@@ -400,9 +400,22 @@ State (local Svelte 5 runes inside this page):
 - `confirmDeleteId: string | null`
 
 Operations: `loadRoutes()` on mount + after each mutation; `submit()` calls
-`createRoute` or `updateRoute`; `confirmDelete()` calls `deleteRoute`. On any
-success a toast is pushed (success variant). On any error the appropriate
-inline message renders AND a toast (danger variant) appears.
+`createRoute` or `updateRoute`; `confirmDelete()` calls `deleteRoute`.
+
+Notification rule — toast complements inline, it does NOT duplicate it:
+- **Success (2xx):** push a green toast (`"Route created" / "Route updated"
+  / "Route deleted"`).
+- **Validation error (HTTP 400 or 409):** inline red message under the
+  relevant field (or top-of-form banner if not field-specific). **No
+  toast.** These errors are user-attributable and the inline location is
+  more precise.
+- **System error (HTTP 500, network failure, JSON parse error):** push a
+  red toast (`"Something went wrong: <message>"`). These are not
+  field-specific, so the toast is the right surface.
+
+Routing this decision happens in a small helper inside the page (or in
+`client.ts` returning a discriminated `ApiError` with a `.kind: 'validation'
+| 'system'` derived from `status`).
 
 ### 10.6 `.env` handling
 
