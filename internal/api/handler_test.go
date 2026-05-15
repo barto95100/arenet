@@ -110,7 +110,9 @@ func TestListRoutes_Multiple(t *testing.T) {
 		t.Fatalf("status=%d", rec.Code)
 	}
 	var got []routeResponse
-	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, rec.Body)
+	}
 	if len(got) != 3 {
 		t.Fatalf("want 3 routes, got %d", len(got))
 	}
@@ -139,7 +141,9 @@ func TestGetRoute_Found(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
 	}
 	var got routeResponse
-	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, rec.Body)
+	}
 	if got.ID != created.ID || got.Host != "g.local" {
 		t.Errorf("got=%+v", got)
 	}
