@@ -1,0 +1,81 @@
+// Arenet - Homelab-friendly reverse proxy with integrated security
+// Copyright (C) 2026  Ludovic Ramos
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see https://www.gnu.org/licenses/.
+
+package api
+
+import (
+	"context"
+	"log/slog"
+
+	"github.com/barto95100/arenet/internal/storage"
+)
+
+// CaddyReloader is the subset of internal/caddymgr the API depends on. Defined
+// here (consumer side) so tests can inject a fake without booting Caddy.
+type CaddyReloader interface {
+	ReloadFromStore(ctx context.Context) error
+}
+
+// Handler owns the storage + caddy reloader + logger and exposes the HTTP
+// handlers for the admin API.
+type Handler struct {
+	store  *storage.Store
+	caddy  CaddyReloader
+	logger *slog.Logger
+}
+
+// NewHandler constructs a Handler. All arguments must be non-nil.
+func NewHandler(store *storage.Store, caddy CaddyReloader, logger *slog.Logger) *Handler {
+	if store == nil || caddy == nil || logger == nil {
+		panic("api.NewHandler: nil dependency")
+	}
+	return &Handler{store: store, caddy: caddy, logger: logger}
+}
+
+// routeRequest is the wire shape accepted by POST and PUT /routes. JSON tags
+// are camelCase per the spec.
+type routeRequest struct {
+	Host        string `json:"host"`
+	UpstreamURL string `json:"upstreamUrl"`
+	TLSEnabled  bool   `json:"tlsEnabled"`
+	WAFEnabled  bool   `json:"wafEnabled"`
+}
+
+// routeResponse is the wire shape returned by GET / POST / PUT /routes. The
+// JSON tags must match routeRequest's camelCase scheme.
+type routeResponse struct {
+	ID          string `json:"id"`
+	Host        string `json:"host"`
+	UpstreamURL string `json:"upstreamUrl"`
+	TLSEnabled  bool   `json:"tlsEnabled"`
+	WAFEnabled  bool   `json:"wafEnabled"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+// toResponse converts a storage.Route to its API wire form (RFC 3339
+// timestamps).
+func toResponse(r storage.Route) routeResponse {
+	return routeResponse{
+		ID:          r.ID,
+		Host:        r.Host,
+		UpstreamURL: r.UpstreamURL,
+		TLSEnabled:  r.TLSEnabled,
+		WAFEnabled:  r.WAFEnabled,
+		CreatedAt:   r.CreatedAt.UTC().Format("2006-01-02T15:04:05.999Z07:00"),
+		UpdatedAt:   r.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999Z07:00"),
+	}
+}
