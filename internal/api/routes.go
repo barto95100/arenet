@@ -132,9 +132,74 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toResponse(created))
 }
 
-// updateRoute and deleteRoute remain 501 stubs until Tasks 2.5 and 2.6.
+// deleteRoute remains a 501 stub until Task 2.6.
 func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented yet")
+	id := chi.URLParam(r, "id")
+
+	var req routeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := validateHost(req.Host); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateUpstreamURL(req.UpstreamURL); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	previous, err := h.store.GetRoute(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "route not found")
+			return
+		}
+		h.logger.Error("get route for update", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to load route")
+		return
+	}
+
+	// Host change must not collide with another route.
+	if req.Host != previous.Host {
+		existing, err := h.store.ListRoutes(r.Context())
+		if err != nil {
+			h.logger.Error("uniqueness list (update)", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to verify uniqueness")
+			return
+		}
+		for _, rt := range existing {
+			if rt.ID != id && rt.Host == req.Host {
+				writeError(w, http.StatusConflict, "host already configured")
+				return
+			}
+		}
+	}
+
+	updated, err := h.store.UpdateRoute(r.Context(), storage.Route{
+		ID:          id,
+		Host:        req.Host,
+		UpstreamURL: req.UpstreamURL,
+		TLSEnabled:  req.TLSEnabled,
+		WAFEnabled:  req.WAFEnabled,
+	})
+	if err != nil {
+		h.logger.Error("update route", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to update route")
+		return
+	}
+
+	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
+		h.logger.Error("caddy reload after update — rolling back", "err", err, "id", id)
+		if _, rbErr := h.store.UpdateRoute(r.Context(), previous); rbErr != nil {
+			h.logger.Error("rollback failed, DB and Caddy may diverge", "err", rbErr, "id", id)
+		}
+		writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toResponse(updated))
 }
 func (h *Handler) deleteRoute(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotImplemented, "not implemented yet")

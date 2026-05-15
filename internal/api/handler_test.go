@@ -262,6 +262,77 @@ func TestCreateRoute_ReloadFails_Rollback(t *testing.T) {
 	}
 }
 
+func TestUpdateRoute_Success(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "u.local", UpstreamURL: "http://u:1"})
+
+	body := `{"host":"u.local","upstreamUrl":"http://u:2","tlsEnabled":true,"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if env.caddy.CallCount() != 1 {
+		t.Errorf("reload calls = %d", env.caddy.CallCount())
+	}
+	got, _ := env.store.GetRoute(context.Background(), created.ID)
+	if got.UpstreamURL != "http://u:2" || !got.TLSEnabled {
+		t.Errorf("not updated: %+v", got)
+	}
+}
+
+func TestUpdateRoute_NotFound(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"x.local","upstreamUrl":"http://x:1"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/00000000-0000-0000-0000-000000000000", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestUpdateRoute_HostCollision(t *testing.T) {
+	env := newTestEnv(t, false)
+	_, _ = env.store.CreateRoute(context.Background(), storage.Route{Host: "a.local", UpstreamURL: "http://x:1"})
+	target, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "b.local", UpstreamURL: "http://x:2"})
+
+	// Try to rename b.local → a.local (already taken).
+	body := `{"host":"a.local","upstreamUrl":"http://x:2"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+target.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	got, _ := env.store.GetRoute(context.Background(), target.ID)
+	if got.Host != "b.local" {
+		t.Errorf("target was mutated: %+v", got)
+	}
+}
+
+func TestUpdateRoute_ReloadFails_Rollback(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "rb.local", UpstreamURL: "http://old:1"})
+
+	env.caddy.SetNextErr(errors.New("simulated"))
+	body := `{"host":"rb.local","upstreamUrl":"http://new:1"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	got, _ := env.store.GetRoute(context.Background(), created.ID)
+	if got.UpstreamURL != "http://old:1" {
+		t.Errorf("rollback failed: upstream=%q", got.UpstreamURL)
+	}
+}
+
 // Used by later tasks; defined here so it's available to subsequent tests
 // in this file. Required so the test file compiles incrementally.
 var _ = errors.New
