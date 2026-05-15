@@ -297,9 +297,7 @@ func TestRestoreRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRoute: %v", err)
 	}
-	if got.ID != original.ID || got.Host != original.Host ||
-		!got.CreatedAt.Equal(original.CreatedAt) ||
-		!got.UpdatedAt.Equal(original.UpdatedAt) {
+	if got != original {
 		t.Errorf("restored route differs: got=%+v want=%+v", got, original)
 	}
 

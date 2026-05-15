@@ -203,6 +203,12 @@ func (s *Store) DeleteRoute(ctx context.Context, id string) error {
 // (no UUID generation, no timestamp refresh) precisely to make rollback
 // fidelity possible. Do NOT use it for business logic — use CreateRoute or
 // UpdateRoute.
+//
+// RestoreRoute is an unconditional upsert: if the key already exists it is
+// overwritten without error. By design, the rollback always wins the
+// conflict — this is safe under the current single-writer flow (bbolt
+// serialises writes and the HTTP handler processes mutations sequentially).
+// Revisit if real concurrency on routes is introduced later.
 func (s *Store) RestoreRoute(ctx context.Context, r Route) error {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
