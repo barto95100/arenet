@@ -422,3 +422,22 @@ func TestCORS_ProdMode_NoHeader(t *testing.T) {
 		t.Errorf("Allow-Origin should be empty in prod, got %q", got)
 	}
 }
+
+func TestCORS_DevMode_ActualRequest(t *testing.T) {
+	env := newTestEnv(t, true) // dev=true
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/routes", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Errorf("Allow-Origin on GET in dev mode=%q, want http://localhost:5173", got)
+	}
+	if got := rec.Header().Get("Access-Control-Max-Age"); got != "3600" {
+		t.Errorf("Max-Age=%q on actual response, want 3600", got)
+	}
+}
