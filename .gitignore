@@ -1,0 +1,59 @@
+# Binaries
+/arenet
+/arenet-*
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+/dist/
+vendor/
+*.test
+*.out
+coverage.txt
+
+# Node / SvelteKit
+node_modules/
+/web/frontend/.svelte-kit/
+/web/frontend/build/
+/web/frontend/dist/
+/web/frontend/.env*
+!/web/frontend/.env.example
+
+# Build artifacts embedded into binary
+/web/build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+/data/
+/log/
+/tmp/
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets
+*.pem
+*.key
+!*-example.pem
+!*-example.key
+.env
+.env.local
+
+# Test artifacts
+/test-output/
+/coverage/
+
+# Claude Code
+.claude/cache/
