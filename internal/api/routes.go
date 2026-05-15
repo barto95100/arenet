@@ -204,7 +204,33 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toResponse(updated))
 }
 
-// deleteRoute remains a 501 stub until Task 2.6.
 func (h *Handler) deleteRoute(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented yet")
+	id := chi.URLParam(r, "id")
+	previous, err := h.store.GetRoute(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "route not found")
+			return
+		}
+		h.logger.Error("get route for delete", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to load route")
+		return
+	}
+
+	if err := h.store.DeleteRoute(r.Context(), id); err != nil {
+		h.logger.Error("delete route", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to delete route")
+		return
+	}
+
+	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
+		h.logger.Error("caddy reload after delete — rolling back", "err", err, "id", id)
+		if rbErr := h.store.RestoreRoute(r.Context(), previous); rbErr != nil {
+			h.logger.Error("rollback failed, DB and Caddy may diverge", "err", rbErr, "id", id)
+		}
+		writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -333,6 +333,52 @@ func TestUpdateRoute_ReloadFails_Rollback(t *testing.T) {
 	}
 }
 
-// Used by later tasks; defined here so it's available to subsequent tests
-// in this file. Required so the test file compiles incrementally.
-var _ = errors.New
+func TestDeleteRoute_Success(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "d.local", UpstreamURL: "http://u:1"})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/routes/"+created.ID, nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if env.caddy.CallCount() != 1 {
+		t.Errorf("reload calls = %d", env.caddy.CallCount())
+	}
+	if _, err := env.store.GetRoute(context.Background(), created.ID); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+}
+
+func TestDeleteRoute_NotFound(t *testing.T) {
+	env := newTestEnv(t, false)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/routes/00000000-0000-0000-0000-000000000000", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestDeleteRoute_ReloadFails_Rollback(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "rb.local", UpstreamURL: "http://u:1"})
+
+	env.caddy.SetNextErr(errors.New("simulated"))
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/routes/"+created.ID, nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	got, err := env.store.GetRoute(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("rollback failed, GetRoute err=%v", err)
+	}
+	if !got.CreatedAt.Equal(created.CreatedAt) || !got.UpdatedAt.Equal(created.UpdatedAt) {
+		t.Errorf("RestoreRoute didn't preserve timestamps: got=%v want=%v", got, created)
+	}
+}
