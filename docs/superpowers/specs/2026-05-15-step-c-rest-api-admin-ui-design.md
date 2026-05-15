@@ -303,20 +303,56 @@ web/frontend/
 ├── .env.example                 VITE_API_BASE_URL=http://localhost:8001
 ├── src/
 │   ├── app.html
-│   ├── app.css                  Tailwind directives
+│   ├── app.css                  Tailwind directives + @font-face for Inter/JetBrains Mono
 │   ├── app.d.ts
 │   ├── routes/
-│   │   ├── +layout.ts
-│   │   └── +page.svelte         single page, all UI
+│   │   ├── +layout.ts           prerender=true, ssr=false
+│   │   ├── +layout.svelte       Sidebar + main content area shell
+│   │   ├── +page.svelte         Root — redirects to /routes (see 10.5)
+│   │   ├── routes/
+│   │   │   └── +page.svelte     Routes management page (the meat of Step C)
+│   │   ├── topology/
+│   │   │   └── +page.svelte     Placeholder ("Available in Step E")
+│   │   ├── security/
+│   │   │   └── +page.svelte     Placeholder (Phase 2)
+│   │   └── settings/
+│   │       └── +page.svelte     Placeholder (Phase 2)
 │   └── lib/
-│       └── api/
-│           ├── client.ts        typed fetch wrapper, throws ApiError
-│           └── types.ts         Route, RouteRequest, ApiError class
+│       ├── api/
+│       │   ├── client.ts        typed fetch wrapper, throws ApiError
+│       │   └── types.ts         Route, RouteRequest, ApiError class
+│       ├── stores/
+│       │   └── toast.ts         writable toast queue + push()/dismiss() helpers
+│       └── components/
+│           ├── Sidebar.svelte
+│           ├── StatusDot.svelte
+│           ├── Button.svelte
+│           ├── Card.svelte
+│           ├── StatCard.svelte
+│           ├── DataTable.svelte
+│           ├── Modal.svelte
+│           ├── Input.svelte
+│           ├── Checkbox.svelte
+│           ├── Badge.svelte
+│           ├── Spinner.svelte
+│           ├── Toast.svelte
+│           └── ToastContainer.svelte
 ├── static/
-│   └── favicon.svg              minimal placeholder
+│   ├── favicon.svg              minimal Arenet mark (cyan A)
+│   └── fonts/
+│       ├── Inter-Regular.woff2
+│       ├── Inter-Medium.woff2
+│       ├── Inter-SemiBold.woff2
+│       ├── Inter-Bold.woff2
+│       ├── JetBrainsMono-Regular.woff2
+│       └── JetBrainsMono-Medium.woff2
 ├── build/.gitkeep               present to keep //go:embed happy
 └── README.md
 ```
+
+The `/` route in 10.5 redirects to `/routes` so the sidebar's "Routes" item
+is the obvious landing destination. Topology / Security / Settings exist as
+pages so client-side navigation works, but they render a placeholder.
 
 ### 10.4 Client (`src/lib/api/client.ts`)
 
@@ -326,27 +362,47 @@ web/frontend/
   body when possible).
 - `204 No Content` returns `undefined`.
 
-### 10.5 Single page (`+page.svelte`)
+### 10.5 Routes page (`src/routes/routes/+page.svelte`)
 
-State (local Svelte 5 runes):
-- `routes: Route[]`
-- `loadError: string | null`
-- `formOpen: boolean`
-- `formMode: 'create' | 'edit'`
-- `formData: RouteRequest`
-- `formError: string | null`
-- `editingId: string | null`
+Visual layout (top to bottom in the main content area):
 
-Operations:
-- `loadRoutes()` — onMount + after every mutation.
-- `submitForm()` — POST or PUT depending on mode; on success: refetch, close
-  form; on error: `formError = err.message` (rendered red below the form).
-- `deleteRow(r)` — `window.confirm(...)` then DELETE then refetch.
-- `openCreate()` / `openEdit(r)` / `closeForm()` — toggle form state.
+1. **Page header** — `<h1>Routes</h1>` (text-4xl semibold), subtitle "Manage
+   reverse proxy routes" (text-secondary), and a primary `Button` "+ Add
+   route" right-aligned.
+2. **Stats row** — 4 `StatCard`s in a CSS grid (`grid-cols-4` collapsing to
+   `grid-cols-2` under `md`): Total Routes, Active, With TLS, With WAF. All
+   four are computed client-side from the same `routes` array (no separate
+   stats endpoint). Trend arrows are not wired in Step C — left as zero.
+3. **DataTable** — columns: Status (StatusDot), Host (mono), Upstream (mono,
+   truncated), TLS (Badge variant=tls if on, else dash), WAF (Badge
+   variant=waf if on, else dash), Actions (Edit + Delete `Button`s, variant
+   ghost, size sm). Click on a row toggles an inline expanded row underneath
+   showing `id`, `createdAt`, `updatedAt`, and a "Live traffic: -- (coming
+   soon)" stub.
+4. **Empty state** — when `routes.length === 0` and not loading: centered
+   block with an icon, "No routes configured yet", and a primary Button "+
+   Add your first route".
+5. **Add/Edit `Modal`** — opens from the page header button or the row Edit
+   button. Title is "Add route" or "Edit route". Body: two `Input`s (Host,
+   Upstream URL) and two `Checkbox`es (Enable TLS, Enable WAF — the WAF
+   checkbox is disabled with tooltip "Available in Step F"). Footer: Cancel
+   (ghost) + Submit (primary). Field-level errors render in red under each
+   `Input` when the backend message references a specific field; otherwise a
+   top-of-form red banner inside the modal.
+6. **Delete confirmation `Modal`** — replaces `window.confirm` to stay
+   visually consistent: title "Delete route", body shows the host, footer
+   Cancel (ghost) + Delete (danger).
 
-Markup: a `<table>` with columns Host, Upstream URL, TLS, WAF, Actions
-(Edit / Delete buttons). Form inline above or below the table. Tailwind
-utility classes only — no extracted components this step.
+State (local Svelte 5 runes inside this page):
+- `routes`, `loadError`, `loading`
+- `formOpen`, `formMode` (`'create' | 'edit'`), `formData: RouteRequest`,
+  `formError`, `editingId`
+- `confirmDeleteId: string | null`
+
+Operations: `loadRoutes()` on mount + after each mutation; `submit()` calls
+`createRoute` or `updateRoute`; `confirmDelete()` calls `deleteRoute`. On any
+success a toast is pushed (success variant). On any error the appropriate
+inline message renders AND a toast (danger variant) appears.
 
 ### 10.6 `.env` handling
 
@@ -360,6 +416,139 @@ which is what we want when the binary serves both.
 ~30 lines: Node ≥ 20 prereq, `npm install`, `npm run dev` (Vite on 5173,
 requires Arenet running on 8001 — `--dev` flag), `npm run build` (produces
 `build/`), how to test locally.
+
+## 10bis. Visual Design System ("SOC / Control Room")
+
+Dark-mode dashboard reminiscent of network security operations centers.
+Inspirations: Linear, Vercel, Railway, Tailscale Console, Grafana dark,
+UniFi Network. Animations are intentionally pronounced; a settings toggle to
+reduce them is planned for later (NOT this step).
+
+### 10bis.1 Layout shell (`+layout.svelte`)
+
+- **Sidebar**: fixed left, 256 px wide. Collapsable to 64 px (icons only) via
+  a toggle button at the bottom. State persisted in `localStorage` under key
+  `arenet.sidebar.collapsed`.
+- **Main content**: remaining width, 24 px padding all around.
+- **No top bar.** The sidebar holds the Arenet wordmark (top), nav items
+  (middle), and the user menu + connection indicator (bottom).
+- **Optional slim header** inside the main area for breadcrumb + contextual
+  actions — deferred to a future step, not implemented now.
+
+### 10bis.2 Color palette (CSS variables)
+
+Defined in `app.css` and exposed as Tailwind utility classes through
+`tailwind.config.ts`. Token names match Tailwind class fragments
+(`bg-base` → `--bg-base`).
+
+```css
+/* Backgrounds */
+--bg-base:        #0a0e14;
+--bg-sidebar:     #060a10;
+--bg-elevated:    #11161f;
+--bg-surface:     #1a212b;
+--bg-hover:       #1f2733;
+
+/* Borders */
+--border-subtle:  #1f2733;
+--border-default: #2a3441;
+--border-strong:  #3a4554;
+
+/* Text */
+--text-primary:   #e6edf3;
+--text-secondary: #8b949e;
+--text-muted:     #4a5568;
+--text-inverse:   #0a0e14;
+
+/* Signature */
+--accent-cyan:    #00d9ff;
+--accent-cyan-d:  #00a8c7;
+
+/* Status */
+--status-up:      #00ff88;
+--status-warn:    #ffaa00;
+--status-down:    #ff4757;
+--status-info:    #a78bfa;
+
+/* Glow */
+--glow-cyan:      0 0 16px rgba(0, 217, 255, 0.4);
+--glow-green:     0 0 12px rgba(0, 255, 136, 0.4);
+--glow-red:       0 0 12px rgba(255, 71, 87, 0.4);
+```
+
+### 10bis.3 Typography
+
+- **UI**: Inter (Regular 400, Medium 500, SemiBold 600, Bold 700),
+  self-hosted in `static/fonts/`. `@font-face` declared in `app.css`,
+  `font-display: swap`.
+- **Mono**: JetBrains Mono (Regular 400, Medium 500), self-hosted, used for
+  IPs, ports, URLs, IDs, status codes. Exposed as Tailwind `font-mono`.
+- **Sizes**: 12 / 14 / 16 / 20 / 28 / 36 px mapped to Tailwind tokens
+  `text-xs`, `text-sm`, `text-base`, `text-lg`, `text-2xl`, `text-4xl`.
+
+Fonts are committed to the repo to keep the binary fully self-contained (no
+runtime CDN dependency) and to make the embed deterministic.
+
+### 10bis.4 Components (in `src/lib/components/`)
+
+13 atomic / composed components. Each is a single `.svelte` file with the
+AGPL header. Props and intent only — implementation details belong in the
+plan.
+
+| Component | Purpose / props |
+|---|---|
+| `Sidebar.svelte` | Fixed left nav. Items: Routes (active), Topology, Security, Settings — last three rendered disabled (grey, tooltip "Coming soon"). Active item shows a 4 px cyan vertical bar on the left + `--bg-hover` background + cyan glow on the bar. User menu and `● Connected` pulse green indicator at the bottom. Collapse toggle. |
+| `StatusDot.svelte` | 8 px circle. Prop `status: 'up' \| 'warn' \| 'down' \| 'info' \| 'idle'`. Pulse animation 2 s infinite on up/warn/down. Idle is static, no pulse. |
+| `Button.svelte` | Props `variant: 'primary' \| 'secondary' \| 'ghost' \| 'danger'`, `size: 'sm' \| 'md' \| 'lg'`, `loading: boolean`. Primary: cyan bg, glow on hover, `transform: scale(0.98)` on click. Loading replaces content with `Spinner` and disables the button. |
+| `Card.svelte` | Generic wrapper: `bg-elevated`, `border border-subtle`, `rounded-lg`, padding configurable via `padding` prop (default `p-6`). Default slot for content. |
+| `StatCard.svelte` | Built on `Card`. Props `label`, `value`, optional `trend: number` (positive→green ↗, negative→red ↘), optional `icon` snippet. In Step C the tween animation is left out — values render directly. |
+| `DataTable.svelte` | Generic table with a sticky header. Header text is text-secondary, uppercase, tracking-wide, text-xs. Hover row: lighter bg + 2 px cyan left border with 150 ms transition. Click row: persistent cyan border + lighter bg. Slot-based: caller provides header cells and a row snippet receiving the item. Optional expanded-row snippet rendered under the active row with `bg-surface`. |
+| `Modal.svelte` | Centered modal over a `bg-base/80` `backdrop-blur` overlay. Slide-up + fade-in 200 ms ease-out. Closes on Escape and click-outside. Slot for body, named slots for header/footer. |
+| `Input.svelte` | Labelled text input. Props `label`, `error`, `type` (default `text`). Focus ring: 2 px `--accent-cyan` + glow. Error: border red + message under the field. |
+| `Checkbox.svelte` | Custom checkbox: unchecked = `border-default`, checked = cyan with white checkmark. 100 ms transition. Disabled state supports a tooltip via title attribute. |
+| `Badge.svelte` | Pill. Prop `variant: 'tls' \| 'waf' \| 'status-up' \| 'status-warn' \| 'status-down' \| 'neutral'`. Optional icon. |
+| `Spinner.svelte` | Circular cyan spinner. Sizes `sm / md / lg`. |
+| `Toast.svelte` | Single toast: slide-in from the right with severity glow, auto-dismiss after 4 s. Internal-only — not exported. |
+| `ToastContainer.svelte` | Mounted once in `+layout.svelte`. Reads `lib/stores/toast.ts`. Renders the queue bottom-right. |
+
+The store `lib/stores/toast.ts` exports `pushToast({ message, variant })` and
+manages the queue + auto-dismiss timers.
+
+### 10bis.5 Signature animations
+
+| Animation | Where | Detail |
+|---|---|---|
+| `pulse-status` | `StatusDot` (non-idle) | Opacity 1 → 0.5 → 1 in 2 s, infinite. |
+| Active sidebar bar | `Sidebar` | 4 px cyan bar + `box-shadow: var(--glow-cyan)`. |
+| Row hover | `DataTable` | All-property transition 150 ms ease-out. |
+| Primary button hover | `Button` (variant=primary) | `box-shadow: var(--glow-cyan)` 200 ms. |
+| Button click | `Button` | `transform: scale(0.98)` 80 ms. |
+| Modal entry | `Modal` | Slide-up 20 px → 0 + opacity 0 → 1 in 200 ms ease-out. |
+| Global loading bar | `+layout.svelte` | 2 px cyan div pinned to top of the main area, left-to-right shimmer 1.5 s infinite while any fetch is in flight. Driven by a shared `loading` store (counter of pending requests). |
+
+The numeric tween on `StatCard` is **not** implemented in Step C. Values
+update instantly. The animation will land when live metrics arrive in Step E.
+
+### 10bis.6 Accessibility floor
+
+CLAUDE.md mandates accessibility on interactive elements. Concretely:
+
+- All `Button` / icon-only buttons have an `aria-label`.
+- All `Input` are associated with their label via `for`/`id`.
+- Modal traps focus, restores it to the trigger on close, and is reachable
+  via `role="dialog"` + `aria-modal="true"` + labelled by its title.
+- Color is never the sole carrier of meaning: status uses both dot color and
+  a label or badge text.
+- Animations respect `@media (prefers-reduced-motion: reduce)`: glow and
+  pulse animations collapse to instantaneous transitions.
+
+### 10bis.7 Out of design system (not now)
+
+- No dark/light toggle. Dark is the only theme.
+- No design tokens published as a separate package.
+- No Storybook.
+- No automated visual regression. Validation is manual via screenshots
+  reviewed by the user after each implementation chunk.
 
 ## 11. Go embed (`web/embed.go`)
 
@@ -509,29 +698,45 @@ All tests pass with `go test -race -count=1 ./...`.
 ## 16. Out of scope (deferred)
 
 - Authentication / authorization (Step D).
-- WebSocket metrics, topology dashboard (Step E).
-- WAF / Coraza wiring through the API (Step F).
+- WebSocket metrics streaming, live topology graph (Step E). The Topology
+  page **route exists** as a placeholder so the sidebar navigation works,
+  but the content is a static "Available in Step E" message.
+- WAF / Coraza wiring through the API (Step F). The "Enable WAF" checkbox
+  exists in the form but is disabled with an explanatory tooltip.
 - CrowdSec wiring (Step G).
 - Wildcard host matchers (`*.example.com`).
 - Partial PATCH updates.
 - Pagination on `GET /routes`.
 - File upload, certificate management UI.
 - i18n.
+- Numeric tween animation on `StatCard` values.
+- Dark / light theme toggle.
+- Settings page content (placeholder only).
+- Security page content (placeholder only).
+- Animation kill-switch in settings (planned for later).
+- Storybook, visual regression tests, Vitest. Validation is manual via
+  screenshots reviewed after each implementation chunk.
 
 ## 17. Acceptance criteria
 
 1. `make build` produces a single binary including the SvelteKit build.
 2. `./bin/arenet --dev --insert-test-route` listens on `:8080`, `:8001`, and
    shows `admin_api=:8001` in the startup log.
-3. `cd web/frontend && npm run dev` opens an admin UI on `:5173` that lists
-   the test route, can create/edit/delete routes, and updates Caddy live.
-4. `curl http://test.local:8080/` proxies to whatever upstream is configured
+3. `cd web/frontend && npm run dev` opens an admin UI on `:5173` with the
+   SOC-style dark dashboard described in §10bis: sidebar with Routes
+   (active) + 3 disabled items, stats cards row, routes table, full add /
+   edit / delete flow via custom modals, and toasts on success/failure.
+4. The Topology / Security / Settings sidebar items navigate to placeholder
+   pages without 404s.
+5. `curl http://test.local:8080/` proxies to whatever upstream is configured
    in the UI.
-5. `curl -i http://localhost:8001/api/v1/routes` returns the JSON list.
-6. `curl -X POST -d '{"host":"","upstreamUrl":"http://x"}'
+6. `curl -i http://localhost:8001/api/v1/routes` returns the JSON list.
+7. `curl -X POST -d '{"host":"","upstreamUrl":"http://x"}'
    http://localhost:8001/api/v1/routes` returns
    `400 {"error": "host must not be empty"}`.
-7. `go test -race -count=1 ./...` is green.
-8. `go vet ./...` is clean.
-9. Ctrl+C produces an ordered shutdown (admin server, then Caddy, then
-   storage) with no warnings.
+8. `go test -race -count=1 ./...` is green.
+9. `go vet ./...` is clean.
+10. Ctrl+C produces an ordered shutdown (admin server, then Caddy, then
+    storage) with no warnings.
+11. With `prefers-reduced-motion: reduce` set in the OS / browser, glow and
+    pulse animations are suppressed but the layout remains usable.
