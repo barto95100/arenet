@@ -388,3 +388,37 @@ func TestDeleteRoute_ReloadFails_Rollback(t *testing.T) {
 		t.Errorf("RestoreRoute didn't preserve timestamps: got=%v want=%v", got, created)
 	}
 }
+
+func TestCORS_DevMode_Preflight(t *testing.T) {
+	env := newTestEnv(t, true) // dev=true
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/routes", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Errorf("Allow-Origin=%q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Max-Age"); got != "3600" {
+		t.Errorf("Max-Age=%q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, "POST") {
+		t.Errorf("Allow-Methods=%q", got)
+	}
+}
+
+func TestCORS_ProdMode_NoHeader(t *testing.T) {
+	env := newTestEnv(t, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/routes", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Allow-Origin should be empty in prod, got %q", got)
+	}
+}

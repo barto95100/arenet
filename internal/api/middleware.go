@@ -19,15 +19,52 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"time"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 )
 
-// slogLogger is a placeholder; replaced in Task 2.7 with a proper request
-// logger.
-func slogLogger(_ *slog.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler { return next }
+// slogLogger logs one structured line per request when the handler returns.
+func slogLogger(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
+			next.ServeHTTP(ww, r)
+			dur := time.Since(start)
+			level := slog.LevelInfo
+			switch {
+			case ww.Status() >= 500:
+				level = slog.LevelError
+			case ww.Status() >= 400:
+				level = slog.LevelWarn
+			}
+			logger.LogAttrs(r.Context(), level, "http request",
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.Int("status", ww.Status()),
+				slog.Int64("duration_ms", dur.Milliseconds()),
+				slog.String("request_id", chimw.GetReqID(r.Context())),
+				slog.String("remote_addr", r.RemoteAddr),
+			)
+		})
+	}
 }
 
-// devCORS is a placeholder; replaced in Task 2.7 with the real CORS impl.
-func devCORS(_ string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler { return next }
+// devCORS allows preflight + simple requests from allowOrigin. Only mounted
+// in dev mode by NewRouter.
+func devCORS(allowOrigin string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Max-Age", "3600")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
