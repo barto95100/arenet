@@ -53,6 +53,12 @@ func (f *fakeReloader) CallCount() int {
 	return f.calls
 }
 
+func (f *fakeReloader) SetNextErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextErr = err
+}
+
 type testEnv struct {
 	router http.Handler
 	store  *storage.Store
@@ -240,7 +246,7 @@ func TestCreateRoute_DuplicateHost(t *testing.T) {
 
 func TestCreateRoute_ReloadFails_Rollback(t *testing.T) {
 	env := newTestEnv(t, false)
-	env.caddy.nextErr = errors.New("simulated reload failure")
+	env.caddy.SetNextErr(errors.New("simulated reload failure"))
 
 	body := `{"host":"rb.local","upstreamUrl":"http://x:1"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))

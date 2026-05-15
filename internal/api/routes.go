@@ -91,7 +91,10 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Uniqueness check.
+	// Uniqueness check. NOTE: this is not atomic with the subsequent
+	// CreateRoute call — two concurrent POSTs with the same host could both
+	// pass this loop. Safe under the homelab single-writer assumption
+	// codified in spec §3 Q3; revisit when real concurrency is introduced.
 	existing, err := h.store.ListRoutes(r.Context())
 	if err != nil {
 		h.logger.Error("uniqueness list", "err", err)
@@ -128,6 +131,8 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, toResponse(created))
 }
+
+// updateRoute and deleteRoute remain 501 stubs until Tasks 2.5 and 2.6.
 func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotImplemented, "not implemented yet")
 }
