@@ -130,7 +130,16 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 			}
 		}
 	}()
-	logger.Info("Arenet listening", "http", ":8080", "https", ":8443", "admin_api", cfg.adminPort)
+
+	httpsActive, err := mgr.HasHTTPSServer(ctx)
+	if err != nil {
+		return err
+	}
+	listenAttrs := []any{"http", ":8080", "admin_api", cfg.adminPort}
+	if httpsActive {
+		listenAttrs = append(listenAttrs, "https", ":8443")
+	}
+	logger.Info("Arenet listening", listenAttrs...)
 
 	<-ctx.Done()
 	if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {

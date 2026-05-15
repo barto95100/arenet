@@ -180,8 +180,8 @@ type matcherSet struct {
 // In dev mode (current Phase 1), automatic ACME is fully disabled; HTTPS on
 // :8443 uses Caddy's internal local CA via the `tls` app issuer "internal".
 func buildConfigJSON(routes []storage.Route) ([]byte, error) {
-	httpRoutes := make([]httpRoute, 0, len(routes))
-	httpsRoutes := make([]httpRoute, 0, len(routes))
+	httpRoutes := make([]httpRoute, 0, len(routes)+1)
+	httpsRoutes := make([]httpRoute, 0, len(routes)+1)
 
 	for _, r := range routes {
 		dial, err := upstreamDial(r.UpstreamURL)
@@ -207,6 +207,10 @@ func buildConfigJSON(routes []storage.Route) ([]byte, error) {
 		}
 	}
 
+	// Final catch-all: must be the LAST route. No match block = matches every
+	// request that none of the prior host-matched routes handled.
+	httpRoutes = append(httpRoutes, catchAllRoute())
+
 	servers := map[string]httpServer{
 		"arenet_http": {
 			Listen: []string{httpListen},
@@ -219,6 +223,7 @@ func buildConfigJSON(routes []storage.Route) ([]byte, error) {
 	}
 
 	if len(httpsRoutes) > 0 {
+		httpsRoutes = append(httpsRoutes, catchAllRoute())
 		servers["arenet_https"] = httpServer{
 			Listen: []string{httpsListen},
 			AutomaticHTTPS: &automaticHTTPSConfig{
@@ -257,6 +262,35 @@ func buildConfigJSON(routes []storage.Route) ([]byte, error) {
 	}
 
 	return json.MarshalIndent(full, "", "  ")
+}
+
+// catchAllRoute builds the final 404 catch-all route: no match block (matches
+// every remaining request) with a static_response handler.
+func catchAllRoute() httpRoute {
+	return httpRoute{
+		Handle: []map[string]any{
+			{
+				"handler":     "static_response",
+				"status_code": 404,
+				"body":        "Not Found - no route configured for this host",
+			},
+		},
+	}
+}
+
+// HasHTTPSServer reports whether the current store contents would produce an
+// HTTPS server in the Caddy config (i.e. at least one route has TLSEnabled).
+func (m *CaddyManager) HasHTTPSServer(ctx context.Context) (bool, error) {
+	routes, err := m.store.ListRoutes(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range routes {
+		if r.TLSEnabled {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // upstreamDial converts an UpstreamURL ("http://127.0.0.1:9999") into the
