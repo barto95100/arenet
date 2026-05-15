@@ -132,7 +132,6 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toResponse(created))
 }
 
-// deleteRoute remains a 501 stub until Task 2.6.
 func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
@@ -192,6 +191,9 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
 		h.logger.Error("caddy reload after update — rolling back", "err", err, "id", id)
+		// UpdateRoute is used here (not RestoreRoute) per spec §9: RestoreRoute
+		// is reserved for DELETE rollback. Side-effect: UpdatedAt reflects the
+		// rollback time, not previous.UpdatedAt. Acceptable under single-writer.
 		if _, rbErr := h.store.UpdateRoute(r.Context(), previous); rbErr != nil {
 			h.logger.Error("rollback failed, DB and Caddy may diverge", "err", rbErr, "id", id)
 		}
@@ -201,6 +203,8 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, toResponse(updated))
 }
+
+// deleteRoute remains a 501 stub until Task 2.6.
 func (h *Handler) deleteRoute(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotImplemented, "not implemented yet")
 }
