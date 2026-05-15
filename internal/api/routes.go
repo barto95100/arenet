@@ -17,6 +17,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -75,10 +76,57 @@ func (h *Handler) getRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toResponse(rt))
 }
 
-// Placeholders so the router compiles. Implemented in later tasks of this
-// chunk.
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented yet")
+	var req routeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := validateHost(req.Host); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateUpstreamURL(req.UpstreamURL); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Uniqueness check.
+	existing, err := h.store.ListRoutes(r.Context())
+	if err != nil {
+		h.logger.Error("uniqueness list", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to verify uniqueness")
+		return
+	}
+	for _, rt := range existing {
+		if rt.Host == req.Host {
+			writeError(w, http.StatusConflict, "host already configured")
+			return
+		}
+	}
+
+	created, err := h.store.CreateRoute(r.Context(), storage.Route{
+		Host:        req.Host,
+		UpstreamURL: req.UpstreamURL,
+		TLSEnabled:  req.TLSEnabled,
+		WAFEnabled:  req.WAFEnabled,
+	})
+	if err != nil {
+		h.logger.Error("create route", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to create route")
+		return
+	}
+
+	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
+		h.logger.Error("caddy reload after create — rolling back", "err", err, "id", created.ID)
+		if delErr := h.store.DeleteRoute(r.Context(), created.ID); delErr != nil {
+			h.logger.Error("rollback failed, DB and Caddy may diverge", "err", delErr, "id", created.ID)
+		}
+		writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, toResponse(created))
 }
 func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotImplemented, "not implemented yet")

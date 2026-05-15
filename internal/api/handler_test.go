@@ -163,6 +163,99 @@ func TestGetRoute_NotFound(t *testing.T) {
 	}
 }
 
+func TestCreateRoute_Success(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"new.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if env.caddy.CallCount() != 1 {
+		t.Errorf("reload calls = %d, want 1", env.caddy.CallCount())
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 || got[0].Host != "new.local" {
+		t.Errorf("store state: %+v", got)
+	}
+}
+
+func TestCreateRoute_InvalidJSON(t *testing.T) {
+	env := newTestEnv(t, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader("not json"))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestCreateRoute_ValidationErrors(t *testing.T) {
+	tests := []struct {
+		name, body, wantSub string
+	}{
+		{"empty host", `{"host":"","upstreamUrl":"http://x:1"}`, "host must not be empty"},
+		{"whitespace host", `{"host":"a b","upstreamUrl":"http://x:1"}`, "must not contain whitespace"},
+		{"bad scheme", `{"host":"a.local","upstreamUrl":"ftp://x"}`, "http or https"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t, false)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			env.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+			}
+			if !strings.Contains(rec.Body.String(), tc.wantSub) {
+				t.Errorf("body %q missing %q", rec.Body.String(), tc.wantSub)
+			}
+			if env.caddy.CallCount() != 0 {
+				t.Errorf("reload should not have been called")
+			}
+		})
+	}
+}
+
+func TestCreateRoute_DuplicateHost(t *testing.T) {
+	env := newTestEnv(t, false)
+	_, _ = env.store.CreateRoute(context.Background(), storage.Route{Host: "dup.local", UpstreamURL: "http://x:1"})
+
+	body := `{"host":"dup.local","upstreamUrl":"http://x:2"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "host already configured") {
+		t.Errorf("body=%s", rec.Body)
+	}
+}
+
+func TestCreateRoute_ReloadFails_Rollback(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.caddy.nextErr = errors.New("simulated reload failure")
+
+	body := `{"host":"rb.local","upstreamUrl":"http://x:1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 0 {
+		t.Errorf("rollback failed: %d routes left", len(got))
+	}
+}
+
 // Used by later tasks; defined here so it's available to subsequent tests
 // in this file. Required so the test file compiles incrementally.
 var _ = errors.New
