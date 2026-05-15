@@ -194,3 +194,31 @@ func (s *Store) DeleteRoute(ctx context.Context, id string) error {
 		return b.Delete([]byte(id))
 	})
 }
+
+// RestoreRoute re-inserts an existing Route exactly as supplied, preserving
+// the provided ID, CreatedAt and UpdatedAt timestamps.
+//
+// This method exists ONLY for the rollback path of internal/api when a Caddy
+// reload fails after a DELETE. It bypasses the normal CreateRoute lifecycle
+// (no UUID generation, no timestamp refresh) precisely to make rollback
+// fidelity possible. Do NOT use it for business logic — use CreateRoute or
+// UpdateRoute.
+func (s *Store) RestoreRoute(ctx context.Context, r Route) error {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	if r.ID == "" {
+		return errors.New("route: id must not be empty")
+	}
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		buf, err := json.Marshal(r)
+		if err != nil {
+			return fmt.Errorf("marshal route: %w", err)
+		}
+		return tx.Bucket([]byte(bucketRoutes)).Put([]byte(r.ID), buf)
+	})
+}

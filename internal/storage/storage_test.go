@@ -21,6 +21,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -272,4 +273,40 @@ func TestDeleteRoute(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRestoreRoute(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	original := Route{
+		ID:          "fixed-uuid-for-test",
+		Host:        "restore.example",
+		UpstreamURL: "http://127.0.0.1:7000",
+		TLSEnabled:  true,
+		WAFEnabled:  false,
+		CreatedAt:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	}
+
+	if err := s.RestoreRoute(ctx, original); err != nil {
+		t.Fatalf("RestoreRoute: %v", err)
+	}
+
+	got, err := s.GetRoute(ctx, original.ID)
+	if err != nil {
+		t.Fatalf("GetRoute: %v", err)
+	}
+	if got.ID != original.ID || got.Host != original.Host ||
+		!got.CreatedAt.Equal(original.CreatedAt) ||
+		!got.UpdatedAt.Equal(original.UpdatedAt) {
+		t.Errorf("restored route differs: got=%+v want=%+v", got, original)
+	}
+
+	t.Run("empty id rejected", func(t *testing.T) {
+		err := s.RestoreRoute(ctx, Route{Host: "x", UpstreamURL: "http://x:1"})
+		if err == nil {
+			t.Fatal("expected error for empty ID")
+		}
+	})
 }
