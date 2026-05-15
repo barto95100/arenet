@@ -292,6 +292,9 @@ func TestUpdateRoute_NotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d", rec.Code)
 	}
+	if env.caddy.CallCount() != 0 {
+		t.Errorf("reload should not have been called on 404, got %d", env.caddy.CallCount())
+	}
 }
 
 func TestUpdateRoute_HostCollision(t *testing.T) {
@@ -359,6 +362,9 @@ func TestDeleteRoute_NotFound(t *testing.T) {
 	env.router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d", rec.Code)
+	}
+	if env.caddy.CallCount() != 0 {
+		t.Errorf("reload should not have been called on 404, got %d", env.caddy.CallCount())
 	}
 }
 
