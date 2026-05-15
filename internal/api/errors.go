@@ -32,9 +32,11 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
-// writeJSON serializes v as JSON with the given status. On marshal failure it
-// downgrades to 500 with a fixed message — this is a programmer error, not a
-// runtime case the client should reason about.
+// writeJSON serializes v as JSON with the given status. The encoder error
+// (if any) is silently discarded: WriteHeader has already committed the
+// status line so a fallback response is no longer possible. This is safe
+// here because every callsite passes flat structs of strings and bools
+// (routeResponse) or maps of strings — neither can fail encoding.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

@@ -23,6 +23,10 @@ import (
 	"github.com/barto95100/arenet/internal/storage"
 )
 
+// timestampFormat is RFC 3339 with millisecond precision, trailing zeros
+// stripped. Matches the wire shape defined in spec §5.2.
+const timestampFormat = "2006-01-02T15:04:05.999Z07:00"
+
 // CaddyReloader is the subset of internal/caddymgr the API depends on. Defined
 // here (consumer side) so tests can inject a fake without booting Caddy.
 type CaddyReloader interface {
@@ -39,8 +43,13 @@ type Handler struct {
 
 // NewHandler constructs a Handler. All arguments must be non-nil.
 func NewHandler(store *storage.Store, caddy CaddyReloader, logger *slog.Logger) *Handler {
-	if store == nil || caddy == nil || logger == nil {
-		panic("api.NewHandler: nil dependency")
+	switch {
+	case store == nil:
+		panic("api.NewHandler: store is nil")
+	case caddy == nil:
+		panic("api.NewHandler: caddy is nil")
+	case logger == nil:
+		panic("api.NewHandler: logger is nil")
 	}
 	return &Handler{store: store, caddy: caddy, logger: logger}
 }
@@ -66,8 +75,8 @@ type routeResponse struct {
 	UpdatedAt   string `json:"updatedAt"`
 }
 
-// toResponse converts a storage.Route to its API wire form (RFC 3339
-// timestamps).
+// toResponse converts a storage.Route to its API wire form (RFC 3339 with
+// millisecond precision, UTC).
 func toResponse(r storage.Route) routeResponse {
 	return routeResponse{
 		ID:          r.ID,
@@ -75,7 +84,7 @@ func toResponse(r storage.Route) routeResponse {
 		UpstreamURL: r.UpstreamURL,
 		TLSEnabled:  r.TLSEnabled,
 		WAFEnabled:  r.WAFEnabled,
-		CreatedAt:   r.CreatedAt.UTC().Format("2006-01-02T15:04:05.999Z07:00"),
-		UpdatedAt:   r.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999Z07:00"),
+		CreatedAt:   r.CreatedAt.UTC().Format(timestampFormat),
+		UpdatedAt:   r.UpdatedAt.UTC().Format(timestampFormat),
 	}
 }
