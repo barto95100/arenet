@@ -46,7 +46,7 @@
 		<Spinner /> Loading routes…
 	</div>
 {:else if loadError}
-	<div class="mt-12 text-down">Failed to load routes: {loadError}</div>
+	<div class="mt-12 text-down" role="alert">Failed to load routes: {loadError}</div>
 {:else if routes.length === 0}
 	<div class="mt-16 flex flex-col items-center text-center gap-4">
 		<div class="text-6xl text-muted">◉</div>
