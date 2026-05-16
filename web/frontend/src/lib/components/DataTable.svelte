@@ -31,7 +31,7 @@
 </script>
 
 <div class="overflow-hidden border border-border-subtle rounded-lg">
-	<table class="w-full text-sm border-collapse">
+	<table class="w-full text-sm border-collapse table-fixed">
 		<thead class="bg-sidebar sticky top-0">
 			<tr>
 				{#each headers as h (h)}

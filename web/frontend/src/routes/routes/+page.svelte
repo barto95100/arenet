@@ -39,6 +39,7 @@
 	// Derived stats — recompute when `routes` changes.
 	const stats = $derived({
 		total: routes.length,
+		// `active` shadows `total` until live health checks land in Step E.
 		active: routes.length,
 		tls: routes.filter((r) => r.tlsEnabled).length,
 		waf: routes.filter((r) => r.wafEnabled).length
@@ -80,6 +81,7 @@
 	<div class="mt-6">
 		<DataTable headers={['Status', 'Host', 'Upstream', 'TLS', 'WAF', 'Actions']} items={routes}>
 			{#snippet row(r)}
+				<!-- TODO Step E: replace with live health-check status -->
 				<td class="px-4 py-3"><StatusDot status="up" /></td>
 				<td class="px-4 py-3 font-mono">{r.host}</td>
 				<td
