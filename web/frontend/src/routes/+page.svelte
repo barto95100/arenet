@@ -10,6 +10,7 @@
 	import { ApiError } from '$lib/api/types';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
+	import Button from '$lib/components/Button.svelte';
 
 	let apiStatus = $state('loading…');
 	listRoutes()
@@ -57,11 +58,30 @@
 	</div>
 
 	<div>
-		<h2 class="text-lg font-semibold mb-2">Spinner (sm, md, lg)</h2>
+		<h2 class="text-lg font-semibold mb-2">Spinner — sizes (cyan default)</h2>
 		<div class="flex items-center gap-4">
 			<Spinner size="sm" />
 			<Spinner size="md" />
 			<Spinner size="lg" />
+		</div>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Spinner — colors</h2>
+		<div class="flex items-center gap-4 flex-wrap">
+			<span class="flex items-center gap-2"><Spinner color="cyan" /> cyan (default)</span>
+			<span class="flex items-center gap-2 bg-cyan p-2 rounded">
+				<Spinner color="black" /> <span class="text-inverse">black on cyan</span>
+			</span>
+			<span class="flex items-center gap-2 bg-down p-2 rounded">
+				<Spinner color="black" /> <span class="text-inverse">black on danger</span>
+			</span>
+			<span class="flex items-center gap-2 text-up">
+				<Spinner color="current" /> current (inherits text color)
+			</span>
+			<span class="flex items-center gap-2 text-warn">
+				<Spinner color="current" /> current on warn
+			</span>
 		</div>
 	</div>
 
@@ -73,6 +93,35 @@
 			<span class="flex items-center gap-1"><StatusDot status="down" /> down</span>
 			<span class="flex items-center gap-1"><StatusDot status="info" /> info</span>
 			<span class="flex items-center gap-1"><StatusDot status="idle" /> idle</span>
+		</div>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Button — variants</h2>
+		<div class="flex flex-wrap gap-3 items-center">
+			<Button>Primary</Button>
+			<Button variant="secondary">Secondary</Button>
+			<Button variant="ghost">Ghost</Button>
+			<Button variant="danger">Danger</Button>
+		</div>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Button — sizes</h2>
+		<div class="flex flex-wrap gap-3 items-center">
+			<Button size="sm">Small</Button>
+			<Button size="md">Medium</Button>
+			<Button size="lg">Large</Button>
+		</div>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Button — states</h2>
+		<div class="flex flex-wrap gap-3 items-center">
+			<Button loading>Loading</Button>
+			<Button disabled>Disabled</Button>
+			<Button variant="danger" loading>Danger loading</Button>
+			<Button variant="secondary" disabled>Secondary disabled</Button>
 		</div>
 	</div>
 

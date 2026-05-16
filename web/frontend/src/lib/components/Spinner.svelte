@@ -5,9 +5,25 @@
 -->
 <script lang="ts">
 	type Size = 'sm' | 'md' | 'lg';
-	let { size = 'md' }: { size?: Size } = $props();
+	type Color = 'cyan' | 'black' | 'white' | 'current';
+	let {
+		size = 'md',
+		color = 'cyan'
+	}: { size?: Size; color?: Color } = $props();
 	const sizeMap: Record<Size, number> = { sm: 14, md: 20, lg: 32 };
 	const sizePx = $derived(sizeMap[size]);
+
+	const arcColorMap: Record<Color, string> = {
+		cyan: 'var(--accent-cyan)',
+		black: 'var(--text-inverse)',
+		white: 'var(--text-primary)',
+		current: 'currentColor'
+	};
+	const arcStroke = $derived(arcColorMap[color]);
+	// The muted ring uses a transparent fade of the arc color when 'current',
+	// otherwise the design-system muted border.
+	const ringStroke = $derived(color === 'current' ? 'currentColor' : 'var(--border-default)');
+	const ringOpacity = $derived(color === 'current' ? '0.25' : '1');
 </script>
 
 <svg
@@ -18,10 +34,17 @@
 	role="status"
 	aria-label="Loading"
 >
-	<circle cx="12" cy="12" r="10" stroke="var(--border-default)" stroke-width="3" />
+	<circle
+		cx="12"
+		cy="12"
+		r="10"
+		stroke={ringStroke}
+		stroke-opacity={ringOpacity}
+		stroke-width="3"
+	/>
 	<path
 		d="M22 12a10 10 0 0 1-10 10"
-		stroke="var(--accent-cyan)"
+		stroke={arcStroke}
 		stroke-width="3"
 		stroke-linecap="round"
 	>
