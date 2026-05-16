@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listRoutes, createRoute, updateRoute } from '$lib/api/client';
+	import { listRoutes, createRoute, updateRoute, deleteRoute } from '$lib/api/client';
 	import type { Route, RouteRequest } from '$lib/api/types';
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
@@ -38,6 +38,9 @@
 		tlsEnabled: false,
 		wafEnabled: false
 	});
+
+	let confirmTarget = $state<Route | null>(null);
+	let deleting = $state(false);
 
 	function resetFormErrors() {
 		formError = null;
@@ -106,6 +109,22 @@
 			}
 		} finally {
 			submitting = false;
+		}
+	}
+
+	async function confirmDelete() {
+		if (!confirmTarget) return;
+		deleting = true;
+		try {
+			await deleteRoute(confirmTarget.id);
+			pushToast('Route deleted', 'success');
+			confirmTarget = null;
+			await loadRoutes();
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : String(err);
+			pushToast(msg, 'danger');
+		} finally {
+			deleting = false;
 		}
 	}
 
@@ -196,7 +215,7 @@
 				<td class="px-4 py-3">
 					<div class="flex gap-1">
 						<Button variant="ghost" size="sm" onclick={() => openEdit(r)}>Edit</Button>
-						<Button variant="ghost" size="sm" onclick={() => alert('delete in 8.4')}>Delete</Button>
+						<Button variant="ghost" size="sm" onclick={() => (confirmTarget = r)}>Delete</Button>
 					</div>
 				</td>
 			{/snippet}
@@ -263,5 +282,25 @@
 		<Button onclick={submitForm} loading={submitting}>
 			{formMode === 'create' ? 'Create' : 'Save'}
 		</Button>
+	{/snippet}
+</Modal>
+
+<Modal
+	open={confirmTarget !== null}
+	title="Delete route"
+	onClose={() => (confirmTarget = null)}
+>
+	{#if confirmTarget}
+		<p class="text-sm">
+			Are you sure you want to delete the route for
+			<code class="font-mono text-cyan">{confirmTarget.host}</code>?
+		</p>
+		<p class="text-xs text-secondary mt-2">
+			Caddy will be reloaded immediately. This action cannot be undone.
+		</p>
+	{/if}
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (confirmTarget = null)}>Cancel</Button>
+		<Button variant="danger" loading={deleting} onclick={confirmDelete}>Delete</Button>
 	{/snippet}
 </Modal>
