@@ -18,7 +18,10 @@
 	import StatCard from '$lib/components/StatCard.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import Modal from '$lib/components/Modal.svelte';
+	import Sidebar from '$lib/components/Sidebar.svelte';
 	import { pushToast } from '$lib/stores/toast';
+
+	let sidebarCollapsed = $state(false);
 
 	let demoModalOpen = $state(false);
 	let formModalOpen = $state(false);
@@ -60,7 +63,9 @@
 		);
 </script>
 
-<div class="p-8 space-y-6">
+<div class="flex">
+	<Sidebar bind:collapsed={sidebarCollapsed} />
+	<div class="flex-1 p-8 space-y-6">
 	<h1 class="text-4xl font-semibold">Arenet design system smoke</h1>
 	<p class="text-secondary text-sm">If you can read this, tokens are wired.</p>
 
@@ -370,5 +375,6 @@
 			GET <code class="font-mono text-cyan">/api/v1/routes</code>:
 			<span class="font-mono">{apiStatus}</span>
 		</p>
+	</div>
 	</div>
 </div>
