@@ -18,11 +18,19 @@
 	import StatCard from '$lib/components/StatCard.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import Modal from '$lib/components/Modal.svelte';
+	import { pushToast } from '$lib/stores/toast';
 
 	let demoModalOpen = $state(false);
 	let formModalOpen = $state(false);
 	let dangerModalOpen = $state(false);
 	let demoModalInput = $state('');
+
+	function spamToasts() {
+		pushToast('Route api.local created', 'success');
+		setTimeout(() => pushToast('Reload took 142ms', 'info'), 300);
+		setTimeout(() => pushToast('Caddy reload failed: bind: address already in use', 'danger'), 600);
+		setTimeout(() => pushToast('Route admin.local updated', 'success'), 900);
+	}
 
 	type DemoRoute = {
 		id: string;
@@ -327,6 +335,34 @@
 			<Button variant="danger" onclick={() => (dangerModalOpen = false)}>Delete</Button>
 		{/snippet}
 	</Modal>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Toast — composed</h2>
+		<div class="flex flex-wrap gap-3">
+			<Button
+				variant="secondary"
+				onclick={() => pushToast('Route created successfully', 'success')}
+			>
+				Push success
+			</Button>
+			<Button
+				variant="secondary"
+				onclick={() => pushToast('Network error: Failed to fetch', 'danger')}
+			>
+				Push danger
+			</Button>
+			<Button
+				variant="secondary"
+				onclick={() => pushToast('Heads up: Caddy was reloaded', 'info')}
+			>
+				Push info
+			</Button>
+			<Button variant="ghost" onclick={spamToasts}>Spam 4 toasts (queue test)</Button>
+		</div>
+		<p class="text-xs text-secondary mt-2">
+			Toasts appear bottom-right, auto-dismiss after 4 s, manual × dismiss available.
+		</p>
+	</div>
 
 	<div>
 		<h2 class="text-lg font-semibold mb-2">API client smoke</h2>
