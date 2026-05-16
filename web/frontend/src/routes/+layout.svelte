@@ -9,6 +9,7 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import ToastContainer from '$lib/components/ToastContainer.svelte';
+	import { loading } from '$lib/stores/loading';
 
 	let { children } = $props();
 
@@ -41,8 +42,27 @@
 
 <div class="flex min-h-screen">
 	<Sidebar bind:collapsed />
-	<main class="flex-1 p-6">
+	<main class="flex-1 p-6 relative">
+		{#if $loading}
+			<div class="absolute left-0 right-0 top-0 h-0.5 overflow-hidden">
+				<div class="h-full w-1/3 bg-cyan-400 loading-shimmer"></div>
+			</div>
+		{/if}
 		{@render children?.()}
 	</main>
 </div>
 <ToastContainer />
+
+<style>
+	.loading-shimmer {
+		animation: shimmer 1.5s ease-in-out infinite;
+	}
+	@keyframes shimmer {
+		0% {
+			transform: translateX(-100%);
+		}
+		100% {
+			transform: translateX(400%);
+		}
+	}
+</style>
