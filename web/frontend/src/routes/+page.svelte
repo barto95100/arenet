@@ -17,6 +17,12 @@
 	import Card from '$lib/components/Card.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
+	import Modal from '$lib/components/Modal.svelte';
+
+	let demoModalOpen = $state(false);
+	let formModalOpen = $state(false);
+	let dangerModalOpen = $state(false);
+	let demoModalInput = $state('');
 
 	type DemoRoute = {
 		id: string;
@@ -267,6 +273,60 @@
 			{/snippet}
 		</DataTable>
 	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Modal — composed</h2>
+		<div class="flex flex-wrap gap-3">
+			<Button onclick={() => (demoModalOpen = true)}>Open simple modal</Button>
+			<Button variant="secondary" onclick={() => (formModalOpen = true)}>
+				Open form modal (focus trap demo)
+			</Button>
+			<Button variant="danger" onclick={() => (dangerModalOpen = true)}>
+				Open delete-style modal
+			</Button>
+		</div>
+	</div>
+
+	<Modal open={demoModalOpen} title="Demo modal" onClose={() => (demoModalOpen = false)}>
+		<p class="text-sm">
+			Hello from a modal. Press <kbd class="font-mono text-cyan">Escape</kbd> or click outside
+			to close. Tab should NOT escape the dialog.
+		</p>
+		{#snippet footer()}
+			<Button variant="ghost" onclick={() => (demoModalOpen = false)}>Cancel</Button>
+			<Button onclick={() => (demoModalOpen = false)}>Confirm</Button>
+		{/snippet}
+	</Modal>
+
+	<Modal open={formModalOpen} title="Form modal" onClose={() => (formModalOpen = false)}>
+		<div class="flex flex-col gap-4">
+			<Input label="Host" placeholder="example.com" bind:value={demoModalInput} />
+			<Input label="Upstream URL" placeholder="http://127.0.0.1:9000" />
+			<Checkbox label="Enable TLS" />
+		</div>
+		{#snippet footer()}
+			<Button variant="ghost" onclick={() => (formModalOpen = false)}>Cancel</Button>
+			<Button onclick={() => (formModalOpen = false)}>Save</Button>
+		{/snippet}
+	</Modal>
+
+	<Modal
+		open={dangerModalOpen}
+		title="Delete route"
+		onClose={() => (dangerModalOpen = false)}
+	>
+		<p class="text-sm">
+			Are you sure you want to delete
+			<code class="font-mono text-cyan">test.local</code>?
+		</p>
+		<p class="text-xs text-secondary mt-2">
+			Caddy will be reloaded immediately. This action cannot be undone.
+		</p>
+		{#snippet footer()}
+			<Button variant="ghost" onclick={() => (dangerModalOpen = false)}>Cancel</Button>
+			<Button variant="danger" onclick={() => (dangerModalOpen = false)}>Delete</Button>
+		{/snippet}
+	</Modal>
 
 	<div>
 		<h2 class="text-lg font-semibold mb-2">API client smoke</h2>
