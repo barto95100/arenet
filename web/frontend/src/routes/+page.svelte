@@ -13,6 +13,8 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Checkbox from '$lib/components/Checkbox.svelte';
+	import Badge from '$lib/components/Badge.svelte';
+	import Card from '$lib/components/Card.svelte';
 
 	// Local state for the smoke demo so we can see two-way binding work.
 	let hostInput = $state('');
@@ -169,6 +171,43 @@
 				class="font-mono text-cyan">{wafChecked}</code
 			>
 		</p>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Badge — variants</h2>
+		<div class="flex flex-wrap gap-2 items-center">
+			<Badge variant="tls">TLS</Badge>
+			<Badge variant="waf">WAF</Badge>
+			<Badge variant="status-up">UP</Badge>
+			<Badge variant="status-warn">WARN</Badge>
+			<Badge variant="status-down">DOWN</Badge>
+			<Badge>neutral</Badge>
+			<Badge variant="tls">Badge with longer text</Badge>
+		</div>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Card — wrapper</h2>
+		<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+			<Card>
+				<h3 class="text-lg font-semibold mb-2">Default padding</h3>
+				<p class="text-sm text-secondary">
+					Card with the default <code class="font-mono text-cyan">p-6</code> padding.
+				</p>
+			</Card>
+			<Card padding="p-4">
+				<h3 class="text-lg font-semibold mb-2">Tight padding</h3>
+				<p class="text-sm text-secondary">
+					Same wrapper, <code class="font-mono text-cyan">padding="p-4"</code>.
+				</p>
+			</Card>
+			<Card padding="p-8" class="border-cyan">
+				<h3 class="text-lg font-semibold mb-2">Custom class</h3>
+				<p class="text-sm text-secondary">
+					Border overridden via <code class="font-mono text-cyan">class="border-cyan"</code>.
+				</p>
+			</Card>
+		</div>
 	</div>
 
 	<div>
