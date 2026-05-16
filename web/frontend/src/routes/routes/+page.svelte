@@ -5,8 +5,8 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listRoutes } from '$lib/api/client';
-	import type { Route } from '$lib/api/types';
+	import { listRoutes, createRoute, updateRoute } from '$lib/api/client';
+	import type { Route, RouteRequest } from '$lib/api/types';
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import Button from '$lib/components/Button.svelte';
@@ -15,10 +15,99 @@
 	import DataTable from '$lib/components/DataTable.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
 	import Badge from '$lib/components/Badge.svelte';
+	import Modal from '$lib/components/Modal.svelte';
+	import Input from '$lib/components/Input.svelte';
+	import Checkbox from '$lib/components/Checkbox.svelte';
 
 	let routes = $state<Route[]>([]);
 	let loading = $state(true);
 	let loadError = $state<string | null>(null);
+
+	type FormMode = 'create' | 'edit';
+	let formOpen = $state(false);
+	let formMode = $state<FormMode>('create');
+	let editingId = $state<string | null>(null);
+	let submitting = $state(false);
+	let formError = $state<string | null>(null);
+	let hostError = $state<string | null>(null);
+	let upstreamError = $state<string | null>(null);
+
+	let formData = $state<RouteRequest>({
+		host: '',
+		upstreamUrl: '',
+		tlsEnabled: false,
+		wafEnabled: false
+	});
+
+	function resetFormErrors() {
+		formError = null;
+		hostError = null;
+		upstreamError = null;
+	}
+
+	function openCreate() {
+		formMode = 'create';
+		editingId = null;
+		formData = { host: '', upstreamUrl: '', tlsEnabled: false, wafEnabled: false };
+		resetFormErrors();
+		formOpen = true;
+	}
+
+	function openEdit(r: Route) {
+		formMode = 'edit';
+		editingId = r.id;
+		formData = {
+			host: r.host,
+			upstreamUrl: r.upstreamUrl,
+			tlsEnabled: r.tlsEnabled,
+			wafEnabled: r.wafEnabled
+		};
+		resetFormErrors();
+		formOpen = true;
+	}
+
+	/**
+	 * Map a server validation message to a specific field, or null if the message
+	 * is not field-attributable (then it lands in formError as a top-of-form
+	 * banner).
+	 */
+	function fieldFromMessage(msg: string): 'host' | 'upstreamUrl' | null {
+		const lower = msg.toLowerCase();
+		if (lower.startsWith('host ')) return 'host';
+		if (lower.startsWith('upstreamurl ')) return 'upstreamUrl';
+		return null;
+	}
+
+	async function submitForm() {
+		submitting = true;
+		resetFormErrors();
+		try {
+			if (formMode === 'create') {
+				await createRoute(formData);
+				pushToast('Route created', 'success');
+			} else if (editingId) {
+				await updateRoute(editingId, formData);
+				pushToast('Route updated', 'success');
+			}
+			formOpen = false;
+			await loadRoutes();
+		} catch (err) {
+			if (err instanceof ApiError && err.kind === 'validation') {
+				// Validation errors (400, 409) → inline. Form stays open.
+				const field = fieldFromMessage(err.message);
+				if (field === 'host') hostError = err.message;
+				else if (field === 'upstreamUrl') upstreamError = err.message;
+				else formError = err.message;
+			} else {
+				// System errors (500, network, parse, anything else) → toast.
+				// Modal stays open so the user can retry without losing input.
+				const msg = err instanceof ApiError ? err.message : String(err);
+				pushToast(msg, 'danger');
+			}
+		} finally {
+			submitting = false;
+		}
+	}
 
 	async function loadRoutes() {
 		loading = true;
@@ -55,7 +144,7 @@
 		<h1 class="text-4xl font-semibold">Routes</h1>
 		<p class="text-secondary text-sm mt-1">Manage reverse proxy routes.</p>
 	</div>
-	<Button onclick={() => alert('form coming in Task 8.3')}>+ Add route</Button>
+	<Button onclick={openCreate}>+ Add route</Button>
 </div>
 
 {#if loading}
@@ -68,7 +157,7 @@
 	<div class="mt-16 flex flex-col items-center text-center gap-4">
 		<div class="text-6xl text-muted">◉</div>
 		<p class="text-secondary">No routes configured yet.</p>
-		<Button onclick={() => alert('form coming in Task 8.3')}>+ Add your first route</Button>
+		<Button onclick={openCreate}>+ Add your first route</Button>
 	</div>
 {:else}
 	<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
@@ -106,7 +195,7 @@
 				</td>
 				<td class="px-4 py-3">
 					<div class="flex gap-1">
-						<Button variant="ghost" size="sm" onclick={() => alert('edit in 8.3')}>Edit</Button>
+						<Button variant="ghost" size="sm" onclick={() => openEdit(r)}>Edit</Button>
 						<Button variant="ghost" size="sm" onclick={() => alert('delete in 8.4')}>Delete</Button>
 					</div>
 				</td>
@@ -126,3 +215,53 @@
 		</DataTable>
 	</div>
 {/if}
+
+<Modal
+	open={formOpen}
+	title={formMode === 'create' ? 'Add route' : 'Edit route'}
+	onClose={() => (formOpen = false)}
+>
+	<form
+		onsubmit={(e) => {
+			e.preventDefault();
+			submitForm();
+		}}
+		class="flex flex-col gap-4"
+	>
+		{#if formError}
+			<p
+				class="px-3 py-2 rounded bg-down/10 border border-down/40 text-sm text-down"
+				role="alert"
+			>
+				{formError}
+			</p>
+		{/if}
+		<Input
+			label="Host"
+			bind:value={formData.host}
+			placeholder="example.local"
+			error={hostError ?? undefined}
+		/>
+		<Input
+			label="Upstream URL"
+			bind:value={formData.upstreamUrl}
+			placeholder="http://127.0.0.1:8080"
+			error={upstreamError ?? undefined}
+		/>
+		<Checkbox label="Enable TLS" bind:checked={formData.tlsEnabled} />
+		<Checkbox
+			label="Enable WAF (coming in Step F)"
+			bind:checked={formData.wafEnabled}
+			disabled
+			title="WAF support arrives in Step F"
+		/>
+		<!-- Hidden submit button so Enter inside an input still triggers the form. -->
+		<button type="submit" class="hidden" aria-hidden="true"></button>
+	</form>
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (formOpen = false)}>Cancel</Button>
+		<Button onclick={submitForm} loading={submitting}>
+			{formMode === 'create' ? 'Create' : 'Save'}
+		</Button>
+	{/snippet}
+</Modal>
