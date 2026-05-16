@@ -5,6 +5,18 @@
 
   THROWAWAY SMOKE PAGE — replaced in Chunk 7 with the / -> /routes redirect.
 -->
+<script lang="ts">
+	import { listRoutes } from '$lib/api/client';
+	import { ApiError } from '$lib/api/types';
+
+	let apiStatus = $state('loading…');
+	listRoutes()
+		.then((rs) => (apiStatus = `OK — ${rs.length} route(s)`))
+		.catch((e: ApiError | Error) =>
+			(apiStatus = `error (${e instanceof ApiError ? e.kind : 'unknown'}): ${e.message}`)
+		);
+</script>
+
 <div class="p-8 space-y-6">
 	<h1 class="text-4xl font-semibold">Arenet design system smoke</h1>
 	<p class="text-secondary text-sm">If you can read this, tokens are wired.</p>
@@ -38,7 +50,15 @@
 	</div>
 
 	<div>
-		<h2 class="text-lg font-semibold mb-2">Mono (will use JetBrains Mono after Task 4.3)</h2>
+		<h2 class="text-lg font-semibold mb-2">Mono</h2>
 		<p class="font-mono text-sm text-secondary">192.0.2.1:443 — 503 Service Unavailable</p>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">API client smoke</h2>
+		<p class="text-sm">
+			GET <code class="font-mono text-cyan">/api/v1/routes</code>:
+			<span class="font-mono">{apiStatus}</span>
+		</p>
 	</div>
 </div>
