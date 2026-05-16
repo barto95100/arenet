@@ -11,6 +11,14 @@
 	import Spinner from '$lib/components/Spinner.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import Input from '$lib/components/Input.svelte';
+	import Checkbox from '$lib/components/Checkbox.svelte';
+
+	// Local state for the smoke demo so we can see two-way binding work.
+	let hostInput = $state('');
+	let portInput = $state('9999');
+	let tlsChecked = $state(false);
+	let wafChecked = $state(false);
 
 	let apiStatus = $state('loading…');
 	listRoutes()
@@ -123,6 +131,44 @@
 			<Button variant="danger" loading>Danger loading</Button>
 			<Button variant="secondary" disabled>Secondary disabled</Button>
 		</div>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Input — states</h2>
+		<div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl">
+			<Input label="Host" placeholder="example.com" bind:value={hostInput} />
+			<Input
+				label="Upstream port (with error)"
+				placeholder="port"
+				bind:value={portInput}
+				error="port must be between 1 and 65535"
+			/>
+			<Input label="No label below" placeholder="bare input, no label" />
+		</div>
+		<p class="text-xs text-secondary mt-2">
+			Bound values: host=<code class="font-mono text-cyan">{hostInput || '(empty)'}</code>,
+			port=<code class="font-mono text-cyan">{portInput}</code>
+		</p>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Checkbox — states</h2>
+		<div class="flex flex-col gap-2 max-w-md">
+			<Checkbox label="Enable TLS" bind:checked={tlsChecked} />
+			<Checkbox label="Enable WAF" bind:checked={wafChecked} />
+			<Checkbox label="Disabled, no tooltip" disabled />
+			<Checkbox
+				label="Disabled with tooltip (hover me)"
+				disabled
+				title="Available in Step F"
+			/>
+			<Checkbox label="Pre-checked" checked />
+		</div>
+		<p class="text-xs text-secondary mt-2">
+			Bound values: tls=<code class="font-mono text-cyan">{tlsChecked}</code>, waf=<code
+				class="font-mono text-cyan">{wafChecked}</code
+			>
+		</p>
 	</div>
 
 	<div>
