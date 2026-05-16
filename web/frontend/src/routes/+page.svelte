@@ -15,6 +15,22 @@
 	import Checkbox from '$lib/components/Checkbox.svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import Card from '$lib/components/Card.svelte';
+	import StatCard from '$lib/components/StatCard.svelte';
+	import DataTable from '$lib/components/DataTable.svelte';
+
+	type DemoRoute = {
+		id: string;
+		host: string;
+		upstream: string;
+		tls: boolean;
+		waf: boolean;
+		status: 'up' | 'warn' | 'down';
+	};
+	const demoRoutes: DemoRoute[] = [
+		{ id: 'r1', host: 'api.local', upstream: 'http://127.0.0.1:9000', tls: true, waf: false, status: 'up' },
+		{ id: 'r2', host: 'admin.local', upstream: 'http://127.0.0.1:9001', tls: true, waf: true, status: 'warn' },
+		{ id: 'r3', host: 'legacy.local', upstream: 'http://10.0.0.42:8080', tls: false, waf: false, status: 'down' }
+	];
 
 	// Local state for the smoke demo so we can see two-way binding work.
 	let hostInput = $state('');
@@ -208,6 +224,48 @@
 				</p>
 			</Card>
 		</div>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">StatCard — composed</h2>
+		<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+			<StatCard label="Total routes" value={12} />
+			<StatCard label="Active" value={9} trend={2} />
+			<StatCard label="With TLS" value={4} trend={-1} />
+			<StatCard label="With WAF" value={0} />
+		</div>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">DataTable — composed</h2>
+		<DataTable
+			headers={['Status', 'Host', 'Upstream', 'TLS', 'WAF']}
+			items={demoRoutes}
+		>
+			{#snippet row(r)}
+				<td class="px-4 py-3"><StatusDot status={r.status} /></td>
+				<td class="px-4 py-3 font-mono">{r.host}</td>
+				<td class="px-4 py-3 font-mono text-secondary truncate max-w-[16rem]" title={r.upstream}>
+					{r.upstream}
+				</td>
+				<td class="px-4 py-3">
+					{#if r.tls}<Badge variant="tls">TLS</Badge>{:else}<span class="text-muted">—</span>{/if}
+				</td>
+				<td class="px-4 py-3">
+					{#if r.waf}<Badge variant="waf">WAF</Badge>{:else}<span class="text-muted">—</span>{/if}
+				</td>
+			{/snippet}
+			{#snippet expanded(r)}
+				<dl class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+					<dt class="text-secondary">ID</dt>
+					<dd class="font-mono">{r.id}</dd>
+					<dt class="text-secondary">Upstream (full)</dt>
+					<dd class="font-mono">{r.upstream}</dd>
+					<dt class="text-secondary">Live traffic</dt>
+					<dd class="text-muted">— (coming soon)</dd>
+				</dl>
+			{/snippet}
+		</DataTable>
 	</div>
 
 	<div>
