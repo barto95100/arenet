@@ -20,14 +20,19 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
+	"github.com/barto95100/arenet/internal/api"
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/storage"
+	"github.com/barto95100/arenet/web"
 )
 
 const version = "DEV"
@@ -131,6 +136,33 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		}
 	}()
 
+	apiHandler := api.NewHandler(store, mgr, logger)
+	router := api.NewRouter(apiHandler, cfg.dev)
+
+	if cfg.dev {
+		router.Get("/", devLandingHandler(cfg.adminPort))
+	} else {
+		staticFS, ferr := web.StaticFS()
+		if ferr != nil {
+			return fmt.Errorf("embed: %w", ferr)
+		}
+		router.Handle("/*", http.FileServer(http.FS(staticFS)))
+	}
+
+	adminSrv := &http.Server{
+		Addr:              cfg.adminPort,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+		}
+		close(serverErr)
+	}()
+
 	httpsActive, err := mgr.HasHTTPSServer(ctx)
 	if err != nil {
 		return err
@@ -141,13 +173,41 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	}
 	logger.Info("Arenet listening", listenAttrs...)
 
-	<-ctx.Done()
-	if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
-		logger.Info("Arenet shutting down", "reason", err)
-	} else {
-		logger.Info("Arenet shutting down")
+	select {
+	case <-ctx.Done():
+	case err := <-serverErr:
+		return fmt.Errorf("admin server: %w", err)
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := adminSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("admin server shutdown error", "err", err)
+	}
+	if err, ok := <-serverErr; ok && err != nil {
+		logger.Error("admin server post-shutdown error", "err", err)
+	}
+	logger.Info("Arenet shutting down")
 	return nil
+}
+
+// devLandingHandler returns a tiny HTML page guiding the developer to the
+// Vite dev server. Only mounted at GET / when --dev is true.
+func devLandingHandler(adminPort string) http.HandlerFunc {
+	const tmpl = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><title>Arenet (dev)</title>
+<style>body{font-family:system-ui;padding:2rem;max-width:40rem;margin:auto;background:#0a0e14;color:#e6edf3}
+a{color:#00d9ff}code{background:#1a212b;padding:0.1rem 0.3rem;border-radius:0.2rem}</style>
+</head><body>
+<h1>Arenet — dev mode</h1>
+<p>The admin API is running on <code>%s</code>.</p>
+<p>The frontend is served separately by Vite. Open <a href="http://localhost:5173">http://localhost:5173</a>.</p>
+</body></html>`
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, tmpl, adminPort)
+	}
 }
 
 func main() {
