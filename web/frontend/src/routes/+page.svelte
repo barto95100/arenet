@@ -8,6 +8,8 @@
 <script lang="ts">
 	import { listRoutes } from '$lib/api/client';
 	import { ApiError } from '$lib/api/types';
+	import Spinner from '$lib/components/Spinner.svelte';
+	import StatusDot from '$lib/components/StatusDot.svelte';
 
 	let apiStatus = $state('loading…');
 	listRoutes()
@@ -52,6 +54,26 @@
 	<div>
 		<h2 class="text-lg font-semibold mb-2">Mono</h2>
 		<p class="font-mono text-sm text-secondary">192.0.2.1:443 — 503 Service Unavailable</p>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">Spinner (sm, md, lg)</h2>
+		<div class="flex items-center gap-4">
+			<Spinner size="sm" />
+			<Spinner size="md" />
+			<Spinner size="lg" />
+		</div>
+	</div>
+
+	<div>
+		<h2 class="text-lg font-semibold mb-2">StatusDot (up, warn, down, info, idle)</h2>
+		<div class="flex items-center gap-4">
+			<span class="flex items-center gap-1"><StatusDot status="up" /> up</span>
+			<span class="flex items-center gap-1"><StatusDot status="warn" /> warn</span>
+			<span class="flex items-center gap-1"><StatusDot status="down" /> down</span>
+			<span class="flex items-center gap-1"><StatusDot status="info" /> info</span>
+			<span class="flex items-center gap-1"><StatusDot status="idle" /> idle</span>
+		</div>
 	</div>
 
 	<div>
