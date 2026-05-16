@@ -1,0 +1,56 @@
+/*
+ * Arenet - Homelab-friendly reverse proxy with integrated security
+ * Copyright (C) 2026  Ludovic Ramos
+ * Licensed under the GNU AGPL v3 or later. See LICENSE.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+	/* Backgrounds */
+	--bg-base: #0a0e14;
+	--bg-sidebar: #060a10;
+	--bg-elevated: #11161f;
+	--bg-surface: #1a212b;
+	--bg-hover: #1f2733;
+
+	/* Borders */
+	--border-subtle: #1f2733;
+	--border-default: #2a3441;
+	--border-strong: #3a4554;
+
+	/* Text */
+	--text-primary: #e6edf3;
+	--text-secondary: #8b949e;
+	--text-muted: #4a5568;
+	--text-inverse: #0a0e14;
+
+	/* Signature */
+	--accent-cyan: #00d9ff;
+	--accent-cyan-d: #00a8c7;
+
+	/* Status */
+	--status-up: #00ff88;
+	--status-warn: #ffaa00;
+	--status-down: #ff4757;
+	--status-info: #a78bfa;
+}
+
+html,
+body {
+	background: var(--bg-base);
+	color: var(--text-primary);
+	font-family: 'Inter', system-ui, sans-serif;
+	min-height: 100vh;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0s !important;
+		transition-duration: 0s !important;
+	}
+}
