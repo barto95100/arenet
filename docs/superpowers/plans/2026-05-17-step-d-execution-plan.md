@@ -122,7 +122,7 @@ Concretely:
 
 The operator must have on hand:
 
-- Go 1.23+ (matching Step C)
+- Go 1.25+ (matching Step C, see CLAUDE.md)
 - Node 20+ for the frontend
 - A terminal with the project root at the working directory
 - A Caddy binary available locally for integration tests
