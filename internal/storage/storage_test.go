@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -42,6 +44,74 @@ func newTestStore(t *testing.T) *Store {
 func TestNewStore_EmptyPath(t *testing.T) {
 	if _, err := NewStore(""); err == nil {
 		t.Fatal("expected error for empty path, got nil")
+	}
+}
+
+func TestNewStore_CreatesAllBuckets(t *testing.T) {
+	s := newTestStore(t)
+
+	want := []string{"routes", "users", "sessions", "audit"}
+	err := s.DB().View(func(tx *bolt.Tx) error {
+		for _, name := range want {
+			if b := tx.Bucket([]byte(name)); b == nil {
+				t.Errorf("bucket %q not created", name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+}
+
+func TestNewStore_ReopenIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "arenet.db")
+
+	s1, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	if _, err := s1.CreateRoute(context.Background(), Route{Host: "a.example.com", UpstreamURL: "http://u:1"}); err != nil {
+		t.Fatalf("seed Step C bucket: %v", err)
+	}
+	if err := s1.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	s2, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+
+	routes, err := s2.ListRoutes(context.Background())
+	if err != nil {
+		t.Fatalf("list after reopen: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("Step C data lost on reopen: want 1 route, got %d", len(routes))
+	}
+
+	err = s2.DB().View(func(tx *bolt.Tx) error {
+		for _, name := range []string{"users", "sessions", "audit"} {
+			if b := tx.Bucket([]byte(name)); b == nil {
+				t.Errorf("bucket %q missing after reopen", name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+}
+
+// TestStore_DB ensures the DB accessor remains exported (regression-safe
+// for the auth/audit packages that depend on it).
+func TestStore_DB(t *testing.T) {
+	s := newTestStore(t)
+	if s.DB() == nil {
+		t.Fatal("DB() returned nil")
 	}
 }
 

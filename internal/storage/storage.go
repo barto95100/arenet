@@ -30,7 +30,10 @@ import (
 
 // Bucket names used inside the BoltDB file.
 const (
-	bucketRoutes = "routes"
+	bucketRoutes   = "routes"
+	bucketUsers    = "users"
+	bucketSessions = "sessions"
+	bucketAudit    = "audit"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -58,14 +61,31 @@ func NewStore(dbPath string) (*Store, error) {
 	}
 
 	if err := db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte(bucketRoutes))
-		return err
+		for _, name := range [][]byte{
+			[]byte(bucketRoutes),   // Step B/C
+			[]byte(bucketUsers),    // Step D
+			[]byte(bucketSessions), // Step D
+			[]byte(bucketAudit),    // Step D
+		} {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return fmt.Errorf("create bucket %q: %w", name, err)
+			}
+		}
+		return nil
 	}); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: init buckets: %w", err)
 	}
 
 	return &Store{db: db}, nil
+}
+
+// DB returns the underlying bbolt handle. Reserved for the auth and
+// audit packages, which share the same database file per bbolt's
+// single-writer constraint. Other consumers MUST NOT call this and
+// MUST use the typed methods on Store.
+func (s *Store) DB() *bolt.DB {
+	return s.db
 }
 
 // Close releases the underlying BoltDB file.
