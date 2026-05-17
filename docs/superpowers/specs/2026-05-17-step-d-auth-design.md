@@ -861,3 +861,636 @@ of mutations and complicates the consistency model. Single-admin
 homelab usage does not justify that cost, and the index can be added
 later without breaking changes to the public API (the methods stay
 the same; only the internal lookup strategy changes).
+
+## 4. Auth endpoints — HTTP detail
+
+This section specifies the wire contract of every endpoint introduced
+in Step D: request shape, response shape, error responses, audit events
+emitted, and side effects on session state. It is the contract that
+both the backend handlers and the frontend client must honor.
+
+### 4.1 Overview
+
+Step D adds nine new HTTP endpoints. Eight are under `/api/v1/auth/*`,
+one is `/api/v1/audit` for reading the audit log.
+
+| Method | Path                              | Group     | Audit emitted                         |
+|--------|-----------------------------------|-----------|---------------------------------------|
+| POST   | `/api/v1/auth/setup`              | no-auth   | `setup_admin_created`                 |
+| POST   | `/api/v1/auth/login`              | no-auth   | `login_success` or `login_failure`    |
+| POST   | `/api/v1/auth/logout`             | soft-auth | `logout`                              |
+| GET    | `/api/v1/auth/me`                 | soft-auth | — (read, not audited)                 |
+| POST   | `/api/v1/auth/unlock`             | soft-auth | `unlock_success` or `unlock_failure`  |
+| POST   | `/api/v1/auth/heartbeat`          | hard-auth | — (heartbeat, not audited)            |
+| GET    | `/api/v1/auth/sessions`           | hard-auth | — (read, not audited)                 |
+| DELETE | `/api/v1/auth/sessions/{id}`      | hard-auth | `session_revoked`                     |
+| GET    | `/api/v1/audit`                   | hard-auth | `audit_viewed`                        |
+
+Middleware groups (specified in Section 5):
+
+- **no-auth**: no session cookie required.
+- **soft-auth**: cookie + valid session, idle state allowed.
+- **hard-auth**: cookie + valid session + not idle (within 15-minute
+  inactivity window).
+
+All endpoints share these conventions:
+
+- Request and response bodies use **camelCase** JSON (matching Step C's
+  `routeRequest` / `routeResponse` convention).
+- The internal storage layer uses snake_case (Section 3); the API layer
+  performs the case transformation.
+- Error responses use the single-key envelope `{"error": "message"}`
+  (matching Step C). Errors are returned one at a time, not as lists.
+- Error messages are in English. The frontend may translate for display.
+- No internal details (file paths, SQL fragments, stack traces) appear
+  in error messages exposed to the client.
+- Rate limit middleware applies to all `/api/v1/auth/*` endpoints (see
+  Section 5 for tier definitions). The `/api/v1/audit` endpoint is not
+  rate-limited because it requires a valid authenticated session.
+
+### 4.2 POST /api/v1/auth/setup
+
+Creates the first admin account. Available only when the `users`
+bucket is empty.
+
+**Group**: no-auth (the user has not authenticated yet by definition)
+
+**Request body**:
+
+```json
+{
+  "setupToken": "8f3a9b2c4e7d1f6a...",
+  "username": "admin",
+  "displayName": "Site Admin",
+  "password": "correct-horse-battery-staple-15"
+}
+```
+
+- `setupToken` (string, required): the token displayed in the server
+  logs at startup. Regenerated on every restart until an admin exists.
+- `username` (string, required): lowercase, 3..32, regex `^[a-z0-9_-]+$`.
+- `displayName` (string, optional): free text, ≤64. Empty allowed.
+- `password` (string, required): 15..128 characters. Validated against
+  the embedded top-10k list synchronously. HIBP check launched
+  asynchronously after creation (see Section 7).
+
+**Response 201**:
+
+```json
+{
+  "id": "a3a6e27d-043b-425a-8e40-868bf1943de8",
+  "username": "admin",
+  "displayName": "Site Admin",
+  "createdAt": "2026-05-17T14:23:00.000Z"
+}
+```
+
+Sets the session cookie:
+
+```text
+Set-Cookie: arenet_session=<256-bit base64>; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400
+```
+
+The newly created admin is immediately logged in (24h session, no
+remember-me at setup time). The `Secure` attribute is omitted in
+`--dev` mode (see 4.11).
+
+**Errors**:
+
+| Status | Body                                                                          | Trigger                                       |
+|--------|-------------------------------------------------------------------------------|-----------------------------------------------|
+| 400    | `{"error": "username must be lowercase"}`                                     | Username regex / length validation fails      |
+| 400    | `{"error": "password must be at least 15 characters"}`                        | Password too short                            |
+| 400    | `{"error": "password is in the list of common compromised passwords"}`        | Top-10k match                                 |
+| 400    | `{"error": "displayName must be at most 64 characters"}`                      | Display name too long                         |
+| 400    | `{"error": "invalid JSON body"}`                                              | Body not valid JSON                           |
+| 403    | `{"error": "setup token invalid or expired"}`                                 | `setupToken` mismatch                         |
+| 404    | `{"error": "setup unavailable: an admin already exists"}`                     | Setup attempted after admin exists            |
+| 429    | `{"error": "too many attempts, retry after 15 minutes"}` + `Retry-After: 900` | Rate limit triggered                          |
+| 500    | `{"error": "internal error"}`                                                 | Unexpected failure (DB write fails, etc.)     |
+
+**Audit event emitted on success**: `setup_admin_created` with
+`ActorUserID` set to the new user's ID, `TargetType: "user"`,
+`TargetID` set to the new user's ID, `AfterJSON` containing the new
+`User` struct **with `PasswordHash` removed** (no secrets in audit).
+
+**Notes**:
+
+- The 404 on "admin already exists" is deliberate: returning 403 or
+  409 would confirm the endpoint exists, which is a minor info leak.
+  404 indicates "this resource is not available in your current state".
+- The setup token is invalidated server-side immediately after a
+  successful setup, preventing replay.
+
+### 4.3 POST /api/v1/auth/login
+
+Authenticates an existing user and issues a session.
+
+**Group**: no-auth
+
+**Request body**:
+
+```json
+{
+  "username": "admin",
+  "password": "correct-horse-battery-staple-15",
+  "rememberMe": false
+}
+```
+
+- `username` (string, required): the username to log in as.
+- `password` (string, required): the user's password.
+- `rememberMe` (boolean, optional, default `false`): when `true`, the
+  session uses a 30-day sliding TTL instead of the default 24h.
+
+**Response 200**:
+
+```json
+{
+  "id": "a3a6e27d-043b-425a-8e40-868bf1943de8",
+  "username": "admin",
+  "displayName": "Site Admin"
+}
+```
+
+Sets the session cookie with `Max-Age` of either 86400 (24h) or
+2592000 (30d) seconds based on `rememberMe`.
+
+**Errors**:
+
+| Status | Body                                                            | Trigger                                            |
+|--------|-----------------------------------------------------------------|----------------------------------------------------|
+| 400    | `{"error": "invalid JSON body"}`                                | Body not valid JSON                                |
+| 400    | `{"error": "username and password are required"}`               | Missing required field                             |
+| 401    | `{"error": "invalid credentials"}`                              | Username not found OR password mismatch (same msg) |
+| 429    | `{"error": "too many attempts, retry after 15 minutes"}`        | Tier 1 rate limit (5 failures in 5 min)            |
+| 429    | `{"error": "too many attempts, retry after 1 hour"}`            | Tier 2 rate limit (10 failures in 1h)              |
+| 503    | `{"error": "authentication service temporarily unavailable"}`   | User store unreachable (decision D11)              |
+
+**Audit events emitted**:
+
+- On success: `login_success` with `ActorUserID` set, `IP` and
+  `UserAgent` captured.
+- On bad credentials: `login_failure` with `ActorUserID` empty (we
+  may not have a matching user), `ActorUsernameSnapshot` set to the
+  attempted username (truncated to 32 chars for safety), `Message`
+  set to `"user_not_found"` or `"bad_password"`.
+- On rate limit: `login_failure` with `Message: "rate_limited_tier_1"`
+  or `"rate_limited_tier_2"`.
+
+**Security notes**:
+
+- The same `401 invalid credentials` message is returned whether the
+  username does not exist or the password is wrong. This prevents
+  username enumeration.
+- A constant-time string comparison (`subtle.ConstantTimeCompare`) is
+  used inside `argon2id.ComparePasswordAndHash` to prevent timing
+  attacks (the library handles this internally).
+- The attempted username in `login_failure` is truncated to prevent
+  log injection of arbitrarily large strings.
+
+**Side effects on success**:
+
+- A new `Session` is created in the `sessions` bucket.
+- `User.LastLoginAt` is updated (best-effort, failure logged but does
+  not fail the login response).
+- If `User.HIBPCheckStatus == "pending"`, an asynchronous HIBP
+  re-check is launched (see Section 7).
+
+### 4.4 POST /api/v1/auth/logout
+
+Terminates the current session.
+
+**Group**: soft-auth (idle sessions can still be cleanly logged out)
+
+**Request body**: empty.
+
+**Response 204**: no body.
+
+Clears the cookie:
+
+```text
+Set-Cookie: arenet_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0
+```
+
+**Errors**:
+
+| Status | Body                                       | Trigger                            |
+|--------|--------------------------------------------|------------------------------------|
+| 401    | `{"error": "no active session"}`           | No cookie or session not found     |
+
+**Audit event emitted**: `logout` with `ActorUserID` and
+`ActorUsernameSnapshot` set. `Message` set to `"manual"` to
+distinguish from session expiry (which is not audited per D7).
+
+**Notes**:
+
+- The endpoint is idempotent: calling it without a session returns
+  401 but does not destabilize the client. The frontend treats 401
+  the same as success here (the user wanted to log out, they are
+  now logged out).
+- The session is deleted from the `sessions` bucket on successful
+  logout.
+
+### 4.5 GET /api/v1/auth/me
+
+Returns the current authenticated user's identity and session state.
+
+**Group**: soft-auth (must work when locked, to populate the lock
+screen with the username)
+
+**Request body**: none.
+
+**Response 200**:
+
+```json
+{
+  "id": "a3a6e27d-043b-425a-8e40-868bf1943de8",
+  "username": "admin",
+  "displayName": "Site Admin",
+  "locked": false,
+  "passwordCompromised": false,
+  "hibpCheckStatus": "clean"
+}
+```
+
+- `id`, `username`, `displayName`: from the `User` struct.
+- `locked` (boolean): `true` if the current session has exceeded
+  the 15-minute inactivity window. Used by the frontend to show
+  the lock-screen overlay.
+- `passwordCompromised` (boolean): `true` if a HIBP re-check has
+  detected the user's password in a breach database. Used by the
+  frontend to show a banner urging immediate password change.
+- `hibpCheckStatus` (string): one of `"pending"`, `"clean"`,
+  `"compromised"`. Useful for the frontend to show a "verifying
+  your password against breach databases..." indicator if pending.
+
+**Errors**:
+
+| Status | Body                              | Trigger                              |
+|--------|-----------------------------------|--------------------------------------|
+| 401    | `{"error": "no active session"}`  | No cookie or session expired/missing |
+
+**Important behavior**: `/auth/me` does **not** update
+`Session.LastActivity`. This is critical: if it did, the frontend
+polling `/me` to keep the lock screen populated would silently
+reset the idle timer server-side, making the lock screen
+permanent unreachable. The middleware for soft-auth specifically
+skips the Touch call for this endpoint (see Section 5).
+
+**No audit emitted**: this is a read operation. Step D's audit
+policy (decision Q5) audits authentication events and mutations,
+not routine reads.
+
+### 4.6 POST /api/v1/auth/unlock
+
+Re-authenticates an idle session to lift the lock screen.
+
+**Group**: soft-auth
+
+**Request body**:
+
+```json
+{
+  "password": "correct-horse-battery-staple-15"
+}
+```
+
+**Response 200**:
+
+```json
+{
+  "unlocked": true
+}
+```
+
+**Errors**:
+
+| Status | Body                                                            | Trigger                            |
+|--------|-----------------------------------------------------------------|------------------------------------|
+| 400    | `{"error": "invalid JSON body"}`                                | Body not valid JSON                |
+| 400    | `{"error": "password is required"}`                             | Missing password                   |
+| 401    | `{"error": "invalid password"}`                                 | Password does not match the user   |
+| 429    | `{"error": "too many attempts, retry after 15 minutes"}`        | Tier 1 rate limit                  |
+| 429    | `{"error": "too many attempts, retry after 1 hour"}`            | Tier 2 rate limit                  |
+
+**Audit events emitted**:
+
+- On success: `unlock_success` with `ActorUserID`, `IP`, `UserAgent`.
+- On failure: `unlock_failure` with `ActorUserID`, `Message:
+  "bad_password"`.
+
+**Side effects on success**:
+
+- `Session.LastActivity` updated to now (lifts the idle state).
+- Client-side idle timer is reset (the frontend triggers this on
+  receiving the success response).
+
+**Rate limit scope**: unlock failures count against the same
+per-IP buckets as login failures. This prevents an attacker from
+brute-forcing the password via the lock screen.
+
+### 4.7 POST /api/v1/auth/heartbeat
+
+Refreshes the session sliding TTL without performing any business
+operation. Called by the frontend periodically (e.g., every 5
+minutes while the tab is active) to keep the session alive during
+long viewing sessions without mutations.
+
+**Group**: hard-auth (must succeed only when the session is
+actively used, not when idle)
+
+**Request body**: empty.
+
+**Response 204**: no body.
+
+**Errors**:
+
+| Status | Body                              | Trigger                            |
+|--------|-----------------------------------|--------------------------------------|
+| 401    | `{"error": "no active session"}`  | No cookie or session expired/missing |
+| 403    | `{"error": "session locked"}`     | Session is in idle state             |
+
+**Audit emitted**: none. Heartbeat is too frequent (~12 per hour
+per active tab) to be useful in the audit log.
+
+**Side effect**: `Session.LastActivity` updated to now (via the
+hard-auth middleware's standard Touch call).
+
+**Note**: this endpoint exists for symmetry with `/me`. The
+difference is that `heartbeat` requires hard-auth and touches
+`LastActivity`, while `/me` requires soft-auth and does not.
+Frontend flow: poll `/me` to know the session state; call
+`heartbeat` periodically to keep the session alive.
+
+### 4.8 GET /api/v1/auth/sessions
+
+Returns all sessions owned by the current authenticated user.
+
+**Group**: hard-auth
+
+**Request body**: none.
+
+**Response 200**:
+
+```json
+{
+  "sessions": [
+    {
+      "id": "Tj9k...",
+      "issuedAt": "2026-05-15T08:00:00.000Z",
+      "lastActivity": "2026-05-17T14:23:00.000Z",
+      "expiresAt": "2026-05-18T14:23:00.000Z",
+      "ip": "192.168.1.42",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/...",
+      "rememberMe": false,
+      "isCurrent": true
+    },
+    {
+      "id": "Mp2k...",
+      "issuedAt": "2026-04-20T12:00:00.000Z",
+      "lastActivity": "2026-05-16T18:00:00.000Z",
+      "expiresAt": "2026-06-15T18:00:00.000Z",
+      "ip": "10.0.0.5",
+      "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5)...",
+      "rememberMe": true,
+      "isCurrent": false
+    }
+  ]
+}
+```
+
+- `isCurrent`: `true` for exactly one session, the one matching the
+  cookie of the current request. The frontend uses this to disable
+  the "revoke" button on the current session (use `/logout` instead).
+- Expired sessions are filtered out server-side before responding.
+
+**Errors**:
+
+| Status | Body                              | Trigger                            |
+|--------|-----------------------------------|--------------------------------------|
+| 401    | 401 standard                      | No session / expired                 |
+| 403    | 403 standard                      | Session locked                       |
+
+**Audit emitted**: none (read operation).
+
+### 4.9 DELETE /api/v1/auth/sessions/{id}
+
+Revokes (deletes) a specific session owned by the current user.
+
+**Group**: hard-auth
+
+**Request body**: none. The session ID is in the URL.
+
+**Response 204**: no body.
+
+**Errors**:
+
+| Status | Body                                                              | Trigger                                                |
+|--------|-------------------------------------------------------------------|--------------------------------------------------------|
+| 400    | `{"error": "cannot revoke own current session; use /logout"}`     | Attempting to revoke the session matching the cookie   |
+| 404    | `{"error": "session not found"}`                                  | Session does not exist OR belongs to another user      |
+
+**Audit event emitted**: `session_revoked` with `ActorUserID`
+(revoker), `TargetType: "session"`, `TargetID` (the revoked
+session ID), `BeforeJSON` containing the revoked `Session`
+struct.
+
+**Security note**: returning 404 when the session belongs to
+another user (rather than 403) prevents discovering which session
+IDs belong to which users by trial.
+
+### 4.10 GET /api/v1/audit
+
+Returns audit events matching the supplied filters, paginated.
+
+**Group**: hard-auth
+
+**Query parameters**:
+
+| Param            | Type     | Description                                                              |
+|------------------|----------|--------------------------------------------------------------------------|
+| `actor_user_id`  | string   | Filter by actor user ID                                                  |
+| `action`         | string   | Filter by exact action (e.g. `login_success`)                            |
+| `target_type`    | string   | Filter by target type (`route`, `user`, `session`)                       |
+| `target_id`      | string   | Filter by target ID                                                      |
+| `from`           | RFC3339  | Include events with `Timestamp >= from`                                  |
+| `to`             | RFC3339  | Include events with `Timestamp < to`                                     |
+| `limit`          | integer  | Max events to return, default 50, max 200                                |
+| `cursor`         | string   | Opaque pagination token from previous response                           |
+
+Filters combine with AND semantics. Empty parameters are ignored.
+
+**Response 200**:
+
+```json
+{
+  "events": [
+    {
+      "id": "0190a3f8-7d3c-7234-9abc-def012345678",
+      "timestamp": "2026-05-17T14:23:00.123Z",
+      "actorUserId": "a3a6e27d-043b-425a-8e40-868bf1943de8",
+      "actorUsernameSnapshot": "admin",
+      "action": "route_created",
+      "targetType": "route",
+      "targetId": "f7b9c0d1-a234-5678-90ab-cdef12345678",
+      "beforeJson": null,
+      "afterJson": {"id":"f7b9c0d1-...","host":"api.local",...},
+      "message": "",
+      "ip": "192.168.1.42",
+      "userAgent": "Mozilla/5.0 ..."
+    }
+  ],
+  "nextCursor": "0190a3f8-7d3c-7234-9abc-def012345678"
+}
+```
+
+- `nextCursor`: opaque token to pass to the next call. Empty string
+  (or omitted) means no more events.
+- Events are sorted by `timestamp` descending (most recent first).
+- `beforeJson` and `afterJson` are returned as parsed JSON objects
+  in the response (not as escaped strings), making the frontend's
+  display logic trivial.
+
+**Errors**:
+
+| Status | Body                                                  | Trigger                          |
+|--------|-------------------------------------------------------|----------------------------------|
+| 400    | `{"error": "invalid 'from' timestamp"}`               | `from` not RFC3339               |
+| 400    | `{"error": "invalid 'to' timestamp"}`                 | `to` not RFC3339                 |
+| 400    | `{"error": "invalid 'limit' parameter"}`              | `limit` not integer or out of range |
+| 400    | `{"error": "invalid cursor"}`                         | Cursor not a valid UUID v7       |
+| 401    | 401 standard                                          | No session                       |
+| 403    | 403 standard                                          | Session locked                   |
+
+**Audit event emitted**: `audit_viewed` with `ActorUserID` set,
+`Message` containing a compact representation of the filters
+applied (e.g. `"action=login_failure&from=2026-05-01"`). This
+allows an admin to see who is consulting the audit log and what
+they searched for.
+
+**Note**: in Phase 1 with a single admin, this self-audit may seem
+redundant. It is included to be ready for Phase 2 (multi-user)
+where it becomes meaningful for accountability.
+
+### 4.11 Cookie attributes
+
+The session cookie is named `arenet_session` and uses the following
+attributes:
+
+| Attribute  | Production value    | Dev mode value (`--dev`)         |
+|------------|---------------------|----------------------------------|
+| `HttpOnly` | yes                 | yes                              |
+| `Secure`   | yes                 | **no** (HTTP allowed for local)  |
+| `SameSite` | `Strict`            | `Strict`                         |
+| `Path`     | `/`                 | `/`                              |
+| `Max-Age`  | 86400 or 2592000    | 86400 or 2592000                 |
+| `Domain`   | (not set)           | (not set)                        |
+
+- `HttpOnly` prevents JavaScript access (XSS defense).
+- `Secure` is **omitted** in `--dev` mode because Vite serves over
+  HTTP locally. Setting `Secure` on HTTP would prevent the cookie
+  from being sent, breaking dev.
+- `SameSite=Strict` is the primary CSRF defense (decision D9).
+  Browsers refuse to send the cookie on cross-site requests.
+- `Path=/` makes the cookie available to all paths under the
+  origin, including `/api/v1/auth/me` and `/api/v1/routes`.
+- `Domain` is not set, restricting the cookie to the exact origin
+  (no subdomain sharing). This is intentional defense against
+  subdomain compromise.
+- `Max-Age` is 86400 seconds (24h) for normal logins, or 2592000
+  seconds (30d) when `rememberMe: true`. The browser also enforces
+  expiry; the server enforces sliding TTL via the `expiresAt`
+  field in the session.
+
+CORS in dev mode (decision implicit in Step C extension) adds:
+
+```text
+Access-Control-Allow-Credentials: true
+```
+
+This is **required** for the browser to send cookies on
+cross-origin requests (Vite at `:5173` → API at `:8001`). The
+Step C `devCORS` middleware will be updated in Section 5 to
+include this header.
+
+### 4.12 Error envelope convention
+
+All error responses use the single-key envelope:
+
+```json
+{"error": "human-readable message"}
+```
+
+Rules:
+
+- **One error per response**, never an array. If a request triggers
+  multiple validation failures, the first failure encountered wins
+  and is returned. This matches Step C's existing pattern and
+  simplifies the frontend display logic.
+- **Messages in English** at the API boundary. The frontend may
+  translate for display (Step D ships English-only UI; localization
+  is out of scope).
+- **No internal details exposed**. Stack traces, file paths, SQL
+  fragments, and database error messages are never included. The
+  detailed error is logged via slog at the appropriate level (Error
+  for unexpected failures, Warn for recoverable, Info for expected).
+- **Status code is authoritative**. The frontend dispatches on the
+  HTTP status; the message is for human display only.
+
+Status code semantics (consistent across all Step D endpoints):
+
+| Code | Meaning                                                                       |
+|------|-------------------------------------------------------------------------------|
+| 200  | Success with response body                                                    |
+| 201  | Resource created with response body                                           |
+| 204  | Success with no response body                                                 |
+| 400  | Validation error in request (client should fix and retry)                     |
+| 401  | Authentication required or invalid credentials (frontend → `/login`)          |
+| 403  | Authenticated but forbidden, including session locked (frontend → lock screen)|
+| 404  | Resource not found, including disambiguating cases (e.g. own session check)   |
+| 409  | Conflict (existing Step C convention for uniqueness)                          |
+| 429  | Rate limit exceeded, includes `Retry-After` header                            |
+| 500  | Unexpected server error                                                       |
+| 503  | Service temporarily unavailable (storage unreachable, decision D11)           |
+
+### 4.13 Audit event wire format
+
+The `Event` struct (Section 3.4) uses snake_case JSON tags for
+storage. The API layer transforms these into camelCase for the
+wire format consumed by the frontend, consistent with Step C's
+`routeResponse` pattern.
+
+Snake_case storage → camelCase wire mapping:
+
+| Storage field              | Wire field                |
+|----------------------------|---------------------------|
+| `id`                       | `id`                      |
+| `timestamp`                | `timestamp`               |
+| `actor_user_id`            | `actorUserId`             |
+| `actor_username_snapshot`  | `actorUsernameSnapshot`   |
+| `action`                   | `action`                  |
+| `target_type`              | `targetType`              |
+| `target_id`                | `targetId`                |
+| `before_json`              | `beforeJson`              |
+| `after_json`               | `afterJson`               |
+| `message`                  | `message`                 |
+| `ip`                       | `ip`                      |
+| `user_agent`               | `userAgent`               |
+
+`beforeJson` and `afterJson` are returned as **parsed JSON
+objects** in the wire format, not as escaped JSON strings. This
+makes the frontend's display logic trivial (no need to
+double-parse). The transformation happens in the API handler
+via `json.RawMessage` → `interface{}` decoding before re-encoding
+the response.
+
+All Phase 1 fields are exposed unconditionally. Phase 2 may
+introduce role-based field filtering (e.g. an `editor` role may
+not see `ip` of other users' events), but this is deferred per
+decision D10.
+
+---
+
+End of Section 4. The middleware behavior, context propagation,
+and request-flow details are specified in Section 5.
