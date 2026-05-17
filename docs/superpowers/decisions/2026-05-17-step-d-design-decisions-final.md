@@ -97,7 +97,7 @@ D6 — Password validation
   - If detected compromised: flag user, banner UI at next login, force password change
 - New User struct fields: HIBPCheckStatus, HIBPCheckedAt, PasswordCompromised
 
-D7 — Action enum (13 events for Step D)
+D7 — Action enum (15 events for Step D)
 - Authentication: login_success, login_failure, logout
 - Lock screen: unlock_success, unlock_failure
 - Sessions: session_revoked
