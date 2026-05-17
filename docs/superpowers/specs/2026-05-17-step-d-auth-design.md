@@ -5426,3 +5426,218 @@ documented here so reviewers do not flag their absence as bugs:
   `docs/roadmap.md`).
 - **No Coraza WAF / advanced threat detection**: deferred to 
   Step G (see `docs/roadmap.md`).
+
+## 11. Out of scope (deferred to future steps)
+
+This section enumerates work that is intentionally deferred beyond 
+Step D, organized by the milestone where it will be delivered. It 
+serves as the planning counterpart to Section 10.10: while 10.10 
+tells reviewers what NOT to flag as missing in the current step, 
+Section 11 tells the architect where each deferred concern lives 
+on the roadmap.
+
+The canonical source of truth for milestone planning is 
+`docs/roadmap.md`. This section reflects the state of that 
+document at Step D spec freeze and may diverge slightly as the 
+roadmap evolves.
+
+### 11.1 Overview
+
+Step D is the foundation: single-admin authentication with 
+password protection, session management, lock screen, audit log, 
+and HIBP integration. Building on this foundation, future steps 
+add complementary capabilities without rewriting the core.
+
+The deferred items fall into three categories:
+
+- **Authentication extensions** (Step D2, D3): expand the auth 
+  model — multi-user, 2FA, OIDC.
+- **Operational maturity** (Phase 2 of Step D, Step F): polish 
+  the UI and add security observability.
+- **Network-layer defense** (Step G, H): integrate WAF and IP 
+  reputation.
+
+Plus a small set of features that are **permanently out of scope** 
+for design or feasibility reasons (Section 11.8).
+
+### 11.2 Deferred to Step D2 (Multi-user + 2FA)
+
+Step D2 transforms Arenet from single-admin to multi-user:
+
+- **Multi-user with roles**: `admin`, `editor`, `viewer`. Admins 
+  manage users and have full access; editors create/modify 
+  routes; viewers see configuration and audit log read-only.
+- **2FA / MFA**: TOTP (RFC 6238) as the primary second factor, 
+  with WebAuthn (FIDO2) as the modern alternative for users with 
+  hardware keys.
+- **Account-level lockout**: a per-user failure counter, separate 
+  from the existing per-IP rate limiter. Prevents an attacker 
+  from cycling IPs to attack a single user.
+- **User management UI**: a `/users` page for admins to create, 
+  disable, delete users, and reset their 2FA.
+- **Per-role audit visibility** (decision D10): editors see only 
+  events tied to their own actions or to routes they manage; 
+  admins see everything.
+- **Per-role field filtering**: certain fields (other users' IPs, 
+  other users' display names) may be redacted for editors/viewers 
+  in the audit response.
+
+### 11.3 Deferred to Step D3 (OIDC integration)
+
+Step D3 enables single sign-on for users already invested in an 
+identity provider:
+
+- **OIDC client**: integration with GoAuthentik, Authelia, and 
+  Keycloak. These three are explicit targets because they cover 
+  the most popular self-hosted identity providers used in homelab 
+  environments.
+- **Authorization Code with PKCE flow**: redirect to provider → 
+  callback → state and PKCE verification → session creation.
+- **Group-to-role mapping**: a configurable mapping of provider 
+  groups (e.g. "arenet-admins") to Arenet roles 
+  (admin/editor/viewer).
+- **Mixed authentication**: local password users (from Step D) 
+  and OIDC users coexist. Admins choose at user creation whether 
+  the user is local or OIDC-bound.
+- **Logout propagation**: a logout from Arenet optionally 
+  triggers a back-channel logout at the OIDC provider (RP-Initiated 
+  Logout per OIDC spec).
+
+### 11.4 Deferred to Phase 2 of Step D
+
+These are enhancements to Step D itself, queued behind more 
+urgent steps but explicitly recognized as desirable:
+
+- **Dedicated `/settings` page**: routine password management 
+  (not driven by the compromised-password banner), profile 
+  display name editing, active sessions overview with revoke 
+  buttons.
+- **URL query parameters for audit filters**: filters reflected 
+  in the URL (e.g. `/audit?action=login_failure&from=2026-05-01`) 
+  to support bookmark and share.
+- **Sortable audit table columns**: click column header to 
+  sort. Backend support requires extending `audit.Filter` with 
+  a sort key.
+- **Syntax highlighting in audit JSON view**: lightweight 
+  tokenizer for keys, strings, numbers, booleans. Considered 
+  but skipped in Step D for bundle size.
+- **Side-by-side diff in audit expanded rows**: for events with 
+  both `BeforeJSON` and `AfterJSON` (e.g. `route_updated`), 
+  render a visual diff. Requires a diff library or custom 
+  implementation.
+- **Audit log retention policy**: configurable automatic purge 
+  of events older than N days. Step D ships with no retention 
+  (events accumulate forever), which is fine for low-volume 
+  homelab use but becomes a concern at higher scales.
+- **Audit log export**: CSV and JSON download, optionally 
+  filtered by the current view. Useful for compliance reviews.
+- **Structured field-level errors at `/setup`**: replace the 
+  heuristic substring-matching of error messages with explicit 
+  `{field, error}` pairs in the response. Requires a 
+  wire-format change.
+- **Auto-detection of "no admin exists"**: a small endpoint 
+  (`/api/v1/setup-status`) that lets the frontend redirect 
+  to `/setup` on first boot without the user needing to know 
+  the URL.
+
+### 11.5 Deferred to Step F (Security observability)
+
+Step F adds operator-facing visibility into security events:
+
+- **Security UI page**: a new sidebar entry surfacing blocked 
+  IPs from the rate limiter (Tier 2 hits), recent suspicious 
+  activity, and aggregate counts.
+- **Webhook for security events**: configurable endpoint that 
+  receives JSON payloads on Tier 2 rate-limit hits and other 
+  security signals. Designed for integration with FortiGate, 
+  Slack, Discord, ntfy, or any inbound webhook receiver.
+- **Real-time alerting on suspicious patterns**: e.g. login 
+  attempts on a non-existent username across multiple IPs 
+  (distributed scan), or repeated `unlock_failure` from the 
+  same session (compromise attempt).
+- **IP geolocation enrichment**: optional integration with 
+  MaxMind GeoIP or similar to display country/city in audit 
+  events. Local database, no external calls per request.
+- **User-Agent parsing**: categorize UAs (browser, OS, bot, 
+  unknown) for faster scanning in the audit log.
+
+The rate limiter in Step D already collects the underlying 
+data (`GetBlockedIPs()` in Section 5.3) but does not expose it 
+via HTTP. Step F bridges that gap.
+
+### 11.6 Deferred to Step G (Web Application Firewall)
+
+Step G integrates a WAF layer in front of business endpoints:
+
+- **Coraza WAF integration**: embedded WAF module in the 
+  request pipeline, evaluating requests against rulesets.
+- **OWASP Core Rule Set**: standard CRS rules for SQL 
+  injection, XSS, command injection, etc.
+- **Custom rules**: operator-defined rules per route (e.g. 
+  block specific user agents, enforce JSON-only on API 
+  endpoints).
+- **WAF event logging**: rule hits feed into the audit log as 
+  new event types (`waf_blocked`, `waf_warned`), correlatable 
+  with auth events.
+
+The WAF runs inside Arenet's binary (not as a separate process), 
+preserving Step C's single-binary deployment model.
+
+### 11.7 Deferred to Step H (IP reputation)
+
+Step H enriches the threat model with external intelligence:
+
+- **AbuseIPDB integration**: real-time check of incoming IPs 
+  against AbuseIPDB's database, with configurable thresholds 
+  for warning vs blocking.
+- **Threat intel feeds**: configurable ingestion of CIDR 
+  blocklists (Spamhaus DROP, Emerging Threats, etc.).
+- **Pre-emptive blocking of known-bad IPs**: rejected at the 
+  earliest middleware layer, before auth or business logic 
+  runs.
+- **Integration with security audit**: pre-emptive blocks 
+  emit audit events for visibility.
+
+### 11.8 Permanently out of scope
+
+The following features are deliberately excluded from Arenet's 
+long-term roadmap. Listing them here protects against scope 
+creep and clarifies the product's design philosophy.
+
+- **Account recovery via email**: Arenet has no email 
+  infrastructure and will not acquire one. Email is a 
+  significant operational concern (SMTP credentials, 
+  deliverability, anti-spam coordination) disproportionate to 
+  the value for a self-hosted admin tool. The recovery path 
+  for a lost password is operator action (admin CLI tool, 
+  Phase 2) or database surgery.
+
+- **SMS-based 2FA**: requires a paid carrier (Twilio, etc.), 
+  introduces dependencies, and is no longer considered a 
+  strong second factor by NIST 800-63B due to SIM-swap 
+  attacks. Step D2 will offer TOTP and WebAuthn instead.
+
+- **Biometric authentication**: hardware-dependent (fingerprint 
+  reader, camera), browser-specific (WebAuthn already covers 
+  this where supported), and inconsistent across the 
+  self-hosted homelab user base.
+
+- **Passwordless flows (magic links, etc.)**: the design 
+  philosophy of Arenet treats the password as the primary 
+  factor, complemented by 2FA in D2 and SSO in D3. Throwaway 
+  flows like magic links shift the security boundary to the 
+  user's email inbox, which is rarely better protected than 
+  their Arenet password.
+
+- **Federation between Arenet instances**: a multi-instance 
+  mesh with shared identity or shared routes is out of scope. 
+  Arenet is a single-instance admin tool; users wanting 
+  multi-site coordination should use a higher-level 
+  orchestrator (Terraform, Ansible) above multiple 
+  independent Arenet instances.
+
+These exclusions are not final in the sense of "we will never 
+reconsider them" — software is soft. But they represent the 
+current product direction and the reasoning behind it. Future 
+reviewers should weigh proposals to reverse these decisions 
+against the rationale above.
