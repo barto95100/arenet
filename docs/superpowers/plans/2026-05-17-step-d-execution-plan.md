@@ -586,3 +586,401 @@ some integration scenarios are best tested manually).
 **Downstream impact**: backend is now feature-complete. Frontend 
 chunks (5, 6, 7, 8) can begin. The API contract is set at this 
 point; any change to it requires a spec amendment.
+
+### 4.5 Chunk 5 — Frontend stores + API clients
+
+**Scope**: implement the two new Svelte stores (`auth.ts`, `idle.ts`), 
+the two typed API client modules (`auth.ts`, `audit.ts`), and the 
+modifications to the shared HTTP client (`client.ts`).
+
+This chunk delivers no visible UI, but it is the foundation that 
+Chunks 6, 7, and 8 consume. After this chunk merges, the frontend 
+can call all backend endpoints with full typing and consistent 
+error handling.
+
+**Spec sections**: 6.2 (auth store), 6.3 (idle store), 6.4 (client.ts 
+modifications), 6.5 (auth API client), 6.6 (audit API client).
+
+**Effort**: 3 hours.
+
+**Assignment**: **Delegable**. The spec for this chunk is exhaustive 
+(complete Svelte 5 / TypeScript snippets for every artifact). A 
+sub-agent following the spec literally produces correct output. 
+The operator reviews per the protocol in Section 6 before commit.
+
+**Files created or modified**:
+
+```text
+web/frontend/src/lib/stores/auth.ts          # NEW: AuthStore singleton, $state runes
+web/frontend/src/lib/stores/idle.ts          # NEW: IdleStore with 15-min timer
+web/frontend/src/lib/api/client.ts           # MODIFIED: credentials, 401/403/429 interceptors
+web/frontend/src/lib/api/auth.ts             # NEW: typed wrappers for /api/v1/auth/*
+web/frontend/src/lib/api/audit.ts            # NEW: typed wrappers for /api/v1/audit
+```
+
+**Tests to write within this chunk**:
+
+- `web/frontend/src/lib/stores/auth.test.ts`: bootstrap state 
+  transitions (unknown → authenticated/locked/anonymous), login, 
+  logout, unlock, setLocked, clear.
+- `web/frontend/src/lib/stores/idle.test.ts`: timer fires after 
+  15 min, reset on activity, no timer when state is not 
+  'authenticated', visibilityChange handler.
+- `web/frontend/src/lib/api/client.test.ts`: 401 triggers 
+  auth.clear() + navigation, 403 triggers auth.setLocked(), 429 
+  pushes toast, successful response resets idle timer.
+- `web/frontend/src/lib/api/auth.test.ts`: each wrapper sends the 
+  correct method/path/body and parses the response.
+- `web/frontend/src/lib/api/audit.test.ts`: filter URL parameter 
+  encoding (camelCase → snake_case).
+
+Test framework: Vitest (already configured in Step C).
+
+Coverage target: ≥75% for stores and API clients.
+
+**Acceptance criteria covered**:
+
+- AC-FE-01 (bootstrap calls /me at mount)
+- AC-FE-02 (anonymous state redirects to /login)
+- AC-FE-03 (authenticated state renders normally)
+- AC-FE-16 (credentials: 'include' on every fetch)
+- AC-FE-17 (heartbeat only when tab visible — the heartbeat function 
+  itself lives in +layout.svelte from Chunk 7, but its 
+  visibility check uses `document.visibilityState` which this 
+  chunk's stores observe correctly)
+
+Partial: AC-FE-04, 11, 12, 13, 14 (these ACs are exercised by 
+Chunks 7 and 8 which depend on this foundation).
+
+**Implementation notes**:
+
+- The `AuthStore` is a singleton **class instance** with Svelte 5 
+  `$state` runes, matching the pattern of Step C's `toast.ts` and 
+  `loading.ts` stores.
+- The `IdleStore` uses `setTimeout` cleared on every successful 
+  API call. The timer continues running when the tab is hidden 
+  (intentional — see spec 6.3).
+- `client.ts` modifications are surgical: add `credentials: 
+  'include'` to the fetch options, intercept 401/403/429 BEFORE 
+  parsing the body, reset idle timer on successful responses 
+  (status < 500).
+- The 403 interceptor distinguishes "session locked" from future 
+  role-based 403s by inspecting the error message body 
+  (`body.error === 'session locked'`).
+- The API client wrappers (`auth.ts`, `audit.ts`) translate 
+  camelCase TypeScript properties to snake_case URL query 
+  parameters where needed (e.g., `actorUserId` → `actor_user_id`).
+
+**Commit strategy**: two commits.
+
+- Commit A: stores (`auth.ts`, `idle.ts`) + their tests. Message: 
+  "Step D: frontend stores — auth and idle".
+- Commit B: API clients (`auth.ts`, `audit.ts`) + `client.ts` 
+  modifications + their tests. Message: 
+  "Step D: frontend API clients (auth, audit) and HTTP interceptors".
+
+**Dependencies**: Chunk 4 must be merged (the backend API contract 
+is set; the frontend clients consume it).
+
+**Downstream impact**: Chunks 6, 7, 8 all depend on this chunk.
+
+### 4.6 Chunk 6 — Frontend pages /login, /setup + Sidebar fifth item
+
+**Scope**: implement the `/login` and `/setup` routes with their 
+form logic and error handling, and add the fifth navigation item 
+"Audit" to the Sidebar component.
+
+**Spec sections**: 6.9 (login page), 6.10 (setup page), 6.12 
+(sidebar modifications).
+
+**Effort**: 3 hours.
+
+**Assignment**: **Delegable**. Both pages have complete Svelte 
+snippets in the spec; the sub-agent implements them literally. 
+Sidebar modification is a one-line addition.
+
+**Files created or modified**:
+
+```text
+web/frontend/src/routes/login/+page.svelte           # NEW: login form
+web/frontend/src/routes/setup/+page.svelte           # NEW: setup form with token field
+web/frontend/src/lib/components/Sidebar.svelte       # MODIFIED: add Audit item (5th)
+```
+
+**Tests to write within this chunk**:
+
+- `web/frontend/src/routes/login/+page.test.ts`: form validation 
+  (empty fields), happy path submission, 401 error handling 
+  (invalid credentials), 429 error handling (rate limit), 
+  rememberMe checkbox.
+- `web/frontend/src/routes/setup/+page.test.ts`: form validation, 
+  successful setup, 403 (invalid token), 404 (admin exists), 400 
+  with field error mapping heuristic.
+- `web/frontend/src/lib/components/Sidebar.test.ts` (extended): 
+  Audit item is now active, ordered correctly between Routes and 
+  Topology.
+
+Coverage target: ≥75% for the page components.
+
+**Acceptance criteria covered**:
+
+- AC-FE-15 (sidebar has 5 items: Routes, Audit active; Topology, 
+  Security, Settings disabled)
+
+Partial: AC-AUTH-02 → AC-AUTH-06 (login/setup flow end-to-end — 
+backend ACs from Chunk 4, frontend integration verified here).
+
+**Implementation notes**:
+
+- The login form's error display uses two levels: per-field 
+  errors via `Input` component's `error` prop (for missing 
+  fields) and form-level errors in a red banner at the top of 
+  the form (for 401, 400, 429).
+- The setup form's 400 error mapping heuristic matches error 
+  message substrings to fields: "username" → username field, 
+  "password" → password field, "displayname" → displayName 
+  field, otherwise form-level. This heuristic is documented in 
+  spec 6.10 as Phase 1 acceptable; Phase 2 will replace it with 
+  structured field-level errors.
+- The "First time? Set up admin account" link on the login page 
+  is the primary discovery mechanism for the setup flow (no 
+  auto-detection of "no admin exists" in Step D — decision in 
+  spec 6.7).
+- The Sidebar modification is a single line added to the existing 
+  `navItems` array between Routes and Topology:
+```ts
+  { href: '/audit', label: 'Audit', icon: 'activity', disabled: false },
+```
+  No other Sidebar logic changes.
+
+**Commit strategy**: one commit.
+
+- Commit: "Step D: frontend pages /login, /setup, and sidebar 
+  audit entry".
+
+**Dependencies**: Chunk 5 must be merged (uses auth store, auth 
+API client).
+
+**Downstream impact**: this chunk delivers the entry point of the 
+authentication flow. After this chunk merges, the end-to-end 
+auth happy path is verifiable manually (visit /login, enter 
+credentials, land on /routes).
+
+### 4.7 Chunk 7 — Frontend LockScreen + compromised banner + ChangePassword Modal
+
+**Scope**: implement the `LockScreen` component, the 
+`ChangePasswordModal` component, and the modifications to 
+`+layout.svelte` that wire them in (bootstrap gate, heartbeat 
+lifecycle, compromised-password banner, conditional LockScreen 
+mount).
+
+**Spec sections**: 6.7 (layout shell modifications), 6.8 
+(LockScreen component), 6.13 (ChangePasswordModal and banner).
+
+**Effort**: 4 hours.
+
+**Assignment**: **Mix**. The LockScreen and modal components have 
+complete spec snippets and can be drafted by a sub-agent. The 
+`+layout.svelte` modifications, however, integrate multiple 
+concerns (auth state, heartbeat, banner, lockscreen) and touch 
+the application's root rendering logic. The operator handles 
+the layout modifications solo to ensure the integration is 
+correct.
+
+**Files created or modified**:
+
+```text
+web/frontend/src/routes/+layout.svelte               # MODIFIED: auth gate, banner, heartbeat
+web/frontend/src/lib/components/LockScreen.svelte    # NEW: idle-lock overlay
+web/frontend/src/lib/components/ChangePasswordModal.svelte  # NEW: invoked from banner
+```
+
+**Tests to write within this chunk**:
+
+- `web/frontend/src/lib/components/LockScreen.test.ts`: renders 
+  with username from auth store, unlock submission success/failure, 
+  error display, focus on mount.
+- `web/frontend/src/lib/components/ChangePasswordModal.test.ts`: 
+  field validation (length, confirm match), submission success 
+  triggers `auth.bootstrap()`, 401 maps to currentPassword error, 
+  multi-session revocation notice visible.
+- `web/frontend/src/routes/+layout.test.ts` (extended): state 
+  transitions through unknown / anonymous / authenticated / 
+  locked, banner appears when passwordCompromised, heartbeat 
+  interval respects visibility.
+
+Coverage target: ≥75%.
+
+**Acceptance criteria covered**:
+
+- AC-FE-04 (LockScreen mounts on locked state)
+- AC-FE-05 (LockScreen preserves underlying UI state via 
+  backdrop-blur, no DOM unmount)
+- AC-FE-06 (LockScreen displays username from auth store)
+- AC-FE-07 (successful unlock transitions locked → authenticated)
+- AC-FE-08 (compromised banner appears, "Change password" opens 
+  modal)
+- AC-FE-09 (successful password change triggers bootstrap, banner 
+  disappears)
+- AC-FE-10 (success toast appears after password change)
+
+**Implementation notes — LockScreen specifics**:
+
+- `z-index: 1000` on the overlay — high enough to cover the 
+  Step C modals (which are in the low hundreds).
+- No Escape key handler: the LockScreen is intentionally not 
+  dismissible. The user must authenticate or close the tab.
+- `role="dialog"` + `aria-modal="true"` + `aria-labelledby` for 
+  screen-reader announcement.
+- Focus on the password input at mount via `bind:element` and a 
+  `passwordInput.focus()` in `onMount`.
+- After a successful `unlock()`, the auth store transitions to 
+  `authenticated` and the parent layout unmounts the LockScreen 
+  via the `{#if}` guard. The component does not need to handle 
+  its own unmount.
+
+**Implementation notes — ChangePasswordModal specifics**:
+
+- Three fields: current, new, confirm new. Validation order: 
+  required, length ≥ 15, match.
+- After successful change, the modal calls `auth.bootstrap()` to 
+  refresh the user (server has cleared `passwordCompromised`), 
+  then closes itself by setting `open = false`.
+- The "other sessions signed out" message appears both as a hint 
+  text under the inputs (always visible) and as a toast on 
+  success.
+
+**Implementation notes — +layout.svelte specifics**:
+
+- Bootstrap is awaited in `onMount` BEFORE any conditional 
+  rendering. The `unknown` state renders only a centered spinner.
+- The heartbeat starts after a successful bootstrap, runs every 
+  5 minutes, checks `document.visibilityState === 'visible'` AND 
+  `auth.state === 'authenticated'` before firing.
+- The compromised banner is conditional on 
+  `auth.user?.passwordCompromised === true`. It renders above 
+  the sidebar+main layout, not inside it.
+- The `ChangePasswordModal` is always mounted (controlled by 
+  `open` prop) to preserve form state across show/hide cycles.
+
+**Commit strategy**: two commits.
+
+- Commit A: `LockScreen.svelte` + `ChangePasswordModal.svelte` + 
+  their tests (no integration yet). Message: 
+  "Step D: frontend components — LockScreen and ChangePasswordModal".
+- Commit B: `+layout.svelte` modifications integrating both new 
+  components plus the compromised banner. Message: 
+  "Step D: layout shell with auth gate, banner, and LockScreen 
+  integration".
+
+**Dependencies**: Chunk 5 must be merged. Chunk 6 is not 
+strictly required but recommended (the /login route should exist 
+for the anonymous-redirect flow to be testable).
+
+### 4.8 Chunk 8 — Frontend audit page
+
+**Scope**: implement the `/audit` page with auto-applied filters 
+(300ms debounce), color-coded action badges, expand/collapse rows, 
+cursor-based pagination, plus the two sub-components 
+(`AuditRow`, `AuditExpandedDetails`) that handle row rendering, 
+and the `app.css` modifications for the new color tokens.
+
+**Spec sections**: 6.11 (audit page intro), 9 (entire — audit log 
+UI, all subsections 9.1 through 9.10).
+
+**Effort**: 4 hours.
+
+**Assignment**: **Delegable**. The spec for the audit page is the 
+most detailed UX specification in Step D (Section 9 alone is 448 
+lines). A sub-agent following Sections 6.11 + 9 literally produces 
+correct output. The operator reviews per the protocol in Section 6.
+
+**Files created or modified**:
+
+```text
+web/frontend/src/routes/audit/+page.svelte                   # NEW: main page with filters and pagination
+web/frontend/src/lib/components/AuditRow.svelte              # NEW: collapsed row + click handlers
+web/frontend/src/lib/components/AuditExpandedDetails.svelte  # NEW: expanded detail view
+web/frontend/src/app.css                                     # MODIFIED: add --color-violet, --color-slate tokens
+```
+
+**Tests to write within this chunk**:
+
+- `web/frontend/src/routes/audit/+page.test.ts`: filter debounce 
+  (300ms), apply filters from row click (badge → action filter, 
+  actor icon → user filter), pagination via Load more, error 
+  states (loading, empty, server error).
+- `web/frontend/src/lib/components/AuditRow.test.ts`: badge color 
+  per category, expand/collapse on click, badge and actor-icon 
+  clicks call `event.stopPropagation()`.
+- `web/frontend/src/lib/components/AuditExpandedDetails.test.ts`: 
+  full timestamp UTC, IDs, IP, UA wrapping, JSON pretty-print, 
+  50-line folding.
+
+Coverage target: ≥75%.
+
+**Acceptance criteria covered**:
+
+- AC-FE-11 (auto-apply filters with 300ms debounce)
+- AC-FE-12 (action badges colored by category; click sets filter)
+- AC-FE-13 (actor icon click sets actor filter)
+- AC-FE-14 (row click expands; badge/icon clicks do not)
+
+Partial: AC-AUDIT-08 → AC-AUDIT-12 (audit page consumes the API 
+correctly; backend ACs verified in Chunk 4).
+
+**Implementation notes**:
+
+- The `ACTIONS` constant in the page component is a hardcoded 
+  array of the 15 action values from D7. Empty string at index 0 
+  represents "All actions" in the dropdown.
+- The badge category mapping is:
+```ts
+  const CATEGORY_COLORS = {
+    auth: 'cyan',      // login_*, logout, unlock_*
+    mutation: 'amber', // route_*, password_changed, setup_admin_created
+    security: 'red',   // session_revoked, password_compromised_detected
+    hibp: 'violet',    // password_hibp_clean, password_hibp_pending
+    meta: 'slate',     // audit_viewed
+  };
+```
+  with a helper function `categoryOf(action: string)` returning 
+  the category key.
+- The 300ms debounce is implemented with a `setTimeout` cleared 
+  on subsequent filter changes. The Svelte 5 `$effect` rune 
+  subscribes to filter changes and schedules the reload.
+- The "Load more" button is visible only when 
+  `nextCursor !== ''`. Clicking it appends to the existing 
+  `events` array; filter changes reset to a fresh fetch.
+- JSON folding: if `JSON.stringify(value, null, 2).split('\n').length > 50`, 
+  show first 50 lines + "Show more" button. Per-block 
+  `foldedOpen` state in the component.
+- Color tokens added to `app.css`:
+```css
+  --color-violet: 167 139 250; /* HIBP category */
+  --color-slate: 100 116 139;  /* Meta category */
+```
+  RGB triplets following the existing convention. Used in 
+  Tailwind opacity contexts (`bg-violet/30`, `border-violet`, 
+  etc.) via the tailwind config.
+- Accessibility: `role="button"` + `tabindex="0"` + 
+  `aria-expanded` on rows; `aria-live="polite"` for filter 
+  result announcements.
+
+**Commit strategy**: two commits.
+
+- Commit A: `app.css` color tokens + `AuditRow.svelte` + 
+  `AuditExpandedDetails.svelte` + their tests. Message: 
+  "Step D: audit row components and color tokens".
+- Commit B: `/audit/+page.svelte` integrating the components, 
+  with filter debounce and pagination, plus its test. Message: 
+  "Step D: audit page with filters, badges, and pagination".
+
+**Dependencies**: Chunk 5 must be merged (uses audit API client). 
+Chunk 6 not strictly required, but it provides the sidebar entry 
+to navigate to /audit; without Chunk 6, the page is only 
+reachable by URL.
+
+**Downstream impact**: this is the final chunk. After it merges, 
+Step D is feature-complete and ready for the final acceptance 
+review (running all 79 ACs from Section 10 of the spec).
