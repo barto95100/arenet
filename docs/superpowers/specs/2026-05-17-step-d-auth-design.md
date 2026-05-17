@@ -1494,3 +1494,607 @@ decision D10.
 
 End of Section 4. The middleware behavior, context propagation,
 and request-flow details are specified in Section 5.
+
+## 5. Middleware chain
+
+This section specifies the middleware layers that protect the API. It
+covers the ordering inside chi, the three authentication gates
+(no-auth, soft-auth, hard-auth), the rate limiter, the IP extraction
+logic, the context propagation contract, and the modifications to
+Step C's CORS middleware.
+
+### 5.1 Overview
+
+Step D introduces three authentication gates, each with different
+strictness:
+
+- **no-auth** allows requests without a session cookie. Used by
+  `/setup` and `/login` (the user has not authenticated yet, by
+  definition).
+
+- **soft-auth** requires a valid session cookie but allows the
+  session to be in the idle state. Used by `/logout` (we want to
+  cleanly terminate an idle session), `/me` (the lock screen needs
+  the username), and `/unlock` (idle is the precondition).
+
+- **hard-auth** requires a valid session cookie AND that the session
+  is not idle (i.e., `LastActivity` is within the past 15 minutes).
+  Used by all business endpoints (routes, audit, sessions
+  management).
+
+The need for three gates instead of two comes from a UX requirement:
+when an admin's session goes idle, we want to lock the UI (require
+password re-entry) without forcing a full re-login. The lock screen
+must be able to display the admin's username, which requires reading
+the session. So `/me` cannot be hard-auth (it would return 403 when
+idle, defeating the purpose) but cannot be no-auth either (it would
+leak info to unauthenticated callers).
+
+The router orchestrates these gates via three chi groups. Cross-cutting
+middlewares (logging, panic recovery, CORS, rate limit) wrap all of
+them. See 5.2.
+
+### 5.2 Middleware ordering in the router
+
+The full middleware stack, executed in order on every request to
+`/api/v1/*`:
+
+```go
+r := chi.NewRouter()
+
+// Outermost: request identification, structured logging, panic recovery.
+// These apply to every request, regardless of authentication group.
+r.Use(middleware.RequestID)              // chi built-in: adds X-Request-ID
+r.Use(slogLogger(logger))                // Step C: structured access log
+r.Use(middleware.Recoverer)              // chi built-in: catches panics
+
+// Dev-only: cross-origin support for Vite at :5173.
+if devMode {
+    r.Use(devCORS("http://localhost:5173"))  // Step C, modified in 5.10
+}
+
+r.Route("/api/v1", func(r chi.Router) {
+
+    // Auth endpoints: rate-limited.
+    r.Route("/auth", func(r chi.Router) {
+        r.Use(rateLimit(rateLimiter))    // NEW (5.3): per-IP failure counters
+
+        // No-auth subgroup: /setup, /login.
+        r.Post("/setup", h.setup)
+        r.Post("/login", h.login)
+
+        // Soft-auth subgroup: /logout, /me, /unlock.
+        r.Group(func(r chi.Router) {
+            r.Use(auth.SoftAuthMiddleware(sessionStore, userStore))  // NEW (5.6)
+            r.Post("/logout", h.logout)
+            r.Get("/me", h.me)
+            r.Post("/unlock", h.unlock)
+        })
+
+        // Hard-auth subgroup: /heartbeat, /sessions, DELETE /sessions/{id}.
+        r.Group(func(r chi.Router) {
+            r.Use(auth.HardAuthMiddleware(sessionStore, userStore))  // NEW (5.7)
+            r.Post("/heartbeat", h.heartbeat)
+            r.Get("/sessions", h.listSessions)
+            r.Delete("/sessions/{id}", h.deleteSession)
+        })
+    })
+
+    // Business endpoints: hard-auth, no rate limit (authenticated callers
+    // are trusted to not flood; the workload is naturally bounded by UI use).
+    r.Group(func(r chi.Router) {
+        r.Use(auth.HardAuthMiddleware(sessionStore, userStore))
+        r.Get("/routes", h.listRoutes)
+        r.Post("/routes", h.createRoute)
+        r.Get("/routes/{id}", h.getRoute)
+        r.Put("/routes/{id}", h.updateRoute)
+        r.Delete("/routes/{id}", h.deleteRoute)
+        r.Get("/audit", h.listAudit)
+    })
+})
+```
+
+The ordering rationale:
+
+- **`RequestID` first** so that every subsequent log entry has the
+  same correlation ID. The handler can pull it via
+  `chimw.GetReqID(r.Context())` for inclusion in audit events and
+  error responses.
+
+- **`slogLogger` second** so it observes the final HTTP status set by
+  any subsequent middleware (including 401 from auth middleware) and
+  any panic recovered by `Recoverer`.
+
+- **`Recoverer` third** so panics from handlers or auth middleware
+  produce a 500 response and a structured log entry instead of
+  terminating the process. (Step C convention preserved.)
+
+- **`devCORS` fourth**, before any auth gate, so that preflight
+  OPTIONS requests succeed without authentication. Browsers send
+  preflight without cookies; failing them at the auth layer would
+  break dev.
+
+- **`rateLimit` fifth**, scoped only to `/api/v1/auth/*`. Applying
+  it to authenticated business endpoints would risk locking out an
+  active admin during heavy UI use (e.g., bulk operations).
+
+- **Auth middleware (soft or hard) sixth**, scoped to specific
+  subgroups. Endpoints requiring different gates live in separate
+  `r.Group` blocks so each gets only the middleware it needs.
+
+### 5.3 Rate limit middleware (per-IP)
+
+The `rateLimit` middleware enforces decision Q6 + D8: per-IP failure
+counters in two tiers, in-memory only.
+
+**Scope**: applies only to routes mounted under `/api/v1/auth/*`. It
+counts failures (HTTP 401, 403 from auth-related causes) and blocks
+the source IP when thresholds are exceeded. It does **not** count
+successes — a frequent legitimate user never hits the limit.
+
+**Tiers**:
+
+- **Tier 1**: 5 authentication failures from the same IP within 5
+  minutes → block that IP for 15 minutes. Designed to catch typical
+  brute-force scripts that try a handful of common passwords.
+
+- **Tier 2**: 10 authentication failures from the same IP within 1
+  hour → block that IP for 1 hour. Designed to catch slower
+  distributed attacks that pace themselves under Tier 1.
+
+Both tiers operate concurrently. A single failure increments both
+counters; whichever threshold is hit first triggers the corresponding
+block. The longer block wins if both fire.
+
+**HTTP behavior**:
+
+- On block, the middleware returns 429 with:
+  - Body: `{"error": "too many attempts, retry after 15 minutes"}`
+    (or 1 hour for Tier 2).
+  - Header: `Retry-After: <seconds-until-unblock>`.
+
+**Reset on success**:
+
+- A successful `/login` or `/unlock` clears the failure counters for
+  the calling IP. This prevents legitimate users who typo their
+  password a few times from being penalized after they finally
+  succeed.
+
+- `setup` does not reset the counter (the counter is essentially
+  unused before any user exists; the setup endpoint itself is rate-
+  limited identically).
+
+**Logging**:
+
+- Every Tier 2 hit emits a structured `slog.Warn` entry:
+
+```go
+logger.Warn("rate limit tier 2 triggered, IP blocked",
+    slog.String("ip", clientIP),
+    slog.String("username_attempted", attemptedUsername),
+    slog.Int("failure_count_window", 10),
+    slog.Time("blocked_until", until),
+    slog.String("suggestion", "consider blocking this IP at network level"),
+)
+```
+
+This is the primary observability hook for operators to detect
+attacks and configure their upstream firewall (FortiGate, OPNsense,
+Unifi). A future Step F (see `docs/roadmap.md`) will surface this
+data in a Security UI page with optional webhook forwarding.
+
+**Storage**:
+
+In-memory only, per decision D8. The state is a
+`map[string]*counter` protected by a `sync.Mutex`, where `counter`
+holds a sliding window of recent failure timestamps and the current
+block expiry. A goroutine launched at server startup garbage-collects
+entries that have been inactive for 2 hours (no failures, no block
+active), bounding memory growth.
+
+The internal method `GetBlockedIPs() []BlockedIP` is exposed for
+future consumption by Step F's Security UI. It is **not** exposed via
+HTTP in Step D.
+
+### 5.4 IP extraction middleware
+
+Correctly identifying the source IP of a request is essential for
+rate limiting and audit logging. When Arenet runs behind a reverse
+proxy (Cloudflare, Caddy on a front host, nginx, etc.),
+`r.RemoteAddr` returns the proxy's IP, not the client's. Conversely,
+trusting `X-Forwarded-For` blindly allows any client to forge their
+source IP.
+
+**Configuration**:
+
+The `ARENET_TRUSTED_PROXIES` environment variable holds a
+comma-separated list of CIDR ranges considered trusted. Example:
+
+```text
+ARENET_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16,2001:db8::/32
+```
+
+Empty or unset → no proxy is trusted. `RemoteAddr` is used directly.
+
+**Logic** (applied early in the request lifecycle, before
+`rateLimit` and auth middleware):
+
+1. Parse `r.RemoteAddr` → IP.
+2. If the parsed IP is **not** within any trusted CIDR → use it
+   as the client IP. `X-Forwarded-For` is ignored.
+3. If the parsed IP **is** within a trusted CIDR → read
+   `X-Forwarded-For`. Take the **leftmost** entry (the original
+   client per RFC 7239). Validate it is a parseable IP. If
+   parsing fails, fall back to `r.RemoteAddr`.
+4. Store the resolved IP in the request context under
+   `auth.ClientIPKey`.
+
+**Implementation detail**: a small package-level function
+`auth.ClientIPFromContext(ctx) string` exposes the value to handlers
+and other middleware (rate limit, audit helper).
+
+**Edge cases**:
+
+- **Multiple `X-Forwarded-For` headers**: chi reads all of them as a
+  single comma-separated string. The leftmost token is the original
+  client.
+- **IPv6 in `X-Forwarded-For`**: parsed correctly by `net.ParseIP`.
+  No special handling.
+- **Malformed `X-Forwarded-For`**: falls back to `RemoteAddr`
+  without erroring out the request. A `slog.Debug` line records the
+  malformed value for troubleshooting.
+- **`r.RemoteAddr` includes a port** (`192.168.1.42:54321`): the
+  middleware strips the port before checking CIDR membership.
+
+**Note**: this middleware is mounted near the top of the chain, just
+after `Recoverer`. Both `rateLimit` and the auth middlewares read
+the client IP from context, not from `r.RemoteAddr` directly. This
+ensures all components see the same authoritative value.
+
+### 5.5 No-auth middleware
+
+There is no dedicated middleware for the no-auth group. The endpoints
+in this group (`/setup`, `/login`) have specific preconditions that
+they check inline:
+
+- `/setup` checks that the `users` bucket is empty. If not, returns
+  404 (see 4.2). The `setupToken` is checked against the in-memory
+  current value generated at startup.
+
+- `/login` performs the username/password check. No middleware needed
+  beyond what is already in the stack (rate limit, logging, etc.).
+
+These endpoints are mounted directly under `r.Route("/auth", ...)`
+without any additional middleware group. The rate limit middleware
+applies because it's mounted at the `/auth` route level.
+
+### 5.6 Soft-auth middleware
+
+The soft-auth middleware enforces: cookie present AND session valid
+AND session not expired (absolute 24h/30d TTL). It does NOT enforce
+the 15-minute idle window.
+
+```go
+package auth
+
+import (
+    "context"
+    "net/http"
+    "errors"
+)
+
+// SoftAuthMiddleware returns a chi-compatible middleware that
+// validates the session cookie and populates the request context
+// with user identity. It allows idle sessions (LastActivity outside
+// the 15-min window) so that the lock screen flow can function.
+//
+// On failure, responds with HTTP 401 and clears the session cookie.
+// On success, calls the next handler with the enriched context.
+//
+// The middleware does NOT call sessionStore.Touch() — that would
+// reset the idle timer on every /me call and make the lock screen
+// unreachable. Touch is the hard-auth middleware's responsibility.
+func SoftAuthMiddleware(sessions SessionStore, users UserStore) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            cookie, err := r.Cookie("arenet_session")
+            if err != nil {
+                writeAuthError(w, "no active session")
+                return
+            }
+
+            session, err := sessions.Get(r.Context(), cookie.Value)
+            if err != nil {
+                // Both ErrSessionNotFound and ErrSessionExpired map to 401.
+                // The Set-Cookie header tells the browser to drop the stale cookie.
+                clearSessionCookie(w)
+                writeAuthError(w, "no active session")
+                return
+            }
+
+            user, err := users.GetByID(r.Context(), session.UserID)
+            if err != nil {
+                if errors.Is(err, ErrUserNotFound) {
+                    // Session references a deleted user. Clean up and 401.
+                    _ = sessions.Delete(r.Context(), session.ID)
+                    clearSessionCookie(w)
+                    writeAuthError(w, "no active session")
+                    return
+                }
+                // Storage error (decision D11): 503.
+                writeServiceUnavailable(w, "authentication service temporarily unavailable")
+                return
+            }
+
+            // Compute is_locked once here for downstream consumers.
+            isLocked := time.Since(session.LastActivity) > 15*time.Minute
+
+            ctx := r.Context()
+            ctx = context.WithValue(ctx, UserIDKey, user.ID)
+            ctx = context.WithValue(ctx, UsernameKey, user.Username)
+            ctx = context.WithValue(ctx, SessionIDKey, session.ID)
+            ctx = context.WithValue(ctx, IsLockedKey, isLocked)
+
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+```
+
+Behavioral summary:
+
+| Condition                                  | Outcome                                       |
+|--------------------------------------------|-----------------------------------------------|
+| No `arenet_session` cookie                 | 401 "no active session"                       |
+| Cookie present, session not found          | 401 + clear cookie                            |
+| Cookie present, session expired            | 401 + clear cookie + lazy purge of session    |
+| Cookie present, session valid, user gone   | 401 + clear cookie + delete orphan session    |
+| Cookie present, session valid, user OK     | Pass through with context populated           |
+| Storage error (DB unreachable)             | 503 "authentication service unavailable"      |
+
+The middleware populates four context keys for downstream consumers:
+`UserIDKey`, `UsernameKey`, `SessionIDKey`, `IsLockedKey`. The
+`IsLockedKey` value is read by `/me` to populate the `locked` field
+of its response (see 4.5).
+
+### 5.7 Hard-auth middleware
+
+The hard-auth middleware builds on soft-auth by adding the idle
+check and the `Touch` call.
+
+```go
+// HardAuthMiddleware returns a chi-compatible middleware that
+// validates the session and refuses idle sessions.
+//
+// On success, updates Session.LastActivity (best-effort) so that
+// active use of authenticated endpoints keeps the session alive
+// without explicit /heartbeat calls.
+func HardAuthMiddleware(sessions SessionStore, users UserStore) func(http.Handler) http.Handler {
+    softAuth := SoftAuthMiddleware(sessions, users)
+    return func(next http.Handler) http.Handler {
+        return softAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // Soft-auth already populated the context. Check is_locked.
+            if locked, _ := r.Context().Value(IsLockedKey).(bool); locked {
+                writeForbidden(w, "session locked")
+                return
+            }
+
+            sessionID, _ := r.Context().Value(SessionIDKey).(string)
+
+            // Best-effort: refresh LastActivity. Failure logs but doesn't fail the request.
+            if err := sessions.Touch(r.Context(), sessionID); err != nil {
+                slog.Default().Warn("session touch failed",
+                    slog.String("err", err.Error()),
+                    slog.String("session_id", sessionID),
+                )
+            }
+
+            next.ServeHTTP(w, r)
+        }))
+    }
+}
+```
+
+Behavioral summary:
+
+| Condition                                            | Outcome                              |
+|------------------------------------------------------|--------------------------------------|
+| Any soft-auth failure                                | Soft-auth response (401 or 503)      |
+| Session valid but idle (LastActivity + 15min < now)  | 403 "session locked"                 |
+| Session valid and active                             | Touch (best-effort) + pass to handler|
+
+Composition rationale: hard-auth wraps soft-auth rather than
+duplicating its logic. This guarantees consistency between the two —
+any change to the session lookup logic happens in one place.
+
+The `Touch` call is **after** the idle check, not before. If we
+touched first, a stale check could refresh `LastActivity` for an idle
+session that we are about to reject. The correct sequence is: check
+freshness → reject if stale → otherwise refresh.
+
+### 5.8 Context propagation
+
+Auth-related values propagate through the request context via
+type-safe accessors in `internal/auth`:
+
+```go
+package auth
+
+type ctxKey string
+
+const (
+    UserIDKey    ctxKey = "auth.user_id"
+    UsernameKey  ctxKey = "auth.username"
+    SessionIDKey ctxKey = "auth.session_id"
+    IsLockedKey  ctxKey = "auth.is_locked"
+    ClientIPKey  ctxKey = "auth.client_ip"
+)
+
+// UserIDFromContext returns the authenticated user's ID, or empty
+// string if the request is not authenticated.
+func UserIDFromContext(ctx context.Context) string {
+    v, _ := ctx.Value(UserIDKey).(string)
+    return v
+}
+
+// UsernameFromContext returns the authenticated user's username.
+func UsernameFromContext(ctx context.Context) string {
+    v, _ := ctx.Value(UsernameKey).(string)
+    return v
+}
+
+// SessionIDFromContext returns the current session ID.
+func SessionIDFromContext(ctx context.Context) string {
+    v, _ := ctx.Value(SessionIDKey).(string)
+    return v
+}
+
+// IsLockedFromContext returns true if the session is in the idle
+// lock state (only meaningful within soft-auth handlers).
+func IsLockedFromContext(ctx context.Context) bool {
+    v, _ := ctx.Value(IsLockedKey).(bool)
+    return v
+}
+
+// ClientIPFromContext returns the resolved client IP (X-Forwarded-For
+// aware, see 5.4).
+func ClientIPFromContext(ctx context.Context) string {
+    v, _ := ctx.Value(ClientIPKey).(string)
+    return v
+}
+```
+
+Convention: handlers use these accessors, never
+`r.Context().Value(...)` directly. The accessors:
+
+- Provide type safety (no `interface{}` cast at the call site).
+- Return zero-value (empty string, false) instead of panicking on
+  missing keys, simplifying handler logic.
+- Localize all knowledge of the context keys in the `auth` package.
+
+Using `ctxKey` as the key type (instead of plain string) prevents
+accidental collision with other packages' context keys, per Go's
+standard library guidance.
+
+### 5.9 Audit context enrichment
+
+The `appendAudit` helper (introduced in 4 and implemented in
+`internal/api/audit_helpers.go`) pulls all contextual fields from
+the request before delegating to `audit.Store.Append`:
+
+```go
+package api
+
+import (
+    "encoding/json"
+    "net/http"
+    "github.com/barto95100/arenet/internal/audit"
+    "github.com/barto95100/arenet/internal/auth"
+)
+
+// appendAudit emits an audit event with context enrichment.
+// Best-effort: failure logged via slog.Warn but does not affect
+// the HTTP response.
+//
+// The caller fills evt.Action, evt.TargetType, evt.TargetID,
+// evt.BeforeJSON, evt.AfterJSON, evt.Message. The helper fills:
+//   - evt.ActorUserID and evt.ActorUsernameSnapshot from context
+//   - evt.IP from context (X-Forwarded-For aware, see 5.4)
+//   - evt.UserAgent from r.Header
+// ID and Timestamp are filled by audit.Store.Append via uuid.NewV7.
+func (h *Handler) appendAudit(r *http.Request, evt audit.Event) {
+    ctx := r.Context()
+    evt.ActorUserID = auth.UserIDFromContext(ctx)
+    evt.ActorUsernameSnapshot = auth.UsernameFromContext(ctx)
+    evt.IP = auth.ClientIPFromContext(ctx)
+    evt.UserAgent = r.UserAgent()
+
+    if err := h.audit.Append(ctx, evt); err != nil {
+        h.logger.Warn("audit append failed",
+            "err", err.Error(),
+            "action", evt.Action,
+            "target_id", evt.TargetID,
+        )
+    }
+}
+
+// mustMarshalForAudit serializes a value to JSON for inclusion in
+// audit event Before/After fields. Returns nil on marshal error;
+// the event is still emitted, just without the diff.
+//
+// Callers MUST strip sensitive fields (PasswordHash on User,
+// session tokens, etc.) before passing the value here.
+func mustMarshalForAudit(v any) json.RawMessage {
+    raw, err := json.Marshal(v)
+    if err != nil {
+        return nil
+    }
+    return raw
+}
+```
+
+Usage pattern in handlers (this is how 4.2-4.10's audit lines
+materialize):
+
+```go
+// Inside h.createRoute after successful Caddy reload:
+h.appendAudit(r, audit.Event{
+    Action:     audit.ActionRouteCreated,
+    TargetType: "route",
+    TargetID:   created.ID,
+    AfterJSON:  mustMarshalForAudit(created),
+})
+```
+
+The helper is intentionally non-fatal. Audit emission failures are
+observability concerns, not request-flow concerns. A failed audit
+emit logs at Warn level and the operator can investigate; the
+business operation has already succeeded by this point and reporting
+its success to the client takes priority.
+
+### 5.10 CORS in dev mode (modified)
+
+Step C's `devCORS` middleware allowed cross-origin requests from
+Vite at `:5173` for the standard methods. Step D requires one
+addition: `Access-Control-Allow-Credentials: true`. Without this
+header, browsers refuse to send cookies on cross-origin requests,
+breaking the entire authentication flow in dev mode.
+
+The modified middleware:
+
+```go
+// devCORS allows preflight + simple requests from allowOrigin, with
+// credentials. Only mounted in dev mode by NewRouter.
+//
+// Step D modification: Access-Control-Allow-Credentials is now set
+// so that the browser sends the arenet_session cookie on cross-origin
+// requests from Vite (:5173) to the API (:8001).
+func devCORS(allowOrigin string) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+            w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+            w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+            w.Header().Set("Access-Control-Allow-Credentials", "true")    // NEW (Step D)
+            w.Header().Set("Access-Control-Max-Age", "3600")
+            if r.Method == http.MethodOptions {
+                w.WriteHeader(http.StatusNoContent)
+                return
+            }
+            next.ServeHTTP(w, r)
+        })
+    }
+}
+```
+
+Frontend correspondance: every `fetch` call in `web/frontend/src/lib/api/client.ts`
+must include `credentials: 'include'`. Without this option, the
+browser does not attach the cookie on cross-origin requests even if
+the server allows it. Step C's client.ts will be updated accordingly
+in Section 6.
+
+Production note: in production mode (no `--dev` flag), `devCORS` is
+not mounted at all. The frontend is served from the same origin as
+the API (via `//go:embed`), so cookies are sent natively without
+any CORS gymnastics. The `Access-Control-Allow-Credentials` addition
+is purely a dev-mode concern.
