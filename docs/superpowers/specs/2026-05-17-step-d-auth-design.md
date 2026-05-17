@@ -188,3 +188,293 @@ Step D explicitly does not protect against:
 - **Supply-chain attacks on Go modules** — out of scope for application
   design. Dependencies are pinned in `go.mod`; module integrity is
   verified via Go's module proxy and `go.sum`.
+
+## 2. Architecture & Package boundaries
+
+This section maps the 17 locked decisions onto concrete Go and Svelte
+package boundaries. It defines what is new, what is modified, what stays
+untouched, and why. Subsequent sections (3 through 9) detail the contents
+of each package; this section is the map.
+
+### 2.1 Package layout
+
+```text
+arenet/
+├── cmd/arenet/main.go                       MODIFIED  wiring
+│
+├── internal/
+│   ├── auth/                                NEW
+│   │   ├── bootstrap.go                     first-boot setup token + env override
+│   │   ├── user.go                          User struct, UserStore CRUD
+│   │   ├── password.go                      argon2id hash/verify, top-10k check
+│   │   ├── hibp.go                          HaveIBeenPwned k-anonymity client
+│   │   ├── session.go                       Session struct, SessionStore CRUD, sliding TTL
+│   │   ├── ratelimit.go                     per-IP failure counters (in-memory)
+│   │   ├── middleware.go                    cookie → session → user context, no-auth / soft-auth / hard-auth
+│   │   ├── ipextract.go                     trusted proxies + X-Forwarded-For policy
+│   │   ├── errors.go                        sentinel errors (ErrUserNotFound, ErrSessionExpired, ...)
+│   │   └── data/common-passwords.txt        embedded top-10k (gzipped, ~30 KB)
+│   │
+│   ├── audit/                               NEW
+│   │   ├── audit.go                         Event struct, Store Append/AppendTx/List
+│   │   ├── actions.go                       Action enum (13 constants)
+│   │   └── filter.go                        Filter struct for List queries
+│   │
+│   ├── storage/                             MODIFIED (minimal)
+│   │   ├── storage.go                       add DB() accessor + 3 new buckets in NewStore
+│   │   └── routes.go                        unchanged (per D1 annulled)
+│   │
+│   ├── api/                                 MODIFIED (extensive)
+│   │   ├── handler.go                       Handler gains auth.Service and audit.Store deps
+│   │   ├── routes.go                        existing handlers + appendAudit calls at the end
+│   │   ├── auth.go                          NEW: 8 handlers (setup, login, logout, me, unlock, heartbeat, sessions list/delete)
+│   │   ├── audit.go                         NEW: GET /api/v1/audit handler
+│   │   ├── middleware.go                    add ratelimit middleware, integrate auth middleware groups
+│   │   └── audit_helpers.go                 NEW: appendAudit, mustMarshal, contextual enrichment
+│   │
+│   └── caddymgr/                            unchanged (Step B/C)
+│
+└── web/
+    └── frontend/
+        └── src/
+            ├── lib/
+            │   ├── api/
+            │   │   ├── client.ts            MODIFIED: 401 → goto /login, 403 → trigger lock state
+            │   │   ├── auth.ts              NEW: setup/login/logout/me/unlock/heartbeat/sessions
+            │   │   └── audit.ts             NEW: list with filters
+            │   ├── stores/
+            │   │   ├── auth.ts              NEW: current user, isLoading, lock state
+            │   │   └── idle.ts              NEW: client-side 15-min timer
+            │   └── components/
+            │       └── LockScreen.svelte    NEW: overlay with password input
+            └── routes/
+                ├── +layout.svelte           MODIFIED: gate on auth bootstrap, mount LockScreen
+                ├── login/+page.svelte       NEW
+                ├── setup/+page.svelte       NEW
+                └── audit/+page.svelte       NEW
+```
+
+### 2.2 New Go packages
+
+Two new packages are created under `internal/`:
+
+**`internal/auth/`** holds everything related to who the caller is: users,
+sessions, password hashing and validation, HIBP client, rate limiting,
+context propagation via middleware, and IP extraction with trusted-proxy
+logic. Approximately 10 source files.
+
+**`internal/audit/`** holds everything related to what the caller did: the
+`Event` struct, the action enum, the `Store` with both standalone and
+transactional append methods, and the `Filter` type for queries.
+Approximately 3 source files.
+
+The two packages have **no mutual dependency**. `auth` does not import
+`audit`, and `audit` does not import `auth`. The integration happens in
+`internal/api`, which imports both. This separation is deliberate: it keeps
+each package independently testable and allows audit to evolve toward
+external sinks (Loki, Elasticsearch) in Phase 2+ without touching auth.
+
+### 2.3 Modified Go packages
+
+**`internal/storage/`** receives a minimal change: a new `DB() *bolt.DB`
+method on `Store` for handle sharing (see 2.4), and three new buckets
+created in `NewStore` alongside the existing `routes` bucket. The
+`routes.go` file and all existing CRUD methods are **unchanged** (decision
+D1 annulled).
+
+**`internal/api/`** receives the bulk of the modifications: the `Handler`
+struct gains two new fields (`auth` and `audit`), `NewHandler` gains two
+parameters with nil checks, the existing three mutation handlers each get
+a single `appendAudit` call at the end, and the chi router is restructured
+into three middleware groups (see 2.5). Four new files are added:
+`auth.go` (8 handlers), `audit.go` (1 handler), `audit_helpers.go`
+(centralized audit emission helper), and the rate limit middleware in
+`middleware.go`.
+
+**`cmd/arenet/main.go`** receives wiring changes only: instantiate the
+auth services and audit store after the storage store, pass them to
+`NewHandler`, and start the session cleanup goroutine alongside the
+existing admin server goroutine.
+
+No other packages are touched. `internal/caddymgr/` remains unchanged,
+ensuring Step C's reverse-proxy behavior is preserved.
+
+### 2.4 Storage handle sharing
+
+bbolt enforces a fundamental constraint: **only one writer per database
+file at a time**. The new packages cannot open independent connections
+to the same `data.db`. The architecture must share a single `*bolt.DB`
+handle across all three packages that need it.
+
+To minimize disruption to Step C, `storage.Store` exposes its underlying
+handle through a new `DB() *bolt.DB` accessor (decision 2.5 from yesterday's
+Section 2 audit, choice Option A). `cmd/arenet/main.go` calls this accessor
+once after `NewStore` succeeds and passes the result to the constructors
+of `auth.UserStore`, `auth.SessionStore`, and `audit.Store`. Each store
+operates on its own bucket name and does not touch the others.
+
+Three new buckets are created idempotently in `storage.NewStore`, alongside
+the existing `routes` bucket: `users`, `sessions`, and `audit`. The use of
+`tx.CreateBucketIfNotExists` ensures that a Step C database opened by a
+Step D binary cleanly gains the new buckets on first run without
+migration.
+
+This design is contractual: future contributors must not attempt to open
+a second `*bolt.DB` against the same file from a different package. The
+constraint is documented inline in `storage.DB`'s godoc.
+
+### 2.5 chi router structure
+
+The admin HTTP server uses chi (Step C). Step D restructures the route tree
+into three middleware groups, each with its own combination of guards:
+
+```text
+chi.Router
+├── Use(RequestID, slogLogger, Recoverer)
+├── Use(devCORS)                          [dev mode only]
+│
+└── Route /api/v1
+    │
+    ├── Route /auth
+    │   ├── Use(rateLimit)                [NEW — Tier 1 + Tier 2 per IP]
+    │   │
+    │   ├── POST /setup                   [no-auth + setup-token gate]
+    │   ├── POST /login                   [no-auth]
+    │   │
+    │   ├── Group [soft-auth]             [cookie required, session exists, idle OK]
+    │   │   ├── POST /logout
+    │   │   ├── GET  /me
+    │   │   └── POST /unlock
+    │   │
+    │   └── Group [hard-auth]             [cookie + session + not expired + not idle]
+    │       ├── POST /heartbeat
+    │       ├── GET  /sessions
+    │       └── DELETE /sessions/{id}
+    │
+    └── Group [hard-auth]                 [cookie + session + not expired + not idle]
+        ├── GET    /routes                [Step C handler + audit_viewed not emitted: read]
+        ├── POST   /routes                [Step C handler + appendAudit]
+        ├── GET    /routes/{id}           [Step C handler unchanged]
+        ├── PUT    /routes/{id}           [Step C handler + appendAudit]
+        ├── DELETE /routes/{id}           [Step C handler + appendAudit]
+        └── GET    /audit                 [NEW handler + emits audit_viewed]
+```
+
+Three middleware levels:
+
+- **no-auth**: no cookie verification. `/setup` and `/login`. The setup
+  endpoint additionally checks that no admin user exists yet; if one does,
+  setup returns 404 (refuses to expose its existence).
+
+- **soft-auth**: cookie required, session must exist in BoltDB, but idle
+  state is allowed. Used by endpoints that the lock screen needs (the UI
+  polls `/me` to populate the lock screen with the username, and calls
+  `/unlock` to leave the locked state). `/logout` is also soft-auth so
+  that an already-idle session can be cleanly terminated.
+
+- **hard-auth**: cookie required, session must exist, must not be
+  expired (24h/30d absolute), and must not be idle (>15 min without
+  activity). Used by all business endpoints (routes, audit) and by
+  session self-management endpoints.
+
+Rate-limit middleware is scoped to `/api/v1/auth/*` only. Authenticated
+business endpoints are not rate-limited (an admin who knows their
+password may legitimately make many calls).
+
+Detailed middleware behavior — including how 401 vs 403 is decided, how
+`last_activity` is updated, and how the request context propagates user
+identity to handlers — is specified in Section 5.
+
+### 2.6 Frontend package layout
+
+The frontend gains three new pages, two new stores, one new component,
+and modifications to the shared layout and HTTP client.
+
+**New pages** (`web/frontend/src/routes/`):
+
+- `/setup/+page.svelte` — shown when the application detects no admin
+  user exists. Accepts the setup token from server logs plus the new
+  admin's username and password.
+
+- `/login/+page.svelte` — username/password form with "Remember me"
+  checkbox. Submits to `/api/v1/auth/login`, redirects to `/routes` on
+  success.
+
+- `/audit/+page.svelte` — DataTable of audit events with filter controls
+  (date range, action type, username). Expandable rows show full event
+  detail including before/after JSON.
+
+**New stores** (`web/frontend/src/lib/stores/`):
+
+- `auth.ts` — current user info (id, username), authentication state
+  (`unknown` / `authenticated` / `locked` / `anonymous`), lock-screen
+  visibility, isLoading flag during transitions.
+
+- `idle.ts` — client-side 15-minute timer reset on any successful API call
+  via the client layer. Triggers the lock-screen overlay locally before
+  the server enforces it on the next request.
+
+**New component** (`web/frontend/src/lib/components/`):
+
+- `LockScreen.svelte` — full-screen overlay rendered above the existing
+  app. Shows the username (read from the auth store) and a single password
+  field. Submits to `/api/v1/auth/unlock`. On success, hides itself; on
+  failure, displays the error inline. Preserves underlying UI state.
+
+**Modified files**:
+
+- `web/frontend/src/lib/api/client.ts` — intercepts HTTP 401 and 403
+  responses globally. 401 clears the auth store and redirects to `/login`.
+  403 sets the locked state on the auth store, which makes
+  `LockScreen.svelte` appear via the layout's reactivity.
+
+- `web/frontend/src/routes/+layout.svelte` — gates the entire app on the
+  auth store. While the auth state is `unknown`, renders a centered
+  spinner and calls `/api/v1/auth/me` once on mount to bootstrap.
+  Renders the existing sidebar + main layout when `authenticated`.
+  Renders `LockScreen.svelte` on top when `locked`. Redirects to `/login`
+  when `anonymous`, and to `/setup` when the server returns the "no admin
+  yet" indicator on the bootstrap call.
+
+**Sidebar** — gains a fifth navigation item, "Audit", positioned after
+"Routes" and before "Topology". The final order is:
+
+1. Routes (active)
+2. Audit (active, new)
+3. Topology (disabled, Step E)
+4. Security (disabled, Step F)
+5. Settings (disabled, Phase 2+)
+
+The cyan-rail active highlight and existing collapse/expand behavior
+apply unchanged.
+
+### 2.7 Go dependency additions
+
+Two Go module additions:
+
+- **`github.com/alexedwards/argon2id`** — wrapper around
+  `golang.org/x/crypto/argon2` that produces and parses PHC-format hash
+  strings. MIT license, ~250 LOC, audit-friendly. Provides
+  `CreateHash(password, params)` and `ComparePasswordAndHash(password,
+  hash)`.
+
+- **`github.com/google/uuid`** — already present in Step C as a transitive
+  dependency. Step D requires version v1.7.0 or later for `uuid.NewV7()`,
+  which generates time-sortable UUIDs used as audit-event keys.
+
+No other new dependencies. The HIBP client is implemented from scratch in
+`internal/auth/hibp.go` using only the standard library (`net/http`,
+`crypto/sha1`, `bufio`).
+
+### 2.8 No new frontend dependencies
+
+Step D adds no new npm packages. All new pages and components are built
+using the existing Step C design system primitives (Modal, DataTable,
+Input, Checkbox, Button, Badge, Card, StatusDot, Spinner) and the
+existing stores pattern. The LockScreen overlay reuses the same Modal
+patterns (focus trap, Escape handling) adapted for full-screen display.
+
+This constraint serves two goals: reducing npm audit surface (a
+recurring source of supply-chain vulnerabilities), and forcing reuse of
+the Step C primitives, which strengthens their design by exercising
+them in new contexts.
