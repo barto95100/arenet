@@ -4560,3 +4560,451 @@ proxy must complete the full auth flow.
   occasionally; review on each Arenet upgrade.
 - Do not include `0.0.0.0/0` or `::/0` (entire internet) — that 
   would disable proxy verification entirely.
+
+## 9. Audit log UI
+
+This section specifies the detailed UX behavior of the `/audit` 
+page introduced in Section 6.11. While Section 6 sketched the page 
+structure and the API integration, Section 9 is the authoritative 
+reference for the interaction patterns, the visual encoding of 
+events, the expanded-row format, and the edge-case handling. A 
+sub-agent implementing the audit page consults this section.
+
+The audit page is the only Step D UI that surfaces complex 
+structured data (JSON before/after, multiple categorical filters, 
+expand/collapse rows). The other pages (login, setup, lock screen) 
+are linear form flows; audit needs explicit attention.
+
+### 9.1 Overview
+
+The `/audit` page is reached via the fifth sidebar item (between 
+Routes and Topology, see Section 6.12). It displays a paginated, 
+filtered list of audit events with the following capabilities:
+
+- Auto-applied filters with 300ms debounce (decision validated in 
+  Section 6.11)
+- Color-coded action badges by category
+- Expand/collapse rows revealing full event details
+- Click-to-filter on action badges and actor usernames
+- Cursor-based pagination via "Load more"
+
+The page is hard-auth-gated (Section 5.7), and accessing it emits 
+an `audit_viewed` event (Section 4.10 — meta-audit).
+
+### 9.2 Page layout
+
+The page is composed of four vertically stacked regions:
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Header                                                       │
+│   Title "Audit log"                                          │
+│   Subtitle "Review authentication events and route mutations"│
+├──────────────────────────────────────────────────────────────┤
+│ Filter panel (3-column grid, responsive)                     │
+│   [From RFC 3339]   [To RFC 3339]   [Action ▼]               │
+│   Active filter pills (if any)                               │
+├──────────────────────────────────────────────────────────────┤
+│ DataTable                                                    │
+│   Columns: Time | Action | Actor | Target | IP               │
+│   Rows: collapsed by default; click to expand                │
+├──────────────────────────────────────────────────────────────┤
+│ Pagination footer                                            │
+│   [Load more] (visible when nextCursor non-empty)            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Rendering states:
+
+- **Loading (initial)**: centered spinner, no chrome around it. 
+  Filter panel still visible and interactive.
+- **Loaded with events**: DataTable populated, "Load more" button 
+  if pagination available.
+- **Loaded with zero events**: empty state message "No audit 
+  events match the current filters." No "Load more" button.
+- **Server error**: red banner above the DataTable with the error 
+  message and a "Retry" button. Existing events (if any) remain 
+  visible.
+
+The DataTable component reuses Step C's primitive 
+(`web/frontend/src/lib/components/DataTable.svelte`). The audit 
+page passes a custom row template that handles the expand/collapse 
+state per-row.
+
+### 9.3 Filter behaviors
+
+**Auto-apply with debounce**: any change to a filter field 
+schedules a reload via a 300ms `setTimeout`. If another change 
+occurs within the debounce window, the previous timer is cleared 
+and a new one starts. The effect (in Svelte 5 runes terms) reads 
+all three filter values to subscribe to changes; the actual 
+fetch is gated by the timer.
+
+**Combination semantics**: filters combine with AND. If both 
+`action=login_success` and `from=2026-05-01` are set, only events 
+matching both are returned. Empty filters are silently ignored 
+(an empty `from` field does not match "events before any date" — 
+it simply does not constrain the time range).
+
+**Clearing a filter**: emptying the input field is the way to 
+clear it. The page does not display an explicit "All actions" 
+option separately from the empty string in the dropdown — the 
+empty string IS "all actions" semantically.
+
+**Filter persistence**: Step D does not persist filter state. 
+Navigating away from `/audit` and back resets the page to default 
+state (no filters). URL query parameters are not used in Step D 
+(decision: keep the URL clean; bookmark-and-share of filtered 
+audit views is deferred to Phase 2).
+
+**Active filter pills**: when one or more filters are active, a 
+strip of pill-shaped indicators appears above the DataTable:
+
+```text
+[ Action: login_failure × ]  [ From: 2026-05-01T00:00:00Z × ]
+```
+
+Clicking the × on a pill clears that specific filter (resets the 
+input field and triggers a reload). A "Clear all filters" button 
+appears to the right of the pills when at least one is active.
+
+### 9.4 Row display (collapsed)
+
+Each row in the table displays five columns:
+
+**Time**: a relative time string (e.g. "2 hours ago", "yesterday", 
+"3 days ago") rendered in the user's locale. The full RFC 3339 
+timestamp appears as a `title` attribute (HTML tooltip) on hover. 
+Implementation uses a small helper based on 
+`Intl.RelativeTimeFormat` — no external library dependency.
+
+**Action**: a colored badge displaying the action name. Categories 
+and colors:
+
+| Category   | Colour  | Actions in category                                          |
+|------------|---------|--------------------------------------------------------------|
+| Auth       | Cyan    | `login_success`, `login_failure`, `logout`, `unlock_success`, `unlock_failure` |
+| Mutation   | Amber   | `route_created`, `route_updated`, `route_deleted`, `password_changed`, `setup_admin_created` |
+| Security   | Red     | `session_revoked`, `password_compromised_detected`            |
+| HIBP       | Violet  | `password_hibp_clean`, `password_hibp_pending`                |
+| Meta       | Slate   | `audit_viewed`                                               |
+
+The colors are sourced from the existing Step C design tokens (in 
+`app.css`): `--color-cyan`, `--color-warning`, `--color-danger`, 
+plus two additions for Step D: `--color-violet`, `--color-slate`. 
+Each badge is the action name in white text on the category color 
+at 30% opacity, with a 1px border at full opacity (matching the 
+Step C button style).
+
+The badge is **clickable**: clicking it sets the action filter to 
+this row's action value. To prevent this click from also 
+triggering the row expand, the badge's event handler calls 
+`event.stopPropagation()`.
+
+**Actor**: the actor's `displayName` (falling back to `username` 
+if displayName is empty), rendered in regular text. A small icon 
+button (Lucide `filter`) appears next to it on hover; clicking 
+the icon sets the actor filter to this row's `actorUserId`. The 
+icon click also calls `stopPropagation()` to avoid expanding the 
+row.
+
+When `ActorUserID` is empty (unauthenticated events like a failed 
+login), the column displays the `ActorUsernameSnapshot` (the 
+attempted username, captured at the time of the event) in italic 
+muted text, with no filter icon (cannot filter on an unidentified 
+actor).
+
+**Target**: a compact representation of the target. Formats:
+
+```text
+route: a1b2c3d4-…
+user:  e5f6g7h8-…
+session: i9j0k1l2-…
+(none)  — for events without a target (e.g. login_failure)
+```
+
+The UUID is truncated to its first 8 characters with an ellipsis. 
+The full UUID appears in the tooltip on hover. The target column 
+is **not** clickable for filtering in Step D (the `target_id` 
+filter is reachable via the filter panel if needed).
+
+**IP**: the resolved client IP rendered in monospace font. Empty 
+IPs (events without a request context, e.g. background HIBP 
+re-check) render as `—`. On narrow viewports, this column may be 
+hidden by the responsive behavior of Step C's `DataTable` component; 
+the full IP is always visible in the expanded row.
+
+**Row click target**: clicking anywhere on the row that is **not** 
+the action badge or the filter icon expands or collapses the row. 
+This is implemented by attaching the click handler to the `<tr>` 
+element, and having the badge and filter icon call 
+`stopPropagation()` on their own click handlers.
+
+### 9.5 Row display (expanded)
+
+When a row is expanded, a sub-region appears below it (still 
+inside the table, as a `<tr>` with `colspan="5"`) displaying all 
+fields of the event:
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Full timestamp:  2026-05-17T14:23:00.123Z UTC                │
+│ Actor:           admin (a3a6e27d-043b-425a-8e40-868bf1943de8)│
+│ Target:          route (f7b9c0d1-a234-5678-90ab-cdef12345678)│
+│ IP:              198.51.100.42                               │
+│ User-Agent:      Mozilla/5.0 (Macintosh; Intel Mac OS X 14…) │
+│ Message:         (none)                                      │
+│                                                              │
+│ Before:                       After:                         │
+│ ┌──────────────────────────┐  ┌──────────────────────────┐  │
+│ │ (null)                   │  │ {                        │  │
+│ │                          │  │   "id": "f7b9c0d1-...",  │  │
+│ │                          │  │   "host": "api.local",   │  │
+│ │                          │  │   ...                    │  │
+│ │                          │  │ }                        │  │
+│ └──────────────────────────┘  └──────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Field details:
+
+- **Full timestamp**: RFC 3339 with milliseconds, UTC explicitly 
+  appended. Always UTC regardless of the user's locale (decision: 
+  audit logs are operational records, not user-facing time 
+  displays; UTC avoids timezone confusion across distributed 
+  teams).
+
+- **Actor**: `displayName (username)` followed by the full ID in 
+  parentheses. If the actor is anonymous, displays 
+  `(unauthenticated) — attempted: <username_snapshot>`.
+
+- **Target**: `<type> (<full UUID>)`. Empty for events without a 
+  target.
+
+- **IP**: the full resolved IP, monospace.
+
+- **User-Agent**: the full UA string, monospace, with CSS 
+  `word-break: break-all` so long strings wrap rather than 
+  overflow.
+
+- **Message**: the `Message` field. Empty messages render as 
+  `(none)` in muted text.
+
+- **Before / After**: two side-by-side `<pre>` blocks, each 
+  containing `JSON.stringify(value, null, 2)` of the respective 
+  field. If a field is `null`, the corresponding block shows 
+  `(null)` in muted text. The two blocks are equal-width on 
+  desktop and stack vertically on mobile (breakpoint at 768px).
+
+**No syntax highlighting in Step D**. The JSON is rendered as 
+plain monospace text. Syntax highlighting (keys in blue, strings 
+in green, etc.) is a Phase 2 enhancement; it requires either a 
+client-side library (Prism, Shiki, highlight.js — all add ~30 KB) 
+or a custom tokenizer. The cost-benefit does not justify it for 
+Step D, where the audit reader is an admin who can read raw JSON.
+
+**No side-by-side diff in Step D**. When both Before and After are 
+present (e.g. `route_updated`), displaying a visual diff between 
+the two would help spot exactly what changed. This is deferred to 
+Phase 2 — it requires a diff library and an additional UI mode. 
+Step D shows the two blocks separately and the reader infers the 
+differences.
+
+**Long JSON collapsing**: if either Before or After JSON exceeds 
+50 lines when stringified, the block initially shows the first 50 
+lines followed by a "Show more" link. Clicking it expands the 
+block to full content. This caps the visual footprint of huge 
+events (rare, but possible if a route has many headers or rules).
+
+### 9.6 Filter interaction patterns
+
+Three interactions trigger filter changes from row content:
+
+1. **Click on action badge**: sets `actionFilter` to the row's 
+   `action` value. Triggers a reload (after 300ms debounce).
+
+2. **Click on actor's filter icon** (visible on hover next to the 
+   username): sets `actorUserIdFilter` to the row's 
+   `actorUserId`. Triggers a reload.
+
+3. **Click on a pill's ×**: clears that specific filter. 
+   Triggers a reload.
+
+All three interactions update the corresponding input field in 
+the filter panel (so the user can see and further adjust the 
+filter). They do not modify the URL (no query params, see 9.3).
+
+The filter panel input fields and the click-to-filter actions are 
+both writers of the same reactive state. Svelte 5 runes handle 
+the binding transparently; no manual synchronization is needed.
+
+### 9.7 Pagination
+
+Cursor-based pagination per the API contract (Section 4.10):
+
+- **Default page size**: 50 events per request. The frontend does 
+  not expose a "page size" selector in Step D; the value is 
+  hard-coded.
+
+- **Load more button**: appears below the DataTable when 
+  `nextCursor !== ""`. Clicking it issues an API call with the 
+  same filters plus the current `nextCursor`. The new events are 
+  appended to the existing list (not replaced).
+
+- **Filter change semantics**: any filter change resets the list. 
+  The next API call has `cursor: ""` (no cursor → fresh query), 
+  and the response replaces the events array. The "Load more" 
+  button reappears if the fresh response has a non-empty 
+  `nextCursor`.
+
+- **Loading state during "Load more"**: the button shows 
+  "Loading..." and disables itself. The existing rows remain 
+  visible (do not hide them during fetch).
+
+- **Pagination footer error handling**: if a "Load more" call 
+  fails, a toast notifies the user and the button re-enables to 
+  allow retry. The existing rows are not removed.
+
+### 9.8 JSON rendering details
+
+The `beforeJson` and `afterJson` fields arrive from the API as 
+**already-parsed JavaScript values** (Section 4.13). The frontend 
+does not double-parse; it directly stringifies for display:
+
+```ts
+function formatJson(value: unknown): string {
+    if (value === null || value === undefined) return '(null)';
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch (err) {
+        // Circular references or unstringifiable values.
+        // Should not happen with API-sourced data, but defensive.
+        return '(unable to render JSON)';
+    }
+}
+```
+
+The `<pre>` block has `white-space: pre-wrap` so long lines wrap 
+within the block, and `overflow-x: auto` as a fallback for 
+non-wrappable content. The font is the design system's monospace 
+stack.
+
+If the JSON exceeds 50 lines, the rendering is truncated:
+
+```ts
+function formatJsonWithFold(value: unknown): { display: string, foldable: boolean } {
+    const full = formatJson(value);
+    const lines = full.split('\n');
+    if (lines.length <= 50) {
+        return { display: full, foldable: false };
+    }
+    return {
+        display: lines.slice(0, 50).join('\n') + '\n... (truncated, click to expand)',
+        foldable: true,
+    };
+}
+```
+
+The Svelte component manages a `foldedOpen` state per JSON block; 
+clicking "Show more" sets it to `true` and re-renders with the 
+full content.
+
+### 9.9 Edge cases
+
+**Very long User-Agent**: User-Agent strings can exceed 200 
+characters. In the collapsed-row view, the IP column is the 
+rightmost; the UA appears only in the expanded view, where the 
+`<pre>` block with `word-break: break-all` handles overflow 
+gracefully. No truncation in the expanded view; truncation only 
+applies to the collapsed-row tooltip (truncate at 80 chars + 
+ellipsis).
+
+**Timestamps and timezones**: all displayed timestamps are UTC. 
+The relative time string ("2 hours ago") is computed from UTC 
+timestamps; the result is locale-relative but timezone-anchored 
+to UTC. The full timestamp in the expanded view includes a literal 
+"UTC" suffix to make the convention explicit.
+
+**Empty audit log**: when the API returns zero events with no 
+filters applied, the empty state shows a friendly message ("No 
+audit events recorded yet."). When zero events with filters 
+applied, the message differs ("No audit events match the current 
+filters."). Both messages are accompanied by no spinner and no 
+"Load more" button.
+
+**Server error during initial load**: a red banner appears above 
+the filter panel:
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ ⚠ Failed to load audit events: <error message>     [ Retry ] │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Clicking Retry re-runs the load with the current filters. The 
+existing events array remains empty (the load failed before any 
+data arrived).
+
+**Server error during "Load more"**: a toast notification is 
+pushed via the existing toast store; the existing rows stay 
+visible; the "Load more" button re-enables for retry.
+
+**Network timeout**: the API client (Section 6.4) treats timeouts 
+as system errors and throws `ApiError('system', 0, ...)`. The 
+audit page handles this the same as any other server error.
+
+**Filter by a future date range**: the API returns an empty 
+events array with no error. The empty state message applies.
+
+**Filter combinations with zero results**: same — empty state, no 
+error.
+
+**Permission to view audit events**: in Step D Phase 1, there is 
+a single admin and they see all events. Phase 2 will introduce 
+per-role visibility (e.g. editor sees only their own actions). The 
+UI is built without permission-aware fields in Step D; this is a 
+decision recorded as D10.
+
+### 9.10 Accessibility
+
+**Semantic table structure**: the events list is a true HTML 
+`<table>` with `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>` 
+elements. Screen readers parse the structure natively.
+
+**Expandable rows accessibility**: each row's clickable area is 
+also a button-like role. The implementation uses:
+
+- `tabindex="0"` on the `<tr>` so it receives keyboard focus.
+- `role="button"` on the `<tr>` to signal the actionable nature.
+- `aria-expanded="true"` or `"false"` reflecting the row state.
+- `aria-controls="event-detail-<id>"` pointing to the expanded 
+  detail row.
+- Keyboard handler: `Enter` or `Space` triggers the toggle 
+  (matching `<tr>` to standard button behavior).
+
+**Filter pill accessibility**: each filter pill has:
+
+- A visible × button with `aria-label="Remove filter: <field>=<value>"`.
+- The pill itself is not focusable; only the × is.
+
+**Color contrast**: the badge colors (cyan, amber, red, violet, 
+slate) at 30% opacity with full-opacity borders meet WCAG AA 
+contrast against the dark background of the design system. White 
+text on the 30%-opacity badges is intentional — the badge 
+background is a tinted glass effect, not the solid color.
+
+**No sortable columns in Step D**: clicking column headers does 
+not sort. Sortable columns are a Phase 2 enhancement (the API 
+already returns events in descending chronological order, which is 
+the default and overwhelmingly the desired order).
+
+**Reduced motion**: the row expand/collapse animation respects 
+`prefers-reduced-motion: reduce` via the global rule already in 
+`app.css` from Step C. When reduced motion is requested, the 
+expanded content appears instantly without sliding.
+
+**Screen reader announcements on filter changes**: a 
+`<div role="status" aria-live="polite">` outside the visible 
+viewport announces "Loaded N events" after a successful load and 
+"No events match the filters" on empty results. This avoids 
+silent UI changes from being missed by screen reader users.
