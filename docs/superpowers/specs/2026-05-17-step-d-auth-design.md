@@ -4155,3 +4155,408 @@ default behavior is correct (no `InsecureSkipVerify`).
   This is the same trust boundary as every password-handling 
   service; argon2id by design cannot eliminate the plaintext-in-RAM 
   exposure during verification.
+
+## 8. Trusted proxies and client IP extraction
+
+This section specifies how Arenet identifies the real source IP of 
+each incoming request when running behind one or more reverse proxies 
+(Cloudflare, a front Caddy, nginx, an internal load balancer). 
+Correctly resolving the client IP is essential for two Step D 
+features: per-IP rate limiting (Section 5.3) and audit logging 
+(Section 3.4). This section is the canonical reference; Section 5.4 
+gives the middleware-level summary and points here for the details.
+
+### 8.1 Overview
+
+In a typical Arenet deployment, requests may arrive through several 
+layers:
+
+- **Direct exposure**: client → Arenet. `r.RemoteAddr` is the 
+  client IP.
+- **Behind a CDN**: client → Cloudflare → Arenet. `r.RemoteAddr` 
+  is Cloudflare's edge IP; the real client IP is in 
+  `X-Forwarded-For`.
+- **Behind a local proxy**: client → Caddy/nginx on the same host 
+  → Arenet on `127.0.0.1`. `r.RemoteAddr` is `127.0.0.1`; the real 
+  client IP is in `X-Forwarded-For`.
+- **Chained proxies**: client → CDN → load balancer → Arenet. The 
+  immediate upstream is the load balancer; `X-Forwarded-For` 
+  contains the chain in order.
+
+The challenge: blindly trusting `X-Forwarded-For` lets any direct 
+client forge their source IP simply by setting the header. The 
+solution: trust the header only when the immediate caller 
+(`r.RemoteAddr`) is itself a known trusted proxy.
+
+Configuration is via a single environment variable, 
+`ARENET_TRUSTED_PROXIES`, holding a comma-separated list of CIDR 
+ranges. No proxy is trusted by default — `r.RemoteAddr` is always 
+used unless explicitly configured otherwise. This is decision D8.
+
+### 8.2 Configuration via environment variable
+
+The `ARENET_TRUSTED_PROXIES` environment variable accepts a 
+comma-separated list of IPv4 and IPv6 CIDR ranges:
+
+```text
+ARENET_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16,2001:db8::/32
+```
+
+Rules:
+
+- **Empty or unset**: no proxy is trusted. `r.RemoteAddr` is always 
+  used as the client IP, regardless of `X-Forwarded-For`.
+- **Whitespace tolerant**: leading/trailing spaces around each CIDR 
+  are trimmed.
+- **CIDR mandatory**: bare IPs (without `/32` or `/128`) are 
+  rejected. The operator must write `10.0.0.5/32` for a single host.
+- **Mixed IPv4 and IPv6**: both families are supported in the same 
+  list.
+
+**Parsing happens once at server startup**. Subsequent changes to 
+the environment variable require a server restart. There is no hot 
+reload (consistent with the rest of Arenet's configuration model: 
+environment-driven, restart-to-reconfigure).
+
+**Fail-fast on parse errors**: if any CIDR in the list is malformed, 
+the server logs an error at `slog.Error` level and refuses to 
+start:
+
+```text
+ERROR auth: invalid CIDR in ARENET_TRUSTED_PROXIES: "10.0.0.0/33"
+```
+
+Rationale: a malformed CIDR is a configuration bug. Silently 
+skipping the malformed entry could lead to subtly wrong trust 
+boundaries (e.g., the operator intends to trust `10.0.0.0/8` but a 
+typo makes it `10.0.0.0/33`, so the trust is silently dropped and 
+client IPs are misattributed). Crashing at startup forces the 
+operator to fix the configuration before any traffic is processed.
+
+### 8.3 IP extraction algorithm
+
+For every request, the IP extractor middleware computes the client 
+IP as follows:
+
+```text
+1. Parse RemoteAddr → strip port → get caller IP
+2. If caller IP ∈ any trusted CIDR → go to step 3, else → go to step 4
+3. Read X-Forwarded-For header, take leftmost entry, validate as IP
+   - If valid → use it as client IP
+   - If invalid → fall back to caller IP, log Debug
+4. Use caller IP as client IP
+5. Store resolved IP in request context under ClientIPKey
+```
+
+The leftmost entry of `X-Forwarded-For` is, per RFC 7239, the 
+original client. Subsequent entries are intermediate proxies, added 
+left-to-right as the request traverses each hop.
+
+Worked examples (assuming `ARENET_TRUSTED_PROXIES=10.0.0.0/8`):
+
+| RemoteAddr      | X-Forwarded-For                 | Resolved client IP | Why                          |
+|-----------------|--------------------------------|--------------------|-----------------------------|
+| `203.0.113.5`   | (absent or any value)          | `203.0.113.5`      | RemoteAddr not in trusted CIDR |
+| `10.0.0.1`      | `198.51.100.42`                | `198.51.100.42`    | RemoteAddr trusted, XFF used   |
+| `10.0.0.1`      | `198.51.100.42, 10.0.0.7`      | `198.51.100.42`    | Leftmost of XFF (chain)        |
+| `10.0.0.1`      | `not-an-ip`                    | `10.0.0.1`         | XFF malformed, fallback        |
+| `10.0.0.1`      | (absent)                       | `10.0.0.1`         | No XFF, fallback to RemoteAddr |
+| `203.0.113.5`   | `forged-attacker-input`        | `203.0.113.5`      | Forge attempt ignored          |
+
+The last example illustrates the security property: even if a 
+direct client sends `X-Forwarded-For: 10.0.0.1`, the extractor 
+discards it because `203.0.113.5` is not a trusted proxy.
+
+### 8.4 Edge cases
+
+**Multiple `X-Forwarded-For` headers**: HTTP allows the same header 
+to appear multiple times. Go's `http.Header` concatenates them with 
+commas: `req.Header.Get("X-Forwarded-For")` returns 
+`"198.51.100.42, 198.51.100.43"`. Our parser splits on comma and 
+takes the leftmost token. This is correct: the leftmost entry of 
+the combined header is still the original client.
+
+**IPv6 in `X-Forwarded-For`**: `net.ParseIP` handles IPv6 
+correctly, including bracketed forms (`[2001:db8::1]`) and zone 
+identifiers. The extractor strips brackets if present before 
+parsing. IPv6 addresses with embedded zones (`fe80::1%eth0`) are 
+not expected in real-world XFF headers; if encountered, parsing 
+fails and we fall back to RemoteAddr.
+
+**`X-Real-IP` is not used**. Some proxies (older nginx 
+configurations) set `X-Real-IP` instead of or alongside 
+`X-Forwarded-For`. Arenet only honors `X-Forwarded-For`. The 
+rationale is simplicity: supporting two headers doubles the 
+attack surface (now both can be checked, the proxy must 
+synchronize them, etc.) and `X-Forwarded-For` is the de facto 
+standard. Operators using `X-Real-IP`-only proxies should 
+reconfigure their proxy to set `X-Forwarded-For`.
+
+**`CF-Connecting-IP` is not used**. Cloudflare populates a 
+proprietary header `CF-Connecting-IP` in addition to 
+`X-Forwarded-For`. Arenet ignores this header for the same 
+reasons as `X-Real-IP`: standard headers only, single source of 
+truth. Cloudflare reliably sets `X-Forwarded-For` as well, so no 
+information is lost. Sub-agents implementing the IP extractor 
+must not add `CF-Connecting-IP` support; that is an explicit 
+non-goal of Step D.
+
+**`r.RemoteAddr` includes a port**. Go's `r.RemoteAddr` is in the 
+form `host:port` (`192.168.1.42:54321` or `[::1]:54321`). The 
+extractor strips the port before any CIDR check or use. This is 
+done via `net.SplitHostPort`, which handles both IPv4 and 
+bracketed IPv6 correctly.
+
+**Loopback addresses (`127.0.0.1`, `::1`) are not auto-trusted**. 
+A common deployment pattern is Arenet running behind a local 
+Caddy/nginx on the same host, where requests arrive from 
+`127.0.0.1`. In this case, the operator **must** add 
+`127.0.0.1/32` (and `::1/128` if IPv6 is in use) to 
+`ARENET_TRUSTED_PROXIES`. Without it, Arenet will use `127.0.0.1` 
+as the client IP for every request — effectively disabling 
+per-client rate limiting.
+
+The choice not to auto-trust loopback is deliberate. Auto-trusting 
+hides a security-relevant decision from the operator and breaks 
+the principle that the trust boundary is explicit. The cost is 
+one extra line of configuration; the benefit is that every 
+production deployment is consciously configured.
+
+**Empty `X-Forwarded-For` token**: if `X-Forwarded-For: , 
+198.51.100.42`, the leftmost token is empty. The parser treats 
+this as a malformed header and falls back to RemoteAddr.
+
+**Trailing whitespace in XFF tokens**: `X-Forwarded-For: 
+198.51.100.42 , 198.51.100.43` is valid; each token is trimmed 
+before parsing.
+
+### 8.5 Implementation
+
+The IP extractor lives in `internal/auth/ipextract.go`. It is a 
+small, stateless package-level component constructed once at 
+startup.
+
+```go
+// IPExtractor resolves the client IP for incoming requests,
+// honoring X-Forwarded-For from configured trusted proxies.
+//
+// The extractor is goroutine-safe: trustedCIDRs is read-only after
+// construction. No mutex is needed.
+type IPExtractor struct {
+    trustedCIDRs []*net.IPNet
+}
+
+// NewIPExtractor parses the comma-separated CIDR list and returns
+// a configured extractor. Returns an error if any CIDR is malformed;
+// the server should fail-fast in this case (do not start).
+//
+// Pass an empty string to disable proxy trust entirely; in that
+// case, ClientIP always returns RemoteAddr.
+func NewIPExtractor(cidrList string) (*IPExtractor, error) {
+    e := &IPExtractor{}
+    cidrList = strings.TrimSpace(cidrList)
+    if cidrList == "" {
+        return e, nil
+    }
+    for _, raw := range strings.Split(cidrList, ",") {
+        raw = strings.TrimSpace(raw)
+        if raw == "" {
+            continue
+        }
+        _, ipNet, err := net.ParseCIDR(raw)
+        if err != nil {
+            return nil, fmt.Errorf("auth: invalid CIDR in ARENET_TRUSTED_PROXIES: %q", raw)
+        }
+        e.trustedCIDRs = append(e.trustedCIDRs, ipNet)
+    }
+    return e, nil
+}
+
+// ClientIP resolves the client IP for the given request. See
+// Section 8.3 for the algorithm. Returns an empty string only if
+// RemoteAddr itself is unparseable (which is exceptional).
+func (e *IPExtractor) ClientIP(r *http.Request) string {
+    callerIP, _, err := net.SplitHostPort(r.RemoteAddr)
+    if err != nil {
+        // RemoteAddr lacked a port (rare, e.g. Unix socket): use as-is.
+        callerIP = r.RemoteAddr
+    }
+    callerParsed := net.ParseIP(callerIP)
+    if callerParsed == nil {
+        return "" // unparseable, will surface as empty in audit
+    }
+
+    // Check if caller is a trusted proxy.
+    trusted := false
+    for _, cidr := range e.trustedCIDRs {
+        if cidr.Contains(callerParsed) {
+            trusted = true
+            break
+        }
+    }
+    if !trusted {
+        return callerIP
+    }
+
+    // Caller is trusted: honor leftmost XFF entry.
+    xff := r.Header.Get("X-Forwarded-For")
+    if xff == "" {
+        return callerIP
+    }
+    leftmost := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
+    leftmost = strings.Trim(leftmost, "[]") // strip brackets if IPv6
+    if net.ParseIP(leftmost) == nil {
+        return callerIP // malformed XFF, fallback
+    }
+    return leftmost
+}
+```
+
+Design notes:
+
+- **No mutex**: `trustedCIDRs` is populated at construction and 
+  never modified. All subsequent calls are read-only. Multiple 
+  goroutines may call `ClientIP` concurrently without locking.
+
+- **Empty CIDR list = pass-through**: `NewIPExtractor("")` returns 
+  an extractor with zero trusted CIDRs. `ClientIP` then always 
+  returns `RemoteAddr`, equivalent to having no proxy support.
+
+- **Bracket-stripping for IPv6**: bracketed forms in XFF 
+  (`[2001:db8::1]`) are unusual but technically valid. Stripping 
+  them defensively avoids parse failures on legitimate input.
+
+- **Empty return on unparseable RemoteAddr**: an empty client IP 
+  surfaces clearly in audit events and rate limit counters (the 
+  empty string is its own bucket). This makes the anomaly visible 
+  in operations rather than masking it.
+
+### 8.6 Middleware integration
+
+The extractor runs as a middleware in the chi router, positioned 
+between `Recoverer` and `rateLimit`:
+
+```go
+// Order in NewRouter (Section 5.2 reminder):
+//   RequestID → slogLogger → Recoverer → devCORS → ipExtractMW → ...
+
+func ipExtractMiddleware(extractor *auth.IPExtractor) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            ip := extractor.ClientIP(r)
+            ctx := context.WithValue(r.Context(), auth.ClientIPKey, ip)
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+```
+
+The middleware is mounted **once at the top of `/api/v1` route 
+group**, not separately in each subgroup. Every authenticated and 
+unauthenticated subgroup downstream benefits from the resolved IP 
+via `auth.ClientIPFromContext(ctx)` (Section 5.8).
+
+The order matters:
+
+- **After `Recoverer`**: so that panics during IP parsing (which 
+  should not happen, but defensively) are caught.
+- **Before `rateLimit`**: the rate limiter reads the IP from 
+  context; it must be populated first.
+- **Before all auth middlewares**: the audit helper 
+  (`appendAudit`) reads the IP from context when recording 
+  events.
+
+### 8.7 Logging
+
+At startup, the parsed CIDR list is logged at `Info` level once:
+
+```text
+INFO auth: trusted proxies configured count=3 cidrs="10.0.0.0/8,192.168.0.0/16,2001:db8::/32"
+```
+
+If the list is empty:
+
+```text
+INFO auth: no trusted proxies configured (X-Forwarded-For will be ignored)
+```
+
+Rationale: the operator must be able to see, at boot, what trust 
+boundary is in effect. This is a single line per startup, no 
+ongoing volume. The CIDRs themselves are not considered sensitive 
+(an operator reading their own server logs).
+
+**No per-request logging in the normal flow**. Resolving an IP for 
+every request would produce log volume linear in traffic, which is 
+excessive for normal operation. The resolved IP appears in:
+
+- The `slogLogger` access log (which already records every 
+  request).
+- Every audit event (Section 3.4).
+- The rate-limit Tier 2 warning when blocking (Section 5.3).
+
+These cover the relevant observability needs without per-request 
+duplication.
+
+**Debug-level logging for malformed XFF**: when `X-Forwarded-For` 
+contains an unparseable token and the extractor falls back to 
+`RemoteAddr`, a `slog.Debug` line records the anomaly. This is 
+opt-in (default slog level is Info) and intended for 
+troubleshooting unusual proxy configurations:
+
+```text
+DEBUG auth: malformed X-Forwarded-For, falling back to RemoteAddr xff="not-an-ip" remote_addr="10.0.0.1:54321"
+```
+
+### 8.8 Security considerations
+
+**The trust decision is on the immediate caller, not the chain**. 
+The extractor checks whether `r.RemoteAddr` is in a trusted CIDR. 
+It does not validate the entire chain in `X-Forwarded-For`. If the 
+chain is `client → CDN → load balancer → Arenet`, and Arenet trusts 
+the load balancer, then the extractor honors the leftmost XFF 
+entry — but it does not verify that the CDN's entry is itself a 
+trusted intermediate.
+
+This is the standard model for XFF-based IP extraction. It works 
+because the trusted proxy is responsible for sanitizing the 
+header it forwards. Cloudflare, for example, strips and 
+regenerates `X-Forwarded-For` on every request to prevent 
+upstream forgery. Our trust assumption is that operators who add 
+Cloudflare to `ARENET_TRUSTED_PROXIES` understand that they are 
+delegating XFF sanitization to Cloudflare.
+
+**Misconfiguration risk**: trusting too broad a CIDR (e.g., 
+`0.0.0.0/0`) effectively disables IP verification. Any client 
+could then send a forged `X-Forwarded-For` and have it honored. 
+The fail-fast on malformed CIDRs (Section 8.2) does not catch 
+overly-broad valid CIDRs; the operator is responsible for 
+keeping the list minimal and accurate.
+
+**Multi-hop proxies and audit integrity**: the audit log records 
+only the resolved client IP, not the intermediate hops. If 
+investigation requires tracing the full path of a request, the 
+operator must correlate Arenet's audit log with upstream proxy 
+access logs (Cloudflare's, the load balancer's). This is the 
+typical setup for SOC investigations and was already accepted in 
+decision D8.
+
+**No CAPTCHA or human-verification bypass**: the resolved IP is 
+used for rate limiting and audit, never for granting elevated 
+privileges. There is no "trusted IP bypasses authentication" 
+mechanism in Arenet. Even an admin connecting from a trusted 
+proxy must complete the full auth flow.
+
+**Operator responsibility checklist**:
+
+- Keep `ARENET_TRUSTED_PROXIES` minimal: only include the CIDRs of 
+  proxies you actually deploy.
+- Re-audit the list whenever you change your infrastructure (add 
+  a CDN, change load balancer subnet, etc.).
+- For deployments behind a local proxy on the same host, include 
+  `127.0.0.1/32` and `::1/128`.
+- For deployments behind Cloudflare, include Cloudflare's IP 
+  ranges (published at 
+  https://www.cloudflare.com/ips/). Note that this list changes 
+  occasionally; review on each Arenet upgrade.
+- Do not include `0.0.0.0/0` or `::/0` (entire internet) — that 
+  would disable proxy verification entirely.
