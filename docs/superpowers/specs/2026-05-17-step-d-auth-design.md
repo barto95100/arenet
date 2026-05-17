@@ -2098,3 +2098,1317 @@ not mounted at all. The frontend is served from the same origin as
 the API (via `//go:embed`), so cookies are sent natively without
 any CORS gymnastics. The `Access-Control-Allow-Credentials` addition
 is purely a dev-mode concern.
+
+## 6. Frontend integration
+
+This section specifies the Svelte 5 / SvelteKit 2 changes required to
+integrate authentication and audit into the existing Step C admin UI.
+It covers the new pages, the new component, the two new stores, the
+two new API client modules, and the modifications to the existing
+layout shell and HTTP client.
+
+### 6.1 Overview
+
+Step D introduces the following frontend artifacts:
+
+**New pages** (under `web/frontend/src/routes/`):
+- `/login` — username/password form
+- `/setup` — first-boot admin creation form
+- `/audit` — audit log explorer with filters
+
+**New component** (under `web/frontend/src/lib/components/`):
+- `LockScreen.svelte` — full-screen overlay for idle session re-auth
+
+**New modal** (reuses Step C `Modal` primitive):
+- `ChangePasswordModal.svelte` — invoked from the compromised-password
+  banner
+
+**New stores** (under `web/frontend/src/lib/stores/`):
+- `auth.ts` — current user identity and authentication state
+- `idle.ts` — client-side 15-minute inactivity timer
+
+**New API client modules** (under `web/frontend/src/lib/api/`):
+- `auth.ts` — typed wrappers for `/api/v1/auth/*`
+- `audit.ts` — typed wrappers for `/api/v1/audit`
+
+**Modified files**:
+- `web/frontend/src/lib/api/client.ts` — credentials, 401/403
+  interceptors, idle timer reset
+- `web/frontend/src/routes/+layout.svelte` — auth bootstrap gate,
+  heartbeat, LockScreen mount, compromised-password banner
+- `web/frontend/src/lib/components/Sidebar.svelte` — fifth nav item
+  for `/audit`
+
+**Application states**: the layout shell distinguishes four states
+of the application, driven by the auth store:
+
+| State           | Cause                                              | UI behavior                             |
+|-----------------|----------------------------------------------------|-----------------------------------------|
+| `unknown`       | Initial state before bootstrap completes           | Centered spinner, no chrome             |
+| `anonymous`     | No session, or session lookup failed (401)         | Redirect to `/login` (which links to `/setup`) |
+| `authenticated` | Valid session, not idle                            | Normal layout (sidebar + main)          |
+| `locked`        | Valid session but idle >15 min, OR 403 from server | Normal layout + LockScreen overlay      |
+
+State transitions:
+
+- `unknown → authenticated`: bootstrap `/me` succeeds with `locked: false`
+- `unknown → locked`: bootstrap `/me` succeeds with `locked: true`
+- `unknown → anonymous`: bootstrap `/me` returns 401
+- `authenticated → locked`: client idle timer fires OR a request returns 403
+- `locked → authenticated`: successful `/unlock` call
+- `* → anonymous`: any request returns 401, or explicit `logout()`
+
+The bootstrap call happens once at layout mount. Subsequent state
+changes happen via the API client interceptors and the idle timer.
+
+### 6.2 Auth store (`lib/stores/auth.ts`)
+
+The auth store holds the current user identity and authentication
+state, exposed as Svelte 5 runes (`$state`) for fine-grained reactivity.
+
+```ts
+// web/frontend/src/lib/stores/auth.ts
+import type { User } from '$lib/api/auth';
+
+export type AuthState = 'unknown' | 'anonymous' | 'authenticated' | 'locked';
+
+class AuthStore {
+    user = $state<User | null>(null);
+    state = $state<AuthState>('unknown');
+    isBootstrapping = $state(false);
+
+    async bootstrap(): Promise<void> {
+        this.isBootstrapping = true;
+        try {
+            const me = await authApi.me();
+            this.user = me;
+            this.state = me.locked ? 'locked' : 'authenticated';
+        } catch (err) {
+            if (err instanceof ApiError && err.status === 401) {
+                this.state = 'anonymous';
+                this.user = null;
+            } else {
+                // Network or 5xx error — leave state as 'unknown' so the
+                // layout shows the spinner. The user can refresh.
+                console.error('auth bootstrap failed:', err);
+            }
+        } finally {
+            this.isBootstrapping = false;
+        }
+    }
+
+    async login(username: string, password: string, rememberMe: boolean): Promise<void> {
+        const user = await authApi.login(username, password, rememberMe);
+        this.user = user;
+        this.state = 'authenticated';
+    }
+
+    async logout(): Promise<void> {
+        try {
+            await authApi.logout();
+        } catch (err) {
+            // Even if the server fails, clear local state.
+            console.warn('logout request failed (clearing local state anyway):', err);
+        }
+        this.user = null;
+        this.state = 'anonymous';
+    }
+
+    async unlock(password: string): Promise<void> {
+        await authApi.unlock(password);
+        this.state = 'authenticated';
+        // The user object is still valid; only the state changes.
+    }
+
+    setLocked(): void {
+        if (this.state === 'authenticated') {
+            this.state = 'locked';
+        }
+    }
+
+    clear(): void {
+        this.user = null;
+        this.state = 'anonymous';
+    }
+}
+
+export const auth = new AuthStore();
+```
+
+Design notes:
+
+- The store is a **singleton class instance** rather than a function
+  returning runes. Svelte 5's runes work in classes, and the singleton
+  pattern matches Step C's `toast.ts` and `loading.ts` stores.
+
+- The `unknown` state is critical: it signals that bootstrap has not
+  yet completed. The layout shell displays a centered spinner during
+  `unknown` to avoid flashing the login page for half a second before
+  the bootstrap completes.
+
+- The `bootstrap()` method is intentionally tolerant: a network
+  failure leaves the state as `unknown`, allowing the user to refresh
+  rather than being kicked to login on a transient connectivity
+  glitch.
+
+- `setLocked()` is idempotent and only transitions from
+  `authenticated`. Trying to lock from `anonymous` or `unknown` is a
+  no-op, preventing race conditions during page transitions.
+
+- `clear()` is called by the API client's 401 interceptor (see 6.4).
+
+### 6.3 Idle store (`lib/stores/idle.ts`)
+
+The idle store implements the client-side counterpart of the 15-minute
+inactivity check. Its purpose is to trigger the lock screen client-side
+**before** the next API request gets a 403, providing immediate UX
+feedback.
+
+```ts
+// web/frontend/src/lib/stores/idle.ts
+import { auth } from './auth';
+
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+class IdleStore {
+    private timerId: ReturnType<typeof setTimeout> | null = null;
+    private lastReset = $state(Date.now());
+
+    start(): void {
+        this.reset();
+        document.addEventListener('visibilitychange', this.onVisibilityChange);
+    }
+
+    stop(): void {
+        if (this.timerId !== null) {
+            clearTimeout(this.timerId);
+            this.timerId = null;
+        }
+        document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    }
+
+    /**
+     * Reset the idle timer. Called by the API client on every successful
+     * server interaction (decision: activity = server action only, not
+     * mouse/keyboard).
+     */
+    reset(): void {
+        if (auth.state !== 'authenticated') {
+            return; // No point timing an unauthenticated or already-locked session.
+        }
+        this.lastReset = Date.now();
+        if (this.timerId !== null) {
+            clearTimeout(this.timerId);
+        }
+        this.timerId = setTimeout(() => {
+            auth.setLocked();
+            this.timerId = null;
+        }, IDLE_TIMEOUT_MS);
+    }
+
+    private onVisibilityChange = (): void => {
+        if (document.visibilityState === 'hidden') {
+            // Tab hidden — keep the existing timer running but don't start
+            // new ones. When the user returns, if the timer fired in the
+            // meantime, they are already in locked state.
+        }
+        // No special handling on visible: the next API call will reset
+        // the timer naturally if the session is still authenticated.
+    };
+}
+
+export const idle = new IdleStore();
+```
+
+Design notes:
+
+- **Activity definition**: per decision Q3bis, "activity" means a
+  server API call, not mouse moves or keyboard events. The idle
+  store does not listen for `mousemove` / `keydown` — those are
+  unreliable (an automated tool moving the cursor would defeat the
+  lock) and noisy.
+
+- **Defense in depth**: the client timer is the UX layer. The server's
+  `LastActivity` check (in hard-auth middleware) is the security
+  layer. If a user disables JavaScript or tampers with the timer,
+  the server still enforces the lock at the next API call.
+
+- **Tab hidden behavior**: the timer continues running when the tab
+  is hidden (we don't pause it). This matches the user's intuition:
+  if they leave the tab open in the background for 30 minutes, they
+  expect to find it locked when they return. Pausing the timer
+  during hidden tabs would defeat the purpose.
+
+- **No timer on `locked` or `anonymous`**: the `reset()` method
+  short-circuits when the auth state is not `authenticated`. This
+  prevents wasted timers and accidental transitions out of locked
+  state.
+
+### 6.4 API client modifications (`lib/api/client.ts`)
+
+The Step C `client.ts` is modified to:
+
+1. Include cookies on every request (`credentials: 'include'`).
+2. Intercept 401, 403, and 429 responses and dispatch to the
+   appropriate store action.
+3. Reset the idle timer on every successful response.
+
+```ts
+// web/frontend/src/lib/api/client.ts (modified)
+import { auth } from '$lib/stores/auth';
+import { idle } from '$lib/stores/idle';
+import { toast } from '$lib/stores/toast';
+import { goto } from '$app/navigation';
+
+export class ApiError extends Error {
+    constructor(
+        public kind: 'validation' | 'system' | 'auth' | 'forbidden' | 'rate_limited',
+        public status: number,
+        public message: string,
+        public retryAfterSeconds?: number,
+    ) {
+        super(message);
+    }
+}
+
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const url = `${import.meta.env.VITE_API_BASE_URL || ''}${path}`;
+    let response: Response;
+    try {
+        response = await fetch(url, {
+            ...init,
+            credentials: 'include', // NEW: send arenet_session cookie cross-origin
+            headers: {
+                'Content-Type': 'application/json',
+                ...init.headers,
+            },
+        });
+    } catch (err) {
+        // Network error
+        throw new ApiError('system', 0, 'network error: ' + (err as Error).message);
+    }
+
+    // Handle authentication-related statuses BEFORE attempting to parse the body.
+    if (response.status === 401) {
+        auth.clear();
+        // Avoid redirect loops: only navigate if we're not already on /login or /setup.
+        const here = window.location.pathname;
+        if (here !== '/login' && here !== '/setup') {
+            goto('/login');
+        }
+        throw new ApiError('auth', 401, 'authentication required');
+    }
+
+    if (response.status === 403) {
+        // Distinguish "session locked" (the only 403 in Step D) from future
+        // role-based 403s by checking the error message body.
+        const body = await response.json().catch(() => ({ error: 'forbidden' }));
+        if (body.error === 'session locked') {
+            auth.setLocked();
+            throw new ApiError('forbidden', 403, 'session locked');
+        }
+        throw new ApiError('forbidden', 403, body.error || 'forbidden');
+    }
+
+    if (response.status === 429) {
+        const retryAfter = parseInt(response.headers.get('Retry-After') || '0', 10);
+        const body = await response.json().catch(() => ({ error: 'rate limited' }));
+        toast.push({ kind: 'error', message: body.error || 'rate limited' });
+        throw new ApiError('rate_limited', 429, body.error, retryAfter);
+    }
+
+    // Reset idle timer on any successful response (including 4xx that are
+    // not auth/rate-limit-related, since those still constitute server
+    // interaction). 5xx and network errors do not reset the timer.
+    if (response.status < 500) {
+        idle.reset();
+    }
+
+    if (response.status >= 400 && response.status < 500) {
+        const body = await response.json().catch(() => ({ error: 'unknown error' }));
+        throw new ApiError('validation', response.status, body.error || 'validation failed');
+    }
+
+    if (response.status >= 500) {
+        const body = await response.json().catch(() => ({ error: 'internal error' }));
+        throw new ApiError('system', response.status, body.error || 'server error');
+    }
+
+    if (response.status === 204) {
+        return undefined as T;
+    }
+
+    return response.json();
+}
+```
+
+Design notes:
+
+- **`credentials: 'include'` on every request**: required for the
+  browser to attach the `arenet_session` cookie on cross-origin
+  requests (dev mode: Vite at `:5173` → API at `:8001`). In
+  production same-origin, this option is a no-op.
+
+- **401 handling**: the interceptor clears the auth store and
+  navigates to `/login`. The `here !== '/login'` guard prevents an
+  infinite redirect loop if `/login` itself somehow returns 401
+  (e.g., during the very first bootstrap when there's no session).
+
+- **403 disambiguation**: Step D has exactly one cause for 403
+  (`session locked`). The interceptor matches the error message to
+  decide between "lock screen" and "generic forbidden". Phase 2
+  will introduce role-based 403s (`editor cannot delete users`);
+  those will be distinguished here.
+
+- **429 toast**: rate-limit responses surface a toast immediately.
+  The login form also displays an inline error (since the request
+  came from there), making the rate limit doubly visible.
+
+- **Idle reset gate**: any response with status `< 500` resets the
+  idle timer. 5xx responses are excluded because a server hiccup
+  should not artificially extend the session. Network errors (no
+  response at all) likewise don't reset.
+
+### 6.5 Auth API client (`lib/api/auth.ts`)
+
+Type-safe wrappers for the auth endpoints. Mirrors the wire
+shapes from Section 4.
+
+```ts
+// web/frontend/src/lib/api/auth.ts
+import { request } from './client';
+
+export interface User {
+    id: string;
+    username: string;
+    displayName: string;
+    locked: boolean;
+    passwordCompromised: boolean;
+    hibpCheckStatus: 'pending' | 'clean' | 'compromised';
+}
+
+export interface Session {
+    id: string;
+    issuedAt: string;
+    lastActivity: string;
+    expiresAt: string;
+    ip: string;
+    userAgent: string;
+    rememberMe: boolean;
+    isCurrent: boolean;
+}
+
+export const authApi = {
+    setup(setupToken: string, username: string, displayName: string, password: string): Promise<User> {
+        return request<User>('/api/v1/auth/setup', {
+            method: 'POST',
+            body: JSON.stringify({ setupToken, username, displayName, password }),
+        });
+    },
+
+    login(username: string, password: string, rememberMe: boolean): Promise<User> {
+        return request<User>('/api/v1/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({ username, password, rememberMe }),
+        });
+    },
+
+    logout(): Promise<void> {
+        return request<void>('/api/v1/auth/logout', { method: 'POST' });
+    },
+
+    me(): Promise<User> {
+        return request<User>('/api/v1/auth/me');
+    },
+
+    unlock(password: string): Promise<{ unlocked: boolean }> {
+        return request<{ unlocked: boolean }>('/api/v1/auth/unlock', {
+            method: 'POST',
+            body: JSON.stringify({ password }),
+        });
+    },
+
+    heartbeat(): Promise<void> {
+        return request<void>('/api/v1/auth/heartbeat', { method: 'POST' });
+    },
+
+    listSessions(): Promise<{ sessions: Session[] }> {
+        return request<{ sessions: Session[] }>('/api/v1/auth/sessions');
+    },
+
+    deleteSession(id: string): Promise<void> {
+        return request<void>(`/api/v1/auth/sessions/${id}`, { method: 'DELETE' });
+    },
+
+    // changePassword is specified in Section 4 (added by amendment).
+    // It returns 204 on success and revokes all other sessions of this user.
+    changePassword(currentPassword: string, newPassword: string): Promise<void> {
+        return request<void>('/api/v1/auth/me/password', {
+            method: 'POST',
+            body: JSON.stringify({ currentPassword, newPassword }),
+        });
+    },
+};
+```
+
+### 6.6 Audit API client (`lib/api/audit.ts`)
+
+```ts
+// web/frontend/src/lib/api/audit.ts
+import { request } from './client';
+
+export interface AuditEvent {
+    id: string;
+    timestamp: string;
+    actorUserId: string;
+    actorUsernameSnapshot: string;
+    action: string;
+    targetType: string;
+    targetId: string;
+    beforeJson: unknown | null;
+    afterJson: unknown | null;
+    message: string;
+    ip: string;
+    userAgent: string;
+}
+
+export interface AuditFilter {
+    actorUserId?: string;
+    action?: string;
+    targetType?: string;
+    targetId?: string;
+    from?: string;  // RFC 3339
+    to?: string;    // RFC 3339
+    limit?: number;
+    cursor?: string;
+}
+
+export interface AuditListResponse {
+    events: AuditEvent[];
+    nextCursor: string;
+}
+
+export const auditApi = {
+    list(filter: AuditFilter): Promise<AuditListResponse> {
+        const params = new URLSearchParams();
+        if (filter.actorUserId) params.set('actor_user_id', filter.actorUserId);
+        if (filter.action) params.set('action', filter.action);
+        if (filter.targetType) params.set('target_type', filter.targetType);
+        if (filter.targetId) params.set('target_id', filter.targetId);
+        if (filter.from) params.set('from', filter.from);
+        if (filter.to) params.set('to', filter.to);
+        if (filter.limit) params.set('limit', String(filter.limit));
+        if (filter.cursor) params.set('cursor', filter.cursor);
+        const query = params.toString();
+        return request<AuditListResponse>(`/api/v1/audit${query ? '?' + query : ''}`);
+    },
+};
+```
+
+Note that the filter keys are snake_case in the URL parameters
+(matching the server's expected query string format) while the
+TypeScript object uses camelCase (matching frontend conventions).
+The translation happens in the `list()` function.
+
+### 6.7 Layout shell modifications (`+layout.svelte`)
+
+The root layout is the gate that decides what to render based on
+the auth state. It also owns the heartbeat lifecycle and the
+compromised-password banner.
+
+```svelte
+<!-- web/frontend/src/routes/+layout.svelte (modified) -->
+<script lang="ts">
+    import { onMount, onDestroy } from 'svelte';
+    import { goto } from '$app/navigation';
+    import { page } from '$app/state';
+    import { auth } from '$lib/stores/auth';
+    import { idle } from '$lib/stores/idle';
+    import { authApi } from '$lib/api/auth';
+    import Sidebar from '$lib/components/Sidebar.svelte';
+    import LockScreen from '$lib/components/LockScreen.svelte';
+    import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
+    import ToastContainer from '$lib/components/ToastContainer.svelte';
+    import Button from '$lib/components/Button.svelte';
+    import Spinner from '$lib/components/Spinner.svelte';
+
+    const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+    let heartbeatId: ReturnType<typeof setInterval> | null = null;
+    let changePasswordModalOpen = $state(false);
+
+    onMount(async () => {
+        await auth.bootstrap();
+
+        // Once authenticated, start the idle timer and the heartbeat.
+        if (auth.state === 'authenticated' || auth.state === 'locked') {
+            idle.start();
+            startHeartbeat();
+        }
+
+        // Redirect anonymous users to /login (the link to /setup is on /login).
+        if (auth.state === 'anonymous') {
+            const here = page.url.pathname;
+            if (here !== '/login' && here !== '/setup') {
+                goto('/login');
+            }
+        }
+    });
+
+    onDestroy(() => {
+        idle.stop();
+        stopHeartbeat();
+    });
+
+    function startHeartbeat() {
+        if (heartbeatId !== null) return;
+        heartbeatId = setInterval(() => {
+            // Only heartbeat when tab is visible (decision: visible-only).
+            if (document.visibilityState !== 'visible') return;
+            // Only heartbeat when authenticated and not locked.
+            if (auth.state !== 'authenticated') return;
+            authApi.heartbeat().catch((err) => {
+                // 401 and 403 are handled by the client interceptor.
+                // Other errors are logged but non-fatal.
+                console.warn('heartbeat failed:', err);
+            });
+        }, HEARTBEAT_INTERVAL_MS);
+    }
+
+    function stopHeartbeat() {
+        if (heartbeatId !== null) {
+            clearInterval(heartbeatId);
+            heartbeatId = null;
+        }
+    }
+</script>
+
+{#if auth.state === 'unknown'}
+    <div class="flex items-center justify-center min-h-screen">
+        <Spinner size="lg" />
+    </div>
+{:else if auth.state === 'anonymous'}
+    <!-- /login or /setup page renders directly -->
+    <slot />
+{:else}
+    <!-- authenticated or locked: full layout with optional compromised-password banner -->
+    {#if auth.user?.passwordCompromised}
+        <div class="bg-danger/10 border-b border-danger text-danger px-6 py-3 flex items-center justify-between" role="alert">
+            <div>
+                <strong>Your password has been found in a known data breach.</strong>
+                Change it immediately to secure your account.
+            </div>
+            <Button variant="danger" size="sm" on:click={() => changePasswordModalOpen = true}>
+                Change password
+            </Button>
+        </div>
+    {/if}
+    <div class="flex min-h-screen bg-base">
+        <Sidebar />
+        <main class="flex-1 p-6 relative" aria-busy={false}>
+            <slot />
+        </main>
+    </div>
+    <ToastContainer />
+    <ChangePasswordModal bind:open={changePasswordModalOpen} />
+    {#if auth.state === 'locked'}
+        <LockScreen />
+    {/if}
+{/if}
+```
+
+Design notes:
+
+- **Bootstrap is the first thing**: `onMount` waits for
+  `auth.bootstrap()` to complete before rendering anything else. The
+  `unknown` state shows a spinner; nothing else is reactive on it.
+
+- **Heartbeat lifecycle**: started after bootstrap when in
+  `authenticated` state, stopped on unmount. The interval handler
+  itself double-checks `document.visibilityState` and `auth.state`
+  to avoid wasted calls.
+
+- **LockScreen mounted conditionally**: when `auth.state === 'locked'`,
+  the LockScreen renders as a sibling of the main layout (not
+  replacing it). The CSS `z-index` of LockScreen ensures it visually
+  covers everything.
+
+- **Compromised-password banner**: rendered above the main layout
+  when `auth.user.passwordCompromised === true`. Clicking "Change
+  password" opens `ChangePasswordModal`. The modal is always mounted
+  (controlled by `open` prop) to preserve form state across
+  show/hide cycles.
+
+- **Anonymous redirect with guard**: redirecting to `/login` from
+  `/login` would loop. The guard checks the current path. The `/setup`
+  path is reached via a link on the `/login` page, not via an
+  automatic detection (decision: keep the flow simple, the user
+  knows whether they're a first-time setup or a returning login).
+
+### 6.8 LockScreen component (`lib/components/LockScreen.svelte`)
+
+A full-screen overlay rendered above the existing UI when the
+session is in the `locked` state. Preserves the underlying UI
+state (modals, scroll position, form drafts).
+
+```svelte
+<!-- web/frontend/src/lib/components/LockScreen.svelte -->
+<script lang="ts">
+    import { onMount } from 'svelte';
+    import { auth } from '$lib/stores/auth';
+    import { ApiError } from '$lib/api/client';
+    import Input from './Input.svelte';
+    import Button from './Button.svelte';
+
+    let password = $state('');
+    let error = $state<string | null>(null);
+    let submitting = $state(false);
+    let passwordInput: HTMLInputElement;
+
+    onMount(() => {
+        passwordInput?.focus();
+    });
+
+    async function handleSubmit(e: Event) {
+        e.preventDefault();
+        if (submitting) return;
+        if (!password) {
+            error = 'Password is required';
+            return;
+        }
+        submitting = true;
+        error = null;
+        try {
+            await auth.unlock(password);
+            // On success, the auth store transitions to 'authenticated'
+            // and this component unmounts via the parent's {#if} guard.
+        } catch (err) {
+            if (err instanceof ApiError) {
+                error = err.status === 401 ? 'Incorrect password' : err.message;
+            } else {
+                error = 'Unexpected error';
+            }
+            password = '';
+            passwordInput?.focus();
+        } finally {
+            submitting = false;
+        }
+    }
+</script>
+
+<div
+    class="fixed inset-0 z-[1000] backdrop-blur-md bg-base/80 flex items-center justify-center"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="lockscreen-title"
+>
+    <div class="bg-elevated border border-default rounded-lg shadow-glow-cyan p-8 w-96 max-w-full mx-4">
+        <h2 id="lockscreen-title" class="text-2xl font-semibold text-primary mb-2">
+            Session locked
+        </h2>
+        <p class="text-secondary text-sm mb-6">
+            Signed in as <span class="font-mono text-primary">{auth.user?.username ?? ''}</span>.
+            Enter your password to continue.
+        </p>
+        <form on:submit={handleSubmit}>
+            <Input
+                bind:element={passwordInput}
+                bind:value={password}
+                type="password"
+                label="Password"
+                autocomplete="current-password"
+                error={error}
+                disabled={submitting}
+            />
+            <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                loading={submitting}
+                disabled={submitting}
+                class="w-full mt-4"
+            >
+                Unlock
+            </Button>
+        </form>
+    </div>
+</div>
+```
+
+Design notes:
+
+- **Full-screen overlay with backdrop blur**: the CSS
+  `backdrop-filter: blur(...)` on the overlay obscures the
+  underlying UI without removing it from the DOM. This preserves
+  state (open modals, scroll positions, form drafts) so the user
+  resumes exactly where they were after unlocking.
+
+- **`z-[1000]`**: high enough to cover modals (Step C modals use
+  z-index in the low hundreds). If Phase 2 introduces z-index
+  competition, this is the value to adjust.
+
+- **No Escape handler**: unlike a regular Modal, the LockScreen
+  cannot be dismissed. There is no "cancel" path; the user must
+  authenticate or close the tab.
+
+- **Accessibility**: `role="dialog"` + `aria-modal="true"` +
+  `aria-labelledby` mark it as a modal dialog. The password input
+  receives focus on mount.
+
+- **Username display from store**: `auth.user?.username` reads from
+  the store, populated by the soft-auth flow (the session lookup
+  still succeeds when locked). If the user object is somehow null
+  (edge case), the fallback `''` keeps the layout intact.
+
+- **`autocomplete="current-password"`**: lets password managers fill
+  the input.
+
+- **Error display**: the `Input` component's existing `error` prop
+  shows the message in red under the field. No toast.
+
+- **`reduced-motion` respect**: the underlying transitions on the
+  overlay (if any are added later) are disabled via the global
+  reduced-motion rule already in `app.css` from Step C.
+
+### 6.9 Login page (`routes/login/+page.svelte`)
+
+Standard username/password form with "Remember me" checkbox. Includes
+a link to `/setup` for first-boot scenarios.
+
+```svelte
+<!-- web/frontend/src/routes/login/+page.svelte -->
+<script lang="ts">
+    import { goto } from '$app/navigation';
+    import { auth } from '$lib/stores/auth';
+    import { ApiError } from '$lib/api/client';
+    import Input from '$lib/components/Input.svelte';
+    import Checkbox from '$lib/components/Checkbox.svelte';
+    import Button from '$lib/components/Button.svelte';
+    import Card from '$lib/components/Card.svelte';
+
+    let username = $state('');
+    let password = $state('');
+    let rememberMe = $state(false);
+    let usernameError = $state<string | null>(null);
+    let passwordError = $state<string | null>(null);
+    let formError = $state<string | null>(null);
+    let submitting = $state(false);
+
+    async function handleSubmit(e: Event) {
+        e.preventDefault();
+        if (submitting) return;
+        usernameError = passwordError = formError = null;
+        if (!username) { usernameError = 'Username is required'; return; }
+        if (!password) { passwordError = 'Password is required'; return; }
+        submitting = true;
+        try {
+            await auth.login(username, password, rememberMe);
+            goto('/routes');
+        } catch (err) {
+            if (err instanceof ApiError) {
+                if (err.status === 401) {
+                    formError = 'Invalid username or password';
+                } else if (err.status === 400) {
+                    formError = err.message;
+                } else if (err.status === 429) {
+                    formError = err.message; // toast already shown by client.ts
+                } else {
+                    formError = 'Unable to sign in. Try again later.';
+                }
+            } else {
+                formError = 'Unexpected error';
+            }
+        } finally {
+            submitting = false;
+        }
+    }
+</script>
+
+<div class="flex items-center justify-center min-h-screen bg-base p-4">
+    <Card class="w-96 max-w-full p-8">
+        <h1 class="text-3xl font-semibold text-primary mb-2">
+            <span class="text-cyan font-mono">A</span><span class="font-mono">RENET</span>
+        </h1>
+        <p class="text-secondary mb-6 text-sm">Sign in to the admin panel.</p>
+        {#if formError}
+            <div class="mb-4 p-3 rounded bg-danger/10 border border-danger text-danger text-sm" role="alert">
+                {formError}
+            </div>
+        {/if}
+        <form on:submit={handleSubmit}>
+            <Input
+                bind:value={username}
+                label="Username"
+                autocomplete="username"
+                error={usernameError}
+                disabled={submitting}
+            />
+            <div class="mt-4">
+                <Input
+                    bind:value={password}
+                    type="password"
+                    label="Password"
+                    autocomplete="current-password"
+                    error={passwordError}
+                    disabled={submitting}
+                />
+            </div>
+            <div class="mt-4">
+                <Checkbox bind:checked={rememberMe} label="Remember me for 30 days" disabled={submitting} />
+            </div>
+            <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                loading={submitting}
+                disabled={submitting}
+                class="w-full mt-6"
+            >
+                Sign in
+            </Button>
+        </form>
+        <p class="text-secondary text-xs mt-6 text-center">
+            First time? <a href="/setup" class="text-cyan hover:underline">Set up admin account</a>
+        </p>
+    </Card>
+</div>
+```
+
+Design notes:
+
+- **Single-page layout**: no sidebar, no chrome, full-screen
+  centered card.
+
+- **Branding consistency**: the wordmark mirrors the sidebar's
+  `ARENET` style (cyan `A`, monospace).
+
+- **Inline error placement**: per-field errors next to the input
+  (via `Input` component's existing `error` prop), form-level
+  errors in a red banner at the top of the form.
+
+- **`autocomplete` attributes**: enable password manager
+  integration.
+
+- **"First time?" link**: gives the user a clear path to `/setup`
+  without requiring them to know the URL. This is the primary
+  discovery mechanism for the setup flow.
+
+### 6.10 Setup page (`routes/setup/+page.svelte`)
+
+First-boot admin creation. Same structure as login, with the
+addition of the setup token field and a banner explaining where
+to find it.
+
+```svelte
+<!-- web/frontend/src/routes/setup/+page.svelte -->
+<script lang="ts">
+    import { goto } from '$app/navigation';
+    import { authApi } from '$lib/api/auth';
+    import { auth } from '$lib/stores/auth';
+    import { ApiError } from '$lib/api/client';
+    import Input from '$lib/components/Input.svelte';
+    import Button from '$lib/components/Button.svelte';
+    import Card from '$lib/components/Card.svelte';
+
+    let setupToken = $state('');
+    let username = $state('');
+    let displayName = $state('');
+    let password = $state('');
+    let errors = $state<Record<string, string | null>>({});
+    let formError = $state<string | null>(null);
+    let submitting = $state(false);
+
+    async function handleSubmit(e: Event) {
+        e.preventDefault();
+        if (submitting) return;
+        errors = {};
+        formError = null;
+        submitting = true;
+        try {
+            const user = await authApi.setup(setupToken, username, displayName, password);
+            auth.user = user;
+            auth.state = 'authenticated';
+            goto('/routes');
+        } catch (err) {
+            if (err instanceof ApiError) {
+                if (err.status === 403) {
+                    errors = { setupToken: 'Invalid or expired setup token' };
+                } else if (err.status === 404) {
+                    formError = 'Setup is not available: an admin account already exists.';
+                } else if (err.status === 400) {
+                    // Heuristic field mapping based on error message content.
+                    const msg = err.message.toLowerCase();
+                    if (msg.includes('username')) errors = { username: err.message };
+                    else if (msg.includes('password')) errors = { password: err.message };
+                    else if (msg.includes('displayname')) errors = { displayName: err.message };
+                    else formError = err.message;
+                } else {
+                    formError = err.message;
+                }
+            } else {
+                formError = 'Unexpected error';
+            }
+        } finally {
+            submitting = false;
+        }
+    }
+</script>
+
+<div class="flex items-center justify-center min-h-screen bg-base p-4">
+    <Card class="w-[28rem] max-w-full p-8">
+        <h1 class="text-3xl font-semibold text-primary mb-2">
+            Initial setup
+        </h1>
+        <p class="text-secondary mb-2 text-sm">Create the first admin account.</p>
+        <div class="mb-6 p-3 rounded bg-cyan/10 border border-cyan/30 text-sm">
+            <p class="text-primary">
+                <strong>Setup token required.</strong>
+            </p>
+            <p class="text-secondary mt-1">
+                Look in your Arenet server logs for a line beginning with
+                <code class="font-mono text-cyan">Setup token:</code>.
+                The token is regenerated on every restart until an admin exists.
+            </p>
+        </div>
+        {#if formError}
+            <div class="mb-4 p-3 rounded bg-danger/10 border border-danger text-danger text-sm" role="alert">
+                {formError}
+            </div>
+        {/if}
+        <form on:submit={handleSubmit}>
+            <Input
+                bind:value={setupToken}
+                label="Setup token"
+                placeholder="Paste from server logs"
+                error={errors.setupToken}
+                disabled={submitting}
+            />
+            <div class="mt-4">
+                <Input
+                    bind:value={username}
+                    label="Username"
+                    placeholder="e.g. admin"
+                    autocomplete="username"
+                    error={errors.username}
+                    disabled={submitting}
+                />
+            </div>
+            <div class="mt-4">
+                <Input
+                    bind:value={displayName}
+                    label="Display name (optional)"
+                    placeholder="e.g. Site Admin"
+                    error={errors.displayName}
+                    disabled={submitting}
+                />
+            </div>
+            <div class="mt-4">
+                <Input
+                    bind:value={password}
+                    type="password"
+                    label="Password (minimum 15 characters)"
+                    autocomplete="new-password"
+                    error={errors.password}
+                    disabled={submitting}
+                />
+            </div>
+            <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                loading={submitting}
+                disabled={submitting}
+                class="w-full mt-6"
+            >
+                Create admin account
+            </Button>
+        </form>
+    </Card>
+</div>
+```
+
+Design notes:
+
+- **Informational banner**: explicitly explains the setup-token
+  flow. This is a one-time page; the explanation is essential for
+  user adoption.
+
+- **Error mapping heuristic**: 400 responses from `/setup` don't
+  include structured field information. The page makes a best-effort
+  mapping based on substring matching of the error message. Phase 2
+  will introduce structured field-level errors (`{field: "username",
+  error: "..."}`) when we have the appetite for a wire-format
+  breaking change.
+
+- **`autocomplete="new-password"`**: prompts password managers to
+  suggest a new strong password.
+
+### 6.11 Audit page (`routes/audit/+page.svelte`)
+
+The audit log explorer. Uses Step C's `DataTable` primitive with
+expandable rows. Filter changes auto-apply with a 300ms debounce
+to avoid hammering the server on every keystroke.
+
+```svelte
+<!-- web/frontend/src/routes/audit/+page.svelte -->
+<script lang="ts">
+    import { onMount } from 'svelte';
+    import { auditApi, type AuditEvent, type AuditFilter } from '$lib/api/audit';
+    import { ApiError } from '$lib/api/client';
+    import DataTable from '$lib/components/DataTable.svelte';
+    import Input from '$lib/components/Input.svelte';
+    import Button from '$lib/components/Button.svelte';
+    import Spinner from '$lib/components/Spinner.svelte';
+
+    const ACTIONS = [
+        '',
+        'login_success', 'login_failure', 'logout',
+        'unlock_success', 'unlock_failure',
+        'session_revoked',
+        'setup_admin_created', 'password_changed',
+        'route_created', 'route_updated', 'route_deleted',
+        'audit_viewed',
+        'password_hibp_clean', 'password_hibp_pending', 'password_compromised_detected',
+    ];
+
+    const DEBOUNCE_MS = 300;
+
+    let fromValue = $state('');
+    let toValue = $state('');
+    let actionFilter = $state('');
+    let events = $state<AuditEvent[]>([]);
+    let nextCursor = $state<string>('');
+    let loading = $state(false);
+    let loadError = $state<string | null>(null);
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    async function load(reset: boolean = false) {
+        loading = true;
+        loadError = null;
+        try {
+            const filter: AuditFilter = { limit: 50 };
+            if (fromValue) filter.from = fromValue;
+            if (toValue) filter.to = toValue;
+            if (actionFilter) filter.action = actionFilter;
+            if (!reset && nextCursor) filter.cursor = nextCursor;
+            const res = await auditApi.list(filter);
+            events = reset ? res.events : [...events, ...res.events];
+            nextCursor = res.nextCursor;
+        } catch (err) {
+            loadError = err instanceof ApiError ? err.message : 'Failed to load audit events';
+        } finally {
+            loading = false;
+        }
+    }
+
+    function scheduleReload() {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            load(true);
+        }, DEBOUNCE_MS);
+    }
+
+    // Auto-apply filter changes: any change to fromValue, toValue, or
+    // actionFilter triggers a debounced reload.
+    $effect(() => {
+        // Read the values to subscribe to changes.
+        const _ = fromValue + toValue + actionFilter;
+        scheduleReload();
+    });
+
+    onMount(() => {
+        load(true);
+    });
+</script>
+
+<div class="space-y-6">
+    <div>
+        <h1 class="text-4xl font-semibold text-primary">Audit log</h1>
+        <p class="text-secondary mt-1">Review authentication events and route mutations.</p>
+    </div>
+
+    <!-- Filters: changes auto-apply with debounce -->
+    <div class="grid grid-cols-3 gap-4 p-4 bg-elevated border border-default rounded-lg">
+        <Input bind:value={fromValue} label="From (RFC 3339)" placeholder="2026-05-01T00:00:00Z" />
+        <Input bind:value={toValue} label="To (RFC 3339)" placeholder="2026-05-18T00:00:00Z" />
+        <div>
+            <label class="block text-xs uppercase tracking-wide text-secondary mb-1">Action</label>
+            <select bind:value={actionFilter} class="w-full bg-base border border-default rounded px-3 py-2 text-primary">
+                {#each ACTIONS as action}
+                    <option value={action}>{action || 'All actions'}</option>
+                {/each}
+            </select>
+        </div>
+    </div>
+
+    {#if loadError}
+        <div class="p-4 rounded bg-danger/10 border border-danger text-danger" role="alert">
+            {loadError}
+        </div>
+    {/if}
+
+    {#if loading && events.length === 0}
+        <div class="flex justify-center mt-12">
+            <Spinner size="lg" />
+        </div>
+    {:else if events.length === 0}
+        <p class="text-secondary text-center mt-12">No audit events match the current filters.</p>
+    {:else}
+        <!-- DataTable with expandable rows: row shows summary, expanded shows JSON -->
+        <DataTable
+            items={events}
+            headers={['Time', 'Action', 'Actor', 'Target', 'IP']}
+        >
+            <!-- Row template and expanded template implemented via Svelte snippets;
+                 details in Step D Chunk 7 frontend implementation. -->
+        </DataTable>
+        {#if nextCursor}
+            <div class="flex justify-center">
+                <Button variant="secondary" size="md" on:click={() => load(false)} disabled={loading}>
+                    {loading ? 'Loading…' : 'Load more'}
+                </Button>
+            </div>
+        {/if}
+    {/if}
+</div>
+```
+
+Design notes:
+
+- **Auto-apply with debounce**: any change to a filter field
+  triggers a 300ms-debounced reload. This avoids the round-trip
+  cost of typing each character of a date while still feeling
+  instant to the user.
+
+- **Action dropdown**: hard-coded list of all Step D action values
+  (matches the enum in `internal/audit/actions.go`). Phase 2 may
+  fetch this dynamically.
+
+- **Pagination**: cursor-based, "Load more" button. Each click
+  appends to the existing list; a filter change resets the list.
+
+- **Expanded row content**: implementation details deferred to the
+  Step D execution plan (chunk for frontend). The expanded view
+  will show formatted `beforeJson`/`afterJson`, full IP, full user
+  agent.
+
+### 6.12 Sidebar modifications
+
+The sidebar gains a fifth navigation item, "Audit", positioned
+between "Routes" and "Topology". The implementation is a one-line
+addition to the existing items array; no logic changes.
+
+```ts
+// Inside Sidebar.svelte, the navItems array gains:
+{ href: '/audit', label: 'Audit', icon: 'activity', disabled: false },
+```
+
+The existing `disabled: true` flag stays on Topology, Security, and
+Settings. The cyan-rail active highlight, the collapse animation,
+and all other Step C sidebar behavior are unchanged.
+
+The Lucide icon `activity` (a heartbeat/pulse line) is appropriate
+for an audit log. Alternative candidates: `list`, `clock`,
+`scroll-text`. The choice is finalized in the implementation chunk.
+
+### 6.13 Change-password modal
+
+The `ChangePasswordModal.svelte` component is mounted by the layout
+shell (see 6.7) and opened by the compromised-password banner or
+(in Phase 2) by a Settings page entry.
+
+```svelte
+<!-- web/frontend/src/lib/components/ChangePasswordModal.svelte -->
+<script lang="ts">
+    import { authApi } from '$lib/api/auth';
+    import { auth } from '$lib/stores/auth';
+    import { toast } from '$lib/stores/toast';
+    import { ApiError } from '$lib/api/client';
+    import Modal from './Modal.svelte';
+    import Input from './Input.svelte';
+    import Button from './Button.svelte';
+
+    let { open = $bindable() } = $props();
+
+    let currentPassword = $state('');
+    let newPassword = $state('');
+    let confirmPassword = $state('');
+    let errors = $state<Record<string, string | null>>({});
+    let submitting = $state(false);
+
+    async function handleSubmit() {
+        if (submitting) return;
+        errors = {};
+        if (!currentPassword) { errors.current = 'Required'; return; }
+        if (newPassword.length < 15) { errors.new = 'Must be at least 15 characters'; return; }
+        if (newPassword !== confirmPassword) { errors.confirm = 'Passwords do not match'; return; }
+        submitting = true;
+        try {
+            await authApi.changePassword(currentPassword, newPassword);
+            toast.push({ kind: 'success', message: 'Password changed successfully. Other sessions have been signed out.' });
+            // The server clears passwordCompromised on the User and revokes
+            // all other sessions of this user. Refresh from /me.
+            await auth.bootstrap();
+            // Clear the form.
+            currentPassword = newPassword = confirmPassword = '';
+            open = false;
+        } catch (err) {
+            if (err instanceof ApiError) {
+                if (err.status === 401) errors.current = 'Incorrect current password';
+                else if (err.status === 400) errors.new = err.message;
+                else toast.push({ kind: 'error', message: err.message });
+            } else {
+                toast.push({ kind: 'error', message: 'Unexpected error' });
+            }
+        } finally {
+            submitting = false;
+        }
+    }
+</script>
+
+<Modal bind:open title="Change password">
+    <Input bind:value={currentPassword} type="password" label="Current password" autocomplete="current-password" error={errors.current} disabled={submitting} />
+    <div class="mt-4">
+        <Input bind:value={newPassword} type="password" label="New password (≥ 15 characters)" autocomplete="new-password" error={errors.new} disabled={submitting} />
+    </div>
+    <div class="mt-4">
+        <Input bind:value={confirmPassword} type="password" label="Confirm new password" autocomplete="new-password" error={errors.confirm} disabled={submitting} />
+    </div>
+    <div class="mt-2 text-xs text-secondary">
+        Changing your password will sign out all other active sessions on other devices.
+    </div>
+    <div slot="footer" class="flex justify-end gap-2">
+        <Button variant="ghost" size="md" on:click={() => open = false} disabled={submitting}>Cancel</Button>
+        <Button variant="primary" size="md" on:click={handleSubmit} loading={submitting} disabled={submitting}>
+            Change password
+        </Button>
+    </div>
+</Modal>
+```
+
+Design notes:
+
+- **Modal reuses Step C Modal primitive**: focus trap, escape
+  handling, click-outside-to-dismiss all inherited.
+
+- **Three fields**: current password (verification), new password
+  (≥15 chars), confirm new password (typo prevention).
+
+- **Server-side validation**: the backend re-validates the new
+  password against the top-10k list and re-checks HIBP
+  asynchronously. If the new password is also compromised, the
+  server returns 400 and the modal stays open with the error
+  inline.
+
+- **Multi-session revocation notice**: an explicit text under the
+  inputs warns that other sessions will be signed out. The toast
+  on success reinforces the message.
+
+- **Post-change cleanup**: after a successful change, the modal
+  triggers `auth.bootstrap()` which re-fetches `/me`. The server
+  has cleared `passwordCompromised` on the user, so the banner
+  disappears reactively.
+
+- **No deep linking from sidebar in Step D**: the change-password
+  modal is reached via the compromised-password banner. Routine
+  password changes (for users without the compromised flag) will
+  get a dedicated `/settings` entry in Phase 2.
