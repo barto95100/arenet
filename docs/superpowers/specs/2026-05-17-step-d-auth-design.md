@@ -3491,3 +3491,667 @@ Design notes:
   modal is reached via the compromised-password banner. Routine
   password changes (for users without the compromised flag) will
   get a dedicated `/settings` entry in Phase 2.
+
+## 7. HIBP integration (HaveIBeenPwned)
+
+This section specifies how Arenet integrates with the HaveIBeenPwned 
+(HIBP) Pwned Passwords service to detect passwords that have been 
+exposed in known data breaches. It covers the two-tier defense 
+(embedded list + online API), the k-anonymity protocol, the 
+synchronous flow at password creation, the deferred re-check at 
+login, and the audit events emitted.
+
+### 7.1 Overview
+
+Passwords in Arenet face two layers of compromise detection:
+
+**Tier 1 — Embedded top-10k list** (always active): a list of the 
+10 000 most common compromised passwords is embedded in the binary 
+via `//go:embed`. Lookup is O(1) against an in-memory map, 
+synchronous, and works offline. Approximately 30 KB compressed.
+
+**Tier 2 — HaveIBeenPwned API** (active by default, disableable): 
+an HTTPS call to `api.pwnedpasswords.com` using the k-anonymity 
+protocol checks the password against HIBP's full database (over 
+800 million breached passwords as of 2025). The protocol guarantees 
+that neither the password nor its full hash is transmitted; only the 
+first 5 characters of the SHA-1 hash leave the server.
+
+The two tiers operate at two moments:
+
+**At password creation or change** (synchronous): both Tier 1 and 
+Tier 2 run. Tier 1 is instant. Tier 2 has a 5-second timeout; if it 
+returns before timeout, its result is authoritative. If it times 
+out or fails (network error, HIBP down), the user is still created 
+but `User.HIBPCheckStatus` is set to `"pending"` for deferred 
+verification.
+
+**At successful login** (deferred re-check): if 
+`User.HIBPCheckStatus == "pending"`, a fresh HIBP check is launched 
+asynchronously after the login response is sent. The user is 
+already logged in; the result of the check updates 
+`User.HIBPCheckStatus` and `User.PasswordCompromised`. If the 
+password is found to be compromised, the next page load (which 
+calls `/me`) surfaces the `passwordCompromised: true` flag, 
+triggering the change-password banner described in Section 6.13.
+
+This deferred re-check is **the only way** Arenet can verify the 
+password against HIBP after creation: once stored as an argon2id 
+hash, the plaintext is gone forever (by design). The login flow is 
+the unique moment we hold the plaintext briefly, and we exploit 
+that to retry HIBP if the previous attempt failed or has aged.
+
+### 7.2 The k-anonymity protocol
+
+HIBP's Pwned Passwords API exposes 800+ million SHA-1 hashes of 
+known breached passwords. Naively, to check whether a given 
+password is in the database, one would compute its SHA-1 and look 
+it up. This would require either downloading the entire database 
+(many GB) or sending the password's hash to HIBP — both undesirable.
+
+K-anonymity solves this elegantly:
+
+1. The client computes `SHA1(password)` and uppercases it. Example: 
+   `5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8` for "password".
+
+2. The client splits the hash into a **5-character prefix** (`5BAA6` 
+   in the example) and a **35-character suffix** 
+   (`1E4C9B93F3F0682250B6CF8331B7EE68FD8`).
+
+3. The client sends only the 5-character prefix to 
+   `https://api.pwnedpasswords.com/range/5BAA6`.
+
+4. HIBP responds with a plain-text list of all 35-character suffixes 
+   that share that prefix, paired with their breach count:
+
+```text
+0018A45C4D1DEF81644B54AB7F969B88D65:1
+00D4F6E8FA6EECAD2A3AA415EEC418D38EC:2
+01330C689E5D64F660D6947A93AD634EF8F:3
+...
+```
+
+5. The client searches its own suffix in the response. If found, 
+   the password is compromised, with a count indicating how many 
+   times it appears across breaches.
+
+Properties:
+
+- **HIBP never sees the password**, not even its full hash.
+- **HIBP receives only the 5-char prefix**, which corresponds to 
+  one of 1,048,576 possible buckets. Each bucket maps to ~800 
+  passwords on average. Identifying which specific password was 
+  checked is impractical.
+- **No authentication or rate limit problematic for our use** — 
+  HIBP allows free access; they ask only for a sensible 
+  User-Agent.
+- **SHA-1 is not used for storage** anywhere in Arenet. It is the 
+  protocol HIBP defined for compatibility reasons in 2018; our 
+  password storage uses argon2id (decision Q4).
+
+### 7.3 HIBP client implementation
+
+The HIBP client lives in `internal/auth/hibp.go`. It exposes one 
+public function:
+
+```go
+// HIBPStatus reflects the outcome of a HIBP check.
+type HIBPStatus string
+
+const (
+    HIBPStatusClean        HIBPStatus = "clean"
+    HIBPStatusCompromised  HIBPStatus = "compromised"
+    HIBPStatusPending      HIBPStatus = "pending"  // network/timeout failure
+    HIBPStatusSkipped      HIBPStatus = "skipped"  // disabled via env var
+)
+
+// HIBPClient performs k-anonymity checks against the HaveIBeenPwned
+// Pwned Passwords API. It is stateless apart from the http.Client
+// (which holds its own connection pool).
+type HIBPClient struct {
+    httpClient *http.Client
+    userAgent  string
+    disabled   bool
+}
+
+// NewHIBPClient constructs a client honoring ARENET_HIBP_DISABLED.
+func NewHIBPClient() *HIBPClient {
+    disabled := os.Getenv("ARENET_HIBP_DISABLED") == "true"
+    return &HIBPClient{
+        httpClient: &http.Client{
+            Timeout: 5 * time.Second,
+        },
+        userAgent: "Arenet/0.1 (homelab-reverse-proxy)",
+        disabled:  disabled,
+    }
+}
+
+// CheckPassword queries HIBP for the given plaintext password.
+// Returns one of: HIBPStatusClean, HIBPStatusCompromised, 
+// HIBPStatusPending (on network/timeout/parse error), or 
+// HIBPStatusSkipped (when disabled via env var).
+//
+// The returned error is non-nil ONLY for programming errors (the 
+// SHA-1 hash is unconditionally computable, so encoding failures 
+// indicate code bugs). Network and parse failures are translated 
+// into HIBPStatusPending without an error, so callers don't need 
+// to special-case timeouts.
+func (c *HIBPClient) CheckPassword(ctx context.Context, password string) (HIBPStatus, error) {
+    if c.disabled {
+        return HIBPStatusSkipped, nil
+    }
+
+    // Compute SHA-1 of password.
+    hash := sha1.Sum([]byte(password))
+    hashHex := strings.ToUpper(hex.EncodeToString(hash[:]))
+    prefix := hashHex[:5]
+    suffix := hashHex[5:]
+
+    // Build request.
+    url := "https://api.pwnedpasswords.com/range/" + prefix
+    req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+    if err != nil {
+        return HIBPStatusPending, fmt.Errorf("hibp: build request: %w", err)
+    }
+    req.Header.Set("User-Agent", c.userAgent)
+    req.Header.Set("Accept", "text/plain")
+
+    // Execute.
+    resp, err := c.httpClient.Do(req)
+    if err != nil {
+        // Network error, DNS failure, timeout, TLS error, etc.
+        // All translate to "pending" — the user is not blocked,
+        // we retry at next login.
+        return HIBPStatusPending, nil
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        // HIBP returned 5xx, 429, etc. Treat as pending.
+        return HIBPStatusPending, nil
+    }
+
+    // Parse response: lines of "SUFFIX:COUNT", look for our suffix.
+    scanner := bufio.NewScanner(resp.Body)
+    for scanner.Scan() {
+        line := scanner.Text()
+        sep := strings.IndexByte(line, ':')
+        if sep <= 0 {
+            continue // malformed line, skip
+        }
+        if strings.EqualFold(line[:sep], suffix) {
+            // Found: the password is compromised.
+            return HIBPStatusCompromised, nil
+        }
+    }
+    if err := scanner.Err(); err != nil {
+        // Read error mid-stream. Treat as pending.
+        return HIBPStatusPending, nil
+    }
+
+    // Suffix not found in the response: the password is clean.
+    return HIBPStatusClean, nil
+}
+```
+
+Design notes:
+
+- **`context.Context` is honored**: callers can cancel via context, 
+  e.g., when the HTTP handler's request context is cancelled by 
+  the client closing the connection.
+
+- **5-second timeout via `http.Client.Timeout`**: this is the 
+  hard upper bound. Combined with the context timeout from the 
+  caller (typically the request's deadline), the effective timeout 
+  is the minimum of the two.
+
+- **All failures map to `pending`**: callers don't need to 
+  distinguish DNS failure from 5xx from parse error. The semantics 
+  are uniform: "we couldn't verify, we'll try again later".
+
+- **No retries**: this is best-effort. Retrying inside the function 
+  would multiply latency and risk hitting HIBP rate limits in 
+  pathological cases. The deferred re-check at login serves as the 
+  natural retry mechanism.
+
+- **`strings.EqualFold` for the suffix comparison**: HIBP responses 
+  are uppercase hex, our `hashHex` is too, but defensive 
+  case-insensitive comparison costs nothing and protects against 
+  future HIBP format changes.
+
+- **`bufio.Scanner` for line-by-line parsing**: the response is 
+  typically ~20 KB (800 lines of 45 chars). Scanning avoids 
+  loading the full body into memory.
+
+### 7.4 Top-10k embedded list
+
+The list of the 10 000 most common compromised passwords is sourced 
+from the [SecLists project](https://github.com/danielmiessler/SecLists), 
+specifically `Passwords/Common-Credentials/10-million-password-list-top-10000.txt`. 
+SecLists is MIT-licensed and compatible with Arenet's AGPL-3.0.
+
+The list is embedded into the binary at compile time via 
+`//go:embed`, gzip-compressed to reduce binary size from ~80 KB 
+(raw) to ~30 KB (compressed).
+
+```go
+// internal/auth/data/common-passwords.txt.gz
+// (binary artifact, see internal/auth/password.go for the embed directive)
+
+// internal/auth/password.go
+package auth
+
+import (
+    "bufio"
+    "compress/gzip"
+    "embed"
+    "strings"
+    "sync"
+)
+
+//go:embed data/common-passwords.txt.gz
+var commonPasswordsCompressed embed.FS
+
+var (
+    commonPasswords     map[string]struct{}
+    commonPasswordsOnce sync.Once
+)
+
+// loadCommonPasswords reads and decompresses the embedded list on
+// first call. Subsequent calls are no-ops (sync.Once).
+func loadCommonPasswords() {
+    commonPasswordsOnce.Do(func() {
+        f, err := commonPasswordsCompressed.Open("data/common-passwords.txt.gz")
+        if err != nil {
+            // This should never happen with //go:embed — the file
+            // is bundled at compile time. Panic indicates a build
+            // misconfiguration.
+            panic("auth: cannot open embedded common-passwords list: " + err.Error())
+        }
+        defer f.Close()
+
+        gz, err := gzip.NewReader(f)
+        if err != nil {
+            panic("auth: cannot decompress embedded common-passwords list: " + err.Error())
+        }
+        defer gz.Close()
+
+        m := make(map[string]struct{}, 10000)
+        scanner := bufio.NewScanner(gz)
+        for scanner.Scan() {
+            line := strings.TrimSpace(scanner.Text())
+            if line != "" {
+                // Store lowercase for case-insensitive lookup.
+                m[strings.ToLower(line)] = struct{}{}
+            }
+        }
+        commonPasswords = m
+    })
+}
+
+// isCommonPassword returns true if the password (case-insensitive)
+// is in the embedded top-10k list.
+func isCommonPassword(password string) bool {
+    loadCommonPasswords()
+    _, found := commonPasswords[strings.ToLower(password)]
+    return found
+}
+```
+
+Design notes:
+
+- **`sync.Once` for lazy initialization**: the list loads on first 
+  call, not at package init. This avoids slowing down binary 
+  startup if the auth package is imported but no password 
+  validation occurs (rare, but cheap to optimize for).
+
+- **Case-insensitive comparison**: "Password123" and "password123" 
+  must both be rejected. The list itself is normalized to 
+  lowercase at load time; lookup lowercases the input.
+
+- **Panic on failed embed/decompress**: these failures indicate 
+  build problems (`//go:embed` directive misconfigured, gzip data 
+  corrupted). The application cannot meaningfully proceed without 
+  the list; failing fast is correct.
+
+- **Never disabled**: unlike HIBP, the top-10k check has no env 
+  var to turn it off. There is no scenario where allowing 
+  `password123` as an admin password is acceptable. The check 
+  adds negligible latency (~1 µs per call).
+
+### 7.5 Integration in password validation flow
+
+Password validation occurs at three entry points: user creation 
+(`UserStore.Create`), password change (`UserStore.UpdatePassword`), 
+and the asynchronous re-check at login (described in 7.6). The 
+synchronous flow at creation and change follows the same sequence:
+
+```text
+Length check (15..128 chars)        — synchronous, in-process
+Top-10k embedded list check         — synchronous, in-process
+HIBP k-anonymity check              — synchronous, network (5s timeout)
+argon2id hash                       — synchronous, CPU-bound (~100ms)
+Persist user                        — synchronous, BoltDB write
+```
+
+Steps 1 and 2 are short-circuiting: if they fail, the validation 
+returns an error immediately without touching the network or 
+computing argon2id. This protects HIBP from being hit by trivially 
+bad passwords (`abc123`) and saves the user's time on the most 
+common rejection cases.
+
+Step 3 (HIBP) has three outcomes:
+
+- **Clean**: the password is not in HIBP's database. Validation 
+  proceeds to step 4. `User.HIBPCheckStatus` is set to `"clean"`.
+
+- **Compromised**: the password is in HIBP's database. Validation 
+  returns `ErrPasswordCommon` with the message "password is in 
+  the list of common compromised passwords". The user is **not** 
+  created.
+
+- **Pending**: HIBP was unreachable (timeout, network error, 5xx). 
+  Validation proceeds to step 4 — the password is accepted. 
+  `User.HIBPCheckStatus` is set to `"pending"` for later 
+  re-verification at login.
+
+Pseudocode for `UserStore.Create`:
+
+```go
+func (s *userStore) Create(ctx context.Context, username, displayName, password string) (User, error) {
+    // Step 1: length
+    if len(password) < 15 {
+        return User{}, ErrPasswordTooShort
+    }
+    if len(password) > 128 {
+        return User{}, ErrPasswordTooLong
+    }
+
+    // Step 1.5: other field validation (username, display name)
+    if err := validateUsername(username); err != nil {
+        return User{}, err
+    }
+    if len(displayName) > 64 {
+        return User{}, ErrDisplayNameTooLong
+    }
+
+    // Step 2: top-10k check
+    if isCommonPassword(password) {
+        return User{}, ErrPasswordCommon
+    }
+
+    // Step 3: HIBP check (5s timeout, best-effort)
+    hibpStatus, _ := s.hibp.CheckPassword(ctx, password)
+    if hibpStatus == HIBPStatusCompromised {
+        return User{}, ErrPasswordCommon
+    }
+
+    // Step 4: argon2id hash
+    hash, err := argon2id.CreateHash(password, s.argon2Params)
+    if err != nil {
+        return User{}, fmt.Errorf("auth: hash password: %w", err)
+    }
+
+    // Step 5: build and persist
+    now := time.Now().UTC()
+    user := User{
+        ID:              uuid.NewString(),
+        Username:        username,
+        DisplayName:     displayName,
+        PasswordHash:    hash,
+        HIBPCheckStatus: string(hibpStatus),  // "clean", "pending", or "skipped"
+        HIBPCheckedAt:   now,
+        CreatedAt:       now,
+        UpdatedAt:       now,
+    }
+
+    if err := s.persist(ctx, user); err != nil {
+        return User{}, err
+    }
+
+    return user, nil
+}
+```
+
+`UpdatePassword` follows the same pattern, with these differences:
+
+- The argon2id-verified `currentPassword` is checked first (HTTP 
+  401 if mismatch); only then are length/top-10k/HIBP checks run 
+  on the new password.
+- `HIBPCheckedAt` is updated regardless of outcome.
+- All other sessions of the user are revoked after the successful 
+  update (per Section 4.9bis).
+
+### 7.6 The asynchronous re-check at login
+
+If `User.HIBPCheckStatus == "pending"` at successful login, a 
+fresh HIBP check is launched after the response is sent. The user 
+is already logged in; the outcome of the check updates the user 
+record and surfaces via `/me` on the next page load.
+
+Flow inside the `/login` handler, post-verification:
+
+```go
+// Inside h.login, after argon2id verification succeeds and the
+// session has been created:
+
+// (Best-effort) update LastLoginAt
+go s.userStore.RecordLogin(context.Background(), user.ID)
+
+// Trigger HIBP re-check if still pending.
+if user.HIBPCheckStatus == string(HIBPStatusPending) {
+    go h.recheckHIBP(user.ID, password)
+}
+
+// Build response and return to client.
+writeJSON(w, http.StatusOK, loginResponse{...})
+```
+
+The `recheckHIBP` method:
+
+```go
+// recheckHIBP runs an asynchronous HIBP check for an existing
+// user's password. It does NOT take the request context (the
+// request will complete before this function returns); it uses
+// a fresh background context with a 30-second timeout.
+//
+// The password parameter is the plaintext supplied by the user at
+// login; it stays in memory only for the duration of this call
+// and is never logged.
+//
+// Outcomes:
+//   - clean: update HIBPCheckStatus to "clean", emit audit event
+//   - compromised: set passwordCompromised=true, emit audit event
+//   - pending: leave the user as-is, log warn, retry at next login
+//   - skipped: leave the user as-is (shouldn't happen — we only call
+//     recheckHIBP when status is "pending", and "skipped" can't
+//     transition to "pending")
+func (h *Handler) recheckHIBP(userID, password string) {
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    status, _ := h.hibp.CheckPassword(ctx, password)
+
+    switch status {
+    case auth.HIBPStatusClean:
+        if err := h.userStore.UpdateHIBPStatus(ctx, userID, string(status), false); err != nil {
+            h.logger.Warn("hibp recheck: update user failed", "err", err.Error(), "user_id", userID)
+            return
+        }
+        h.appendAuditBackground(userID, audit.Event{
+            Action:     audit.ActionPasswordHIBPClean,
+            TargetType: "user",
+            TargetID:   userID,
+        })
+
+    case auth.HIBPStatusCompromised:
+        if err := h.userStore.UpdateHIBPStatus(ctx, userID, string(status), true); err != nil {
+            h.logger.Warn("hibp recheck: update user failed", "err", err.Error(), "user_id", userID)
+            return
+        }
+        h.appendAuditBackground(userID, audit.Event{
+            Action:     audit.ActionPasswordCompromisedDetected,
+            TargetType: "user",
+            TargetID:   userID,
+            Message:    "deferred HIBP check at login confirmed password is in breach database",
+        })
+
+    case auth.HIBPStatusPending:
+        // Still unreachable. Log and retry at next login.
+        h.logger.Warn("hibp recheck: still pending", "user_id", userID)
+
+    case auth.HIBPStatusSkipped:
+        // Shouldn't reach here; defensive no-op.
+    }
+}
+```
+
+Design notes:
+
+- **30-second timeout for the async check**: more generous than 
+  the 5-second timeout at creation because no user is waiting. We 
+  want the check to succeed if at all possible.
+
+- **`context.Background()` instead of `r.Context()`**: the HTTP 
+  request will have completed by the time this function runs. 
+  Using the request context would cause the check to be cancelled 
+  the moment the client connection closes.
+
+- **Plaintext password lives only in this goroutine**: it is 
+  passed as an argument (not stored anywhere), and the function 
+  returns when the check completes. The garbage collector reclaims 
+  the memory.
+
+- **`appendAuditBackground`**: a variant of the standard 
+  `appendAudit` helper that does not require a `*http.Request` 
+  argument. It synthesizes the actor information from the user ID 
+  directly. The IP and User-Agent are left empty (the audit event 
+  is not tied to a specific request anymore).
+
+- **Failure to update the user record is a warning, not a panic**: 
+  the user is already logged in successfully; failing to update 
+  their HIBP status is a degraded outcome but not catastrophic. 
+  Next login will retry.
+
+### 7.7 Audit events emitted
+
+Three audit events relate to HIBP, all declared in Section 3.4 and 
+listed in the enum in `internal/audit/actions.go`:
+
+| Event                              | When emitted                                                     |
+|------------------------------------|------------------------------------------------------------------|
+| `password_hibp_clean`              | Synchronous create OR async re-check confirms clean              |
+| `password_hibp_pending`            | Synchronous create: HIBP unreachable, user accepted as "pending" |
+| `password_compromised_detected`    | Async re-check at login confirms compromised                     |
+
+Notes:
+
+- `password_hibp_clean` at create is **not** strictly necessary 
+  (the user creation event already implies the password was clean), 
+  but emitting it explicitly makes the audit log self-describing: 
+  an operator filtering by HIBP events sees all relevant transitions.
+
+- `password_compromised_detected` only fires at async re-check, 
+  never at create. At create, a confirmed-compromised password 
+  causes the user creation to fail with 400; no user is created, 
+  so no audit event is emitted (decision: failed validation is 
+  not audited, only successful state changes are).
+
+- All three events have `TargetType: "user"` and `TargetID` set 
+  to the user's ID, allowing easy filtering of HIBP history per 
+  user.
+
+- `BeforeJSON` and `AfterJSON` are always `null` for these events. 
+  The only changing fields (`HIBPCheckStatus`, `PasswordCompromised`) 
+  are derived state, not user-facing data; including them in the 
+  audit JSON would add noise without value.
+
+### 7.8 Configuration: disabling HIBP
+
+HIBP checks can be disabled via environment variable:
+
+```text
+ARENET_HIBP_DISABLED=true
+```
+
+When disabled:
+
+- `HIBPClient.CheckPassword` returns `HIBPStatusSkipped` immediately 
+  without making any network call.
+- New users get `HIBPCheckStatus: "skipped"` and 
+  `HIBPCheckedAt` set to creation time.
+- No HIBP-related audit events are emitted.
+- The compromised-password banner never appears (because 
+  `PasswordCompromised` is never set).
+- The top-10k embedded check **continues to run** (it is not 
+  affected by this env var).
+
+Use cases:
+
+- **Air-gapped lab**: Arenet deployed in an environment with no 
+  outbound internet. HIBP would always time out; disabling 
+  silences the noise.
+- **Testing and CI**: avoid hitting HIBP from automated test 
+  suites (which would also be poor netizenship — 
+  HIBP asks not to be hammered).
+- **Strict data-residency requirements**: some regulated 
+  environments (defense, healthcare in certain jurisdictions) may 
+  forbid any outbound calls to third-party services, even 
+  k-anonymity-protected ones.
+
+The default is **enabled**. Operators must explicitly opt out by 
+setting the env var. This errs on the side of better security for 
+the typical homelab deployment.
+
+### 7.9 Security considerations
+
+**SHA-1 is not used for password storage**. SHA-1 is cryptographically 
+broken for collision resistance but remains adequate as a hash for 
+the HIBP protocol, which doesn't depend on collision resistance. 
+Password storage in Arenet uses argon2id (decision Q4), an entirely 
+separate algorithm.
+
+**K-anonymity privacy guarantees**:
+
+- HIBP receives a 5-character hex prefix, representing one of 
+  1,048,576 possible buckets. Each bucket maps to roughly 800 
+  passwords on average across the database.
+- An adversary observing the HIBP request stream (e.g., HIBP's 
+  operator, a state-level network observer) can deduce which 
+  bucket was queried, but cannot determine which of ~800 
+  passwords within the bucket was the actual subject.
+- Repeated queries from the same user for different passwords are 
+  not linkable without TLS interception; the TLS connection itself 
+  is the privacy boundary.
+
+**TLS to HIBP**: the request is `https://api.pwnedpasswords.com`, 
+verified against the standard system CA bundle. Go's `net/http` 
+default behavior is correct (no `InsecureSkipVerify`).
+
+**Logging hygiene**:
+
+- Plaintext passwords are never logged. The HIBP client receives 
+  the password as a parameter, computes its SHA-1, sends only the 
+  prefix, and returns. The password string is never written to 
+  slog, never written to any file.
+- The 5-char prefix is not considered sensitive (millions of users 
+  share each bucket) and may appear in debug logs if explicitly 
+  enabled.
+
+**Threat model boundaries**:
+
+- HIBP being malicious is out of scope. We trust HIBP's operator 
+  (Troy Hunt) and the k-anonymity guarantee. A compromised HIBP 
+  would at worst learn the buckets we query, which is far less 
+  damaging than learning the passwords.
+- The local network being malicious is partially out of scope. A 
+  man-in-the-middle attacker capable of breaking TLS could observe 
+  the bucket queries. This is the same threat that every TLS-based 
+  service faces and is mitigated by Arenet's standard practice of 
+  running behind a reverse proxy with TLS termination.
+- Local memory disclosure (e.g., a process memory dump while the 
+  user is logging in) could reveal the password in plaintext for 
+  the brief window between HTTP body parse and argon2id verification. 
+  This is the same trust boundary as every password-handling 
+  service; argon2id by design cannot eliminate the plaintext-in-RAM 
+  exposure during verification.
