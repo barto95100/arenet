@@ -5008,3 +5008,421 @@ expanded content appears instantly without sliding.
 viewport announces "Loaded N events" after a successful load and 
 "No events match the filters" on empty results. This avoids 
 silent UI changes from being missed by screen reader users.
+
+## 10. Acceptance criteria
+
+This section enumerates the verifiable criteria that determine 
+whether Step D is "done". Each criterion is a precise statement of 
+expected behavior that can be tested manually (via curl and 
+browser interaction) or automatically (Go unit/integration tests). 
+This section is the contract that the implementation chunks 
+satisfy.
+
+The criteria are organized by domain rather than by component. A 
+single failing criterion blocks the Step D acceptance, regardless 
+of which file or package implements it.
+
+### 10.1 Overview
+
+Step D delivers three families of behavior:
+
+1. **Authentication and session management** (Sections 10.2–10.4): 
+   the foundation; everything else depends on it.
+2. **Password protection** (Section 10.5): the HIBP integration 
+   and embedded top-10k list.
+3. **Audit and observability** (Section 10.6): the immutable 
+   record of authentication and mutation events.
+
+Plus three transversal areas:
+
+4. **Trusted proxies** (Section 10.7): correct IP attribution.
+5. **Frontend integration** (Section 10.8): UX flows the user sees.
+6. **Configuration** (Section 10.9): the env vars that operators 
+   touch.
+
+Each criterion is independently verifiable: passing one does not 
+imply passing another. The implementation is considered Step D 
+complete when **all** criteria below pass.
+
+### 10.2 Authentication flow
+
+**AC-AUTH-01** — At first boot (no admin in BoltDB), the server 
+logs a structured `slog.Info` line containing 
+`Setup token: <opaque-256-bit-string>`. The token regenerates on 
+every restart while no admin exists.
+
+**AC-AUTH-02** — `POST /api/v1/auth/setup` with a valid 
+`setupToken`, `username: "admin"`, `displayName: "Test"`, 
+`password: "<15+ chars valid>"` returns 201 with the new User 
+JSON, and sets the `arenet_session` cookie.
+
+**AC-AUTH-03** — After AC-AUTH-02, a second call to 
+`POST /api/v1/auth/setup` returns 404 with body 
+`{"error": "setup unavailable: an admin already exists"}`.
+
+**AC-AUTH-04** — `POST /api/v1/auth/login` with correct username 
+and password returns 200 with the User JSON and sets the session 
+cookie. The cookie has attributes `HttpOnly; Secure; 
+SameSite=Strict; Path=/; Max-Age=86400` in production mode (no 
+`--dev`), and `Secure` omitted in `--dev` mode.
+
+**AC-AUTH-05** — `POST /api/v1/auth/login` with non-existent 
+username returns 401 with body `{"error": "invalid credentials"}`. 
+The same response is returned for an existing username with wrong 
+password (no username enumeration).
+
+**AC-AUTH-06** — `POST /api/v1/auth/login` with `rememberMe: true` 
+sets the cookie `Max-Age=2592000` (30 days).
+
+**AC-AUTH-07** — `POST /api/v1/auth/logout` deletes the session 
+from BoltDB and returns 204 with `Set-Cookie: arenet_session=; 
+Max-Age=0`.
+
+**AC-AUTH-08** — After 24 hours of inactivity on a non-remember-me 
+session, the next API call returns 401 (the session has expired 
+absolutely).
+
+**AC-AUTH-09** — After 30 days of inactivity on a remember-me 
+session, the next API call returns 401.
+
+**AC-AUTH-10** — `GET /api/v1/auth/me` returns the current user's 
+JSON including `locked: false` when the session is active.
+
+**AC-AUTH-11** — Argon2id parameters are `m=64MiB, t=3, p=4` 
+(decision Q4). Verified by inspecting the generated PHC string in 
+`User.PasswordHash`.
+
+### 10.3 Session locking
+
+**AC-LOCK-01** — After 15 minutes without an authenticated API 
+call, `GET /api/v1/auth/me` returns 200 with `locked: true` in 
+the response body.
+
+**AC-LOCK-02** — After 15 minutes without an authenticated API 
+call, any hard-auth endpoint (e.g. `GET /api/v1/routes`) returns 
+403 with body `{"error": "session locked"}`.
+
+**AC-LOCK-03** — `POST /api/v1/auth/unlock` with correct password 
+returns 200 with `{"unlocked": true}`, updates `Session.LastActivity` 
+to now, and subsequent hard-auth calls succeed.
+
+**AC-LOCK-04** — `POST /api/v1/auth/unlock` with wrong password 
+returns 401 with `{"error": "invalid password"}` and emits a 
+`unlock_failure` audit event.
+
+**AC-LOCK-05** — `GET /api/v1/auth/me` does NOT touch 
+`Session.LastActivity`. Verified: polling `/me` every minute while 
+nothing else happens still triggers the lock after 15 minutes.
+
+**AC-LOCK-06** — The frontend's `LockScreen` component appears 
+when `auth.state === 'locked'`. The underlying UI (sidebar, main 
+content, open modals) remains in the DOM behind a backdrop-blur 
+overlay.
+
+**AC-LOCK-07** — The client-side idle timer (Section 6.3) calls 
+`auth.setLocked()` after 15 minutes of no successful API call. 
+Server activity (Touch in hard-auth middleware) and client timer 
+agree on the threshold.
+
+### 10.4 Rate limiting
+
+**AC-RATE-01** — Five consecutive `POST /api/v1/auth/login` calls 
+with wrong credentials from the same IP within 5 minutes cause the 
+sixth call from that IP to return 429 with header 
+`Retry-After: 900` and body 
+`{"error": "too many attempts, retry after 15 minutes"}`.
+
+**AC-RATE-02** — Ten consecutive failed `POST /api/v1/auth/login` 
+calls from the same IP within 1 hour cause the eleventh call from 
+that IP to return 429 with header `Retry-After: 3600`.
+
+**AC-RATE-03** — A successful `POST /api/v1/auth/login` from an 
+IP resets that IP's failure counter (Tier 1 and Tier 2 both 
+cleared).
+
+**AC-RATE-04** — Tier 2 trigger emits an `slog.Warn` line with 
+structured fields `ip`, `username_attempted`, `failure_count_window`, 
+`blocked_until`, `suggestion`.
+
+**AC-RATE-05** — Rate limit counters are stored in memory only. 
+After a server restart, all counters are cleared (verified by 
+hitting Tier 1, restarting the binary, and verifying the IP is no 
+longer blocked).
+
+**AC-RATE-06** — Rate limit is per-IP, not per-username. Two 
+different attackers from the same IP attempting different 
+usernames share the same counter.
+
+### 10.5 Password validation
+
+**AC-PW-01** — `POST /api/v1/auth/setup` with `password` of 14 
+characters returns 400 with body 
+`{"error": "password must be at least 15 characters"}`.
+
+**AC-PW-02** — `POST /api/v1/auth/setup` with `password` of 129 
+characters returns 400 with body 
+`{"error": "password must be at most 128 characters"}`.
+
+**AC-PW-03** — `POST /api/v1/auth/setup` with `password: 
+"password12345678"` (in top-10k list) returns 400 with body 
+`{"error": "password is in the list of common compromised passwords"}`.
+
+**AC-PW-04** — Password validation is case-insensitive against 
+the top-10k list. `"Password12345678"`, `"PASSWORD12345678"`, 
+and `"password12345678"` are all rejected.
+
+**AC-PW-05** — With HIBP enabled (default) and reachable, 
+`POST /api/v1/auth/setup` with a password known to HIBP but not in 
+top-10k returns 400 with the same error message as top-10k 
+rejections.
+
+**AC-PW-06** — With HIBP unreachable (verified by blocking 
+`api.pwnedpasswords.com` at the network level), 
+`POST /api/v1/auth/setup` succeeds and the created User has 
+`HIBPCheckStatus: "pending"`.
+
+**AC-PW-07** — A subsequent successful `POST /api/v1/auth/login` 
+for a user with `HIBPCheckStatus: "pending"` triggers an 
+asynchronous HIBP re-check. After the check completes (with HIBP 
+now reachable), the User's `HIBPCheckStatus` is updated to 
+`"clean"` or `"compromised"`.
+
+**AC-PW-08** — When the async re-check finds the password 
+compromised, the User's `PasswordCompromised` is set to `true`, 
+and an audit event `password_compromised_detected` is emitted.
+
+**AC-PW-09** — `GET /api/v1/auth/me` for a user with 
+`PasswordCompromised: true` returns the field in the response 
+JSON. The frontend's compromised-password banner renders.
+
+**AC-PW-10** — `POST /api/v1/auth/me/password` with correct 
+`currentPassword` and valid `newPassword` returns 204, updates 
+`User.PasswordHash`, sets `HIBPCheckStatus: "pending"`, sets 
+`PasswordCompromised: false`, and revokes all other sessions of 
+this user.
+
+**AC-PW-11** — `POST /api/v1/auth/me/password` with wrong 
+`currentPassword` returns 401 with 
+`{"error": "current password is incorrect"}`. The session is not 
+modified.
+
+**AC-PW-12** — With `ARENET_HIBP_DISABLED=true`, no HIBP HTTP 
+request is made (verified by network logs). New users get 
+`HIBPCheckStatus: "skipped"`.
+
+### 10.6 Audit log
+
+**AC-AUDIT-01** — A successful login emits an `Event` with 
+`Action: "login_success"`, `ActorUserID` set, 
+`ActorUsernameSnapshot` matching the username, `IP` set, 
+`UserAgent` set, `BeforeJSON` and `AfterJSON` both nil.
+
+**AC-AUDIT-02** — A failed login emits an event with 
+`Action: "login_failure"`, `ActorUserID` empty (no matching user), 
+`ActorUsernameSnapshot` set to the attempted username (truncated 
+to 32 chars), `Message: "user_not_found"` or `"bad_password"`.
+
+**AC-AUDIT-03** — A successful logout emits an event with 
+`Action: "logout"`, `Message: "manual"`.
+
+**AC-AUDIT-04** — `POST /api/v1/routes` (route create) emits 
+`Action: "route_created"`, `TargetType: "route"`, `TargetID` set 
+to the new route's ID, `BeforeJSON: nil`, `AfterJSON` containing 
+the created route. Emission is AFTER the Caddy reload succeeds 
+(decision D2).
+
+**AC-AUDIT-05** — `PUT /api/v1/routes/{id}` emits 
+`Action: "route_updated"`, with `BeforeJSON` containing the 
+previous route state and `AfterJSON` containing the new state.
+
+**AC-AUDIT-06** — `DELETE /api/v1/routes/{id}` emits 
+`Action: "route_deleted"`, with `BeforeJSON` containing the 
+deleted route state and `AfterJSON: nil`.
+
+**AC-AUDIT-07** — `GET /api/v1/audit` (loading the audit page) 
+emits an `Action: "audit_viewed"` event with the filters used in 
+the `Message` field.
+
+**AC-AUDIT-08** — `GET /api/v1/audit` returns events in 
+descending chronological order (most recent first).
+
+**AC-AUDIT-09** — `GET /api/v1/audit?action=login_failure` 
+returns only events with `action == "login_failure"`. Other 
+actions are filtered out.
+
+**AC-AUDIT-10** — `GET /api/v1/audit?from=2026-05-01T00:00:00Z` 
+returns only events with `timestamp >= 2026-05-01T00:00:00Z`.
+
+**AC-AUDIT-11** — `GET /api/v1/audit?limit=10` returns at most 
+10 events. The response includes `nextCursor` if there are more.
+
+**AC-AUDIT-12** — Passing the previous `nextCursor` back as 
+`cursor` query parameter returns the next page of events, no 
+overlap and no skip.
+
+**AC-AUDIT-13** — Audit events are written AFTER the business 
+mutation completes (verified by killing the server between the 
+mutation and the audit append; the mutation persists but the 
+audit event does not, per decision D2 best-effort policy).
+
+**AC-AUDIT-14** — Audit `BeforeJSON` and `AfterJSON` never 
+contain `PasswordHash`, session tokens, or any other secret 
+field. Verified by inspecting events emitted during `setup_admin_created`.
+
+### 10.7 Trusted proxies
+
+**AC-PROXY-01** — With `ARENET_TRUSTED_PROXIES` empty or unset, 
+the client IP in audit events is always derived from 
+`r.RemoteAddr`, regardless of any `X-Forwarded-For` sent by the 
+caller.
+
+**AC-PROXY-02** — With `ARENET_TRUSTED_PROXIES=10.0.0.0/8` and 
+a request from `10.0.0.1` carrying 
+`X-Forwarded-For: 203.0.113.5`, the client IP in audit events is 
+`203.0.113.5`.
+
+**AC-PROXY-03** — With `ARENET_TRUSTED_PROXIES=10.0.0.0/8` and 
+a request from `192.168.1.1` (not in trusted range) carrying 
+`X-Forwarded-For: 203.0.113.5`, the client IP in audit events 
+is `192.168.1.1` (the forged header is ignored).
+
+**AC-PROXY-04** — With `ARENET_TRUSTED_PROXIES=10.0.0.0/8` and 
+a request from `10.0.0.1` carrying 
+`X-Forwarded-For: 203.0.113.5, 10.0.0.7`, the client IP is 
+`203.0.113.5` (leftmost entry).
+
+**AC-PROXY-05** — With `ARENET_TRUSTED_PROXIES="10.0.0.0/33"` 
+(malformed CIDR), the server fails to start and logs 
+`ERROR auth: invalid CIDR in ARENET_TRUSTED_PROXIES`.
+
+**AC-PROXY-06** — Loopback addresses `127.0.0.1` and `::1` are 
+not auto-trusted. Without explicit inclusion in 
+`ARENET_TRUSTED_PROXIES`, requests from loopback have their 
+`X-Forwarded-For` ignored.
+
+**AC-PROXY-07** — At server startup, an `slog.Info` line records 
+the parsed trusted CIDRs (or "no trusted proxies configured" if 
+empty).
+
+### 10.8 Frontend integration
+
+**AC-FE-01** — At application mount, the layout calls 
+`/api/v1/auth/me`. While the call is in flight, the page shows a 
+centered spinner with no other chrome.
+
+**AC-FE-02** — When `/me` returns 401 and the user is not on 
+`/login` or `/setup`, the layout navigates to `/login`.
+
+**AC-FE-03** — When `/me` returns 200 with `locked: false`, the 
+sidebar and main content render normally.
+
+**AC-FE-04** — When `/me` returns 200 with `locked: true`, the 
+sidebar and main content render normally AND the `LockScreen` 
+overlay appears on top.
+
+**AC-FE-05** — The `LockScreen` overlay covers the entire 
+viewport with `backdrop-filter: blur(...)`. The underlying UI 
+(scroll position, open modals, form drafts) remains intact and 
+re-appears after a successful unlock.
+
+**AC-FE-06** — The `LockScreen` displays the username of the 
+locked user (read from `auth.user.username`).
+
+**AC-FE-07** — Successful unlock from the `LockScreen` transitions 
+`auth.state` from `locked` to `authenticated`. The LockScreen 
+unmounts via the parent `{#if}`.
+
+**AC-FE-08** — The compromised-password banner appears at the top 
+of the layout when `auth.user.passwordCompromised === true`. 
+Clicking "Change password" opens the `ChangePasswordModal`.
+
+**AC-FE-09** — A successful password change via the modal 
+triggers `auth.bootstrap()`, which re-fetches `/me`. The banner 
+disappears reactively.
+
+**AC-FE-10** — A toast notification reading "Password changed 
+successfully. Other sessions have been signed out." appears after 
+a successful password change.
+
+**AC-FE-11** — The audit page (`/audit`) auto-applies filter 
+changes with a 300ms debounce. Typing in the "From" field issues 
+a new API call 300ms after the last keystroke.
+
+**AC-FE-12** — Action badges on audit rows are colored by 
+category (Auth: cyan, Mutation: amber, Security: red, HIBP: 
+violet, Meta: slate). Clicking a badge sets the action filter to 
+that row's action value.
+
+**AC-FE-13** — Clicking the actor filter icon on an audit row 
+sets the `actorUserId` filter to that row's value.
+
+**AC-FE-14** — Clicking anywhere on an audit row (excluding the 
+action badge and actor filter icon) expands the row to show full 
+details: full timestamp, full IDs, IP, User-Agent, message, and 
+Before/After JSON.
+
+**AC-FE-15** — The sidebar has exactly five items in this order: 
+Routes (active), Audit (active), Topology (disabled), Security 
+(disabled), Settings (disabled).
+
+**AC-FE-16** — Every authenticated API call sends the cookie 
+(`credentials: 'include'`). Verified by inspecting the request 
+headers in browser dev tools.
+
+**AC-FE-17** — Heartbeat fires only when 
+`document.visibilityState === 'visible'`. Verified by hiding the 
+tab and confirming no heartbeat requests in network logs.
+
+### 10.9 Configuration
+
+**AC-CONFIG-01** — Setting `ARENET_ADMIN_USERNAME` and 
+`ARENET_ADMIN_PASSWORD` at first boot (when no admin exists) 
+creates the admin automatically without requiring the setup flow.
+
+**AC-CONFIG-02** — Setting `ARENET_ADMIN_USERNAME` and 
+`ARENET_ADMIN_PASSWORD` when an admin already exists does nothing 
+(no overwrite, no error). A startup `slog.Info` line records that 
+the env vars are ignored because an admin exists.
+
+**AC-CONFIG-03** — `ARENET_HIBP_DISABLED=true` disables all HIBP 
+HTTP calls. New users get `HIBPCheckStatus: "skipped"`. The 
+compromised-password banner never appears.
+
+**AC-CONFIG-04** — `ARENET_HIBP_DISABLED` with any value other 
+than `"true"` (case-sensitive) leaves HIBP enabled. The value 
+`"True"`, `"1"`, `"yes"` do NOT disable HIBP.
+
+**AC-CONFIG-05** — `ARENET_TRUSTED_PROXIES` parsing follows 
+Section 8.2. Acceptance criteria covered by AC-PROXY-01 through 
+AC-PROXY-07.
+
+### 10.10 Security non-goals reminder
+
+The following are explicitly NOT delivered in Step D and are 
+documented here so reviewers do not flag their absence as bugs:
+
+- **No 2FA / MFA**: deferred to Step D2 (multi-user). Step D is 
+  single-admin, password-only.
+- **No multi-user / role-based access**: Step D Phase 1 has 
+  exactly one user (admin role implicit). Phase 2 will introduce 
+  admin/editor/viewer roles.
+- **No OIDC / SSO**: deferred to Step D3. Step D does not 
+  integrate with Authentik, Authelia, Keycloak, or any external 
+  identity provider.
+- **No dedicated password-change page**: Step D's only entry point 
+  for password change is the modal launched from the 
+  compromised-password banner. Phase 2 will add a `/settings` 
+  page with routine password management.
+- **No password reset flow**: there is no "forgot password" link. 
+  If the admin loses their password, the recovery path is to 
+  delete the BoltDB file (loses all data) or to use a future 
+  CLI admin tool (Phase 2).
+- **No account lockout per user**: rate limiting is per-IP, not 
+  per-user. A locked-out admin can switch IPs to retry. This is 
+  acceptable in a single-admin homelab context; multi-user 
+  deployments in Phase 2 will revisit.
+- **No security dashboard / webhook**: visibility of blocked IPs 
+  and threat-related signals is deferred to Step F (see 
+  `docs/roadmap.md`).
+- **No Coraza WAF / advanced threat detection**: deferred to 
+  Step G (see `docs/roadmap.md`).
