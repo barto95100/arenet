@@ -58,6 +58,7 @@ Thumbs.db
 
 # Claude Code
 .claude/cache/
+.claude/settings.local.json
 
 # Compiled binaries (added after first commit mistake)
 /bin/
