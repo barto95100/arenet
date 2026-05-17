@@ -984,3 +984,455 @@ reachable by URL.
 **Downstream impact**: this is the final chunk. After it merges, 
 Step D is feature-complete and ready for the final acceptance 
 review (running all 79 ACs from Section 10 of the spec).
+
+## 5. Quality gates between chunks
+
+Each chunk must satisfy a uniform set of checks before being 
+considered complete and merged. These checks apply identically 
+whether the chunk was implemented solo or by a sub-agent.
+
+### 5.1 Automated test suite
+
+After the chunk's commits are staged:
+
+- `go test ./...` from the project root must pass with no failures 
+  and no skipped tests in the packages touched by the chunk.
+- `cd web/frontend && npm test` must pass for chunks 5-8.
+- Coverage on the touched packages must meet the targets stated 
+  in the chunk's description (≥80% for storage, ≥85% for auth, 
+  ≥75% for api and frontend).
+
+If any test added during the chunk depends on network access 
+(HIBP), it must use a mocked HTTP server, not the real 
+`api.pwnedpasswords.com`.
+
+### 5.2 Build verification
+
+A clean build must succeed:
+
+- `go build ./cmd/arenet` produces a binary without errors or 
+  warnings.
+- `cd web/frontend && npm run build` produces the production 
+  bundle without errors.
+- For chunks affecting the embedded assets (Chunk 2 with the 
+  top-10k password list), confirm the binary size growth is 
+  reasonable (expected ~30 KB increase).
+
+### 5.3 Manual acceptance criteria check
+
+For every AC listed in the chunk's "Acceptance criteria covered" 
+section, the operator runs at least one test of the corresponding 
+behavior. This is a manual end-to-end verification, not a unit 
+test (those are covered by 5.1).
+
+The check is documented in the commit message or in a brief note 
+in the chunk's PR description. The format is freeform but should 
+identify which ACs were verified.
+
+### 5.4 Code review
+
+Solo chunks: the operator does a self-review using `git diff` 
+before the final commit. The review focuses on security-relevant 
+code (auth middleware, password handling, audit emission) and 
+catches things like accidental `fmt.Println` of secrets, missing 
+error checks, or accidental TODO/FIXME.
+
+Sub-agent chunks: the operator does a full review of the 
+sub-agent's output per the checklist in Section 6.4. No exception 
+to this rule.
+
+### 5.5 No TODO/FIXME left behind
+
+A `grep -rn 'TODO\|FIXME\|XXX' internal/auth internal/audit 
+internal/api web/frontend/src` must return only entries that 
+were present before the chunk started, plus any new ones that 
+are explicitly justified in a comment (e.g., 
+`// TODO(Phase 2): replace with structured field errors`). 
+Unjustified TODOs are blockers.
+
+### 5.6 Commit message hygiene
+
+Every commit in a chunk has a message that:
+
+- Starts with `Step D:` (lowercase D, colon, single space).
+- States the artifact added or modified in concrete terms.
+- Optionally references the ACs covered by this commit (e.g., 
+  `[AC-AUTH-04, AC-AUTH-05]`).
+
+Bad: `wip`, `fix bug`, `update stuff`.
+Good: `Step D: internal/auth middleware, HIBP, and password validation [AC-LOCK-01 → 07, AC-RATE-01 → 06]`.
+
+## 6. Sub-agent delegation protocol
+
+This section is the operating manual for delegating a chunk to a 
+sub-agent. It applies to Chunks 5, 6, and 8 (fully delegable) and 
+the delegable portions of Chunks 3 and 7.
+
+### 6.1 When to delegate
+
+A chunk is a candidate for delegation if all three conditions hold:
+
+- The spec sections it implements contain **complete code 
+  snippets** (Svelte, TypeScript, Go) that the sub-agent can use 
+  as a starting point.
+- The chunk does not touch security-critical paths 
+  (HardAuthMiddleware, HIBP client, password hashing, session 
+  storage, audit emission ordering).
+- The integration surface with other chunks is narrow (the 
+  chunk's outputs are consumed via well-defined interfaces, not 
+  through implicit shared state).
+
+Chunks 5, 6, 8 satisfy all three. Chunks 3 and 7 satisfy two of 
+three (the audit helper in Chunk 3 is straightforward but emits 
+security-relevant events; the LockScreen in Chunk 7 touches the 
+session lock UX which is security-adjacent). For these, 
+delegation is acceptable but the review (6.4) is stricter.
+
+Chunks 1, 2, 4 are **never delegated**. They are the security 
+foundation of Step D.
+
+### 6.2 Template prompt for a sub-agent
+
+The sub-agent receives a self-contained prompt with the following 
+structure:
+
+```text
+You are implementing Chunk N of the Step D execution plan for 
+Arenet. Step D is a single-admin authentication module being 
+added to an existing Go + SvelteKit reverse-proxy project.
+
+Reference documents (you must read these before writing code):
+
+- The spec: docs/superpowers/specs/2026-05-17-step-d-auth-design.md
+  Specifically Sections [list the spec sections for this chunk].
+- The plan: docs/superpowers/plans/2026-05-17-step-d-execution-plan.md
+  Specifically Chunk N (Section 4.N).
+- The decisions: docs/superpowers/decisions/2026-05-17-step-d-design-decisions-final.md
+  Specifically [list the relevant Dxx decisions].
+
+Your scope is exactly what Chunk N describes. Do not add features 
+not in the spec. Do not refactor existing code unless the chunk 
+requires it.
+
+When the spec contains a code snippet, treat it as the starting 
+point. You may improve clarity (naming, comments) but must not 
+change the behavior or the structure.
+
+Deliverables:
+
+- All files listed in the "Files created or modified" section of 
+  Chunk N.
+- Tests as specified in "Tests to write within this chunk".
+- A brief report at the end summarizing what you did, which ACs 
+  you verified manually, and any deviations from the spec (none 
+  are expected; flag them explicitly if any).
+
+Do not commit. The operator reviews and commits.
+```
+
+### 6.3 Documents to provide
+
+The sub-agent receives, at the start of its session:
+
+- The full text of the spec sections relevant to its chunk (not 
+  just references — the actual content).
+- The full text of the chunk description from Section 4 of this 
+  plan.
+- The relevant decisions (especially D6, D7, D8, D9 for security 
+  decisions).
+- Access to read the existing Step C code in `internal/` and 
+  `web/frontend/src/` for context.
+- The current `go.mod` and `package.json` for dependency 
+  awareness.
+
+The sub-agent does NOT need:
+
+- The full spec (only the relevant sections).
+- The full execution plan (only its chunk).
+- Access to other chunks' code (the chunk should be self-contained 
+  against the existing codebase, not against work-in-progress 
+  from other chunks).
+
+### 6.4 Review checklist after sub-agent output
+
+The operator runs this checklist before committing the sub-agent's 
+output. The checklist is mandatory for every sub-agent chunk; 
+skipping any item is a process violation.
+
+**Functional checks**:
+
+1. All files listed in "Files created or modified" exist with 
+   the correct names and locations.
+2. Each AC listed in the chunk is verifiable (the operator runs 
+   the relevant test or manual check).
+3. No TODO/FIXME comments left behind without explicit Phase 2 
+   justification.
+4. The code compiles / builds without errors or warnings.
+5. The included tests pass.
+
+**Code quality checks**:
+
+6. The code follows the patterns of the existing codebase (Svelte 
+   5 runes for frontend, error wrapping with `fmt.Errorf` for Go, 
+   etc.).
+7. No imports from libraries not listed in the spec or 
+   `package.json` / `go.mod` (no library introduced without 
+   justification).
+8. No `console.log` or `fmt.Println` debugging artifacts.
+9. No commented-out code.
+
+**Security checks** (especially for Chunks 3 and 7):
+
+10. No plaintext secret (password, token, session ID) appears in 
+    log statements.
+11. No audit event includes `PasswordHash` or session tokens in 
+    `BeforeJSON` or `AfterJSON`.
+12. No bypass of the auth middleware (e.g., a route mounted 
+    outside the protected groups).
+
+**Documentation checks**:
+
+13. Function-level doc comments are present on exported 
+    identifiers in Go.
+14. Component prop types are explicit in Svelte / TypeScript.
+
+If any item fails, the chunk goes back to the sub-agent with a 
+specific request to fix. The operator does not silently fix 
+sub-agent output; that defeats the delegation pattern.
+
+### 6.5 When to redo vs accept
+
+If the sub-agent's output passes 11 or more of the 14 checks, the 
+operator can request targeted fixes for the remaining issues 
+without redoing the whole chunk.
+
+If 4 or more checks fail, the operator considers redoing the 
+chunk solo. The cumulative time of reviewing + fixing exceeds 
+the time of implementing, and the integration risk grows.
+
+A failed check in items 10-12 (security) is **always a redo**, 
+regardless of the count. Security regressions are not negotiable.
+
+### 6.6 Mandatory review rule (recap)
+
+**Every sub-agent chunk goes through the Section 6.4 checklist 
+before commit, plus a manual test of the chunk's critical 
+acceptance criteria, plus a verification that no TODO/FIXME 
+comment was left behind.**
+
+This rule was validated during the planning phase. It is not 
+negotiable. The operator who skips it must document the 
+exception in the commit message ("skipped review checklist for 
+reason X") and accept the maintenance debt.
+
+## 7. Risk register
+
+The following risks are identified for the execution phase. Each 
+is discussed in prose with its mitigation. The list is not 
+exhaustive; the operator should add to it as new risks surface 
+during execution.
+
+### 7.1 Spec ↔ implementation divergence
+
+**The risk**: during implementation, an edge case surfaces that 
+the spec did not anticipate. The operator decides to "just fix 
+it in code" without amending the spec.
+
+**Why it matters**: the spec is consulted by future maintainers 
+(including the operator in six months). If it diverges from the 
+code, the divergence creates surprises.
+
+**Mitigation**: any deviation from the spec triggers an amendment 
+commit on the spec file BEFORE the code commit that diverges. 
+The amendment includes the reason and the alternative chosen. 
+This rule was applied during the spec phase itself (Sections 3 
+and 4 each received amendments) and continues here.
+
+### 7.2 Sub-agent output incomplete or incorrect
+
+**The risk**: a sub-agent produces code that compiles and looks 
+right but misses an AC or introduces a subtle bug.
+
+**Why it matters**: the operator's instinct may be to "patch and 
+move on" rather than send back to the sub-agent. This silently 
+shifts the work from delegation to operator-as-debugger.
+
+**Mitigation**: Section 6.4 checklist is mandatory. If a sub-agent 
+chunk fails 4+ checks, redo it. If it fails 1-3, request targeted 
+fixes from the sub-agent and re-review.
+
+### 7.3 Subtle bug in HardAuthMiddleware
+
+**The risk**: the Touch-before-check ordering bug (discussed in 
+spec Section 5.7) is a real failure mode that could pass code 
+review at a glance. Touch updates `LastActivity`; if it's called 
+before the idle check, the check always passes, and the lock 
+screen is unreachable.
+
+**Why it matters**: a session that should be locked stays active 
+indefinitely. An attacker with a stolen cookie can maintain the 
+session by simply making API calls.
+
+**Mitigation**: Chunk 2 includes an explicit test for this 
+ordering (Section 4.2 "Sub-tests to add for security 
+correctness"). The test fails if Touch is moved before the 
+idle check. This is the kind of test that protects against 
+future refactors.
+
+### 7.4 Secret leakage in audit JSON
+
+**The risk**: a handler includes the User struct in an audit 
+event's `AfterJSON` without stripping `PasswordHash`, leaking 
+the hash into the audit log.
+
+**Why it matters**: the audit log is more accessible than the 
+user store (any admin can query it). A leaked hash, while not 
+the plaintext, opens offline cracking attempts.
+
+**Mitigation**: spec decision D3 forbids secrets in `BeforeJSON` / 
+`AfterJSON`. AC-AUDIT-14 verifies this explicitly. Chunk 4's 
+tests must include an audit-content inspection for the 
+`setup_admin_created` event.
+
+### 7.5 Action enum drift (recurrence of the D7 issue)
+
+**The risk**: a sub-agent or hurried solo implementation adds or 
+omits an action constant compared to D7, breaking the cohesion 
+between the code, the audit page dropdown, and the test 
+expectations.
+
+**Why it matters**: the action enum is consumed by the backend 
+(constants), the frontend (the audit page filter dropdown), and 
+the tests. A mismatch causes test failures or silently dropped 
+audit events.
+
+**Mitigation**: Chunk 3's review checklist includes "All 15 
+ActionXXX constants match D7 in name and string value". The 
+Chunk 8 implementation hardcodes the same 15 values in the 
+dropdown array; a test confirms the two sources agree (e.g., 
+a small integration test that compares the backend's allowed 
+actions with the frontend's filter options). This is a 
+recurrence-class risk; it was discovered during the planning 
+phase and the test is the prevention.
+
+### 7.6 Regression of Step C functionality
+
+**The risk**: a change to `internal/storage` (Chunk 1) or 
+`internal/api/router.go` (Chunk 4) breaks the existing Step C 
+routes CRUD.
+
+**Why it matters**: Step C is the user's currently-working 
+deployment. Breaking it during Step D execution would force a 
+rollback.
+
+**Mitigation**: prerequisite 2.2 — Step C tests must pass 
+before each chunk starts and after each chunk completes. The 
+manual dev-mode demo (create a route, see Caddy reload, hit 
+the route) must still work after every chunk.
+
+### 7.7 Operator burnout
+
+**The risk**: the operator pushes through fatigue and produces 
+lower-quality code or skips review checklists.
+
+**Why it matters**: backend chunks (1, 2, 4) are security-critical 
+and solo. Errors there have outsized consequences. The cost of 
+a security bug found in production is many times the cost of 
+implementing the same chunk a day later.
+
+**Mitigation**: split execution across multiple sessions. The 
+plan estimates 30-37 hours total; at 4-6 hours per session, that 
+is 6-8 sessions over 2-3 weeks. Resist the temptation to 
+finish faster. Specifically: do not implement Chunk 2 (the 
+security core) in the same session as Chunk 1 unless you are 
+genuinely fresh.
+
+## 8. Done criteria for Step D
+
+Step D is considered complete when **all** of the following are 
+true:
+
+### 8.1 All 79 acceptance criteria pass
+
+The 79 ACs enumerated in Section 10 of the spec, across the 8 
+domains (AUTH 11, LOCK 7, RATE 6, PW 12, AUDIT 14, PROXY 7, FE 
+17, CONFIG 5), each verified at least once by manual or 
+automated test. A small spreadsheet or markdown checklist 
+tracking each AC against its verifying test or scenario is 
+maintained during execution; the final commit references this 
+checklist.
+
+### 8.2 Test coverage targets met
+
+- `internal/auth`: ≥85% line coverage
+- `internal/audit`: ≥80% line coverage
+- `internal/api`: ≥75% line coverage
+- `web/frontend/src/lib/stores`: ≥75% coverage
+- `web/frontend/src/lib/api`: ≥75% coverage
+- `web/frontend/src/lib/components`: ≥70% coverage
+
+Measured with `go test -cover` for Go and `vitest --coverage` 
+for frontend.
+
+### 8.3 No TODO/FIXME without justification
+
+A final `grep -rn 'TODO\|FIXME\|XXX'` over the new code returns 
+only comments that:
+
+- Reference a Phase 2 enhancement explicitly, OR
+- Reference a decision that was deferred (e.g., decision recorded 
+  in roadmap.md), OR
+- Are pre-existing from Step C (untouched).
+
+No "todo: figure this out later" with no plan.
+
+### 8.4 No secrets in logs or audit JSON
+
+Manual inspection plus automated scan:
+
+- `grep -i 'password'` on slog output during a full auth flow 
+  returns no plaintext occurrences (only `password=[redacted]` 
+  or similar markers if any).
+- A sample audit event from `setup_admin_created` is inspected; 
+  it does not contain `PasswordHash`.
+
+### 8.5 Build and run end-to-end
+
+The final binary builds from a clean checkout:
+
+```text
+git checkout main
+go build -o bin/arenet ./cmd/arenet
+./bin/arenet --dev
+```
+
+The dev-mode boot logs the setup token. The full happy path is 
+exercisable:
+
+1. Setup admin via the displayed token
+2. Login with the new admin
+3. Create a route
+4. Verify Caddy reload
+5. Check audit log shows `setup_admin_created`, `login_success`, 
+   `route_created`
+6. Wait 16 minutes (or reduce the idle timeout for testing)
+7. Verify the lock screen appears
+8. Unlock with password
+9. Logout
+10. Login again, verify session
+
+### 8.6 Tag the completed implementation
+
+When 8.1 through 8.5 pass, tag the final commit:
+
+```text
+v0.2.0-step-d
+```
+
+The tag message records the date, the commit count, and a 
+reference to this execution plan. This tag is distinct from 
+`v0.2.0-step-d-spec` (which tagged the spec freeze, not the 
+implementation).
+
+After the tag, Step D is officially complete and the project 
+moves to the next milestone per docs/roadmap.md.
