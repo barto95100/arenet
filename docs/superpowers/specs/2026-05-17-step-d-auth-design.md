@@ -871,7 +871,7 @@ both the backend handlers and the frontend client must honor.
 
 ### 4.1 Overview
 
-Step D adds nine new HTTP endpoints. Eight are under `/api/v1/auth/*`,
+Step D adds ten new HTTP endpoints. Nine are under `/api/v1/auth/*`,
 one is `/api/v1/audit` for reading the audit log.
 
 | Method | Path                              | Group     | Audit emitted                         |
@@ -884,6 +884,7 @@ one is `/api/v1/audit` for reading the audit log.
 | POST   | `/api/v1/auth/heartbeat`          | hard-auth | — (heartbeat, not audited)            |
 | GET    | `/api/v1/auth/sessions`           | hard-auth | — (read, not audited)                 |
 | DELETE | `/api/v1/auth/sessions/{id}`      | hard-auth | `session_revoked`                     |
+| POST   | `/api/v1/auth/me/password`        | hard-auth | `password_changed`                    |
 | GET    | `/api/v1/audit`                   | hard-auth | `audit_viewed`                        |
 
 Middleware groups (specified in Section 5):
@@ -1299,6 +1300,84 @@ struct.
 **Security note**: returning 404 when the session belongs to
 another user (rather than 403) prevents discovering which session
 IDs belong to which users by trial.
+
+### 4.9bis POST /api/v1/auth/me/password
+
+Changes the authenticated user's password. Revokes all other active 
+sessions of this user as a side effect.
+
+**Group**: hard-auth
+
+**Request body**:
+
+```json
+{
+  "currentPassword": "old-password-15-or-more",
+  "newPassword": "new-password-15-or-more"
+}
+```
+
+- `currentPassword` (string, required): the user's current password, 
+  verified before any change is applied.
+- `newPassword` (string, required): the desired new password. Subject 
+  to the same validation as creation (length 15..128, top-10k check, 
+  HIBP best-effort).
+
+**Response 204**: no body. The current session cookie remains valid; 
+the user stays logged in on this device.
+
+**Errors**:
+
+| Status | Body                                                                       | Trigger                                          |
+|--------|----------------------------------------------------------------------------|--------------------------------------------------|
+| 400    | `{"error": "invalid JSON body"}`                                           | Body not valid JSON                              |
+| 400    | `{"error": "currentPassword and newPassword are required"}`                | Missing required field                           |
+| 400    | `{"error": "password must be at least 15 characters"}`                     | New password too short                           |
+| 400    | `{"error": "password must be at most 128 characters"}`                     | New password too long                            |
+| 400    | `{"error": "password is in the list of common compromised passwords"}`     | New password matches top-10k                     |
+| 401    | `{"error": "current password is incorrect"}`                               | `currentPassword` verification failed            |
+| 403    | `{"error": "session locked"}`                                              | Session is in idle state (hard-auth gate)        |
+| 500    | `{"error": "internal error"}`                                              | Unexpected failure                               |
+
+**Audit event emitted on success**: `password_changed` with 
+`ActorUserID` set, `TargetType: "user"`, `TargetID` set to the same 
+user ID. `BeforeJSON` and `AfterJSON` are both `null` (no diff is 
+emitted since the only changed field is the password hash, which is 
+forbidden in audit content per decision D3).
+
+**Side effects on success**:
+
+1. The user's `PasswordHash` is updated with the argon2id hash of 
+   `newPassword`.
+2. `User.HIBPCheckStatus` is reset to `"pending"`. The new password 
+   will be re-verified against HIBP at the next successful login.
+3. `User.PasswordCompromised` is reset to `false`.
+4. `User.UpdatedAt` is refreshed.
+5. **All other sessions of this user are revoked**. The current 
+   session (the one whose cookie made this request) is preserved; 
+   the user stays logged in on this device. Other devices (mobile, 
+   another browser) are signed out at their next request 
+   (which will return 401 since their session no longer exists).
+
+**Rationale for multi-session revocation**: when a user changes their 
+password, the most likely cause is that the previous password was 
+compromised (HIBP banner, suspicion of theft, etc.). Revoking other 
+sessions prevents an attacker who has already logged in elsewhere 
+from continuing to operate undetected. The current session is 
+spared so the user is not signed out of the device they just used 
+to change the password.
+
+**Rate limiting**: this endpoint is subject to the same per-IP rate 
+limit as other authentication endpoints. A user repeatedly typing 
+the wrong `currentPassword` will be blocked after the Tier 1 
+threshold.
+
+**Security note**: the `currentPassword` field is verified using 
+`argon2id.ComparePasswordAndHash` (constant-time), preventing timing 
+attacks. A `login_failure`-equivalent audit event is **not** emitted 
+for incorrect `currentPassword` attempts (the user is already 
+authenticated; a typo is not an authentication failure). The slog 
+logger records the attempt at Info level for observability.
 
 ### 4.10 GET /api/v1/audit
 
