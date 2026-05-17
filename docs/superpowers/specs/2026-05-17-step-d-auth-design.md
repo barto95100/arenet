@@ -3727,8 +3727,10 @@ Design notes:
 
 The list of the 10 000 most common compromised passwords is sourced 
 from the [SecLists project](https://github.com/danielmiessler/SecLists), 
-specifically `Passwords/Common-Credentials/10-million-password-list-top-10000.txt`. 
-SecLists is MIT-licensed and compatible with Arenet's AGPL-3.0.
+specifically `Passwords/Common-Credentials/xato-net-10-million-passwords-10000.txt` 
+(formerly named `10-million-password-list-top-10000.txt`; renamed upstream by 
+SecLists, same xato.net source). SecLists is MIT-licensed and compatible with 
+Arenet's AGPL-3.0.
 
 The list is embedded into the binary at compile time via 
 `//go:embed`, gzip-compressed to reduce binary size from ~80 KB 
