@@ -523,7 +523,7 @@ type User struct {
     Username            string    `json:"username"`             // lowercase, 3..32
     DisplayName         string    `json:"display_name"`         // free text, ≤64
     PasswordHash        string    `json:"password_hash"`        // argon2id PHC string
-    HIBPCheckStatus     string    `json:"hibp_check_status"`    // "pending" | "clean" | "compromised"
+    HIBPCheckStatus     string    `json:"hibp_check_status"`    // "pending" | "clean" | "compromised" | "skipped"
     HIBPCheckedAt       time.Time `json:"hibp_checked_at,omitempty"`
     PasswordCompromised bool      `json:"password_compromised"`
     CreatedAt           time.Time `json:"created_at"`
@@ -1123,7 +1123,7 @@ screen with the username)
   detected the user's password in a breach database. Used by the
   frontend to show a banner urging immediate password change.
 - `hibpCheckStatus` (string): one of `"pending"`, `"clean"`,
-  `"compromised"`. Useful for the frontend to show a "verifying
+  `"compromised"`, `"skipped"`. Useful for the frontend to show a "verifying
   your password against breach databases..." indicator if pending.
 
 **Errors**:
@@ -2563,7 +2563,7 @@ export interface User {
     displayName: string;
     locked: boolean;
     passwordCompromised: boolean;
-    hibpCheckStatus: 'pending' | 'clean' | 'compromised';
+    hibpCheckStatus: 'pending' | 'clean' | 'compromised' | 'skipped';
 }
 
 export interface Session {
