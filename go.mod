@@ -3,6 +3,7 @@ module github.com/barto95100/arenet
 go 1.25.0
 
 require (
+	github.com/alexedwards/argon2id v1.0.0
 	github.com/caddyserver/caddy/v2 v2.11.3
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/google/uuid v1.6.0

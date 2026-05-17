@@ -1,0 +1,104 @@
+// Arenet - Homelab-friendly reverse proxy with integrated security
+// Copyright (C) 2026  Ludovic Ramos
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see https://www.gnu.org/licenses/.
+
+// Package auth manages admin users, sessions, and the authentication
+// primitives used by the API middleware (Chunk 2). Step D Phase 1 has
+// a single-admin model; multi-user and SSO are deferred to Step D2/D3.
+package auth
+
+import "time"
+
+// SECURITY: User is the internal storage shape and MUST NOT be exposed
+// directly via HTTP. It contains PasswordHash and other fields that
+// should never reach the wire. The API layer (Chunk 4) builds a
+// separate wire shape that omits sensitive fields.
+//
+// User represents a single admin account.
+//
+// Phase 1: exactly one row. The setup flow creates it; the first login
+// records LastLoginAt. Phase 2 will allow multiple rows with admin/editor
+// roles (see docs/roadmap.md).
+type User struct {
+	ID                  string    `json:"id"`                // UUID v4
+	Username            string    `json:"username"`          // lowercase, 3..32
+	DisplayName         string    `json:"display_name"`      // free text, ≤64
+	PasswordHash        string    `json:"password_hash"`     // argon2id PHC string — never expose via HTTP
+	HIBPCheckStatus     string    `json:"hibp_check_status"` // "pending" | "clean" | "compromised" | "skipped"
+	HIBPCheckedAt       time.Time `json:"hibp_checked_at,omitempty"`
+	PasswordCompromised bool      `json:"password_compromised"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+	LastLoginAt         time.Time `json:"last_login_at,omitempty"`
+}
+
+// HIBP status constants. Matches the enum documented in spec §3.2 and §7.
+const (
+	HIBPStatusPending     = "pending"
+	HIBPStatusClean       = "clean"
+	HIBPStatusCompromised = "compromised"
+	HIBPStatusSkipped     = "skipped"
+)
+
+// Session represents a server-side authenticated session.
+//
+// The ID is the opaque 256-bit token also stored in the user's
+// arenet_session cookie. ExpiresAt enforces the absolute upper bound
+// (24h or 30d); LastActivity enforces the 15-minute idle lock window
+// (the middleware check happens in Chunk 2).
+type Session struct {
+	ID           string    `json:"id"` // 256-bit base64 url-safe (43 chars)
+	UserID       string    `json:"user_id"`
+	IssuedAt     time.Time `json:"issued_at"`
+	ExpiresAt    time.Time `json:"expires_at"` // sliding TTL: 24h or 30d
+	LastActivity time.Time `json:"last_activity"`
+	RememberMe   bool      `json:"remember_me"`
+	IP           string    `json:"ip"`         // captured at issue time
+	UserAgent    string    `json:"user_agent"` // captured at issue time
+}
+
+// Session TTL constants per spec §3.3 and decision Q3.
+const (
+	SessionTTLDefault    = 24 * time.Hour      // sliding, non-remember-me
+	SessionTTLRememberMe = 30 * 24 * time.Hour // sliding, remember-me
+	SessionIdleTimeout   = 15 * time.Minute    // hard-auth lock window (enforced in Chunk 2)
+)
+
+// Argon2id parameters per spec §3.2 and decision Q4.
+//
+// These values are exposed so the userstore and tests can reference
+// them without duplicating literals. The argon2id library expects the
+// values directly in its Params struct.
+const (
+	Argon2idMemory      = 64 * 1024 // 64 MiB, in KiB as argon2id expects
+	Argon2idIterations  = 3
+	Argon2idParallelism = 4
+	Argon2idSaltLength  = 16
+	Argon2idKeyLength   = 32
+)
+
+// Username and password validation bounds per spec §3.2 and decision D5/D6.
+const (
+	UsernameMinLen    = 3
+	UsernameMaxLen    = 32
+	DisplayNameMaxLen = 64
+	PasswordMinLen    = 15
+	PasswordMaxLen    = 128
+)
+
+// SessionIDByteLen is the entropy used to generate session IDs:
+// 32 bytes from crypto/rand, base64 url-safe encoded without padding.
+// Encoded length is 43 characters.
+const SessionIDByteLen = 32
