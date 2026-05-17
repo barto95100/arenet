@@ -57,6 +57,13 @@ const (
 	// when the immediate caller is in ARENET_TRUSTED_PROXIES.
 	// Populated by IPExtractMiddleware near the top of the stack.
 	ClientIPKey ctxKey = "auth.client_ip"
+
+	// attemptedUsernameKey is the username submitted by an
+	// unauthenticated /login or /unlock attempt. Stored by the
+	// handler via SetAttemptedUsername so the rate-limit middleware
+	// can include it in Tier 2 Warn logs. Unexported because callers
+	// MUST use the typed accessors, never raw context.Value.
+	attemptedUsernameKey ctxKey = "auth.attempted_username"
 )
 
 // UserIDFromContext returns the authenticated user's ID, or empty
@@ -93,5 +100,25 @@ func IsLockedFromContext(ctx context.Context) bool {
 // when r.RemoteAddr was unparseable.
 func ClientIPFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(ClientIPKey).(string)
+	return v
+}
+
+// SetAttemptedUsername returns a new context carrying the username
+// submitted by an unauthenticated /login or /unlock attempt. The
+// rate-limit middleware reads this value after the handler runs to
+// enrich Tier 2 Warn logs. Pattern: handlers call ctx = SetAttemptedUsername(ctx, username)
+// and pass r.WithContext(ctx) to writers.
+//
+// The value is never used for authentication decisions; it is
+// observability metadata only. A missing or empty value is OK.
+func SetAttemptedUsername(ctx context.Context, username string) context.Context {
+	return context.WithValue(ctx, attemptedUsernameKey, username)
+}
+
+// AttemptedUsernameFromContext returns the username stored via
+// SetAttemptedUsername, or empty string when the handler did not
+// set one (e.g. malformed body, no /login or /unlock invocation).
+func AttemptedUsernameFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(attemptedUsernameKey).(string)
 	return v
 }

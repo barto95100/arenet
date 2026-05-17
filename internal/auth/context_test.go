@@ -94,3 +94,36 @@ func TestCtxKey_DistinctTypeIsolation(t *testing.T) {
 		t.Errorf("ctxKey isolation broken: got %q via plain-string key", got)
 	}
 }
+
+// TestAttemptedUsername_RoundTrip covers the handler→middleware
+// observability channel used by the rate limiter (Commit B).
+func TestAttemptedUsername_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	// Empty by default.
+	if got := AttemptedUsernameFromContext(ctx); got != "" {
+		t.Errorf("default: got %q, want \"\"", got)
+	}
+
+	ctx2 := SetAttemptedUsername(ctx, "admin")
+	if got := AttemptedUsernameFromContext(ctx2); got != "admin" {
+		t.Errorf("after Set: got %q, want \"admin\"", got)
+	}
+
+	// Original context unchanged (immutability invariant).
+	if got := AttemptedUsernameFromContext(ctx); got != "" {
+		t.Errorf("original ctx mutated: got %q, want \"\"", got)
+	}
+
+	// Overwrite.
+	ctx3 := SetAttemptedUsername(ctx2, "other")
+	if got := AttemptedUsernameFromContext(ctx3); got != "other" {
+		t.Errorf("after overwrite: got %q, want \"other\"", got)
+	}
+
+	// Empty string is a valid value (signals "handler tried but no username available").
+	ctx4 := SetAttemptedUsername(ctx, "")
+	if got := AttemptedUsernameFromContext(ctx4); got != "" {
+		t.Errorf("explicit empty: got %q, want \"\"", got)
+	}
+}
