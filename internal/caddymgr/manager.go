@@ -34,6 +34,11 @@ import (
 	// (reverse_proxy, host matcher, internal TLS issuer, ...).
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 
+	// Side-effect import: registers the arenet_routemetrics module so
+	// the JSON config produced by buildConfigJSON (referencing it as
+	// a handler) is accepted by caddy.Load. Step E spec §3.
+	"github.com/barto95100/arenet/internal/metrics"
+
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -45,23 +50,32 @@ const (
 
 // CaddyManager owns the lifecycle of the embedded Caddy instance and
 // reloads it from the persisted routes.
+//
+// The optional registry, when non-nil, is reconciled with the canonical
+// route IDs after each successful caddy.Load (spec §11.5 + §4.1). When
+// nil (typical for unit tests that only exercise buildConfigJSON or
+// catch-all behavior), the metrics layer is fully bypassed.
 type CaddyManager struct {
-	store  *storage.Store
-	logger *slog.Logger
+	store    *storage.Store
+	logger   *slog.Logger
+	registry *metrics.Registry
 
 	mu      sync.Mutex
 	started bool
 }
 
 // New constructs a CaddyManager. The store and logger must be non-nil.
-func New(store *storage.Store, logger *slog.Logger) (*CaddyManager, error) {
+// The registry may be nil; passing a non-nil registry enables the
+// per-reload Sync call that keeps the metrics counter map in step
+// with the current set of routes.
+func New(store *storage.Store, logger *slog.Logger, registry *metrics.Registry) (*CaddyManager, error) {
 	if store == nil {
 		return nil, errors.New("caddymgr: store must not be nil")
 	}
 	if logger == nil {
 		return nil, errors.New("caddymgr: logger must not be nil")
 	}
-	return &CaddyManager{store: store, logger: logger}, nil
+	return &CaddyManager{store: store, logger: logger, registry: registry}, nil
 }
 
 // Start launches the embedded Caddy with the config derived from the store.
@@ -108,6 +122,15 @@ func (m *CaddyManager) ReloadFromStore(ctx context.Context) error {
 
 // applyLocked must be called with m.mu held. It reads routes from the store,
 // renders the Caddy JSON config and applies it.
+//
+// After a successful caddy.Load, syncs the metrics registry (if any)
+// with the canonical route IDs so the per-route counters are aligned
+// with the live config (spec §11.5). The Sync happens AFTER the
+// reload succeeds — same pattern as audit emission for /routes
+// mutations (Step D Bug 1 / D2): on reload failure the storage is
+// rolled back by the caller (handlers in internal/api/routes.go),
+// so the registry already reflects the pre-attempt state, and we
+// must not re-sync against a state that was rejected.
 func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	routes, err := m.store.ListRoutes(ctx)
 	if err != nil {
@@ -123,7 +146,29 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	if err := caddy.Load(cfgJSON, true); err != nil {
 		return fmt.Errorf("caddy.Load: %w", err)
 	}
+
+	// Reload succeeded — sync the metrics registry with the live
+	// route IDs. Nil registry (typical for unit tests) skips the
+	// sync. Extracted into syncRegistry so the no-Caddy unit test
+	// (TestApplyLocked_SyncCalledAfterSuccess) can exercise the
+	// Sync path directly without spinning up an embedded Caddy.
+	m.syncRegistry(routes)
 	return nil
+}
+
+// syncRegistry reconciles the metrics registry's cells with the
+// canonical route IDs. No-op when m.registry is nil. Pulled out of
+// applyLocked so tests can exercise it without going through
+// caddy.Load.
+func (m *CaddyManager) syncRegistry(routes []storage.Route) {
+	if m.registry == nil {
+		return
+	}
+	ids := make([]string, len(routes))
+	for i, r := range routes {
+		ids[i] = r.ID
+	}
+	m.registry.Sync(ids)
 }
 
 // caddyConfig models the subset of Caddy JSON we need.
@@ -189,7 +234,21 @@ func buildConfigJSON(routes []storage.Route) ([]byte, error) {
 			return nil, fmt.Errorf("route %s (%s): %w", r.ID, r.Host, err)
 		}
 
-		handler := map[string]any{
+		// Handler chain order (spec §11.5) — the metrics handler MUST
+		// run before reverse_proxy so it observes the upstream's status
+		// code via the deferred Inc. Reversing this order makes the
+		// metric record 200 for every request.
+		//
+		// The "handler" string is exactly metrics.HandlerName
+		// ("arenet_routemetrics", no dot, no http.handlers. prefix).
+		// Caddy's JSON config convention uses the last-segment form;
+		// passing the dotted ModuleID silently fails config load
+		// (spec §3.5). Tests in this package guard both invariants.
+		metricsHandler := map[string]any{
+			"handler":  metrics.HandlerName,
+			"route_id": r.ID,
+		}
+		proxyHandler := map[string]any{
 			"handler": "reverse_proxy",
 			"upstreams": []map[string]any{
 				{"dial": dial},
@@ -198,7 +257,7 @@ func buildConfigJSON(routes []storage.Route) ([]byte, error) {
 
 		route := httpRoute{
 			Match:  []matcherSet{{Host: []string{r.Host}}},
-			Handle: []map[string]any{handler},
+			Handle: []map[string]any{metricsHandler, proxyHandler},
 		}
 
 		httpRoutes = append(httpRoutes, route)

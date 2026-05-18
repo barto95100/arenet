@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/caddymgr"
+	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/web"
 )
@@ -123,7 +125,22 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		}
 	}
 
-	mgr, err := caddymgr.New(store, logger)
+	// Step E metrics pipeline — wired BEFORE caddymgr.Start because
+	// the Caddy module's Provision (which runs during the first
+	// applyLocked inside Start) reads metrics.GlobalRegistry(). The
+	// order is:
+	//   1. NewRegistry             — empty counter map
+	//   2. SetRegistry(reg)        — installs the process-wide singleton
+	//   3. caddymgr.New(..., reg)  — manager keeps the same pointer
+	//   4. mgr.Start               — Provisions the module, applies config,
+	//                                runs the first syncRegistry
+	//   5. Broadcaster + Ticker    — start AFTER Start so the first tick
+	//                                sees a populated registry (spec §4.3)
+	metricsRegistry := metrics.NewRegistry()
+	metrics.SetRegistry(metricsRegistry)
+	metricsBroadcaster := metrics.NewBroadcaster(logger)
+
+	mgr, err := caddymgr.New(store, logger, metricsRegistry)
 	if err != nil {
 		return err
 	}
@@ -139,6 +156,29 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 			}
 		}
 	}()
+
+	// Start the metrics ticker AFTER caddymgr.Start so the first
+	// tick sees the registry already populated by the post-Start
+	// syncRegistry. Run on a child context so a Ctrl-C / shutdown
+	// cancels Run promptly; we wait for the goroutine to exit
+	// before returning from run().
+	metricsTicker := metrics.NewTicker(metricsRegistry, metricsBroadcaster, &storeLister{store: store})
+	tickerCtx, tickerCancel := context.WithCancel(ctx)
+	var tickerWG sync.WaitGroup
+	tickerWG.Add(1)
+	go func() {
+		defer tickerWG.Done()
+		metricsTicker.Run(tickerCtx)
+	}()
+	defer func() {
+		tickerCancel()
+		tickerWG.Wait()
+		logger.Info("metrics pipeline stopped")
+	}()
+	logger.Info("metrics pipeline started",
+		"tick_interval", metrics.TickInterval,
+		"ws_path", "/api/v1/ws/topology",
+	)
 
 	auditStore := audit.NewStore(store.DB())
 	userStore := auth.NewUserStore(store.DB())
@@ -286,6 +326,34 @@ func spaHandler(staticFS fs.FS) http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(shell)
 	})
+}
+
+// storeLister adapts *storage.Store to the metrics.RouteLister
+// interface. Defined inline rather than in internal/storage so the
+// metrics package stays decoupled from the storage package — only
+// main() wires the two together (spec §4.3).
+type storeLister struct {
+	store *storage.Store
+}
+
+// ListRoutesForMetrics returns the canonical route list (one entry
+// per persisted route) in the order produced by storage.ListRoutes.
+// The metrics ticker calls this once per tick to join counter deltas
+// with route metadata for the wire-shape Snapshot.
+func (l *storeLister) ListRoutesForMetrics(ctx context.Context) ([]metrics.RouteMetadata, error) {
+	routes, err := l.store.ListRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]metrics.RouteMetadata, len(routes))
+	for i, r := range routes {
+		out[i] = metrics.RouteMetadata{
+			ID:       r.ID,
+			Host:     r.Host,
+			Upstream: r.UpstreamURL,
+		}
+	}
+	return out, nil
 }
 
 func main() {
