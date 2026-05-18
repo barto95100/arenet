@@ -17,13 +17,31 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
+
+	"github.com/alexedwards/argon2id"
+	"github.com/go-chi/chi/v5"
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 )
+
+// truncatedUsernameMaxLen bounds the username snapshot stored in
+// audit events to prevent log injection of arbitrarily large
+// attacker-controlled strings (spec §4.3 security notes).
+const truncatedUsernameMaxLen = 32
+
+// truncateUsername clamps an attempted username for audit storage.
+func truncateUsername(s string) string {
+	if len(s) > truncatedUsernameMaxLen {
+		return s[:truncatedUsernameMaxLen]
+	}
+	return s
+}
 
 // setupRequest is the wire shape accepted by POST /api/v1/auth/setup.
 // Spec §4.2.
@@ -177,4 +195,409 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 		DisplayName: user.DisplayName,
 		CreatedAt:   user.CreatedAt.UTC().Format(timestampFormat),
 	})
+}
+
+// --- POST /api/v1/auth/login -----------------------------------------------
+
+// loginRequest is the wire shape for POST /api/v1/auth/login. Spec §4.3.
+type loginRequest struct {
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	RememberMe bool   `json:"rememberMe"`
+}
+
+// loginResponse is the success body per spec §4.3.
+type loginResponse struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+}
+
+// login handles POST /api/v1/auth/login (spec §4.3).
+//
+// Security properties:
+//   - Same 401 "invalid credentials" for "user not found" and "bad password"
+//     to prevent username enumeration.
+//   - argon2id.ComparePasswordAndHash is constant-time internally.
+//   - Attempted username truncated before being stored in audit events.
+//   - Failure increments the rate-limit counter (via the middleware's
+//     401 observation); success calls rateLimiter.Reset.
+func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	var req loginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+
+	// Record attempted username in context so the rate-limit middleware
+	// can include it in Tier 2 Warn logs (spec §5.3).
+	attempted := truncateUsername(req.Username)
+	ctx := auth.SetAttemptedUsername(r.Context(), attempted)
+	r = r.WithContext(ctx)
+
+	user, err := h.users.GetByUsername(ctx, req.Username)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			h.emitLoginFailure(r, attempted, "user_not_found")
+			writeError(w, http.StatusUnauthorized, "invalid credentials")
+			return
+		}
+		// Storage error (decision D11): 503.
+		h.logger.Error("login: user lookup failed", "err", err)
+		writeError(w, http.StatusServiceUnavailable, "authentication service temporarily unavailable")
+		return
+	}
+
+	match, err := argon2id.ComparePasswordAndHash(req.Password, user.PasswordHash)
+	if err != nil {
+		// Malformed PHC string in storage; treat as internal failure.
+		h.logger.Error("login: argon2id compare failed", "err", err, "user_id", user.ID)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !match {
+		h.emitLoginFailure(r, attempted, "bad_password")
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	// Success: create session, set cookie, reset rate limit, audit.
+	ip := auth.ClientIPFromContext(ctx)
+	sess, err := h.sessions.Create(ctx, user.ID, req.RememberMe, ip, r.UserAgent())
+	if err != nil {
+		h.logger.Error("login: session create failed", "err", err, "user_id", user.ID)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	setSessionCookie(w, sess.ID, req.RememberMe, h.devMode)
+
+	// Best-effort: record LastLoginAt; log warning on failure but
+	// never fail the login response. Bounded by a 5-second timeout
+	// so the goroutine cannot linger if the storage hangs (which
+	// would also bound any goroutine leak on shutdown).
+	go func(uid string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.users.RecordLogin(ctx, uid); err != nil {
+			h.logger.Warn("login: RecordLogin failed (non-fatal)",
+				"err", err.Error(), "user_id", uid)
+		}
+	}(user.ID)
+
+	// Reset the per-IP failure counter on successful login (spec §5.3).
+	h.rateLimiter.Reset(ip)
+
+	// Audit success — populate ActorUserID directly because the soft-auth
+	// context keys are not set on no-auth endpoints.
+	h.appendAudit(r, audit.Event{
+		Action:                audit.ActionLoginSuccess,
+		ActorUserID:           user.ID,
+		ActorUsernameSnapshot: user.Username,
+	})
+
+	writeJSON(w, http.StatusOK, loginResponse{
+		ID:          user.ID,
+		Username:    user.Username,
+		DisplayName: user.DisplayName,
+	})
+}
+
+// emitLoginFailure records a login_failure audit event. Used by both
+// the "user not found" and "bad password" branches.
+func (h *Handler) emitLoginFailure(r *http.Request, attemptedUsername, reason string) {
+	h.appendAudit(r, audit.Event{
+		Action:                audit.ActionLoginFailure,
+		ActorUsernameSnapshot: attemptedUsername,
+		Message:               reason,
+	})
+}
+
+// --- POST /api/v1/auth/logout ----------------------------------------------
+
+// logout handles POST /api/v1/auth/logout (spec §4.4). Group: soft-auth.
+//
+// Idempotent on the client side: a missing cookie returns 401 but the
+// frontend treats that as success ("the user is now logged out").
+func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	sessionID := auth.SessionIDFromContext(r.Context())
+	userID := auth.UserIDFromContext(r.Context())
+
+	// Soft-auth middleware guarantees these are set if we got here.
+	if err := h.sessions.Delete(r.Context(), sessionID); err != nil {
+		h.logger.Warn("logout: session delete failed (non-fatal)", "err", err.Error(), "session_id", sessionID)
+	}
+	clearSessionCookieOnResponse(w, h.devMode)
+
+	h.appendAudit(r, audit.Event{
+		Action:                audit.ActionLogout,
+		ActorUserID:           userID,
+		ActorUsernameSnapshot: auth.UsernameFromContext(r.Context()),
+		TargetType:            "session",
+		TargetID:              sessionID,
+		Message:               "manual",
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// clearSessionCookieOnResponse is the api-layer counterpart of the
+// auth-layer helper of the same name (which lives in middleware.go).
+// Duplicated here so the api package does not need to reach into the
+// auth package's private helpers. All cookie attributes match those
+// of creation per spec §4.11.
+func clearSessionCookieOnResponse(w http.ResponseWriter, devMode bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   !devMode,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+// --- GET /api/v1/auth/me ---------------------------------------------------
+
+// meResponse is the wire shape for GET /api/v1/auth/me. Spec §4.5.
+type meResponse struct {
+	ID                  string `json:"id"`
+	Username            string `json:"username"`
+	DisplayName         string `json:"displayName"`
+	Locked              bool   `json:"locked"`
+	PasswordCompromised bool   `json:"passwordCompromised"`
+	HIBPCheckStatus     string `json:"hibpCheckStatus"`
+}
+
+// me handles GET /api/v1/auth/me (spec §4.5). Group: soft-auth.
+//
+// CRITICAL: this handler must NOT touch Session.LastActivity. The
+// soft-auth middleware does not call Touch (spec §5.6), and the
+// handler itself does not either. Polling /me must never extend
+// the idle timer (otherwise the lock screen becomes unreachable).
+//
+// A regression test (TestMe_DoesNotTouchSession) protects this
+// invariant.
+func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := auth.UserIDFromContext(ctx)
+
+	// The soft-auth middleware already loaded the User to populate
+	// the context. We re-fetch here to get the live HIBP fields
+	// (which the deferred re-check at login may have updated).
+	user, err := h.users.GetByID(ctx, userID)
+	if err != nil {
+		h.logger.Error("me: user lookup failed", "err", err, "user_id", userID)
+		writeError(w, http.StatusServiceUnavailable, "authentication service temporarily unavailable")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, meResponse{
+		ID:                  user.ID,
+		Username:            user.Username,
+		DisplayName:         user.DisplayName,
+		Locked:              auth.IsLockedFromContext(ctx),
+		PasswordCompromised: user.PasswordCompromised,
+		HIBPCheckStatus:     user.HIBPCheckStatus,
+	})
+}
+
+// --- POST /api/v1/auth/unlock ----------------------------------------------
+
+// unlockRequest is the wire shape for POST /api/v1/auth/unlock. Spec §4.6.
+type unlockRequest struct {
+	Password string `json:"password"`
+}
+
+// unlockResponse is the success body.
+type unlockResponse struct {
+	Unlocked bool `json:"unlocked"`
+}
+
+// unlock handles POST /api/v1/auth/unlock (spec §4.6). Group: soft-auth.
+//
+// Re-authenticates an idle session by verifying the password. On
+// success: Touch the session (lifting idle state), reset rate limit.
+// On failure: audit + 401 + rate-limit counter increments via middleware.
+func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
+	var req unlockRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Password == "" {
+		writeError(w, http.StatusBadRequest, "password is required")
+		return
+	}
+
+	ctx := r.Context()
+	userID := auth.UserIDFromContext(ctx)
+	username := auth.UsernameFromContext(ctx)
+	sessionID := auth.SessionIDFromContext(ctx)
+
+	// Record the attempted username (we know it from soft-auth) so
+	// the rate-limit middleware can include it in Tier 2 logs.
+	ctx = auth.SetAttemptedUsername(ctx, username)
+	r = r.WithContext(ctx)
+
+	user, err := h.users.GetByID(ctx, userID)
+	if err != nil {
+		h.logger.Error("unlock: user lookup failed", "err", err, "user_id", userID)
+		writeError(w, http.StatusServiceUnavailable, "authentication service temporarily unavailable")
+		return
+	}
+
+	match, err := argon2id.ComparePasswordAndHash(req.Password, user.PasswordHash)
+	if err != nil {
+		h.logger.Error("unlock: argon2id compare failed", "err", err, "user_id", userID)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !match {
+		h.appendAudit(r, audit.Event{
+			Action:  audit.ActionUnlockFailure,
+			Message: "bad_password",
+		})
+		writeError(w, http.StatusUnauthorized, "invalid password")
+		return
+	}
+
+	// Success: Touch the session to lift the idle state.
+	if err := h.sessions.Touch(ctx, sessionID); err != nil {
+		h.logger.Warn("unlock: session touch failed (non-fatal)", "err", err.Error(), "session_id", sessionID)
+	}
+
+	// Reset rate-limit counter for this IP (spec §5.3).
+	h.rateLimiter.Reset(auth.ClientIPFromContext(ctx))
+
+	h.appendAudit(r, audit.Event{
+		Action:     audit.ActionUnlockSuccess,
+		TargetType: "session",
+		TargetID:   sessionID,
+	})
+
+	writeJSON(w, http.StatusOK, unlockResponse{Unlocked: true})
+}
+
+// --- POST /api/v1/auth/heartbeat -------------------------------------------
+
+// heartbeat handles POST /api/v1/auth/heartbeat (spec §4.7). Group: hard-auth.
+//
+// The hard-auth middleware has already called Touch by the time this
+// handler runs; this body therefore just returns 204.
+func (h *Handler) heartbeat(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- GET /api/v1/auth/sessions ---------------------------------------------
+
+// sessionResponse is the wire shape for one session entry. Spec §4.8.
+type sessionResponse struct {
+	ID           string `json:"id"`
+	IssuedAt     string `json:"issuedAt"`
+	LastActivity string `json:"lastActivity"`
+	ExpiresAt    string `json:"expiresAt"`
+	IP           string `json:"ip"`
+	UserAgent    string `json:"userAgent"`
+	RememberMe   bool   `json:"rememberMe"`
+	IsCurrent    bool   `json:"isCurrent"`
+}
+
+// listSessionsResponse wraps the session list per spec §4.8.
+type listSessionsResponse struct {
+	Sessions []sessionResponse `json:"sessions"`
+}
+
+// listSessions handles GET /api/v1/auth/sessions (spec §4.8). Group: hard-auth.
+//
+// Returns every non-expired session owned by the current user.
+// `isCurrent` is true for the session whose ID matches the cookie of
+// this request.
+func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := auth.UserIDFromContext(ctx)
+	currentSessionID := auth.SessionIDFromContext(ctx)
+
+	all, err := h.sessions.ListForUser(ctx, userID)
+	if err != nil {
+		h.logger.Error("listSessions: failed", "err", err, "user_id", userID)
+		writeError(w, http.StatusServiceUnavailable, "authentication service temporarily unavailable")
+		return
+	}
+
+	now := time.Now().UTC()
+	out := make([]sessionResponse, 0, len(all))
+	for _, s := range all {
+		// Filter expired sessions server-side per spec §4.8.
+		if now.After(s.ExpiresAt) {
+			continue
+		}
+		out = append(out, sessionResponse{
+			ID:           s.ID,
+			IssuedAt:     s.IssuedAt.UTC().Format(timestampFormat),
+			LastActivity: s.LastActivity.UTC().Format(timestampFormat),
+			ExpiresAt:    s.ExpiresAt.UTC().Format(timestampFormat),
+			IP:           s.IP,
+			UserAgent:    s.UserAgent,
+			RememberMe:   s.RememberMe,
+			IsCurrent:    s.ID == currentSessionID,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, listSessionsResponse{Sessions: out})
+}
+
+// --- DELETE /api/v1/auth/sessions/{id} -------------------------------------
+
+// deleteSession handles DELETE /api/v1/auth/sessions/{id} (spec §4.9).
+// Group: hard-auth.
+//
+// Security: returns 404 when the session belongs to another user (rather
+// than 403) to prevent discovering which session IDs belong to which users
+// by trial.
+func (h *Handler) deleteSession(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	ctx := r.Context()
+	currentUserID := auth.UserIDFromContext(ctx)
+
+	sess, err := h.sessions.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, auth.ErrSessionNotFound) || errors.Is(err, auth.ErrSessionExpired) {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		h.logger.Error("deleteSession: lookup failed", "err", err)
+		writeError(w, http.StatusServiceUnavailable, "authentication service temporarily unavailable")
+		return
+	}
+	if sess.UserID != currentUserID {
+		// Foreign session: same 404 as not-found (anti-enumeration).
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	if err := h.sessions.Delete(ctx, id); err != nil {
+		h.logger.Error("deleteSession: delete failed", "err", err)
+		writeError(w, http.StatusServiceUnavailable, "authentication service temporarily unavailable")
+		return
+	}
+
+	// Audit the revocation. BeforeJSON captures the revoked session
+	// (sans secrets — Session has no PasswordHash field).
+	h.appendAudit(r, audit.Event{
+		Action:     audit.ActionSessionRevoked,
+		TargetType: "session",
+		TargetID:   id,
+		BeforeJSON: mustMarshalForAudit(sess),
+	})
+
+	w.WriteHeader(http.StatusNoContent)
 }

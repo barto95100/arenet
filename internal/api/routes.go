@@ -54,11 +54,28 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor) chi.Router {
 		r.Route("/auth", func(r chi.Router) {
 			r.Use(h.rateLimiter.Middleware())
 
-			// No-auth: /setup, /login (Commit B adds /login).
+			// No-auth subgroup: /setup, /login.
 			r.Post("/setup", h.setup)
+			r.Post("/login", h.login)
+
+			// Soft-auth subgroup: /logout, /me, /unlock.
+			r.Group(func(r chi.Router) {
+				r.Use(auth.SoftAuthMiddleware(h.sessions, h.users, h.devMode))
+				r.Post("/logout", h.logout)
+				r.Get("/me", h.me)
+				r.Post("/unlock", h.unlock)
+			})
+
+			// Hard-auth subgroup: /heartbeat, /sessions, DELETE /sessions/{id}.
+			r.Group(func(r chi.Router) {
+				r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.devMode))
+				r.Post("/heartbeat", h.heartbeat)
+				r.Get("/sessions", h.listSessions)
+				r.Delete("/sessions/{id}", h.deleteSession)
+			})
 		})
 
-		// Step C business endpoints. Hard-auth wiring comes in Commit C.
+		// Step C business endpoints — Commit C wires hard-auth here.
 		r.Get("/routes", h.listRoutes)
 		r.Post("/routes", h.createRoute)
 		r.Get("/routes/{id}", h.getRoute)
