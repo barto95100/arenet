@@ -12,6 +12,7 @@ vendor/
 *.test
 *.out
 coverage.txt
+/web/frontend/coverage/
 
 # Node / SvelteKit
 node_modules/

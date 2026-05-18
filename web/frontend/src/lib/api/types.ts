@@ -20,17 +20,32 @@ export interface RouteRequest {
 }
 
 /**
- * Discriminated kind of an ApiError so the UI can decide between inline
- * (validation) and toast (system) presentation per spec §10.5.
+ * Discriminated kind of an ApiError so the UI can decide presentation:
+ *   - validation: inline near the offending field (4xx other than auth/rate)
+ *   - system:     toast or full-page error (network, 5xx)
+ *   - auth:       401 — caller redirected to /login by the interceptor
+ *   - forbidden:  403 — session locked (lock screen overlay)
+ *   - rate_limited: 429 — caller shown a toast by the interceptor
+ *
+ * Step D adds the auth/forbidden/rate_limited kinds (spec §6.4); Step C
+ * shipped only validation/system.
  */
-export type ErrorKind = 'validation' | 'system';
+export type ErrorKind = 'validation' | 'system' | 'auth' | 'forbidden' | 'rate_limited';
 
 export class ApiError extends Error {
 	status: number;
 	kind: ErrorKind;
-	constructor(message: string, status: number) {
+	retryAfterSeconds?: number;
+
+	constructor(message: string, status: number, kind?: ErrorKind, retryAfterSeconds?: number) {
 		super(message);
 		this.status = status;
-		this.kind = status === 400 || status === 409 ? 'validation' : 'system';
+		if (kind !== undefined) {
+			this.kind = kind;
+		} else {
+			// Step C compat: derive kind from status when caller omits it.
+			this.kind = status === 400 || status === 409 ? 'validation' : 'system';
+		}
+		this.retryAfterSeconds = retryAfterSeconds;
 	}
 }
