@@ -555,6 +555,13 @@ func TestCORS_DevMode_Preflight(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, "POST") {
 		t.Errorf("Allow-Methods=%q", got)
 	}
+	// Allow-Credentials must be "true" so the Vite dev server at :5173
+	// can send the arenet_session cookie via fetch credentials:'include'.
+	// Wildcard origins are incompatible with credentials, hence the
+	// explicit allowOrigin in devCORS (verified above).
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("Allow-Credentials=%q want %q", got, "true")
+	}
 }
 
 func TestCORS_ProdMode_NoHeader(t *testing.T) {
@@ -584,6 +591,37 @@ func TestCORS_DevMode_ActualRequest(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Max-Age"); got != "3600" {
 		t.Errorf("Max-Age=%q on actual response, want 3600", got)
+	}
+	// Allow-Credentials must also be set on simple requests, not just
+	// preflight, otherwise the browser rejects the response when fetch
+	// uses credentials:'include'.
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("Allow-Credentials=%q want %q", got, "true")
+	}
+}
+
+// TestCORS_DevMode_AuthMe_Preflight covers the exact path that surfaced
+// the Allow-Credentials regression: the SvelteKit dev server at :5173
+// polls /api/v1/auth/me with fetch credentials:'include' on every page
+// load to bootstrap auth state. Without Allow-Credentials, the browser
+// drops the response.
+func TestCORS_DevMode_AuthMe_Preflight(t *testing.T) {
+	env := newTestEnv(t, true)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/me", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Errorf("Allow-Origin=%q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("Allow-Credentials=%q want %q", got, "true")
 	}
 }
 

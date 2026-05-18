@@ -53,10 +53,18 @@ func slogLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 // devCORS allows preflight + simple requests from allowOrigin. Only mounted
 // in dev mode by NewRouter.
+//
+// Access-Control-Allow-Credentials is set to "true" so the SvelteKit
+// dev server can send the arenet_session cookie via fetch
+// credentials:'include'. The CORS spec forbids combining
+// Allow-Credentials:true with a wildcard origin, so allowOrigin must
+// always be an explicit URL (verified by callers; NewRouter passes
+// "http://localhost:5173").
 func devCORS(allowOrigin string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Set("Access-Control-Max-Age", "3600")
