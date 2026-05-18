@@ -24,10 +24,12 @@
 	};
 
 	// Step D inserts Audit between Routes and Topology (spec §6.12).
+	// Step E enables Topology and switches its icon to Lucide `network`
+	// (spec §6.11 verbatim).
 	const items: Item[] = [
 		{ href: '/routes', label: 'Routes', icon: 'routes' },
 		{ href: '/audit', label: 'Audit', icon: 'audit' },
-		{ href: '/topology', label: 'Topology', icon: 'topology', disabled: true, tooltip: 'Coming soon' },
+		{ href: '/topology', label: 'Topology', icon: 'topology' },
 		{ href: '/security', label: 'Security', icon: 'security', disabled: true, tooltip: 'Coming soon' },
 		{ href: '/settings', label: 'Settings', icon: 'settings', disabled: true, tooltip: 'Coming soon' }
 	];
@@ -82,10 +84,12 @@
 						<!-- Lucide: activity -->
 						<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.5.5 0 0 1-.96 0L9.24 2.18a.5.5 0 0 0-.96 0l-2.35 8.36A2 2 0 0 1 4 12H2" />
 					{:else if item.icon === 'topology'}
-						<!-- Lucide: workflow -->
-						<rect width="8" height="8" x="3" y="3" rx="2" />
-						<path d="M7 11v4a2 2 0 0 0 2 2h4" />
-						<rect width="8" height="8" x="13" y="13" rx="2" />
+						<!-- Lucide: network -->
+						<rect x="16" y="16" width="6" height="6" rx="1" />
+						<rect x="2" y="16" width="6" height="6" rx="1" />
+						<rect x="9" y="2" width="6" height="6" rx="1" />
+						<path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" />
+						<path d="M12 12V8" />
 					{:else if item.icon === 'security'}
 						<!-- Lucide: shield -->
 						<path
