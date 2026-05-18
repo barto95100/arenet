@@ -993,3 +993,252 @@ func TestDeleteSession_NonExistent_404(t *testing.T) {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
 }
+
+// --- /auth/me/password tests ---------------------------------------------
+
+func TestChangePassword_HappyPath(t *testing.T) {
+	env, token := setupTestEnv(t)
+	uid, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/password",
+		strings.NewReader(`{"currentPassword":"`+testAdminPassword+`","newPassword":"new-strong-password-15+"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+
+	// Current session is still valid (we can still call /me).
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	withSessionCookie(req, sessionCookie)
+	rec = httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("after password change, /me on current session = %d, want 200", rec.Code)
+	}
+
+	// Audit event emitted with the expected shape.
+	events := env.audit.Events()
+	var pwc *audit.Event
+	for i := range events {
+		if events[i].Action == audit.ActionPasswordChanged {
+			pwc = &events[i]
+		}
+	}
+	if pwc == nil {
+		t.Fatal("password_changed audit event not emitted")
+	}
+	if pwc.ActorUserID != uid {
+		t.Errorf("ActorUserID = %q, want %q", pwc.ActorUserID, uid)
+	}
+	if pwc.TargetID != uid {
+		t.Errorf("TargetID = %q, want %q", pwc.TargetID, uid)
+	}
+	// D3: no BeforeJSON/AfterJSON (only changed field is the hash, forbidden in audit).
+	if pwc.BeforeJSON != nil {
+		t.Errorf("BeforeJSON should be nil, got %s", string(pwc.BeforeJSON))
+	}
+	if pwc.AfterJSON != nil {
+		t.Errorf("AfterJSON should be nil, got %s", string(pwc.AfterJSON))
+	}
+}
+
+func TestChangePassword_RevokesOtherSessionsKeepsCurrent(t *testing.T) {
+	env, token := setupTestEnv(t)
+	uid, currentCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	// Create 2 other sessions for the same user (mimicking "phone" and "tablet").
+	ss := auth.NewSessionStore(env.store.DB())
+	other1, _ := ss.Create(context.Background(), uid, false, "1.2.3.4", "Phone")
+	other2, _ := ss.Create(context.Background(), uid, true, "5.6.7.8", "Tablet")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/password",
+		strings.NewReader(`{"currentPassword":"`+testAdminPassword+`","newPassword":"new-strong-password-15+"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, currentCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+
+	// Other sessions are gone.
+	for _, id := range []string{other1.ID, other2.ID} {
+		if _, err := ss.Get(context.Background(), id); !errors.Is(err, auth.ErrSessionNotFound) {
+			t.Errorf("session %s not revoked: err = %v", id, err)
+		}
+	}
+	// Current session preserved.
+	if _, err := ss.Get(context.Background(), currentCookie); err != nil {
+		t.Errorf("current session erroneously revoked: %v", err)
+	}
+}
+
+func TestChangePassword_WrongCurrentPassword_401(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/password",
+		strings.NewReader(`{"currentPassword":"wrong-password-15c","newPassword":"new-strong-password-15+"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401; body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "current password is incorrect") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+}
+
+func TestChangePassword_NewPasswordTooShort_400(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/password",
+		strings.NewReader(`{"currentPassword":"`+testAdminPassword+`","newPassword":"short"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestChangePassword_MissingFields_400(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/password",
+		strings.NewReader(`{"currentPassword":"","newPassword":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+// --- /audit tests ---------------------------------------------------------
+
+func TestListAudit_ReturnsEventsAndAuditViewed(t *testing.T) {
+	env, token := setupTestEnv(t)
+	uid, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	beforeCount := len(env.audit.Events())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit", nil)
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+
+	var resp listAuditResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("body not JSON: %s (%v)", rec.Body.String(), err)
+	}
+	// At least the setup_admin_created event is present.
+	if len(resp.Events) == 0 {
+		t.Error("audit list empty; expected at least setup_admin_created")
+	}
+
+	// audit_viewed self-event emitted (decision Q5).
+	events := env.audit.Events()
+	var seen bool
+	for _, e := range events[beforeCount:] {
+		if e.Action == audit.ActionAuditViewed && e.ActorUserID == uid {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		t.Error("audit_viewed self-event not emitted")
+	}
+}
+
+func TestListAudit_FilterByAction(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit?action=setup_admin_created", nil)
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp listAuditResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	for _, e := range resp.Events {
+		if e.Action != "setup_admin_created" {
+			t.Errorf("filter leaked: got action %q", e.Action)
+		}
+	}
+}
+
+func TestListAudit_InvalidFromTimestamp_400(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit?from=not-rfc3339", nil)
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid 'from'") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+}
+
+func TestListAudit_InvalidLimit_400(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit?limit=not-an-int", nil)
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestListAudit_NoCookie_401(t *testing.T) {
+	env, _ := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestFilterToString_ReadableFormat(t *testing.T) {
+	f := audit.Filter{
+		ActorUserID: "uid",
+		Action:      "login_success",
+		Limit:       50,
+	}
+	got := filterToString(f)
+	if !strings.Contains(got, "actor_user_id=uid") {
+		t.Errorf("got %q, missing actor_user_id", got)
+	}
+	if !strings.Contains(got, "action=login_success") {
+		t.Errorf("got %q, missing action", got)
+	}
+	if !strings.Contains(got, "limit=50") {
+		t.Errorf("got %q, missing limit", got)
+	}
+}

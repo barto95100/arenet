@@ -268,6 +268,60 @@ func (s *SessionStore) DeleteAllForUser(ctx context.Context, userID string) (int
 	return deleted, nil
 }
 
+// DeleteAllForUserExcept deletes every session owned by userID
+// EXCEPT the one whose ID equals keepSessionID. Used by the
+// password-change flow (spec §4.9bis): revoking all sessions of a
+// user when they change their password, while preserving the
+// session that just performed the change so the user does not get
+// logged out of the device they just used.
+//
+// Returns the number of sessions deleted.
+func (s *SessionStore) DeleteAllForUserExcept(ctx context.Context, userID, keepSessionID string) (int, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+	if userID == "" {
+		return 0, nil
+	}
+
+	var deleted int
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(sessionsBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", sessionsBucketName)
+		}
+		var keys [][]byte
+		err := b.ForEach(func(k, v []byte) error {
+			var sess Session
+			if err := json.Unmarshal(v, &sess); err != nil {
+				return nil
+			}
+			if sess.UserID == userID && sess.ID != keepSessionID {
+				kc := make([]byte, len(k))
+				copy(kc, k)
+				keys = append(keys, kc)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		for _, k := range keys {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+			deleted++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 // ListForUser returns all sessions for userID, including expired ones
 // not yet lazy-purged. The UI filters expired entries client-side.
 func (s *SessionStore) ListForUser(ctx context.Context, userID string) ([]Session, error) {

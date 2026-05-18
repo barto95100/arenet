@@ -38,8 +38,14 @@ type CaddyReloader interface {
 // AuditAppender is the subset of internal/audit the API depends on. Defined
 // here (consumer side, decision D4) so tests can inject a fake without
 // booting bbolt. *audit.Store naturally satisfies this interface.
+//
+// The interface exposes both Append (used by handlers post-success) and
+// List (used by /audit endpoint, Commit C). The name AuditAppender is
+// kept for Step C/Chunk 3 backwards compatibility despite now covering
+// reads as well; a future rename to AuditStore is out of scope for Step D.
 type AuditAppender interface {
 	Append(ctx context.Context, evt audit.Event) error
+	List(ctx context.Context, f audit.Filter) ([]audit.Event, string, error)
 }
 
 // Handler owns every dependency the admin API needs (storage, Caddy

@@ -20,7 +20,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/argon2id"
@@ -600,4 +602,274 @@ func (h *Handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- POST /api/v1/auth/me/password -----------------------------------------
+
+// changePasswordRequest is the wire shape for POST /api/v1/auth/me/password
+// (spec §4.9bis).
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// changePassword handles POST /api/v1/auth/me/password (spec §4.9bis).
+// Group: hard-auth.
+//
+// Flow:
+//  1. Verify currentPassword against the stored hash (401 on mismatch).
+//  2. Validate the new password (length + top-10k + HIBP).
+//  3. UserStore.UpdatePassword (resets HIBPCheckStatus, PasswordCompromised).
+//  4. Revoke ALL OTHER sessions of this user (DeleteAllForUserExcept).
+//  5. Audit password_changed (no BeforeJSON/AfterJSON — D3 forbids hash leaks).
+//  6. Return 204.
+//
+// Security: a wrong currentPassword does NOT emit a login_failure-style
+// audit event (the user is already authenticated; a typo is observability
+// noise, not an authentication failure per spec §4.9bis). It is logged
+// at Info level for operational visibility.
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "currentPassword and newPassword are required")
+		return
+	}
+
+	ctx := r.Context()
+	userID := auth.UserIDFromContext(ctx)
+	currentSessionID := auth.SessionIDFromContext(ctx)
+
+	user, err := h.users.GetByID(ctx, userID)
+	if err != nil {
+		h.logger.Error("changePassword: user lookup failed", "err", err, "user_id", userID)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	match, err := argon2id.ComparePasswordAndHash(req.CurrentPassword, user.PasswordHash)
+	if err != nil {
+		h.logger.Error("changePassword: argon2id compare failed", "err", err, "user_id", userID)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !match {
+		h.logger.Info("changePassword: currentPassword incorrect",
+			"user_id", userID,
+			"ip", auth.ClientIPFromContext(ctx),
+		)
+		writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+
+	// Validate the new password BEFORE writing anything.
+	if _, err := auth.ValidatePasswordSync(ctx, h.hibp, req.NewPassword); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrPasswordTooShort):
+			writeError(w, http.StatusBadRequest, "password must be at least 15 characters")
+		case errors.Is(err, auth.ErrPasswordTooLong):
+			writeError(w, http.StatusBadRequest, "password must be at most 128 characters")
+		case errors.Is(err, auth.ErrPasswordCommon):
+			writeError(w, http.StatusBadRequest, "password is in the list of common compromised passwords")
+		default:
+			h.logger.Error("changePassword: validation unexpected error", "err", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+		}
+		return
+	}
+
+	// Persist the new password (UpdatePassword internally resets
+	// HIBPCheckStatus to "pending", PasswordCompromised to false,
+	// HIBPCheckedAt to zero, UpdatedAt to now — Chunk 1).
+	if err := h.users.UpdatePassword(ctx, userID, req.NewPassword); err != nil {
+		h.logger.Error("changePassword: UpdatePassword failed", "err", err, "user_id", userID)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// Revoke all OTHER sessions of this user. The current session
+	// (whose cookie made this request) is preserved.
+	revoked, err := h.sessions.DeleteAllForUserExcept(ctx, userID, currentSessionID)
+	if err != nil {
+		// Non-fatal: the password has already been changed. Log Warn
+		// and continue. The other sessions will still get 401 at their
+		// next request because PasswordHash mismatch is not the
+		// invalidation channel (only session deletion is); but
+		// pragmatically this is highly unlikely to fail in isolation
+		// — the DB write before just succeeded.
+		h.logger.Warn("changePassword: revoking other sessions failed (non-fatal)",
+			"err", err.Error(), "user_id", userID)
+	} else if revoked > 0 {
+		h.logger.Info("changePassword: other sessions revoked",
+			"user_id", userID, "revoked_count", revoked)
+	}
+
+	// Audit (post-success per D2). No BeforeJSON/AfterJSON: D3 forbids
+	// PasswordHash in audit content, and the only changed field is the
+	// hash. Action + ActorUserID + TargetID are sufficient.
+	h.appendAudit(r, audit.Event{
+		Action:     audit.ActionPasswordChanged,
+		TargetType: "user",
+		TargetID:   userID,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- GET /api/v1/audit ------------------------------------------------------
+
+// auditEventWire is the wire shape for one event returned by /audit.
+// Mirrors audit.Event but with camelCase JSON tags and parsed
+// JSON for Before/After fields (not escaped strings) per spec §4.10.
+type auditEventWire struct {
+	ID                    string          `json:"id"`
+	Timestamp             string          `json:"timestamp"`
+	ActorUserID           string          `json:"actorUserId,omitempty"`
+	ActorUsernameSnapshot string          `json:"actorUsernameSnapshot,omitempty"`
+	Action                string          `json:"action"`
+	TargetType            string          `json:"targetType,omitempty"`
+	TargetID              string          `json:"targetId,omitempty"`
+	BeforeJSON            json.RawMessage `json:"beforeJson"`
+	AfterJSON             json.RawMessage `json:"afterJson"`
+	Message               string          `json:"message,omitempty"`
+	IP                    string          `json:"ip,omitempty"`
+	UserAgent             string          `json:"userAgent,omitempty"`
+}
+
+// listAuditResponse wraps the events list with the pagination cursor.
+type listAuditResponse struct {
+	Events     []auditEventWire `json:"events"`
+	NextCursor string           `json:"nextCursor"`
+}
+
+// listAudit handles GET /api/v1/audit (spec §4.10). Group: hard-auth.
+//
+// Parses query params into audit.Filter, fetches via audit.Store.List,
+// converts to wire form (camelCase + parsed Before/After), and emits
+// an `audit_viewed` event capturing the filters used (spec §4.10 +
+// decision Q5 self-audit).
+func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	filter := audit.Filter{
+		ActorUserID: q.Get("actor_user_id"),
+		Action:      q.Get("action"),
+		TargetType:  q.Get("target_type"),
+		TargetID:    q.Get("target_id"),
+		Cursor:      q.Get("cursor"),
+	}
+
+	if s := q.Get("from"); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid 'from' timestamp")
+			return
+		}
+		filter.From = t
+	}
+	if s := q.Get("to"); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid 'to' timestamp")
+			return
+		}
+		filter.To = t
+	}
+	if s := q.Get("limit"); s != "" {
+		n, err := parseLimit(s)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid 'limit' parameter")
+			return
+		}
+		filter.Limit = n
+	}
+
+	events, nextCursor, err := h.audit.List(r.Context(), filter)
+	if err != nil {
+		// Distinguish invalid cursor (user error → 400) from other
+		// errors (server fault → 500).
+		if strings.Contains(err.Error(), "invalid cursor") {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		h.logger.Error("listAudit: List failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	wire := make([]auditEventWire, 0, len(events))
+	for _, e := range events {
+		wire = append(wire, auditEventWire{
+			ID:                    e.ID,
+			Timestamp:             e.Timestamp.UTC().Format(timestampFormat),
+			ActorUserID:           e.ActorUserID,
+			ActorUsernameSnapshot: e.ActorUsernameSnapshot,
+			Action:                e.Action,
+			TargetType:            e.TargetType,
+			TargetID:              e.TargetID,
+			BeforeJSON:            e.BeforeJSON,
+			AfterJSON:             e.AfterJSON,
+			Message:               e.Message,
+			IP:                    e.IP,
+			UserAgent:             e.UserAgent,
+		})
+	}
+
+	// Audit the audit query itself (self-audit per Q5).
+	h.appendAudit(r, audit.Event{
+		Action:  audit.ActionAuditViewed,
+		Message: filterToString(filter),
+	})
+
+	writeJSON(w, http.StatusOK, listAuditResponse{
+		Events:     wire,
+		NextCursor: nextCursor,
+	})
+}
+
+// parseLimit parses the limit query parameter and clamps it to the
+// permitted range. Returns an error if the string is not an integer.
+func parseLimit(s string) (int, error) {
+	var n int
+	if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
+		return 0, err
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("negative limit")
+	}
+	return n, nil
+}
+
+// filterToString produces a compact human-readable representation of
+// a Filter for inclusion in the audit_viewed event's Message field.
+// Example: "action=login_failure&from=2026-05-01"
+func filterToString(f audit.Filter) string {
+	parts := []string{}
+	if f.ActorUserID != "" {
+		parts = append(parts, "actor_user_id="+f.ActorUserID)
+	}
+	if f.Action != "" {
+		parts = append(parts, "action="+f.Action)
+	}
+	if f.TargetType != "" {
+		parts = append(parts, "target_type="+f.TargetType)
+	}
+	if f.TargetID != "" {
+		parts = append(parts, "target_id="+f.TargetID)
+	}
+	if !f.From.IsZero() {
+		parts = append(parts, "from="+f.From.UTC().Format(time.RFC3339))
+	}
+	if !f.To.IsZero() {
+		parts = append(parts, "to="+f.To.UTC().Format(time.RFC3339))
+	}
+	if f.Limit > 0 {
+		parts = append(parts, fmt.Sprintf("limit=%d", f.Limit))
+	}
+	if f.Cursor != "" {
+		parts = append(parts, "cursor=<set>")
+	}
+	return strings.Join(parts, "&")
 }

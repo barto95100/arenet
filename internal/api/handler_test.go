@@ -76,6 +76,41 @@ func (f *fakeAuditAppender) Append(ctx context.Context, evt audit.Event) error {
 	return f.nextErr
 }
 
+// List returns a copy of the captured events. Pagination is minimal
+// (Limit honored, Cursor ignored) — sufficient for handler tests
+// that don't exercise cursor behavior. Filter fields ActorUserID,
+// Action, TargetType, TargetID are applied; From/To are honored.
+func (f *fakeAuditAppender) List(_ context.Context, filter audit.Filter) ([]audit.Event, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]audit.Event, 0)
+	for _, e := range f.events {
+		if filter.ActorUserID != "" && e.ActorUserID != filter.ActorUserID {
+			continue
+		}
+		if filter.Action != "" && e.Action != filter.Action {
+			continue
+		}
+		if filter.TargetType != "" && e.TargetType != filter.TargetType {
+			continue
+		}
+		if filter.TargetID != "" && e.TargetID != filter.TargetID {
+			continue
+		}
+		if !filter.From.IsZero() && e.Timestamp.Before(filter.From) {
+			continue
+		}
+		if !filter.To.IsZero() && !e.Timestamp.Before(filter.To) {
+			continue
+		}
+		out = append(out, e)
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, "", nil
+}
+
 func (f *fakeAuditAppender) Events() []audit.Event {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -124,13 +159,70 @@ func newTestEnv(t *testing.T, dev bool) *testEnv {
 	ipExtractor, _ := auth.NewIPExtractor("")
 
 	h := NewHandler(store, caddy, auditAppender, userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder, dev, logger)
+	rawRouter := NewRouter(h, dev, ipExtractor)
+
+	// Step C tests predate hard-auth gating on /routes; they hit the
+	// router without a cookie. To avoid touching every Step C test,
+	// we wrap the router: if a request has no arenet_session cookie,
+	// we synthesize a freshly-bootstrapped admin session and inject it.
+	// Step D auth tests (e.g., TestLogin*, TestSetup_403*) make their
+	// own requests directly via the raw router via env.rawRouter or
+	// by setting the cookie explicitly.
+	autoAuth := newAutoAuthRouter(t, rawRouter, store, sessionStore, userStore)
 	return &testEnv{
-		router:     NewRouter(h, dev, ipExtractor),
+		router:     autoAuth,
 		store:      store,
 		caddy:      caddy,
 		audit:      auditAppender,
 		setupToken: setupTokenHolder,
 	}
+}
+
+// newAutoAuthRouter wraps the raw router so any request lacking the
+// arenet_session cookie gets one synthesized. The wrapper bootstraps
+// a real admin user + session on first use and reuses the same
+// session for subsequent unauthenticated requests within the same
+// test. This preserves the Step C contract "every test starts with
+// a working router" without forcing every test to bootstrap auth.
+func newAutoAuthRouter(t *testing.T, raw http.Handler, store *storage.Store, ss *auth.SessionStore, us *auth.UserStore) http.Handler {
+	t.Helper()
+	var (
+		ready         bool
+		sessionCookie string
+		mu            sync.Mutex
+	)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Step D auth subtree: do not auto-authenticate; tests there
+		// drive their own flow.
+		if strings.HasPrefix(r.URL.Path, "/api/v1/auth") {
+			raw.ServeHTTP(w, r)
+			return
+		}
+		if _, err := r.Cookie(sessionCookieName); err == nil {
+			raw.ServeHTTP(w, r)
+			return
+		}
+		// Lazy bootstrap on first call without cookie.
+		mu.Lock()
+		if !ready {
+			ctx := context.Background()
+			u, err := us.Create(ctx, "tester", "Tester", "test-password-15c-xx")
+			if err != nil {
+				mu.Unlock()
+				t.Fatalf("autoAuth: bootstrap user: %v", err)
+			}
+			sess, err := ss.Create(ctx, u.ID, false, "127.0.0.1", "test/1")
+			if err != nil {
+				mu.Unlock()
+				t.Fatalf("autoAuth: bootstrap session: %v", err)
+			}
+			sessionCookie = sess.ID
+			ready = true
+		}
+		mu.Unlock()
+		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionCookie})
+		raw.ServeHTTP(w, r)
+	})
 }
 
 func TestListRoutes_Empty(t *testing.T) {

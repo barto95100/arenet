@@ -66,21 +66,27 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor) chi.Router {
 				r.Post("/unlock", h.unlock)
 			})
 
-			// Hard-auth subgroup: /heartbeat, /sessions, DELETE /sessions/{id}.
+			// Hard-auth subgroup: /heartbeat, /sessions, DELETE /sessions/{id},
+			// /me/password.
 			r.Group(func(r chi.Router) {
 				r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.devMode))
 				r.Post("/heartbeat", h.heartbeat)
 				r.Get("/sessions", h.listSessions)
 				r.Delete("/sessions/{id}", h.deleteSession)
+				r.Post("/me/password", h.changePassword)
 			})
 		})
 
-		// Step C business endpoints — Commit C wires hard-auth here.
-		r.Get("/routes", h.listRoutes)
-		r.Post("/routes", h.createRoute)
-		r.Get("/routes/{id}", h.getRoute)
-		r.Put("/routes/{id}", h.updateRoute)
-		r.Delete("/routes/{id}", h.deleteRoute)
+		// Business endpoints — hard-auth gated per spec §5.2.
+		r.Group(func(r chi.Router) {
+			r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.devMode))
+			r.Get("/routes", h.listRoutes)
+			r.Post("/routes", h.createRoute)
+			r.Get("/routes/{id}", h.getRoute)
+			r.Put("/routes/{id}", h.updateRoute)
+			r.Delete("/routes/{id}", h.deleteRoute)
+			r.Get("/audit", h.listAudit)
+		})
 	})
 	return r
 }

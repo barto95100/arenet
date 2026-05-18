@@ -310,6 +310,63 @@ func TestSessionStore_DeleteAllForUser(t *testing.T) {
 	}
 }
 
+// TestSessionStore_DeleteAllForUserExcept verifies the password-change
+// flow contract (spec §4.9bis): keep one specific session, revoke
+// the rest. Sessions of OTHER users are untouched.
+func TestSessionStore_DeleteAllForUserExcept(t *testing.T) {
+	s := NewSessionStore(newTestDB(t))
+	ctx := context.Background()
+
+	// Alice: 3 sessions including "alice-current".
+	aliceCurrent, _ := s.Create(ctx, "alice", false, "", "")
+	aliceOther1, _ := s.Create(ctx, "alice", false, "", "")
+	aliceOther2, _ := s.Create(ctx, "alice", true, "", "") // remember-me
+	// Bob: 1 session, must NOT be touched.
+	bobSess, _ := s.Create(ctx, "bob", false, "", "")
+
+	deleted, err := s.DeleteAllForUserExcept(ctx, "alice", aliceCurrent.ID)
+	if err != nil {
+		t.Fatalf("DeleteAllForUserExcept: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2 (other1 + other2; not current)", deleted)
+	}
+
+	// aliceCurrent still exists.
+	if _, err := s.Get(ctx, aliceCurrent.ID); err != nil {
+		t.Errorf("alice-current was deleted: %v", err)
+	}
+	// aliceOther1, aliceOther2 are gone.
+	for _, id := range []string{aliceOther1.ID, aliceOther2.ID} {
+		if _, err := s.Get(ctx, id); !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("alice-other %s not deleted: err = %v", id, err)
+		}
+	}
+	// Bob untouched.
+	if _, err := s.Get(ctx, bobSess.ID); err != nil {
+		t.Errorf("bob session erroneously affected: %v", err)
+	}
+
+	// Empty userID is a no-op.
+	deleted, err = s.DeleteAllForUserExcept(ctx, "", aliceCurrent.ID)
+	if err != nil || deleted != 0 {
+		t.Errorf("empty userID: deleted=%d err=%v, want 0/nil", deleted, err)
+	}
+
+	// keepSessionID that doesn't exist: deletes all of that user's sessions.
+	// Bob has 1 session; passing a fake keep ID should delete it.
+	deleted, err = s.DeleteAllForUserExcept(ctx, "bob", "fake-id")
+	if err != nil {
+		t.Fatalf("DeleteAllForUserExcept bob: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1 (bob with fake keep ID)", deleted)
+	}
+	if _, err := s.Get(ctx, bobSess.ID); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("bob session not deleted")
+	}
+}
+
 func TestSessionStore_ListForUser(t *testing.T) {
 	s := NewSessionStore(newTestDB(t))
 	ctx := context.Background()
