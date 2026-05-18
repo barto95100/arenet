@@ -20,6 +20,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -33,25 +34,35 @@ type CaddyReloader interface {
 	ReloadFromStore(ctx context.Context) error
 }
 
-// Handler owns the storage + caddy reloader + logger and exposes the HTTP
-// handlers for the admin API.
+// AuditAppender is the subset of internal/audit the API depends on. Defined
+// here (consumer side, decision D4) so tests can inject a fake without
+// booting bbolt. *audit.Store naturally satisfies this interface.
+type AuditAppender interface {
+	Append(ctx context.Context, evt audit.Event) error
+}
+
+// Handler owns the storage + caddy reloader + audit appender + logger and
+// exposes the HTTP handlers for the admin API.
 type Handler struct {
 	store  *storage.Store
 	caddy  CaddyReloader
+	audit  AuditAppender
 	logger *slog.Logger
 }
 
 // NewHandler constructs a Handler. All arguments must be non-nil.
-func NewHandler(store *storage.Store, caddy CaddyReloader, logger *slog.Logger) *Handler {
+func NewHandler(store *storage.Store, caddy CaddyReloader, auditAppender AuditAppender, logger *slog.Logger) *Handler {
 	switch {
 	case store == nil:
 		panic("api.NewHandler: store is nil")
 	case caddy == nil:
 		panic("api.NewHandler: caddy is nil")
+	case auditAppender == nil:
+		panic("api.NewHandler: audit is nil")
 	case logger == nil:
 		panic("api.NewHandler: logger is nil")
 	}
-	return &Handler{store: store, caddy: caddy, logger: logger}
+	return &Handler{store: store, caddy: caddy, audit: auditAppender, logger: logger}
 }
 
 // routeRequest is the wire shape accepted by POST and PUT /routes. JSON tags

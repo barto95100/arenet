@@ -29,6 +29,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -59,10 +60,40 @@ func (f *fakeReloader) SetNextErr(err error) {
 	f.nextErr = err
 }
 
+// fakeAuditAppender records Append calls for assertion. Safe for
+// concurrent use; mirrors the interface defined in handler.go.
+type fakeAuditAppender struct {
+	mu      sync.Mutex
+	events  []audit.Event
+	nextErr error
+}
+
+func (f *fakeAuditAppender) Append(ctx context.Context, evt audit.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, evt)
+	return f.nextErr
+}
+
+func (f *fakeAuditAppender) Events() []audit.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]audit.Event, len(f.events))
+	copy(out, f.events)
+	return out
+}
+
+func (f *fakeAuditAppender) SetNextErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextErr = err
+}
+
 type testEnv struct {
 	router http.Handler
 	store  *storage.Store
 	caddy  *fakeReloader
+	audit  *fakeAuditAppender
 }
 
 func newTestEnv(t *testing.T, dev bool) *testEnv {
@@ -75,9 +106,10 @@ func newTestEnv(t *testing.T, dev bool) *testEnv {
 	t.Cleanup(func() { _ = store.Close() })
 
 	caddy := &fakeReloader{}
+	auditAppender := &fakeAuditAppender{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := NewHandler(store, caddy, logger)
-	return &testEnv{router: NewRouter(h, dev), store: store, caddy: caddy}
+	h := NewHandler(store, caddy, auditAppender, logger)
+	return &testEnv{router: NewRouter(h, dev), store: store, caddy: caddy, audit: auditAppender}
 }
 
 func TestListRoutes_Empty(t *testing.T) {

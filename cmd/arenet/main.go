@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/barto95100/arenet/internal/api"
+	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/web"
@@ -138,7 +139,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		}
 	}()
 
-	apiHandler := api.NewHandler(store, mgr, logger)
+	auditStore := audit.NewStore(store.DB())
+	apiHandler := api.NewHandler(store, mgr, auditStore, logger)
 	router := api.NewRouter(apiHandler, cfg.dev)
 
 	if cfg.dev {
