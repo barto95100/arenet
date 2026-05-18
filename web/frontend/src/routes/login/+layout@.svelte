@@ -1,0 +1,28 @@
+<!--
+  Arenet - Homelab-friendly reverse proxy with integrated security
+  Copyright (C) 2026  Ludovic Ramos
+  Licensed under the GNU AGPL v3 or later. See LICENSE.
+
+  Layout reset for /login (spec §6.9). The parent +layout.svelte mounts
+  the Sidebar + main chrome which is inappropriate for unauthenticated
+  pages. The `@` suffix on the filename instructs SvelteKit to attach
+  this layout directly to the root, bypassing the parent.
+
+  Once Chunk 7 introduces the auth-state-aware layout shell, this reset
+  may become redundant; for now it isolates /login cleanly.
+-->
+<script lang="ts">
+	import '../../app.css';
+	import favicon from '$lib/assets/favicon.svg';
+	import ToastContainer from '$lib/components/ToastContainer.svelte';
+
+	let { children } = $props();
+</script>
+
+<svelte:head>
+	<link rel="icon" href={favicon} />
+	<title>Sign in — Arenet</title>
+</svelte:head>
+
+{@render children?.()}
+<ToastContainer />

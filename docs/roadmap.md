@@ -12,6 +12,32 @@
 
 ## Phase 2 — Security & Operations
 
+### Test coverage debt (carried from Step D)
+
+- **Svelte component tests deferred to Phase 2**. Step D Chunk 6
+  shipped `/login`, `/setup`, `/audit` pages and the Sidebar
+  modification WITHOUT unit tests for the `.svelte` components.
+  Tests for `.svelte.ts` stores and `.ts` API clients ARE present
+  (~55 Vitest tests, ≥86% coverage on lib/api + lib/stores).
+- **Why deferred**: testing `.svelte` components needs
+  `@testing-library/svelte` (or `@vitest/browser`) + jsdom DOM
+  cleanup setup + render helpers. Non-trivial scaffold for the
+  small surface introduced in Step D pages.
+- **Phase 2 action**: install `@testing-library/svelte` +
+  `@testing-library/jest-dom`, add tests for:
+  - `/login/+page.svelte`: form validation, 401 inline error
+    mapping, rememberMe state, redirect on success.
+  - `/setup/+page.svelte`: error-message heuristic mapping
+    (username / password / displayName), 403 token error, 404
+    "admin exists" surface.
+  - `/audit/+page.svelte`: filter debounce, "Load more" cursor
+    pagination, empty/error states.
+  - `LockScreen.svelte`, `ChangePasswordModal.svelte` (Chunk 7).
+  - `Sidebar.svelte`: 5-item list, active-state highlighting,
+    disabled-state ARIA.
+- **Manual test coverage during Step D**: each chunk validated
+  via `npm run build` + manual interaction in `npm run dev`.
+
 ### Step F — Security & Threat dashboard
 - Page UI /security (currently disabled placeholder)
 - Threat dashboard:

@@ -13,7 +13,7 @@
 
 	let { collapsed = $bindable(false) }: Props = $props();
 
-	type IconName = 'routes' | 'topology' | 'security' | 'settings';
+	type IconName = 'routes' | 'audit' | 'topology' | 'security' | 'settings';
 
 	type Item = {
 		href: string;
@@ -23,8 +23,10 @@
 		tooltip?: string;
 	};
 
+	// Step D inserts Audit between Routes and Topology (spec §6.12).
 	const items: Item[] = [
 		{ href: '/routes', label: 'Routes', icon: 'routes' },
+		{ href: '/audit', label: 'Audit', icon: 'audit' },
 		{ href: '/topology', label: 'Topology', icon: 'topology', disabled: true, tooltip: 'Coming soon' },
 		{ href: '/security', label: 'Security', icon: 'security', disabled: true, tooltip: 'Coming soon' },
 		{ href: '/settings', label: 'Settings', icon: 'settings', disabled: true, tooltip: 'Coming soon' }
@@ -76,6 +78,9 @@
 						<circle cx="18" cy="19" r="3" />
 						<line x1="8.59" x2="15.42" y1="13.51" y2="17.49" />
 						<line x1="15.41" x2="8.59" y1="6.51" y2="10.49" />
+					{:else if item.icon === 'audit'}
+						<!-- Lucide: activity -->
+						<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.5.5 0 0 1-.96 0L9.24 2.18a.5.5 0 0 0-.96 0l-2.35 8.36A2 2 0 0 1 4 12H2" />
 					{:else if item.icon === 'topology'}
 						<!-- Lucide: workflow -->
 						<rect width="8" height="8" x="3" y="3" rx="2" />
