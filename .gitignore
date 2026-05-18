@@ -17,8 +17,7 @@ coverage.txt
 # Node / SvelteKit
 node_modules/
 /web/frontend/.svelte-kit/
-/web/frontend/build/*
-!/web/frontend/build/.gitkeep
+/web/frontend/build/
 /web/frontend/dist/
 /web/frontend/.env*
 !/web/frontend/.env.example
