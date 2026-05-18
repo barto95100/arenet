@@ -24,12 +24,22 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 
+	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
 // NewRouter builds the chi router for the admin API. When dev is true a
 // permissive CORS middleware is mounted for http://localhost:5173.
-func NewRouter(h *Handler, dev bool) chi.Router {
+//
+// Step D wires the IP extractor near the top (after Recoverer) so
+// every downstream handler reads the resolved IP from context. The
+// /api/v1/auth/* subtree is then rate-limited per-IP; business
+// endpoints under /api/v1 stay unrated (authenticated callers are
+// trusted per spec §5.2).
+func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor) chi.Router {
+	if ipExtractor == nil {
+		panic("api.NewRouter: ipExtractor is nil")
+	}
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Use(slogLogger(h.logger))
@@ -37,7 +47,18 @@ func NewRouter(h *Handler, dev bool) chi.Router {
 	if dev {
 		r.Use(devCORS("http://localhost:5173"))
 	}
+	r.Use(auth.IPExtractMiddleware(ipExtractor))
+
 	r.Route("/api/v1", func(r chi.Router) {
+		// Auth subtree: rate-limited per IP (spec §5.2).
+		r.Route("/auth", func(r chi.Router) {
+			r.Use(h.rateLimiter.Middleware())
+
+			// No-auth: /setup, /login (Commit B adds /login).
+			r.Post("/setup", h.setup)
+		})
+
+		// Step C business endpoints. Hard-auth wiring comes in Commit C.
 		r.Get("/routes", h.listRoutes)
 		r.Post("/routes", h.createRoute)
 		r.Get("/routes/{id}", h.getRoute)

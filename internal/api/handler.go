@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/barto95100/arenet/internal/audit"
+	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -41,17 +42,35 @@ type AuditAppender interface {
 	Append(ctx context.Context, evt audit.Event) error
 }
 
-// Handler owns the storage + caddy reloader + audit appender + logger and
-// exposes the HTTP handlers for the admin API.
+// Handler owns every dependency the admin API needs (storage, Caddy
+// reload, audit, auth stores, HIBP, rate limiter, setup token) and
+// exposes the HTTP handlers.
 type Handler struct {
-	store  *storage.Store
-	caddy  CaddyReloader
-	audit  AuditAppender
-	logger *slog.Logger
+	store       *storage.Store
+	caddy       CaddyReloader
+	audit       AuditAppender
+	users       *auth.UserStore
+	sessions    *auth.SessionStore
+	hibp        *auth.HIBPClient
+	rateLimiter *auth.RateLimiter
+	setupToken  *SetupTokenHolder
+	devMode     bool
+	logger      *slog.Logger
 }
 
-// NewHandler constructs a Handler. All arguments must be non-nil.
-func NewHandler(store *storage.Store, caddy CaddyReloader, auditAppender AuditAppender, logger *slog.Logger) *Handler {
+// NewHandler constructs a Handler. All non-bool arguments must be non-nil.
+func NewHandler(
+	store *storage.Store,
+	caddy CaddyReloader,
+	auditAppender AuditAppender,
+	users *auth.UserStore,
+	sessions *auth.SessionStore,
+	hibp *auth.HIBPClient,
+	rateLimiter *auth.RateLimiter,
+	setupToken *SetupTokenHolder,
+	devMode bool,
+	logger *slog.Logger,
+) *Handler {
 	switch {
 	case store == nil:
 		panic("api.NewHandler: store is nil")
@@ -59,10 +78,31 @@ func NewHandler(store *storage.Store, caddy CaddyReloader, auditAppender AuditAp
 		panic("api.NewHandler: caddy is nil")
 	case auditAppender == nil:
 		panic("api.NewHandler: audit is nil")
+	case users == nil:
+		panic("api.NewHandler: users is nil")
+	case sessions == nil:
+		panic("api.NewHandler: sessions is nil")
+	case hibp == nil:
+		panic("api.NewHandler: hibp is nil")
+	case rateLimiter == nil:
+		panic("api.NewHandler: rateLimiter is nil")
+	case setupToken == nil:
+		panic("api.NewHandler: setupToken is nil")
 	case logger == nil:
 		panic("api.NewHandler: logger is nil")
 	}
-	return &Handler{store: store, caddy: caddy, audit: auditAppender, logger: logger}
+	return &Handler{
+		store:       store,
+		caddy:       caddy,
+		audit:       auditAppender,
+		users:       users,
+		sessions:    sessions,
+		hibp:        hibp,
+		rateLimiter: rateLimiter,
+		setupToken:  setupToken,
+		devMode:     devMode,
+		logger:      logger,
+	}
 }
 
 // routeRequest is the wire shape accepted by POST and PUT /routes. JSON tags

@@ -33,6 +33,7 @@ import (
 
 	"github.com/barto95100/arenet/internal/api"
 	"github.com/barto95100/arenet/internal/audit"
+	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/web"
@@ -140,8 +141,40 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	}()
 
 	auditStore := audit.NewStore(store.DB())
-	apiHandler := api.NewHandler(store, mgr, auditStore, logger)
-	router := api.NewRouter(apiHandler, cfg.dev)
+	userStore := auth.NewUserStore(store.DB())
+	sessionStore := auth.NewSessionStore(store.DB())
+	hibpClient := auth.NewHIBPClient()
+	rateLimiter := auth.NewRateLimiter(logger)
+	rateLimiter.Start(ctx)
+	setupTokenHolder := api.NewSetupTokenHolder()
+
+	ipExtractor, err := auth.NewIPExtractor(os.Getenv("ARENET_TRUSTED_PROXIES"))
+	if err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+	if cidrs := ipExtractor.TrustedCIDRs(); len(cidrs) > 0 {
+		logger.Info("auth: trusted proxies configured", "count", len(cidrs), "cidrs", cidrs)
+	} else {
+		logger.Info("auth: no trusted proxies configured (X-Forwarded-For will be ignored)")
+	}
+
+	// Generate setup token if the users bucket is empty. The token
+	// is logged at Info so the operator can paste it into /setup.
+	userCount, err := userStore.Count(ctx)
+	if err != nil {
+		return fmt.Errorf("auth: count users: %w", err)
+	}
+	if userCount == 0 {
+		tok := setupTokenHolder.Generate()
+		logger.Info("Setup token: " + tok)
+	}
+
+	apiHandler := api.NewHandler(
+		store, mgr, auditStore,
+		userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder,
+		cfg.dev, logger,
+	)
+	router := api.NewRouter(apiHandler, cfg.dev, ipExtractor)
 
 	if cfg.dev {
 		router.Get("/", devLandingHandler(cfg.adminPort))

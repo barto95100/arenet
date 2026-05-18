@@ -30,6 +30,7 @@ import (
 	"testing"
 
 	"github.com/barto95100/arenet/internal/audit"
+	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -90,10 +91,11 @@ func (f *fakeAuditAppender) SetNextErr(err error) {
 }
 
 type testEnv struct {
-	router http.Handler
-	store  *storage.Store
-	caddy  *fakeReloader
-	audit  *fakeAuditAppender
+	router     http.Handler
+	store      *storage.Store
+	caddy      *fakeReloader
+	audit      *fakeAuditAppender
+	setupToken *SetupTokenHolder
 }
 
 func newTestEnv(t *testing.T, dev bool) *testEnv {
@@ -108,8 +110,27 @@ func newTestEnv(t *testing.T, dev bool) *testEnv {
 	caddy := &fakeReloader{}
 	auditAppender := &fakeAuditAppender{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := NewHandler(store, caddy, auditAppender, logger)
-	return &testEnv{router: NewRouter(h, dev), store: store, caddy: caddy, audit: auditAppender}
+
+	// Step D dependencies. Tests that don't exercise auth flows
+	// receive functional but defaulted instances. HIBP is disabled
+	// via env var so no network calls are made; the env scope is
+	// limited to this t via t.Setenv.
+	t.Setenv("ARENET_HIBP_DISABLED", "true")
+	userStore := auth.NewUserStore(store.DB())
+	sessionStore := auth.NewSessionStore(store.DB())
+	hibpClient := auth.NewHIBPClient()
+	rateLimiter := auth.NewRateLimiter(logger)
+	setupTokenHolder := NewSetupTokenHolder()
+	ipExtractor, _ := auth.NewIPExtractor("")
+
+	h := NewHandler(store, caddy, auditAppender, userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder, dev, logger)
+	return &testEnv{
+		router:     NewRouter(h, dev, ipExtractor),
+		store:      store,
+		caddy:      caddy,
+		audit:      auditAppender,
+		setupToken: setupTokenHolder,
+	}
 }
 
 func TestListRoutes_Empty(t *testing.T) {

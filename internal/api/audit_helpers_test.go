@@ -33,6 +33,22 @@ import (
 	"github.com/barto95100/arenet/internal/storage"
 )
 
+// newAuthDepsForTest builds the auth dependencies needed by NewHandler
+// in audit_helpers tests. These tests do not exercise auth flows, so
+// the returned objects are functional but not used by any code path
+// the tests trigger.
+func newAuthDepsForTest(t *testing.T, store *storage.Store, logger *slog.Logger) (
+	*auth.UserStore, *auth.SessionStore, *auth.HIBPClient, *auth.RateLimiter, *SetupTokenHolder,
+) {
+	t.Helper()
+	t.Setenv("ARENET_HIBP_DISABLED", "true")
+	return auth.NewUserStore(store.DB()),
+		auth.NewSessionStore(store.DB()),
+		auth.NewHIBPClient(),
+		auth.NewRateLimiter(logger),
+		NewSetupTokenHolder()
+}
+
 // newTestHandler constructs a Handler with the supplied audit appender
 // and a logger writing into the provided buffer (for log assertions).
 func newTestHandler(t *testing.T, auditAppender AuditAppender, logBuf io.Writer) *Handler {
@@ -44,7 +60,8 @@ func newTestHandler(t *testing.T, auditAppender AuditAppender, logBuf io.Writer)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	return NewHandler(store, &fakeReloader{}, auditAppender, logger)
+	users, sessions, hibp, rl, setupTok := newAuthDepsForTest(t, store, logger)
+	return NewHandler(store, &fakeReloader{}, auditAppender, users, sessions, hibp, rl, setupTok, false, logger)
 }
 
 // reqWithAuth returns a fake request with auth context populated.
