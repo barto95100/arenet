@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 
+	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -173,6 +174,18 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Emit route_created audit event AFTER the Caddy reload succeeds
+	// (Plan §4.4 / D2). On reload failure the early return above skips
+	// this emission. storage.Route holds no secrets (no PasswordHash,
+	// no tokens) so passing it through mustMarshalForAudit is safe
+	// per D3.
+	h.appendAudit(r, audit.Event{
+		Action:     audit.ActionRouteCreated,
+		TargetType: "route",
+		TargetID:   created.ID,
+		AfterJSON:  mustMarshalForAudit(created),
+	})
+
 	writeJSON(w, http.StatusCreated, toResponse(created))
 }
 
@@ -245,6 +258,17 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Emit route_updated audit event AFTER the Caddy reload succeeds
+	// (Plan §4.4 / D2). storage.Route holds no secrets per D3, so
+	// passing both Before and After through mustMarshalForAudit is safe.
+	h.appendAudit(r, audit.Event{
+		Action:     audit.ActionRouteUpdated,
+		TargetType: "route",
+		TargetID:   id,
+		BeforeJSON: mustMarshalForAudit(previous),
+		AfterJSON:  mustMarshalForAudit(updated),
+	})
+
 	writeJSON(w, http.StatusOK, toResponse(updated))
 }
 
@@ -275,6 +299,17 @@ func (h *Handler) deleteRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
 		return
 	}
+
+	// Emit route_deleted audit event AFTER the Caddy reload succeeds
+	// (Plan §4.4 / D2). BeforeJSON captures the deleted route's last
+	// state; AfterJSON is intentionally nil. storage.Route holds no
+	// secrets per D3.
+	h.appendAudit(r, audit.Event{
+		Action:     audit.ActionRouteDeleted,
+		TargetType: "route",
+		TargetID:   id,
+		BeforeJSON: mustMarshalForAudit(previous),
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

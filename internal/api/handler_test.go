@@ -586,3 +586,197 @@ func TestCORS_DevMode_ActualRequest(t *testing.T) {
 		t.Errorf("Max-Age=%q on actual response, want 3600", got)
 	}
 }
+
+// --- Audit emission on /routes mutations (spec §4 + D7 + Plan §4.4) -------
+//
+// The autoAuth wrapper bootstraps a `tester` user and adds a logout to
+// the audit log for any subsequent /auth/logout call. Mutation tests
+// below filter env.audit.Events() by Action prefix "route_" so they
+// don't accidentally match other events emitted by middleware or by
+// other handlers.
+
+// routeEvents returns the subset of recorded audit events whose Action
+// is one of route_created / route_updated / route_deleted.
+func routeEvents(events []audit.Event) []audit.Event {
+	out := make([]audit.Event, 0)
+	for _, e := range events {
+		switch e.Action {
+		case audit.ActionRouteCreated, audit.ActionRouteUpdated, audit.ActionRouteDeleted:
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func TestCreateRoute_EmitsAuditEvent(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"audit-create.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	events := routeEvents(env.audit.Events())
+	if len(events) != 1 {
+		t.Fatalf("route audit events = %d, want 1: %+v", len(events), events)
+	}
+	ev := events[0]
+	if ev.Action != audit.ActionRouteCreated {
+		t.Errorf("Action=%q want %q", ev.Action, audit.ActionRouteCreated)
+	}
+	if ev.TargetType != "route" {
+		t.Errorf("TargetType=%q want %q", ev.TargetType, "route")
+	}
+	// Read back the stored route to compare TargetID with the persisted id.
+	stored, _ := env.store.ListRoutes(context.Background())
+	if len(stored) != 1 {
+		t.Fatalf("expected 1 stored route, got %d", len(stored))
+	}
+	if ev.TargetID != stored[0].ID {
+		t.Errorf("TargetID=%q want %q", ev.TargetID, stored[0].ID)
+	}
+	if ev.BeforeJSON != nil {
+		t.Errorf("BeforeJSON should be nil on create, got %s", ev.BeforeJSON)
+	}
+	if len(ev.AfterJSON) == 0 {
+		t.Fatalf("AfterJSON should be populated on create")
+	}
+	if !strings.Contains(string(ev.AfterJSON), "audit-create.local") {
+		t.Errorf("AfterJSON missing host: %s", ev.AfterJSON)
+	}
+}
+
+func TestUpdateRoute_EmitsAuditEvent(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{
+		Host: "audit-update.local", UpstreamURL: "http://old:1",
+	})
+
+	body := `{"host":"audit-update.local","upstreamUrl":"http://new:1","tlsEnabled":true,"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	events := routeEvents(env.audit.Events())
+	if len(events) != 1 {
+		t.Fatalf("route audit events = %d, want 1: %+v", len(events), events)
+	}
+	ev := events[0]
+	if ev.Action != audit.ActionRouteUpdated {
+		t.Errorf("Action=%q want %q", ev.Action, audit.ActionRouteUpdated)
+	}
+	if ev.TargetID != created.ID {
+		t.Errorf("TargetID=%q want %q", ev.TargetID, created.ID)
+	}
+	if len(ev.BeforeJSON) == 0 || !strings.Contains(string(ev.BeforeJSON), "http://old:1") {
+		t.Errorf("BeforeJSON missing previous upstream: %s", ev.BeforeJSON)
+	}
+	if len(ev.AfterJSON) == 0 || !strings.Contains(string(ev.AfterJSON), "http://new:1") {
+		t.Errorf("AfterJSON missing new upstream: %s", ev.AfterJSON)
+	}
+}
+
+func TestDeleteRoute_EmitsAuditEvent(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{
+		Host: "audit-delete.local", UpstreamURL: "http://u:1",
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/routes/"+created.ID, nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	events := routeEvents(env.audit.Events())
+	if len(events) != 1 {
+		t.Fatalf("route audit events = %d, want 1: %+v", len(events), events)
+	}
+	ev := events[0]
+	if ev.Action != audit.ActionRouteDeleted {
+		t.Errorf("Action=%q want %q", ev.Action, audit.ActionRouteDeleted)
+	}
+	if ev.TargetID != created.ID {
+		t.Errorf("TargetID=%q want %q", ev.TargetID, created.ID)
+	}
+	if len(ev.BeforeJSON) == 0 || !strings.Contains(string(ev.BeforeJSON), "audit-delete.local") {
+		t.Errorf("BeforeJSON missing deleted host: %s", ev.BeforeJSON)
+	}
+	if ev.AfterJSON != nil {
+		t.Errorf("AfterJSON should be nil on delete, got %s", ev.AfterJSON)
+	}
+}
+
+// The next three tests guard the D2 / Plan §4.4 invariant: when a
+// Caddy reload fails, the storage rollback runs AND no audit event is
+// emitted. The structural placement of appendAudit AFTER the reload
+// branch is what makes this hold; this test catches any regression
+// that moves the emission above the reload check.
+
+func TestCreateRoute_ReloadFails_NoAudit(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.caddy.SetNextErr(errors.New("simulated reload failure"))
+
+	body := `{"host":"noaudit-create.local","upstreamUrl":"http://x:1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if events := routeEvents(env.audit.Events()); len(events) != 0 {
+		t.Errorf("expected 0 route audit events on reload failure, got %d: %+v", len(events), events)
+	}
+}
+
+func TestUpdateRoute_ReloadFails_NoAudit(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{
+		Host: "noaudit-update.local", UpstreamURL: "http://old:1",
+	})
+
+	env.caddy.SetNextErr(errors.New("simulated reload failure"))
+	body := `{"host":"noaudit-update.local","upstreamUrl":"http://new:1"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if events := routeEvents(env.audit.Events()); len(events) != 0 {
+		t.Errorf("expected 0 route audit events on reload failure, got %d: %+v", len(events), events)
+	}
+}
+
+func TestDeleteRoute_ReloadFails_NoAudit(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{
+		Host: "noaudit-delete.local", UpstreamURL: "http://u:1",
+	})
+
+	env.caddy.SetNextErr(errors.New("simulated reload failure"))
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/routes/"+created.ID, nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if events := routeEvents(env.audit.Events()); len(events) != 0 {
+		t.Errorf("expected 0 route audit events on reload failure, got %d: %+v", len(events), events)
+	}
+}
