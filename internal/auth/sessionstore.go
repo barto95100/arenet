@@ -413,3 +413,31 @@ func generateSessionID() (string, error) {
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
+
+// PutForTest writes sess into the store verbatim, bypassing all
+// validation. Used exclusively by tests that need to construct
+// pathological session states (e.g., backdated LastActivity to
+// simulate idle-lock for HardAuthMiddleware tests). The "ForTest"
+// suffix is the package convention; production callers must use
+// Create / Touch / Delete.
+func (s *SessionStore) PutForTest(ctx context.Context, sess Session) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+	if sess.ID == "" {
+		return fmt.Errorf("auth: session id must not be empty")
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(sessionsBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", sessionsBucketName)
+		}
+		buf, err := json.Marshal(sess)
+		if err != nil {
+			return fmt.Errorf("auth: marshal session: %w", err)
+		}
+		return b.Put([]byte(sess.ID), buf)
+	})
+}

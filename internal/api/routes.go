@@ -37,7 +37,12 @@ import (
 // /api/v1/auth/* subtree is then rate-limited per-IP; business
 // endpoints under /api/v1 stay unrated (authenticated callers are
 // trusted per spec §5.2).
-func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor) chi.Router {
+//
+// Step E adds the optional ws handler: when non-nil, it is mounted
+// at GET /api/v1/ws/topology inside the hard-auth subgroup
+// (spec §5.1 + §7.1). Tests that do not exercise the topology
+// endpoint pass nil — the route is then simply not registered.
+func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopologyHandler) chi.Router {
 	if ipExtractor == nil {
 		panic("api.NewRouter: ipExtractor is nil")
 	}
@@ -87,6 +92,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor) chi.Router {
 			r.Put("/routes/{id}", h.updateRoute)
 			r.Delete("/routes/{id}", h.deleteRoute)
 			r.Get("/audit", h.listAudit)
+			// Step E: live-metrics WebSocket. HardAuthMiddleware
+			// rejects the handshake (401 / 403) BEFORE the upgrade,
+			// so an unauthorized peer never sees an open WS frame
+			// — spec §5.1 + §7.1.
+			if ws != nil {
+				r.Get("/ws/topology", ws.ServeHTTP)
+			}
 		})
 	})
 	return r

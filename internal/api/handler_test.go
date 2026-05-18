@@ -159,7 +159,7 @@ func newTestEnv(t *testing.T, dev bool) *testEnv {
 	ipExtractor, _ := auth.NewIPExtractor("")
 
 	h := NewHandler(store, caddy, auditAppender, userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder, dev, logger)
-	rawRouter := NewRouter(h, dev, ipExtractor)
+	rawRouter := NewRouter(h, dev, ipExtractor, nil /* ws topology handler not exercised here */)
 
 	// Step C tests predate hard-auth gating on /routes; they hit the
 	// router without a cookie. To avoid touching every Step C test,

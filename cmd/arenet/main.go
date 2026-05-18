@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -214,7 +215,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder,
 		cfg.dev, logger,
 	)
-	router := api.NewRouter(apiHandler, cfg.dev, ipExtractor)
+	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.dev, logger)
+	router := api.NewRouter(apiHandler, cfg.dev, ipExtractor, wsTopologyHandler)
 
 	if cfg.dev {
 		router.Get("/", devLandingHandler(cfg.adminPort))
@@ -231,6 +233,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		// BaseContext propagates the process-level ctx (cancelled by
+		// SIGINT / SIGTERM) into each request's context. Hijacked
+		// connections — like the Step E WebSocket at
+		// /api/v1/ws/topology — observe ctx.Done() and emit a clean
+		// CloseGoingAway (code 1001) frame on shutdown. Without
+		// BaseContext, http.Server.Shutdown does NOT cancel hijacked
+		// requests, so the WS would only see an abrupt TCP close
+		// (1006) at the grace deadline — violating spec §5.4.
+		BaseContext: func(_ net.Listener) context.Context { return ctx },
 	}
 	serverErr := make(chan error, 1)
 	go func() {

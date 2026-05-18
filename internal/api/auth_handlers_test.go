@@ -59,7 +59,7 @@ func setupTestEnv(t *testing.T) (*testEnv, string) {
 	ipExtractor, _ := auth.NewIPExtractor("")
 
 	h := NewHandler(store, caddy, auditAppender, userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder, false, logger)
-	router := NewRouter(h, false, ipExtractor)
+	router := NewRouter(h, false, ipExtractor, nil)
 
 	return &testEnv{
 		router:     router,
@@ -170,7 +170,7 @@ func TestSetup_DevMode_OmitsSecure(t *testing.T) {
 	ipExtractor, _ := auth.NewIPExtractor("")
 
 	h := NewHandler(store, caddy, auditAppender, userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder, true /* devMode */, logger)
-	router := NewRouter(h, true, ipExtractor)
+	router := NewRouter(h, true, ipExtractor, nil)
 
 	rec := postJSON(t, router, "/api/v1/auth/setup", map[string]string{
 		"setupToken": token,
@@ -453,7 +453,7 @@ func TestSetup_ClientIPCapturedInSession(t *testing.T) {
 	ipExtractor, _ := auth.NewIPExtractor("")
 
 	h := NewHandler(store, &fakeReloader{}, &fakeAuditAppender{}, userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder, false, logger)
-	router := NewRouter(h, false, ipExtractor)
+	router := NewRouter(h, false, ipExtractor, nil)
 
 	body, _ := json.Marshal(map[string]string{
 		"setupToken": token,

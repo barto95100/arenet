@@ -37,4 +37,10 @@ const (
 	// Publish cannot enqueue (channel full). A persistently slow client
 	// produces at most 60 log lines/hour (spec §5.6).
 	DropLogInterval = 1 * time.Minute
+
+	// WSWriteDeadline bounds each WebSocket write. A slow client that
+	// cannot drain its socket within this deadline gets disconnected
+	// (spec §5.4 + §8 wsWriteDeadlineMs). 1 s is generous enough for a
+	// healthy LAN client but short enough to surface real backpressure.
+	WSWriteDeadline = 1 * time.Second
 )
