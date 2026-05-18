@@ -10,12 +10,19 @@
 		label?: string;
 		error?: string;
 		value?: string;
+		/**
+		 * Optional bindable reference to the underlying <input> element.
+		 * Lets callers manage focus (e.g., LockScreen.onMount → focus())
+		 * without reaching into the DOM via querySelector.
+		 */
+		element?: HTMLInputElement;
 	}
 
 	let {
 		label,
 		error,
 		value = $bindable(''),
+		element = $bindable(),
 		type = 'text',
 		id = `input-${Math.random().toString(36).slice(2, 9)}`,
 		placeholder = '',
@@ -28,6 +35,7 @@
 		<label for={id} class="text-sm font-medium text-secondary">{label}</label>
 	{/if}
 	<input
+		bind:this={element}
 		{id}
 		{type}
 		{placeholder}
