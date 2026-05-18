@@ -78,7 +78,8 @@
 	--status-up: #00ff88;
 	--status-warn: #ffaa00;
 	--status-down: #ff4757;
-	--status-info: #a78bfa;
+	--status-info: #a78bfa; /* violet — used by spec §9.4 for HIBP category badges */
+	--status-meta: #94a3b8; /* slate — used by spec §9.4 for the Meta (audit_viewed) category */
 }
 
 html,
