@@ -4,6 +4,12 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<!-- Theme bootstrap (Step F §4.3). MUST run before the first
+		     paint and before %sveltekit.head% so the user never sees
+		     a flash of the wrong theme. Priority: cookie > localStorage
+		     > 'dark' default. Empty / unknown values fall back to 'dark'
+		     via the explicit `=== 'light'` guard (§4.2). -->
+		<script>(function(){var d=document.documentElement,m=document.cookie.match(/arenet_theme=(dark|light)/);if(m){d.dataset.theme=m[1];return}try{var l=localStorage.getItem('arenet_theme');if(l==='dark'||l==='light'){d.dataset.theme=l;return}}catch(_){}d.dataset.theme='dark'})();</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
