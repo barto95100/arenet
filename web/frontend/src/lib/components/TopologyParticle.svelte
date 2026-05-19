@@ -34,11 +34,31 @@
 	let startedAt = 0;
 	let rafId: number | null = null;
 	let totalLength = 0;
+	let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+	let completed = false;
+
+	function complete(): void {
+		// Idempotent — RAF path and fallback timer may both race to
+		// signal completion (e.g., when the tab becomes visible and
+		// the throttled RAF catches up around the same time the
+		// fallback timer fires).
+		if (completed) return;
+		completed = true;
+		visible = false;
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+			rafId = null;
+		}
+		if (fallbackTimer !== null) {
+			clearTimeout(fallbackTimer);
+			fallbackTimer = null;
+		}
+		onComplete();
+	}
 
 	function step(now: number): void {
 		if (!pathRef || totalLength === 0) {
-			rafId = null;
-			onComplete();
+			complete();
 			return;
 		}
 		const elapsed = now - startedAt;
@@ -47,9 +67,7 @@
 		x = point.x;
 		y = point.y;
 		if (progress >= 1) {
-			visible = false;
-			rafId = null;
-			onComplete();
+			complete();
 			return;
 		}
 		rafId = requestAnimationFrame(step);
@@ -57,25 +75,38 @@
 
 	onMount(() => {
 		if (!pathRef) {
-			onComplete();
+			complete();
 			return;
 		}
 		try {
 			totalLength = pathRef.getTotalLength();
 		} catch {
 			// Path not yet laid out (rare race in StrictMode); skip.
-			onComplete();
+			complete();
 			return;
 		}
 		visible = true;
 		startedAt = performance.now();
 		rafId = requestAnimationFrame(step);
+		// Fallback timer: guarantees onComplete fires even if the
+		// browser throttles RAF (background tab, sleep, etc.). The
+		// extra 500 ms gives a healthy frame a chance to finish
+		// naturally; only kicks in when RAF is genuinely stuck.
+		// Without this, throttled RAF + a still-running spawn timer
+		// in the parent edge let particles accumulate indefinitely
+		// — observed during the v0.3.0-step-e smoke (9000+ circles
+		// after 5 s).
+		fallbackTimer = setTimeout(complete, PARTICLE_TRAVEL_MS + 500);
 	});
 
 	onDestroy(() => {
 		if (rafId !== null) {
 			cancelAnimationFrame(rafId);
 			rafId = null;
+		}
+		if (fallbackTimer !== null) {
+			clearTimeout(fallbackTimer);
+			fallbackTimer = null;
 		}
 	});
 </script>

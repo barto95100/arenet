@@ -90,8 +90,31 @@
 		// navigations until full page reload.
 	});
 
-	const routesList = $derived(topology.list());
-	const totalReqPerSec = $derived(topology.totalReqPerSec());
+	// EXPLICIT VERSION COUNTER subscription.
+	//
+	// Reading `topology.routes.values()` alone (whether via getter
+	// or inline iteration) was empirically not enough to invalidate
+	// these `$derived` blocks across the module boundary — see the
+	// long doc-comment in topology.svelte.ts for the full saga.
+	//
+	// Pairing each read with `void topology.version` subscribes the
+	// $derived to a plain $state(number) that IS reliably reactive
+	// cross-module. Every mutator on the store bumps `version`, the
+	// $derived invalidates, the closure re-runs, and the iteration
+	// reads the now-current Map contents.
+	//
+	// The `void` cast discards the value — we only need the
+	// subscription side-effect.
+	const routesList = $derived.by(() => {
+		void topology.version;
+		return Array.from(topology.routes.values());
+	});
+	const totalReqPerSec = $derived.by(() => {
+		void topology.version;
+		let total = 0;
+		for (const r of topology.routes.values()) total += r.reqPerSec;
+		return total;
+	});
 	const selectedRoute = $derived(
 		selectedRouteId !== null ? topology.get(selectedRouteId) : null
 	);

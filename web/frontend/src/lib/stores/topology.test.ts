@@ -298,3 +298,91 @@ describe('SPIKE_THRESHOLD boundary', () => {
 		expect(isErrorSpike(state)).toBe(false);
 	});
 });
+
+// --- TopologyStore.apply integration (smoke-bug regression guard) ---------
+//
+// The smoke session caught a bug where /topology kept rendering its
+// empty state even though WS frames arrived: `routes = $state(new Map())`
+// is not reactive on .set/.delete (Svelte 5 limitation; the rune
+// only tracks reassignment, not Map mutations).
+//
+// These tests guard the fix (SvelteMap from svelte/reactivity) by
+// hitting the singleton's apply() and asserting list() reflects the
+// update — which is exactly what the page does on every tick.
+
+describe('TopologyStore.apply (singleton)', () => {
+	it('makes new routes visible via list() after apply()', async () => {
+		const { topology } = await import('./topology.svelte');
+		topology.clear();
+
+		topology.apply(
+			snap([
+				{
+					id: 'r1',
+					host: 'app.example',
+					upstream: 'http://10.0.0.1:80',
+					reqs: 5,
+					errs: 0,
+					reqPerSec: 5,
+					errRate5xx: 0
+				}
+			])
+		);
+
+		expect(topology.size).toBe(1);
+		const list = topology.list;
+		expect(list).toHaveLength(1);
+		expect(list[0].id).toBe('r1');
+		expect(list[0].host).toBe('app.example');
+		expect(list[0].reqPerSec).toBe(5);
+	});
+
+	it('updates existing routes on subsequent apply() calls', async () => {
+		const { topology } = await import('./topology.svelte');
+		topology.clear();
+
+		topology.apply(snap([{
+			id: 'r1', host: 'h', upstream: 'u',
+			reqs: 1, errs: 0, reqPerSec: 1, errRate5xx: 0
+		}]));
+		topology.apply(snap([{
+			id: 'r1', host: 'h', upstream: 'u',
+			reqs: 10, errs: 1, reqPerSec: 10, errRate5xx: 0.1
+		}]));
+
+		expect(topology.size).toBe(1);
+		const r = topology.get('r1');
+		expect(r?.reqPerSec).toBe(10);
+		expect(r?.errRate5xx).toBeCloseTo(0.1);
+		// History should hold both ticks.
+		expect(r?.history).toHaveLength(2);
+	});
+
+	it('totalReqPerSec sums across routes after apply()', async () => {
+		const { topology } = await import('./topology.svelte');
+		topology.clear();
+
+		topology.apply(snap([
+			{ id: 'r1', host: 'a', upstream: 'u', reqs: 3, errs: 0, reqPerSec: 3, errRate5xx: 0 },
+			{ id: 'r2', host: 'b', upstream: 'u', reqs: 7, errs: 0, reqPerSec: 7, errRate5xx: 0 }
+		]));
+
+		expect(topology.totalReqPerSec).toBe(10);
+	});
+
+	it('clear() empties the store', async () => {
+		const { topology } = await import('./topology.svelte');
+		topology.clear();
+		topology.apply(snap([{
+			id: 'r1', host: 'h', upstream: 'u',
+			reqs: 1, errs: 0, reqPerSec: 1, errRate5xx: 0
+		}]));
+		expect(topology.size).toBe(1);
+
+		topology.clear();
+		expect(topology.size).toBe(0);
+		expect(topology.list).toEqual([]);
+		expect(topology.connectionStatus).toBe('disconnected');
+		expect(topology.lastTickAt).toBeNull();
+	});
+});

@@ -13,7 +13,7 @@
   text label instead (spec §6.6).
 -->
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import TopologyParticle from './TopologyParticle.svelte';
 	import {
 		COLOR_ERROR_THRESHOLD,
@@ -32,6 +32,15 @@
 	}
 
 	let { x1, y1, x2, y2, reqPerSec, errRate5xx, reducedMotion }: Props = $props();
+
+	// Hard cap on in-flight particles per edge. Defense against
+	// pathological accumulation when onComplete is delayed (RAF
+	// throttling in background tabs, browser sleep, etc.) — the
+	// smoke session for v0.3.0-step-e observed 9000+ circles after
+	// 5 s without load when the spawn timer continued firing but
+	// the RAF that drives onComplete had been throttled by the
+	// browser. A simple max prevents unbounded DOM growth.
+	const MAX_PARTICLES_PER_EDGE = 100;
 
 	// Bezier control points: horizontal pull toward the column gap.
 	const cpDx = $derived(Math.max((x2 - x1) * 0.5, 40));
@@ -58,6 +67,9 @@
 	let spawnTimer: ReturnType<typeof setInterval> | null = null;
 
 	function spawnOne(): void {
+		// Safety cap: if particles aren't completing (RAF throttled,
+		// tab hidden, etc.), stop spawning rather than leaking.
+		if (particles.length >= MAX_PARTICLES_PER_EDGE) return;
 		const id = nextId++;
 		particles = [...particles, { id, color }];
 	}
@@ -72,6 +84,10 @@
 			spawnTimer = null;
 		}
 		if (reducedMotion) return;
+		// Skip spawning while the tab is hidden — the RAF that drives
+		// particle completion is also throttled there, so spawning
+		// would just inflate the cap with stuck circles.
+		if (typeof document !== 'undefined' && document.hidden) return;
 		const rate = Math.max(0, Math.min(reqPerSec, PARTICLE_DENSITY_CAP));
 		if (rate <= 0) return;
 		const intervalMs = 1000 / rate;
@@ -86,7 +102,16 @@
 		restartSpawnTimer();
 	});
 
+	onMount(() => {
+		if (typeof document !== 'undefined') {
+			document.addEventListener('visibilitychange', restartSpawnTimer);
+		}
+	});
+
 	onDestroy(() => {
+		if (typeof document !== 'undefined') {
+			document.removeEventListener('visibilitychange', restartSpawnTimer);
+		}
 		if (spawnTimer !== null) {
 			clearInterval(spawnTimer);
 			spawnTimer = null;
