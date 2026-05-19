@@ -4,6 +4,13 @@
  * Licensed under the GNU AGPL v3 or later. See LICENSE.
  */
 
+/* Design tokens — single source of truth for color / spacing / radii
+ * / shadows / motion / typography. Spec §2.
+ * Imported FIRST per CSS spec (`@import` must precede other rules). */
+@import './lib/styles/tokens.css';
+
+/* Self-hosted UI fonts. Inter shipped since Step C; Geist Mono lands
+ * in Step F Sub-task 1.3 alongside its @font-face declaration. */
 @font-face {
 	font-family: 'Inter';
 	font-style: normal;
@@ -51,43 +58,17 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-	/* Backgrounds */
-	--bg-base: #0a0e14;
-	--bg-sidebar: #060a10;
-	--bg-elevated: #11161f;
-	--bg-surface: #1a212b;
-	--bg-hover: #1f2733;
-
-	/* Borders */
-	--border-subtle: #1f2733;
-	--border-default: #2a3441;
-	--border-strong: #3a4554;
-
-	/* Text */
-	--text-primary: #e6edf3;
-	--text-secondary: #8b949e;
-	--text-muted: #4a5568;
-	--text-inverse: #0a0e14;
-
-	/* Signature */
-	--accent-cyan: #00d9ff;
-	--accent-cyan-d: #00a8c7;
-
-	/* Status */
-	--status-up: #00ff88;
-	--status-warn: #ffaa00;
-	--status-down: #ff4757;
-	--status-info: #a78bfa; /* violet — used by spec §9.4 for HIBP category badges */
-	--status-meta: #94a3b8; /* slate — used by spec §9.4 for the Meta (audit_viewed) category */
-}
-
 html,
 body {
 	background: var(--bg-base);
 	color: var(--text-primary);
-	font-family: 'Inter', system-ui, sans-serif;
+	font-family: var(--font-sans);
 	min-height: 100vh;
+	/* Theme swap transition (§10.2 — body background+color animate;
+	 * the [data-theme] attribute change itself is instant). */
+	transition:
+		background-color var(--motion-base),
+		color var(--motion-base);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,0 +1,142 @@
+/*
+ * Arenet - Homelab-friendly reverse proxy with integrated security
+ * Copyright (C) 2026  Ludovic Ramos
+ * Licensed under the GNU AGPL v3 or later. See LICENSE.
+ *
+ * Step F design tokens — single source of truth for every visual
+ * constant (color, spacing, radius, shadow, motion, typography).
+ *
+ * Tokens are role-named, not hue-named: a component reads
+ * `--bg-elevated` and does not care whether it's #11161f (dark)
+ * or #ffffff (light). The swap happens on `<html data-theme>`.
+ *
+ * Spec ref: docs/superpowers/specs/2026-05-19-step-f-design-polish.md §2.
+ */
+
+/* ------------------------------------------------------------------
+ * Dark theme (default + opt-in via [data-theme="dark"])
+ * ------------------------------------------------------------------ */
+:root,
+[data-theme='dark'] {
+	/* Backgrounds */
+	--bg-base: #0a0e14;
+	--bg-sidebar: #060a10;
+	--bg-elevated: #11161f;
+	--bg-surface: #1a212b;
+	--bg-hover: #1f2733;
+
+	/* Borders */
+	--border-subtle: #1f2733;
+	--border-default: #2a3441;
+	--border-strong: #3a4554;
+
+	/* Text */
+	--text-primary: #e6edf3;
+	--text-secondary: #8b949e;
+	--text-muted: #4a5568;
+	--text-inverse: #0a0e14;
+
+	/* Signature (cyan accent) */
+	--accent-cyan: #00d9ff;
+	--accent-cyan-d: #00a8c7;
+
+	/* Status */
+	--status-up: #00ff88;
+	--status-warn: #ffaa00;
+	--status-down: #ff4757;
+	--status-info: #a78bfa;
+	--status-meta: #94a3b8;
+
+	/* Shadows */
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+	--shadow-md: 0 4px 8px rgba(0, 0, 0, 0.5);
+	--shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.6);
+	--shadow-glow-cyan: 0 0 16px rgba(0, 217, 255, 0.4);
+	--shadow-glow-red: 0 0 16px rgba(255, 71, 87, 0.4);
+}
+
+/* ------------------------------------------------------------------
+ * Light theme
+ * ------------------------------------------------------------------ */
+[data-theme='light'] {
+	/* Backgrounds */
+	--bg-base: #fafafa;
+	--bg-sidebar: #f4f4f5;
+	--bg-elevated: #ffffff;
+	--bg-surface: #f8f8f8;
+	--bg-hover: #ececef; /* Slightly darker than --bg-sidebar (#f4f4f5) so hover is visible on sidebar items. */
+
+	/* Borders */
+	--border-subtle: #e4e4e7;
+	--border-default: #d4d4d8;
+	--border-strong: #a1a1aa;
+
+	/* Text */
+	--text-primary: #18181b;
+	--text-secondary: #52525b;
+	--text-muted: #a1a1aa;
+	--text-inverse: #ffffff;
+
+	/* Signature */
+	--accent-cyan: #0891b2;
+	--accent-cyan-d: #0e7490;
+
+	/* Status */
+	--status-up: #16a34a;
+	--status-warn: #d97706;
+	--status-down: #dc2626;
+	--status-info: #7c3aed;
+	--status-meta: #71717a;
+
+	/* Shadows */
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+	--shadow-md: 0 4px 8px rgba(0, 0, 0, 0.08);
+	--shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.12);
+	--shadow-glow-cyan: 0 0 16px rgba(8, 145, 178, 0.25);
+	--shadow-glow-red: 0 0 16px rgba(220, 38, 38, 0.25);
+}
+
+/* ------------------------------------------------------------------
+ * Mode-independent tokens (spacing, radii, motion, typography)
+ * ------------------------------------------------------------------ */
+:root {
+	/* Spacing (4 px ladder, Tailwind-aligned). §2.3 */
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+	--space-5: 20px;
+	--space-6: 24px;
+	--space-8: 32px;
+	--space-10: 40px;
+	--space-12: 48px;
+	--space-16: 64px;
+
+	/* Radii. §2.4 */
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-lg: 8px;
+	--radius-xl: 12px;
+	--radius-full: 9999px;
+
+	/* Motion — linear transitions. §2.6
+	 * Springs live in lib/styles/motion.ts (TS, not CSS). */
+	--motion-fast: 100ms cubic-bezier(0.4, 0, 0.2, 1); /* Linear-instant feel — hover, focus */
+	--motion-base: 200ms cubic-bezier(0.4, 0, 0.2, 1); /* Default — most state changes */
+	--motion-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1); /* Deliberate — panels, route changes */
+
+	/* Typography. §2.7
+	 * Geist Mono is added in Sub-task 1.3; the stack already lists
+	 * it first so the cascade picks it up the moment the @font-face
+	 * declarations land. JetBrains Mono stays as fallback during
+	 * the migration window. */
+	--font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+	--font-mono: 'Geist Mono', ui-monospace, 'JetBrains Mono', monospace;
+
+	--text-xs: 11px;
+	--text-sm: 13px;
+	--text-base: 14px;
+	--text-lg: 16px;
+	--text-xl: 18px;
+	--text-2xl: 22px;
+}
