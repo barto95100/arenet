@@ -397,6 +397,135 @@ func TestUserStore_UpdateHIBPStatus(t *testing.T) {
 	}
 }
 
+// TestUpdateThemePreference_ValidDark covers the happy-path for the
+// "dark" value: persistence, UpdatedAt touched, GetByID re-reads it.
+func TestUpdateThemePreference_ValidDark(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if created.ThemePreference != "" {
+		t.Errorf("fresh user ThemePreference = %q, want empty", created.ThemePreference)
+	}
+
+	before := time.Now().UTC()
+	if err := s.UpdateThemePreference(ctx, created.ID, ThemeDark); err != nil {
+		t.Fatalf("UpdateThemePreference: %v", err)
+	}
+	after := time.Now().UTC()
+
+	got, err := s.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ThemePreference != ThemeDark {
+		t.Errorf("ThemePreference = %q, want %q", got.ThemePreference, ThemeDark)
+	}
+	if got.UpdatedAt.Before(before) || got.UpdatedAt.After(after) {
+		t.Errorf("UpdatedAt = %v, want between %v and %v", got.UpdatedAt, before, after)
+	}
+}
+
+// TestUpdateThemePreference_ValidLight covers the symmetric "light"
+// value and confirms a second call overwrites the first.
+func TestUpdateThemePreference_ValidLight(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := s.UpdateThemePreference(ctx, created.ID, ThemeDark); err != nil {
+		t.Fatalf("UpdateThemePreference dark: %v", err)
+	}
+	if err := s.UpdateThemePreference(ctx, created.ID, ThemeLight); err != nil {
+		t.Fatalf("UpdateThemePreference light: %v", err)
+	}
+
+	got, err := s.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ThemePreference != ThemeLight {
+		t.Errorf("ThemePreference = %q, want %q", got.ThemePreference, ThemeLight)
+	}
+}
+
+// TestUpdateThemePreference_InvalidRejected covers ErrThemeInvalid for
+// every non-{dark,light} input (including "", "Dark" with caps, garbage).
+// The store value MUST be unchanged after the rejected calls.
+func TestUpdateThemePreference_InvalidRejected(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Seed with a known good value so we can prove the rejected calls
+	// don't silently overwrite it.
+	if err := s.UpdateThemePreference(ctx, created.ID, ThemeDark); err != nil {
+		t.Fatalf("seed theme: %v", err)
+	}
+
+	invalid := []string{"", "Dark", "LIGHT", "blue", "system", "  dark  "}
+	for _, val := range invalid {
+		if err := s.UpdateThemePreference(ctx, created.ID, val); !errors.Is(err, ErrThemeInvalid) {
+			t.Errorf("UpdateThemePreference(%q) err = %v, want ErrThemeInvalid", val, err)
+		}
+	}
+
+	got, err := s.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ThemePreference != ThemeDark {
+		t.Errorf("ThemePreference clobbered: got %q, want %q (rejected calls must not mutate)", got.ThemePreference, ThemeDark)
+	}
+}
+
+// TestUpdateThemePreference_EmptyIDError covers the early-exit guard
+// (parallel to UpdateHIBPStatus / UpdatePassword behavior).
+func TestUpdateThemePreference_EmptyIDError(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	if err := s.UpdateThemePreference(context.Background(), "", ThemeDark); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("err = %v, want ErrUserNotFound", err)
+	}
+}
+
+// TestUpdateThemePreference_PersistenceRoundtrip closes and re-opens
+// the bbolt DB to prove the field actually hits disk (catches a
+// hypothetical bug where we forget the b.Put line).
+func TestUpdateThemePreference_PersistenceRoundtrip(t *testing.T) {
+	db := newTestDB(t)
+	s := NewUserStore(db)
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.UpdateThemePreference(ctx, created.ID, ThemeLight); err != nil {
+		t.Fatalf("UpdateThemePreference: %v", err)
+	}
+
+	// Re-open the store on the same DB handle — simulates a fresh
+	// process load of the same on-disk bucket.
+	s2 := NewUserStore(db)
+	got, err := s2.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after reopen: %v", err)
+	}
+	if got.ThemePreference != ThemeLight {
+		t.Errorf("after reopen, ThemePreference = %q, want %q", got.ThemePreference, ThemeLight)
+	}
+}
+
 func TestUserStore_RecordLogin(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()

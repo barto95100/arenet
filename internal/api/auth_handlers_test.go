@@ -1225,6 +1225,141 @@ func TestListAudit_NoCookie_401(t *testing.T) {
 	}
 }
 
+// --- POST /api/v1/auth/me/theme tests (Step F §3) -------------------------
+
+// TestPatchTheme_RequiresHardAuth proves an unauthenticated request is
+// rejected by the middleware before the handler ever runs. (No cookie =>
+// 401, as for every other hard-auth endpoint.)
+func TestPatchTheme_RequiresHardAuth(t *testing.T) {
+	env, _ := setupTestEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/theme",
+		strings.NewReader(`{"theme":"light"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+// TestPatchTheme_Success exercises the happy path: 204 + persistence
+// visible through GET /auth/me (themePreference echoed back).
+func TestPatchTheme_Success(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/theme",
+		strings.NewReader(`{"theme":"light"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+
+	// /me must now return the new preference.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	withSessionCookie(req, sessionCookie)
+	rec = httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/me after theme set: status = %d, want 200", rec.Code)
+	}
+	var meBody map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &meBody); err != nil {
+		t.Fatalf("decode /me: %v", err)
+	}
+	if got := meBody["themePreference"]; got != "light" {
+		t.Errorf("themePreference = %v, want \"light\"", got)
+	}
+
+	// Step F §3.4: no audit event for a theme change. Walk the recorded
+	// audit events and assert nothing references a theme action. (The
+	// D7 set has 15 actions; this test would catch a regression where
+	// someone added a "theme_changed" action without spec amendment.)
+	for _, ev := range env.audit.Events() {
+		if strings.Contains(string(ev.Action), "theme") {
+			t.Errorf("unexpected theme-related audit event: %+v", ev)
+		}
+	}
+}
+
+// TestPatchTheme_InvalidBody covers the three rejection paths the
+// handler distinguishes: malformed JSON, missing field, unknown value.
+func TestPatchTheme_InvalidBody(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"not_json", `{not json`},
+		{"missing_theme", `{}`},
+		{"unknown_value", `{"theme":"blue"}`},
+		{"empty_value", `{"theme":""}`},
+		{"capitalized", `{"theme":"Dark"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/theme",
+				strings.NewReader(c.body))
+			req.Header.Set("Content-Type", "application/json")
+			withSessionCookie(req, sessionCookie)
+			rec := httptest.NewRecorder()
+			env.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("body=%q: status = %d, want 400", c.body, rec.Code)
+			}
+		})
+	}
+}
+
+// TestPatchTheme_LockedSession_403 proves the idle-lock window also
+// gates the theme endpoint. Same mechanism as /me/password: backdate
+// the session's LastActivity past SessionIdleTimeout via PutForTest,
+// hard-auth middleware then refuses with 403.
+func TestPatchTheme_LockedSession_403(t *testing.T) {
+	env, token := setupTestEnv(t)
+	uid, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	// Backdate the session's LastActivity well past the idle threshold.
+	ss := auth.NewSessionStore(env.store.DB())
+	sess, err := ss.Get(context.Background(), sessionCookie)
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	sess.LastActivity = time.Now().Add(-(auth.SessionIdleTimeout + time.Minute)).UTC()
+	if err := ss.PutForTest(context.Background(), sess); err != nil {
+		t.Fatalf("PutForTest: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/theme",
+		strings.NewReader(`{"theme":"light"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("idle-locked session: status = %d, want 403", rec.Code)
+	}
+
+	// The stored preference MUST remain unchanged after a 403.
+	users := auth.NewUserStore(env.store.DB())
+	u, err := users.GetByID(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if u.ThemePreference != "" {
+		t.Errorf("locked-session 403 silently mutated theme to %q", u.ThemePreference)
+	}
+}
+
 func TestFilterToString_ReadableFormat(t *testing.T) {
 	f := audit.Filter{
 		ActorUserID: "uid",

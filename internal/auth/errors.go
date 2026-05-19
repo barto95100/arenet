@@ -50,6 +50,11 @@ var (
 	// compromised. Same error for both sources so the user experience
 	// is uniform.
 	ErrPasswordCommon = errors.New("auth: password is in the list of common compromised passwords")
+
+	// ErrThemeInvalid is returned by UpdateThemePreference when the
+	// supplied value is not exactly "dark" or "light". The API layer
+	// maps this to HTTP 400. Step F spec §3.1.
+	ErrThemeInvalid = errors.New("auth: theme must be \"dark\" or \"light\"")
 )
 
 // Session store sentinel errors. See spec §3.3.

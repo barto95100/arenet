@@ -42,6 +42,11 @@ type User struct {
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 	LastLoginAt         time.Time `json:"last_login_at,omitempty"`
+	// ThemePreference: "dark" | "light" | "" (empty = pre-Step-F user,
+	// frontend treats "" as "dark" — see spec §4.2). Step F §3.1.
+	// `omitempty` keeps legacy rows decoded by older binaries identical
+	// to new rows that simply never had the field set.
+	ThemePreference string `json:"theme_preference,omitempty"`
 }
 
 // HIBP status constants. Matches the enum documented in spec §3.2 and §7.
@@ -50,6 +55,14 @@ const (
 	HIBPStatusClean       = "clean"
 	HIBPStatusCompromised = "compromised"
 	HIBPStatusSkipped     = "skipped"
+)
+
+// Theme preference values accepted by the API per Step F spec §3.1.
+// The empty string "" is NOT in this list: it's a valid storage state
+// (legacy pre-Step-F rows) but cannot be written back via the API.
+const (
+	ThemeDark  = "dark"
+	ThemeLight = "light"
 )
 
 // Session represents a server-side authenticated session.

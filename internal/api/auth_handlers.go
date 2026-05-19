@@ -365,7 +365,8 @@ func clearSessionCookieOnResponse(w http.ResponseWriter, devMode bool) {
 
 // --- GET /api/v1/auth/me ---------------------------------------------------
 
-// meResponse is the wire shape for GET /api/v1/auth/me. Spec §4.5.
+// meResponse is the wire shape for GET /api/v1/auth/me. Spec §4.5
+// (extended in Step F §3.3 to include ThemePreference).
 type meResponse struct {
 	ID                  string `json:"id"`
 	Username            string `json:"username"`
@@ -373,6 +374,9 @@ type meResponse struct {
 	Locked              bool   `json:"locked"`
 	PasswordCompromised bool   `json:"passwordCompromised"`
 	HIBPCheckStatus     string `json:"hibpCheckStatus"`
+	// ThemePreference is "dark", "light", or "" (legacy users who never
+	// visited Settings). The frontend treats "" as "dark" per §4.2.
+	ThemePreference string `json:"themePreference"`
 }
 
 // me handles GET /api/v1/auth/me (spec §4.5). Group: soft-auth.
@@ -405,6 +409,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		Locked:              auth.IsLockedFromContext(ctx),
 		PasswordCompromised: user.PasswordCompromised,
 		HIBPCheckStatus:     user.HIBPCheckStatus,
+		ThemePreference:     user.ThemePreference,
 	})
 }
 
@@ -715,6 +720,56 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		TargetType: "user",
 		TargetID:   userID,
 	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- POST /api/v1/auth/me/theme --------------------------------------------
+
+// updateThemeRequest is the wire shape for POST /api/v1/auth/me/theme.
+// Step F spec §3.3. Method is POST (not PATCH) for verb consistency
+// with the analogous /me/password endpoint.
+type updateThemeRequest struct {
+	Theme string `json:"theme"` // "dark" or "light"
+}
+
+// updateTheme handles POST /api/v1/auth/me/theme (Step F §3.3).
+// Group: hard-auth (same as /me/password).
+//
+// 204 on success, 400 on invalid body / invalid theme value,
+// 401/403 via middleware, 500 on storage error.
+//
+// No audit emission: theme is a user-preference setting, not a
+// security event (spec §3.4, brainstorm verbatim "c'est du
+// paramétrage user, pas sécurité"). The D7 audit action set (15
+// entries) is therefore unchanged.
+func (h *Handler) updateTheme(w http.ResponseWriter, r *http.Request) {
+	var req updateThemeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Theme != auth.ThemeDark && req.Theme != auth.ThemeLight {
+		writeError(w, http.StatusBadRequest, "theme must be \"dark\" or \"light\"")
+		return
+	}
+
+	ctx := r.Context()
+	userID := auth.UserIDFromContext(ctx)
+
+	if err := h.users.UpdateThemePreference(ctx, userID, req.Theme); err != nil {
+		// ErrThemeInvalid here would mean the validation above passed but
+		// the store rejected the value — should be unreachable, but map
+		// it to 400 to stay consistent. Everything else is a 500.
+		if errors.Is(err, auth.ErrThemeInvalid) {
+			writeError(w, http.StatusBadRequest, "theme must be \"dark\" or \"light\"")
+			return
+		}
+		h.logger.Error("updateTheme: UpdateThemePreference failed",
+			"err", err, "user_id", userID)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

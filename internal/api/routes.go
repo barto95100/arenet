@@ -73,13 +73,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			})
 
 			// Hard-auth subgroup: /heartbeat, /sessions, DELETE /sessions/{id},
-			// /me/password.
+			// /me/password, /me/theme.
 			r.Group(func(r chi.Router) {
 				r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.devMode))
 				r.Post("/heartbeat", h.heartbeat)
 				r.Get("/sessions", h.listSessions)
 				r.Delete("/sessions/{id}", h.deleteSession)
 				r.Post("/me/password", h.changePassword)
+				r.Post("/me/theme", h.updateTheme)
 			})
 		})
 
