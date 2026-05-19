@@ -4,46 +4,102 @@
 
 import type { Config } from 'tailwindcss';
 
+// Tailwind tokens are an `extend` layer that surfaces every
+// design token from src/lib/styles/tokens.css through utility
+// class names. Components are free to write either `bg-elevated`
+// (Tailwind) or `style:background={var(--bg-elevated)}` — both
+// resolve to the same custom property value.
+//
+// IMPORTANT: keep this file in sync with tokens.css. Drift bites
+// — pre-Chunk-3 the fontFamily and fontSize blocks here had their
+// own values (16px base etc.) that disagreed with what tokens.css
+// declared (14px base etc.). Step F Chunk 3 re-aligns them so the
+// Tailwind utilities and the var(--...) references read identical.
 const config: Config = {
 	content: ['./src/**/*.{html,js,ts,svelte}'],
 	theme: {
 		extend: {
 			colors: {
+				// Background surfaces (§2.1)
 				base: 'var(--bg-base)',
 				sidebar: 'var(--bg-sidebar)',
 				elevated: 'var(--bg-elevated)',
 				surface: 'var(--bg-surface)',
 				hover: 'var(--bg-hover)',
+				// Borders (§2.1)
 				'border-subtle': 'var(--border-subtle)',
 				'border-default': 'var(--border-default)',
 				'border-strong': 'var(--border-strong)',
+				// Text (§2.1)
 				primary: 'var(--text-primary)',
 				secondary: 'var(--text-secondary)',
 				muted: 'var(--text-muted)',
 				inverse: 'var(--text-inverse)',
+				'on-color': 'var(--text-on-color)', // Chunk 3 — text on filled colored bg
+				// Accents + status (§2.1)
 				cyan: 'var(--accent-cyan)',
 				'cyan-dark': 'var(--accent-cyan-d)',
 				up: 'var(--status-up)',
 				warn: 'var(--status-warn)',
 				down: 'var(--status-down)',
-				info: 'var(--status-info)'
+				violet: 'var(--status-info)', // semantic alias — historic name "info"
+				meta: 'var(--status-meta)' // Chunk 3 — slate, AuditRow Meta category
 			},
 			fontFamily: {
-				sans: ['Inter', 'system-ui', 'sans-serif'],
-				mono: ['JetBrains Mono', 'ui-monospace', 'monospace']
+				// Match tokens.css §2.7 stacks exactly.
+				sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+				mono: ['Geist Mono', 'ui-monospace', 'JetBrains Mono', 'monospace']
 			},
 			fontSize: {
-				xs: '12px',
-				sm: '14px',
-				base: '16px',
-				lg: '20px',
-				'2xl': '28px',
-				'4xl': '36px'
+				// Match tokens.css §2.7 sizing exactly (was 12/14/16/20/28/36
+				// pre-Chunk-3; tokens.css uses 11/13/14/16/18/22).
+				xs: 'var(--text-xs)',
+				sm: 'var(--text-sm)',
+				base: 'var(--text-base)',
+				lg: 'var(--text-lg)',
+				xl: 'var(--text-xl)',
+				'2xl': 'var(--text-2xl)'
+			},
+			borderRadius: {
+				sm: 'var(--radius-sm)',
+				md: 'var(--radius-md)',
+				lg: 'var(--radius-lg)',
+				xl: 'var(--radius-xl)',
+				full: 'var(--radius-full)'
+			},
+			spacing: {
+				// Bridge tokens.css spacing scale to Tailwind's numeric
+				// scale where they overlap. Tailwind already covers most
+				// of these (1=4px, 2=8px, etc.) so we only override where
+				// our values differ; keeping it minimal avoids
+				// surprising Tailwind defaults.
+				'tk-1': 'var(--space-1)',
+				'tk-2': 'var(--space-2)',
+				'tk-3': 'var(--space-3)',
+				'tk-4': 'var(--space-4)',
+				'tk-5': 'var(--space-5)',
+				'tk-6': 'var(--space-6)',
+				'tk-8': 'var(--space-8)',
+				'tk-10': 'var(--space-10)',
+				'tk-12': 'var(--space-12)',
+				'tk-16': 'var(--space-16)'
 			},
 			boxShadow: {
-				'glow-cyan': '0 0 16px rgba(0, 217, 255, 0.4)',
-				'glow-green': '0 0 12px rgba(0, 255, 136, 0.4)',
-				'glow-red': '0 0 12px rgba(255, 71, 87, 0.4)'
+				// Forward tokens.css shadows. Glow shadows are
+				// per-mode through their respective custom properties.
+				sm: 'var(--shadow-sm)',
+				md: 'var(--shadow-md)',
+				lg: 'var(--shadow-lg)',
+				'glow-cyan': 'var(--shadow-glow-cyan)',
+				'glow-red': 'var(--shadow-glow-red)'
+			},
+			transitionDuration: {
+				// Surface motion-* timings as Tailwind transition utilities.
+				// Note Tailwind expects bare numbers; we cast the token
+				// values' time portion via a thin alias.
+				fast: '100ms',
+				base: '200ms',
+				slow: '400ms'
 			}
 		}
 	},
