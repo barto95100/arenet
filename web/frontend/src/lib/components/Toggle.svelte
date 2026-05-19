@@ -18,10 +18,20 @@
   discipline §1.3):
 
     options  — array of {value, label, icon?}, length === 2
-    value    — bindable, must equal one of options[i].value
+    value    — current selection (controlled prop, NOT bindable —
+               the caller drives it via re-render after onchange)
     onchange — fired on user interaction with the new value
     disabled — disables interaction (e.g., while isApplying)
     ariaLabel — labels the group for screen readers
+
+  Why controlled (not bindable): the theme store applies a value
+  via applyLocally() which writes BOTH `current` AND the
+  `<html data-theme>` attribute. If `value` were bindable, a click
+  on the Toggle would mutate `theme.current` directly through the
+  bind BEFORE onchange fires, then `theme.set(v)` would early-return
+  on `next === this.current` and skip applyLocally — leaving the
+  DOM attribute stale (smoke session bug). Controlled mode keeps
+  the store as the single writer.
 -->
 <script lang="ts" generics="T extends string">
 	import type { Snippet } from 'svelte';
@@ -40,19 +50,12 @@
 		ariaLabel?: string;
 	}
 
-	let {
-		options,
-		value = $bindable(),
-		onchange,
-		disabled = false,
-		ariaLabel
-	}: Props = $props();
+	let { options, value, onchange, disabled = false, ariaLabel }: Props = $props();
 
 	const activeIndex = $derived(options[0].value === value ? 0 : 1);
 
 	function pick(v: T): void {
 		if (disabled || v === value) return;
-		value = v;
 		onchange?.(v);
 	}
 </script>
