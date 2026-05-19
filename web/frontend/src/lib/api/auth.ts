@@ -14,6 +14,9 @@ export interface User {
 	locked: boolean;
 	passwordCompromised: boolean;
 	hibpCheckStatus: 'pending' | 'clean' | 'compromised' | 'skipped';
+	// "" means "no preference yet" (legacy pre-Step-F user). The theme
+	// store treats "" identically to "dark" per spec §4.2. Step F §3.1.
+	themePreference: '' | 'dark' | 'light';
 }
 
 export interface Session {
@@ -74,5 +77,12 @@ export const authApi = {
 	// of this user. The current session cookie remains valid (spec §4.9bis).
 	changePassword(currentPassword: string, newPassword: string): Promise<void> {
 		return request<void>('POST', '/auth/me/password', { currentPassword, newPassword });
+	},
+
+	// setTheme persists the user's theme preference (Step F §3.3, §4.5).
+	// 204 on success; the server also refreshes the arenet_theme cookie
+	// so the FOUC bootstrap picks up the new value on the next paint.
+	setTheme(theme: 'dark' | 'light'): Promise<void> {
+		return request<void>('POST', '/auth/me/theme', { theme });
 	}
 };

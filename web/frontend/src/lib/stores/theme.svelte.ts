@@ -9,12 +9,17 @@
 // script in app.html (§4.3) sets the attribute before the first
 // paint to avoid FOUC; this store takes over once the app boots.
 //
-// Phase 1 (this Sub-task 1.2): `set()` updates the DOM and persists
-// to localStorage. The server round-trip is wired in Sub-task 1.5
-// once POST /api/v1/auth/me/theme exists (Sub-task 1.4 implements
-// the backend). Keeping `isApplying` here so the Toggle component
-// can already render its busy state — it just never flips true
-// until 1.5 lands.
+// Sub-task 1.5 wires the server round-trip via authApi.setTheme:
+//   - applyLocally optimistically + persist to localStorage
+//   - await POST /auth/me/theme
+//   - on failure, revert applyLocally and surface a toast
+// The Phase 2 reconciliation step (§4.3, last paragraph) compares
+// the server's value to whatever the bootstrap picked and adjusts
+// silently if they differ (e.g., user changed theme on another
+// device since the cookie was last refreshed).
+
+import { authApi } from '$lib/api/auth';
+import { pushToast } from './toast';
 
 export type Theme = 'dark' | 'light';
 
@@ -29,29 +34,72 @@ class ThemeStore {
 	current = $state<Theme>('dark');
 	isApplying = $state(false);
 
-	/** Apply a theme to the DOM and persist it locally. In Phase 1
-	 *  the server round-trip is a no-op; Sub-task 1.5 wires it. */
+	/** Apply a theme, optimistically, then persist via the server.
+	 *  On failure, revert to the previous value and surface a toast.
+	 *  Resolves once the round-trip completes (or rejects). Callers
+	 *  may ignore the rejection — the store already reverted. */
 	async set(t: Theme): Promise<void> {
 		const next = normalize(t);
+		if (next === this.current) return; // no-op
+		const previous = this.current;
+
 		this.applyLocally(next);
-		if (typeof localStorage !== 'undefined') {
-			try {
-				localStorage.setItem('arenet_theme', next);
-			} catch (_) {
-				// Private browsing / quota — ignore, the cookie + server
-				// (1.5) remain authoritative.
-			}
+		this.persistLocally(next);
+		this.isApplying = true;
+		try {
+			await authApi.setTheme(next);
+			// The server refreshed the arenet_theme cookie; nothing more
+			// to do here. localStorage already holds `next`.
+		} catch (err) {
+			// Revert. The cookie + server still hold `previous`, so the
+			// next reload will be consistent — but we also rewrite
+			// localStorage so a refresh during the failed window doesn't
+			// linger on the wrong value.
+			this.applyLocally(previous);
+			this.persistLocally(previous);
+			pushToast('Failed to save theme preference', 'danger');
+			throw err;
+		} finally {
+			this.isApplying = false;
 		}
 	}
 
-	/** Apply WITHOUT touching localStorage or the server. Used by the
-	 *  Phase 2 reconciliation step after /auth/me resolves (§4.3),
-	 *  where the server's value is already authoritative. */
+	/** Apply WITHOUT touching localStorage or the server. Used by
+	 *  reconcileFromServer after /auth/me resolves, and internally
+	 *  by set() when reverting. */
 	applyLocally(t: Theme): void {
 		const next = normalize(t);
 		this.current = next;
 		if (typeof document !== 'undefined') {
 			document.documentElement.dataset.theme = next;
+		}
+	}
+
+	/** Reconcile against the server's value after /auth/me resolves
+	 *  (spec §4.3 Phase 2). If the server's value differs from what
+	 *  bootstrap picked, swap silently — the 200 ms transition on
+	 *  body background+color animates the difference. Empty / unknown
+	 *  values are mapped to "dark" via normalize().
+	 *
+	 *  This is a no-op when the bootstrap and server already agree,
+	 *  which is the common case (the cookie is refreshed on every
+	 *  successful /auth/me/theme call). */
+	reconcileFromServer(serverTheme: unknown): void {
+		const next = normalize(serverTheme);
+		if (next === this.current) return;
+		this.applyLocally(next);
+	}
+
+	/** Mirror the chosen theme into localStorage so subsequent paints
+	 *  in private-cookie scenarios (or cookie-deletion edge cases)
+	 *  still hit the bootstrap's localStorage tier (§4.3). */
+	private persistLocally(t: Theme): void {
+		if (typeof localStorage === 'undefined') return;
+		try {
+			localStorage.setItem('arenet_theme', t);
+		} catch (_) {
+			// Private browsing / quota — ignore. The cookie + server
+			// remain authoritative.
 		}
 	}
 }

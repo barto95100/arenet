@@ -171,6 +171,9 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, sess.ID, false, h.devMode)
+	// Setup creates a brand-new user with ThemePreference="" — normalized
+	// to "dark" so the FOUC bootstrap has a useful value (spec §4.5).
+	setThemeCookie(w, normalizeThemeForCookie(user.ThemePreference), h.devMode)
 
 	// Step 7: invalidate the setup token (single-use, spec §4.2).
 	h.setupToken.Invalidate()
@@ -276,6 +279,9 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, sess.ID, req.RememberMe, h.devMode)
+	// Also set the theme cookie so the FOUC bootstrap script picks up
+	// the user's stored preference on the next paint (spec §4.5).
+	setThemeCookie(w, normalizeThemeForCookie(user.ThemePreference), h.devMode)
 
 	// Best-effort: record LastLoginAt; log warning on failure but
 	// never fail the login response. Bounded by a 5-second timeout
@@ -333,6 +339,10 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("logout: session delete failed (non-fatal)", "err", err.Error(), "session_id", sessionID)
 	}
 	clearSessionCookieOnResponse(w, h.devMode)
+	// Clear the theme cookie too — the "explicit logout" lifecycle path
+	// in spec §4.5 clears both cookies. (Silent expirations leave the
+	// theme cookie in place; only the explicit /logout call wipes it.)
+	clearThemeCookieOnResponse(w, h.devMode)
 
 	h.appendAudit(r, audit.Event{
 		Action:                audit.ActionLogout,
@@ -770,6 +780,12 @@ func (h *Handler) updateTheme(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+
+	// Refresh the arenet_theme cookie so the FOUC bootstrap on the
+	// next paint reflects the new preference immediately (spec §4.5).
+	// req.Theme is already validated to be exactly "dark" or "light"
+	// at this point — no need to re-normalize.
+	setThemeCookie(w, req.Theme, h.devMode)
 
 	w.WriteHeader(http.StatusNoContent)
 }

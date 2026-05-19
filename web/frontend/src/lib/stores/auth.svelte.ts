@@ -12,6 +12,7 @@
 
 import { authApi, type User } from '$lib/api/auth';
 import { ApiError } from '$lib/api/types';
+import { theme } from './theme.svelte';
 
 export type AuthState = 'unknown' | 'anonymous' | 'authenticated' | 'locked';
 
@@ -26,6 +27,10 @@ class AuthStore {
 			const me = await authApi.me();
 			this.user = me;
 			this.state = me.locked ? 'locked' : 'authenticated';
+			// Phase 2 reconciliation (Step F §4.3): align the theme that
+			// the FOUC bootstrap picked with whatever the server stores.
+			// No-op when they already agree, which is the common case.
+			theme.reconcileFromServer(me.themePreference);
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 401) {
 				this.state = 'anonymous';
@@ -44,6 +49,21 @@ class AuthStore {
 		const user = await authApi.login(username, password, rememberMe);
 		this.user = user;
 		this.state = 'authenticated';
+		// /auth/login returns a slimmer loginResponse than /me — themePreference
+		// isn't on the wire there. The cookie has just been refreshed by the
+		// server, but the DOM still shows whatever the bootstrap picked on
+		// initial load (or the previous user's theme on a re-login). Fetch
+		// /me once to pull the authoritative preference, then reconcile.
+		try {
+			const me = await authApi.me();
+			this.user = me;
+			theme.reconcileFromServer(me.themePreference);
+		} catch (err) {
+			// Non-fatal: leave the bootstrap's theme in place. The next
+			// page navigation that hits bootstrap will pick up the
+			// freshly-set cookie anyway.
+			console.warn('login: post-login /me failed (non-fatal):', err);
+		}
 	}
 
 	async logout(): Promise<void> {

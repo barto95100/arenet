@@ -28,6 +28,19 @@ import (
 // auth package keeps its copy unexported (encapsulation across layers).
 const sessionCookieName = "arenet_session"
 
+// themeCookieName is the cookie read by the FOUC bootstrap script in
+// app.html (Step F §4.3). The bootstrap MUST read it from JS, so the
+// cookie is intentionally NOT HttpOnly. It carries only a 4-char
+// preference string ("dark" or "light") and has no security context.
+const themeCookieName = "arenet_theme"
+
+// themeCookieMaxAge is the absolute lifetime in seconds of arenet_theme.
+// 30 days (spec §4.5) — long enough to survive normal browser sessions
+// and idle periods. Logout clears the cookie explicitly; idle/silent
+// session expirations leave it in place (acceptable per §4.5: the
+// cookie carries only a UX preference, no security context).
+const themeCookieMaxAge = 30 * 24 * 60 * 60
+
 // setSessionCookie issues the Set-Cookie header for a freshly-created
 // session per spec §4.11:
 //
@@ -49,4 +62,64 @@ func setSessionCookie(w http.ResponseWriter, sessionID string, rememberMe, devMo
 		Secure:   !devMode,
 		SameSite: http.SameSiteStrictMode,
 	})
+}
+
+// setThemeCookie issues the Set-Cookie header for arenet_theme per
+// spec §4.5:
+//
+//	HttpOnly=false; Secure (prod); SameSite=Lax; Path=/; Max-Age=2592000
+//
+// Three deliberate differences from setSessionCookie:
+//   - HttpOnly=false: the FOUC bootstrap script (§4.3) reads it from JS.
+//   - SameSite=Lax (not Strict): with Strict the cookie is NOT sent on
+//     the very first navigation from an external link, which breaks the
+//     FOUC bootstrap on first paint. Lax sends it on top-level GETs from
+//     any origin — exactly what the bootstrap needs.
+//   - 30-day fixed Max-Age (not session-TTL-driven): the theme outlives
+//     the session intentionally; a freshly logged-out user sees their
+//     previously-set theme on the login page.
+//
+// Caller MUST pass a normalized value ("dark" or "light"); pre-Step-F
+// users with `""` should be mapped to "dark" before this call so the
+// cookie always carries a useful value for the bootstrap script.
+func setThemeCookie(w http.ResponseWriter, theme string, devMode bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     themeCookieName,
+		Value:    theme,
+		Path:     "/",
+		MaxAge:   themeCookieMaxAge,
+		HttpOnly: false,
+		Secure:   !devMode,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// clearThemeCookieOnResponse issues a Set-Cookie that deletes the
+// arenet_theme cookie on the next browser write. Used by /auth/logout
+// per spec §4.5 (the "explicit logout clears both cookies" lifecycle).
+//
+// The attributes other than MaxAge MUST exactly match the values used
+// at set time, otherwise some browsers refuse the deletion.
+func clearThemeCookieOnResponse(w http.ResponseWriter, devMode bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     themeCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: false,
+		Secure:   !devMode,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// normalizeThemeForCookie ensures the value written to the bootstrap
+// cookie is always a useful "dark" or "light" — pre-Step-F users
+// (themePreference == "") get the default "dark" the bootstrap would
+// have picked anyway, but written explicitly so subsequent visits skip
+// the localStorage / default fallback steps.
+func normalizeThemeForCookie(theme string) string {
+	if theme == auth.ThemeLight {
+		return auth.ThemeLight
+	}
+	return auth.ThemeDark
 }

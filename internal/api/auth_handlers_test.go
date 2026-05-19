@@ -1377,3 +1377,182 @@ func TestFilterToString_ReadableFormat(t *testing.T) {
 		t.Errorf("got %q, missing limit", got)
 	}
 }
+
+// --- arenet_theme cookie lifecycle tests (Step F §4.5) -------------------
+
+// findCookie returns the first Set-Cookie matching name, or nil. We can't
+// use http.Response.Cookies() because httptest.ResponseRecorder doesn't
+// reconstruct the response object — we parse raw headers instead.
+func findCookie(rec *httptest.ResponseRecorder, name string) *http.Cookie {
+	resp := &http.Response{Header: rec.Result().Header}
+	for _, c := range resp.Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// TestLogin_SetsThemeCookie covers spec §4.5: a successful login must
+// emit Set-Cookie: arenet_theme=... with the user's stored preference
+// (defaulting to "dark" if the user is pre-Step-F empty-string state).
+// Attributes match the design spec exactly.
+func TestLogin_SetsThemeCookie(t *testing.T) {
+	env, token := setupTestEnv(t)
+	// adminBootstrap goes through /setup (which also sets the cookie);
+	// run a fresh /login on top so we exercise the login path itself.
+	_, _ = adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"username":"admin","password":"`+testAdminPassword+`","rememberMe":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	c := findCookie(rec, "arenet_theme")
+	if c == nil {
+		t.Fatal("Set-Cookie arenet_theme not emitted on successful login")
+	}
+	// Empty-string ThemePreference (pre-Step-F user) normalizes to "dark".
+	if c.Value != "dark" {
+		t.Errorf("cookie value = %q, want \"dark\" (default for empty preference)", c.Value)
+	}
+	if c.HttpOnly {
+		t.Error("HttpOnly = true; want false (bootstrap script must read it from JS)")
+	}
+	if c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite = %v, want Lax (FOUC first-navigation requirement)", c.SameSite)
+	}
+	if c.Path != "/" {
+		t.Errorf("Path = %q, want \"/\"", c.Path)
+	}
+	if c.MaxAge != 30*24*60*60 {
+		t.Errorf("MaxAge = %d, want 2592000 (30 days)", c.MaxAge)
+	}
+	// devMode=false in setupTestEnv → Secure should be true.
+	if !c.Secure {
+		t.Error("Secure = false; want true in prod-mode (devMode false)")
+	}
+}
+
+// TestLogin_SetsThemeCookieReflectsStoredPref proves the cookie value
+// tracks UserStore.ThemePreference rather than a hardcoded default.
+func TestLogin_SetsThemeCookieReflectsStoredPref(t *testing.T) {
+	env, token := setupTestEnv(t)
+	uid, _ := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	// Persist "light" directly via the store, then re-login.
+	users := auth.NewUserStore(env.store.DB())
+	if err := users.UpdateThemePreference(context.Background(), uid, auth.ThemeLight); err != nil {
+		t.Fatalf("UpdateThemePreference: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"username":"admin","password":"`+testAdminPassword+`","rememberMe":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, want 200", rec.Code)
+	}
+
+	c := findCookie(rec, "arenet_theme")
+	if c == nil || c.Value != "light" {
+		t.Errorf("cookie = %+v, want value=\"light\"", c)
+	}
+}
+
+// TestLogout_ClearsThemeCookie covers the explicit-logout lifecycle
+// path in spec §4.5: both cookies (session + theme) are cleared.
+func TestLogout_ClearsThemeCookie(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout status = %d, want 204", rec.Code)
+	}
+
+	c := findCookie(rec, "arenet_theme")
+	if c == nil {
+		t.Fatal("Set-Cookie arenet_theme not emitted on logout")
+	}
+	if c.MaxAge != -1 {
+		t.Errorf("MaxAge = %d, want -1 (clear marker)", c.MaxAge)
+	}
+	if c.Value != "" {
+		t.Errorf("Value = %q, want \"\" on clear", c.Value)
+	}
+	// SameSite + Path must match the set-time attributes or some
+	// browsers refuse the deletion.
+	if c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("clear SameSite = %v, want Lax (must match set)", c.SameSite)
+	}
+	if c.Path != "/" {
+		t.Errorf("clear Path = %q, want \"/\"", c.Path)
+	}
+}
+
+// TestPatchTheme_RefreshesThemeCookie covers the third lifecycle path:
+// every successful POST /me/theme refreshes the cookie so the next
+// FOUC bootstrap picks up the new value.
+func TestPatchTheme_RefreshesThemeCookie(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/theme",
+		strings.NewReader(`{"theme":"light"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("updateTheme status = %d, want 204", rec.Code)
+	}
+
+	c := findCookie(rec, "arenet_theme")
+	if c == nil {
+		t.Fatal("Set-Cookie arenet_theme not emitted on successful theme update")
+	}
+	if c.Value != "light" {
+		t.Errorf("cookie value = %q, want \"light\"", c.Value)
+	}
+	if c.HttpOnly {
+		t.Error("HttpOnly = true; want false")
+	}
+	if c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite = %v, want Lax", c.SameSite)
+	}
+	if c.MaxAge != 30*24*60*60 {
+		t.Errorf("MaxAge = %d, want 2592000", c.MaxAge)
+	}
+}
+
+// TestSetup_SetsThemeCookieAsDark covers the setup path: a brand-new
+// user has ThemePreference="" so the cookie must carry "dark" (the
+// FOUC bootstrap default).
+func TestSetup_SetsThemeCookieAsDark(t *testing.T) {
+	env, token := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/setup",
+		strings.NewReader(`{"setupToken":"`+token+`","username":"admin","displayName":"","password":"`+testAdminPassword+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+
+	c := findCookie(rec, "arenet_theme")
+	if c == nil {
+		t.Fatal("Set-Cookie arenet_theme not emitted on setup")
+	}
+	if c.Value != "dark" {
+		t.Errorf("setup cookie = %q, want \"dark\"", c.Value)
+	}
+}

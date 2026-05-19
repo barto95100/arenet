@@ -18,7 +18,8 @@ const authApiMock = {
 	heartbeat: vi.fn(),
 	listSessions: vi.fn(),
 	deleteSession: vi.fn(),
-	changePassword: vi.fn()
+	changePassword: vi.fn(),
+	setTheme: vi.fn()
 };
 
 vi.mock('$lib/api/auth', async () => {
@@ -44,7 +45,8 @@ const sampleUser: User = {
 	displayName: 'Admin',
 	locked: false,
 	passwordCompromised: false,
-	hibpCheckStatus: 'clean'
+	hibpCheckStatus: 'clean',
+	themePreference: ''
 };
 
 beforeEach(() => {
@@ -96,6 +98,9 @@ describe('AuthStore.bootstrap', () => {
 describe('AuthStore.login', () => {
 	it('populates user and transitions to authenticated', async () => {
 		authApiMock.login.mockResolvedValueOnce(sampleUser);
+		// Sub-task 1.5 wiring: login() follows up with a /me call to
+		// pick up themePreference for reconcileFromServer.
+		authApiMock.me.mockResolvedValueOnce(sampleUser);
 		await auth.login('admin', 'pw', false);
 		expect(auth.state).toBe('authenticated');
 		expect(auth.user).toEqual(sampleUser);
