@@ -19,6 +19,7 @@
 	import { topology } from '$lib/stores/topology.svelte';
 	import { TopologyClient, type Snapshot, type ConnectionStatus } from '$lib/api/topology';
 	import TopologySvg from '$lib/components/TopologySvg.svelte';
+	import TopologyControls from '$lib/components/TopologyControls.svelte';
 	import TopologyDetailPanel from '$lib/components/TopologyDetailPanel.svelte';
 
 	let client: TopologyClient | null = null;
@@ -29,6 +30,12 @@
 	// prefers-reduced-motion gate (spec §6.6).
 	let reducedMotion = $state(false);
 	let motionMQ: MediaQueryList | null = null;
+
+	// Live viewport dimensions of the .svg-wrap surface — bound via
+	// the template below. Chunk 4b.4 TopologyControls reads these
+	// for fit-view + zoom-to-center math.
+	let wrapWidth = $state(0);
+	let wrapHeight = $state(0);
 
 	function onMotionChange(): void {
 		if (motionMQ) reducedMotion = motionMQ.matches;
@@ -174,7 +181,11 @@
 			</p>
 		</div>
 	{:else}
-		<div class="svg-wrap">
+		<!-- bind:clientWidth/Height supplies the live viewport size
+		     to TopologyControls so fit-view / zoom-to-center math
+		     reads off the actual rendered surface rather than a
+		     hardcoded guess. -->
+		<div class="svg-wrap" bind:clientWidth={wrapWidth} bind:clientHeight={wrapHeight}>
 			<TopologySvg
 				routes={routesList}
 				{selectedRouteId}
@@ -182,6 +193,12 @@
 				{onSelectRoute}
 				{totalReqPerSec}
 			/>
+			<div class="controls-overlay">
+				<TopologyControls
+					viewportSize={{ width: wrapWidth, height: wrapHeight }}
+					routesCount={routesList.length}
+				/>
+			</div>
 		</div>
 	{/if}
 
@@ -247,11 +264,19 @@
 	}
 
 	.svg-wrap {
+		position: relative;
 		background: var(--bg-base);
 		border: 1px solid var(--border-subtle);
-		border-radius: 8px;
-		padding: 1rem;
-		overflow: auto;
+		border-radius: var(--radius-lg);
+		padding: var(--space-4);
+		overflow: hidden;
+	}
+	.controls-overlay {
+		position: absolute;
+		top: var(--space-3);
+		right: var(--space-3);
+		z-index: 20;
+		pointer-events: auto;
 	}
 
 	.empty {

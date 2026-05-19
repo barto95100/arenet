@@ -14,9 +14,24 @@
   particles) and TopologyNode (which suppresses pulse animation).
 -->
 <script lang="ts">
+	import { onMount, untrack } from 'svelte';
+	import { fade, scale } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
+	import { prefersReducedMotion } from 'svelte/motion';
 	import TopologyEdge from './TopologyEdge.svelte';
 	import TopologyNode from './TopologyNode.svelte';
 	import { isActive, isErrorSpike, type RouteState } from '$lib/stores/topology.svelte';
+	import { viewport } from '$lib/topology/viewport.svelte';
+	import {
+		SVG_WIDTH,
+		MIN_SVG_HEIGHT,
+		NODE_HEIGHT,
+		ROW_PITCH,
+		TOP_PAD,
+		BOTTOM_PAD,
+		computeSvgHeight,
+		computeTopologyBBox
+	} from '$lib/topology/bounds';
 
 	interface Props {
 		routes: RouteState[];
@@ -29,13 +44,21 @@
 
 	let { routes, selectedRouteId, reducedMotion, onSelectRoute, totalReqPerSec }: Props = $props();
 
-	// Layout constants — single source for column geometry. Spec §6.2.
-	const NODE_HEIGHT = 56;
-	const NODE_GAP = 16;
-	const ROW_PITCH = NODE_HEIGHT + NODE_GAP; // 72
-	const TOP_PAD = 20;
-	const BOTTOM_PAD = 20;
+	// SVG root reference + cached client rect for pointer math.
+	let svgEl: SVGSVGElement | undefined = $state();
+	// `panning` drives the cursor style via class:panning, so it must
+	// be reactive — Svelte 5 warns on non-$state mutations bound to
+	// the template otherwise.
+	let panning = $state(false);
+	let panLastX = 0;
+	let panLastY = 0;
 
+	// Column-layout constants (X axis) — local to TopologySvg's
+	// 3-column rendering. The vertical geometry constants
+	// (NODE_HEIGHT, ROW_PITCH, TOP_PAD, BOTTOM_PAD, SVG_WIDTH,
+	// MIN_SVG_HEIGHT, computeSvgHeight) live in lib/topology/bounds.ts
+	// so TopologyControls + TopologySvg share the same source of
+	// truth for fit-view bbox computation.
 	const CLIENTS_X = 80;
 	const CLIENTS_WIDTH = 120;
 	const CLIENTS_RIGHT = CLIENTS_X + CLIENTS_WIDTH; // 200
@@ -47,9 +70,6 @@
 	const UPSTREAMS_X = 900;
 	const UPSTREAMS_WIDTH = 240;
 
-	const SVG_WIDTH = 1200;
-	const MIN_SVG_HEIGHT = 600;
-
 	/** Compute the Y coordinate of route i (top of its box). */
 	function routeY(i: number): number {
 		return TOP_PAD + i * ROW_PITCH;
@@ -60,11 +80,10 @@
 		return routeY(i) + NODE_HEIGHT / 2;
 	}
 
-	// Total SVG height: at least MIN_SVG_HEIGHT, otherwise tall enough
-	// to fit all routes.
-	const svgHeight = $derived(
-		Math.max(MIN_SVG_HEIGHT, TOP_PAD + routes.length * ROW_PITCH + BOTTOM_PAD)
-	);
+	// Total SVG height — delegated to the shared bounds module so
+	// TopologyControls fit-view stays in sync with the initial mount
+	// fit-view (same formula on both sides).
+	const svgHeight = $derived(computeSvgHeight(routes.length));
 
 	// Clients pillar spans the same Y range as the routes column.
 	const pillarTop = TOP_PAD;
@@ -121,15 +140,101 @@
 		if (isActive(r)) return 'active';
 		return 'idle';
 	}
+
+	// Animation params for node add/remove (Step F Chunk 4b.3).
+	// When the user prefers reduced motion, the durations collapse to
+	// 0 so the transition is functional but invisible — Svelte's
+	// transition machinery still runs (lifecycle hooks intact) but
+	// no animation frames are produced.
+	const addDuration = $derived(prefersReducedMotion.current ? 0 : 200);
+	const removeDuration = $derived(prefersReducedMotion.current ? 0 : 150);
+
+	// --- viewport interaction (Step F Chunk 4b.3) --------------------------
+
+	// The SVG content sits inside an inner <g> that follows viewport.x/y/k.
+	// All event coordinates below are in CSS-pixel space relative to the
+	// SVG root; the viewport store handles the topology↔screen math.
+
+	function onPointerDown(e: PointerEvent): void {
+		// Left button only; ignore right-click and middle-click for now.
+		if (e.button !== 0) return;
+		panning = true;
+		panLastX = e.clientX;
+		panLastY = e.clientY;
+		svgEl?.setPointerCapture(e.pointerId);
+	}
+
+	function onPointerMove(e: PointerEvent): void {
+		if (!panning) return;
+		const dx = e.clientX - panLastX;
+		const dy = e.clientY - panLastY;
+		panLastX = e.clientX;
+		panLastY = e.clientY;
+		viewport.pan(dx, dy);
+	}
+
+	function onPointerUp(e: PointerEvent): void {
+		if (!panning) return;
+		panning = false;
+		svgEl?.releasePointerCapture(e.pointerId);
+	}
+
+	function onWheel(e: WheelEvent): void {
+		// Trackpad pinch arrives with ctrlKey=true and a fine-grained
+		// deltaY; mouse wheel arrives without ctrlKey and coarser deltaY.
+		// Both feed the same zoom logic with a single tuning factor.
+		e.preventDefault();
+		const rect = svgEl?.getBoundingClientRect();
+		if (!rect) return;
+		const centerX = e.clientX - rect.left;
+		const centerY = e.clientY - rect.top;
+		// Wheel up (deltaY < 0) zooms in; wheel down zooms out.
+		// 0.0015 makes pinch + scroll feel similar on a Mac trackpad.
+		const factor = Math.exp(-e.deltaY * 0.0015);
+		viewport.zoom(factor, centerX, centerY);
+	}
+
+	onMount(() => {
+		// fitView on first paint to land on a sensible initial frame.
+		// Uses the shared computeTopologyBBox so TopologyControls'
+		// fit-view button reproduces the exact same cadrage on click.
+		// Wrapped in untrack so the read doesn't subscribe this effect
+		// to viewport state.
+		untrack(() => {
+			if (!svgEl) return;
+			const rect = svgEl.getBoundingClientRect();
+			viewport.fitView(
+				computeTopologyBBox(routes.length),
+				rect.width,
+				rect.height,
+				40
+			);
+		});
+		return () => viewport.reset();
+	});
+
 </script>
 
 <svg
+	bind:this={svgEl}
 	viewBox={`0 0 ${SVG_WIDTH} ${svgHeight}`}
 	preserveAspectRatio="xMidYMid meet"
 	class="topology-svg"
+	class:panning
 	role="img"
 	aria-label="Topology of {routes.length} routes"
+	onpointerdown={onPointerDown}
+	onpointermove={onPointerMove}
+	onpointerup={onPointerUp}
+	onpointercancel={onPointerUp}
+	onwheel={onWheel}
 >
+	<!-- Viewport content: pan/zoom transform applied to all topology
+	     children. The math (translate then scale) is in CSS-pixel
+	     space because the listeners feed deltas in client-pixel space.
+	     The SVG viewBox stays static so the coordinate system the
+	     children draw in doesn't change. -->
+	<g class="viewport-content" transform="translate({viewport.x} {viewport.y}) scale({viewport.k})">
 	<!-- Clients pillar (spec §6.2) -->
 	<g class="clients-pillar">
 		<rect
@@ -194,26 +299,41 @@
 		/>
 	{/each}
 
-	<!-- Route nodes -->
+	<!-- Route nodes. Each is wrapped in a <g> that carries the
+	     mount/unmount transitions; the <TopologyNode> component
+	     produces its own <g> inside. SVG transforms compose, so the
+	     wrapper's transition transforms layer on top of the
+	     viewport's translate(x) scale(k) without collision. -->
 	{#each routes as r, i (r.id)}
-		<TopologyNode
-			x={ROUTES_X}
-			y={routeY(i)}
-			width={ROUTES_WIDTH}
-			height={NODE_HEIGHT}
-			label={r.host}
-			reqPerSec={r.reqPerSec}
-			errRate5xx={r.errRate5xx}
-			nodeState={stateForRoute(r)}
-			selected={selectedRouteId === r.id}
-			onClick={() => onSelectRoute(r.id)}
-			{reducedMotion}
-		/>
+		<g
+			in:scale={{ duration: addDuration, easing: cubicOut, start: 0.8 }}
+			out:fade={{ duration: removeDuration, easing: cubicOut }}
+		>
+			<TopologyNode
+				x={ROUTES_X}
+				y={routeY(i)}
+				width={ROUTES_WIDTH}
+				height={NODE_HEIGHT}
+				label={r.host}
+				reqPerSec={r.reqPerSec}
+				errRate5xx={r.errRate5xx}
+				nodeState={stateForRoute(r)}
+				selected={selectedRouteId === r.id}
+				onClick={() => onSelectRoute(r.id)}
+				{reducedMotion}
+			/>
+		</g>
 	{/each}
 
-	<!-- Upstream nodes -->
+	<!-- Upstream nodes. Same mount/unmount animation as Routes;
+	     upstream dedup means add/remove fires only when a new URL
+	     appears or the last route pointing at it disappears. -->
 	{#each upstreams as u (u.url)}
-		<g class="upstream-node">
+		<g
+			class="upstream-node"
+			in:scale={{ duration: addDuration, easing: cubicOut, start: 0.8 }}
+			out:fade={{ duration: removeDuration, easing: cubicOut }}
+		>
 			<rect
 				x={UPSTREAMS_X}
 				y={u.y}
@@ -244,6 +364,7 @@
 			{/if}
 		</g>
 	{/each}
+	</g>
 </svg>
 
 <style>
@@ -251,6 +372,14 @@
 		display: block;
 		width: 100%;
 		height: auto;
+		cursor: grab;
+		/* Block touch-action so pointermove events fire reliably for
+		 * pan + wheel events aren't swallowed by browser scroll. */
+		touch-action: none;
+		user-select: none;
+	}
+	.topology-svg.panning {
+		cursor: grabbing;
 	}
 
 	.pillar-box {
@@ -260,22 +389,22 @@
 	}
 	.pillar-title {
 		fill: var(--text-secondary);
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 12px;
+		font-family: var(--font-sans);
+		font-size: var(--text-xs);
 		font-weight: 500;
 		text-transform: uppercase;
 		letter-spacing: 0.5px;
 	}
 	.pillar-total {
 		fill: var(--text-primary);
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 22px;
+		font-family: var(--font-mono);
+		font-size: var(--text-2xl);
 		font-weight: 600;
 	}
 	.pillar-unit {
 		fill: var(--text-secondary);
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 11px;
+		font-family: var(--font-mono);
+		font-size: var(--text-xs);
 	}
 
 	.upstream-box {
@@ -285,13 +414,13 @@
 	}
 	.upstream-url {
 		fill: var(--text-primary);
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 12px;
+		font-family: var(--font-mono);
+		font-size: var(--text-xs);
 		font-weight: 500;
 	}
 	.upstream-count {
 		fill: var(--text-secondary);
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 10px;
+		font-family: var(--font-sans);
+		font-size: var(--text-xs);
 	}
 </style>

@@ -12,6 +12,14 @@
 // The function is intentionally pure (no DOM access, no side
 // effects) so it's trivial to unit-test and to swap for a
 // force-directed variant later if a user reports needing it.
+//
+// CURRENTLY UNUSED in Chunk 4b — the user-validated "Path C" kept
+// the Step E 3-column layout (Clients pillar / Routes / Upstreams)
+// instead of pivoting to a grid. This module ships unconsumed but
+// fully tested as infra for Phase 2 sub-graphs or alternative
+// layouts (a topology view that wants a free-form grid, a
+// dependency graph between routes, etc.). Removal would be a
+// regression — kept here intentionally.
 
 import type { RouteState } from '$lib/stores/topology.svelte';
 
