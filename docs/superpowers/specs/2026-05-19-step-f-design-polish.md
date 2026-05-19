@@ -1209,6 +1209,45 @@ spring + tweened stores cover 90% of the listed patterns
 (FLIP), upgrade to `motion` at Chunk 4 (topology) where the need
 is most likely to surface.
 
+**FINAL DECISION (Chunk 3 spike, 2026-05-19)** : the bias was
+confirmed. Stay with `svelte/transition` + `svelte/motion`
+natives — no external animation library.
+
+Rationale captured during the Chunk 3 spike:
+
+- Every pattern listed in §10.2 (modal in/out, toast queue,
+  sidebar collapse, detail panel slide-in, Toggle knob spring,
+  theme swap) is covered by `transition:fade` / `fly` / `slide`
+  + `spring` / `tweened` stores + plain CSS transitions on tokens.
+- `motion@12.39.0` (MIT, current at spike date) was considered.
+  Its `motion/mini` entry would add ~5–6 kB gzip for `animate()`
+  only; the full bundle ~25–30 kB gzip. Neither is large in
+  absolute terms, but the natives cost 0 kB delta and stay in
+  the budget allotted by AC #11.
+- Chunk 4b uses `@xyflow/svelte`, which ships its own
+  layout-animation engine. The "we'll need `motion` for topology
+  layouts" hypothesis from §10.1 doesn't materialise.
+- `prefersReducedMotion` is a built-in Svelte 5 rune; using it
+  in concert with native transitions is idiomatic.
+- Decision is non-blocking: `motion` can be re-introduced
+  additively in a future chunk if a concrete use case appears
+  (complex sequencing, gesture-driven UI, etc.). No code in this
+  step needs to anticipate that switch.
+
+Implementation conventions (Chunk 3 onward):
+
+- Mount/unmount transitions: `transition:fade|fly|slide` from
+  `svelte/transition`, with `duration` derived from `--motion-*`
+  token values where practical.
+- Imperative tween (e.g., Toggle knob): CSS
+  `transition: <prop> var(--motion-base)` is preferred over
+  Svelte stores when the property is style-driven. Springs from
+  `svelte/motion` are reserved for values consumed by component
+  state (e.g., Topology future detail panel offset).
+- Reduced-motion: combine the `prefersReducedMotion` rune for
+  conditional logic + the global `@media (prefers-reduced-motion: reduce)`
+  block in `app.css` (Chunk 1) for CSS-driven fallbacks.
+
 ### 10.2 Patterns to support
 
 - **Modal in/out**: slide-up + fade with `--motion-slow`
