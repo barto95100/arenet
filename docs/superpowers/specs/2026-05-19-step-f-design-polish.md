@@ -735,6 +735,69 @@ renames.
 
 ## 6. Topology refonte (Svelte Flow)
 
+**FINAL DECISION (Chunk 4a spike, 2026-05-19) — NO-GO `@xyflow/svelte`.**
+A time-boxed POC at `src/routes/(spike)/svelte-flow/` rendered 100
+simulated routes in a 10×10 grid via `<SvelteFlow>` with a custom
+Svelte node component. The production bundle measured:
+
+| Asset | Raw | Gzipped |
+|---|---|---|
+| Page chunk (xyflow inlined into the route's JS chunk) | 154 951 B | **49 175 B** |
+| `@xyflow/svelte/dist/style.css` (mandatory import) | 18 483 B | **3 199 B** |
+| **Total spike footprint** | 173 434 B | **52 374 B** |
+| Budget set in AC #11 | — | **30 720 B (30 kB strict)** |
+| Dépassement | — | **+70 %** |
+
+Per the contract set at Chunk 4a kickoff, the bundle gate trips
+NO-GO regardless of FPS or visual quality — those were not measured
+(spike halted on critère #1).
+
+**Root cause**: `@xyflow/system` (671 kB unpacked, the shared
+engine with React Flow) has tightly interconnected modules —
+viewport math, drag handlers, edge routing, graph algorithms,
+selection / multi-selection logic, keyboard shortcuts — that Vite
+tree-shaking cannot eliminate when `<SvelteFlow>` is the top-level
+consumer. The library is designed for editor-style apps where
+every facility is used; we only need a static read-only viewer,
+but we'd pay for the editor weight.
+
+**Acceptable pre-conditions that DID pass** (kept for the record,
+not blocking):
+- `@xyflow/svelte@1.5.2` is stable MIT (no longer alpha — the
+  §6.1 paragraph below was based on the pre-spike doc and is now
+  outdated as a description of the *library state*; only the
+  *decision* is what matters here).
+- Svelte 5 peer dep is honored (`^5.25.0`), runes natively
+  supported, no React port shim.
+- Custom Svelte node integration took ~5 minutes including type
+  fixes — the API surface for `nodeTypes` is clean.
+
+**Plan Chunk 4b (fallback retained, not Cytoscape)**: extend the
+Step E `TopologySvg.svelte` with:
+- multi-route layout (grid or simple force-directed for small N,
+  homelab use-case rarely exceeds 50 routes);
+- pan/zoom via CSS transforms + wheel/pointer listeners (~50 lines
+  of code, no library);
+- restyle with the Chunk 3 tokens;
+- preserve the detail panel surface (spec §6.4 unchanged);
+- the persistent particle pipeline from Step E + Chunk 2 stays.
+
+Bundle stays on the current ~3 kB custom baseline (a 1500× delta
+against the xyflow alternative). Cytoscape.js (the §6.1 fallback
+mention) is **not** retained — same library-of-everything problem,
+unlikely to fit the budget either. If a future homelab user reports
+needing 500+ nodes and the custom SVG breaks down, that's the
+trigger to revisit a library; not for the v0.4 ship.
+
+The §6.1 through §6.9 subsections below describe the pre-decision
+plan for using `@xyflow/svelte`. **They are retained as historical
+context for the decision**, not as implementation guidance. Chunk
+4b implementation will reference §6.4 (detail panel preservation)
+and §6.5 (layout algorithm hints) selectively — the rest of the
+plan adapts to the custom-SVG path.
+
+---
+
 ### 6.1 Library choice — `@xyflow/svelte`
 
 `@xyflow/svelte` is the Svelte port of `react-flow` from the
@@ -1224,9 +1287,17 @@ Rationale captured during the Chunk 3 spike:
   only; the full bundle ~25–30 kB gzip. Neither is large in
   absolute terms, but the natives cost 0 kB delta and stay in
   the budget allotted by AC #11.
-- Chunk 4b uses `@xyflow/svelte`, which ships its own
-  layout-animation engine. The "we'll need `motion` for topology
-  layouts" hypothesis from §10.1 doesn't materialise.
+- Chunk 4b was originally planned to use `@xyflow/svelte`, which
+  the Chunk 3 spike assumed "ships its own layout-animation
+  engine". The Chunk 4a deep-dive corrected this: xyflow relies
+  on `svelte/transition` natives for mount/unmount only, with no
+  FLIP / position-interpolation engine. The "we'll need `motion`
+  for topology layouts" hypothesis from the pre-amendment §10.1
+  still doesn't materialise, but for a different reason — Chunk
+  4a went NO-GO on bundle (see §6 FINAL DECISION), so Chunk 4b
+  falls back to the Step E custom SVG which has no position
+  animations to begin with. Either way, no `motion` dependency
+  is needed.
 - `prefersReducedMotion` is a built-in Svelte 5 rune; using it
   in concert with native transitions is idiomatic.
 - Decision is non-blocking: `motion` can be re-introduced
