@@ -5,6 +5,8 @@
 -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { fade, fly } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
 
 	interface Props {
 		open?: boolean;
@@ -71,26 +73,32 @@
 </script>
 
 {#if open}
+	<!-- Backdrop: fade in/out via svelte/transition (Chunk 3.0 lib
+	     decision). Background uses --overlay-modal (rgba 0.8) so theme
+	     switches don't change the dim level. -->
 	<div
 		role="presentation"
-		class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-fade"
-		style:background-color="rgba(10, 14, 20, 0.8)"
-		style:backdrop-filter="blur(4px)"
+		class="modal-backdrop fixed inset-0 z-50 flex items-center justify-center p-4"
 		onclick={(e) => {
 			if (e.target === e.currentTarget) onClose();
 		}}
-		onkeydown={(e) => {
+		onkeydown={() => {
 			/* keydown is handled at document level via $effect; this stub keeps
 			   svelte/a11y happy on the click handler. */
 		}}
+		transition:fade={{ duration: 200, easing: cubicOut }}
 	>
+		<!-- Dialog: fly + fade per spec §10.2 (slide-up + fade with
+		     --motion-slow 400ms). Both directions (in/out) are now
+		     animated — pre-Chunk-3 only the entry was. -->
 		<div
 			bind:this={dialog}
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby={titleId}
 			tabindex="-1"
-			class="bg-elevated border border-border-default rounded-lg shadow-2xl w-full max-w-md modal-slide-up focus:outline-none"
+			class="bg-elevated border border-border-default rounded-lg shadow-lg w-full max-w-md focus:outline-none"
+			transition:fly={{ y: 20, duration: 400, easing: cubicOut }}
 		>
 			<header class="px-5 py-4 border-b border-border-subtle">
 				<h2 id={titleId} class="text-lg font-semibold">{title}</h2>
@@ -106,28 +114,8 @@
 {/if}
 
 <style>
-	.modal-fade {
-		animation: fade-in 200ms ease-out;
-	}
-	.modal-slide-up {
-		animation: slide-up 200ms ease-out;
-	}
-	@keyframes fade-in {
-		from {
-			opacity: 0;
-		}
-		to {
-			opacity: 1;
-		}
-	}
-	@keyframes slide-up {
-		from {
-			opacity: 0;
-			transform: translateY(20px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
+	.modal-backdrop {
+		background-color: var(--overlay-modal);
+		backdrop-filter: blur(4px);
 	}
 </style>

@@ -15,6 +15,8 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { fade } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { ApiError } from '$lib/api/types';
 	import Input from './Input.svelte';
@@ -57,12 +59,11 @@
 </script>
 
 <div
-	class="fixed inset-0 z-[1000] flex items-center justify-center"
-	style:background-color="rgba(10, 14, 20, 0.8)"
-	style:backdrop-filter="blur(8px)"
+	class="lockscreen-backdrop fixed inset-0 z-[1000] flex items-center justify-center"
 	role="dialog"
 	aria-modal="true"
 	aria-labelledby="lockscreen-title"
+	transition:fade={{ duration: 200, easing: cubicOut }}
 >
 	<div
 		class="bg-elevated border border-border-default rounded-lg shadow-glow-cyan p-8 w-96 max-w-full mx-4"
@@ -101,3 +102,13 @@
 		</form>
 	</div>
 </div>
+
+<style>
+	/* The LockScreen overlay uses --overlay-lock (rgba 0.95) — more
+	 * opaque than Modal's --overlay-modal (0.8) because the lock is
+	 * a security boundary, not a contextual focus surface. */
+	.lockscreen-backdrop {
+		background-color: var(--overlay-lock);
+		backdrop-filter: blur(8px);
+	}
+</style>
