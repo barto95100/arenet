@@ -26,23 +26,28 @@
 </div>
 
 <style>
+	/* Toast variant colors use the --toast-*-{bg,border} tokens from
+	 * tokens.css (Chunk 3.1 additions, @20% color-mix tint). The
+	 * Step C glow box-shadow becomes the generic --shadow-md so we
+	 * don't need three per-color glow tokens — visually slightly
+	 * tamer but consistent with cards and modals. A green glow
+	 * (success) could be reintroduced as --shadow-glow-green if the
+	 * Chunk 7 smoke wants the punchier look back. */
 	.toast {
-		animation: slide-in 200ms ease-out;
+		animation: slide-in var(--motion-base);
+		box-shadow: var(--shadow-md);
 	}
 	.toast[data-variant='success'] {
-		border-color: rgba(0, 255, 136, 0.4);
-		background-color: rgba(0, 255, 136, 0.1);
-		box-shadow: 0 0 12px rgba(0, 255, 136, 0.4);
+		border-color: var(--toast-success-border);
+		background-color: var(--toast-success-bg);
 	}
 	.toast[data-variant='danger'] {
-		border-color: rgba(255, 71, 87, 0.4);
-		background-color: rgba(255, 71, 87, 0.1);
-		box-shadow: 0 0 12px rgba(255, 71, 87, 0.4);
+		border-color: var(--toast-danger-border);
+		background-color: var(--toast-danger-bg);
 	}
 	.toast[data-variant='info'] {
-		border-color: rgba(0, 217, 255, 0.4);
-		background-color: rgba(0, 217, 255, 0.1);
-		box-shadow: 0 0 16px rgba(0, 217, 255, 0.4);
+		border-color: var(--toast-info-border);
+		background-color: var(--toast-info-bg);
 	}
 	@keyframes slide-in {
 		from {

@@ -103,14 +103,14 @@
 	.audit-badge {
 		display: inline-flex;
 		align-items: center;
-		padding: 0.125rem 0.5rem;
-		font-size: 12px;
+		padding: 2px var(--space-2);
+		font-size: var(--text-xs);
 		font-weight: 500;
-		border-radius: 9999px;
+		border-radius: var(--radius-full);
 		border: 1px solid;
 		line-height: 1.5;
 		cursor: pointer;
-		transition: opacity 150ms ease-out;
+		transition: opacity var(--motion-fast);
 	}
 	.audit-badge:hover {
 		opacity: 0.85;
@@ -120,33 +120,37 @@
 		outline-offset: 2px;
 	}
 	/*
-	 * One rule per category (spec §9.4). Background at 30% opacity, border
-	 * at full opacity, white text — matches the Step C button glass effect.
+	 * One rule per category (spec §9.4). Uses --badge-*-{bg,border}
+	 * tokens from tokens.css (Chunk 3.1). Pre-Chunk-3 these were 5
+	 * rgba()@30% blocks; switching to the shared 15% mix aligns the
+	 * audit category badges with Badge.svelte's variant pairs across
+	 * the app. White text (--text-on-color) on the tinted backgrounds
+	 * stays legible because the border carries the saturated hue.
 	 */
 	.audit-badge[data-category='auth'] {
-		background: rgba(0, 217, 255, 0.3);
-		border-color: var(--accent-cyan);
-		color: #ffffff;
+		background: var(--badge-info-bg);
+		border-color: var(--badge-info-border);
+		color: var(--text-on-color);
 	}
 	.audit-badge[data-category='mutation'] {
-		background: rgba(255, 170, 0, 0.3);
-		border-color: var(--status-warn);
-		color: #ffffff;
+		background: var(--badge-warning-bg);
+		border-color: var(--badge-warning-border);
+		color: var(--text-on-color);
 	}
 	.audit-badge[data-category='security'] {
-		background: rgba(255, 71, 87, 0.3);
-		border-color: var(--status-down);
-		color: #ffffff;
+		background: var(--badge-danger-bg);
+		border-color: var(--badge-danger-border);
+		color: var(--text-on-color);
 	}
 	.audit-badge[data-category='hibp'] {
-		background: rgba(167, 139, 250, 0.3);
-		border-color: var(--status-info);
-		color: #ffffff;
+		background: var(--badge-violet-bg);
+		border-color: var(--badge-violet-border);
+		color: var(--text-on-color);
 	}
 	.audit-badge[data-category='meta'] {
-		background: rgba(148, 163, 184, 0.3);
-		border-color: var(--status-meta);
-		color: #ffffff;
+		background: var(--badge-meta-bg);
+		border-color: var(--badge-meta-border);
+		color: var(--text-on-color);
 	}
 	.audit-badge[data-category='unknown'] {
 		background: var(--bg-elevated);

@@ -108,14 +108,14 @@
 
 <style>
 	.json-block {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 11.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-xs);
 		line-height: 1.5;
 		color: var(--text-primary);
 		background: var(--bg-base);
 		border: 1px solid var(--border-subtle);
-		border-radius: 4px;
-		padding: 0.5rem 0.75rem;
+		border-radius: var(--radius-sm);
+		padding: var(--space-2) var(--space-3);
 		max-height: 24rem;
 		overflow: auto;
 		white-space: pre-wrap;

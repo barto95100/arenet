@@ -85,7 +85,9 @@
 	 * outside its parent <tr> flow, while still animating smoothly.
 	 */
 	.data-row {
-		transition: background-color 150ms ease-out, box-shadow 150ms ease-out;
+		transition:
+			background-color var(--motion-fast),
+			box-shadow var(--motion-fast);
 	}
 	.data-row:hover {
 		background-color: var(--bg-hover);
