@@ -120,35 +120,35 @@
 		outline-offset: 2px;
 	}
 	/*
-	 * One rule per category (spec §9.4). Uses --badge-*-{bg,border}
-	 * tokens from tokens.css (Chunk 3.1). Pre-Chunk-3 these were 5
-	 * rgba()@30% blocks; switching to the shared 15% mix aligns the
-	 * audit category badges with Badge.svelte's variant pairs across
-	 * the app. White text (--text-on-color) on the tinted backgrounds
-	 * stays legible because the border carries the saturated hue.
+	 * One rule per category (spec §9.4). Uses --badge-*-{bg-strong,border}
+	 * token pairs from tokens.css. The "strong" variant (@30% tint)
+	 * is required here because the text is white (--text-on-color)
+	 * on top — the base @15% tint dropped below readable contrast
+	 * in light theme (Chunk 3.5 smoke fix). Badge.svelte keeps the
+	 * @15% base because its text is the saturated color, not white.
 	 */
 	.audit-badge[data-category='auth'] {
-		background: var(--badge-info-bg);
+		background: var(--badge-info-bg-strong);
 		border-color: var(--badge-info-border);
 		color: var(--text-on-color);
 	}
 	.audit-badge[data-category='mutation'] {
-		background: var(--badge-warning-bg);
+		background: var(--badge-warning-bg-strong);
 		border-color: var(--badge-warning-border);
 		color: var(--text-on-color);
 	}
 	.audit-badge[data-category='security'] {
-		background: var(--badge-danger-bg);
+		background: var(--badge-danger-bg-strong);
 		border-color: var(--badge-danger-border);
 		color: var(--text-on-color);
 	}
 	.audit-badge[data-category='hibp'] {
-		background: var(--badge-violet-bg);
+		background: var(--badge-violet-bg-strong);
 		border-color: var(--badge-violet-border);
 		color: var(--text-on-color);
 	}
 	.audit-badge[data-category='meta'] {
-		background: var(--badge-meta-bg);
+		background: var(--badge-meta-bg-strong);
 		border-color: var(--badge-meta-border);
 		color: var(--text-on-color);
 	}

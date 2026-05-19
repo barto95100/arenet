@@ -186,9 +186,13 @@
 		class="sidebar-footer px-4 py-3 border-t border-border-subtle flex flex-col gap-2"
 		transition:fade={{ duration: 200 }}
 	>
-		<!-- Connection status -->
+		<!-- Connection status. The StatusDot is small (8x8); wrapping
+		     it in a 24x24 .footer-icon-slot aligns its trailing label
+		     with the avatar/theme rows (Chunk 3.5 smoke fix). -->
 		<div class="flex items-center gap-2 text-xs" class:justify-center={collapsed}>
-			<StatusDot status="up" />
+			<span class="footer-icon-slot">
+				<StatusDot status="up" />
+			</span>
 			<span class:hidden={collapsed} class="text-secondary">Connected</span>
 		</div>
 
@@ -205,9 +209,11 @@
 
 		<!-- Theme indicator (passive — does not toggle; the active
 		     control lives in Settings). Sun for light, moon for dark.
-		     Reads theme.current directly so it tracks the store. -->
+		     Reads theme.current directly so it tracks the store.
+		     The icon (14x14 sun/moon) sits inside a 24x24 .footer-icon-slot
+		     so the trailing label aligns with the other footer rows. -->
 		<div class="flex items-center gap-2 text-xs" class:justify-center={collapsed}>
-			<span class="text-muted shrink-0" aria-hidden="true">
+			<span class="footer-icon-slot text-muted" aria-hidden="true">
 				{#if theme.current === 'light'}
 					<!-- Lucide: sun -->
 					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -307,5 +313,18 @@
 		font-weight: 600;
 		color: var(--text-secondary);
 		line-height: 1;
+	}
+	/* 24x24 wrapper for footer-row icons so labels (Connected /
+	 * username / theme name) align under each other regardless of
+	 * the icon's intrinsic size. Avatar is already 24x24 so it
+	 * does not need this class; StatusDot (8x8) and the theme
+	 * sun/moon SVG (14x14) do. Chunk 3.5 smoke fix. */
+	.footer-icon-slot {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 24px;
+		height: 24px;
+		flex-shrink: 0;
 	}
 </style>

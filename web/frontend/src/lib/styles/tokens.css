@@ -178,6 +178,19 @@
 	--badge-meta-bg: color-mix(in srgb, var(--status-meta) 15%, transparent);
 	--badge-meta-border: var(--status-meta);
 
+	/* Strong variants (30% tint) for badges that carry white text
+	 * (--text-on-color). The base @15% works for badges whose text
+	 * is the saturated color itself (Badge.svelte component) but
+	 * isn't legible enough for filled white-text usage like the
+	 * AuditRow category badges — surfaced during Chunk 3 smoke in
+	 * light theme where blank-on-pale-tint dropped below the
+	 * readable contrast threshold. */
+	--badge-info-bg-strong: color-mix(in srgb, var(--accent-cyan) 30%, transparent);
+	--badge-warning-bg-strong: color-mix(in srgb, var(--status-warn) 30%, transparent);
+	--badge-danger-bg-strong: color-mix(in srgb, var(--status-down) 30%, transparent);
+	--badge-violet-bg-strong: color-mix(in srgb, var(--status-info) 30%, transparent);
+	--badge-meta-bg-strong: color-mix(in srgb, var(--status-meta) 30%, transparent);
+
 	/* Toast variants — same recipe as badges, slightly stronger
 	 * tint (20%) because toasts are larger surfaces and need to
 	 * read more clearly at a glance. */
