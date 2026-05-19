@@ -54,6 +54,31 @@
 	src: url('/fonts/JetBrainsMono-Medium.woff2') format('woff2');
 }
 
+/* Geist Mono — primary monospace per spec §2.7. Self-hosted from
+ * @fontsource/geist-mono (OFL-1.1). Latin subset only; ~13 kB / weight.
+ * License copy lives at /static/fonts/GeistMono-LICENSE.txt. */
+@font-face {
+	font-family: 'Geist Mono';
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url('/fonts/GeistMono-Regular.woff2') format('woff2');
+}
+@font-face {
+	font-family: 'Geist Mono';
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url('/fonts/GeistMono-Medium.woff2') format('woff2');
+}
+@font-face {
+	font-family: 'Geist Mono';
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url('/fonts/GeistMono-SemiBold.woff2') format('woff2');
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
