@@ -44,7 +44,7 @@
 			class:opacity-50={disabled}
 		>
 			{#if checked}
-				<svg viewBox="0 0 16 16" class="w-4 h-4 text-inverse" fill="none">
+				<svg viewBox="0 0 16 16" class="w-4 h-4 text-on-color" fill="none">
 					<path
 						d="M3 8.5l3 3 7-7"
 						stroke="currentColor"

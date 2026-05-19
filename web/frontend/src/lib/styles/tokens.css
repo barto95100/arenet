@@ -139,4 +139,54 @@
 	--text-lg: 16px;
 	--text-xl: 18px;
 	--text-2xl: 22px;
+
+	/* ------------------------------------------------------------------
+	 * Step F Chunk 3 additions — text-on-color, overlays, badge/toast
+	 * variant pairs. All mode-independent unless noted.
+	 * ------------------------------------------------------------------ */
+
+	/* Text drawn on top of saturated colored backgrounds (filled
+	 * badges, primary buttons, accent banners). White holds enough
+	 * contrast on both the dark and light accent/status values. */
+	--text-on-color: #ffffff;
+
+	/* Full-surface dim overlays. Sombre uniformly across themes:
+	 * a light-translucent overlay in light theme reads as washed
+	 * out (Linear/Vercel/Notion all keep dark overlays). */
+	--overlay-modal: rgba(10, 14, 20, 0.8); /* Modal backdrop. */
+	--overlay-lock: rgba(10, 14, 20, 0.95); /* LockScreen — more opaque. */
+
+	/* Badge variants — tinted background + saturated border.
+	 * Uses color-mix() so the underlying token follows [data-theme],
+	 * keeping the 15% tint consistent in both modes. Chrome 111+,
+	 * Safari 16.2+, Firefox 113+ — safe for Step F (2026). */
+	--badge-info-bg: color-mix(in srgb, var(--accent-cyan) 15%, transparent);
+	--badge-info-border: var(--accent-cyan);
+
+	--badge-success-bg: color-mix(in srgb, var(--status-up) 15%, transparent);
+	--badge-success-border: var(--status-up);
+
+	--badge-warning-bg: color-mix(in srgb, var(--status-warn) 15%, transparent);
+	--badge-warning-border: var(--status-warn);
+
+	--badge-danger-bg: color-mix(in srgb, var(--status-down) 15%, transparent);
+	--badge-danger-border: var(--status-down);
+
+	--badge-violet-bg: color-mix(in srgb, var(--status-info) 15%, transparent);
+	--badge-violet-border: var(--status-info);
+
+	--badge-meta-bg: color-mix(in srgb, var(--status-meta) 15%, transparent);
+	--badge-meta-border: var(--status-meta);
+
+	/* Toast variants — same recipe as badges, slightly stronger
+	 * tint (20%) because toasts are larger surfaces and need to
+	 * read more clearly at a glance. */
+	--toast-success-bg: color-mix(in srgb, var(--status-up) 20%, transparent);
+	--toast-success-border: var(--status-up);
+
+	--toast-danger-bg: color-mix(in srgb, var(--status-down) 20%, transparent);
+	--toast-danger-border: var(--status-down);
+
+	--toast-info-bg: color-mix(in srgb, var(--accent-cyan) 20%, transparent);
+	--toast-info-border: var(--accent-cyan);
 }

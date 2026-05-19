@@ -24,46 +24,43 @@
 	.badge {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.25rem;
-		padding: 0.125rem 0.5rem;
-		font-size: 12px;
+		gap: var(--space-1);
+		padding: 2px var(--space-2);
+		font-size: var(--text-xs);
 		font-weight: 500;
-		border-radius: 9999px;
+		border-radius: var(--radius-full);
 		border: 1px solid;
 		line-height: 1.5;
 	}
 
-	/*
-	 * Each variant uses three shades of the same hue:
-	 * - background = 15% opacity tint
-	 * - border = 40% opacity tint
-	 * - text = full hue
-	 * Implemented with explicit rgba()/hsl() values because Tailwind v3 cannot
-	 * derive opacity variants from CSS custom properties without extra plumbing.
-	 */
+	/* Variants use the --badge-*-{bg,border} token pairs from
+	 * tokens.css (Step F Chunk 3 additions). bg is a 15% tint of
+	 * the variant's accent/status color via color-mix(); border is
+	 * the saturated source color. Text is also the saturated source.
+	 * Pre-Chunk-3 these were 5 rgba() hardcoded blocks per variant. */
 	.badge[data-variant='tls'] {
-		background: rgba(0, 217, 255, 0.15);
-		border-color: rgba(0, 217, 255, 0.4);
+		background: var(--badge-info-bg);
+		border-color: var(--badge-info-border);
 		color: var(--accent-cyan);
 	}
 	.badge[data-variant='waf'] {
-		background: rgba(167, 139, 250, 0.15);
-		border-color: rgba(167, 139, 250, 0.4);
+		background: var(--badge-violet-bg);
+		border-color: var(--badge-violet-border);
 		color: var(--status-info);
 	}
 	.badge[data-variant='status-up'] {
-		background: rgba(0, 255, 136, 0.15);
-		border-color: rgba(0, 255, 136, 0.4);
+		background: var(--badge-success-bg);
+		border-color: var(--badge-success-border);
 		color: var(--status-up);
 	}
 	.badge[data-variant='status-warn'] {
-		background: rgba(255, 170, 0, 0.15);
-		border-color: rgba(255, 170, 0, 0.4);
+		background: var(--badge-warning-bg);
+		border-color: var(--badge-warning-border);
 		color: var(--status-warn);
 	}
 	.badge[data-variant='status-down'] {
-		background: rgba(255, 71, 87, 0.15);
-		border-color: rgba(255, 71, 87, 0.4);
+		background: var(--badge-danger-bg);
+		border-color: var(--badge-danger-border);
 		color: var(--status-down);
 	}
 	.badge[data-variant='neutral'] {
