@@ -262,9 +262,38 @@ class TopologyStore {
 	}
 
 	/** Apply one Snapshot frame. Called by the page after the
-	 *  TopologyClient delivers a JSON tick. Bumps `version`. */
+	 *  TopologyClient delivers a JSON tick. Bumps `version`.
+	 *
+	 *  Step F §7.1 — Orphan prune. Servers send full-state ticks
+	 *  (spec §5.2): every active route appears in every snapshot.
+	 *  A route present in the store but absent from this snapshot
+	 *  has therefore been removed via the routes API (or otherwise
+	 *  gone). We delete it so the topology page doesn't keep dead
+	 *  nodes until a full reload.
+	 *
+	 *  The prune lives on the *store* `apply` method, not on the
+	 *  `applyTick` pure helper, deliberately: the helper's contract
+	 *  (doc-comment lines 97-102) promises it does NOT remove
+	 *  missing routes, and an existing test enforces that contract.
+	 *  Pruning here gives the page the behavior it needs without
+	 *  breaking helper-level consumers (none today, but the
+	 *  separation is cheap to keep).
+	 *
+	 *  The single `version++` after both operations is enough — a
+	 *  prune-only tick (snapshot with one fewer route, no other
+	 *  field changes) still bumps `version`, so consumers'
+	 *  `$derived` blocks re-evaluate and pick up the shrunken map. */
 	apply(snap: Snapshot): void {
 		applyTick(this.routes, snap);
+		// Orphan prune (§7.1) — must run AFTER applyTick (which may
+		// have inserted ids carried by the snapshot) so we only drop
+		// routes that are genuinely absent.
+		const snapshotIds = new Set(snap.routes.map((r) => r.id));
+		for (const id of this.routes.keys()) {
+			if (!snapshotIds.has(id)) {
+				this.routes.delete(id);
+			}
+		}
 		this.version++;
 		this.lastTickAt = new Date();
 	}

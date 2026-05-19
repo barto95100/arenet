@@ -370,6 +370,30 @@ describe('TopologyStore.apply (singleton)', () => {
 		expect(topology.totalReqPerSec).toBe(10);
 	});
 
+	it('removes routes absent from snapshot (orphan prune §7.1)', async () => {
+		const { topology } = await import('./topology.svelte');
+		topology.clear();
+
+		topology.apply(
+			snap([
+				{ id: 'r1', host: 'a.local', upstream: 'http://10.0.0.1/', reqs: 1, errs: 0, reqPerSec: 1, errRate5xx: 0 },
+				{ id: 'r2', host: 'b.local', upstream: 'http://10.0.0.2/', reqs: 1, errs: 0, reqPerSec: 1, errRate5xx: 0 }
+			])
+		);
+		expect(topology.size).toBe(2);
+
+		// Second tick drops r2 — store must follow suit.
+		topology.apply(
+			snap([
+				{ id: 'r1', host: 'a.local', upstream: 'http://10.0.0.1/', reqs: 2, errs: 0, reqPerSec: 2, errRate5xx: 0 }
+			])
+		);
+		expect(topology.size).toBe(1);
+		expect(topology.get('r2')).toBeUndefined();
+		// r1 must still be there with the updated reqPerSec.
+		expect(topology.get('r1')?.reqPerSec).toBe(2);
+	});
+
 	it('clear() empties the store', async () => {
 		const { topology } = await import('./topology.svelte');
 		topology.clear();

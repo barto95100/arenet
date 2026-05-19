@@ -19,6 +19,7 @@
 		COLOR_ERROR_THRESHOLD,
 		PARTICLE_DENSITY_CAP
 	} from '$lib/stores/topology-constants';
+	import { topology } from '$lib/stores/topology.svelte';
 
 	interface Props {
 		x1: number;
@@ -84,6 +85,12 @@
 			spawnTimer = null;
 		}
 		if (reducedMotion) return;
+		// Pause spawning while the WebSocket is not connected (Step F
+		// §7.2). reqPerSec values frozen at the moment of disconnect
+		// would otherwise keep streaming particles for stale routes,
+		// producing the misleading "everything looks fine" illusion
+		// during an outage.
+		if (topology.connectionStatus !== 'connected') return;
 		// Skip spawning while the tab is hidden — the RAF that drives
 		// particle completion is also throttled there, so spawning
 		// would just inflate the cap with stuck circles.
@@ -94,11 +101,20 @@
 		spawnTimer = setInterval(spawnOne, intervalMs);
 	}
 
-	// Re-tune the spawn timer whenever reqPerSec or reducedMotion changes.
+	// Re-tune the spawn timer whenever any of its inputs change.
+	// connectionStatus is a plain $state primitive in the topology
+	// store — reactive cross-module per the version-counter doc
+	// (topology.svelte.ts lines 199-220), no `void topology.version`
+	// needed here.
+	//
+	// Regression test for the disconnect-pause behavior is deferred
+	// to Chunk 7 — it needs @testing-library/svelte which installs
+	// then. See MetricEdge.test.ts in that chunk.
 	$effect(() => {
 		// Read the dependencies to subscribe.
 		void reqPerSec;
 		void reducedMotion;
+		void topology.connectionStatus;
 		restartSpawnTimer();
 	});
 
