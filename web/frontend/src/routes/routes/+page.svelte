@@ -18,6 +18,7 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Checkbox from '$lib/components/Checkbox.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	let routes = $state<Route[]>([]);
 	let loading = $state(true);
@@ -158,13 +159,11 @@
 	}
 </script>
 
-<div class="flex items-start justify-between">
-	<div>
-		<h1 class="text-4xl font-semibold">Routes</h1>
-		<p class="text-secondary text-sm mt-1">Manage reverse proxy routes.</p>
-	</div>
-	<Button onclick={openCreate}>+ Add route</Button>
-</div>
+<PageHeader title="Routes" subtitle="Manage reverse proxy routes.">
+	{#snippet actions()}
+		<Button onclick={openCreate}>+ Add route</Button>
+	{/snippet}
+</PageHeader>
 
 {#if loading}
 	<div class="flex items-center gap-2 mt-12 text-secondary">
