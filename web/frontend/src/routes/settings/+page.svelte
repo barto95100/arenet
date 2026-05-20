@@ -35,13 +35,13 @@
 
 <div class="mx-auto max-w-2xl">
 	<h1 class="text-4xl font-semibold">Settings</h1>
-	<p class="mt-1 text-sm" style:color="var(--text-secondary)">
+	<p class="mt-1 text-sm text-secondary">
 		Application preferences.
 	</p>
 
 	<section class="mt-10">
 		<h2 class="text-xl font-semibold">Appearance</h2>
-		<p class="mt-1 text-sm" style:color="var(--text-secondary)">
+		<p class="mt-1 text-sm text-secondary">
 			Pick a theme. The change applies immediately and is saved to your account.
 		</p>
 
@@ -57,14 +57,13 @@
 
 		<!-- Debug strip (smoke-only). Removed when this file is rewritten
 		     for the real Settings page in Chunk 6. -->
-		<dl class="mt-6 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs font-mono"
-		    style:color="var(--text-muted)">
+		<dl class="mt-6 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs font-mono text-muted">
 			<dt>theme.current</dt>
-			<dd style:color="var(--text-primary)">{theme.current}</dd>
+			<dd class="text-primary">{theme.current}</dd>
 			<dt>theme.isApplying</dt>
-			<dd style:color="var(--text-primary)">{theme.isApplying}</dd>
+			<dd class="text-primary">{theme.isApplying}</dd>
 			<dt>data-theme attr</dt>
-			<dd style:color="var(--text-primary)">
+			<dd class="text-primary">
 				{typeof document !== 'undefined'
 					? (document.documentElement.dataset.theme ?? '(unset)')
 					: '(ssr)'}
@@ -72,7 +71,7 @@
 		</dl>
 	</section>
 
-	<p class="mt-12 text-xs" style:color="var(--text-muted)">
+	<p class="mt-12 text-xs text-muted">
 		Full Settings page lands in Chunk 6 (spec §9). This is a Chunk 1
 		smoke-validation placeholder.
 	</p>
