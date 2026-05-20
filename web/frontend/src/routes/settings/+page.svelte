@@ -244,6 +244,43 @@
 		{/if}
 	</Card>
 
+	<!-- ABOUT SECTION (Step F Chunk 6.3 / spec §8.6 About) -->
+	<Card padding="p-6" class="mb-6">
+		<header class="border-b border-border-subtle pb-3 mb-4">
+			<h2 class="text-xl font-semibold">About</h2>
+		</header>
+
+		<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-3 text-sm">
+			<dt class="text-secondary">Version</dt>
+			<dd class="text-primary font-mono">{import.meta.env.VITE_APP_VERSION}</dd>
+
+			<dt class="text-secondary">License</dt>
+			<dd>
+				<a
+					href="https://github.com/barto95100/arenet/blob/{import.meta.env
+						.VITE_APP_VERSION}/LICENSE"
+					target="_blank"
+					rel="noopener noreferrer"
+					class="text-cyan hover:underline"
+				>
+					AGPL v3
+				</a>
+			</dd>
+
+			<dt class="text-secondary">Source</dt>
+			<dd>
+				<a
+					href="https://github.com/barto95100/arenet"
+					target="_blank"
+					rel="noopener noreferrer"
+					class="text-cyan hover:underline"
+				>
+					github.com/barto95100/arenet
+				</a>
+			</dd>
+		</dl>
+	</Card>
+
 	<!-- ChangePasswordModal mounted locally (Option B). The
 	     layout-level instance handles the compromised-banner flow;
 	     this one handles the explicit user click in Settings. They're
