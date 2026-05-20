@@ -122,6 +122,19 @@
 		return s.slice(0, max) + '…';
 	}
 
+	// License URL ref resolution (Step G G.2).
+	// `git describe --tags --always` produces three shapes:
+	//   - clean tag   → `v0.4.0-step-f`           (valid GitHub ref)
+	//   - describe    → `v0.4.0-step-f-3-g7471243` (NOT a ref → 404)
+	//   - bare sha    → `7471243`                  (NOT a ref → 404)
+	// Also `unknown` when git is unavailable (vite.config.ts fallback).
+	// Clean tag is the only shape we can safely use as a GitHub ref;
+	// every other shape falls back to `main` to avoid the 404.
+	const appVersion = import.meta.env.VITE_APP_VERSION;
+	const isCleanTag =
+		/^v[^\s]+$/.test(appVersion) && !/-\d+-g[0-9a-f]{7,40}$/.test(appVersion);
+	const licenseRef = isCleanTag ? appVersion : 'main';
+
 	onMount(() => {
 		void loadSessions();
 	});
@@ -291,8 +304,7 @@
 			<dt class="text-secondary">License</dt>
 			<dd>
 				<a
-					href="https://github.com/barto95100/arenet/blob/{import.meta.env
-						.VITE_APP_VERSION}/LICENSE"
+					href="https://github.com/barto95100/arenet/blob/{licenseRef}/LICENSE"
 					target="_blank"
 					rel="noopener noreferrer"
 					class="text-cyan hover:underline"
