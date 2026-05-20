@@ -259,7 +259,7 @@
 						</td>
 						<td class="px-4 py-3 text-sm">
 							{#if s.isCurrent}
-								<Badge variant="tls">Current</Badge>
+								<Badge variant="current">Current</Badge>
 							{/if}
 						</td>
 						<td class="px-4 py-3 text-sm text-right">

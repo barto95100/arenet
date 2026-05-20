@@ -6,7 +6,14 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 
-	type Variant = 'tls' | 'waf' | 'status-up' | 'status-warn' | 'status-down' | 'neutral';
+	type Variant =
+		| 'tls'
+		| 'waf'
+		| 'status-up'
+		| 'status-warn'
+		| 'status-down'
+		| 'neutral'
+		| 'current';
 
 	interface Props {
 		variant?: Variant;
@@ -67,5 +74,16 @@
 		background: var(--bg-elevated);
 		border-color: var(--border-default);
 		color: var(--text-secondary);
+	}
+	/* "current" reuses the cyan info palette but exists as its own
+	 * variant name for caller-side semantics. Sessions table marks
+	 * the active session with <Badge variant="current">; reading
+	 * variant="current" makes the intent obvious, whereas
+	 * variant="tls" (the Chunk 6.2 placeholder) suggested a TLS
+	 * indicator. Chunk 7.5 smoke fix. */
+	.badge[data-variant='current'] {
+		background: var(--badge-info-bg);
+		border-color: var(--badge-info-border);
+		color: var(--accent-cyan);
 	}
 </style>

@@ -30,7 +30,8 @@ type BadgeVariant =
 	| 'status-up'
 	| 'status-warn'
 	| 'status-down'
-	| 'neutral';
+	| 'neutral'
+	| 'current';
 
 describe('Badge', () => {
 	it.each<BadgeVariant>([
@@ -39,7 +40,8 @@ describe('Badge', () => {
 		'status-up',
 		'status-warn',
 		'status-down',
-		'neutral'
+		'neutral',
+		'current'
 	])('renders with data-variant="%s"', (variant) => {
 		const { container } = render(Badge, {
 			variant,
