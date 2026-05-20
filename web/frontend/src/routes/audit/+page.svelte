@@ -22,6 +22,7 @@
 	import Spinner from '$lib/components/Spinner.svelte';
 	import AuditRow from '$lib/components/AuditRow.svelte';
 	import AuditExpandedDetails from '$lib/components/AuditExpandedDetails.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	// 15 action values per D7 (canonical list lives in
 	// docs/superpowers/decisions/2026-05-17-step-d-design-decisions-final.md).
@@ -169,14 +170,20 @@
 	<title>Audit log — Arenet</title>
 </svelte:head>
 
-<div class="space-y-6">
-	<div>
-		<h1 class="text-4xl font-semibold text-primary">Audit log</h1>
-		<p class="text-secondary mt-1">
-			Review authentication events and route mutations.
-		</p>
-	</div>
+<PageHeader
+	title="Audit log"
+	subtitle="Review authentication events and route mutations."
+>
+	{#snippet actions()}
+		{#if hasAnyFilter}
+			<Button variant="ghost" size="sm" onclick={clearAllFilters}>
+				Clear filters
+			</Button>
+		{/if}
+	{/snippet}
+</PageHeader>
 
+<div class="space-y-6">
 	<!-- Filters: changes auto-apply with 300ms debounce -->
 	<div
 		class="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-elevated border border-border-default rounded-lg"
@@ -253,13 +260,10 @@
 					>×</button>
 				</span>
 			{/if}
-			<button
-				type="button"
-				class="text-xs text-secondary hover:text-primary ml-2"
-				onclick={clearAllFilters}
-			>
-				Clear all filters
-			</button>
+			<!-- "Clear all filters" button moved to PageHeader actions
+			     slot in Chunk 5.2. The per-pill × buttons stay here for
+			     granular removal; the bulk-clear action lives at the
+			     page level. -->
 		</div>
 	{/if}
 
