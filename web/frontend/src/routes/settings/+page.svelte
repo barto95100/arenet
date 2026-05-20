@@ -20,12 +20,19 @@
   better than full-bleed.
 -->
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { prefersReducedMotion } from 'svelte/motion';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { theme, type Theme } from '$lib/stores/theme.svelte';
+	import { pushToast } from '$lib/stores/toast';
+	import { authApi, type Session } from '$lib/api/auth';
+	import { relativeTime } from '$lib/utils/audit-format';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import Badge from '$lib/components/Badge.svelte';
+	import DataTable from '$lib/components/DataTable.svelte';
+	import Spinner from '$lib/components/Spinner.svelte';
 	import Toggle from '$lib/components/Toggle.svelte';
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 
@@ -53,6 +60,58 @@
 			// here so the smoke session sees no unhandled rejection.
 		}
 	}
+
+	// --- Sessions section (Step F Chunk 6.2 / spec §9.2) -------------------
+
+	let sessions = $state<Session[]>([]);
+	let sessionsLoading = $state(true);
+	let sessionsError = $state<string | null>(null);
+
+	async function loadSessions(): Promise<void> {
+		sessionsLoading = true;
+		sessionsError = null;
+		try {
+			const res = await authApi.listSessions();
+			sessions = res.sessions;
+		} catch (err) {
+			sessionsError = err instanceof Error ? err.message : 'Failed to load sessions';
+		} finally {
+			sessionsLoading = false;
+		}
+	}
+
+	async function onRevokeSession(s: Session): Promise<void> {
+		// Hard safety even though the button is `disabled` on isCurrent —
+		// keyboard activation on a disabled button is browser-dependent.
+		if (s.isCurrent) return;
+		const confirmed = confirm(
+			`Revoke this session?\n\nThe other device will be signed out immediately.`
+		);
+		if (!confirmed) return;
+		try {
+			await authApi.deleteSession(s.id);
+			// Optimistic local filter — no re-fetch unless we hit an error.
+			// The server is the source of truth, but a session listing
+			// rarely diverges in the ~50 ms window between delete and
+			// next request.
+			sessions = sessions.filter((x) => x.id !== s.id);
+			pushToast('Session revoked', 'success');
+		} catch (_) {
+			pushToast('Failed to revoke session', 'danger');
+			// Re-fetch on error to recover the truth — the delete might
+			// have partially succeeded or the local list might be stale.
+			void loadSessions();
+		}
+	}
+
+	function truncate(s: string, max: number): string {
+		if (s.length <= max) return s;
+		return s.slice(0, max) + '…';
+	}
+
+	onMount(() => {
+		void loadSessions();
+	});
 </script>
 
 <svelte:head>
@@ -126,6 +185,63 @@
 				<span class="text-muted ml-2 text-xs">(system preference)</span>
 			</dd>
 		</dl>
+	</Card>
+
+	<!-- SESSIONS SECTION -->
+	<Card padding="p-6" class="mb-6">
+		<header class="border-b border-border-subtle pb-3 mb-4">
+			<h2 class="text-xl font-semibold">Sessions</h2>
+		</header>
+
+		{#if sessionsLoading}
+			<div class="flex items-center gap-2 py-4 text-secondary text-sm">
+				<Spinner size="sm" /> Loading sessions…
+			</div>
+		{:else if sessionsError}
+			<div class="py-4 text-sm" role="alert">
+				<p class="text-down">Failed to load sessions: {sessionsError}</p>
+				<div class="mt-3">
+					<Button variant="ghost" size="sm" onclick={loadSessions}>Retry</Button>
+				</div>
+			</div>
+		{:else}
+			<!-- DataTable rows are clickable by design (Chunk 3.2 expand
+			     toggle) but we don't provide an expanded snippet here, so
+			     the click toggles unused internal state. Cosmetic dette
+			     pre-existing; tracked for Step G cleanup. -->
+			<DataTable
+				headers={['Issued', 'Last activity', 'IP', 'Browser', 'Status', '']}
+				items={sessions}
+			>
+				{#snippet row(s: Session)}
+					<td class="px-4 py-3 text-sm" title={s.issuedAt}>
+						{relativeTime(s.issuedAt)}
+					</td>
+					<td class="px-4 py-3 text-sm" title={s.lastActivity}>
+						{relativeTime(s.lastActivity)}
+					</td>
+					<td class="px-4 py-3 text-sm font-mono text-secondary">{s.ip}</td>
+					<td class="px-4 py-3 text-sm text-secondary" title={s.userAgent}>
+						{truncate(s.userAgent, 40)}
+					</td>
+					<td class="px-4 py-3 text-sm">
+						{#if s.isCurrent}
+							<Badge variant="tls">Current</Badge>
+						{/if}
+					</td>
+					<td class="px-4 py-3 text-sm text-right">
+						<Button
+							variant="ghost"
+							size="sm"
+							disabled={s.isCurrent}
+							onclick={() => onRevokeSession(s)}
+						>
+							Revoke
+						</Button>
+					</td>
+				{/snippet}
+			</DataTable>
+		{/if}
 	</Card>
 
 	<!-- ChangePasswordModal mounted locally (Option B). The
