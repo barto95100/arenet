@@ -35,6 +35,7 @@
 	import Spinner from '$lib/components/Spinner.svelte';
 	import Toggle from '$lib/components/Toggle.svelte';
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
 	const options: [
 		{ value: Theme; label: string },
@@ -80,26 +81,38 @@
 		}
 	}
 
-	async function onRevokeSession(s: Session): Promise<void> {
+	// Revoke confirmation state — replaces the native confirm() that
+	// broke the Linear-like visual consistency. The ConfirmDialog
+	// (Chunk 6.4) wraps Modal with a standard yes/no surface.
+	let revokeConfirmOpen = $state(false);
+	let revokeTarget = $state<Session | null>(null);
+
+	function onRevokeClick(s: Session): void {
 		// Hard safety even though the button is `disabled` on isCurrent —
 		// keyboard activation on a disabled button is browser-dependent.
 		if (s.isCurrent) return;
-		const confirmed = confirm(
-			`Revoke this session?\n\nThe other device will be signed out immediately.`
-		);
-		if (!confirmed) return;
+		revokeTarget = s;
+		revokeConfirmOpen = true;
+	}
+
+	async function confirmRevoke(): Promise<void> {
+		const target = revokeTarget;
+		if (!target) return;
 		try {
-			await authApi.deleteSession(s.id);
+			await authApi.deleteSession(target.id);
 			// Optimistic local filter — no re-fetch unless we hit an error.
 			// The server is the source of truth, but a session listing
 			// rarely diverges in the ~50 ms window between delete and
 			// next request.
-			sessions = sessions.filter((x) => x.id !== s.id);
+			sessions = sessions.filter((x) => x.id !== target.id);
 			pushToast('Session revoked', 'success');
+			revokeConfirmOpen = false;
+			revokeTarget = null;
 		} catch (_) {
 			pushToast('Failed to revoke session', 'danger');
 			// Re-fetch on error to recover the truth — the delete might
 			// have partially succeeded or the local list might be stale.
+			// Keep the dialog open so the user can retry if they want.
 			void loadSessions();
 		}
 	}
@@ -118,134 +131,155 @@
 	<title>Settings — Arenet</title>
 </svelte:head>
 
-<div class="mx-auto max-w-2xl">
+<div class="mx-auto max-w-5xl">
 	<PageHeader title="Settings" subtitle="Manage your account and preferences." />
 
-	<!-- ACCOUNT SECTION -->
-	<Card padding="p-6" class="mb-6">
-		<header class="border-b border-border-subtle pb-3 mb-4">
-			<h2 class="text-xl font-semibold">Account</h2>
-		</header>
+	<!-- Asymmetric layout (Chunk 6.5 smoke fix):
+	     - Row 1: 2-column grid (lg+) → Account + Appearance.
+	       Both are form-narrow Cards (short labels, short values),
+	       fit comfortably in 480 px columns.
+	     - Row 2: full-width → Sessions DataTable.
+	       Needs horizontal real estate for IP + UA + timestamp
+	       columns; 480 px wraps it to 7+ lines per row (smoke fail).
+	     - Row 3: full-width → About.
+	       Short content, intentionally aerated as a "footer-meta"
+	       section that closes the page.
+	     The 6.4 attempt put everything in a single 2-col grid which
+	     compressed Sessions to illegibility — this asymmetric form
+	     is the corrective. -->
 
-		<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-3 text-sm">
-			<dt class="text-secondary">Display name</dt>
-			<dd class="text-primary">{auth.user?.displayName ?? '—'}</dd>
+	<!-- ROW 1 — Account + Appearance (2-col on lg+, 1-col below) -->
+	<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+		<!-- ACCOUNT SECTION -->
+		<Card padding="p-6">
+			<header class="border-b border-border-subtle pb-3 mb-4">
+				<h2 class="text-xl font-semibold">Account</h2>
+			</header>
 
-			<dt class="text-secondary">Username</dt>
-			<dd class="text-primary font-mono">{auth.user?.username ?? '—'}</dd>
+			<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-3 text-sm">
+				<dt class="text-secondary">Display name</dt>
+				<dd class="text-primary">{auth.user?.displayName ?? '—'}</dd>
 
-			<dt class="text-secondary">Password security</dt>
-			<dd>
-				<!-- Discreet inline indicator — the compromised banner
-				     in +layout.svelte handles the urgent attention
-				     path; this is just a mirror so the user can read
-				     their HIBP status without scrolling to the top. -->
-				{#if auth.user?.passwordCompromised}
-					<span class="text-down">Compromised — change required</span>
-				{:else if auth.user?.hibpCheckStatus === 'clean'}
-					<span class="text-up">Clean (HIBP verified)</span>
-				{:else if auth.user?.hibpCheckStatus === 'pending'}
-					<span class="text-muted">Pending check</span>
-				{:else if auth.user?.hibpCheckStatus === 'skipped'}
-					<span class="text-muted">Check skipped</span>
-				{:else}
-					<span class="text-muted">Unknown</span>
-				{/if}
-			</dd>
-		</dl>
+				<dt class="text-secondary">Username</dt>
+				<dd class="text-primary font-mono">{auth.user?.username ?? '—'}</dd>
 
-		<div class="mt-6">
-			<Button variant="secondary" onclick={() => (changePasswordOpen = true)}>
-				Change password
-			</Button>
-		</div>
-	</Card>
+				<dt class="text-secondary">Password security</dt>
+				<dd>
+					<!-- Discreet inline indicator — the compromised banner
+					     in +layout.svelte handles the urgent attention
+					     path; this is just a mirror so the user can read
+					     their breach status without scrolling to the top.
+					     Chunk 6.4: wording switched from HIBP jargon to
+					     user-friendly equivalents. -->
+					{#if auth.user?.passwordCompromised}
+						<span class="text-down">Found in known breaches — change required</span>
+					{:else if auth.user?.hibpCheckStatus === 'clean'}
+						<span class="text-up">Not found in known breaches</span>
+					{:else if auth.user?.hibpCheckStatus === 'pending'}
+						<span class="text-muted">Verification in progress</span>
+					{:else if auth.user?.hibpCheckStatus === 'skipped'}
+						<span class="text-muted">Verification skipped</span>
+					{:else}
+						<span class="text-muted">Status unknown</span>
+					{/if}
+				</dd>
+			</dl>
 
-	<!-- APPEARANCE SECTION -->
-	<Card padding="p-6" class="mb-6">
-		<header class="border-b border-border-subtle pb-3 mb-4">
-			<h2 class="text-xl font-semibold">Appearance</h2>
-		</header>
-
-		<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-4 text-sm items-center">
-			<dt class="text-secondary">Theme</dt>
-			<dd>
-				<Toggle
-					ariaLabel="Theme"
-					{options}
-					value={theme.current}
-					disabled={theme.isApplying}
-					onchange={onThemeChange}
-				/>
-			</dd>
-
-			<dt class="text-secondary">Reduce motion</dt>
-			<dd class="text-primary">
-				{prefersReducedMotion.current ? 'Enabled' : 'Disabled'}
-				<span class="text-muted ml-2 text-xs">(system preference)</span>
-			</dd>
-		</dl>
-	</Card>
-
-	<!-- SESSIONS SECTION -->
-	<Card padding="p-6" class="mb-6">
-		<header class="border-b border-border-subtle pb-3 mb-4">
-			<h2 class="text-xl font-semibold">Sessions</h2>
-		</header>
-
-		{#if sessionsLoading}
-			<div class="flex items-center gap-2 py-4 text-secondary text-sm">
-				<Spinner size="sm" /> Loading sessions…
+			<div class="mt-6">
+				<Button variant="secondary" onclick={() => (changePasswordOpen = true)}>
+					Change password
+				</Button>
 			</div>
-		{:else if sessionsError}
-			<div class="py-4 text-sm" role="alert">
-				<p class="text-down">Failed to load sessions: {sessionsError}</p>
-				<div class="mt-3">
-					<Button variant="ghost" size="sm" onclick={loadSessions}>Retry</Button>
+		</Card>
+
+		<!-- APPEARANCE SECTION -->
+		<Card padding="p-6">
+			<header class="border-b border-border-subtle pb-3 mb-4">
+				<h2 class="text-xl font-semibold">Appearance</h2>
+			</header>
+
+			<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-4 text-sm items-center">
+				<dt class="text-secondary">Theme</dt>
+				<dd>
+					<Toggle
+						ariaLabel="Theme"
+						{options}
+						value={theme.current}
+						disabled={theme.isApplying}
+						onchange={onThemeChange}
+					/>
+				</dd>
+
+				<dt class="text-secondary">Reduce motion</dt>
+				<dd class="text-primary">
+					{prefersReducedMotion.current ? 'Enabled' : 'Disabled'}
+					<span class="text-muted ml-2 text-xs">(system preference)</span>
+				</dd>
+			</dl>
+		</Card>
+	</div>
+
+	<!-- ROW 2 — Sessions, full-width (DataTable needs the room) -->
+	<div class="mb-6">
+		<Card padding="p-6">
+			<header class="border-b border-border-subtle pb-3 mb-4">
+				<h2 class="text-xl font-semibold">Sessions</h2>
+			</header>
+
+			{#if sessionsLoading}
+				<div class="flex items-center gap-2 py-4 text-secondary text-sm">
+					<Spinner size="sm" /> Loading sessions…
 				</div>
-			</div>
-		{:else}
-			<!-- DataTable rows are clickable by design (Chunk 3.2 expand
-			     toggle) but we don't provide an expanded snippet here, so
-			     the click toggles unused internal state. Cosmetic dette
-			     pre-existing; tracked for Step G cleanup. -->
-			<DataTable
-				headers={['Issued', 'Last activity', 'IP', 'Browser', 'Status', '']}
-				items={sessions}
-			>
-				{#snippet row(s: Session)}
-					<td class="px-4 py-3 text-sm" title={s.issuedAt}>
-						{relativeTime(s.issuedAt)}
-					</td>
-					<td class="px-4 py-3 text-sm" title={s.lastActivity}>
-						{relativeTime(s.lastActivity)}
-					</td>
-					<td class="px-4 py-3 text-sm font-mono text-secondary">{s.ip}</td>
-					<td class="px-4 py-3 text-sm text-secondary" title={s.userAgent}>
-						{truncate(s.userAgent, 40)}
-					</td>
-					<td class="px-4 py-3 text-sm">
-						{#if s.isCurrent}
-							<Badge variant="tls">Current</Badge>
-						{/if}
-					</td>
-					<td class="px-4 py-3 text-sm text-right">
-						<Button
-							variant="ghost"
-							size="sm"
-							disabled={s.isCurrent}
-							onclick={() => onRevokeSession(s)}
-						>
-							Revoke
-						</Button>
-					</td>
-				{/snippet}
-			</DataTable>
-		{/if}
-	</Card>
+			{:else if sessionsError}
+				<div class="py-4 text-sm" role="alert">
+					<p class="text-down">Failed to load sessions: {sessionsError}</p>
+					<div class="mt-3">
+						<Button variant="ghost" size="sm" onclick={loadSessions}>Retry</Button>
+					</div>
+				</div>
+			{:else}
+				<!-- DataTable rows are clickable by design (Chunk 3.2 expand
+				     toggle) but we don't provide an expanded snippet here,
+				     so the click toggles unused internal state. Cosmetic
+				     dette pre-existing; tracked for Step G cleanup. -->
+				<DataTable
+					headers={['Issued', 'Last activity', 'IP', 'Browser', 'Status', '']}
+					items={sessions}
+				>
+					{#snippet row(s: Session)}
+						<td class="px-4 py-3 text-sm" title={s.issuedAt}>
+							{relativeTime(s.issuedAt)}
+						</td>
+						<td class="px-4 py-3 text-sm" title={s.lastActivity}>
+							{relativeTime(s.lastActivity)}
+						</td>
+						<td class="px-4 py-3 text-sm font-mono text-secondary">{s.ip}</td>
+						<td class="px-4 py-3 text-sm text-secondary" title={s.userAgent}>
+							{truncate(s.userAgent, 40)}
+						</td>
+						<td class="px-4 py-3 text-sm">
+							{#if s.isCurrent}
+								<Badge variant="tls">Current</Badge>
+							{/if}
+						</td>
+						<td class="px-4 py-3 text-sm text-right">
+							<Button
+								variant="ghost"
+								size="sm"
+								disabled={s.isCurrent}
+								onclick={() => onRevokeClick(s)}
+							>
+								Revoke
+							</Button>
+						</td>
+					{/snippet}
+				</DataTable>
+			{/if}
+		</Card>
+	</div>
 
-	<!-- ABOUT SECTION (Step F Chunk 6.3 / spec §8.6 About) -->
-	<Card padding="p-6" class="mb-6">
+	<!-- ROW 3 — About, full-width (footer-meta, intentionally aerated) -->
+	<Card padding="p-6">
 		<header class="border-b border-border-subtle pb-3 mb-4">
 			<h2 class="text-xl font-semibold">About</h2>
 		</header>
@@ -287,4 +321,14 @@
 	     independent instances of the same component — both safe by
 	     ChangePasswordModal's `bind:open` design. -->
 	<ChangePasswordModal bind:open={changePasswordOpen} />
+
+	<!-- Revoke confirmation (Chunk 6.4 — replaces native confirm()). -->
+	<ConfirmDialog
+		bind:open={revokeConfirmOpen}
+		title="Revoke session?"
+		message="The other device will be signed out immediately."
+		confirmLabel="Revoke"
+		confirmVariant="danger"
+		onConfirm={confirmRevoke}
+	/>
 </div>
