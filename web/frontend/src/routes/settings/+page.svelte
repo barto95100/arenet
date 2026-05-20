@@ -3,16 +3,31 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  TEMPORARY (Step F Chunk 1.6): minimal wiring of the theme Toggle for
-  manual smoke validation of Chunk 1 (tokens + bootstrap + theme store
-  + cookie wire-up + reconciliation). The full Settings page — sessions
-  table, password change, account info, etc. — lands in Chunk 6 per
-  spec §9. This file will be rewritten then; keeping the AGPL header
-  preserved so the rewrite can `git mv`-equivalent the contents.
+  Settings (Step F §8.6 / §9). Three sections in a single page:
+
+    1. Account  — display name + username (read-only), HIBP status
+                  indicator (discreet — the compromised banner lives
+                  in +layout.svelte, this is just an inline mirror),
+                  Change password button.
+    2. Appearance — theme Toggle (Chunk 1.6 wiring preserved),
+                  Reduce motion read-only indicator.
+    3. Sessions — DataTable (lands in Chunk 6.2).
+    4. About — version / license / source (lands in Chunk 6.3).
+
+  This file replaces the Chunk 1.6 placeholder (debug strip + footer
+  note removed). The wrapper max-w-2xl is preserved — Settings is a
+  configuration page, not a dashboard, so a column layout reads
+  better than full-bleed.
 -->
 <script lang="ts">
-	import Toggle from '$lib/components/Toggle.svelte';
+	import { prefersReducedMotion } from 'svelte/motion';
+	import { auth } from '$lib/stores/auth.svelte';
 	import { theme, type Theme } from '$lib/stores/theme.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Card from '$lib/components/Card.svelte';
+	import Button from '$lib/components/Button.svelte';
+	import Toggle from '$lib/components/Toggle.svelte';
+	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 
 	const options: [
 		{ value: Theme; label: string },
@@ -22,57 +37,101 @@
 		{ value: 'light', label: 'Light' }
 	];
 
+	// Local ChangePasswordModal instance (Decision: Option B from the
+	// Chunk 6 brief). The layout-shell instance handles the
+	// compromised-password banner flow; this one is wired to the
+	// explicit "Change password" button in the Account section.
+	// Two instances of the same component, each with its own `open`
+	// state — the component supports that by design.
+	let changePasswordOpen = $state(false);
+
 	async function onThemeChange(v: Theme): Promise<void> {
 		try {
 			await theme.set(v);
 		} catch (_) {
-			// Theme store already reverted and emitted a toast; nothing
-			// to do here. Caught so the smoke session sees no unhandled
-			// rejection in the console.
+			// theme store already reverted + toast emitted; just swallow
+			// here so the smoke session sees no unhandled rejection.
 		}
 	}
 </script>
 
+<svelte:head>
+	<title>Settings — Arenet</title>
+</svelte:head>
+
 <div class="mx-auto max-w-2xl">
-	<h1 class="text-4xl font-semibold">Settings</h1>
-	<p class="mt-1 text-sm text-secondary">
-		Application preferences.
-	</p>
+	<PageHeader title="Settings" subtitle="Manage your account and preferences." />
 
-	<section class="mt-10">
-		<h2 class="text-xl font-semibold">Appearance</h2>
-		<p class="mt-1 text-sm text-secondary">
-			Pick a theme. The change applies immediately and is saved to your account.
-		</p>
+	<!-- ACCOUNT SECTION -->
+	<Card padding="p-6" class="mb-6">
+		<header class="border-b border-border-subtle pb-3 mb-4">
+			<h2 class="text-xl font-semibold">Account</h2>
+		</header>
 
-		<div class="mt-4">
-			<Toggle
-				ariaLabel="Theme"
-				{options}
-				value={theme.current}
-				disabled={theme.isApplying}
-				onchange={onThemeChange}
-			/>
-		</div>
+		<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-3 text-sm">
+			<dt class="text-secondary">Display name</dt>
+			<dd class="text-primary">{auth.user?.displayName ?? '—'}</dd>
 
-		<!-- Debug strip (smoke-only). Removed when this file is rewritten
-		     for the real Settings page in Chunk 6. -->
-		<dl class="mt-6 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs font-mono text-muted">
-			<dt>theme.current</dt>
-			<dd class="text-primary">{theme.current}</dd>
-			<dt>theme.isApplying</dt>
-			<dd class="text-primary">{theme.isApplying}</dd>
-			<dt>data-theme attr</dt>
-			<dd class="text-primary">
-				{typeof document !== 'undefined'
-					? (document.documentElement.dataset.theme ?? '(unset)')
-					: '(ssr)'}
+			<dt class="text-secondary">Username</dt>
+			<dd class="text-primary font-mono">{auth.user?.username ?? '—'}</dd>
+
+			<dt class="text-secondary">Password security</dt>
+			<dd>
+				<!-- Discreet inline indicator — the compromised banner
+				     in +layout.svelte handles the urgent attention
+				     path; this is just a mirror so the user can read
+				     their HIBP status without scrolling to the top. -->
+				{#if auth.user?.passwordCompromised}
+					<span class="text-down">Compromised — change required</span>
+				{:else if auth.user?.hibpCheckStatus === 'clean'}
+					<span class="text-up">Clean (HIBP verified)</span>
+				{:else if auth.user?.hibpCheckStatus === 'pending'}
+					<span class="text-muted">Pending check</span>
+				{:else if auth.user?.hibpCheckStatus === 'skipped'}
+					<span class="text-muted">Check skipped</span>
+				{:else}
+					<span class="text-muted">Unknown</span>
+				{/if}
 			</dd>
 		</dl>
-	</section>
 
-	<p class="mt-12 text-xs text-muted">
-		Full Settings page lands in Chunk 6 (spec §9). This is a Chunk 1
-		smoke-validation placeholder.
-	</p>
+		<div class="mt-6">
+			<Button variant="secondary" onclick={() => (changePasswordOpen = true)}>
+				Change password
+			</Button>
+		</div>
+	</Card>
+
+	<!-- APPEARANCE SECTION -->
+	<Card padding="p-6" class="mb-6">
+		<header class="border-b border-border-subtle pb-3 mb-4">
+			<h2 class="text-xl font-semibold">Appearance</h2>
+		</header>
+
+		<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-4 text-sm items-center">
+			<dt class="text-secondary">Theme</dt>
+			<dd>
+				<Toggle
+					ariaLabel="Theme"
+					{options}
+					value={theme.current}
+					disabled={theme.isApplying}
+					onchange={onThemeChange}
+				/>
+			</dd>
+
+			<dt class="text-secondary">Reduce motion</dt>
+			<dd class="text-primary">
+				{prefersReducedMotion.current ? 'Enabled' : 'Disabled'}
+				<span class="text-muted ml-2 text-xs">(system preference)</span>
+			</dd>
+		</dl>
+	</Card>
+
+	<!-- ChangePasswordModal mounted locally (Option B). The
+	     layout-level instance handles the compromised-banner flow;
+	     this one handles the explicit user click in Settings. They're
+	     independent instances of the same component — both safe by
+	     ChangePasswordModal's `bind:open` design. -->
+	<ChangePasswordModal bind:open={changePasswordOpen} />
 </div>
