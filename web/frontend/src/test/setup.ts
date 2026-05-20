@@ -38,3 +38,45 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
 
 // Auto-cleanup is wired by the svelteTesting() Vitest plugin
 // (see vitest.config.ts). No explicit afterEach(cleanup) needed.
+
+// jsdom doesn't implement Web Animations API (element.animate).
+// svelte/transition (fade, fly, slide) calls element.animate on the
+// transitioned node — any component test that mounts a Svelte
+// transition (Sidebar footer fade, Modal fly, etc.) would crash with
+// "TypeError: element.animate is not a function".
+//
+// Stub returns a minimal Animation-like object so Svelte's transition
+// glue can proceed: finished promise resolves immediately (no
+// animation actually plays), and cancel/finish are no-ops. Tests
+// assert on rendered DOM, not on animation frames.
+if (
+	typeof Element !== 'undefined' &&
+	typeof Element.prototype.animate === 'undefined'
+) {
+	Element.prototype.animate = (() => ({
+		cancel: () => {},
+		finish: () => {},
+		finished: Promise.resolve() as unknown as Promise<Animation>,
+		onfinish: null,
+		oncancel: null,
+		addEventListener: () => {},
+		removeEventListener: () => {},
+		dispatchEvent: () => true,
+		currentTime: 0,
+		startTime: 0,
+		playbackRate: 1,
+		playState: 'finished' as const,
+		pending: false,
+		ready: Promise.resolve() as unknown as Promise<Animation>,
+		effect: null,
+		timeline: null,
+		id: '',
+		replaceState: 'active' as const,
+		play: () => {},
+		pause: () => {},
+		reverse: () => {},
+		updatePlaybackRate: () => {},
+		persist: () => {},
+		commitStyles: () => {}
+	})) as unknown as typeof Element.prototype.animate;
+}
