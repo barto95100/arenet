@@ -42,6 +42,8 @@
 		basicAuthEnabled: false,
 		basicAuthUsername: '',
 		basicAuthPassword: '',
+		requestHeaders: {},
+		responseHeaders: {},
 		wafEnabled: false
 	});
 
@@ -50,6 +52,51 @@
 	// not the form's write-only password input. Drives the "••• set"
 	// placeholder and the empty-password-keeps-hash semantics.
 	let basicAuthPasswordSet = $state(false);
+
+	// Step I.6 — header repeater state. We track tuples here (not
+	// the final Record) so:
+	//   1. an empty row can sit visibly in the form while the user
+	//      types the key,
+	//   2. two rows with the same key can coexist while editing
+	//      (the conversion at submit picks last-wins, matching the
+	//      server's JSON-decode behavior),
+	//   3. the each-key index stays stable while the user adds /
+	//      deletes rows.
+	// The conversion to Record<string,string> happens in submitForm.
+	let requestHeaderRows = $state<Array<[string, string]>>([]);
+	let responseHeaderRows = $state<Array<[string, string]>>([]);
+
+	function addRequestHeader() {
+		requestHeaderRows = [...requestHeaderRows, ['', '']];
+	}
+	function removeRequestHeader(i: number) {
+		requestHeaderRows = requestHeaderRows.filter((_, idx) => idx !== i);
+	}
+	function addResponseHeader() {
+		responseHeaderRows = [...responseHeaderRows, ['', '']];
+	}
+	function removeResponseHeader(i: number) {
+		responseHeaderRows = responseHeaderRows.filter((_, idx) => idx !== i);
+	}
+
+	// tuplesToRecord drops rows whose KEY is empty (per Step I.6
+	// Ajustement 2: empty VALUE is intentionally allowed — some
+	// upstreams check header presence, not content — so we only
+	// trim on the key side). Last-wins on duplicate keys, matching
+	// the server's json.Decode semantics; documented limitation.
+	function tuplesToRecord(rows: Array<[string, string]>): Record<string, string> {
+		const out: Record<string, string> = {};
+		for (const [k, v] of rows) {
+			const key = k.trim();
+			if (key === '') continue;
+			out[key] = v;
+		}
+		return out;
+	}
+
+	function recordToTuples(rec: Record<string, string>): Array<[string, string]> {
+		return Object.entries(rec ?? {});
+	}
 
 	let confirmTarget = $state<Route | null>(null);
 	let deleting = $state(false);
@@ -76,9 +123,13 @@
 			basicAuthEnabled: false,
 			basicAuthUsername: '',
 			basicAuthPassword: '',
+			requestHeaders: {},
+			responseHeaders: {},
 			wafEnabled: false
 		};
 		basicAuthPasswordSet = false;
+		requestHeaderRows = [];
+		responseHeaderRows = [];
 		resetFormErrors();
 		formOpen = true;
 	}
@@ -100,9 +151,16 @@
 			// hash-already-set → backend preserves the existing hash.
 			// User must re-type to rotate.
 			basicAuthPassword: '',
+			requestHeaders: { ...(r.requestHeaders ?? {}) },
+			responseHeaders: { ...(r.responseHeaders ?? {}) },
 			wafEnabled: r.wafEnabled
 		};
 		basicAuthPasswordSet = r.basicAuthPasswordSet;
+		// Step I.6: seed the repeater tuples from the server's map.
+		// We intentionally don't share references — typing in the
+		// form should not mutate the table-backing object.
+		requestHeaderRows = recordToTuples(r.requestHeaders ?? {});
+		responseHeaderRows = recordToTuples(r.responseHeaders ?? {});
 		resetFormErrors();
 		formOpen = true;
 	}
@@ -139,9 +197,15 @@
 			// without filling. The backend would 400 on them anyway,
 			// but trimming here keeps the round-trip clean for the
 			// common "added a row, changed mind" case.
+			//
+			// Step I.6: convert the header repeater tuples back to
+			// the Record<string,string> the API expects. Empty keys
+			// are dropped; empty values are KEPT (Ajustement 2).
 			const payload = {
 				...formData,
-				aliases: formData.aliases.map((a) => a.trim()).filter((a) => a.length > 0)
+				aliases: formData.aliases.map((a) => a.trim()).filter((a) => a.length > 0),
+				requestHeaders: tuplesToRecord(requestHeaderRows),
+				responseHeaders: tuplesToRecord(responseHeaderRows)
 			};
 			if (formMode === 'create') {
 				await createRoute(payload);
@@ -447,6 +511,61 @@
 			disabled
 			title="WAF support lands in Step I.4"
 		/>
+		<!-- Step I.6 — custom request / response headers. Two
+		     collapsible sections (closed by default; most routes
+		     don't need this). Backend validates RFC 7230 token
+		     grammar on names, rejects CR/LF in values, and refuses
+		     reserved hop-by-hop / framing-critical header names. -->
+		<details class="rounded border border-border-subtle">
+			<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+				Request headers
+				{#if requestHeaderRows.length > 0}
+					<span class="ml-1 text-xs text-muted">({requestHeaderRows.length})</span>
+				{/if}
+			</summary>
+			<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
+				{#each requestHeaderRows as _, i (i)}
+					<div class="flex items-center gap-2">
+						<Input bind:value={requestHeaderRows[i][0]} placeholder="X-Custom-Header" />
+						<Input bind:value={requestHeaderRows[i][1]} placeholder="value" />
+						<Button
+							variant="ghost"
+							size="sm"
+							onclick={() => removeRequestHeader(i)}
+							type="button">×</Button
+						>
+					</div>
+				{/each}
+				<Button variant="ghost" size="sm" onclick={addRequestHeader} type="button"
+					>+ Add request header</Button
+				>
+			</div>
+		</details>
+		<details class="rounded border border-border-subtle">
+			<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+				Response headers
+				{#if responseHeaderRows.length > 0}
+					<span class="ml-1 text-xs text-muted">({responseHeaderRows.length})</span>
+				{/if}
+			</summary>
+			<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
+				{#each responseHeaderRows as _, i (i)}
+					<div class="flex items-center gap-2">
+						<Input bind:value={responseHeaderRows[i][0]} placeholder="X-Custom-Header" />
+						<Input bind:value={responseHeaderRows[i][1]} placeholder="value" />
+						<Button
+							variant="ghost"
+							size="sm"
+							onclick={() => removeResponseHeader(i)}
+							type="button">×</Button
+						>
+					</div>
+				{/each}
+				<Button variant="ghost" size="sm" onclick={addResponseHeader} type="button"
+					>+ Add response header</Button
+				>
+			</div>
+		</details>
 		<!-- Hidden submit button so Enter inside an input still triggers the form. -->
 		<button type="submit" class="hidden" aria-hidden="true"></button>
 	</form>

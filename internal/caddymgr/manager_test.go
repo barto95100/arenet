@@ -685,6 +685,76 @@ func TestBuildConfigJSON_BasicAuth_OffSkipsHandler(t *testing.T) {
 	}
 }
 
+// --- Step I.6 — Custom headers --------------------------------------------
+
+func TestBuildConfigJSON_Headers_EmitsHandler(t *testing.T) {
+	// Both request- and response-header maps populated: the chain
+	// gains a `headers` handler between basicauth (absent here) and
+	// reverse_proxy. Caddy's headers handler expects values wrapped
+	// in []string — verify that conversion.
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "hdr.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			RequestHeaders:  map[string]string{"X-Real-Foo": "bar"},
+			ResponseHeaders: map[string]string{"X-Custom": "x"},
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	handlers, _ := httpRoutes[0]["handle"].([]any)
+	// Chain: [metrics, headers, reverse_proxy].
+	if len(handlers) != 3 {
+		t.Fatalf("handler chain length = %d; want 3 (metrics + headers + proxy)", len(handlers))
+	}
+	h1, _ := handlers[1].(map[string]any)
+	if h1["handler"] != "headers" {
+		t.Fatalf("handler[1] = %v; want headers", h1["handler"])
+	}
+	req, _ := h1["request"].(map[string]any)
+	reqSet, _ := req["set"].(map[string]any)
+	values, _ := reqSet["X-Real-Foo"].([]any)
+	if len(values) != 1 || values[0] != "bar" {
+		t.Errorf("request.set X-Real-Foo = %v; want [\"bar\"]", values)
+	}
+	resp, _ := h1["response"].(map[string]any)
+	respSet, _ := resp["set"].(map[string]any)
+	respValues, _ := respSet["X-Custom"].([]any)
+	if len(respValues) != 1 || respValues[0] != "x" {
+		t.Errorf("response.set X-Custom = %v; want [\"x\"]", respValues)
+	}
+	h2, _ := handlers[2].(map[string]any)
+	if h2["handler"] != "reverse_proxy" {
+		t.Errorf("handler[2] = %v; want reverse_proxy", h2["handler"])
+	}
+}
+
+func TestBuildConfigJSON_Headers_EmptyMapsSkipHandler(t *testing.T) {
+	// Both maps empty → no headers handler in the chain. Verifies
+	// the legacy two-handler chain stays compact when the feature
+	// is unused.
+	routes := []storage.Route{
+		{ID: "r1", Host: "nohdr.example.com", UpstreamURL: "http://127.0.0.1:9000"},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	handlers, _ := httpRoutes[0]["handle"].([]any)
+	if len(handlers) != 2 {
+		t.Fatalf("handler chain length = %d; want 2 (no headers handler when both maps empty)", len(handlers))
+	}
+	for _, hh := range handlers {
+		m, _ := hh.(map[string]any)
+		if m["handler"] == "headers" {
+			t.Errorf("headers handler present despite empty maps: %v", m)
+		}
+	}
+}
+
 // --- Step I.2 — HTTP → HTTPS redirect -----------------------------------
 
 // httpsServerRoutes extracts the arenet_https server's route slice. Mirrors

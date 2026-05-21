@@ -58,10 +58,19 @@ type Route struct {
 	// over the API (the response surface uses a derived
 	// BasicAuthPasswordSet bool instead) and NEVER embedded in
 	// audit events (see routeForAudit in internal/api/routes.go).
-	BasicAuthPasswordHash string    `json:"basic_auth_password_hash"`
-	WAFEnabled            bool      `json:"waf_enabled"`
-	CreatedAt             time.Time `json:"created_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	BasicAuthPasswordHash string `json:"basic_auth_password_hash"`
+	// RequestHeaders (Step I.6) are key/value pairs set on the
+	// proxied request before it reaches the upstream; ResponseHeaders
+	// are set on the response before it reaches the client. Both
+	// default nil; the API layer normalizes nil → {} on the wire so
+	// frontend callers can iterate without a null check. Validation
+	// (RFC 7230 token name, CR/LF-free value, hop-by-hop blacklist)
+	// lives in internal/api/routes.go — storage trusts the API.
+	RequestHeaders  map[string]string `json:"request_headers"`
+	ResponseHeaders map[string]string `json:"response_headers"`
+	WAFEnabled      bool              `json:"waf_enabled"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route

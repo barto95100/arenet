@@ -133,7 +133,13 @@ type routeRequest struct {
 	BasicAuthEnabled  bool   `json:"basicAuthEnabled"`
 	BasicAuthUsername string `json:"basicAuthUsername"`
 	BasicAuthPassword string `json:"basicAuthPassword"`
-	WAFEnabled        bool   `json:"wafEnabled"`
+	// Step I.6 — custom headers applied to the proxied request /
+	// response. Map[name → value] (single value per name in v1.0).
+	// Validation rejects CR/LF/control characters and hop-by-hop /
+	// framing-critical names — see validateHeaders.
+	RequestHeaders  map[string]string `json:"requestHeaders"`
+	ResponseHeaders map[string]string `json:"responseHeaders"`
+	WAFEnabled      bool              `json:"wafEnabled"`
 }
 
 // routeResponse is the wire shape returned by GET / POST / PUT /routes. The
@@ -157,9 +163,14 @@ type routeResponse struct {
 	BasicAuthEnabled     bool   `json:"basicAuthEnabled"`
 	BasicAuthUsername    string `json:"basicAuthUsername"`
 	BasicAuthPasswordSet bool   `json:"basicAuthPasswordSet"`
-	WAFEnabled           bool   `json:"wafEnabled"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
+	// Step I.6 — custom headers, normalized to empty maps (never
+	// nil) so the JSON wire shape is always {} and frontend can
+	// iterate without a null check.
+	RequestHeaders  map[string]string `json:"requestHeaders"`
+	ResponseHeaders map[string]string `json:"responseHeaders"`
+	WAFEnabled      bool              `json:"wafEnabled"`
+	CreatedAt       string            `json:"createdAt"`
+	UpdatedAt       string            `json:"updatedAt"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with
@@ -168,6 +179,16 @@ func toResponse(r storage.Route) routeResponse {
 	aliases := r.Aliases
 	if aliases == nil {
 		aliases = []string{} // S6: never emit `"aliases": null` on the wire.
+	}
+	// Step I.6 — normalize nil maps to empty so the wire JSON never
+	// emits `null`. Frontend reads .length / Object.keys safely.
+	reqHeaders := r.RequestHeaders
+	if reqHeaders == nil {
+		reqHeaders = map[string]string{}
+	}
+	respHeaders := r.ResponseHeaders
+	if respHeaders == nil {
+		respHeaders = map[string]string{}
 	}
 	return routeResponse{
 		ID:                   r.ID,
@@ -179,6 +200,8 @@ func toResponse(r storage.Route) routeResponse {
 		BasicAuthEnabled:     r.BasicAuthEnabled,
 		BasicAuthUsername:    r.BasicAuthUsername,
 		BasicAuthPasswordSet: r.BasicAuthPasswordHash != "",
+		RequestHeaders:       reqHeaders,
+		ResponseHeaders:      respHeaders,
 		WAFEnabled:           r.WAFEnabled,
 		CreatedAt:            r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:            r.UpdatedAt.UTC().Format(timestampFormat),

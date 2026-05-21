@@ -29,6 +29,14 @@ export interface Route {
 	basicAuthEnabled: boolean;
 	basicAuthUsername: string;
 	basicAuthPasswordSet: boolean;
+	/**
+	 * Step I.6 — custom headers applied to the proxied request /
+	 * response. Map of name → value (single value per name in v1.0).
+	 * Server normalizes nil → empty object on the wire, so callers
+	 * iterate Object.keys without a null check.
+	 */
+	requestHeaders: Record<string, string>;
+	responseHeaders: Record<string, string>;
 	wafEnabled: boolean;
 	createdAt: string;
 	updatedAt: string;
@@ -49,6 +57,8 @@ export interface RouteRequest {
 	basicAuthEnabled: boolean;
 	basicAuthUsername: string;
 	basicAuthPassword: string;
+	requestHeaders: Record<string, string>;
+	responseHeaders: Record<string, string>;
 	wafEnabled: boolean;
 }
 

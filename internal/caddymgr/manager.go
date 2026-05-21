@@ -358,11 +358,16 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// cached credentials per virtual host (a switch from one
 		// route to another re-prompts as expected).
 		//
+		// Step I.6 — custom request/response headers (`headers`
+		// handler) slot between basicauth and the proxy. Modifying
+		// headers on a request that's about to be 401'd is wasted
+		// work, hence ordering AFTER basicauth; modifying them
+		// BEFORE the proxy is required so request changes reach the
+		// upstream and response changes are applied on the way back.
+		//
 		// Handler chain order (spec §3.2): [metrics, basicauth?,
-		// reverse_proxy]. Metrics MUST stay first to observe the
-		// final status code (§11.5 invariant); basicauth slides in
-		// just before the proxy so a 401 short-circuits before any
-		// upstream connection is attempted.
+		// headers?, reverse_proxy]. Metrics MUST stay first to
+		// observe the final status code (§11.5 invariant).
 		handlers := []map[string]any{metricsHandler}
 		if r.BasicAuthEnabled {
 			handlers = append(handlers, map[string]any{
@@ -380,6 +385,9 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 					},
 				},
 			})
+		}
+		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
+			handlers = append(handlers, headersHandler)
 		}
 		handlers = append(handlers, proxyHandler)
 
@@ -552,6 +560,51 @@ func buildRedirectRoute(hosts []string) httpRoute {
 			},
 		},
 	}
+}
+
+// buildHeadersHandler returns the Caddy `headers` handler config for
+// the given (request, response) header maps, or nil when BOTH maps
+// are empty (so the caller skips appending anything to the handler
+// chain). Step I.6.
+//
+// Caddy's headers handler expects `request.set` and `response.set`
+// to be `http.Header` shaped — i.e. map[string][]string. Arenet's
+// schema carries single-valued map[string]string entries; the
+// conversion wraps each value in a one-element slice. Multi-value
+// headers are not exposed in v1.0 (acceptable trade-off; cookies
+// and CORS lists are usually single-value in homelab proxying).
+//
+// Each side (`request` / `response`) is OMITTED from the emitted
+// JSON when its source map is empty (Caddy treats both as
+// `omitempty`); this keeps the wire config minimal and the smoke
+// diff readable.
+func buildHeadersHandler(reqHeaders, respHeaders map[string]string) map[string]any {
+	if len(reqHeaders) == 0 && len(respHeaders) == 0 {
+		return nil
+	}
+	handler := map[string]any{"handler": "headers"}
+	if len(reqHeaders) > 0 {
+		handler["request"] = map[string]any{
+			"set": wrapHeaderValues(reqHeaders),
+		}
+	}
+	if len(respHeaders) > 0 {
+		handler["response"] = map[string]any{
+			"set": wrapHeaderValues(respHeaders),
+		}
+	}
+	return handler
+}
+
+// wrapHeaderValues turns a map[string]string into the
+// map[string][]string shape Caddy's headers handler consumes.
+// Each value becomes a one-element slice.
+func wrapHeaderValues(m map[string]string) map[string][]string {
+	out := make(map[string][]string, len(m))
+	for k, v := range m {
+		out[k] = []string{v}
+	}
+	return out
 }
 
 // catchAllRoute builds the final 404 catch-all route: no match block (matches

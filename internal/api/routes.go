@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -277,6 +278,104 @@ func routeForAudit(r storage.Route) storage.Route {
 	return r
 }
 
+// Step I.6 — Custom request/response headers.
+
+const (
+	headerNameMaxLen  = 128
+	headerValueMaxLen = 1024
+)
+
+// headerNameTokenRE matches an RFC 7230 token: ALPHA / DIGIT plus
+// the punctuation set explicitly listed in the grammar. No space,
+// no ':', no control character — those are filtered by the regex
+// itself (negative match) and made explicit by validateHeaderName's
+// error message.
+var headerNameTokenRE = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+\-.^_` + "`" + `|~]+$`)
+
+// reservedHeaderNames lists HTTP header names the user MUST NOT
+// override per Step I.6 Q3 / spec §1.6 #2: hop-by-hop fields (RFC
+// 7230 §6.1) plus Host and the framing-critical Content-Length /
+// Content-Encoding which Caddy's reverse_proxy manages on the
+// operator's behalf. Comparison is case-insensitive (HTTP header
+// names are case-insensitive); the lookup uses strings.ToLower(name).
+var reservedHeaderNames = map[string]struct{}{
+	"host":              {},
+	"connection":        {},
+	"keep-alive":        {},
+	"transfer-encoding": {},
+	"te":                {},
+	"trailer":           {},
+	"upgrade":           {},
+	"content-length":    {},
+	"content-encoding":  {},
+}
+
+// validateHeaderName enforces the RFC 7230 token grammar + the
+// reserved blacklist + the length cap. Empty name is rejected with
+// a separate message (the caller usually catches it earlier when
+// building the map, but defense in depth).
+func validateHeaderName(name string) error {
+	if name == "" {
+		return errors.New("header name must not be empty")
+	}
+	if len(name) > headerNameMaxLen {
+		return fmt.Errorf("header name %q exceeds %d characters", name, headerNameMaxLen)
+	}
+	if !headerNameTokenRE.MatchString(name) {
+		return fmt.Errorf("header name %q is not a valid HTTP token (RFC 7230)", name)
+	}
+	if _, reserved := reservedHeaderNames[strings.ToLower(name)]; reserved {
+		return fmt.Errorf("header name %q is reserved (managed by Caddy or required for framing)", name)
+	}
+	return nil
+}
+
+// validateHeaderValue catches HTTP header injection (CR / LF inside
+// the value would break the wire framing — see spec §1.6 #2 and
+// I.6 audit finding F1) plus NUL and other ASCII control characters
+// except HTAB. Visible-ASCII + SP + HTAB are the RFC 7230 field-
+// value VCHAR / WSP set. Empty values are ALLOWED (Step I.6
+// Ajustement 2: some upstreams check header presence, not value).
+func validateHeaderValue(name, value string) error {
+	if len(value) > headerValueMaxLen {
+		return fmt.Errorf("header %q value exceeds %d characters", name, headerValueMaxLen)
+	}
+	for i, r := range value {
+		if r == '\t' {
+			continue
+		}
+		if r < 0x20 || r == 0x7F {
+			return fmt.Errorf("header %q value contains a control character at offset %d (CR/LF/NUL are forbidden)", name, i)
+		}
+	}
+	return nil
+}
+
+// validateHeaders walks a request- or response-header map and runs
+// validateHeaderName + validateHeaderValue on every entry. The
+// direction argument ("request" / "response") is interpolated into
+// error messages so the user knows which section to fix. Returns
+// the first failure (fail-fast — typing helps when iterating in
+// the form).
+//
+// Note (Step I.6 Ajustement 1): no intra-request duplicate check.
+// JSON object key duplicates are last-wins per Go's json.Decode;
+// the frontend repeater prevents this in the normal flow but a
+// hand-crafted curl could trigger silent merge. Documented in the
+// I.6 commit message; Step J may add an ordered-decoder-based
+// duplicate check if user feedback warrants it.
+func validateHeaders(headers map[string]string, direction string) error {
+	for name, value := range headers {
+		if err := validateHeaderName(name); err != nil {
+			return fmt.Errorf("%s %s", direction, err.Error())
+		}
+		if err := validateHeaderValue(name, value); err != nil {
+			return fmt.Errorf("%s %s", direction, err.Error())
+		}
+	}
+	return nil
+}
+
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	var req routeRequest
 	dec := json.NewDecoder(r.Body)
@@ -298,6 +397,14 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateBasicAuth(req, ""); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateHeaders(req.RequestHeaders, "request"); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateHeaders(req.ResponseHeaders, "response"); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -342,6 +449,8 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		BasicAuthEnabled:      req.BasicAuthEnabled,
 		BasicAuthUsername:     req.BasicAuthUsername,
 		BasicAuthPasswordHash: basicAuthHash,
+		RequestHeaders:        req.RequestHeaders,
+		ResponseHeaders:       req.ResponseHeaders,
 		WAFEnabled:            req.WAFEnabled,
 	}
 	for _, h := range newRoute.AllHosts() {
@@ -429,6 +538,14 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateHeaders(req.RequestHeaders, "request"); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateHeaders(req.ResponseHeaders, "response"); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	// Step I.5 password resolution (Q5):
 	//   - basic auth disabled    → no hash stored, fields cleared.
@@ -467,6 +584,8 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		BasicAuthEnabled:      req.BasicAuthEnabled,
 		BasicAuthUsername:     req.BasicAuthUsername,
 		BasicAuthPasswordHash: basicAuthHash,
+		RequestHeaders:        req.RequestHeaders,
+		ResponseHeaders:       req.ResponseHeaders,
 		WAFEnabled:            req.WAFEnabled,
 	}
 	if !hostnamesEqual(newRoute.AllHosts(), previous.AllHosts()) {

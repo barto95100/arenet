@@ -479,3 +479,21 @@ func TestRoute_Validate_BasicAuthDisabledIgnoresFields(t *testing.T) {
 		t.Errorf("validate() = %v; want nil (disabled basic auth ignores other fields)", err)
 	}
 }
+
+// --- Step I.6 — Custom headers --------------------------------------------
+
+// TestRoute_Validate_HeadersAreNotInspected is a sanity test: the
+// storage layer trusts the API to have run validateHeaders on the
+// maps, so it accepts any content (including what a unit test might
+// inject). The line of defense for header injection is in the API
+// layer; storage just persists.
+func TestRoute_Validate_HeadersAreNotInspected(t *testing.T) {
+	r := Route{
+		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		RequestHeaders:  map[string]string{"X-Anything": "value with whatever the API allowed"},
+		ResponseHeaders: map[string]string{"X-Another": ""},
+	}
+	if err := r.validate(); err != nil {
+		t.Errorf("validate() = %v; storage must trust the API on header content", err)
+	}
+}

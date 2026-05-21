@@ -577,6 +577,102 @@ func TestAudit_BasicAuthHashNeverInAuditLog(t *testing.T) {
 	}
 }
 
+// --- Step I.6 — Custom headers --------------------------------------------
+
+// TestCreateRoute_AcceptsCustomHeaders exercises the happy path: a
+// POST with both request- and response-header maps round-trips into
+// storage and back out on the response (the API does NOT redact
+// header values, per Q7).
+func TestCreateRoute_AcceptsCustomHeaders(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"hdr.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Real-Foo":"bar"},"responseHeaders":{"X-Custom":"x"},"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 {
+		t.Fatalf("want 1 route, got %d", len(got))
+	}
+	if got[0].RequestHeaders["X-Real-Foo"] != "bar" {
+		t.Errorf("RequestHeaders not persisted: %v", got[0].RequestHeaders)
+	}
+	if got[0].ResponseHeaders["X-Custom"] != "x" {
+		t.Errorf("ResponseHeaders not persisted: %v", got[0].ResponseHeaders)
+	}
+	if !strings.Contains(rec.Body.String(), `"X-Real-Foo":"bar"`) {
+		t.Errorf("response missing request header: %s", rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"X-Custom":"x"`) {
+		t.Errorf("response missing response header: %s", rec.Body)
+	}
+}
+
+// TestCreateRoute_RejectsCRLFInHeaderValue is the F1 mitigation
+// guard. A CR or LF in a header value would let an attacker inject
+// arbitrary additional headers (or even a response body) by
+// breaking HTTP framing. The API MUST reject before the value ever
+// reaches Caddy's config or BoltDB.
+func TestCreateRoute_RejectsCRLFInHeaderValue(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Embedded \r\n in the header value (escaped as \\r\\n in the
+	// JSON string literal so the decoder lands a real CR + LF in
+	// the Go string).
+	body := `{"host":"injection.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Injected":"ok\r\nEvil: foo"},"responseHeaders":{},"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	// Message names the header AND explains the control-character
+	// rejection — admin-friendly diagnostic.
+	if !strings.Contains(rec.Body.String(), "X-Injected") || !strings.Contains(rec.Body.String(), "control character") {
+		t.Errorf("body=%s; want X-Injected + control-character mention", rec.Body)
+	}
+}
+
+// TestCreateRoute_RejectsInvalidHeaderKey: a key with a space is
+// not a valid RFC 7230 token. The reject message identifies the
+// offending key.
+func TestCreateRoute_RejectsInvalidHeaderKey(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"badkey.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Bad Key":"value"},"responseHeaders":{},"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "Bad Key") || !strings.Contains(rec.Body.String(), "RFC 7230") {
+		t.Errorf("body=%s; want Bad Key + RFC 7230 mention", rec.Body)
+	}
+}
+
+// TestCreateRoute_RejectsReservedHeaderName: a user that tries to
+// override Host / Connection / etc. would break the proxying
+// machinery. Reject with a clear message.
+func TestCreateRoute_RejectsReservedHeaderName(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"reserved.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Host":"evil.example.com"},"responseHeaders":{},"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "reserved") {
+		t.Errorf("body=%s; want reserved-header mention", rec.Body)
+	}
+}
+
 func TestUpdateRoute_AllowsKeepingSameAliases(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, err := env.store.CreateRoute(context.Background(), storage.Route{
