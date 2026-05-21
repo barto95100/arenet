@@ -335,6 +335,65 @@ func TestCreateRoute_Success(t *testing.T) {
 	}
 }
 
+// Step I.1: redirectToHttps is a new wire field added with the
+// ACME work. The default zero value (false) keeps the pre-Step-I.1
+// behavior; explicit true must round-trip through create → store →
+// response.
+func TestCreateRoute_AcceptsRedirectToHTTPS(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"redir.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":true,"redirectToHttps":true,"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	// Store persists the field.
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 || !got[0].RedirectToHTTPS {
+		t.Errorf("store RedirectToHTTPS = %v; want true. routes=%+v", got[0].RedirectToHTTPS, got)
+	}
+	// Response includes the field.
+	if !strings.Contains(rec.Body.String(), `"redirectToHttps":true`) {
+		t.Errorf("response body missing redirectToHttps=true: %s", rec.Body)
+	}
+}
+
+// Step I.1: an update flipping redirectToHttps back to false must
+// persist the change (catches the bug of forgetting the field in
+// updateRoute's storage.Route construction).
+func TestUpdateRoute_PreservesRedirectToHTTPS(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Seed: a route with redirect on.
+	created, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host: "flip.local", UpstreamURL: "http://127.0.0.1:9000",
+		TLSEnabled: true, RedirectToHTTPS: true,
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	body := `{"host":"flip.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":true,"redirectToHttps":false,"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	got, err := env.store.GetRoute(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.RedirectToHTTPS {
+		t.Errorf("RedirectToHTTPS not flipped to false; got route = %+v", got)
+	}
+}
+
 func TestCreateRoute_InvalidJSON(t *testing.T) {
 	env := newTestEnv(t, false)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader("not json"))

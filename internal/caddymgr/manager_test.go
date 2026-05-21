@@ -33,7 +33,7 @@ func TestBuildConfigJSON_TestRoute(t *testing.T) {
 		{ID: "fixture", Host: "test.local", UpstreamURL: "http://127.0.0.1:9999"},
 	}
 
-	raw, err := buildConfigJSON(routes)
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestBuildConfigJSON_CatchAllAppended(t *testing.T) {
 		{ID: "b", Host: "b.local", UpstreamURL: "http://127.0.0.1:9002"},
 	}
 
-	raw, err := buildConfigJSON(routes)
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBuildConfigJSON_CatchAllOnHTTPSServer(t *testing.T) {
 	routes := []storage.Route{
 		{ID: "a", Host: "secure.local", UpstreamURL: "http://127.0.0.1:9001", TLSEnabled: true},
 	}
-	raw, err := buildConfigJSON(routes)
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestBuildConfigJSON_HandlerChainOrder(t *testing.T) {
 		{ID: "rid-2", Host: "b.local", UpstreamURL: "http://127.0.0.1:9002"},
 	}
 
-	raw, err := buildConfigJSON(routes)
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestBuildConfigJSON_HandlerJSONName(t *testing.T) {
 	routes := []storage.Route{
 		{ID: "rid-1", Host: "a.local", UpstreamURL: "http://127.0.0.1:9001"},
 	}
-	raw, err := buildConfigJSON(routes)
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestBuildConfigJSON_HandlerJSONName_HTTPSToo(t *testing.T) {
 	routes := []storage.Route{
 		{ID: "rid-tls", Host: "secure.local", UpstreamURL: "http://127.0.0.1:9001", TLSEnabled: true},
 	}
-	raw, err := buildConfigJSON(routes)
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestSyncRegistry_CalledAfterSuccess(t *testing.T) {
 
 	registry := metrics.NewRegistry()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := New(store, logger, registry)
+	mgr, err := New(store, logger, registry, true, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestSyncRegistry_NoOpOnNilRegistry(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := New(store, logger, nil) // nil registry
+	mgr, err := New(store, logger, nil, true, "") // nil registry
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestSyncRegistry_NotCalledOnReloadFailure(t *testing.T) {
 
 	registry := metrics.NewRegistry()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr, err := New(store, logger, registry)
+	mgr, err := New(store, logger, registry, true, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -399,6 +399,177 @@ func TestUpstreamDial(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// --- Step I.1 — ACME policies + listen ports ----------------------------
+
+// readPolicies pulls apps.tls.automation.policies from a buildConfigJSON
+// emission and returns them as a typed slice. Centralizes the deep-key
+// traversal so individual tests assert on policy shape only.
+func readPolicies(t *testing.T, raw []byte) []map[string]any {
+	t.Helper()
+	var top map[string]any
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, raw)
+	}
+	apps, _ := top["apps"].(map[string]any)
+	tls, _ := apps["tls"].(map[string]any)
+	autom, _ := tls["automation"].(map[string]any)
+	raw2, ok := autom["policies"].([]any)
+	if !ok {
+		t.Fatalf("policies not an array: %v", autom["policies"])
+	}
+	out := make([]map[string]any, len(raw2))
+	for i, p := range raw2 {
+		out[i], _ = p.(map[string]any)
+	}
+	return out
+}
+
+func TestBuildConfigJSON_ACME_DevMode_StagingURL(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "r1", Host: "test.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true, ACMEEmail: "ops@example.com"})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	policies := readPolicies(t, raw)
+	if len(policies) != 2 {
+		t.Fatalf("want 2 policies (ACME + internal), got %d: %v", len(policies), policies)
+	}
+	// First policy: ACME, bound to the TLS-enabled host.
+	subjects, _ := policies[0]["subjects"].([]any)
+	if len(subjects) != 1 || subjects[0] != "test.example.com" {
+		t.Errorf("policies[0].subjects = %v; want [test.example.com]", subjects)
+	}
+	issuers, _ := policies[0]["issuers"].([]any)
+	issuer, _ := issuers[0].(map[string]any)
+	if issuer["module"] != "acme" {
+		t.Errorf("policies[0].issuers[0].module = %v; want acme", issuer["module"])
+	}
+	if issuer["ca"] != acmeStagingURL {
+		t.Errorf("policies[0].issuers[0].ca = %v; want staging URL", issuer["ca"])
+	}
+	if issuer["email"] != "ops@example.com" {
+		t.Errorf("policies[0].issuers[0].email = %v; want ops@example.com", issuer["email"])
+	}
+	// Second policy: catch-all internal issuer.
+	issuers2, _ := policies[1]["issuers"].([]any)
+	internalIssuer, _ := issuers2[0].(map[string]any)
+	if internalIssuer["module"] != "internal" {
+		t.Errorf("policies[1].issuers[0].module = %v; want internal", internalIssuer["module"])
+	}
+	if _, hasSubjects := policies[1]["subjects"]; hasSubjects {
+		t.Errorf("policies[1] should be catch-all (no subjects), got %v", policies[1])
+	}
+}
+
+func TestBuildConfigJSON_ACME_ProdMode_ProdURL(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "r1", Host: "prod.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: false, ACMEEmail: "ops@example.com"})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	policies := readPolicies(t, raw)
+	issuers, _ := policies[0]["issuers"].([]any)
+	issuer, _ := issuers[0].(map[string]any)
+	if issuer["ca"] != acmeProdURL {
+		t.Errorf("policies[0].issuers[0].ca = %v; want prod URL %q", issuer["ca"], acmeProdURL)
+	}
+}
+
+func TestBuildConfigJSON_ACME_NoEmail_IssuerOmitsEmailKey(t *testing.T) {
+	// Empty ACMEEmail must produce an issuer WITHOUT the "email"
+	// key (Let's Encrypt accepts email-free accounts; main.go logs
+	// a WARN separately at boot if a TLS route already exists).
+	routes := []storage.Route{
+		{ID: "r1", Host: "noemail.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true, ACMEEmail: ""})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	policies := readPolicies(t, raw)
+	issuers, _ := policies[0]["issuers"].([]any)
+	issuer, _ := issuers[0].(map[string]any)
+	if _, has := issuer["email"]; has {
+		t.Errorf("issuer should omit \"email\" key when ACMEEmail is empty, got %v", issuer)
+	}
+}
+
+func TestBuildConfigJSON_NoTLS_InternalOnly(t *testing.T) {
+	// No route has TLSEnabled=true → policies must be ONLY the
+	// internal catch-all (preserves pre-Step-I.1 wire shape).
+	routes := []storage.Route{
+		{ID: "r1", Host: "plain.example.com", UpstreamURL: "http://127.0.0.1:9000"},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	policies := readPolicies(t, raw)
+	if len(policies) != 1 {
+		t.Fatalf("want 1 policy (internal only) when no TLS route, got %d", len(policies))
+	}
+	issuers, _ := policies[0]["issuers"].([]any)
+	issuer, _ := issuers[0].(map[string]any)
+	if issuer["module"] != "internal" {
+		t.Errorf("policy[0].issuers[0].module = %v; want internal", issuer["module"])
+	}
+}
+
+func TestBuildConfigJSON_ListenPorts_DevVsProd(t *testing.T) {
+	cases := []struct {
+		name          string
+		dev           bool
+		wantHTTP      string
+		wantHTTPS     string
+		anyTLSEnabled bool
+	}{
+		{name: "dev_no_tls", dev: true, wantHTTP: ":8080", wantHTTPS: "", anyTLSEnabled: false},
+		{name: "dev_with_tls", dev: true, wantHTTP: ":8080", wantHTTPS: ":8443", anyTLSEnabled: true},
+		{name: "prod_no_tls", dev: false, wantHTTP: ":80", wantHTTPS: "", anyTLSEnabled: false},
+		{name: "prod_with_tls", dev: false, wantHTTP: ":80", wantHTTPS: ":443", anyTLSEnabled: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			routes := []storage.Route{
+				{ID: "r1", Host: "x.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: tc.anyTLSEnabled},
+			}
+			raw, err := buildConfigJSON(routes, buildOpts{DevMode: tc.dev})
+			if err != nil {
+				t.Fatalf("buildConfigJSON: %v", err)
+			}
+			var top map[string]any
+			if err := json.Unmarshal(raw, &top); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			apps, _ := top["apps"].(map[string]any)
+			httpApp, _ := apps["http"].(map[string]any)
+			servers, _ := httpApp["servers"].(map[string]any)
+
+			httpSrv, _ := servers["arenet_http"].(map[string]any)
+			httpListens, _ := httpSrv["listen"].([]any)
+			if len(httpListens) != 1 || httpListens[0] != tc.wantHTTP {
+				t.Errorf("arenet_http.listen = %v; want [%q]", httpListens, tc.wantHTTP)
+			}
+
+			httpsSrv, hasHTTPS := servers["arenet_https"].(map[string]any)
+			if tc.wantHTTPS == "" {
+				if hasHTTPS {
+					t.Errorf("expected no arenet_https server when no TLS route; got %v", httpsSrv)
+				}
+				return
+			}
+			httpsListens, _ := httpsSrv["listen"].([]any)
+			if len(httpsListens) != 1 || httpsListens[0] != tc.wantHTTPS {
+				t.Errorf("arenet_https.listen = %v; want [%q]", httpsListens, tc.wantHTTPS)
 			}
 		})
 	}

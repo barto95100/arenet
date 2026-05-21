@@ -42,10 +42,29 @@ import (
 	"github.com/barto95100/arenet/internal/storage"
 )
 
-// Default listen addresses for the public proxy in dev mode.
+// Listen addresses by mode (Step I.1).
+//
+// Dev keeps the high ports so a non-root developer can bind without
+// CAP_NET_BIND_SERVICE. Prod uses the standard reverse-proxy ports —
+// ACME HTTP-01 challenges arrive on :80 and Let's Encrypt-issued
+// certs serve on :443. Operators that cannot bind :80 / :443 must
+// either run the binary as root or `setcap cap_net_bind_service+ep`
+// on it; documented in the Step I.1 commit message.
 const (
-	httpListen  = ":8080"
-	httpsListen = ":8443"
+	httpListenDev   = ":8080"
+	httpsListenDev  = ":8443"
+	httpListenProd  = ":80"
+	httpsListenProd = ":443"
+)
+
+// ACME directory URLs (Step I.1).
+//
+// `--dev` mode targets Let's Encrypt **staging** so iteration on the
+// reverse-proxy config doesn't burn the production rate limit
+// (50 certs / week / domain). Prod mode targets the real directory.
+const (
+	acmeProdURL    = "https://acme-v02.api.letsencrypt.org/directory"
+	acmeStagingURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
 )
 
 // CaddyManager owns the lifecycle of the embedded Caddy instance and
@@ -55,10 +74,17 @@ const (
 // route IDs after each successful caddy.Load (spec §11.5 + §4.1). When
 // nil (typical for unit tests that only exercise buildConfigJSON or
 // catch-all behavior), the metrics layer is fully bypassed.
+//
+// devMode (Step I.1) selects the listen ports (:8080/:8443 vs :80/:443)
+// and the ACME directory (staging vs production). acmeEmail is the
+// contact email passed to the ACME issuer; empty is accepted by
+// Let's Encrypt but discouraged (no expiry reminders).
 type CaddyManager struct {
-	store    *storage.Store
-	logger   *slog.Logger
-	registry *metrics.Registry
+	store     *storage.Store
+	logger    *slog.Logger
+	registry  *metrics.Registry
+	devMode   bool
+	acmeEmail string
 
 	mu      sync.Mutex
 	started bool
@@ -68,14 +94,29 @@ type CaddyManager struct {
 // The registry may be nil; passing a non-nil registry enables the
 // per-reload Sync call that keeps the metrics counter map in step
 // with the current set of routes.
-func New(store *storage.Store, logger *slog.Logger, registry *metrics.Registry) (*CaddyManager, error) {
+//
+// devMode and acmeEmail were added in Step I.1:
+//   - devMode=true selects high listen ports (:8080/:8443) and the
+//     Let's Encrypt staging directory; devMode=false picks :80/:443
+//     and the production directory.
+//   - acmeEmail is the contact passed to the ACME issuer when a route
+//     has TLSEnabled=true. Empty is accepted but Let's Encrypt won't
+//     send expiry reminders; caller is responsible for logging a
+//     WARN at boot if appropriate.
+func New(store *storage.Store, logger *slog.Logger, registry *metrics.Registry, devMode bool, acmeEmail string) (*CaddyManager, error) {
 	if store == nil {
 		return nil, errors.New("caddymgr: store must not be nil")
 	}
 	if logger == nil {
 		return nil, errors.New("caddymgr: logger must not be nil")
 	}
-	return &CaddyManager{store: store, logger: logger, registry: registry}, nil
+	return &CaddyManager{
+		store:     store,
+		logger:    logger,
+		registry:  registry,
+		devMode:   devMode,
+		acmeEmail: acmeEmail,
+	}, nil
 }
 
 // Start launches the embedded Caddy with the config derived from the store.
@@ -92,8 +133,26 @@ func (m *CaddyManager) Start(ctx context.Context) error {
 		return fmt.Errorf("initial caddy load: %w", err)
 	}
 	m.started = true
-	m.logger.Info("Caddy started", "http", httpListen, "https", httpsListen)
+	m.logger.Info("Caddy started", "http", m.httpListen(), "https", m.httpsListen(), "dev", m.devMode)
 	return nil
+}
+
+// httpListen returns the HTTP listen address based on devMode.
+// Step I.1: dev picks :8080, prod picks :80 (for ACME HTTP-01 +
+// the I.2 redirect).
+func (m *CaddyManager) httpListen() string {
+	if m.devMode {
+		return httpListenDev
+	}
+	return httpListenProd
+}
+
+// httpsListen returns the HTTPS listen address based on devMode.
+func (m *CaddyManager) httpsListen() string {
+	if m.devMode {
+		return httpsListenDev
+	}
+	return httpsListenProd
 }
 
 // Stop halts the embedded Caddy. Safe to call when Start was never invoked.
@@ -137,7 +196,10 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		return fmt.Errorf("list routes: %w", err)
 	}
 
-	cfgJSON, err := buildConfigJSON(routes)
+	cfgJSON, err := buildConfigJSON(routes, buildOpts{
+		DevMode:   m.devMode,
+		ACMEEmail: m.acmeEmail,
+	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
 	}
@@ -221,12 +283,42 @@ type matcherSet struct {
 	Host []string `json:"host,omitempty"`
 }
 
+// buildOpts configures buildConfigJSON's environment-dependent
+// behaviors. Step I.1 introduced it so the manager can pass devMode
+// + acmeEmail down without buildConfigJSON growing a long parameter
+// list. Tests pass a value-typed default (zero values) when they
+// only exercise the catch-all + internal-issuer path.
+type buildOpts struct {
+	// DevMode selects listen ports (:8080/:8443 vs :80/:443) and
+	// the ACME directory URL (staging vs production).
+	DevMode bool
+	// ACMEEmail is forwarded to the ACME issuer when at least one
+	// route has TLSEnabled=true. Empty is accepted (Let's Encrypt
+	// won't send expiry reminders).
+	ACMEEmail string
+}
+
 // buildConfigJSON renders the full Caddy config for the given routes.
-// In dev mode (current Phase 1), automatic ACME is fully disabled; HTTPS on
-// :8443 uses Caddy's internal local CA via the `tls` app issuer "internal".
-func buildConfigJSON(routes []storage.Route) ([]byte, error) {
+//
+// Step I.1 wires real ACME: routes with TLSEnabled=true produce a
+// dedicated tls.automation.policies entry pointing at Let's Encrypt
+// (staging in dev mode, prod otherwise). The historical catch-all
+// "internal" policy stays as the LAST policy so any host not bound
+// to an ACME policy (localhost, .local, IP literals) still receives
+// a self-signed cert and Caddy can answer HTTPS at all.
+//
+// AutomaticHTTPS remains disabled at the server level: Caddy's
+// built-in port-80 redirect logic and the implicit cert magic are
+// replaced by Arenet's own explicit translation (per-route opt-in,
+// I.2 redirect handler). Keeps the JSON deterministic and testable.
+func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	httpRoutes := make([]httpRoute, 0, len(routes)+1)
 	httpsRoutes := make([]httpRoute, 0, len(routes)+1)
+	// Hosts that opted into TLS — used to build the ACME policy
+	// subjects list. Collected in route iteration order; emitted as
+	// a single policy (one issuer, many subjects) rather than one
+	// policy per host to keep the Caddy config readable.
+	acmeSubjects := make([]string, 0, len(routes))
 
 	for _, r := range routes {
 		dial, err := upstreamDial(r.UpstreamURL)
@@ -263,12 +355,15 @@ func buildConfigJSON(routes []storage.Route) ([]byte, error) {
 		httpRoutes = append(httpRoutes, route)
 		if r.TLSEnabled {
 			httpsRoutes = append(httpsRoutes, route)
+			acmeSubjects = append(acmeSubjects, r.Host)
 		}
 	}
 
 	// Final catch-all: must be the LAST route. No match block = matches every
 	// request that none of the prior host-matched routes handled.
 	httpRoutes = append(httpRoutes, catchAllRoute())
+
+	httpListen, httpsListen := listenPortsFor(opts.DevMode)
 
 	servers := map[string]httpServer{
 		"arenet_http": {
@@ -300,27 +395,73 @@ func buildConfigJSON(routes []storage.Route) ([]byte, error) {
 		},
 	}
 
-	// TLS app providing the "internal" issuer for self-signed local certs
-	// must live under apps.tls — model it as a generic map to keep the
-	// dependency on Caddy's internal types minimal.
 	full := map[string]any{
 		"apps": map[string]any{
 			"http": cfg.Apps.HTTP,
 			"tls": map[string]any{
 				"automation": map[string]any{
-					"policies": []map[string]any{
-						{
-							"issuers": []map[string]any{
-								{"module": "internal"},
-							},
-						},
-					},
+					"policies": buildTLSPolicies(acmeSubjects, opts),
 				},
 			},
 		},
 	}
 
 	return json.MarshalIndent(full, "", "  ")
+}
+
+// buildTLSPolicies returns the tls.automation.policies array.
+//
+// Order matters for Caddy: the FIRST policy whose subjects list
+// matches a host wins. A policy without `subjects` matches anything.
+// We therefore emit the ACME policy (subject-bound) first and the
+// internal catch-all last, so:
+//   - hosts in `acmeSubjects` get an ACME cert,
+//   - any other host (localhost, .local, IP literal, etc.) falls
+//     back to Caddy's internal CA — same behavior as pre-Step-I.1.
+//
+// If no route has TLSEnabled=true, we emit only the catch-all
+// internal policy, preserving the exact pre-Step-I.1 wire shape so
+// existing tests of that path keep passing.
+func buildTLSPolicies(acmeSubjects []string, opts buildOpts) []map[string]any {
+	internalPolicy := map[string]any{
+		"issuers": []map[string]any{
+			{"module": "internal"},
+		},
+	}
+	if len(acmeSubjects) == 0 {
+		return []map[string]any{internalPolicy}
+	}
+	acmeIssuer := map[string]any{
+		"module": "acme",
+		"ca":     acmeDirectoryURL(opts.DevMode),
+	}
+	if opts.ACMEEmail != "" {
+		acmeIssuer["email"] = opts.ACMEEmail
+	}
+	acmePolicy := map[string]any{
+		"subjects": acmeSubjects,
+		"issuers":  []map[string]any{acmeIssuer},
+	}
+	return []map[string]any{acmePolicy, internalPolicy}
+}
+
+// acmeDirectoryURL returns the Let's Encrypt directory URL for the
+// current mode. Dev mode uses staging (no rate limit on cert
+// issuance for iteration); prod uses the real directory.
+func acmeDirectoryURL(devMode bool) string {
+	if devMode {
+		return acmeStagingURL
+	}
+	return acmeProdURL
+}
+
+// listenPortsFor returns the (HTTP, HTTPS) listen addresses based
+// on mode. Step I.1: dev keeps :8080/:8443, prod uses :80/:443.
+func listenPortsFor(devMode bool) (string, string) {
+	if devMode {
+		return httpListenDev, httpsListenDev
+	}
+	return httpListenProd, httpsListenProd
 }
 
 // catchAllRoute builds the final 404 catch-all route: no match block (matches

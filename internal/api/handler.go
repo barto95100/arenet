@@ -120,34 +120,37 @@ func NewHandler(
 // routeRequest is the wire shape accepted by POST and PUT /routes. JSON tags
 // are camelCase per the spec.
 type routeRequest struct {
-	Host        string `json:"host"`
-	UpstreamURL string `json:"upstreamUrl"`
-	TLSEnabled  bool   `json:"tlsEnabled"`
-	WAFEnabled  bool   `json:"wafEnabled"`
+	Host            string `json:"host"`
+	UpstreamURL     string `json:"upstreamUrl"`
+	TLSEnabled      bool   `json:"tlsEnabled"`
+	RedirectToHTTPS bool   `json:"redirectToHttps"`
+	WAFEnabled      bool   `json:"wafEnabled"`
 }
 
 // routeResponse is the wire shape returned by GET / POST / PUT /routes. The
 // JSON tags must match routeRequest's camelCase scheme.
 type routeResponse struct {
-	ID          string `json:"id"`
-	Host        string `json:"host"`
-	UpstreamURL string `json:"upstreamUrl"`
-	TLSEnabled  bool   `json:"tlsEnabled"`
-	WAFEnabled  bool   `json:"wafEnabled"`
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
+	ID              string `json:"id"`
+	Host            string `json:"host"`
+	UpstreamURL     string `json:"upstreamUrl"`
+	TLSEnabled      bool   `json:"tlsEnabled"`
+	RedirectToHTTPS bool   `json:"redirectToHttps"`
+	WAFEnabled      bool   `json:"wafEnabled"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with
 // millisecond precision, UTC).
 func toResponse(r storage.Route) routeResponse {
 	return routeResponse{
-		ID:          r.ID,
-		Host:        r.Host,
-		UpstreamURL: r.UpstreamURL,
-		TLSEnabled:  r.TLSEnabled,
-		WAFEnabled:  r.WAFEnabled,
-		CreatedAt:   r.CreatedAt.UTC().Format(timestampFormat),
-		UpdatedAt:   r.UpdatedAt.UTC().Format(timestampFormat),
+		ID:              r.ID,
+		Host:            r.Host,
+		UpstreamURL:     r.UpstreamURL,
+		TLSEnabled:      r.TLSEnabled,
+		RedirectToHTTPS: r.RedirectToHTTPS,
+		WAFEnabled:      r.WAFEnabled,
+		CreatedAt:       r.CreatedAt.UTC().Format(timestampFormat),
+		UpdatedAt:       r.UpdatedAt.UTC().Format(timestampFormat),
 	}
 }

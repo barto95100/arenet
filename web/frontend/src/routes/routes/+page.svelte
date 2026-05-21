@@ -37,6 +37,7 @@
 		host: '',
 		upstreamUrl: '',
 		tlsEnabled: false,
+		redirectToHttps: false,
 		wafEnabled: false
 	});
 
@@ -52,7 +53,17 @@
 	function openCreate() {
 		formMode = 'create';
 		editingId = null;
-		formData = { host: '', upstreamUrl: '', tlsEnabled: false, wafEnabled: false };
+		// Step I.1: redirectToHttps defaults to true so opting into TLS
+		// gives the user the "right thing" (301 from :80 to :443) by
+		// default. They can flip the toggle off explicitly if they
+		// want plain HTTP to keep serving alongside HTTPS.
+		formData = {
+			host: '',
+			upstreamUrl: '',
+			tlsEnabled: false,
+			redirectToHttps: true,
+			wafEnabled: false
+		};
 		resetFormErrors();
 		formOpen = true;
 	}
@@ -64,6 +75,7 @@
 			host: r.host,
 			upstreamUrl: r.upstreamUrl,
 			tlsEnabled: r.tlsEnabled,
+			redirectToHttps: r.redirectToHttps,
 			wafEnabled: r.wafEnabled
 		};
 		resetFormErrors();
@@ -266,12 +278,29 @@
 			placeholder="http://127.0.0.1:8080"
 			error={upstreamError ?? undefined}
 		/>
-		<Checkbox label="Enable TLS" bind:checked={formData.tlsEnabled} />
+		<div class="flex flex-col gap-1">
+			<Checkbox label="Enable TLS" bind:checked={formData.tlsEnabled} />
+			<!-- Step I.1 helper text (Q4 vote C): warn softly that ACME
+			     needs a publicly resolvable hostname. localhost / .local
+			     fall back to Caddy's internal CA (self-signed). -->
+			<p class="text-xs text-muted ml-6">
+				Public domain required for Let's Encrypt; localhost / .local
+				will fall back to internal CA.
+			</p>
+		</div>
 		<Checkbox
-			label="Enable WAF (coming in Step F)"
+			label="Redirect HTTP → HTTPS"
+			bind:checked={formData.redirectToHttps}
+			disabled={!formData.tlsEnabled}
+			title={formData.tlsEnabled
+				? 'Automatically redirects HTTP requests to HTTPS with a 301.'
+				: 'Enable TLS to use HTTPS redirect.'}
+		/>
+		<Checkbox
+			label="Enable WAF (coming in Step I.4)"
 			bind:checked={formData.wafEnabled}
 			disabled
-			title="WAF support arrives in Step F"
+			title="WAF support lands in Step I.4"
 		/>
 		<!-- Hidden submit button so Enter inside an input still triggers the form. -->
 		<button type="submit" class="hidden" aria-hidden="true"></button>

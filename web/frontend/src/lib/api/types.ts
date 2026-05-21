@@ -7,6 +7,12 @@ export interface Route {
 	host: string;
 	upstreamUrl: string;
 	tlsEnabled: boolean;
+	/**
+	 * Step I.1 (wired by I.2): when true and tlsEnabled is also true,
+	 * HTTP requests on :80 are 301-redirected to https://. Ignored when
+	 * tlsEnabled is false.
+	 */
+	redirectToHttps: boolean;
 	wafEnabled: boolean;
 	createdAt: string;
 	updatedAt: string;
@@ -16,6 +22,7 @@ export interface RouteRequest {
 	host: string;
 	upstreamUrl: string;
 	tlsEnabled: boolean;
+	redirectToHttps: boolean;
 	wafEnabled: boolean;
 }
 

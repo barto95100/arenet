@@ -30,13 +30,20 @@ import (
 
 // Route is a proxied virtual host served by Arenet.
 type Route struct {
-	ID          string    `json:"id"`
-	Host        string    `json:"host"`
-	UpstreamURL string    `json:"upstream_url"`
-	TLSEnabled  bool      `json:"tls_enabled"`
-	WAFEnabled  bool      `json:"waf_enabled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string `json:"id"`
+	Host        string `json:"host"`
+	UpstreamURL string `json:"upstream_url"`
+	TLSEnabled  bool   `json:"tls_enabled"`
+	// RedirectToHTTPS (Step I.1, used by I.2) requests Caddy to
+	// emit a 301 from http://<host>/* to https://<host>/* when the
+	// matching route has TLSEnabled=true. Zero value is false: pre-
+	// Step-I.1 routes silently keep the no-redirect behavior. The
+	// wire JSON below this struct uses camelCase to match the API
+	// shape; storage tags use snake_case for legacy reasons.
+	RedirectToHTTPS bool      `json:"redirect_to_https"`
+	WAFEnabled      bool      `json:"waf_enabled"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // validate checks the user-supplied fields of a Route.

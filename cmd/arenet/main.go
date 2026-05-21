@@ -141,9 +141,26 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	metrics.SetRegistry(metricsRegistry)
 	metricsBroadcaster := metrics.NewBroadcaster(logger)
 
-	mgr, err := caddymgr.New(store, logger, metricsRegistry)
+	// Step I.1: propagate dev mode + ACME contact email to the
+	// Caddy manager so it can pick the right listen ports
+	// (:8080/:8443 vs :80/:443) and the right ACME directory
+	// (Let's Encrypt staging vs prod). Empty ARENET_ACME_EMAIL is
+	// accepted by Let's Encrypt but we WARN below if any route
+	// already opted into TLS — the operator likely wants expiry
+	// notifications and a `caa` identity tied to a mailbox.
+	acmeEmail := os.Getenv("ARENET_ACME_EMAIL")
+	mgr, err := caddymgr.New(store, logger, metricsRegistry, cfg.dev, acmeEmail)
 	if err != nil {
 		return err
+	}
+	if acmeEmail == "" {
+		anyTLS, listErr := storeHasTLSRoute(ctx, store)
+		switch {
+		case listErr != nil:
+			logger.Warn("could not check for TLS routes at boot (ARENET_ACME_EMAIL empty)", "err", listErr)
+		case anyTLS:
+			logger.Warn("at least one route has TLSEnabled=true but ARENET_ACME_EMAIL is empty — Let's Encrypt account will be email-free, no expiry reminders")
+		}
 	}
 
 	if err := mgr.Start(ctx); err != nil {
@@ -277,6 +294,22 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	}
 	logger.Info("Arenet shutting down")
 	return nil
+}
+
+// storeHasTLSRoute returns true if any persisted route has
+// TLSEnabled=true. Used at boot (Step I.1) to decide whether to
+// WARN about an empty ARENET_ACME_EMAIL.
+func storeHasTLSRoute(ctx context.Context, store *storage.Store) (bool, error) {
+	routes, err := store.ListRoutes(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range routes {
+		if r.TLSEnabled {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // devLandingHandler returns a tiny HTML page guiding the developer to the

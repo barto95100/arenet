@@ -180,10 +180,11 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	created, err := h.store.CreateRoute(r.Context(), storage.Route{
-		Host:        req.Host,
-		UpstreamURL: req.UpstreamURL,
-		TLSEnabled:  req.TLSEnabled,
-		WAFEnabled:  req.WAFEnabled,
+		Host:            req.Host,
+		UpstreamURL:     req.UpstreamURL,
+		TLSEnabled:      req.TLSEnabled,
+		RedirectToHTTPS: req.RedirectToHTTPS,
+		WAFEnabled:      req.WAFEnabled,
 	})
 	if err != nil {
 		h.logger.Error("create route", "err", err)
@@ -262,11 +263,12 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, err := h.store.UpdateRoute(r.Context(), storage.Route{
-		ID:          id,
-		Host:        req.Host,
-		UpstreamURL: req.UpstreamURL,
-		TLSEnabled:  req.TLSEnabled,
-		WAFEnabled:  req.WAFEnabled,
+		ID:              id,
+		Host:            req.Host,
+		UpstreamURL:     req.UpstreamURL,
+		TLSEnabled:      req.TLSEnabled,
+		RedirectToHTTPS: req.RedirectToHTTPS,
+		WAFEnabled:      req.WAFEnabled,
 	})
 	if err != nil {
 		h.logger.Error("update route", "err", err)
