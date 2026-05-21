@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
@@ -62,6 +63,10 @@ type Handler struct {
 	setupToken  *SetupTokenHolder
 	devMode     bool
 	logger      *slog.Logger
+	// startTime is captured at NewHandler-time and reported by the
+	// /healthz endpoint as uptime_seconds (Step H.3). Read-only after
+	// construction.
+	startTime time.Time
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -108,6 +113,7 @@ func NewHandler(
 		setupToken:  setupToken,
 		devMode:     devMode,
 		logger:      logger,
+		startTime:   time.Now(),
 	}
 }
 

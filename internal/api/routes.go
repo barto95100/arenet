@@ -55,6 +55,17 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 	}
 	r.Use(auth.IPExtractMiddleware(ipExtractor))
 
+	// /healthz: mounted at the root (NOT /api/v1/...) so the probe
+	// path stays stable across API versions. No auth wrapper because
+	// orchestrator probes carry no credentials. No audit either —
+	// audit is per-handler in Arenet, not a middleware, so /healthz
+	// is implicitly silent. Step H.3 — see internal/api/health.go
+	// for full design rationale. The middleware stack above does
+	// apply (chi enforces "all middlewares before any route"), so
+	// probe hits land in the structured log; that is an acceptable
+	// trade-off for the homelab single-instance deployment target.
+	r.Get("/healthz", h.healthz)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// Auth subtree: rate-limited per IP (spec §5.2).
 		r.Route("/auth", func(r chi.Router) {
