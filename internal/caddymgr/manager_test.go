@@ -610,6 +610,81 @@ func TestBuildConfigJSON_Aliases_RedirectHonorsAliases(t *testing.T) {
 	}
 }
 
+// --- Step I.5 — Basic Auth ------------------------------------------------
+
+func TestBuildConfigJSON_BasicAuth_EmitsAuthHandler(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "auth.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			BasicAuthEnabled:      true,
+			BasicAuthUsername:     "admin",
+			BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$SALT$KEY",
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	first := httpRoutes[0]
+	handlers, _ := first["handle"].([]any)
+	// Step I.5 chain: [metrics, authentication, reverse_proxy].
+	if len(handlers) != 3 {
+		t.Fatalf("handler chain length = %d; want 3 (metrics + auth + proxy)", len(handlers))
+	}
+	h0, _ := handlers[0].(map[string]any)
+	if h0["handler"] != "arenet_routemetrics" {
+		t.Errorf("handler[0] = %v; want arenet_routemetrics (metrics MUST stay first)", h0["handler"])
+	}
+	h1, _ := handlers[1].(map[string]any)
+	if h1["handler"] != "authentication" {
+		t.Errorf("handler[1] = %v; want authentication", h1["handler"])
+	}
+	providers, _ := h1["providers"].(map[string]any)
+	httpBasic, _ := providers["http_basic"].(map[string]any)
+	hash, _ := httpBasic["hash"].(map[string]any)
+	if hash["algorithm"] != "argon2id" {
+		t.Errorf("hash.algorithm = %v; want argon2id", hash["algorithm"])
+	}
+	accounts, _ := httpBasic["accounts"].([]any)
+	if len(accounts) != 1 {
+		t.Fatalf("accounts length = %d; want 1", len(accounts))
+	}
+	acc0, _ := accounts[0].(map[string]any)
+	if acc0["username"] != "admin" {
+		t.Errorf("accounts[0].username = %v; want admin", acc0["username"])
+	}
+	if acc0["password"] != "$argon2id$v=19$m=65536,t=3,p=4$SALT$KEY" {
+		t.Errorf("accounts[0].password = %v; want PHC hash verbatim", acc0["password"])
+	}
+	h2, _ := handlers[2].(map[string]any)
+	if h2["handler"] != "reverse_proxy" {
+		t.Errorf("handler[2] = %v; want reverse_proxy", h2["handler"])
+	}
+}
+
+func TestBuildConfigJSON_BasicAuth_OffSkipsHandler(t *testing.T) {
+	// BasicAuthEnabled=false: chain stays [metrics, reverse_proxy].
+	routes := []storage.Route{
+		{ID: "r1", Host: "open.example.com", UpstreamURL: "http://127.0.0.1:9000"},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	handlers, _ := httpRoutes[0]["handle"].([]any)
+	if len(handlers) != 2 {
+		t.Fatalf("handler chain length = %d; want 2 (no auth handler when disabled)", len(handlers))
+	}
+	for _, hh := range handlers {
+		m, _ := hh.(map[string]any)
+		if m["handler"] == "authentication" {
+			t.Errorf("authentication handler present despite BasicAuthEnabled=false: %v", m)
+		}
+	}
+}
+
 // --- Step I.2 — HTTP → HTTPS redirect -----------------------------------
 
 // httpsServerRoutes extracts the arenet_https server's route slice. Mirrors

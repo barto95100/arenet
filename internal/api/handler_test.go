@@ -443,6 +443,140 @@ func TestCreateRoute_RejectsCrossRouteDuplicate(t *testing.T) {
 	}
 }
 
+// --- Step I.5 — Basic Auth ------------------------------------------------
+
+// TestCreateRoute_AcceptsBasicAuth_HashesPassword exercises the
+// happy path: plaintext password goes IN via the request, the
+// route is persisted with an argon2id PHC hash, the response carries
+// basicAuthPasswordSet:true but NEVER the hash or plaintext.
+func TestCreateRoute_AcceptsBasicAuth_HashesPassword(t *testing.T) {
+	env := newTestEnv(t, false)
+	plain := "s3cret-pa$$"
+	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	// Store: hash present, starts with $argon2id$ PHC marker.
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 || got[0].BasicAuthPasswordHash == "" {
+		t.Fatalf("hash not persisted: %+v", got)
+	}
+	if !strings.HasPrefix(got[0].BasicAuthPasswordHash, "$argon2id$") {
+		t.Errorf("hash should be argon2id PHC; got %q", got[0].BasicAuthPasswordHash)
+	}
+	// Response: passwordSet flag yes, plain absent, hash absent.
+	respBody := rec.Body.String()
+	if !strings.Contains(respBody, `"basicAuthPasswordSet":true`) {
+		t.Errorf("response missing basicAuthPasswordSet:true: %s", respBody)
+	}
+	if strings.Contains(respBody, plain) {
+		t.Errorf("response leaked plaintext password: %s", respBody)
+	}
+	if strings.Contains(respBody, "$argon2id$") {
+		t.Errorf("response leaked hash PHC: %s", respBody)
+	}
+}
+
+// TestCreateRoute_RejectsBasicAuthEnabledWithoutPassword catches the
+// classic UI mistake of flipping the toggle but forgetting to type
+// the credentials. Q6 in the audit.
+func TestCreateRoute_RejectsBasicAuthEnabledWithoutPassword(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "basicAuthPassword required") {
+		t.Errorf("body=%s; want basicAuthPassword-required message", rec.Body)
+	}
+}
+
+// TestUpdateRoute_EmptyPasswordPreservesHash exercises the "Edit
+// anything without re-typing the secret" UX (Q5). Empty password on
+// PUT keeps the existing hash verbatim — re-hashing would invalidate
+// every cached browser credential on the route.
+func TestUpdateRoute_EmptyPasswordPreservesHash(t *testing.T) {
+	env := newTestEnv(t, false)
+	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host: "auth.local", UpstreamURL: "http://127.0.0.1:9000",
+		BasicAuthEnabled:      true,
+		BasicAuthUsername:     "admin",
+		BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$SALTSALTSALTSALT$KEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEY",
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	originalHash := seeded.BasicAuthPasswordHash
+
+	// PUT with basicAuthPassword:"" — and a different upstream so we
+	// know the update path actually ran.
+	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s; want 200", rec.Code, rec.Body)
+	}
+	got, _ := env.store.GetRoute(context.Background(), seeded.ID)
+	if got.BasicAuthPasswordHash != originalHash {
+		t.Errorf("hash was rotated despite empty password: before=%q after=%q", originalHash, got.BasicAuthPasswordHash)
+	}
+	if got.UpstreamURL != "http://127.0.0.1:9001" {
+		t.Errorf("upstream not updated: %v", got)
+	}
+}
+
+// TestAudit_BasicAuthHashNeverInAuditLog is the explicit F1 mitigation
+// guard: when a route with Basic Auth is created / updated / deleted,
+// the AfterJSON / BeforeJSON payloads embedded in the audit events
+// must NOT contain the argon2id PHC string. Routes are passed through
+// routeForAudit() before mustMarshalForAudit, which blanks the hash.
+func TestAudit_BasicAuthHashNeverInAuditLog(t *testing.T) {
+	env := newTestEnv(t, false)
+	plain := "leaky-secret-3000"
+	body := `{"host":"audit.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	// Find the route_created event we just emitted and assert the
+	// AfterJSON payload contains no argon2id PHC marker.
+	events := env.audit.Events()
+	if len(events) == 0 {
+		t.Fatal("no audit events captured")
+	}
+	var got *audit.Event
+	for i := range events {
+		if events[i].Action == audit.ActionRouteCreated {
+			got = &events[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("route_created event not found")
+	}
+	if strings.Contains(string(got.AfterJSON), "$argon2id$") {
+		t.Errorf("audit AfterJSON LEAKED argon2id PHC hash: %s", got.AfterJSON)
+	}
+	if strings.Contains(string(got.AfterJSON), plain) {
+		t.Errorf("audit AfterJSON LEAKED plaintext password: %s", got.AfterJSON)
+	}
+}
+
 func TestUpdateRoute_AllowsKeepingSameAliases(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, err := env.store.CreateRoute(context.Background(), storage.Route{

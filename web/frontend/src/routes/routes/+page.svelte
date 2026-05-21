@@ -39,8 +39,17 @@
 		tlsEnabled: false,
 		redirectToHttps: false,
 		aliases: [],
+		basicAuthEnabled: false,
+		basicAuthUsername: '',
+		basicAuthPassword: '',
 		wafEnabled: false
 	});
+
+	// Step I.5: tracked separately from formData because it reflects
+	// the SERVER state (does a hash exist on the route being edited),
+	// not the form's write-only password input. Drives the "••• set"
+	// placeholder and the empty-password-keeps-hash semantics.
+	let basicAuthPasswordSet = $state(false);
 
 	let confirmTarget = $state<Route | null>(null);
 	let deleting = $state(false);
@@ -64,8 +73,12 @@
 			tlsEnabled: false,
 			redirectToHttps: true,
 			aliases: [],
+			basicAuthEnabled: false,
+			basicAuthUsername: '',
+			basicAuthPassword: '',
 			wafEnabled: false
 		};
+		basicAuthPasswordSet = false;
 		resetFormErrors();
 		formOpen = true;
 	}
@@ -81,8 +94,15 @@
 			// Step I.3: copy aliases by value so editing in the form
 			// doesn't mutate the original Route in the table list.
 			aliases: [...(r.aliases ?? [])],
+			basicAuthEnabled: r.basicAuthEnabled,
+			basicAuthUsername: r.basicAuthUsername,
+			// Step I.5: password input starts EMPTY on Edit. Empty +
+			// hash-already-set → backend preserves the existing hash.
+			// User must re-type to rotate.
+			basicAuthPassword: '',
 			wafEnabled: r.wafEnabled
 		};
+		basicAuthPasswordSet = r.basicAuthPasswordSet;
 		resetFormErrors();
 		formOpen = true;
 	}
@@ -239,6 +259,32 @@
 							title={`Aliases:\n${r.aliases.join('\n')}`}
 						>+{r.aliases.length}</span>
 					{/if}
+					{#if r.basicAuthEnabled}
+						<!-- Step I.5: discreet lock icon when Basic Auth is on.
+						     Tooltip via the native title attribute names the
+						     username so the admin can identify the credential
+						     at a glance without opening Edit. -->
+						<span
+							class="ml-1.5 inline-flex items-center text-muted cursor-help"
+							title={`Basic Auth required (user: ${r.basicAuthUsername})`}
+							aria-label="Basic Auth required"
+						>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								class="w-3.5 h-3.5"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<rect width="18" height="11" x="3" y="11" rx="2" />
+								<path d="M7 11V7a5 5 0 0 1 10 0v4" />
+							</svg>
+						</span>
+					{/if}
 				</td>
 				<td
 					class="px-4 py-3 font-mono text-secondary truncate max-w-[16rem]"
@@ -360,6 +406,41 @@
 				? 'Automatically redirects HTTP requests to HTTPS with a 301.'
 				: 'Enable TLS to use HTTPS redirect.'}
 		/>
+		<!-- Step I.5: per-route Basic Auth. Username + password are
+		     only meaningful when the toggle is on. On Edit, the
+		     password input stays EMPTY and shows "••• set" as a
+		     placeholder when a hash already exists — leaving the
+		     input blank tells the backend to keep the existing
+		     hash; typing a new value rotates it. -->
+		<div class="flex flex-col gap-2">
+			<Checkbox label="Require Basic Auth" bind:checked={formData.basicAuthEnabled} />
+			{#if formData.basicAuthEnabled}
+				<div class="ml-6 flex flex-col gap-2">
+					<Input
+						label="Username"
+						bind:value={formData.basicAuthUsername}
+						placeholder="admin"
+					/>
+					<div>
+						<label
+							for="basic-auth-password"
+							class="text-sm font-medium text-secondary block mb-1"
+						>
+							Password
+						</label>
+						<input
+							id="basic-auth-password"
+							type="password"
+							bind:value={formData.basicAuthPassword}
+							placeholder={formMode === 'edit' && basicAuthPasswordSet
+								? '••• set (leave blank to keep)'
+								: ''}
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+						/>
+					</div>
+				</div>
+			{/if}
+		</div>
 		<Checkbox
 			label="Enable WAF (coming in Step I.4)"
 			bind:checked={formData.wafEnabled}

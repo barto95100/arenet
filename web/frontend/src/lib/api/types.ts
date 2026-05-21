@@ -20,6 +20,15 @@ export interface Route {
 	 * null check.
 	 */
 	aliases: string[];
+	/**
+	 * Step I.5: per-route Basic Auth. The plaintext password and the
+	 * argon2id hash are NEVER on the wire response. basicAuthPasswordSet
+	 * tells the UI whether a hash exists so it can render the
+	 * "••• set" placeholder on Edit.
+	 */
+	basicAuthEnabled: boolean;
+	basicAuthUsername: string;
+	basicAuthPasswordSet: boolean;
 	wafEnabled: boolean;
 	createdAt: string;
 	updatedAt: string;
@@ -31,6 +40,15 @@ export interface RouteRequest {
 	tlsEnabled: boolean;
 	redirectToHttps: boolean;
 	aliases: string[];
+	/**
+	 * Step I.5 — Basic Auth fields on the request side. basicAuthPassword
+	 * is write-only: leave it empty on Edit to keep the existing hash,
+	 * provide a fresh value to rotate. The server hashes it with
+	 * argon2id; the plaintext is never persisted or echoed back.
+	 */
+	basicAuthEnabled: boolean;
+	basicAuthUsername: string;
+	basicAuthPassword: string;
 	wafEnabled: boolean;
 }
 

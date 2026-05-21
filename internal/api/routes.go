@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -212,6 +213,70 @@ func hostnamesEqual(a, b []string) bool {
 	return true
 }
 
+// Step I.5 — Basic Auth helpers.
+
+// basicAuthUsernameMaxLen caps the username at a reasonable length.
+// 64 chars covers admin usernames + service accounts; longer values
+// hint at confused inputs (e.g. an email or a token pasted into the
+// wrong field).
+const basicAuthUsernameMaxLen = 64
+
+// basicAuthPasswordMaxBytes caps the plaintext password at 64 bytes.
+// argon2id doesn't have bcrypt's 72-byte ceiling but a soft cap
+// protects against DoS via very long passwords (each hash costs
+// ~100 ms; a 1 MB password could lock a goroutine).
+const basicAuthPasswordMaxBytes = 64
+
+// validateBasicAuth enforces the per-route Basic Auth invariants.
+// existingHash carries the hash already stored for this route on
+// PUT — empty on POST. When the user enables Basic Auth, they must
+// supply a username AND either a fresh password (POST, or PUT to
+// rotate) or rely on the existing hash (PUT, leaving the password
+// field blank to keep it). Per spec §1.3 L9 / L10 / Q6.
+func validateBasicAuth(req routeRequest, existingHash string) error {
+	if !req.BasicAuthEnabled {
+		return nil
+	}
+	if req.BasicAuthUsername == "" {
+		return errors.New("basicAuthUsername must not be empty when basic auth is enabled")
+	}
+	if len(req.BasicAuthUsername) > basicAuthUsernameMaxLen {
+		return fmt.Errorf("basicAuthUsername must not exceed %d characters", basicAuthUsernameMaxLen)
+	}
+	// RFC 7617: ':' is the Basic Auth separator inside the
+	// "user:password" payload — embedding it in the username would
+	// break the protocol. Reject early with a clear message.
+	if strings.ContainsRune(req.BasicAuthUsername, ':') {
+		return errors.New("basicAuthUsername must not contain ':' (Basic Auth separator)")
+	}
+	for _, r := range req.BasicAuthUsername {
+		// Reject control / whitespace characters: they make log
+		// injection trivial and rarely belong in an admin username.
+		if r < 0x21 || r == 0x7F {
+			return errors.New("basicAuthUsername must not contain whitespace or control characters")
+		}
+	}
+	if req.BasicAuthPassword == "" && existingHash == "" {
+		return errors.New("basicAuthPassword required when enabling basic auth on a route without an existing password")
+	}
+	if len(req.BasicAuthPassword) > basicAuthPasswordMaxBytes {
+		return fmt.Errorf("basicAuthPassword must not exceed %d bytes", basicAuthPasswordMaxBytes)
+	}
+	return nil
+}
+
+// routeForAudit returns a copy of r with the Basic Auth password
+// hash blanked. Audit events are persisted under the assumption
+// that they hold NO secrets (D3 / spec §1.6 #3); the argon2id PHC
+// produced for per-route Basic Auth is a secret in the same sense
+// as the admin password hash and must never reach BoltDB's audit
+// bucket. Apply to every storage.Route passed into appendAudit's
+// AfterJSON / BeforeJSON since Step I.5.
+func routeForAudit(r storage.Route) storage.Route {
+	r.BasicAuthPasswordHash = ""
+	return r
+}
+
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	var req routeRequest
 	dec := json.NewDecoder(r.Body)
@@ -232,6 +297,25 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateBasicAuth(req, ""); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Step I.5: hash the plaintext password BEFORE the uniqueness
+	// check + the storage write. Done outside the bbolt transaction
+	// so the ~100 ms argon2id cost doesn't hold the single-writer
+	// lock. Only computed when Basic Auth is enabled.
+	var basicAuthHash string
+	if req.BasicAuthEnabled {
+		hash, hashErr := auth.HashRoutePassword(req.BasicAuthPassword)
+		if hashErr != nil {
+			h.logger.Error("hash basic auth password", "err", hashErr)
+			writeError(w, http.StatusInternalServerError, "failed to hash password")
+			return
+		}
+		basicAuthHash = hash
+	}
 
 	// Uniqueness check across the union of (Host ∪ Aliases) per
 	// Step I.3 Q1. Caddy dispatches by host match, so any duplicate
@@ -250,12 +334,15 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	owners := collectAllHostsExcept(existing, "")
 	newRoute := storage.Route{
-		Host:            req.Host,
-		UpstreamURL:     req.UpstreamURL,
-		TLSEnabled:      req.TLSEnabled,
-		RedirectToHTTPS: req.RedirectToHTTPS,
-		Aliases:         req.Aliases,
-		WAFEnabled:      req.WAFEnabled,
+		Host:                  req.Host,
+		UpstreamURL:           req.UpstreamURL,
+		TLSEnabled:            req.TLSEnabled,
+		RedirectToHTTPS:       req.RedirectToHTTPS,
+		Aliases:               req.Aliases,
+		BasicAuthEnabled:      req.BasicAuthEnabled,
+		BasicAuthUsername:     req.BasicAuthUsername,
+		BasicAuthPasswordHash: basicAuthHash,
+		WAFEnabled:            req.WAFEnabled,
 	}
 	for _, h := range newRoute.AllHosts() {
 		if ownerID, taken := owners[h]; taken {
@@ -282,14 +369,18 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 
 	// Emit route_created audit event AFTER the Caddy reload succeeds
 	// (Plan §4.4 / D2). On reload failure the early return above skips
-	// this emission. storage.Route holds no secrets (no PasswordHash,
-	// no tokens) so passing it through mustMarshalForAudit is safe
-	// per D3.
+	// this emission.
+	//
+	// Step I.5 / F1: the storage.Route now carries
+	// BasicAuthPasswordHash, an argon2id PHC string that must NEVER
+	// reach the audit log (D3 / spec §1.6 #3). routeForAudit clones
+	// the route with that field blanked before mustMarshalForAudit
+	// serializes it.
 	h.appendAudit(r, audit.Event{
 		Action:     audit.ActionRouteCreated,
 		TargetType: "route",
 		TargetID:   created.ID,
-		AfterJSON:  mustMarshalForAudit(created),
+		AfterJSON:  mustMarshalForAudit(routeForAudit(created)),
 	})
 
 	writeJSON(w, http.StatusCreated, toResponse(created))
@@ -329,18 +420,54 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step I.5: enabling basic auth requires either a fresh password
+	// in this PUT or an existing hash from the stored copy (cf. Q6
+	// in the audit). validateBasicAuth takes the previous hash into
+	// account so toggling-on a route that already has a hash works
+	// without re-typing the password.
+	if err := validateBasicAuth(req, previous.BasicAuthPasswordHash); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Step I.5 password resolution (Q5):
+	//   - basic auth disabled    → no hash stored, fields cleared.
+	//   - new password supplied  → re-hash, replacing whatever was
+	//                              there before (rotation).
+	//   - empty password on PUT  → keep the existing hash. This is
+	//                              the "edit anything else without
+	//                              re-typing the secret" path.
+	var basicAuthHash string
+	switch {
+	case !req.BasicAuthEnabled:
+		basicAuthHash = ""
+	case req.BasicAuthPassword != "":
+		hash, hashErr := auth.HashRoutePassword(req.BasicAuthPassword)
+		if hashErr != nil {
+			h.logger.Error("hash basic auth password (update)", "err", hashErr)
+			writeError(w, http.StatusInternalServerError, "failed to hash password")
+			return
+		}
+		basicAuthHash = hash
+	default:
+		basicAuthHash = previous.BasicAuthPasswordHash
+	}
+
 	// Uniqueness check across (Host ∪ Aliases) when ANY hostname has
 	// changed since the stored copy (Step I.3 Q1). The pre-Step-I.3
 	// optimization that compared only Host is no longer sufficient —
 	// adding a new alias must still trigger the cross-route check.
 	newRoute := storage.Route{
-		ID:              id,
-		Host:            req.Host,
-		UpstreamURL:     req.UpstreamURL,
-		TLSEnabled:      req.TLSEnabled,
-		RedirectToHTTPS: req.RedirectToHTTPS,
-		Aliases:         req.Aliases,
-		WAFEnabled:      req.WAFEnabled,
+		ID:                    id,
+		Host:                  req.Host,
+		UpstreamURL:           req.UpstreamURL,
+		TLSEnabled:            req.TLSEnabled,
+		RedirectToHTTPS:       req.RedirectToHTTPS,
+		Aliases:               req.Aliases,
+		BasicAuthEnabled:      req.BasicAuthEnabled,
+		BasicAuthUsername:     req.BasicAuthUsername,
+		BasicAuthPasswordHash: basicAuthHash,
+		WAFEnabled:            req.WAFEnabled,
 	}
 	if !hostnamesEqual(newRoute.AllHosts(), previous.AllHosts()) {
 		existing, err := h.store.ListRoutes(r.Context())
@@ -378,14 +505,15 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Emit route_updated audit event AFTER the Caddy reload succeeds
-	// (Plan §4.4 / D2). storage.Route holds no secrets per D3, so
-	// passing both Before and After through mustMarshalForAudit is safe.
+	// (Plan §4.4 / D2). Step I.5 / F1: strip BasicAuthPasswordHash
+	// from both Before and After via routeForAudit — the argon2id PHC
+	// is a secret that must never reach the audit log (D3).
 	h.appendAudit(r, audit.Event{
 		Action:     audit.ActionRouteUpdated,
 		TargetType: "route",
 		TargetID:   id,
-		BeforeJSON: mustMarshalForAudit(previous),
-		AfterJSON:  mustMarshalForAudit(updated),
+		BeforeJSON: mustMarshalForAudit(routeForAudit(previous)),
+		AfterJSON:  mustMarshalForAudit(routeForAudit(updated)),
 	})
 
 	writeJSON(w, http.StatusOK, toResponse(updated))
@@ -421,13 +549,14 @@ func (h *Handler) deleteRoute(w http.ResponseWriter, r *http.Request) {
 
 	// Emit route_deleted audit event AFTER the Caddy reload succeeds
 	// (Plan §4.4 / D2). BeforeJSON captures the deleted route's last
-	// state; AfterJSON is intentionally nil. storage.Route holds no
-	// secrets per D3.
+	// state; AfterJSON is intentionally nil. Step I.5 / F1: strip
+	// BasicAuthPasswordHash via routeForAudit so the deletion record
+	// never holds the secret.
 	h.appendAudit(r, audit.Event{
 		Action:     audit.ActionRouteDeleted,
 		TargetType: "route",
 		TargetID:   id,
-		BeforeJSON: mustMarshalForAudit(previous),
+		BeforeJSON: mustMarshalForAudit(routeForAudit(previous)),
 	})
 
 	w.WriteHeader(http.StatusNoContent)

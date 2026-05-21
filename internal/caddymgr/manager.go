@@ -347,6 +347,42 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			},
 		}
 
+		// Step I.5 — Basic Auth. The `authentication` handler with
+		// the http_basic provider gates the route at HTTP layer:
+		// missing or wrong credentials yield a 401 before the
+		// request reaches the proxy chain. argon2id is selected via
+		// the hash module map; Caddy's caddyhttp/caddyauth ships it
+		// in the standard module set so no plugin is needed.
+		//
+		// Realm carries the primary Host so the browser scopes its
+		// cached credentials per virtual host (a switch from one
+		// route to another re-prompts as expected).
+		//
+		// Handler chain order (spec §3.2): [metrics, basicauth?,
+		// reverse_proxy]. Metrics MUST stay first to observe the
+		// final status code (§11.5 invariant); basicauth slides in
+		// just before the proxy so a 401 short-circuits before any
+		// upstream connection is attempted.
+		handlers := []map[string]any{metricsHandler}
+		if r.BasicAuthEnabled {
+			handlers = append(handlers, map[string]any{
+				"handler": "authentication",
+				"providers": map[string]any{
+					"http_basic": map[string]any{
+						"hash":  map[string]any{"algorithm": "argon2id"},
+						"realm": fmt.Sprintf("Arenet route %s", r.Host),
+						"accounts": []map[string]any{
+							{
+								"username": r.BasicAuthUsername,
+								"password": r.BasicAuthPasswordHash,
+							},
+						},
+					},
+				},
+			})
+		}
+		handlers = append(handlers, proxyHandler)
+
 		// Step I.3: Match.Host carries the full hostname set
 		// (primary + aliases) so Caddy dispatches the same route to
 		// any of them. acmeSubjects collects every TLS-enabled host
@@ -354,7 +390,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		allHosts := r.AllHosts()
 		route := httpRoute{
 			Match:  []matcherSet{{Host: allHosts}},
-			Handle: []map[string]any{metricsHandler, proxyHandler},
+			Handle: handlers,
 		}
 
 		// Step I.2: when TLS is on AND the operator asked for an

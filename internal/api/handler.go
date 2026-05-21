@@ -125,7 +125,15 @@ type routeRequest struct {
 	TLSEnabled      bool     `json:"tlsEnabled"`
 	RedirectToHTTPS bool     `json:"redirectToHttps"`
 	Aliases         []string `json:"aliases"`
-	WAFEnabled      bool     `json:"wafEnabled"`
+	// Step I.5 — Basic Auth. BasicAuthPassword is the PLAIN
+	// password; write-only on the wire (the response never echoes
+	// it, the storage layer holds only the argon2id PHC hash). On
+	// Edit, leaving this empty means "keep the existing hash" —
+	// see updateRoute.
+	BasicAuthEnabled  bool   `json:"basicAuthEnabled"`
+	BasicAuthUsername string `json:"basicAuthUsername"`
+	BasicAuthPassword string `json:"basicAuthPassword"`
+	WAFEnabled        bool   `json:"wafEnabled"`
 }
 
 // routeResponse is the wire shape returned by GET / POST / PUT /routes. The
@@ -140,10 +148,18 @@ type routeResponse struct {
 	// so the JSON wire shape is consistently `"aliases": []` rather
 	// than `"aliases": null` — frontend callers can read .length
 	// without a null check.
-	Aliases    []string `json:"aliases"`
-	WAFEnabled bool     `json:"wafEnabled"`
-	CreatedAt  string   `json:"createdAt"`
-	UpdatedAt  string   `json:"updatedAt"`
+	Aliases []string `json:"aliases"`
+	// Step I.5 — Basic Auth response surface. The plaintext password
+	// is NEVER echoed; the hash is NEVER echoed either. Instead,
+	// BasicAuthPasswordSet is a boolean derived from "is the hash
+	// non-empty?" so the UI can render the placeholder
+	// "••• set" hint in Edit mode without ever seeing the secret.
+	BasicAuthEnabled     bool   `json:"basicAuthEnabled"`
+	BasicAuthUsername    string `json:"basicAuthUsername"`
+	BasicAuthPasswordSet bool   `json:"basicAuthPasswordSet"`
+	WAFEnabled           bool   `json:"wafEnabled"`
+	CreatedAt            string `json:"createdAt"`
+	UpdatedAt            string `json:"updatedAt"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with
@@ -154,14 +170,17 @@ func toResponse(r storage.Route) routeResponse {
 		aliases = []string{} // S6: never emit `"aliases": null` on the wire.
 	}
 	return routeResponse{
-		ID:              r.ID,
-		Host:            r.Host,
-		UpstreamURL:     r.UpstreamURL,
-		TLSEnabled:      r.TLSEnabled,
-		RedirectToHTTPS: r.RedirectToHTTPS,
-		Aliases:         aliases,
-		WAFEnabled:      r.WAFEnabled,
-		CreatedAt:       r.CreatedAt.UTC().Format(timestampFormat),
-		UpdatedAt:       r.UpdatedAt.UTC().Format(timestampFormat),
+		ID:                   r.ID,
+		Host:                 r.Host,
+		UpstreamURL:          r.UpstreamURL,
+		TLSEnabled:           r.TLSEnabled,
+		RedirectToHTTPS:      r.RedirectToHTTPS,
+		Aliases:              aliases,
+		BasicAuthEnabled:     r.BasicAuthEnabled,
+		BasicAuthUsername:    r.BasicAuthUsername,
+		BasicAuthPasswordSet: r.BasicAuthPasswordHash != "",
+		WAFEnabled:           r.WAFEnabled,
+		CreatedAt:            r.CreatedAt.UTC().Format(timestampFormat),
+		UpdatedAt:            r.UpdatedAt.UTC().Format(timestampFormat),
 	}
 }

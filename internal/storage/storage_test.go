@@ -439,3 +439,43 @@ func TestRoute_Validate_RejectsEmptyAlias(t *testing.T) {
 		t.Errorf("err = %v; want alias-must-not-be-empty message", err)
 	}
 }
+
+// --- Step I.5 — Basic Auth invariants -------------------------------------
+
+func TestRoute_Validate_BasicAuthEnabledRequiresUsername(t *testing.T) {
+	r := Route{
+		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		BasicAuthEnabled:      true,
+		BasicAuthUsername:     "",
+		BasicAuthPasswordHash: "$argon2id$..fake..",
+	}
+	err := r.validate()
+	if err == nil || !strings.Contains(err.Error(), "basic_auth_username") {
+		t.Errorf("validate() = %v; want basic_auth_username error", err)
+	}
+}
+
+func TestRoute_Validate_BasicAuthEnabledRequiresHash(t *testing.T) {
+	r := Route{
+		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		BasicAuthEnabled:      true,
+		BasicAuthUsername:     "admin",
+		BasicAuthPasswordHash: "",
+	}
+	err := r.validate()
+	if err == nil || !strings.Contains(err.Error(), "basic_auth_password_hash") {
+		t.Errorf("validate() = %v; want basic_auth_password_hash error", err)
+	}
+}
+
+func TestRoute_Validate_BasicAuthDisabledIgnoresFields(t *testing.T) {
+	// Disabled basic auth: even with empty username + hash, validate
+	// must pass (the API layer clears these fields when toggling off).
+	r := Route{
+		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		BasicAuthEnabled: false,
+	}
+	if err := r.validate(); err != nil {
+		t.Errorf("validate() = %v; want nil (disabled basic auth ignores other fields)", err)
+	}
+}

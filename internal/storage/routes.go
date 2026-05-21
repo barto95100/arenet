@@ -47,10 +47,21 @@ type Route struct {
 	// all. Stored as a JSON array; pre-Step-I.3 routes decode with
 	// a nil slice (zero value), which is treated identically to an
 	// empty slice everywhere downstream.
-	Aliases    []string  `json:"aliases"`
-	WAFEnabled bool      `json:"waf_enabled"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	Aliases []string `json:"aliases"`
+	// BasicAuthEnabled (Step I.5) gates HTTP Basic Auth on this
+	// route. When true, BasicAuthUsername and BasicAuthPasswordHash
+	// must be set; Caddy emits the `authentication` handler before
+	// the proxy chain, returning 401 on missing / wrong credentials.
+	BasicAuthEnabled  bool   `json:"basic_auth_enabled"`
+	BasicAuthUsername string `json:"basic_auth_username"`
+	// BasicAuthPasswordHash is an argon2id PHC string. NEVER exposed
+	// over the API (the response surface uses a derived
+	// BasicAuthPasswordSet bool instead) and NEVER embedded in
+	// audit events (see routeForAudit in internal/api/routes.go).
+	BasicAuthPasswordHash string    `json:"basic_auth_password_hash"`
+	WAFEnabled            bool      `json:"waf_enabled"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route
@@ -90,6 +101,19 @@ func (r *Route) validate() error {
 			return fmt.Errorf("route: alias %q duplicates within the same route", a)
 		}
 		seen[a] = struct{}{}
+	}
+	// Step I.5: enabling Basic Auth requires both a non-empty
+	// username and a hash. The API layer enforces these earlier
+	// with friendlier messages (and triggers the hash computation);
+	// storage's job is to reject obviously inconsistent rows that
+	// bypass the API (tests, future internal callers).
+	if r.BasicAuthEnabled {
+		if r.BasicAuthUsername == "" {
+			return errors.New("route: basic_auth_username must not be empty when basic auth is enabled")
+		}
+		if r.BasicAuthPasswordHash == "" {
+			return errors.New("route: basic_auth_password_hash must not be empty when basic auth is enabled")
+		}
 	}
 	return nil
 }
