@@ -52,7 +52,15 @@
 	let fromValue = $state('');
 	let toValue = $state('');
 	let actionFilter = $state('');
+	// Step G G.4: actorFilter holds the UUID used for the backend query;
+	// actorFilterDisplayName is the cosmetic human label captured at the
+	// click moment (admin / username / snapshot). Both states move in
+	// lockstep — set together in onFilterByActor, reset together in
+	// removePill / clearAllFilters. The displayName is intentionally
+	// NOT persisted (filter state is in-memory only, no URL sync, no
+	// localStorage), so its lifecycle matches the UUID's.
 	let actorFilter = $state('');
+	let actorFilterDisplayName = $state('');
 
 	let events = $state<AuditEvent[]>([]);
 	let nextCursor = $state('');
@@ -129,15 +137,19 @@
 		// The $effect picks up the change and schedules a reload.
 	}
 
-	function onFilterByActor(actorUserId: string): void {
+	function onFilterByActor(actorUserId: string, displayName: string): void {
 		actorFilter = actorUserId;
+		actorFilterDisplayName = displayName;
 	}
 
 	function removePill(field: 'from' | 'to' | 'action' | 'actor'): void {
 		if (field === 'from') fromValue = '';
 		else if (field === 'to') toValue = '';
 		else if (field === 'action') actionFilter = '';
-		else if (field === 'actor') actorFilter = '';
+		else if (field === 'actor') {
+			actorFilter = '';
+			actorFilterDisplayName = '';
+		}
 	}
 
 	function clearAllFilters(): void {
@@ -145,6 +157,7 @@
 		toValue = '';
 		actionFilter = '';
 		actorFilter = '';
+		actorFilterDisplayName = '';
 	}
 
 	const hasAnyFilter = $derived(
@@ -232,10 +245,10 @@
 			{/if}
 			{#if actorFilter}
 				<span class="filter-pill">
-					Actor: {actorFilter}
+					Actor: {actorFilterDisplayName || actorFilter}
 					<button
 						type="button"
-						aria-label={`Remove filter: actor=${actorFilter}`}
+						aria-label={`Remove filter: actor=${actorFilterDisplayName || actorFilter}`}
 						onclick={() => removePill('actor')}
 					>×</button>
 				</span>

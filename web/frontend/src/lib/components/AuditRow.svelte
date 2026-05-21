@@ -24,8 +24,14 @@
 		event: AuditEvent;
 		/** Called when the action badge is clicked. */
 		onFilterAction: (action: string) => void;
-		/** Called when the actor filter icon is clicked. */
-		onFilterActor: (actorUserId: string) => void;
+		/**
+		 * Called when the actor filter icon is clicked. Receives the
+		 * resolved display name (displayName / username / snapshot) so
+		 * the filter pill can render human-readable text. The backend
+		 * query continues to use the UUID. Step G G.4 fix for the
+		 * "Actor: <UUID>" cosmetic debt (smoke doc Step F §5 #3).
+		 */
+		onFilterActor: (actorUserId: string, actorDisplayName: string) => void;
 	}
 
 	let { event, onFilterAction, onFilterActor }: Props = $props();
@@ -48,7 +54,7 @@
 
 	function handleActorFilterClick(e: MouseEvent): void {
 		e.stopPropagation();
-		onFilterActor(event.actorUserId);
+		onFilterActor(event.actorUserId, actorInfo.text);
 	}
 </script>
 
