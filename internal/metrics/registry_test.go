@@ -403,4 +403,3 @@ func BenchmarkRegistry_Snapshot_100Routes(b *testing.B) {
 		}
 	}
 }
-

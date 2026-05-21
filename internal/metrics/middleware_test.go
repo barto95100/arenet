@@ -54,8 +54,11 @@ func (f *fakeRWNoHijack) Header() http.Header {
 	}
 	return f.header
 }
-func (f *fakeRWNoHijack) Write(b []byte) (int, error) { f.body = append(f.body, b...); return len(b), nil }
-func (f *fakeRWNoHijack) WriteHeader(code int)        { f.status = code }
+func (f *fakeRWNoHijack) Write(b []byte) (int, error) {
+	f.body = append(f.body, b...)
+	return len(b), nil
+}
+func (f *fakeRWNoHijack) WriteHeader(code int) { f.status = code }
 
 // --- Module registration ---------------------------------------------------
 
@@ -311,7 +314,7 @@ func TestRouteMetrics_StatusRecorder_DoubleWriteHeader_KeepsFirst(t *testing.T) 
 	underlying := httptest.NewRecorder()
 	rec := newStatusRecorder(underlying)
 
-	rec.WriteHeader(http.StatusServiceUnavailable) // 503
+	rec.WriteHeader(http.StatusServiceUnavailable)  // 503
 	rec.WriteHeader(http.StatusInternalServerError) // 500 — must NOT overwrite
 
 	if rec.Status() != http.StatusServiceUnavailable {

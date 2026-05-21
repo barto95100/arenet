@@ -173,9 +173,9 @@ func (m *CaddyManager) syncRegistry(routes []storage.Route) {
 
 // caddyConfig models the subset of Caddy JSON we need.
 type caddyConfig struct {
-	Admin *adminConfig    `json:"admin,omitempty"`
-	Apps  appsConfig      `json:"apps"`
-	Logs  *loggingConfig  `json:"logging,omitempty"`
+	Admin *adminConfig   `json:"admin,omitempty"`
+	Apps  appsConfig     `json:"apps"`
+	Logs  *loggingConfig `json:"logging,omitempty"`
 }
 
 type adminConfig struct {
@@ -195,17 +195,17 @@ type httpApp struct {
 }
 
 type httpServer struct {
-	Listen              []string                `json:"listen"`
-	Routes              []httpRoute             `json:"routes,omitempty"`
-	AutomaticHTTPS      *automaticHTTPSConfig   `json:"automatic_https,omitempty"`
-	TLSConnPolicies     []tlsConnectionPolicy   `json:"tls_connection_policies,omitempty"`
+	Listen          []string              `json:"listen"`
+	Routes          []httpRoute           `json:"routes,omitempty"`
+	AutomaticHTTPS  *automaticHTTPSConfig `json:"automatic_https,omitempty"`
+	TLSConnPolicies []tlsConnectionPolicy `json:"tls_connection_policies,omitempty"`
 }
 
 type automaticHTTPSConfig struct {
-	Disable                bool `json:"disable"`
-	DisableRedirects       bool `json:"disable_redirects,omitempty"`
-	DisableCertificates    bool `json:"disable_certificates,omitempty"`
-	SkipCerts              bool `json:"skip,omitempty"`
+	Disable             bool `json:"disable"`
+	DisableRedirects    bool `json:"disable_redirects,omitempty"`
+	DisableCertificates bool `json:"disable_certificates,omitempty"`
+	SkipCerts           bool `json:"skip,omitempty"`
 }
 
 type tlsConnectionPolicy struct {
@@ -213,7 +213,7 @@ type tlsConnectionPolicy struct {
 }
 
 type httpRoute struct {
-	Match []matcherSet     `json:"match,omitempty"`
+	Match  []matcherSet     `json:"match,omitempty"`
 	Handle []map[string]any `json:"handle"`
 }
 
