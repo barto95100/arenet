@@ -229,7 +229,9 @@ type loginResponse struct {
 //     401 observation); success calls rateLimiter.Reset.
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -442,7 +444,9 @@ type unlockResponse struct {
 // On failure: audit + 401 + rate-limit counter increments via middleware.
 func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 	var req unlockRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -645,7 +649,9 @@ type changePasswordRequest struct {
 // at Info level for operational visibility.
 func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	var req changePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -755,7 +761,9 @@ type updateThemeRequest struct {
 // entries) is therefore unchanged.
 func (h *Handler) updateTheme(w http.ResponseWriter, r *http.Request) {
 	var req updateThemeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
