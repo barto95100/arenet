@@ -685,6 +685,79 @@ func TestBuildConfigJSON_BasicAuth_OffSkipsHandler(t *testing.T) {
 	}
 }
 
+// --- Step I.4 — WAF (Coraza) ----------------------------------------------
+
+func TestBuildConfigJSON_WAF_DetectMode(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "r1", Host: "waf.example.com", UpstreamURL: "http://127.0.0.1:9000", WAFMode: "detect"},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	handlers, _ := httpRoutes[0]["handle"].([]any)
+	// Chain: [metrics, coraza, reverse_proxy]
+	if len(handlers) != 3 {
+		t.Fatalf("handler chain length = %d; want 3 (metrics + coraza + proxy)", len(handlers))
+	}
+	h1, _ := handlers[1].(map[string]any)
+	if h1["handler"] != "coraza" {
+		t.Fatalf("handler[1] = %v; want coraza", h1["handler"])
+	}
+	dir, _ := h1["directives"].(string)
+	if !strings.Contains(dir, "SecRuleEngine DetectionOnly") {
+		t.Errorf("directives missing DetectionOnly toggle: %q", dir)
+	}
+	if !strings.Contains(dir, "@owasp_crs") {
+		t.Errorf("directives missing OWASP CRS include: %q", dir)
+	}
+}
+
+func TestBuildConfigJSON_WAF_BlockMode(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "r1", Host: "block.example.com", UpstreamURL: "http://127.0.0.1:9000", WAFMode: "block"},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	handlers, _ := httpRoutes[0]["handle"].([]any)
+	h1, _ := handlers[1].(map[string]any)
+	dir, _ := h1["directives"].(string)
+	if !strings.Contains(dir, "SecRuleEngine On") {
+		t.Errorf("directives missing block-mode toggle: %q", dir)
+	}
+	// Sanity: the engine setter is NOT "DetectionOnly" — guards
+	// against a copy-paste where "On" could degrade to "DetectionOnly"
+	// silently.
+	if strings.Contains(dir, "DetectionOnly") {
+		t.Errorf("block mode emitted DetectionOnly engine: %q", dir)
+	}
+}
+
+func TestBuildConfigJSON_WAF_OffSkipsHandler(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "r1", Host: "open.example.com", UpstreamURL: "http://127.0.0.1:9000", WAFMode: "off"},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	handlers, _ := httpRoutes[0]["handle"].([]any)
+	if len(handlers) != 2 {
+		t.Fatalf("handler chain length = %d; want 2 (no coraza handler when mode=off)", len(handlers))
+	}
+	for _, hh := range handlers {
+		m, _ := hh.(map[string]any)
+		if m["handler"] == "coraza" {
+			t.Errorf("coraza handler present despite WAFMode=off: %v", m)
+		}
+	}
+}
+
 // --- Step I.6 — Custom headers --------------------------------------------
 
 func TestBuildConfigJSON_Headers_EmitsHandler(t *testing.T) {

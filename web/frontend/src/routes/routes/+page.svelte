@@ -44,7 +44,7 @@
 		basicAuthPassword: '',
 		requestHeaders: {},
 		responseHeaders: {},
-		wafEnabled: false
+		wafMode: 'detect'
 	});
 
 	// Step I.5: tracked separately from formData because it reflects
@@ -125,7 +125,9 @@
 			basicAuthPassword: '',
 			requestHeaders: {},
 			responseHeaders: {},
-			wafEnabled: false
+			// Step I.4: 'detect' is the FortiWeb-style safe-shadow default
+			// (L6). The admin can change to 'off' or 'block' explicitly.
+			wafMode: 'detect'
 		};
 		basicAuthPasswordSet = false;
 		requestHeaderRows = [];
@@ -153,7 +155,7 @@
 			basicAuthPassword: '',
 			requestHeaders: { ...(r.requestHeaders ?? {}) },
 			responseHeaders: { ...(r.responseHeaders ?? {}) },
-			wafEnabled: r.wafEnabled
+			wafMode: r.wafMode
 		};
 		basicAuthPasswordSet = r.basicAuthPasswordSet;
 		// Step I.6: seed the repeater tuples from the server's map.
@@ -272,7 +274,9 @@
 		// `active` shadows `total` until live health checks land in Step E.
 		active: routes.length,
 		tls: routes.filter((r) => r.tlsEnabled).length,
-		waf: routes.filter((r) => r.wafEnabled).length
+		// Step I.4: count routes where WAF is actively engaged
+		// (detect OR block; off means no inspection).
+		waf: routes.filter((r) => r.wafMode !== 'off').length
 	});
 
 	function fmtDate(iso: string): string {
@@ -364,8 +368,13 @@
 					{/if}
 				</td>
 				<td class="px-4 py-3">
-					{#if r.wafEnabled}
-						<Badge variant="waf">WAF</Badge>
+					<!-- Step I.4 — yellow for detect, red for block,
+					     em-dash for off (spec L8). Reuses the Badge
+					     variants from Step F. -->
+					{#if r.wafMode === 'detect'}
+						<Badge variant="status-warn">Detect</Badge>
+					{:else if r.wafMode === 'block'}
+						<Badge variant="status-down">Block</Badge>
 					{:else}
 						<span class="text-muted">—</span>
 					{/if}
@@ -505,12 +514,30 @@
 				</div>
 			{/if}
 		</div>
-		<Checkbox
-			label="Enable WAF (coming in Step I.4)"
-			bind:checked={formData.wafEnabled}
-			disabled
-			title="WAF support lands in Step I.4"
-		/>
+		<!-- Step I.4 — WAF mode (Coraza + OWASP CRS). The dropdown
+		     pattern matches the /audit page's Action filter. Default
+		     'detect' on Create gives the admin a safe-shadow window
+		     to spot false positives before flipping to 'block'. -->
+		<div>
+			<label
+				for="route-waf-mode"
+				class="text-sm font-medium text-secondary block mb-1"
+			>
+				WAF (Coraza + OWASP CRS)
+			</label>
+			<select
+				id="route-waf-mode"
+				bind:value={formData.wafMode}
+				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+			>
+				<option value="off">Off — no inspection</option>
+				<option value="detect">Detect — log matches, let traffic through</option>
+				<option value="block">Block — return 403 on match</option>
+			</select>
+			<p class="text-xs text-muted mt-1">
+				Start with Detect to spot false positives before enforcing.
+			</p>
+		</div>
 		<!-- Step I.6 — custom request / response headers. Two
 		     collapsible sections (closed by default; most routes
 		     don't need this). Backend validates RFC 7230 token

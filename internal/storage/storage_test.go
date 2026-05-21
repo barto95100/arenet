@@ -260,7 +260,7 @@ func TestUpdateRoute(t *testing.T) {
 			mut: func(r Route) Route {
 				r.UpstreamURL = "http://u:2"
 				r.TLSEnabled = true
-				r.WAFEnabled = true
+				r.WAFMode = "block"
 				return r
 			},
 		},
@@ -356,7 +356,7 @@ func TestRestoreRoute(t *testing.T) {
 		Host:        "restore.example",
 		UpstreamURL: "http://127.0.0.1:7000",
 		TLSEnabled:  true,
-		WAFEnabled:  false,
+		WAFMode:     "off",
 		CreatedAt:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 		UpdatedAt:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	}

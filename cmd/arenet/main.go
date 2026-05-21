@@ -33,6 +33,15 @@ import (
 	"syscall"
 	"time"
 
+	// Step I.4: register the Coraza WAF Caddy module via side-effect
+	// import so its handler ID `coraza` is resolvable when
+	// buildConfigJSON emits a `{"handler":"coraza", ...}` block. The
+	// coraza-caddy v2 package's init() side-effects on caddy.RegisterModule
+	// are what make this work; no symbol from coraza-caddy is referenced
+	// directly anywhere in Arenet. OWASP CRS comes embedded via the
+	// transitive coraza-coreruleset/v4 dep, so the binary is self-contained.
+	_ "github.com/corazawaf/coraza-caddy/v2"
+
 	"github.com/barto95100/arenet/internal/api"
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"

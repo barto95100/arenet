@@ -37,7 +37,16 @@ export interface Route {
 	 */
 	requestHeaders: Record<string, string>;
 	responseHeaders: Record<string, string>;
-	wafEnabled: boolean;
+	/**
+	 * Step I.4 — WAF mode. Replaces the pre-I.4 wafEnabled bool with
+	 * a three-valued enum:
+	 *   - "off":    no WAF inspection.
+	 *   - "detect": Coraza/OWASP CRS inspects and logs matches but
+	 *               lets traffic through (FortiWeb-style safe-shadow,
+	 *               the recommended starting point).
+	 *   - "block":  Coraza returns 403 on match.
+	 */
+	wafMode: 'off' | 'detect' | 'block';
 	createdAt: string;
 	updatedAt: string;
 }
@@ -59,7 +68,12 @@ export interface RouteRequest {
 	basicAuthPassword: string;
 	requestHeaders: Record<string, string>;
 	responseHeaders: Record<string, string>;
-	wafEnabled: boolean;
+	/**
+	 * Step I.4 — WAF mode. On POST, empty string is normalized to
+	 * "detect" by the server. On PUT, empty string preserves the
+	 * previously stored value (mirrors the I.5 password preserve UX).
+	 */
+	wafMode: 'off' | 'detect' | 'block' | '';
 }
 
 /**

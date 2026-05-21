@@ -68,9 +68,20 @@ type Route struct {
 	// lives in internal/api/routes.go — storage trusts the API.
 	RequestHeaders  map[string]string `json:"request_headers"`
 	ResponseHeaders map[string]string `json:"response_headers"`
-	WAFEnabled      bool              `json:"waf_enabled"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	// WAFMode (Step I.4) replaces the pre-I.4 WAFEnabled bool with a
+	// three-valued enum: "off" / "detect" / "block".
+	//   - off    : no WAF inspection, no Caddy handler emitted.
+	//   - detect : Coraza inspects, logs matches, lets traffic pass
+	//              (SecRuleEngine DetectionOnly — FortiWeb-style
+	//              safe shadow mode; recommended starting point).
+	//   - block  : Coraza inspects and returns 403 on match
+	//              (SecRuleEngine On).
+	// Pre-I.4 routes with WAFEnabled=true are migrated to "block"
+	// (semantic equivalent of "block on every detection"); WAFEnabled=
+	// false routes are migrated to "off". See migrateWAFEnabledToWAFMode.
+	WAFMode   string    `json:"waf_mode"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route

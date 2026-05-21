@@ -139,7 +139,13 @@ type routeRequest struct {
 	// framing-critical names — see validateHeaders.
 	RequestHeaders  map[string]string `json:"requestHeaders"`
 	ResponseHeaders map[string]string `json:"responseHeaders"`
-	WAFEnabled      bool              `json:"wafEnabled"`
+	// Step I.4 — WAF mode, one of "off" / "detect" / "block".
+	// On POST, empty string is normalized to "detect" (the FortiWeb
+	// safe-shadow default, L6). On PUT, empty string MEANS "preserve
+	// the previously stored value" — mirrors the I.5 password
+	// preserve UX so admins can flip unrelated fields without
+	// re-typing the WAF mode every time.
+	WAFMode string `json:"wafMode"`
 }
 
 // routeResponse is the wire shape returned by GET / POST / PUT /routes. The
@@ -168,9 +174,10 @@ type routeResponse struct {
 	// iterate without a null check.
 	RequestHeaders  map[string]string `json:"requestHeaders"`
 	ResponseHeaders map[string]string `json:"responseHeaders"`
-	WAFEnabled      bool              `json:"wafEnabled"`
-	CreatedAt       string            `json:"createdAt"`
-	UpdatedAt       string            `json:"updatedAt"`
+	// Step I.4 — WAF mode, one of "off" / "detect" / "block".
+	WAFMode   string `json:"wafMode"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with
@@ -202,7 +209,7 @@ func toResponse(r storage.Route) routeResponse {
 		BasicAuthPasswordSet: r.BasicAuthPasswordHash != "",
 		RequestHeaders:       reqHeaders,
 		ResponseHeaders:      respHeaders,
-		WAFEnabled:           r.WAFEnabled,
+		WAFMode:              r.WAFMode,
 		CreatedAt:            r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:            r.UpdatedAt.UTC().Format(timestampFormat),
 	}

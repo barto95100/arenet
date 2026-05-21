@@ -351,6 +351,29 @@ func validateHeaderValue(name, value string) error {
 	return nil
 }
 
+// Step I.4 — WAF mode validation.
+
+// WAFMode allowed values. Empty string is NOT in this set: empty is a
+// per-handler signal ("default to detect on POST" / "preserve on
+// PUT") that callers handle before invoking validateWAFMode.
+var wafModeValues = map[string]struct{}{
+	"off":    {},
+	"detect": {},
+	"block":  {},
+}
+
+// validateWAFMode rejects any value not in the enum {off, detect, block}.
+// The empty string is treated as INVALID at this layer; createRoute and
+// updateRoute apply the "default to detect" / "preserve previous"
+// semantics BEFORE calling this, so by the time validateWAFMode runs the
+// caller has either supplied a value or wants it rejected.
+func validateWAFMode(mode string) error {
+	if _, ok := wafModeValues[mode]; !ok {
+		return fmt.Errorf("wafMode %q is invalid (must be one of: off, detect, block)", mode)
+	}
+	return nil
+}
+
 // validateHeaders walks a request- or response-header map and runs
 // validateHeaderName + validateHeaderValue on every entry. The
 // direction argument ("request" / "response") is interpolated into
@@ -409,6 +432,18 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step I.4: WAF mode default — POST with empty wafMode means
+	// "give me the safe-shadow default" (spec L6). updateRoute
+	// applies a different rule (preserve previous), hence the
+	// per-handler normalization rather than a centralized one.
+	if req.WAFMode == "" {
+		req.WAFMode = "detect"
+	}
+	if err := validateWAFMode(req.WAFMode); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Step I.5: hash the plaintext password BEFORE the uniqueness
 	// check + the storage write. Done outside the bbolt transaction
 	// so the ~100 ms argon2id cost doesn't hold the single-writer
@@ -451,7 +486,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		BasicAuthPasswordHash: basicAuthHash,
 		RequestHeaders:        req.RequestHeaders,
 		ResponseHeaders:       req.ResponseHeaders,
-		WAFEnabled:            req.WAFEnabled,
+		WAFMode:               req.WAFMode,
 	}
 	for _, h := range newRoute.AllHosts() {
 		if ownerID, taken := owners[h]; taken {
@@ -547,6 +582,30 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step I.4: WAF mode resolution on PUT (Q6 override). Empty
+	// wafMode means "preserve the previously stored value", mirroring
+	// the I.5 password preserve UX — admins can flip unrelated
+	// fields without re-stating the WAF mode. Explicit value still
+	// goes through validateWAFMode to catch typos.
+	//
+	// Edge case: a route that was persisted without WAFMode (a row
+	// that should have been touched by the boot migration but was
+	// created by a code path that bypassed it — typically test seed
+	// fixtures using storage.CreateRoute directly) reads back as
+	// previous.WAFMode == "". Treat that as "off" so the preserve
+	// path produces a valid state, equivalent to the L7 mapping
+	// (WAFEnabled=false → off).
+	if req.WAFMode == "" {
+		req.WAFMode = previous.WAFMode
+		if req.WAFMode == "" {
+			req.WAFMode = "off"
+		}
+	}
+	if err := validateWAFMode(req.WAFMode); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Step I.5 password resolution (Q5):
 	//   - basic auth disabled    → no hash stored, fields cleared.
 	//   - new password supplied  → re-hash, replacing whatever was
@@ -586,7 +645,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		BasicAuthPasswordHash: basicAuthHash,
 		RequestHeaders:        req.RequestHeaders,
 		ResponseHeaders:       req.ResponseHeaders,
-		WAFEnabled:            req.WAFEnabled,
+		WAFMode:               req.WAFMode,
 	}
 	if !hostnamesEqual(newRoute.AllHosts(), previous.AllHosts()) {
 		existing, err := h.store.ListRoutes(r.Context())

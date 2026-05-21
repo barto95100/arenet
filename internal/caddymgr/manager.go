@@ -386,6 +386,18 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				},
 			})
 		}
+		// Step I.4 — WAF (Coraza). Slot between basicauth and the
+		// headers handler:
+		//   - AFTER basicauth, so a 401 short-circuits before
+		//     wasting Coraza analysis on anonymous traffic;
+		//   - BEFORE headers, so Coraza analyses the original
+		//     request as the client sent it (headers cosmetic
+		//     mutations would otherwise confuse the rules);
+		//   - BEFORE proxy, so a block-mode rejection (403) never
+		//     reaches the upstream.
+		if wafHandler := buildWAFHandler(r.WAFMode); wafHandler != nil {
+			handlers = append(handlers, wafHandler)
+		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
 			handlers = append(handlers, headersHandler)
 		}
@@ -559,6 +571,45 @@ func buildRedirectRoute(hosts []string) httpRoute {
 				},
 			},
 		},
+	}
+}
+
+// buildWAFHandler returns the Caddy `coraza` handler config for the
+// given WAF mode, or nil when the WAF is disabled (mode "off" or
+// empty) so the caller skips appending anything to the handler
+// chain.
+//
+// Mode mapping (spec L5):
+//   - "detect" → SecRuleEngine DetectionOnly: rules are evaluated
+//     and matches are logged, but the request is forwarded
+//     untouched. The FortiWeb-style "safe shadow" mode — recommended
+//     starting point so admins can spot false positives before
+//     enforcing.
+//   - "block"  → SecRuleEngine On: matches yield a 403 short-circuit
+//     before the request reaches the upstream.
+//
+// Directives are HARDCODED here on purpose (F2 finding in the I.4
+// audit): there is no API path that lets an admin inject arbitrary
+// Coraza directives. The OWASP CRS is bundled into the binary via
+// the transitive coraza-coreruleset/v4 module and addressed by the
+// `@owasp_crs/*.conf` alias the coraza-caddy wrapper exposes.
+//
+// Step I.4 ships WITHOUT an Arenet-side `audit_waf_match` event
+// (spec §5.4 mentioned a D7 enum bump 15→16; deferred to Step J —
+// see the commit message). Caddy's structured log captures WAF
+// matches at info level if the operator wants per-match
+// observability today.
+func buildWAFHandler(mode string) map[string]any {
+	if mode == "" || mode == "off" {
+		return nil
+	}
+	engine := "On" // mode == "block"
+	if mode == "detect" {
+		engine = "DetectionOnly"
+	}
+	return map[string]any{
+		"handler":    "coraza",
+		"directives": "Include @owasp_crs/*.conf\nSecRuleEngine " + engine,
 	}
 }
 

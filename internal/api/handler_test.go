@@ -317,7 +317,7 @@ func TestGetRoute_NotFound(t *testing.T) {
 func TestCreateRoute_Success(t *testing.T) {
 	env := newTestEnv(t, false)
 
-	body := `{"host":"new.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"wafEnabled":false}`
+	body := `{"host":"new.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -342,7 +342,7 @@ func TestCreateRoute_Success(t *testing.T) {
 func TestCreateRoute_AcceptsRedirectToHTTPS(t *testing.T) {
 	env := newTestEnv(t, false)
 
-	body := `{"host":"redir.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":true,"redirectToHttps":true,"wafEnabled":false}`
+	body := `{"host":"redir.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":true,"redirectToHttps":true,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -366,7 +366,7 @@ func TestCreateRoute_AcceptsRedirectToHTTPS(t *testing.T) {
 
 func TestCreateRoute_AcceptsAliases(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt1.local","alt2.local"],"wafEnabled":false}`
+	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt1.local","alt2.local"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -390,7 +390,7 @@ func TestCreateRoute_AcceptsAliases(t *testing.T) {
 
 func TestCreateRoute_RejectsInvalidAlias(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["not a hostname"],"wafEnabled":false}`
+	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["not a hostname"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -407,7 +407,7 @@ func TestCreateRoute_RejectsIntraRouteDuplicate(t *testing.T) {
 	env := newTestEnv(t, false)
 	// Two identical aliases in the same request — defense-in-depth
 	// before storage sees the route.
-	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["dup.local","dup.local"],"wafEnabled":false}`
+	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["dup.local","dup.local"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -429,7 +429,7 @@ func TestCreateRoute_RejectsCrossRouteDuplicate(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	body := `{"host":"other.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":["x.local"],"wafEnabled":false}`
+	body := `{"host":"other.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":["x.local"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -452,7 +452,7 @@ func TestCreateRoute_RejectsCrossRouteDuplicate(t *testing.T) {
 func TestCreateRoute_AcceptsBasicAuth_HashesPassword(t *testing.T) {
 	env := newTestEnv(t, false)
 	plain := "s3cret-pa$$"
-	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafEnabled":false}`
+	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -487,7 +487,7 @@ func TestCreateRoute_AcceptsBasicAuth_HashesPassword(t *testing.T) {
 // the credentials. Q6 in the audit.
 func TestCreateRoute_RejectsBasicAuthEnabledWithoutPassword(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafEnabled":false}`
+	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -519,7 +519,7 @@ func TestUpdateRoute_EmptyPasswordPreservesHash(t *testing.T) {
 
 	// PUT with basicAuthPassword:"" — and a different upstream so we
 	// know the update path actually ran.
-	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafEnabled":false}`
+	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -544,7 +544,7 @@ func TestUpdateRoute_EmptyPasswordPreservesHash(t *testing.T) {
 func TestAudit_BasicAuthHashNeverInAuditLog(t *testing.T) {
 	env := newTestEnv(t, false)
 	plain := "leaky-secret-3000"
-	body := `{"host":"audit.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafEnabled":false}`
+	body := `{"host":"audit.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -585,7 +585,7 @@ func TestAudit_BasicAuthHashNeverInAuditLog(t *testing.T) {
 // header values, per Q7).
 func TestCreateRoute_AcceptsCustomHeaders(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"hdr.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Real-Foo":"bar"},"responseHeaders":{"X-Custom":"x"},"wafEnabled":false}`
+	body := `{"host":"hdr.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Real-Foo":"bar"},"responseHeaders":{"X-Custom":"x"},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -622,7 +622,7 @@ func TestCreateRoute_RejectsCRLFInHeaderValue(t *testing.T) {
 	// Embedded \r\n in the header value (escaped as \\r\\n in the
 	// JSON string literal so the decoder lands a real CR + LF in
 	// the Go string).
-	body := `{"host":"injection.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Injected":"ok\r\nEvil: foo"},"responseHeaders":{},"wafEnabled":false}`
+	body := `{"host":"injection.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Injected":"ok\r\nEvil: foo"},"responseHeaders":{},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -642,7 +642,7 @@ func TestCreateRoute_RejectsCRLFInHeaderValue(t *testing.T) {
 // offending key.
 func TestCreateRoute_RejectsInvalidHeaderKey(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"badkey.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Bad Key":"value"},"responseHeaders":{},"wafEnabled":false}`
+	body := `{"host":"badkey.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Bad Key":"value"},"responseHeaders":{},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -660,7 +660,7 @@ func TestCreateRoute_RejectsInvalidHeaderKey(t *testing.T) {
 // machinery. Reject with a clear message.
 func TestCreateRoute_RejectsReservedHeaderName(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"reserved.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Host":"evil.example.com"},"responseHeaders":{},"wafEnabled":false}`
+	body := `{"host":"reserved.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Host":"evil.example.com"},"responseHeaders":{},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -670,6 +670,101 @@ func TestCreateRoute_RejectsReservedHeaderName(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "reserved") {
 		t.Errorf("body=%s; want reserved-header mention", rec.Body)
+	}
+}
+
+// --- Step I.4 — WAF mode --------------------------------------------------
+
+func TestCreateRoute_AcceptsWAFModeDetect(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"waf-detect.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"detect"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 || got[0].WAFMode != "detect" {
+		t.Errorf("WAFMode = %v; want detect. routes=%+v", got[0].WAFMode, got)
+	}
+	if !strings.Contains(rec.Body.String(), `"wafMode":"detect"`) {
+		t.Errorf("response missing wafMode:detect: %s", rec.Body)
+	}
+}
+
+// TestCreateRoute_DefaultsToWAFModeDetect — POST with an empty (or
+// absent) wafMode lands the route in "detect" per spec L6 / Q6 override.
+// FortiWeb-style safe-shadow default makes the WAF observable before
+// it ever blocks legitimate traffic.
+func TestCreateRoute_DefaultsToWAFModeDetect(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"waf-default.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":""}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 || got[0].WAFMode != "detect" {
+		t.Errorf("WAFMode = %v; want detect (default on POST). routes=%+v", got[0].WAFMode, got)
+	}
+}
+
+// TestCreateRoute_RejectsInvalidWAFMode — anything outside the enum
+// {off, detect, block} returns 400.
+func TestCreateRoute_RejectsInvalidWAFMode(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"waf-bad.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"loud"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	// JSON-escaped quotes in the body (\"loud\") wouldn't match a
+	// literal `"loud"` substring search — assert on the bare value
+	// and the enum listing separately, same pattern as the I.3
+	// duplicate-host test.
+	if !strings.Contains(rec.Body.String(), `loud`) || !strings.Contains(rec.Body.String(), "off, detect, block") {
+		t.Errorf("body=%s; want offending value + enum listing", rec.Body)
+	}
+}
+
+// TestUpdateRoute_EmptyWAFModePreservesPrevious — Q6 override: empty
+// wafMode on PUT means "keep the previously stored value", mirroring
+// the I.5 password preserve UX.
+func TestUpdateRoute_EmptyWAFModePreservesPrevious(t *testing.T) {
+	env := newTestEnv(t, false)
+	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host: "waf-preserve.local", UpstreamURL: "http://127.0.0.1:9000",
+		WAFMode: "block",
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// PUT with empty wafMode — and a different upstream so we know
+	// the update path actually ran.
+	body := `{"host":"waf-preserve.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":""}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s; want 200", rec.Code, rec.Body)
+	}
+	got, _ := env.store.GetRoute(context.Background(), seeded.ID)
+	if got.WAFMode != "block" {
+		t.Errorf("WAFMode lost on PUT: got %q, want %q (preserved)", got.WAFMode, "block")
+	}
+	if got.UpstreamURL != "http://127.0.0.1:9001" {
+		t.Errorf("upstream not updated: %v", got)
 	}
 }
 
@@ -685,7 +780,7 @@ func TestUpdateRoute_AllowsKeepingSameAliases(t *testing.T) {
 	// PUT with the exact same (Host + Aliases) must NOT trigger a
 	// false-positive duplicate error — the hostnamesEqual short-circuit
 	// is the guard against the obvious bug of "comparing to self".
-	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt.local"],"wafEnabled":false}`
+	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt.local"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -709,7 +804,7 @@ func TestUpdateRoute_PreservesRedirectToHTTPS(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	body := `{"host":"flip.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":true,"redirectToHttps":false,"wafEnabled":false}`
+	body := `{"host":"flip.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":true,"redirectToHttps":false,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -808,7 +903,7 @@ func TestUpdateRoute_Success(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "u.local", UpstreamURL: "http://u:1"})
 
-	body := `{"host":"u.local","upstreamUrl":"http://u:2","tlsEnabled":true,"wafEnabled":false}`
+	body := `{"host":"u.local","upstreamUrl":"http://u:2","tlsEnabled":true,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -1046,7 +1141,7 @@ func routeEvents(events []audit.Event) []audit.Event {
 func TestCreateRoute_EmitsAuditEvent(t *testing.T) {
 	env := newTestEnv(t, false)
 
-	body := `{"host":"audit-create.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"wafEnabled":false}`
+	body := `{"host":"audit-create.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -1092,7 +1187,7 @@ func TestUpdateRoute_EmitsAuditEvent(t *testing.T) {
 		Host: "audit-update.local", UpstreamURL: "http://old:1",
 	})
 
-	body := `{"host":"audit-update.local","upstreamUrl":"http://new:1","tlsEnabled":true,"wafEnabled":false}`
+	body := `{"host":"audit-update.local","upstreamUrl":"http://new:1","tlsEnabled":true,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

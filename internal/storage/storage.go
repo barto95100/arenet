@@ -77,6 +77,15 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("storage: init buckets: %w", err)
 	}
 
+	// Step I.4 boot migration: convert pre-I.4 routes' WAFEnabled
+	// bool into the new WAFMode string enum. Runs idempotently —
+	// already-migrated rows are left as-is, so re-running on every
+	// boot after the first is a cheap no-op.
+	if err := migrateWAFEnabledToWAFMode(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("storage: migrate route schema: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 
