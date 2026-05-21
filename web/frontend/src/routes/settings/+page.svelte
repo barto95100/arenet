@@ -251,13 +251,15 @@
 					</div>
 				</div>
 			{:else}
-				<!-- DataTable rows are clickable by design (Chunk 3.2 expand
-				     toggle) but we don't provide an expanded snippet here,
-				     so the click toggles unused internal state. Cosmetic
-				     dette pre-existing; tracked for Step G cleanup. -->
+				<!-- Sessions table is read-only: no expanded snippet, no
+				     click-to-expand. Step G G.3 introduced `interactive`
+				     prop on DataTable to drop cursor-pointer + role=button
+				     + tabindex + hover-rail + focus-ring when interactive
+				     is false. -->
 				<DataTable
 					headers={['Issued', 'Last activity', 'IP', 'Browser', 'Status', '']}
 					items={sessions}
+					interactive={false}
 				>
 					{#snippet row(s: Session)}
 						<td class="px-4 py-3 text-sm" title={s.issuedAt}>

@@ -12,9 +12,18 @@
 		row: Snippet<[T]>;
 		/** Optional snippet rendered in an extra row beneath the active item. */
 		expanded?: Snippet<[T]>;
+		/**
+		 * Whether rows are click-to-expand interactive. Defaults to `true`
+		 * for backward compatibility with Routes / Audit which use the
+		 * expanded snippet. Set to `false` for read-only tables (e.g.
+		 * Sessions) so rows don't carry cursor-pointer, role=button,
+		 * tabindex, hover-rail, or focus-ring — Step G G.3 fix for the
+		 * "interactive parasite" cosmetic debt (smoke doc Step F §5 #1).
+		 */
+		interactive?: boolean;
 	}
 
-	let { headers, items, row, expanded }: Props = $props();
+	let { headers, items, row, expanded, interactive = true }: Props = $props();
 
 	let activeId = $state<string | null>(null);
 
@@ -46,13 +55,14 @@
 		<tbody>
 			{#each items as item (item.id)}
 				<tr
-					class="data-row border-t border-border-subtle cursor-pointer"
-					class:active={activeId === item.id}
-					onclick={() => toggle(item.id)}
-					onkeydown={(e) => onKey(e, item.id)}
-					tabindex="0"
-					role="button"
-					aria-expanded={expanded ? activeId === item.id : undefined}
+					class="data-row border-t border-border-subtle"
+					class:interactive
+					class:active={interactive && activeId === item.id}
+					onclick={interactive ? () => toggle(item.id) : undefined}
+					onkeydown={interactive ? (e) => onKey(e, item.id) : undefined}
+					tabindex={interactive ? 0 : undefined}
+					role={interactive ? 'button' : undefined}
+					aria-expanded={interactive && expanded ? activeId === item.id : undefined}
 				>
 					{@render row(item)}
 				</tr>
@@ -89,7 +99,13 @@
 			background-color var(--motion-fast),
 			box-shadow var(--motion-fast);
 	}
-	.data-row:hover {
+	/* Step G G.3: hover-rail + focus-ring + active-rail only apply to
+	 * interactive rows. Read-only tables (Sessions) keep the default
+	 * cursor + no rail + no focus outline. */
+	.data-row.interactive {
+		cursor: pointer;
+	}
+	.data-row.interactive:hover {
 		background-color: var(--bg-hover);
 		box-shadow: inset 2px 0 0 var(--accent-cyan);
 	}
@@ -97,7 +113,7 @@
 		background-color: var(--bg-hover);
 		box-shadow: inset 2px 0 0 var(--accent-cyan);
 	}
-	.data-row:focus-visible {
+	.data-row.interactive:focus-visible {
 		outline: 2px solid var(--accent-cyan);
 		outline-offset: -2px;
 	}

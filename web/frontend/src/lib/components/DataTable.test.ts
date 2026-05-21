@@ -104,4 +104,54 @@ describe('DataTable', () => {
 		// surrounding markup is a defensive scaffold.
 		expect(screen.getByText('No items.')).toBeInTheDocument();
 	});
+
+	it('drops row interactivity when interactive=false (Step G G.3)', () => {
+		// Sessions table use case: caller passes no expanded snippet and
+		// wants read-only rows. The pre-G.3 component left cursor-pointer
+		// + role=button + tabindex + hover-rail on every row regardless,
+		// causing the parasite-cursor cosmetic bug documented in smoke
+		// doc Step F §5 dette #1.
+		const { container } = render(DataTable, {
+			headers: ['Label'],
+			items,
+			row: rowSnippet(),
+			interactive: false
+		});
+
+		// No role=button on rows → screen.queryAllByRole returns 0 for
+		// the row layer (the columnheader role is still there for <th>).
+		expect(screen.queryAllByRole('button')).toHaveLength(0);
+
+		// Rows render but without tabindex and without the .interactive
+		// class that drives cursor + hover-rail + focus-ring in CSS.
+		const rows = container.querySelectorAll('tr.data-row');
+		expect(rows).toHaveLength(items.length);
+		for (const r of rows) {
+			expect(r.getAttribute('tabindex')).toBeNull();
+			expect(r.getAttribute('role')).toBeNull();
+			expect(r.classList.contains('interactive')).toBe(false);
+		}
+	});
+
+	it('defaults to interactive=true (rétrocompat Routes/Audit)', () => {
+		// Without an explicit interactive prop, behavior must match the
+		// pre-G.3 component: rows are role=button, tabindex=0, .interactive
+		// class is set. Guarantees that Routes + Audit callers (which
+		// don't pass the prop) keep their existing click-to-expand
+		// behavior wired to the same row markup.
+		const { container } = render(DataTable, {
+			headers: ['Label'],
+			items,
+			row: rowSnippet(),
+			expanded: expandedSnippet()
+		});
+
+		const rows = container.querySelectorAll('tr.data-row');
+		expect(rows).toHaveLength(items.length);
+		for (const r of rows) {
+			expect(r.getAttribute('tabindex')).toBe('0');
+			expect(r.getAttribute('role')).toBe('button');
+			expect(r.classList.contains('interactive')).toBe(true);
+		}
+	});
 });
