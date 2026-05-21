@@ -29,7 +29,19 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 )
 
-// Rate-limit thresholds and windows per decision Q6 + D8.
+// Rate-limit thresholds and windows for per-IP auth failure tracking.
+//
+// Spec / decision sources (Step D):
+//   - docs/superpowers/specs/2026-05-17-step-d-auth-design.md §1.4
+//     "Locked decisions" — foundation policy (Tier 1 + Tier 2 per IP).
+//   - docs/superpowers/specs/2026-05-17-step-d-auth-design.md §4.3
+//     "POST /api/v1/auth/login" — 429 response shape (Retry-After
+//     header + human message "15 minutes" / "1 hour").
+//   - docs/superpowers/decisions/2026-05-17-step-d-design-decisions-final.md
+//     Q6 — chosen tier values (5/5min → 15min, 10/1h → 1h).
+//   - docs/superpowers/decisions/2026-05-17-step-d-design-decisions-final.md
+//     D8 — in-memory storage, trusted-proxies env var, slog WARN
+//     on every Tier 2 hit.
 //
 // The two tiers operate concurrently: each failure increments both
 // counters; whichever threshold is hit first triggers the corresponding
@@ -44,11 +56,13 @@ const (
 	Tier2Block     = time.Hour // → block 1 hour
 
 	// CleanupInterval is how often the cleanup goroutine sweeps the
-	// rate limiter's state map for inactive entries.
+	// rate limiter's state map for inactive entries. Not in spec —
+	// implementation hygiene (D8 in-memory storage).
 	CleanupInterval = 30 * time.Minute
 
 	// InactiveAfter is the duration an entry must be inactive (no
 	// failures, no active block) before being garbage-collected.
+	// Not in spec — implementation hygiene.
 	InactiveAfter = 2 * time.Hour
 )
 
