@@ -524,6 +524,157 @@ func TestBuildConfigJSON_NoTLS_InternalOnly(t *testing.T) {
 	}
 }
 
+// --- Step I.2 — HTTP → HTTPS redirect -----------------------------------
+
+// httpsServerRoutes extracts the arenet_https server's route slice. Mirrors
+// httpRoutesFromConfig but for the HTTPS server, used by the redirect tests
+// to assert the proxy chain stays intact on the HTTPS side.
+func httpsServerRoutes(t *testing.T, raw []byte) []map[string]any {
+	t.Helper()
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	servers, _ := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	server, ok := servers["arenet_https"].(map[string]any)
+	if !ok {
+		t.Fatal("arenet_https server missing")
+	}
+	rawRoutes, _ := server["routes"].([]any)
+	out := make([]map[string]any, len(rawRoutes))
+	for i, r := range rawRoutes {
+		out[i], _ = r.(map[string]any)
+	}
+	return out
+}
+
+func TestBuildConfigJSON_Redirect_TLSAndRedirectOn_EmitsStaticResponse301(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "redir.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			TLSEnabled: true, RedirectToHTTPS: true,
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	// HTTP side: route 0 should be the 301 redirect (route 1 is the catch-all).
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	if len(httpRoutes) < 1 {
+		t.Fatalf("no HTTP routes emitted")
+	}
+	first := httpRoutes[0]
+	handlers, _ := first["handle"].([]any)
+	if len(handlers) != 1 {
+		t.Fatalf("redirect route should have exactly 1 handler; got %d", len(handlers))
+	}
+	h, _ := handlers[0].(map[string]any)
+	if h["handler"] != "static_response" {
+		t.Errorf("HTTP route handler = %v; want static_response", h["handler"])
+	}
+	if status, _ := h["status_code"].(float64); int(status) != 301 {
+		t.Errorf("status_code = %v; want 301", h["status_code"])
+	}
+	hdrs, _ := h["headers"].(map[string]any)
+	loc, _ := hdrs["Location"].([]any)
+	if len(loc) != 1 {
+		t.Fatalf("Location header malformed: %v", hdrs)
+	}
+	locStr, _ := loc[0].(string)
+	if !strings.HasPrefix(locStr, "https://") {
+		t.Errorf("Location = %q; want https:// prefix", locStr)
+	}
+	if !strings.Contains(locStr, "{http.request.host}") || !strings.Contains(locStr, "{http.request.uri}") {
+		t.Errorf("Location = %q; want both placeholders for host + uri", locStr)
+	}
+
+	// HTTPS side: the proxy chain must be untouched on this route.
+	httpsRoutes := httpsServerRoutes(t, raw)
+	if len(httpsRoutes) < 1 {
+		t.Fatalf("no HTTPS routes emitted despite TLSEnabled=true")
+	}
+	httpsFirst := httpsRoutes[0]
+	httpsHandlers, _ := httpsFirst["handle"].([]any)
+	if len(httpsHandlers) != 2 {
+		t.Fatalf("HTTPS route should keep [metrics, reverse_proxy]; got %d handlers", len(httpsHandlers))
+	}
+	rp, _ := httpsHandlers[1].(map[string]any)
+	if rp["handler"] != "reverse_proxy" {
+		t.Errorf("HTTPS handler[1] = %v; want reverse_proxy", rp["handler"])
+	}
+}
+
+func TestBuildConfigJSON_Redirect_TLSOnlyNoRedirect_PreservesProxyOnHTTP(t *testing.T) {
+	// User opted into TLS but disabled the auto-redirect: HTTP must
+	// keep serving via the proxy chain (no 301), HTTPS must too.
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "noredir.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			TLSEnabled: true, RedirectToHTTPS: false,
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	first := httpRoutes[0]
+	handlers, _ := first["handle"].([]any)
+	if len(handlers) != 2 {
+		t.Fatalf("HTTP route should keep [metrics, reverse_proxy]; got %d handlers", len(handlers))
+	}
+	rp, _ := handlers[1].(map[string]any)
+	if rp["handler"] != "reverse_proxy" {
+		t.Errorf("HTTP handler[1] = %v; want reverse_proxy (no 301)", rp["handler"])
+	}
+
+	// HTTPS side stays proxy.
+	httpsRoutes := httpsServerRoutes(t, raw)
+	httpsHandlers, _ := httpsRoutes[0]["handle"].([]any)
+	httpsRP, _ := httpsHandlers[1].(map[string]any)
+	if httpsRP["handler"] != "reverse_proxy" {
+		t.Errorf("HTTPS handler[1] = %v; want reverse_proxy", httpsRP["handler"])
+	}
+}
+
+func TestBuildConfigJSON_Redirect_NoTLSIgnoresRedirectFlag(t *testing.T) {
+	// Absurd-but-possible UI state: RedirectToHTTPS=true with
+	// TLSEnabled=false. Per L3, the redirect is a NO-OP when TLS is
+	// off — the route serves plain HTTP normally, and no HTTPS
+	// server is emitted.
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "plain.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			TLSEnabled: false, RedirectToHTTPS: true,
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	handlers, _ := httpRoutes[0]["handle"].([]any)
+	if len(handlers) != 2 {
+		t.Fatalf("HTTP route should keep [metrics, reverse_proxy]; got %d handlers", len(handlers))
+	}
+	rp, _ := handlers[1].(map[string]any)
+	if rp["handler"] != "reverse_proxy" {
+		t.Errorf("HTTP handler[1] = %v; want reverse_proxy (NO-OP redirect)", rp["handler"])
+	}
+
+	// No HTTPS server when no TLS route exists.
+	var cfg map[string]any
+	_ = json.Unmarshal(raw, &cfg)
+	servers, _ := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	if _, has := servers["arenet_https"]; has {
+		t.Errorf("arenet_https should not be emitted when no route has TLSEnabled=true")
+	}
+}
+
 func TestBuildConfigJSON_ListenPorts_DevVsProd(t *testing.T) {
 	cases := []struct {
 		name          string

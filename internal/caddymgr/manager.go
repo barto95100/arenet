@@ -352,7 +352,23 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			Handle: []map[string]any{metricsHandler, proxyHandler},
 		}
 
-		httpRoutes = append(httpRoutes, route)
+		// Step I.2: when TLS is on AND the operator asked for an
+		// automatic HTTP→HTTPS upgrade, the HTTP-side route serves
+		// a 301 instead of the proxy. The HTTPS-side keeps the
+		// normal proxy chain. RedirectToHTTPS is a NO-OP when TLS
+		// is off (the field is meaningless without a target HTTPS
+		// listener) — L3 in the Step I spec.
+		//
+		// Caddy injects the ACME HTTP-01 challenge handler ABOVE
+		// these user routes at load time (apps.tls.automation owns
+		// that side), so /.well-known/acme-challenge/* is never
+		// shadowed by the 301 — verified by the smoke pass on
+		// staging at I.7.
+		if r.TLSEnabled && r.RedirectToHTTPS {
+			httpRoutes = append(httpRoutes, buildRedirectRoute(r.Host))
+		} else {
+			httpRoutes = append(httpRoutes, route)
+		}
 		if r.TLSEnabled {
 			httpsRoutes = append(httpsRoutes, route)
 			acmeSubjects = append(acmeSubjects, r.Host)
@@ -462,6 +478,36 @@ func listenPortsFor(devMode bool) (string, string) {
 		return httpListenDev, httpsListenDev
 	}
 	return httpListenProd, httpsListenProd
+}
+
+// buildRedirectRoute returns the HTTP-side route entry that serves
+// a 301 redirect to the HTTPS scheme for the given host (Step I.2).
+//
+// Caddy's `{http.request.host}` and `{http.request.uri}` placeholders
+// are resolved at request time:
+//   - {http.request.host} preserves the actual Host header (covers
+//     aliases that I.3 will introduce: the redirect lands on the
+//     same hostname the client used).
+//   - {http.request.uri} preserves both path and query string, so
+//     a hit on http://x/foo?bar=1 redirects to https://x/foo?bar=1
+//     (AC #2 verification).
+//
+// `close: true` is not set: HTTP/1.1 keep-alive is fine for a 301
+// (the client retries on TLS regardless, no connection reuse for
+// the redirected request).
+func buildRedirectRoute(host string) httpRoute {
+	return httpRoute{
+		Match: []matcherSet{{Host: []string{host}}},
+		Handle: []map[string]any{
+			{
+				"handler":     "static_response",
+				"status_code": 301,
+				"headers": map[string]any{
+					"Location": []string{"https://{http.request.host}{http.request.uri}"},
+				},
+			},
+		},
+	}
 }
 
 // catchAllRoute builds the final 404 catch-all route: no match block (matches
