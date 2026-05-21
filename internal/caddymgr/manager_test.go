@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -521,6 +522,91 @@ func TestBuildConfigJSON_NoTLS_InternalOnly(t *testing.T) {
 	issuer, _ := issuers[0].(map[string]any)
 	if issuer["module"] != "internal" {
 		t.Errorf("policy[0].issuers[0].module = %v; want internal", issuer["module"])
+	}
+}
+
+// --- Step I.3 — Alias hostnames -----------------------------------------
+
+func TestBuildConfigJSON_Aliases_MatchHostContainsAll(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "primary.com", UpstreamURL: "http://127.0.0.1:9000",
+			Aliases: []string{"alt1.com", "alt2.com"},
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	first := httpRoutes[0]
+	matches, _ := first["match"].([]any)
+	match0, _ := matches[0].(map[string]any)
+	hosts, _ := match0["host"].([]any)
+	got := make([]string, len(hosts))
+	for i, h := range hosts {
+		got[i], _ = h.(string)
+	}
+	want := []string{"primary.com", "alt1.com", "alt2.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("match.host = %v; want %v (primary first, then aliases in order)", got, want)
+	}
+}
+
+func TestBuildConfigJSON_Aliases_ACMESubjectsExpanded(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "primary.com", UpstreamURL: "http://127.0.0.1:9000",
+			Aliases: []string{"alt1.com", "alt2.com"}, TLSEnabled: true,
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	policies := readPolicies(t, raw)
+	subjects, _ := policies[0]["subjects"].([]any)
+	got := make([]string, len(subjects))
+	for i, s := range subjects {
+		got[i], _ = s.(string)
+	}
+	want := []string{"primary.com", "alt1.com", "alt2.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("acmeSubjects = %v; want %v (primary first, then aliases in order)", got, want)
+	}
+}
+
+func TestBuildConfigJSON_Aliases_RedirectHonorsAliases(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "primary.com", UpstreamURL: "http://127.0.0.1:9000",
+			Aliases: []string{"alt1.com"}, TLSEnabled: true, RedirectToHTTPS: true,
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	httpRoutes := httpRoutesFromConfig(t, raw)
+	// Route[0] is the 301 redirect; its match.host must include the alias
+	// so a hit on http://alt1.com/* is redirected to https://alt1.com/* via
+	// the {http.request.host} placeholder.
+	first := httpRoutes[0]
+	handlers, _ := first["handle"].([]any)
+	h, _ := handlers[0].(map[string]any)
+	if h["handler"] != "static_response" {
+		t.Fatalf("first HTTP route should be the 301 redirect; got handler=%v", h["handler"])
+	}
+	matches, _ := first["match"].([]any)
+	match0, _ := matches[0].(map[string]any)
+	hosts, _ := match0["host"].([]any)
+	got := make([]string, len(hosts))
+	for i, h := range hosts {
+		got[i], _ = h.(string)
+	}
+	want := []string{"primary.com", "alt1.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("redirect match.host = %v; want %v", got, want)
 	}
 }
 

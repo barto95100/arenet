@@ -38,6 +38,7 @@
 		upstreamUrl: '',
 		tlsEnabled: false,
 		redirectToHttps: false,
+		aliases: [],
 		wafEnabled: false
 	});
 
@@ -62,6 +63,7 @@
 			upstreamUrl: '',
 			tlsEnabled: false,
 			redirectToHttps: true,
+			aliases: [],
 			wafEnabled: false
 		};
 		resetFormErrors();
@@ -76,10 +78,25 @@
 			upstreamUrl: r.upstreamUrl,
 			tlsEnabled: r.tlsEnabled,
 			redirectToHttps: r.redirectToHttps,
+			// Step I.3: copy aliases by value so editing in the form
+			// doesn't mutate the original Route in the table list.
+			aliases: [...(r.aliases ?? [])],
 			wafEnabled: r.wafEnabled
 		};
 		resetFormErrors();
 		formOpen = true;
+	}
+
+	// Step I.3: alias repeater helpers. Empty-string entries are kept
+	// in the array while editing (so the user can type) and trimmed
+	// out at submit time — that way the backend never sees a payload
+	// like aliases: ["a.com", ""] which would 400 on "alias must not
+	// be empty" before any meaningful validation happens.
+	function addAlias() {
+		formData.aliases = [...formData.aliases, ''];
+	}
+	function removeAlias(i: number) {
+		formData.aliases = formData.aliases.filter((_, idx) => idx !== i);
 	}
 
 	/**
@@ -98,11 +115,19 @@
 		submitting = true;
 		resetFormErrors();
 		try {
+			// Step I.3: drop blank alias rows the user may have added
+			// without filling. The backend would 400 on them anyway,
+			// but trimming here keeps the round-trip clean for the
+			// common "added a row, changed mind" case.
+			const payload = {
+				...formData,
+				aliases: formData.aliases.map((a) => a.trim()).filter((a) => a.length > 0)
+			};
 			if (formMode === 'create') {
-				await createRoute(formData);
+				await createRoute(payload);
 				pushToast('Route created', 'success');
 			} else if (editingId) {
-				await updateRoute(editingId, formData);
+				await updateRoute(editingId, payload);
 				pushToast('Route updated', 'success');
 			}
 			formOpen = false;
@@ -202,7 +227,19 @@
 			{#snippet row(r)}
 				<!-- TODO Step E: replace with live health-check status -->
 				<td class="px-4 py-3"><StatusDot status="up" /></td>
-				<td class="px-4 py-3 font-mono">{r.host}</td>
+				<td class="px-4 py-3 font-mono">
+					{r.host}
+					{#if r.aliases && r.aliases.length > 0}
+						<!-- Step I.3: compact "+N" badge with a native title
+						     tooltip listing every alias. The expanded snippet
+						     below has the full readable list; this is the
+						     at-a-glance signal in the table row. -->
+						<span
+							class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-sans text-secondary bg-elevated border border-border-subtle cursor-help"
+							title={`Aliases:\n${r.aliases.join('\n')}`}
+						>+{r.aliases.length}</span>
+					{/if}
+				</td>
 				<td
 					class="px-4 py-3 font-mono text-secondary truncate max-w-[16rem]"
 					title={r.upstreamUrl}
@@ -234,6 +271,17 @@
 				<dl class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
 					<dt class="text-secondary">ID</dt>
 					<dd class="font-mono">{r.id}</dd>
+					<dt class="text-secondary">Hostnames</dt>
+					<dd class="font-mono">
+						<!-- Step I.3: full hostname list with the primary
+						     called out so the reader knows which host is
+						     the canonical one (matters for ACME naming +
+						     the {http.request.host} placeholder echo). -->
+						<div>{r.host} <span class="text-muted">(primary)</span></div>
+						{#each r.aliases ?? [] as alias (alias)}
+							<div>{alias} <span class="text-muted">(alias)</span></div>
+						{/each}
+					</dd>
 					<dt class="text-secondary">Created</dt>
 					<dd class="font-mono">{fmtDate(r.createdAt)}</dd>
 					<dt class="text-secondary">Updated</dt>
@@ -272,6 +320,22 @@
 			placeholder="example.local"
 			error={hostError ?? undefined}
 		/>
+		<!-- Step I.3: alias hostnames. Each row binds to one slot of
+		     formData.aliases. The user types a hostname; backend
+		     validation rejects malformed entries via the formError
+		     banner above. Empty rows are trimmed at submit time. -->
+		<div class="flex flex-col gap-2">
+			<div class="flex items-center justify-between">
+				<span class="text-sm text-secondary">Aliases (optional)</span>
+				<Button variant="ghost" size="sm" onclick={addAlias} type="button">+ Add alias</Button>
+			</div>
+			{#each formData.aliases as _, i (i)}
+				<div class="flex items-center gap-2">
+					<Input bind:value={formData.aliases[i]} placeholder="alt.example.com" />
+					<Button variant="ghost" size="sm" onclick={() => removeAlias(i)} type="button">×</Button>
+				</div>
+			{/each}
+		</div>
 		<Input
 			label="Upstream URL"
 			bind:value={formData.upstreamUrl}

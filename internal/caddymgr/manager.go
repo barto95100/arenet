@@ -347,8 +347,13 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			},
 		}
 
+		// Step I.3: Match.Host carries the full hostname set
+		// (primary + aliases) so Caddy dispatches the same route to
+		// any of them. acmeSubjects collects every TLS-enabled host
+		// individually so a single multi-SAN cert covers them all.
+		allHosts := r.AllHosts()
 		route := httpRoute{
-			Match:  []matcherSet{{Host: []string{r.Host}}},
+			Match:  []matcherSet{{Host: allHosts}},
 			Handle: []map[string]any{metricsHandler, proxyHandler},
 		}
 
@@ -365,13 +370,13 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// shadowed by the 301 — verified by the smoke pass on
 		// staging at I.7.
 		if r.TLSEnabled && r.RedirectToHTTPS {
-			httpRoutes = append(httpRoutes, buildRedirectRoute(r.Host))
+			httpRoutes = append(httpRoutes, buildRedirectRoute(allHosts))
 		} else {
 			httpRoutes = append(httpRoutes, route)
 		}
 		if r.TLSEnabled {
 			httpsRoutes = append(httpsRoutes, route)
-			acmeSubjects = append(acmeSubjects, r.Host)
+			acmeSubjects = append(acmeSubjects, allHosts...)
 		}
 	}
 
@@ -481,13 +486,16 @@ func listenPortsFor(devMode bool) (string, string) {
 }
 
 // buildRedirectRoute returns the HTTP-side route entry that serves
-// a 301 redirect to the HTTPS scheme for the given host (Step I.2).
+// a 301 redirect to the HTTPS scheme for the given hostname set
+// (Step I.2, extended to multi-host in I.3).
 //
 // Caddy's `{http.request.host}` and `{http.request.uri}` placeholders
 // are resolved at request time:
-//   - {http.request.host} preserves the actual Host header (covers
-//     aliases that I.3 will introduce: the redirect lands on the
-//     same hostname the client used).
+//   - {http.request.host} preserves the actual Host header the
+//     client used — so a hit on an alias is redirected to that same
+//     alias on HTTPS, not to the primary host. The match.host array
+//     here covers every alias; the placeholder echoes whichever one
+//     hit.
 //   - {http.request.uri} preserves both path and query string, so
 //     a hit on http://x/foo?bar=1 redirects to https://x/foo?bar=1
 //     (AC #2 verification).
@@ -495,9 +503,9 @@ func listenPortsFor(devMode bool) (string, string) {
 // `close: true` is not set: HTTP/1.1 keep-alive is fine for a 301
 // (the client retries on TLS regardless, no connection reuse for
 // the redirected request).
-func buildRedirectRoute(host string) httpRoute {
+func buildRedirectRoute(hosts []string) httpRoute {
 	return httpRoute{
-		Match: []matcherSet{{Host: []string{host}}},
+		Match: []matcherSet{{Host: hosts}},
 		Handle: []map[string]any{
 			{
 				"handler":     "static_response",

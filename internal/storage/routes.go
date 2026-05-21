@@ -40,10 +40,28 @@ type Route struct {
 	// Step-I.1 routes silently keep the no-redirect behavior. The
 	// wire JSON below this struct uses camelCase to match the API
 	// shape; storage tags use snake_case for legacy reasons.
-	RedirectToHTTPS bool      `json:"redirect_to_https"`
-	WAFEnabled      bool      `json:"waf_enabled"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	RedirectToHTTPS bool `json:"redirect_to_https"`
+	// Aliases (Step I.3) are additional hostnames served by the
+	// SAME upstream. Caddy matches any of (Host ∪ Aliases) for this
+	// route, and ACME issues a single multi-SAN cert covering them
+	// all. Stored as a JSON array; pre-Step-I.3 routes decode with
+	// a nil slice (zero value), which is treated identically to an
+	// empty slice everywhere downstream.
+	Aliases    []string  `json:"aliases"`
+	WAFEnabled bool      `json:"waf_enabled"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// AllHosts returns the full ordered list of hostnames this route
+// answers to: [Host, Aliases...]. The primary Host always comes
+// first so callers that need a deterministic ordering (Caddy
+// match.host, ACME subjects, audit log) get a stable shape.
+func (r Route) AllHosts() []string {
+	out := make([]string, 0, 1+len(r.Aliases))
+	out = append(out, r.Host)
+	out = append(out, r.Aliases...)
+	return out
 }
 
 // validate checks the user-supplied fields of a Route.
@@ -53,6 +71,25 @@ func (r *Route) validate() error {
 	}
 	if r.UpstreamURL == "" {
 		return errors.New("route: upstream_url must not be empty")
+	}
+	// Step I.3: intra-route alias rules. Storage is the last line
+	// of defense; the API layer also enforces these so the user
+	// gets a 400 with a friendlier message. Keeping the check here
+	// guarantees that any direct CreateRoute / UpdateRoute call
+	// (tests, future internal callers) cannot smuggle a malformed
+	// alias set into BoltDB.
+	seen := make(map[string]struct{}, len(r.Aliases))
+	for _, a := range r.Aliases {
+		if a == "" {
+			return errors.New("route: alias must not be empty")
+		}
+		if a == r.Host {
+			return fmt.Errorf("route: alias %q duplicates the primary host", a)
+		}
+		if _, dup := seen[a]; dup {
+			return fmt.Errorf("route: alias %q duplicates within the same route", a)
+		}
+		seen[a] = struct{}{}
 	}
 	return nil
 }

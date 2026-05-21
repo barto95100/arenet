@@ -19,6 +19,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -145,6 +146,72 @@ func (h *Handler) getRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toResponse(rt))
 }
 
+// validateAliasesStructural runs the same hostname rule used for the
+// primary Host (RFC 1035 grammar + length) on every alias supplied
+// by the user. It also enforces the two intra-route invariants from
+// Step I.3 S3: no alias may duplicate the primary host, and no
+// alias may duplicate another alias in the same request.
+//
+// Returns the first failure with a user-facing message. The
+// duplicate checks here mirror the storage-layer defense in
+// storage.Route.validate; the API copy gives a friendlier message
+// (with the offending alias quoted) before the storage layer would
+// reject it anonymously.
+func validateAliasesStructural(host string, aliases []string) error {
+	seen := make(map[string]struct{}, len(aliases))
+	for _, a := range aliases {
+		if a == "" {
+			return errors.New("alias must not be empty")
+		}
+		if err := validateHost(a); err != nil {
+			return fmt.Errorf("alias %q: %s", a, err.Error())
+		}
+		if a == host {
+			return fmt.Errorf("alias %q duplicates the primary host", a)
+		}
+		if _, dup := seen[a]; dup {
+			return fmt.Errorf("alias %q duplicates within the same route", a)
+		}
+		seen[a] = struct{}{}
+	}
+	return nil
+}
+
+// collectAllHostsExcept walks existing routes and returns a map from
+// hostname to owning route ID, including every primary Host AND every
+// alias. The excludeID, when non-empty, skips the route currently
+// being updated (so it doesn't collide with its own existing aliases).
+// Used by createRoute and updateRoute to enforce cross-route uniqueness
+// across the union of (Host, Aliases) per Step I.3 Q1.
+func collectAllHostsExcept(routes []storage.Route, excludeID string) map[string]string {
+	owners := make(map[string]string, len(routes))
+	for _, rt := range routes {
+		if rt.ID == excludeID {
+			continue
+		}
+		for _, h := range rt.AllHosts() {
+			owners[h] = rt.ID
+		}
+	}
+	return owners
+}
+
+// hostnamesEqual reports whether two hostname slices contain the same
+// hosts in the same order. Used by updateRoute to short-circuit the
+// uniqueness check when nothing changed (avoids a needless ListRoutes
+// + map build on every PUT that flips, say, only WAFEnabled).
+func hostnamesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	var req routeRequest
 	dec := json.NewDecoder(r.Body)
@@ -161,31 +228,43 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateAliasesStructural(req.Host, req.Aliases); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	// Uniqueness check. NOTE: this is not atomic with the subsequent
-	// CreateRoute call — two concurrent POSTs with the same host could both
-	// pass this loop. Safe under the homelab single-writer assumption
-	// codified in spec §3 Q3; revisit when real concurrency is introduced.
+	// Uniqueness check across the union of (Host ∪ Aliases) per
+	// Step I.3 Q1. Caddy dispatches by host match, so any duplicate
+	// hostname across two routes would yield non-deterministic
+	// routing — reject at the API layer.
+	//
+	// NOTE: this is not atomic with the subsequent CreateRoute call —
+	// two concurrent POSTs with the same host could both pass this
+	// loop. Safe under the homelab single-writer assumption codified
+	// in spec §3 Q3; revisit when real concurrency is introduced.
 	existing, err := h.store.ListRoutes(r.Context())
 	if err != nil {
 		h.logger.Error("uniqueness list", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to verify uniqueness")
 		return
 	}
-	for _, rt := range existing {
-		if rt.Host == req.Host {
-			writeError(w, http.StatusConflict, "host already configured")
-			return
-		}
-	}
-
-	created, err := h.store.CreateRoute(r.Context(), storage.Route{
+	owners := collectAllHostsExcept(existing, "")
+	newRoute := storage.Route{
 		Host:            req.Host,
 		UpstreamURL:     req.UpstreamURL,
 		TLSEnabled:      req.TLSEnabled,
 		RedirectToHTTPS: req.RedirectToHTTPS,
+		Aliases:         req.Aliases,
 		WAFEnabled:      req.WAFEnabled,
-	})
+	}
+	for _, h := range newRoute.AllHosts() {
+		if ownerID, taken := owners[h]; taken {
+			writeError(w, http.StatusConflict, fmt.Sprintf("hostname %q already configured on route %s", h, ownerID))
+			return
+		}
+	}
+
+	created, err := h.store.CreateRoute(r.Context(), newRoute)
 	if err != nil {
 		h.logger.Error("create route", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to create route")
@@ -234,6 +313,10 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateAliasesStructural(req.Host, req.Aliases); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	previous, err := h.store.GetRoute(r.Context(), id)
 	if err != nil {
@@ -246,30 +329,36 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Host change must not collide with another route.
-	if req.Host != previous.Host {
+	// Uniqueness check across (Host ∪ Aliases) when ANY hostname has
+	// changed since the stored copy (Step I.3 Q1). The pre-Step-I.3
+	// optimization that compared only Host is no longer sufficient —
+	// adding a new alias must still trigger the cross-route check.
+	newRoute := storage.Route{
+		ID:              id,
+		Host:            req.Host,
+		UpstreamURL:     req.UpstreamURL,
+		TLSEnabled:      req.TLSEnabled,
+		RedirectToHTTPS: req.RedirectToHTTPS,
+		Aliases:         req.Aliases,
+		WAFEnabled:      req.WAFEnabled,
+	}
+	if !hostnamesEqual(newRoute.AllHosts(), previous.AllHosts()) {
 		existing, err := h.store.ListRoutes(r.Context())
 		if err != nil {
 			h.logger.Error("uniqueness list (update)", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to verify uniqueness")
 			return
 		}
-		for _, rt := range existing {
-			if rt.ID != id && rt.Host == req.Host {
-				writeError(w, http.StatusConflict, "host already configured")
+		owners := collectAllHostsExcept(existing, id)
+		for _, h := range newRoute.AllHosts() {
+			if ownerID, taken := owners[h]; taken {
+				writeError(w, http.StatusConflict, fmt.Sprintf("hostname %q already configured on route %s", h, ownerID))
 				return
 			}
 		}
 	}
 
-	updated, err := h.store.UpdateRoute(r.Context(), storage.Route{
-		ID:              id,
-		Host:            req.Host,
-		UpstreamURL:     req.UpstreamURL,
-		TLSEnabled:      req.TLSEnabled,
-		RedirectToHTTPS: req.RedirectToHTTPS,
-		WAFEnabled:      req.WAFEnabled,
-	})
+	updated, err := h.store.UpdateRoute(r.Context(), newRoute)
 	if err != nil {
 		h.logger.Error("update route", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to update route")

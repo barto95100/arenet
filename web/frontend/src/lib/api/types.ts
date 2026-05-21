@@ -13,6 +13,13 @@ export interface Route {
 	 * tlsEnabled is false.
 	 */
 	redirectToHttps: boolean;
+	/**
+	 * Step I.3: additional hostnames served by the same upstream + same
+	 * TLS cert (multi-SAN). The server normalizes the wire shape to an
+	 * empty array (never null), so callers can read .length without a
+	 * null check.
+	 */
+	aliases: string[];
 	wafEnabled: boolean;
 	createdAt: string;
 	updatedAt: string;
@@ -23,6 +30,7 @@ export interface RouteRequest {
 	upstreamUrl: string;
 	tlsEnabled: boolean;
 	redirectToHttps: boolean;
+	aliases: string[];
 	wafEnabled: boolean;
 }
 

@@ -362,6 +362,109 @@ func TestCreateRoute_AcceptsRedirectToHTTPS(t *testing.T) {
 	}
 }
 
+// --- Step I.3 — Alias hostnames -------------------------------------------
+
+func TestCreateRoute_AcceptsAliases(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt1.local","alt2.local"],"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 || len(got[0].Aliases) != 2 {
+		t.Fatalf("aliases not persisted: routes=%+v", got)
+	}
+	if got[0].Aliases[0] != "alt1.local" || got[0].Aliases[1] != "alt2.local" {
+		t.Errorf("aliases ordering wrong: %v", got[0].Aliases)
+	}
+	// Response wire shape: aliases must be present as an array.
+	if !strings.Contains(rec.Body.String(), `"aliases":["alt1.local","alt2.local"]`) {
+		t.Errorf("response missing aliases array: %s", rec.Body)
+	}
+}
+
+func TestCreateRoute_RejectsInvalidAlias(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["not a hostname"],"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `not a hostname`) {
+		t.Errorf("body should quote the offending alias: %s", rec.Body)
+	}
+}
+
+func TestCreateRoute_RejectsIntraRouteDuplicate(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Two identical aliases in the same request — defense-in-depth
+	// before storage sees the route.
+	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["dup.local","dup.local"],"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `duplicates within the same route`) {
+		t.Errorf("body=%s", rec.Body)
+	}
+}
+
+func TestCreateRoute_RejectsCrossRouteDuplicate(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Seed an existing route with Host=x.com; a new route trying to
+	// claim it as an alias must fail with a 409.
+	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{Host: "x.local", UpstreamURL: "http://127.0.0.1:9000"})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	body := `{"host":"other.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":["x.local"],"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s; want 409", rec.Code, rec.Body)
+	}
+	// Conflict message names BOTH the host and the owning route ID.
+	if !strings.Contains(rec.Body.String(), `x.local`) || !strings.Contains(rec.Body.String(), seeded.ID) {
+		t.Errorf("body should cite host + owner: %s", rec.Body)
+	}
+}
+
+func TestUpdateRoute_AllowsKeepingSameAliases(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host: "primary.local", UpstreamURL: "http://127.0.0.1:9000",
+		Aliases: []string{"alt.local"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// PUT with the exact same (Host + Aliases) must NOT trigger a
+	// false-positive duplicate error — the hostnamesEqual short-circuit
+	// is the guard against the obvious bug of "comparing to self".
+	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt.local"],"wafEnabled":false}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s; want 200 (no duplicate on self)", rec.Code, rec.Body)
+	}
+}
+
 // Step I.1: an update flipping redirectToHttps back to false must
 // persist the change (catches the bug of forgetting the field in
 // updateRoute's storage.Route construction).
@@ -443,7 +546,12 @@ func TestCreateRoute_DuplicateHost(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
 	}
-	if !strings.Contains(rec.Body.String(), "host already configured") {
+	// Step I.3: the conflict message now identifies BOTH the conflicting
+	// hostname and the owning route ID (the wider check covers aliases too,
+	// so the message must disambiguate which host triggered the collision).
+	// The body is JSON, so the quotes around dup.local are backslash-
+	// escaped — match the substring without the surrounding quotes.
+	if !strings.Contains(rec.Body.String(), `dup.local`) || !strings.Contains(rec.Body.String(), `already configured`) {
 		t.Errorf("body=%s", rec.Body)
 	}
 }

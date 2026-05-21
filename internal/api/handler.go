@@ -120,11 +120,12 @@ func NewHandler(
 // routeRequest is the wire shape accepted by POST and PUT /routes. JSON tags
 // are camelCase per the spec.
 type routeRequest struct {
-	Host            string `json:"host"`
-	UpstreamURL     string `json:"upstreamUrl"`
-	TLSEnabled      bool   `json:"tlsEnabled"`
-	RedirectToHTTPS bool   `json:"redirectToHttps"`
-	WAFEnabled      bool   `json:"wafEnabled"`
+	Host            string   `json:"host"`
+	UpstreamURL     string   `json:"upstreamUrl"`
+	TLSEnabled      bool     `json:"tlsEnabled"`
+	RedirectToHTTPS bool     `json:"redirectToHttps"`
+	Aliases         []string `json:"aliases"`
+	WAFEnabled      bool     `json:"wafEnabled"`
 }
 
 // routeResponse is the wire shape returned by GET / POST / PUT /routes. The
@@ -135,20 +136,30 @@ type routeResponse struct {
 	UpstreamURL     string `json:"upstreamUrl"`
 	TLSEnabled      bool   `json:"tlsEnabled"`
 	RedirectToHTTPS bool   `json:"redirectToHttps"`
-	WAFEnabled      bool   `json:"wafEnabled"`
-	CreatedAt       string `json:"createdAt"`
-	UpdatedAt       string `json:"updatedAt"`
+	// Aliases (Step I.3) is normalized to an empty slice (never nil)
+	// so the JSON wire shape is consistently `"aliases": []` rather
+	// than `"aliases": null` — frontend callers can read .length
+	// without a null check.
+	Aliases    []string `json:"aliases"`
+	WAFEnabled bool     `json:"wafEnabled"`
+	CreatedAt  string   `json:"createdAt"`
+	UpdatedAt  string   `json:"updatedAt"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with
 // millisecond precision, UTC).
 func toResponse(r storage.Route) routeResponse {
+	aliases := r.Aliases
+	if aliases == nil {
+		aliases = []string{} // S6: never emit `"aliases": null` on the wire.
+	}
 	return routeResponse{
 		ID:              r.ID,
 		Host:            r.Host,
 		UpstreamURL:     r.UpstreamURL,
 		TLSEnabled:      r.TLSEnabled,
 		RedirectToHTTPS: r.RedirectToHTTPS,
+		Aliases:         aliases,
 		WAFEnabled:      r.WAFEnabled,
 		CreatedAt:       r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:       r.UpdatedAt.UTC().Format(timestampFormat),

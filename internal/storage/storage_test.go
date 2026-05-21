@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -367,7 +369,7 @@ func TestRestoreRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRoute: %v", err)
 	}
-	if got != original {
+	if !reflect.DeepEqual(got, original) {
 		t.Errorf("restored route differs: got=%+v want=%+v", got, original)
 	}
 
@@ -377,4 +379,63 @@ func TestRestoreRoute(t *testing.T) {
 			t.Fatal("expected error for empty ID")
 		}
 	})
+}
+
+// --- Step I.3 — Alias hostnames -------------------------------------------
+
+func TestRoute_AllHosts_ReturnsHostThenAliases(t *testing.T) {
+	r := Route{Host: "primary.com", Aliases: []string{"alt1.com", "alt2.com"}}
+	got := r.AllHosts()
+	want := []string{"primary.com", "alt1.com", "alt2.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("AllHosts() = %v; want %v (primary first)", got, want)
+	}
+
+	// No aliases → singleton slice with just the host.
+	rNoAlias := Route{Host: "only.com"}
+	if !reflect.DeepEqual(rNoAlias.AllHosts(), []string{"only.com"}) {
+		t.Errorf("AllHosts() with nil aliases = %v; want [only.com]", rNoAlias.AllHosts())
+	}
+}
+
+func TestRoute_Validate_RejectsAliasDuplicateOfHost(t *testing.T) {
+	r := Route{
+		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		Aliases: []string{"y.com", "x.com"}, // x.com == Host
+	}
+	err := r.validate()
+	if err == nil {
+		t.Fatal("validate() = nil; want duplicate-of-host error")
+	}
+	if !strings.Contains(err.Error(), `duplicates the primary host`) {
+		t.Errorf("err = %v; want duplicates-the-primary-host message", err)
+	}
+}
+
+func TestRoute_Validate_RejectsAliasesNotUnique(t *testing.T) {
+	r := Route{
+		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		Aliases: []string{"dup.com", "dup.com"}, // intra-alias duplicate
+	}
+	err := r.validate()
+	if err == nil {
+		t.Fatal("validate() = nil; want intra-alias duplicate error")
+	}
+	if !strings.Contains(err.Error(), `duplicates within the same route`) {
+		t.Errorf("err = %v; want duplicates-within-same-route message", err)
+	}
+}
+
+func TestRoute_Validate_RejectsEmptyAlias(t *testing.T) {
+	r := Route{
+		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		Aliases: []string{""},
+	}
+	err := r.validate()
+	if err == nil {
+		t.Fatal("validate() = nil; want empty-alias error")
+	}
+	if !strings.Contains(err.Error(), `alias must not be empty`) {
+		t.Errorf("err = %v; want alias-must-not-be-empty message", err)
+	}
 }
