@@ -178,7 +178,7 @@ When generating code for this project:
 5. **Write tests** when generating non-trivial logic. Test files alongside source files (`foo_test.go`).
 6. **Comment public APIs**: every exported function/type needs a Go doc comment
 7. **No dead code**: don't generate stubs or `// TODO` placeholders that don't compile
-8. **Match Caddy's actual API**: when configuring Caddy, generate valid Caddy JSON config (refer to https://caddyserver.com/docs/json/)
+8. **Match Caddy's actual API**: when configuring Caddy, generate valid Caddy JSON config (refer to https://caddyserver.com/docs/json/). For runtime behaviour, see §Empirical verification.
 9. **Be conservative with deps**: prefer stdlib, then well-known libs. Avoid obscure dependencies.
 
 ## What Claude Code Should NOT Do
@@ -188,7 +188,25 @@ When generating code for this project:
 - Don't copy code from Zoraxy directly (different license/architecture)
 - Don't introduce React, Vue, or other frontend frameworks — we use SvelteKit
 - Don't suggest non-AGPL-compatible licenses or deps with incompatible licenses
-- Don't fabricate API endpoints or library functions — verify they exist in the actual lib
+- Don't fabricate API endpoints or library functions — verify they exist in the actual lib (see §Empirical verification for runtime behaviour)
+
+## Empirical verification of external dependencies
+
+Any audit-time claim about the runtime behaviour of an external
+dependency (Caddy, Coraza, CRS, certmagic, etc.) must be verified
+empirically before it is treated as settled — either by reading
+the upstream source with an explicit `file:line` citation, or by
+a targeted test harness that demonstrates the invariant. An
+unverified "I assume X does Y" is a latent finding until proven.
+
+Background: the Step I.7 smoke caught five bugs (Findings #2, #4,
+#6, #7, #8) that all stemmed from audit-time inferences about Caddy
+or Coraza behaviour that proved wrong against a real binary. See
+`docs/smoke-test-step-i.md` §3 and `docs/backlog-step-j.md` §1.
+The mitigation pattern: `caddy.Validate()` on emitted JSON
+(`TestBuildConfigJSON_LoadsCleanly`) + handler-ID resolvability
+checks (`TestBuildConfigJSON_HandlersAllResolvable`). Extend this
+pattern to any new Caddy-facing config.
 
 ## Build & Run
 
