@@ -1,5 +1,20 @@
 # Arenet Roadmap
 
+> **⚠️ Stale — realignment pending (2026-05-22).** This roadmap reflects
+> the *original* planning, not the actual shipping order. Known drift:
+> the "Step F — Security & Threat dashboard" section below was NOT
+> shipped as Step F — Step F shipped a design-polish pass (`v0.4.0-step-f`);
+> the Security & Threat dashboard and IP reputation are now dedicated
+> future steps, not yet scheduled. Step I (Reverse Proxy v1.0,
+> `v0.5.0-step-i`) and Step J are missing from the sections below.
+>
+> Authoritative sources until this file is realigned:
+> - **Shipped steps** — the git tags (`git tag -l 'v0.*'`).
+> - **Step J scope** — `docs/backlog-step-j.md` §5.
+> - **Step I outcome** — `docs/smoke-test-step-i.md`.
+>
+> A full roadmap realignment is tracked as a housekeeping task.
+
 ## Phase 1 — Core POC + Auth (in progress)
 
 - ✅ Step A — Skeleton + Caddy embedded
