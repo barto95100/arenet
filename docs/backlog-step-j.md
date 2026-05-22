@@ -86,6 +86,9 @@ Scope: trigger the same handler as the "Reset view" button from the
 Topology component's `onMount` — likely a one-liner. Pure UX polish,
 non-blocker.
 
+Scope note: see §5 — now part of a broader Topology visual design
+pass, not just the auto-fit fix.
+
 ### AC #4 PARTIAL — `audit_waf_match` event + `X-WAF-Match` header
 
 AC #4 (WAF detect mode) shipped PARTIAL. The spec §2 verification
@@ -125,3 +128,49 @@ Step J / K spec can pick them up:
     `WAFMode="block"` and will actively block matching requests.
   - When WAF + Basic Auth are both enabled, Basic Auth gates first
     (Finding #9).
+
+---
+
+## 5. Step J scope decision (2026-05-22)
+
+Priorities set at the close of Step I, before the Step J spec is written.
+
+### Step J core — to spec (priority order)
+
+1. **Multi-upstream per route with load balancing + active health checks.**
+   The marquee feature of Step J. A route must support multiple backend
+   upstreams instead of a single one. Scope to spec:
+   - Load-balancing policy selection (round-robin, weighted round-robin,
+     least-connections, etc. — full enum decided in the spec).
+   - Active health checks per upstream, FortiWeb / HAProxy style:
+     configurable check type (HTTP probe with expected status / body
+     match, TCP connect, ...), check interval, rise/fall thresholds
+     before a backend flips up/down.
+   - An unhealthy backend is automatically pulled from rotation; traffic
+     fails over to the remaining healthy upstreams.
+
+2. **TLS — DNS-01 ACME challenge** for wildcard certificates.
+
+3. **AC #4 completion** — `audit_waf_match` audit event + `X-WAF-Match`
+   response header (detect mode). Custom Coraza module wrapper. Note:
+   this also produces the WAF events the future Security dashboard
+   (see below) will consume — it is a building block for that step.
+
+4. **Topology page — visual design pass.** Broader than Finding #10's
+   auto-fit: a real visual polish of the page (flagged as wanting to
+   look better / "plus joli"). The auto-fit zoom folds into this work.
+
+### Out of Step J scope
+
+- **Finding #9 — perimeter-mode WAF (waf-before-auth).** Low-priority;
+  the current order works. Revisit near project end.
+- **Multi-user Basic Auth per route.** Refine near project end.
+- **Security / Threat dashboard.** The /security page is a disabled
+  sidebar stub today ("Coming in a later step"). Its intended scope
+  per roadmap.md — live rate-limited IPs, top-N failed-attempt IPs,
+  CSV / iptables / FortiGate exports, outbound webhook system with
+  HMAC, optional CSRF / GeoIP hardening — is large enough to be its
+  OWN dedicated step with its own spec. NOT a Step J item. roadmap.md
+  still labels it "Step F", which is stale: Step F shipped only the
+  disabled sidebar shell, not the page. To be re-assigned to a
+  dedicated later step.
