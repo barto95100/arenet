@@ -444,6 +444,17 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step I.7 hotfix (Finding #5): RedirectToHTTPS is meaningless
+	// without TLS. Normalize to false when TLS is off so the stored
+	// row never carries a latent redirect that would silently
+	// activate if the admin later flips TLS on. Backend is the
+	// source of truth — this also covers direct API clients that
+	// bypass the frontend, and naturally heals legacy routes the
+	// next time they are updated (no separate migration needed).
+	if !req.TLSEnabled {
+		req.RedirectToHTTPS = false
+	}
+
 	// Step I.5: hash the plaintext password BEFORE the uniqueness
 	// check + the storage write. Done outside the bbolt transaction
 	// so the ~100 ms argon2id cost doesn't hold the single-writer
@@ -604,6 +615,16 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	if err := validateWAFMode(req.WAFMode); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// Step I.7 hotfix (Finding #5): RedirectToHTTPS is meaningless
+	// without TLS — normalize on PUT too so a route losing its TLS
+	// also loses its redirect. Also self-heals legacy rows that
+	// were persisted with redirect=true + tls=false before the fix
+	// landed (no separate migration needed: any update to such a
+	// row clears the latent flag).
+	if !req.TLSEnabled {
+		req.RedirectToHTTPS = false
 	}
 
 	// Step I.5 password resolution (Q5):

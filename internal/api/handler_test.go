@@ -768,6 +768,79 @@ func TestUpdateRoute_EmptyWAFModePreservesPrevious(t *testing.T) {
 	}
 }
 
+// --- Step I.7 hotfix (Finding #5) — redirect-without-TLS normalize -------
+
+// TestCreateRoute_NormalizesRedirectWhenTLSOff — a POST with
+// tlsEnabled=false + redirectToHttps=true (the bug pattern that
+// the frontend defaults made common) MUST land in storage as
+// redirect=false. The defense lives at the API layer so direct
+// curl callers bypassing the form get the same protection, and
+// no latent redirect ever ships to BoltDB.
+func TestCreateRoute_NormalizesRedirectWhenTLSOff(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"host":"latent.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":true,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"off"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 {
+		t.Fatalf("want 1 route, got %d", len(got))
+	}
+	if got[0].RedirectToHTTPS {
+		t.Errorf("RedirectToHTTPS persisted as true despite TLSEnabled=false (Finding #5 regression): %+v", got[0])
+	}
+	// Response wire shape also reflects the normalized value.
+	if !strings.Contains(rec.Body.String(), `"redirectToHttps":false`) {
+		t.Errorf("response did not echo normalized redirectToHttps:false: %s", rec.Body)
+	}
+}
+
+// TestUpdateRoute_NormalizesRedirectWhenTLSOff — same invariant
+// on PUT, plus the self-heal property: a legacy row persisted
+// before the hotfix (redirect=true + tls=false) gets cleaned the
+// next time it's updated, even if the PUT payload doesn't touch
+// the redirect field explicitly.
+func TestUpdateRoute_NormalizesRedirectWhenTLSOff(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Seed a "legacy" row directly through the store — this
+	// bypasses the API-layer normalize and produces the exact
+	// pre-hotfix state Finding #5 catches.
+	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host:            "heal.local",
+		UpstreamURL:     "http://127.0.0.1:9000",
+		TLSEnabled:      false,
+		RedirectToHTTPS: true, // the latent bug we want self-healed
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// PUT touching ONLY the upstream — payload still says
+	// redirectToHttps:true (matching the legacy stored value),
+	// tls stays false. The normalize at the top of updateRoute
+	// must coerce redirect to false on the way out.
+	body := `{"host":"heal.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":true,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"off"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s; want 200", rec.Code, rec.Body)
+	}
+	got, _ := env.store.GetRoute(context.Background(), seeded.ID)
+	if got.RedirectToHTTPS {
+		t.Errorf("legacy redirect=true row not self-healed by PUT: %+v", got)
+	}
+	if got.UpstreamURL != "http://127.0.0.1:9001" {
+		t.Errorf("upstream not updated: %v", got)
+	}
+}
+
 func TestUpdateRoute_AllowsKeepingSameAliases(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, err := env.store.CreateRoute(context.Background(), storage.Route{

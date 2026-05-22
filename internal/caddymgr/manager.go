@@ -29,6 +29,7 @@ import (
 	"sync"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/certmagic"
 
 	// Side-effect import: registers every standard Caddy module
 	// (reverse_proxy, host matcher, internal TLS issuer, ...).
@@ -42,7 +43,10 @@ import (
 	"github.com/barto95100/arenet/internal/storage"
 )
 
-// Listen addresses by mode (Step I.1).
+// Listen ports by mode (Step I.1, refactored to ints in Step I.7
+// hotfix Finding #8 so we can declare apps.http.http_port /
+// https_port to Caddy and stop its auto_https logic from mis-
+// identifying our HTTP listener as TLS-capable).
 //
 // Dev keeps the high ports so a non-root developer can bind without
 // CAP_NET_BIND_SERVICE. Prod uses the standard reverse-proxy ports —
@@ -50,6 +54,17 @@ import (
 // certs serve on :443. Operators that cannot bind :80 / :443 must
 // either run the binary as root or `setcap cap_net_bind_service+ep`
 // on it; documented in the Step I.1 commit message.
+const (
+	httpPortDev   = 8080
+	httpsPortDev  = 8443
+	httpPortProd  = 80
+	httpsPortProd = 443
+)
+
+// Listen address forms ":<port>" derived from the int constants
+// above. Kept as their own consts so existing tests asserting on
+// the literal ":8080" / ":8443" / ":80" / ":443" strings keep
+// matching verbatim.
 const (
 	httpListenDev   = ":8080"
 	httpsListenDev  = ":8443"
@@ -432,7 +447,25 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		}
 		if r.TLSEnabled {
 			httpsRoutes = append(httpsRoutes, route)
-			acmeSubjects = append(acmeSubjects, allHosts...)
+			// Step I.7 hotfix (Finding #6): only PUBLICLY validatable
+			// hostnames go into the ACME policy subjects list. A
+			// .local / .lan / localhost / IP-literal subject in an
+			// ACME policy makes Caddy try HTTP-01 against Let's
+			// Encrypt, which can't reach those names — so no cert
+			// is ever acquired and the handshake fails with an
+			// "internal error" alert at Client Hello time.
+			//
+			// Private hosts fall through to the catch-all `internal`
+			// policy below and get a self-signed cert from Caddy's
+			// embedded local CA. certmagic.SubjectQualifiesForPublicCert
+			// implements the RFC 6761 / 2606 classification (IPs,
+			// loopback, .local, .home.arpa, etc.) and is the same
+			// function Caddy uses internally for its own auto-HTTPS.
+			for _, h := range allHosts {
+				if certmagic.SubjectQualifiesForPublicCert(h) {
+					acmeSubjects = append(acmeSubjects, h)
+				}
+			}
 		}
 	}
 
@@ -442,11 +475,42 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 
 	httpListen, httpsListen := listenPortsFor(opts.DevMode)
 
+	// Step I.7 hotfix (Finding #7): Caddy's automatic_https struct
+	// has three orthogonal flags with VERY different semantics
+	// (per modules/caddyhttp/autohttps.go in caddy/v2 v2.11.3):
+	//
+	//   - `disable: true`              kills EVERYTHING: cert
+	//                                  management AND auto-redirects
+	//                                  AND every other auto-HTTPS
+	//                                  side effect. This is the
+	//                                  nuclear option.
+	//   - `disable_certificates: true` kills ONLY automatic cert
+	//                                  acquisition; auto-redirects
+	//                                  remain.
+	//   - `disable_redirects: true`    kills ONLY the implicit
+	//                                  HTTP→HTTPS 301 routes Caddy
+	//                                  would add on every TLS host;
+	//                                  cert management stays active.
+	//
+	// Pre-Finding-#7 Arenet (since Step B / Step E, latent until
+	// smoke I.7 §2.3 finally exercised a real TLS handshake on
+	// :8443) emitted `disable: true` on BOTH servers, which killed
+	// cert management on `arenet_https`. The :8443 listener came
+	// up but had nothing to present at Client Hello, so every
+	// handshake failed with `tlsv1 alert internal error`.
+	//
+	// The correct intent — and what we emit now — is
+	// `disable_redirects: true` ONLY: Arenet provides its own
+	// HTTP→HTTPS 301 routes per-route via buildRedirectRoute
+	// (Step I.2), so Caddy's blanket auto-redirect would step on
+	// our explicit per-route control. Cert management stays
+	// active and consumes the tls.automation.policies we emit
+	// (public hosts → ACME, private hosts → internal CA via the
+	// catch-all policy added in Finding #6).
 	servers := map[string]httpServer{
 		"arenet_http": {
 			Listen: []string{httpListen},
 			AutomaticHTTPS: &automaticHTTPSConfig{
-				Disable:          true,
 				DisableRedirects: true,
 			},
 			Routes: httpRoutes,
@@ -458,7 +522,6 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		servers["arenet_https"] = httpServer{
 			Listen: []string{httpsListen},
 			AutomaticHTTPS: &automaticHTTPSConfig{
-				Disable:          true,
 				DisableRedirects: true,
 			},
 			TLSConnPolicies: []tlsConnectionPolicy{{}},
@@ -472,9 +535,33 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		},
 	}
 
+	// Step I.7 hotfix (Finding #8): declare our HTTP / HTTPS ports
+	// at the http app level. Without this, Caddy defaults to 80 /
+	// 443 and mis-identifies our :8080 (dev) or non-:80 prod port
+	// as a "non-HTTP-port" listener that might be TLS-capable. Its
+	// auto_https logic (caddyhttp/autohttps.go L125-131) then
+	// SKIPS the "listening-only-on-HTTP-port → Disabled=true"
+	// guard, walks the routes' host matchers, finds hosts that
+	// qualify for cert management (because every host matches our
+	// catch-all internal policy), and INJECTS TLS connection
+	// policies into the server at runtime — turning the HTTP
+	// listener into a TLS listener. Clear HTTP requests then hit
+	// Go std net/http's TLS handshake path, which writes back the
+	// canonical 400 "Client sent an HTTP request to an HTTPS
+	// server" before any of our handlers ever run.
+	//
+	// Declaring the ports explicitly here fixes Finding #8 by
+	// making the autohttps guard trigger correctly: arenet_http
+	// is recognized as listening on THE HTTP port, auto_https is
+	// disabled on it, no TLS policies are injected. arenet_https
+	// listens on THE HTTPS port and keeps its cert management.
 	full := map[string]any{
 		"apps": map[string]any{
-			"http": cfg.Apps.HTTP,
+			"http": map[string]any{
+				"http_port":  httpPortFor(opts.DevMode),
+				"https_port": httpsPortFor(opts.DevMode),
+				"servers":    cfg.Apps.HTTP.Servers,
+			},
 			"tls": map[string]any{
 				"automation": map[string]any{
 					"policies": buildTLSPolicies(acmeSubjects, opts),
@@ -489,16 +576,28 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 // buildTLSPolicies returns the tls.automation.policies array.
 //
 // Order matters for Caddy: the FIRST policy whose subjects list
-// matches a host wins. A policy without `subjects` matches anything.
-// We therefore emit the ACME policy (subject-bound) first and the
+// matches a host wins, and matching is STRICT (no automatic
+// fallback to a later policy if the matched issuer fails). We
+// therefore emit the ACME policy (subject-bound) first and the
 // internal catch-all last, so:
-//   - hosts in `acmeSubjects` get an ACME cert,
-//   - any other host (localhost, .local, IP literal, etc.) falls
-//     back to Caddy's internal CA — same behavior as pre-Step-I.1.
 //
-// If no route has TLSEnabled=true, we emit only the catch-all
-// internal policy, preserving the exact pre-Step-I.1 wire shape so
-// existing tests of that path keep passing.
+//   - hosts in `acmeSubjects` get an ACME cert,
+//   - any other host falls back to Caddy's internal CA (self-signed).
+//
+// CRITICAL contract on `acmeSubjects` (Step I.7 hotfix Finding #6):
+// the caller MUST only include hosts that are publicly validatable
+// by an ACME CA. Including a private host (localhost, .local, IP
+// literal, ...) here would route it to the ACME issuer; Let's
+// Encrypt could not validate the HTTP-01 challenge for that name
+// and Caddy would never acquire a cert — the TLS handshake then
+// fails with "internal error" at Client Hello. The peuplement site
+// in buildConfigJSON uses certmagic.SubjectQualifiesForPublicCert
+// to enforce this; do NOT bypass it on a future refactor.
+//
+// If no route has TLSEnabled=true (or all TLS hosts are private),
+// `acmeSubjects` is empty and we emit only the catch-all internal
+// policy, preserving the exact pre-Step-I.1 wire shape so existing
+// tests of that path keep passing.
 func buildTLSPolicies(acmeSubjects []string, opts buildOpts) []map[string]any {
 	internalPolicy := map[string]any{
 		"issuers": []map[string]any{
@@ -541,6 +640,27 @@ func listenPortsFor(devMode bool) (string, string) {
 	return httpListenProd, httpsListenProd
 }
 
+// httpPortFor returns the HTTP port number (int) used by this
+// mode. Same source of truth as listenPortsFor — the string
+// listen address `:8080` and the int port 8080 are mechanically
+// linked through the const block at the top of this file. Step
+// I.7 hotfix Finding #8: this int value is what Caddy expects in
+// apps.http.http_port to recognize our HTTP listener.
+func httpPortFor(devMode bool) int {
+	if devMode {
+		return httpPortDev
+	}
+	return httpPortProd
+}
+
+// httpsPortFor mirrors httpPortFor for the HTTPS side.
+func httpsPortFor(devMode bool) int {
+	if devMode {
+		return httpsPortDev
+	}
+	return httpsPortProd
+}
+
 // buildRedirectRoute returns the HTTP-side route entry that serves
 // a 301 redirect to the HTTPS scheme for the given hostname set
 // (Step I.2, extended to multi-host in I.3).
@@ -574,10 +694,20 @@ func buildRedirectRoute(hosts []string) httpRoute {
 	}
 }
 
-// buildWAFHandler returns the Caddy `coraza` handler config for the
-// given WAF mode, or nil when the WAF is disabled (mode "off" or
-// empty) so the caller skips appending anything to the handler
-// chain.
+// buildWAFHandler returns the Caddy WAF handler config (Coraza-
+// powered) for the given mode, or nil when WAF is disabled (mode
+// "off" or empty) so the caller skips appending anything to the
+// handler chain.
+//
+// The handler value emitted here is "waf", NOT "coraza": Caddy
+// resolves the `"handler"` JSON field to the LAST SEGMENT of the
+// module ID, and coraza-caddy/v2 registers itself as
+// `http.handlers.waf` (see CaddyModule() in coraza.go of the
+// upstream module — the project name is Coraza but the Caddy
+// module name is `waf`). Step I.7 hotfix corrected this from the
+// initial "coraza" guess; TestBuildConfigJSON_HandlersAllResolvable
+// is the anti-regression guard that calls caddy.GetModule on every
+// emitted handler ID.
 //
 // Mode mapping (spec L5):
 //   - "detect" → SecRuleEngine DetectionOnly: rules are evaluated
@@ -588,11 +718,31 @@ func buildRedirectRoute(hosts []string) httpRoute {
 //   - "block"  → SecRuleEngine On: matches yield a 403 short-circuit
 //     before the request reaches the upstream.
 //
-// Directives are HARDCODED here on purpose (F2 finding in the I.4
-// audit): there is no API path that lets an admin inject arbitrary
-// Coraza directives. The OWASP CRS is bundled into the binary via
-// the transitive coraza-coreruleset/v4 module and addressed by the
-// `@owasp_crs/*.conf` alias the coraza-caddy wrapper exposes.
+// Config shape — three things matter (Step I.7 hotfix Finding #4):
+//
+//  1. `load_owasp_crs: true` is REQUIRED. Without this flag,
+//     coraza-caddy does NOT register the embedded
+//     coraza-coreruleset/v4 FS as a root filesystem (see the
+//     `if m.LoadOWASPCRS` branch at coraza.go:107 in the upstream
+//     module). The `@owasp_crs/*.conf` alias then resolves to
+//     zero files at Include time and the WAF runs with no rules
+//     — exactly the silent failure Finding #4 caught at smoke.
+//
+//  2. THREE Includes are needed, not one. The canonical sequence
+//     documented in the coraza-caddy/v2 README is:
+//     - `@coraza.conf-recommended`  Coraza-level defaults
+//     (transaction lifecycle, body limits).
+//     - `@crs-setup.conf.example`   CRS variables every rule
+//     file assumes are set (paranoia level, anomaly threshold,
+//     allowed request methods, etc.).
+//     - `@owasp_crs/*.conf`         the actual rule files.
+//     Loading only `@owasp_crs/*.conf` runs rules against undefined
+//     `tx.*` variables, which silently degrades coverage.
+//
+//  3. Directives are HARDCODED here on purpose (F2 in the I.4
+//     audit): there is no API path that lets an admin inject
+//     arbitrary Coraza directives. Step K may add a per-route
+//     rule allowlist UI for false-positive tuning.
 //
 // Step I.4 ships WITHOUT an Arenet-side `audit_waf_match` event
 // (spec §5.4 mentioned a D7 enum bump 15→16; deferred to Step J —
@@ -608,8 +758,12 @@ func buildWAFHandler(mode string) map[string]any {
 		engine = "DetectionOnly"
 	}
 	return map[string]any{
-		"handler":    "coraza",
-		"directives": "Include @owasp_crs/*.conf\nSecRuleEngine " + engine,
+		"handler":        "waf",
+		"load_owasp_crs": true,
+		"directives": "Include @coraza.conf-recommended\n" +
+			"Include @crs-setup.conf.example\n" +
+			"Include @owasp_crs/*.conf\n" +
+			"SecRuleEngine " + engine,
 	}
 }
 

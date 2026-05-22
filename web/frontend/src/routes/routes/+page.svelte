@@ -110,15 +110,19 @@
 	function openCreate() {
 		formMode = 'create';
 		editingId = null;
-		// Step I.1: redirectToHttps defaults to true so opting into TLS
-		// gives the user the "right thing" (301 from :80 to :443) by
-		// default. They can flip the toggle off explicitly if they
-		// want plain HTTP to keep serving alongside HTTPS.
+		// Step I.7 hotfix (Finding #5): redirectToHttps defaults to
+		// FALSE on Create. The earlier "default true" was a
+		// well-intentioned UX shortcut (Step I.1) that turned out to
+		// silently persist redirect=true on routes the admin never
+		// enabled TLS on. The reactive $effect below enforces the
+		// same invariant in the form, but starting at false is the
+		// cleanest contract: the admin opts INTO the redirect after
+		// flipping TLS on.
 		formData = {
 			host: '',
 			upstreamUrl: '',
 			tlsEnabled: false,
-			redirectToHttps: true,
+			redirectToHttps: false,
 			aliases: [],
 			basicAuthEnabled: false,
 			basicAuthUsername: '',
@@ -178,6 +182,21 @@
 	function removeAlias(i: number) {
 		formData.aliases = formData.aliases.filter((_, idx) => idx !== i);
 	}
+
+	// Step I.7 hotfix (Finding #5): redirectToHttps is meaningless
+	// without TLS. This reactive effect keeps the form's checkbox
+	// state in sync with that invariant — flipping TLS off
+	// immediately uncheck the redirect (visually + in formData),
+	// so the user can't submit a tls:false + redirect:true payload
+	// that would silently activate the redirect later if TLS is
+	// flipped back on. The backend mirrors this in createRoute /
+	// updateRoute (defense in depth, also covers direct API
+	// clients that bypass the form).
+	$effect(() => {
+		if (!formData.tlsEnabled && formData.redirectToHttps) {
+			formData.redirectToHttps = false;
+		}
+	});
 
 	/**
 	 * Map a server validation message to a specific field, or null if the message

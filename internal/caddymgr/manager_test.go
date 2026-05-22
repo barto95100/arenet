@@ -25,6 +25,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/caddyserver/caddy/v2"
+	// Step I.7 hotfix: side-effect import of coraza-caddy is needed so
+	// caddy.GetModule("http.handlers.waf") in TestBuildConfigJSON_
+	// HandlersAllResolvable returns a hit. cmd/arenet/main.go has the
+	// same blank import at the binary level; the test binary needs its
+	// own copy because Go's test binary doesn't link cmd/arenet.
+	_ "github.com/corazawaf/coraza-caddy/v2"
+
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -504,6 +512,134 @@ func TestBuildConfigJSON_ACME_NoEmail_IssuerOmitsEmailKey(t *testing.T) {
 	}
 }
 
+// --- Step I.7 hotfix (Finding #6) — ACME private-host filtering -----------
+
+// TestBuildConfigJSON_ACME_SkipsPrivateHosts verifies the fix:
+// a TLS-enabled route on a .local hostname must NOT end up in an
+// ACME policy subjects list (Let's Encrypt cannot validate .local).
+// It should fall through to the internal catch-all policy and be
+// served by Caddy's self-signed local CA.
+//
+// Pre-fix: this test would have produced policies[0].subjects =
+// ["api.local"] routed to acme staging, the handshake would have
+// failed with "internal error" at runtime (smoke I.7 Finding #6).
+func TestBuildConfigJSON_ACME_SkipsPrivateHosts(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "r1", Host: "api.local", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	policies := readPolicies(t, raw)
+	// Only the catch-all internal policy must be emitted: api.local
+	// is private, so acmeSubjects is empty, so the ACME policy is
+	// not emitted at all.
+	if len(policies) != 1 {
+		t.Fatalf("want 1 policy (internal catch-all only), got %d:\n%v", len(policies), policies)
+	}
+	if _, hasSubjects := policies[0]["subjects"]; hasSubjects {
+		t.Errorf("the only policy should be catch-all (no subjects key), got %v", policies[0])
+	}
+	issuers, _ := policies[0]["issuers"].([]any)
+	if first, _ := issuers[0].(map[string]any); first["module"] != "internal" {
+		t.Errorf("policy[0].issuer = %v; want internal", first["module"])
+	}
+}
+
+// TestBuildConfigJSON_ACME_MixedPublicPrivate exercises the
+// partitioning logic on a route set that mixes public and private
+// hosts: only the public ones land in the ACME policy, the private
+// ones fall through to the catch-all. Critical because the per-route
+// AllHosts() loop walks both primary + aliases — a mistake on the
+// per-host filter would leak a .local into ACME subjects.
+func TestBuildConfigJSON_ACME_MixedPublicPrivate(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "r1", Host: "api.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+		{ID: "r2", Host: "api.local", UpstreamURL: "http://127.0.0.1:9001", TLSEnabled: true},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	policies := readPolicies(t, raw)
+	if len(policies) != 2 {
+		t.Fatalf("want 2 policies (ACME for public + internal catch-all), got %d:\n%v", len(policies), policies)
+	}
+	// policies[0] = ACME with ONLY the public host.
+	subjects, _ := policies[0]["subjects"].([]any)
+	if len(subjects) != 1 || subjects[0] != "api.example.com" {
+		t.Errorf("policies[0].subjects = %v; want [api.example.com] (api.local must NOT leak into ACME)", subjects)
+	}
+	// policies[1] = catch-all internal, no subjects → handles api.local.
+	if _, hasSubjects := policies[1]["subjects"]; hasSubjects {
+		t.Errorf("policies[1] must be catch-all, got %v", policies[1])
+	}
+}
+
+// TestBuildConfigJSON_ACME_IPLiteralSkipped — IP literals are
+// another class of subjects Let's Encrypt does not issue for. The
+// certmagic classifier rejects them; we just check the wire-shape
+// outcome.
+func TestBuildConfigJSON_ACME_IPLiteralSkipped(t *testing.T) {
+	routes := []storage.Route{
+		// 10.0.0.1 isn't a strictly valid HTTP "host" per Arenet's
+		// validateHost (the regex rejects pure-digit labels in
+		// some shapes), but storage.Route.validate doesn't run the
+		// hostname regex — and routes can be seeded directly from
+		// tests as we do here. The unit under test is the
+		// public-cert filter; it must skip IP literals regardless.
+		{ID: "r1", Host: "10.0.0.1", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	policies := readPolicies(t, raw)
+	if len(policies) != 1 {
+		t.Fatalf("want 1 policy (internal catch-all only), got %d:\n%v", len(policies), policies)
+	}
+	if _, hasSubjects := policies[0]["subjects"]; hasSubjects {
+		t.Errorf("IP literal must fall through to the catch-all; got policy[0]=%v", policies[0])
+	}
+}
+
+// TestBuildConfigJSON_ACME_AliasMixedPublicPrivate — a route's
+// primary may be public while one of its aliases is private (or
+// the inverse). The per-host filter must split them: only the
+// public ones reach ACME, the private ones fall through to the
+// internal catch-all. Anti-regression for any future refactor
+// that switches back to a per-route (instead of per-host) decision.
+func TestBuildConfigJSON_ACME_AliasMixedPublicPrivate(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "api.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			Aliases:    []string{"api.local", "alt.example.com"},
+			TLSEnabled: true,
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	policies := readPolicies(t, raw)
+	if len(policies) != 2 {
+		t.Fatalf("want 2 policies (ACME + catch-all), got %d:\n%v", len(policies), policies)
+	}
+	subjectsAny, _ := policies[0]["subjects"].([]any)
+	got := make([]string, 0, len(subjectsAny))
+	for _, s := range subjectsAny {
+		got = append(got, s.(string))
+	}
+	// Order is the iteration order of AllHosts(): primary, then
+	// aliases in the slice's order. The private alias is filtered
+	// out; the rest keeps that order.
+	want := []string{"api.example.com", "alt.example.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("acmeSubjects = %v; want %v (api.local must be filtered out)", got, want)
+	}
+}
+
 func TestBuildConfigJSON_NoTLS_InternalOnly(t *testing.T) {
 	// No route has TLSEnabled=true → policies must be ONLY the
 	// internal catch-all (preserves pre-Step-I.1 wire shape).
@@ -697,20 +833,41 @@ func TestBuildConfigJSON_WAF_DetectMode(t *testing.T) {
 	}
 	httpRoutes := httpRoutesFromConfig(t, raw)
 	handlers, _ := httpRoutes[0]["handle"].([]any)
-	// Chain: [metrics, coraza, reverse_proxy]
+	// Chain: [metrics, waf, reverse_proxy] — the WAF handler value
+	// is "waf" (last segment of http.handlers.waf), NOT "coraza";
+	// the upstream coraza-caddy module registers itself under the
+	// generic Caddy name "waf". Step I.7 hotfix.
 	if len(handlers) != 3 {
-		t.Fatalf("handler chain length = %d; want 3 (metrics + coraza + proxy)", len(handlers))
+		t.Fatalf("handler chain length = %d; want 3 (metrics + waf + proxy)", len(handlers))
 	}
 	h1, _ := handlers[1].(map[string]any)
-	if h1["handler"] != "coraza" {
-		t.Fatalf("handler[1] = %v; want coraza", h1["handler"])
+	if h1["handler"] != "waf" {
+		t.Fatalf("handler[1] = %v; want waf (Caddy module id http.handlers.waf)", h1["handler"])
+	}
+	// Finding #4 hotfix: the `load_owasp_crs` flag MUST be present
+	// and true, otherwise coraza-caddy does not register the
+	// embedded coreruleset.FS and the @owasp_crs/* alias resolves
+	// to zero files at Include time.
+	if v, ok := h1["load_owasp_crs"].(bool); !ok || !v {
+		t.Errorf("load_owasp_crs missing or false: %v (WAF would run with zero rules)", h1["load_owasp_crs"])
 	}
 	dir, _ := h1["directives"].(string)
 	if !strings.Contains(dir, "SecRuleEngine DetectionOnly") {
 		t.Errorf("directives missing DetectionOnly toggle: %q", dir)
 	}
-	if !strings.Contains(dir, "@owasp_crs") {
-		t.Errorf("directives missing OWASP CRS include: %q", dir)
+	// Finding #4 hotfix: the canonical three-Include sequence is
+	// required for CRS to function (Coraza defaults +
+	// CRS-setup variables + the rule files themselves). Loading
+	// only the third one runs rules against undefined tx.*
+	// variables.
+	for _, want := range []string{
+		"Include @coraza.conf-recommended",
+		"Include @crs-setup.conf.example",
+		"Include @owasp_crs/*.conf",
+	} {
+		if !strings.Contains(dir, want) {
+			t.Errorf("directives missing %q: %q", want, dir)
+		}
 	}
 }
 
@@ -725,6 +882,12 @@ func TestBuildConfigJSON_WAF_BlockMode(t *testing.T) {
 	httpRoutes := httpRoutesFromConfig(t, raw)
 	handlers, _ := httpRoutes[0]["handle"].([]any)
 	h1, _ := handlers[1].(map[string]any)
+	if h1["handler"] != "waf" {
+		t.Fatalf("handler[1] = %v; want waf", h1["handler"])
+	}
+	if v, ok := h1["load_owasp_crs"].(bool); !ok || !v {
+		t.Errorf("load_owasp_crs missing or false: %v", h1["load_owasp_crs"])
+	}
 	dir, _ := h1["directives"].(string)
 	if !strings.Contains(dir, "SecRuleEngine On") {
 		t.Errorf("directives missing block-mode toggle: %q", dir)
@@ -734,6 +897,15 @@ func TestBuildConfigJSON_WAF_BlockMode(t *testing.T) {
 	// silently.
 	if strings.Contains(dir, "DetectionOnly") {
 		t.Errorf("block mode emitted DetectionOnly engine: %q", dir)
+	}
+	for _, want := range []string{
+		"Include @coraza.conf-recommended",
+		"Include @crs-setup.conf.example",
+		"Include @owasp_crs/*.conf",
+	} {
+		if !strings.Contains(dir, want) {
+			t.Errorf("directives missing %q: %q", want, dir)
+		}
 	}
 }
 
@@ -748,12 +920,194 @@ func TestBuildConfigJSON_WAF_OffSkipsHandler(t *testing.T) {
 	httpRoutes := httpRoutesFromConfig(t, raw)
 	handlers, _ := httpRoutes[0]["handle"].([]any)
 	if len(handlers) != 2 {
-		t.Fatalf("handler chain length = %d; want 2 (no coraza handler when mode=off)", len(handlers))
+		t.Fatalf("handler chain length = %d; want 2 (no waf handler when mode=off)", len(handlers))
 	}
 	for _, hh := range handlers {
 		m, _ := hh.(map[string]any)
-		if m["handler"] == "coraza" {
-			t.Errorf("coraza handler present despite WAFMode=off: %v", m)
+		if m["handler"] == "waf" {
+			t.Errorf("waf handler present despite WAFMode=off: %v", m)
+		}
+	}
+}
+
+// --- Step I.7 hotfix — caddy.Validate e2e -------------------------------
+
+// TestBuildConfigJSON_LoadsCleanly is the deeper anti-regression guard
+// the I.4 audit + commit missed twice: it builds the Caddy config for
+// a fixture route engaging every Step I feature and runs the real
+// caddy.Validate on the emitted JSON. caddy.Validate provisions every
+// module (including the coraza WAF) without starting the HTTP servers,
+// so configuration mistakes that would have crashed caddy.Load at
+// runtime are caught at unit-test time.
+//
+// This test would have caught:
+//   - Finding #2 (handler ID "coraza" vs the actual "waf" registration)
+//     — Provision returns "unknown module: http.handlers.coraza" as an
+//     error and caddy.Validate fails.
+//   - Finding #4 (zero CRS rules loaded) when load_owasp_crs is missing
+//     — coraza Provision emits "empty glob result" Warn logs; even if
+//     Validate itself returns nil (a missing-rule config is technically
+//     valid), running the test verifies the rest of the chain stays
+//     loadable AROUND the fix, ie. it locks the contract that the
+//     emitted JSON is at least Caddy-parseable / provisionable.
+//
+// Capturing the Warn logs to fail the test when "empty glob result"
+// fires would close the Finding-#4-style hole more strictly, but
+// swapping Caddy's global logger requires modifying caddy package
+// internals that aren't exposed. The shape assertions in
+// TestBuildConfigJSON_WAF_DetectMode/_BlockMode already lock the
+// presence of load_owasp_crs:true + the three Includes, so the
+// missing-rule path is structurally prevented; this Validate test
+// is the runtime safety net on top.
+func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
+	// Fixture route engaging every Step I feature so the emitted
+	// chain contains [metrics, authentication, waf, headers,
+	// reverse_proxy] + the redirect entry on the HTTP listener.
+	// Use bcrypt-format-shaped password hash to satisfy Caddy's
+	// basicauth Provision validation; coraza-caddy will Provision
+	// against the real bundled OWASP CRS files.
+	routes := []storage.Route{
+		{
+			ID:                    "r-all",
+			Host:                  "everything.example.com",
+			UpstreamURL:           "http://127.0.0.1:9000",
+			TLSEnabled:            true,
+			RedirectToHTTPS:       true,
+			Aliases:               []string{"alt.example.com"},
+			WAFMode:               "block",
+			BasicAuthEnabled:      true,
+			BasicAuthUsername:     "admin",
+			BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$U0FMVFNBTFRTQUxUU0FMVA$S0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0U",
+			RequestHeaders:        map[string]string{"X-Real-Foo": "bar"},
+			ResponseHeaders:       map[string]string{"X-Custom": "x"},
+		},
+	}
+	// The arenet_routemetrics Caddy module's Provision asserts
+	// metrics.GlobalRegistry() is non-nil (see internal/metrics).
+	// cmd/arenet/main.go installs the registry at boot via
+	// metrics.SetRegistry; the test harness must do the same before
+	// caddy.Validate provisions the chain. Without this, Validate
+	// would fail with "metrics: registry not installed", which has
+	// nothing to do with the WAF config we're trying to exercise.
+	metrics.SetRegistry(metrics.NewRegistry())
+
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	// Unmarshal to *caddy.Config, then run caddy.Validate which
+	// Provisions every module (incl. coraza WAF rule loading).
+	// Any unknown-module error, malformed directives, or
+	// provisioning panic surfaces here as a non-nil err.
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, raw)
+	}
+
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate failed on emitted config: %v\nThis catches Finding #2-class bugs "+
+			"(unknown handler ID) and any future module-ID drift. The config that failed:\n%s", err, raw)
+	}
+}
+
+// --- Step I.7 hotfix — handler-ID resolvability anti-regression ----------
+
+// TestBuildConfigJSON_HandlersAllResolvable is the deeper guard that the
+// I.4 audit + commit missed: it builds the Caddy config for a fixture
+// route that turns ON every Step I feature at once, walks every handler
+// emitted in the chain, and verifies that the corresponding Caddy
+// module is actually registered under `http.handlers.<value>`.
+//
+// The bug this catches: I.4 originally emitted "handler": "coraza"
+// which Caddy resolved as `http.handlers.coraza` — and silently
+// blew up at caddy.Load time with "unknown module" because the
+// upstream coraza-caddy module registers itself as
+// `http.handlers.waf`. Unit tests asserting on the JSON shape
+// happily passed because they checked the (wrong) value we emitted
+// against itself. The runtime check below would have caught the
+// mismatch the moment the value was first set.
+//
+// Step E's TestBuildConfigJSON_HandlerJSONName guards the metrics
+// handler the same way (spec §3.5); this test extends the same
+// principle to every other handler we emit.
+func TestBuildConfigJSON_HandlersAllResolvable(t *testing.T) {
+	// Fixture route engaging every Step I feature so the emitted
+	// chain contains [metrics, authentication, waf, headers, proxy]
+	// + the redirect entry on the HTTP listener.
+	routes := []storage.Route{
+		{
+			ID:                    "r-all",
+			Host:                  "everything.example.com",
+			UpstreamURL:           "http://127.0.0.1:9000",
+			TLSEnabled:            true,
+			RedirectToHTTPS:       true,
+			Aliases:               []string{"alt.example.com"},
+			WAFMode:               "block",
+			BasicAuthEnabled:      true,
+			BasicAuthUsername:     "admin",
+			BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$SALT$KEY",
+			RequestHeaders:        map[string]string{"X-Real-Foo": "bar"},
+			ResponseHeaders:       map[string]string{"X-Custom": "x"},
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	servers, _ := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+
+	// Walk every server, every route, every handler entry; check
+	// that caddy.GetModule("http.handlers.<value>") returns a known
+	// module. A miss here means the value we emit doesn't match any
+	// registered Caddy module — i.e., caddy.Load would crash with
+	// "unknown module" at runtime.
+	seen := make(map[string]struct{})
+	for name, srvAny := range servers {
+		srv, _ := srvAny.(map[string]any)
+		routes, _ := srv["routes"].([]any)
+		for ri, rt := range routes {
+			route, _ := rt.(map[string]any)
+			handlers, _ := route["handle"].([]any)
+			for hi, hh := range handlers {
+				m, _ := hh.(map[string]any)
+				value, _ := m["handler"].(string)
+				if value == "" {
+					t.Errorf("server %s, route %d, handler %d: empty handler id (%v)", name, ri, hi, m)
+					continue
+				}
+				moduleID := "http.handlers." + value
+				if _, dup := seen[moduleID]; dup {
+					continue
+				}
+				seen[moduleID] = struct{}{}
+				if _, err := caddy.GetModule(moduleID); err != nil {
+					t.Errorf("handler %q resolves to module %q but caddy.GetModule failed: %v (server %s, route %d, handler %d)",
+						value, moduleID, err, name, ri, hi)
+				}
+			}
+		}
+	}
+
+	// Belt-and-braces: confirm we actually exercised the modules
+	// we care about (the test would silently pass if buildConfigJSON
+	// stopped emitting one of them).
+	wantModules := []string{
+		"http.handlers.arenet_routemetrics",
+		"http.handlers.authentication",
+		"http.handlers.waf",
+		"http.handlers.headers",
+		"http.handlers.reverse_proxy",
+		"http.handlers.static_response",
+	}
+	for _, m := range wantModules {
+		if _, ok := seen[m]; !ok {
+			t.Errorf("fixture did not exercise module %q (seen=%v)", m, seen)
 		}
 	}
 }
@@ -976,6 +1330,155 @@ func TestBuildConfigJSON_Redirect_NoTLSIgnoresRedirectFlag(t *testing.T) {
 	servers, _ := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
 	if _, has := servers["arenet_https"]; has {
 		t.Errorf("arenet_https should not be emitted when no route has TLSEnabled=true")
+	}
+}
+
+// --- Step I.7 hotfix (Finding #8) — http_port / https_port declared -----
+
+// TestBuildConfigJSON_HTTPPort_DeclaredInAppConfig is the regression
+// guard for Finding #8: pre-fix the emitted JSON did not declare
+// apps.http.http_port / https_port at the app level. Caddy defaults
+// to 80 / 443, so it considered our `:8080` listener a non-HTTP
+// port and applied auto_https to arenet_http — silently injecting
+// TLS connection policies at runtime, turning :8080 into a TLS
+// listener. Clear HTTP requests then hit Go std's TLS handshake
+// and got the canonical 400 "Client sent an HTTP request to an
+// HTTPS server".
+//
+// Asserts dev mode → 8080/8443, prod mode → 80/443, and crucially
+// that the values are emitted as JSON NUMBERS (int), not strings.
+// A string value would silently fail Caddy's int parser at config
+// load and reproduce the original Finding #8 bug.
+func TestBuildConfigJSON_HTTPPort_DeclaredInAppConfig(t *testing.T) {
+	cases := []struct {
+		name      string
+		dev       bool
+		wantHTTP  float64 // JSON numbers decode as float64
+		wantHTTPS float64
+	}{
+		{name: "dev", dev: true, wantHTTP: 8080, wantHTTPS: 8443},
+		{name: "prod", dev: false, wantHTTP: 80, wantHTTPS: 443},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			routes := []storage.Route{
+				{ID: "r1", Host: "x.example.com", UpstreamURL: "http://127.0.0.1:9000"},
+			}
+			raw, err := buildConfigJSON(routes, buildOpts{DevMode: tc.dev})
+			if err != nil {
+				t.Fatalf("buildConfigJSON: %v", err)
+			}
+			var top map[string]any
+			if err := json.Unmarshal(raw, &top); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			httpApp, _ := top["apps"].(map[string]any)["http"].(map[string]any)
+
+			// http_port MUST be present and a JSON number.
+			gotHTTP, ok := httpApp["http_port"].(float64)
+			if !ok {
+				t.Fatalf("apps.http.http_port missing or not a JSON number; got %T: %v\n%s", httpApp["http_port"], httpApp["http_port"], raw)
+			}
+			if gotHTTP != tc.wantHTTP {
+				t.Errorf("apps.http.http_port = %v; want %v", gotHTTP, tc.wantHTTP)
+			}
+
+			// https_port MUST be present and a JSON number.
+			gotHTTPS, ok := httpApp["https_port"].(float64)
+			if !ok {
+				t.Fatalf("apps.http.https_port missing or not a JSON number; got %T: %v", httpApp["https_port"], httpApp["https_port"])
+			}
+			if gotHTTPS != tc.wantHTTPS {
+				t.Errorf("apps.http.https_port = %v; want %v", gotHTTPS, tc.wantHTTPS)
+			}
+
+			// String values would silently break Caddy's int parser
+			// → reproduce Finding #8. Explicit double-check.
+			if _, isStr := httpApp["http_port"].(string); isStr {
+				t.Errorf("apps.http.http_port emitted as string — Caddy needs int (Finding #8 regression)")
+			}
+			if _, isStr := httpApp["https_port"].(string); isStr {
+				t.Errorf("apps.http.https_port emitted as string — Caddy needs int (Finding #8 regression)")
+			}
+		})
+	}
+}
+
+// --- Step I.7 hotfix (Finding #7) — automatic_https flags --------------
+
+// TestBuildConfigJSON_AutomaticHTTPS_KeepsCertManagementOn is the
+// regression guard for Finding #7: pre-fix the builder emitted
+// `automatic_https.disable: true` on both servers, which kills the
+// AUTO CERT MANAGEMENT in addition to the redirects. The :8443
+// listener was up but Caddy had no certs to present at Client
+// Hello, so every TLS handshake failed with "internal error".
+//
+// The fix emits `disable_redirects: true` ALONE — keeping Caddy's
+// automatic cert acquisition active (via the tls.automation.policies
+// emitted separately), while preventing Caddy from synthesizing
+// blanket HTTP→HTTPS 301 routes that would step on the per-route
+// RedirectToHTTPS flag Arenet honors via buildRedirectRoute (I.2).
+//
+// This test asserts the three orthogonal flags
+// (`disable`, `disable_certificates`, `disable_redirects`) on every
+// emitted server. If any of them ever drifts back to `disable:true`,
+// the test fails immediately at unit-test time instead of waiting
+// for a smoke session to discover the broken TLS handshake.
+func TestBuildConfigJSON_AutomaticHTTPS_KeepsCertManagementOn(t *testing.T) {
+	// Need at least one TLS-enabled route so the arenet_https
+	// server is emitted alongside arenet_http; otherwise the test
+	// only covers the HTTP side.
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "tls.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			TLSEnabled: true,
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var top map[string]any
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	servers, _ := top["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+
+	for name, srvAny := range servers {
+		srv, _ := srvAny.(map[string]any)
+		ah, _ := srv["automatic_https"].(map[string]any)
+		if ah == nil {
+			t.Errorf("server %q: automatic_https block missing", name)
+			continue
+		}
+
+		// `disable` MUST be false (or absent). Setting it true is
+		// the Finding #7 bug — it would kill cert management
+		// alongside the redirects.
+		if v, ok := ah["disable"]; ok {
+			if b, _ := v.(bool); b {
+				t.Errorf("server %q: automatic_https.disable = true; this is the Finding #7 bug (would kill cert management — TLS handshake failures at runtime)", name)
+			}
+		}
+
+		// `disable_certificates` MUST be false (or absent). Setting
+		// it true would also kill cert management but spare the
+		// redirect side — still wrong for Arenet's intent.
+		if v, ok := ah["disable_certificates"]; ok {
+			if b, _ := v.(bool); b {
+				t.Errorf("server %q: automatic_https.disable_certificates = true; cert management is required", name)
+			}
+		}
+
+		// `disable_redirects` MUST be true. This is what we want:
+		// Arenet emits per-route 301s via buildRedirectRoute (I.2);
+		// letting Caddy add its blanket auto-redirect on top would
+		// double-redirect or step on routes where the user
+		// explicitly disabled RedirectToHTTPS.
+		dr, _ := ah["disable_redirects"].(bool)
+		if !dr {
+			t.Errorf("server %q: automatic_https.disable_redirects = %v; want true (Arenet handles redirects per-route)", name, ah["disable_redirects"])
+		}
 	}
 }
 
