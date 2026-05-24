@@ -100,6 +100,14 @@ emission needs a custom Coraza module wrapper.
 Scope: the module wrapper enables both the audit event and the
 response header. Estimated ~3h (per smoke doc §5).
 
+**Update 2026-05-24** — the ~3h estimate was wrong. Empirical recon
+during the Step J spec showed `coraza-caddy v2.5.0` (current, byte-
+identical to upstream `main` HEAD) exposes no hook to Coraza's
+matched rules. The only viable path is a custom Caddy module
+consuming `coraza/v3` directly (~600 lines, security-critical). Was
+scoped into Step J as J.5, then deferred — see §5 "Out of Step J
+scope" and `2026-05-22-step-j-multi-upstream-lb.md` §1.4.
+
 ---
 
 ## 3. Acknowledged debt (from Step I smoke §5)
@@ -162,6 +170,25 @@ Priorities set at the close of Step I, before the Step J spec is written.
 
 ### Out of Step J scope
 
+- **WAF observability completion** — `audit_waf_match` audit event +
+  `X-WAF-Match` response header (AC #4 PARTIAL from Step I; was the
+  Step J J.5 sub-task, now deferred). `coraza-caddy v2.5.0` — current
+  pinned, byte-identical to upstream `main` HEAD — exposes no hook to
+  Coraza's matched rules. Only viable path is a custom Caddy module
+  consuming `coraza/v3` directly (~600 lines, security-critical: a bug
+  in the match handling silently weakens the WAF). Ownership
+  disproportionate to an observability surface. Revisit if
+  `coraza-caddy` gains a match hook, or as a dedicated WAF step. See
+  spec `2026-05-22-step-j-multi-upstream-lb.md` §1.4.
+- **Topology code-quality debt (out of J.6 scope).** Extract a
+  `<Sparkline>` atomic component out of `TopologyDetailPanel` (the SVG
+  path is built manually today, 30+ lines); migrate the ad-hoc
+  hover-timeout tooltip in `TopologyNode` to the existing `<Tooltip>`
+  atomic; add Vitest coverage for the visual components (Node, Svg,
+  DetailPanel currently have zero component tests, while the store has
+  412 test-lines and the WS client 361). J.6 ships the header
+  migration + the auto-fit only — these structural cleanups are
+  recorded here so they are not forgotten.
 - **Finding #9 — perimeter-mode WAF (waf-before-auth).** Low-priority;
   the current order works. Revisit near project end.
 - **Multi-user Basic Auth per route.** Refine near project end.
