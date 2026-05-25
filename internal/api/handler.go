@@ -117,11 +117,36 @@ func NewHandler(
 	}
 }
 
+// upstreamReq is the per-element wire shape inside the routeRequest
+// upstreams pool. Mirrors storage.Upstream verbatim (URL + Weight)
+// but lives in the api package so the wire layer is decoupled from
+// the storage struct — pattern Step I established for routeRequest
+// vs storage.Route. createRoute / updateRoute map upstreamReq slices
+// to storage.Upstream slices before validation; the API materialises
+// Weight=0 → 1 in that mapping (§5.1, §1.3 decision 1).
+type upstreamReq struct {
+	URL    string `json:"url"`
+	Weight int    `json:"weight"`
+}
+
 // routeRequest is the wire shape accepted by POST and PUT /routes. JSON tags
 // are camelCase per the spec.
 type routeRequest struct {
-	Host            string   `json:"host"`
-	UpstreamURL     string   `json:"upstreamUrl"`
+	Host string `json:"host"`
+	// Step J.1 — pool of backends. Replaces the pre-J.1 single
+	// UpstreamURL string. At least one element; per-element URL is
+	// validated by validateUpstreamURL (the existing Step I logic,
+	// applied per element). Per-element Weight defaults to 1 if
+	// omitted/zero — materialised by the API before the storage
+	// write so the storage validate() rule weight >= 1 is satisfied.
+	Upstreams []upstreamReq `json:"upstreams"`
+	// Step J.1 — LB selection policy. One of the six storage
+	// .LBPolicy* values. Empty on POST is normalised to
+	// "round_robin" (the default per §5.1, materialised before
+	// validation so the storage row carries the explicit value).
+	// Empty on PUT means "preserve the previously stored value",
+	// same UX as WAFMode below.
+	LBPolicy        string   `json:"lbPolicy"`
 	TLSEnabled      bool     `json:"tlsEnabled"`
 	RedirectToHTTPS bool     `json:"redirectToHttps"`
 	Aliases         []string `json:"aliases"`
@@ -148,12 +173,24 @@ type routeRequest struct {
 	WAFMode string `json:"wafMode"`
 }
 
+// upstreamResp is the per-element wire shape inside the routeResponse
+// upstreams pool. Symmetric to upstreamReq — URL + Weight.
+type upstreamResp struct {
+	URL    string `json:"url"`
+	Weight int    `json:"weight"`
+}
+
 // routeResponse is the wire shape returned by GET / POST / PUT /routes. The
 // JSON tags must match routeRequest's camelCase scheme.
 type routeResponse struct {
-	ID              string `json:"id"`
-	Host            string `json:"host"`
-	UpstreamURL     string `json:"upstreamUrl"`
+	ID   string `json:"id"`
+	Host string `json:"host"`
+	// Step J.1 — pool surfaced on the wire. Always at least one
+	// element on a stored route (storage.validate guarantees it).
+	Upstreams []upstreamResp `json:"upstreams"`
+	// Step J.1 — LB selection policy. Always a non-empty enum value
+	// on a stored route (storage.validate guarantees it).
+	LBPolicy        string `json:"lbPolicy"`
 	TLSEnabled      bool   `json:"tlsEnabled"`
 	RedirectToHTTPS bool   `json:"redirectToHttps"`
 	// Aliases (Step I.3) is normalized to an empty slice (never nil)
@@ -197,10 +234,18 @@ func toResponse(r storage.Route) routeResponse {
 	if respHeaders == nil {
 		respHeaders = map[string]string{}
 	}
+	// Step J.1 — surface the upstream pool 1:1 from storage.
+	// storage.validate() guarantees at least one element, so the
+	// returned slice is always non-empty for a stored route.
+	upstreamsResp := make([]upstreamResp, len(r.Upstreams))
+	for i, u := range r.Upstreams {
+		upstreamsResp[i] = upstreamResp{URL: u.URL, Weight: u.Weight}
+	}
 	return routeResponse{
 		ID:                   r.ID,
 		Host:                 r.Host,
-		UpstreamURL:          r.UpstreamURL,
+		Upstreams:            upstreamsResp,
+		LBPolicy:             r.LBPolicy,
 		TLSEnabled:           r.TLSEnabled,
 		RedirectToHTTPS:      r.RedirectToHTTPS,
 		Aliases:              aliases,

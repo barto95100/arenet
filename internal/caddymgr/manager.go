@@ -336,9 +336,18 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	acmeSubjects := make([]string, 0, len(routes))
 
 	for _, r := range routes {
-		dial, err := upstreamDial(r.UpstreamURL)
-		if err != nil {
-			return nil, fmt.Errorf("route %s (%s): %w", r.ID, r.Host, err)
+		// Step J.1: build the upstream pool by dialing each Upstream
+		// in declaration order. A one-element pool collapses to the
+		// same shape Step I emitted, plus a load_balancing block
+		// (selection moot but valid — see §3.2). Reject the whole
+		// route if any single upstream URL is malformed.
+		upstreamsJSON := make([]map[string]any, 0, len(r.Upstreams))
+		for i, u := range r.Upstreams {
+			dial, err := upstreamDial(u.URL)
+			if err != nil {
+				return nil, fmt.Errorf("route %s (%s) upstreams[%d]: %w", r.ID, r.Host, i, err)
+			}
+			upstreamsJSON = append(upstreamsJSON, map[string]any{"dial": dial})
 		}
 
 		// Handler chain order (spec §11.5) — the metrics handler MUST
@@ -355,10 +364,25 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			"handler":  metrics.HandlerName,
 			"route_id": r.ID,
 		}
+		// Step J.1: emit load_balancing.selection_policy unconditionally
+		// when at least one upstream is present. §3.2 explicitly notes
+		// the policy is harmless on a one-element pool ("selection is
+		// moot but valid"). For weighted_round_robin we also emit the
+		// `weights` array in pool order; other policies need no extra
+		// fields.
+		selectionPolicy := map[string]any{"policy": r.LBPolicy}
+		if r.LBPolicy == storage.LBPolicyWeightedRoundRobin {
+			weights := make([]int, 0, len(r.Upstreams))
+			for _, u := range r.Upstreams {
+				weights = append(weights, u.Weight)
+			}
+			selectionPolicy["weights"] = weights
+		}
 		proxyHandler := map[string]any{
-			"handler": "reverse_proxy",
-			"upstreams": []map[string]any{
-				{"dial": dial},
+			"handler":   "reverse_proxy",
+			"upstreams": upstreamsJSON,
+			"load_balancing": map[string]any{
+				"selection_policy": selectionPolicy,
 			},
 		}
 
@@ -841,8 +865,9 @@ func (m *CaddyManager) HasHTTPSServer(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// upstreamDial converts an UpstreamURL ("http://127.0.0.1:9999") into the
+// upstreamDial converts an Upstream URL ("http://127.0.0.1:9999") into the
 // host:port form Caddy's reverse_proxy expects in the "dial" field.
+// Called once per Upstream in the pool by buildConfigJSON.
 func upstreamDial(raw string) (string, error) {
 	if raw == "" {
 		return "", errors.New("upstream_url is empty")

@@ -19,10 +19,13 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/barto95100/arenet/internal/storage"
 )
 
 // hostnameRE is a pragmatic RFC 1123 hostname check: dot-separated labels,
@@ -66,4 +69,42 @@ func validateUpstreamURL(s string) error {
 		return errors.New("upstreamUrl must include a host")
 	}
 	return nil
+}
+
+// validateUpstreamPool checks the Step J.1 upstream pool: at least
+// one entry, each entry's URL parsable per validateUpstreamURL.
+// Per-element Weight is NOT checked here — the API materialises
+// Weight=0 → 1 before this function runs, so a weight that reaches
+// the validator is, by construction, the API's chosen default or an
+// explicit user value (which must be >= 1, asserted below).
+//
+// The friendly per-element error wraps validateUpstreamURL's
+// existing message with the row index so operators can locate the
+// offending pool element in a multi-upstream payload.
+func validateUpstreamPool(pool []upstreamReq) error {
+	if len(pool) == 0 {
+		return errors.New("upstreams must contain at least one entry")
+	}
+	for i, u := range pool {
+		if err := validateUpstreamURL(u.URL); err != nil {
+			return fmt.Errorf("upstreams[%d]: %s", i, err.Error())
+		}
+		if u.Weight < 1 {
+			return fmt.Errorf("upstreams[%d].weight must be >= 1", i)
+		}
+	}
+	return nil
+}
+
+// validateLBPolicy checks that s is one of the six storage.LBPolicy*
+// values. Empty string is rejected — the API is expected to have
+// materialised the default ("round_robin") before this function
+// runs, so an empty value here is a programming error.
+func validateLBPolicy(s string) error {
+	for _, p := range storage.LBPolicies {
+		if s == p {
+			return nil
+		}
+	}
+	return fmt.Errorf("lbPolicy %q is not a valid policy", s)
 }

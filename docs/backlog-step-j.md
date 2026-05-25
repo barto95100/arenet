@@ -189,6 +189,29 @@ Priorities set at the close of Step I, before the Step J spec is written.
   412 test-lines and the WS client 361). J.6 ships the header
   migration + the auto-fit only — these structural cleanups are
   recorded here so they are not forgotten.
+- **Migration pattern debt: full-Route round-trip is fragile.** Step
+  I.4's original `migrateWAFEnabledToWAFMode` did `Unmarshal → Route
+  → mutate → Marshal`, which silently drops every JSON key absent
+  from the current Route struct. The bug stayed latent until Step
+  J.1 removed `Route.UpstreamURL`: I.4 then started eating
+  `upstream_url` on every pre-J.1 row before J.1's migration could
+  see it. Caught by `TestMigrate_ChainedOrder_WAFThenUpstream`
+  during J.1; fixed by rewriting I.4 as a `map[string]any`
+  passthrough (set new key, delete old key, re-marshal — every other
+  key passes verbatim). The Step J.1 migration itself (`migrate
+  UpstreamURLToPool`) is **kept** in the full-Route round-trip
+  pattern: it is correct under §6.1 because no Step J commit removes
+  a field from Route — only additions — so the round-trip injects
+  zero values for new fields and drops nothing. **Rule for future
+  migrations:** any step that REMOVES a field from Route (or any
+  storage struct) MUST write its migration in the passthrough-map
+  pattern; full-Route round-trip is only safe for steps that
+  exclusively add fields. **Caveat — float64 type assertion:**
+  `map[string]any` decodes every JSON number as `float64`, so a
+  passthrough migration that reads a numeric field (e.g. a future
+  step touching `weight`, `expect_status`, `passes`, `fails`) must
+  type-assert `.(float64)`, not `.(int)` — the latter panics. I.4
+  is safe because it only reads `string` and `bool`.
 - **Finding #9 — perimeter-mode WAF (waf-before-auth).** Low-priority;
   the current order works. Revisit near project end.
 - **Multi-user Basic Auth per route.** Refine near project end.

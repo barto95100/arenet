@@ -2,10 +2,44 @@
 // Copyright (C) 2026  Ludovic Ramos
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
+/**
+ * Step J.1: one backend in a Route's upstream pool. Replaces the
+ * pre-J.1 single upstreamUrl string. Weight defaults to 1 and is
+ * only consulted by the weighted_round_robin LB policy; other
+ * policies ignore it.
+ */
+export interface Upstream {
+	url: string;
+	weight: number;
+}
+
+/**
+ * Step J.1: load-balancing selection policy enum. Must match the
+ * six storage.LBPolicy* constants on the backend exactly; drift
+ * would be caught by the route create / update returning a 400.
+ */
+export type LBPolicy =
+	| 'round_robin'
+	| 'weighted_round_robin'
+	| 'least_conn'
+	| 'ip_hash'
+	| 'random'
+	| 'first';
+
 export interface Route {
 	id: string;
 	host: string;
-	upstreamUrl: string;
+	/**
+	 * Step J.1: pool of backends. Always non-empty (the backend's
+	 * storage.validate() guarantees it). A migrated pre-J.1 route
+	 * carries a one-element pool with the legacy URL at index 0.
+	 */
+	upstreams: Upstream[];
+	/**
+	 * Step J.1: LB selection policy. Always one of the six LBPolicy
+	 * enum values on a stored route.
+	 */
+	lbPolicy: LBPolicy;
 	tlsEnabled: boolean;
 	/**
 	 * Step I.1 (wired by I.2): when true and tlsEnabled is also true,
@@ -53,7 +87,22 @@ export interface Route {
 
 export interface RouteRequest {
 	host: string;
-	upstreamUrl: string;
+	/**
+	 * Step J.1: pool of backends. The J.1→J.3 transitional UI in
+	 * routes/+page.svelte sends a one-element pool built from the
+	 * single Upstream URL input; J.3 will replace that with a real
+	 * repeater. Either way the backend materialises Weight=0 → 1
+	 * before validation, so an omitted weight is fine.
+	 */
+	upstreams: Upstream[]; // Step J.1 — see Route.upstreams.
+	/**
+	 * Step J.1: LB selection policy. Empty string on POST means
+	 * "give me the default round_robin"; empty on PUT preserves the
+	 * previously stored value (same UX as wafMode). The J.1→J.3
+	 * transitional UI always sends "" so the backend default
+	 * applies; J.3 will add a real selector.
+	 */
+	lbPolicy: LBPolicy | '';
 	tlsEnabled: boolean;
 	redirectToHttps: boolean;
 	aliases: string[];

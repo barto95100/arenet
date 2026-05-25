@@ -86,6 +86,26 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("storage: migrate route schema: %w", err)
 	}
 
+	// Step J.1 boot migration: convert pre-J.1 routes' UpstreamURL
+	// string into the new Upstreams pool + LBPolicy enum. Same
+	// shape-based idempotency as Step I.4 (sentinel: Upstreams
+	// non-empty ⇒ already migrated).
+	//
+	// ORDER MATTERS — DO NOT REORDER: migrateUpstreamURLToPool MUST
+	// run AFTER migrateWAFEnabledToWAFMode. The J.1 migration does a
+	// full-Route round-trip through json.Unmarshal, which silently
+	// drops every key absent from the current Route struct — including
+	// the legacy `waf_enabled` field that Step I.4 still needs to read.
+	// If J.1 ran first on a doubly-legacy row (waf_enabled + upstream_url,
+	// no waf_mode + no upstreams), the re-marshal would drop waf_enabled
+	// before Step I.4 ever saw it, leaving waf_mode silently set to "off"
+	// — i.e. the WAF would be turned off without anyone noticing. The
+	// chained-migration test in migrate_test.go pins this ordering.
+	if err := migrateUpstreamURLToPool(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("storage: migrate upstream pool: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 

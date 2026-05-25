@@ -43,6 +43,20 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
+// minimalRoute returns a Route with the bare minimum Step J.1 fields
+// populated to pass validate(): a Host, a one-element upstream pool,
+// and the round_robin LB policy default. Other Step I fields stay at
+// zero value. Centralised so the dozen+ pre-J.1 test fixtures that
+// used to inline a single upstream string share one shape and the
+// Upstream struct churn lives in one place.
+func minimalRoute(host, upstream string) Route {
+	return Route{
+		Host:      host,
+		Upstreams: []Upstream{{URL: upstream, Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+	}
+}
+
 func TestNewStore_EmptyPath(t *testing.T) {
 	if _, err := NewStore(""); err == nil {
 		t.Fatal("expected error for empty path, got nil")
@@ -74,7 +88,11 @@ func TestNewStore_ReopenIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	if _, err := s1.CreateRoute(context.Background(), Route{Host: "a.example.com", UpstreamURL: "http://u:1"}); err != nil {
+	if _, err := s1.CreateRoute(context.Background(), Route{
+		Host:      "a.example.com",
+		Upstreams: []Upstream{{URL: "http://u:1", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+	}); err != nil {
 		t.Fatalf("seed Step C bucket: %v", err)
 	}
 	if err := s1.Close(); err != nil {
@@ -125,16 +143,23 @@ func TestCreateRoute(t *testing.T) {
 	}{
 		{
 			name: "valid",
-			in:   Route{Host: "a.example.com", UpstreamURL: "http://127.0.0.1:9000"},
+			in: Route{
+				Host:      "a.example.com",
+				Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+				LBPolicy:  LBPolicyRoundRobin,
+			},
 		},
 		{
-			name:    "missing host",
-			in:      Route{UpstreamURL: "http://127.0.0.1:9000"},
+			name: "missing host",
+			in: Route{
+				Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+				LBPolicy:  LBPolicyRoundRobin,
+			},
 			wantErr: true,
 		},
 		{
-			name:    "missing upstream",
-			in:      Route{Host: "a.example.com"},
+			name:    "missing upstream pool",
+			in:      Route{Host: "a.example.com", LBPolicy: LBPolicyRoundRobin},
 			wantErr: true,
 		},
 	}
@@ -160,8 +185,20 @@ func TestCreateRoute(t *testing.T) {
 			if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
 				t.Error("expected non-zero timestamps")
 			}
-			if got.Host != tc.in.Host || got.UpstreamURL != tc.in.UpstreamURL {
-				t.Errorf("fields not preserved: %+v", got)
+			if got.Host != tc.in.Host {
+				t.Errorf("host not preserved: got %q, want %q", got.Host, tc.in.Host)
+			}
+			if len(got.Upstreams) != len(tc.in.Upstreams) {
+				t.Fatalf("upstream pool size: got %d, want %d", len(got.Upstreams), len(tc.in.Upstreams))
+			}
+			for i := range tc.in.Upstreams {
+				if got.Upstreams[i] != tc.in.Upstreams[i] {
+					t.Errorf("upstreams[%d] not preserved: got %+v, want %+v",
+						i, got.Upstreams[i], tc.in.Upstreams[i])
+				}
+			}
+			if got.LBPolicy != tc.in.LBPolicy {
+				t.Errorf("lb_policy not preserved: got %q, want %q", got.LBPolicy, tc.in.LBPolicy)
 			}
 		})
 	}
@@ -171,7 +208,7 @@ func TestGetRoute(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	created, err := s.CreateRoute(ctx, Route{Host: "a.example.com", UpstreamURL: "http://u:1"})
+	created, err := s.CreateRoute(ctx, minimalRoute("a.example.com", "http://u:1"))
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -221,7 +258,7 @@ func TestListRoutes(t *testing.T) {
 	}
 
 	for _, h := range []string{"a.example.com", "b.example.com", "c.example.com"} {
-		if _, err := s.CreateRoute(ctx, Route{Host: h, UpstreamURL: "http://u:1"}); err != nil {
+		if _, err := s.CreateRoute(ctx, minimalRoute(h, "http://u:1")); err != nil {
 			t.Fatalf("seed %s: %v", h, err)
 		}
 	}
@@ -245,7 +282,7 @@ func TestUpdateRoute(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	created, err := s.CreateRoute(ctx, Route{Host: "a.example.com", UpstreamURL: "http://u:1"})
+	created, err := s.CreateRoute(ctx, minimalRoute("a.example.com", "http://u:1"))
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -258,7 +295,7 @@ func TestUpdateRoute(t *testing.T) {
 		{
 			name: "valid update",
 			mut: func(r Route) Route {
-				r.UpstreamURL = "http://u:2"
+				r.Upstreams = []Upstream{{URL: "http://u:2", Weight: 1}}
 				r.TLSEnabled = true
 				r.WAFMode = "block"
 				return r
@@ -310,7 +347,7 @@ func TestDeleteRoute(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	created, err := s.CreateRoute(ctx, Route{Host: "a.example.com", UpstreamURL: "http://u:1"})
+	created, err := s.CreateRoute(ctx, minimalRoute("a.example.com", "http://u:1"))
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -352,13 +389,14 @@ func TestRestoreRoute(t *testing.T) {
 	ctx := context.Background()
 
 	original := Route{
-		ID:          "fixed-uuid-for-test",
-		Host:        "restore.example",
-		UpstreamURL: "http://127.0.0.1:7000",
-		TLSEnabled:  true,
-		WAFMode:     "off",
-		CreatedAt:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
-		UpdatedAt:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		ID:         "fixed-uuid-for-test",
+		Host:       "restore.example",
+		Upstreams:  []Upstream{{URL: "http://127.0.0.1:7000", Weight: 1}},
+		LBPolicy:   LBPolicyRoundRobin,
+		TLSEnabled: true,
+		WAFMode:    "off",
+		CreatedAt:  time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		UpdatedAt:  time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	}
 
 	if err := s.RestoreRoute(ctx, original); err != nil {
@@ -374,7 +412,7 @@ func TestRestoreRoute(t *testing.T) {
 	}
 
 	t.Run("empty id rejected", func(t *testing.T) {
-		err := s.RestoreRoute(ctx, Route{Host: "x", UpstreamURL: "http://x:1"})
+		err := s.RestoreRoute(ctx, minimalRoute("x", "http://x:1"))
 		if err == nil {
 			t.Fatal("expected error for empty ID")
 		}
@@ -400,8 +438,10 @@ func TestRoute_AllHosts_ReturnsHostThenAliases(t *testing.T) {
 
 func TestRoute_Validate_RejectsAliasDuplicateOfHost(t *testing.T) {
 	r := Route{
-		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
-		Aliases: []string{"y.com", "x.com"}, // x.com == Host
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		Aliases:   []string{"y.com", "x.com"}, // x.com == Host
 	}
 	err := r.validate()
 	if err == nil {
@@ -414,8 +454,10 @@ func TestRoute_Validate_RejectsAliasDuplicateOfHost(t *testing.T) {
 
 func TestRoute_Validate_RejectsAliasesNotUnique(t *testing.T) {
 	r := Route{
-		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
-		Aliases: []string{"dup.com", "dup.com"}, // intra-alias duplicate
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		Aliases:   []string{"dup.com", "dup.com"}, // intra-alias duplicate
 	}
 	err := r.validate()
 	if err == nil {
@@ -428,8 +470,10 @@ func TestRoute_Validate_RejectsAliasesNotUnique(t *testing.T) {
 
 func TestRoute_Validate_RejectsEmptyAlias(t *testing.T) {
 	r := Route{
-		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
-		Aliases: []string{""},
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		Aliases:   []string{""},
 	}
 	err := r.validate()
 	if err == nil {
@@ -440,11 +484,82 @@ func TestRoute_Validate_RejectsEmptyAlias(t *testing.T) {
 	}
 }
 
+// --- Step J.1 — Upstream pool & LB policy invariants ----------------------
+
+func TestRoute_Validate_RejectsEmptyUpstreamURL(t *testing.T) {
+	r := Route{
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+	}
+	err := r.validate()
+	if err == nil {
+		t.Fatal("validate() = nil; want empty-upstream-url error")
+	}
+	if !strings.Contains(err.Error(), "upstreams[0].url must not be empty") {
+		t.Errorf("err = %v; want upstreams[0].url-must-not-be-empty message", err)
+	}
+}
+
+func TestRoute_Validate_RejectsNonPositiveWeight(t *testing.T) {
+	tests := []struct {
+		name   string
+		weight int
+	}{
+		{name: "zero", weight: 0},
+		{name: "negative", weight: -3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Route{
+				Host:      "x.com",
+				Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: tc.weight}},
+				LBPolicy:  LBPolicyRoundRobin,
+			}
+			err := r.validate()
+			if err == nil {
+				t.Fatalf("validate() = nil; want weight >= 1 error (weight=%d)", tc.weight)
+			}
+			if !strings.Contains(err.Error(), "upstreams[0].weight must be >= 1") {
+				t.Errorf("err = %v; want upstreams[0].weight-must-be->=1 message", err)
+			}
+		})
+	}
+}
+
+func TestRoute_Validate_RejectsUnknownLBPolicy(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy string
+	}{
+		{name: "empty", policy: ""},
+		{name: "bogus", policy: "magic_sauce"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Route{
+				Host:      "x.com",
+				Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+				LBPolicy:  tc.policy,
+			}
+			err := r.validate()
+			if err == nil {
+				t.Fatalf("validate() = nil; want unknown-lb-policy error (policy=%q)", tc.policy)
+			}
+			if !strings.Contains(err.Error(), "is not a valid policy") {
+				t.Errorf("err = %v; want is-not-a-valid-policy message", err)
+			}
+		})
+	}
+}
+
 // --- Step I.5 — Basic Auth invariants -------------------------------------
 
 func TestRoute_Validate_BasicAuthEnabledRequiresUsername(t *testing.T) {
 	r := Route{
-		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		Host:                  "x.com",
+		Upstreams:             []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:              LBPolicyRoundRobin,
 		BasicAuthEnabled:      true,
 		BasicAuthUsername:     "",
 		BasicAuthPasswordHash: "$argon2id$..fake..",
@@ -457,7 +572,9 @@ func TestRoute_Validate_BasicAuthEnabledRequiresUsername(t *testing.T) {
 
 func TestRoute_Validate_BasicAuthEnabledRequiresHash(t *testing.T) {
 	r := Route{
-		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		Host:                  "x.com",
+		Upstreams:             []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:              LBPolicyRoundRobin,
 		BasicAuthEnabled:      true,
 		BasicAuthUsername:     "admin",
 		BasicAuthPasswordHash: "",
@@ -472,7 +589,9 @@ func TestRoute_Validate_BasicAuthDisabledIgnoresFields(t *testing.T) {
 	// Disabled basic auth: even with empty username + hash, validate
 	// must pass (the API layer clears these fields when toggling off).
 	r := Route{
-		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		Host:             "x.com",
+		Upstreams:        []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:         LBPolicyRoundRobin,
 		BasicAuthEnabled: false,
 	}
 	if err := r.validate(); err != nil {
@@ -489,7 +608,9 @@ func TestRoute_Validate_BasicAuthDisabledIgnoresFields(t *testing.T) {
 // layer; storage just persists.
 func TestRoute_Validate_HeadersAreNotInspected(t *testing.T) {
 	r := Route{
-		Host: "x.com", UpstreamURL: "http://127.0.0.1:9000",
+		Host:            "x.com",
+		Upstreams:       []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:        LBPolicyRoundRobin,
 		RequestHeaders:  map[string]string{"X-Anything": "value with whatever the API allowed"},
 		ResponseHeaders: map[string]string{"X-Another": ""},
 	}

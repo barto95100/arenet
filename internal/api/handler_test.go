@@ -248,7 +248,7 @@ func TestListRoutes_Multiple(t *testing.T) {
 	env := newTestEnv(t, false)
 	ctx := context.Background()
 	for _, h := range []string{"a.local", "b.local", "c.local"} {
-		if _, err := env.store.CreateRoute(ctx, storage.Route{Host: h, UpstreamURL: "http://u:1"}); err != nil {
+		if _, err := env.store.CreateRoute(ctx, storage.Route{Host: h, Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin}); err != nil {
 			t.Fatalf("seed %s: %v", h, err)
 		}
 	}
@@ -279,7 +279,7 @@ func TestListRoutes_Multiple(t *testing.T) {
 
 func TestGetRoute_Found(t *testing.T) {
 	env := newTestEnv(t, false)
-	created, err := env.store.CreateRoute(context.Background(), storage.Route{Host: "g.local", UpstreamURL: "http://u:1"})
+	created, err := env.store.CreateRoute(context.Background(), storage.Route{Host: "g.local", Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestGetRoute_NotFound(t *testing.T) {
 func TestCreateRoute_Success(t *testing.T) {
 	env := newTestEnv(t, false)
 
-	body := `{"host":"new.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"wafMode":"off"}`
+	body := `{"host":"new.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -342,7 +342,7 @@ func TestCreateRoute_Success(t *testing.T) {
 func TestCreateRoute_AcceptsRedirectToHTTPS(t *testing.T) {
 	env := newTestEnv(t, false)
 
-	body := `{"host":"redir.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":true,"redirectToHttps":true,"wafMode":"off"}`
+	body := `{"host":"redir.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":true,"redirectToHttps":true,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -366,7 +366,7 @@ func TestCreateRoute_AcceptsRedirectToHTTPS(t *testing.T) {
 
 func TestCreateRoute_AcceptsAliases(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt1.local","alt2.local"],"wafMode":"off"}`
+	body := `{"host":"primary.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt1.local","alt2.local"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -390,7 +390,7 @@ func TestCreateRoute_AcceptsAliases(t *testing.T) {
 
 func TestCreateRoute_RejectsInvalidAlias(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["not a hostname"],"wafMode":"off"}`
+	body := `{"host":"primary.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":["not a hostname"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -407,7 +407,7 @@ func TestCreateRoute_RejectsIntraRouteDuplicate(t *testing.T) {
 	env := newTestEnv(t, false)
 	// Two identical aliases in the same request — defense-in-depth
 	// before storage sees the route.
-	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":["dup.local","dup.local"],"wafMode":"off"}`
+	body := `{"host":"primary.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":["dup.local","dup.local"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -424,12 +424,12 @@ func TestCreateRoute_RejectsCrossRouteDuplicate(t *testing.T) {
 	env := newTestEnv(t, false)
 	// Seed an existing route with Host=x.com; a new route trying to
 	// claim it as an alias must fail with a 409.
-	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{Host: "x.local", UpstreamURL: "http://127.0.0.1:9000"})
+	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{Host: "x.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	body := `{"host":"other.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":["x.local"],"wafMode":"off"}`
+	body := `{"host":"other.local","upstreams":[{"url":"http://127.0.0.1:9001","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":["x.local"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -452,7 +452,7 @@ func TestCreateRoute_RejectsCrossRouteDuplicate(t *testing.T) {
 func TestCreateRoute_AcceptsBasicAuth_HashesPassword(t *testing.T) {
 	env := newTestEnv(t, false)
 	plain := "s3cret-pa$$"
-	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafMode":"off"}`
+	body := `{"host":"auth.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -487,7 +487,7 @@ func TestCreateRoute_AcceptsBasicAuth_HashesPassword(t *testing.T) {
 // the credentials. Q6 in the audit.
 func TestCreateRoute_RejectsBasicAuthEnabledWithoutPassword(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafMode":"off"}`
+	body := `{"host":"auth.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -507,7 +507,7 @@ func TestCreateRoute_RejectsBasicAuthEnabledWithoutPassword(t *testing.T) {
 func TestUpdateRoute_EmptyPasswordPreservesHash(t *testing.T) {
 	env := newTestEnv(t, false)
 	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{
-		Host: "auth.local", UpstreamURL: "http://127.0.0.1:9000",
+		Host: "auth.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 		BasicAuthEnabled:      true,
 		BasicAuthUsername:     "admin",
 		BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$SALTSALTSALTSALT$KEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEY",
@@ -519,7 +519,7 @@ func TestUpdateRoute_EmptyPasswordPreservesHash(t *testing.T) {
 
 	// PUT with basicAuthPassword:"" — and a different upstream so we
 	// know the update path actually ran.
-	body := `{"host":"auth.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafMode":"off"}`
+	body := `{"host":"auth.local","upstreams":[{"url":"http://127.0.0.1:9001","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"","wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -531,7 +531,7 @@ func TestUpdateRoute_EmptyPasswordPreservesHash(t *testing.T) {
 	if got.BasicAuthPasswordHash != originalHash {
 		t.Errorf("hash was rotated despite empty password: before=%q after=%q", originalHash, got.BasicAuthPasswordHash)
 	}
-	if got.UpstreamURL != "http://127.0.0.1:9001" {
+	if got.Upstreams[0].URL != "http://127.0.0.1:9001" {
 		t.Errorf("upstream not updated: %v", got)
 	}
 }
@@ -544,7 +544,7 @@ func TestUpdateRoute_EmptyPasswordPreservesHash(t *testing.T) {
 func TestAudit_BasicAuthHashNeverInAuditLog(t *testing.T) {
 	env := newTestEnv(t, false)
 	plain := "leaky-secret-3000"
-	body := `{"host":"audit.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafMode":"off"}`
+	body := `{"host":"audit.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":true,"basicAuthUsername":"admin","basicAuthPassword":"` + plain + `","wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -585,7 +585,7 @@ func TestAudit_BasicAuthHashNeverInAuditLog(t *testing.T) {
 // header values, per Q7).
 func TestCreateRoute_AcceptsCustomHeaders(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"hdr.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Real-Foo":"bar"},"responseHeaders":{"X-Custom":"x"},"wafMode":"off"}`
+	body := `{"host":"hdr.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Real-Foo":"bar"},"responseHeaders":{"X-Custom":"x"},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -622,7 +622,7 @@ func TestCreateRoute_RejectsCRLFInHeaderValue(t *testing.T) {
 	// Embedded \r\n in the header value (escaped as \\r\\n in the
 	// JSON string literal so the decoder lands a real CR + LF in
 	// the Go string).
-	body := `{"host":"injection.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Injected":"ok\r\nEvil: foo"},"responseHeaders":{},"wafMode":"off"}`
+	body := `{"host":"injection.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"X-Injected":"ok\r\nEvil: foo"},"responseHeaders":{},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -642,7 +642,7 @@ func TestCreateRoute_RejectsCRLFInHeaderValue(t *testing.T) {
 // offending key.
 func TestCreateRoute_RejectsInvalidHeaderKey(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"badkey.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Bad Key":"value"},"responseHeaders":{},"wafMode":"off"}`
+	body := `{"host":"badkey.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Bad Key":"value"},"responseHeaders":{},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -660,7 +660,7 @@ func TestCreateRoute_RejectsInvalidHeaderKey(t *testing.T) {
 // machinery. Reject with a clear message.
 func TestCreateRoute_RejectsReservedHeaderName(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"reserved.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Host":"evil.example.com"},"responseHeaders":{},"wafMode":"off"}`
+	body := `{"host":"reserved.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{"Host":"evil.example.com"},"responseHeaders":{},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -677,7 +677,7 @@ func TestCreateRoute_RejectsReservedHeaderName(t *testing.T) {
 
 func TestCreateRoute_AcceptsWAFModeDetect(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"waf-detect.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"detect"}`
+	body := `{"host":"waf-detect.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"detect"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -701,7 +701,7 @@ func TestCreateRoute_AcceptsWAFModeDetect(t *testing.T) {
 // it ever blocks legitimate traffic.
 func TestCreateRoute_DefaultsToWAFModeDetect(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"waf-default.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":""}`
+	body := `{"host":"waf-default.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -719,7 +719,7 @@ func TestCreateRoute_DefaultsToWAFModeDetect(t *testing.T) {
 // {off, detect, block} returns 400.
 func TestCreateRoute_RejectsInvalidWAFMode(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"waf-bad.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"loud"}`
+	body := `{"host":"waf-bad.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"loud"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -742,7 +742,7 @@ func TestCreateRoute_RejectsInvalidWAFMode(t *testing.T) {
 func TestUpdateRoute_EmptyWAFModePreservesPrevious(t *testing.T) {
 	env := newTestEnv(t, false)
 	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{
-		Host: "waf-preserve.local", UpstreamURL: "http://127.0.0.1:9000",
+		Host: "waf-preserve.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 		WAFMode: "block",
 	})
 	if err != nil {
@@ -751,7 +751,7 @@ func TestUpdateRoute_EmptyWAFModePreservesPrevious(t *testing.T) {
 
 	// PUT with empty wafMode — and a different upstream so we know
 	// the update path actually ran.
-	body := `{"host":"waf-preserve.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":""}`
+	body := `{"host":"waf-preserve.local","upstreams":[{"url":"http://127.0.0.1:9001","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":""}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -763,7 +763,7 @@ func TestUpdateRoute_EmptyWAFModePreservesPrevious(t *testing.T) {
 	if got.WAFMode != "block" {
 		t.Errorf("WAFMode lost on PUT: got %q, want %q (preserved)", got.WAFMode, "block")
 	}
-	if got.UpstreamURL != "http://127.0.0.1:9001" {
+	if got.Upstreams[0].URL != "http://127.0.0.1:9001" {
 		t.Errorf("upstream not updated: %v", got)
 	}
 }
@@ -778,7 +778,7 @@ func TestUpdateRoute_EmptyWAFModePreservesPrevious(t *testing.T) {
 // no latent redirect ever ships to BoltDB.
 func TestCreateRoute_NormalizesRedirectWhenTLSOff(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"latent.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"redirectToHttps":true,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"off"}`
+	body := `{"host":"latent.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":true,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -811,8 +811,8 @@ func TestUpdateRoute_NormalizesRedirectWhenTLSOff(t *testing.T) {
 	// bypasses the API-layer normalize and produces the exact
 	// pre-hotfix state Finding #5 catches.
 	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{
-		Host:            "heal.local",
-		UpstreamURL:     "http://127.0.0.1:9000",
+		Host:      "heal.local",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 		TLSEnabled:      false,
 		RedirectToHTTPS: true, // the latent bug we want self-healed
 	})
@@ -824,7 +824,7 @@ func TestUpdateRoute_NormalizesRedirectWhenTLSOff(t *testing.T) {
 	// redirectToHttps:true (matching the legacy stored value),
 	// tls stays false. The normalize at the top of updateRoute
 	// must coerce redirect to false on the way out.
-	body := `{"host":"heal.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":true,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"off"}`
+	body := `{"host":"heal.local","upstreams":[{"url":"http://127.0.0.1:9001","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":true,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -836,7 +836,7 @@ func TestUpdateRoute_NormalizesRedirectWhenTLSOff(t *testing.T) {
 	if got.RedirectToHTTPS {
 		t.Errorf("legacy redirect=true row not self-healed by PUT: %+v", got)
 	}
-	if got.UpstreamURL != "http://127.0.0.1:9001" {
+	if got.Upstreams[0].URL != "http://127.0.0.1:9001" {
 		t.Errorf("upstream not updated: %v", got)
 	}
 }
@@ -844,7 +844,7 @@ func TestUpdateRoute_NormalizesRedirectWhenTLSOff(t *testing.T) {
 func TestUpdateRoute_AllowsKeepingSameAliases(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, err := env.store.CreateRoute(context.Background(), storage.Route{
-		Host: "primary.local", UpstreamURL: "http://127.0.0.1:9000",
+		Host: "primary.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 		Aliases: []string{"alt.local"},
 	})
 	if err != nil {
@@ -853,7 +853,7 @@ func TestUpdateRoute_AllowsKeepingSameAliases(t *testing.T) {
 	// PUT with the exact same (Host + Aliases) must NOT trigger a
 	// false-positive duplicate error — the hostnamesEqual short-circuit
 	// is the guard against the obvious bug of "comparing to self".
-	body := `{"host":"primary.local","upstreamUrl":"http://127.0.0.1:9001","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt.local"],"wafMode":"off"}`
+	body := `{"host":"primary.local","upstreams":[{"url":"http://127.0.0.1:9001","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":["alt.local"],"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -870,14 +870,14 @@ func TestUpdateRoute_PreservesRedirectToHTTPS(t *testing.T) {
 	env := newTestEnv(t, false)
 	// Seed: a route with redirect on.
 	created, err := env.store.CreateRoute(context.Background(), storage.Route{
-		Host: "flip.local", UpstreamURL: "http://127.0.0.1:9000",
+		Host: "flip.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 		TLSEnabled: true, RedirectToHTTPS: true,
 	})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	body := `{"host":"flip.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":true,"redirectToHttps":false,"wafMode":"off"}`
+	body := `{"host":"flip.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":true,"redirectToHttps":false,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -909,9 +909,9 @@ func TestCreateRoute_ValidationErrors(t *testing.T) {
 	tests := []struct {
 		name, body, wantSub string
 	}{
-		{"empty host", `{"host":"","upstreamUrl":"http://x:1"}`, "host must not be empty"},
-		{"whitespace host", `{"host":"a b","upstreamUrl":"http://x:1"}`, "must not contain whitespace"},
-		{"bad scheme", `{"host":"a.local","upstreamUrl":"ftp://x"}`, "http or https"},
+		{"empty host", `{"host":"","upstreams":[{"url":"http://x:1","weight":1}],"lbPolicy":"round_robin"}`, "host must not be empty"},
+		{"whitespace host", `{"host":"a b","upstreams":[{"url":"http://x:1","weight":1}],"lbPolicy":"round_robin"}`, "must not contain whitespace"},
+		{"bad scheme", `{"host":"a.local","upstreams":[{"url":"ftp://x","weight":1}],"lbPolicy":"round_robin"}`, "http or https"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -934,9 +934,9 @@ func TestCreateRoute_ValidationErrors(t *testing.T) {
 
 func TestCreateRoute_DuplicateHost(t *testing.T) {
 	env := newTestEnv(t, false)
-	_, _ = env.store.CreateRoute(context.Background(), storage.Route{Host: "dup.local", UpstreamURL: "http://x:1"})
+	_, _ = env.store.CreateRoute(context.Background(), storage.Route{Host: "dup.local", Upstreams: []storage.Upstream{{URL: "http://x:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin})
 
-	body := `{"host":"dup.local","upstreamUrl":"http://x:2"}`
+	body := `{"host":"dup.local","upstreams":[{"url":"http://x:2","weight":1}],"lbPolicy":"round_robin"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -958,7 +958,7 @@ func TestCreateRoute_ReloadFails_Rollback(t *testing.T) {
 	env := newTestEnv(t, false)
 	env.caddy.SetNextErr(errors.New("simulated reload failure"))
 
-	body := `{"host":"rb.local","upstreamUrl":"http://x:1"}`
+	body := `{"host":"rb.local","upstreams":[{"url":"http://x:1","weight":1}],"lbPolicy":"round_robin"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -974,9 +974,9 @@ func TestCreateRoute_ReloadFails_Rollback(t *testing.T) {
 
 func TestUpdateRoute_Success(t *testing.T) {
 	env := newTestEnv(t, false)
-	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "u.local", UpstreamURL: "http://u:1"})
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "u.local", Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin})
 
-	body := `{"host":"u.local","upstreamUrl":"http://u:2","tlsEnabled":true,"wafMode":"off"}`
+	body := `{"host":"u.local","upstreams":[{"url":"http://u:2","weight":1}],"lbPolicy":"round_robin","tlsEnabled":true,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -988,14 +988,14 @@ func TestUpdateRoute_Success(t *testing.T) {
 		t.Errorf("reload calls = %d", env.caddy.CallCount())
 	}
 	got, _ := env.store.GetRoute(context.Background(), created.ID)
-	if got.UpstreamURL != "http://u:2" || !got.TLSEnabled {
+	if got.Upstreams[0].URL != "http://u:2" || !got.TLSEnabled {
 		t.Errorf("not updated: %+v", got)
 	}
 }
 
 func TestUpdateRoute_NotFound(t *testing.T) {
 	env := newTestEnv(t, false)
-	body := `{"host":"x.local","upstreamUrl":"http://x:1"}`
+	body := `{"host":"x.local","upstreams":[{"url":"http://x:1","weight":1}],"lbPolicy":"round_robin"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/00000000-0000-0000-0000-000000000000", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -1009,11 +1009,11 @@ func TestUpdateRoute_NotFound(t *testing.T) {
 
 func TestUpdateRoute_HostCollision(t *testing.T) {
 	env := newTestEnv(t, false)
-	_, _ = env.store.CreateRoute(context.Background(), storage.Route{Host: "a.local", UpstreamURL: "http://x:1"})
-	target, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "b.local", UpstreamURL: "http://x:2"})
+	_, _ = env.store.CreateRoute(context.Background(), storage.Route{Host: "a.local", Upstreams: []storage.Upstream{{URL: "http://x:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin})
+	target, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "b.local", Upstreams: []storage.Upstream{{URL: "http://x:2", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin})
 
 	// Try to rename b.local → a.local (already taken).
-	body := `{"host":"a.local","upstreamUrl":"http://x:2"}`
+	body := `{"host":"a.local","upstreams":[{"url":"http://x:2","weight":1}],"lbPolicy":"round_robin"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+target.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -1029,10 +1029,10 @@ func TestUpdateRoute_HostCollision(t *testing.T) {
 
 func TestUpdateRoute_ReloadFails_Rollback(t *testing.T) {
 	env := newTestEnv(t, false)
-	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "rb.local", UpstreamURL: "http://old:1"})
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "rb.local", Upstreams: []storage.Upstream{{URL: "http://old:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin})
 
 	env.caddy.SetNextErr(errors.New("simulated"))
-	body := `{"host":"rb.local","upstreamUrl":"http://new:1"}`
+	body := `{"host":"rb.local","upstreams":[{"url":"http://new:1","weight":1}],"lbPolicy":"round_robin"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -1041,14 +1041,14 @@ func TestUpdateRoute_ReloadFails_Rollback(t *testing.T) {
 		t.Fatalf("status=%d", rec.Code)
 	}
 	got, _ := env.store.GetRoute(context.Background(), created.ID)
-	if got.UpstreamURL != "http://old:1" {
-		t.Errorf("rollback failed: upstream=%q", got.UpstreamURL)
+	if got.Upstreams[0].URL != "http://old:1" {
+		t.Errorf("rollback failed: upstream=%q", got.Upstreams[0].URL)
 	}
 }
 
 func TestDeleteRoute_Success(t *testing.T) {
 	env := newTestEnv(t, false)
-	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "d.local", UpstreamURL: "http://u:1"})
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "d.local", Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin})
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/routes/"+created.ID, nil)
 	rec := httptest.NewRecorder()
@@ -1080,7 +1080,7 @@ func TestDeleteRoute_NotFound(t *testing.T) {
 
 func TestDeleteRoute_ReloadFails_Rollback(t *testing.T) {
 	env := newTestEnv(t, false)
-	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "rb.local", UpstreamURL: "http://u:1"})
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{Host: "rb.local", Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin})
 
 	env.caddy.SetNextErr(errors.New("simulated"))
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/routes/"+created.ID, nil)
@@ -1214,7 +1214,7 @@ func routeEvents(events []audit.Event) []audit.Event {
 func TestCreateRoute_EmitsAuditEvent(t *testing.T) {
 	env := newTestEnv(t, false)
 
-	body := `{"host":"audit-create.local","upstreamUrl":"http://127.0.0.1:9000","tlsEnabled":false,"wafMode":"off"}`
+	body := `{"host":"audit-create.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -1257,10 +1257,10 @@ func TestCreateRoute_EmitsAuditEvent(t *testing.T) {
 func TestUpdateRoute_EmitsAuditEvent(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, _ := env.store.CreateRoute(context.Background(), storage.Route{
-		Host: "audit-update.local", UpstreamURL: "http://old:1",
+		Host: "audit-update.local", Upstreams: []storage.Upstream{{URL: "http://old:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 	})
 
-	body := `{"host":"audit-update.local","upstreamUrl":"http://new:1","tlsEnabled":true,"wafMode":"off"}`
+	body := `{"host":"audit-update.local","upstreams":[{"url":"http://new:1","weight":1}],"lbPolicy":"round_robin","tlsEnabled":true,"wafMode":"off"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -1292,7 +1292,7 @@ func TestUpdateRoute_EmitsAuditEvent(t *testing.T) {
 func TestDeleteRoute_EmitsAuditEvent(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, _ := env.store.CreateRoute(context.Background(), storage.Route{
-		Host: "audit-delete.local", UpstreamURL: "http://u:1",
+		Host: "audit-delete.local", Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 	})
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/routes/"+created.ID, nil)
@@ -1332,7 +1332,7 @@ func TestCreateRoute_ReloadFails_NoAudit(t *testing.T) {
 	env := newTestEnv(t, false)
 	env.caddy.SetNextErr(errors.New("simulated reload failure"))
 
-	body := `{"host":"noaudit-create.local","upstreamUrl":"http://x:1"}`
+	body := `{"host":"noaudit-create.local","upstreams":[{"url":"http://x:1","weight":1}],"lbPolicy":"round_robin"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -1348,11 +1348,11 @@ func TestCreateRoute_ReloadFails_NoAudit(t *testing.T) {
 func TestUpdateRoute_ReloadFails_NoAudit(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, _ := env.store.CreateRoute(context.Background(), storage.Route{
-		Host: "noaudit-update.local", UpstreamURL: "http://old:1",
+		Host: "noaudit-update.local", Upstreams: []storage.Upstream{{URL: "http://old:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 	})
 
 	env.caddy.SetNextErr(errors.New("simulated reload failure"))
-	body := `{"host":"noaudit-update.local","upstreamUrl":"http://new:1"}`
+	body := `{"host":"noaudit-update.local","upstreams":[{"url":"http://new:1","weight":1}],"lbPolicy":"round_robin"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -1368,7 +1368,7 @@ func TestUpdateRoute_ReloadFails_NoAudit(t *testing.T) {
 func TestDeleteRoute_ReloadFails_NoAudit(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, _ := env.store.CreateRoute(context.Background(), storage.Route{
-		Host: "noaudit-delete.local", UpstreamURL: "http://u:1",
+		Host: "noaudit-delete.local", Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 	})
 
 	env.caddy.SetNextErr(errors.New("simulated reload failure"))
@@ -1381,5 +1381,164 @@ func TestDeleteRoute_ReloadFails_NoAudit(t *testing.T) {
 	}
 	if events := routeEvents(env.audit.Events()); len(events) != 0 {
 		t.Errorf("expected 0 route audit events on reload failure, got %d: %+v", len(events), events)
+	}
+}
+
+// --- Step J.1 — Upstream pool + LB policy handler-level invariants --------
+
+// TestCreateRoute_DefaultsWeightWhenOmitted pins the
+// materialise-before-validate ordering for Upstream.Weight. A POST
+// with the pool element's weight omitted (or 0) must reach storage
+// with weight=1, because storage.validate() rejects weight<1 — if
+// the API stopped materialising the default, this test would 400.
+func TestCreateRoute_DefaultsWeightWhenOmitted(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	// JSON literal omits the weight field entirely; Go unmarshal
+	// gives Weight=0 to the corresponding upstreamReq, which is the
+	// exact zero-value case the API must materialise.
+	body := `{"host":"wzero.local","upstreams":[{"url":"http://127.0.0.1:9000"}],"lbPolicy":"round_robin","wafMode":"off"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s; want 201 (weight=0 should be materialised to 1)", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 {
+		t.Fatalf("want 1 route stored, got %d", len(got))
+	}
+	if got[0].Upstreams[0].Weight != 1 {
+		t.Errorf("Upstreams[0].Weight = %d; want 1 (default materialised by API)", got[0].Upstreams[0].Weight)
+	}
+}
+
+// TestCreateRoute_DefaultsLBPolicyWhenOmitted pins the same
+// materialise-before-validate ordering for LBPolicy. A POST with
+// "lbPolicy" omitted (or empty) must reach storage with
+// "round_robin" (§5.1 default).
+func TestCreateRoute_DefaultsLBPolicyWhenOmitted(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	// JSON literal omits the lbPolicy field entirely.
+	body := `{"host":"lbzero.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"wafMode":"off"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s; want 201 (lbPolicy=\"\" should be materialised to round_robin)", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 {
+		t.Fatalf("want 1 route stored, got %d", len(got))
+	}
+	if got[0].LBPolicy != storage.LBPolicyRoundRobin {
+		t.Errorf("LBPolicy = %q; want %q (default materialised by API)", got[0].LBPolicy, storage.LBPolicyRoundRobin)
+	}
+}
+
+// TestCreateRoute_RejectsEmptyUpstreamPool — §5.1 rule 1, handler
+// level. Empty pool must come back as 400 (not 500, not a storage
+// validate panic).
+func TestCreateRoute_RejectsEmptyUpstreamPool(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"empty.local","upstreams":[],"lbPolicy":"round_robin","wafMode":"off"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "at least one entry") {
+		t.Errorf("body %q missing 'at least one entry'", rec.Body.String())
+	}
+	if env.caddy.CallCount() != 0 {
+		t.Errorf("reload should not have been called on 400")
+	}
+}
+
+// TestCreateRoute_RejectsNegativeWeight — §5.1 rule 3, handler
+// level. A negative weight must come back as 400 with the indexed
+// error message; weight=0 is materialised to 1 (covered by
+// TestCreateRoute_DefaultsWeightWhenOmitted) so it does not hit
+// this path.
+func TestCreateRoute_RejectsNegativeWeight(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"wneg.local","upstreams":[{"url":"http://127.0.0.1:9001","weight":1},{"url":"http://127.0.0.1:9002","weight":-3}],"lbPolicy":"round_robin","wafMode":"off"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	// JSON encoder escapes `>` as >, so we assert against the
+	// non-special-char prefix (the indexed location + start of
+	// message). Catches the regression "weight check not wired"
+	// without coupling the test to the JSON-encoded form of >=.
+	if !strings.Contains(rec.Body.String(), "upstreams[1].weight must be") {
+		t.Errorf("body %q missing the indexed weight error", rec.Body.String())
+	}
+}
+
+// TestCreateRoute_RejectsUnknownLBPolicy — §5.1 rule 2, handler
+// level. An unknown policy value must come back as 400.
+func TestCreateRoute_RejectsUnknownLBPolicy(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"badpolicy.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"magic_sauce","wafMode":"off"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	// JSON encoder escapes `"` as \", so we assert on the
+	// unambiguous middle of the message (no quote chars). Catches
+	// the regression "policy enum not wired" without coupling the
+	// test to the JSON-encoded form of double quotes.
+	if !strings.Contains(rec.Body.String(), `magic_sauce`) || !strings.Contains(rec.Body.String(), `is not a valid policy`) {
+		t.Errorf("body %q missing the not-a-valid-policy error", rec.Body.String())
+	}
+}
+
+// TestUpdateRoute_EmptyLBPolicyPreservesPrevious — anti-silent-
+// downgrade. A PUT with "lbPolicy":"" must preserve the previously
+// stored non-default policy, mirroring the WAFMode preserve UX so
+// an admin who toggles unrelated fields doesn't silently revert the
+// policy to round_robin.
+func TestUpdateRoute_EmptyLBPolicyPreservesPrevious(t *testing.T) {
+	env := newTestEnv(t, false)
+	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host:      "lb-preserve.local",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  storage.LBPolicyLeastConn,
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// PUT with empty lbPolicy — and a different upstream URL so we
+	// know the update path actually ran.
+	body := `{"host":"lb-preserve.local","upstreams":[{"url":"http://127.0.0.1:9001","weight":1}],"lbPolicy":"","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":""}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s; want 200", rec.Code, rec.Body)
+	}
+	got, _ := env.store.GetRoute(context.Background(), seeded.ID)
+	if got.LBPolicy != storage.LBPolicyLeastConn {
+		t.Errorf("LBPolicy lost on PUT: got %q, want %q (preserved)", got.LBPolicy, storage.LBPolicyLeastConn)
+	}
+	if got.Upstreams[0].URL != "http://127.0.0.1:9001" {
+		t.Errorf("upstream not updated (so the update path didn't actually run): %v", got)
 	}
 }

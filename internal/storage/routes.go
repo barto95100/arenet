@@ -28,12 +28,58 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// Step J.1 load-balancing policies. Exposed as constants so the API
+// validation layer and the Caddy generator share a single source of
+// truth (no string typos drift). The order mirrors §1.3 decision 2.
+const (
+	LBPolicyRoundRobin         = "round_robin"
+	LBPolicyWeightedRoundRobin = "weighted_round_robin"
+	LBPolicyLeastConn          = "least_conn"
+	LBPolicyIPHash             = "ip_hash"
+	LBPolicyRandom             = "random"
+	LBPolicyFirst              = "first"
+)
+
+// LBPolicies is the canonical ordered list of allowed LBPolicy values.
+// Used by validate() and by the API enum check. Order matches the
+// constants above and §1.3 decision 2.
+var LBPolicies = []string{
+	LBPolicyRoundRobin,
+	LBPolicyWeightedRoundRobin,
+	LBPolicyLeastConn,
+	LBPolicyIPHash,
+	LBPolicyRandom,
+	LBPolicyFirst,
+}
+
+// Upstream is one backend in a Route's upstream pool (Step J.1).
+//
+// The pool replaces the pre-J.1 single Route.UpstreamURL string. Each
+// Upstream carries the dial URL and a Weight; Weight defaults to 1 and
+// is consulted only by the weighted_round_robin LB policy — other
+// policies ignore it (§1.3 decision 1, §5.1).
+type Upstream struct {
+	URL    string `json:"url"`
+	Weight int    `json:"weight"`
+}
+
 // Route is a proxied virtual host served by Arenet.
 type Route struct {
-	ID          string `json:"id"`
-	Host        string `json:"host"`
-	UpstreamURL string `json:"upstream_url"`
-	TLSEnabled  bool   `json:"tls_enabled"`
+	ID   string `json:"id"`
+	Host string `json:"host"`
+	// Upstreams (Step J.1) is the pool of backends this route fans
+	// traffic to. At least one element; created with one element by
+	// the migrateUpstreamURLToPool boot migration for pre-J.1 rows.
+	// The pre-J.1 UpstreamURL string field is gone — its value lives
+	// at Upstreams[0].URL after migration. See spec §5.1, §6.1.
+	Upstreams []Upstream `json:"upstreams"`
+	// LBPolicy (Step J.1) is the load-balancing selection policy
+	// Caddy applies across Upstreams. One of: round_robin (default),
+	// weighted_round_robin, least_conn, ip_hash, random, first.
+	// Materialised at create time and by the boot migration; never
+	// empty post-J.1 (§5.1, §1.3 decision 2).
+	LBPolicy   string `json:"lb_policy"`
+	TLSEnabled bool   `json:"tls_enabled"`
 	// RedirectToHTTPS (Step I.1, used by I.2) requests Caddy to
 	// emit a 301 from http://<host>/* to https://<host>/* when the
 	// matching route has TLSEnabled=true. Zero value is false: pre-
@@ -100,8 +146,38 @@ func (r *Route) validate() error {
 	if r.Host == "" {
 		return errors.New("route: host must not be empty")
 	}
-	if r.UpstreamURL == "" {
-		return errors.New("route: upstream_url must not be empty")
+	// Step J.1: upstream pool must contain at least one element, each
+	// with a non-empty URL and a strictly positive weight. The API
+	// layer validates the URL shape (http/https scheme, non-empty
+	// host) earlier with friendlier messages; storage's job is to
+	// reject obviously inconsistent rows that bypass the API.
+	if len(r.Upstreams) == 0 {
+		return errors.New("route: upstreams must contain at least one entry")
+	}
+	for i, u := range r.Upstreams {
+		if u.URL == "" {
+			return fmt.Errorf("route: upstreams[%d].url must not be empty", i)
+		}
+		if u.Weight < 1 {
+			return fmt.Errorf("route: upstreams[%d].weight must be >= 1", i)
+		}
+	}
+	// Step J.1: LBPolicy must be one of the six enum values. Empty is
+	// rejected here because the API layer is responsible for
+	// materialising the default (round_robin) before validation runs;
+	// a row reaching storage with an empty LBPolicy is a programming
+	// error, not a user-input case.
+	{
+		ok := false
+		for _, p := range LBPolicies {
+			if r.LBPolicy == p {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return fmt.Errorf("route: lb_policy %q is not a valid policy", r.LBPolicy)
+		}
 	}
 	// Step I.3: intra-route alias rules. Storage is the last line
 	// of defense; the API layer also enforces these so the user

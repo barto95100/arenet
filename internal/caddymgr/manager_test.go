@@ -39,7 +39,7 @@ import (
 
 func TestBuildConfigJSON_TestRoute(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "fixture", Host: "test.local", UpstreamURL: "http://127.0.0.1:9999"},
+		{ID: "fixture", Host: "test.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9999", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	}
 
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
@@ -87,8 +87,8 @@ func httpRoutesFromConfig(t *testing.T, raw []byte) []map[string]any {
 
 func TestBuildConfigJSON_CatchAllAppended(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "a", Host: "a.local", UpstreamURL: "http://127.0.0.1:9001"},
-		{ID: "b", Host: "b.local", UpstreamURL: "http://127.0.0.1:9002"},
+		{ID: "a", Host: "a.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
+		{ID: "b", Host: "b.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9002", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	}
 
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
@@ -132,7 +132,7 @@ func TestBuildConfigJSON_CatchAllAppended(t *testing.T) {
 
 func TestBuildConfigJSON_CatchAllOnHTTPSServer(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "a", Host: "secure.local", UpstreamURL: "http://127.0.0.1:9001", TLSEnabled: true},
+		{ID: "a", Host: "secure.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: true},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -167,8 +167,8 @@ func TestBuildConfigJSON_CatchAllOnHTTPSServer(t *testing.T) {
 // every request is counted as 200.
 func TestBuildConfigJSON_HandlerChainOrder(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "rid-1", Host: "a.local", UpstreamURL: "http://127.0.0.1:9001"},
-		{ID: "rid-2", Host: "b.local", UpstreamURL: "http://127.0.0.1:9002"},
+		{ID: "rid-1", Host: "a.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
+		{ID: "rid-2", Host: "b.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9002", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	}
 
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
@@ -207,7 +207,7 @@ func TestBuildConfigJSON_HandlerChainOrder(t *testing.T) {
 // caddy.Load with an unhelpful "unknown handler" error.
 func TestBuildConfigJSON_HandlerJSONName(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "rid-1", Host: "a.local", UpstreamURL: "http://127.0.0.1:9001"},
+		{ID: "rid-1", Host: "a.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -240,7 +240,7 @@ func TestBuildConfigJSON_HandlerJSONName(t *testing.T) {
 // metrics handler.
 func TestBuildConfigJSON_HandlerJSONName_HTTPSToo(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "rid-tls", Host: "secure.local", UpstreamURL: "http://127.0.0.1:9001", TLSEnabled: true},
+		{ID: "rid-tls", Host: "secure.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: true},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -287,8 +287,8 @@ func TestSyncRegistry_CalledAfterSuccess(t *testing.T) {
 	}
 
 	routes := []storage.Route{
-		{ID: "r1", Host: "a.local", UpstreamURL: "http://127.0.0.1:1"},
-		{ID: "r2", Host: "b.local", UpstreamURL: "http://127.0.0.1:2"},
+		{ID: "r1", Host: "a.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
+		{ID: "r2", Host: "b.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:2", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	}
 	mgr.syncRegistry(routes)
 
@@ -328,7 +328,7 @@ func TestSyncRegistry_NoOpOnNilRegistry(t *testing.T) {
 
 	// Must not panic on nil registry.
 	mgr.syncRegistry([]storage.Route{
-		{ID: "r1", Host: "a.local", UpstreamURL: "http://127.0.0.1:1"},
+		{ID: "r1", Host: "a.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	})
 }
 
@@ -351,16 +351,19 @@ func TestSyncRegistry_NotCalledOnReloadFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	// Insert a route with an INVALID upstream URL → buildConfigJSON
-	// fails when upstreamDial rejects the empty URL. Note: we use
-	// RestoreRoute (no validation) to bypass storage.CreateRoute's
-	// own upstream_url presence check. This route would never enter
-	// the system via the public API; we synthesize it here purely
-	// to make buildConfigJSON fail downstream.
+	// Insert a route with an EMPTY upstream pool → buildConfigJSON
+	// produces a reverse_proxy handler with no upstreams, and caddy.Load
+	// rejects the config when the manager tries to apply it. Note: we
+	// use RestoreRoute (no validation) to bypass storage.CreateRoute's
+	// own pool-presence check. This route would never enter the system
+	// via the public API; we synthesize it here purely to make
+	// ReloadFromStore fail somewhere on the path so we can assert that
+	// syncRegistry did not run.
 	if err := store.RestoreRoute(t.Context(), storage.Route{
-		ID:          "bad-route-id",
-		Host:        "bad.local",
-		UpstreamURL: "", // upstreamDial rejects empty
+		ID:        "bad-route-id",
+		Host:      "bad.local",
+		Upstreams: nil, // empty pool → caddy.Load rejects on reload
+		LBPolicy:  storage.LBPolicyRoundRobin,
 	}); err != nil {
 		t.Fatalf("seed route: %v", err)
 	}
@@ -440,7 +443,7 @@ func readPolicies(t *testing.T, raw []byte) []map[string]any {
 
 func TestBuildConfigJSON_ACME_DevMode_StagingURL(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "r1", Host: "test.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+		{ID: "r1", Host: "test.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: true},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true, ACMEEmail: "ops@example.com"})
 	if err != nil {
@@ -479,7 +482,7 @@ func TestBuildConfigJSON_ACME_DevMode_StagingURL(t *testing.T) {
 
 func TestBuildConfigJSON_ACME_ProdMode_ProdURL(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "r1", Host: "prod.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+		{ID: "r1", Host: "prod.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: true},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: false, ACMEEmail: "ops@example.com"})
 	if err != nil {
@@ -498,7 +501,7 @@ func TestBuildConfigJSON_ACME_NoEmail_IssuerOmitsEmailKey(t *testing.T) {
 	// key (Let's Encrypt accepts email-free accounts; main.go logs
 	// a WARN separately at boot if a TLS route already exists).
 	routes := []storage.Route{
-		{ID: "r1", Host: "noemail.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+		{ID: "r1", Host: "noemail.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: true},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true, ACMEEmail: ""})
 	if err != nil {
@@ -525,7 +528,7 @@ func TestBuildConfigJSON_ACME_NoEmail_IssuerOmitsEmailKey(t *testing.T) {
 // failed with "internal error" at runtime (smoke I.7 Finding #6).
 func TestBuildConfigJSON_ACME_SkipsPrivateHosts(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "r1", Host: "api.local", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+		{ID: "r1", Host: "api.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: true},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -555,8 +558,8 @@ func TestBuildConfigJSON_ACME_SkipsPrivateHosts(t *testing.T) {
 // per-host filter would leak a .local into ACME subjects.
 func TestBuildConfigJSON_ACME_MixedPublicPrivate(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "r1", Host: "api.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
-		{ID: "r2", Host: "api.local", UpstreamURL: "http://127.0.0.1:9001", TLSEnabled: true},
+		{ID: "r1", Host: "api.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: true},
+		{ID: "r2", Host: "api.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: true},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -589,7 +592,7 @@ func TestBuildConfigJSON_ACME_IPLiteralSkipped(t *testing.T) {
 		// hostname regex — and routes can be seeded directly from
 		// tests as we do here. The unit under test is the
 		// public-cert filter; it must skip IP literals regardless.
-		{ID: "r1", Host: "10.0.0.1", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: true},
+		{ID: "r1", Host: "10.0.0.1", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: true},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -613,7 +616,7 @@ func TestBuildConfigJSON_ACME_IPLiteralSkipped(t *testing.T) {
 func TestBuildConfigJSON_ACME_AliasMixedPublicPrivate(t *testing.T) {
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "api.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "api.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			Aliases:    []string{"api.local", "alt.example.com"},
 			TLSEnabled: true,
 		},
@@ -644,7 +647,7 @@ func TestBuildConfigJSON_NoTLS_InternalOnly(t *testing.T) {
 	// No route has TLSEnabled=true → policies must be ONLY the
 	// internal catch-all (preserves pre-Step-I.1 wire shape).
 	routes := []storage.Route{
-		{ID: "r1", Host: "plain.example.com", UpstreamURL: "http://127.0.0.1:9000"},
+		{ID: "r1", Host: "plain.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -666,7 +669,7 @@ func TestBuildConfigJSON_NoTLS_InternalOnly(t *testing.T) {
 func TestBuildConfigJSON_Aliases_MatchHostContainsAll(t *testing.T) {
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "primary.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "primary.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			Aliases: []string{"alt1.com", "alt2.com"},
 		},
 	}
@@ -692,7 +695,7 @@ func TestBuildConfigJSON_Aliases_MatchHostContainsAll(t *testing.T) {
 func TestBuildConfigJSON_Aliases_ACMESubjectsExpanded(t *testing.T) {
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "primary.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "primary.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			Aliases: []string{"alt1.com", "alt2.com"}, TLSEnabled: true,
 		},
 	}
@@ -715,7 +718,7 @@ func TestBuildConfigJSON_Aliases_ACMESubjectsExpanded(t *testing.T) {
 func TestBuildConfigJSON_Aliases_RedirectHonorsAliases(t *testing.T) {
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "primary.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "primary.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			Aliases: []string{"alt1.com"}, TLSEnabled: true, RedirectToHTTPS: true,
 		},
 	}
@@ -751,7 +754,7 @@ func TestBuildConfigJSON_Aliases_RedirectHonorsAliases(t *testing.T) {
 func TestBuildConfigJSON_BasicAuth_EmitsAuthHandler(t *testing.T) {
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "auth.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "auth.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			BasicAuthEnabled:      true,
 			BasicAuthUsername:     "admin",
 			BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$SALT$KEY",
@@ -802,7 +805,7 @@ func TestBuildConfigJSON_BasicAuth_EmitsAuthHandler(t *testing.T) {
 func TestBuildConfigJSON_BasicAuth_OffSkipsHandler(t *testing.T) {
 	// BasicAuthEnabled=false: chain stays [metrics, reverse_proxy].
 	routes := []storage.Route{
-		{ID: "r1", Host: "open.example.com", UpstreamURL: "http://127.0.0.1:9000"},
+		{ID: "r1", Host: "open.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -825,7 +828,7 @@ func TestBuildConfigJSON_BasicAuth_OffSkipsHandler(t *testing.T) {
 
 func TestBuildConfigJSON_WAF_DetectMode(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "r1", Host: "waf.example.com", UpstreamURL: "http://127.0.0.1:9000", WAFMode: "detect"},
+		{ID: "r1", Host: "waf.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, WAFMode: "detect"},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -873,7 +876,7 @@ func TestBuildConfigJSON_WAF_DetectMode(t *testing.T) {
 
 func TestBuildConfigJSON_WAF_BlockMode(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "r1", Host: "block.example.com", UpstreamURL: "http://127.0.0.1:9000", WAFMode: "block"},
+		{ID: "r1", Host: "block.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, WAFMode: "block"},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -911,7 +914,7 @@ func TestBuildConfigJSON_WAF_BlockMode(t *testing.T) {
 
 func TestBuildConfigJSON_WAF_OffSkipsHandler(t *testing.T) {
 	routes := []storage.Route{
-		{ID: "r1", Host: "open.example.com", UpstreamURL: "http://127.0.0.1:9000", WAFMode: "off"},
+		{ID: "r1", Host: "open.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, WAFMode: "off"},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -960,17 +963,26 @@ func TestBuildConfigJSON_WAF_OffSkipsHandler(t *testing.T) {
 // missing-rule path is structurally prevented; this Validate test
 // is the runtime safety net on top.
 func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
-	// Fixture route engaging every Step I feature so the emitted
-	// chain contains [metrics, authentication, waf, headers,
+	// First fixture: route engaging every Step I feature so the
+	// emitted chain contains [metrics, authentication, waf, headers,
 	// reverse_proxy] + the redirect entry on the HTTP listener.
-	// Use bcrypt-format-shaped password hash to satisfy Caddy's
+	// Use argon2id-format-shaped password hash to satisfy Caddy's
 	// basicauth Provision validation; coraza-caddy will Provision
 	// against the real bundled OWASP CRS files.
+	//
+	// Step J.1 extension: the fixture set also covers each of the
+	// six LB policies on a multi-upstream pool, so caddy.Validate
+	// has to provision every selection_policy module emitted by the
+	// generator. Any future drift in the policy enum or in the
+	// emitted JSON shape surfaces here as a "unknown module" /
+	// provisioning panic — the same guard pattern that caught
+	// Step I Finding #2.
 	routes := []storage.Route{
 		{
 			ID:                    "r-all",
 			Host:                  "everything.example.com",
-			UpstreamURL:           "http://127.0.0.1:9000",
+			Upstreams:             []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:              storage.LBPolicyRoundRobin,
 			TLSEnabled:            true,
 			RedirectToHTTPS:       true,
 			Aliases:               []string{"alt.example.com"},
@@ -981,6 +993,30 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 			RequestHeaders:        map[string]string{"X-Real-Foo": "bar"},
 			ResponseHeaders:       map[string]string{"X-Custom": "x"},
 		},
+	}
+	// One additional route per non-default LB policy. Each carries a
+	// two-upstream pool so the selection_policy module has something
+	// real to provision against. round_robin is already covered by
+	// the r-all route above. Hosts are unique to avoid Caddy's
+	// host-collision check.
+	policyHosts := map[string]string{
+		storage.LBPolicyWeightedRoundRobin: "weighted.example.com",
+		storage.LBPolicyLeastConn:          "leastconn.example.com",
+		storage.LBPolicyIPHash:             "iphash.example.com",
+		storage.LBPolicyRandom:             "random.example.com",
+		storage.LBPolicyFirst:              "first.example.com",
+	}
+	for policy, host := range policyHosts {
+		routes = append(routes, storage.Route{
+			ID:   "r-" + policy,
+			Host: host,
+			Upstreams: []storage.Upstream{
+				{URL: "http://127.0.0.1:9001", Weight: 2},
+				{URL: "http://127.0.0.1:9002", Weight: 1},
+			},
+			LBPolicy: policy,
+			WAFMode:  "off",
+		})
 	}
 	// The arenet_routemetrics Caddy module's Provision asserts
 	// metrics.GlobalRegistry() is non-nil (see internal/metrics).
@@ -1037,9 +1073,9 @@ func TestBuildConfigJSON_HandlersAllResolvable(t *testing.T) {
 	// + the redirect entry on the HTTP listener.
 	routes := []storage.Route{
 		{
-			ID:                    "r-all",
-			Host:                  "everything.example.com",
-			UpstreamURL:           "http://127.0.0.1:9000",
+			ID:        "r-all",
+			Host:      "everything.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			TLSEnabled:            true,
 			RedirectToHTTPS:       true,
 			Aliases:               []string{"alt.example.com"},
@@ -1121,7 +1157,7 @@ func TestBuildConfigJSON_Headers_EmitsHandler(t *testing.T) {
 	// in []string — verify that conversion.
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "hdr.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "hdr.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			RequestHeaders:  map[string]string{"X-Real-Foo": "bar"},
 			ResponseHeaders: map[string]string{"X-Custom": "x"},
 		},
@@ -1163,7 +1199,7 @@ func TestBuildConfigJSON_Headers_EmptyMapsSkipHandler(t *testing.T) {
 	// the legacy two-handler chain stays compact when the feature
 	// is unused.
 	routes := []storage.Route{
-		{ID: "r1", Host: "nohdr.example.com", UpstreamURL: "http://127.0.0.1:9000"},
+		{ID: "r1", Host: "nohdr.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
 	if err != nil {
@@ -1209,7 +1245,7 @@ func httpsServerRoutes(t *testing.T, raw []byte) []map[string]any {
 func TestBuildConfigJSON_Redirect_TLSAndRedirectOn_EmitsStaticResponse301(t *testing.T) {
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "redir.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "redir.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			TLSEnabled: true, RedirectToHTTPS: true,
 		},
 	}
@@ -1269,7 +1305,7 @@ func TestBuildConfigJSON_Redirect_TLSOnlyNoRedirect_PreservesProxyOnHTTP(t *test
 	// keep serving via the proxy chain (no 301), HTTPS must too.
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "noredir.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "noredir.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			TLSEnabled: true, RedirectToHTTPS: false,
 		},
 	}
@@ -1305,7 +1341,7 @@ func TestBuildConfigJSON_Redirect_NoTLSIgnoresRedirectFlag(t *testing.T) {
 	// server is emitted.
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "plain.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "plain.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			TLSEnabled: false, RedirectToHTTPS: true,
 		},
 	}
@@ -1362,7 +1398,7 @@ func TestBuildConfigJSON_HTTPPort_DeclaredInAppConfig(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			routes := []storage.Route{
-				{ID: "r1", Host: "x.example.com", UpstreamURL: "http://127.0.0.1:9000"},
+				{ID: "r1", Host: "x.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 			}
 			raw, err := buildConfigJSON(routes, buildOpts{DevMode: tc.dev})
 			if err != nil {
@@ -1430,7 +1466,7 @@ func TestBuildConfigJSON_AutomaticHTTPS_KeepsCertManagementOn(t *testing.T) {
 	// only covers the HTTP side.
 	routes := []storage.Route{
 		{
-			ID: "r1", Host: "tls.example.com", UpstreamURL: "http://127.0.0.1:9000",
+			ID: "r1", Host: "tls.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
 			TLSEnabled: true,
 		},
 	}
@@ -1498,7 +1534,7 @@ func TestBuildConfigJSON_ListenPorts_DevVsProd(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			routes := []storage.Route{
-				{ID: "r1", Host: "x.example.com", UpstreamURL: "http://127.0.0.1:9000", TLSEnabled: tc.anyTLSEnabled},
+				{ID: "r1", Host: "x.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin, TLSEnabled: tc.anyTLSEnabled},
 			}
 			raw, err := buildConfigJSON(routes, buildOpts{DevMode: tc.dev})
 			if err != nil {
@@ -1530,5 +1566,252 @@ func TestBuildConfigJSON_ListenPorts_DevVsProd(t *testing.T) {
 				t.Errorf("arenet_https.listen = %v; want [%q]", httpsListens, tc.wantHTTPS)
 			}
 		})
+	}
+}
+
+// --- Step J.1 — Upstream pool + LB policy emission -------------------------
+
+// firstReverseProxyHandler walks the emitted Caddy config and returns
+// the first reverse_proxy handler map it finds. The Step J.1 tests use
+// this to inspect the upstreams / load_balancing block without having
+// to navigate the full apps.http.servers.routes.handle tree by hand.
+func firstReverseProxyHandler(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	apps, _ := got["apps"].(map[string]any)
+	http, _ := apps["http"].(map[string]any)
+	servers, _ := http["servers"].(map[string]any)
+	for _, srvAny := range servers {
+		srv, _ := srvAny.(map[string]any)
+		routes, _ := srv["routes"].([]any)
+		for _, routeAny := range routes {
+			route, _ := routeAny.(map[string]any)
+			handlers, _ := route["handle"].([]any)
+			for _, hAny := range handlers {
+				h, _ := hAny.(map[string]any)
+				if h["handler"] == "reverse_proxy" {
+					return h
+				}
+			}
+		}
+	}
+	t.Fatalf("no reverse_proxy handler found in config:\n%s", raw)
+	return nil
+}
+
+// TestBuildConfigJSON_LBPolicy_<X> — one test per LB policy. Every
+// policy must reach the emitted JSON as the value of
+// load_balancing.selection_policy.policy, verbatim. The constants
+// from storage.LBPolicy* are the single source of truth (no string
+// literals in test code or generator code) — drift would be caught
+// by the package failing to compile.
+
+func TestBuildConfigJSON_LBPolicy_RoundRobin(t *testing.T) {
+	assertLBPolicyEmitted(t, storage.LBPolicyRoundRobin)
+}
+
+func TestBuildConfigJSON_LBPolicy_WeightedRoundRobin(t *testing.T) {
+	assertLBPolicyEmitted(t, storage.LBPolicyWeightedRoundRobin)
+}
+
+func TestBuildConfigJSON_LBPolicy_LeastConn(t *testing.T) {
+	assertLBPolicyEmitted(t, storage.LBPolicyLeastConn)
+}
+
+func TestBuildConfigJSON_LBPolicy_IPHash(t *testing.T) {
+	assertLBPolicyEmitted(t, storage.LBPolicyIPHash)
+}
+
+func TestBuildConfigJSON_LBPolicy_Random(t *testing.T) {
+	assertLBPolicyEmitted(t, storage.LBPolicyRandom)
+}
+
+func TestBuildConfigJSON_LBPolicy_First(t *testing.T) {
+	assertLBPolicyEmitted(t, storage.LBPolicyFirst)
+}
+
+// assertLBPolicyEmitted is the per-policy assertion shared by the six
+// TestBuildConfigJSON_LBPolicy_<X> tests above. It builds a two-
+// upstream route with the given policy, parses the emitted JSON, and
+// asserts that load_balancing.selection_policy.policy matches.
+func assertLBPolicyEmitted(t *testing.T, policy string) {
+	t.Helper()
+	routes := []storage.Route{{
+		ID:   "r-policy",
+		Host: "policy.local",
+		Upstreams: []storage.Upstream{
+			{URL: "http://127.0.0.1:9001", Weight: 1},
+			{URL: "http://127.0.0.1:9002", Weight: 1},
+		},
+		LBPolicy: policy,
+	}}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	proxy := firstReverseProxyHandler(t, raw)
+	lb, ok := proxy["load_balancing"].(map[string]any)
+	if !ok {
+		t.Fatalf("reverse_proxy.load_balancing missing or wrong type: %+v", proxy)
+	}
+	sel, ok := lb["selection_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("load_balancing.selection_policy missing or wrong type: %+v", lb)
+	}
+	if got := sel["policy"]; got != policy {
+		t.Errorf("selection_policy.policy = %v; want %q", got, policy)
+	}
+}
+
+// TestBuildConfigJSON_WeightedRoundRobin_EmitsWeights — only the
+// weighted_round_robin policy must carry a `weights` array in pool
+// order. Other policies must not.
+func TestBuildConfigJSON_WeightedRoundRobin_EmitsWeights(t *testing.T) {
+	routes := []storage.Route{{
+		ID:   "r-weighted",
+		Host: "weighted.local",
+		Upstreams: []storage.Upstream{
+			{URL: "http://127.0.0.1:9001", Weight: 3},
+			{URL: "http://127.0.0.1:9002", Weight: 1},
+			{URL: "http://127.0.0.1:9003", Weight: 2},
+		},
+		LBPolicy: storage.LBPolicyWeightedRoundRobin,
+	}}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	proxy := firstReverseProxyHandler(t, raw)
+	sel := proxy["load_balancing"].(map[string]any)["selection_policy"].(map[string]any)
+	weights, ok := sel["weights"].([]any)
+	if !ok {
+		t.Fatalf("selection_policy.weights missing or wrong type for weighted_round_robin: %+v", sel)
+	}
+	// JSON numbers come back as float64.
+	if len(weights) != 3 {
+		t.Fatalf("weights len = %d; want 3", len(weights))
+	}
+	want := []float64{3, 1, 2}
+	for i, w := range weights {
+		gotF, ok := w.(float64)
+		if !ok {
+			t.Fatalf("weights[%d] type = %T; want float64", i, w)
+		}
+		if gotF != want[i] {
+			t.Errorf("weights[%d] = %v; want %v (pool order matters)", i, gotF, want[i])
+		}
+	}
+}
+
+// TestBuildConfigJSON_OtherPolicies_DoNotEmitWeights — the five
+// non-weighted policies must NOT emit a `weights` array, even if the
+// Upstream entries have non-default Weight values (Weight is ignored
+// outside weighted_round_robin per §1.3 decision 1).
+func TestBuildConfigJSON_OtherPolicies_DoNotEmitWeights(t *testing.T) {
+	for _, policy := range []string{
+		storage.LBPolicyRoundRobin,
+		storage.LBPolicyLeastConn,
+		storage.LBPolicyIPHash,
+		storage.LBPolicyRandom,
+		storage.LBPolicyFirst,
+	} {
+		t.Run(policy, func(t *testing.T) {
+			routes := []storage.Route{{
+				ID:   "r-noweights",
+				Host: "noweights.local",
+				Upstreams: []storage.Upstream{
+					// Deliberately set non-default weights to make sure
+					// the generator IGNORES them when the policy is not
+					// weighted_round_robin.
+					{URL: "http://127.0.0.1:9001", Weight: 5},
+					{URL: "http://127.0.0.1:9002", Weight: 7},
+				},
+				LBPolicy: policy,
+			}}
+			raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+			if err != nil {
+				t.Fatalf("buildConfigJSON: %v", err)
+			}
+			proxy := firstReverseProxyHandler(t, raw)
+			sel := proxy["load_balancing"].(map[string]any)["selection_policy"].(map[string]any)
+			if _, present := sel["weights"]; present {
+				t.Errorf("policy %q emitted a weights array; weights must be %s-only", policy, storage.LBPolicyWeightedRoundRobin)
+			}
+		})
+	}
+}
+
+// TestBuildConfigJSON_MultiUpstreamPool_EmitsEveryDial — a pool with
+// more than one Upstream produces one {"dial": ...} entry per pool
+// element, in declaration order. This is the §3.2 "Loop over r.
+// Upstreams" contract.
+func TestBuildConfigJSON_MultiUpstreamPool_EmitsEveryDial(t *testing.T) {
+	routes := []storage.Route{{
+		ID:   "r-multi",
+		Host: "multi.local",
+		Upstreams: []storage.Upstream{
+			{URL: "http://127.0.0.1:9001", Weight: 1},
+			{URL: "http://127.0.0.1:9002", Weight: 1},
+			{URL: "http://127.0.0.1:9003", Weight: 1},
+		},
+		LBPolicy: storage.LBPolicyRoundRobin,
+	}}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	proxy := firstReverseProxyHandler(t, raw)
+	upstreams, ok := proxy["upstreams"].([]any)
+	if !ok {
+		t.Fatalf("upstreams missing or wrong type: %+v", proxy)
+	}
+	if len(upstreams) != 3 {
+		t.Fatalf("upstreams len = %d; want 3 (one entry per pool element)", len(upstreams))
+	}
+	want := []string{"127.0.0.1:9001", "127.0.0.1:9002", "127.0.0.1:9003"}
+	for i, uAny := range upstreams {
+		u, _ := uAny.(map[string]any)
+		if got := u["dial"]; got != want[i] {
+			t.Errorf("upstreams[%d].dial = %v; want %q (declaration order)", i, got, want[i])
+		}
+	}
+}
+
+// TestBuildConfigJSON_SingleUpstreamPool_EmitsLoadBalancing — a one-
+// element pool still emits a load_balancing.selection_policy block,
+// per §3.2 ("Emitting the policy for a one-upstream route is harmless
+// — selection is moot but valid"). This is the AC #2 behavioural
+// guarantee: a migrated Step I route, which becomes a one-element
+// pool with round_robin, proxies identically — the addition of the
+// load_balancing block is expected, the emitted JSON shape is
+// validated against §3.2, NOT against the pre-J.1 byte-equal shape.
+func TestBuildConfigJSON_SingleUpstreamPool_EmitsLoadBalancing(t *testing.T) {
+	routes := []storage.Route{{
+		ID:   "r-single",
+		Host: "single.local",
+		Upstreams: []storage.Upstream{
+			{URL: "http://127.0.0.1:9000", Weight: 1},
+		},
+		LBPolicy: storage.LBPolicyRoundRobin,
+	}}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	proxy := firstReverseProxyHandler(t, raw)
+	upstreams, _ := proxy["upstreams"].([]any)
+	if len(upstreams) != 1 {
+		t.Fatalf("upstreams len = %d; want 1 (one-element pool)", len(upstreams))
+	}
+	lb, ok := proxy["load_balancing"].(map[string]any)
+	if !ok {
+		t.Fatalf("one-upstream pool did not emit load_balancing: %+v", proxy)
+	}
+	sel := lb["selection_policy"].(map[string]any)
+	if got := sel["policy"]; got != storage.LBPolicyRoundRobin {
+		t.Errorf("single-upstream selection_policy.policy = %v; want %q", got, storage.LBPolicyRoundRobin)
 	}
 }

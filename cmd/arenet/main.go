@@ -92,13 +92,14 @@ func ensureTestRoute(ctx context.Context, logger *slog.Logger, store *storage.St
 		}
 	}
 	created, err := store.CreateRoute(ctx, storage.Route{
-		Host:        "test.local",
-		UpstreamURL: "http://127.0.0.1:9999",
+		Host:      "test.local",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9999", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
 	})
 	if err != nil {
 		return err
 	}
-	logger.Info("inserted test route", "id", created.ID, "host", created.Host, "upstream", created.UpstreamURL)
+	logger.Info("inserted test route", "id", created.ID, "host", created.Host, "upstream", created.Upstreams[0].URL)
 	return nil
 }
 
@@ -400,10 +401,21 @@ func (l *storeLister) ListRoutesForMetrics(ctx context.Context) ([]metrics.Route
 	}
 	out := make([]metrics.RouteMetadata, len(routes))
 	for i, r := range routes {
+		// Step J.1: metrics.RouteMetadata still carries a single
+		// Upstream string (Topology page is mono-upstream until J.6).
+		// Expose Upstreams[0].URL — storage.validate() guarantees the
+		// pool has at least one element. A multi-upstream route shows
+		// only the first backend in the Topology graph until J.3 / J.6
+		// rework the visualisation. Acceptable transitional behaviour
+		// for J.1.
+		var upstream string
+		if len(r.Upstreams) > 0 {
+			upstream = r.Upstreams[0].URL
+		}
 		out[i] = metrics.RouteMetadata{
 			ID:       r.ID,
 			Host:     r.Host,
-			Upstream: r.UpstreamURL,
+			Upstream: upstream,
 		}
 	}
 	return out, nil

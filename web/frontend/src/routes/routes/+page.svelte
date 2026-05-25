@@ -33,7 +33,29 @@
 	let hostError = $state<string | null>(null);
 	let upstreamError = $state<string | null>(null);
 
-	let formData = $state<RouteRequest>({
+	// Step J.1 → J.3 transitional bridge:
+	// The form still has a single Upstream URL input (the pre-J.1
+	// shape). The backend now expects an upstreams[] pool + lbPolicy
+	// on the wire. To keep the form functional in the J.1→J.3
+	// window without shipping any J.3 UI here, we keep `upstreamUrl`
+	// as a UI-only field in formData and rebuild a one-element
+	// upstreams[] at submit time (see submitForm below). lbPolicy is
+	// always sent empty so the backend default (round_robin)
+	// applies.
+	//
+	// FOOTGUN, documented: a route created via the API with multiple
+	// upstreams will display only the first one in this form, and
+	// EDITING it in the form will overwrite the whole pool with a
+	// one-element pool — silently dropping every other upstream.
+	// J.3 ships the real repeater + selector; until then, treat the
+	// UI as mono-upstream only. The wire types in types.ts already
+	// carry the new fields, so this is a UI lag, not a wire lag.
+	//
+	// J.3 must remove the `upstreamUrl` UI field below, replace the
+	// single Input with a repeater, and stop the synthetic mapping
+	// in submitForm / openEdit.
+	type FormData = Omit<RouteRequest, 'upstreams' | 'lbPolicy'> & { upstreamUrl: string };
+	let formData = $state<FormData>({
 		host: '',
 		upstreamUrl: '',
 		tlsEnabled: false,
@@ -52,6 +74,17 @@
 	// not the form's write-only password input. Drives the "••• set"
 	// placeholder and the empty-password-keeps-hash semantics.
 	let basicAuthPasswordSet = $state(false);
+
+	// Step J.1 → J.3 transitional bridge guard: when the route being
+	// edited has multiple upstreams (created via API), the single-
+	// input UI in this form cannot represent the pool. Saving would
+	// silently flatten it (see FOOTGUN comment near formData). We
+	// freeze the Upstream URL input in that case and surface a one-
+	// line notice so the operator knows to edit via API until J.3
+	// ships the real repeater. multiUpstreamReadOnly is set in
+	// openEdit / openCreate; the input below binds its `disabled`
+	// to it.
+	let multiUpstreamReadOnly = $state(false);
 
 	// Step I.6 — header repeater state. We track tuples here (not
 	// the final Record) so:
@@ -134,6 +167,9 @@
 			wafMode: 'detect'
 		};
 		basicAuthPasswordSet = false;
+		// Step J.1: a fresh create starts with a single empty upstream
+		// — single-input UI is safe.
+		multiUpstreamReadOnly = false;
 		requestHeaderRows = [];
 		responseHeaderRows = [];
 		resetFormErrors();
@@ -143,9 +179,14 @@
 	function openEdit(r: Route) {
 		formMode = 'edit';
 		editingId = r.id;
+		// Step J.1 → J.3 transitional bridge: show the first
+		// upstream's URL in the single-input UI. Multi-upstream
+		// routes (created via API) display only Upstreams[0] —
+		// editing here will overwrite the whole pool. Documented
+		// limitation, see the FormData comment block above.
 		formData = {
 			host: r.host,
-			upstreamUrl: r.upstreamUrl,
+			upstreamUrl: r.upstreams[0]?.url ?? '',
 			tlsEnabled: r.tlsEnabled,
 			redirectToHttps: r.redirectToHttps,
 			// Step I.3: copy aliases by value so editing in the form
@@ -162,6 +203,12 @@
 			wafMode: r.wafMode
 		};
 		basicAuthPasswordSet = r.basicAuthPasswordSet;
+		// Step J.1 → J.3 transitional bridge: freeze the upstream
+		// input when the route has more than one upstream so editing
+		// can't silently flatten the pool. The operator must use the
+		// API (or wait for J.3) to modify the pool itself; other
+		// fields (TLS, WAF, headers, …) remain editable normally.
+		multiUpstreamReadOnly = r.upstreams.length > 1;
 		// Step I.6: seed the repeater tuples from the server's map.
 		// We intentionally don't share references — typing in the
 		// form should not mutate the table-backing object.
@@ -206,13 +253,30 @@
 	function fieldFromMessage(msg: string): 'host' | 'upstreamUrl' | null {
 		const lower = msg.toLowerCase();
 		if (lower.startsWith('host ')) return 'host';
-		if (lower.startsWith('upstreamurl ')) return 'upstreamUrl';
+		// Step J.1: backend pool errors are prefixed "upstreams[N]:"
+		// or start with "upstreams" (e.g. "upstreams must contain
+		// at least one entry"). In the J.1→J.3 transitional UI we
+		// only ever send a one-element pool, so any "upstreams[N]"
+		// error is N=0 — surface it on the single UI input. J.3
+		// must split this back into per-row errors once the
+		// repeater lands.
+		if (lower.startsWith('upstreams')) return 'upstreamUrl';
 		return null;
 	}
 
 	async function submitForm() {
 		submitting = true;
 		resetFormErrors();
+		// Step J.1 → J.3 transitional bridge: refuse to submit a
+		// multi-upstream route through the single-input UI. The Input
+		// is also visually disabled (see the markup), but a clavier-
+		// only submit would otherwise still flatten the pool. Belt
+		// and suspenders.
+		if (multiUpstreamReadOnly) {
+			formError = 'Multi-upstream pool — edit via API until J.3 ships the repeater.';
+			submitting = false;
+			return;
+		}
 		try {
 			// Step I.3: drop blank alias rows the user may have added
 			// without filling. The backend would 400 on them anyway,
@@ -222,11 +286,21 @@
 			// Step I.6: convert the header repeater tuples back to
 			// the Record<string,string> the API expects. Empty keys
 			// are dropped; empty values are KEPT (Ajustement 2).
-			const payload = {
-				...formData,
+			//
+			// Step J.1 → J.3 transitional bridge: synthesize the
+			// upstreams pool from the single upstreamUrl input and
+			// send an empty lbPolicy so the backend default
+			// (round_robin) applies. J.3 must replace this with the
+			// real pool + selector + and drop the destructured
+			// `upstreamUrl` field below.
+			const { upstreamUrl, ...rest } = formData;
+			const payload: RouteRequest = {
+				...rest,
 				aliases: formData.aliases.map((a) => a.trim()).filter((a) => a.length > 0),
 				requestHeaders: tuplesToRecord(requestHeaderRows),
-				responseHeaders: tuplesToRecord(responseHeaderRows)
+				responseHeaders: tuplesToRecord(responseHeaderRows),
+				upstreams: [{ url: upstreamUrl, weight: 1 }],
+				lbPolicy: ''
 			};
 			if (formMode === 'create') {
 				await createRoute(payload);
@@ -375,9 +449,11 @@
 				</td>
 				<td
 					class="px-4 py-3 font-mono text-secondary truncate max-w-[16rem]"
-					title={r.upstreamUrl}
+					title={r.upstreams[0]?.url ?? ''}
 				>
-					{r.upstreamUrl}
+					{r.upstreams[0]?.url ?? ''}{r.upstreams.length > 1
+						? ` (+${r.upstreams.length - 1})`
+						: ''}
 				</td>
 				<td class="px-4 py-3">
 					{#if r.tlsEnabled}
@@ -479,7 +555,13 @@
 			bind:value={formData.upstreamUrl}
 			placeholder="http://127.0.0.1:8080"
 			error={upstreamError ?? undefined}
+			disabled={multiUpstreamReadOnly}
 		/>
+		{#if multiUpstreamReadOnly}
+			<p class="text-xs text-muted ml-1">
+				Multi-upstream pool — edit via API until J.3 ships the repeater.
+			</p>
+		{/if}
 		<div class="flex flex-col gap-1">
 			<Checkbox label="Enable TLS" bind:checked={formData.tlsEnabled} />
 			<!-- Step I.1 helper text (Q4 vote C): warn softly that ACME

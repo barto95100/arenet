@@ -411,10 +411,33 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateUpstreamURL(req.UpstreamURL); err != nil {
+	// Step J.1: materialise the per-Upstream default Weight=1 BEFORE
+	// pool validation. The storage validate() rule weight >= 1 (the
+	// last line of defence) would otherwise reject any pool element
+	// the caller submitted without a weight. §1.3 decision 1: weight
+	// defaults to 1 and is only consulted by weighted_round_robin.
+	for i := range req.Upstreams {
+		if req.Upstreams[i].Weight == 0 {
+			req.Upstreams[i].Weight = 1
+		}
+	}
+	if err := validateUpstreamPool(req.Upstreams); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	// Step J.1: materialise the default LBPolicy on POST. Empty means
+	// "give me the default round_robin" (§5.1). updateRoute uses a
+	// different rule (preserve previous), hence the per-handler
+	// normalisation here.
+	if req.LBPolicy == "" {
+		req.LBPolicy = storage.LBPolicyRoundRobin
+	}
+	if err := validateLBPolicy(req.LBPolicy); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if err := validateAliasesStructural(req.Host, req.Aliases); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -486,9 +509,17 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owners := collectAllHostsExcept(existing, "")
+	// Step J.1: map the wire pool to storage.Upstream verbatim.
+	// Defaults (Weight=1, LBPolicy=round_robin) have already been
+	// materialised above so the storage row carries explicit values.
+	storeUpstreams := make([]storage.Upstream, len(req.Upstreams))
+	for i, u := range req.Upstreams {
+		storeUpstreams[i] = storage.Upstream{URL: u.URL, Weight: u.Weight}
+	}
 	newRoute := storage.Route{
 		Host:                  req.Host,
-		UpstreamURL:           req.UpstreamURL,
+		Upstreams:             storeUpstreams,
+		LBPolicy:              req.LBPolicy,
 		TLSEnabled:            req.TLSEnabled,
 		RedirectToHTTPS:       req.RedirectToHTTPS,
 		Aliases:               req.Aliases,
@@ -555,7 +586,15 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateUpstreamURL(req.UpstreamURL); err != nil {
+	// Step J.1: materialise the per-Upstream default Weight=1 before
+	// pool validation. Same rule as createRoute (storage validate()
+	// rejects weight < 1).
+	for i := range req.Upstreams {
+		if req.Upstreams[i].Weight == 0 {
+			req.Upstreams[i].Weight = 1
+		}
+	}
+	if err := validateUpstreamPool(req.Upstreams); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -589,6 +628,23 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateHeaders(req.ResponseHeaders, "response"); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Step J.1: LBPolicy resolution on PUT — same preserve-previous
+	// semantics as WAFMode below. Empty means "keep the stored
+	// value", explicit value goes through validateLBPolicy. A row
+	// persisted without LBPolicy is a programming-error case (pool
+	// migration guarantees it) but we recover to "round_robin" to
+	// avoid a 500 if it ever happens.
+	if req.LBPolicy == "" {
+		req.LBPolicy = previous.LBPolicy
+		if req.LBPolicy == "" {
+			req.LBPolicy = storage.LBPolicyRoundRobin
+		}
+	}
+	if err := validateLBPolicy(req.LBPolicy); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -654,10 +710,17 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	// changed since the stored copy (Step I.3 Q1). The pre-Step-I.3
 	// optimization that compared only Host is no longer sufficient —
 	// adding a new alias must still trigger the cross-route check.
+	// Step J.1: map the wire pool to storage.Upstream verbatim, same
+	// as createRoute.
+	storeUpstreams := make([]storage.Upstream, len(req.Upstreams))
+	for i, u := range req.Upstreams {
+		storeUpstreams[i] = storage.Upstream{URL: u.URL, Weight: u.Weight}
+	}
 	newRoute := storage.Route{
 		ID:                    id,
 		Host:                  req.Host,
-		UpstreamURL:           req.UpstreamURL,
+		Upstreams:             storeUpstreams,
+		LBPolicy:              req.LBPolicy,
 		TLSEnabled:            req.TLSEnabled,
 		RedirectToHTTPS:       req.RedirectToHTTPS,
 		Aliases:               req.Aliases,
