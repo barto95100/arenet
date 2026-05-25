@@ -219,6 +219,35 @@ Priorities set at the close of Step I, before the Step J spec is written.
     automatic).
 
   No infra dependency. Schedule: J.7, before the tag.
+- **ACME directory / `--dev` coupling — post-v0.6.0, not blocking.**
+  Today `acmeDirectoryURL(devMode)` in `internal/caddymgr/manager.go`
+  binds the Let's Encrypt directory choice (staging vs production)
+  to the same `--dev` flag that picks the listen ports
+  (`:8080/:8443` vs `:80/:443`). An operator who wants to dry-run
+  DNS-01 (or HTTP-01) issuance against LE **staging** with the
+  prod listen ports — the classic "validate my certs are
+  issuable before opening the public ports for real" rehearsal —
+  cannot, without also flipping to the dev ports. The J.7 smoke
+  works around this by running the DNS-01 phase in `--dev`
+  (option γ in the recon — AC #9 explicitly allows PARTIAL, and
+  the smoke doc records the `:8443` port acknowledgement), but
+  the underlying coupling is a real defect.
+
+  Mini-design (recorded so a future follow-up doesn't redesign
+  from scratch): add `ARENET_ACME_DIRECTORY_URL` env var, read
+  in `cmd/arenet/main.go` next to `ARENET_ACME_EMAIL`, plumbed
+  through `caddymgr.New` and `buildOpts.ACMEDirectoryURL` into
+  `acmeDirectoryURL(...)`. When the env is non-empty it
+  overrides the devMode default; when empty, the current
+  behaviour is preserved verbatim. Env-var pattern mirrors the
+  existing `ARENET_ACME_EMAIL` plumbing (same file, same call
+  site, same nil-OK semantics). Estimated ~15 lines Go + 1
+  three-case unit test (override-set / dev / prod) on
+  `acmeDirectoryURL`. AGPL header not affected (no new file).
+
+  Schedule: post-`v0.6.0-step-j` follow-up. Out of Step J
+  scope — adding it now would require re-tagging the spec.
+
 - **J.4 frontend test gap — not blocking before tag.** Same
   shape as the §5.3 entry above, but smaller surface and lower
   priority. J.4 shipped two render-reachable frontend surfaces
