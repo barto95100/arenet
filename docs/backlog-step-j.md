@@ -219,6 +219,28 @@ Priorities set at the close of Step I, before the Step J spec is written.
     automatic).
 
   No infra dependency. Schedule: J.7, before the tag.
+- **J.4 frontend test gap — not blocking before tag.** Same
+  shape as the §5.3 entry above, but smaller surface and lower
+  priority. J.4 shipped two render-reachable frontend surfaces
+  that have no dedicated render tests:
+  - The route form's `<select id="route-acme-challenge">`
+    (visibility gated on `tlsEnabled`; locked to `dns-01` when
+    host or any alias is a wildcard; inline hint linking to
+    `/settings` when `dns-01` is selected without a configured
+    provider).
+  - The (β) inconsistency bandeaux on `/routes` and `/settings`
+    (rendered when any persisted route uses `dns-01` while
+    `dnsProvider.configured === false`).
+  - The /settings DNS-provider section (endpoint dropdown +
+    three password inputs + preserve-on-edit + Configured /
+    Not configured badge).
+
+  Recommendation: pick up as a post-`v0.6.0-step-j` follow-up.
+  The J.7 live smoke exercises every one of these surfaces in
+  a real browser against a real backend, which is the higher-
+  value coverage for now. Add render tests once a regression
+  candidate materialises or alongside the next J.4-adjacent
+  feature.
 - **Topology code-quality debt (out of J.6 scope).** Extract a
   `<Sparkline>` atomic component out of `TopologyDetailPanel` (the SVG
   path is built manually today, 30+ lines); migrate the ad-hoc
