@@ -8,12 +8,14 @@
   Surface for page-level controls. Holds a title, an optional
   subtitle, and a right-aligned actions slot. Used by:
 
-    - Routes page → "Add route" primary button
-    - Audit page → filter chips + "Clear all"
-    - Settings page → (no actions for now)
+    - Routes page    → "Add route" primary button
+    - Audit page     → filter chips + "Clear all"
+    - Settings page  → (no actions for now)
+    - Topology page  → connection status (StatusDot + label) + the
+                       "Waiting for first tick…" notice (J.6)
 
-  Topology and Setup/Login pages stay headerless — they have their
-  own UX patterns (canvas, centered card).
+  Setup / Login pages stay headerless — they have their own UX
+  patterns (centered card).
 
   Public API (add-only per §1.3):
 

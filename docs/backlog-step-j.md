@@ -180,27 +180,45 @@ Priorities set at the close of Step I, before the Step J spec is written.
   disproportionate to an observability surface. Revisit if
   `coraza-caddy` gains a match hook, or as a dedicated WAF step. See
   spec `2026-05-22-step-j-multi-upstream-lb.md` §1.4.
-- **§5.3 — Extended frontend test suite for the Routes page,
-  REPORTÉE.** The spec calls for the frontend test count to rise
-  alongside J.3's UI: upstream-repeater add/remove tests, LB-
-  selector visibility (and weight visibility) state preserved
-  across visibility flips, health-check sub-form gating (sub-
-  fields disabled when off, state preserved across the toggle),
-  validation rules (each §5.2 rule has a matching client-side
-  rejection test), and an error-map test pinning the round-trip
-  between `fieldFromMessage` and `errors[...]`. **None of these
-  shipped with J.3.** Pre-requisite: scaffold
-  `@testing-library/svelte` + jsdom, which the project does not
-  currently have — this is a deferred Step F debt already
-  documented in `docs/roadmap.md` ("Step F action: install
-  @testing-library/svelte ..."). J.3 inherited that gap rather
-  than fixing it, because adding the scaffold is its own non-
-  trivial sub-task. Take this as one combined sub-task: add the
-  testing-library scaffold AND write the §5.3 test suite. Also
-  on the list once the scaffold exists: a round-trip test for
-  openEdit → HC sub-form → submit, pinning that all 9 HealthCheck
-  fields survive an unchanged round-trip (the audit on this
-  commit was manual — see the J.3 review notes).
+- **§5.3 — Extended frontend test suite for the Routes page —
+  BLOCKING BEFORE THE `v0.6.0-step-j` TAG.** Promoted from
+  REPORTÉE to blocking on 2026-05-25 after the J.6 commit: the
+  scaffold pre-requisite this entry once cited turned out to be
+  stale — `@testing-library/svelte v5.3.1` + jsdom have been
+  installed since Step F, and the J.6 page-render tests prove
+  the harness works. The remaining work is the test suite
+  itself, scheduled to land **inside J.7** before the tag is
+  cut.
+
+  Scope, exact (spec §5.3 + the J.3 review notes):
+  - Upstream-pool repeater add / remove tests (including the
+    "last row cannot be removed" guard).
+  - LB-selector visibility flip: shown only when the pool has
+    ≥ 2 upstreams; lbPolicy value preserved across visibility
+    flips (remove a row, re-add, the selector re-appears with
+    the previous choice).
+  - Weight-column visibility flip: shown only for
+    weighted_round_robin; per-row weight values preserved when
+    the column hides and re-appears.
+  - Health-check sub-form gating: sub-fields disabled when
+    `enabled` is off, sub-field state preserved across the
+    toggle (typed values do not erase on off-and-back-on).
+  - Validation rules — each §5.2 rule with a matching client-
+    side rejection test (URI required when enabled, method
+    enum, interval / timeout duration shape, timeout < interval,
+    expectStatus in 100..599 or 0, expectBody is a valid regex,
+    passes ≥ 1, fails ≥ 1).
+  - Error-map round-trip: `fieldFromMessage` correctly maps
+    every server message shape (host, lbPolicy, upstreams[N]
+    .url, upstreams[N].weight, healthCheck.<sub>) to the right
+    `errors[…]` key, and the markup binds those keys back to
+    the offending field.
+  - openEdit → HC sub-form → submit round-trip: pin that all
+    9 HealthCheck fields survive an unchanged round-trip (the
+    audit on the J.3 commit was manual; this test makes it
+    automatic).
+
+  No infra dependency. Schedule: J.7, before the tag.
 - **Topology code-quality debt (out of J.6 scope).** Extract a
   `<Sparkline>` atomic component out of `TopologyDetailPanel` (the SVG
   path is built manually today, 30+ lines); migrate the ad-hoc

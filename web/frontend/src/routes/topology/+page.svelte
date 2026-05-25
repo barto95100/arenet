@@ -17,10 +17,15 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { topology } from '$lib/stores/topology.svelte';
+	import { viewport } from '$lib/topology/viewport.svelte';
+	import { computeTopologyBBox } from '$lib/topology/bounds';
+	import { shouldAutoFit } from '$lib/topology/auto-fit';
 	import { TopologyClient, type Snapshot, type ConnectionStatus } from '$lib/api/topology';
 	import TopologySvg from '$lib/components/TopologySvg.svelte';
 	import TopologyControls from '$lib/components/TopologyControls.svelte';
 	import TopologyDetailPanel from '$lib/components/TopologyDetailPanel.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import StatusDot from '$lib/components/StatusDot.svelte';
 
 	let client: TopologyClient | null = null;
 
@@ -150,6 +155,46 @@
 	const showWaitingForTick = $derived(
 		topology.connectionStatus === 'connected' && topology.lastTickAt === null
 	);
+
+	// J.6 — auto-fit on the first non-empty data tick (Finding #10
+	// from the Step I smoke). The naive "call fitView from onMount"
+	// trap is that at mount the topology store is empty: nodes
+	// arrive via the first WebSocket snapshot at ~1 Hz, so a fit
+	// computed before that snapshot runs against zero nodes and
+	// produces an identity (or NaN) transform.
+	//
+	// Correct trigger: watch `routesList.length` and fire fitView()
+	// the first time it transitions from 0 to > 0. The local
+	// `hasFit` flag guards against re-firing on every subsequent
+	// tick — re-fitting on every snapshot would make the viewport
+	// jump every second as routes appear/disappear, which would be
+	// worse than the pre-J.6 behaviour.
+	//
+	// The fit also waits for the wrap to have measured a non-zero
+	// viewport size (wrapWidth > 0, wrapHeight > 0); without this
+	// guard the first $effect tick fires before bind:clientWidth/
+	// Height has reported the rendered surface, and fitView would
+	// divide by zero in viewport.fitView's clamp.
+	let hasFit = $state(false);
+	$effect(() => {
+		if (
+			!shouldAutoFit({
+				hasFit,
+				routesCount: routesList.length,
+				viewportWidth: wrapWidth,
+				viewportHeight: wrapHeight
+			})
+		) {
+			return;
+		}
+		viewport.fitView(
+			computeTopologyBBox(routesList.length),
+			wrapWidth,
+			wrapHeight,
+			40
+		);
+		hasFit = true;
+	});
 </script>
 
 <svelte:head>
@@ -157,21 +202,17 @@
 </svelte:head>
 
 <div class="page">
-	<header class="page-header">
-		<div>
-			<h1 class="title">Topology</h1>
-			<p class="subtitle">Live network visualization.</p>
-		</div>
-		<div class="status-block">
+	<PageHeader title="Topology" subtitle="Live network visualization.">
+		{#snippet actions()}
 			{#if showWaitingForTick}
 				<span class="waiting" aria-live="polite">Waiting for first tick…</span>
 			{/if}
 			<span class="status" aria-live="polite">
-				<span class="status-dot status-dot-{statusDot}" aria-hidden="true"></span>
+				<StatusDot status={statusDot} />
 				{statusLabel}
 			</span>
-		</div>
-	</header>
+		{/snippet}
+	</PageHeader>
 
 	{#if routesList.length === 0 && topology.connectionStatus !== 'reconnecting'}
 		<div class="empty">
@@ -211,29 +252,12 @@
 	.page {
 		padding: 1.5rem;
 	}
-	.page-header {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		margin-bottom: 1.5rem;
-	}
-	.title {
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 1.5rem;
-		font-weight: 600;
-		color: var(--text-primary);
-		margin: 0;
-	}
-	.subtitle {
-		font-size: 0.875rem;
-		color: var(--text-secondary);
-		margin: 0.25rem 0 0;
-	}
-	.status-block {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-	}
+	/* J.6: .page-header, .title, .subtitle, .status-block,
+	   .status-dot{,-up,-warn,-down} removed — replaced by the
+	   shared <PageHeader> + <StatusDot> atomic. Only the slot-
+	   content layout (.waiting / .status) stays here since it
+	   describes content inside PageHeader's actions snippet, not
+	   the atomic itself. */
 	.waiting {
 		font-size: 0.75rem;
 		color: var(--text-secondary);
@@ -244,23 +268,6 @@
 		gap: 0.5rem;
 		font-size: 0.875rem;
 		color: var(--text-secondary);
-	}
-	.status-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		display: inline-block;
-	}
-	.status-dot-up {
-		background: var(--status-up);
-		box-shadow: 0 0 6px var(--status-up);
-	}
-	.status-dot-warn {
-		background: var(--status-warn);
-		box-shadow: 0 0 6px var(--status-warn);
-	}
-	.status-dot-down {
-		background: var(--status-down);
 	}
 
 	.svg-wrap {
