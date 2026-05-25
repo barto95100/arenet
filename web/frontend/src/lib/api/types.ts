@@ -26,6 +26,34 @@ export type LBPolicy =
 	| 'random'
 	| 'first';
 
+/**
+ * Step J.2: per-route active health check. Mirrors storage.HealthCheck
+ * (9 fields). When Enabled is false the other eight fields are inert
+ * — the server emits no Caddy `health_checks` block.
+ *
+ * The five defaultable fields (method, interval, timeout, passes,
+ * fails) are materialised by the server before validation. URI is
+ * the one field operators must always supply when Enabled is true.
+ *
+ * Wire semantics on PUT (J.2 decision): the block is preserve-or-
+ * replace, never partial. Send the complete 9-field block (full
+ * replacement) OR omit the block entirely (preserve previous);
+ * never a partial block, because every omitted sub-field resets to
+ * its server-side default. See docs/backlog-step-j.md "J.3 frontend
+ * — health-check is preserve-or-replace, never partial".
+ */
+export interface HealthCheck {
+	enabled: boolean;
+	uri: string;
+	method: 'GET' | 'HEAD' | '';
+	interval: string;
+	timeout: string;
+	expectStatus: number;
+	expectBody: string;
+	passes: number;
+	fails: number;
+}
+
 export interface Route {
 	id: string;
 	host: string;
@@ -81,6 +109,13 @@ export interface Route {
 	 *   - "block":  Coraza returns 403 on match.
 	 */
 	wafMode: 'off' | 'detect' | 'block';
+	/**
+	 * Step J.2 — active health check. Always present on a stored
+	 * route (storage.HealthCheck has no omitempty); a route created
+	 * pre-J.2 reads back with the zero-value HealthCheck (Enabled
+	 * false, every sub-field at zero).
+	 */
+	healthCheck: HealthCheck;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -88,19 +123,17 @@ export interface Route {
 export interface RouteRequest {
 	host: string;
 	/**
-	 * Step J.1: pool of backends. The J.1→J.3 transitional UI in
-	 * routes/+page.svelte sends a one-element pool built from the
-	 * single Upstream URL input; J.3 will replace that with a real
-	 * repeater. Either way the backend materialises Weight=0 → 1
-	 * before validation, so an omitted weight is fine.
+	 * Step J.1: pool of backends. Repeater on the form; at least one
+	 * entry; per-element URL + weight. Server materialises Weight=0
+	 * → 1 before validation, so an omitted weight is fine.
 	 */
-	upstreams: Upstream[]; // Step J.1 — see Route.upstreams.
+	upstreams: Upstream[];
 	/**
 	 * Step J.1: LB selection policy. Empty string on POST means
 	 * "give me the default round_robin"; empty on PUT preserves the
-	 * previously stored value (same UX as wafMode). The J.1→J.3
-	 * transitional UI always sends "" so the backend default
-	 * applies; J.3 will add a real selector.
+	 * previously stored value (same UX as wafMode). The form sends
+	 * the explicit value when the LB selector is visible (pool size
+	 * ≥ 2), otherwise sends "" so the backend default applies.
 	 */
 	lbPolicy: LBPolicy | '';
 	tlsEnabled: boolean;
@@ -123,6 +156,20 @@ export interface RouteRequest {
 	 * previously stored value (mirrors the I.5 password preserve UX).
 	 */
 	wafMode: 'off' | 'detect' | 'block' | '';
+	/**
+	 * Step J.2 — active health check. OPTIONAL field with
+	 * preserve-or-replace semantics on PUT (J.2 decision):
+	 *   - omitted (undefined)         → preserve previously stored
+	 *     HealthCheck verbatim. The form uses this when the user did
+	 *     not touch the HC sub-form.
+	 *   - present with all 9 fields   → full replacement. The server
+	 *     materialises the five defaultable fields if blank.
+	 *
+	 * Never ship a partial block: every omitted sub-field of a
+	 * present block resets to its server-side default. See
+	 * docs/backlog-step-j.md.
+	 */
+	healthCheck?: HealthCheck;
 }
 
 /**

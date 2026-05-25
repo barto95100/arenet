@@ -6,7 +6,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { listRoutes, createRoute, updateRoute, deleteRoute } from '$lib/api/client';
-	import type { Route, RouteRequest } from '$lib/api/types';
+	import type { HealthCheck, LBPolicy, Route, RouteRequest, Upstream } from '$lib/api/types';
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import Button from '$lib/components/Button.svelte';
@@ -30,72 +30,86 @@
 	let editingId = $state<string | null>(null);
 	let submitting = $state(false);
 	let formError = $state<string | null>(null);
-	let hostError = $state<string | null>(null);
-	let upstreamError = $state<string | null>(null);
 
-	// Step J.1 → J.3 transitional bridge:
-	// The form still has a single Upstream URL input (the pre-J.1
-	// shape). The backend now expects an upstreams[] pool + lbPolicy
-	// on the wire. To keep the form functional in the J.1→J.3
-	// window without shipping any J.3 UI here, we keep `upstreamUrl`
-	// as a UI-only field in formData and rebuild a one-element
-	// upstreams[] at submit time (see submitForm below). lbPolicy is
-	// always sent empty so the backend default (round_robin)
-	// applies.
+	// Step J.3: §5.2 default values. Source of truth on the client
+	// for the four defaultable text/number placeholders + the
+	// initial `method` select value. Must stay in sync with §1.3
+	// decision 4 (Arenet-owned defaults) and validation.go's
+	// defaultHC* constants. uri and expectStatus placeholders are
+	// illustrative — not in this object — because they are not
+	// server-defaultable.
+	const HEALTH_CHECK_DEFAULTS = {
+		method: 'GET',
+		interval: '30s',
+		timeout: '5s',
+		passes: 1,
+		fails: 1
+	} as const;
+
+	// Step J.3: minimal duration regex matching Go's
+	// time.ParseDuration shape ("30s", "1m30s", "500ms", etc.).
+	// Client-side pre-check; server validation is authoritative.
+	const DURATION_RE = /^(\d+(?:\.\d+)?(?:ns|us|µs|μs|ms|s|m|h))+$/;
+
+	// Step J.3: form state. The Step I.5 BasicAuth password is
+	// write-only on the wire; the rest of the form is bound 1:1 to
+	// the storage shape, with the J.3 additions for the upstream
+	// pool, LB policy, and health check.
 	//
-	// FOOTGUN, documented: a route created via the API with multiple
-	// upstreams will display only the first one in this form, and
-	// EDITING it in the form will overwrite the whole pool with a
-	// one-element pool — silently dropping every other upstream.
-	// J.3 ships the real repeater + selector; until then, treat the
-	// UI as mono-upstream only. The wire types in types.ts already
-	// carry the new fields, so this is a UI lag, not a wire lag.
-	//
-	// J.3 must remove the `upstreamUrl` UI field below, replace the
-	// single Input with a repeater, and stop the synthetic mapping
-	// in submitForm / openEdit.
-	type FormData = Omit<RouteRequest, 'upstreams' | 'lbPolicy'> & { upstreamUrl: string };
-	let formData = $state<FormData>({
-		host: '',
-		upstreamUrl: '',
-		tlsEnabled: false,
-		redirectToHttps: false,
-		aliases: [],
-		basicAuthEnabled: false,
-		basicAuthUsername: '',
-		basicAuthPassword: '',
-		requestHeaders: {},
-		responseHeaders: {},
-		wafMode: 'detect'
-	});
+	// `healthCheckTouched` tracks whether the user opened the
+	// health-check sub-form during this edit session. When false on
+	// submit, we OMIT the healthCheck key from the payload so the
+	// server takes the preserve-previous path (J.2 decision: PUT
+	// without healthCheck preserves the stored value). When true,
+	// we ship the complete 9-field block (full replacement).
+	type FormData = Omit<RouteRequest, 'healthCheck'> & {
+		healthCheck: HealthCheck;
+	};
+	let formData = $state<FormData>(emptyFormData());
+	let healthCheckTouched = $state(false);
+
+	function emptyFormData(): FormData {
+		return {
+			host: '',
+			upstreams: [{ url: '', weight: 1 }],
+			lbPolicy: 'round_robin',
+			tlsEnabled: false,
+			redirectToHttps: false,
+			aliases: [],
+			basicAuthEnabled: false,
+			basicAuthUsername: '',
+			basicAuthPassword: '',
+			requestHeaders: {},
+			responseHeaders: {},
+			wafMode: 'detect',
+			healthCheck: {
+				enabled: false,
+				uri: '',
+				// Method is deliberately pre-set to GET (a binary
+				// select offers no useful blank state — §5.3
+				// contained exception). Server uppercases on the
+				// way in, but we send the explicit value.
+				method: HEALTH_CHECK_DEFAULTS.method,
+				// Four defaultable fields stay blank on create so
+				// the server materialises them and the form
+				// surfaces the §1.3 values as placeholders only.
+				interval: '',
+				timeout: '',
+				expectStatus: 0,
+				expectBody: '',
+				passes: 0,
+				fails: 0
+			}
+		};
+	}
 
 	// Step I.5: tracked separately from formData because it reflects
 	// the SERVER state (does a hash exist on the route being edited),
-	// not the form's write-only password input. Drives the "••• set"
-	// placeholder and the empty-password-keeps-hash semantics.
+	// not the form's write-only password input.
 	let basicAuthPasswordSet = $state(false);
 
-	// Step J.1 → J.3 transitional bridge guard: when the route being
-	// edited has multiple upstreams (created via API), the single-
-	// input UI in this form cannot represent the pool. Saving would
-	// silently flatten it (see FOOTGUN comment near formData). We
-	// freeze the Upstream URL input in that case and surface a one-
-	// line notice so the operator knows to edit via API until J.3
-	// ships the real repeater. multiUpstreamReadOnly is set in
-	// openEdit / openCreate; the input below binds its `disabled`
-	// to it.
-	let multiUpstreamReadOnly = $state(false);
-
-	// Step I.6 — header repeater state. We track tuples here (not
-	// the final Record) so:
-	//   1. an empty row can sit visibly in the form while the user
-	//      types the key,
-	//   2. two rows with the same key can coexist while editing
-	//      (the conversion at submit picks last-wins, matching the
-	//      server's JSON-decode behavior),
-	//   3. the each-key index stays stable while the user adds /
-	//      deletes rows.
-	// The conversion to Record<string,string> happens in submitForm.
+	// Step I.6 — header repeater state. Tuples here, converted to
+	// Record<string,string> at submit (see tuplesToRecord).
 	let requestHeaderRows = $state<Array<[string, string]>>([]);
 	let responseHeaderRows = $state<Array<[string, string]>>([]);
 
@@ -112,11 +126,6 @@
 		responseHeaderRows = responseHeaderRows.filter((_, idx) => idx !== i);
 	}
 
-	// tuplesToRecord drops rows whose KEY is empty (per Step I.6
-	// Ajustement 2: empty VALUE is intentionally allowed — some
-	// upstreams check header presence, not content — so we only
-	// trim on the key side). Last-wins on duplicate keys, matching
-	// the server's json.Decode semantics; documented limitation.
 	function tuplesToRecord(rows: Array<[string, string]>): Record<string, string> {
 		const out: Record<string, string> = {};
 		for (const [k, v] of rows) {
@@ -131,45 +140,40 @@
 		return Object.entries(rec ?? {});
 	}
 
+	// Step J.3: upstream pool repeater helpers.
+	function addUpstream() {
+		formData.upstreams = [...formData.upstreams, { url: '', weight: 1 }];
+	}
+	function removeUpstream(i: number) {
+		// Server enforces "at least one upstream"; we mirror it on
+		// the client by disabling the remove button on the last row
+		// (see markup below). Defensive: refuse to remove the last
+		// row if we are ever called with len == 1.
+		if (formData.upstreams.length <= 1) return;
+		formData.upstreams = formData.upstreams.filter((_, idx) => idx !== i);
+	}
+
 	let confirmTarget = $state<Route | null>(null);
 	let deleting = $state(false);
 
+	// Step J.3: errors map keyed by formData field path. Replaces
+	// the per-field $state<string> pattern from Step I (hostError,
+	// upstreamError) — that pattern doesn't scale to the ~13 new
+	// J.1/J.2 fields. formError remains as a top-of-form banner
+	// for non-field-attributable messages.
+	let errors = $state<Record<string, string>>({});
+
 	function resetFormErrors() {
 		formError = null;
-		hostError = null;
-		upstreamError = null;
+		errors = {};
 	}
 
 	function openCreate() {
 		formMode = 'create';
 		editingId = null;
-		// Step I.7 hotfix (Finding #5): redirectToHttps defaults to
-		// FALSE on Create. The earlier "default true" was a
-		// well-intentioned UX shortcut (Step I.1) that turned out to
-		// silently persist redirect=true on routes the admin never
-		// enabled TLS on. The reactive $effect below enforces the
-		// same invariant in the form, but starting at false is the
-		// cleanest contract: the admin opts INTO the redirect after
-		// flipping TLS on.
-		formData = {
-			host: '',
-			upstreamUrl: '',
-			tlsEnabled: false,
-			redirectToHttps: false,
-			aliases: [],
-			basicAuthEnabled: false,
-			basicAuthUsername: '',
-			basicAuthPassword: '',
-			requestHeaders: {},
-			responseHeaders: {},
-			// Step I.4: 'detect' is the FortiWeb-style safe-shadow default
-			// (L6). The admin can change to 'off' or 'block' explicitly.
-			wafMode: 'detect'
-		};
+		formData = emptyFormData();
 		basicAuthPasswordSet = false;
-		// Step J.1: a fresh create starts with a single empty upstream
-		// — single-input UI is safe.
-		multiUpstreamReadOnly = false;
+		healthCheckTouched = false;
 		requestHeaderRows = [];
 		responseHeaderRows = [];
 		resetFormErrors();
@@ -179,50 +183,62 @@
 	function openEdit(r: Route) {
 		formMode = 'edit';
 		editingId = r.id;
-		// Step J.1 → J.3 transitional bridge: show the first
-		// upstream's URL in the single-input UI. Multi-upstream
-		// routes (created via API) display only Upstreams[0] —
-		// editing here will overwrite the whole pool. Documented
-		// limitation, see the FormData comment block above.
+		// Step J.3: populate the pool from the stored route as-is.
+		// A one-upstream route (e.g. migrated from Step I) shows a
+		// single-row repeater; multi-upstream routes show every row.
 		formData = {
 			host: r.host,
-			upstreamUrl: r.upstreams[0]?.url ?? '',
+			upstreams: r.upstreams.map((u) => ({ url: u.url, weight: u.weight })),
+			lbPolicy: r.lbPolicy,
 			tlsEnabled: r.tlsEnabled,
 			redirectToHttps: r.redirectToHttps,
-			// Step I.3: copy aliases by value so editing in the form
-			// doesn't mutate the original Route in the table list.
 			aliases: [...(r.aliases ?? [])],
 			basicAuthEnabled: r.basicAuthEnabled,
 			basicAuthUsername: r.basicAuthUsername,
-			// Step I.5: password input starts EMPTY on Edit. Empty +
-			// hash-already-set → backend preserves the existing hash.
-			// User must re-type to rotate.
 			basicAuthPassword: '',
 			requestHeaders: { ...(r.requestHeaders ?? {}) },
 			responseHeaders: { ...(r.responseHeaders ?? {}) },
-			wafMode: r.wafMode
+			wafMode: r.wafMode,
+			// Step J.2: the server's HealthCheck is always present
+			// on the wire (no omitempty). The form holds it as-is;
+			// edit-mode shows explicit values (server materialised
+			// defaults at original create), edit-mode users see
+			// populated fields with no blanks to misinterpret.
+			healthCheck: {
+				enabled: r.healthCheck.enabled,
+				uri: r.healthCheck.uri,
+				method: r.healthCheck.method || HEALTH_CHECK_DEFAULTS.method,
+				interval: r.healthCheck.interval,
+				timeout: r.healthCheck.timeout,
+				expectStatus: r.healthCheck.expectStatus,
+				expectBody: r.healthCheck.expectBody,
+				passes: r.healthCheck.passes,
+				fails: r.healthCheck.fails
+			}
 		};
 		basicAuthPasswordSet = r.basicAuthPasswordSet;
-		// Step J.1 → J.3 transitional bridge: freeze the upstream
-		// input when the route has more than one upstream so editing
-		// can't silently flatten the pool. The operator must use the
-		// API (or wait for J.3) to modify the pool itself; other
-		// fields (TLS, WAF, headers, …) remain editable normally.
-		multiUpstreamReadOnly = r.upstreams.length > 1;
-		// Step I.6: seed the repeater tuples from the server's map.
-		// We intentionally don't share references — typing in the
-		// form should not mutate the table-backing object.
+		// Step J.2 preserve-or-replace: the user has not touched the
+		// HC sub-form yet, so a submit without further interaction
+		// omits the block and triggers the preserve path. Any
+		// interaction with an HC input flips this to true (see
+		// markHealthCheckTouched).
+		healthCheckTouched = false;
 		requestHeaderRows = recordToTuples(r.requestHeaders ?? {});
 		responseHeaderRows = recordToTuples(r.responseHeaders ?? {});
 		resetFormErrors();
 		formOpen = true;
 	}
 
-	// Step I.3: alias repeater helpers. Empty-string entries are kept
-	// in the array while editing (so the user can type) and trimmed
-	// out at submit time — that way the backend never sees a payload
-	// like aliases: ["a.com", ""] which would 400 on "alias must not
-	// be empty" before any meaningful validation happens.
+	// Step J.2 preserve-or-replace: any user interaction with the
+	// HC sub-form (the enabled checkbox or any sub-field) flips
+	// healthCheckTouched to true, so the submit ships the complete
+	// block. Without this, a PUT would omit `healthCheck` even
+	// though the user intentionally changed something. The on:*
+	// handlers in the markup call this.
+	function markHealthCheckTouched() {
+		healthCheckTouched = true;
+	}
+
 	function addAlias() {
 		formData.aliases = [...formData.aliases, ''];
 	}
@@ -230,78 +246,210 @@
 		formData.aliases = formData.aliases.filter((_, idx) => idx !== i);
 	}
 
-	// Step I.7 hotfix (Finding #5): redirectToHttps is meaningless
-	// without TLS. This reactive effect keeps the form's checkbox
-	// state in sync with that invariant — flipping TLS off
-	// immediately uncheck the redirect (visually + in formData),
-	// so the user can't submit a tls:false + redirect:true payload
-	// that would silently activate the redirect later if TLS is
-	// flipped back on. The backend mirrors this in createRoute /
-	// updateRoute (defense in depth, also covers direct API
-	// clients that bypass the form).
+	// Step I.7 hotfix (Finding #5): TLS off ⇒ no HTTP→HTTPS redirect.
 	$effect(() => {
 		if (!formData.tlsEnabled && formData.redirectToHttps) {
 			formData.redirectToHttps = false;
 		}
 	});
 
-	/**
-	 * Map a server validation message to a specific field, or null if the message
-	 * is not field-attributable (then it lands in formError as a top-of-form
-	 * banner).
-	 */
-	function fieldFromMessage(msg: string): 'host' | 'upstreamUrl' | null {
+	// Step J.3: derive whether the LB-policy selector is visible.
+	// Hidden when the pool has one upstream — selection is moot;
+	// formData.lbPolicy is preserved across visibility flips so an
+	// admin who picked weighted_round_robin, removed an upstream,
+	// then re-added one keeps the choice.
+	const lbSelectorVisible = $derived(formData.upstreams.length >= 2);
+
+	// Step J.3: derive whether the weight column is visible.
+	// Shown only for weighted_round_robin; per-row Weight value is
+	// preserved across visibility flips (the form state isn't
+	// touched when we hide the column).
+	const weightVisible = $derived(formData.lbPolicy === 'weighted_round_robin');
+
+	// --- Client-side validation (Step J.3) -----------------------------------
+
+	function parseDuration(s: string): number | null {
+		if (!DURATION_RE.test(s)) return null;
+		// We do not need the actual ns count — just whether it
+		// parses. The "positive" check is done indirectly by
+		// requiring at least one digit (the regex ensures \d+).
+		// Comparison timeout < interval falls back on string
+		// equality for the common case where the operator typed the
+		// same value twice; rare edge cases (e.g. "60s" vs "1m")
+		// are caught by the server validator.
+		return s.length;
+	}
+
+	function validateBeforeSubmit(): boolean {
+		const next: Record<string, string> = {};
+
+		if (formData.host.trim() === '') {
+			next['host'] = 'Host must not be empty';
+		}
+
+		// Step J.1: per-upstream URL + weight validation.
+		if (formData.upstreams.length === 0) {
+			next['upstreams'] = 'At least one upstream is required';
+		}
+		formData.upstreams.forEach((u, i) => {
+			const url = u.url.trim();
+			if (url === '') {
+				next[`upstreams[${i}].url`] = 'URL must not be empty';
+			} else {
+				try {
+					const parsed = new URL(url);
+					if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+						next[`upstreams[${i}].url`] = 'URL must use http or https';
+					}
+				} catch {
+					next[`upstreams[${i}].url`] = 'URL is malformed';
+				}
+			}
+			if (weightVisible && u.weight < 1) {
+				next[`upstreams[${i}].weight`] = 'Weight must be >= 1';
+			}
+		});
+
+		// Step J.2: health-check sub-form validation, gated on enabled.
+		if (formData.healthCheck.enabled) {
+			const hc = formData.healthCheck;
+			if (hc.uri.trim() === '') {
+				next['healthCheck.uri'] = 'URI is required';
+			} else if (!hc.uri.startsWith('/')) {
+				next['healthCheck.uri'] = 'URI must start with /';
+			}
+			// method: a binary select bound to a fixed set, so
+			// validation is unreachable through the UI; defensive
+			// check kept anyway.
+			if (hc.method !== 'GET' && hc.method !== 'HEAD') {
+				next['healthCheck.method'] = 'Method must be GET or HEAD';
+			}
+			// Defaultable fields: blank passes through to the
+			// server, which materialises defaults. Validate only
+			// non-blank inputs.
+			if (hc.interval !== '' && parseDuration(hc.interval) === null) {
+				next['healthCheck.interval'] = 'Interval must be a duration (e.g. 30s)';
+			}
+			if (hc.timeout !== '' && parseDuration(hc.timeout) === null) {
+				next['healthCheck.timeout'] = 'Timeout must be a duration (e.g. 5s)';
+			}
+			// timeout < interval: only checked when BOTH are
+			// supplied (string equality catches the common typo).
+			if (
+				hc.interval !== '' &&
+				hc.timeout !== '' &&
+				parseDuration(hc.interval) !== null &&
+				parseDuration(hc.timeout) !== null &&
+				hc.timeout === hc.interval
+			) {
+				next['healthCheck.timeout'] = 'Timeout must be less than interval';
+			}
+			if (hc.expectStatus !== 0 && (hc.expectStatus < 100 || hc.expectStatus > 599)) {
+				next['healthCheck.expectStatus'] = 'Expected status must be 0 or in 100..599';
+			}
+			if (hc.expectBody !== '') {
+				try {
+					// eslint-disable-next-line no-new
+					new RegExp(hc.expectBody);
+				} catch {
+					next['healthCheck.expectBody'] = 'Expected body is not a valid regex';
+				}
+			}
+			// passes / fails: 0 means "use default" → blank-equiv,
+			// don't reject. Negative values are rejected.
+			if (hc.passes < 0) {
+				next['healthCheck.passes'] = 'Passes must be >= 1';
+			}
+			if (hc.fails < 0) {
+				next['healthCheck.fails'] = 'Fails must be >= 1';
+			}
+		}
+
+		errors = next;
+		return Object.keys(next).length === 0;
+	}
+
+	// Step I.7 / J.3: server validation error → which field path
+	// does it apply to? The server uses both camelCase ("upstreams[0]
+	// .url", "healthCheck.method") and prefixes the message with the
+	// field path verbatim, so we read up to the first colon or space.
+	function fieldFromMessage(msg: string): string | null {
+		// Patterns observed:
+		//   "host must not be empty"
+		//   "upstreams[1]: upstreamUrl must use http or https scheme"
+		//   "upstreams[1].weight must be >= 1"
+		//   "healthCheck.uri must not be empty when enabled"
+		//   "healthCheck.timeout must be strictly less than interval"
+		//   "lbPolicy "foo" is not a valid policy"
 		const lower = msg.toLowerCase();
 		if (lower.startsWith('host ')) return 'host';
-		// Step J.1: backend pool errors are prefixed "upstreams[N]:"
-		// or start with "upstreams" (e.g. "upstreams must contain
-		// at least one entry"). In the J.1→J.3 transitional UI we
-		// only ever send a one-element pool, so any "upstreams[N]"
-		// error is N=0 — surface it on the single UI input. J.3
-		// must split this back into per-row errors once the
-		// repeater lands.
-		if (lower.startsWith('upstreams')) return 'upstreamUrl';
+		if (lower.startsWith('lbpolicy ')) return 'lbPolicy';
+		// upstreams[N]:... or upstreams[N].field …
+		const upstreamsMatch = /^upstreams\[(\d+)\]/.exec(msg);
+		if (upstreamsMatch) {
+			const idx = upstreamsMatch[1];
+			if (msg.startsWith(`upstreams[${idx}].weight`)) {
+				return `upstreams[${idx}].weight`;
+			}
+			return `upstreams[${idx}].url`;
+		}
+		if (lower.startsWith('upstreams ')) {
+			return 'upstreams';
+		}
+		// healthCheck.<subfield>
+		const hcMatch = /^healthCheck\.(\w+)/.exec(msg);
+		if (hcMatch) {
+			return `healthCheck.${hcMatch[1]}`;
+		}
 		return null;
 	}
 
 	async function submitForm() {
 		submitting = true;
 		resetFormErrors();
-		// Step J.1 → J.3 transitional bridge: refuse to submit a
-		// multi-upstream route through the single-input UI. The Input
-		// is also visually disabled (see the markup), but a clavier-
-		// only submit would otherwise still flatten the pool. Belt
-		// and suspenders.
-		if (multiUpstreamReadOnly) {
-			formError = 'Multi-upstream pool — edit via API until J.3 ships the repeater.';
+		if (!validateBeforeSubmit()) {
 			submitting = false;
 			return;
 		}
 		try {
-			// Step I.3: drop blank alias rows the user may have added
-			// without filling. The backend would 400 on them anyway,
-			// but trimming here keeps the round-trip clean for the
-			// common "added a row, changed mind" case.
-			//
-			// Step I.6: convert the header repeater tuples back to
-			// the Record<string,string> the API expects. Empty keys
-			// are dropped; empty values are KEPT (Ajustement 2).
-			//
-			// Step J.1 → J.3 transitional bridge: synthesize the
-			// upstreams pool from the single upstreamUrl input and
-			// send an empty lbPolicy so the backend default
-			// (round_robin) applies. J.3 must replace this with the
-			// real pool + selector + and drop the destructured
-			// `upstreamUrl` field below.
-			const { upstreamUrl, ...rest } = formData;
+			// Step J.3: build the payload from formData. The pool +
+			// lbPolicy + healthCheck are shipped explicitly. lbPolicy
+			// is sent as the empty string when the selector is
+			// hidden (pool size == 1) so the server applies the
+			// default round_robin on create / preserves on update.
 			const payload: RouteRequest = {
-				...rest,
+				host: formData.host,
+				upstreams: formData.upstreams.map((u) => ({ url: u.url.trim(), weight: u.weight })),
+				lbPolicy: lbSelectorVisible ? (formData.lbPolicy as LBPolicy) : '',
+				tlsEnabled: formData.tlsEnabled,
+				redirectToHttps: formData.redirectToHttps,
 				aliases: formData.aliases.map((a) => a.trim()).filter((a) => a.length > 0),
+				basicAuthEnabled: formData.basicAuthEnabled,
+				basicAuthUsername: formData.basicAuthUsername,
+				basicAuthPassword: formData.basicAuthPassword,
 				requestHeaders: tuplesToRecord(requestHeaderRows),
 				responseHeaders: tuplesToRecord(responseHeaderRows),
-				upstreams: [{ url: upstreamUrl, weight: 1 }],
-				lbPolicy: ''
+				wafMode: formData.wafMode
 			};
+			// Step J.2 preserve-or-replace: ship the HC block only
+			// if the user touched it. Otherwise omit, letting the
+			// server preserve the previously stored value (on PUT)
+			// or default to disabled (on POST — emptyFormData makes
+			// the un-touched HC zero anyway, but omitting is
+			// cleaner and symmetric with PUT).
+			if (healthCheckTouched) {
+				payload.healthCheck = {
+					enabled: formData.healthCheck.enabled,
+					uri: formData.healthCheck.uri,
+					method: formData.healthCheck.method as 'GET' | 'HEAD',
+					interval: formData.healthCheck.interval,
+					timeout: formData.healthCheck.timeout,
+					expectStatus: formData.healthCheck.expectStatus,
+					expectBody: formData.healthCheck.expectBody,
+					passes: formData.healthCheck.passes,
+					fails: formData.healthCheck.fails
+				};
+			}
 			if (formMode === 'create') {
 				await createRoute(payload);
 				pushToast('Route created', 'success');
@@ -313,14 +461,13 @@
 			await loadRoutes();
 		} catch (err) {
 			if (err instanceof ApiError && err.kind === 'validation') {
-				// Validation errors (400, 409) → inline. Form stays open.
 				const field = fieldFromMessage(err.message);
-				if (field === 'host') hostError = err.message;
-				else if (field === 'upstreamUrl') upstreamError = err.message;
-				else formError = err.message;
+				if (field) {
+					errors = { ...errors, [field]: err.message };
+				} else {
+					formError = err.message;
+				}
 			} else {
-				// System errors (500, network, parse, anything else) → toast.
-				// Modal stays open so the user can retry without losing input.
 				const msg = err instanceof ApiError ? err.message : String(err);
 				pushToast(msg, 'danger');
 			}
@@ -361,14 +508,10 @@
 
 	onMount(loadRoutes);
 
-	// Derived stats — recompute when `routes` changes.
 	const stats = $derived({
 		total: routes.length,
-		// `active` shadows `total` until live health checks land in Step E.
 		active: routes.length,
 		tls: routes.filter((r) => r.tlsEnabled).length,
-		// Step I.4: count routes where WAF is actively engaged
-		// (detect OR block; off means no inspection).
 		waf: routes.filter((r) => r.wafMode !== 'off').length
 	});
 
@@ -406,25 +549,16 @@
 	<div class="mt-6">
 		<DataTable headers={['Status', 'Host', 'Upstream', 'TLS', 'WAF', 'Actions']} items={routes}>
 			{#snippet row(r)}
-				<!-- TODO Step E: replace with live health-check status -->
 				<td class="px-4 py-3"><StatusDot status="up" /></td>
 				<td class="px-4 py-3 font-mono">
 					{r.host}
 					{#if r.aliases && r.aliases.length > 0}
-						<!-- Step I.3: compact "+N" badge with a native title
-						     tooltip listing every alias. The expanded snippet
-						     below has the full readable list; this is the
-						     at-a-glance signal in the table row. -->
 						<span
 							class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-sans text-secondary bg-elevated border border-border-subtle cursor-help"
 							title={`Aliases:\n${r.aliases.join('\n')}`}
 						>+{r.aliases.length}</span>
 					{/if}
 					{#if r.basicAuthEnabled}
-						<!-- Step I.5: discreet lock icon when Basic Auth is on.
-						     Tooltip via the native title attribute names the
-						     username so the admin can identify the credential
-						     at a glance without opening Edit. -->
 						<span
 							class="ml-1.5 inline-flex items-center text-muted cursor-help"
 							title={`Basic Auth required (user: ${r.basicAuthUsername})`}
@@ -463,9 +597,6 @@
 					{/if}
 				</td>
 				<td class="px-4 py-3">
-					<!-- Step I.4 — yellow for detect, red for block,
-					     em-dash for off (spec L8). Reuses the Badge
-					     variants from Step F. -->
 					{#if r.wafMode === 'detect'}
 						<Badge variant="status-warn">Detect</Badge>
 					{:else if r.wafMode === 'block'}
@@ -487,21 +618,39 @@
 					<dd class="font-mono">{r.id}</dd>
 					<dt class="text-secondary">Hostnames</dt>
 					<dd class="font-mono">
-						<!-- Step I.3: full hostname list with the primary
-						     called out so the reader knows which host is
-						     the canonical one (matters for ACME naming +
-						     the {http.request.host} placeholder echo). -->
 						<div>{r.host} <span class="text-muted">(primary)</span></div>
 						{#each r.aliases ?? [] as alias (alias)}
 							<div>{alias} <span class="text-muted">(alias)</span></div>
 						{/each}
 					</dd>
+					<dt class="text-secondary">Upstreams</dt>
+					<dd class="font-mono">
+						{#each r.upstreams as u, i (i)}
+							<div>
+								{u.url}
+								{#if r.lbPolicy === 'weighted_round_robin'}
+									<span class="text-muted">(weight {u.weight})</span>
+								{/if}
+							</div>
+						{/each}
+						{#if r.upstreams.length >= 2}
+							<div class="text-muted mt-1">LB: {r.lbPolicy}</div>
+						{/if}
+					</dd>
+					<dt class="text-secondary">Health check</dt>
+					<dd class="font-mono">
+						{#if r.healthCheck.enabled}
+							{r.healthCheck.method} {r.healthCheck.uri}
+							every {r.healthCheck.interval}
+							(timeout {r.healthCheck.timeout})
+						{:else}
+							<span class="text-muted">disabled</span>
+						{/if}
+					</dd>
 					<dt class="text-secondary">Created</dt>
 					<dd class="font-mono">{fmtDate(r.createdAt)}</dd>
 					<dt class="text-secondary">Updated</dt>
 					<dd class="font-mono">{fmtDate(r.updatedAt)}</dd>
-					<dt class="text-secondary">Live traffic</dt>
-					<dd class="text-muted">— (coming soon)</dd>
 				</dl>
 			{/snippet}
 		</DataTable>
@@ -532,12 +681,9 @@
 			label="Host"
 			bind:value={formData.host}
 			placeholder="example.local"
-			error={hostError ?? undefined}
+			error={errors['host'] ?? undefined}
 		/>
-		<!-- Step I.3: alias hostnames. Each row binds to one slot of
-		     formData.aliases. The user types a hostname; backend
-		     validation rejects malformed entries via the formError
-		     banner above. Empty rows are trimmed at submit time. -->
+		<!-- Step I.3: alias hostnames repeater. -->
 		<div class="flex flex-col gap-2">
 			<div class="flex items-center justify-between">
 				<span class="text-sm text-secondary">Aliases (optional)</span>
@@ -550,23 +696,86 @@
 				</div>
 			{/each}
 		</div>
-		<Input
-			label="Upstream URL"
-			bind:value={formData.upstreamUrl}
-			placeholder="http://127.0.0.1:8080"
-			error={upstreamError ?? undefined}
-			disabled={multiUpstreamReadOnly}
-		/>
-		{#if multiUpstreamReadOnly}
-			<p class="text-xs text-muted ml-1">
-				Multi-upstream pool — edit via API until J.3 ships the repeater.
-			</p>
+
+		<!-- Step J.3: upstream pool repeater (replaces the Step I single
+		     Upstream URL input). Each row binds to one pool element.
+		     The weight column is hidden unless lbPolicy is
+		     weighted_round_robin. Per-row state is preserved across
+		     visibility flips. -->
+		<div class="flex flex-col gap-2">
+			<div class="flex items-center justify-between">
+				<span class="text-sm font-medium text-secondary">Upstreams</span>
+				<Button variant="ghost" size="sm" onclick={addUpstream} type="button"
+					>+ Add upstream</Button
+				>
+			</div>
+			{#if errors['upstreams']}
+				<p class="text-xs text-down">{errors['upstreams']}</p>
+			{/if}
+			{#each formData.upstreams as _, i (i)}
+				<div class="flex items-start gap-2">
+					<div class="flex-1">
+						<Input
+							bind:value={formData.upstreams[i].url}
+							placeholder="http://127.0.0.1:8080"
+							error={errors[`upstreams[${i}].url`] ?? undefined}
+						/>
+					</div>
+					{#if weightVisible}
+						<div class="w-24 flex flex-col gap-1.5">
+							<input
+								type="number"
+								min="1"
+								bind:value={formData.upstreams[i].weight}
+								placeholder="1"
+								class="bg-surface border rounded-md px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+								class:border-down={!!errors[`upstreams[${i}].weight`]}
+								class:border-border-default={!errors[`upstreams[${i}].weight`]}
+							/>
+							{#if errors[`upstreams[${i}].weight`]}
+								<p class="text-xs text-down">{errors[`upstreams[${i}].weight`]}</p>
+							{/if}
+						</div>
+					{/if}
+					<Button
+						variant="ghost"
+						size="sm"
+						onclick={() => removeUpstream(i)}
+						disabled={formData.upstreams.length <= 1}
+						type="button">×</Button
+					>
+				</div>
+			{/each}
+		</div>
+
+		<!-- Step J.3: LB policy selector. Hidden when the pool has
+		     one upstream (selection is moot). formData.lbPolicy is
+		     preserved across visibility flips. -->
+		{#if lbSelectorVisible}
+			<div>
+				<label
+					for="route-lb-policy"
+					class="text-sm font-medium text-secondary block mb-1"
+				>
+					Load balancing
+				</label>
+				<select
+					id="route-lb-policy"
+					bind:value={formData.lbPolicy}
+					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+				>
+					<option value="round_robin">Round-robin (even distribution)</option>
+					<option value="weighted_round_robin">Weighted round-robin</option>
+					<option value="least_conn">Least connections</option>
+					<option value="ip_hash">IP hash (client-IP affinity)</option>
+					<option value="random">Random</option>
+					<option value="first">First available (failover)</option>
+				</select>
+			</div>
 		{/if}
+
 		<div class="flex flex-col gap-1">
 			<Checkbox label="Enable TLS" bind:checked={formData.tlsEnabled} />
-			<!-- Step I.1 helper text (Q4 vote C): warn softly that ACME
-			     needs a publicly resolvable hostname. localhost / .local
-			     fall back to Caddy's internal CA (self-signed). -->
 			<p class="text-xs text-muted ml-6">
 				Public domain required for Let's Encrypt; localhost / .local
 				will fall back to internal CA.
@@ -580,12 +789,7 @@
 				? 'Automatically redirects HTTP requests to HTTPS with a 301.'
 				: 'Enable TLS to use HTTPS redirect.'}
 		/>
-		<!-- Step I.5: per-route Basic Auth. Username + password are
-		     only meaningful when the toggle is on. On Edit, the
-		     password input stays EMPTY and shows "••• set" as a
-		     placeholder when a hash already exists — leaving the
-		     input blank tells the backend to keep the existing
-		     hash; typing a new value rotates it. -->
+		<!-- Step I.5: per-route Basic Auth. -->
 		<div class="flex flex-col gap-2">
 			<Checkbox label="Require Basic Auth" bind:checked={formData.basicAuthEnabled} />
 			{#if formData.basicAuthEnabled}
@@ -615,10 +819,7 @@
 				</div>
 			{/if}
 		</div>
-		<!-- Step I.4 — WAF mode (Coraza + OWASP CRS). The dropdown
-		     pattern matches the /audit page's Action filter. Default
-		     'detect' on Create gives the admin a safe-shadow window
-		     to spot false positives before flipping to 'block'. -->
+		<!-- Step I.4: WAF mode. -->
 		<div>
 			<label
 				for="route-waf-mode"
@@ -639,11 +840,184 @@
 				Start with Detect to spot false positives before enforcing.
 			</p>
 		</div>
-		<!-- Step I.6 — custom request / response headers. Two
-		     collapsible sections (closed by default; most routes
-		     don't need this). Backend validates RFC 7230 token
-		     grammar on names, rejects CR/LF in values, and refuses
-		     reserved hop-by-hop / framing-critical header names. -->
+
+		<!-- Step J.3: active health-check sub-form. Gated by the
+		     enabled checkbox. Sub-fields disabled when off; their
+		     state is PRESERVED across the toggle so a user who
+		     flips off-and-on keeps their typed values.
+		     Any interaction marks healthCheckTouched so submit ships
+		     the complete 9-field block (J.2 preserve-or-replace). -->
+		<details
+			class="rounded border border-border-subtle"
+			open={formData.healthCheck.enabled}
+		>
+			<summary
+				class="px-3 py-2 text-sm text-secondary cursor-pointer select-none"
+				onclick={markHealthCheckTouched}
+			>
+				Active health check
+				{#if formData.healthCheck.enabled}
+					<span class="ml-1 text-xs text-muted">(on)</span>
+				{/if}
+			</summary>
+			<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
+				<!-- Capture click on the wrapper so toggling the
+				     checkbox marks the HC block as touched (drives
+				     the J.2 preserve-or-replace decision). Checkbox
+				     does not expose an onchange prop; the wrapper
+				     handler runs whether the user clicks the box or
+				     its label. -->
+				<div onclick={markHealthCheckTouched} onkeydown={markHealthCheckTouched} role="none">
+					<Checkbox
+						label="Enable active health checks"
+						bind:checked={formData.healthCheck.enabled}
+					/>
+				</div>
+				<div>
+					<label
+						for="hc-uri"
+						class="text-sm font-medium text-secondary block mb-1"
+					>
+						URI <span class="text-down" aria-hidden="true">*</span>
+					</label>
+					<input
+						id="hc-uri"
+						type="text"
+						bind:value={formData.healthCheck.uri}
+						placeholder="/healthz"
+						disabled={!formData.healthCheck.enabled}
+						aria-required="true"
+						oninput={markHealthCheckTouched}
+						class="w-full bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+						class:border-down={!!errors['healthCheck.uri']}
+						class:border-border-default={!errors['healthCheck.uri']}
+					/>
+					{#if errors['healthCheck.uri']}
+						<p class="text-xs text-down mt-1">{errors['healthCheck.uri']}</p>
+					{/if}
+				</div>
+				<div>
+					<label
+						for="hc-method"
+						class="text-sm font-medium text-secondary block mb-1"
+					>
+						Method
+					</label>
+					<select
+						id="hc-method"
+						bind:value={formData.healthCheck.method}
+						disabled={!formData.healthCheck.enabled}
+						onchange={markHealthCheckTouched}
+						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+					>
+						<option value="GET">GET</option>
+						<option value="HEAD">HEAD</option>
+					</select>
+					{#if errors['healthCheck.method']}
+						<p class="text-xs text-down mt-1">{errors['healthCheck.method']}</p>
+					{/if}
+				</div>
+				<div class="grid grid-cols-2 gap-3">
+					<Input
+						label="Interval"
+						bind:value={formData.healthCheck.interval}
+						placeholder={HEALTH_CHECK_DEFAULTS.interval}
+						disabled={!formData.healthCheck.enabled}
+						oninput={markHealthCheckTouched}
+						error={errors['healthCheck.interval'] ?? undefined}
+					/>
+					<Input
+						label="Timeout"
+						bind:value={formData.healthCheck.timeout}
+						placeholder={HEALTH_CHECK_DEFAULTS.timeout}
+						disabled={!formData.healthCheck.enabled}
+						oninput={markHealthCheckTouched}
+						error={errors['healthCheck.timeout'] ?? undefined}
+					/>
+				</div>
+				<div class="grid grid-cols-2 gap-3">
+					<div class="flex flex-col gap-1.5">
+						<label
+							for="hc-passes"
+							class="text-sm font-medium text-secondary">Passes</label
+						>
+						<input
+							id="hc-passes"
+							type="number"
+							min="1"
+							bind:value={formData.healthCheck.passes}
+							placeholder={String(HEALTH_CHECK_DEFAULTS.passes)}
+							disabled={!formData.healthCheck.enabled}
+							oninput={markHealthCheckTouched}
+							class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+							class:border-down={!!errors['healthCheck.passes']}
+							class:border-border-default={!errors['healthCheck.passes']}
+						/>
+						{#if errors['healthCheck.passes']}
+							<p class="text-xs text-down">{errors['healthCheck.passes']}</p>
+						{/if}
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<label
+							for="hc-fails"
+							class="text-sm font-medium text-secondary">Fails</label
+						>
+						<input
+							id="hc-fails"
+							type="number"
+							min="1"
+							bind:value={formData.healthCheck.fails}
+							placeholder={String(HEALTH_CHECK_DEFAULTS.fails)}
+							disabled={!formData.healthCheck.enabled}
+							oninput={markHealthCheckTouched}
+							class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+							class:border-down={!!errors['healthCheck.fails']}
+							class:border-border-default={!errors['healthCheck.fails']}
+						/>
+						{#if errors['healthCheck.fails']}
+							<p class="text-xs text-down">{errors['healthCheck.fails']}</p>
+						{/if}
+					</div>
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<label
+						for="hc-expect-status"
+						class="text-sm font-medium text-secondary">Expected status</label
+					>
+					<input
+						id="hc-expect-status"
+						type="number"
+						min="0"
+						max="599"
+						bind:value={formData.healthCheck.expectStatus}
+						placeholder="200"
+						disabled={!formData.healthCheck.enabled}
+						oninput={markHealthCheckTouched}
+						class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+						class:border-down={!!errors['healthCheck.expectStatus']}
+						class:border-border-default={!errors['healthCheck.expectStatus']}
+					/>
+					{#if errors['healthCheck.expectStatus']}
+						<p class="text-xs text-down">{errors['healthCheck.expectStatus']}</p>
+					{/if}
+				</div>
+				<Input
+					label="Expected body (regex)"
+					bind:value={formData.healthCheck.expectBody}
+					disabled={!formData.healthCheck.enabled}
+					oninput={markHealthCheckTouched}
+					error={errors['healthCheck.expectBody'] ?? undefined}
+				/>
+				<p class="text-xs text-muted">
+					Leave a field blank to use the server default
+					({HEALTH_CHECK_DEFAULTS.method} / {HEALTH_CHECK_DEFAULTS.interval}
+					/ {HEALTH_CHECK_DEFAULTS.timeout} / passes={HEALTH_CHECK_DEFAULTS.passes}
+					/ fails={HEALTH_CHECK_DEFAULTS.fails}). URI is required.
+				</p>
+			</div>
+		</details>
+
+		<!-- Step I.6: custom request / response headers. -->
 		<details class="rounded border border-border-subtle">
 			<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
 				Request headers
@@ -694,7 +1068,6 @@
 				>
 			</div>
 		</details>
-		<!-- Hidden submit button so Enter inside an input still triggers the form. -->
 		<button type="submit" class="hidden" aria-hidden="true"></button>
 	</form>
 	{#snippet footer()}

@@ -180,34 +180,27 @@ Priorities set at the close of Step I, before the Step J spec is written.
   disproportionate to an observability surface. Revisit if
   `coraza-caddy` gains a match hook, or as a dedicated WAF step. See
   spec `2026-05-22-step-j-multi-upstream-lb.md` §1.4.
-- **J.3 frontend — health-check is preserve-or-replace, never
-  partial.** J.2 decision (out of §5.2's literal wording, which only
-  covered the `Enabled: false → true` transition): `updateRoute`
-  treats the `healthCheck` block with **two cases**, distinguished
-  by the wire's nil-vs-present semantics (the field is
-  `*healthCheckReq` on routeRequest):
-  - **Block ABSENT from PUT** → server preserves the existing
-    stored HealthCheck verbatim. This is the safe default for
-    clients that don't know about HC yet (e.g. the J.1→J.3
-    single-input UI that doesn't send the block).
-  - **Block PRESENT in PUT** → full replacement. Materialise the
-    five defaults (Method/Interval/Timeout/Passes/Fails) for any
-    omitted sub-field, then validate. URI must be supplied. A
-    `{"enabled": false}` block is a valid explicit disable.
-
-  Consequence the J.3 form must respect: pick one of the two paths
-  on submit — either ship NO `healthCheck` key (preserve) OR ship
-  the complete 9-field block (replace). Don't ship a partial block
-  with some sub-fields omitted, because every omitted sub-field
-  resets to its default on the server side. The J.3 repeater +
-  sub-form will hold the populated HC from the GET response in form
-  state, edit it in place, and ship the full block on submit when
-  the user touched the HC sub-form; ship no block when the user
-  didn't touch it.
-
-  This matches the existing Step I patterns: BasicAuth password ""
-  preserves the hash, WAFMode "" preserves the mode. Health check
-  block absent preserves the HC. Symmetry holds.
+- **§5.3 — Extended frontend test suite for the Routes page,
+  REPORTÉE.** The spec calls for the frontend test count to rise
+  alongside J.3's UI: upstream-repeater add/remove tests, LB-
+  selector visibility (and weight visibility) state preserved
+  across visibility flips, health-check sub-form gating (sub-
+  fields disabled when off, state preserved across the toggle),
+  validation rules (each §5.2 rule has a matching client-side
+  rejection test), and an error-map test pinning the round-trip
+  between `fieldFromMessage` and `errors[...]`. **None of these
+  shipped with J.3.** Pre-requisite: scaffold
+  `@testing-library/svelte` + jsdom, which the project does not
+  currently have — this is a deferred Step F debt already
+  documented in `docs/roadmap.md` ("Step F action: install
+  @testing-library/svelte ..."). J.3 inherited that gap rather
+  than fixing it, because adding the scaffold is its own non-
+  trivial sub-task. Take this as one combined sub-task: add the
+  testing-library scaffold AND write the §5.3 test suite. Also
+  on the list once the scaffold exists: a round-trip test for
+  openEdit → HC sub-form → submit, pinning that all 9 HealthCheck
+  fields survive an unchanged round-trip (the audit on this
+  commit was manual — see the J.3 review notes).
 - **Topology code-quality debt (out of J.6 scope).** Extract a
   `<Sparkline>` atomic component out of `TopologyDetailPanel` (the SVG
   path is built manually today, 30+ lines); migrate the ad-hoc
