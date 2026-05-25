@@ -35,9 +35,33 @@ var hostnameRE = regexp.MustCompile(
 	`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$`,
 )
 
+// wildcardHostRE matches a single-label wildcard hostname of the
+// shape `*.<rest>` where `<rest>` is itself a valid hostname per
+// hostnameRE. Only one leading `*` is allowed (no `*.*.foo`) — ACME
+// wildcard certs cover exactly one label. Used by validateHost +
+// validateACMEChallenge to enforce "wildcard ⇒ dns-01" (§5.4).
+var wildcardHostRE = regexp.MustCompile(
+	`^\*\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$`,
+)
+
+// isWildcardHost reports whether h is a single-label wildcard
+// (e.g. "*.example.com"). Plain hosts ("example.com") and double-
+// wildcards ("*.*.example.com") both return false. Used as the
+// trigger for the "wildcard ⇒ dns-01" rule.
+func isWildcardHost(h string) bool {
+	return wildcardHostRE.MatchString(h)
+}
+
 // validateHost checks that s is non-empty, contains no whitespace, and matches
 // a basic hostname grammar. Returns the first failure with a user-facing
 // English message.
+//
+// Step J.4: single-label wildcards (`*.example.com`) are accepted as
+// valid hosts so the operator can configure a route that issues a
+// wildcard cert via DNS-01. The cross-rule "wildcard ⇒ dns-01" lives
+// in validateACMEChallenge / createRoute / updateRoute — kept out of
+// validateHost so the host-shape rule and the ACME-policy rule each
+// have a single responsibility.
 func validateHost(s string) error {
 	if strings.TrimSpace(s) == "" {
 		return errors.New("host must not be empty")
@@ -45,10 +69,13 @@ func validateHost(s string) error {
 	if strings.ContainsFunc(s, unicode.IsSpace) {
 		return errors.New("host must not contain whitespace")
 	}
-	if len(s) > 253 || !hostnameRE.MatchString(s) {
+	if len(s) > 253 {
 		return errors.New("host must be a valid hostname")
 	}
-	return nil
+	if hostnameRE.MatchString(s) || wildcardHostRE.MatchString(s) {
+		return nil
+	}
+	return errors.New("host must be a valid hostname")
 }
 
 // validateUpstreamURL checks that s is a parsable absolute URL using the http
@@ -92,6 +119,43 @@ func validateUpstreamPool(pool []upstreamReq) error {
 		}
 		if u.Weight < 1 {
 			return fmt.Errorf("upstreams[%d].weight must be >= 1", i)
+		}
+	}
+	return nil
+}
+
+// validateACMEChallenge enforces the Step J.4 §5.4 rules on a
+// route's per-route ACME challenge selection. The caller has
+// already normalised the empty string to "http-01" (POST / PUT
+// default), so a value reaching this function is one of the two
+// enum values — anything else is rejected.
+//
+// Cross-rules enforced here:
+//   - The challenge must be exactly "http-01" or "dns-01".
+//   - If ANY host in the route's hostname set (primary Host +
+//     Aliases) is a wildcard, the challenge MUST be "dns-01".
+//     HTTP-01 cannot issue wildcards (proving control of
+//     "*.example.com" is impossible via an HTTP request to any
+//     concrete host).
+//
+// The DNS-01-requires-a-configured-provider rule lives in
+// createRoute / updateRoute (it needs the store handle) so this
+// pure function stays handle-free and testable.
+func validateACMEChallenge(challenge, host string, aliases []string) error {
+	if challenge != storage.ACMEChallengeHTTP01 && challenge != storage.ACMEChallengeDNS01 {
+		return fmt.Errorf("acmeChallenge %q must be %q or %q",
+			challenge, storage.ACMEChallengeHTTP01, storage.ACMEChallengeDNS01)
+	}
+	if challenge == storage.ACMEChallengeHTTP01 {
+		if isWildcardHost(host) {
+			return fmt.Errorf("acmeChallenge must be %q for wildcard host %q",
+				storage.ACMEChallengeDNS01, host)
+		}
+		for _, a := range aliases {
+			if isWildcardHost(a) {
+				return fmt.Errorf("acmeChallenge must be %q for wildcard alias %q",
+					storage.ACMEChallengeDNS01, a)
+			}
 		}
 	}
 	return nil

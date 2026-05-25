@@ -33,6 +33,16 @@ import (
 	// own copy because Go's test binary doesn't link cmd/arenet.
 	_ "github.com/corazawaf/coraza-caddy/v2"
 
+	// Step J.4: side-effect import of caddy-dns/ovh so the test
+	// binary can Provision a DNS-01 policy in
+	// TestBuildConfigJSON_LoadsCleanly_DNS01 (mirrors the
+	// coraza-caddy import above and the production binary's blank
+	// import in cmd/arenet/main.go). Without this, caddy.Validate
+	// on a payload that references `dns.providers.ovh` fails with
+	// `module not registered: dns.providers.ovh` even when the
+	// production binary is correctly wired.
+	_ "github.com/caddy-dns/ovh"
+
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -1062,6 +1072,152 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 	if err := caddy.Validate(&cfg); err != nil {
 		t.Fatalf("caddy.Validate failed on emitted config: %v\nThis catches Finding #2-class bugs "+
 			"(unknown handler ID) and any future module-ID drift. The config that failed:\n%s", err, raw)
+	}
+}
+
+// TestBuildConfigJSON_LoadsCleanly_DNS01 is the J.4 §5.4 counterpart
+// to TestBuildConfigJSON_LoadsCleanly: a route configured for
+// DNS-01 ACME with a fixture DNSProviderConfig, fed through
+// caddy.Validate to confirm the OVH module's `dns.providers.ovh`
+// ID resolves at Provision time. The blank import on this test
+// file is what makes the ID resolvable; if a future commit drops
+// that import, this test fails before reaching the smoke (same
+// guard pattern as Finding #2).
+//
+// The test also pins the two-policy shape: a route with
+// acmeChallenge=dns-01 + a route with the default (http-01) on
+// the same Arenet emits two distinct ACME policies plus the
+// internal catch-all (§5.4 "up to three policies").
+func TestBuildConfigJSON_LoadsCleanly_DNS01(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:            "r-wild",
+			Host:          "wild.example.com",
+			Upstreams:     []storage.Upstream{{URL: "http://127.0.0.1:9003", Weight: 1}},
+			LBPolicy:      storage.LBPolicyRoundRobin,
+			TLSEnabled:    true,
+			ACMEChallenge: storage.ACMEChallengeDNS01,
+			WAFMode:       "off",
+		},
+		{
+			// HTTP-01 route on the same Arenet — exercises the
+			// partition branch where both ACME policies are
+			// emitted side by side.
+			ID:            "r-plain",
+			Host:          "plain.example.com",
+			Upstreams:     []storage.Upstream{{URL: "http://127.0.0.1:9004", Weight: 1}},
+			LBPolicy:      storage.LBPolicyRoundRobin,
+			TLSEnabled:    true,
+			ACMEChallenge: storage.ACMEChallengeHTTP01,
+			WAFMode:       "off",
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+
+	opts := buildOpts{
+		DevMode:   true,
+		ACMEEmail: "ops@example.com",
+		DNSProvider: storage.DNSProviderConfig{
+			Endpoint:          "ovh-eu",
+			ApplicationKey:    "fixture-app-key",
+			ApplicationSecret: "fixture-app-secret",
+			ConsumerKey:       "fixture-consumer-key",
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, raw)
+	}
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate failed on DNS-01 config: %v\nThis test pins that the OVH "+
+			"module resolves under `dns.providers.ovh` and the emitted policy shape "+
+			"survives Caddy v2.11.3's Provision. Config:\n%s", err, raw)
+	}
+
+	// Shape assertion: there must be exactly three TLS policies —
+	// HTTP-01 ACME, DNS-01 ACME, internal catch-all — in that
+	// order, and the DNS-01 issuer must carry `name:"ovh"`.
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal full: %v", err)
+	}
+	apps, _ := full["apps"].(map[string]any)
+	tlsApp, _ := apps["tls"].(map[string]any)
+	automation, _ := tlsApp["automation"].(map[string]any)
+	policies, ok := automation["policies"].([]any)
+	if !ok {
+		t.Fatalf("policies missing or wrong type:\n%s", raw)
+	}
+	if got := len(policies); got != 3 {
+		t.Fatalf("policy count: got %d, want 3 (HTTP-01 + DNS-01 + internal)\n%s", got, raw)
+	}
+	dnsPolicy, _ := policies[1].(map[string]any)
+	issuers, _ := dnsPolicy["issuers"].([]any)
+	if len(issuers) != 1 {
+		t.Fatalf("DNS-01 policy must have exactly one issuer, got %d", len(issuers))
+	}
+	issuer, _ := issuers[0].(map[string]any)
+	challenges, _ := issuer["challenges"].(map[string]any)
+	dnsBlock, _ := challenges["dns"].(map[string]any)
+	provider, _ := dnsBlock["provider"].(map[string]any)
+	if provider["name"] != "ovh" {
+		t.Fatalf("DNS-01 provider.name: got %v, want \"ovh\"\n%s", provider["name"], raw)
+	}
+	if provider["endpoint"] != "ovh-eu" {
+		t.Fatalf("DNS-01 provider.endpoint: got %v, want \"ovh-eu\"", provider["endpoint"])
+	}
+}
+
+// TestBuildConfigJSON_DNS01_NoProvider_FallsBackQuietly exercises
+// the generator's defensive guard (§5.4): a DNS-01 route reaching
+// buildConfigJSON without a complete DNSProvider config is the
+// programming-error case (the API rejects this state at edit
+// time). The generator MUST NOT emit a malformed DNS-01 policy
+// that fails caddy.Validate; it skips the DNS-01 policy entirely
+// and the affected route's host falls through to the internal CA
+// (the same fallback any TLS host gets when there is no ACME
+// policy covering it).
+func TestBuildConfigJSON_DNS01_NoProvider_FallsBackQuietly(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:            "r-orphan",
+			Host:          "orphan.example.com",
+			Upstreams:     []storage.Upstream{{URL: "http://127.0.0.1:9005", Weight: 1}},
+			LBPolicy:      storage.LBPolicyRoundRobin,
+			TLSEnabled:    true,
+			ACMEChallenge: storage.ACMEChallengeDNS01,
+			WAFMode:       "off",
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, raw)
+	}
+	apps := full["apps"].(map[string]any)
+	tlsApp := apps["tls"].(map[string]any)
+	automation := tlsApp["automation"].(map[string]any)
+	policies := automation["policies"].([]any)
+	if got := len(policies); got != 1 {
+		t.Fatalf("policy count with orphan dns-01 route: got %d, want 1 (internal only)\n%s", got, raw)
+	}
+
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal cfg: %v", err)
+	}
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate must accept the fallback shape: %v\n%s", err, raw)
 	}
 }
 

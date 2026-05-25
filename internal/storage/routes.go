@@ -42,6 +42,18 @@ const (
 	LBPolicyFirst              = "first"
 )
 
+// Step J.4 ACME challenge enum (§5.4).
+//
+// Empty string is NOT in the enum but is treated by the API and the
+// generator as equivalent to ACMEChallengeHTTP01 (default + the
+// no-migration zero-value for pre-J.4 rows). Storage.validate
+// accepts the empty string explicitly so the boot zero-value path
+// works without a migration.
+const (
+	ACMEChallengeHTTP01 = "http-01"
+	ACMEChallengeDNS01  = "dns-01"
+)
+
 // LBPolicies is the canonical ordered list of allowed LBPolicy values.
 // Used by validate() and by the API enum check. Order matches the
 // constants above and §1.3 decision 2.
@@ -158,6 +170,16 @@ type Route struct {
 	// (semantic equivalent of "block on every detection"); WAFEnabled=
 	// false routes are migrated to "off". See migrateWAFEnabledToWAFMode.
 	WAFMode string `json:"waf_mode"`
+	// ACMEChallenge (Step J.4) is the ACME challenge type used to
+	// issue / renew the certificate for this route's hostnames when
+	// TLSEnabled is true. One of: "http-01" (default), "dns-01".
+	// Empty string decodes for pre-J.4 rows and is treated by the
+	// API + generator as equivalent to "http-01" — no migration
+	// needed. Only "dns-01" can issue wildcard certificates (the
+	// API rejects a wildcard host with http-01). DNS-01 requires
+	// the instance-level DNSProviderConfig to be configured; the
+	// API enforces that at edit time (§5.4).
+	ACMEChallenge string `json:"acme_challenge"`
 	// HealthCheck (Step J.2) is the active health-check configuration
 	// Caddy applies to every Upstream in the pool. Zero-value
 	// (Enabled: false) means no probe runs — the generator omits the
@@ -253,6 +275,21 @@ func (r *Route) validate() error {
 		if r.BasicAuthPasswordHash == "" {
 			return errors.New("route: basic_auth_password_hash must not be empty when basic auth is enabled")
 		}
+	}
+	// Step J.4: ACMEChallenge enum check. The empty string is
+	// accepted explicitly — a pre-J.4 row reads back with no
+	// `acme_challenge` key (zero value ""), and the API + generator
+	// both treat that as equivalent to "http-01". The two-valued
+	// enum + empty is the only accepted set; any other value is a
+	// programming error (the API rejects unknown values with a
+	// friendlier message before reaching here). The cross-rules
+	// (wildcard host requires dns-01, dns-01 requires a configured
+	// DNSProviderConfig) belong at the API layer — storage stays a
+	// pure grid (same separation as J.1 / J.2).
+	switch r.ACMEChallenge {
+	case "", ACMEChallengeHTTP01, ACMEChallengeDNS01:
+	default:
+		return fmt.Errorf("route: acme_challenge %q must be http-01 or dns-01", r.ACMEChallenge)
 	}
 	// Step J.2: active health-check validation, gated by Enabled.
 	// When Enabled is false the sub-fields are inert; storage does

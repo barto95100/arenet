@@ -116,9 +116,23 @@ export interface Route {
 	 * false, every sub-field at zero).
 	 */
 	healthCheck: HealthCheck;
+	/**
+	 * Step J.4 — ACME challenge type. The backend normalises the
+	 * pre-J.4 storage zero value "" to "http-01" before serialising,
+	 * so callers always see one of the two enum values on the wire.
+	 */
+	acmeChallenge: ACMEChallenge;
 	createdAt: string;
 	updatedAt: string;
 }
+
+/**
+ * Step J.4 — per-route ACME challenge type. "http-01" is the
+ * default (and the pre-J.4 behaviour). "dns-01" is required for
+ * wildcard hosts and depends on a configured DNS provider in
+ * Settings.
+ */
+export type ACMEChallenge = 'http-01' | 'dns-01';
 
 export interface RouteRequest {
 	host: string;
@@ -170,7 +184,57 @@ export interface RouteRequest {
 	 * docs/backlog-step-j.md.
 	 */
 	healthCheck?: HealthCheck;
+	/**
+	 * Step J.4 — ACME challenge type. Empty string on POST/PUT is
+	 * normalised by the backend to "http-01" (no preserve-on-omit
+	 * semantic — the value carries no secret and is naturally
+	 * supplied on every form submit).
+	 */
+	acmeChallenge: ACMEChallenge | '';
 }
+
+/**
+ * Step J.4 — instance-level DNS provider configuration for the OVH
+ * provider (v1.0 supports OVH only). The three secret fields are
+ * always emitted as empty strings on the wire (server-side
+ * redaction, like the Step I.5 BasicAuthPasswordHash). Configured
+ * is the single status flag the UI binds to.
+ */
+export interface DNSProviderOVH {
+	endpoint: string;
+	applicationKey: string; // always "" on the wire (redacted)
+	applicationSecret: string; // always "" on the wire (redacted)
+	consumerKey: string; // always "" on the wire (redacted)
+	configured: boolean;
+}
+
+/**
+ * Step J.4 — wire shape for PUT /api/v1/settings/dns-providers/ovh.
+ * Empty secret fields trigger the preserve-on-edit path (the
+ * stored value is kept); non-empty overwrites. Endpoint must be
+ * non-empty and one of the seven OVH region IDs.
+ */
+export interface DNSProviderOVHRequest {
+	endpoint: string;
+	applicationKey: string;
+	applicationSecret: string;
+	consumerKey: string;
+}
+
+/**
+ * Step J.4 — the seven OVH endpoint identifiers accepted by the
+ * go-ovh SDK. Mirrors storage.OVHEndpoints; the UI dropdown
+ * populates from this list.
+ */
+export const OVH_ENDPOINTS: readonly string[] = [
+	'ovh-eu',
+	'ovh-ca',
+	'ovh-us',
+	'kimsufi-eu',
+	'kimsufi-ca',
+	'soyoustart-eu',
+	'soyoustart-ca'
+] as const;
 
 /**
  * Discriminated kind of an ApiError so the UI can decide presentation:

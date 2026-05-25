@@ -34,6 +34,11 @@ const (
 	bucketUsers    = "users"
 	bucketSessions = "sessions"
 	bucketAudit    = "audit"
+	// Step J.4 — instance-level DNS provider configurations, keyed
+	// by provider name (v1.0: only "ovh"). Parallel to the existing
+	// settings storage rather than mixed in, so the secret scan is
+	// isolated. See dns_provider.go.
+	bucketDNSProviders = "dns_providers"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -62,10 +67,11 @@ func NewStore(dbPath string) (*Store, error) {
 
 	if err := db.Update(func(tx *bolt.Tx) error {
 		for _, name := range [][]byte{
-			[]byte(bucketRoutes),   // Step B/C
-			[]byte(bucketUsers),    // Step D
-			[]byte(bucketSessions), // Step D
-			[]byte(bucketAudit),    // Step D
+			[]byte(bucketRoutes),       // Step B/C
+			[]byte(bucketUsers),        // Step D
+			[]byte(bucketSessions),     // Step D
+			[]byte(bucketAudit),        // Step D
+			[]byte(bucketDNSProviders), // Step J.4
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)

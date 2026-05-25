@@ -6,7 +6,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { listRoutes, createRoute, updateRoute, deleteRoute } from '$lib/api/client';
-	import type { HealthCheck, LBPolicy, Route, RouteRequest, Upstream } from '$lib/api/types';
+	import { settingsApi } from '$lib/api/settings';
+	import type {
+		ACMEChallenge,
+		DNSProviderOVH,
+		HealthCheck,
+		LBPolicy,
+		Route,
+		RouteRequest,
+		Upstream
+	} from '$lib/api/types';
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import Button from '$lib/components/Button.svelte';
@@ -82,6 +91,7 @@
 			requestHeaders: {},
 			responseHeaders: {},
 			wafMode: 'detect',
+			acmeChallenge: 'http-01',
 			healthCheck: {
 				enabled: false,
 				uri: '',
@@ -178,6 +188,10 @@
 		responseHeaderRows = [];
 		resetFormErrors();
 		formOpen = true;
+		// Step J.4: refresh provider status whenever the form opens
+		// so the inline hint reflects any provider changes the
+		// operator may have just made in Settings.
+		void loadDNSProvider();
 	}
 
 	function openEdit(r: Route) {
@@ -199,6 +213,7 @@
 			requestHeaders: { ...(r.requestHeaders ?? {}) },
 			responseHeaders: { ...(r.responseHeaders ?? {}) },
 			wafMode: r.wafMode,
+			acmeChallenge: r.acmeChallenge,
 			// Step J.2: the server's HealthCheck is always present
 			// on the wire (no omitempty). The form holds it as-is;
 			// edit-mode shows explicit values (server materialised
@@ -217,6 +232,7 @@
 			}
 		};
 		basicAuthPasswordSet = r.basicAuthPasswordSet;
+		void loadDNSProvider();
 		// Step J.2 preserve-or-replace: the user has not touched the
 		// HC sub-form yet, so a submit without further interaction
 		// omits the block and triggers the preserve path. Any
@@ -253,6 +269,66 @@
 		}
 	});
 
+	// Step J.4: DNS provider status (snapshot loaded on mount and
+	// re-fetched whenever we open the form). The Routes page uses
+	// this for three things:
+	//   (1) the inline hint in the ACME challenge selector when the
+	//       user picks "dns-01" without a configured provider;
+	//   (2) the form-level disabled state on "dns-01" — keeps the
+	//       backend's edit-time 400 from being the only signal;
+	//   (3) the page-level (β) bandeau when any persisted route
+	//       carries acmeChallenge="dns-01" while the provider is
+	//       missing / incomplete (provider deleted AFTER routes
+	//       were saved).
+	let dnsProvider = $state<DNSProviderOVH | null>(null);
+	let dnsProviderLoadError = $state<string | null>(null);
+
+	async function loadDNSProvider() {
+		try {
+			dnsProvider = await settingsApi.getDNSProviderOVH();
+			dnsProviderLoadError = null;
+		} catch (err) {
+			dnsProvider = null;
+			dnsProviderLoadError = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	// (β) bandeau gate: any persisted route is on dns-01 while the
+	// provider is not fully configured. Derived from the loaded
+	// routes + provider snapshot; updates automatically when either
+	// list changes after a refresh.
+	const dns01Inconsistent = $derived.by(() => {
+		if (!dnsProvider || dnsProvider.configured) return false;
+		return routes.some((r) => r.acmeChallenge === 'dns-01');
+	});
+
+	// Step J.4 wildcard detection — mirrors the backend's
+	// wildcardHostRE. Single-leading-`*` only; multi-wildcards are
+	// rejected upstream as malformed hostnames.
+	function isWildcardHost(h: string): boolean {
+		return /^\*\.[A-Za-z0-9-.]+$/.test(h.trim());
+	}
+
+	// Step J.4: when the host or any alias is a wildcard, the
+	// challenge selector is LOCKED to "dns-01" (greyed). Used as
+	// `disabled` on the selector AND to force-flip the formData
+	// value if the user pastes a wildcard host into a form that
+	// was previously on http-01.
+	const acmeLockedToDNS01 = $derived.by(() => {
+		if (isWildcardHost(formData.host)) return true;
+		return formData.aliases.some(isWildcardHost);
+	});
+
+	$effect(() => {
+		if (acmeLockedToDNS01 && formData.acmeChallenge !== 'dns-01') {
+			formData.acmeChallenge = 'dns-01';
+		}
+	});
+
+	// Step J.4: when TLS gets turned off the ACMEChallenge value is
+	// irrelevant. We don't reset it (so the user can toggle TLS off
+	// and back on without losing the choice), but the selector is
+	// hidden — see the markup.
 	// Step J.3: derive whether the LB-policy selector is visible.
 	// Hidden when the pool has one upstream — selection is moot;
 	// formData.lbPolicy is preserved across visibility flips so an
@@ -429,7 +505,8 @@
 				basicAuthPassword: formData.basicAuthPassword,
 				requestHeaders: tuplesToRecord(requestHeaderRows),
 				responseHeaders: tuplesToRecord(responseHeaderRows),
-				wafMode: formData.wafMode
+				wafMode: formData.wafMode,
+				acmeChallenge: formData.acmeChallenge
 			};
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
@@ -506,7 +583,9 @@
 		}
 	}
 
-	onMount(loadRoutes);
+	onMount(async () => {
+		await Promise.all([loadRoutes(), loadDNSProvider()]);
+	});
 
 	const stats = $derived({
 		total: routes.length,
@@ -525,6 +604,26 @@
 		<Button onclick={openCreate}>+ Add route</Button>
 	{/snippet}
 </PageHeader>
+
+<!-- Step J.4 (β) bandeau: at least one persisted route uses
+     DNS-01 ACME but the OVH DNS provider is not configured (or is
+     partially configured). The (α) edit-time validation prevents
+     creating new dns-01 routes in this state; this bandeau catches
+     the case where the provider is removed AFTER routes were
+     saved. Cert renewal will fail until the provider is
+     re-completed. -->
+{#if dns01Inconsistent}
+	<div
+		class="mt-4 mb-2 rounded border border-down/40 bg-down/10 px-4 py-3 text-sm text-down"
+		role="alert"
+	>
+		<strong class="font-semibold">DNS-01 routes need a DNS provider.</strong>
+		At least one route is configured for DNS-01 ACME, but the OVH DNS
+		provider is missing or incomplete in
+		<a href="/settings" class="underline">Settings</a>. Certificate
+		renewals for these routes will fail until the provider is configured.
+	</div>
+{/if}
 
 {#if loading}
 	<div class="flex items-center gap-2 mt-12 text-secondary">
@@ -789,6 +888,49 @@
 				? 'Automatically redirects HTTP requests to HTTPS with a 301.'
 				: 'Enable TLS to use HTTPS redirect.'}
 		/>
+
+		<!-- Step J.4: ACME challenge selector. Visible only when TLS
+		     is on. Locked to "dns-01" when host or any alias is a
+		     wildcard (the only ACME challenge that can issue
+		     wildcard certs). When dns-01 is selected without a
+		     configured DNS provider, an inline hint points to
+		     /settings. -->
+		{#if formData.tlsEnabled}
+			<div>
+				<label
+					for="route-acme-challenge"
+					class="text-sm font-medium text-secondary block mb-1"
+				>
+					ACME challenge
+				</label>
+				<select
+					id="route-acme-challenge"
+					bind:value={formData.acmeChallenge}
+					disabled={acmeLockedToDNS01}
+					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-60 disabled:cursor-not-allowed"
+				>
+					<option value="http-01">HTTP-01 (default, port 80)</option>
+					<option value="dns-01">DNS-01 (required for wildcards)</option>
+				</select>
+				{#if acmeLockedToDNS01}
+					<p class="text-xs text-muted mt-1">
+						Wildcard hosts require DNS-01.
+					</p>
+				{:else if formData.acmeChallenge === 'dns-01' && (!dnsProvider || !dnsProvider.configured)}
+					<p class="text-xs text-down mt-1">
+						DNS-01 requires a configured DNS provider —
+						<a href="/settings" class="text-cyan hover:underline">configure it under Settings</a>.
+					</p>
+				{:else}
+					<p class="text-xs text-muted mt-1">
+						HTTP-01 proves control via port 80. DNS-01 proves it
+						via a `_acme-challenge` TXT record and is the only
+						option for wildcard certs.
+					</p>
+				{/if}
+			</div>
+		{/if}
+
 		<!-- Step I.5: per-route Basic Auth. -->
 		<div class="flex flex-col gap-2">
 			<Checkbox label="Require Basic Auth" bind:checked={formData.basicAuthEnabled} />

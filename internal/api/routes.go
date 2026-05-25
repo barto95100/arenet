@@ -107,6 +107,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			r.Put("/routes/{id}", h.updateRoute)
 			r.Delete("/routes/{id}", h.deleteRoute)
 			r.Get("/audit", h.listAudit)
+			// Step J.4: instance-level DNS provider config. The
+			// PUT endpoint emits dns_provider_updated audit; no
+			// DELETE in v1.0 (§5.4 lifecycle decision — a
+			// guarded delete is a backlog item).
+			r.Get("/settings/dns-providers/ovh", h.getDNSProviderOVH)
+			r.Put("/settings/dns-providers/ovh", h.putDNSProviderOVH)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame
@@ -467,6 +473,32 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step J.4: ACMEChallenge default + validation. Empty string is
+	// normalised to "http-01" (the default and the pre-J.4
+	// behaviour). validateACMEChallenge then enforces the enum +
+	// the "wildcard ⇒ dns-01" cross-rule. The dns-01-requires-a-
+	// configured-provider rule needs the store and lives below.
+	if req.ACMEChallenge == "" {
+		req.ACMEChallenge = storage.ACMEChallengeHTTP01
+	}
+	if err := validateACMEChallenge(req.ACMEChallenge, req.Host, req.Aliases); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.ACMEChallenge == storage.ACMEChallengeDNS01 {
+		cfg, err := h.store.GetDNSProviderOVH(r.Context())
+		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+			h.logger.Error("read dns provider", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to verify dns provider")
+			return
+		}
+		if errors.Is(err, storage.ErrNotFound) || !dnsProviderComplete(cfg) {
+			writeError(w, http.StatusBadRequest,
+				"acmeChallenge \"dns-01\" requires a configured DNS provider — see Settings")
+			return
+		}
+	}
+
 	// Step J.2: materialise health-check defaults + uppercase
 	// Method, then validate (gated on Enabled). The "block absent
 	// vs present" distinction (the *healthCheckReq pointer) is the
@@ -563,6 +595,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		RequestHeaders:        req.RequestHeaders,
 		ResponseHeaders:       req.ResponseHeaders,
 		WAFMode:               req.WAFMode,
+		ACMEChallenge:         req.ACMEChallenge,
 		HealthCheck:           storeHC,
 	}
 	for _, h := range newRoute.AllHosts() {
@@ -708,6 +741,35 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step J.4: ACMEChallenge — same default + validation as on
+	// POST. The field carries no secret and the per-route ACME
+	// choice is naturally specified on every edit, so we don't use
+	// the wafMode-style preserve-previous-on-empty rule; an empty
+	// value on PUT means "default", and a pre-J.4 stored row
+	// (zero value "") also reads back through toResponse as
+	// "http-01" so the frontend submits an explicit value on every
+	// round-trip.
+	if req.ACMEChallenge == "" {
+		req.ACMEChallenge = storage.ACMEChallengeHTTP01
+	}
+	if err := validateACMEChallenge(req.ACMEChallenge, req.Host, req.Aliases); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.ACMEChallenge == storage.ACMEChallengeDNS01 {
+		cfg, err := h.store.GetDNSProviderOVH(r.Context())
+		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+			h.logger.Error("read dns provider (update)", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to verify dns provider")
+			return
+		}
+		if errors.Is(err, storage.ErrNotFound) || !dnsProviderComplete(cfg) {
+			writeError(w, http.StatusBadRequest,
+				"acmeChallenge \"dns-01\" requires a configured DNS provider — see Settings")
+			return
+		}
+	}
+
 	// Step J.2: HealthCheck resolution on PUT — preserve-or-replace,
 	// driven by the wire's nil-vs-present distinction (see
 	// healthCheckReq doc-comment on routeRequest).
@@ -819,6 +881,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		RequestHeaders:        req.RequestHeaders,
 		ResponseHeaders:       req.ResponseHeaders,
 		WAFMode:               req.WAFMode,
+		ACMEChallenge:         req.ACMEChallenge,
 		HealthCheck:           storeHC,
 	}
 	if !hostnamesEqual(newRoute.AllHosts(), previous.AllHosts()) {

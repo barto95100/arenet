@@ -171,6 +171,14 @@ type routeRequest struct {
 	// preserve UX so admins can flip unrelated fields without
 	// re-typing the WAF mode every time.
 	WAFMode string `json:"wafMode"`
+	// Step J.4 — ACME challenge type for this route's TLS cert.
+	// One of "" / "http-01" / "dns-01". On POST and PUT, empty
+	// string is normalised to "http-01" (the §5.4 default and the
+	// pre-J.4 behaviour) — there is no preserve-on-omit semantic
+	// like wafMode, because the value carries no secret and the
+	// per-route ACME challenge is naturally specified on every
+	// edit (TLS section of the form).
+	ACMEChallenge string `json:"acmeChallenge"`
 	// Step J.2 — active health check, pointer so nil distinguishes
 	// "block absent from JSON" from "block present with explicit
 	// disabled" (see healthCheckReq doc-comment). createRoute: nil
@@ -269,6 +277,11 @@ type routeResponse struct {
 	ResponseHeaders map[string]string `json:"responseHeaders"`
 	// Step I.4 — WAF mode, one of "off" / "detect" / "block".
 	WAFMode string `json:"wafMode"`
+	// Step J.4 — ACME challenge type, one of "http-01" / "dns-01".
+	// Surfaced as the normalised value (a pre-J.4 row read back
+	// reports "http-01", not the storage "" zero value), so the
+	// frontend has a single, consistent state to render.
+	ACMEChallenge string `json:"acmeChallenge"`
 	// Step J.2 — active health check. Always present on a stored
 	// route (storage.HealthCheck has no omitempty); when Enabled
 	// is false the rest of the sub-fields carry zero values and
@@ -302,6 +315,14 @@ func toResponse(r storage.Route) routeResponse {
 	for i, u := range r.Upstreams {
 		upstreamsResp[i] = upstreamResp{URL: u.URL, Weight: u.Weight}
 	}
+	// Step J.4: surface the normalised ACMEChallenge — a stored row
+	// with the zero value "" reads back as "http-01" so the
+	// frontend renders a single consistent value (pre-J.4 rows
+	// behave identically to a fresh post-J.4 default).
+	acmeChallenge := r.ACMEChallenge
+	if acmeChallenge == "" {
+		acmeChallenge = storage.ACMEChallengeHTTP01
+	}
 	return routeResponse{
 		ID:                   r.ID,
 		Host:                 r.Host,
@@ -316,6 +337,7 @@ func toResponse(r storage.Route) routeResponse {
 		RequestHeaders:       reqHeaders,
 		ResponseHeaders:      respHeaders,
 		WAFMode:              r.WAFMode,
+		ACMEChallenge:        acmeChallenge,
 		HealthCheck: healthCheckResp{
 			Enabled:      r.HealthCheck.Enabled,
 			URI:          r.HealthCheck.URI,

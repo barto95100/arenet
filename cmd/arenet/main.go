@@ -42,6 +42,19 @@ import (
 	// transitive coraza-coreruleset/v4 dep, so the binary is self-contained.
 	_ "github.com/corazawaf/coraza-caddy/v2"
 
+	// Step J.4: register the OVH DNS provider Caddy module via
+	// side-effect import so its module ID `dns.providers.ovh` is
+	// resolvable when buildTLSPolicies emits a DNS-01 ACME policy
+	// with `challenges.dns.provider.name == "ovh"`. Same mechanism
+	// as the coraza import above — init()-time caddy.RegisterModule
+	// side-effect; no symbol from caddy-dns/ovh is referenced
+	// directly. Removing this import would cause caddy.Validate /
+	// caddy.Load to fail with `module not registered:
+	// dns.providers.ovh` the first time a DNS-01 policy is emitted.
+	// The anti-regression guard is TestBuildConfigJSON_LoadsCleanly,
+	// which feeds a DNS-01 fixture through caddy.Validate (§5.4).
+	_ "github.com/caddy-dns/ovh"
+
 	"github.com/barto95100/arenet/internal/api"
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
@@ -171,6 +184,21 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		case anyTLS:
 			logger.Warn("at least one route has TLSEnabled=true but ARENET_ACME_EMAIL is empty — Let's Encrypt account will be email-free, no expiry reminders")
 		}
+	}
+
+	// Step J.4: WARN at boot if any route is configured for DNS-01
+	// ACME but the OVH DNS provider config is missing or
+	// incomplete. The API rejects new DNS-01 routes that fail this
+	// guard, but a provider deletion (or a never-completed PUT)
+	// AFTER routes were saved can leave the system in this state —
+	// boot WARN is the safety net the (β) decision requires
+	// (validation edit-time + warnings, not xor).
+	anyDNS01, providerOK, dnsCheckErr := storeDNS01Inconsistency(ctx, store)
+	switch {
+	case dnsCheckErr != nil:
+		logger.Warn("could not check DNS-01 route / provider consistency at boot", "err", dnsCheckErr)
+	case anyDNS01 && !providerOK:
+		logger.Warn("at least one route has acmeChallenge=dns-01 but the OVH DNS provider is not fully configured — cert renewal will fail until you complete the provider config under Settings")
 	}
 
 	if err := mgr.Start(ctx); err != nil {
@@ -320,6 +348,43 @@ func storeHasTLSRoute(ctx context.Context, store *storage.Store) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// storeDNS01Inconsistency reports whether the persisted state
+// contains a route configured for DNS-01 ACME while the
+// instance-level OVH DNS provider config is missing or
+// incomplete. The triplet (anyDNS01, providerOK, err) is consumed
+// by the boot WARN in run().
+//
+// Step J.4 §5.4 (β) decision: edit-time validation prevents new
+// DNS-01 routes from being created without a configured provider,
+// but it cannot prevent a provider that was deleted /
+// half-configured AFTER routes were saved. The boot WARN is the
+// safety net for that gap.
+func storeDNS01Inconsistency(ctx context.Context, store *storage.Store) (bool, bool, error) {
+	routes, err := store.ListRoutes(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	anyDNS01 := false
+	for _, r := range routes {
+		if r.ACMEChallenge == storage.ACMEChallengeDNS01 {
+			anyDNS01 = true
+			break
+		}
+	}
+	if !anyDNS01 {
+		return false, true, nil
+	}
+	cfg, err := store.GetDNSProviderOVH(ctx)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return anyDNS01, false, err
+	}
+	providerOK := cfg.Endpoint != "" &&
+		cfg.ApplicationKey != "" &&
+		cfg.ApplicationSecret != "" &&
+		cfg.ConsumerKey != ""
+	return anyDNS01, providerOK, nil
 }
 
 // devLandingHandler returns a tiny HTML page guiding the developer to the

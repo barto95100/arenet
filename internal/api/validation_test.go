@@ -375,3 +375,122 @@ func assertHCRejects(t *testing.T, h healthCheckReq, wantSub string) {
 		t.Errorf("error %q missing substring %q", err.Error(), wantSub)
 	}
 }
+
+// Step J.4 — validateACMEChallenge covers the enum + the
+// cross-rule "wildcard ⇒ dns-01". The wildcard rule is the
+// silent-cert-failure guard: an http-01 challenge for "*.x.y"
+// will be requested at renewal time and fail because Let's
+// Encrypt cannot validate a wildcard via HTTP. Catching that at
+// edit time is the whole point of the rule; this test pins it.
+func TestValidateACMEChallenge(t *testing.T) {
+	tests := []struct {
+		name      string
+		challenge string
+		host      string
+		aliases   []string
+		wantSub   string // empty = expect nil
+	}{
+		// Enum coverage — only "http-01" and "dns-01" accepted.
+		{"http-01 plain host", "http-01", "example.com", nil, ""},
+		{"dns-01 plain host", "dns-01", "example.com", nil, ""},
+		{"empty rejected", "", "example.com", nil, "must be"},
+		{"unknown enum rejected", "tls-alpn-01", "example.com", nil, "must be"},
+		{"mixed case rejected (no normalisation here)", "HTTP-01", "example.com", nil, "must be"},
+		// Wildcard cross-rule — primary host.
+		{"wildcard host + http-01 rejected", "http-01", "*.example.com", nil, "wildcard host"},
+		{"wildcard host + dns-01 accepted", "dns-01", "*.example.com", nil, ""},
+		// Wildcard cross-rule — alias.
+		{"wildcard alias + http-01 rejected", "http-01", "example.com", []string{"*.alt.example.com"}, "wildcard alias"},
+		{"wildcard alias + dns-01 accepted", "dns-01", "example.com", []string{"*.alt.example.com"}, ""},
+		// Non-wildcard alias keeps http-01 valid (control case).
+		{"plain alias + http-01 accepted", "http-01", "example.com", []string{"alt.example.com"}, ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateACMEChallenge(tc.challenge, tc.host, tc.aliases)
+			if tc.wantSub == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error %q missing substring %q", err.Error(), tc.wantSub)
+			}
+		})
+	}
+}
+
+// Step J.4 — isWildcardHost is the predicate validateHost +
+// validateACMEChallenge + the frontend share. A regression that
+// changes its shape silently changes the "wildcard ⇒ dns-01"
+// boundary in three places at once. Pin it explicitly.
+func TestIsWildcardHost(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"plain hostname", "example.com", false},
+		{"single-label wildcard", "*.example.com", true},
+		{"deep wildcard", "*.a.b.c.example.com", true},
+		{"bare star rejected", "*", false},
+		{"double wildcard rejected", "*.*.example.com", false},
+		{"trailing star rejected", "example.com.*", false},
+		{"wildcard with port rejected", "*.example.com:443", false},
+		{"empty", "", false},
+		// dnsProviderConfigured upstream uses isWildcardHost in
+		// the aliases loop, so the trim/preserve characteristics
+		// matter: leading/trailing whitespace is NOT stripped (we
+		// rely on validateHost rejecting whitespace earlier).
+		{"leading whitespace rejected", " *.example.com", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isWildcardHost(tc.in); got != tc.want {
+				t.Errorf("isWildcardHost(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// Step J.4 — dnsProviderComplete is the predicate the route
+// edit-time guard AND the GET response's `configured` flag share.
+// A regression that flips it (e.g. accepting endpoint-only as
+// "configured") silently relaxes the edit-time guard. Pin it.
+func TestDNSProviderComplete(t *testing.T) {
+	full := storage.DNSProviderConfig{
+		Endpoint:          "ovh-eu",
+		ApplicationKey:    "k",
+		ApplicationSecret: "s",
+		ConsumerKey:       "c",
+	}
+	if !dnsProviderComplete(full) {
+		t.Errorf("complete config rejected: %+v", full)
+	}
+	// Every single field blanked individually must flip the
+	// predicate to false. One sub-test per field so a regression
+	// names the offender.
+	for _, tc := range []struct {
+		name  string
+		blank func(c *storage.DNSProviderConfig)
+	}{
+		{"endpoint blank", func(c *storage.DNSProviderConfig) { c.Endpoint = "" }},
+		{"applicationKey blank", func(c *storage.DNSProviderConfig) { c.ApplicationKey = "" }},
+		{"applicationSecret blank", func(c *storage.DNSProviderConfig) { c.ApplicationSecret = "" }},
+		{"consumerKey blank", func(c *storage.DNSProviderConfig) { c.ConsumerKey = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := full
+			tc.blank(&c)
+			if dnsProviderComplete(c) {
+				t.Errorf("predicate true with %s: %+v", tc.name, c)
+			}
+		})
+	}
+}

@@ -211,9 +211,27 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		return fmt.Errorf("list routes: %w", err)
 	}
 
+	// Step J.4: read the instance-level OVH DNS provider config (if
+	// any). Used by buildTLSPolicies to emit the DNS-01 ACME policy
+	// when at least one route has ACMEChallenge=dns-01. The API
+	// layer rejects a route create / update that would activate
+	// DNS-01 without a configured provider, so reaching this code
+	// path with a dns-01 route and ErrNotFound is a programming
+	// error — the generator handles it defensively (no DNS-01
+	// policy emitted; the route silently falls back to HTTP-01
+	// emission which Caddy can still serve a pre-existing cert
+	// for) rather than failing the whole reload. ErrNotFound on a
+	// fresh install with no dns-01 routes is the normal path and
+	// is silent.
+	dnsProvider, err := m.store.GetDNSProviderOVH(ctx)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return fmt.Errorf("read dns provider: %w", err)
+	}
+
 	cfgJSON, err := buildConfigJSON(routes, buildOpts{
-		DevMode:   m.devMode,
-		ACMEEmail: m.acmeEmail,
+		DevMode:     m.devMode,
+		ACMEEmail:   m.acmeEmail,
+		DNSProvider: dnsProvider,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -311,6 +329,27 @@ type buildOpts struct {
 	// route has TLSEnabled=true. Empty is accepted (Let's Encrypt
 	// won't send expiry reminders).
 	ACMEEmail string
+	// DNSProvider (Step J.4) is the instance-level OVH credential
+	// row read by the manager from BoltDB before each apply. Zero
+	// value (all four string fields empty) means "not configured";
+	// buildTLSPolicies treats that state as "no DNS-01 policy
+	// emittable" and silently falls back to no DNS-01 policy. The
+	// API rejects route create / update that would activate DNS-01
+	// without a configured provider, so reaching this code path
+	// with DNS-01 routes and an empty DNSProvider is a programming
+	// error caught at apply time.
+	DNSProvider storage.DNSProviderConfig
+}
+
+// acmePartition splits a TLS-enabled route's public subjects into
+// two slices based on the route's ACMEChallenge (Step J.4 §5.4).
+// The caller (buildConfigJSON) accumulates one acmePartition over
+// the route iteration; buildTLSPolicies consumes it to decide
+// which of HTTP-01 and DNS-01 policies to emit. Two-element split
+// keeps the partition local to caddymgr — no new public type.
+type acmePartition struct {
+	HTTP01 []string
+	DNS01  []string
 }
 
 // buildConfigJSON renders the full Caddy config for the given routes.
@@ -329,11 +368,16 @@ type buildOpts struct {
 func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	httpRoutes := make([]httpRoute, 0, len(routes)+1)
 	httpsRoutes := make([]httpRoute, 0, len(routes)+1)
-	// Hosts that opted into TLS — used to build the ACME policy
-	// subjects list. Collected in route iteration order; emitted as
-	// a single policy (one issuer, many subjects) rather than one
-	// policy per host to keep the Caddy config readable.
-	acmeSubjects := make([]string, 0, len(routes))
+	// Step J.4: publicly-validatable TLS hosts, partitioned by ACME
+	// challenge. Pre-J.4 (and any route persisted without an
+	// explicit ACMEChallenge) feeds HTTP01 — the same behaviour
+	// Step I.1 shipped. A route with ACMEChallenge=="dns-01" feeds
+	// DNS01 instead. The partition is consumed by buildTLSPolicies
+	// to emit up to two ACME policies (one per non-empty side).
+	acme := acmePartition{
+		HTTP01: make([]string, 0, len(routes)),
+		DNS01:  make([]string, 0, len(routes)),
+	}
 
 	for _, r := range routes {
 		// Step J.1: build the upstream pool by dialing each Upstream
@@ -521,9 +565,22 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			// implements the RFC 6761 / 2606 classification (IPs,
 			// loopback, .local, .home.arpa, etc.) and is the same
 			// function Caddy uses internally for its own auto-HTTPS.
+			// Step J.4: route a public host into HTTP01 or DNS01 based
+			// on the route's ACMEChallenge. The empty string and
+			// "http-01" both land in HTTP01 (default + pre-J.4 rows);
+			// "dns-01" lands in DNS01. A wildcard host (`*.foo.bar`)
+			// is rejected by certmagic.SubjectQualifiesForPublicCert
+			// only if it fails the IP/loopback/.local classification;
+			// wildcards DO qualify and reach the partition, where the
+			// API guarantees they sit on a dns-01 route.
 			for _, h := range allHosts {
-				if certmagic.SubjectQualifiesForPublicCert(h) {
-					acmeSubjects = append(acmeSubjects, h)
+				if !certmagic.SubjectQualifiesForPublicCert(h) {
+					continue
+				}
+				if r.ACMEChallenge == storage.ACMEChallengeDNS01 {
+					acme.DNS01 = append(acme.DNS01, h)
+				} else {
+					acme.HTTP01 = append(acme.HTTP01, h)
 				}
 			}
 		}
@@ -624,7 +681,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			},
 			"tls": map[string]any{
 				"automation": map[string]any{
-					"policies": buildTLSPolicies(acmeSubjects, opts),
+					"policies": buildTLSPolicies(acme, opts),
 				},
 			},
 		},
@@ -638,35 +695,76 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 // Order matters for Caddy: the FIRST policy whose subjects list
 // matches a host wins, and matching is STRICT (no automatic
 // fallback to a later policy if the matched issuer fails). We
-// therefore emit the ACME policy (subject-bound) first and the
-// internal catch-all last, so:
+// emit subject-bound ACME policies first (HTTP-01 then DNS-01,
+// arbitrary stable order — they are partitioned and don't share
+// subjects) and the internal catch-all last, so:
 //
-//   - hosts in `acmeSubjects` get an ACME cert,
+//   - hosts in `partition.HTTP01` get an HTTP-01 ACME cert,
+//   - hosts in `partition.DNS01`  get a DNS-01  ACME cert,
 //   - any other host falls back to Caddy's internal CA (self-signed).
 //
-// CRITICAL contract on `acmeSubjects` (Step I.7 hotfix Finding #6):
-// the caller MUST only include hosts that are publicly validatable
-// by an ACME CA. Including a private host (localhost, .local, IP
-// literal, ...) here would route it to the ACME issuer; Let's
-// Encrypt could not validate the HTTP-01 challenge for that name
-// and Caddy would never acquire a cert — the TLS handshake then
-// fails with "internal error" at Client Hello. The peuplement site
-// in buildConfigJSON uses certmagic.SubjectQualifiesForPublicCert
-// to enforce this; do NOT bypass it on a future refactor.
+// CRITICAL contract on the partition (Step I.7 hotfix Finding #6,
+// preserved through Step J.4): the caller MUST only include hosts
+// that are publicly validatable by an ACME CA. Including a private
+// host (localhost, .local, IP literal, ...) would route it to the
+// ACME issuer; Let's Encrypt could not validate the HTTP-01
+// challenge for that name and Caddy would never acquire a cert —
+// the TLS handshake then fails with "internal error" at Client
+// Hello. The peuplement site in buildConfigJSON uses
+// certmagic.SubjectQualifiesForPublicCert to enforce this; do NOT
+// bypass it on a future refactor.
+//
+// Step J.4 DNS-01 specifics (§5.4):
+//   - The DNS-01 policy is emitted ONLY when both `partition.DNS01`
+//     is non-empty AND the operator has configured an OVH provider
+//     in storage (opts.DNSProvider.ApplicationKey + Secret +
+//     ConsumerKey + Endpoint all non-empty). The API validates the
+//     latter at edit time, so reaching this code with DNS-01 hosts
+//     and an unconfigured provider is a programming error — we
+//     defensively skip the DNS-01 policy emission rather than emit
+//     a malformed Caddy config that would fail Validate.
+//   - The provider sub-block always carries `name: "ovh"` so
+//     Caddy's `caddy:"namespace=dns.providers inline_key=name"` tag
+//     on DNSChallengeConfig.ProviderRaw resolves correctly
+//     (empirically verified during J.4 recon).
+//   - A single issuer per ACME policy (Let's Encrypt only). No
+//     ZeroSSL fallback — consistent with Step I's single-issuer
+//     shape.
 //
 // If no route has TLSEnabled=true (or all TLS hosts are private),
-// `acmeSubjects` is empty and we emit only the catch-all internal
-// policy, preserving the exact pre-Step-I.1 wire shape so existing
-// tests of that path keep passing.
-func buildTLSPolicies(acmeSubjects []string, opts buildOpts) []map[string]any {
+// both partition slices are empty and we emit only the catch-all
+// internal policy, preserving the exact pre-Step-I.1 wire shape
+// so existing tests of that path keep passing.
+func buildTLSPolicies(partition acmePartition, opts buildOpts) []map[string]any {
 	internalPolicy := map[string]any{
 		"issuers": []map[string]any{
 			{"module": "internal"},
 		},
 	}
-	if len(acmeSubjects) == 0 {
+	if len(partition.HTTP01) == 0 && len(partition.DNS01) == 0 {
 		return []map[string]any{internalPolicy}
 	}
+	policies := make([]map[string]any, 0, 3)
+	if len(partition.HTTP01) > 0 {
+		policies = append(policies, buildACMEPolicy(partition.HTTP01, opts, nil))
+	}
+	if len(partition.DNS01) > 0 && dnsProviderConfigured(opts.DNSProvider) {
+		policies = append(policies, buildACMEPolicy(partition.DNS01, opts, &opts.DNSProvider))
+	}
+	policies = append(policies, internalPolicy)
+	return policies
+}
+
+// buildACMEPolicy returns a single tls.automation.policies entry
+// shaped as Caddy v2.11.3 expects. When `dnsProvider` is nil the
+// policy uses HTTP-01 (Caddy's implicit default for the ACME
+// issuer — no `challenges` block needed); when non-nil it adds the
+// DNS-01 `challenges.dns.provider` sub-block sourced from the
+// OVH credentials. Pulled out of buildTLSPolicies so the HTTP-01
+// and DNS-01 emission paths share the same issuer-shape code —
+// any future addition (challenge timeouts, alt-name list, ...)
+// lands in one place. Step J.4 §5.4.
+func buildACMEPolicy(subjects []string, opts buildOpts, dnsProvider *storage.DNSProviderConfig) map[string]any {
 	acmeIssuer := map[string]any{
 		"module": "acme",
 		"ca":     acmeDirectoryURL(opts.DevMode),
@@ -674,11 +772,42 @@ func buildTLSPolicies(acmeSubjects []string, opts buildOpts) []map[string]any {
 	if opts.ACMEEmail != "" {
 		acmeIssuer["email"] = opts.ACMEEmail
 	}
-	acmePolicy := map[string]any{
-		"subjects": acmeSubjects,
+	if dnsProvider != nil {
+		acmeIssuer["challenges"] = map[string]any{
+			"dns": map[string]any{
+				"provider": map[string]any{
+					// `name` is REQUIRED — without it Caddy's
+					// DNSChallengeConfig.ProviderRaw cannot resolve
+					// which dns.providers.* module to instantiate
+					// (empirically observed failure: `module not
+					// registered: dns.providers.ovh`).
+					"name":               "ovh",
+					"endpoint":           dnsProvider.Endpoint,
+					"application_key":    dnsProvider.ApplicationKey,
+					"application_secret": dnsProvider.ApplicationSecret,
+					"consumer_key":       dnsProvider.ConsumerKey,
+				},
+			},
+		}
+	}
+	return map[string]any{
+		"subjects": subjects,
 		"issuers":  []map[string]any{acmeIssuer},
 	}
-	return []map[string]any{acmePolicy, internalPolicy}
+}
+
+// dnsProviderConfigured reports whether the four fields of an
+// instance OVH DNS provider config are all non-empty — the bar for
+// emitting a DNS-01 ACME policy that won't fail Caddy's Provision.
+// The API rejects a route create / update that would activate
+// DNS-01 without a complete config, but the generator double-
+// checks here so a programming error doesn't slip through to
+// caddy.Load. Step J.4 §5.4.
+func dnsProviderConfigured(c storage.DNSProviderConfig) bool {
+	return c.Endpoint != "" &&
+		c.ApplicationKey != "" &&
+		c.ApplicationSecret != "" &&
+		c.ConsumerKey != ""
 }
 
 // acmeDirectoryURL returns the Let's Encrypt directory URL for the

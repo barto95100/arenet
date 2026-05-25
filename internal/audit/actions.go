@@ -55,6 +55,14 @@ const (
 	ActionPasswordHIBPClean           = "password_hibp_clean"
 	ActionPasswordHIBPPending         = "password_hibp_pending"
 	ActionPasswordCompromisedDetected = "password_compromised_detected"
+
+	// Step J.4 — DNS provider (1)
+	//
+	// The string value is duplicated as a separate constant in
+	// internal/api/dns_provider.go (api.ActionDNSProviderUpdated)
+	// to keep the API's source-of-truth near the only emission
+	// site; tests in actions_test.go pin the enum count.
+	ActionDNSProviderUpdated = "dns_provider_updated"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -76,6 +84,7 @@ var allActions = []string{
 	ActionPasswordHIBPClean,
 	ActionPasswordHIBPPending,
 	ActionPasswordCompromisedDetected,
+	ActionDNSProviderUpdated,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.
