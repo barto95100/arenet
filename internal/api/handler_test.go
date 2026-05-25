@@ -1542,3 +1542,196 @@ func TestUpdateRoute_EmptyLBPolicyPreservesPrevious(t *testing.T) {
 		t.Errorf("upstream not updated (so the update path didn't actually run): %v", got)
 	}
 }
+
+// --- Step J.2 — Active health check handler-level invariants --------------
+
+// TestCreateRoute_DefaultsHealthCheckSubFieldsWhenEnabled pins the
+// materialise-before-validate ordering for the five defaultable HC
+// sub-fields. A POST with `healthCheck.enabled: true` and only
+// `uri` supplied (the other five sub-fields zero) must reach
+// storage with Method="GET", Interval="30s", Timeout="5s",
+// Passes=1, Fails=1 — because storage.HealthCheck.validate()
+// rejects an empty Method, non-positive Passes, etc.; if the API
+// stopped materialising the defaults, this test would 400.
+func TestCreateRoute_DefaultsHealthCheckSubFieldsWhenEnabled(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"hc-defaults.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","wafMode":"off",` +
+		`"healthCheck":{"enabled":true,"uri":"/healthz"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s; want 201 (HC sub-field defaults must be materialised)", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 {
+		t.Fatalf("want 1 route stored, got %d", len(got))
+	}
+	hc := got[0].HealthCheck
+	if hc.Method != "GET" {
+		t.Errorf("HC.Method = %q; want %q (default materialised)", hc.Method, "GET")
+	}
+	if hc.Interval != "30s" {
+		t.Errorf("HC.Interval = %q; want %q (default materialised)", hc.Interval, "30s")
+	}
+	if hc.Timeout != "5s" {
+		t.Errorf("HC.Timeout = %q; want %q (default materialised)", hc.Timeout, "5s")
+	}
+	if hc.Passes != 1 {
+		t.Errorf("HC.Passes = %d; want 1 (default materialised)", hc.Passes)
+	}
+	if hc.Fails != 1 {
+		t.Errorf("HC.Fails = %d; want 1 (default materialised)", hc.Fails)
+	}
+}
+
+// TestCreateRoute_NormalisesHealthCheckMethod pins the §5.2
+// uppercase write-back end-to-end: POST `method:"head"` →
+// storage row carries `Method:"HEAD"`. Covers the chain
+// API.materialise → storage.validate (strict GET/HEAD) →
+// persistence → GET reads back "HEAD". This is the test that
+// makes the API-normalise / storage-pure-grid contract
+// load-bearing across the boundary.
+func TestCreateRoute_NormalisesHealthCheckMethod(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"hc-method.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","wafMode":"off",` +
+		`"healthCheck":{"enabled":true,"uri":"/healthz","method":"head"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s; want 201 (lowercase method should be uppercased)", rec.Code, rec.Body)
+	}
+	got, _ := env.store.ListRoutes(context.Background())
+	if len(got) != 1 {
+		t.Fatalf("want 1 route stored, got %d", len(got))
+	}
+	if got[0].HealthCheck.Method != "HEAD" {
+		t.Errorf("HC.Method = %q; want %q (API uppercased and persisted)", got[0].HealthCheck.Method, "HEAD")
+	}
+}
+
+// TestCreateRoute_RejectsHealthCheckEmptyURI — §5.2 non-defaultable
+// rule. Enabled=true + uri="" must come back as 400 with the
+// camelCase friendly message.
+func TestCreateRoute_RejectsHealthCheckEmptyURI(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"hc-uri.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","wafMode":"off",` +
+		`"healthCheck":{"enabled":true,"uri":""}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "healthCheck.uri") {
+		t.Errorf("body %q missing healthCheck.uri error", rec.Body.String())
+	}
+}
+
+// TestCreateRoute_RejectsHealthCheckInvalidMethod — Method "POST"
+// (non-GET, non-HEAD) must come back as 400. The materialiser
+// uppercases first, so "post" and "POST" both reach the validator
+// as "POST" and get rejected uniformly.
+func TestCreateRoute_RejectsHealthCheckInvalidMethod(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"hc-method-bad.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","wafMode":"off",` +
+		`"healthCheck":{"enabled":true,"uri":"/healthz","method":"POST"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "healthCheck.method") {
+		t.Errorf("body %q missing healthCheck.method error", rec.Body.String())
+	}
+}
+
+// TestCreateRoute_RejectsHealthCheckTimeoutNotLessThanInterval —
+// §5.2 ordering rule. Timeout >= Interval must come back as 400.
+func TestCreateRoute_RejectsHealthCheckTimeoutNotLessThanInterval(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"host":"hc-timeout.local","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","wafMode":"off",` +
+		`"healthCheck":{"enabled":true,"uri":"/healthz","interval":"5s","timeout":"5s"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "timeout") {
+		t.Errorf("body %q missing timeout error", rec.Body.String())
+	}
+}
+
+// TestUpdateRoute_HealthCheckAbsentPreservesPrevious — THE
+// load-bearing test for the (b) decision. A PUT without a
+// `healthCheck` key on the wire MUST preserve the previously
+// stored HC (Enabled=true with non-default custom values), not
+// reset it to zero. Mirrors the BasicAuth / WAFMode preserve
+// patterns. If a future regression changes
+// routeRequest.HealthCheck from *healthCheckReq to value, the
+// distinction nil-vs-zero disappears and this test fails.
+func TestUpdateRoute_HealthCheckAbsentPreservesPrevious(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	// Seed a route with a custom health-check setup directly via
+	// storage (bypasses API; lets us seed any HC we want).
+	seeded, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host:      "hc-preserve.local",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+		HealthCheck: storage.HealthCheck{
+			Enabled:  true,
+			URI:      "/custom/probe",
+			Method:   "HEAD",
+			Interval: "45s",
+			Timeout:  "7s",
+			Passes:   3,
+			Fails:    5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// PUT with NO healthCheck key — only an unrelated change
+	// (different upstream) so we know the update path actually ran.
+	body := `{"host":"hc-preserve.local","upstreams":[{"url":"http://127.0.0.1:9001","weight":1}],"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],"basicAuthEnabled":false,"basicAuthUsername":"","basicAuthPassword":"","requestHeaders":{},"responseHeaders":{},"wafMode":""}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s; want 200", rec.Code, rec.Body)
+	}
+	got, _ := env.store.GetRoute(context.Background(), seeded.ID)
+	if got.Upstreams[0].URL != "http://127.0.0.1:9001" {
+		t.Errorf("upstream not updated (so update path didn't actually run): %v", got)
+	}
+	// All seven non-default HC fields must be preserved verbatim.
+	want := storage.HealthCheck{
+		Enabled:  true,
+		URI:      "/custom/probe",
+		Method:   "HEAD",
+		Interval: "45s",
+		Timeout:  "7s",
+		Passes:   3,
+		Fails:    5,
+	}
+	if got.HealthCheck != want {
+		t.Errorf("HealthCheck silently mutated by PUT without HC block:\ngot:  %+v\nwant: %+v",
+			got.HealthCheck, want)
+	}
+}

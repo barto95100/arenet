@@ -199,3 +199,179 @@ func TestValidateLBPolicy(t *testing.T) {
 		})
 	}
 }
+
+// --- Step J.2 — Health check validation (unit) ----------------------------
+
+// TestValidateHealthCheck exercises the eight §5.2 API-layer rules
+// directly against the validator. The handler-level tests cover a
+// representative sample end-to-end (uri empty, method invalid,
+// timeout>=interval); this unit suite makes every rule
+// individually load-bearing so a regression in any one of them
+// surfaces as a 400 rather than slipping past the API to be caught
+// (in 500 form) by the strict storage HealthCheck.validate().
+//
+// The fixture is a fully-valid healthCheckReq with the §1.3
+// decision-4 defaults pre-applied; each sub-test overrides exactly
+// the field under test. validateHealthCheck assumes the materialise
+// step has already run, so empty/zero-value defaults are
+// programming errors here (covered by the "blank" sub-tests).
+func TestValidateHealthCheck(t *testing.T) {
+	mk := func() healthCheckReq {
+		return healthCheckReq{
+			Enabled:      true,
+			URI:          "/healthz",
+			Method:       "GET",
+			Interval:     "30s",
+			Timeout:      "5s",
+			ExpectStatus: 0,
+			ExpectBody:   "",
+			Passes:       1,
+			Fails:        1,
+		}
+	}
+
+	t.Run("valid fixture", func(t *testing.T) {
+		if err := validateHealthCheck(mk()); err != nil {
+			t.Errorf("valid fixture rejected: %v", err)
+		}
+	})
+
+	// --- uri rules ---
+	t.Run("uri empty rejected", func(t *testing.T) {
+		h := mk()
+		h.URI = ""
+		assertHCRejects(t, h, "healthCheck.uri")
+	})
+	t.Run("uri without leading slash rejected", func(t *testing.T) {
+		h := mk()
+		h.URI = "healthz"
+		assertHCRejects(t, h, "healthCheck.uri")
+	})
+
+	// --- method rule (uppercase is materialiser's job; validator
+	// rejects non-canonical) ---
+	t.Run("method invalid rejected", func(t *testing.T) {
+		h := mk()
+		h.Method = "POST"
+		assertHCRejects(t, h, "healthCheck.method")
+	})
+
+	// --- interval rules ---
+	t.Run("interval unparseable rejected", func(t *testing.T) {
+		h := mk()
+		h.Interval = "not-a-duration"
+		assertHCRejects(t, h, "healthCheck.interval")
+	})
+	t.Run("interval zero rejected", func(t *testing.T) {
+		h := mk()
+		h.Interval = "0s"
+		assertHCRejects(t, h, "healthCheck.interval")
+	})
+
+	// --- timeout rules ---
+	t.Run("timeout unparseable rejected", func(t *testing.T) {
+		h := mk()
+		h.Timeout = "garbage"
+		assertHCRejects(t, h, "healthCheck.timeout")
+	})
+	t.Run("timeout zero rejected", func(t *testing.T) {
+		h := mk()
+		h.Timeout = "0s"
+		assertHCRejects(t, h, "healthCheck.timeout")
+	})
+	t.Run("timeout equal to interval rejected", func(t *testing.T) {
+		h := mk()
+		h.Interval = "5s"
+		h.Timeout = "5s"
+		assertHCRejects(t, h, "timeout")
+	})
+	t.Run("timeout greater than interval rejected", func(t *testing.T) {
+		h := mk()
+		h.Interval = "5s"
+		h.Timeout = "10s"
+		assertHCRejects(t, h, "timeout")
+	})
+
+	// --- expect_status rules ---
+	t.Run("expectStatus zero accepted (means any 2xx)", func(t *testing.T) {
+		h := mk()
+		h.ExpectStatus = 0
+		if err := validateHealthCheck(h); err != nil {
+			t.Errorf("expectStatus=0 rejected: %v", err)
+		}
+	})
+	t.Run("expectStatus 200 accepted", func(t *testing.T) {
+		h := mk()
+		h.ExpectStatus = 200
+		if err := validateHealthCheck(h); err != nil {
+			t.Errorf("expectStatus=200 rejected: %v", err)
+		}
+	})
+	t.Run("expectStatus 99 rejected (below 100)", func(t *testing.T) {
+		h := mk()
+		h.ExpectStatus = 99
+		assertHCRejects(t, h, "healthCheck.expectStatus")
+	})
+	t.Run("expectStatus 600 rejected (above 599)", func(t *testing.T) {
+		h := mk()
+		h.ExpectStatus = 600
+		assertHCRejects(t, h, "healthCheck.expectStatus")
+	})
+
+	// --- expect_body rules ---
+	t.Run("expectBody empty accepted (means no body check)", func(t *testing.T) {
+		h := mk()
+		h.ExpectBody = ""
+		if err := validateHealthCheck(h); err != nil {
+			t.Errorf("expectBody=\"\" rejected: %v", err)
+		}
+	})
+	t.Run("expectBody valid regex accepted", func(t *testing.T) {
+		h := mk()
+		h.ExpectBody = "^OK$"
+		if err := validateHealthCheck(h); err != nil {
+			t.Errorf("valid regex rejected: %v", err)
+		}
+	})
+	t.Run("expectBody malformed regex rejected", func(t *testing.T) {
+		h := mk()
+		h.ExpectBody = "[unclosed"
+		assertHCRejects(t, h, "healthCheck.expectBody")
+	})
+
+	// --- passes / fails rules ---
+	t.Run("passes zero rejected", func(t *testing.T) {
+		h := mk()
+		h.Passes = 0
+		assertHCRejects(t, h, "healthCheck.passes")
+	})
+	t.Run("passes negative rejected", func(t *testing.T) {
+		h := mk()
+		h.Passes = -1
+		assertHCRejects(t, h, "healthCheck.passes")
+	})
+	t.Run("fails zero rejected", func(t *testing.T) {
+		h := mk()
+		h.Fails = 0
+		assertHCRejects(t, h, "healthCheck.fails")
+	})
+	t.Run("fails negative rejected", func(t *testing.T) {
+		h := mk()
+		h.Fails = -5
+		assertHCRejects(t, h, "healthCheck.fails")
+	})
+}
+
+// assertHCRejects is the shared assertion helper for the
+// TestValidateHealthCheck sub-tests: validate must return an
+// error whose message contains the given substring.
+func assertHCRejects(t *testing.T, h healthCheckReq, wantSub string) {
+	t.Helper()
+	err := validateHealthCheck(h)
+	if err == nil {
+		t.Fatalf("validateHealthCheck() = nil; want error containing %q", wantSub)
+	}
+	if !strings.Contains(err.Error(), wantSub) {
+		t.Errorf("error %q missing substring %q", err.Error(), wantSub)
+	}
+}

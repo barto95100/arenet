@@ -618,3 +618,224 @@ func TestRoute_Validate_HeadersAreNotInspected(t *testing.T) {
 		t.Errorf("validate() = %v; storage must trust the API on header content", err)
 	}
 }
+
+// --- Step J.2 — HealthCheck zero-value & decode-from-J.1-era ---------------
+
+// TestRoute_DecodeJ1EraRow_HasZeroHealthCheck — J.2 adds Route.
+// HealthCheck without a migration. A row persisted by J.1 (before
+// the HealthCheck field existed) has no `health_check` key in its
+// stored JSON; standard json.Unmarshal must decode that missing key
+// to the zero value, which the rest of the J.2 codebase treats as
+// "no probe runs". This test seeds a J.1-era JSON literal directly
+// into the bucket (bypassing CreateRoute, which would force a
+// post-J.2 marshal) and then reads it back through the public API
+// to prove the decode path is silent and correct.
+func TestRoute_DecodeJ1EraRow_HasZeroHealthCheck(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Hand-crafted JSON without a `health_check` key — exactly the
+	// shape a J.1 binary would have written for a route created
+	// before Step J.2 landed.
+	j1Row := []byte(`{` +
+		`"id":"r-j1era",` +
+		`"host":"j1era.example.com",` +
+		`"upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],` +
+		`"lb_policy":"round_robin",` +
+		`"tls_enabled":false,` +
+		`"redirect_to_https":false,` +
+		`"aliases":null,` +
+		`"basic_auth_enabled":false,` +
+		`"basic_auth_username":"",` +
+		`"basic_auth_password_hash":"",` +
+		`"request_headers":null,` +
+		`"response_headers":null,` +
+		`"waf_mode":"off",` +
+		`"created_at":"2026-05-25T00:00:00Z",` +
+		`"updated_at":"2026-05-25T00:00:00Z"` +
+		`}`)
+	if err := s.DB().Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte("routes")).Put([]byte("r-j1era"), j1Row)
+	}); err != nil {
+		t.Fatalf("seed J.1-era row: %v", err)
+	}
+
+	got, err := s.GetRoute(ctx, "r-j1era")
+	if err != nil {
+		t.Fatalf("GetRoute: %v", err)
+	}
+
+	// The whole point: a missing health_check key decodes to the
+	// zero-value HealthCheck — Enabled false, every other field at
+	// its Go zero. The generator (caddymgr) treats this as "omit
+	// the health_checks Caddy block entirely"; no probe ever runs.
+	if got.HealthCheck.Enabled {
+		t.Errorf("HealthCheck.Enabled = true; want false (zero-value from absent key)")
+	}
+	if got.HealthCheck.URI != "" {
+		t.Errorf("HealthCheck.URI = %q; want \"\"", got.HealthCheck.URI)
+	}
+	if got.HealthCheck.Passes != 0 {
+		t.Errorf("HealthCheck.Passes = %d; want 0", got.HealthCheck.Passes)
+	}
+	if got.HealthCheck.Fails != 0 {
+		t.Errorf("HealthCheck.Fails = %d; want 0", got.HealthCheck.Fails)
+	}
+}
+
+// TestRoute_Validate_HealthCheckDisabledIgnoresSubFields — when
+// HealthCheck.Enabled is false, the rest of the struct is inert and
+// validate() must pass even if every sub-field would normally fail
+// the strict checks. Mirrors the BasicAuth-disabled test above.
+func TestRoute_Validate_HealthCheckDisabledIgnoresSubFields(t *testing.T) {
+	r := Route{
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		HealthCheck: HealthCheck{
+			Enabled:  false,
+			URI:      "",        // would fail when Enabled
+			Method:   "POST",    // would fail when Enabled
+			Interval: "garbage", // would fail when Enabled
+		},
+	}
+	if err := r.validate(); err != nil {
+		t.Errorf("validate() = %v; want nil (disabled health check ignores other fields)", err)
+	}
+}
+
+// TestRoute_Validate_HealthCheckEnabledRequiresURI — the one
+// non-defaultable field. validate() must reject Enabled=true with
+// URI="" because the API materialises everything except URI before
+// the storage write. This is the strict last-line-of-defence check
+// (§5.2 "URI is the one field operators must always supply").
+func TestRoute_Validate_HealthCheckEnabledRequiresURI(t *testing.T) {
+	r := Route{
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		HealthCheck: HealthCheck{
+			Enabled:  true,
+			URI:      "",
+			Method:   "GET",
+			Interval: "30s",
+			Timeout:  "5s",
+			Passes:   1,
+			Fails:    1,
+		},
+	}
+	err := r.validate()
+	if err == nil {
+		t.Fatal("validate() = nil; want health_check.uri error")
+	}
+	if !strings.Contains(err.Error(), "health_check.uri") {
+		t.Errorf("err = %v; want health_check.uri error message", err)
+	}
+}
+
+// TestRoute_Validate_HealthCheckEnabledRejectsBlankMethod — once
+// Enabled is true, an empty Method reaching storage is a programming
+// error (the API layer materialises Method "" → "GET" before
+// validate). Storage's job is to fail closed.
+func TestRoute_Validate_HealthCheckEnabledRejectsBlankMethod(t *testing.T) {
+	r := Route{
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		HealthCheck: HealthCheck{
+			Enabled:  true,
+			URI:      "/healthz",
+			Method:   "", // unmaterialised — programming error
+			Interval: "30s",
+			Timeout:  "5s",
+			Passes:   1,
+			Fails:    1,
+		},
+	}
+	err := r.validate()
+	if err == nil {
+		t.Fatal("validate() = nil; want health_check.method error")
+	}
+	if !strings.Contains(err.Error(), "health_check.method") {
+		t.Errorf("err = %v; want health_check.method error message", err)
+	}
+}
+
+// TestRoute_Validate_HealthCheckMethod — storage validate() is a
+// pure grid: it accepts canonical "GET" / "HEAD" and rejects any
+// other value (including non-canonical "head" / "Get"). The API
+// layer is responsible for uppercase normalisation before reaching
+// storage; the end-to-end "POST method:head → stored Method:HEAD"
+// contract is verified by the handler-level test in the api package.
+func TestRoute_Validate_HealthCheckMethod(t *testing.T) {
+	mkRoute := func(method string) *Route {
+		return &Route{
+			Host:      "x.com",
+			Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  LBPolicyRoundRobin,
+			HealthCheck: HealthCheck{
+				Enabled:  true,
+				URI:      "/healthz",
+				Method:   method,
+				Interval: "30s",
+				Timeout:  "5s",
+				Passes:   1,
+				Fails:    1,
+			},
+		}
+	}
+
+	for _, m := range []string{"GET", "HEAD"} {
+		t.Run("accepts/"+m, func(t *testing.T) {
+			r := mkRoute(m)
+			if err := r.validate(); err != nil {
+				t.Errorf("validate() = %v; want nil (canonical %q)", err, m)
+			}
+			// Pure grid: Method MUST NOT be rewritten by validate().
+			if r.HealthCheck.Method != m {
+				t.Errorf("Method mutated by validate: got %q, want %q (pure-grid contract)",
+					r.HealthCheck.Method, m)
+			}
+		})
+	}
+
+	for _, m := range []string{"head", "Get", "POST"} {
+		t.Run("rejects/"+m, func(t *testing.T) {
+			r := mkRoute(m)
+			err := r.validate()
+			if err == nil {
+				t.Fatalf("validate() = nil; want method-error for %q", m)
+			}
+			if !strings.Contains(err.Error(), "health_check.method") {
+				t.Errorf("err = %v; want health_check.method error", err)
+			}
+		})
+	}
+}
+
+// TestRoute_Validate_HealthCheckTimeoutMustBeLessThanInterval —
+// the §5.2 ordering rule. A probe whose timeout is >= the interval
+// would let consecutive probes pile up; storage rejects it.
+func TestRoute_Validate_HealthCheckTimeoutMustBeLessThanInterval(t *testing.T) {
+	r := Route{
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		HealthCheck: HealthCheck{
+			Enabled:  true,
+			URI:      "/healthz",
+			Method:   "GET",
+			Interval: "5s",
+			Timeout:  "5s", // == interval — must reject
+			Passes:   1,
+			Fails:    1,
+		},
+	}
+	err := r.validate()
+	if err == nil {
+		t.Fatal("validate() = nil; want timeout-not-less-than-interval error")
+	}
+	if !strings.Contains(err.Error(), "timeout must be strictly less than interval") {
+		t.Errorf("err = %v; want timeout-less-than-interval error", err)
+	}
+}

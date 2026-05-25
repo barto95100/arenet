@@ -21,7 +21,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,6 +63,36 @@ var LBPolicies = []string{
 type Upstream struct {
 	URL    string `json:"url"`
 	Weight int    `json:"weight"`
+}
+
+// HealthCheck is the per-route active health-check configuration
+// (Step J.2). Caddy applies these settings to every Upstream in the
+// pool — a single HealthCheck per route, not per upstream (§1.3,
+// §5.2).
+//
+// Wire shape mirrors Caddy v2.11.3's ActiveHealthChecks struct for the
+// eight fields Arenet exposes. Interval and Timeout are kept as Go
+// strings ("30s") rather than int nanoseconds because Caddy parses
+// the string form at unmarshal time and the human-readable form is
+// preserved end-to-end. None of the fields use `omitempty` —
+// consistent with the existing Route pattern (Aliases, RequestHeaders,
+// etc.).
+//
+// Defaults for Method / Interval / Timeout / Passes / Fails are
+// materialised by the API layer BEFORE storage validation (§5.2).
+// URI is the one field the operator must always supply when Enabled
+// is true — there is no sensible default health-check path that fits
+// every backend.
+type HealthCheck struct {
+	Enabled      bool   `json:"enabled"`
+	URI          string `json:"uri"`
+	Method       string `json:"method"`
+	Interval     string `json:"interval"`
+	Timeout      string `json:"timeout"`
+	ExpectStatus int    `json:"expect_status"`
+	ExpectBody   string `json:"expect_body"`
+	Passes       int    `json:"passes"`
+	Fails        int    `json:"fails"`
 }
 
 // Route is a proxied virtual host served by Arenet.
@@ -125,9 +157,20 @@ type Route struct {
 	// Pre-I.4 routes with WAFEnabled=true are migrated to "block"
 	// (semantic equivalent of "block on every detection"); WAFEnabled=
 	// false routes are migrated to "off". See migrateWAFEnabledToWAFMode.
-	WAFMode   string    `json:"waf_mode"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	WAFMode string `json:"waf_mode"`
+	// HealthCheck (Step J.2) is the active health-check configuration
+	// Caddy applies to every Upstream in the pool. Zero-value
+	// (Enabled: false) means no probe runs — the generator omits the
+	// `health_checks` Caddy block entirely. When Enabled is true the
+	// remaining eight fields carry the probe parameters (see the
+	// HealthCheck type above this Route struct). Materialisation of
+	// the five defaultable fields (Method, Interval, Timeout, Passes,
+	// Fails) happens at the API layer BEFORE the storage write —
+	// storage.validate() is the last line of defence, strict (e.g.
+	// Passes < 1 rejected) without blank-or-positive branching.
+	HealthCheck HealthCheck `json:"health_check"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route
@@ -210,6 +253,79 @@ func (r *Route) validate() error {
 		if r.BasicAuthPasswordHash == "" {
 			return errors.New("route: basic_auth_password_hash must not be empty when basic auth is enabled")
 		}
+	}
+	// Step J.2: active health-check validation, gated by Enabled.
+	// When Enabled is false the sub-fields are inert; storage does
+	// not touch them. When true the API layer has already
+	// materialised the five defaultable fields (Method, Interval,
+	// Timeout, Passes, Fails) before validate() runs, so the
+	// checks below are uniformly strict — no "blank or positive"
+	// branching. URI is the one field operators must always supply
+	// (§5.2): there is no sensible default health-check path.
+	if r.HealthCheck.Enabled {
+		if err := r.HealthCheck.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate runs the strict last-line-of-defence checks on an
+// Enabled HealthCheck. Called only when HealthCheck.Enabled is
+// true — callers must guard. The API layer is expected to have
+// materialised the five default fields (Method/Interval/Timeout/
+// Passes/Fails) AND uppercased Method before storage's CreateRoute /
+// UpdateRoute is invoked; a HealthCheck reaching this method with
+// any of those fields blank, or with a non-uppercase Method, is a
+// programming error and gets rejected here.
+//
+// This method is a PURE GRID — it does not mutate the receiver.
+// Storage validators in Arenet follow the J.1 contract: the API
+// normalises, storage checks. The pointer receiver only avoids a
+// receiver copy on the hot path; nothing here writes back.
+func (h *HealthCheck) validate() error {
+	if h.URI == "" {
+		return errors.New("route: health_check.uri must not be empty when enabled")
+	}
+	if !strings.HasPrefix(h.URI, "/") {
+		return fmt.Errorf("route: health_check.uri %q must start with /", h.URI)
+	}
+	// Method enum check, no mutation. The API layer is responsible
+	// for normalising "head" → "HEAD" before reaching storage; a
+	// non-canonical value here is a programming error.
+	if h.Method != "GET" && h.Method != "HEAD" {
+		return fmt.Errorf("route: health_check.method %q must be GET or HEAD", h.Method)
+	}
+	interval, err := time.ParseDuration(h.Interval)
+	if err != nil {
+		return fmt.Errorf("route: health_check.interval %q is not a valid duration", h.Interval)
+	}
+	if interval <= 0 {
+		return errors.New("route: health_check.interval must be strictly positive")
+	}
+	timeout, err := time.ParseDuration(h.Timeout)
+	if err != nil {
+		return fmt.Errorf("route: health_check.timeout %q is not a valid duration", h.Timeout)
+	}
+	if timeout <= 0 {
+		return errors.New("route: health_check.timeout must be strictly positive")
+	}
+	if timeout >= interval {
+		return errors.New("route: health_check.timeout must be strictly less than interval")
+	}
+	if h.ExpectStatus != 0 && (h.ExpectStatus < 100 || h.ExpectStatus > 599) {
+		return fmt.Errorf("route: health_check.expect_status %d must be 0 or in 100..599", h.ExpectStatus)
+	}
+	if h.ExpectBody != "" {
+		if _, err := regexp.Compile(h.ExpectBody); err != nil {
+			return fmt.Errorf("route: health_check.expect_body is not a valid regex: %v", err)
+		}
+	}
+	if h.Passes < 1 {
+		return errors.New("route: health_check.passes must be >= 1")
+	}
+	if h.Fails < 1 {
+		return errors.New("route: health_check.fails must be >= 1")
 	}
 	return nil
 }

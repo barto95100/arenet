@@ -386,6 +386,42 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			},
 		}
 
+		// Step J.2: active health checks. When the route has them
+		// enabled, emit `health_checks.active` as a sibling of
+		// upstreams and load_balancing inside the reverse_proxy
+		// handler (§3.2, §5.2). When disabled, the whole
+		// health_checks key is omitted — Caddy treats absence as
+		// "no probe runs", which is what we want.
+		//
+		// Emission rules (§5.2):
+		//   - `uri`, `method`, `interval`, `timeout`, `passes`,
+		//     `fails` always emitted when Enabled (the API layer
+		//     materialised the five defaults before the row
+		//     reached storage, so none of them are blank here).
+		//   - `expect_status` only when non-zero (zero = "any 2xx",
+		//     Caddy's documented default).
+		//   - `expect_body` only when non-empty (empty regex =
+		//     "no body check"; emitting "" would be confusing).
+		if r.HealthCheck.Enabled {
+			active := map[string]any{
+				"uri":      r.HealthCheck.URI,
+				"method":   r.HealthCheck.Method,
+				"interval": r.HealthCheck.Interval,
+				"timeout":  r.HealthCheck.Timeout,
+				"passes":   r.HealthCheck.Passes,
+				"fails":    r.HealthCheck.Fails,
+			}
+			if r.HealthCheck.ExpectStatus != 0 {
+				active["expect_status"] = r.HealthCheck.ExpectStatus
+			}
+			if r.HealthCheck.ExpectBody != "" {
+				active["expect_body"] = r.HealthCheck.ExpectBody
+			}
+			proxyHandler["health_checks"] = map[string]any{
+				"active": active,
+			}
+		}
+
 		// Step I.5 — Basic Auth. The `authentication` handler with
 		// the http_basic provider gates the route at HTTP layer:
 		// missing or wrong credentials yield a 401 before the

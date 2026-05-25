@@ -467,6 +467,23 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step J.2: materialise health-check defaults + uppercase
+	// Method, then validate (gated on Enabled). The "block absent
+	// vs present" distinction (the *healthCheckReq pointer) is the
+	// load-bearing detail of the J.2 wire: nil = no HC block on
+	// the request = no probe runs (createRoute treats as
+	// zero-value disabled). When non-nil with Enabled=true, the
+	// caller meant a real probe — materialise the five defaults
+	// (uri is not defaultable) and validate.
+	if req.HealthCheck != nil && req.HealthCheck.Enabled {
+		hc := materialiseHealthCheck(*req.HealthCheck)
+		if err := validateHealthCheck(hc); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		req.HealthCheck = &hc
+	}
+
 	// Step I.7 hotfix (Finding #5): RedirectToHTTPS is meaningless
 	// without TLS. Normalize to false when TLS is off so the stored
 	// row never carries a latent redirect that would silently
@@ -516,6 +533,23 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	for i, u := range req.Upstreams {
 		storeUpstreams[i] = storage.Upstream{URL: u.URL, Weight: u.Weight}
 	}
+	// Step J.2: map the optional wire HealthCheck to storage. nil
+	// pointer or Enabled=false both produce a zero-value
+	// storage.HealthCheck (no probe runs).
+	var storeHC storage.HealthCheck
+	if req.HealthCheck != nil {
+		storeHC = storage.HealthCheck{
+			Enabled:      req.HealthCheck.Enabled,
+			URI:          req.HealthCheck.URI,
+			Method:       req.HealthCheck.Method,
+			Interval:     req.HealthCheck.Interval,
+			Timeout:      req.HealthCheck.Timeout,
+			ExpectStatus: req.HealthCheck.ExpectStatus,
+			ExpectBody:   req.HealthCheck.ExpectBody,
+			Passes:       req.HealthCheck.Passes,
+			Fails:        req.HealthCheck.Fails,
+		}
+	}
 	newRoute := storage.Route{
 		Host:                  req.Host,
 		Upstreams:             storeUpstreams,
@@ -529,6 +563,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		RequestHeaders:        req.RequestHeaders,
 		ResponseHeaders:       req.ResponseHeaders,
 		WAFMode:               req.WAFMode,
+		HealthCheck:           storeHC,
 	}
 	for _, h := range newRoute.AllHosts() {
 		if ownerID, taken := owners[h]; taken {
@@ -673,6 +708,38 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step J.2: HealthCheck resolution on PUT — preserve-or-replace,
+	// driven by the wire's nil-vs-present distinction (see
+	// healthCheckReq doc-comment on routeRequest).
+	//
+	//   - req.HealthCheck == nil (block absent from PUT) → preserve
+	//     the previously stored HealthCheck verbatim. Matches the
+	//     Step I.5 BasicAuth password-blank-preserves-hash pattern
+	//     and the Step I.4 WAFMode empty-preserves-mode pattern.
+	//     The previous HealthCheck is already validated (storage
+	//     accepted it at the original write); no need to
+	//     re-materialise or re-validate. Copied straight into
+	//     storeHC below at the assembly site.
+	//
+	//   - req.HealthCheck != nil (block present, any value) → full
+	//     replacement (decision #4). When Enabled is true,
+	//     materialise the five defaults + uppercase Method then
+	//     validate; the stored row carries the explicit values.
+	//     When Enabled is false the rest of the block is inert and
+	//     the storage row carries a zero HealthCheck (disabled).
+	//
+	// J.3 form must ship one or the other — never a partial block.
+	// See docs/backlog-step-j.md "J.3 frontend — health-check is
+	// preserve-or-replace, never partial".
+	if req.HealthCheck != nil && req.HealthCheck.Enabled {
+		hc := materialiseHealthCheck(*req.HealthCheck)
+		if err := validateHealthCheck(hc); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		req.HealthCheck = &hc
+	}
+
 	// Step I.7 hotfix (Finding #5): RedirectToHTTPS is meaningless
 	// without TLS — normalize on PUT too so a route losing its TLS
 	// also loses its redirect. Also self-heals legacy rows that
@@ -716,6 +783,28 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	for i, u := range req.Upstreams {
 		storeUpstreams[i] = storage.Upstream{URL: u.URL, Weight: u.Weight}
 	}
+	// Step J.2: map the HealthCheck to storage.
+	//   - req.HealthCheck == nil  → preserve previous verbatim
+	//     (no re-materialise, no re-validate; previous is already
+	//     valid by construction).
+	//   - req.HealthCheck != nil  → full replacement, mapped from
+	//     the materialised+validated value built above.
+	var storeHC storage.HealthCheck
+	if req.HealthCheck == nil {
+		storeHC = previous.HealthCheck
+	} else {
+		storeHC = storage.HealthCheck{
+			Enabled:      req.HealthCheck.Enabled,
+			URI:          req.HealthCheck.URI,
+			Method:       req.HealthCheck.Method,
+			Interval:     req.HealthCheck.Interval,
+			Timeout:      req.HealthCheck.Timeout,
+			ExpectStatus: req.HealthCheck.ExpectStatus,
+			ExpectBody:   req.HealthCheck.ExpectBody,
+			Passes:       req.HealthCheck.Passes,
+			Fails:        req.HealthCheck.Fails,
+		}
+	}
 	newRoute := storage.Route{
 		ID:                    id,
 		Host:                  req.Host,
@@ -730,6 +819,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		RequestHeaders:        req.RequestHeaders,
 		ResponseHeaders:       req.ResponseHeaders,
 		WAFMode:               req.WAFMode,
+		HealthCheck:           storeHC,
 	}
 	if !hostnamesEqual(newRoute.AllHosts(), previous.AllHosts()) {
 		existing, err := h.store.ListRoutes(r.Context())

@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/barto95100/arenet/internal/storage"
@@ -107,4 +108,103 @@ func validateLBPolicy(s string) error {
 		}
 	}
 	return fmt.Errorf("lbPolicy %q is not a valid policy", s)
+}
+
+// Step J.2 — five default values the API layer materialises into
+// HealthCheck sub-fields before validation runs. uri is NOT in
+// this set: there is no sensible default health-check path; the
+// operator must always supply it when Enabled is true (§5.2). The
+// constants live next to the validator so a single edit keeps the
+// materialise-then-validate pipeline consistent.
+const (
+	defaultHCMethod   = "GET"
+	defaultHCInterval = "30s"
+	defaultHCTimeout  = "5s"
+	defaultHCPasses   = 1
+	defaultHCFails    = 1
+)
+
+// validateHealthCheck runs the eight Step J.2 API-layer rules on a
+// healthCheckReq that has been through the defaults injection
+// (Method/Interval/Timeout/Passes/Fails) + Method uppercase
+// normalisation. Only called when h.Enabled is true; callers MUST
+// guard.
+//
+// The validation messages use camelCase field names ("healthCheck.
+// uri", "healthCheck.method", ...) because they surface to the API
+// caller verbatim — friendlier 400 than the snake_case storage
+// errors. The storage HealthCheck.validate() runs after, as the
+// strict last line of defence against direct CreateRoute /
+// UpdateRoute calls that bypass the API.
+func validateHealthCheck(h healthCheckReq) error {
+	if h.URI == "" {
+		return errors.New("healthCheck.uri must not be empty when enabled")
+	}
+	if !strings.HasPrefix(h.URI, "/") {
+		return fmt.Errorf("healthCheck.uri %q must start with /", h.URI)
+	}
+	if h.Method != "GET" && h.Method != "HEAD" {
+		return fmt.Errorf("healthCheck.method %q must be GET or HEAD", h.Method)
+	}
+	interval, err := time.ParseDuration(h.Interval)
+	if err != nil {
+		return fmt.Errorf("healthCheck.interval %q is not a valid duration", h.Interval)
+	}
+	if interval <= 0 {
+		return errors.New("healthCheck.interval must be strictly positive")
+	}
+	timeout, err := time.ParseDuration(h.Timeout)
+	if err != nil {
+		return fmt.Errorf("healthCheck.timeout %q is not a valid duration", h.Timeout)
+	}
+	if timeout <= 0 {
+		return errors.New("healthCheck.timeout must be strictly positive")
+	}
+	if timeout >= interval {
+		return errors.New("healthCheck.timeout must be strictly less than interval")
+	}
+	if h.ExpectStatus != 0 && (h.ExpectStatus < 100 || h.ExpectStatus > 599) {
+		return fmt.Errorf("healthCheck.expectStatus %d must be 0 or in 100..599", h.ExpectStatus)
+	}
+	if h.ExpectBody != "" {
+		if _, err := regexp.Compile(h.ExpectBody); err != nil {
+			return fmt.Errorf("healthCheck.expectBody is not a valid regex: %v", err)
+		}
+	}
+	if h.Passes < 1 {
+		return errors.New("healthCheck.passes must be >= 1")
+	}
+	if h.Fails < 1 {
+		return errors.New("healthCheck.fails must be >= 1")
+	}
+	return nil
+}
+
+// materialiseHealthCheck applies the five default values (and the
+// Method uppercase normalisation) to an Enabled health check
+// before validation runs. URI is NOT defaulted — it must come
+// from the caller. The function returns a new healthCheckReq with
+// the defaults filled in; the caller swaps the original with the
+// returned one before passing it to validateHealthCheck and to
+// the storage mapping.
+//
+// Called only when the caller has determined Enabled is true.
+func materialiseHealthCheck(h healthCheckReq) healthCheckReq {
+	if h.Method == "" {
+		h.Method = defaultHCMethod
+	}
+	h.Method = strings.ToUpper(h.Method)
+	if h.Interval == "" {
+		h.Interval = defaultHCInterval
+	}
+	if h.Timeout == "" {
+		h.Timeout = defaultHCTimeout
+	}
+	if h.Passes == 0 {
+		h.Passes = defaultHCPasses
+	}
+	if h.Fails == 0 {
+		h.Fails = defaultHCFails
+	}
+	return h
 }

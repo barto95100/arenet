@@ -171,6 +171,15 @@ type routeRequest struct {
 	// preserve UX so admins can flip unrelated fields without
 	// re-typing the WAF mode every time.
 	WAFMode string `json:"wafMode"`
+	// Step J.2 — active health check, pointer so nil distinguishes
+	// "block absent from JSON" from "block present with explicit
+	// disabled" (see healthCheckReq doc-comment). createRoute: nil
+	// = HC zero-value (disabled); non-nil = materialise + validate
+	// then map to storage. updateRoute: nil = preserve previous
+	// stored HealthCheck; non-nil = full replacement. The latter
+	// rule matches Step I.5 BasicAuth + Step I.4 WAFMode
+	// preserve-on-omission patterns.
+	HealthCheck *healthCheckReq `json:"healthCheck,omitempty"`
 }
 
 // upstreamResp is the per-element wire shape inside the routeResponse
@@ -178,6 +187,53 @@ type routeRequest struct {
 type upstreamResp struct {
 	URL    string `json:"url"`
 	Weight int    `json:"weight"`
+}
+
+// healthCheckReq is the per-route active health check on the API
+// request side (Step J.2). Mirrors storage.HealthCheck verbatim
+// except the JSON tags are camelCase (the api wire convention)
+// rather than snake_case (the storage convention) — pattern Step I
+// established for routeRequest vs storage.Route. createRoute /
+// updateRoute map healthCheckReq to storage.HealthCheck after
+// materialising the five defaultable sub-fields (Method, Interval,
+// Timeout, Passes, Fails) and uppercasing Method (§5.2).
+//
+// On routeRequest the field is a POINTER (*healthCheckReq) so the
+// JSON decoder distinguishes:
+//   - block ABSENT (`healthCheck` key missing) → ptr is nil →
+//     updateRoute preserves the previously stored HealthCheck;
+//     createRoute treats as zero-value (disabled).
+//   - block PRESENT (any value, including {"enabled": false}) →
+//     ptr is non-nil → full replacement (§J.3-backlog).
+//
+// The "omission ≠ clear" semantic mirrors Step I.5 (empty password
+// preserves hash) and Step I.4 (empty wafMode preserves mode).
+type healthCheckReq struct {
+	Enabled      bool   `json:"enabled"`
+	URI          string `json:"uri"`
+	Method       string `json:"method"`
+	Interval     string `json:"interval"`
+	Timeout      string `json:"timeout"`
+	ExpectStatus int    `json:"expectStatus"`
+	ExpectBody   string `json:"expectBody"`
+	Passes       int    `json:"passes"`
+	Fails        int    `json:"fails"`
+}
+
+// healthCheckResp is the per-route active health check on the API
+// response side. Always non-pointer on the response (storage
+// guarantees a HealthCheck field always exists on a stored Route)
+// and the camelCase tags mirror healthCheckReq.
+type healthCheckResp struct {
+	Enabled      bool   `json:"enabled"`
+	URI          string `json:"uri"`
+	Method       string `json:"method"`
+	Interval     string `json:"interval"`
+	Timeout      string `json:"timeout"`
+	ExpectStatus int    `json:"expectStatus"`
+	ExpectBody   string `json:"expectBody"`
+	Passes       int    `json:"passes"`
+	Fails        int    `json:"fails"`
 }
 
 // routeResponse is the wire shape returned by GET / POST / PUT /routes. The
@@ -212,9 +268,14 @@ type routeResponse struct {
 	RequestHeaders  map[string]string `json:"requestHeaders"`
 	ResponseHeaders map[string]string `json:"responseHeaders"`
 	// Step I.4 — WAF mode, one of "off" / "detect" / "block".
-	WAFMode   string `json:"wafMode"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	WAFMode string `json:"wafMode"`
+	// Step J.2 — active health check. Always present on a stored
+	// route (storage.HealthCheck has no omitempty); when Enabled
+	// is false the rest of the sub-fields carry zero values and
+	// the generator omits the Caddy `health_checks` block.
+	HealthCheck healthCheckResp `json:"healthCheck"`
+	CreatedAt   string          `json:"createdAt"`
+	UpdatedAt   string          `json:"updatedAt"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with
@@ -255,7 +316,18 @@ func toResponse(r storage.Route) routeResponse {
 		RequestHeaders:       reqHeaders,
 		ResponseHeaders:      respHeaders,
 		WAFMode:              r.WAFMode,
-		CreatedAt:            r.CreatedAt.UTC().Format(timestampFormat),
-		UpdatedAt:            r.UpdatedAt.UTC().Format(timestampFormat),
+		HealthCheck: healthCheckResp{
+			Enabled:      r.HealthCheck.Enabled,
+			URI:          r.HealthCheck.URI,
+			Method:       r.HealthCheck.Method,
+			Interval:     r.HealthCheck.Interval,
+			Timeout:      r.HealthCheck.Timeout,
+			ExpectStatus: r.HealthCheck.ExpectStatus,
+			ExpectBody:   r.HealthCheck.ExpectBody,
+			Passes:       r.HealthCheck.Passes,
+			Fails:        r.HealthCheck.Fails,
+		},
+		CreatedAt: r.CreatedAt.UTC().Format(timestampFormat),
+		UpdatedAt: r.UpdatedAt.UTC().Format(timestampFormat),
 	}
 }

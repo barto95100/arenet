@@ -992,6 +992,24 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 			BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$U0FMVFNBTFRTQUxUU0FMVA$S0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0U",
 			RequestHeaders:        map[string]string{"X-Real-Foo": "bar"},
 			ResponseHeaders:       map[string]string{"X-Custom": "x"},
+			// Step J.2 — empirical anchor for the active health check
+			// block. Caddy v2.11.3 must Provision the emitted
+			// `health_checks.active` shape (including the string form
+			// "30s"/"5s" for caddy.Duration fields) without error.
+			// A future drift in either Caddy's struct tags or our
+			// generator surfaces here as a Validate failure, same
+			// guard pattern as Finding #2.
+			HealthCheck: storage.HealthCheck{
+				Enabled:      true,
+				URI:          "/healthz",
+				Method:       "GET",
+				Interval:     "30s",
+				Timeout:      "5s",
+				ExpectStatus: 200,
+				ExpectBody:   "^OK$",
+				Passes:       1,
+				Fails:        1,
+			},
 		},
 	}
 	// One additional route per non-default LB policy. Each carries a
@@ -1813,5 +1831,215 @@ func TestBuildConfigJSON_SingleUpstreamPool_EmitsLoadBalancing(t *testing.T) {
 	sel := lb["selection_policy"].(map[string]any)
 	if got := sel["policy"]; got != storage.LBPolicyRoundRobin {
 		t.Errorf("single-upstream selection_policy.policy = %v; want %q", got, storage.LBPolicyRoundRobin)
+	}
+}
+
+// --- Step J.2 — Active health checks emission -----------------------------
+
+// fixtureHealthCheckEnabled returns a minimal Route with Step J.2
+// active health checks turned on. The five defaultable fields carry
+// their §1.3 decision-4 default values (GET / 30s / 5s / 1 / 1),
+// `uri` is the operator-supplied probe path. Used by the J.2 tests
+// below to share one valid fixture; per-test variations override
+// the field under test.
+func fixtureHealthCheckEnabled() storage.Route {
+	return storage.Route{
+		ID:        "r-hc",
+		Host:      "hc.local",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+		HealthCheck: storage.HealthCheck{
+			Enabled:  true,
+			URI:      "/healthz",
+			Method:   "GET",
+			Interval: "30s",
+			Timeout:  "5s",
+			Passes:   1,
+			Fails:    1,
+		},
+	}
+}
+
+// TestBuildConfigJSON_HealthCheck_DisabledOmitsBlock — Enabled=false
+// must produce a reverse_proxy handler WITHOUT a health_checks key.
+// Caddy treats the absence as "no probe runs" — which is what the
+// spec calls for (§5.2 "When `Enabled` is false the entire
+// health_checks key is omitted").
+func TestBuildConfigJSON_HealthCheck_DisabledOmitsBlock(t *testing.T) {
+	routes := []storage.Route{{
+		ID:        "r-no-hc",
+		Host:      "no-hc.local",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+		// HealthCheck zero-value → Enabled is false.
+	}}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	proxy := firstReverseProxyHandler(t, raw)
+	if _, present := proxy["health_checks"]; present {
+		t.Errorf("disabled health check leaked into config: %+v", proxy["health_checks"])
+	}
+}
+
+// TestBuildConfigJSON_HealthCheck_EnabledEmitsActive — Enabled=true
+// produces a `health_checks.active` block with the six mandatory
+// fields. The values come back as their JSON-decoded form
+// (`interval`/`timeout` as strings, `passes`/`fails` as float64).
+func TestBuildConfigJSON_HealthCheck_EnabledEmitsActive(t *testing.T) {
+	routes := []storage.Route{fixtureHealthCheckEnabled()}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	proxy := firstReverseProxyHandler(t, raw)
+	hc, ok := proxy["health_checks"].(map[string]any)
+	if !ok {
+		t.Fatalf("health_checks missing or wrong type: %+v", proxy)
+	}
+	active, ok := hc["active"].(map[string]any)
+	if !ok {
+		t.Fatalf("health_checks.active missing or wrong type: %+v", hc)
+	}
+	// Six fields ALWAYS emitted when Enabled (§5.2). Each must be
+	// present with the fixture value.
+	wantStrings := map[string]string{
+		"uri":      "/healthz",
+		"method":   "GET",
+		"interval": "30s",
+		"timeout":  "5s",
+	}
+	for k, want := range wantStrings {
+		if got := active[k]; got != want {
+			t.Errorf("active.%s = %v; want %q", k, got, want)
+		}
+	}
+	// JSON numbers come back as float64.
+	wantInts := map[string]float64{
+		"passes": 1,
+		"fails":  1,
+	}
+	for k, want := range wantInts {
+		got, ok := active[k].(float64)
+		if !ok {
+			t.Errorf("active.%s missing or wrong type: %v", k, active[k])
+			continue
+		}
+		if got != want {
+			t.Errorf("active.%s = %v; want %v", k, got, want)
+		}
+	}
+}
+
+// TestBuildConfigJSON_HealthCheck_ExpectStatusConditional —
+// `expect_status` is emitted ONLY when non-zero. Zero means "any
+// 2xx" per Caddy's documented behaviour (§5.2 generation rule),
+// and emitting it would override that default.
+func TestBuildConfigJSON_HealthCheck_ExpectStatusConditional(t *testing.T) {
+	t.Run("zero is omitted", func(t *testing.T) {
+		r := fixtureHealthCheckEnabled()
+		r.HealthCheck.ExpectStatus = 0
+		raw, err := buildConfigJSON([]storage.Route{r}, buildOpts{DevMode: true})
+		if err != nil {
+			t.Fatalf("buildConfigJSON: %v", err)
+		}
+		proxy := firstReverseProxyHandler(t, raw)
+		active := proxy["health_checks"].(map[string]any)["active"].(map[string]any)
+		if _, present := active["expect_status"]; present {
+			t.Errorf("expect_status=0 leaked into config: %v", active["expect_status"])
+		}
+	})
+
+	t.Run("non-zero is emitted", func(t *testing.T) {
+		r := fixtureHealthCheckEnabled()
+		r.HealthCheck.ExpectStatus = 204
+		raw, err := buildConfigJSON([]storage.Route{r}, buildOpts{DevMode: true})
+		if err != nil {
+			t.Fatalf("buildConfigJSON: %v", err)
+		}
+		proxy := firstReverseProxyHandler(t, raw)
+		active := proxy["health_checks"].(map[string]any)["active"].(map[string]any)
+		got, ok := active["expect_status"].(float64)
+		if !ok {
+			t.Fatalf("expect_status missing or wrong type: %v", active["expect_status"])
+		}
+		if got != 204 {
+			t.Errorf("expect_status = %v; want 204", got)
+		}
+	})
+}
+
+// TestBuildConfigJSON_HealthCheck_ExpectBodyConditional —
+// `expect_body` is emitted ONLY when non-empty. An empty regex
+// means "no body check"; emitting "" would compile-fail at Caddy's
+// Provision (§5.2 generation rule).
+func TestBuildConfigJSON_HealthCheck_ExpectBodyConditional(t *testing.T) {
+	t.Run("empty is omitted", func(t *testing.T) {
+		r := fixtureHealthCheckEnabled()
+		r.HealthCheck.ExpectBody = ""
+		raw, err := buildConfigJSON([]storage.Route{r}, buildOpts{DevMode: true})
+		if err != nil {
+			t.Fatalf("buildConfigJSON: %v", err)
+		}
+		proxy := firstReverseProxyHandler(t, raw)
+		active := proxy["health_checks"].(map[string]any)["active"].(map[string]any)
+		if _, present := active["expect_body"]; present {
+			t.Errorf("empty expect_body leaked into config: %v", active["expect_body"])
+		}
+	})
+
+	t.Run("non-empty is emitted verbatim", func(t *testing.T) {
+		r := fixtureHealthCheckEnabled()
+		r.HealthCheck.ExpectBody = "^OK$"
+		raw, err := buildConfigJSON([]storage.Route{r}, buildOpts{DevMode: true})
+		if err != nil {
+			t.Fatalf("buildConfigJSON: %v", err)
+		}
+		proxy := firstReverseProxyHandler(t, raw)
+		active := proxy["health_checks"].(map[string]any)["active"].(map[string]any)
+		if got := active["expect_body"]; got != "^OK$" {
+			t.Errorf("expect_body = %v; want %q", got, "^OK$")
+		}
+	})
+}
+
+// TestBuildConfigJSON_HealthCheck_FieldValuesFlowVerbatim — each
+// of the six mandatory fields is passed through to the emitted
+// JSON verbatim (not just the defaults). Catches a future
+// regression where the generator hardcodes a value or applies a
+// transformation.
+func TestBuildConfigJSON_HealthCheck_FieldValuesFlowVerbatim(t *testing.T) {
+	r := fixtureHealthCheckEnabled()
+	r.HealthCheck.URI = "/custom/probe"
+	r.HealthCheck.Method = "HEAD"
+	r.HealthCheck.Interval = "45s"
+	r.HealthCheck.Timeout = "7s"
+	r.HealthCheck.Passes = 3
+	r.HealthCheck.Fails = 5
+
+	raw, err := buildConfigJSON([]storage.Route{r}, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	proxy := firstReverseProxyHandler(t, raw)
+	active := proxy["health_checks"].(map[string]any)["active"].(map[string]any)
+	if got := active["uri"]; got != "/custom/probe" {
+		t.Errorf("uri = %v; want /custom/probe", got)
+	}
+	if got := active["method"]; got != "HEAD" {
+		t.Errorf("method = %v; want HEAD", got)
+	}
+	if got := active["interval"]; got != "45s" {
+		t.Errorf("interval = %v; want 45s", got)
+	}
+	if got := active["timeout"]; got != "7s" {
+		t.Errorf("timeout = %v; want 7s", got)
+	}
+	if got, _ := active["passes"].(float64); got != 3 {
+		t.Errorf("passes = %v; want 3", got)
+	}
+	if got, _ := active["fails"].(float64); got != 5 {
+		t.Errorf("fails = %v; want 5", got)
 	}
 }
