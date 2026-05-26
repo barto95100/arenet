@@ -54,6 +54,48 @@ const (
 	ACMEChallengeDNS01  = "dns-01"
 )
 
+// Step K.1 per-route authentication mode (§5.1). One of three
+// mutually-exclusive values, materialised at the API layer
+// (empty string → "none" on POST, preserve previous on PUT).
+const (
+	RouteAuthNone        = "none"
+	RouteAuthBasic       = "basic"
+	RouteAuthForwardAuth = "forward_auth"
+)
+
+// BasicAuthRouteConfig is the per-route Basic Auth configuration
+// (Step K.1 — refactored from the flat BasicAuthEnabled / Username /
+// PasswordHash fields shipped in Step I.5). The shape is unchanged
+// at the bytes level; it lives in a nested struct so the radio-
+// group auth model (none / basic / forward_auth) reads cleanly.
+//
+// Validation rules: when Route.AuthMode == RouteAuthBasic, both
+// Username and PasswordHash must be non-empty. The PasswordHash
+// is an argon2id PHC string — NEVER exposed over the API (the
+// response surface uses a derived BasicAuthPasswordSet bool
+// instead) and NEVER embedded in audit events.
+type BasicAuthRouteConfig struct {
+	Username     string `json:"username"`
+	PasswordHash string `json:"password_hash"` // SECRET — never echoed
+}
+
+// ForwardAuthRouteConfig is the per-route reference to one of the
+// instance-level forward-auth providers (Step K.1, §5.1). The
+// provider configuration itself lives in the
+// `forward_auth_providers` bucket, indexed by name. Per-route
+// data is the reference only — keeps the route row small and
+// lets one provider serve N routes.
+//
+// Validation rules: when Route.AuthMode == RouteAuthForwardAuth,
+// ProviderName must be non-empty AND must reference an existing
+// provider in the forward_auth_providers bucket. The API layer
+// looks up the provider at edit time and rejects the route
+// create / update if no such provider exists (same pattern as
+// J.4 DNS-01 provider check).
+type ForwardAuthRouteConfig struct {
+	ProviderName string `json:"provider_name"`
+}
+
 // LBPolicies is the canonical ordered list of allowed LBPolicy values.
 // Used by validate() and by the API enum check. Order matches the
 // constants above and §1.3 decision 2.
@@ -138,17 +180,26 @@ type Route struct {
 	// a nil slice (zero value), which is treated identically to an
 	// empty slice everywhere downstream.
 	Aliases []string `json:"aliases"`
-	// BasicAuthEnabled (Step I.5) gates HTTP Basic Auth on this
-	// route. When true, BasicAuthUsername and BasicAuthPasswordHash
-	// must be set; Caddy emits the `authentication` handler before
-	// the proxy chain, returning 401 on missing / wrong credentials.
-	BasicAuthEnabled  bool   `json:"basic_auth_enabled"`
-	BasicAuthUsername string `json:"basic_auth_username"`
-	// BasicAuthPasswordHash is an argon2id PHC string. NEVER exposed
-	// over the API (the response surface uses a derived
-	// BasicAuthPasswordSet bool instead) and NEVER embedded in
-	// audit events (see routeForAudit in internal/api/routes.go).
-	BasicAuthPasswordHash string `json:"basic_auth_password_hash"`
+	// AuthMode (Step K.1) picks the per-route authentication
+	// strategy: "none" / "basic" / "forward_auth". Mutually
+	// exclusive (§1.3 decision 2). Step I.5 BasicAuth fields
+	// previously lived flat on Route; they are now nested in
+	// BasicAuth below, gated by AuthMode == RouteAuthBasic.
+	// Empty string decodes for pre-K rows and is rewritten by
+	// migrateBasicAuthToAuthMode at boot to "basic" (if the
+	// pre-K BasicAuthEnabled was true) or "none" (otherwise).
+	AuthMode string `json:"auth_mode"`
+	// BasicAuth (Step K.1, replaces the flat Step I.5 fields).
+	// Active when AuthMode == RouteAuthBasic. Empty when not.
+	// The PasswordHash is an argon2id PHC string — NEVER
+	// exposed over the API (the response surface uses a
+	// derived BasicAuthPasswordSet bool instead) and NEVER
+	// embedded in audit events.
+	BasicAuth BasicAuthRouteConfig `json:"basic_auth"`
+	// ForwardAuth (Step K.1) — per-route reference to an
+	// instance-level forward-auth provider. Active when
+	// AuthMode == RouteAuthForwardAuth.
+	ForwardAuth ForwardAuthRouteConfig `json:"forward_auth"`
 	// RequestHeaders (Step I.6) are key/value pairs set on the
 	// proxied request before it reaches the upstream; ResponseHeaders
 	// are set on the response before it reaches the client. Both
@@ -263,18 +314,35 @@ func (r *Route) validate() error {
 		}
 		seen[a] = struct{}{}
 	}
-	// Step I.5: enabling Basic Auth requires both a non-empty
-	// username and a hash. The API layer enforces these earlier
-	// with friendlier messages (and triggers the hash computation);
-	// storage's job is to reject obviously inconsistent rows that
-	// bypass the API (tests, future internal callers).
-	if r.BasicAuthEnabled {
-		if r.BasicAuthUsername == "" {
-			return errors.New("route: basic_auth_username must not be empty when basic auth is enabled")
+	// Step K.1: AuthMode enum check + per-mode sub-rules. The
+	// empty string is accepted at the storage layer (a pre-K
+	// row reads back zero-value before the boot migration runs;
+	// not strictly possible because migrateBasicAuthToAuthMode
+	// runs at NewStore time, but storage stays defensive).
+	// The API layer materialises empty → "none" on POST and
+	// preserve-previous on PUT before validate is invoked.
+	switch r.AuthMode {
+	case "", RouteAuthNone:
+		// No auth; the BasicAuth and ForwardAuth structs are
+		// inert. Storage trusts the API to not have populated
+		// secret fields here, but a stray hash would just be
+		// ignored at generation time (no handler emitted).
+	case RouteAuthBasic:
+		if r.BasicAuth.Username == "" {
+			return errors.New("route: basic_auth.username must not be empty when auth_mode is \"basic\"")
 		}
-		if r.BasicAuthPasswordHash == "" {
-			return errors.New("route: basic_auth_password_hash must not be empty when basic auth is enabled")
+		if r.BasicAuth.PasswordHash == "" {
+			return errors.New("route: basic_auth.password_hash must not be empty when auth_mode is \"basic\"")
 		}
+	case RouteAuthForwardAuth:
+		if r.ForwardAuth.ProviderName == "" {
+			return errors.New("route: forward_auth.provider_name must not be empty when auth_mode is \"forward_auth\"")
+		}
+		// Cross-rule "provider must exist" lives at the API
+		// layer (it needs the store handle); storage's role is
+		// the local-shape check.
+	default:
+		return fmt.Errorf("route: auth_mode %q must be one of \"none\", \"basic\", \"forward_auth\"", r.AuthMode)
 	}
 	// Step J.4: ACMEChallenge enum check. The empty string is
 	// accepted explicitly — a pre-J.4 row reads back with no

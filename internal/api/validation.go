@@ -161,6 +161,47 @@ func validateACMEChallenge(challenge, host string, aliases []string) error {
 	return nil
 }
 
+// validateAuthMode (Step K.1) checks that s is one of the three
+// enum values. Empty string is rejected — the API materialises the
+// default (createRoute: "none", updateRoute: preserve previous
+// then "none") before this function runs.
+func validateAuthMode(s string) error {
+	switch s {
+	case storage.RouteAuthNone, storage.RouteAuthBasic, storage.RouteAuthForwardAuth:
+		return nil
+	}
+	return fmt.Errorf("authMode %q must be one of %q, %q, %q",
+		s,
+		storage.RouteAuthNone, storage.RouteAuthBasic, storage.RouteAuthForwardAuth)
+}
+
+// validateAuthFieldsMutex (Step K.1) enforces the mutual
+// exclusivity of basic / forward_auth at the wire level — even if
+// the operator hand-crafts a JSON body that picks AuthMode "basic"
+// but ALSO sets ForwardAuth.ProviderName (or vice versa), the API
+// rejects it. The form's radio-group UI prevents this state in the
+// happy path; this is the AC #5 defence-in-depth guard.
+func validateAuthFieldsMutex(req routeRequest) error {
+	switch req.AuthMode {
+	case storage.RouteAuthBasic:
+		if req.ForwardAuth.ProviderName != "" {
+			return errors.New("authMode is \"basic\" but forwardAuth.providerName is set — pick one auth method")
+		}
+	case storage.RouteAuthForwardAuth:
+		if req.BasicAuth.Username != "" || req.BasicAuth.Password != "" {
+			return errors.New("authMode is \"forward_auth\" but basicAuth.{username,password} is set — pick one auth method")
+		}
+	case storage.RouteAuthNone:
+		if req.ForwardAuth.ProviderName != "" {
+			return errors.New("authMode is \"none\" but forwardAuth.providerName is set — clear the field or change authMode")
+		}
+		if req.BasicAuth.Username != "" || req.BasicAuth.Password != "" {
+			return errors.New("authMode is \"none\" but basicAuth.{username,password} is set — clear the fields or change authMode")
+		}
+	}
+	return nil
+}
+
 // validateLBPolicy checks that s is one of the six storage.LBPolicy*
 // values. Empty string is rejected — the API is expected to have
 // materialised the default ("round_robin") before this function

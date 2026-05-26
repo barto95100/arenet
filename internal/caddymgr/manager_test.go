@@ -765,9 +765,11 @@ func TestBuildConfigJSON_BasicAuth_EmitsAuthHandler(t *testing.T) {
 	routes := []storage.Route{
 		{
 			ID: "r1", Host: "auth.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
-			BasicAuthEnabled:      true,
-			BasicAuthUsername:     "admin",
-			BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$SALT$KEY",
+			AuthMode: storage.RouteAuthBasic,
+			BasicAuth: storage.BasicAuthRouteConfig{
+				Username:     "admin",
+				PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$SALT$KEY",
+			},
 		},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
@@ -989,19 +991,21 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 	// Step I Finding #2.
 	routes := []storage.Route{
 		{
-			ID:                    "r-all",
-			Host:                  "everything.example.com",
-			Upstreams:             []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
-			LBPolicy:              storage.LBPolicyRoundRobin,
-			TLSEnabled:            true,
-			RedirectToHTTPS:       true,
-			Aliases:               []string{"alt.example.com"},
-			WAFMode:               "block",
-			BasicAuthEnabled:      true,
-			BasicAuthUsername:     "admin",
-			BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$U0FMVFNBTFRTQUxUU0FMVA$S0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0U",
-			RequestHeaders:        map[string]string{"X-Real-Foo": "bar"},
-			ResponseHeaders:       map[string]string{"X-Custom": "x"},
+			ID:              "r-all",
+			Host:            "everything.example.com",
+			Upstreams:       []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:        storage.LBPolicyRoundRobin,
+			TLSEnabled:      true,
+			RedirectToHTTPS: true,
+			Aliases:         []string{"alt.example.com"},
+			WAFMode:         "block",
+			AuthMode:        storage.RouteAuthBasic,
+			BasicAuth: storage.BasicAuthRouteConfig{
+				Username:     "admin",
+				PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$U0FMVFNBTFRTQUxUU0FMVA$S0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0U",
+			},
+			RequestHeaders:  map[string]string{"X-Real-Foo": "bar"},
+			ResponseHeaders: map[string]string{"X-Custom": "x"},
 			// Step J.2 — empirical anchor for the active health check
 			// block. Caddy v2.11.3 must Provision the emitted
 			// `health_checks.active` shape (including the string form
@@ -1250,15 +1254,17 @@ func TestBuildConfigJSON_HandlersAllResolvable(t *testing.T) {
 			ID:        "r-all",
 			Host:      "everything.example.com",
 			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
-			TLSEnabled:            true,
-			RedirectToHTTPS:       true,
-			Aliases:               []string{"alt.example.com"},
-			WAFMode:               "block",
-			BasicAuthEnabled:      true,
-			BasicAuthUsername:     "admin",
-			BasicAuthPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$SALT$KEY",
-			RequestHeaders:        map[string]string{"X-Real-Foo": "bar"},
-			ResponseHeaders:       map[string]string{"X-Custom": "x"},
+			TLSEnabled:      true,
+			RedirectToHTTPS: true,
+			Aliases:         []string{"alt.example.com"},
+			WAFMode:         "block",
+			AuthMode:        storage.RouteAuthBasic,
+			BasicAuth: storage.BasicAuthRouteConfig{
+				Username:     "admin",
+				PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$SALT$KEY",
+			},
+			RequestHeaders:  map[string]string{"X-Real-Foo": "bar"},
+			ResponseHeaders: map[string]string{"X-Custom": "x"},
 		},
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
@@ -2198,4 +2204,245 @@ func TestBuildConfigJSON_HealthCheck_FieldValuesFlowVerbatim(t *testing.T) {
 	if got, _ := active["fails"].(float64); got != 5 {
 		t.Errorf("fails = %v; want 5", got)
 	}
+}
+
+// TestBuildConfigJSON_LoadsCleanly_ForwardAuth is the Step K.1
+// counterpart to TestBuildConfigJSON_LoadsCleanly and
+// TestBuildConfigJSON_LoadsCleanly_DNS01: a route configured for
+// forward_auth with a fixture provider, fed through caddy.Validate
+// to confirm the emitted subroute / reverse_proxy / handle_response
+// shape provisions cleanly. The forward_auth handler relies on
+// modules from the Caddy standard set (reverse_proxy, headers,
+// vars, handle_response) — all already imported via the
+// modules/standard blank import, no new dependency.
+func TestBuildConfigJSON_LoadsCleanly_ForwardAuth(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:        "r-fa",
+			Host:      "protected.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "authelia-prod",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+
+	opts := buildOpts{
+		DevMode: true,
+		ForwardAuthProviders: map[string]storage.ForwardAuthProvider{
+			"authelia-prod": {
+				Name:           "authelia-prod",
+				Kind:           "authelia",
+				VerifyURL:      "http://127.0.0.1:9091",
+				AuthRequestURI: "/api/authz/forward-auth",
+				CopyHeaders:    []string{"Remote-User", "Remote-Email"},
+			},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, raw)
+	}
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate failed on forward_auth config: %v\n%s", err, raw)
+	}
+
+	// Shape assertion: the auth handler emitted must be the
+	// reverse_proxy variant with handle_response, the IdP dial
+	// must be the provider's VerifyURL, and the rewrite.uri must
+	// be the provider's AuthRequestURI.
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal full: %v", err)
+	}
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpSrv := servers["arenet_http"].(map[string]any)
+	httpRoutes := httpSrv["routes"].([]any)
+	target := findRouteByHost(t, httpRoutes, "protected.example.com")
+	handlers := target["handle"].([]any)
+	// Chain: [metrics, forward_auth_proxy, ..., real_proxy]. The
+	// forward_auth handler is at index 1 (right after metrics).
+	if len(handlers) < 3 {
+		t.Fatalf("handler chain too short: %v", handlers)
+	}
+	faHandler := handlers[1].(map[string]any)
+	if faHandler["handler"] != "reverse_proxy" {
+		t.Errorf("forward_auth handler is %v; want reverse_proxy", faHandler["handler"])
+	}
+	upstreams := faHandler["upstreams"].([]any)
+	if dial := upstreams[0].(map[string]any)["dial"]; dial != "127.0.0.1:9091" {
+		t.Errorf("forward_auth dial = %v; want 127.0.0.1:9091", dial)
+	}
+	rewrite := faHandler["rewrite"].(map[string]any)
+	if uri := rewrite["uri"]; uri != "/api/authz/forward-auth" {
+		t.Errorf("forward_auth rewrite.uri = %v; want /api/authz/forward-auth", uri)
+	}
+	// The handle_response block must contain two header-handling
+	// routes per copied header (delete + conditional set), plus
+	// the leading "vars" route.
+	hr := faHandler["handle_response"].([]any)
+	if len(hr) != 1 {
+		t.Fatalf("handle_response: got %d blocks, want 1", len(hr))
+	}
+	hrRoutes := hr[0].(map[string]any)["routes"].([]any)
+	// 1 vars + 2 per header * 2 headers = 5 routes.
+	if len(hrRoutes) != 5 {
+		t.Errorf("handle_response inner routes = %d; want 5 (vars + 2*2 headers)", len(hrRoutes))
+	}
+}
+
+// TestBuildConfigJSON_ForwardAuth_UnknownProvider_FailsClosed
+// pins the security-critical fail-closed contract: a route with
+// AuthMode = "forward_auth" referencing a provider name that
+// doesn't exist in opts.ForwardAuthProviders MUST NOT serve
+// traffic to its upstream. The API rejects this state at edit
+// time (and DELETE on a referenced provider is rejected with
+// 409), so reaching this code path requires a corruption / a
+// direct BoltDB edit / a bug class we haven't imagined — but
+// for an auth control, the failure mode must be "route
+// unavailable" (503, visible) rather than "route exposed
+// without auth" (the catastrophic fail-OPEN that the original
+// implementation produced; the previous test name
+// "FallsBackQuietly" was itself the alarm bell).
+//
+// The emitted route MUST:
+//   - Carry a static_response 503 handler instead of the IdP
+//     forward_auth + reverse_proxy chain.
+//   - NOT carry a `reverse_proxy` to the user's configured
+//     upstream (that's the fail-open path we're guarding
+//     against — a regression that re-introduced it would
+//     silently expose the upstream as public).
+//   - NOT carry an `authentication` (Basic Auth) handler — the
+//     route's AuthMode was forward_auth, not basic; we don't
+//     accidentally fall back to a different auth mode either.
+//   - Pass caddy.Validate() so the reload doesn't fail when
+//     the operator's last good config drifts into this edge.
+func TestBuildConfigJSON_ForwardAuth_UnknownProvider_FailsClosed(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:        "r-orphan",
+			Host:      "orphan.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "does-not-exist",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, raw)
+	}
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate must accept the fail-closed shape: %v\n%s", err, raw)
+	}
+
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal full: %v", err)
+	}
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpSrv := servers["arenet_http"].(map[string]any)
+	httpRoutes := httpSrv["routes"].([]any)
+	target := findRouteByHost(t, httpRoutes, "orphan.example.com")
+	handlers := target["handle"].([]any)
+
+	// Assertion 1: the static_response 503 deny handler IS present.
+	var denyHandler map[string]any
+	for _, h := range handlers {
+		m := h.(map[string]any)
+		if m["handler"] == "static_response" {
+			denyHandler = m
+			break
+		}
+	}
+	if denyHandler == nil {
+		t.Fatalf("expected static_response deny handler in fail-closed chain; got %v", handlers)
+	}
+	// status_code must be 503 (numeric in JSON).
+	switch sc := denyHandler["status_code"].(type) {
+	case float64:
+		if sc != 503 {
+			t.Errorf("deny handler status_code = %v; want 503", sc)
+		}
+	case int:
+		if sc != 503 {
+			t.Errorf("deny handler status_code = %v; want 503", sc)
+		}
+	default:
+		t.Errorf("deny handler status_code is not numeric: %T %v", sc, sc)
+	}
+	// Body should name the missing provider for operator visibility.
+	if body, _ := denyHandler["body"].(string); !strings.Contains(body, "does-not-exist") {
+		t.Errorf("deny handler body should name the missing provider; got %q", body)
+	}
+
+	// Assertion 2 — the critical fail-CLOSED invariant: the
+	// reverse_proxy to the user's upstream MUST NOT be in the
+	// chain. A regression that re-introduces it is a
+	// catastrophic auth bypass.
+	for _, h := range handlers {
+		m := h.(map[string]any)
+		if m["handler"] != "reverse_proxy" {
+			continue
+		}
+		// reverse_proxy is allowed ONLY if it dials the IdP
+		// (forward_auth handler shape), not the user upstream.
+		// In the fail-closed path the IdP itself is unknown, so
+		// no reverse_proxy should appear at all.
+		t.Errorf("FAIL-OPEN REGRESSION: reverse_proxy handler emitted in unknown-provider chain; "+
+			"the route's upstream is exposed without authentication. Handler: %v", m)
+	}
+
+	// Assertion 3: no accidental fall-back to Basic Auth.
+	for _, h := range handlers {
+		m := h.(map[string]any)
+		if m["handler"] == "authentication" {
+			t.Errorf("unexpected authentication handler in fail-closed chain (auth mode was forward_auth): %v", m)
+		}
+	}
+}
+
+// findRouteByHost walks the httpRoutes array (Caddy JSON config
+// shape) and returns the first entry whose match.host contains
+// the given hostname.
+func findRouteByHost(t *testing.T, routes []any, host string) map[string]any {
+	t.Helper()
+	for _, r := range routes {
+		m := r.(map[string]any)
+		matchSets, ok := m["match"].([]any)
+		if !ok {
+			continue
+		}
+		for _, ms := range matchSets {
+			hosts := ms.(map[string]any)["host"]
+			if hosts == nil {
+				continue
+			}
+			for _, h := range hosts.([]any) {
+				if h == host {
+					return m
+				}
+			}
+		}
+	}
+	t.Fatalf("route for host %q not found in config", host)
+	return nil
 }

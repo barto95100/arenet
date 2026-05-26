@@ -19,13 +19,14 @@ package audit
 import "testing"
 
 // TestAllActions_Count guards against accidental drift from D7
-// (Step D shipped 15) + Step J.4 (+1 = 16). Adding or removing
-// actions without updating the spec / decisions doc is a process
-// violation; this test forces the conversation.
+// (Step D shipped 15) + Step J.4 (+1 = 16) + Step K.1 (+2 = 18).
+// Adding or removing actions without updating the spec /
+// decisions doc is a process violation; this test forces the
+// conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 16
+	const wantCount = 18
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + Step J.4=1)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + Step J.4=1 + Step K.1=2)", got, wantCount)
 	}
 }
 
@@ -66,9 +67,11 @@ func TestAllActions_ReturnsFreshCopy(t *testing.T) {
 }
 
 // TestAllActions_ExactSet confirms the exact set: 15 from D7
-// + 1 added by Step J.4 (dns_provider_updated). If you add or
-// remove an action, this test will fail and force you to amend
-// the decision document / spec.
+// + 1 added by Step J.4 (dns_provider_updated) + 2 added by
+// Step K.1 (forward_auth_provider_updated /
+// forward_auth_provider_deleted). If you add or remove an
+// action, this test will fail and force you to amend the
+// decision document / spec.
 func TestAllActions_ExactSet(t *testing.T) {
 	want := map[string]bool{
 		"login_success":                 true,
@@ -87,6 +90,8 @@ func TestAllActions_ExactSet(t *testing.T) {
 		"password_hibp_pending":         true,
 		"password_compromised_detected": true,
 		"dns_provider_updated":          true,
+		"forward_auth_provider_updated": true,
+		"forward_auth_provider_deleted": true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {

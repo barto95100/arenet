@@ -129,6 +129,36 @@ type upstreamReq struct {
 	Weight int    `json:"weight"`
 }
 
+// basicAuthReq is the Step K.1 wire shape for per-route Basic
+// Auth on the request side. Password is the PLAIN text on the
+// wire — write-only (the response never echoes it; the storage
+// hash is derived from it via auth.HashRoutePassword); Username
+// round-trips normally.
+//
+// Active iff routeRequest.AuthMode == "basic". When the parent's
+// AuthMode is "none" or "forward_auth", BasicAuth fields are
+// ignored by createRoute / updateRoute (the API validates this
+// mutual exclusivity at the §1.3 decision 2 boundary).
+//
+// Preserve-on-edit: Password empty on PUT keeps the existing
+// hash — same UX as Step I.5 + Step J.4 secrets.
+type basicAuthReq struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// forwardAuthReq is the Step K.1 wire shape for per-route
+// forward-auth on the request side. Carries the reference to one
+// of the instance-level providers (the providers themselves are
+// CRUD'd via /api/v1/settings/forward-auth/providers).
+//
+// Active iff routeRequest.AuthMode == "forward_auth". Empty
+// ProviderName on PUT preserves the previously stored
+// reference; mutually-exclusive with the basic auth fields.
+type forwardAuthReq struct {
+	ProviderName string `json:"providerName"`
+}
+
 // routeRequest is the wire shape accepted by POST and PUT /routes. JSON tags
 // are camelCase per the spec.
 type routeRequest struct {
@@ -150,14 +180,25 @@ type routeRequest struct {
 	TLSEnabled      bool     `json:"tlsEnabled"`
 	RedirectToHTTPS bool     `json:"redirectToHttps"`
 	Aliases         []string `json:"aliases"`
-	// Step I.5 — Basic Auth. BasicAuthPassword is the PLAIN
-	// password; write-only on the wire (the response never echoes
-	// it, the storage layer holds only the argon2id PHC hash). On
-	// Edit, leaving this empty means "keep the existing hash" —
-	// see updateRoute.
-	BasicAuthEnabled  bool   `json:"basicAuthEnabled"`
-	BasicAuthUsername string `json:"basicAuthUsername"`
-	BasicAuthPassword string `json:"basicAuthPassword"`
+	// Step K.1 — per-route auth mode. One of "" / "none" / "basic"
+	// / "forward_auth". On POST, empty is normalised to "none". On
+	// PUT, empty preserves the previously stored value (same UX as
+	// WAFMode). The radio-group enum is materialised before
+	// validation so the storage row carries the explicit value.
+	AuthMode string `json:"authMode"`
+	// Step K.1 — Basic Auth sub-shape (replaces the Step I.5 flat
+	// BasicAuthEnabled / BasicAuthUsername / BasicAuthPassword
+	// triplet). Active only when AuthMode == "basic". BasicAuth.Password
+	// is the PLAIN password, write-only on the wire (the response
+	// never echoes it, the storage layer holds only the argon2id
+	// PHC hash). On Edit, leaving this empty means "keep the
+	// existing hash" — same UX preserve-on-edit pattern Step I.5
+	// established.
+	BasicAuth basicAuthReq `json:"basicAuth"`
+	// Step K.1 — Forward-auth sub-shape. Active only when AuthMode
+	// == "forward_auth". The reference to one of the configured
+	// instance-level providers (Settings page).
+	ForwardAuth forwardAuthReq `json:"forwardAuth"`
 	// Step I.6 — custom headers applied to the proxied request /
 	// response. Map[name → value] (single value per name in v1.0).
 	// Validation rejects CR/LF/control characters and hop-by-hop /
@@ -244,6 +285,24 @@ type healthCheckResp struct {
 	Fails        int    `json:"fails"`
 }
 
+// basicAuthResp is the Step K.1 wire shape for per-route Basic
+// Auth on the response side. PasswordSet is the secret-redaction
+// signal (true if a hash exists in storage; the UI renders the
+// "••• set" placeholder accordingly) — Step I.5 pattern preserved
+// through K.1.
+type basicAuthResp struct {
+	Username    string `json:"username"`
+	PasswordSet bool   `json:"passwordSet"`
+}
+
+// forwardAuthResp is the Step K.1 wire shape for per-route
+// forward-auth on the response side. Mirrors forwardAuthReq —
+// only the provider reference, no secrets (those live in the
+// provider config endpoint).
+type forwardAuthResp struct {
+	ProviderName string `json:"providerName"`
+}
+
 // routeResponse is the wire shape returned by GET / POST / PUT /routes. The
 // JSON tags must match routeRequest's camelCase scheme.
 type routeResponse struct {
@@ -262,14 +321,25 @@ type routeResponse struct {
 	// than `"aliases": null` — frontend callers can read .length
 	// without a null check.
 	Aliases []string `json:"aliases"`
-	// Step I.5 — Basic Auth response surface. The plaintext password
-	// is NEVER echoed; the hash is NEVER echoed either. Instead,
-	// BasicAuthPasswordSet is a boolean derived from "is the hash
-	// non-empty?" so the UI can render the placeholder
-	// "••• set" hint in Edit mode without ever seeing the secret.
-	BasicAuthEnabled     bool   `json:"basicAuthEnabled"`
-	BasicAuthUsername    string `json:"basicAuthUsername"`
-	BasicAuthPasswordSet bool   `json:"basicAuthPasswordSet"`
+	// Step K.1 — per-route auth mode. The normalised value is
+	// always one of "none" / "basic" / "forward_auth" on the
+	// wire (storage zero-value "" is rewritten to "none" by
+	// toResponse so the frontend renders a single consistent
+	// state).
+	AuthMode string `json:"authMode"`
+	// Step K.1 — Basic Auth response sub-shape. Active only when
+	// AuthMode == "basic". The plaintext password is NEVER
+	// echoed; the hash is NEVER echoed either. PasswordSet is a
+	// boolean derived from "is the hash non-empty?" so the UI
+	// can render the placeholder "••• set" hint in Edit mode
+	// without ever seeing the secret. (Step I.5 redaction
+	// pattern preserved through K.1.)
+	BasicAuth basicAuthResp `json:"basicAuth"`
+	// Step K.1 — Forward-auth response sub-shape. Active only
+	// when AuthMode == "forward_auth". Carries the provider
+	// reference; the provider configuration itself (URL, secret,
+	// copy headers) is GET'd via the Settings endpoint.
+	ForwardAuth forwardAuthResp `json:"forwardAuth"`
 	// Step I.6 — custom headers, normalized to empty maps (never
 	// nil) so the JSON wire shape is always {} and frontend can
 	// iterate without a null check.
@@ -323,21 +393,34 @@ func toResponse(r storage.Route) routeResponse {
 	if acmeChallenge == "" {
 		acmeChallenge = storage.ACMEChallengeHTTP01
 	}
+	// Step K.1: surface the normalised AuthMode — a stored row
+	// with the zero value "" (a row that somehow bypassed the
+	// boot migration) reads back as "none" so the frontend
+	// always renders a defined radio-group state.
+	authMode := r.AuthMode
+	if authMode == "" {
+		authMode = storage.RouteAuthNone
+	}
 	return routeResponse{
-		ID:                   r.ID,
-		Host:                 r.Host,
-		Upstreams:            upstreamsResp,
-		LBPolicy:             r.LBPolicy,
-		TLSEnabled:           r.TLSEnabled,
-		RedirectToHTTPS:      r.RedirectToHTTPS,
-		Aliases:              aliases,
-		BasicAuthEnabled:     r.BasicAuthEnabled,
-		BasicAuthUsername:    r.BasicAuthUsername,
-		BasicAuthPasswordSet: r.BasicAuthPasswordHash != "",
-		RequestHeaders:       reqHeaders,
-		ResponseHeaders:      respHeaders,
-		WAFMode:              r.WAFMode,
-		ACMEChallenge:        acmeChallenge,
+		ID:              r.ID,
+		Host:            r.Host,
+		Upstreams:       upstreamsResp,
+		LBPolicy:        r.LBPolicy,
+		TLSEnabled:      r.TLSEnabled,
+		RedirectToHTTPS: r.RedirectToHTTPS,
+		Aliases:         aliases,
+		AuthMode:        authMode,
+		BasicAuth: basicAuthResp{
+			Username:    r.BasicAuth.Username,
+			PasswordSet: r.BasicAuth.PasswordHash != "",
+		},
+		ForwardAuth: forwardAuthResp{
+			ProviderName: r.ForwardAuth.ProviderName,
+		},
+		RequestHeaders:  reqHeaders,
+		ResponseHeaders: respHeaders,
+		WAFMode:         r.WAFMode,
+		ACMEChallenge:   acmeChallenge,
 		HealthCheck: healthCheckResp{
 			Enabled:      r.HealthCheck.Enabled,
 			URI:          r.HealthCheck.URI,

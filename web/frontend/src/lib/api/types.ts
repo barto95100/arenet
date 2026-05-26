@@ -83,14 +83,34 @@ export interface Route {
 	 */
 	aliases: string[];
 	/**
-	 * Step I.5: per-route Basic Auth. The plaintext password and the
-	 * argon2id hash are NEVER on the wire response. basicAuthPasswordSet
-	 * tells the UI whether a hash exists so it can render the
-	 * "••• set" placeholder on Edit.
+	 * Step K.1 — per-route auth mode. Replaces the Step I.5 flat
+	 * basicAuthEnabled boolean with a three-valued radio enum:
+	 *   - "none":        no auth gate on the route.
+	 *   - "basic":       Step I.5 HTTP Basic Auth, preserved.
+	 *   - "forward_auth": delegated to an external IdP via Caddy
+	 *                    forward_auth (Authelia / Authentik /
+	 *                    Keycloak / generic).
+	 * Mutually exclusive (§1.3 decision 2). The server normalises
+	 * the storage zero value "" to "none" so the wire always
+	 * carries an explicit enum value.
 	 */
-	basicAuthEnabled: boolean;
-	basicAuthUsername: string;
-	basicAuthPasswordSet: boolean;
+	authMode: RouteAuthMode;
+	/**
+	 * Step K.1 — Basic Auth response sub-shape (replaces the flat
+	 * Step I.5 basicAuthEnabled / basicAuthUsername /
+	 * basicAuthPasswordSet triplet). Active only when authMode ==
+	 * "basic". The plaintext password and the argon2id hash are
+	 * NEVER on the wire response; passwordSet tells the UI whether
+	 * a hash exists so it can render the "••• set" placeholder on
+	 * Edit.
+	 */
+	basicAuth: BasicAuthResponse;
+	/**
+	 * Step K.1 — Forward-auth response sub-shape. Active only when
+	 * authMode == "forward_auth". Carries the reference to the
+	 * instance-level provider (configured via Settings).
+	 */
+	forwardAuth: ForwardAuthResponse;
 	/**
 	 * Step I.6 — custom headers applied to the proxied request /
 	 * response. Map of name → value (single value per name in v1.0).
@@ -134,6 +154,95 @@ export interface Route {
  */
 export type ACMEChallenge = 'http-01' | 'dns-01';
 
+/**
+ * Step K.1 — per-route auth mode enum. See Route.authMode for
+ * the per-value semantics.
+ */
+export type RouteAuthMode = 'none' | 'basic' | 'forward_auth';
+
+/**
+ * Step K.1 — Basic Auth response shape. Surfaces username +
+ * passwordSet flag; the hash and plaintext are never on the wire.
+ */
+export interface BasicAuthResponse {
+	username: string;
+	passwordSet: boolean;
+}
+
+/**
+ * Step K.1 — Forward-auth response shape. Carries only the
+ * provider reference; the provider configuration itself is
+ * GET'd via the Settings endpoint.
+ */
+export interface ForwardAuthResponse {
+	providerName: string;
+}
+
+/**
+ * Step K.1 — Basic Auth request shape. password is the PLAIN
+ * text on the wire (write-only): leave empty on Edit to keep
+ * the existing hash; provide a fresh value to rotate.
+ */
+export interface BasicAuthRequest {
+	username: string;
+	password: string;
+}
+
+/**
+ * Step K.1 — Forward-auth request shape. Mirrors the response
+ * shape — only the provider reference.
+ */
+export interface ForwardAuthRequest {
+	providerName: string;
+}
+
+/**
+ * Step K.1 — instance-level forward-auth provider as returned by
+ * the Settings API. The client_secret is always blanked on the
+ * wire; clientSecretSet flags the UI to render the "••• set"
+ * placeholder. Mirrors the J.4 DNS-provider redaction shape.
+ */
+export interface ForwardAuthProvider {
+	name: string;
+	kind: ForwardAuthProviderKind;
+	verifyUrl: string;
+	authRequestUri: string;
+	copyHeaders: string[];
+	clientSecret: string; // always "" on the wire (redacted)
+	clientSecretSet: boolean;
+	createdAt: string;
+	updatedAt: string;
+}
+
+/**
+ * Step K.1 — wire shape for POST / PUT
+ * /api/v1/settings/forward-auth/providers. The clientSecret is
+ * write-only; empty on PUT preserves the previously stored
+ * value (Step J.4 preserve-on-edit pattern).
+ */
+export interface ForwardAuthProviderRequest {
+	name: string;
+	kind: ForwardAuthProviderKind;
+	verifyUrl: string;
+	authRequestUri: string;
+	copyHeaders: string[];
+	clientSecret: string;
+}
+
+/**
+ * Step K.1 — supported forward-auth provider kinds. Drives UI
+ * presets (default verify URL, default copy-headers list);
+ * server stores the enum as-is.
+ */
+export type ForwardAuthProviderKind = 'authelia' | 'authentik' | 'keycloak' | 'generic';
+
+export const FORWARD_AUTH_PROVIDER_KINDS: readonly ForwardAuthProviderKind[] = [
+	'authelia',
+	'authentik',
+	'keycloak',
+	'generic'
+] as const;
+
 export interface RouteRequest {
 	host: string;
 	/**
@@ -154,14 +263,25 @@ export interface RouteRequest {
 	redirectToHttps: boolean;
 	aliases: string[];
 	/**
-	 * Step I.5 — Basic Auth fields on the request side. basicAuthPassword
-	 * is write-only: leave it empty on Edit to keep the existing hash,
-	 * provide a fresh value to rotate. The server hashes it with
-	 * argon2id; the plaintext is never persisted or echoed back.
+	 * Step K.1 — per-route auth mode. Empty string on POST is
+	 * normalised to "none" by the server; empty on PUT preserves
+	 * the previously stored value (same UX as wafMode).
 	 */
-	basicAuthEnabled: boolean;
-	basicAuthUsername: string;
-	basicAuthPassword: string;
+	authMode: RouteAuthMode | '';
+	/**
+	 * Step K.1 — Basic Auth request shape. Active only when
+	 * authMode == "basic". password is write-only (empty on Edit
+	 * keeps the existing hash; new value rotates). When authMode
+	 * != "basic", set username/password to "" (the server
+	 * enforces this mutual exclusion at the validation layer).
+	 */
+	basicAuth: BasicAuthRequest;
+	/**
+	 * Step K.1 — Forward-auth request shape. Active only when
+	 * authMode == "forward_auth". When authMode != "forward_auth",
+	 * providerName must be "" (mutual exclusion).
+	 */
+	forwardAuth: ForwardAuthRequest;
 	requestHeaders: Record<string, string>;
 	responseHeaders: Record<string, string>;
 	/**

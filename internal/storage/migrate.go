@@ -180,37 +180,138 @@ func migrateUpstreamURLToPool(db *bolt.DB) error {
 		var writes []pending
 
 		if err := b.ForEach(func(k, v []byte) error {
-			// Probe with a transitional struct that still carries the
-			// legacy UpstreamURL string (the post-J.1 Route type no
-			// longer has it) alongside the new Upstreams sentinel.
-			// Both predicates read from the raw JSON simultaneously.
-			var legacy struct {
-				UpstreamURL string     `json:"upstream_url"`
-				Upstreams   []Upstream `json:"upstreams"`
-			}
-			if err := json.Unmarshal(v, &legacy); err != nil {
+			// PASSTHROUGH-MAP per the backlog rule: this migration
+			// was originally full-Route round-trip (the Step J spec
+			// noted Step J only added fields). Step K.1 REMOVES the
+			// legacy basic_auth_* keys from Route, so a full-Route
+			// round-trip here would silently drop those keys before
+			// K.1's migration ever reads them — exactly the I.4 → J.1
+			// trap that justified the backlog rule. Refactored to
+			// map[string]any for K.1's sake.
+			var row map[string]any
+			if err := json.Unmarshal(v, &row); err != nil {
 				return fmt.Errorf("migrate route %s: unmarshal probe: %w", k, err)
 			}
-			if len(legacy.Upstreams) > 0 {
-				return nil // already migrated; idempotent no-op
+			// Already-migrated sentinel: upstreams array present + non-empty.
+			if arr, ok := row["upstreams"].([]any); ok && len(arr) > 0 {
+				return nil
 			}
-			if legacy.UpstreamURL == "" {
+			legacyURL, _ := row["upstream_url"].(string)
+			if legacyURL == "" {
 				// Neither the legacy field nor the new pool — leave
 				// the row untouched (forward-compat: a future Arenet
 				// might have written a shape we don't recognise).
 				return nil
 			}
 
-			// Full-route round-trip preserves every field — we don't
-			// want to silently drop newer-than-this-codebase fields
-			// that a future Arenet version might have written.
-			var r Route
-			if err := json.Unmarshal(v, &r); err != nil {
-				return fmt.Errorf("migrate route %s: unmarshal full: %w", k, err)
+			row["upstreams"] = []map[string]any{
+				{"url": legacyURL, "weight": 1},
 			}
-			r.Upstreams = []Upstream{{URL: legacy.UpstreamURL, Weight: 1}}
-			r.LBPolicy = LBPolicyRoundRobin
-			buf, err := json.Marshal(r)
+			row["lb_policy"] = LBPolicyRoundRobin
+			delete(row, "upstream_url")
+
+			buf, err := json.Marshal(row)
+			if err != nil {
+				return fmt.Errorf("migrate route %s: marshal: %w", k, err)
+			}
+			writes = append(writes, pending{key: append([]byte(nil), k...), val: buf})
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		for _, w := range writes {
+			if err := b.Put(w.key, w.val); err != nil {
+				return fmt.Errorf("migrate route %s: put: %w", w.key, err)
+			}
+		}
+		return nil
+	})
+}
+
+// migrateBasicAuthToAuthMode is the Step K.1 boot migration.
+//
+// Pre-Step-K routes carried three flat fields for Basic Auth:
+// `basic_auth_enabled` (bool), `basic_auth_username` (string), and
+// `basic_auth_password_hash` (string). Step K.1 replaces them with
+// an explicit `auth_mode` enum + a nested `basic_auth` struct +
+// an empty `forward_auth` struct (filled in by the forward_auth
+// configuration UX, not by this migration).
+//
+// Mapping (spec §6.4):
+//
+//   - basic_auth_enabled: true  →  auth_mode: "basic", basic_auth.{username, password_hash} from legacy keys
+//   - basic_auth_enabled: false →  auth_mode: "none", basic_auth: {} (empty values), forward_auth: {} (empty)
+//   - legacy keys (basic_auth_enabled, basic_auth_username, basic_auth_password_hash) → dropped
+//
+// REMOVE-FIELDS migration → passthrough-map pattern is REQUIRED
+// per the backlog rule (full-Route round-trip would silently
+// eat any key the current Route struct doesn't carry). The post-
+// K Route struct doesn't have BasicAuthEnabled / BasicAuthUsername
+// / BasicAuthPasswordHash anymore — the round-trip would erase
+// the legacy keys' values before this migration could read them.
+// We use map[string]any verbatim.
+//
+// Predicate is shape-based: "already migrated" means `auth_mode`
+// is a non-empty string in the stored row. "Needs migration"
+// means the row has at least the legacy `basic_auth_enabled` key
+// (or any of its siblings). A row with neither (a future Arenet
+// wrote a different shape) is left alone.
+func migrateBasicAuthToAuthMode(db *bolt.DB) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketRoutes))
+		if b == nil {
+			return nil
+		}
+		type pending struct {
+			key []byte
+			val []byte
+		}
+		var writes []pending
+
+		if err := b.ForEach(func(k, v []byte) error {
+			var row map[string]any
+			if err := json.Unmarshal(v, &row); err != nil {
+				return fmt.Errorf("migrate route %s: unmarshal probe: %w", k, err)
+			}
+			if mode, ok := row["auth_mode"].(string); ok && mode != "" {
+				return nil // already migrated; idempotent no-op
+			}
+
+			// Derive AuthMode from the legacy enabled bool. Missing
+			// legacy keys (a row that wasn't on Step I.5 — pre-I.5)
+			// produce auth_mode = "none", which is the correct
+			// inherited default.
+			enabled, _ := row["basic_auth_enabled"].(bool)
+			username, _ := row["basic_auth_username"].(string)
+			passwordHash, _ := row["basic_auth_password_hash"].(string)
+			if enabled {
+				row["auth_mode"] = RouteAuthBasic
+				row["basic_auth"] = map[string]any{
+					"username":      username,
+					"password_hash": passwordHash,
+				}
+			} else {
+				row["auth_mode"] = RouteAuthNone
+				row["basic_auth"] = map[string]any{
+					"username":      "",
+					"password_hash": "",
+				}
+			}
+			// Initialise forward_auth as zero-values so a migrated
+			// row's JSON shape matches a post-K Route created via
+			// the API. Empty provider_name means "no provider
+			// referenced", correct for auth_mode in {none, basic}.
+			row["forward_auth"] = map[string]any{
+				"provider_name": "",
+			}
+
+			// Drop the three legacy keys.
+			delete(row, "basic_auth_enabled")
+			delete(row, "basic_auth_username")
+			delete(row, "basic_auth_password_hash")
+
+			buf, err := json.Marshal(row)
 			if err != nil {
 				return fmt.Errorf("migrate route %s: marshal: %w", k, err)
 			}

@@ -427,3 +427,264 @@ func TestMigrate_ChainedOrder_WAFThenUpstream(t *testing.T) {
 		t.Errorf("LBPolicy = %q; want %q", r.LBPolicy, LBPolicyRoundRobin)
 	}
 }
+
+// TestMigrate_BasicAuthEnabledTrueBecomesBasicMode pins the
+// Step K.1 mapping: a pre-K route with basic_auth_enabled=true
+// migrates to auth_mode="basic" + the nested BasicAuth struct
+// populated from the legacy flat fields.
+func TestMigrate_BasicAuthEnabledTrueBecomesBasicMode(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	// Seed a pre-K row directly via bbolt, bypassing the route
+	// validators (which would now reject the legacy shape).
+	legacy := []byte(`{` +
+		`"id":"r-pre-k-1",` +
+		`"host":"protected.example.com",` +
+		`"upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],` +
+		`"lb_policy":"round_robin",` +
+		`"tls_enabled":false,` +
+		`"redirect_to_https":false,` +
+		`"aliases":null,` +
+		`"basic_auth_enabled":true,` +
+		`"basic_auth_username":"admin",` +
+		`"basic_auth_password_hash":"$argon2id$..fake..",` +
+		`"request_headers":null,` +
+		`"response_headers":null,` +
+		`"waf_mode":"off",` +
+		`"created_at":"2026-05-01T00:00:00Z",` +
+		`"updated_at":"2026-05-01T00:00:00Z"` +
+		`}`)
+	if err := store.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(bucketRoutes)).Put([]byte("r-pre-k-1"), legacy)
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := migrateBasicAuthToAuthMode(store.db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var r Route
+	if err := store.db.View(func(tx *bolt.Tx) error {
+		raw := tx.Bucket([]byte(bucketRoutes)).Get([]byte("r-pre-k-1"))
+		return jsonUnmarshalForTest(raw, &r)
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	if r.AuthMode != RouteAuthBasic {
+		t.Errorf("AuthMode = %q; want %q", r.AuthMode, RouteAuthBasic)
+	}
+	if r.BasicAuth.Username != "admin" {
+		t.Errorf("BasicAuth.Username = %q; want admin", r.BasicAuth.Username)
+	}
+	if r.BasicAuth.PasswordHash != "$argon2id$..fake.." {
+		t.Errorf("BasicAuth.PasswordHash = %q; want %q", r.BasicAuth.PasswordHash, "$argon2id$..fake..")
+	}
+	// Forward-auth nested struct must initialise to zero.
+	if r.ForwardAuth.ProviderName != "" {
+		t.Errorf("ForwardAuth.ProviderName = %q; want empty", r.ForwardAuth.ProviderName)
+	}
+
+	// Verify the legacy keys are GONE from the persisted row.
+	var raw map[string]any
+	if err := store.db.View(func(tx *bolt.Tx) error {
+		bs := tx.Bucket([]byte(bucketRoutes)).Get([]byte("r-pre-k-1"))
+		return jsonUnmarshalForTest(bs, &raw)
+	}); err != nil {
+		t.Fatalf("raw read: %v", err)
+	}
+	for _, k := range []string{"basic_auth_enabled", "basic_auth_username", "basic_auth_password_hash"} {
+		if _, present := raw[k]; present {
+			t.Errorf("legacy key %q still present after migration", k)
+		}
+	}
+}
+
+// TestMigrate_BasicAuthEnabledFalseBecomesNoneMode pins the
+// inverse mapping: basic_auth_enabled=false → auth_mode="none",
+// nested BasicAuth empty.
+func TestMigrate_BasicAuthEnabledFalseBecomesNoneMode(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	legacy := []byte(`{` +
+		`"id":"r-pre-k-2",` +
+		`"host":"open.example.com",` +
+		`"upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],` +
+		`"lb_policy":"round_robin",` +
+		`"tls_enabled":false,` +
+		`"redirect_to_https":false,` +
+		`"aliases":null,` +
+		`"basic_auth_enabled":false,` +
+		`"basic_auth_username":"",` +
+		`"basic_auth_password_hash":"",` +
+		`"request_headers":null,` +
+		`"response_headers":null,` +
+		`"waf_mode":"off",` +
+		`"created_at":"2026-05-01T00:00:00Z",` +
+		`"updated_at":"2026-05-01T00:00:00Z"` +
+		`}`)
+	if err := store.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(bucketRoutes)).Put([]byte("r-pre-k-2"), legacy)
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := migrateBasicAuthToAuthMode(store.db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var r Route
+	if err := store.db.View(func(tx *bolt.Tx) error {
+		raw := tx.Bucket([]byte(bucketRoutes)).Get([]byte("r-pre-k-2"))
+		return jsonUnmarshalForTest(raw, &r)
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	if r.AuthMode != RouteAuthNone {
+		t.Errorf("AuthMode = %q; want %q", r.AuthMode, RouteAuthNone)
+	}
+	if r.BasicAuth.Username != "" || r.BasicAuth.PasswordHash != "" {
+		t.Errorf("BasicAuth populated despite none: %+v", r.BasicAuth)
+	}
+}
+
+// TestMigrate_BasicAuthToAuthMode_Idempotent: re-running the
+// migration on an already-migrated row must be a no-op.
+func TestMigrate_BasicAuthToAuthMode_Idempotent(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	migrated := []byte(`{` +
+		`"id":"r-already",` +
+		`"host":"done.example.com",` +
+		`"upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],` +
+		`"lb_policy":"round_robin",` +
+		`"tls_enabled":false,` +
+		`"redirect_to_https":false,` +
+		`"aliases":null,` +
+		`"auth_mode":"basic",` +
+		`"basic_auth":{"username":"admin","password_hash":"$argon2id$..hash.."},` +
+		`"forward_auth":{"provider_name":""},` +
+		`"request_headers":null,` +
+		`"response_headers":null,` +
+		`"waf_mode":"off",` +
+		`"created_at":"2026-05-01T00:00:00Z",` +
+		`"updated_at":"2026-05-01T00:00:00Z"` +
+		`}`)
+	if err := store.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(bucketRoutes)).Put([]byte("r-already"), migrated)
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Capture pre-state.
+	var before []byte
+	store.db.View(func(tx *bolt.Tx) error {
+		before = append([]byte(nil), tx.Bucket([]byte(bucketRoutes)).Get([]byte("r-already"))...)
+		return nil
+	})
+
+	if err := migrateBasicAuthToAuthMode(store.db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var after []byte
+	store.db.View(func(tx *bolt.Tx) error {
+		after = append([]byte(nil), tx.Bucket([]byte(bucketRoutes)).Get([]byte("r-already"))...)
+		return nil
+	})
+
+	if string(before) != string(after) {
+		t.Errorf("migration mutated an already-migrated row:\nbefore=%s\nafter =%s", before, after)
+	}
+}
+
+// TestMigrate_ChainedOrder_IFourThenJOneThenKOne is the K.1
+// extension of TestMigrate_ChainedOrder_WAFThenUpstream. It seeds
+// a TRIPLY-legacy row (pre-I.4 waf_enabled + pre-J.1 upstream_url
+// + pre-K basic_auth_enabled) and verifies that NewStore's
+// migration sequence produces the final post-K shape correctly
+// for all three concerns.
+//
+// Failure mode if K.1 ran before I.4 / J.1: the passthrough-map
+// pattern in K.1 keeps unknown keys intact, so the chain order is
+// less critical than the I.4→J.1 ordering — but a regression that
+// swapped to a full-Route round-trip in K.1 would silently drop
+// waf_enabled / upstream_url before they could be migrated.
+func TestMigrate_ChainedOrder_IFourThenJOneThenKOne(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "db")
+
+	db, err := bolt.Open(dbPath, 0o600, nil)
+	if err != nil {
+		t.Fatalf("bolt.Open: %v", err)
+	}
+	if err := db.Update(func(tx *bolt.Tx) error {
+		if _, err := tx.CreateBucketIfNotExists([]byte(bucketRoutes)); err != nil {
+			return err
+		}
+		legacy := []byte(`{` +
+			`"id":"r-triple",` +
+			`"host":"triple-legacy.example.com",` +
+			`"upstream_url":"http://127.0.0.1:9000",` +
+			`"tls_enabled":false,` +
+			`"redirect_to_https":false,` +
+			`"aliases":null,` +
+			`"basic_auth_enabled":true,` +
+			`"basic_auth_username":"admin",` +
+			`"basic_auth_password_hash":"$argon2id$..legacy..",` +
+			`"request_headers":null,` +
+			`"response_headers":null,` +
+			`"waf_enabled":true,` +
+			`"created_at":"2026-05-01T00:00:00Z",` +
+			`"updated_at":"2026-05-01T00:00:00Z"` +
+			`}`)
+		return tx.Bucket([]byte(bucketRoutes)).Put([]byte("r-triple"), legacy)
+	}); err != nil {
+		t.Fatalf("seed triple-legacy row: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pre-NewStore bolt: %v", err)
+	}
+
+	store, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	var r Route
+	if err := store.db.View(func(tx *bolt.Tx) error {
+		raw := tx.Bucket([]byte(bucketRoutes)).Get([]byte("r-triple"))
+		if raw == nil {
+			t.Fatal("triple-legacy row missing after NewStore boot")
+		}
+		return jsonUnmarshalForTest(raw, &r)
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// All three migrations must have left their mark.
+	if r.WAFMode != "block" {
+		t.Errorf("WAFMode = %q; want %q (Step I.4 lost)", r.WAFMode, "block")
+	}
+	if len(r.Upstreams) != 1 || r.Upstreams[0].URL != "http://127.0.0.1:9000" {
+		t.Errorf("Upstreams = %+v; want one element with the legacy URL (Step J.1 lost)", r.Upstreams)
+	}
+	if r.LBPolicy != LBPolicyRoundRobin {
+		t.Errorf("LBPolicy = %q; want %q (Step J.1 lost)", r.LBPolicy, LBPolicyRoundRobin)
+	}
+	if r.AuthMode != RouteAuthBasic {
+		t.Errorf("AuthMode = %q; want %q (Step K.1 lost)", r.AuthMode, RouteAuthBasic)
+	}
+	if r.BasicAuth.Username != "admin" {
+		t.Errorf("BasicAuth.Username = %q; want admin (Step K.1 lost)", r.BasicAuth.Username)
+	}
+	if r.BasicAuth.PasswordHash != "$argon2id$..legacy.." {
+		t.Errorf("BasicAuth.PasswordHash = %q; want preserved (Step K.1 lost)", r.BasicAuth.PasswordHash)
+	}
+}

@@ -39,10 +39,18 @@ const (
 	// settings storage rather than mixed in, so the secret scan is
 	// isolated. See dns_provider.go.
 	bucketDNSProviders = "dns_providers"
+	// Step K.1 — instance-level forward-auth provider configurations,
+	// keyed by provider name (slug-shaped). See forward_auth_provider.go.
+	bucketForwardAuthProviders = "forward_auth_providers"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
 var ErrNotFound = errors.New("storage: record not found")
+
+// ErrConflict is returned when an operation would violate a
+// uniqueness constraint at the storage layer (e.g. creating a
+// ForwardAuthProvider with a Name that already exists).
+var ErrConflict = errors.New("storage: conflict")
 
 // Store is the BoltDB-backed persistence layer for Arenet.
 type Store struct {
@@ -67,11 +75,12 @@ func NewStore(dbPath string) (*Store, error) {
 
 	if err := db.Update(func(tx *bolt.Tx) error {
 		for _, name := range [][]byte{
-			[]byte(bucketRoutes),       // Step B/C
-			[]byte(bucketUsers),        // Step D
-			[]byte(bucketSessions),     // Step D
-			[]byte(bucketAudit),        // Step D
-			[]byte(bucketDNSProviders), // Step J.4
+			[]byte(bucketRoutes),               // Step B/C
+			[]byte(bucketUsers),                // Step D
+			[]byte(bucketSessions),             // Step D
+			[]byte(bucketAudit),                // Step D
+			[]byte(bucketDNSProviders),         // Step J.4
+			[]byte(bucketForwardAuthProviders), // Step K.1
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)
@@ -110,6 +119,22 @@ func NewStore(dbPath string) (*Store, error) {
 	if err := migrateUpstreamURLToPool(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: migrate upstream pool: %w", err)
+	}
+
+	// Step K.1 boot migration: replace the flat BasicAuthEnabled /
+	// BasicAuthUsername / BasicAuthPasswordHash fields with the
+	// nested BasicAuth struct under a new AuthMode enum. Passthrough-
+	// map per the backlog rule (this migration REMOVES legacy keys,
+	// not just adds them).
+	//
+	// Ordering: runs LAST. Both I.4 (waf_enabled → waf_mode) and J.1
+	// (upstream_url → upstreams pool) are pure restructurings of
+	// different keys; this migration touches only the basic_auth_*
+	// triplet, so the ordering is independent. Placed last for
+	// chronological clarity.
+	if err := migrateBasicAuthToAuthMode(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("storage: migrate auth mode: %w", err)
 	}
 
 	return &Store{db: db}, nil

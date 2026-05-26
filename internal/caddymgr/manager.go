@@ -228,10 +228,26 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		return fmt.Errorf("read dns provider: %w", err)
 	}
 
+	// Step K.1: read the instance-level forward-auth provider
+	// catalogue so buildConfigJSON can resolve each route's
+	// referenced provider into the emitted Caddy handler shape.
+	// Empty list is the normal state on a fresh install; routes
+	// with AuthMode == "forward_auth" are rejected at edit time
+	// when no matching provider exists (§5.1 cross-rule).
+	fwdAuthList, err := m.store.ListForwardAuthProviders(ctx)
+	if err != nil {
+		return fmt.Errorf("list forward_auth providers: %w", err)
+	}
+	fwdAuthMap := make(map[string]storage.ForwardAuthProvider, len(fwdAuthList))
+	for _, p := range fwdAuthList {
+		fwdAuthMap[p.Name] = p
+	}
+
 	cfgJSON, err := buildConfigJSON(routes, buildOpts{
-		DevMode:     m.devMode,
-		ACMEEmail:   m.acmeEmail,
-		DNSProvider: dnsProvider,
+		DevMode:              m.devMode,
+		ACMEEmail:            m.acmeEmail,
+		DNSProvider:          dnsProvider,
+		ForwardAuthProviders: fwdAuthMap,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -339,6 +355,17 @@ type buildOpts struct {
 	// with DNS-01 routes and an empty DNSProvider is a programming
 	// error caught at apply time.
 	DNSProvider storage.DNSProviderConfig
+	// ForwardAuthProviders (Step K.1) is the map of configured
+	// forward-auth provider rows, keyed by Name, read by the
+	// manager from BoltDB before each apply. Routes with
+	// AuthMode == "forward_auth" look up their provider by name
+	// in this map; a missing key is the programming-error path
+	// (API rejects route create / update referencing a non-
+	// existent provider, §5.1 cross-rule). buildConfigJSON falls
+	// back to NO auth handler in that defensive case rather than
+	// failing the reload — same posture as the J.4 DNS-01
+	// fall-back.
+	ForwardAuthProviders map[string]storage.ForwardAuthProvider
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -466,29 +493,39 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			}
 		}
 
-		// Step I.5 — Basic Auth. The `authentication` handler with
-		// the http_basic provider gates the route at HTTP layer:
-		// missing or wrong credentials yield a 401 before the
-		// request reaches the proxy chain. argon2id is selected via
-		// the hash module map; Caddy's caddyhttp/caddyauth ships it
-		// in the standard module set so no plugin is needed.
-		//
-		// Realm carries the primary Host so the browser scopes its
-		// cached credentials per virtual host (a switch from one
-		// route to another re-prompts as expected).
+		// Step K.1 — per-route auth (refactored from Step I.5's flat
+		// BasicAuthEnabled toggle into the AuthMode enum: "none",
+		// "basic", "forward_auth"). The three modes are mutually
+		// exclusive (§1.3 decision 2). The handler emitted (or not)
+		// here is the auth gate; it sits BEFORE the WAF and the
+		// reverse_proxy in the chain so a failed auth short-circuits
+		// the rest (Finding #9 chain order preserved).
 		//
 		// Step I.6 — custom request/response headers (`headers`
-		// handler) slot between basicauth and the proxy. Modifying
+		// handler) slot between auth and the proxy. Modifying
 		// headers on a request that's about to be 401'd is wasted
-		// work, hence ordering AFTER basicauth; modifying them
-		// BEFORE the proxy is required so request changes reach the
+		// work, hence ordering AFTER auth; modifying them BEFORE
+		// the proxy is required so request changes reach the
 		// upstream and response changes are applied on the way back.
 		//
-		// Handler chain order (spec §3.2): [metrics, basicauth?,
-		// headers?, reverse_proxy]. Metrics MUST stay first to
-		// observe the final status code (§11.5 invariant).
+		// Handler chain order (spec §3.2 + K.1 §5.1):
+		//   [metrics, auth?, waf?, headers?, reverse_proxy]
+		// Metrics MUST stay first to observe the final status code
+		// (§11.5 invariant).
 		handlers := []map[string]any{metricsHandler}
-		if r.BasicAuthEnabled {
+		switch r.AuthMode {
+		case storage.RouteAuthBasic:
+			// Step I.5 — Basic Auth, preserved verbatim through K.1.
+			// The `authentication` handler with the http_basic
+			// provider gates the route at HTTP layer: missing or
+			// wrong credentials yield a 401 before the request
+			// reaches the proxy chain. argon2id is selected via the
+			// hash module map; Caddy's caddyhttp/caddyauth ships it
+			// in the standard module set so no plugin is needed.
+			//
+			// Realm carries the primary Host so the browser scopes
+			// its cached credentials per virtual host (a switch from
+			// one route to another re-prompts as expected).
 			handlers = append(handlers, map[string]any{
 				"handler": "authentication",
 				"providers": map[string]any{
@@ -497,13 +534,70 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 						"realm": fmt.Sprintf("Arenet route %s", r.Host),
 						"accounts": []map[string]any{
 							{
-								"username": r.BasicAuthUsername,
-								"password": r.BasicAuthPasswordHash,
+								"username": r.BasicAuth.Username,
+								"password": r.BasicAuth.PasswordHash,
 							},
 						},
 					},
 				},
 			})
+		case storage.RouteAuthForwardAuth:
+			// Step K.1 — forward_auth. Look up the referenced
+			// provider in opts.ForwardAuthProviders (passed in by
+			// applyLocked from the storage layer). The provider's
+			// existence is enforced at the API layer (a route
+			// referencing an unknown provider is rejected at
+			// edit-time per §5.1; DELETE on a referenced provider
+			// is rejected with 409 per §1.3 decision 14), so the
+			// happy path always finds a match here.
+			//
+			// FAIL-CLOSED CONTRACT — security-critical. If we ever
+			// reach this code with an unknown provider (e.g. a
+			// storage corruption, a future migration drift, a
+			// direct BoltDB edit, or any class of bug we haven't
+			// imagined), the route MUST NOT serve traffic to the
+			// upstream without authentication. The previous
+			// implementation fell back to no-auth, which silently
+			// exposed an operator's intended-protected route as
+			// public — the worst class of failure for an auth
+			// control. Fail-closed via a static_response 503
+			// short-circuits the chain BEFORE the reverse_proxy:
+			// the route becomes loudly unavailable (Caddy logs,
+			// browser-visible 503) instead of silently exposed.
+			// Recovery is operator action: configure the missing
+			// provider, Caddy reloads, the route comes back up.
+			provider, ok := opts.ForwardAuthProviders[r.ForwardAuth.ProviderName]
+			if ok {
+				handlers = append(handlers, buildForwardAuthHandler(provider))
+			} else {
+				// Build the deny handler + STOP appending to the
+				// chain — no waf, no headers, no reverse_proxy.
+				// The static_response is the terminal handler.
+				handlers = append(handlers, buildForwardAuthDenyHandler(r.ForwardAuth.ProviderName))
+				denyHosts := r.AllHosts()
+				denyRoute := httpRoute{
+					Match:  []matcherSet{{Host: denyHosts}},
+					Handle: handlers,
+				}
+				httpRoutes = append(httpRoutes, denyRoute)
+				if r.TLSEnabled {
+					httpsRoutes = append(httpsRoutes, denyRoute)
+					// Still register TLS subjects so the cert is
+					// issued (the operator can fix the provider
+					// without losing the cert when reload runs).
+					for _, h := range denyHosts {
+						if !certmagic.SubjectQualifiesForPublicCert(h) {
+							continue
+						}
+						if r.ACMEChallenge == storage.ACMEChallengeDNS01 {
+							acme.DNS01 = append(acme.DNS01, h)
+						} else {
+							acme.HTTP01 = append(acme.HTTP01, h)
+						}
+					}
+				}
+				continue
+			}
 		}
 		// Step I.4 — WAF (Coraza). Slot between basicauth and the
 		// headers handler:
@@ -999,6 +1093,191 @@ func wrapHeaderValues(m map[string]string) map[string][]string {
 		out[k] = []string{v}
 	}
 	return out
+}
+
+// buildForwardAuthHandler returns the Caddy handler config for the
+// per-route forward-auth (Step K.1, §5.1). Shape verified against
+// the Caddy v2.11.3 Caddyfile-adapt reference samples
+// (caddy/caddytest/integration/caddyfile_adapt/forward_auth_*.
+// caddyfiletest):
+//
+//   - The handler is a `reverse_proxy` that targets the IdP's
+//     verify URL (provider.VerifyURL), rewrites the method to GET
+//     and the URI to provider.AuthRequestURI (the standard
+//     `forward_auth` Caddyfile expansion), and sets the two
+//     forwarded-request headers (X-Forwarded-Method,
+//     X-Forwarded-Uri) so the IdP knows what the original request
+//     looked like.
+//   - On a 2xx response from the IdP, `handle_response` fires:
+//     each header in provider.CopyHeaders is read from the IdP
+//     response and copied onto the original request (so the
+//     downstream chain — WAF, custom headers, real proxy — sees
+//     the IdP-injected identity headers like Remote-User /
+//     Remote-Email).
+//   - On a non-2xx response (the IdP redirected the user to its
+//     login page, returned 401, etc.), the reverse_proxy returns
+//     that response to the client and the downstream chain is
+//     short-circuited. This is the standard forward_auth gate.
+//
+// The "vars" handler inside each handle_response route is the
+// Caddyfile expansion's idiomatic no-op slot — it's where a
+// future "request_header overrides" feature would land. We keep
+// it for shape-fidelity with caddy adapt.
+//
+// Notes:
+//   - provider.ClientSecret is not emitted in the JSON here. The
+//     standard Authelia / Authentik / Keycloak forward_auth flow
+//     uses cookies / session for the IdP-side authentication,
+//     not a static RP credential. ClientSecret is plumbed at the
+//     storage / API level to support the future case where a
+//     provider needs an explicit credential (e.g. as an HTTP
+//     Authorization header on the sub-request); a follow-up
+//     refinement can read it here. v1.0 of K.1 ships the cookie-
+//     based pattern that covers Authelia / Authentik / Keycloak.
+//   - The provider must have at least one entry in CopyHeaders
+//     for the `handle_response` block to be meaningful; an empty
+//     CopyHeaders list still produces a valid forward_auth gate
+//     (auth check happens, but no claims are forwarded to the
+//     upstream).
+func buildForwardAuthHandler(p storage.ForwardAuthProvider) map[string]any {
+	// Build the per-header copy routes. For each header, two
+	// routes mirror the Caddyfile expansion: (1) delete the
+	// header from the original request (so any client-supplied
+	// value is wiped), (2) set it from the IdP response —
+	// conditionally on the IdP response actually containing a
+	// value (the {http.reverse_proxy.header.X} placeholder, if
+	// the IdP omitted the header, would otherwise inject the
+	// literal placeholder text into the upstream request).
+	copyRoutes := []map[string]any{
+		{"handle": []map[string]any{{"handler": "vars"}}},
+	}
+	for _, h := range p.CopyHeaders {
+		// Delete the original-request value first.
+		copyRoutes = append(copyRoutes, map[string]any{
+			"handle": []map[string]any{
+				{
+					"handler": "headers",
+					"request": map[string]any{
+						"delete": []string{h},
+					},
+				},
+			},
+		})
+		// Conditionally set it from the IdP response (skip if
+		// the IdP didn't return a value).
+		copyRoutes = append(copyRoutes, map[string]any{
+			"handle": []map[string]any{
+				{
+					"handler": "headers",
+					"request": map[string]any{
+						"set": map[string][]string{
+							h: {fmt.Sprintf("{http.reverse_proxy.header.%s}", h)},
+						},
+					},
+				},
+			},
+			"match": []map[string]any{
+				{
+					"not": []map[string]any{
+						{
+							"vars": map[string][]string{
+								fmt.Sprintf("{http.reverse_proxy.header.%s}", h): {""},
+							},
+						},
+					},
+				},
+			},
+		})
+	}
+
+	return map[string]any{
+		"handler":   "reverse_proxy",
+		"upstreams": []map[string]any{{"dial": forwardAuthDial(p.VerifyURL)}},
+		"rewrite": map[string]any{
+			"method": "GET",
+			"uri":    p.AuthRequestURI,
+		},
+		"headers": map[string]any{
+			"request": map[string]any{
+				"set": map[string][]string{
+					"X-Forwarded-Method": {"{http.request.method}"},
+					"X-Forwarded-Uri":    {"{http.request.uri}"},
+				},
+			},
+		},
+		"handle_response": []map[string]any{
+			{
+				"match": map[string]any{
+					"status_code": []int{2}, // 2xx family
+				},
+				"routes": copyRoutes,
+			},
+		},
+	}
+}
+
+// buildForwardAuthDenyHandler returns the fail-closed
+// short-circuit handler emitted when a route's forward_auth
+// provider reference is unresolvable at generator time. Critical
+// security-control: a route configured for forward_auth MUST
+// NOT serve unauthenticated traffic when its gate is missing.
+// The handler is a `static_response` with status 503 + a body
+// pointing the operator to the Settings page; the chain stops
+// here (the caller is responsible for NOT appending the
+// reverse_proxy after this handler — see the AuthMode switch
+// in buildConfigJSON).
+//
+// 503 is the right code for the operator-fixable, recoverable
+// state: route configured, dependency missing, recovery is to
+// configure the dependency. Retry-After: 0 because the recovery
+// is operator action, not a "client should retry in N seconds".
+// The body is text/plain so a curl shows it immediately; a
+// browser will render it as well.
+func buildForwardAuthDenyHandler(providerName string) map[string]any {
+	body := fmt.Sprintf(
+		"Service Unavailable: forward-auth provider %q is not configured.\n"+
+			"This route requires an authenticated identity but its auth "+
+			"gate is missing. An administrator must configure the "+
+			"forward-auth provider under Arenet Settings → Forward-auth "+
+			"providers, then reload.\n",
+		providerName,
+	)
+	return map[string]any{
+		"handler":     "static_response",
+		"status_code": 503,
+		"headers": map[string]any{
+			"Content-Type": []string{"text/plain; charset=utf-8"},
+			"Retry-After":  []string{"0"},
+		},
+		"body": body,
+	}
+}
+
+// forwardAuthDial converts a provider's VerifyURL (e.g.
+// "http://authelia:9091") into the host:port form Caddy's
+// reverse_proxy expects in the "dial" field. Same shape as
+// upstreamDial but specific to forward_auth providers (the
+// VerifyURL is validated at the API layer to be a parseable
+// http/https URL with a host component).
+func forwardAuthDial(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		// API validation should prevent this; defensive return.
+		return raw
+	}
+	host := u.Host
+	if !strings.Contains(host, ":") {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			host += ":443"
+		default:
+			host += ":80"
+		}
+	}
+	return host
 }
 
 // catchAllRoute builds the final 404 catch-all route: no match block (matches

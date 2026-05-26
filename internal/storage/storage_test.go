@@ -557,45 +557,51 @@ func TestRoute_Validate_RejectsUnknownLBPolicy(t *testing.T) {
 
 func TestRoute_Validate_BasicAuthEnabledRequiresUsername(t *testing.T) {
 	r := Route{
-		Host:                  "x.com",
-		Upstreams:             []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
-		LBPolicy:              LBPolicyRoundRobin,
-		BasicAuthEnabled:      true,
-		BasicAuthUsername:     "",
-		BasicAuthPasswordHash: "$argon2id$..fake..",
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		AuthMode:  RouteAuthBasic,
+		BasicAuth: BasicAuthRouteConfig{
+			Username:     "",
+			PasswordHash: "$argon2id$..fake..",
+		},
 	}
 	err := r.validate()
-	if err == nil || !strings.Contains(err.Error(), "basic_auth_username") {
-		t.Errorf("validate() = %v; want basic_auth_username error", err)
+	if err == nil || !strings.Contains(err.Error(), "basic_auth.username") {
+		t.Errorf("validate() = %v; want basic_auth.username error", err)
 	}
 }
 
 func TestRoute_Validate_BasicAuthEnabledRequiresHash(t *testing.T) {
 	r := Route{
-		Host:                  "x.com",
-		Upstreams:             []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
-		LBPolicy:              LBPolicyRoundRobin,
-		BasicAuthEnabled:      true,
-		BasicAuthUsername:     "admin",
-		BasicAuthPasswordHash: "",
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		AuthMode:  RouteAuthBasic,
+		BasicAuth: BasicAuthRouteConfig{
+			Username:     "admin",
+			PasswordHash: "",
+		},
 	}
 	err := r.validate()
-	if err == nil || !strings.Contains(err.Error(), "basic_auth_password_hash") {
-		t.Errorf("validate() = %v; want basic_auth_password_hash error", err)
+	if err == nil || !strings.Contains(err.Error(), "basic_auth.password_hash") {
+		t.Errorf("validate() = %v; want basic_auth.password_hash error", err)
 	}
 }
 
 func TestRoute_Validate_BasicAuthDisabledIgnoresFields(t *testing.T) {
-	// Disabled basic auth: even with empty username + hash, validate
-	// must pass (the API layer clears these fields when toggling off).
+	// AuthMode "none" (the K.1 default for routes that don't pick
+	// basic / forward_auth): even with empty BasicAuth fields,
+	// validate must pass (the API layer clears these fields when
+	// toggling away from "basic").
 	r := Route{
-		Host:             "x.com",
-		Upstreams:        []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
-		LBPolicy:         LBPolicyRoundRobin,
-		BasicAuthEnabled: false,
+		Host:      "x.com",
+		Upstreams: []Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		AuthMode:  RouteAuthNone,
 	}
 	if err := r.validate(); err != nil {
-		t.Errorf("validate() = %v; want nil (disabled basic auth ignores other fields)", err)
+		t.Errorf("validate() = %v; want nil (none auth mode ignores basic-auth fields)", err)
 	}
 }
 

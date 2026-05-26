@@ -113,6 +113,15 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// guarded delete is a backlog item).
 			r.Get("/settings/dns-providers/ovh", h.getDNSProviderOVH)
 			r.Put("/settings/dns-providers/ovh", h.putDNSProviderOVH)
+			// Step K.1: forward-auth provider CRUD. The DELETE
+			// endpoint enforces the reference-guard contract
+			// (§1.3 decision 14) — a provider referenced by ≥1
+			// route returns 409 with the offending route IDs.
+			r.Get("/settings/forward-auth/providers", h.listForwardAuthProviders)
+			r.Post("/settings/forward-auth/providers", h.createForwardAuthProvider)
+			r.Get("/settings/forward-auth/providers/{name}", h.getForwardAuthProvider)
+			r.Put("/settings/forward-auth/providers/{name}", h.updateForwardAuthProvider)
+			r.Delete("/settings/forward-auth/providers/{name}", h.deleteForwardAuthProvider)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame
@@ -234,53 +243,53 @@ const basicAuthUsernameMaxLen = 64
 // ~100 ms; a 1 MB password could lock a goroutine).
 const basicAuthPasswordMaxBytes = 64
 
-// validateBasicAuth enforces the per-route Basic Auth invariants.
-// existingHash carries the hash already stored for this route on
-// PUT — empty on POST. When the user enables Basic Auth, they must
-// supply a username AND either a fresh password (POST, or PUT to
-// rotate) or rely on the existing hash (PUT, leaving the password
-// field blank to keep it). Per spec §1.3 L9 / L10 / Q6.
+// validateBasicAuth enforces the per-route Basic Auth invariants
+// (Step I.5 rules preserved through K.1 — the nested BasicAuth
+// struct of K.1 carries the same Username / Password fields).
+// Called ONLY when req.AuthMode == storage.RouteAuthBasic;
+// callers MUST guard. existingHash carries the hash already
+// stored for this route on PUT — empty on POST. When the user
+// picks AuthMode "basic", they must supply a username AND either
+// a fresh password (POST, or PUT to rotate) or rely on the
+// existing hash (PUT, leaving the password field blank to keep it).
 func validateBasicAuth(req routeRequest, existingHash string) error {
-	if !req.BasicAuthEnabled {
-		return nil
+	if req.BasicAuth.Username == "" {
+		return errors.New("basicAuth.username must not be empty when authMode is \"basic\"")
 	}
-	if req.BasicAuthUsername == "" {
-		return errors.New("basicAuthUsername must not be empty when basic auth is enabled")
-	}
-	if len(req.BasicAuthUsername) > basicAuthUsernameMaxLen {
-		return fmt.Errorf("basicAuthUsername must not exceed %d characters", basicAuthUsernameMaxLen)
+	if len(req.BasicAuth.Username) > basicAuthUsernameMaxLen {
+		return fmt.Errorf("basicAuth.username must not exceed %d characters", basicAuthUsernameMaxLen)
 	}
 	// RFC 7617: ':' is the Basic Auth separator inside the
 	// "user:password" payload — embedding it in the username would
 	// break the protocol. Reject early with a clear message.
-	if strings.ContainsRune(req.BasicAuthUsername, ':') {
-		return errors.New("basicAuthUsername must not contain ':' (Basic Auth separator)")
+	if strings.ContainsRune(req.BasicAuth.Username, ':') {
+		return errors.New("basicAuth.username must not contain ':' (Basic Auth separator)")
 	}
-	for _, r := range req.BasicAuthUsername {
+	for _, r := range req.BasicAuth.Username {
 		// Reject control / whitespace characters: they make log
 		// injection trivial and rarely belong in an admin username.
 		if r < 0x21 || r == 0x7F {
-			return errors.New("basicAuthUsername must not contain whitespace or control characters")
+			return errors.New("basicAuth.username must not contain whitespace or control characters")
 		}
 	}
-	if req.BasicAuthPassword == "" && existingHash == "" {
-		return errors.New("basicAuthPassword required when enabling basic auth on a route without an existing password")
+	if req.BasicAuth.Password == "" && existingHash == "" {
+		return errors.New("basicAuth.password required when enabling basic auth on a route without an existing password")
 	}
-	if len(req.BasicAuthPassword) > basicAuthPasswordMaxBytes {
-		return fmt.Errorf("basicAuthPassword must not exceed %d bytes", basicAuthPasswordMaxBytes)
+	if len(req.BasicAuth.Password) > basicAuthPasswordMaxBytes {
+		return fmt.Errorf("basicAuth.password must not exceed %d bytes", basicAuthPasswordMaxBytes)
 	}
 	return nil
 }
 
-// routeForAudit returns a copy of r with the Basic Auth password
-// hash blanked. Audit events are persisted under the assumption
-// that they hold NO secrets (D3 / spec §1.6 #3); the argon2id PHC
-// produced for per-route Basic Auth is a secret in the same sense
-// as the admin password hash and must never reach BoltDB's audit
-// bucket. Apply to every storage.Route passed into appendAudit's
-// AfterJSON / BeforeJSON since Step I.5.
+// routeForAudit returns a copy of r with the per-route Basic
+// Auth password hash blanked. Audit events are persisted under
+// the assumption that they hold NO secrets (D3 / spec §1.6 #3);
+// the argon2id PHC of a route's Basic Auth must never reach the
+// audit bucket. Apply to every storage.Route passed into
+// appendAudit's AfterJSON / BeforeJSON since Step I.5 — refactored
+// in K.1 to read through the nested BasicAuth struct.
 func routeForAudit(r storage.Route) storage.Route {
-	r.BasicAuthPasswordHash = ""
+	r.BasicAuth.PasswordHash = ""
 	return r
 }
 
@@ -448,9 +457,37 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateBasicAuth(req, ""); err != nil {
+	// Step K.1: AuthMode default + validation. Empty on POST is
+	// normalised to "none" (no per-route auth — the most permissive
+	// default, operator opts in to basic / forward_auth explicitly).
+	if req.AuthMode == "" {
+		req.AuthMode = storage.RouteAuthNone
+	}
+	if err := validateAuthMode(req.AuthMode); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// Step K.1: per-mode validation + cross-field mutual-exclusion
+	// check (§1.3 decision 2). The wire shape allows the operator
+	// to populate BasicAuth + ForwardAuth simultaneously by hand-
+	// crafted JSON — we reject that even if the AuthMode picks
+	// just one of the two, so direct API clients can't smuggle a
+	// confused row past the radio-group UI.
+	if err := validateAuthFieldsMutex(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.AuthMode == storage.RouteAuthBasic {
+		if err := validateBasicAuth(req, ""); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.AuthMode == storage.RouteAuthForwardAuth {
+		if err := h.validateForwardAuthProvider(r.Context(), req.ForwardAuth.ProviderName); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if err := validateHeaders(req.RequestHeaders, "request"); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -527,13 +564,14 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		req.RedirectToHTTPS = false
 	}
 
-	// Step I.5: hash the plaintext password BEFORE the uniqueness
-	// check + the storage write. Done outside the bbolt transaction
-	// so the ~100 ms argon2id cost doesn't hold the single-writer
-	// lock. Only computed when Basic Auth is enabled.
+	// Step K.1 (was Step I.5): hash the plaintext password BEFORE
+	// the uniqueness check + the storage write. Done outside the
+	// bbolt transaction so the ~100 ms argon2id cost doesn't hold
+	// the single-writer lock. Only computed when AuthMode is
+	// "basic"; "none" and "forward_auth" do not carry a password.
 	var basicAuthHash string
-	if req.BasicAuthEnabled {
-		hash, hashErr := auth.HashRoutePassword(req.BasicAuthPassword)
+	if req.AuthMode == storage.RouteAuthBasic {
+		hash, hashErr := auth.HashRoutePassword(req.BasicAuth.Password)
 		if hashErr != nil {
 			h.logger.Error("hash basic auth password", "err", hashErr)
 			writeError(w, http.StatusInternalServerError, "failed to hash password")
@@ -583,20 +621,34 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	newRoute := storage.Route{
-		Host:                  req.Host,
-		Upstreams:             storeUpstreams,
-		LBPolicy:              req.LBPolicy,
-		TLSEnabled:            req.TLSEnabled,
-		RedirectToHTTPS:       req.RedirectToHTTPS,
-		Aliases:               req.Aliases,
-		BasicAuthEnabled:      req.BasicAuthEnabled,
-		BasicAuthUsername:     req.BasicAuthUsername,
-		BasicAuthPasswordHash: basicAuthHash,
-		RequestHeaders:        req.RequestHeaders,
-		ResponseHeaders:       req.ResponseHeaders,
-		WAFMode:               req.WAFMode,
-		ACMEChallenge:         req.ACMEChallenge,
-		HealthCheck:           storeHC,
+		Host:            req.Host,
+		Upstreams:       storeUpstreams,
+		LBPolicy:        req.LBPolicy,
+		TLSEnabled:      req.TLSEnabled,
+		RedirectToHTTPS: req.RedirectToHTTPS,
+		Aliases:         req.Aliases,
+		AuthMode:        req.AuthMode,
+		BasicAuth: storage.BasicAuthRouteConfig{
+			Username:     req.BasicAuth.Username,
+			PasswordHash: basicAuthHash,
+		},
+		ForwardAuth: storage.ForwardAuthRouteConfig{
+			ProviderName: req.ForwardAuth.ProviderName,
+		},
+		RequestHeaders:  req.RequestHeaders,
+		ResponseHeaders: req.ResponseHeaders,
+		WAFMode:         req.WAFMode,
+		ACMEChallenge:   req.ACMEChallenge,
+		HealthCheck:     storeHC,
+	}
+	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
+	// the corresponding sub-struct (storage trusts the API to
+	// not persist orphan credentials).
+	if newRoute.AuthMode != storage.RouteAuthBasic {
+		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}
+	}
+	if newRoute.AuthMode != storage.RouteAuthForwardAuth {
+		newRoute.ForwardAuth = storage.ForwardAuthRouteConfig{}
 	}
 	for _, h := range newRoute.AllHosts() {
 		if ownerID, taken := owners[h]; taken {
@@ -682,14 +734,42 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step I.5: enabling basic auth requires either a fresh password
-	// in this PUT or an existing hash from the stored copy (cf. Q6
-	// in the audit). validateBasicAuth takes the previous hash into
-	// account so toggling-on a route that already has a hash works
-	// without re-typing the password.
-	if err := validateBasicAuth(req, previous.BasicAuthPasswordHash); err != nil {
+	// Step K.1: AuthMode resolution on PUT — same preserve-
+	// previous semantics as WAFMode below. Empty means "keep the
+	// stored value", explicit value goes through validateAuthMode.
+	// A row persisted without AuthMode (a row a code path bypassed
+	// the migration on, e.g. test seeds calling storage.CreateRoute
+	// directly) reads back as previous.AuthMode == "" — treat as
+	// "none" so the preserve path yields a valid state.
+	if req.AuthMode == "" {
+		req.AuthMode = previous.AuthMode
+		if req.AuthMode == "" {
+			req.AuthMode = storage.RouteAuthNone
+		}
+	}
+	if err := validateAuthMode(req.AuthMode); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if err := validateAuthFieldsMutex(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Step K.1: per-mode validation. For "basic", validateBasicAuth
+	// takes the previous hash into account so toggling-on a route
+	// that already has a hash works without re-typing the password
+	// (Step I.5 preserve UX preserved through K.1).
+	if req.AuthMode == storage.RouteAuthBasic {
+		if err := validateBasicAuth(req, previous.BasicAuth.PasswordHash); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.AuthMode == storage.RouteAuthForwardAuth {
+		if err := h.validateForwardAuthProvider(r.Context(), req.ForwardAuth.ProviderName); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if err := validateHeaders(req.RequestHeaders, "request"); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -812,19 +892,20 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		req.RedirectToHTTPS = false
 	}
 
-	// Step I.5 password resolution (Q5):
-	//   - basic auth disabled    → no hash stored, fields cleared.
-	//   - new password supplied  → re-hash, replacing whatever was
-	//                              there before (rotation).
-	//   - empty password on PUT  → keep the existing hash. This is
-	//                              the "edit anything else without
-	//                              re-typing the secret" path.
+	// Step K.1 password resolution (refactor of the Step I.5 Q5
+	// rule under the new AuthMode enum):
+	//   - AuthMode != "basic"            → no hash stored, fields cleared.
+	//   - new password supplied          → re-hash, replacing whatever
+	//                                      was there before (rotation).
+	//   - empty password on PUT (basic)  → keep the existing hash. The
+	//                                      "edit anything else without
+	//                                      re-typing the secret" path.
 	var basicAuthHash string
 	switch {
-	case !req.BasicAuthEnabled:
+	case req.AuthMode != storage.RouteAuthBasic:
 		basicAuthHash = ""
-	case req.BasicAuthPassword != "":
-		hash, hashErr := auth.HashRoutePassword(req.BasicAuthPassword)
+	case req.BasicAuth.Password != "":
+		hash, hashErr := auth.HashRoutePassword(req.BasicAuth.Password)
 		if hashErr != nil {
 			h.logger.Error("hash basic auth password (update)", "err", hashErr)
 			writeError(w, http.StatusInternalServerError, "failed to hash password")
@@ -832,7 +913,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		basicAuthHash = hash
 	default:
-		basicAuthHash = previous.BasicAuthPasswordHash
+		basicAuthHash = previous.BasicAuth.PasswordHash
 	}
 
 	// Uniqueness check across (Host ∪ Aliases) when ANY hostname has
@@ -868,21 +949,32 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	newRoute := storage.Route{
-		ID:                    id,
-		Host:                  req.Host,
-		Upstreams:             storeUpstreams,
-		LBPolicy:              req.LBPolicy,
-		TLSEnabled:            req.TLSEnabled,
-		RedirectToHTTPS:       req.RedirectToHTTPS,
-		Aliases:               req.Aliases,
-		BasicAuthEnabled:      req.BasicAuthEnabled,
-		BasicAuthUsername:     req.BasicAuthUsername,
-		BasicAuthPasswordHash: basicAuthHash,
-		RequestHeaders:        req.RequestHeaders,
-		ResponseHeaders:       req.ResponseHeaders,
-		WAFMode:               req.WAFMode,
-		ACMEChallenge:         req.ACMEChallenge,
-		HealthCheck:           storeHC,
+		ID:              id,
+		Host:            req.Host,
+		Upstreams:       storeUpstreams,
+		LBPolicy:        req.LBPolicy,
+		TLSEnabled:      req.TLSEnabled,
+		RedirectToHTTPS: req.RedirectToHTTPS,
+		Aliases:         req.Aliases,
+		AuthMode:        req.AuthMode,
+		BasicAuth: storage.BasicAuthRouteConfig{
+			Username:     req.BasicAuth.Username,
+			PasswordHash: basicAuthHash,
+		},
+		ForwardAuth: storage.ForwardAuthRouteConfig{
+			ProviderName: req.ForwardAuth.ProviderName,
+		},
+		RequestHeaders:  req.RequestHeaders,
+		ResponseHeaders: req.ResponseHeaders,
+		WAFMode:         req.WAFMode,
+		ACMEChallenge:   req.ACMEChallenge,
+		HealthCheck:     storeHC,
+	}
+	if newRoute.AuthMode != storage.RouteAuthBasic {
+		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}
+	}
+	if newRoute.AuthMode != storage.RouteAuthForwardAuth {
+		newRoute.ForwardAuth = storage.ForwardAuthRouteConfig{}
 	}
 	if !hostnamesEqual(newRoute.AllHosts(), previous.AllHosts()) {
 		existing, err := h.store.ListRoutes(r.Context())

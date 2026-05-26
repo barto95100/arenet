@@ -27,7 +27,13 @@
 	import { pushToast } from '$lib/stores/toast';
 	import { authApi, type Session } from '$lib/api/auth';
 	import { settingsApi } from '$lib/api/settings';
-	import { OVH_ENDPOINTS, type DNSProviderOVH } from '$lib/api/types';
+	import {
+		FORWARD_AUTH_PROVIDER_KINDS,
+		OVH_ENDPOINTS,
+		type DNSProviderOVH,
+		type ForwardAuthProvider,
+		type ForwardAuthProviderKind
+	} from '$lib/api/types';
 	import { ApiError } from '$lib/api/types';
 	import { listRoutes } from '$lib/api/client';
 	import { relativeTime } from '$lib/utils/audit-format';
@@ -214,6 +220,118 @@
 		anyDNS01Route && dnsProvider !== null && !dnsProvider.configured
 	);
 
+	// --- Forward-auth providers section (Step K.1 §5.1) ----------------------
+
+	// List + an inline form for create-or-edit. The form keeps an
+	// `editingName` slot: null = create mode (POST), non-null =
+	// edit mode (PUT on /providers/{name}). Same client-secret
+	// preserve-on-edit pattern as the DNS provider above (empty
+	// secret on PUT keeps the stored value).
+	let fwdAuthList = $state<ForwardAuthProvider[]>([]);
+	let fwdAuthLoading = $state(true);
+	let fwdAuthListError = $state<string | null>(null);
+
+	let fwdAuthEditingName = $state<string | null>(null);
+	let fwdAuthForm = $state({
+		name: '',
+		kind: 'authelia' as ForwardAuthProviderKind,
+		verifyUrl: '',
+		authRequestUri: '/api/authz/forward-auth',
+		copyHeaders: 'Remote-User, Remote-Email',
+		clientSecret: ''
+	});
+	let fwdAuthFormOpen = $state(false);
+	let fwdAuthSubmitting = $state(false);
+	let fwdAuthFormError = $state<string | null>(null);
+	let fwdAuthDeleteError = $state<string | null>(null);
+	// Edit-mode flag for the placeholder pattern on the secret input.
+	let fwdAuthEditingSecretSet = $state(false);
+
+	async function loadForwardAuthProviders(): Promise<void> {
+		fwdAuthLoading = true;
+		fwdAuthListError = null;
+		try {
+			fwdAuthList = await settingsApi.listForwardAuthProviders();
+		} catch (err) {
+			fwdAuthListError =
+				err instanceof Error ? err.message : 'Failed to load forward-auth providers';
+		} finally {
+			fwdAuthLoading = false;
+		}
+	}
+
+	function openFwdAuthCreate(): void {
+		fwdAuthEditingName = null;
+		fwdAuthEditingSecretSet = false;
+		fwdAuthForm = {
+			name: '',
+			kind: 'authelia',
+			verifyUrl: '',
+			authRequestUri: '/api/authz/forward-auth',
+			copyHeaders: 'Remote-User, Remote-Email',
+			clientSecret: ''
+		};
+		fwdAuthFormError = null;
+		fwdAuthFormOpen = true;
+	}
+
+	function openFwdAuthEdit(p: ForwardAuthProvider): void {
+		fwdAuthEditingName = p.name;
+		fwdAuthEditingSecretSet = p.clientSecretSet;
+		fwdAuthForm = {
+			name: p.name,
+			kind: p.kind,
+			verifyUrl: p.verifyUrl,
+			authRequestUri: p.authRequestUri,
+			copyHeaders: (p.copyHeaders ?? []).join(', '),
+			clientSecret: ''
+		};
+		fwdAuthFormError = null;
+		fwdAuthFormOpen = true;
+	}
+
+	async function submitFwdAuth(): Promise<void> {
+		fwdAuthSubmitting = true;
+		fwdAuthFormError = null;
+		try {
+			const req = {
+				name: fwdAuthForm.name.trim(),
+				kind: fwdAuthForm.kind,
+				verifyUrl: fwdAuthForm.verifyUrl.trim(),
+				authRequestUri: fwdAuthForm.authRequestUri.trim(),
+				copyHeaders: fwdAuthForm.copyHeaders
+					.split(',')
+					.map((h) => h.trim())
+					.filter((h) => h.length > 0),
+				clientSecret: fwdAuthForm.clientSecret
+			};
+			if (fwdAuthEditingName === null) {
+				await settingsApi.createForwardAuthProvider(req);
+				pushToast('Forward-auth provider created', 'success');
+			} else {
+				await settingsApi.updateForwardAuthProvider(fwdAuthEditingName, req);
+				pushToast('Forward-auth provider updated', 'success');
+			}
+			fwdAuthFormOpen = false;
+			await loadForwardAuthProviders();
+		} catch (err) {
+			fwdAuthFormError = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			fwdAuthSubmitting = false;
+		}
+	}
+
+	async function deleteFwdAuth(name: string): Promise<void> {
+		fwdAuthDeleteError = null;
+		try {
+			await settingsApi.deleteForwardAuthProvider(name);
+			pushToast('Forward-auth provider deleted', 'success');
+			await loadForwardAuthProviders();
+		} catch (err) {
+			fwdAuthDeleteError = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
 	// License URL ref resolution (Step G G.2).
 	// `git describe --tags --always` produces three shapes:
 	//   - clean tag   → `v0.4.0-step-f`           (valid GitHub ref)
@@ -231,6 +349,7 @@
 		void loadSessions();
 		void loadDNSProvider();
 		void loadDNS01Status();
+		void loadForwardAuthProviders();
 	});
 </script>
 
@@ -519,6 +638,199 @@
 				BoltDB file — protected by the file's filesystem permissions.
 				Restrict the data directory to the Arenet process user.
 			</p>
+		</Card>
+	</div>
+
+	<!-- ROW 2.75 — Forward-auth providers (Step K.1 §5.1).
+	     Full-width like DNS provider: list of configured providers
+	     with add/edit/delete + an inline form. The form pattern
+	     mirrors the DNS provider's secret discipline — empty
+	     clientSecret on PUT preserves the stored value, with the
+	     "••• set (leave blank to keep)" placeholder. -->
+	<div class="mb-6">
+		<Card padding="p-6">
+			<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
+				<div>
+					<h2 class="text-xl font-semibold">Forward-auth providers</h2>
+					<p class="text-xs text-muted mt-1">
+						Configure identity providers (Authelia / Authentik /
+						Keycloak / generic) that routes delegate auth to.
+					</p>
+				</div>
+				<Button onclick={openFwdAuthCreate}>+ Add provider</Button>
+			</header>
+
+			{#if fwdAuthLoading}
+				<div class="flex items-center gap-2 py-4 text-secondary text-sm">
+					<Spinner size="sm" /> Loading providers…
+				</div>
+			{:else if fwdAuthListError}
+				<p class="text-sm text-down mb-3" role="alert">
+					Failed to load forward-auth providers: {fwdAuthListError}
+				</p>
+			{:else if fwdAuthList.length === 0 && !fwdAuthFormOpen}
+				<p class="text-sm text-secondary py-2">
+					No forward-auth provider configured yet.
+				</p>
+			{:else}
+				<div class="flex flex-col gap-2 mb-3">
+					{#each fwdAuthList as p (p.name)}
+						<div class="flex items-center justify-between border border-border-subtle rounded px-3 py-2">
+							<div class="flex flex-col text-sm">
+								<span class="font-mono text-primary">{p.name}</span>
+								<span class="text-xs text-muted">
+									{p.kind} · {p.verifyUrl}
+									{#if p.clientSecretSet}
+										· <span class="text-up">secret set</span>
+									{:else}
+										· <span class="text-secondary">no secret</span>
+									{/if}
+								</span>
+							</div>
+							<div class="flex items-center gap-1">
+								<Button variant="ghost" size="sm" onclick={() => openFwdAuthEdit(p)}>
+									Edit
+								</Button>
+								<Button variant="ghost" size="sm" onclick={() => deleteFwdAuth(p.name)}>
+									Delete
+								</Button>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+
+			{#if fwdAuthDeleteError}
+				<p class="text-sm text-down mb-3" role="alert">{fwdAuthDeleteError}</p>
+			{/if}
+
+			{#if fwdAuthFormOpen}
+				<form
+					class="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-border-subtle pt-4"
+					onsubmit={(e) => {
+						e.preventDefault();
+						void submitFwdAuth();
+					}}
+				>
+					<div>
+						<label for="fwdauth-name" class="text-sm font-medium text-secondary block mb-1">
+							Name (slug)
+						</label>
+						<input
+							id="fwdauth-name"
+							type="text"
+							bind:value={fwdAuthForm.name}
+							placeholder="authelia-prod"
+							disabled={fwdAuthEditingName !== null}
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-60 disabled:cursor-not-allowed"
+						/>
+						{#if fwdAuthEditingName !== null}
+							<p class="text-xs text-muted mt-1">
+								Name is immutable after creation.
+							</p>
+						{/if}
+					</div>
+
+					<div>
+						<label for="fwdauth-kind" class="text-sm font-medium text-secondary block mb-1">
+							Kind
+						</label>
+						<select
+							id="fwdauth-kind"
+							bind:value={fwdAuthForm.kind}
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+						>
+							{#each FORWARD_AUTH_PROVIDER_KINDS as k (k)}
+								<option value={k}>{k}</option>
+							{/each}
+						</select>
+					</div>
+
+					<div class="md:col-span-2">
+						<label
+							for="fwdauth-verify-url"
+							class="text-sm font-medium text-secondary block mb-1"
+						>
+							Verify URL
+						</label>
+						<input
+							id="fwdauth-verify-url"
+							type="text"
+							bind:value={fwdAuthForm.verifyUrl}
+							placeholder="http://authelia:9091"
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+						/>
+					</div>
+
+					<div>
+						<label
+							for="fwdauth-auth-request-uri"
+							class="text-sm font-medium text-secondary block mb-1"
+						>
+							Auth request URI
+						</label>
+						<input
+							id="fwdauth-auth-request-uri"
+							type="text"
+							bind:value={fwdAuthForm.authRequestUri}
+							placeholder="/api/authz/forward-auth"
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+						/>
+					</div>
+
+					<div>
+						<label
+							for="fwdauth-copy-headers"
+							class="text-sm font-medium text-secondary block mb-1"
+						>
+							Copy headers (comma-separated)
+						</label>
+						<input
+							id="fwdauth-copy-headers"
+							type="text"
+							bind:value={fwdAuthForm.copyHeaders}
+							placeholder="Remote-User, Remote-Email"
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+						/>
+					</div>
+
+					<div class="md:col-span-2">
+						<label
+							for="fwdauth-client-secret"
+							class="text-sm font-medium text-secondary block mb-1"
+						>
+							Client secret (optional)
+						</label>
+						<input
+							id="fwdauth-client-secret"
+							type="password"
+							autocomplete="off"
+							bind:value={fwdAuthForm.clientSecret}
+							placeholder={fwdAuthEditingSecretSet
+								? '••• set (leave blank to keep)'
+								: ''}
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+						/>
+					</div>
+
+					{#if fwdAuthFormError}
+						<p class="text-sm text-down md:col-span-2" role="alert">{fwdAuthFormError}</p>
+					{/if}
+
+					<div class="md:col-span-2 flex justify-end gap-2">
+						<Button variant="ghost" onclick={() => (fwdAuthFormOpen = false)} type="button">
+							Cancel
+						</Button>
+						<Button type="submit" disabled={fwdAuthSubmitting}>
+							{fwdAuthSubmitting
+								? 'Saving…'
+								: fwdAuthEditingName === null
+									? 'Create'
+									: 'Save'}
+						</Button>
+					</div>
+				</form>
+			{/if}
 		</Card>
 	</div>
 

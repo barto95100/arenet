@@ -10,6 +10,7 @@
 	import type {
 		ACMEChallenge,
 		DNSProviderOVH,
+		ForwardAuthProvider,
 		HealthCheck,
 		LBPolicy,
 		Route,
@@ -85,9 +86,9 @@
 			tlsEnabled: false,
 			redirectToHttps: false,
 			aliases: [],
-			basicAuthEnabled: false,
-			basicAuthUsername: '',
-			basicAuthPassword: '',
+			authMode: 'none',
+			basicAuth: { username: '', password: '' },
+			forwardAuth: { providerName: '' },
 			requestHeaders: {},
 			responseHeaders: {},
 			wafMode: 'detect',
@@ -192,6 +193,7 @@
 		// so the inline hint reflects any provider changes the
 		// operator may have just made in Settings.
 		void loadDNSProvider();
+		void loadForwardAuthProviders();
 	}
 
 	function openEdit(r: Route) {
@@ -207,9 +209,14 @@
 			tlsEnabled: r.tlsEnabled,
 			redirectToHttps: r.redirectToHttps,
 			aliases: [...(r.aliases ?? [])],
-			basicAuthEnabled: r.basicAuthEnabled,
-			basicAuthUsername: r.basicAuthUsername,
-			basicAuthPassword: '',
+			authMode: r.authMode,
+			basicAuth: {
+				username: r.basicAuth?.username ?? '',
+				password: ''
+			},
+			forwardAuth: {
+				providerName: r.forwardAuth?.providerName ?? ''
+			},
 			requestHeaders: { ...(r.requestHeaders ?? {}) },
 			responseHeaders: { ...(r.responseHeaders ?? {}) },
 			wafMode: r.wafMode,
@@ -231,8 +238,9 @@
 				fails: r.healthCheck.fails
 			}
 		};
-		basicAuthPasswordSet = r.basicAuthPasswordSet;
+		basicAuthPasswordSet = r.basicAuth?.passwordSet ?? false;
 		void loadDNSProvider();
+		void loadForwardAuthProviders();
 		// Step J.2 preserve-or-replace: the user has not touched the
 		// HC sub-form yet, so a submit without further interaction
 		// omits the block and triggers the preserve path. Any
@@ -290,6 +298,20 @@
 		} catch (err) {
 			dnsProvider = null;
 			dnsProviderLoadError = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	// Step K.1: forward-auth providers snapshot, loaded on mount
+	// and on form open. Drives the per-route forward_auth selector
+	// (options = configured providers) and the inline hint when
+	// the user picks forward_auth but no provider is configured.
+	let forwardAuthProviders = $state<ForwardAuthProvider[]>([]);
+
+	async function loadForwardAuthProviders() {
+		try {
+			forwardAuthProviders = await settingsApi.listForwardAuthProviders();
+		} catch (_err) {
+			forwardAuthProviders = [];
 		}
 	}
 
@@ -493,6 +515,22 @@
 			// is sent as the empty string when the selector is
 			// hidden (pool size == 1) so the server applies the
 			// default round_robin on create / preserves on update.
+			// Step K.1: zero out the inactive auth sub-shape based on
+			// AuthMode. The server enforces mutual exclusion via
+			// validateAuthFieldsMutex; the form mirrors the same
+			// invariant on the way out so an in-place mode switch
+			// in the radio group never ships stale fields.
+			const basicAuth =
+				formData.authMode === 'basic'
+					? {
+							username: formData.basicAuth.username,
+							password: formData.basicAuth.password
+						}
+					: { username: '', password: '' };
+			const forwardAuth =
+				formData.authMode === 'forward_auth'
+					? { providerName: formData.forwardAuth.providerName }
+					: { providerName: '' };
 			const payload: RouteRequest = {
 				host: formData.host,
 				upstreams: formData.upstreams.map((u) => ({ url: u.url.trim(), weight: u.weight })),
@@ -500,9 +538,9 @@
 				tlsEnabled: formData.tlsEnabled,
 				redirectToHttps: formData.redirectToHttps,
 				aliases: formData.aliases.map((a) => a.trim()).filter((a) => a.length > 0),
-				basicAuthEnabled: formData.basicAuthEnabled,
-				basicAuthUsername: formData.basicAuthUsername,
-				basicAuthPassword: formData.basicAuthPassword,
+				authMode: formData.authMode,
+				basicAuth,
+				forwardAuth,
 				requestHeaders: tuplesToRecord(requestHeaderRows),
 				responseHeaders: tuplesToRecord(responseHeaderRows),
 				wafMode: formData.wafMode,
@@ -584,7 +622,7 @@
 	}
 
 	onMount(async () => {
-		await Promise.all([loadRoutes(), loadDNSProvider()]);
+		await Promise.all([loadRoutes(), loadDNSProvider(), loadForwardAuthProviders()]);
 	});
 
 	const stats = $derived({
@@ -657,10 +695,10 @@
 							title={`Aliases:\n${r.aliases.join('\n')}`}
 						>+{r.aliases.length}</span>
 					{/if}
-					{#if r.basicAuthEnabled}
+					{#if r.authMode === 'basic'}
 						<span
 							class="ml-1.5 inline-flex items-center text-muted cursor-help"
-							title={`Basic Auth required (user: ${r.basicAuthUsername})`}
+							title={`Basic Auth required (user: ${r.basicAuth?.username ?? ''})`}
 							aria-label="Basic Auth required"
 						>
 							<svg
@@ -676,6 +714,28 @@
 							>
 								<rect width="18" height="11" x="3" y="11" rx="2" />
 								<path d="M7 11V7a5 5 0 0 1 10 0v4" />
+							</svg>
+						</span>
+					{:else if r.authMode === 'forward_auth'}
+						<span
+							class="ml-1.5 inline-flex items-center text-muted cursor-help"
+							title={`Forward-auth via ${r.forwardAuth?.providerName ?? ''}`}
+							aria-label="Forward-auth required"
+						>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								class="w-3.5 h-3.5"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M21 12H9" />
+								<path d="m12 5 7 7-7 7" />
+								<path d="M5 21V3" />
 							</svg>
 						</span>
 					{/if}
@@ -931,14 +991,51 @@
 			</div>
 		{/if}
 
-		<!-- Step I.5: per-route Basic Auth. -->
+		<!-- Step K.1 — per-route auth: radio group (none / basic /
+		     forward_auth). Replaces the Step I.5 "Require Basic Auth"
+		     checkbox with an explicit three-way choice. Mutual
+		     exclusion enforced by the radio shape; the server
+		     re-checks (validateAuthFieldsMutex) as defence in depth. -->
 		<div class="flex flex-col gap-2">
-			<Checkbox label="Require Basic Auth" bind:checked={formData.basicAuthEnabled} />
-			{#if formData.basicAuthEnabled}
+			<span class="text-sm font-medium text-secondary">Authentication</span>
+			<div class="flex flex-col gap-1 ml-1">
+				<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
+					<input
+						type="radio"
+						name="route-auth-mode"
+						value="none"
+						bind:group={formData.authMode}
+						class="accent-cyan"
+					/>
+					None
+				</label>
+				<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
+					<input
+						type="radio"
+						name="route-auth-mode"
+						value="basic"
+						bind:group={formData.authMode}
+						class="accent-cyan"
+					/>
+					Basic auth (single shared credential)
+				</label>
+				<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
+					<input
+						type="radio"
+						name="route-auth-mode"
+						value="forward_auth"
+						bind:group={formData.authMode}
+						class="accent-cyan"
+					/>
+					Forward auth (delegate to an IdP)
+				</label>
+			</div>
+
+			{#if formData.authMode === 'basic'}
 				<div class="ml-6 flex flex-col gap-2">
 					<Input
 						label="Username"
-						bind:value={formData.basicAuthUsername}
+						bind:value={formData.basicAuth.username}
 						placeholder="admin"
 					/>
 					<div>
@@ -951,13 +1048,44 @@
 						<input
 							id="basic-auth-password"
 							type="password"
-							bind:value={formData.basicAuthPassword}
+							bind:value={formData.basicAuth.password}
 							placeholder={formMode === 'edit' && basicAuthPasswordSet
 								? '••• set (leave blank to keep)'
 								: ''}
 							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 						/>
 					</div>
+				</div>
+			{:else if formData.authMode === 'forward_auth'}
+				<div class="ml-6 flex flex-col gap-2">
+					<label
+						for="route-forward-auth-provider"
+						class="text-sm font-medium text-secondary block"
+					>
+						Provider
+					</label>
+					{#if forwardAuthProviders.length === 0}
+						<p class="text-xs text-down">
+							No forward-auth provider configured —
+							<a href="/settings" class="text-cyan hover:underline">configure one under Settings</a>.
+						</p>
+					{:else}
+						<select
+							id="route-forward-auth-provider"
+							bind:value={formData.forwardAuth.providerName}
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+						>
+							<option value="" disabled>— select a provider —</option>
+							{#each forwardAuthProviders as p (p.name)}
+								<option value={p.name}>{p.name} ({p.kind})</option>
+							{/each}
+						</select>
+						<p class="text-xs text-muted">
+							The route's auth gate delegates to the IdP at
+							<code>{forwardAuthProviders.find((p) => p.name === formData.forwardAuth.providerName)?.verifyUrl ?? '...'}</code>
+							via Caddy <code>forward_auth</code>.
+						</p>
+					{/if}
 				</div>
 			{/if}
 		</div>

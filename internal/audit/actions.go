@@ -63,6 +63,10 @@ const (
 	// to keep the API's source-of-truth near the only emission
 	// site; tests in actions_test.go pin the enum count.
 	ActionDNSProviderUpdated = "dns_provider_updated"
+
+	// Step K.1 — forward-auth provider (2)
+	ActionForwardAuthProviderUpdated = "forward_auth_provider_updated"
+	ActionForwardAuthProviderDeleted = "forward_auth_provider_deleted"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -85,6 +89,8 @@ var allActions = []string{
 	ActionPasswordHIBPPending,
 	ActionPasswordCompromisedDetected,
 	ActionDNSProviderUpdated,
+	ActionForwardAuthProviderUpdated,
+	ActionForwardAuthProviderDeleted,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.
