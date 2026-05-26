@@ -337,9 +337,10 @@ func migrateBasicAuthToAuthMode(db *bolt.DB) error {
 // and the auth-source distinction (§1.3 decision 13). Every
 // pre-K user was, by construction, locally-managed AND admin:
 //   - AuthSource = "local"  (the boot setup-token flow creates
-//                            local users only)
+//     local users only)
 //   - Role       = "admin"  (Step D phase 1 single-admin model;
-//                            no viewer role existed)
+//     no viewer role existed)
+//
 // OIDCSub stays empty (no OIDC mapping on pre-K rows).
 //
 // Pattern: passthrough-map. This migration is pure-additions

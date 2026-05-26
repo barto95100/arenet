@@ -147,6 +147,9 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Delete("/settings/oidc/allowlist/{email}", h.deleteOIDCAllowlist)
 				r.Get("/admin/users", h.listAdminUsers)
 				r.Post("/admin/users/{id}/role", h.updateUserRole)
+				// Step K.3 — backup / restore.
+				r.Get("/admin/backup", h.getBackup)
+				r.Post("/admin/restore", h.postRestore)
 			})
 		})
 	})

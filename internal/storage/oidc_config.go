@@ -66,9 +66,9 @@ type OIDCConfig struct {
 //   - Subsequent logins match by Sub directly (Email becomes a
 //     cosmetic identifier).
 type OIDCAllowedIdentity struct {
-	Email        string    `json:"email"`         // operator-supplied, required, unique
-	DisplayName  string    `json:"display_name"`  // operator-supplied, optional
-	Sub          string    `json:"sub"`           // OIDC subject; empty before first login
+	Email        string    `json:"email"`        // operator-supplied, required, unique
+	DisplayName  string    `json:"display_name"` // operator-supplied, optional
+	Sub          string    `json:"sub"`          // OIDC subject; empty before first login
 	AddedAt      time.Time `json:"added_at"`
 	FirstLoginAt time.Time `json:"first_login_at,omitempty"`
 }
@@ -80,6 +80,11 @@ const oidcConfigKey = "default"
 // disabled state (a fresh-install row before the operator has
 // configured anything). When Enabled is true, the four core
 // fields must be populated.
+// ValidateOIDCConfig is the Step K.3 exported shim.
+func ValidateOIDCConfig(c OIDCConfig) error {
+	return c.validate()
+}
+
 func (c *OIDCConfig) validate() error {
 	if !c.Enabled {
 		// Disabled state: storage trusts the API to have provided

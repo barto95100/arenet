@@ -257,6 +257,22 @@ func (r Route) AllHosts() []string {
 	return out
 }
 
+// ValidateRoute is the exported shim around the package-private
+// validate(). The internal/backup package calls it during the
+// import pipeline to re-validate business invariants before
+// committing the snapshot. Existing internal callers stay on the
+// private form (one less import on the hot path).
+//
+// Step K.3: the derogation for AllowIncompleteRestore is NOT
+// embedded here — the caller (internal/backup) knows which fields
+// it cleared on purpose and substitutes a non-empty placeholder
+// before calling ValidateRoute, or skips ValidateRoute for that
+// field specifically. Keeping the validator pure-grid stays true
+// to the J.1 contract.
+func ValidateRoute(r Route) error {
+	return r.validate()
+}
+
 // validate checks the user-supplied fields of a Route.
 func (r *Route) validate() error {
 	if r.Host == "" {

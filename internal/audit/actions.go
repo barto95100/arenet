@@ -69,13 +69,22 @@ const (
 	ActionForwardAuthProviderDeleted = "forward_auth_provider_deleted"
 
 	// Step K.2 — OIDC admin auth + roles (7)
-	ActionOIDCConfigured             = "oidc_configured"
-	ActionOIDCUpdated                = "oidc_updated"
-	ActionOIDCLoginRejected          = "oidc_login_rejected"
-	ActionOIDCCallbackInvalid        = "oidc_callback_invalid"
-	ActionLoginBreakGlass            = "login_break_glass"
-	ActionLocalAdminPasswordRotated  = "local_admin_password_rotated"
-	ActionUserRoleChanged            = "user_role_changed"
+	ActionOIDCConfigured            = "oidc_configured"
+	ActionOIDCUpdated               = "oidc_updated"
+	ActionOIDCLoginRejected         = "oidc_login_rejected"
+	ActionOIDCCallbackInvalid       = "oidc_callback_invalid"
+	ActionLoginBreakGlass           = "login_break_glass"
+	ActionLocalAdminPasswordRotated = "local_admin_password_rotated"
+	ActionUserRoleChanged           = "user_role_changed"
+
+	// Step K.3 — backup / restore (3). The restore is significantly
+	// more destructive than the export; both must be audited and the
+	// failure path emits its own dedicated event so a rejected
+	// restore is still traceable ("did someone try to take over my
+	// instance?" — spec §5.3).
+	ActionConfigExported         = "config_exported"
+	ActionConfigRestored         = "config_restored"
+	ActionConfigRestoredRejected = "config_restored_rejected"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -107,6 +116,9 @@ var allActions = []string{
 	ActionLoginBreakGlass,
 	ActionLocalAdminPasswordRotated,
 	ActionUserRoleChanged,
+	ActionConfigExported,
+	ActionConfigRestored,
+	ActionConfigRestoredRejected,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

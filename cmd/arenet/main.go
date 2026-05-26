@@ -71,6 +71,14 @@ type config struct {
 	dataDir         string
 	dev             bool
 	insertTestRoute bool
+	// Step K.3 — backup / restore flags. When exportPath OR
+	// restorePath is set, run() short-circuits before Caddy
+	// boots: the binary becomes a one-shot CLI tool.
+	exportPath             string
+	restorePath            string
+	includeSecrets         bool
+	allowIncompleteRestore bool
+	allowEmptyUsers        bool
 }
 
 func parseFlags() config {
@@ -80,6 +88,16 @@ func parseFlags() config {
 	flag.BoolVar(&cfg.dev, "dev", false, "enable development mode (verbose logging, no TLS auto-issuance)")
 	flag.BoolVar(&cfg.insertTestRoute, "insert-test-route", false,
 		"insert a test route (test.local -> http://127.0.0.1:9999) before starting Caddy")
+	flag.StringVar(&cfg.exportPath, "export", "",
+		"Step K.3: export the configuration to PATH and exit (default redacts secrets)")
+	flag.StringVar(&cfg.restorePath, "restore", "",
+		"Step K.3: restore the configuration from PATH and exit (before Caddy starts)")
+	flag.BoolVar(&cfg.includeSecrets, "include-secrets", false,
+		"Step K.3: include plaintext secrets in --export output (warning printed to stderr)")
+	flag.BoolVar(&cfg.allowIncompleteRestore, "allow-incomplete-restore", false,
+		"Step K.3: accept --restore inputs whose sentinels cannot be inherited; affected secret fields are cleared")
+	flag.BoolVar(&cfg.allowEmptyUsers, "allow-empty-users", false,
+		"Step K.3: accept --restore inputs with zero users (next boot re-triggers the setup-token flow)")
 	flag.Parse()
 	return cfg
 }
@@ -491,10 +509,34 @@ func main() {
 	logger := newLogger(cfg.dev)
 	slog.SetDefault(logger)
 
-	logger.Info("Arenet v" + version + " starting...")
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Step K.3 — CLI export / restore short-circuits. The binary
+	// becomes a one-shot tool: open BoltDB, do the operation,
+	// exit. Caddy never starts; the admin API never listens.
+	// Mutual exclusion: --export AND --restore together is a
+	// usage error.
+	if cfg.exportPath != "" && cfg.restorePath != "" {
+		logger.Error("--export and --restore cannot be combined")
+		os.Exit(2)
+	}
+	if cfg.exportPath != "" {
+		if err := runExportCLI(ctx, logger, cfg); err != nil {
+			logger.Error("export failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if cfg.restorePath != "" {
+		if err := runRestoreCLI(ctx, logger, cfg); err != nil {
+			logger.Error("restore failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	logger.Info("Arenet v" + version + " starting...")
 
 	if err := run(ctx, logger, cfg); err != nil {
 		logger.Error("fatal error", "err", err)

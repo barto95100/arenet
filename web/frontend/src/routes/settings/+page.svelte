@@ -47,6 +47,7 @@
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
+	import BackupSection from '$lib/components/BackupSection.svelte';
 
 	const options: [
 		{ value: Theme; label: string },
@@ -838,6 +839,9 @@
 	<!-- ROW 2.85 — OIDC SSO (Step K.2 §5.2). Self-contained
 	     component to keep the settings page tractable. -->
 	<OIDCSettingsSection />
+
+	<!-- ROW 2.9 — Backup & restore (Step K.3 §5.3). -->
+	<BackupSection />
 
 	<!-- ROW 3 — About, full-width (footer-meta, intentionally aerated) -->
 	<Card padding="p-6">

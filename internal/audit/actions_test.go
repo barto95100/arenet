@@ -20,13 +20,13 @@ import "testing"
 
 // TestAllActions_Count guards against accidental drift from D7
 // (Step D shipped 15) + Step J.4 (+1 = 16) + Step K.1 (+2 = 18)
-// + Step K.2 (+7 = 25). Adding or removing actions without
-// updating the spec / decisions doc is a process violation; this
-// test forces the conversation.
+// + Step K.2 (+7 = 25) + Step K.3 (+3 = 28). Adding or removing
+// actions without updating the spec / decisions doc is a process
+// violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 25
+	const wantCount = 28
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3)", got, wantCount)
 	}
 }
 
@@ -89,16 +89,19 @@ func TestAllActions_ExactSet(t *testing.T) {
 		"password_hibp_clean":           true,
 		"password_hibp_pending":         true,
 		"password_compromised_detected": true,
-		"dns_provider_updated":            true,
-		"forward_auth_provider_updated":   true,
-		"forward_auth_provider_deleted":   true,
-		"oidc_configured":                 true,
-		"oidc_updated":                    true,
-		"oidc_login_rejected":             true,
-		"oidc_callback_invalid":           true,
-		"login_break_glass":               true,
-		"local_admin_password_rotated":    true,
-		"user_role_changed":               true,
+		"dns_provider_updated":          true,
+		"forward_auth_provider_updated": true,
+		"forward_auth_provider_deleted": true,
+		"oidc_configured":               true,
+		"oidc_updated":                  true,
+		"oidc_login_rejected":           true,
+		"oidc_callback_invalid":         true,
+		"login_break_glass":             true,
+		"local_admin_password_rotated":  true,
+		"user_role_changed":             true,
+		"config_exported":               true,
+		"config_restored":               true,
+		"config_restored_rejected":      true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {

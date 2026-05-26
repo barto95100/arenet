@@ -48,6 +48,52 @@ var argon2idParams = &argon2id.Params{
 	KeyLength:   Argon2idKeyLength,
 }
 
+// ValidateUserForRestore is the Step K.3 shim used by
+// internal/backup to re-validate a user row read from a snapshot
+// before commit. The function checks the same invariants that
+// UserStore.Create / UpdateRole enforce on the live path:
+//   - username: regex + length bounds
+//   - displayName: length bound
+//   - id: non-empty
+//   - auth_source ∈ {local, oidc}
+//   - role ∈ {viewer, admin}
+//   - password_hash non-empty when auth_source == "local" UNLESS
+//     allowEmptyPasswordHash is true (the dérogation invoked by
+//     internal/backup for fields legitimately cleared under
+//     AllowIncompleteRestore — only for that user's
+//     password_hash, only when the restore engine asked for it).
+//
+// The dérogation is intentionally narrow: ValidateUserForRestore
+// stays a pure-grid check. The backup engine, which knows which
+// fields it cleared and why, is the only legitimate caller of the
+// allowEmptyPasswordHash form.
+func ValidateUserForRestore(u User, allowEmptyPasswordHash bool) error {
+	username := strings.TrimSpace(u.Username)
+	if !usernameRegex.MatchString(username) || len(username) < UsernameMinLen || len(username) > UsernameMaxLen {
+		return fmt.Errorf("auth: user %q: %w", u.ID, ErrUsernameInvalid)
+	}
+	if len(u.DisplayName) > DisplayNameMaxLen {
+		return fmt.Errorf("auth: user %q: %w", u.ID, ErrDisplayNameTooLong)
+	}
+	if u.ID == "" {
+		return fmt.Errorf("auth: user with empty ID")
+	}
+	switch u.AuthSource {
+	case UserAuthSourceLocal, UserAuthSourceOIDC:
+	default:
+		return fmt.Errorf("auth: user %q: auth_source %q must be %q or %q", u.ID, u.AuthSource, UserAuthSourceLocal, UserAuthSourceOIDC)
+	}
+	switch u.Role {
+	case UserRoleViewer, UserRoleAdmin:
+	default:
+		return fmt.Errorf("auth: user %q: role %q must be %q or %q", u.ID, u.Role, UserRoleViewer, UserRoleAdmin)
+	}
+	if u.AuthSource == UserAuthSourceLocal && u.PasswordHash == "" && !allowEmptyPasswordHash {
+		return fmt.Errorf("auth: user %q: password_hash must not be empty when auth_source is %q", u.ID, UserAuthSourceLocal)
+	}
+	return nil
+}
+
 // UserStore persists admin users into the BoltDB "users" bucket.
 //
 // UserStore is safe for concurrent use: bbolt serializes writes

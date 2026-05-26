@@ -71,5 +71,40 @@ export const settingsApi = {
 	// PasswordHash and surfaces OIDCSub as a boolean (oidcLinked).
 	listAdminUsers: (): Promise<AdminUser[]> => request<AdminUser[]>('GET', '/admin/users'),
 	updateUserRole: (id: string, r: UpdateUserRoleRequest): Promise<AdminUser> =>
-		request<AdminUser>('POST', `/admin/users/${encodeURIComponent(id)}/role`, r)
+		request<AdminUser>('POST', `/admin/users/${encodeURIComponent(id)}/role`, r),
+
+	// Step K.3 — backup / restore. The export endpoint streams a
+	// JSON file; we don't go through the typed `request` helper
+	// because we want the raw Response so we can save the file via
+	// blob+anchor. The restore endpoint accepts the JSON body
+	// uploaded by the operator.
+	exportBackupURL: (includeSecrets: boolean): string => {
+		const qp = includeSecrets ? '?include-secrets=true' : '';
+		return `/api/v1/admin/backup${qp}`;
+	},
+	postRestore: (
+		body: unknown,
+		opts: { allowIncompleteRestore?: boolean; allowEmptyUsers?: boolean }
+	): Promise<RestoreReport> => {
+		const params = new URLSearchParams();
+		if (opts.allowIncompleteRestore) params.set('allow-incomplete-restore', 'true');
+		if (opts.allowEmptyUsers) params.set('allow-empty-users', 'true');
+		const qs = params.toString();
+		const url = qs ? `/admin/restore?${qs}` : '/admin/restore';
+		return request<RestoreReport>('POST', url, body);
+	}
 };
+
+// RestoreReport is the wire shape returned by POST /admin/restore.
+// Mirrors the Go restoreResponse struct in
+// internal/api/backup_handlers.go.
+export interface RestoreReport {
+	routesImported: number;
+	usersImported: number;
+	dnsProvidersImported: number;
+	forwardAuthProvidersImported: number;
+	oidcConfigImported: boolean;
+	sentinelsInheritedTotal: number;
+	sentinelsUnresolvedTotal: number;
+	incompleteRows: number;
+}

@@ -80,6 +80,12 @@ const dnsProviderKeyOVH = "ovh"
 //
 // Pure grid — no mutation, identical pattern to Route.validate /
 // HealthCheck.validate (Step J.1, J.2).
+// ValidateDNSProvider is the Step K.3 exported shim — internal/backup
+// re-validates the snapshot's DNS provider before commit.
+func ValidateDNSProvider(c DNSProviderConfig) error {
+	return c.validate()
+}
+
 func (c *DNSProviderConfig) validate() error {
 	if c.Endpoint == "" {
 		return errors.New("dns_provider: endpoint must not be empty")

@@ -74,6 +74,11 @@ var providerNameRE = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 // validate runs the strict last-line-of-defence checks. Pure
 // grid (no mutation), same pattern as DNSProviderConfig.validate
 // and HealthCheck.validate.
+// ValidateForwardAuthProvider is the Step K.3 exported shim.
+func ValidateForwardAuthProvider(p ForwardAuthProvider) error {
+	return p.validate()
+}
+
 func (p *ForwardAuthProvider) validate() error {
 	if !providerNameRE.MatchString(p.Name) {
 		return fmt.Errorf("forward_auth_provider: name %q must match %s", p.Name, providerNameRE.String())
