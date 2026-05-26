@@ -222,6 +222,85 @@ Priorities set at the close of Step I, before the Step J spec is written.
     automatic).
 
   No infra dependency. Schedule: J.7, before the tag.
+- **Domain-level wildcard certificate management — roadmap
+  candidate, unscheduled.** Evolution of the J.4 per-route ACME
+  model. The current shape (host = `r.Host`, one ACME policy
+  subject per route) does not let a wildcard `*.example.com`
+  cert cover sibling routes `app.example.com` and
+  `blog.example.com`: each route emits its own ACME challenge,
+  certmagic's `getAllMatchingCerts(subject)` does NOT expand
+  wildcards on the provisioning path (cache + storage are keyed
+  by exact subject — verified empirically against
+  certmagic@v0.25.3 `cache.go:333-347` + `storage.go:277`).
+  Wildcard expansion only happens at the TLS handshake
+  (`AllMatchingCertificates`) — by which time each host has
+  already triggered its own issuance.
+
+  Impact on a homelab with N sub-domains under one apex: N ACME
+  emissions instead of 1, N times the Let's Encrypt rate-limit
+  consumption (50 certs / domain / week prod), N×(15-30s)
+  serialised boot latency. Rough today; problematic at 30+
+  routes.
+
+  Model to capture in a dedicated step spec:
+  - **Settings → SSL section**: declare one or more managed
+    domains; Arenet provisions a wildcard `*.<domain>` via
+    DNS-01 (reuses the J.4 OVH provider configuration). One
+    cert per managed domain, kept in storage, renewed
+    automatically.
+  - **Route inheritance by default**: a route whose host sits
+    under a managed domain inherits that domain's wildcard
+    cert. No ACME emission per route — the wildcard is
+    sufficient (modulo the apex caveat below).
+  - **Per-route opt-out**: explicit choice between (a) ACME
+    HTTP-01 for that route (re-introduces port 80 inbound
+    dependency, scoped to that route — caveat displayed in the
+    UI), (b) manual cert upload — feature Arenet does NOT
+    support today, separate sub-feature with its own design
+    surface (where to store, how to renew warnings, key
+    confidentiality, etc.).
+  - **Per-route override**: a route may still request its own
+    ACME-managed cert even under a managed domain (e.g. host
+    `payments.example.com` wants its own cert separate from the
+    domain wildcard for separation-of-concerns). Same opt-out
+    surface as above.
+  - **Wildcard apex caveat — to spec explicitly**: an RFC 6125
+    wildcard `*.<domain>` does NOT cover the bare apex
+    `<domain>` itself. A route on the apex always needs its own
+    cert (either via the per-route opt-out, or by extending the
+    wildcard to a multi-SAN cert covering both `<domain>` and
+    `*.<domain>` — the SAN-extension path is the cleaner option
+    but adds one more DNS-01 challenge during issuance).
+
+  Implication on the J.4 design:
+  - The per-route `ACMEChallenge` field becomes contextual.
+    Today it's a free per-route enum; with managed domains it's
+    derived from "does a managed domain cover this host? if yes
+    → inherit wildcard cert (no challenge needed), else → fall
+    back to the per-route choice from J.4". A BoltDB migration
+    is needed for the routes whose `ACMEChallenge` would
+    otherwise become meaningless.
+  - The Route create / edit modal's TLS section becomes
+    contextual: hide the ACME challenge selector when a managed
+    domain covers the host, show it (with the opt-out wording)
+    when no managed domain covers — and display which managed
+    domain is going to issue the cert.
+
+  Scope decision (when this step is specced): is this an
+  evolution of the J.4 model (likely yes — natural progression),
+  or a parallel feature (a "centralised cert store" that
+  per-route ACME continues to coexist with)? The integration
+  surface is identical either way; the question is the default
+  behaviour when no managed domain is declared. Recommendation
+  for the spec author: keep J.4 per-route ACME as the default
+  when no managed domain covers a host, so the user-facing
+  shift is purely additive (operators who don't declare a
+  managed domain see no change in behaviour).
+
+  Not ordered against the rest of the Step K backlog (SSO
+  forward-auth, WAF rule tuning UI, metrics, backup/restore).
+  Ludo arbitrates the order at Step K spec time.
+
 - **ACME directory / `--dev` coupling — post-v0.6.0, not blocking.**
   Today `acmeDirectoryURL(devMode)` in `internal/caddymgr/manager.go`
   binds the Let's Encrypt directory choice (staging vs production)
