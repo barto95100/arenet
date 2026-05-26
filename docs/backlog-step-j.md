@@ -119,7 +119,14 @@ Step J / K spec can pick them up:
   silence false positives. (Step K, spec §6.4)
 - **DNS-01 ACME challenge** — wildcard certs. (Step J)
 - **Multi-upstream load balancing + active health checks.** (Step J)
-- **Multi-user Basic Auth per route.** (Step J)
+- **Multi-user Basic Auth per route.** ~~(Step J)~~ — **DECLINED
+  2026-05-26 by the Step K spec.** Superseded by K.1
+  forward_auth (route delegates multi-identity to an external
+  IdP — Authelia / Authentik / Keycloak / generic OIDC).
+  Operators who need multiple identities per route configure an
+  IdP instead of growing Basic Auth into a per-route user
+  management system. See `docs/superpowers/specs/2026-05-26-
+  step-k-auth-backup.md` §1.3 decision 1.
 - **Forward-auth SSO** — Authelia / Keycloak / Authentik. (Step K)
 - **Backup / restore config** — BoltDB JSON export / import. (Step K)
 
@@ -430,7 +437,9 @@ Priorities set at the close of Step I, before the Step J spec is written.
   is safe because it only reads `string` and `bool`.
 - **Finding #9 — perimeter-mode WAF (waf-before-auth).** Low-priority;
   the current order works. Revisit near project end.
-- **Multi-user Basic Auth per route.** Refine near project end.
+- **Multi-user Basic Auth per route.** ~~Refine near project
+  end.~~ **DECLINED 2026-05-26 by the Step K spec** — superseded
+  by K.1 forward_auth. Cross-reference §3 entry above.
 - **Security / Threat dashboard.** The /security page is a disabled
   sidebar stub today ("Coming in a later step"). Its intended scope
   per roadmap.md — live rate-limited IPs, top-N failed-attempt IPs,
