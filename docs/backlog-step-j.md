@@ -301,6 +301,50 @@ Priorities set at the close of Step I, before the Step J spec is written.
   forward-auth, WAF rule tuning UI, metrics, backup/restore).
   Ludo arbitrates the order at Step K spec time.
 
+- **Observability / metrics step — roadmap candidate,
+  post-Step-K.** Per-route request counters and error counters
+  (5XX), surfaced as timeline graphs in the admin UI with
+  rolling windows (last 24 h / 7 d / 30 d). Today the admin UI
+  shows only the live tick (`reqPerSec` over the last second,
+  via the WebSocket pipeline shipped in Step E) — no history,
+  no aggregates, no trend.
+
+  Architecture direction discussed: embedded SQLite in pure Go
+  (`modernc.org/sqlite` — no cgo dependency, single binary
+  posture preserved), time-bucketed aggregates (e.g. 1 min
+  buckets retained 24 h, 1 h buckets retained 30 d), source =
+  the Prometheus metrics Caddy already exposes
+  (`/metrics` admin endpoint by default). Arenet scrapes its
+  own embedded Caddy at a low frequency, parses the relevant
+  counters per route, and writes the rolled-up buckets into
+  SQLite. Frontend queries SQLite via a thin API for the
+  graphs.
+
+  Open questions to settle at spec time:
+  - Bucket sizes + retention windows — the 1m/24h + 1h/30d
+    above is one option; finer (5s buckets for the 24 h view)
+    gives a smoother trend but multiplies disk. Spec authoring
+    needs a rough budget on expected route count × bucket count.
+  - Are 5XX the only error class tracked, or also 4XX
+    (separately, since the latter are largely client-driven)?
+  - Per-upstream breakdown inside a route (J.1 multi-pool) —
+    desirable but multiplies the dimension; defer to a later
+    refinement?
+  - Where the SQLite file sits relative to the existing BoltDB
+    file in the data-dir — same dir, separate file
+    (`metrics.db`) keeps the bbolt single-writer invariant
+    untouched.
+  - Bootstrap migration: nothing to migrate on first ship — the
+    metrics DB starts empty on v(K+1) deploy, the first tick
+    populates.
+
+  Not ordered against the rest of the Step K+ backlog. Likely
+  best as its own step after Step K (the SSO forward-auth + WAF
+  tuning UI features have a more user-facing impact and are
+  cheaper to ship; the observability step is more
+  infrastructure-grade and benefits from the larger feature
+  surface to instrument once shipped).
+
 - **ACME directory / `--dev` coupling — post-v0.6.0, not blocking.**
   Today `acmeDirectoryURL(devMode)` in `internal/caddymgr/manager.go`
   binds the Let's Encrypt directory choice (staging vs production)
