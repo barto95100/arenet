@@ -1684,9 +1684,13 @@ and a verdict. Phases:
     health-check configs in turn and confirm each is rejected at the
     API layer with a clear error message: blank `uri` with `enabled:
     true`, `method: "POST"`, `timeout >= interval`, malformed
-    `expect_body` regex, `passes: 0`. Each maps to one rule in §5.2
+    `expect_body` regex, `passes: -1`. Each maps to one rule in §5.2
     (which is the authoritative full list — the smoke covers a
-    representative sample, not every rule).
+    representative sample, not every rule). Note: `passes: 0` is
+    intentionally default-materialised to `1` by the API layer
+    (§5.2 + §1.3 decision 4 — "blank or zero ⇒ use default"), so
+    only a negative value reaches `validateHealthCheck`'s strict
+    `>= 1` check.
   - **B.3 (J.3)** — **configure the J.1 + J.2 features through the
     UI**, not the API: open the route create / edit modal, add
     multiple upstreams via the repeater (+ / × buttons), pick a

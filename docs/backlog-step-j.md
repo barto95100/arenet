@@ -251,30 +251,6 @@ Priorities set at the close of Step I, before the Step J spec is written.
   Schedule: post-`v0.6.0-step-j` follow-up. Out of Step J
   scope — adding it now would require re-tagging the spec.
 
-- **F1 — spec §7 phase B.2 amend: `passes: 0` is not rejected.**
-  Surfaced during the J.7 live smoke (2026-05-26). The §7 smoke
-  plan lists `passes: 0` among the AC #8 negative-path examples
-  ("POST a route with each of the following invalid health-check
-  configs in turn and confirm each is rejected at the API layer").
-  Empirically `passes: 0` is **accepted** — the API layer's
-  `materialiseHealthCheck` injects the default value `1` for any
-  zero / blank numeric HC sub-field (spec §1.3 decision 4 +
-  §5.2 "the validation rules below face a fully-populated
-  `HealthCheck`"). The subsequent `validateHealthCheck` sees
-  `passes: 1` and accepts. The behaviour is conform to §5.2 and
-  §1.3 decision 4; §7's sample list is the contradiction.
-
-  Fix: spec doc amend. Either remove the `passes: 0` sample (the
-  other four samples cover the rule space — blank URI, method
-  enum, timeout vs interval, regex shape), or replace it with
-  `passes: -1` (genuinely rejected client-side AND server-side
-  via the J.3 test suite + the negative-value check), or extend
-  the §7 sentence to make explicit that `passes: 0` is
-  intentionally default-materialised, not rejected.
-
-  No code change required. Post-tag spec amend. See
-  `docs/smoke-test-step-j.md` §5 Finding F1.
-
 - **J.4 frontend test gap — not blocking before tag.** Same
   shape as the §5.3 entry above, but smaller surface and lower
   priority. J.4 shipped two render-reachable frontend surfaces
