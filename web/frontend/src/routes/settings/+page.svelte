@@ -46,6 +46,7 @@
 	import Toggle from '$lib/components/Toggle.svelte';
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
 
 	const options: [
 		{ value: Theme; label: string },
@@ -833,6 +834,10 @@
 			{/if}
 		</Card>
 	</div>
+
+	<!-- ROW 2.85 — OIDC SSO (Step K.2 §5.2). Self-contained
+	     component to keep the settings page tractable. -->
+	<OIDCSettingsSection />
 
 	<!-- ROW 3 — About, full-width (footer-meta, intentionally aerated) -->
 	<Card padding="p-6">

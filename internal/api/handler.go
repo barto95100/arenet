@@ -61,8 +61,13 @@ type Handler struct {
 	hibp        *auth.HIBPClient
 	rateLimiter *auth.RateLimiter
 	setupToken  *SetupTokenHolder
-	devMode     bool
-	logger      *slog.Logger
+	// oidc (Step K.2) owns the OIDC client state — discovery
+	// doc cache, verifier, oauth2 config. Built lazily on first
+	// enabled-config PUT. nil-safe: a non-OIDC code path never
+	// touches it.
+	oidc    *OIDCManager
+	devMode bool
+	logger  *slog.Logger
 	// startTime is captured at NewHandler-time and reported by the
 	// /healthz endpoint as uptime_seconds (Step H.3). Read-only after
 	// construction.
@@ -111,9 +116,15 @@ func NewHandler(
 		hibp:        hibp,
 		rateLimiter: rateLimiter,
 		setupToken:  setupToken,
-		devMode:     devMode,
-		logger:      logger,
-		startTime:   time.Now(),
+		// Step K.2 — always present; the OIDC handlers tolerate a
+		// "never built" state (lazy build on first enabled-config
+		// PUT or first login initiate). Tests that don't exercise
+		// the OIDC flow leave this untouched; no nil checks needed
+		// at the call sites.
+		oidc:      NewOIDCManager(),
+		devMode:   devMode,
+		logger:    logger,
+		startTime: time.Now(),
 	}
 }
 

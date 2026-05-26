@@ -47,7 +47,41 @@ type User struct {
 	// `omitempty` keeps legacy rows decoded by older binaries identical
 	// to new rows that simply never had the field set.
 	ThemePreference string `json:"theme_preference,omitempty"`
+	// AuthSource (Step K.2) distinguishes locally-managed users
+	// from OIDC-mapped users. "local" = bootstrapped via the
+	// boot-time setup token + login flow (password / argon2id
+	// PHC); "oidc" = canonicalised on first OIDC login from the
+	// allowlist (PasswordHash empty by construction). Mutual
+	// exclusion enforced at UserStore level: an OIDC user has no
+	// PasswordHash; a local user has no OIDCSub.
+	AuthSource string `json:"auth_source"`
+	// OIDCSub (Step K.2) is the OIDC subject claim (IdP-stable
+	// identifier) of an OIDC-source user. Empty for local users.
+	// Set by the OIDC callback on first canonicalisation per
+	// spec §1.3 decision 13.
+	OIDCSub string `json:"oidc_sub,omitempty"`
+	// Role (Step K.2 — §1.3 decision 12) gates business
+	// endpoints. "viewer" = read-only access to /routes,
+	// /audit, /topology (GET-only). "admin" = full CRUD on
+	// routes / settings / users. Migrated pre-K users default
+	// to "admin" (they were admin before the role model
+	// existed). Newly auto-created OIDC users default to
+	// "viewer" — elevation requires an explicit operator
+	// gesture via POST /api/v1/admin/users/{id}/role.
+	Role string `json:"role"`
 }
+
+// AuthSource constants (Step K.2).
+const (
+	UserAuthSourceLocal = "local" // username + PasswordHash, Step D
+	UserAuthSourceOIDC  = "oidc"  // OIDC sub mapped to this user
+)
+
+// Role constants (Step K.2 — §1.3 decision 12).
+const (
+	UserRoleViewer = "viewer" // read-only admin UI access
+	UserRoleAdmin  = "admin"  // full CRUD on routes / settings / users
+)
 
 // HIBP status constants. Matches the enum documented in spec §3.2 and §7.
 const (

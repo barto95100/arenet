@@ -9,10 +9,16 @@
 
 import { request } from './client';
 import type {
+	AdminUser,
 	DNSProviderOVH,
 	DNSProviderOVHRequest,
 	ForwardAuthProvider,
-	ForwardAuthProviderRequest
+	ForwardAuthProviderRequest,
+	OIDCAllowedIdentity,
+	OIDCAllowlistAddRequest,
+	OIDCConfig,
+	OIDCConfigRequest,
+	UpdateUserRoleRequest
 } from './types';
 
 export const settingsApi = {
@@ -41,5 +47,29 @@ export const settingsApi = {
 			r
 		),
 	deleteForwardAuthProvider: (name: string): Promise<void> =>
-		request<void>('DELETE', `/settings/forward-auth/providers/${encodeURIComponent(name)}`)
+		request<void>('DELETE', `/settings/forward-auth/providers/${encodeURIComponent(name)}`),
+
+	// Step K.2 — OIDC config (single row, "default" key on the
+	// backend). PUT preserves the clientSecret when empty (J.4
+	// preserve-on-edit). The allowlist is preserved across config
+	// edits server-side; mutate it via the /allowlist endpoints.
+	getOIDCConfig: (): Promise<OIDCConfig> => request<OIDCConfig>('GET', '/settings/oidc'),
+	putOIDCConfig: (r: OIDCConfigRequest): Promise<OIDCConfig> =>
+		request<OIDCConfig>('PUT', '/settings/oidc', r),
+
+	// Step K.2 — OIDC allowlist. add lower-cases the email; delete
+	// is keyed by the same lower-cased email. The Sub canonicalises
+	// on first login (§5.2).
+	listOIDCAllowlist: (): Promise<OIDCAllowedIdentity[]> =>
+		request<OIDCAllowedIdentity[]>('GET', '/settings/oidc/allowlist'),
+	addOIDCAllowlist: (r: OIDCAllowlistAddRequest): Promise<OIDCAllowedIdentity> =>
+		request<OIDCAllowedIdentity>('POST', '/settings/oidc/allowlist', r),
+	deleteOIDCAllowlist: (email: string): Promise<void> =>
+		request<void>('DELETE', `/settings/oidc/allowlist/${encodeURIComponent(email)}`),
+
+	// Step K.2 — admin Users management. The list response omits
+	// PasswordHash and surfaces OIDCSub as a boolean (oidcLinked).
+	listAdminUsers: (): Promise<AdminUser[]> => request<AdminUser[]>('GET', '/admin/users'),
+	updateUserRole: (id: string, r: UpdateUserRoleRequest): Promise<AdminUser> =>
+		request<AdminUser>('POST', `/admin/users/${encodeURIComponent(id)}/role`, r)
 };

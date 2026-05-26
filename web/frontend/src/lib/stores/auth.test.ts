@@ -46,7 +46,9 @@ const sampleUser: User = {
 	locked: false,
 	passwordCompromised: false,
 	hibpCheckStatus: 'clean',
-	themePreference: ''
+	themePreference: '',
+	role: 'admin',
+	authSource: 'local'
 };
 
 beforeEach(() => {

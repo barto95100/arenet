@@ -688,3 +688,98 @@ func TestMigrate_ChainedOrder_IFourThenJOneThenKOne(t *testing.T) {
 		t.Errorf("BasicAuth.PasswordHash = %q; want preserved (Step K.1 lost)", r.BasicAuth.PasswordHash)
 	}
 }
+
+// TestMigrate_UsersAuthSourceAndRole pins the K.2 mapping:
+// pre-K user rows (no auth_source / role / oidc_sub keys) get
+// auth_source="local" + role="admin" + oidc_sub="". Idempotent
+// via the compound sentinel (both auth_source AND role
+// non-empty).
+func TestMigrate_UsersAuthSourceAndRole(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	legacy := []byte(`{` +
+		`"id":"u-pre-k",` +
+		`"username":"alice",` +
+		`"display_name":"Alice",` +
+		`"password_hash":"$argon2id$..fake..",` +
+		`"hibp_check_status":"clean",` +
+		`"password_compromised":false,` +
+		`"created_at":"2026-04-01T00:00:00Z",` +
+		`"updated_at":"2026-04-01T00:00:00Z"` +
+		`}`)
+	if err := store.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(bucketUsers)).Put([]byte("u-pre-k"), legacy)
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := migrateUsersAuthSourceAndRole(store.db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var raw map[string]any
+	if err := store.db.View(func(tx *bolt.Tx) error {
+		bs := tx.Bucket([]byte(bucketUsers)).Get([]byte("u-pre-k"))
+		return jsonUnmarshalForTest(bs, &raw)
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if raw["auth_source"] != "local" {
+		t.Errorf("auth_source = %v; want local", raw["auth_source"])
+	}
+	if raw["role"] != "admin" {
+		t.Errorf("role = %v; want admin (pre-K user privilege preserved)", raw["role"])
+	}
+	if raw["oidc_sub"] != "" {
+		t.Errorf("oidc_sub = %v; want empty", raw["oidc_sub"])
+	}
+	// Existing field preserved.
+	if raw["username"] != "alice" {
+		t.Errorf("username clobbered: %v", raw["username"])
+	}
+}
+
+// TestMigrate_UsersAuthSourceAndRole_Idempotent: re-running the
+// migration on an already-migrated row must be a no-op.
+func TestMigrate_UsersAuthSourceAndRole_Idempotent(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	migrated := []byte(`{` +
+		`"id":"u-already",` +
+		`"username":"bob",` +
+		`"display_name":"Bob",` +
+		`"password_hash":"$argon2id$..hash..",` +
+		`"auth_source":"local",` +
+		`"role":"admin",` +
+		`"oidc_sub":"",` +
+		`"created_at":"2026-04-01T00:00:00Z",` +
+		`"updated_at":"2026-04-01T00:00:00Z"` +
+		`}`)
+	if err := store.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(bucketUsers)).Put([]byte("u-already"), migrated)
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	var before []byte
+	store.db.View(func(tx *bolt.Tx) error {
+		before = append([]byte(nil), tx.Bucket([]byte(bucketUsers)).Get([]byte("u-already"))...)
+		return nil
+	})
+
+	if err := migrateUsersAuthSourceAndRole(store.db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var after []byte
+	store.db.View(func(tx *bolt.Tx) error {
+		after = append([]byte(nil), tx.Bucket([]byte(bucketUsers)).Get([]byte("u-already"))...)
+		return nil
+	})
+
+	if string(before) != string(after) {
+		t.Errorf("migration mutated an already-migrated user row:\nbefore=%s\nafter =%s", before, after)
+	}
+}

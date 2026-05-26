@@ -67,6 +67,15 @@ const (
 	// Step K.1 — forward-auth provider (2)
 	ActionForwardAuthProviderUpdated = "forward_auth_provider_updated"
 	ActionForwardAuthProviderDeleted = "forward_auth_provider_deleted"
+
+	// Step K.2 — OIDC admin auth + roles (7)
+	ActionOIDCConfigured             = "oidc_configured"
+	ActionOIDCUpdated                = "oidc_updated"
+	ActionOIDCLoginRejected          = "oidc_login_rejected"
+	ActionOIDCCallbackInvalid        = "oidc_callback_invalid"
+	ActionLoginBreakGlass            = "login_break_glass"
+	ActionLocalAdminPasswordRotated  = "local_admin_password_rotated"
+	ActionUserRoleChanged            = "user_role_changed"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -91,6 +100,13 @@ var allActions = []string{
 	ActionDNSProviderUpdated,
 	ActionForwardAuthProviderUpdated,
 	ActionForwardAuthProviderDeleted,
+	ActionOIDCConfigured,
+	ActionOIDCUpdated,
+	ActionOIDCLoginRejected,
+	ActionOIDCCallbackInvalid,
+	ActionLoginBreakGlass,
+	ActionLocalAdminPasswordRotated,
+	ActionUserRoleChanged,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

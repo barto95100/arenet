@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -115,6 +116,13 @@ func (s *UserStore) Create(ctx context.Context, username, displayName, password 
 		HIBPCheckedAt:   now,
 		CreatedAt:       now,
 		UpdatedAt:       now,
+		// Step K.2: locally-managed admin (created via the boot-
+		// time setup-token flow). Default role is admin — the
+		// setup flow is trusted by definition (the operator
+		// knows the boot token), and a homelab with zero admin
+		// is locked out.
+		AuthSource: UserAuthSourceLocal,
+		Role:       UserRoleAdmin,
 	}
 
 	err = s.db.Update(func(tx *bolt.Tx) error {
@@ -429,4 +437,281 @@ func (s *UserStore) RecordLogin(ctx context.Context, id string) error {
 		}
 		return b.Put([]byte(id), out)
 	})
+}
+
+// CreateOIDCUser persists a new user mapped to an OIDC subject
+// (Step K.2 §5.2 allowlist auto-create flow). The new user has
+// no PasswordHash (the IdP is the auth source) and a default
+// role of "viewer" — elevation to "admin" is an explicit later
+// operator action via UpdateRole (§1.3 decision 12 — guards
+// against over-permissive OIDC allowlist mistakes).
+//
+// Caller responsibilities:
+//   - Validate the OIDC sub (non-empty, IdP-provided).
+//   - Derive a unique Username from the IdP claims (preferred
+//     username / email local part / sub fallback).
+//   - Re-check uniqueness — the in-transaction check below
+//     defends against concurrent Create races but the caller's
+//     pre-check produces a friendlier error.
+func (s *UserStore) CreateOIDCUser(ctx context.Context, username, displayName, oidcSub string) (User, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	username = strings.TrimSpace(username)
+	if !usernameRegex.MatchString(username) || len(username) < UsernameMinLen || len(username) > UsernameMaxLen {
+		return User{}, ErrUsernameInvalid
+	}
+	if len(displayName) > DisplayNameMaxLen {
+		return User{}, ErrDisplayNameTooLong
+	}
+	if oidcSub == "" {
+		return User{}, fmt.Errorf("auth: oidc_sub must not be empty")
+	}
+
+	now := time.Now().UTC()
+	user := User{
+		ID:              uuid.NewString(),
+		Username:        username,
+		DisplayName:     displayName,
+		PasswordHash:    "", // OIDC user — no local password
+		HIBPCheckStatus: HIBPStatusSkipped,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		AuthSource:      UserAuthSourceOIDC,
+		OIDCSub:         oidcSub,
+		Role:            UserRoleViewer, // §1.3 decision 12 default
+	}
+
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(usersBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
+		}
+		// Uniqueness in-transaction across BOTH Username AND OIDCSub.
+		// Corrupted rows are logged and skipped.
+		var usernameTaken, subTaken bool
+		_ = b.ForEach(func(k, v []byte) error {
+			var existing User
+			if err := json.Unmarshal(v, &existing); err != nil {
+				slog.Default().Warn("auth: corrupted user row in bucket, skipping",
+					slog.String("key", string(k)),
+					slog.String("err", err.Error()),
+				)
+				return nil
+			}
+			if existing.Username == username {
+				usernameTaken = true
+			}
+			if existing.OIDCSub != "" && existing.OIDCSub == oidcSub {
+				subTaken = true
+			}
+			return nil
+		})
+		if usernameTaken {
+			return ErrUsernameTaken
+		}
+		if subTaken {
+			return fmt.Errorf("auth: oidc_sub %q already mapped to a user", oidcSub)
+		}
+		value, err := json.Marshal(user)
+		if err != nil {
+			return fmt.Errorf("auth: marshal user: %w", err)
+		}
+		return b.Put([]byte(user.ID), value)
+	})
+	if err != nil {
+		return User{}, err
+	}
+	return user, nil
+}
+
+// GetByOIDCSub returns the user mapped to the given OIDC subject,
+// or ErrUserNotFound. Step K.2 §5.2 steady-state lookup path
+// (post-canonicalisation).
+func (s *UserStore) GetByOIDCSub(ctx context.Context, sub string) (User, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+	if sub == "" {
+		return User{}, ErrUserNotFound
+	}
+
+	var user User
+	var found bool
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(usersBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
+		}
+		return b.ForEach(func(k, v []byte) error {
+			var u User
+			if err := json.Unmarshal(v, &u); err != nil {
+				return nil // skip corrupted row
+			}
+			if u.OIDCSub != "" && u.OIDCSub == sub {
+				user = u
+				found = true
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return User{}, err
+	}
+	if !found {
+		return User{}, ErrUserNotFound
+	}
+	return user, nil
+}
+
+// UpdateRole sets the user's Role field (Step K.2 §3.1).
+// Validates the enum + enforces the §1.3 decision 12 last-admin
+// guard: demoting the last user with AuthSource=local AND
+// Role=admin is rejected to prevent locking the instance out of
+// admin access (the local admin is the break-glass channel).
+//
+// Returns ErrUserNotFound when no row matches id, an error of
+// shape "auth: cannot demote the last local admin" when the
+// guard fires, and the standard storage errors otherwise.
+func (s *UserStore) UpdateRole(ctx context.Context, id, newRole string) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+	if id == "" {
+		return ErrUserNotFound
+	}
+	if newRole != UserRoleViewer && newRole != UserRoleAdmin {
+		return fmt.Errorf("auth: invalid role %q (must be %q or %q)", newRole, UserRoleViewer, UserRoleAdmin)
+	}
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(usersBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
+		}
+		raw := b.Get([]byte(id))
+		if raw == nil {
+			return ErrUserNotFound
+		}
+		var user User
+		if err := json.Unmarshal(raw, &user); err != nil {
+			return fmt.Errorf("auth: unmarshal user: %w", err)
+		}
+
+		// Last-admin guard: the demote path "admin → viewer" on
+		// a local-source admin must be rejected if this user is
+		// the last LOCAL admin. OIDC-source admins don't count
+		// for the break-glass channel — only local admins can
+		// log in when the IdP is down (§1.3 decisions 4-6).
+		if user.AuthSource == UserAuthSourceLocal &&
+			user.Role == UserRoleAdmin &&
+			newRole == UserRoleViewer {
+			// Count local admins other than this user.
+			otherLocalAdmins := 0
+			_ = b.ForEach(func(k, v []byte) error {
+				if string(k) == id {
+					return nil
+				}
+				var other User
+				if err := json.Unmarshal(v, &other); err != nil {
+					return nil
+				}
+				if other.AuthSource == UserAuthSourceLocal && other.Role == UserRoleAdmin {
+					otherLocalAdmins++
+				}
+				return nil
+			})
+			if otherLocalAdmins == 0 {
+				return fmt.Errorf("auth: cannot demote the last local admin — break-glass channel must remain")
+			}
+		}
+
+		// No change → no write (avoids touching UpdatedAt on a no-op).
+		if user.Role == newRole {
+			return nil
+		}
+
+		user.Role = newRole
+		user.UpdatedAt = time.Now().UTC()
+		value, err := json.Marshal(user)
+		if err != nil {
+			return fmt.Errorf("auth: marshal user: %w", err)
+		}
+		return b.Put([]byte(id), value)
+	})
+}
+
+// CountLocalAdmins returns the number of users with
+// AuthSource=local AND Role=admin. Used for the break-glass
+// invariant check at boot and by UpdateRole's last-admin guard
+// (see above). A pure count: returns 0 + nil if the bucket is
+// empty.
+func (s *UserStore) CountLocalAdmins(ctx context.Context) (int, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	count := 0
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(usersBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var u User
+			if err := json.Unmarshal(v, &u); err != nil {
+				return nil
+			}
+			if u.AuthSource == UserAuthSourceLocal && u.Role == UserRoleAdmin {
+				count++
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// List returns every user, sorted by CreatedAt ascending. Used
+// by the admin Users management UI (GET /api/v1/admin/users).
+// PasswordHash + OIDCSub are NOT scrubbed here — the API layer
+// builds a separate wire shape that omits them.
+func (s *UserStore) List(ctx context.Context) ([]User, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	var out []User
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(usersBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var u User
+			if err := json.Unmarshal(v, &u); err != nil {
+				return nil // skip corrupted
+			}
+			out = append(out, u)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
 }

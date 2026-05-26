@@ -54,7 +54,7 @@
 		}
 	}
 
-	type IconName = 'routes' | 'audit' | 'topology' | 'security' | 'settings';
+	type IconName = 'routes' | 'audit' | 'topology' | 'security' | 'settings' | 'users';
 
 	type Item = {
 		href: string;
@@ -69,13 +69,18 @@
 	// Step F Chunk 1.6 added a placeholder /settings page (route exists
 	// + cliquable), so Settings is no longer disabled. Security remains
 	// disabled until Phase 2 ships an actual /security view.
-	const items: Item[] = [
+	// Step K.2 adds /admin/users, admin-only — filtered out for viewers.
+	const baseItems: Item[] = [
 		{ href: '/routes', label: 'Routes', icon: 'routes' },
 		{ href: '/audit', label: 'Audit', icon: 'audit' },
 		{ href: '/topology', label: 'Topology', icon: 'topology' },
 		{ href: '/security', label: 'Security', icon: 'security', disabled: true, tooltip: 'Coming soon' },
+		{ href: '/admin/users', label: 'Users', icon: 'users' },
 		{ href: '/settings', label: 'Settings', icon: 'settings' }
 	];
+	const items = $derived(
+		baseItems.filter((it) => it.href !== '/admin/users' || auth.user?.role === 'admin')
+	);
 
 	const currentPath = $derived(page.url.pathname);
 	const isActive = (href: string) => currentPath === href;
@@ -126,6 +131,12 @@
 				d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"
 			/>
 			<circle cx="12" cy="12" r="3" />
+		{:else if icon === 'users'}
+			<!-- Lucide: users -->
+			<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+			<circle cx="9" cy="7" r="4" />
+			<path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+			<path d="M16 3.13a4 4 0 0 1 0 7.75" />
 		{/if}
 	</svg>
 {/snippet}

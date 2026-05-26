@@ -42,6 +42,10 @@ const (
 	// Step K.1 — instance-level forward-auth provider configurations,
 	// keyed by provider name (slug-shaped). See forward_auth_provider.go.
 	bucketForwardAuthProviders = "forward_auth_providers"
+	// Step K.2 — instance-level OIDC SSO config (single row,
+	// keyed "default"). Future-proof for multi-IdP without a
+	// schema rewrite. See oidc_config.go.
+	bucketOIDCConfig = "oidc_config"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -81,6 +85,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketAudit),                // Step D
 			[]byte(bucketDNSProviders),         // Step J.4
 			[]byte(bucketForwardAuthProviders), // Step K.1
+			[]byte(bucketOIDCConfig),           // Step K.2
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)
@@ -135,6 +140,16 @@ func NewStore(dbPath string) (*Store, error) {
 	if err := migrateBasicAuthToAuthMode(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: migrate auth mode: %w", err)
+	}
+
+	// Step K.2 boot migration: add AuthSource + Role + OIDCSub
+	// to every user row. Pure-additions migration on a different
+	// bucket (users) — independent of the routes bucket
+	// migrations above. Passthrough-map per §6 (defence-in-depth
+	// for forward-compat across downgrade cycles).
+	if err := migrateUsersAuthSourceAndRole(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("storage: migrate users role: %w", err)
 	}
 
 	return &Store{db: db}, nil

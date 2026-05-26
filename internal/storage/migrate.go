@@ -329,3 +329,85 @@ func migrateBasicAuthToAuthMode(db *bolt.DB) error {
 		return nil
 	})
 }
+
+// migrateUsersAuthSourceAndRole is the Step K.2 boot migration.
+//
+// Pre-Step-K users had no `auth_source` / `role` / `oidc_sub`
+// keys. Step K.2 introduces the role model (§1.3 decision 12)
+// and the auth-source distinction (§1.3 decision 13). Every
+// pre-K user was, by construction, locally-managed AND admin:
+//   - AuthSource = "local"  (the boot setup-token flow creates
+//                            local users only)
+//   - Role       = "admin"  (Step D phase 1 single-admin model;
+//                            no viewer role existed)
+// OIDCSub stays empty (no OIDC mapping on pre-K rows).
+//
+// Pattern: passthrough-map. This migration is pure-additions
+// (no key removed), so the backlog rule allows full-Route round-
+// trip. We use passthrough-map ANYWAY as defence-in-depth
+// (§6 intro):
+//   - Forward-compat against a v(K+1) → v(K) → v(K+1) downgrade
+//     cycle where v(K+1) added some field this code doesn't know.
+//   - Costs a tiny helper function; preserves unknown keys
+//     across the migration boundary.
+//
+// Sentinel: COMPOUND — both `auth_source` AND `role` must be
+// non-empty for the row to be considered already-migrated. A
+// single-key sentinel would let a v(K+1) → v(K) → v(K+1) cycle
+// leave `role` empty if v(K+1) had only set `auth_source` (or
+// vice versa). Compound sentinel survives partial migrations
+// across versions.
+func migrateUsersAuthSourceAndRole(db *bolt.DB) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketUsers))
+		if b == nil {
+			return nil
+		}
+		type pending struct {
+			key []byte
+			val []byte
+		}
+		var writes []pending
+
+		if err := b.ForEach(func(k, v []byte) error {
+			var row map[string]any
+			if err := json.Unmarshal(v, &row); err != nil {
+				return fmt.Errorf("migrate user %s: unmarshal probe: %w", k, err)
+			}
+			authSource, _ := row["auth_source"].(string)
+			role, _ := row["role"].(string)
+			if authSource != "" && role != "" {
+				return nil // already migrated; compound sentinel
+			}
+
+			// Fill missing fields. Pre-K users were all local admins
+			// (Step D phase 1) — preserve their privilege through
+			// the migration. The OIDC fields stay at zero values.
+			if authSource == "" {
+				row["auth_source"] = "local"
+			}
+			if role == "" {
+				row["role"] = "admin"
+			}
+			if _, ok := row["oidc_sub"]; !ok {
+				row["oidc_sub"] = ""
+			}
+
+			buf, err := json.Marshal(row)
+			if err != nil {
+				return fmt.Errorf("migrate user %s: marshal: %w", k, err)
+			}
+			writes = append(writes, pending{key: append([]byte(nil), k...), val: buf})
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		for _, w := range writes {
+			if err := b.Put(w.key, w.val); err != nil {
+				return fmt.Errorf("migrate user %s: put: %w", w.key, err)
+			}
+		}
+		return nil
+	})
+}

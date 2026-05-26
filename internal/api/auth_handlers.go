@@ -307,7 +307,33 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		Action:                audit.ActionLoginSuccess,
 		ActorUserID:           user.ID,
 		ActorUsernameSnapshot: user.Username,
+		Message:               "auth_method=local",
 	})
+
+	// Step K.2 AC #10 — break-glass audit. A local-credential
+	// login on an instance where OIDC has been configured emits
+	// an additional `login_break_glass` event so the operator
+	// gets a post-mortem signal ("we fell back to the local
+	// account on YYYY-MM-DD"). On a fresh install (OIDC never
+	// configured) this is silent — the local path is just THE
+	// path.
+	//
+	// SECURITY-CRITICAL ORDERING: this read MUST be best-effort.
+	// A storage error on the OIDC config read MUST NOT fail the
+	// login itself — the break-glass invariant (§1.3 #5) requires
+	// the local path to be independent of the OIDC code path.
+	// Failure logs a warn and skips the extra emission; the
+	// login_success above already succeeded and is permanent.
+	if configured, configErr := h.store.OIDCConfigEverConfigured(r.Context()); configErr != nil {
+		h.logger.Warn("auth: oidc config read at login (best-effort) failed",
+			"err", configErr.Error(), "user_id", user.ID)
+	} else if configured {
+		h.appendAudit(r, audit.Event{
+			Action:                audit.ActionLoginBreakGlass,
+			ActorUserID:           user.ID,
+			ActorUsernameSnapshot: user.Username,
+		})
+	}
 
 	writeJSON(w, http.StatusOK, loginResponse{
 		ID:          user.ID,
@@ -389,6 +415,15 @@ type meResponse struct {
 	// ThemePreference is "dark", "light", or "" (legacy users who never
 	// visited Settings). The frontend treats "" as "dark" per §4.2.
 	ThemePreference string `json:"themePreference"`
+	// Step K.2 — role on the admin surface ("viewer" or "admin").
+	// The frontend gates write action UI on this; the backend gates
+	// the underlying routes via RequireAdminMiddleware.
+	Role string `json:"role"`
+	// Step K.2 — provenance of the credentials backing this session
+	// ("local" or "oidc"). Drives the "Change password" affordance:
+	// only LOCAL admins rotate password in-app; OIDC users rotate
+	// at the IdP.
+	AuthSource string `json:"authSource"`
 }
 
 // me handles GET /api/v1/auth/me (spec §4.5). Group: soft-auth.
@@ -422,6 +457,8 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		PasswordCompromised: user.PasswordCompromised,
 		HIBPCheckStatus:     user.HIBPCheckStatus,
 		ThemePreference:     user.ThemePreference,
+		Role:                user.Role,
+		AuthSource:          user.AuthSource,
 	})
 }
 
@@ -736,6 +773,24 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		TargetType: "user",
 		TargetID:   userID,
 	})
+
+	// Step K.2 AC #11 — extra audit hook for local-admin password
+	// rotation while OIDC is configured. Signals an observability
+	// event ("the break-glass credential was rotated") that the
+	// regular password_changed doesn't separately flag. Best-
+	// effort: read failures on the OIDC config are swallowed
+	// (the password rotation itself already succeeded; this is
+	// purely audit observability).
+	authSource := auth.AuthSourceFromContext(r.Context())
+	if authSource == auth.UserAuthSourceLocal {
+		if configured, _ := h.store.OIDCConfigEverConfigured(r.Context()); configured {
+			h.appendAudit(r, audit.Event{
+				Action:     audit.ActionLocalAdminPasswordRotated,
+				TargetType: "user",
+				TargetID:   userID,
+			})
+		}
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

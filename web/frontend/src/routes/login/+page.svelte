@@ -11,9 +11,11 @@
   reset in this same directory.
 -->
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { ApiError } from '$lib/api/types';
+	import { authApi } from '$lib/api/auth';
 	import Input from '$lib/components/Input.svelte';
 	import Checkbox from '$lib/components/Checkbox.svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -26,6 +28,29 @@
 	let passwordError = $state('');
 	let formError = $state('');
 	let submitting = $state(false);
+	// Step K.2 — probe the anonymous status endpoint to decide
+	// whether to render the SSO button. A read failure is treated
+	// as "OIDC not available" (fail-closed for the UI hint; local
+	// login is never affected).
+	let oidcEnabled = $state(false);
+
+	onMount(() => {
+		void authApi
+			.oidcStatus()
+			.then((s) => {
+				oidcEnabled = s.enabled;
+			})
+			.catch(() => {
+				oidcEnabled = false;
+			});
+	});
+
+	function handleSsoLogin(): void {
+		// Full navigation (NOT a fetch) — the backend 302s to the
+		// IdP, which 302s back to /api/v1/auth/oidc/callback, which
+		// sets the session cookie and 302s to /routes.
+		window.location.href = '/api/v1/auth/oidc/login';
+	}
 
 	async function handleSubmit(e: Event): Promise<void> {
 		e.preventDefault();
@@ -123,6 +148,28 @@
 				</Button>
 			</div>
 		</form>
+		{#if oidcEnabled}
+			<div class="mt-4">
+				<div
+					class="relative my-4 text-center text-xs text-secondary"
+					aria-hidden="true"
+				>
+					<span class="bg-surface px-2 relative z-10">or</span>
+					<div class="absolute inset-x-0 top-1/2 h-px bg-border -translate-y-1/2"></div>
+				</div>
+				<Button
+					type="button"
+					variant="secondary"
+					size="md"
+					onclick={handleSsoLogin}
+					disabled={submitting}
+				>
+					{#snippet children()}
+						<span class="w-full text-center">Continue with SSO</span>
+					{/snippet}
+				</Button>
+			</div>
+		{/if}
 		<p class="text-secondary text-xs mt-6 text-center">
 			First time? <a href="/setup" class="text-cyan hover:underline">Set up admin account</a>
 		</p>

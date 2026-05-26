@@ -8,10 +8,13 @@ require (
 	github.com/caddyserver/caddy/v2 v2.11.3
 	github.com/caddyserver/certmagic v0.25.3
 	github.com/corazawaf/coraza-caddy/v2 v2.5.0
+	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/go-chi/chi/v5 v5.2.5
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	go.etcd.io/bbolt v1.4.3
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (
@@ -43,7 +46,6 @@ require (
 	github.com/corazawaf/coraza-coreruleset/v4 v4.25.0 // indirect
 	github.com/corazawaf/coraza/v3 v3.7.0 // indirect
 	github.com/corazawaf/libinjection-go v0.3.2 // indirect
-	github.com/coreos/go-oidc/v3 v3.17.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/dgraph-io/badger v1.6.2 // indirect
 	github.com/dgraph-io/badger/v2 v2.2007.4 // indirect
@@ -54,7 +56,6 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
@@ -176,7 +177,6 @@ require (
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/term v0.42.0 // indirect

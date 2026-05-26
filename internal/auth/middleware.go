@@ -98,6 +98,12 @@ func SoftAuthMiddleware(sessions sessionStore, users userStore, devMode bool) fu
 			ctx = context.WithValue(ctx, UsernameKey, user.Username)
 			ctx = context.WithValue(ctx, SessionIDKey, session.ID)
 			ctx = context.WithValue(ctx, IsLockedKey, isLocked)
+			// Step K.2: surface Role + AuthSource for the
+			// RequireAdminMiddleware (role gate on business
+			// endpoints) + the audit hooks (break-glass
+			// emission, local-admin password rotation flag).
+			ctx = context.WithValue(ctx, RoleKey, user.Role)
+			ctx = context.WithValue(ctx, AuthSourceKey, user.AuthSource)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -147,6 +153,37 @@ func HardAuthMiddleware(sessions sessionStore, users userStore, devMode bool) fu
 			next.ServeHTTP(w, r)
 		})
 		return soft(hard)
+	}
+}
+
+// RequireAdminMiddleware returns a chi-compatible middleware that
+// gates the wrapped handler on the authenticated user's role
+// being "admin" (Step K.2 §1.3 decision 12). Returns 403 with
+// {"error":"admin role required"} when the request is from a
+// viewer (or, defensively, from any non-admin role).
+//
+// MUST be composed INSIDE the HardAuthMiddleware chain — it
+// reads RoleKey populated by SoftAuth (transitively, via Hard).
+// Composing it outside means the role check runs against an
+// empty Role, which would deny by construction (the empty
+// string never equals "admin"). That's safe but misleading;
+// the explicit composition order is HardAuth → RequireAdmin →
+// handler.
+//
+// Endpoints that DO NOT require admin (the viewer-accessible
+// surfaces): GET /routes, GET /audit, GET /topology, GET /me,
+// POST /me/password (self-rotate), POST /me/theme. All writes
+// to routes / settings / users gate on admin.
+func RequireAdminMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			role := RoleFromContext(r.Context())
+			if role != UserRoleAdmin {
+				writeForbidden(w, "admin role required")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 

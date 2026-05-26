@@ -58,6 +58,19 @@ const (
 	// Populated by IPExtractMiddleware near the top of the stack.
 	ClientIPKey ctxKey = "auth.client_ip"
 
+	// RoleKey is the authenticated user's role ("viewer" or
+	// "admin") populated by SoftAuthMiddleware on success.
+	// Consumed by RequireAdminMiddleware to gate write
+	// endpoints (Step K.2 §1.3 decision 12).
+	RoleKey ctxKey = "auth.role"
+
+	// AuthSourceKey is the authenticated user's auth source
+	// ("local" or "oidc"). Populated by SoftAuthMiddleware on
+	// success. Consumed by the local-admin password rotation
+	// audit hook (Step K.2 AC #11) and by the break-glass audit
+	// emission decision (AC #10).
+	AuthSourceKey ctxKey = "auth.source"
+
 	// attemptedUsernameKey is the username submitted by an
 	// unauthenticated /login or /unlock attempt. Stored by the
 	// handler via SetAttemptedUsername so the rate-limit middleware
@@ -100,6 +113,26 @@ func IsLockedFromContext(ctx context.Context) bool {
 // when r.RemoteAddr was unparseable.
 func ClientIPFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(ClientIPKey).(string)
+	return v
+}
+
+// RoleFromContext returns the authenticated user's role
+// ("viewer" or "admin"), or empty string when the request is
+// unauthenticated. The empty case is safe: every callsite that
+// matters (RequireAdminMiddleware, audit emission) gates on the
+// explicit "admin" value, so an empty Role denies admin actions
+// by construction.
+func RoleFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(RoleKey).(string)
+	return v
+}
+
+// AuthSourceFromContext returns the authenticated user's auth
+// source ("local" or "oidc"), or empty string when the request
+// is unauthenticated. Consumed by the local-admin password
+// rotation audit hook + the break-glass audit emission.
+func AuthSourceFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(AuthSourceKey).(string)
 	return v
 }
 

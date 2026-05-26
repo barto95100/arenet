@@ -6,6 +6,7 @@
 // shapes mirror the Go handlers in internal/api/auth_handlers.go.
 
 import { request } from './client';
+import type { OIDCStatus, UserRole } from './types';
 
 export interface User {
 	id: string;
@@ -17,6 +18,20 @@ export interface User {
 	// "" means "no preference yet" (legacy pre-Step-F user). The theme
 	// store treats "" identically to "dark" per spec §4.2. Step F §3.1.
 	themePreference: '' | 'dark' | 'light';
+	/**
+	 * Step K.2 — role on the admin surface. "admin" gets full
+	 * CRUD; "viewer" sees a read-only UI. The frontend gates
+	 * action buttons on this; the backend gates the underlying
+	 * routes via RequireAdminMiddleware (defence in depth).
+	 */
+	role: UserRole;
+	/**
+	 * Step K.2 — provenance of the credentials backing this
+	 * session. "local" → username+password (and Settings → "Change
+	 * password" works); "oidc" → SSO via IdP (password rotation
+	 * disabled — the user changes their password at the IdP).
+	 */
+	authSource: 'local' | 'oidc';
 }
 
 export interface Session {
@@ -84,5 +99,12 @@ export const authApi = {
 	// so the FOUC bootstrap picks up the new value on the next paint.
 	setTheme(theme: 'dark' | 'light'): Promise<void> {
 		return request<void>('POST', '/auth/me/theme', { theme });
+	},
+
+	// Step K.2 — anonymous OIDC status probe. Login page calls
+	// this to decide whether to render the "Continue with SSO"
+	// button. Response is tiny and carries no operational details.
+	oidcStatus(): Promise<OIDCStatus> {
+		return request<OIDCStatus>('GET', '/auth/oidc/status');
 	}
 };

@@ -357,6 +357,108 @@ export const OVH_ENDPOINTS: readonly string[] = [
 ] as const;
 
 /**
+ * Step K.2 — OIDC SSO configuration as returned by GET
+ * /api/v1/settings/oidc. The clientSecret is always blanked on the
+ * wire (server-side redaction, mirrors the J.4 DNS-provider and
+ * K.1 forward-auth pattern). clientSecretSet flags the UI to
+ * render the "••• set" placeholder on Edit.
+ */
+export interface OIDCConfig {
+	enabled: boolean;
+	issuerUrl: string;
+	clientId: string;
+	clientSecret: string; // always "" on the wire (redacted)
+	clientSecretSet: boolean;
+	scopes: string[];
+	redirectUrl: string;
+	allowedIdentities: OIDCAllowedIdentity[];
+	configured: boolean;
+}
+
+/**
+ * Step K.2 — wire shape for PUT /api/v1/settings/oidc. clientSecret
+ * is write-only; empty preserves the previously stored value
+ * (Step J.4 preserve-on-edit pattern). The allowlist is NOT
+ * mutated by this endpoint — use the /allowlist sub-endpoints.
+ */
+export interface OIDCConfigRequest {
+	enabled: boolean;
+	issuerUrl: string;
+	clientId: string;
+	clientSecret: string;
+	scopes: string[];
+	redirectUrl: string;
+}
+
+/**
+ * Step K.2 — one allowlisted identity. Sub is empty until the
+ * user's first successful login canonicalises the entry (§5.2);
+ * firstLoginAt is the timestamp of that canonicalisation. The UI
+ * uses the empty-Sub state to render a "pending" badge.
+ */
+export interface OIDCAllowedIdentity {
+	email: string;
+	displayName: string;
+	sub: string;
+	addedAt: string;
+	firstLoginAt?: string;
+}
+
+/**
+ * Step K.2 — POST /api/v1/settings/oidc/allowlist body. Server
+ * lower-cases the email and rejects duplicates.
+ */
+export interface OIDCAllowlistAddRequest {
+	email: string;
+	displayName: string;
+}
+
+/**
+ * Step K.2 — anonymous status endpoint shape (GET /api/v1/auth/
+ * oidc/status). The login page reads this to decide whether to
+ * render the "Continue with SSO" button. NEVER carries operational
+ * details (no issuer URL, no allowlist).
+ */
+export interface OIDCStatus {
+	enabled: boolean;
+}
+
+/**
+ * Step K.2 — admin user list entry as returned by GET
+ * /api/v1/admin/users. The wire surface OMITS PasswordHash and
+ * surfaces OIDCSub only as a boolean (oidcLinked); the raw sub is
+ * operational metadata for the storage layer only.
+ */
+export interface AdminUser {
+	id: string;
+	username: string;
+	displayName: string;
+	authSource: 'local' | 'oidc';
+	oidcLinked: boolean;
+	role: UserRole;
+	createdAt: string;
+	updatedAt: string;
+	lastLoginAt?: string;
+}
+
+/**
+ * Step K.2 — admin role enum. "admin" has full CRUD on routes /
+ * settings / users; "viewer" has read-only access to the admin UI.
+ * Mutually exclusive. The server enforces a last-LOCAL-admin
+ * guard against demoting the only break-glass channel.
+ */
+export type UserRole = 'viewer' | 'admin';
+
+/**
+ * Step K.2 — POST /api/v1/admin/users/{id}/role body. Empty role
+ * or values outside the UserRole enum return a 400 from the
+ * server.
+ */
+export interface UpdateUserRoleRequest {
+	role: UserRole;
+}
+
+/**
  * Discriminated kind of an ApiError so the UI can decide presentation:
  *   - validation: inline near the offending field (4xx other than auth/rate)
  *   - system:     toast or full-page error (network, 5xx)

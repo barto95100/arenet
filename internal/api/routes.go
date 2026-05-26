@@ -74,9 +74,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 		r.Route("/auth", func(r chi.Router) {
 			r.Use(h.rateLimiter.Middleware())
 
-			// No-auth subgroup: /setup, /login.
+			// No-auth subgroup: /setup, /login + OIDC login flow
+			// (the login IS the auth — these endpoints can't
+			// require a session). Step K.2 §5.2.
 			r.Post("/setup", h.setup)
 			r.Post("/login", h.login)
+			r.Get("/oidc/login", h.oidcInitiateLogin)
+			r.Get("/oidc/callback", h.oidcCallback)
+			r.Get("/oidc/status", h.oidcStatus)
 
 			// Soft-auth subgroup: /logout, /me, /unlock.
 			r.Group(func(r chi.Router) {
@@ -87,7 +92,8 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			})
 
 			// Hard-auth subgroup: /heartbeat, /sessions, DELETE /sessions/{id},
-			// /me/password, /me/theme.
+			// /me/password, /me/theme. All viewer-accessible (the user
+			// rotates their OWN password / theme, not someone else's).
 			r.Group(func(r chi.Router) {
 				r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.devMode))
 				r.Post("/heartbeat", h.heartbeat)
@@ -99,29 +105,15 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 		})
 
 		// Business endpoints — hard-auth gated per spec §5.2.
+		// Step K.2 §1.3 #12: viewer-accessible endpoints
+		// (read-only on routes / audit / topology) sit at this
+		// level. The admin-only sub-group below adds the role
+		// gate for write endpoints + settings + admin users.
 		r.Group(func(r chi.Router) {
 			r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.devMode))
 			r.Get("/routes", h.listRoutes)
-			r.Post("/routes", h.createRoute)
 			r.Get("/routes/{id}", h.getRoute)
-			r.Put("/routes/{id}", h.updateRoute)
-			r.Delete("/routes/{id}", h.deleteRoute)
 			r.Get("/audit", h.listAudit)
-			// Step J.4: instance-level DNS provider config. The
-			// PUT endpoint emits dns_provider_updated audit; no
-			// DELETE in v1.0 (§5.4 lifecycle decision — a
-			// guarded delete is a backlog item).
-			r.Get("/settings/dns-providers/ovh", h.getDNSProviderOVH)
-			r.Put("/settings/dns-providers/ovh", h.putDNSProviderOVH)
-			// Step K.1: forward-auth provider CRUD. The DELETE
-			// endpoint enforces the reference-guard contract
-			// (§1.3 decision 14) — a provider referenced by ≥1
-			// route returns 409 with the offending route IDs.
-			r.Get("/settings/forward-auth/providers", h.listForwardAuthProviders)
-			r.Post("/settings/forward-auth/providers", h.createForwardAuthProvider)
-			r.Get("/settings/forward-auth/providers/{name}", h.getForwardAuthProvider)
-			r.Put("/settings/forward-auth/providers/{name}", h.updateForwardAuthProvider)
-			r.Delete("/settings/forward-auth/providers/{name}", h.deleteForwardAuthProvider)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame
@@ -129,6 +121,33 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			if ws != nil {
 				r.Get("/ws/topology", ws.ServeHTTP)
 			}
+
+			// Admin-only sub-group (Step K.2 §1.3 decision 12).
+			// Viewer is rejected with 403 "admin role required".
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireAdminMiddleware())
+				r.Post("/routes", h.createRoute)
+				r.Put("/routes/{id}", h.updateRoute)
+				r.Delete("/routes/{id}", h.deleteRoute)
+				// Step J.4 — DNS provider config.
+				r.Get("/settings/dns-providers/ovh", h.getDNSProviderOVH)
+				r.Put("/settings/dns-providers/ovh", h.putDNSProviderOVH)
+				// Step K.1 — forward-auth provider CRUD.
+				r.Get("/settings/forward-auth/providers", h.listForwardAuthProviders)
+				r.Post("/settings/forward-auth/providers", h.createForwardAuthProvider)
+				r.Get("/settings/forward-auth/providers/{name}", h.getForwardAuthProvider)
+				r.Put("/settings/forward-auth/providers/{name}", h.updateForwardAuthProvider)
+				r.Delete("/settings/forward-auth/providers/{name}", h.deleteForwardAuthProvider)
+				// Step K.2 — OIDC settings + allowlist + admin
+				// users management.
+				r.Get("/settings/oidc", h.getOIDCConfig)
+				r.Put("/settings/oidc", h.putOIDCConfig)
+				r.Get("/settings/oidc/allowlist", h.listOIDCAllowlist)
+				r.Post("/settings/oidc/allowlist", h.addOIDCAllowlist)
+				r.Delete("/settings/oidc/allowlist/{email}", h.deleteOIDCAllowlist)
+				r.Get("/admin/users", h.listAdminUsers)
+				r.Post("/admin/users/{id}/role", h.updateUserRole)
+			})
 		})
 	})
 	return r
