@@ -106,5 +106,15 @@ export const authApi = {
 	// button. Response is tiny and carries no operational details.
 	oidcStatus(): Promise<OIDCStatus> {
 		return request<OIDCStatus>('GET', '/auth/oidc/status');
+	},
+
+	// Anonymous setup availability probe. Login page reads this
+	// to decide whether to render the "Première connexion ?"
+	// link. Returns { available: true } only when zero users
+	// exist; once any admin is created, the setup endpoint 404s
+	// permanently and the link becomes a UX dead-end, so we hide
+	// it.
+	setupStatus(): Promise<{ available: boolean }> {
+		return request<{ available: boolean }>('GET', '/auth/setup/status');
 	}
 };

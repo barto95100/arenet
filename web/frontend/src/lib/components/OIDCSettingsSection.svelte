@@ -211,9 +211,18 @@
 				id="oidc-issuer"
 				type="url"
 				bind:value={form.issuerUrl}
-				placeholder="https://idp.example.com"
+				placeholder="https://auth.example.com/application/o/arenet/"
 				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 			/>
+			<p class="text-xs text-muted mt-1">
+				URL d'émetteur OIDC (champ <code class="font-mono">issuer</code> du
+				discovery document). NE PAS inclure le suffixe
+				<code class="font-mono">/.well-known/openid-configuration</code> —
+				Arenet l'ajoute automatiquement. Authentik :
+				<code class="font-mono">/application/o/&lt;slug&gt;/</code> ; Keycloak :
+				<code class="font-mono">/realms/&lt;realm&gt;</code> ; Authelia : la racine
+				du déploiement.
+			</p>
 		</div>
 
 		<div>
@@ -285,7 +294,7 @@
 	</form>
 
 	<div class="mt-8 pt-6 border-t border-border-subtle">
-		<h3 class="text-base font-semibold mb-2">Allowlist</h3>
+		<h3 class="text-base font-semibold text-primary mb-2">Allowlist</h3>
 		<p class="text-xs text-muted mb-4">
 			Only emails on this list can log in via SSO. New entries are
 			"pending" until the user's first login canonicalises them.

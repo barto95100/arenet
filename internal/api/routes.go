@@ -78,6 +78,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// (the login IS the auth — these endpoints can't
 			// require a session). Step K.2 §5.2.
 			r.Post("/setup", h.setup)
+			r.Get("/setup/status", h.setupStatus)
 			r.Post("/login", h.login)
 			r.Get("/oidc/login", h.oidcInitiateLogin)
 			r.Get("/oidc/callback", h.oidcCallback)

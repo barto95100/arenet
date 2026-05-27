@@ -76,6 +76,29 @@ type setupResponse struct {
 //  7. Invalidate the setup token (single-use).
 //  8. Emit setup_admin_created audit event (best-effort).
 //  9. Return 201 with the user wire shape (sans PasswordHash).
+
+// setupStatus (GET /api/v1/auth/setup/status) is a tiny
+// anonymous hint endpoint the /login page reads to decide
+// whether to render the "Première connexion ? Créer le
+// compte administrateur" link. Returns `{ available: bool }`
+// — true when zero users exist (the setup flow is reachable),
+// false otherwise (an admin exists; setup would 404).
+//
+// Read failure is treated as `available: false` (fail-closed
+// for the UI hint; this is just a visibility toggle, the
+// backend setup endpoint still enforces the count check
+// independently).
+//
+// No-auth endpoint by design — /login is anonymous.
+func (h *Handler) setupStatus(w http.ResponseWriter, r *http.Request) {
+	available := false
+	count, err := h.users.Count(r.Context())
+	if err == nil && count == 0 {
+		available = true
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"available": available})
+}
+
 func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 	// Step 1: users bucket empty?
 	count, err := h.users.Count(r.Context())

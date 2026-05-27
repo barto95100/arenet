@@ -100,7 +100,7 @@
 
 	<div class="space-y-6">
 		<section>
-			<h3 class="text-base font-semibold mb-2">Export</h3>
+			<h3 class="text-base font-semibold text-primary mb-2">Export</h3>
 			<p class="text-xs text-muted mb-3">
 				Default export redacts secrets (admin password hashes, OVH
 				keys, OIDC client secret, forward-auth client secrets,
@@ -119,7 +119,7 @@
 		</section>
 
 		<section class="pt-4 border-t border-border-subtle">
-			<h3 class="text-base font-semibold mb-2">Restore</h3>
+			<h3 class="text-base font-semibold text-primary mb-2">Restore</h3>
 			<p class="text-xs text-muted mb-3">
 				Choose a previously-exported file. The restore is
 				all-or-nothing: any validation failure aborts before any

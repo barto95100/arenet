@@ -73,6 +73,11 @@
 	// as "OIDC not available" (fail-closed for the UI hint; local
 	// login is never affected).
 	let oidcEnabled = $state(false);
+	// Setup availability probe. The "Première connexion ?" link
+	// only makes sense before the first admin is created; once
+	// any admin exists the /setup endpoint 404s and the link
+	// becomes a dead-end. We hide it in that case.
+	let setupAvailable = $state(false);
 
 	onMount(() => {
 		void authApi
@@ -82,6 +87,15 @@
 			})
 			.catch(() => {
 				oidcEnabled = false;
+			});
+
+		void authApi
+			.setupStatus()
+			.then((s) => {
+				setupAvailable = s.available;
+			})
+			.catch(() => {
+				setupAvailable = false;
 			});
 
 		// Step K.2 — surface ?error=<code> from the OIDC callback.
@@ -181,6 +195,28 @@
 		{/if}
 
 		{#if oidcEnabled}
+			<!--
+			  Backlog (post-tag, UX polish): the .login-sso-icon
+			  square below is a generic gradient + Lucide log-in
+			  glyph today. Future iteration: load a provider-
+			  specific asset (Authentik orange "GA", Keycloak,
+			  Authelia, oauth2-proxy) driven by the OIDC config's
+			  provider kind. Requires:
+			    1. Adding a `Kind` enum to storage.OIDCConfig
+			       (mirror of ForwardAuthProvider.Kind).
+			    2. Exposing the kind anonymously in
+			       /api/v1/auth/oidc/status (currently returns only
+			       {enabled: bool}). Note: the kind is metadata
+			       (operator's IdP choice), not a secret — exposing
+			       it pre-login is acceptable.
+			    3. Mapping the kind to a small set of bundled SVG
+			       assets in lib/components/SSOProviderLogo.svelte,
+			       falling back to the current Lucide glyph when
+			       unknown.
+			  Keep the "Continuer avec SSO" label generic until
+			  there's a real need for per-provider naming (B1 vs B3
+			  arbitration deferred).
+			-->
 			<button
 				class="login-sso"
 				type="button"
@@ -325,9 +361,11 @@
 			</button>
 		</form>
 
-		<div class="login-foot">
-			Première connexion ? <a href="/setup">Créer le compte administrateur</a>
-		</div>
+		{#if setupAvailable}
+			<div class="login-foot">
+				Première connexion ? <a href="/setup">Créer le compte administrateur</a>
+			</div>
+		{/if}
 	</div>
 </div>
 
@@ -357,8 +395,8 @@
 		position: relative;
 		min-height: 100vh;
 		display: flex;
-		flex-direction: column;
 		align-items: center;
+		justify-content: center;
 		padding: 28px 22px;
 		color: var(--fg);
 		font-family: var(--font-body);
@@ -370,14 +408,22 @@
 	}
 
 	/* Topbar: brand wordmark left, nothing on the right (mock's
-	 * env badge + lang toggle dropped per the port brief). */
+	 * env badge + lang toggle dropped per the port brief).
+	 * Positioned absolute so the parent flex remains a pure
+	 * viewport-centered container — that keeps the card aligned
+	 * with the breathing halo (which is fixed at 50%/50% of the
+	 * viewport). The mock balanced the flex with a footbar; we
+	 * dropped the footbar, so removing the topbar from the flow
+	 * is the equivalent solution. */
 	.login-topbar {
-		width: 100%;
+		position: absolute;
+		top: 28px;
+		left: 22px;
+		right: 22px;
 		max-width: 1180px;
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		margin-bottom: auto;
 	}
 	.login-brand {
 		display: flex;
@@ -408,11 +454,7 @@
 		letter-spacing: -0.02em;
 	}
 
-	/* The card sits between the topbar (margin-bottom: auto)
-	 * and the page bottom (margin-top: auto) so it lands
-	 * vertically centered in the remaining flex space. */
 	.login-card {
-		margin: auto 0;
 		width: 100%;
 		max-width: 440px;
 		padding: 34px;
@@ -735,7 +777,12 @@
 
 	@media (max-width: 640px) {
 		.login-page {
-			padding: 18px 14px;
+			padding: 80px 14px 18px; /* top padding keeps the absolute topbar from overlapping the card on short viewports */
+		}
+		.login-topbar {
+			top: 18px;
+			left: 14px;
+			right: 14px;
 		}
 		.login-card {
 			padding: 26px;
