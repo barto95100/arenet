@@ -219,6 +219,14 @@ export interface ForwardAuthProvider {
 	 * Empty = legacy K.1 behaviour.
 	 */
 	authPassthroughPrefix: string;
+	/**
+	 * Step K.4 parity fix — when true, the forward_auth sub-
+	 * request's Host header is rewritten to the verify URL's
+	 * host. Required for IdPs that route apps by Host
+	 * (Authentik embedded outpost). Default false = canonical
+	 * Caddy expansion (client Host propagated).
+	 */
+	rewriteVerifyHost: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -237,6 +245,7 @@ export interface ForwardAuthProviderRequest {
 	copyHeaders: string[];
 	clientSecret: string;
 	authPassthroughPrefix?: string;
+	rewriteVerifyHost?: boolean;
 }
 
 /**

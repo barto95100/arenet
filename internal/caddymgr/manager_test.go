@@ -116,8 +116,8 @@ func TestBuildConfigJSON_CatchAllAppended(t *testing.T) {
 		t.Errorf("catch-all route must have no match block, got: %v", catchAll["match"])
 	}
 
-	handlers, ok := catchAll["handle"].([]any)
-	if !ok || len(handlers) != 1 {
+	handlers := unwrapHandlers(catchAll)
+	if len(handlers) != 1 {
 		t.Fatalf("catch-all handle malformed: %v", catchAll["handle"])
 	}
 	h := handlers[0].(map[string]any)
@@ -193,9 +193,9 @@ func TestBuildConfigJSON_HandlerChainOrder(t *testing.T) {
 	}
 
 	for i, route := range httpRoutes[:2] {
-		handlers, ok := route["handle"].([]any)
-		if !ok {
-			t.Fatalf("route %d: handle field missing or wrong type", i)
+		handlers := unwrapHandlers(route)
+		if len(handlers) == 0 {
+			t.Fatalf("route %d: no handlers found", i)
 		}
 		if len(handlers) != 2 {
 			t.Fatalf("route %d: expected 2 handlers (metrics + reverse_proxy), got %d", i, len(handlers))
@@ -225,7 +225,7 @@ func TestBuildConfigJSON_HandlerJSONName(t *testing.T) {
 	}
 
 	httpRoutes := httpRoutesFromConfig(t, raw)
-	handlers := httpRoutes[0]["handle"].([]any)
+	handlers := unwrapHandlers(httpRoutes[0])
 	first := handlers[0].(map[string]any)
 	got, _ := first["handler"].(string)
 
@@ -267,7 +267,7 @@ func TestBuildConfigJSON_HandlerJSONName_HTTPSToo(t *testing.T) {
 	}
 	httpsRoutes := httpsServer["routes"].([]any)
 	first := httpsRoutes[0].(map[string]any)
-	handlers := first["handle"].([]any)
+	handlers := unwrapHandlers(first)
 	if len(handlers) != 2 {
 		t.Fatalf("HTTPS route: %d handlers, want 2", len(handlers))
 	}
@@ -741,7 +741,7 @@ func TestBuildConfigJSON_Aliases_RedirectHonorsAliases(t *testing.T) {
 	// so a hit on http://alt1.com/* is redirected to https://alt1.com/* via
 	// the {http.request.host} placeholder.
 	first := httpRoutes[0]
-	handlers, _ := first["handle"].([]any)
+	handlers := unwrapHandlers(first)
 	h, _ := handlers[0].(map[string]any)
 	if h["handler"] != "static_response" {
 		t.Fatalf("first HTTP route should be the 301 redirect; got handler=%v", h["handler"])
@@ -778,7 +778,7 @@ func TestBuildConfigJSON_BasicAuth_EmitsAuthHandler(t *testing.T) {
 	}
 	httpRoutes := httpRoutesFromConfig(t, raw)
 	first := httpRoutes[0]
-	handlers, _ := first["handle"].([]any)
+	handlers := unwrapHandlers(first)
 	// Step I.5 chain: [metrics, authentication, reverse_proxy].
 	if len(handlers) != 3 {
 		t.Fatalf("handler chain length = %d; want 3 (metrics + auth + proxy)", len(handlers))
@@ -824,7 +824,7 @@ func TestBuildConfigJSON_BasicAuth_OffSkipsHandler(t *testing.T) {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
 	httpRoutes := httpRoutesFromConfig(t, raw)
-	handlers, _ := httpRoutes[0]["handle"].([]any)
+	handlers := unwrapHandlers(httpRoutes[0])
 	if len(handlers) != 2 {
 		t.Fatalf("handler chain length = %d; want 2 (no auth handler when disabled)", len(handlers))
 	}
@@ -847,7 +847,7 @@ func TestBuildConfigJSON_WAF_DetectMode(t *testing.T) {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
 	httpRoutes := httpRoutesFromConfig(t, raw)
-	handlers, _ := httpRoutes[0]["handle"].([]any)
+	handlers := unwrapHandlers(httpRoutes[0])
 	// Chain: [metrics, waf, reverse_proxy] — the WAF handler value
 	// is "waf" (last segment of http.handlers.waf), NOT "coraza";
 	// the upstream coraza-caddy module registers itself under the
@@ -895,7 +895,7 @@ func TestBuildConfigJSON_WAF_BlockMode(t *testing.T) {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
 	httpRoutes := httpRoutesFromConfig(t, raw)
-	handlers, _ := httpRoutes[0]["handle"].([]any)
+	handlers := unwrapHandlers(httpRoutes[0])
 	h1, _ := handlers[1].(map[string]any)
 	if h1["handler"] != "waf" {
 		t.Fatalf("handler[1] = %v; want waf", h1["handler"])
@@ -933,7 +933,7 @@ func TestBuildConfigJSON_WAF_OffSkipsHandler(t *testing.T) {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
 	httpRoutes := httpRoutesFromConfig(t, raw)
-	handlers, _ := httpRoutes[0]["handle"].([]any)
+	handlers := unwrapHandlers(httpRoutes[0])
 	if len(handlers) != 2 {
 		t.Fatalf("handler chain length = %d; want 2 (no waf handler when mode=off)", len(handlers))
 	}
@@ -1289,7 +1289,7 @@ func TestBuildConfigJSON_HandlersAllResolvable(t *testing.T) {
 		routes, _ := srv["routes"].([]any)
 		for ri, rt := range routes {
 			route, _ := rt.(map[string]any)
-			handlers, _ := route["handle"].([]any)
+			handlers := unwrapHandlers(route)
 			for hi, hh := range handlers {
 				m, _ := hh.(map[string]any)
 				value, _ := m["handler"].(string)
@@ -1347,7 +1347,7 @@ func TestBuildConfigJSON_Headers_EmitsHandler(t *testing.T) {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
 	httpRoutes := httpRoutesFromConfig(t, raw)
-	handlers, _ := httpRoutes[0]["handle"].([]any)
+	handlers := unwrapHandlers(httpRoutes[0])
 	// Chain: [metrics, headers, reverse_proxy].
 	if len(handlers) != 3 {
 		t.Fatalf("handler chain length = %d; want 3 (metrics + headers + proxy)", len(handlers))
@@ -1386,7 +1386,7 @@ func TestBuildConfigJSON_Headers_EmptyMapsSkipHandler(t *testing.T) {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
 	httpRoutes := httpRoutesFromConfig(t, raw)
-	handlers, _ := httpRoutes[0]["handle"].([]any)
+	handlers := unwrapHandlers(httpRoutes[0])
 	if len(handlers) != 2 {
 		t.Fatalf("handler chain length = %d; want 2 (no headers handler when both maps empty)", len(handlers))
 	}
@@ -1440,7 +1440,7 @@ func TestBuildConfigJSON_Redirect_TLSAndRedirectOn_EmitsStaticResponse301(t *tes
 		t.Fatalf("no HTTP routes emitted")
 	}
 	first := httpRoutes[0]
-	handlers, _ := first["handle"].([]any)
+	handlers := unwrapHandlers(first)
 	if len(handlers) != 1 {
 		t.Fatalf("redirect route should have exactly 1 handler; got %d", len(handlers))
 	}
@@ -1470,7 +1470,7 @@ func TestBuildConfigJSON_Redirect_TLSAndRedirectOn_EmitsStaticResponse301(t *tes
 		t.Fatalf("no HTTPS routes emitted despite TLSEnabled=true")
 	}
 	httpsFirst := httpsRoutes[0]
-	httpsHandlers, _ := httpsFirst["handle"].([]any)
+	httpsHandlers := unwrapHandlers(httpsFirst)
 	if len(httpsHandlers) != 2 {
 		t.Fatalf("HTTPS route should keep [metrics, reverse_proxy]; got %d handlers", len(httpsHandlers))
 	}
@@ -1496,7 +1496,7 @@ func TestBuildConfigJSON_Redirect_TLSOnlyNoRedirect_PreservesProxyOnHTTP(t *test
 
 	httpRoutes := httpRoutesFromConfig(t, raw)
 	first := httpRoutes[0]
-	handlers, _ := first["handle"].([]any)
+	handlers := unwrapHandlers(first)
 	if len(handlers) != 2 {
 		t.Fatalf("HTTP route should keep [metrics, reverse_proxy]; got %d handlers", len(handlers))
 	}
@@ -1507,7 +1507,7 @@ func TestBuildConfigJSON_Redirect_TLSOnlyNoRedirect_PreservesProxyOnHTTP(t *test
 
 	// HTTPS side stays proxy.
 	httpsRoutes := httpsServerRoutes(t, raw)
-	httpsHandlers, _ := httpsRoutes[0]["handle"].([]any)
+	httpsHandlers := unwrapHandlers(httpsRoutes[0])
 	httpsRP, _ := httpsHandlers[1].(map[string]any)
 	if httpsRP["handler"] != "reverse_proxy" {
 		t.Errorf("HTTPS handler[1] = %v; want reverse_proxy", httpsRP["handler"])
@@ -1531,7 +1531,7 @@ func TestBuildConfigJSON_Redirect_NoTLSIgnoresRedirectFlag(t *testing.T) {
 	}
 
 	httpRoutes := httpRoutesFromConfig(t, raw)
-	handlers, _ := httpRoutes[0]["handle"].([]any)
+	handlers := unwrapHandlers(httpRoutes[0])
 	if len(handlers) != 2 {
 		t.Fatalf("HTTP route should keep [metrics, reverse_proxy]; got %d handlers", len(handlers))
 	}
@@ -1769,7 +1769,7 @@ func firstReverseProxyHandler(t *testing.T, raw []byte) map[string]any {
 		routes, _ := srv["routes"].([]any)
 		for _, routeAny := range routes {
 			route, _ := routeAny.(map[string]any)
-			handlers, _ := route["handle"].([]any)
+			handlers := unwrapHandlers(route)
 			for _, hAny := range handlers {
 				h, _ := hAny.(map[string]any)
 				if h["handler"] == "reverse_proxy" {
@@ -2268,7 +2268,7 @@ func TestBuildConfigJSON_LoadsCleanly_ForwardAuth(t *testing.T) {
 	httpSrv := servers["arenet_http"].(map[string]any)
 	httpRoutes := httpSrv["routes"].([]any)
 	target := findRouteByHost(t, httpRoutes, "protected.example.com")
-	handlers := target["handle"].([]any)
+	handlers := unwrapHandlers(target)
 	// Chain: [metrics, forward_auth_proxy, ..., real_proxy]. The
 	// forward_auth handler is at index 1 (right after metrics).
 	if len(handlers) < 3 {
@@ -2362,7 +2362,7 @@ func TestBuildConfigJSON_ForwardAuth_UnknownProvider_FailsClosed(t *testing.T) {
 	httpSrv := servers["arenet_http"].(map[string]any)
 	httpRoutes := httpSrv["routes"].([]any)
 	target := findRouteByHost(t, httpRoutes, "orphan.example.com")
-	handlers := target["handle"].([]any)
+	handlers := unwrapHandlers(target)
 
 	// Assertion 1: the static_response 503 deny handler IS present.
 	var denyHandler map[string]any
@@ -2523,11 +2523,19 @@ func TestBuildConfigJSON_ForwardAuth_PassthroughPrefix_BypassesGate(t *testing.T
 	// reverse_proxy to the verify URL's host. No forward_auth,
 	// no static_response.
 	ptRoute := httpRoutes[passthroughIdx].(map[string]any)
-	ptHandlers := ptRoute["handle"].([]any)
+	ptHandlers := unwrapHandlers(ptRoute)
 	if len(ptHandlers) != 1 {
 		t.Fatalf("PASSTHROUGH SHAPE REGRESSION: passthrough chain length = %d; want 1 (single reverse_proxy)", len(ptHandlers))
 	}
 	rp := ptHandlers[0].(map[string]any)
+	// Step K.4 parity — ALSO verify the canonical subroute
+	// wrapper is in place and the route is terminal.
+	if outer, _ := ptRoute["handle"].([]any); len(outer) != 1 || outer[0].(map[string]any)["handler"] != "subroute" {
+		t.Errorf("PARITY REGRESSION: passthrough route is not wrapped in subroute (canonical Caddyfile shape)")
+	}
+	if ptRoute["terminal"] != true {
+		t.Errorf("PARITY REGRESSION: passthrough route is not terminal (must short-circuit dispatch)")
+	}
 	if rp["handler"] != "reverse_proxy" {
 		t.Errorf("passthrough handler = %v; want reverse_proxy", rp["handler"])
 	}
@@ -2667,7 +2675,7 @@ func TestBuildConfigJSON_ForwardAuth_HTTPSVerifyURL_UsesTLSTransport(t *testing.
 	httpSrv := servers["arenet_http"].(map[string]any)
 	httpRoutes := httpSrv["routes"].([]any)
 	target := findRouteByHost(t, httpRoutes, "tls-protected.example.com")
-	handlers := target["handle"].([]any)
+	handlers := unwrapHandlers(target)
 	// forward_auth handler is at index 1 (after metrics).
 	fa := handlers[1].(map[string]any)
 	transport, ok := fa["transport"].(map[string]any)
@@ -2722,7 +2730,7 @@ func TestBuildConfigJSON_ForwardAuth_HTTPVerifyURL_NoTLSTransport(t *testing.T) 
 	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
 	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
 	target := findRouteByHost(t, httpRoutes, "plain-http.example.com")
-	fa := target["handle"].([]any)[1].(map[string]any)
+	fa := unwrapHandlers(target)[1].(map[string]any)
 	if _, hasTransport := fa["transport"]; hasTransport {
 		t.Errorf("LEGACY SHAPE REGRESSION: HTTP-only verify URL gained a transport block: %v", fa["transport"])
 	}
@@ -2822,13 +2830,219 @@ func TestBuildConfigJSON_ForwardAuth_PassthroughPrefix_FailsClosed_NoPassthrough
 	// Pin the chain shape: single static_response 503 handler,
 	// no reverse_proxy of any kind.
 	target := findRouteByHost(t, httpRoutes, "orphan-with-pt.example.com")
-	handlers := target["handle"].([]any)
+	handlers := unwrapHandlers(target)
 	for _, h := range handlers {
 		m := h.(map[string]any)
 		if m["handler"] == "reverse_proxy" {
 			t.Errorf("PASSTHROUGH FAIL-OPEN REGRESSION: reverse_proxy emitted on the deny path; the K.4 passthrough leaked into the unresolved-provider chain. Handler: %v", m)
 		}
 	}
+}
+
+// TestBuildConfigJSON_ForwardAuth_RewriteVerifyHost_HostSetToUpstream
+// pins the K.4 Host opt-in: when the provider has
+// RewriteVerifyHost=true, the forward_auth handler emits a
+// headers.request.set.Host pointing at the verify URL's
+// hostport. Default false (legacy) does NOT set Host (canonical
+// Caddy expansion propagates client Host).
+func TestBuildConfigJSON_ForwardAuth_RewriteVerifyHost_HostSetToUpstream(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:        "r-fa-host-rw",
+			Host:      "protected.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "authentik-embedded",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+	opts := buildOpts{
+		DevMode: true,
+		ForwardAuthProviders: map[string]storage.ForwardAuthProvider{
+			"authentik-embedded": {
+				Name:              "authentik-embedded",
+				Kind:              "authentik",
+				VerifyURL:         "https://auth.example.com/outpost.goauthentik.io/auth/caddy",
+				AuthRequestURI:    "/outpost.goauthentik.io/auth/caddy",
+				CopyHeaders:       []string{"X-Authentik-Username"},
+				RewriteVerifyHost: true,
+			},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var full map[string]any
+	_ = json.Unmarshal(raw, &full)
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
+	target := findRouteByHost(t, httpRoutes, "protected.example.com")
+	// forward_auth handler is at index 1 (after metrics) inside
+	// the unwrapped subroute chain.
+	fa := unwrapHandlers(target)[1].(map[string]any)
+	headers := fa["headers"].(map[string]any)["request"].(map[string]any)["set"].(map[string]any)
+	hostVal, ok := headers["Host"]
+	if !ok {
+		t.Fatalf("HOST REWRITE REGRESSION: RewriteVerifyHost=true did not emit headers.request.set.Host on the forward_auth sub-request. headers: %v", headers)
+	}
+	hostList := hostVal.([]any)
+	if len(hostList) != 1 || hostList[0] != "auth.example.com" {
+		t.Errorf("Host set to %v; want [\"auth.example.com\"]", hostList)
+	}
+}
+
+func TestBuildConfigJSON_ForwardAuth_RewriteVerifyHost_DefaultFalse_NoHostSet(t *testing.T) {
+	// Inverse: default RewriteVerifyHost=false preserves the
+	// canonical Caddyfile shape (no Host in headers.request.set).
+	// Authelia + Keycloak + Authentik external outpost compat.
+	routes := []storage.Route{
+		{
+			ID:        "r-fa-canon",
+			Host:      "canon.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "authelia-canon",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+	opts := buildOpts{
+		DevMode: true,
+		ForwardAuthProviders: map[string]storage.ForwardAuthProvider{
+			"authelia-canon": {
+				Name:           "authelia-canon",
+				Kind:           "authelia",
+				VerifyURL:      "http://127.0.0.1:9091",
+				AuthRequestURI: "/api/authz/forward-auth",
+				CopyHeaders:    []string{"Remote-User"},
+				// RewriteVerifyHost intentionally false.
+			},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var full map[string]any
+	_ = json.Unmarshal(raw, &full)
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
+	target := findRouteByHost(t, httpRoutes, "canon.example.com")
+	fa := unwrapHandlers(target)[1].(map[string]any)
+	headers := fa["headers"].(map[string]any)["request"].(map[string]any)["set"].(map[string]any)
+	if _, hasHost := headers["Host"]; hasHost {
+		t.Errorf("CANONICAL SHAPE REGRESSION: Host header was set on the sub-request without RewriteVerifyHost opt-in. headers: %v", headers)
+	}
+}
+
+// TestBuildConfigJSON_ForwardAuth_RouteIsTerminal pins the K.4
+// parity defence-in-depth: every Step-K route (main,
+// passthrough, deny) MUST carry terminal=true so the dispatcher
+// does NOT match another route after this one. Without
+// terminal, a future route addition on the same Host (e.g.
+// catch-all, redirect) could accidentally also fire — a class
+// of bug the canonical Caddyfile expansion eliminates by
+// emitting terminal on every forward_auth route.
+func TestBuildConfigJSON_ForwardAuth_RouteIsTerminal(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:        "r-term",
+			Host:      "terminal.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "fa-term",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+	opts := buildOpts{
+		DevMode: true,
+		ForwardAuthProviders: map[string]storage.ForwardAuthProvider{
+			"fa-term": {
+				Name:                  "fa-term",
+				Kind:                  "authentik",
+				VerifyURL:             "https://auth.example.com/outpost.goauthentik.io/auth/caddy",
+				AuthRequestURI:        "/outpost.goauthentik.io/auth/caddy",
+				CopyHeaders:           []string{"X-Authentik-Username"},
+				AuthPassthroughPrefix: "/outpost.goauthentik.io",
+			},
+		},
+	}
+	raw, _ := buildConfigJSON(routes, opts)
+	var full map[string]any
+	_ = json.Unmarshal(raw, &full)
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
+	hostRoutes := 0
+	for _, r := range httpRoutes {
+		m := r.(map[string]any)
+		matchSets, _ := m["match"].([]any)
+		for _, ms := range matchSets {
+			hosts, _ := ms.(map[string]any)["host"].([]any)
+			for _, h := range hosts {
+				if h == "terminal.example.com" {
+					hostRoutes++
+					if m["terminal"] != true {
+						paths, _ := ms.(map[string]any)["path"].([]any)
+						t.Errorf("TERMINAL REGRESSION: route on host=terminal.example.com path=%v is NOT terminal; canonical Caddyfile shape requires every forward_auth route to short-circuit", paths)
+					}
+					outer, _ := m["handle"].([]any)
+					if len(outer) != 1 || outer[0].(map[string]any)["handler"] != "subroute" {
+						t.Errorf("PARITY REGRESSION: route handle is not wrapped in canonical subroute")
+					}
+				}
+			}
+		}
+	}
+	if hostRoutes != 2 {
+		t.Fatalf("expected 2 routes on terminal.example.com (passthrough + main), got %d", hostRoutes)
+	}
+}
+
+// unwrapHandlers (Step K.4 parity fix) returns the flat handler
+// chain inside a route, peeling off the canonical `subroute`
+// wrapper that the K.4 generator emits. Routes that don't carry
+// a single subroute (rare — legacy non-Step-K builds) are
+// returned as-is. Tests that assert on handler shape use this
+// instead of indexing route["handle"] directly so they stay
+// agnostic of the wrapping layer.
+func unwrapHandlers(route map[string]any) []any {
+	raw, _ := route["handle"].([]any)
+	if len(raw) != 1 {
+		return raw
+	}
+	outer, ok := raw[0].(map[string]any)
+	if !ok || outer["handler"] != "subroute" {
+		return raw
+	}
+	subRoutes, ok := outer["routes"].([]any)
+	if !ok {
+		return raw
+	}
+	flat := make([]any, 0, len(subRoutes))
+	for _, sr := range subRoutes {
+		srMap, ok := sr.(map[string]any)
+		if !ok {
+			continue
+		}
+		inner, ok := srMap["handle"].([]any)
+		if !ok {
+			continue
+		}
+		flat = append(flat, inner...)
+	}
+	return flat
 }
 
 // findRouteByHost walks the httpRoutes array (Caddy JSON config

@@ -67,9 +67,26 @@ type ForwardAuthProvider struct {
 	// (overlap / ordering semantics would need their own decision
 	// at that point). Empty (default): legacy K.1 behaviour —
 	// a single forward_auth chain for every request to the route.
-	AuthPassthroughPrefix string    `json:"auth_passthrough_prefix,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	AuthPassthroughPrefix string `json:"auth_passthrough_prefix,omitempty"`
+	// RewriteVerifyHost (Step K.4 parity fix) — when true, the
+	// forward_auth sub-request's Host header is rewritten to the
+	// hostport of VerifyURL (instead of being propagated from the
+	// client request, which is the Caddy default + the canonical
+	// forward_auth Caddyfile expansion). Required for IdPs that
+	// route their app dispatch by the Host header (Authentik
+	// embedded outpost: the core Authentik server hosts the
+	// outpost endpoint on /outpost.goauthentik.io/* but routes
+	// the app by Host — a sub-request carrying the client's Host
+	// gets 404 from Authentik core's app router).
+	//
+	// Empty (default false): Caddy default = client Host
+	// propagated to the upstream. This is the canonical shape;
+	// compatible with Authelia, Keycloak, oauth2-proxy, Authentik
+	// external outpost (separate deployment with its own listener
+	// on the outpost-only endpoint).
+	RewriteVerifyHost bool      `json:"rewrite_verify_host,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // ForwardAuthProviderKinds enumerates the four supported provider

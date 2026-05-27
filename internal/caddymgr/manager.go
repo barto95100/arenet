@@ -326,6 +326,14 @@ type tlsConnectionPolicy struct {
 type httpRoute struct {
 	Match  []matcherSet     `json:"match,omitempty"`
 	Handle []map[string]any `json:"handle"`
+	// Terminal (Step K.4 parity fix) — when true, Caddy stops
+	// route dispatching after this route matches. Mirrors the
+	// canonical forward_auth Caddyfile expansion (every emitted
+	// route there is terminal). Defence-in-depth: prevents a
+	// future request from matching BOTH this route and another
+	// one on the same host (e.g. passthrough-prefix + main
+	// route sharing the Host).
+	Terminal bool `json:"terminal,omitempty"`
 }
 
 type matcherSet struct {
@@ -335,6 +343,38 @@ type matcherSet struct {
 	// Omitempty so the legacy host-only routes stay byte-
 	// identical in the emitted JSON.
 	Path []string `json:"path,omitempty"`
+}
+
+// wrapInSubroute (Step K.4 parity fix) packages a flat handler
+// chain into the canonical "subroute" handler shape that Caddy's
+// own Caddyfile-to-JSON adapter produces for the forward_auth
+// directive. Mirrors forward_auth_authelia.caddyfiletest verbatim:
+// every chain handler becomes a single-handler entry in
+// subroute.routes, wrapped by exactly one subroute handler at the
+// outer level.
+//
+// Why: K.1 originally emitted handlers flat in httpRoute.Handle.
+// That works for simple cases but diverges from the canonical
+// expansion of the forward_auth directive. The K.4 smoke surfaced
+// the structural divergence as the cause of latent risks (e.g.
+// passthrough-path × main-route double-match without a `terminal`
+// flag). Emitting the canonical shape removes those classes by
+// construction.
+//
+// Single-handler input: returns a one-entry subroute. Zero-
+// handler input: returns an empty subroute (defensive — caller
+// should ensure non-empty).
+func wrapInSubroute(handlers []map[string]any) map[string]any {
+	subRoutes := make([]map[string]any, 0, len(handlers))
+	for _, h := range handlers {
+		subRoutes = append(subRoutes, map[string]any{
+			"handle": []map[string]any{h},
+		})
+	}
+	return map[string]any{
+		"handler": "subroute",
+		"routes":  subRoutes,
+	}
 }
 
 // buildOpts configures buildConfigJSON's environment-dependent
@@ -594,8 +634,9 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				handlers = append(handlers, buildForwardAuthDenyHandler(r.ForwardAuth.ProviderName))
 				denyHosts := r.AllHosts()
 				denyRoute := httpRoute{
-					Match:  []matcherSet{{Host: denyHosts}},
-					Handle: handlers,
+					Match:    []matcherSet{{Host: denyHosts}},
+					Handle:   []map[string]any{wrapInSubroute(handlers)},
+					Terminal: true,
 				}
 				httpRoutes = append(httpRoutes, denyRoute)
 				if r.TLSEnabled {
@@ -638,10 +679,18 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// (primary + aliases) so Caddy dispatches the same route to
 		// any of them. acmeSubjects collects every TLS-enabled host
 		// individually so a single multi-SAN cert covers them all.
+		//
+		// Step K.4 parity fix — the handler chain is wrapped in a
+		// canonical `subroute` (mirror forward_auth_authelia
+		// .caddyfiletest) and the route is marked terminal. Empty
+		// chain (theoretically possible) yields an empty subroute,
+		// but in practice handlers always carries at least the
+		// metrics handler.
 		allHosts := r.AllHosts()
 		route := httpRoute{
-			Match:  []matcherSet{{Host: allHosts}},
-			Handle: handlers,
+			Match:    []matcherSet{{Host: allHosts}},
+			Handle:   []map[string]any{wrapInSubroute(handlers)},
+			Terminal: true,
 		}
 
 		// Step K.4 — auth passthrough. When the resolved
@@ -1244,6 +1293,26 @@ func buildForwardAuthHandler(p storage.ForwardAuthProvider) map[string]any {
 		})
 	}
 
+	// Step K.4 — header set for the sub-request. X-Forwarded-Method/
+	// Uri are canonical (forward_auth_authelia.caddyfiletest line
+	// 211-218). The Host header is OPTIONALLY rewritten to the
+	// verify URL's hostport when the provider opts in via
+	// RewriteVerifyHost — required for Authentik embedded outpost
+	// which routes apps by Host. Default behaviour (RewriteVerifyHost
+	// false) is the canonical Caddy expansion: Host header
+	// propagated from the client request to the upstream, which
+	// Authelia / Keycloak / oauth2-proxy / Authentik external
+	// outpost all accept.
+	headerSet := map[string][]string{
+		"X-Forwarded-Method": {"{http.request.method}"},
+		"X-Forwarded-Uri":    {"{http.request.uri}"},
+	}
+	if p.RewriteVerifyHost {
+		if u, err := url.Parse(p.VerifyURL); err == nil && u.Host != "" {
+			headerSet["Host"] = []string{u.Host}
+		}
+	}
+
 	rp := map[string]any{
 		"handler":   "reverse_proxy",
 		"upstreams": []map[string]any{{"dial": forwardAuthDial(p.VerifyURL)}},
@@ -1253,10 +1322,7 @@ func buildForwardAuthHandler(p storage.ForwardAuthProvider) map[string]any {
 		},
 		"headers": map[string]any{
 			"request": map[string]any{
-				"set": map[string][]string{
-					"X-Forwarded-Method": {"{http.request.method}"},
-					"X-Forwarded-Uri":    {"{http.request.uri}"},
-				},
+				"set": headerSet,
 			},
 		},
 		"handle_response": []map[string]any{
@@ -1367,7 +1433,8 @@ func buildAuthPassthroughRoute(provider storage.ForwardAuthProvider, hosts []str
 			Host: hosts,
 			Path: []string{pathPattern},
 		}},
-		Handle: []map[string]any{rp},
+		Handle:   []map[string]any{wrapInSubroute([]map[string]any{rp})},
+		Terminal: true,
 	}
 }
 

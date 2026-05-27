@@ -63,6 +63,12 @@ type forwardAuthProviderRequest struct {
 	// emits a passthrough route bypassing the forward_auth gate
 	// for that subtree. Empty = legacy K.1 behaviour.
 	AuthPassthroughPrefix string `json:"authPassthroughPrefix,omitempty"`
+	// RewriteVerifyHost (Step K.4 parity fix, optional) — when
+	// true, the forward_auth sub-request's Host header is
+	// rewritten to the host of VerifyURL. Required for IdPs that
+	// route by Host (Authentik embedded outpost). Default false =
+	// canonical Caddy behaviour (Host propagated from client).
+	RewriteVerifyHost bool `json:"rewriteVerifyHost,omitempty"`
 }
 
 // forwardAuthProviderResponse is the wire shape on GET. The
@@ -78,6 +84,7 @@ type forwardAuthProviderResponse struct {
 	ClientSecret          string   `json:"clientSecret"`
 	ClientSecretSet       bool     `json:"clientSecretSet"`
 	AuthPassthroughPrefix string   `json:"authPassthroughPrefix"`
+	RewriteVerifyHost     bool     `json:"rewriteVerifyHost"`
 	CreatedAt             string   `json:"createdAt"`
 	UpdatedAt             string   `json:"updatedAt"`
 }
@@ -105,6 +112,7 @@ func forwardAuthProviderToResponse(p storage.ForwardAuthProvider) forwardAuthPro
 		ClientSecret:          "",
 		ClientSecretSet:       p.ClientSecret != "",
 		AuthPassthroughPrefix: p.AuthPassthroughPrefix,
+		RewriteVerifyHost:     p.RewriteVerifyHost,
 		CreatedAt:             p.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:             p.UpdatedAt.UTC().Format(timestampFormat),
 	}
@@ -241,6 +249,7 @@ func (h *Handler) createForwardAuthProvider(w http.ResponseWriter, r *http.Reque
 		CopyHeaders:           req.CopyHeaders,
 		ClientSecret:          req.ClientSecret,
 		AuthPassthroughPrefix: req.AuthPassthroughPrefix,
+		RewriteVerifyHost:     req.RewriteVerifyHost,
 	}
 	created, err := h.store.CreateForwardAuthProvider(r.Context(), provider)
 	if err != nil {
@@ -319,6 +328,7 @@ func (h *Handler) updateForwardAuthProvider(w http.ResponseWriter, r *http.Reque
 		CopyHeaders:           req.CopyHeaders,
 		ClientSecret:          clientSecret,
 		AuthPassthroughPrefix: req.AuthPassthroughPrefix,
+		RewriteVerifyHost:     req.RewriteVerifyHost,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

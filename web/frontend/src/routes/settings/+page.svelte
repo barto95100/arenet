@@ -241,7 +241,8 @@
 		authRequestUri: '/api/authz/forward-auth',
 		copyHeaders: 'Remote-User, Remote-Email',
 		clientSecret: '',
-		authPassthroughPrefix: ''
+		authPassthroughPrefix: '',
+		rewriteVerifyHost: false
 	});
 	let fwdAuthFormOpen = $state(false);
 	let fwdAuthSubmitting = $state(false);
@@ -273,7 +274,8 @@
 			authRequestUri: '/api/authz/forward-auth',
 			copyHeaders: 'Remote-User, Remote-Email',
 			clientSecret: '',
-			authPassthroughPrefix: ''
+			authPassthroughPrefix: '',
+			rewriteVerifyHost: false
 		};
 		fwdAuthFormError = null;
 		fwdAuthFormOpen = true;
@@ -289,7 +291,8 @@
 			authRequestUri: p.authRequestUri,
 			copyHeaders: (p.copyHeaders ?? []).join(', '),
 			clientSecret: '',
-			authPassthroughPrefix: p.authPassthroughPrefix ?? ''
+			authPassthroughPrefix: p.authPassthroughPrefix ?? '',
+			rewriteVerifyHost: p.rewriteVerifyHost ?? false
 		};
 		fwdAuthFormError = null;
 		fwdAuthFormOpen = true;
@@ -310,7 +313,8 @@
 					.map((h) => h.trim())
 					.filter((h) => h.length > 0),
 				clientSecret: fwdAuthForm.clientSecret,
-				...(passthrough ? { authPassthroughPrefix: passthrough } : {})
+				...(passthrough ? { authPassthroughPrefix: passthrough } : {}),
+				...(fwdAuthForm.rewriteVerifyHost ? { rewriteVerifyHost: true } : {})
 			};
 			if (fwdAuthEditingName === null) {
 				await settingsApi.createForwardAuthProvider(req);
@@ -844,6 +848,26 @@
 							providers that don't need it (Authelia standalone,
 							generic).
 						</p>
+					</div>
+
+					<div class="md:col-span-2">
+						<label class="inline-flex items-start gap-2 text-sm font-medium text-secondary">
+							<input
+								type="checkbox"
+								bind:checked={fwdAuthForm.rewriteVerifyHost}
+								class="mt-0.5 rounded border-border-default bg-surface text-cyan focus:ring-cyan"
+							/>
+							<span>
+								Rewrite Host of verify sub-request to verify URL host
+								<span class="block text-xs font-normal text-muted mt-0.5">
+									Required for Authentik embedded outpost (Authentik
+									routes apps by Host header on its core listener).
+									Leave unchecked for Authelia, Keycloak, oauth2-proxy,
+									and Authentik external outpost — they all accept the
+									client's Host (canonical Caddy forward_auth shape).
+								</span>
+							</span>
+						</label>
 					</div>
 
 					{#if fwdAuthFormError}
