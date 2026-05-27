@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="fr">
+<head><script data-od-sandbox-shim>(function(){
+  function makeStore(){
+    var data = {};
+    var api = {
+      getItem: function(k){ return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function(k, v){ data[k] = String(v); },
+      removeItem: function(k){ delete data[k]; },
+      clear: function(){ data = {}; },
+      key: function(i){ return Object.keys(data)[i] || null; }
+    };
+    Object.defineProperty(api, 'length', { get: function(){ return Object.keys(data).length; } });
+    return api;
+  }
+  function tryShim(name){
+    var works = false;
+    try { works = !!window[name] && typeof window[name].getItem === 'function'; void window[name].length; }
+    catch (_) { works = false; }
+    if (works) return;
+    try { Object.defineProperty(window, name, { configurable: true, value: makeStore() }); }
+    catch (_) { try { window[name] = makeStore(); } catch (__) {} }
+  }
+  tryShim('localStorage');
+  tryShim('sessionStorage');
+})();</script>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AreNET — Connexion</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:           oklch(15% 0.005 250);
+    --bg-deep:      oklch(11% 0.005 250);
+    --surface:      oklch(19% 0.006 250);
+    --surface-2:    oklch(22% 0.007 250);
+    --surface-hi:   oklch(26% 0.008 250);
+    --border:       oklch(28% 0.009 250);
+    --border-hi:    oklch(34% 0.011 250);
+    --fg:           oklch(96% 0.005 250);
+    --fg-muted:     oklch(68% 0.012 250);
+    --fg-dim:       oklch(54% 0.011 250);
+    --accent:       oklch(68% 0.21 255);
+    --accent-deep:  oklch(52% 0.22 265);
+    --accent-soft:  oklch(68% 0.21 255 / 0.14);
+    --accent-line:  oklch(68% 0.21 255 / 0.45);
+    --sso:          oklch(64% 0.18 35);
+    --sso-soft:     oklch(64% 0.18 35 / 0.14);
+
+    --ok:    oklch(72% 0.16 150);
+    --warn:  oklch(80% 0.14 85);
+    --bad:   oklch(66% 0.20 25);
+
+    --font-display: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+    --font-body:    'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+    --font-mono:    'JetBrains Mono', ui-monospace, 'IBM Plex Mono', Menlo, monospace;
+
+    --radius: 8px;
+    --radius-sm: 6px;
+    --radius-lg: 14px;
+  }
+
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0;padding:0;color:var(--fg);font-family:var(--font-body);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+  html{background:var(--bg-deep)}
+  body{min-height:100vh;overflow-x:hidden;background:transparent}
+  a{color:inherit;text-decoration:none}
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;padding:0}
+  input,select,textarea{font:inherit;color:inherit}
+  ::selection{background:var(--accent-soft);color:var(--fg)}
+
+  /* ============ Full-page background ============ */
+  .bg-stage{
+    position:fixed;inset:0;
+    background:
+      radial-gradient(110% 80% at 18% 12%, oklch(68% 0.21 255 / 0.10) 0%, transparent 55%),
+      radial-gradient(80% 60% at 88% 88%, oklch(52% 0.22 265 / 0.10) 0%, transparent 55%),
+      linear-gradient(180deg, oklch(13% 0.006 250) 0%, oklch(10% 0.005 250) 100%);
+    z-index:0;
+  }
+  /* Conic sweep behind the topology — adds orbital depth */
+  .bg-conic{
+    position:fixed;inset:-20%;
+    background: conic-gradient(from 200deg at 50% 50%,
+      transparent 0deg,
+      oklch(68% 0.21 255 / 0.08) 60deg,
+      transparent 130deg,
+      oklch(52% 0.22 285 / 0.07) 220deg,
+      transparent 320deg,
+      transparent 360deg);
+    filter: blur(40px);
+    opacity:.85;
+    z-index:1;
+    pointer-events:none;
+    animation: conicSpin 90s linear infinite;
+  }
+  @keyframes conicSpin{ to{ transform: rotate(360deg) } }
+
+  /* Aurora drift — two soft blobs travelling slowly across the canvas */
+  .bg-aurora{
+    position:fixed;inset:-25%;
+    pointer-events:none;
+    z-index:1;
+    overflow:hidden;
+  }
+  .bg-aurora::before, .bg-aurora::after{
+    content:"";
+    position:absolute;
+    width:60vmax;height:60vmax;
+    border-radius:50%;
+    filter:blur(80px);
+    opacity:.5;
+    will-change: transform;
+  }
+  .bg-aurora::before{
+    top:-15%;left:-10%;
+    background: radial-gradient(circle, oklch(58% 0.18 255 / 0.45) 0%, transparent 65%);
+    animation: auroraDriftA 55s ease-in-out infinite alternate;
+  }
+  .bg-aurora::after{
+    bottom:-15%;right:-10%;
+    background: radial-gradient(circle, oklch(50% 0.20 290 / 0.40) 0%, transparent 65%);
+    animation: auroraDriftB 70s ease-in-out infinite alternate;
+  }
+  @keyframes auroraDriftA{
+    0%   { transform: translate(-8%, -5%) scale(1) }
+    50%  { transform: translate(25%, 18%) scale(1.15) }
+    100% { transform: translate(8%, 30%) scale(0.95) }
+  }
+  @keyframes auroraDriftB{
+    0%   { transform: translate(10%, 5%) scale(1) }
+    50%  { transform: translate(-22%, -15%) scale(1.18) }
+    100% { transform: translate(-5%, -28%) scale(0.92) }
+  }
+
+  /* Grain overlay — SVG turbulence filter at very low opacity */
+  .bg-noise{
+    position:fixed;inset:0;
+    pointer-events:none;
+    z-index:3;
+    opacity:.045;
+    mix-blend-mode:overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.85   0 0 0 0 0.86   0 0 0 0 0.92   0 0 0 0.55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    background-size:240px 240px;
+  }
+
+  /* Card breathing halo — soft glow that pulses behind the form */
+  .card-halo{
+    position:fixed;
+    top:50%;left:50%;
+    width:560px;height:560px;
+    transform:translate(-50%,-50%);
+    border-radius:50%;
+    background: radial-gradient(circle, oklch(68% 0.21 255 / 0.18) 0%, oklch(52% 0.22 265 / 0.08) 35%, transparent 70%);
+    filter: blur(40px);
+    pointer-events:none;
+    z-index:3;
+    animation: cardBreathe 9s ease-in-out infinite;
+  }
+  @keyframes cardBreathe{
+    0%, 100% { transform: translate(-50%,-50%) scale(0.92); opacity:0.7 }
+    50%      { transform: translate(-50%,-50%) scale(1.08); opacity:1 }
+  }
+
+  .bg-grid{
+    position:fixed;inset:0;
+    background-image:
+      linear-gradient(to right, var(--border) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+    background-size:64px 64px;
+    opacity:.14;
+    mask-image: radial-gradient(140% 100% at 50% 40%, #000 25%, transparent 80%);
+    pointer-events:none;
+    z-index:2;
+  }
+
+  /* Ambient floating particles — abstract drifting dots, no diagram */
+  .bg-dots{
+    position:fixed;inset:0;
+    pointer-events:none;
+    z-index:2;
+    overflow:hidden;
+  }
+  .bg-dots .d{
+    position:absolute;
+    width:3px;height:3px;
+    border-radius:50%;
+    background:var(--accent);
+    box-shadow:0 0 10px oklch(68% 0.21 255 / 0.6), 0 0 22px oklch(68% 0.21 255 / 0.3);
+    opacity:0;
+    animation: dotDrift var(--dur, 18s) linear infinite;
+    animation-delay: var(--delay, 0s);
+  }
+  .bg-dots .d.v{ background: oklch(64% 0.20 290); box-shadow:0 0 10px oklch(64% 0.20 290 / 0.55), 0 0 22px oklch(64% 0.20 290 / 0.28) }
+  .bg-dots .d.s{ width:2px;height:2px }
+  .bg-dots .d.l{ width:4px;height:4px }
+  @keyframes dotDrift{
+    0%   { transform: translate(0,0) scale(0.6); opacity:0 }
+    10%  { opacity:.85 }
+    50%  { transform: translate(var(--mx, 40px), var(--my, -60px)) scale(1); opacity:1 }
+    90%  { opacity:.8 }
+    100% { transform: translate(calc(var(--mx, 40px) * 2), calc(var(--my, -60px) * 2)) scale(0.6); opacity:0 }
+  }
+
+  /* Soft orbital ring around the card halo — abstract architectural cue */
+  .bg-ring{
+    position:fixed;
+    top:50%;left:50%;
+    width:780px;height:780px;
+    transform: translate(-50%, -50%);
+    border-radius:50%;
+    border:1px solid oklch(68% 0.21 255 / 0.16);
+    box-shadow:
+      inset 0 0 80px oklch(68% 0.21 255 / 0.05),
+      0 0 60px oklch(52% 0.22 285 / 0.08);
+    pointer-events:none;
+    z-index:2;
+    animation: ringPulse 12s ease-in-out infinite;
+  }
+  .bg-ring::before{
+    content:"";
+    position:absolute; inset:60px;
+    border-radius:50%;
+    border:1px dashed oklch(68% 0.21 255 / 0.10);
+    animation: ringSpin 80s linear infinite reverse;
+  }
+  @keyframes ringPulse{
+    0%, 100% { opacity:.55 }
+    50%      { opacity:.95 }
+  }
+  @keyframes ringSpin{ to { transform: rotate(360deg) } }
+  /* Subtle vignette on top so the card sits on a calmer area */
+  .bg-vignette{
+    position:fixed;inset:0;
+    background:radial-gradient(40% 30% at 50% 50%, oklch(10% 0.005 250 / 0.55) 0%, transparent 75%);
+    pointer-events:none;z-index:3;
+  }
+
+  /* ============ Layout ============ */
+  .auth{
+    min-height:100vh;
+    display:flex;flex-direction:column;align-items:center;
+    padding:28px 22px 24px;
+    position:relative;
+    z-index:10;
+  }
+
+  /* Top bar (brand left, lang right) */
+  .topbar{
+    width:100%;max-width:1180px;
+    display:flex;align-items:center;justify-content:space-between;
+    margin-bottom:auto;
+  }
+  .brand{display:flex;align-items:center;gap:11px}
+  .brand-mark{
+    width:34px;height:34px;border-radius:9px;
+    background:linear-gradient(140deg, var(--accent) 0%, var(--accent-deep) 100%);
+    display:grid;place-items:center;color:#fff;font-family:var(--font-display);font-weight:600;font-size:16px;letter-spacing:-0.02em;
+    box-shadow: inset 0 1px 0 oklch(82% 0.18 250 / 0.5), 0 1px 0 oklch(0% 0 0 / 0.4), 0 12px 36px -10px oklch(60% 0.22 260 / 0.5);
+  }
+  .brand-name{font-family:var(--font-display);font-size:16px;font-weight:600;letter-spacing:-0.02em}
+  .brand-env{
+    margin-left:4px;
+    font-family:var(--font-mono);font-size:10px;color:var(--fg-muted);
+    background:var(--surface);border:1px solid var(--border);padding:3px 7px;border-radius:5px;letter-spacing:0.04em;text-transform:uppercase;
+  }
+  .topbar-r{display:flex;align-items:center;gap:8px}
+  .lang{
+    display:inline-flex;align-items:center;gap:5px;
+    padding:5px 9px;border-radius:var(--radius-sm);border:1px solid var(--border);
+    background:var(--surface);font-family:var(--font-mono);font-size:11px;color:var(--fg-muted);
+  }
+  .lang:hover{color:var(--fg);background:var(--surface-2)}
+
+  /* Centered card wrapper */
+  .center{
+    flex:1;display:flex;align-items:center;justify-content:center;
+    width:100%;
+    padding:24px 0;
+  }
+
+  .card{
+    width:100%;max-width:440px;
+    padding:34px;
+    background:oklch(19% 0.006 250 / 0.85);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border:1px solid var(--border-hi);
+    border-radius:var(--radius-lg);
+    box-shadow:
+      0 1px 0 0 oklch(60% 0.012 250 / 0.06) inset,
+      0 32px 80px -32px oklch(0% 0 0 / 0.65),
+      0 2px 6px oklch(0% 0 0 / 0.3);
+  }
+
+  .card-h{
+    font-family:var(--font-display);
+    font-size:24px;font-weight:600;letter-spacing:-0.025em;
+    margin:0 0 6px;
+  }
+  .card-sub{color:var(--fg-muted);font-size:13.5px;margin:0 0 22px}
+
+  /* SSO primary action */
+  .sso-btn{
+    display:flex;align-items:center;justify-content:center;gap:10px;
+    width:100%;padding:12px 14px;
+    border-radius:var(--radius);
+    background:linear-gradient(180deg, oklch(28% 0.018 60) 0%, oklch(22% 0.014 60) 100%);
+    border:1px solid oklch(64% 0.18 35 / 0.45);
+    color:var(--fg);font-size:14px;font-weight:500;
+    transition: background .15s, border-color .15s, transform .04s;
+    position:relative;
+  }
+  .sso-btn:hover{background:linear-gradient(180deg, oklch(32% 0.02 60) 0%, oklch(25% 0.016 60) 100%);border-color:oklch(64% 0.18 35 / 0.7)}
+  .sso-btn:active{transform:translateY(1px)}
+  .sso-btn .sso-logo{
+    width:22px;height:22px;border-radius:5px;
+    background:linear-gradient(140deg, oklch(70% 0.20 35) 0%, oklch(58% 0.18 30) 100%);
+    display:grid;place-items:center;font-family:var(--font-mono);font-weight:600;font-size:11px;color:#fff;
+    box-shadow:inset 0 1px 0 oklch(82% 0.16 50 / 0.4);
+  }
+  .sso-btn .arr{margin-left:auto;color:var(--fg-dim)}
+  .sso-btn:hover .arr{color:var(--fg-muted)}
+  .sso-hint{
+    display:flex;align-items:center;gap:6px;
+    margin-top:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--fg-dim);
+    letter-spacing:0.03em;
+  }
+  .sso-hint .pdot{width:5px;height:5px;border-radius:50%;background:var(--ok)}
+
+  .divider{
+    display:flex;align-items:center;gap:12px;margin:22px 0;
+    color:var(--fg-dim);font-size:11px;font-family:var(--font-mono);letter-spacing:0.1em;text-transform:uppercase;
+  }
+  .divider::before, .divider::after{content:"";flex:1;height:1px;background:var(--border)}
+
+  /* Form */
+  .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+  .field label{font-size:12.5px;color:var(--fg-muted);display:flex;align-items:center;justify-content:space-between}
+  .field label .link{color:var(--accent);font-size:12px;font-weight:500}
+  .field label .link:hover{text-decoration:underline;text-decoration-color:var(--accent-line);text-underline-offset:3px}
+  .input-wrap{position:relative}
+  .input{
+    width:100%;
+    background:var(--bg);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:10px 12px;
+    color:var(--fg);font-size:14px;
+    outline:none;
+    transition:border-color .12s, box-shadow .12s, background .12s;
+  }
+  .input:hover{border-color:var(--border-hi)}
+  .input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:oklch(17% 0.006 250)}
+  .input.with-toggle{padding-right:42px}
+  .pw-toggle{
+    position:absolute;right:8px;top:50%;transform:translateY(-50%);
+    width:28px;height:28px;border-radius:6px;
+    display:grid;place-items:center;color:var(--fg-dim);
+  }
+  .pw-toggle:hover{color:var(--fg-muted);background:var(--surface-2)}
+  .pw-toggle svg{width:16px;height:16px}
+
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:2px 0 18px}
+  .check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-muted);cursor:pointer;user-select:none}
+  .check input{appearance:none;width:16px;height:16px;border-radius:4px;border:1px solid var(--border-hi);background:var(--bg);display:grid;place-items:center;cursor:pointer;transition:border-color .12s, background .12s}
+  .check input:checked{background:var(--accent);border-color:var(--accent)}
+  .check input:checked::after{content:"";width:8px;height:5px;border-left:1.6px solid #fff;border-bottom:1.6px solid #fff;transform:rotate(-45deg) translate(1px,-1px)}
+  .check:hover input{border-color:var(--accent-line)}
+  .check small{display:block;color:var(--fg-dim);font-size:11px;margin-top:1px}
+
+  .submit{
+    width:100%;padding:11px 14px;
+    background:var(--accent);
+    color:#fff;font-weight:500;font-size:14px;
+    border-radius:var(--radius);
+    border:1px solid transparent;
+    transition:background .12s, transform .04s;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+  }
+  .submit:hover{background:oklch(62% 0.22 255)}
+  .submit:active{transform:translateY(1px)}
+  .submit .spin{display:none;width:14px;height:14px;border-radius:50%;border:2px solid oklch(98% 0.005 250 / 0.4);border-top-color:#fff;animation:spin 0.8s linear infinite}
+  .submit.loading .spin{display:inline-block}
+  .submit.loading .label{opacity:.85}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* Error / notice banner */
+  .banner{
+    display:none;
+    align-items:flex-start;gap:10px;
+    padding:10px 12px;border-radius:var(--radius);
+    background:oklch(66% 0.20 25 / 0.10);
+    border:1px solid oklch(66% 0.20 25 / 0.4);
+    color:oklch(86% 0.12 25);
+    font-size:12.5px;line-height:1.45;
+    margin-bottom:16px;
+  }
+  .banner.show{display:flex}
+  .banner.info{
+    background:oklch(72% 0.12 230 / 0.10);
+    border-color:oklch(72% 0.12 230 / 0.35);
+    color:oklch(88% 0.08 230);
+  }
+  .banner svg{width:16px;height:16px;flex:none;margin-top:1px}
+  .banner b{font-weight:600}
+
+  /* MFA */
+  .mfa{display:none}
+  .mfa.show{display:block}
+  .signin{display:block}
+  .signin.hide{display:none}
+
+  .mfa-back{
+    display:inline-flex;align-items:center;gap:6px;
+    color:var(--fg-muted);font-size:12.5px;margin-bottom:14px;
+  }
+  .mfa-back:hover{color:var(--fg)}
+  .mfa-user{
+    display:flex;align-items:center;gap:10px;
+    padding:10px 12px;
+    background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+    margin-bottom:16px;
+  }
+  .mfa-user .a{
+    width:34px;height:34px;border-radius:50%;
+    background:linear-gradient(140deg, oklch(58% 0.16 200) 0%, oklch(42% 0.14 220) 100%);
+    display:grid;place-items:center;color:#fff;font-weight:600;font-size:13px;
+  }
+  .mfa-user .who-l{font-size:13px;line-height:1.25}
+  .mfa-user .who-l small{display:block;color:var(--fg-dim);font-size:11px;font-family:var(--font-mono)}
+
+  .code-row{display:flex;gap:8px;justify-content:space-between;margin-bottom:6px}
+  .code-cell{
+    width:44px;height:52px;
+    background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+    text-align:center;font-family:var(--font-mono);font-size:20px;font-weight:500;color:var(--fg);
+    outline:none;transition:border-color .12s, box-shadow .12s, background .12s;
+  }
+  .code-cell:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:oklch(17% 0.006 250)}
+  .code-cell:not(:placeholder-shown){border-color:var(--accent-line)}
+  .mfa-meta{
+    display:flex;align-items:center;justify-content:space-between;
+    margin:14px 0 16px;font-size:12px;color:var(--fg-muted);
+  }
+  .mfa-meta .timer{font-family:var(--font-mono);color:var(--fg)}
+  .mfa-alts{
+    margin-top:18px;padding-top:16px;border-top:1px solid var(--border);
+    display:flex;flex-direction:column;gap:6px;
+  }
+  .mfa-alts .h{font-family:var(--font-mono);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--fg-dim);margin-bottom:4px}
+  .mfa-alt{
+    display:flex;align-items:center;gap:10px;
+    padding:8px 10px;border-radius:var(--radius-sm);
+    color:var(--fg-muted);font-size:12.5px;
+  }
+  .mfa-alt:hover{background:var(--surface-2);color:var(--fg)}
+  .mfa-alt svg{width:16px;height:16px;color:var(--fg-dim)}
+
+  /* Card footer */
+  .card-foot{
+    margin-top:18px;text-align:center;
+    color:var(--fg-muted);font-size:12.5px;
+  }
+  .card-foot a{color:var(--accent);font-weight:500}
+  .card-foot a:hover{text-decoration:underline;text-decoration-color:var(--accent-line);text-underline-offset:3px}
+
+  /* Bottom footer (status + build) */
+  .footbar{
+    width:100%;max-width:1180px;
+    margin-top:auto;
+    padding-top:18px;
+    color:var(--fg-dim);font-size:11px;font-family:var(--font-mono);letter-spacing:0.02em;
+    display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
+  }
+  .footbar a:hover{color:var(--fg-muted)}
+  .footbar .build{display:inline-flex;align-items:center;gap:6px}
+  .footbar .build .pdot{width:5px;height:5px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px oklch(72% 0.16 150 / 0.2)}
+  .footbar .links{display:inline-flex;align-items:center;gap:14px}
+
+  /* Responsive */
+  @media (max-width: 640px){
+    .auth{padding:18px 14px 18px}
+    .bg-conic{filter:blur(60px);opacity:.5}
+    .bg-aurora::before, .bg-aurora::after{filter:blur(60px);opacity:.35}
+    .card-halo{width:380px;height:380px}
+    .bg-ring{width:540px;height:540px}
+    .topbar{margin-bottom:24px}
+    .card{padding:26px}
+    .footbar{font-size:10.5px}
+  }
+  @media (max-width: 480px){
+    .card{padding:22px}
+    .code-cell{width:38px;height:48px;font-size:18px}
+    .brand-env{display:none}
+    .bg-conic{display:none}
+    .bg-ring{display:none}
+    .bg-dots .d{ box-shadow:0 0 8px oklch(68% 0.21 255 / 0.5) }
+  }
+
+  /* Honor reduced motion — keep visuals, kill the drift */
+  @media (prefers-reduced-motion: reduce){
+    .bg-conic, .bg-aurora::before, .bg-aurora::after, .card-halo, .bg-ring, .bg-ring::before, .bg-dots .d{
+      animation:none !important;
+    }
+    .bg-dots .d{ opacity:.6 }
+  }
+</style>
+</head>
+<body>
+
+<!-- Full-page decorative background -->
+<div class="bg-stage" aria-hidden="true"></div>
+<div class="bg-conic" aria-hidden="true"></div>
+<div class="bg-aurora" aria-hidden="true"></div>
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="bg-ring" aria-hidden="true"></div>
+<div class="bg-dots" id="bgDots" aria-hidden="true"></div>
+<div class="card-halo" aria-hidden="true"></div>
+<div class="bg-vignette" aria-hidden="true"></div>
+<div class="bg-noise" aria-hidden="true"></div>
+
+<div class="auth">
+
+  <!-- top bar: brand + lang -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">A</div>
+      <div class="brand-name">AreNET</div>
+      <span class="brand-env">prod · eu-west-1</span>
+    </div>
+    <div class="topbar-r">
+      <button class="lang" id="langBtn">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        FR
+      </button>
+    </div>
+  </div>
+
+  <!-- centered card -->
+  <div class="center">
+
+    <div class="card">
+
+      <!-- ===== Sign-in view ===== -->
+      <div class="signin" id="signinView">
+        <h1 class="card-h">Bienvenue.</h1>
+        <p class="card-sub">Connecte-toi pour accéder à la console AreNET.</p>
+
+        <div class="banner" id="errBanner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <div><b>Identifiants invalides.</b> Vérifie ton email et mot de passe, ou utilise GoAuthentik si ton compte est géré par l'IdP.</div>
+        </div>
+
+        <!-- SSO primary -->
+        <button class="sso-btn" id="ssoBtn" type="button" aria-label="Continuer avec GoAuthentik">
+          <span class="sso-logo">GA</span>
+          <span>Continuer avec <b style="font-weight:600">GoAuthentik</b></span>
+          <svg class="arr" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+        <div class="sso-hint">
+          <span class="pdot"></span>
+          IdP joignable · sync il y a 2 min · 9 comptes provisionnés
+        </div>
+
+        <div class="divider">ou avec un compte local</div>
+
+        <form id="signinForm" autocomplete="on" novalidate>
+          <div class="field">
+            <label for="email">Email</label>
+            <div class="input-wrap">
+              <input class="input" type="email" id="email" name="email" autocomplete="username" placeholder="ton.email@arenet.fr" value="" required />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="password">Mot de passe <a href="#" class="link" id="forgotLink">Oublié ?</a></label>
+            <div class="input-wrap">
+              <input class="input with-toggle" type="password" id="password" name="password" autocomplete="current-password" placeholder="••••••••••••" required minlength="8" />
+              <button type="button" class="pw-toggle" id="pwToggle" aria-label="Afficher le mot de passe" tabindex="-1">
+                <svg id="pwEyeOn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg id="pwEyeOff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="row">
+            <label class="check">
+              <input type="checkbox" id="trust" />
+              <span>Faire confiance à cet appareil <small>session de 30 jours</small></span>
+            </label>
+          </div>
+
+          <button type="submit" class="submit" id="submitBtn">
+            <span class="spin"></span>
+            <span class="label">Se connecter</span>
+          </button>
+        </form>
+
+        <div class="card-foot">
+          Pas encore d'accès ? <a href="#">Demande une invitation</a>
+        </div>
+      </div>
+
+      <!-- ===== MFA view ===== -->
+      <div class="mfa" id="mfaView">
+        <a class="mfa-back" href="#" id="mfaBack">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          Retour
+        </a>
+        <h1 class="card-h">Vérification en deux étapes</h1>
+        <p class="card-sub">Saisis le code à 6 chiffres de ton application d'authentification.</p>
+
+        <div class="banner info show" id="infoBanner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <div>Code TOTP attendu · expire dans <span id="ttl">28</span>s</div>
+        </div>
+
+        <div class="mfa-user">
+          <div class="a" id="mfaInitial">LR</div>
+          <div class="who-l">
+            <span id="mfaName" style="color:var(--fg);font-weight:500">l.ramos@sct-telecom.fr</span>
+            <small>compte local · MFA TOTP</small>
+          </div>
+        </div>
+
+        <form id="mfaForm" autocomplete="off">
+          <div class="code-row" id="codeRow">
+            <input class="code-cell" type="text" maxlength="1" inputmode="numeric" placeholder="0" aria-label="Chiffre 1"/>
+            <input class="code-cell" type="text" maxlength="1" inputmode="numeric" placeholder="0" aria-label="Chiffre 2"/>
+            <input class="code-cell" type="text" maxlength="1" inputmode="numeric" placeholder="0" aria-label="Chiffre 3"/>
+            <input class="code-cell" type="text" maxlength="1" inputmode="numeric" placeholder="0" aria-label="Chiffre 4"/>
+            <input class="code-cell" type="text" maxlength="1" inputmode="numeric" placeholder="0" aria-label="Chiffre 5"/>
+            <input class="code-cell" type="text" maxlength="1" inputmode="numeric" placeholder="0" aria-label="Chiffre 6"/>
+          </div>
+
+          <div class="mfa-meta">
+            <label class="check">
+              <input type="checkbox" id="trustMfa"/>
+              <span>Mémoriser cet appareil 30j</span>
+            </label>
+            <span class="timer" id="ttl2">00:28</span>
+          </div>
+
+          <button type="submit" class="submit" id="mfaSubmit">
+            <span class="spin"></span>
+            <span class="label">Vérifier</span>
+          </button>
+        </form>
+
+        <div class="mfa-alts">
+          <div class="h">autres méthodes</div>
+          <a href="#" class="mfa-alt">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            Clé de sécurité WebAuthn
+          </a>
+          <a href="#" class="mfa-alt">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            Recevoir un code par email
+          </a>
+          <a href="#" class="mfa-alt">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            Utiliser un code de récupération
+          </a>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- bottom footer -->
+  <div class="footbar">
+    <span class="build">
+      <span class="pdot"></span>
+      build <span style="color:var(--fg-muted)">2026.05.27-1a4f</span> · region <b style="color:var(--fg-muted);font-family:inherit;font-weight:500">eu-west-1</b>
+    </span>
+    <span class="links">
+      <a href="#">status.arenet.fr</a>
+      <a href="#">Conditions</a>
+      <a href="#">Confidentialité</a>
+      <a href="#">Sécurité</a>
+    </span>
+  </div>
+
+</div>
+
+<script>
+  // ============ View switching ============
+  const signinView = document.getElementById('signinView');
+  const mfaView    = document.getElementById('mfaView');
+  const errBanner  = document.getElementById('errBanner');
+
+  function showMfa(){
+    const email = document.getElementById('email').value.trim() || 'l.ramos@sct-telecom.fr';
+    document.getElementById('mfaName').textContent = email;
+    const initial = (email.split('@')[0].split('.').map(s=>s[0]).join('') || 'U').slice(0,2).toUpperCase();
+    document.getElementById('mfaInitial').textContent = initial;
+    signinView.classList.add('hide');
+    mfaView.classList.add('show');
+    setTimeout(()=>document.querySelector('.code-cell').focus(), 60);
+    startTtl();
+  }
+  function showSignin(){
+    mfaView.classList.remove('show');
+    signinView.classList.remove('hide');
+    stopTtl();
+  }
+
+  document.getElementById('mfaBack').addEventListener('click', e=>{e.preventDefault();showSignin()});
+
+  // ============ Password toggle ============
+  const pwInput  = document.getElementById('password');
+  const pwToggle = document.getElementById('pwToggle');
+  const pwEyeOn  = document.getElementById('pwEyeOn');
+  const pwEyeOff = document.getElementById('pwEyeOff');
+  pwToggle.addEventListener('click', ()=>{
+    const showing = pwInput.type === 'text';
+    pwInput.type = showing ? 'password' : 'text';
+    pwEyeOn.style.display  = showing ? '' : 'none';
+    pwEyeOff.style.display = showing ? 'none' : '';
+    pwToggle.setAttribute('aria-label', showing ? 'Afficher le mot de passe' : 'Masquer le mot de passe');
+  });
+
+  // ============ Sign-in submit (demo) ============
+  const form = document.getElementById('signinForm');
+  const submitBtn = document.getElementById('submitBtn');
+  form.addEventListener('submit', e=>{
+    e.preventDefault();
+    errBanner.classList.remove('show');
+    const email = document.getElementById('email').value.trim();
+    const pw    = pwInput.value;
+    if(!email || !pw){
+      errBanner.querySelector('div').innerHTML = '<b>Champs incomplets.</b> Saisis ton email et mot de passe.';
+      errBanner.classList.add('show');
+      return;
+    }
+    submitBtn.classList.add('loading');
+    submitBtn.querySelector('.label').textContent = 'Vérification…';
+    // simulate auth → MFA (admin path) or error (?error=1)
+    setTimeout(()=>{
+      submitBtn.classList.remove('loading');
+      submitBtn.querySelector('.label').textContent = 'Se connecter';
+      if(new URLSearchParams(location.search).get('error') === '1'){
+        errBanner.classList.add('show');
+        return;
+      }
+      showMfa();
+    }, 850);
+  });
+
+  // ============ SSO button (demo) ============
+  document.getElementById('ssoBtn').addEventListener('click', ()=>{
+    const btn = document.getElementById('ssoBtn');
+    const labelSpan = btn.querySelector('span:nth-child(2)');
+    const oldHtml = labelSpan.innerHTML;
+    labelSpan.innerHTML = 'Redirection vers <b style="font-weight:600">id.arenet.fr</b>…';
+    btn.style.pointerEvents = 'none';
+    btn.style.opacity = '0.8';
+    setTimeout(()=>{
+      // demo: bounce back, simulate IdP returning an admin user
+      btn.style.pointerEvents = '';
+      btn.style.opacity = '';
+      labelSpan.innerHTML = oldHtml;
+      // After SSO, you'd normally redirect into the console.
+      // For the demo: small flash, then go to the console.
+      window.location.href = 'index.html';
+    }, 1200);
+  });
+
+  document.getElementById('forgotLink').addEventListener('click', e=>{
+    e.preventDefault();
+    errBanner.classList.remove('show');
+    errBanner.classList.add('info','show');
+    errBanner.querySelector('div').innerHTML = '<b>Lien envoyé.</b> Si un compte local existe pour cet email, tu recevras un lien de réinitialisation dans quelques minutes.';
+  });
+
+  // ============ MFA code input behavior ============
+  const codeCells = [...document.querySelectorAll('.code-cell')];
+  codeCells.forEach((cell, i)=>{
+    cell.addEventListener('input', e=>{
+      const v = cell.value.replace(/\D/g,'').slice(0,1);
+      cell.value = v;
+      if(v && codeCells[i+1]) codeCells[i+1].focus();
+      const allFilled = codeCells.every(c=>c.value.length===1);
+      if(allFilled) document.getElementById('mfaSubmit').focus();
+    });
+    cell.addEventListener('keydown', e=>{
+      if(e.key === 'Backspace' && !cell.value && codeCells[i-1]){
+        codeCells[i-1].focus();
+        codeCells[i-1].value = '';
+      }
+      if(e.key === 'ArrowLeft'  && codeCells[i-1]) codeCells[i-1].focus();
+      if(e.key === 'ArrowRight' && codeCells[i+1]) codeCells[i+1].focus();
+    });
+    cell.addEventListener('paste', e=>{
+      const text = (e.clipboardData||window.clipboardData).getData('text').replace(/\D/g,'').slice(0,6);
+      if(!text) return;
+      e.preventDefault();
+      text.split('').forEach((ch, k)=>{ if(codeCells[k]) codeCells[k].value = ch; });
+      const next = Math.min(text.length, 5);
+      codeCells[next].focus();
+    });
+  });
+
+  document.getElementById('mfaForm').addEventListener('submit', e=>{
+    e.preventDefault();
+    const code = codeCells.map(c=>c.value).join('');
+    const btn = document.getElementById('mfaSubmit');
+    if(code.length !== 6) return;
+    btn.classList.add('loading');
+    btn.querySelector('.label').textContent = 'Vérification…';
+    setTimeout(()=>{
+      btn.classList.remove('loading');
+      btn.querySelector('.label').textContent = 'Vérifier';
+      window.location.href = 'index.html';
+    }, 700);
+  });
+
+  // ============ MFA countdown ============
+  let ttlInt = null;
+  function startTtl(){
+    let left = 28;
+    const t1 = document.getElementById('ttl');
+    const t2 = document.getElementById('ttl2');
+    function render(){
+      const m = String(Math.floor(left/60)).padStart(2,'0');
+      const s = String(left%60).padStart(2,'0');
+      if(t1) t1.textContent = left;
+      if(t2) t2.textContent = `${m}:${s}`;
+    }
+    render();
+    ttlInt = setInterval(()=>{
+      left--; if(left<0) left = 30;
+      render();
+    }, 1000);
+  }
+  function stopTtl(){ if(ttlInt){clearInterval(ttlInt); ttlInt=null} }
+
+  // ============ Ambient drifting dots ============
+  (function(){
+    const layer = document.getElementById('bgDots');
+    if(!layer) return;
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const count = reduced ? 8 : 26;
+    const sizes = ['s','','l'];
+    for(let i=0;i<count;i++){
+      const d = document.createElement('div');
+      const isViolet = Math.random() < 0.35;
+      const size = sizes[Math.floor(Math.random()*sizes.length)];
+      d.className = 'd' + (isViolet ? ' v' : '') + (size ? ' ' + size : '');
+      // start position anywhere on the canvas
+      const sx = Math.random() * 100;
+      const sy = Math.random() * 100;
+      // drift vector — random direction, longer travel
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 120 + Math.random() * 220;
+      const mx = Math.cos(angle) * dist;
+      const my = Math.sin(angle) * dist;
+      d.style.left = sx + '%';
+      d.style.top  = sy + '%';
+      d.style.setProperty('--mx', mx.toFixed(0) + 'px');
+      d.style.setProperty('--my', my.toFixed(0) + 'px');
+      d.style.setProperty('--dur',   (16 + Math.random() * 18).toFixed(1) + 's');
+      d.style.setProperty('--delay', (-Math.random() * 20).toFixed(1) + 's');
+      layer.appendChild(d);
+    }
+  })();
+
+  // ============ Lang demo ============
+  document.getElementById('langBtn').addEventListener('click', ()=>{
+    const b = document.getElementById('langBtn');
+    b.textContent = b.textContent.trim() === 'FR' ? 'EN' : 'FR';
+  });
+
+  // ============ Keyboard polish ============
+  document.addEventListener('keydown', e=>{
+    if(e.key === 'Escape' && mfaView.classList.contains('show')) showSignin();
+  });
+
+  // ============ Demo: ?step=mfa direct link ============
+  if(new URLSearchParams(location.search).get('step') === 'mfa'){
+    document.getElementById('email').value = 'l.ramos@sct-telecom.fr';
+    showMfa();
+  }
+  if(new URLSearchParams(location.search).get('error') === '1'){
+    errBanner.classList.add('show');
+  }
+</script>
+</body>
+</html>
