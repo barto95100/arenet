@@ -17,6 +17,7 @@
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import StatusDot from './StatusDot.svelte';
 	import Tooltip from './Tooltip.svelte';
 	import { auth } from '$lib/stores/auth.svelte';
@@ -51,6 +52,23 @@
 			localStorage.setItem(SIDEBAR_LS_KEY, String(collapsed));
 		} catch (_) {
 			// Same fallback as mount — non-fatal.
+		}
+	}
+
+	// Step K.2 — Sign out. Posts /auth/logout (kills the server-side
+	// session + revokes the cookie), then redirects to /login. The
+	// auth store handles its own state clearing; the goto ensures
+	// the user lands on the public login page even if the route they
+	// were on is still mounted.
+	let signingOut = $state(false);
+	async function signOut(): Promise<void> {
+		if (signingOut) return;
+		signingOut = true;
+		try {
+			await auth.logout();
+		} finally {
+			signingOut = false;
+			void goto('/login');
 		}
 	}
 
@@ -217,6 +235,28 @@
 			</span>
 			<span class:hidden={collapsed} class="text-primary truncate">{userLabel}</span>
 		</div>
+
+		<!-- Step K.2 — Sign out. Visible in both expanded and
+		     collapsed states (icon-only when collapsed). Calls
+		     auth.logout() then redirects to /login. -->
+		<button
+			type="button"
+			class="signout-btn flex items-center gap-2 text-xs text-secondary hover:text-primary transition-colors disabled:opacity-50"
+			class:justify-center={collapsed}
+			aria-label="Sign out"
+			disabled={signingOut}
+			onclick={signOut}
+		>
+			<span class="footer-icon-slot" aria-hidden="true">
+				<!-- Lucide: log-out -->
+				<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+					<polyline points="16 17 21 12 16 7" />
+					<line x1="21" x2="9" y1="12" y2="12" />
+				</svg>
+			</span>
+			<span class:hidden={collapsed}>{signingOut ? 'Signing out…' : 'Sign out'}</span>
+		</button>
 
 		<!-- Theme indicator (passive — does not toggle; the active
 		     control lives in Settings). Sun for light, moon for dark.

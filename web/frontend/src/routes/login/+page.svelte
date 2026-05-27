@@ -13,6 +13,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { ApiError } from '$lib/api/types';
 	import { authApi } from '$lib/api/auth';
@@ -20,6 +21,23 @@
 	import Checkbox from '$lib/components/Checkbox.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
+
+	// Step K.2 — map the `?error=<code>` query the OIDC callback
+	// posts to the login page on a rejected SSO flow. Spec §5.2
+	// callback emits these five codes; any other value falls
+	// through to a generic message.
+	const OIDC_ERROR_MESSAGES: Record<string, string> = {
+		not_authorized:
+			'This account is not allowed to sign in. Ask an administrator to add your email or OIDC subject to the allowlist.',
+		invalid_state:
+			'The SSO request was rejected (state mismatch, expired session, or replay attempt). Please try again.',
+		idp_error:
+			'The identity provider rejected the sign-in request. Check with your IdP administrator.',
+		idp_unreachable:
+			'The identity provider could not be reached. Try again later, or sign in with your local account below.',
+		internal:
+			'An unexpected error occurred during the SSO sign-in. Please try again, or sign in with your local account.'
+	};
 
 	let username = $state('');
 	let password = $state('');
@@ -43,6 +61,17 @@
 			.catch(() => {
 				oidcEnabled = false;
 			});
+
+		// Step K.2 — surface ?error=<code> from the OIDC callback.
+		// The callback handler can land the operator back on this
+		// page with a query param identifying the rejection reason;
+		// silently dropping it is a UX black hole.
+		const errCode = page.url.searchParams.get('error');
+		if (errCode) {
+			formError =
+				OIDC_ERROR_MESSAGES[errCode] ??
+				`Sign-in failed (code: ${errCode}). Please try again or sign in with your local account.`;
+		}
 	});
 
 	function handleSsoLogin(): void {

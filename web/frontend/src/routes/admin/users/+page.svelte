@@ -102,6 +102,13 @@
 				pushToast('Failed to change role', 'danger');
 			}
 		} finally {
+			// Close the dialog AND clear the pending action.
+			// The ConfirmDialog doesn't auto-close after onConfirm;
+			// the caller owns the lifecycle. Setting confirmOpen
+			// here also matters for the error path so the operator
+			// can read the toast and retry without the modal
+			// blocking the view.
+			confirmOpen = false;
 			pending = null;
 		}
 	}
