@@ -240,7 +240,8 @@
 		verifyUrl: '',
 		authRequestUri: '/api/authz/forward-auth',
 		copyHeaders: 'Remote-User, Remote-Email',
-		clientSecret: ''
+		clientSecret: '',
+		authPassthroughPrefix: ''
 	});
 	let fwdAuthFormOpen = $state(false);
 	let fwdAuthSubmitting = $state(false);
@@ -271,7 +272,8 @@
 			verifyUrl: '',
 			authRequestUri: '/api/authz/forward-auth',
 			copyHeaders: 'Remote-User, Remote-Email',
-			clientSecret: ''
+			clientSecret: '',
+			authPassthroughPrefix: ''
 		};
 		fwdAuthFormError = null;
 		fwdAuthFormOpen = true;
@@ -286,7 +288,8 @@
 			verifyUrl: p.verifyUrl,
 			authRequestUri: p.authRequestUri,
 			copyHeaders: (p.copyHeaders ?? []).join(', '),
-			clientSecret: ''
+			clientSecret: '',
+			authPassthroughPrefix: p.authPassthroughPrefix ?? ''
 		};
 		fwdAuthFormError = null;
 		fwdAuthFormOpen = true;
@@ -296,6 +299,7 @@
 		fwdAuthSubmitting = true;
 		fwdAuthFormError = null;
 		try {
+			const passthrough = fwdAuthForm.authPassthroughPrefix.trim();
 			const req = {
 				name: fwdAuthForm.name.trim(),
 				kind: fwdAuthForm.kind,
@@ -305,7 +309,8 @@
 					.split(',')
 					.map((h) => h.trim())
 					.filter((h) => h.length > 0),
-				clientSecret: fwdAuthForm.clientSecret
+				clientSecret: fwdAuthForm.clientSecret,
+				...(passthrough ? { authPassthroughPrefix: passthrough } : {})
 			};
 			if (fwdAuthEditingName === null) {
 				await settingsApi.createForwardAuthProvider(req);
@@ -813,6 +818,32 @@
 								: ''}
 							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 						/>
+					</div>
+
+					<div class="md:col-span-2">
+						<label
+							for="fwdauth-passthrough"
+							class="text-sm font-medium text-secondary block mb-1"
+						>
+							Auth passthrough prefix (optional)
+						</label>
+						<input
+							id="fwdauth-passthrough"
+							type="text"
+							bind:value={fwdAuthForm.authPassthroughPrefix}
+							placeholder="/outpost.goauthentik.io"
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+						/>
+						<p class="text-xs text-muted mt-1">
+							Path prefix served by the IdP itself on the
+							application's host (e.g. <code class="font-mono">/outpost.goauthentik.io</code> for
+							Authentik embedded outpost, <code class="font-mono">/oauth2</code> for
+							oauth2-proxy). Requests under this prefix bypass
+							the forward_auth gate and are reverse-proxied
+							directly to the verify URL host. Leave empty for
+							providers that don't need it (Authelia standalone,
+							generic).
+						</p>
 					</div>
 
 					{#if fwdAuthFormError}

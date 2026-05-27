@@ -45,14 +45,31 @@ import (
 // AuthRequestURI, CopyHeaders, ClientSecret) are enough to emit
 // the Caddy forward_auth subroute pattern for any of them.
 type ForwardAuthProvider struct {
-	Name           string    `json:"name"` // unique key, slug-shaped
-	Kind           string    `json:"kind"` // "authelia"|"authentik"|"keycloak"|"generic"
-	VerifyURL      string    `json:"verify_url"`
-	AuthRequestURI string    `json:"auth_request_uri"`
-	CopyHeaders    []string  `json:"copy_headers"`
-	ClientSecret   string    `json:"client_secret"` // SECRET — never echoed by the API or audit
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	Name           string   `json:"name"` // unique key, slug-shaped
+	Kind           string   `json:"kind"` // "authelia"|"authentik"|"keycloak"|"generic"
+	VerifyURL      string   `json:"verify_url"`
+	AuthRequestURI string   `json:"auth_request_uri"`
+	CopyHeaders    []string `json:"copy_headers"`
+	ClientSecret   string   `json:"client_secret"` // SECRET — never echoed by the API or audit
+	// AuthPassthroughPrefix (Step K.4) — when non-empty, requests
+	// to routes referencing this provider whose path starts with
+	// this prefix are reverse-proxied DIRECTLY to the verify URL's
+	// host, bypassing the forward_auth gate. This unblocks IdP
+	// patterns where the IdP itself serves embedded UI / OAuth
+	// endpoints at a stable path under the application's external
+	// host (Authentik embedded outpost: /outpost.goauthentik.io/*;
+	// oauth2-proxy: /oauth2/*). Without this, the IdP's redirect
+	// to its own UI loop-feeds back into the forward_auth handler
+	// → ∞ loop OR 404.
+	//
+	// Single-valued by design (single string). Multiple prefixes
+	// per provider can be added later if a real need surfaces
+	// (overlap / ordering semantics would need their own decision
+	// at that point). Empty (default): legacy K.1 behaviour —
+	// a single forward_auth chain for every request to the route.
+	AuthPassthroughPrefix string    `json:"auth_passthrough_prefix,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 // ForwardAuthProviderKinds enumerates the four supported provider
@@ -110,6 +127,23 @@ func (p *ForwardAuthProvider) validate() error {
 	// doesn't require RP authentication, e.g. some basic Authelia
 	// setups). The API layer documents this; storage stays
 	// permissive.
+	// Step K.4 — AuthPassthroughPrefix shape check. Empty is
+	// fine (legacy K.1 behaviour). Non-empty must start with /
+	// and carry no whitespace. Caddy's path matchers treat the
+	// prefix as a literal segment + wildcard at generation time.
+	if p.AuthPassthroughPrefix != "" {
+		if p.AuthPassthroughPrefix[0] != '/' {
+			return fmt.Errorf("forward_auth_provider: auth_passthrough_prefix %q must start with /", p.AuthPassthroughPrefix)
+		}
+		for _, r := range p.AuthPassthroughPrefix {
+			if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+				return fmt.Errorf("forward_auth_provider: auth_passthrough_prefix %q must not contain whitespace", p.AuthPassthroughPrefix)
+			}
+		}
+		if len(p.AuthPassthroughPrefix) > 256 {
+			return errors.New("forward_auth_provider: auth_passthrough_prefix must be ≤ 256 chars")
+		}
+	}
 	return nil
 }
 

@@ -2420,9 +2420,419 @@ func TestBuildConfigJSON_ForwardAuth_UnknownProvider_FailsClosed(t *testing.T) {
 	}
 }
 
+// TestBuildConfigJSON_ForwardAuth_PassthroughPrefix_BypassesGate
+// pins the Step K.4 contract: a provider with a non-empty
+// AuthPassthroughPrefix emits an ADDITIONAL httpRoute matching
+// the path prefix on the same Host, whose handler chain has NO
+// forward_auth gate (just a reverse_proxy to the verify URL
+// host). Caddy dispatches routes in declaration order — the
+// prefixed route MUST land before the catch-all main route so
+// it claims its subtree first.
+func TestBuildConfigJSON_ForwardAuth_PassthroughPrefix_BypassesGate(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:        "r-fa-pt",
+			Host:      "protected.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "authentik-pt",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+
+	opts := buildOpts{
+		DevMode: true,
+		ForwardAuthProviders: map[string]storage.ForwardAuthProvider{
+			"authentik-pt": {
+				Name:                  "authentik-pt",
+				Kind:                  "authentik",
+				VerifyURL:             "https://auth.example.com/outpost.goauthentik.io/auth/caddy",
+				AuthRequestURI:        "/outpost.goauthentik.io/auth/caddy",
+				CopyHeaders:           []string{"X-Authentik-Username"},
+				AuthPassthroughPrefix: "/outpost.goauthentik.io",
+			},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, raw)
+	}
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate failed on passthrough config: %v\n%s", err, raw)
+	}
+
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal full: %v", err)
+	}
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpSrv := servers["arenet_http"].(map[string]any)
+	httpRoutes := httpSrv["routes"].([]any)
+
+	// Find the passthrough route: same host, has Path matcher
+	// equal to "/outpost.goauthentik.io/*".
+	passthroughIdx := -1
+	mainIdx := -1
+	for i, r := range httpRoutes {
+		m := r.(map[string]any)
+		matchSets, _ := m["match"].([]any)
+		if len(matchSets) == 0 {
+			continue
+		}
+		ms := matchSets[0].(map[string]any)
+		hosts, _ := ms["host"].([]any)
+		hostMatch := false
+		for _, h := range hosts {
+			if h == "protected.example.com" {
+				hostMatch = true
+				break
+			}
+		}
+		if !hostMatch {
+			continue
+		}
+		path, _ := ms["path"].([]any)
+		if len(path) > 0 && path[0] == "/outpost.goauthentik.io/*" {
+			passthroughIdx = i
+		} else if len(path) == 0 {
+			mainIdx = i
+		}
+	}
+	if passthroughIdx < 0 {
+		t.Fatalf("passthrough route not emitted; httpRoutes: %v", httpRoutes)
+	}
+	if mainIdx < 0 {
+		t.Fatalf("main route not emitted")
+	}
+	// Order: passthrough MUST come before main, otherwise the
+	// catch-all main route on the same Host would claim the
+	// passthrough path first.
+	if passthroughIdx >= mainIdx {
+		t.Fatalf("PASSTHROUGH ORDERING REGRESSION: passthrough route idx=%d is at or after main route idx=%d; the main host route would claim the passthrough path before the passthrough route gets a chance", passthroughIdx, mainIdx)
+	}
+
+	// The passthrough route's handler chain MUST be just one
+	// reverse_proxy to the verify URL's host. No forward_auth,
+	// no static_response.
+	ptRoute := httpRoutes[passthroughIdx].(map[string]any)
+	ptHandlers := ptRoute["handle"].([]any)
+	if len(ptHandlers) != 1 {
+		t.Fatalf("PASSTHROUGH SHAPE REGRESSION: passthrough chain length = %d; want 1 (single reverse_proxy)", len(ptHandlers))
+	}
+	rp := ptHandlers[0].(map[string]any)
+	if rp["handler"] != "reverse_proxy" {
+		t.Errorf("passthrough handler = %v; want reverse_proxy", rp["handler"])
+	}
+	// No "rewrite" (forward_auth uses rewrite) — the
+	// passthrough is a straight reverse-proxy.
+	if _, hasRewrite := rp["rewrite"]; hasRewrite {
+		t.Error("PASSTHROUGH BYPASS REGRESSION: passthrough route emitted a rewrite block (forward_auth shape leaked); the passthrough must be a straight reverse_proxy")
+	}
+	// No "handle_response" (forward_auth's copy-header block).
+	if _, hasHR := rp["handle_response"]; hasHR {
+		t.Error("PASSTHROUGH BYPASS REGRESSION: passthrough route emitted handle_response (forward_auth shape leaked)")
+	}
+	// Upstream dial must be the verify URL's host:port.
+	dial := rp["upstreams"].([]any)[0].(map[string]any)["dial"]
+	if dial != "auth.example.com:443" {
+		t.Errorf("passthrough dial = %v; want auth.example.com:443", dial)
+	}
+}
+
+// TestBuildConfigJSON_ForwardAuth_PassthroughEmpty_NoExtraRoute
+// pins the regression boundary: AuthPassthroughPrefix="" keeps
+// the legacy K.1 behaviour byte-identical (no extra route
+// emitted, no Path matcher on the main route).
+func TestBuildConfigJSON_ForwardAuth_PassthroughEmpty_NoExtraRoute(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:        "r-fa-legacy",
+			Host:      "legacy.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "authelia-legacy",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+
+	opts := buildOpts{
+		DevMode: true,
+		ForwardAuthProviders: map[string]storage.ForwardAuthProvider{
+			"authelia-legacy": {
+				Name:           "authelia-legacy",
+				Kind:           "authelia",
+				VerifyURL:      "http://127.0.0.1:9091",
+				AuthRequestURI: "/api/authz/forward-auth",
+				CopyHeaders:    []string{"Remote-User"},
+				// AuthPassthroughPrefix intentionally empty.
+			},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpSrv := servers["arenet_http"].(map[string]any)
+	httpRoutes := httpSrv["routes"].([]any)
+
+	hostMatches := 0
+	for _, r := range httpRoutes {
+		m := r.(map[string]any)
+		matchSets, _ := m["match"].([]any)
+		if len(matchSets) == 0 {
+			continue
+		}
+		ms := matchSets[0].(map[string]any)
+		hosts, _ := ms["host"].([]any)
+		for _, h := range hosts {
+			if h == "legacy.example.com" {
+				hostMatches++
+				// The main route MUST NOT carry a Path matcher
+				// — legacy shape is host-only.
+				if path, hasPath := ms["path"]; hasPath && path != nil {
+					t.Errorf("LEGACY SHAPE REGRESSION: main route gained a Path matcher %v with empty AuthPassthroughPrefix", path)
+				}
+			}
+		}
+	}
+	if hostMatches != 1 {
+		t.Fatalf("LEGACY ADD-ONLY REGRESSION: expected exactly 1 httpRoute for legacy.example.com, got %d", hostMatches)
+	}
+}
+
+// TestBuildConfigJSON_ForwardAuth_HTTPSVerifyURL_UsesTLSTransport
+// pins the K.4 smoke-time fix: when the provider's VerifyURL is
+// HTTPS the forward_auth sub-request MUST be sent over TLS. The
+// previous K.1 generator omitted the transport block, so Caddy
+// defaulted to plain HTTP — every IdP that exposes its verify
+// endpoint on https (Authentik embedded outpost is the common
+// case) returned 400 "Client sent HTTP to HTTPS server" on every
+// sub-request, refusing every requester (same outcome as
+// fail-closed, but for the wrong reason — operator can't tell
+// "my IdP is rejecting" from "my Arenet config is bugged").
+func TestBuildConfigJSON_ForwardAuth_HTTPSVerifyURL_UsesTLSTransport(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:        "r-fa-https",
+			Host:      "tls-protected.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "authentik-tls",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+
+	opts := buildOpts{
+		DevMode: true,
+		ForwardAuthProviders: map[string]storage.ForwardAuthProvider{
+			"authentik-tls": {
+				Name:           "authentik-tls",
+				Kind:           "authentik",
+				VerifyURL:      "https://auth.example.com/outpost.goauthentik.io/auth/caddy",
+				AuthRequestURI: "/outpost.goauthentik.io/auth/caddy",
+				CopyHeaders:    []string{"X-Authentik-Username"},
+			},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpSrv := servers["arenet_http"].(map[string]any)
+	httpRoutes := httpSrv["routes"].([]any)
+	target := findRouteByHost(t, httpRoutes, "tls-protected.example.com")
+	handlers := target["handle"].([]any)
+	// forward_auth handler is at index 1 (after metrics).
+	fa := handlers[1].(map[string]any)
+	transport, ok := fa["transport"].(map[string]any)
+	if !ok {
+		t.Fatalf("TLS TRANSPORT REGRESSION: forward_auth handler missing transport block for HTTPS VerifyURL; Caddy will default to plain HTTP and the IdP will reject every sub-request with 400. Handler: %v", fa)
+	}
+	if _, hasTLS := transport["tls"]; !hasTLS {
+		t.Errorf("TLS TRANSPORT REGRESSION: transport block missing tls field: %v", transport)
+	}
+	if transport["protocol"] != "http" {
+		t.Errorf("transport.protocol = %v; want \"http\" (the HTTP-over-TLS protocol)", transport["protocol"])
+	}
+}
+
+func TestBuildConfigJSON_ForwardAuth_HTTPVerifyURL_NoTLSTransport(t *testing.T) {
+	// Inverse: HTTP verify URL must NOT add a transport block —
+	// staying byte-identical with the K.1 pre-fix shape so legacy
+	// plain-HTTP providers (typical local Authelia setup) keep
+	// working.
+	routes := []storage.Route{
+		{
+			ID:        "r-fa-http-only",
+			Host:      "plain-http.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "authelia-plain",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+	opts := buildOpts{
+		DevMode: true,
+		ForwardAuthProviders: map[string]storage.ForwardAuthProvider{
+			"authelia-plain": {
+				Name:           "authelia-plain",
+				Kind:           "authelia",
+				VerifyURL:      "http://127.0.0.1:9091",
+				AuthRequestURI: "/api/authz/forward-auth",
+				CopyHeaders:    []string{"Remote-User"},
+			},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var full map[string]any
+	_ = json.Unmarshal(raw, &full)
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
+	target := findRouteByHost(t, httpRoutes, "plain-http.example.com")
+	fa := target["handle"].([]any)[1].(map[string]any)
+	if _, hasTransport := fa["transport"]; hasTransport {
+		t.Errorf("LEGACY SHAPE REGRESSION: HTTP-only verify URL gained a transport block: %v", fa["transport"])
+	}
+}
+
+// TestBuildConfigJSON_ForwardAuth_PassthroughPrefix_FailsClosed_NoPassthroughEmitted
+// pins the security-critical corner of the K.4 matrix: when the
+// route's referenced forward-auth provider does NOT resolve (a
+// state reachable only via storage corruption / migration drift
+// / direct BoltDB edit per the K.1 invariants, NEVER through
+// the API), the FAIL-CLOSED deny path MUST short-circuit
+// completely — even when an AuthPassthroughPrefix was set on
+// some OTHER provider that happens to share the name slot. The
+// passthrough route must NOT be emitted: it would dial straight
+// to the verify URL host bypassing every gate, leaking the
+// IdP's UI to an unauthenticated request on a route the
+// operator intended to protect.
+//
+// Mirror of TestBuildConfigJSON_ForwardAuth_UnknownProvider_
+// FailsClosed but with the K.4 passthrough field involved:
+// proves that the deny path's "STOP appending to the chain"
+// also stops the passthrough emission.
+func TestBuildConfigJSON_ForwardAuth_PassthroughPrefix_FailsClosed_NoPassthroughEmitted(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:        "r-fa-deny-pt",
+			Host:      "orphan-with-pt.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			AuthMode:  storage.RouteAuthForwardAuth,
+			ForwardAuth: storage.ForwardAuthRouteConfig{
+				ProviderName: "does-not-exist",
+			},
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+
+	// The map carries a DIFFERENT provider name AND that provider
+	// DOES declare a passthrough prefix. The route references
+	// "does-not-exist" which is NOT this entry — the resolution
+	// must fail, the deny chain must fire, and the passthrough
+	// MUST NOT be emitted (the resolved-provider pointer never
+	// gets set in the loop).
+	opts := buildOpts{
+		DevMode: true,
+		ForwardAuthProviders: map[string]storage.ForwardAuthProvider{
+			"some-other-provider": {
+				Name:                  "some-other-provider",
+				Kind:                  "authentik",
+				VerifyURL:             "https://auth.example.com/outpost.goauthentik.io/auth/caddy",
+				AuthRequestURI:        "/outpost.goauthentik.io/auth/caddy",
+				CopyHeaders:           []string{"X-Authentik-Username"},
+				AuthPassthroughPrefix: "/outpost.goauthentik.io",
+			},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpSrv := servers["arenet_http"].(map[string]any)
+	httpRoutes := httpSrv["routes"].([]any)
+
+	// Enumerate every route claiming this host. Expect EXACTLY
+	// ONE (the deny route) — zero passthroughs, zero reverse-
+	// proxy chains to the user upstream.
+	matchingHostRoutes := 0
+	for _, r := range httpRoutes {
+		m := r.(map[string]any)
+		matchSets, _ := m["match"].([]any)
+		for _, ms := range matchSets {
+			hosts, _ := ms.(map[string]any)["host"].([]any)
+			for _, h := range hosts {
+				if h == "orphan-with-pt.example.com" {
+					matchingHostRoutes++
+					// If this is the passthrough route, it would
+					// carry a Path matcher. Its mere presence here
+					// is the regression.
+					if path, hasPath := ms.(map[string]any)["path"]; hasPath && path != nil {
+						t.Errorf("PASSTHROUGH FAIL-OPEN REGRESSION: passthrough route emitted on the deny path; an attacker can reach the IdP-side path %v without authentication. The deny chain MUST short-circuit BEFORE the passthrough emission.", path)
+					}
+				}
+			}
+		}
+	}
+	if matchingHostRoutes != 1 {
+		t.Fatalf("DENY CHAIN BYPASS REGRESSION: expected exactly 1 httpRoute on the unresolved-provider host (the deny static_response), got %d. A second route on this host means the chain leaked past the FAIL-CLOSED short-circuit.", matchingHostRoutes)
+	}
+
+	// Pin the chain shape: single static_response 503 handler,
+	// no reverse_proxy of any kind.
+	target := findRouteByHost(t, httpRoutes, "orphan-with-pt.example.com")
+	handlers := target["handle"].([]any)
+	for _, h := range handlers {
+		m := h.(map[string]any)
+		if m["handler"] == "reverse_proxy" {
+			t.Errorf("PASSTHROUGH FAIL-OPEN REGRESSION: reverse_proxy emitted on the deny path; the K.4 passthrough leaked into the unresolved-provider chain. Handler: %v", m)
+		}
+	}
+}
+
 // findRouteByHost walks the httpRoutes array (Caddy JSON config
 // shape) and returns the first entry whose match.host contains
-// the given hostname.
 func findRouteByHost(t *testing.T, routes []any, host string) map[string]any {
 	t.Helper()
 	for _, r := range routes {

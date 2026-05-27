@@ -56,6 +56,13 @@ type forwardAuthProviderRequest struct {
 	AuthRequestURI string   `json:"authRequestUri"`
 	CopyHeaders    []string `json:"copyHeaders"`
 	ClientSecret   string   `json:"clientSecret"`
+	// AuthPassthroughPrefix (Step K.4, optional) — path prefix
+	// served by the IdP itself on the application's external
+	// host (e.g. "/outpost.goauthentik.io" for Authentik
+	// embedded outpost, "/oauth2" for oauth2-proxy). Non-empty
+	// emits a passthrough route bypassing the forward_auth gate
+	// for that subtree. Empty = legacy K.1 behaviour.
+	AuthPassthroughPrefix string `json:"authPassthroughPrefix,omitempty"`
 }
 
 // forwardAuthProviderResponse is the wire shape on GET. The
@@ -63,15 +70,16 @@ type forwardAuthProviderRequest struct {
 // ClientSecretSet bool tells the UI whether the row has a stored
 // secret so it can render the "••• set" placeholder.
 type forwardAuthProviderResponse struct {
-	Name            string   `json:"name"`
-	Kind            string   `json:"kind"`
-	VerifyURL       string   `json:"verifyUrl"`
-	AuthRequestURI  string   `json:"authRequestUri"`
-	CopyHeaders     []string `json:"copyHeaders"`
-	ClientSecret    string   `json:"clientSecret"`
-	ClientSecretSet bool     `json:"clientSecretSet"`
-	CreatedAt       string   `json:"createdAt"`
-	UpdatedAt       string   `json:"updatedAt"`
+	Name                  string   `json:"name"`
+	Kind                  string   `json:"kind"`
+	VerifyURL             string   `json:"verifyUrl"`
+	AuthRequestURI        string   `json:"authRequestUri"`
+	CopyHeaders           []string `json:"copyHeaders"`
+	ClientSecret          string   `json:"clientSecret"`
+	ClientSecretSet       bool     `json:"clientSecretSet"`
+	AuthPassthroughPrefix string   `json:"authPassthroughPrefix"`
+	CreatedAt             string   `json:"createdAt"`
+	UpdatedAt             string   `json:"updatedAt"`
 }
 
 // forwardAuthProviderForAudit returns a copy of p with the
@@ -89,15 +97,16 @@ func forwardAuthProviderToResponse(p storage.ForwardAuthProvider) forwardAuthPro
 		copyHeaders = []string{}
 	}
 	return forwardAuthProviderResponse{
-		Name:            p.Name,
-		Kind:            p.Kind,
-		VerifyURL:       p.VerifyURL,
-		AuthRequestURI:  p.AuthRequestURI,
-		CopyHeaders:     copyHeaders,
-		ClientSecret:    "",
-		ClientSecretSet: p.ClientSecret != "",
-		CreatedAt:       p.CreatedAt.UTC().Format(timestampFormat),
-		UpdatedAt:       p.UpdatedAt.UTC().Format(timestampFormat),
+		Name:                  p.Name,
+		Kind:                  p.Kind,
+		VerifyURL:             p.VerifyURL,
+		AuthRequestURI:        p.AuthRequestURI,
+		CopyHeaders:           copyHeaders,
+		ClientSecret:          "",
+		ClientSecretSet:       p.ClientSecret != "",
+		AuthPassthroughPrefix: p.AuthPassthroughPrefix,
+		CreatedAt:             p.CreatedAt.UTC().Format(timestampFormat),
+		UpdatedAt:             p.UpdatedAt.UTC().Format(timestampFormat),
 	}
 }
 
@@ -141,6 +150,21 @@ func validateForwardAuthProviderRequest(req forwardAuthProviderRequest) error {
 	for i, h := range req.CopyHeaders {
 		if err := validateHeaderName(h); err != nil {
 			return fmt.Errorf("copyHeaders[%d]: %s", i, err.Error())
+		}
+	}
+	// Step K.4 — passthrough prefix shape check (API-friendlier
+	// wording; storage re-checks via validate()).
+	if req.AuthPassthroughPrefix != "" {
+		if req.AuthPassthroughPrefix[0] != '/' {
+			return fmt.Errorf("authPassthroughPrefix %q must start with /", req.AuthPassthroughPrefix)
+		}
+		for _, r := range req.AuthPassthroughPrefix {
+			if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+				return fmt.Errorf("authPassthroughPrefix %q must not contain whitespace", req.AuthPassthroughPrefix)
+			}
+		}
+		if len(req.AuthPassthroughPrefix) > 256 {
+			return errors.New("authPassthroughPrefix must be ≤ 256 characters")
 		}
 	}
 	return nil
@@ -210,12 +234,13 @@ func (h *Handler) createForwardAuthProvider(w http.ResponseWriter, r *http.Reque
 	}
 
 	provider := storage.ForwardAuthProvider{
-		Name:           req.Name,
-		Kind:           req.Kind,
-		VerifyURL:      req.VerifyURL,
-		AuthRequestURI: req.AuthRequestURI,
-		CopyHeaders:    req.CopyHeaders,
-		ClientSecret:   req.ClientSecret,
+		Name:                  req.Name,
+		Kind:                  req.Kind,
+		VerifyURL:             req.VerifyURL,
+		AuthRequestURI:        req.AuthRequestURI,
+		CopyHeaders:           req.CopyHeaders,
+		ClientSecret:          req.ClientSecret,
+		AuthPassthroughPrefix: req.AuthPassthroughPrefix,
 	}
 	created, err := h.store.CreateForwardAuthProvider(r.Context(), provider)
 	if err != nil {
@@ -287,12 +312,13 @@ func (h *Handler) updateForwardAuthProvider(w http.ResponseWriter, r *http.Reque
 	}
 
 	updated, err := h.store.UpdateForwardAuthProvider(r.Context(), storage.ForwardAuthProvider{
-		Name:           req.Name,
-		Kind:           req.Kind,
-		VerifyURL:      req.VerifyURL,
-		AuthRequestURI: req.AuthRequestURI,
-		CopyHeaders:    req.CopyHeaders,
-		ClientSecret:   clientSecret,
+		Name:                  req.Name,
+		Kind:                  req.Kind,
+		VerifyURL:             req.VerifyURL,
+		AuthRequestURI:        req.AuthRequestURI,
+		CopyHeaders:           req.CopyHeaders,
+		ClientSecret:          clientSecret,
+		AuthPassthroughPrefix: req.AuthPassthroughPrefix,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

@@ -330,6 +330,11 @@ type httpRoute struct {
 
 type matcherSet struct {
 	Host []string `json:"host,omitempty"`
+	// Step K.4 — Path matcher. Caddy v2 takes a slice of glob
+	// patterns; a request matches if ANY pattern matches.
+	// Omitempty so the legacy host-only routes stay byte-
+	// identical in the emitted JSON.
+	Path []string `json:"path,omitempty"`
 }
 
 // buildOpts configures buildConfigJSON's environment-dependent
@@ -513,6 +518,12 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// Metrics MUST stay first to observe the final status code
 		// (§11.5 invariant).
 		handlers := []map[string]any{metricsHandler}
+		// Step K.4 — captured here so the passthrough-route block
+		// below (post-handler-chain construction) can read the
+		// resolved provider without re-doing the map lookup. nil
+		// when AuthMode != "forward_auth" OR provider is missing
+		// (the FAIL-CLOSED deny path).
+		var fwdAuthProviderForPassthrough *storage.ForwardAuthProvider
 		switch r.AuthMode {
 		case storage.RouteAuthBasic:
 			// Step I.5 — Basic Auth, preserved verbatim through K.1.
@@ -569,6 +580,13 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			provider, ok := opts.ForwardAuthProviders[r.ForwardAuth.ProviderName]
 			if ok {
 				handlers = append(handlers, buildForwardAuthHandler(provider))
+				// Capture for the passthrough-route block below.
+				// Local-variable copy — the loop iteration reuses
+				// the same map key on the next route, so we take a
+				// pointer to a per-iteration copy rather than the
+				// map's value (would alias across iterations).
+				p := provider
+				fwdAuthProviderForPassthrough = &p
 			} else {
 				// Build the deny handler + STOP appending to the
 				// chain — no waf, no headers, no reverse_proxy.
@@ -626,6 +644,28 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			Handle: handlers,
 		}
 
+		// Step K.4 — auth passthrough. When the resolved
+		// forward-auth provider declares an AuthPassthroughPrefix,
+		// emit an additional route BEFORE the main one matching
+		// that path prefix on the same Host(s). It reverse-proxies
+		// straight to the provider's verify-URL host, no
+		// forward_auth gate. Caddy dispatches routes in
+		// declaration order — the prefixed route MUST land first
+		// so it claims the matching requests before the catch-all
+		// (the main `route`) sees them.
+		//
+		// Use case: Authentik embedded outpost serves its UI /
+		// OAuth start endpoints under
+		// `/outpost.goauthentik.io/*` on the application's own
+		// External Host. Without the passthrough, those URIs
+		// would go through forward_auth → loop or 404. Pattern is
+		// generic: oauth2-proxy uses `/oauth2/*` the same way.
+		var passthroughRoute *httpRoute
+		if fwdAuthProviderForPassthrough != nil && fwdAuthProviderForPassthrough.AuthPassthroughPrefix != "" {
+			pr := buildAuthPassthroughRoute(*fwdAuthProviderForPassthrough, allHosts)
+			passthroughRoute = &pr
+		}
+
 		// Step I.2: when TLS is on AND the operator asked for an
 		// automatic HTTP→HTTPS upgrade, the HTTP-side route serves
 		// a 301 instead of the proxy. The HTTPS-side keeps the
@@ -639,11 +679,25 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// shadowed by the 301 — verified by the smoke pass on
 		// staging at I.7.
 		if r.TLSEnabled && r.RedirectToHTTPS {
+			// Passthrough route also serves under HTTPS-only
+			// when the operator opted into the redirect; on the
+			// HTTP side the 301 wins (Caddy matches the most
+			// specific Host route — here both share the same
+			// Host, so the order matters: 301 first, passthrough
+			// never reached on :80). That's intentional — the
+			// passthrough endpoint is OIDC + must be served over
+			// HTTPS too.
 			httpRoutes = append(httpRoutes, buildRedirectRoute(allHosts))
 		} else {
+			if passthroughRoute != nil {
+				httpRoutes = append(httpRoutes, *passthroughRoute)
+			}
 			httpRoutes = append(httpRoutes, route)
 		}
 		if r.TLSEnabled {
+			if passthroughRoute != nil {
+				httpsRoutes = append(httpsRoutes, *passthroughRoute)
+			}
 			httpsRoutes = append(httpsRoutes, route)
 			// Step I.7 hotfix (Finding #6): only PUBLICLY validatable
 			// hostnames go into the ACME policy subjects list. A
@@ -1190,7 +1244,7 @@ func buildForwardAuthHandler(p storage.ForwardAuthProvider) map[string]any {
 		})
 	}
 
-	return map[string]any{
+	rp := map[string]any{
 		"handler":   "reverse_proxy",
 		"upstreams": []map[string]any{{"dial": forwardAuthDial(p.VerifyURL)}},
 		"rewrite": map[string]any{
@@ -1214,6 +1268,21 @@ func buildForwardAuthHandler(p storage.ForwardAuthProvider) map[string]any {
 			},
 		},
 	}
+	// Step K.4 fix (found at smoke time): when the verify URL is
+	// HTTPS the forward_auth sub-request MUST be sent over TLS;
+	// reverse_proxy defaults to plain HTTP otherwise. Without
+	// this, the IdP returns 400 "Client sent an HTTP request to
+	// an HTTPS server" on every sub-request and the gate refuses
+	// every requester — same outcome as fail-closed but for the
+	// wrong reason. Mirror of the transport-flip the K.4
+	// passthrough emits.
+	if u, err := url.Parse(p.VerifyURL); err == nil && strings.EqualFold(u.Scheme, "https") {
+		rp["transport"] = map[string]any{
+			"protocol": "http",
+			"tls":      map[string]any{},
+		}
+	}
+	return rp
 }
 
 // buildForwardAuthDenyHandler returns the fail-closed
@@ -1250,6 +1319,55 @@ func buildForwardAuthDenyHandler(providerName string) map[string]any {
 			"Retry-After":  []string{"0"},
 		},
 		"body": body,
+	}
+}
+
+// buildAuthPassthroughRoute returns the httpRoute that
+// reverse-proxies a single path prefix on the route's Host(s)
+// straight to the forward-auth provider's verify-URL host,
+// bypassing the forward_auth gate. Caddy v2 path matchers treat
+// "/prefix/*" as "any URI starting with /prefix/" — exact match
+// on "/prefix" alone is NOT covered (the spec wants the prefix
+// branch to claim its own subtree; the bare prefix would
+// normally not have meaning either way). The dial uses TLS when
+// the verify URL is https; this matches the verify-URL Dial
+// behaviour at forwardAuthDial.
+//
+// Step K.4. SECURITY note: this route does NOT include the
+// metrics handler, since the requests it serves are IdP-side UI
+// / OAuth endpoints — instrumenting them as if they were
+// regular upstream traffic would distort the per-route counters
+// (they're internal-to-auth, not application). Same posture as
+// the forward_auth sub-request itself (which doesn't go through
+// metrics either).
+func buildAuthPassthroughRoute(provider storage.ForwardAuthProvider, hosts []string) httpRoute {
+	// Path matcher: "<prefix>/*" matches the prefix subtree.
+	// Caddy's path matcher uses a glob with "*" matching anything
+	// including "/", so a single trailing /* is the right shape
+	// for "everything under /prefix/".
+	pathPattern := strings.TrimSuffix(provider.AuthPassthroughPrefix, "/") + "/*"
+	dial := forwardAuthDial(provider.VerifyURL)
+
+	rp := map[string]any{
+		"handler":   "reverse_proxy",
+		"upstreams": []map[string]any{{"dial": dial}},
+	}
+	// When the verify URL is HTTPS the upstream must be reached
+	// over TLS; reverse_proxy's transport defaults to plain HTTP
+	// unless we tell it otherwise.
+	if u, err := url.Parse(provider.VerifyURL); err == nil && strings.EqualFold(u.Scheme, "https") {
+		rp["transport"] = map[string]any{
+			"protocol": "http",
+			"tls":      map[string]any{},
+		}
+	}
+
+	return httpRoute{
+		Match: []matcherSet{{
+			Host: hosts,
+			Path: []string{pathPattern},
+		}},
+		Handle: []map[string]any{rp},
 	}
 }
 

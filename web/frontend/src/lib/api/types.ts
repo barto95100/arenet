@@ -210,6 +210,15 @@ export interface ForwardAuthProvider {
 	copyHeaders: string[];
 	clientSecret: string; // always "" on the wire (redacted)
 	clientSecretSet: boolean;
+	/**
+	 * Step K.4 — optional path prefix served by the IdP itself
+	 * on the application's external host. Non-empty makes the
+	 * generator emit a passthrough route bypassing the
+	 * forward_auth gate for that subtree (required for the
+	 * Authentik embedded outpost pattern + oauth2-proxy).
+	 * Empty = legacy K.1 behaviour.
+	 */
+	authPassthroughPrefix: string;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -227,6 +236,7 @@ export interface ForwardAuthProviderRequest {
 	authRequestUri: string;
 	copyHeaders: string[];
 	clientSecret: string;
+	authPassthroughPrefix?: string;
 }
 
 /**
