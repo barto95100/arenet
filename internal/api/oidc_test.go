@@ -582,6 +582,46 @@ func TestOIDCAllowlist_AddWithEmptySub_PendingBehaviourPreserved(t *testing.T) {
 	}
 }
 
+// TestHandler_UIOrigin_PrefixesRedirects pins the K.2 dev fix:
+// when SetUIOrigin is non-empty, every OIDC callback redirect
+// targets the absolute UI origin instead of a relative path.
+// Exercises the simplest reachable branch (state cookie
+// missing → 302 to /login?error=invalid_state) — the prefix
+// behaviour is identical for every redirect site by virtue of
+// the single uiURL helper.
+func TestHandler_UIOrigin_PrefixesRedirects(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Reach into the handler via the env's router — we need
+	// the Handler instance to call SetUIOrigin. The test env
+	// builds the router from a Handler at line ~161; we'll
+	// rely on env.router exercising the same instance and
+	// reach the handler via a helper.
+	env.handler.SetUIOrigin("http://localhost:5173")
+
+	// Empty state cookie → redirect to /login?error=invalid_state.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?state=x&code=y", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	loc := rec.Header().Get("Location")
+	if loc != "http://localhost:5173/login?error=invalid_state" {
+		t.Errorf("UI-ORIGIN BYPASS REGRESSION: callback redirect = %q; expected absolute http://localhost:5173/login?error=invalid_state", loc)
+	}
+}
+
+func TestHandler_UIOrigin_EmptyKeepsRelative(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Do NOT call SetUIOrigin — empty preserves legacy relative
+	// behaviour for prod (static SPA same-origin).
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?state=x&code=y", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	loc := rec.Header().Get("Location")
+	if loc != "/login?error=invalid_state" {
+		t.Errorf("LEGACY RELATIVE REDIRECT REGRESSION: callback redirect = %q; expected relative /login?error=invalid_state when uiOrigin empty", loc)
+	}
+}
+
 // Sanity probe — confirms the test file compiles against the
 // time / context imports used in setup helpers.
 func TestK2_TestFileCompiles(t *testing.T) {

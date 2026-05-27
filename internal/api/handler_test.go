@@ -131,6 +131,11 @@ type testEnv struct {
 	caddy      *fakeReloader
 	audit      *fakeAuditAppender
 	setupToken *SetupTokenHolder
+	// handler is the underlying *Handler instance — exposed so
+	// tests can call setters like SetUIOrigin without going
+	// through the router. Tests that only drive HTTP via the
+	// router can ignore it.
+	handler *Handler
 }
 
 func newTestEnv(t *testing.T, dev bool) *testEnv {
@@ -175,6 +180,7 @@ func newTestEnv(t *testing.T, dev bool) *testEnv {
 		caddy:      caddy,
 		audit:      auditAppender,
 		setupToken: setupTokenHolder,
+		handler:    h,
 	}
 }
 

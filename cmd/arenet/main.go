@@ -79,6 +79,17 @@ type config struct {
 	includeSecrets         bool
 	allowIncompleteRestore bool
 	allowEmptyUsers        bool
+	// Step K.2 dev — when the SPA is served by a separate dev
+	// server (Vite on :5173 typically) the OIDC callback's
+	// in-handler 302 redirects (/routes on success,
+	// /login?error=... on failure) cannot be relative — the
+	// browser would land on :8001/routes which is API-only and
+	// 404s. Setting --ui-origin=http://localhost:5173 makes the
+	// callback emit absolute redirects to the frontend origin.
+	// Empty (prod default) keeps the relative redirects, which
+	// is correct when the static SPA is served by Arenet from
+	// the same origin as the API.
+	uiOrigin string
 }
 
 func parseFlags() config {
@@ -98,6 +109,8 @@ func parseFlags() config {
 		"Step K.3: accept --restore inputs whose sentinels cannot be inherited; affected secret fields are cleared")
 	flag.BoolVar(&cfg.allowEmptyUsers, "allow-empty-users", false,
 		"Step K.3: accept --restore inputs with zero users (next boot re-triggers the setup-token flow)")
+	flag.StringVar(&cfg.uiOrigin, "ui-origin", "",
+		"Step K.2 dev: absolute origin of the SPA dev server (e.g. http://localhost:5173); empty in prod (static SPA served by Arenet)")
 	flag.Parse()
 	return cfg
 }
@@ -288,6 +301,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder,
 		cfg.dev, logger,
 	)
+	if cfg.uiOrigin != "" {
+		apiHandler.SetUIOrigin(cfg.uiOrigin)
+		logger.Info("OIDC callback redirects will target SPA origin", "ui_origin", cfg.uiOrigin)
+	}
 	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.dev, logger)
 	router := api.NewRouter(apiHandler, cfg.dev, ipExtractor, wsTopologyHandler)
 

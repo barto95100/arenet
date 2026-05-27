@@ -610,7 +610,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionOIDCCallbackInvalid,
 			Message: fmt.Sprintf("idp_error=%s", errParam),
 		})
-		http.Redirect(w, r, "/login?error=idp_error", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=idp_error"), http.StatusFound)
 		return
 	}
 
@@ -621,7 +621,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionOIDCCallbackInvalid,
 			Message: "state_cookie_missing",
 		})
-		http.Redirect(w, r, "/login?error=invalid_state", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=invalid_state"), http.StatusFound)
 		return
 	}
 	stateParam := q.Get("state")
@@ -631,7 +631,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionOIDCCallbackInvalid,
 			Message: "state_mismatch",
 		})
-		http.Redirect(w, r, "/login?error=invalid_state", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=invalid_state"), http.StatusFound)
 		return
 	}
 	// Single-use: clear the state cookie now that we've consumed it.
@@ -644,24 +644,24 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionOIDCCallbackInvalid,
 			Message: "nonce_cookie_missing",
 		})
-		http.Redirect(w, r, "/login?error=invalid_state", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=invalid_state"), http.StatusFound)
 		return
 	}
 	clearOIDCFlowCookie(w, oidcNonceCookie, h.devMode)
 
 	cfg, err := h.store.GetOIDCConfig(r.Context())
 	if err != nil || !cfg.Enabled {
-		http.Redirect(w, r, "/login?error=idp_unreachable", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=idp_unreachable"), http.StatusFound)
 		return
 	}
 	if err := h.oidc.EnsureBuilt(r.Context(), cfg); err != nil {
 		h.logger.Warn("oidc: discovery fetch failed at callback", "err", err)
-		http.Redirect(w, r, "/login?error=idp_unreachable", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=idp_unreachable"), http.StatusFound)
 		return
 	}
 	_, verifier, oauthCfg := h.oidc.snapshot()
 	if oauthCfg == nil || verifier == nil {
-		http.Redirect(w, r, "/login?error=idp_unreachable", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=idp_unreachable"), http.StatusFound)
 		return
 	}
 
@@ -672,13 +672,13 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionOIDCCallbackInvalid,
 			Message: "code_missing",
 		})
-		http.Redirect(w, r, "/login?error=invalid_state", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=invalid_state"), http.StatusFound)
 		return
 	}
 	tok, err := oauthCfg.Exchange(r.Context(), code)
 	if err != nil {
 		h.logger.Warn("oidc: code exchange failed", "err", err)
-		http.Redirect(w, r, "/login?error=idp_unreachable", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=idp_unreachable"), http.StatusFound)
 		return
 	}
 	rawIDToken, ok := tok.Extra("id_token").(string)
@@ -687,7 +687,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionOIDCCallbackInvalid,
 			Message: "id_token_missing",
 		})
-		http.Redirect(w, r, "/login?error=idp_unreachable", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=idp_unreachable"), http.StatusFound)
 		return
 	}
 
@@ -698,7 +698,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionOIDCCallbackInvalid,
 			Message: "id_token_invalid",
 		})
-		http.Redirect(w, r, "/login?error=invalid_state", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=invalid_state"), http.StatusFound)
 		return
 	}
 	if idToken.Nonce != nonceCookie.Value {
@@ -706,7 +706,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionOIDCCallbackInvalid,
 			Message: "nonce_mismatch",
 		})
-		http.Redirect(w, r, "/login?error=invalid_state", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=invalid_state"), http.StatusFound)
 		return
 	}
 
@@ -720,11 +720,11 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		h.logger.Warn("oidc: claims parse failed", "err", err)
-		http.Redirect(w, r, "/login?error=invalid_state", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=invalid_state"), http.StatusFound)
 		return
 	}
 	if claims.Sub == "" || len(claims.Sub) > oidcSubMaxLen {
-		http.Redirect(w, r, "/login?error=invalid_state", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=invalid_state"), http.StatusFound)
 		return
 	}
 
@@ -736,7 +736,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionOIDCLoginRejected,
 			Message: fmt.Sprintf("sub=%s email=%s verified=%t", truncate(claims.Sub, 64), truncate(claims.Email, 64), claims.EmailVerified),
 		})
-		http.Redirect(w, r, "/login?error=not_authorized", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=not_authorized"), http.StatusFound)
 		return
 	}
 
@@ -746,7 +746,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		cfg.AllowedIdentities[matchIdx].FirstLoginAt = time.Now().UTC()
 		if err := h.store.PutOIDCConfig(r.Context(), cfg); err != nil {
 			h.logger.Error("oidc: canonicalise failed", "err", err)
-			http.Redirect(w, r, "/login?error=internal", http.StatusFound)
+			http.Redirect(w, r, h.uiURL("/login?error=internal"), http.StatusFound)
 			return
 		}
 		match = cfg.AllowedIdentities[matchIdx]
@@ -757,7 +757,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if !errors.Is(err, auth.ErrUserNotFound) {
 			h.logger.Error("oidc: lookup user by sub failed", "err", err)
-			http.Redirect(w, r, "/login?error=internal", http.StatusFound)
+			http.Redirect(w, r, h.uiURL("/login?error=internal"), http.StatusFound)
 			return
 		}
 		// Auto-create — default Role viewer per §1.3 #12.
@@ -775,7 +775,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		user, err = h.users.CreateOIDCUser(r.Context(), username, displayName, claims.Sub)
 		if err != nil {
 			h.logger.Error("oidc: auto-create user failed", "err", err)
-			http.Redirect(w, r, "/login?error=internal", http.StatusFound)
+			http.Redirect(w, r, h.uiURL("/login?error=internal"), http.StatusFound)
 			return
 		}
 	}
@@ -785,7 +785,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	sess, err := h.sessions.Create(r.Context(), user.ID, false, ip, r.UserAgent())
 	if err != nil {
 		h.logger.Error("oidc: session create failed", "err", err)
-		http.Redirect(w, r, "/login?error=internal", http.StatusFound)
+		http.Redirect(w, r, h.uiURL("/login?error=internal"), http.StatusFound)
 		return
 	}
 	setSessionCookie(w, sess.ID, false, h.devMode)
@@ -805,7 +805,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		Message:               "auth_method=oidc",
 	})
 
-	http.Redirect(w, r, "/routes", http.StatusFound)
+	http.Redirect(w, r, h.uiURL("/routes"), http.StatusFound)
 }
 
 // matchAllowlist returns the matching entry + its index +

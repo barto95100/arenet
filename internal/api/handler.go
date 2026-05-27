@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/barto95100/arenet/internal/audit"
@@ -68,6 +69,14 @@ type Handler struct {
 	oidc    *OIDCManager
 	devMode bool
 	logger  *slog.Logger
+	// uiOrigin (Step K.2 dev) — when non-empty, the OIDC
+	// callback's redirects are emitted as absolute URLs
+	// against this origin (e.g. http://localhost:5173) so the
+	// browser lands on the Vite dev server, not on the API.
+	// Empty in prod: relative redirects resolved against the
+	// API origin where the static SPA is served. Set via
+	// SetUIOrigin after construction.
+	uiOrigin string
 	// startTime is captured at NewHandler-time and reported by the
 	// /healthz endpoint as uptime_seconds (Step H.3). Read-only after
 	// construction.
@@ -126,6 +135,31 @@ func NewHandler(
 		logger:    logger,
 		startTime: time.Now(),
 	}
+}
+
+// SetUIOrigin (Step K.2 dev) configures the SPA origin to use
+// for the OIDC callback redirects. Empty (default) keeps
+// relative redirects, suitable for production where the static
+// SPA is served by Arenet at the same origin as the API.
+// Non-empty (e.g. "http://localhost:5173") prefixes every
+// callback redirect so the browser lands on the dev server.
+// Trailing slashes are stripped; the value is used as-is for
+// concatenation with "/routes" / "/login?error=...".
+//
+// Intentionally a setter (not a NewHandler arg) so the existing
+// test scaffolding stays signature-compatible.
+func (h *Handler) SetUIOrigin(origin string) {
+	h.uiOrigin = strings.TrimRight(strings.TrimSpace(origin), "/")
+}
+
+// uiURL returns the URL to redirect to for the given SPA path
+// (must start with "/"). If uiOrigin is empty, path is returned
+// as-is (relative). Otherwise the origin is prefixed.
+func (h *Handler) uiURL(path string) string {
+	if h.uiOrigin == "" {
+		return path
+	}
+	return h.uiOrigin + path
 }
 
 // upstreamReq is the per-element wire shape inside the routeRequest
