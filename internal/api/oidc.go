@@ -346,6 +346,18 @@ func (h *Handler) putOIDCConfig(w http.ResponseWriter, r *http.Request) {
 type oidcAllowlistAddRequest struct {
 	Email       string `json:"email"`
 	DisplayName string `json:"displayName"`
+	// Sub (Spec-1, optional) — pre-fill the IdP-stable subject
+	// identifier directly. When non-empty, the entry skips the
+	// email-bootstrap path (no Pass 2, Δ7 guard not invoked) and
+	// the first login matches via Pass 1 (steady-state by Sub).
+	// Required when the operator's IdP doesn't emit
+	// `email_verified=true` (e.g. Authentik admin-created
+	// accounts), making the bootstrap path unreachable.
+	//
+	// Empty value: legacy behaviour preserved — entry created
+	// with Sub="" (pending) → first login goes through the
+	// email-bootstrap Pass 2 with the Δ7 email_verified guard.
+	Sub string `json:"sub,omitempty"`
 }
 
 func (h *Handler) listOIDCAllowlist(w http.ResponseWriter, r *http.Request) {
@@ -393,24 +405,49 @@ func (h *Handler) addOIDCAllowlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Spec-1 — optional pre-filled Sub. Empty (after trim) keeps
+	// the legacy pending-bootstrap path; non-empty installs the
+	// entry as already-canonicalised, suitable for IdPs that
+	// don't emit email_verified.
+	sub := strings.TrimSpace(req.Sub)
+	if sub != "" && len(sub) > oidcSubMaxLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("sub exceeds %d characters", oidcSubMaxLen))
+		return
+	}
+
 	cfg, err := h.store.GetOIDCConfig(r.Context())
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		h.logger.Error("get oidc config for allowlist add", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load oidc config")
 		return
 	}
-	// Case-insensitive uniqueness check.
+	// Case-insensitive uniqueness on email.
 	for _, existing := range cfg.AllowedIdentities {
 		if strings.EqualFold(strings.TrimSpace(existing.Email), email) {
 			writeError(w, http.StatusConflict, fmt.Sprintf("allowlist already contains email %q", email))
 			return
 		}
 	}
-	cfg.AllowedIdentities = append(cfg.AllowedIdentities, storage.OIDCAllowedIdentity{
+	// Spec-1 — Sub collision check: a pre-filled sub MUST NOT
+	// duplicate any existing entry's sub (whether canonicalised
+	// or pre-filled). Two entries sharing a sub would create
+	// ambiguous Pass-1 matches at callback time.
+	if sub != "" {
+		for _, existing := range cfg.AllowedIdentities {
+			if existing.Sub != "" && existing.Sub == sub {
+				writeError(w, http.StatusConflict, fmt.Sprintf("allowlist already contains an entry with this sub (email %q)", existing.Email))
+				return
+			}
+		}
+	}
+	now := time.Now().UTC()
+	newEntry := storage.OIDCAllowedIdentity{
 		Email:       email,
 		DisplayName: req.DisplayName,
-		AddedAt:     time.Now().UTC(),
-	})
+		Sub:         sub,
+		AddedAt:     now,
+	}
+	cfg.AllowedIdentities = append(cfg.AllowedIdentities, newEntry)
 	if err := h.store.PutOIDCConfig(r.Context(), cfg); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -418,7 +455,8 @@ func (h *Handler) addOIDCAllowlist(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, oidcAllowedIdentityResponse{
 		Email:       email,
 		DisplayName: req.DisplayName,
-		AddedAt:     time.Now().UTC().Format(timestampFormat),
+		Sub:         sub,
+		AddedAt:     now.Format(timestampFormat),
 	})
 }
 

@@ -48,7 +48,7 @@
 	let formError = $state('');
 	let submitting = $state(false);
 
-	let newEntry = $state({ email: '', displayName: '' });
+	let newEntry = $state({ email: '', displayName: '', sub: '' });
 	let allowlistError = $state('');
 	let allowlistSubmitting = $state(false);
 
@@ -126,11 +126,13 @@
 		}
 		allowlistSubmitting = true;
 		try {
+			const sub = newEntry.sub.trim();
 			await settingsApi.addOIDCAllowlist({
 				email,
-				displayName: newEntry.displayName.trim()
+				displayName: newEntry.displayName.trim(),
+				...(sub ? { sub } : {})
 			});
-			newEntry = { email: '', displayName: '' };
+			newEntry = { email: '', displayName: '', sub: '' };
 			allowlist = await settingsApi.listOIDCAllowlist();
 			pushToast(`Added ${email} to OIDC allowlist`, 'success');
 		} catch (err) {
@@ -290,27 +292,43 @@
 		</p>
 
 		<form
-			class="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 mb-4"
+			class="mb-4 space-y-2"
 			onsubmit={(e) => {
 				e.preventDefault();
 				void addAllowlistEntry();
 			}}
 		>
-			<input
-				type="email"
-				bind:value={newEntry.email}
-				placeholder="user@example.com"
-				class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-			/>
-			<input
-				type="text"
-				bind:value={newEntry.displayName}
-				placeholder="Display name (optional)"
-				class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-			/>
-			<Button type="submit" disabled={allowlistSubmitting}>
-				{allowlistSubmitting ? 'Adding…' : 'Add'}
-			</Button>
+			<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+				<input
+					type="email"
+					bind:value={newEntry.email}
+					placeholder="user@example.com"
+					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+				/>
+				<input
+					type="text"
+					bind:value={newEntry.displayName}
+					placeholder="Display name (optional)"
+					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+				/>
+			</div>
+			<div class="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3">
+				<input
+					type="text"
+					bind:value={newEntry.sub}
+					placeholder="OIDC Subject ID (optional)"
+					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+				/>
+				<Button type="submit" disabled={allowlistSubmitting}>
+					{allowlistSubmitting ? 'Adding…' : 'Add'}
+				</Button>
+			</div>
+			<p class="text-xs text-muted">
+				To find the OIDC Subject ID, look it up in your IdP's admin
+				console. Leaving this field empty uses email-bootstrap on
+				first login (requires the IdP to emit
+				<code class="font-mono">email_verified=true</code>).
+			</p>
 		</form>
 
 		{#if allowlistError}

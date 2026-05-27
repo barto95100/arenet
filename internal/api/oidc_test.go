@@ -491,6 +491,97 @@ func TestOIDCAllowlist_AddAndList(t *testing.T) {
 	}
 }
 
+// --- Spec-1: pre-filled Sub on allowlist add ---------------------------
+//
+// Allows IdPs that do not emit email_verified (e.g. Authentik
+// admin-created accounts) to be used by skipping the email-
+// bootstrap path: the operator pre-fills the IdP-stable sub
+// when adding the entry, so the first login matches via Pass 1
+// (steady-state) and Δ7 never applies. The legacy pending-
+// bootstrap path stays available for IdPs that do emit
+// email_verified=true.
+
+func TestOIDCAllowlist_AddWithPrefilledSub_FirstLoginMatchesPass1WithUnverifiedEmail(t *testing.T) {
+	// Add an entry with a pre-filled sub.
+	env := newTestEnv(t, false)
+	body := `{"email":"alice@example.com","displayName":"Alice","sub":"sub-from-authentik-xyz"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/oidc/allowlist", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST: status=%d body=%s", rec.Code, rec.Body)
+	}
+	// The entry must be persisted with Sub already set (NOT pending).
+	got, err := env.store.GetOIDCConfig(context.Background())
+	if err != nil {
+		t.Fatalf("get oidc config: %v", err)
+	}
+	if len(got.AllowedIdentities) != 1 {
+		t.Fatalf("expected 1 entry; got %d", len(got.AllowedIdentities))
+	}
+	if got.AllowedIdentities[0].Sub != "sub-from-authentik-xyz" {
+		t.Errorf("Sub = %q; want %q (pre-fill not persisted)", got.AllowedIdentities[0].Sub, "sub-from-authentik-xyz")
+	}
+
+	// Pinning the contract: matchAllowlist must match this
+	// entry via Pass 1 (sub-pass) with email_verified=false.
+	// Pass 1 does NOT consult email_verified — that's the
+	// spec §5.2 invariant ("the verified-email guard does
+	// not apply there"). This is the property that lets the
+	// pre-fill skip Δ7.
+	match, idx, isBootstrap := matchAllowlist(got.AllowedIdentities, "sub-from-authentik-xyz", "alice@example.com", false)
+	if idx != 0 || isBootstrap || match.Sub != "sub-from-authentik-xyz" {
+		t.Fatalf("PASS-1 BYPASS REGRESSION: pre-filled sub did not match via Pass 1 with email_verified=false; idx=%d isBootstrap=%v match=%v", idx, isBootstrap, match)
+	}
+}
+
+func TestOIDCAllowlist_AddWithDuplicateSub_Rejected(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	// First entry — sub claimed.
+	body1 := `{"email":"first@example.com","displayName":"First","sub":"sub-shared-zzz"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/oidc/allowlist", strings.NewReader(body1))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("first POST: status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	// Second entry — different email, SAME sub: must reject.
+	body2 := `{"email":"second@example.com","displayName":"Second","sub":"sub-shared-zzz"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/settings/oidc/allowlist", strings.NewReader(body2))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("AMBIGUOUS PASS-1 REGRESSION: second entry with duplicate sub should return 409 (would otherwise create ambiguous Pass-1 matches at callback time); got %d body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "already contains an entry with this sub") {
+		t.Errorf("error message must name the collision cause: %s", rec.Body)
+	}
+}
+
+func TestOIDCAllowlist_AddWithEmptySub_PendingBehaviourPreserved(t *testing.T) {
+	// Spec-1 regression: omitting the sub field MUST keep the
+	// legacy pending-bootstrap path entirely unchanged. Sub
+	// pending, Pass 2 + Δ7 still applicable.
+	env := newTestEnv(t, false)
+	body := `{"email":"pending@example.com","displayName":"Pending"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/oidc/allowlist", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST: status=%d body=%s", rec.Code, rec.Body)
+	}
+	got, _ := env.store.GetOIDCConfig(context.Background())
+	if got.AllowedIdentities[0].Sub != "" {
+		t.Errorf("Sub = %q; want empty (legacy pending behaviour broken by Spec-1)", got.AllowedIdentities[0].Sub)
+	}
+}
+
 // Sanity probe — confirms the test file compiles against the
 // time / context imports used in setup helpers.
 func TestK2_TestFileCompiles(t *testing.T) {

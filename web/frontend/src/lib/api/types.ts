@@ -407,10 +407,19 @@ export interface OIDCAllowedIdentity {
 /**
  * Step K.2 — POST /api/v1/settings/oidc/allowlist body. Server
  * lower-cases the email and rejects duplicates.
+ *
+ * Spec-1 — optional pre-filled `sub`. Non-empty installs the
+ * entry as already-canonicalised, bypassing the email-bootstrap
+ * path (Δ7 guard not invoked). Required for IdPs that don't
+ * emit `email_verified=true` (Authentik admin-created accounts).
+ * Empty (default) keeps the pending behaviour: first login goes
+ * through the email-bootstrap Pass 2 with the email_verified
+ * guard.
  */
 export interface OIDCAllowlistAddRequest {
 	email: string;
 	displayName: string;
+	sub?: string;
 }
 
 /**
