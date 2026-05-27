@@ -184,6 +184,11 @@ type oidcConfigRequest struct {
 	ClientSecret string   `json:"clientSecret"`
 	Scopes       []string `json:"scopes"`
 	RedirectURL  string   `json:"redirectUrl"`
+	// Kind (optional) — provider kind for UI per-IdP hints
+	// (login SSO button logo). One of "authentik" / "keycloak" /
+	// "authelia" / "generic". Empty is accepted (treated as
+	// "generic" downstream).
+	Kind string `json:"kind,omitempty"`
 }
 
 // oidcConfigResponse is the wire shape on GET. ClientSecret is
@@ -197,6 +202,7 @@ type oidcConfigResponse struct {
 	ClientSecretSet   bool                          `json:"clientSecretSet"`
 	Scopes            []string                      `json:"scopes"`
 	RedirectURL       string                        `json:"redirectUrl"`
+	Kind              string                        `json:"kind"`
 	AllowedIdentities []oidcAllowedIdentityResponse `json:"allowedIdentities"`
 	Configured        bool                          `json:"configured"`
 }
@@ -235,6 +241,7 @@ func oidcConfigToResponse(c storage.OIDCConfig, configured bool) oidcConfigRespo
 		ClientSecretSet:   c.ClientSecret != "",
 		Scopes:            scopes,
 		RedirectURL:       c.RedirectURL,
+		Kind:              c.Kind,
 		AllowedIdentities: identities,
 		Configured:        configured,
 	}
@@ -289,13 +296,24 @@ func (h *Handler) putOIDCConfig(w http.ResponseWriter, r *http.Request) {
 	// Preserve the existing allowlist across config edits — the
 	// allowlist has its own dedicated endpoints. A bare PUT on
 	// the config should NOT wipe the allowlist as a side effect.
+	// Auto-strip the well-known suffix if the operator pasted the
+	// discovery URL by mistake. The convention (RFC 8414) is that
+	// the issuer is a stable PREFIX url, and go-oidc appends
+	// `/.well-known/openid-configuration` itself; pasting it twice
+	// produces a 404. The UI helptext warns about this, but
+	// silently fixing the common slip is the right ergonomic call.
+	issuer := strings.TrimSpace(req.IssuerURL)
+	issuer = strings.TrimSuffix(issuer, "/.well-known/openid-configuration")
+	issuer = strings.TrimSuffix(issuer, "/.well-known/openid-configuration/")
+
 	merged := storage.OIDCConfig{
 		Enabled:           req.Enabled,
-		IssuerURL:         strings.TrimSpace(req.IssuerURL),
+		IssuerURL:         issuer,
 		ClientID:          strings.TrimSpace(req.ClientID),
 		ClientSecret:      clientSecret,
 		Scopes:            req.Scopes,
 		RedirectURL:       strings.TrimSpace(req.RedirectURL),
+		Kind:              strings.TrimSpace(req.Kind),
 		AllowedIdentities: previous.AllowedIdentities,
 		CreatedAt:         previous.CreatedAt,
 	}
@@ -507,24 +525,37 @@ func (h *Handler) deleteOIDCAllowlist(w http.ResponseWriter, r *http.Request) {
 
 // --- OIDC login flow: initiate + callback --------------------------------
 
-// oidcStatus (GET /api/v1/auth/oidc/status) is a tiny anonymous
-// hint endpoint the login page reads to decide whether to render
-// the "Continue with SSO" button. Returns `{ enabled: bool }`.
-// Never echoes IssuerURL / ClientID / allowlist — the unauth-
-// enticated surface MUST not leak operational details. A read
-// failure is treated as `enabled: false` (fail-closed for the
-// UI hint; the local login path is unaffected by the read
-// regardless — see the break-glass invariant).
+// oidcStatusResponse is the anonymous status payload. `enabled`
+// tells the login page whether to render the SSO button.
+// `kind` (optional, may be empty) tells it which provider logo
+// to use — exposed anonymously because the click on the SSO
+// button immediately reveals the IdP via the 302 chain, so this
+// is metadata not a secret. Empty kind → frontend falls back to
+// the generic logo.
+//
+// IssuerURL / ClientID / allowlist are still NEVER echoed here —
+// they would leak operational details that no anonymous probe
+// needs.
+type oidcStatusResponse struct {
+	Enabled bool   `json:"enabled"`
+	Kind    string `json:"kind,omitempty"`
+}
+
+// oidcStatus (GET /api/v1/auth/oidc/status) — anonymous hint
+// endpoint. A read failure is treated as `enabled: false` (fail-
+// closed for the UI hint; the local login path is unaffected by
+// the read regardless — see the break-glass invariant).
 //
 // No-auth endpoint by design — the login page reads it before
 // the user is authenticated.
 func (h *Handler) oidcStatus(w http.ResponseWriter, r *http.Request) {
-	enabled := false
+	resp := oidcStatusResponse{Enabled: false}
 	cfg, err := h.store.GetOIDCConfig(r.Context())
 	if err == nil && cfg.Enabled {
-		enabled = true
+		resp.Enabled = true
+		resp.Kind = cfg.Kind
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"enabled": enabled})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // oidcInitiateLogin (GET /api/v1/auth/oidc/login) starts the

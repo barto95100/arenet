@@ -390,9 +390,25 @@ export interface OIDCConfig {
 	clientSecretSet: boolean;
 	scopes: string[];
 	redirectUrl: string;
+	/**
+	 * Provider kind (optional) — drives the SSO button logo on
+	 * the login page. Empty = "generic" fallback. Mirrors the
+	 * ForwardAuthProviderKind enum.
+	 */
+	kind: OIDCProviderKind;
 	allowedIdentities: OIDCAllowedIdentity[];
 	configured: boolean;
 }
+
+export type OIDCProviderKind = '' | 'authentik' | 'keycloak' | 'authelia' | 'generic';
+
+export const OIDC_PROVIDER_KINDS: readonly OIDCProviderKind[] = [
+	'',
+	'authentik',
+	'keycloak',
+	'authelia',
+	'generic'
+] as const;
 
 /**
  * Step K.2 — wire shape for PUT /api/v1/settings/oidc. clientSecret
@@ -407,6 +423,7 @@ export interface OIDCConfigRequest {
 	clientSecret: string;
 	scopes: string[];
 	redirectUrl: string;
+	kind?: OIDCProviderKind;
 }
 
 /**
@@ -449,6 +466,12 @@ export interface OIDCAllowlistAddRequest {
  */
 export interface OIDCStatus {
 	enabled: boolean;
+	/**
+	 * Provider kind (optional, may be absent in JSON when empty/
+	 * disabled). The login page uses it to pick the right SSO
+	 * button logo via SSOProviderLogo. Absent → "generic".
+	 */
+	kind?: OIDCProviderKind;
 }
 
 /**

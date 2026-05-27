@@ -24,8 +24,10 @@
 	import { settingsApi } from '$lib/api/settings';
 	import {
 		ApiError,
+		OIDC_PROVIDER_KINDS,
 		type OIDCAllowedIdentity,
-		type OIDCConfig
+		type OIDCConfig,
+		type OIDCProviderKind
 	} from '$lib/api/types';
 	import Card from '$lib/components/Card.svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -43,7 +45,8 @@
 		clientId: '',
 		clientSecret: '',
 		redirectUrl: '',
-		scopes: 'openid profile email' // space-separated for the textarea/input
+		scopes: 'openid profile email', // space-separated for the textarea/input
+		kind: '' as OIDCProviderKind | ''
 	});
 	let formError = $state('');
 	let submitting = $state(false);
@@ -67,6 +70,7 @@
 			form.clientId = cfg.clientId;
 			form.redirectUrl = cfg.redirectUrl;
 			form.scopes = (cfg.scopes ?? []).join(' ');
+			form.kind = (cfg.kind ?? '') as OIDCProviderKind | '';
 			// clientSecret stays "" — server redacts on GET; user only
 			// types it on explicit rotation. The placeholder tells them
 			// what the empty state means.
@@ -97,7 +101,8 @@
 				clientId: form.clientId.trim(),
 				clientSecret: form.clientSecret, // empty preserves
 				redirectUrl: form.redirectUrl.trim(),
-				scopes
+				scopes,
+				...(form.kind ? { kind: form.kind } : {})
 			});
 			config = saved;
 			form.scopes = (saved.scopes ?? []).join(' ');
@@ -204,6 +209,29 @@
 		</div>
 
 		<div class="md:col-span-2">
+			<label for="oidc-kind" class="text-sm font-medium text-secondary block mb-1">
+				Provider
+			</label>
+			<select
+				id="oidc-kind"
+				bind:value={form.kind}
+				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+			>
+				{#each OIDC_PROVIDER_KINDS as k (k)}
+					<option value={k}>
+						{k === '' ? '— Generic (default) —' : k}
+					</option>
+				{/each}
+			</select>
+			<p class="text-xs text-muted mt-1">
+				Choisis ton fournisseur OIDC pour afficher son logo sur le
+				bouton de connexion. Laisse vide pour utiliser le logo
+				générique. Le choix n'influence PAS la logique d'authentification
+				— c'est purement visuel.
+			</p>
+		</div>
+
+		<div class="md:col-span-2">
 			<label for="oidc-issuer" class="text-sm font-medium text-secondary block mb-1">
 				Issuer URL
 			</label>
@@ -218,7 +246,8 @@
 				URL d'émetteur OIDC (champ <code class="font-mono">issuer</code> du
 				discovery document). NE PAS inclure le suffixe
 				<code class="font-mono">/.well-known/openid-configuration</code> —
-				Arenet l'ajoute automatiquement. Authentik :
+				Arenet l'ajoute automatiquement (si tu colles l'URL complète, le
+				suffixe est strippé silencieusement côté serveur). Authentik :
 				<code class="font-mono">/application/o/&lt;slug&gt;/</code> ; Keycloak :
 				<code class="font-mono">/realms/&lt;realm&gt;</code> ; Authelia : la racine
 				du déploiement.

@@ -42,15 +42,37 @@ import (
 // as Step J.4 OVH credentials). Never echoed by the API GET path,
 // never in audit before/after, never in slog.
 type OIDCConfig struct {
-	Enabled           bool                  `json:"enabled"`
-	IssuerURL         string                `json:"issuer_url"`
-	ClientID          string                `json:"client_id"`
-	ClientSecret      string                `json:"client_secret"` // SECRET — never echoed
+	Enabled      bool   `json:"enabled"`
+	IssuerURL    string `json:"issuer_url"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"` // SECRET — never echoed
+	// Kind drives the UI's per-provider hints (logo on the login
+	// SSO button, future per-IdP presets). Mirrors the
+	// ForwardAuthProvider.Kind enum to keep the two surfaces
+	// consistent. Empty (legacy + zero-value) is treated as
+	// "generic" — falls back to the Lucide log-in glyph and
+	// the canonical Caddy forward_auth shape. Anonymous-readable
+	// (exposed via /auth/oidc/status) so the login page can pick
+	// the right logo BEFORE bootstrap; this is metadata, not a
+	// secret.
+	Kind              string                `json:"kind,omitempty"`
 	Scopes            []string              `json:"scopes"`
 	RedirectURL       string                `json:"redirect_url"`
 	AllowedIdentities []OIDCAllowedIdentity `json:"allowed_identities"`
 	CreatedAt         time.Time             `json:"created_at"`
 	UpdatedAt         time.Time             `json:"updated_at"`
+}
+
+// OIDCProviderKinds enumerates the four supported provider
+// kinds. Mirror of ForwardAuthProviderKinds — see also
+// forward_auth_provider.go. An empty Kind is accepted by the
+// validator (legacy + fresh-install rows); the UI treats empty
+// as "generic" for asset resolution.
+var OIDCProviderKinds = []string{
+	"authentik",
+	"keycloak",
+	"authelia",
+	"generic",
 }
 
 // OIDCAllowedIdentity is one entry in the allowlist
@@ -119,6 +141,23 @@ func (c *OIDCConfig) validate() error {
 	}
 	if len(c.Scopes) == 0 {
 		return errors.New("oidc_config: scopes must not be empty when enabled")
+	}
+	// Kind is OPTIONAL (empty = generic). Non-empty must be one of
+	// the supported provider kinds — strict enum check protects
+	// against typos in the BoltDB row (anyone editing the file
+	// directly) and against an outdated frontend posting a value
+	// the storage layer doesn't know how to interpret.
+	if c.Kind != "" {
+		ok := false
+		for _, k := range OIDCProviderKinds {
+			if c.Kind == k {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return fmt.Errorf("oidc_config: kind %q must be one of %v (or empty for generic)", c.Kind, OIDCProviderKinds)
+		}
 	}
 	return nil
 }

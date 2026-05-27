@@ -622,6 +622,115 @@ func TestHandler_UIOrigin_EmptyKeepsRelative(t *testing.T) {
 	}
 }
 
+// --- Provider Kind (post-K UX polish) ---------------------------
+
+// TestOIDCConfig_KindPersistedAndExposedAnonymously pins the
+// round-trip Kind field through PUT → BoltDB → GET, and through
+// the anonymous /oidc/status response surface.
+func TestOIDCConfig_KindPersistedAndExposedAnonymously(t *testing.T) {
+	env := newTestEnv(t, false)
+	ctx := context.Background()
+
+	// Seed enabled OIDC config with Kind=authentik via the storage
+	// layer directly (the API PUT path requires a reachable IdP
+	// for discovery; we bypass that here by writing the row).
+	if err := env.store.PutOIDCConfig(ctx, storage.OIDCConfig{
+		Enabled:      true,
+		IssuerURL:    "https://idp.example.com",
+		ClientID:     "arenet",
+		ClientSecret: "secret-1234567890",
+		RedirectURL:  "http://localhost:8001/api/v1/auth/oidc/callback",
+		Scopes:       []string{"openid", "profile", "email"},
+		Kind:         "authentik",
+	}); err != nil {
+		t.Fatalf("seed oidc: %v", err)
+	}
+
+	// GET /settings/oidc → response carries Kind.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/oidc", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"kind":"authentik"`) {
+		t.Errorf("admin GET missing kind=authentik: %s", rec.Body)
+	}
+
+	// GET /auth/oidc/status (anonymous) → kind exposed.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/status", nil)
+	rec = httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status GET status=%d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"enabled":true`) {
+		t.Errorf("anonymous status missing enabled:true: %s", rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"kind":"authentik"`) {
+		t.Errorf("anonymous status missing kind=authentik: %s", rec.Body)
+	}
+}
+
+// TestOIDCConfig_KindOmittedWhenDisabled pins that kind is
+// suppressed from the anonymous status response when OIDC is
+// disabled. Default state on a fresh install.
+func TestOIDCConfig_KindOmittedWhenDisabled(t *testing.T) {
+	env := newTestEnv(t, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/status", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `"enabled":false`) {
+		t.Errorf("fresh install should report enabled:false: %s", body)
+	}
+	// omitempty on the Kind field — the JSON key MUST be absent
+	// when no config exists / kind is empty.
+	if strings.Contains(body, `"kind"`) {
+		t.Errorf("kind should be omitted from anonymous status when disabled / empty: %s", body)
+	}
+}
+
+// TestOIDCConfig_InvalidKindRejected pins the enum check on
+// non-empty kind. Storage validate is the last-line guard; the
+// API layer also rejects via the storage validate chain.
+func TestOIDCConfig_InvalidKindRejected(t *testing.T) {
+	err := storage.ValidateOIDCConfig(storage.OIDCConfig{
+		Enabled:      true,
+		IssuerURL:    "https://idp.example.com",
+		ClientID:     "arenet",
+		ClientSecret: "x",
+		RedirectURL:  "http://localhost:8001/cb",
+		Scopes:       []string{"openid"},
+		Kind:         "okta", // not in OIDCProviderKinds
+	})
+	if err == nil {
+		t.Fatal("storage validate accepted unknown kind=okta — enum guard regressed")
+	}
+	if !strings.Contains(err.Error(), "kind") {
+		t.Errorf("error should name the kind field: %v", err)
+	}
+}
+
+// TestOIDCConfig_EmptyKindAccepted pins that Kind="" is the
+// legacy + fresh-install state (rows created pre-K-UX-polish)
+// — must NOT be rejected by validate. Treated as "generic" by
+// the frontend at render time.
+func TestOIDCConfig_EmptyKindAccepted(t *testing.T) {
+	err := storage.ValidateOIDCConfig(storage.OIDCConfig{
+		Enabled:      true,
+		IssuerURL:    "https://idp.example.com",
+		ClientID:     "arenet",
+		ClientSecret: "x",
+		RedirectURL:  "http://localhost:8001/cb",
+		Scopes:       []string{"openid"},
+		Kind:         "", // legacy
+	})
+	if err != nil {
+		t.Errorf("storage validate rejected empty kind (legacy): %v", err)
+	}
+}
+
 // Sanity probe — confirms the test file compiles against the
 // time / context imports used in setup helpers.
 func TestK2_TestFileCompiles(t *testing.T) {

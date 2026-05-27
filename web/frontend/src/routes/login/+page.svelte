@@ -42,6 +42,8 @@
 	import { ApiError } from '$lib/api/types';
 	import { authApi } from '$lib/api/auth';
 	import LoginBackground from '$lib/components/LoginBackground.svelte';
+	import SSOProviderLogo from '$lib/components/SSOProviderLogo.svelte';
+	import type { OIDCProviderKind } from '$lib/api/types';
 
 	// Step K.2 — map the `?error=<code>` query the OIDC callback
 	// posts to the login page on a rejected SSO flow. Spec §5.2
@@ -73,6 +75,7 @@
 	// as "OIDC not available" (fail-closed for the UI hint; local
 	// login is never affected).
 	let oidcEnabled = $state(false);
+	let oidcKind = $state<OIDCProviderKind | ''>('');
 	// Setup availability probe. The "Première connexion ?" link
 	// only makes sense before the first admin is created; once
 	// any admin exists the /setup endpoint 404s and the link
@@ -84,9 +87,11 @@
 			.oidcStatus()
 			.then((s) => {
 				oidcEnabled = s.enabled;
+				oidcKind = (s.kind ?? '') as OIDCProviderKind | '';
 			})
 			.catch(() => {
 				oidcEnabled = false;
+				oidcKind = '';
 			});
 
 		void authApi
@@ -195,28 +200,6 @@
 		{/if}
 
 		{#if oidcEnabled}
-			<!--
-			  Backlog (post-tag, UX polish): the .login-sso-icon
-			  square below is a generic gradient + Lucide log-in
-			  glyph today. Future iteration: load a provider-
-			  specific asset (Authentik orange "GA", Keycloak,
-			  Authelia, oauth2-proxy) driven by the OIDC config's
-			  provider kind. Requires:
-			    1. Adding a `Kind` enum to storage.OIDCConfig
-			       (mirror of ForwardAuthProvider.Kind).
-			    2. Exposing the kind anonymously in
-			       /api/v1/auth/oidc/status (currently returns only
-			       {enabled: bool}). Note: the kind is metadata
-			       (operator's IdP choice), not a secret — exposing
-			       it pre-login is acceptable.
-			    3. Mapping the kind to a small set of bundled SVG
-			       assets in lib/components/SSOProviderLogo.svelte,
-			       falling back to the current Lucide glyph when
-			       unknown.
-			  Keep the "Continuer avec SSO" label generic until
-			  there's a real need for per-provider naming (B1 vs B3
-			  arbitration deferred).
-			-->
 			<button
 				class="login-sso"
 				type="button"
@@ -224,22 +207,7 @@
 				disabled={submitting}
 				aria-label="Continuer avec SSO"
 			>
-				<span class="login-sso-icon" aria-hidden="true">
-					<svg
-						viewBox="0 0 24 24"
-						width="14"
-						height="14"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-					>
-						<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-						<polyline points="10 17 15 12 10 7" />
-						<line x1="15" y1="12" x2="3" y2="12" />
-					</svg>
-				</span>
+				<SSOProviderLogo kind={oidcKind} size={22} />
 				<span class="login-sso-label">Continuer avec <b>SSO</b></span>
 				<svg
 					class="login-sso-arrow"
@@ -533,16 +501,6 @@
 	.login-sso:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
-	}
-	.login-sso-icon {
-		width: 22px;
-		height: 22px;
-		border-radius: 5px;
-		background: linear-gradient(140deg, oklch(70% 0.20 35) 0%, oklch(58% 0.18 30) 100%);
-		display: grid;
-		place-items: center;
-		color: #fff;
-		box-shadow: inset 0 1px 0 oklch(82% 0.16 50 / 0.4);
 	}
 	.login-sso-label b {
 		font-weight: 600;
