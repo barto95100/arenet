@@ -4,14 +4,27 @@
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
   LockScreen (spec §6.8). Full-screen overlay rendered above the
-  existing UI when the session is in the `locked` state. Backdrop-blur
-  preserves the underlying UI in the DOM (open modals, scroll position,
-  form drafts) so the user resumes exactly where they were after
-  unlocking.
+  existing UI when the session is in the `locked` state. Backdrop-
+  blur preserves the underlying UI in the DOM (open modals,
+  scroll position, form drafts) so the user resumes exactly where
+  they were after unlocking.
+
+  Re-skinned in symmetry with /login and /setup (LSC port,
+  2026-05): tokens OKLCH scoped to .lockscreen-page, glass card
+  with backdrop-filter, FR copy, eye toggle on the password
+  field, local cyan/violet halo behind the card. The
+  constellation background is NOT reused on purpose — the
+  LockScreen invariant is "underlying UI must remain visible
+  through blur" (cf. spec §6.8); painting a full-screen
+  decoration on top would defeat that.
 
   Mounted conditionally by +layout.svelte (Chunk 7 Étape 2) via
-  {#if auth.state === 'locked'}. No escape handler: the user must
-  authenticate or close the tab.
+  {#if auth.state === 'locked'}. No escape handler: the user
+  must authenticate or close the tab.
+
+  Auth logic preserved verbatim: auth.unlock(password) → POST
+  /api/v1/auth/unlock, 401 → "Mot de passe incorrect", other →
+  generic message.
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
@@ -19,10 +32,9 @@
 	import { cubicOut } from 'svelte/easing';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { ApiError } from '$lib/api/types';
-	import Input from './Input.svelte';
-	import Button from './Button.svelte';
 
 	let password = $state('');
+	let showPassword = $state(false);
 	let error = $state('');
 	let submitting = $state(false);
 	let passwordInput: HTMLInputElement | undefined = $state();
@@ -31,11 +43,18 @@
 		passwordInput?.focus();
 	});
 
+	function togglePassword(): void {
+		showPassword = !showPassword;
+		// Re-focus the input after toggling so the user can keep
+		// typing without grabbing the mouse.
+		setTimeout(() => passwordInput?.focus(), 0);
+	}
+
 	async function handleSubmit(e: Event): Promise<void> {
 		e.preventDefault();
 		if (submitting) return;
 		if (!password) {
-			error = 'Password is required';
+			error = 'Le mot de passe est requis.';
 			return;
 		}
 		submitting = true;
@@ -46,9 +65,9 @@
 			// and this component unmounts via the parent's {#if} guard.
 		} catch (err) {
 			if (err instanceof ApiError) {
-				error = err.status === 401 ? 'Incorrect password' : err.message;
+				error = err.status === 401 ? 'Mot de passe incorrect.' : err.message;
 			} else {
-				error = 'Unexpected error';
+				error = 'Erreur inattendue.';
 			}
 			password = '';
 			passwordInput?.focus();
@@ -59,56 +78,368 @@
 </script>
 
 <div
-	class="lockscreen-backdrop fixed inset-0 z-[1000] flex items-center justify-center"
+	class="lockscreen-page"
 	role="dialog"
 	aria-modal="true"
 	aria-labelledby="lockscreen-title"
 	transition:fade={{ duration: 200, easing: cubicOut }}
 >
-	<div
-		class="bg-elevated border border-border-default rounded-lg shadow-glow-cyan p-8 w-96 max-w-full mx-4"
-	>
-		<h2 id="lockscreen-title" class="text-2xl font-semibold text-primary mb-2">
-			Session locked
-		</h2>
-		<p class="text-secondary text-sm mb-6">
-			Signed in as
-			<span class="font-mono text-primary">{auth.user?.username ?? ''}</span>.
-			Enter your password to continue.
+	<div class="lockscreen-halo" aria-hidden="true"></div>
+
+	<div class="lockscreen-card">
+		<h2 id="lockscreen-title" class="lockscreen-title">Session verrouillée.</h2>
+		<p class="lockscreen-sub">
+			Connecté en tant que
+			<span class="lockscreen-user">{auth.user?.username ?? ''}</span>.
+			Entre ton mot de passe pour continuer.
 		</p>
-		<form onsubmit={handleSubmit}>
-			<Input
-				bind:value={password}
-				bind:element={passwordInput}
-				type="password"
-				label="Password"
-				autocomplete="current-password"
-				error={error}
-				disabled={submitting}
-			/>
-			<div class="mt-4 w-full">
-				<Button
-					type="submit"
-					variant="primary"
-					size="md"
-					loading={submitting}
-					disabled={submitting}
+
+		{#if error}
+			<div class="lockscreen-banner" role="alert">
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
 				>
-					{#snippet children()}
-						<span class="w-full text-center">Unlock</span>
-					{/snippet}
-				</Button>
+					<circle cx="12" cy="12" r="10" />
+					<line x1="12" y1="8" x2="12" y2="12" />
+					<line x1="12" y1="16" x2="12.01" y2="16" />
+				</svg>
+				<div>{error}</div>
 			</div>
+		{/if}
+
+		<form onsubmit={handleSubmit} autocomplete="on" novalidate>
+			<div class="lockscreen-field">
+				<label for="lockscreen-password">Mot de passe</label>
+				<div class="lockscreen-input-wrap">
+					<input
+						id="lockscreen-password"
+						class="lockscreen-input lockscreen-input-with-toggle"
+						type={showPassword ? 'text' : 'password'}
+						autocomplete="current-password"
+						bind:value={password}
+						bind:this={passwordInput}
+						disabled={submitting}
+						aria-invalid={error ? 'true' : undefined}
+					/>
+					<button
+						type="button"
+						class="lockscreen-pw-toggle"
+						onclick={togglePassword}
+						tabindex={-1}
+						aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+					>
+						{#if showPassword}
+							<svg
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<path
+									d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"
+								/>
+								<line x1="1" y1="1" x2="23" y2="23" />
+							</svg>
+						{:else}
+							<svg
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+								<circle cx="12" cy="12" r="3" />
+							</svg>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			<button
+				type="submit"
+				class="lockscreen-submit"
+				class:loading={submitting}
+				disabled={submitting}
+			>
+				<span class="lockscreen-spin" aria-hidden="true"></span>
+				<span class="lockscreen-submit-label">Déverrouiller</span>
+			</button>
 		</form>
 	</div>
 </div>
 
 <style>
-	/* The LockScreen overlay uses --overlay-lock (rgba 0.95) — more
-	 * opaque than Modal's --overlay-modal (0.8) because the lock is
-	 * a security boundary, not a contextual focus surface. */
-	.lockscreen-backdrop {
+	/* Tokens scoped to the lockscreen overlay. Same OKLCH palette
+	 * as the .login-page / .setup-page (visual continuity through
+	 * the auth corridor). tokens.css unchanged. */
+	.lockscreen-page {
+		--bg: oklch(15% 0.005 250);
+		--surface: oklch(19% 0.006 250);
+		--surface-2: oklch(22% 0.007 250);
+		--border: oklch(28% 0.009 250);
+		--border-hi: oklch(34% 0.011 250);
+		--fg: oklch(96% 0.005 250);
+		--fg-muted: oklch(68% 0.012 250);
+		--fg-dim: oklch(54% 0.011 250);
+		--accent: oklch(68% 0.21 255);
+		--accent-soft: oklch(68% 0.21 255 / 0.14);
+		--accent-line: oklch(68% 0.21 255 / 0.45);
+		--radius: 8px;
+		--radius-lg: 14px;
+		--font-display: 'Inter', system-ui, -apple-system, sans-serif;
+		--font-body: 'Inter', system-ui, -apple-system, sans-serif;
+		--font-mono: 'Geist Mono', ui-monospace, 'JetBrains Mono', monospace;
+
+		position: fixed;
+		inset: 0;
+		z-index: 1000;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 28px 22px;
+		color: var(--fg);
+		font-family: var(--font-body);
+		font-size: 14px;
+		line-height: 1.5;
+		-webkit-font-smoothing: antialiased;
+		font-variant-numeric: tabular-nums;
+
+		/* The dim+blur layer that preserves the underlying UI's
+		 * shape behind the glass card. Spec §6.8 invariant: the
+		 * user must see they're locked on top of their previous
+		 * context, not on a new full-screen scene. */
 		background-color: var(--overlay-lock);
 		backdrop-filter: blur(8px);
+		-webkit-backdrop-filter: blur(8px);
+	}
+
+	/* Local breathing halo just behind the card — apporte la
+	 * signature cyan/violet du couloir d'auth sans peindre un
+	 * fond constellation entier (qui effacerait le contexte). */
+	.lockscreen-halo {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		width: 520px;
+		height: 520px;
+		transform: translate(-50%, -50%);
+		border-radius: 50%;
+		background: radial-gradient(
+			circle,
+			oklch(68% 0.21 255 / 0.16) 0%,
+			oklch(52% 0.22 265 / 0.07) 35%,
+			transparent 70%
+		);
+		filter: blur(40px);
+		pointer-events: none;
+		animation: lockscreenBreathe 9s ease-in-out infinite;
+	}
+	@keyframes lockscreenBreathe {
+		0%,
+		100% {
+			transform: translate(-50%, -50%) scale(0.94);
+			opacity: 0.75;
+		}
+		50% {
+			transform: translate(-50%, -50%) scale(1.05);
+			opacity: 1;
+		}
+	}
+
+	.lockscreen-card {
+		position: relative;
+		width: 100%;
+		max-width: 400px;
+		padding: 32px;
+		background: oklch(19% 0.006 250 / 0.85);
+		backdrop-filter: blur(18px) saturate(140%);
+		-webkit-backdrop-filter: blur(18px) saturate(140%);
+		border: 1px solid var(--border-hi);
+		border-radius: var(--radius-lg);
+		box-shadow:
+			0 1px 0 0 oklch(60% 0.012 250 / 0.06) inset,
+			0 32px 80px -32px oklch(0% 0 0 / 0.65),
+			0 2px 6px oklch(0% 0 0 / 0.3);
+	}
+
+	.lockscreen-title {
+		font-family: var(--font-display);
+		font-size: 22px;
+		font-weight: 600;
+		letter-spacing: -0.025em;
+		margin: 0 0 6px;
+	}
+	.lockscreen-sub {
+		color: var(--fg-muted);
+		font-size: 13.5px;
+		margin: 0 0 22px;
+	}
+	.lockscreen-user {
+		color: var(--fg);
+		font-family: var(--font-mono);
+		font-size: 12.5px;
+	}
+
+	.lockscreen-banner {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		padding: 10px 12px;
+		border-radius: var(--radius);
+		background: oklch(66% 0.20 25 / 0.10);
+		border: 1px solid oklch(66% 0.20 25 / 0.4);
+		color: oklch(86% 0.12 25);
+		font-size: 12.5px;
+		line-height: 1.45;
+		margin-bottom: 16px;
+	}
+	.lockscreen-banner :global(svg) {
+		width: 16px;
+		height: 16px;
+		flex: none;
+		margin-top: 1px;
+	}
+
+	.lockscreen-field {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		margin-bottom: 16px;
+	}
+	.lockscreen-field label {
+		font-size: 12.5px;
+		color: var(--fg-muted);
+	}
+
+	.lockscreen-input-wrap {
+		position: relative;
+	}
+	.lockscreen-input {
+		width: 100%;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: 10px 12px;
+		color: var(--fg);
+		font: inherit;
+		font-size: 14px;
+		outline: none;
+		transition: border-color 0.12s, box-shadow 0.12s, background 0.12s;
+	}
+	.lockscreen-input:hover:not(:disabled) {
+		border-color: var(--border-hi);
+	}
+	.lockscreen-input:focus {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 3px var(--accent-soft);
+		background: oklch(17% 0.006 250);
+	}
+	.lockscreen-input:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+	.lockscreen-input-with-toggle {
+		padding-right: 42px;
+	}
+
+	.lockscreen-pw-toggle {
+		position: absolute;
+		right: 8px;
+		top: 50%;
+		transform: translateY(-50%);
+		width: 28px;
+		height: 28px;
+		border-radius: 6px;
+		display: grid;
+		place-items: center;
+		color: var(--fg-dim);
+		background: none;
+		border: none;
+		cursor: pointer;
+	}
+	.lockscreen-pw-toggle:hover {
+		color: var(--fg-muted);
+		background: var(--surface-2);
+	}
+	.lockscreen-pw-toggle :global(svg) {
+		width: 16px;
+		height: 16px;
+	}
+
+	.lockscreen-submit {
+		width: 100%;
+		padding: 11px 14px;
+		background: var(--accent);
+		color: #fff;
+		font: inherit;
+		font-weight: 500;
+		font-size: 14px;
+		border-radius: var(--radius);
+		border: 1px solid transparent;
+		cursor: pointer;
+		transition: background 0.12s, transform 0.04s;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+	}
+	.lockscreen-submit:hover:not(:disabled) {
+		background: oklch(62% 0.22 255);
+	}
+	.lockscreen-submit:active:not(:disabled) {
+		transform: translateY(1px);
+	}
+	.lockscreen-submit:disabled {
+		opacity: 0.7;
+		cursor: not-allowed;
+	}
+	.lockscreen-spin {
+		display: none;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		border: 2px solid oklch(98% 0.005 250 / 0.4);
+		border-top-color: #fff;
+		animation: lockscreenSpin 0.8s linear infinite;
+	}
+	.lockscreen-submit.loading .lockscreen-spin {
+		display: inline-block;
+	}
+	.lockscreen-submit.loading .lockscreen-submit-label {
+		opacity: 0.85;
+	}
+	@keyframes lockscreenSpin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+
+	@media (max-width: 480px) {
+		.lockscreen-card {
+			padding: 24px;
+		}
+		.lockscreen-halo {
+			width: 360px;
+			height: 360px;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.lockscreen-halo,
+		.lockscreen-spin {
+			animation: none !important;
+		}
 	}
 </style>
