@@ -170,6 +170,19 @@ func (m *CaddyManager) httpsListen() string {
 	return fmt.Sprintf(":%d", httpsPortFor(m.devMode))
 }
 
+// HTTPListen exposes the effective HTTP listen address for the
+// caller's log line. Mirrors m.httpListen with the override
+// applied, so cmd/arenet/main.go prints the same port Caddy
+// actually bound. Added in the M.0 sweep to fix Finding #L.5-1.
+func (m *CaddyManager) HTTPListen() string {
+	return m.httpListen()
+}
+
+// HTTPSListen mirrors HTTPListen for the TLS side.
+func (m *CaddyManager) HTTPSListen() string {
+	return m.httpsListen()
+}
+
 // Stop halts the embedded Caddy. Safe to call when Start was never invoked.
 func (m *CaddyManager) Stop() error {
 	m.mu.Lock()

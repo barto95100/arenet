@@ -7,12 +7,12 @@ convention used in `docs/backlog-step-j.md`.
 
 ### Finding #L.2-1 — Pre-existing staticcheck warning: `oidc.go pathJoin` unused
 
+**Status: RESOLVED** (M.0 sweep, 2026-05-28).
+
 Surfaced by the L.2 close-out `staticcheck ./internal/api/...`
 run. Predates Step L (introduced in commit `1d7bc19d`, Step K.2
-work). Not touched in L.2 because it is outside the L.2 surface
-and the user explicitly flagged it as backlog ("vérifier que
-c'est cosmétique et pas un vrai souci de construction d'URL
-OIDC").
+work). Not touched in L.2 because it was outside the L.2 surface;
+deferred to verify cosmetic vs URL-encoding bug.
 
 **Symptom:**
 
@@ -20,63 +20,59 @@ OIDC").
 internal/api/oidc.go:1006:6: func pathJoin is unused (U1000)
 ```
 
-**Question to answer:** Is `pathJoin` actually unused (so just
-delete it), or is there an OIDC-callback URL-construction code
-path that should call it instead of `path.Join` directly /
-string concatenation? A find-references sweep over OIDC URL
-construction sites should answer this in <10 min.
+**Resolution.** Inspected every URL-construction site in
+`internal/api/oidc.go`. The two `IssuerURL` consumers
+(`oidc.NewProvider` and the OIDCConfig hash for cache
+invalidation) both pass the URL verbatim — `go-oidc`
+constructs the `.well-known/openid-configuration` path
+internally, and the API edge strips that suffix server-side
+before persistence. No call site uses string concatenation
+that should have routed through `pathJoin`. **Function is
+genuinely dead code; removed in the M.0 sweep commit.**
 
-**Action:**
-- If genuinely dead: delete the function.
-- If a caller was missed: wire it back into the relevant URL
-  construction site.
+### Finding #L.5-1 — main.go log line hardcoded :8080
 
-**Triage:** cosmetic vs URL-encoding bug — the former is
-ignore-able; the latter would be a P1 OIDC reliability finding.
-Resolve before tagging `v0.8.0-step-l` (L.5 smoke).
+**Status: RESOLVED** (M.0 sweep, 2026-05-28).
 
-### Finding #L.5-1 — Cosmetic log line in main.go still hardcodes `:8080`
+Surfaced by the L.5 smoke (2026-05-28). The "Arenet listening
+http=:8080" log line in `cmd/arenet/main.go` was hardcoded and
+ignored the `ARENET_HTTP_PORT` / `ARENET_HTTPS_PORT` override
+that the prereq commit `7650802` had wired into Caddy. Caddy
+itself bound the right port; only this one cosmetic log line
+was wrong.
 
-Surfaced by the L.5 smoke (2026-05-28). When the operator
-overrides via `ARENET_HTTP_PORT=...`, Caddy correctly binds
-the requested port (`Caddy started http=:18080 ...` log line is
-authoritative) and the data-plane works. But the second log
-line `Arenet listening http=:8080 admin_api=:...` printed by
-`cmd/arenet/main.go` (around line 348, `listenAttrs`) is
-hardcoded to `":8080"` and ignores the override.
-
-Cosmetic only — no code path reads that string. Fix: ask
-`caddymgr` for the effective listen address. ~3-line change.
-Fix before another step smoke leans on this log line for
-assertion.
-
-**Triage**: cosmetic, non-blocking on the L tag, but trivial
-enough that it should land in a small follow-up commit before
-work on Step M starts.
+**Resolution.** Exported `caddymgr.HTTPListen()` and
+`caddymgr.HTTPSListen()` accessors; main.go now reads from them
+so the log line matches the actual bind, including under env
+override. Verified by reading the new `Arenet listening` line
+during the M.0 sweep smoke.
 
 ### Finding #L.2-2 — Last bucket of historical timeline lags up to 1 minute
 
-By design: the aggregator flushes at the minute boundary, so the
-current (in-progress) minute is not yet persisted to
-`bucket_1m`. The `/metrics/timeseries` endpoint returns the dense
-window ending at the **next** bucket boundary — the very last
-slot is gap-filled (0 or null) until the next flush.
+**Status: RESOLVED** (handled inline in L.3, 2026-05-28).
 
-For the historical timeline this is correct behaviour (no
-partial buckets), but the L.3 dashboard MUST NOT render the
-last slot as a real data point — it would draw a fake "traffic
-dropped to zero" cliff on every chart.
+By design: the aggregator flushes at the minute boundary, so
+the current (in-progress) minute is not yet persisted to
+`bucket_1m`. The `/metrics/timeseries` endpoint returns the
+dense window ending at the next bucket boundary — the very
+last slot would be gap-filled (0 or null) until the next
+flush.
 
-**Action for L.3:**
-- Either trim the last slot client-side (display the window as
-  ending at `now - bucketSize` so the lag is hidden).
-- Or merge the live Step E tick into the last slot for the
-  current minute (more complex; only useful if the dashboard
-  also shows live values).
+**Resolution.** The L.3 dashboard + L.4 drill-down each call
+`trimTrailing(resp)` which does `resp.points.slice(0, -1)` on
+every timeseries before passing to the chart. The phantom
+near-zero point at the right edge is dropped client-side. The
+L.5 smoke verified live that data lands correctly and no fake
+zero-cliff renders on the chart's right edge.
 
 The live `reqPerSec` WebSocket pipeline (Step E topology view)
-remains real-time and is unaffected — L.3 dashboard can layer
-the live tick on top of the history when wired.
+remains real-time and unaffected — the dashboard is
+historical-only by design.
 
-**Triage:** UX-only; no code change in L.2 scope.
+---
 
+## 2. Closed
+
+All three findings logged above are resolved. No open Step L
+backlog items at this time. Future Step L work would re-open
+this doc; Step M starts with a clean slate.

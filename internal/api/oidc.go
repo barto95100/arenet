@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -999,10 +998,3 @@ func truncate(s string, max int) string {
 	return s[:max]
 }
 
-// pathJoin returns a clean URL path joined from segments —
-// avoids a stray double slash when the callback URL ends with /.
-//
-//nolint:unused // kept for future use by the discovery refresh logic
-func pathJoin(elem ...string) string {
-	return path.Join(elem...)
-}

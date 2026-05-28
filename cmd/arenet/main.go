@@ -417,9 +417,14 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	if err != nil {
 		return err
 	}
-	listenAttrs := []any{"http", ":8080", "admin_api", cfg.adminPort}
+	// Pull the effective listen addresses from the manager so the
+	// log line matches Caddy's actual bind even when the operator
+	// overrides via ARENET_HTTP_PORT / ARENET_HTTPS_PORT (Step L
+	// backlog #L.5-1). The existing "Caddy started" log line above
+	// is sourced from the same accessor.
+	listenAttrs := []any{"http", mgr.HTTPListen(), "admin_api", cfg.adminPort}
 	if httpsActive {
-		listenAttrs = append(listenAttrs, "https", ":8443")
+		listenAttrs = append(listenAttrs, "https", mgr.HTTPSListen())
 	}
 	logger.Info("Arenet listening", listenAttrs...)
 
