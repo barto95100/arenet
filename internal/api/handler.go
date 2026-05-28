@@ -48,8 +48,14 @@ type CaddyReloader interface {
 // holds the interface type rather than the concrete *Store so the
 // handler tolerates a nil sentinel cleanly (no nil-pointer
 // dereference on method dispatch).
+//
+// QueryAggregated (Spec-1 §10.1) is the system-wide view: one
+// MetricBucket per ts with SUM-aggregated counters and weighted
+// p95 across all routes. Used by the dashboard's three timeline
+// charts so they line up with the global stat cards.
 type MetricsReader interface {
 	Query(ctx context.Context, gran observability.Granularity, routeID string, from, to time.Time) ([]observability.MetricBucket, error)
+	QueryAggregated(ctx context.Context, gran observability.Granularity, from, to time.Time) ([]observability.MetricBucket, error)
 }
 
 // AuditAppender is the subset of internal/audit the API depends on. Defined

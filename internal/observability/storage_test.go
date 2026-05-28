@@ -177,6 +177,108 @@ func TestStore_InsertBatchEmpty(t *testing.T) {
 	}
 }
 
+func TestStore_QueryAggregated_SumsAcrossRoutes(t *testing.T) {
+	// Spec-1 §10.1: aggregated timeseries for the global view.
+	// Two routes, one minute apart, two minutes each → the
+	// aggregated query MUST sum each counter independently
+	// per bucket. p95 must be req-weighted.
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	rows := []MetricBucket{
+		// Bucket t0: r-a heavy, r-b light. Weighted p95 ≠ max.
+		{RouteID: "r-a", Ts: t0, ReqCount: 90, FourxxCount: 5, FivexxCount: 0, LatencyP95Ms: 20},
+		{RouteID: "r-b", Ts: t0, ReqCount: 10, FourxxCount: 0, FivexxCount: 3, LatencyP95Ms: 100},
+		// Bucket t0+1m: only r-a.
+		{RouteID: "r-a", Ts: t0.Add(time.Minute), ReqCount: 50, FourxxCount: 2, FivexxCount: 1, LatencyP95Ms: 16},
+	}
+	if err := s.InsertBatch(ctx, Granularity1m, rows); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := s.QueryAggregated(ctx, Granularity1m, t0, t0.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("QueryAggregated: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("rows = %d, want 2 (one per bucket): %+v", len(got), got)
+	}
+	// Bucket 0: req=100, 4xx=5, 5xx=3, p95 weighted
+	// = (90*20 + 10*100) / (90+10) = 2800/100 = 28. Critically
+	// NOT the unweighted max of 100 — the weighting is the
+	// AC #2 contract restated for the global view.
+	if got[0].ReqCount != 100 || got[0].FourxxCount != 5 || got[0].FivexxCount != 3 {
+		t.Errorf("bucket0 counts mismatch: %+v", got[0])
+	}
+	if got[0].LatencyP95Ms != 28 {
+		t.Errorf("bucket0 LatencyP95Ms = %d, want 28 (weighted, NOT 100 unweighted max)", got[0].LatencyP95Ms)
+	}
+	// Bucket 1: just r-a. Counters as-is, p95 = 16.
+	if got[1].ReqCount != 50 || got[1].FourxxCount != 2 || got[1].FivexxCount != 1 || got[1].LatencyP95Ms != 16 {
+		t.Errorf("bucket1 mismatch: %+v", got[1])
+	}
+	// AC #3 anti-regression at the storage layer: the
+	// aggregation must keep each counter independent. A 4xx
+	// row from r-a must NEVER inflate r-b's 5xx total.
+	if got[0].FivexxCount == 0 {
+		t.Errorf("bucket0 FivexxCount should be 3 (from r-b), got 0 — aggregation lost r-b's 5xx")
+	}
+}
+
+func TestStore_QueryAggregated_FourxxOnlyDoesNotContaminate5xx(t *testing.T) {
+	// Reciprocal AC #3 check at the aggregation layer.
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	if err := s.InsertBatch(ctx, Granularity1m, []MetricBucket{
+		{RouteID: "r-a", Ts: t0, ReqCount: 100, FourxxCount: 30, FivexxCount: 0, LatencyP95Ms: 10},
+		{RouteID: "r-b", Ts: t0, ReqCount: 50, FourxxCount: 10, FivexxCount: 0, LatencyP95Ms: 10},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	got, err := s.QueryAggregated(ctx, Granularity1m, t0, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("QueryAggregated: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("rows = %d, want 1", len(got))
+	}
+	if got[0].FourxxCount != 40 {
+		t.Errorf("FourxxCount aggregate = %d, want 40", got[0].FourxxCount)
+	}
+	if got[0].FivexxCount != 0 {
+		t.Errorf("FivexxCount = %d, want 0 — a 4xx-only spike across routes MUST NOT inflate 5xx (AC #3 reciprocal)", got[0].FivexxCount)
+	}
+}
+
+func TestStore_QueryAggregated_EmptyWindow(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	got, err := s.QueryAggregated(ctx, Granularity1m,
+		time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 28, 11, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("QueryAggregated: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("empty window should yield 0 rows, got %d", len(got))
+	}
+}
+
 func TestStore_PruneOlderThan(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(ctx, ":memory:")

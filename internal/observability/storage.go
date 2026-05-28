@@ -227,6 +227,71 @@ ORDER BY ts ASC
 	return out, nil
 }
 
+// QueryAggregated returns one MetricBucket per `ts` aggregated
+// across ALL routes, for the table selected by gran. Per
+// Spec-1 §10.1 (added during L.3):
+//
+//   - req_count, fourxx_count, fivexx_count: SUM across routes
+//     within each bucket. AC #3 holds: each counter is summed
+//     independently — they NEVER collapse into a single
+//     "errors" number.
+//   - latency_p95_ms: req-weighted percentile-of-percentiles
+//     across the routes that landed rows in the bucket. Same
+//     approximation as the hourly rollup (AC #2 acknowledged).
+//     Returned as 0 when the bucket has no traffic; the API
+//     layer maps that to JSON null per AC #5.
+//
+// The returned RouteID is the empty string ("") on every row —
+// these buckets are system-wide, not tied to a specific route.
+// The API layer rewrites it to "all" for the wire response.
+func (s *Store) QueryAggregated(ctx context.Context, gran Granularity, from, to time.Time) ([]MetricBucket, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	// Integer arithmetic in SQLite: the weighted-p95
+	// numerator is Σ(latency_p95_ms × req_count) and the
+	// denominator is Σ(req_count) when req_count > 0. Without
+	// the CASE guard, a bucket with no traffic but a phantom
+	// LatencyP95Ms > 0 would skew the average; the guard
+	// keeps the math honest.
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+  ts,
+  SUM(req_count)     AS req_total,
+  SUM(fourxx_count)  AS fourxx_total,
+  SUM(fivexx_count)  AS fivexx_total,
+  CASE
+    WHEN SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END) > 0
+    THEN SUM(latency_p95_ms * CASE WHEN req_count > 0 THEN req_count ELSE 0 END) / SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END)
+    ELSE 0
+  END AS p95_weighted
+FROM `+gran.tableName()+`
+WHERE ts >= ? AND ts < ?
+GROUP BY ts
+ORDER BY ts ASC
+`, from.UTC().Unix(), to.UTC().Unix())
+	if err != nil {
+		return nil, fmt.Errorf("observability: query aggregated: %w", err)
+	}
+	defer rows.Close()
+	var out []MetricBucket
+	for rows.Next() {
+		var b MetricBucket
+		var tsUnix int64
+		var p95 int64 // SQLite SUM/CASE returns INTEGER; scan as int64 then narrow
+		if err := rows.Scan(&tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &p95); err != nil {
+			return nil, fmt.Errorf("observability: scan aggregated: %w", err)
+		}
+		b.Ts = time.Unix(tsUnix, 0).UTC()
+		b.LatencyP95Ms = int32(p95)
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: query aggregated iterate: %w", err)
+	}
+	return out, nil
+}
+
 // PruneOlderThan deletes rows from the table selected by gran
 // where ts < cutoff. Returns the number of rows deleted. Called
 // by the retention loop; safe to call concurrently with inserts

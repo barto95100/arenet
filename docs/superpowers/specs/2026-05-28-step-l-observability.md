@@ -778,3 +778,103 @@ with an explicit "spec amendment" prefix and re-tagged
 
 (Step K used the same pattern with `v0.7.0-step-k-spec` →
 spec-1 amendments via Spec-1 commit.)
+
+## 10. Spec-1 amendments (2026-05-28, during L.3)
+
+Two divergences from the frozen spec surfaced during L.3
+implementation. Logged here per §9 — spec amendments are
+explicit, not silent.
+
+### 10.1 New endpoint: aggregated global timeseries
+
+**What changed.** The frozen spec §3.3 only declared
+`GET /api/v1/metrics/timeseries?route=<id>&metric=<m>&window=<w>`
+(per-route). The dashboard at L.3 needed a **global** timeseries
+covering all routes, not the leader route, because:
+
+- The dashboard is the global view (D7.D). Its stat cards are
+  global aggregates; its charts must match — otherwise the
+  cards say "system 5xx/min = X" while the charts plot only
+  the busiest route, and a system-wide 5xx spike on a quiet
+  route would be invisible.
+- The "is the system being scanned right now?" question is
+  exactly the 4xx-rate-across-all-routes signal. A
+  leader-only chart hides distributed scanners.
+
+**Addition.** The `route` query parameter accepts the sentinel
+string `all`:
+
+```
+GET /api/v1/metrics/timeseries?route=all&metric=<m>&window=<w>
+```
+
+Response shape is identical to the per-route form (same
+`timeseriesResponse`); the `routeId` field carries `"all"`
+back to the caller as an echo.
+
+**Semantics.** For each bucket in [from, to):
+- `req_count`, `fourxx_count`, `fivexx_count` are SUM-aggregated
+  across all routes whose row landed in that bucket. Buckets
+  with no row produce a 0-count point (gap-fill rule for
+  counts, unchanged).
+- `latency_p95_ms` is the **req-weighted percentile-of-
+  percentiles approximation** across the routes that landed
+  rows in that bucket — same formula as the hourly rollup in
+  §3 (`Σ(p95 × req) / Σ(req)`). Buckets with zero total
+  traffic produce a `null` p95 (gap-fill rule, unchanged).
+
+**AC #3 invariant preserved.** The aggregation sums each of
+`req`, `4xx`, `5xx` independently. There is no point in the
+pipeline where they collapse. The L.3 anti-regression tests
+include a 4xx-only-burst and a 5xx-only-burst case against
+the aggregated endpoint, mirroring the per-route AC #3 tests.
+
+**AC #5 invariant preserved.** A bucket with zero rows from
+zero routes is a `value: 0` for counts (real measurement: no
+traffic) and `value: null` for p95 (no traffic ⇒ no latency).
+
+**Storage layer.** New `Store.QueryAggregated(ctx, gran, from,
+to)` returns `[]MetricBucket` with `RouteID = ""` (sentinel —
+the row is system-wide, not tied to a specific route). One
+SQL query with `GROUP BY ts`; no per-route iteration.
+
+**Trade-off considered.** An alternative was to fan out per-
+route timeseries client-side and sum in JS. Rejected because
+(a) for windows >= 30 days the row count is large and round-
+trip cost dominates, (b) the weighted-p95 aggregation is the
+same math as the existing hourly rollup, so the SQL form
+mirrors a code path we already trust.
+
+### 10.2 D8 revised: no D3 dependency
+
+**What the frozen spec said.** §1.3 D8 ("topology graph + chart
+rendering: D3 already loaded as a dependency for the topology
+page, so the observability dashboard can borrow it for free").
+
+**What turned out to be true.** The topology page does NOT
+use D3. It uses raw SVG with hand-computed coordinates
+(`web/frontend/src/lib/components/TopologySvg.svelte` +
+`$lib/topology/*`). D3 is not in `package.json`. Importing it
+just for L.3 would have blown AC #16 — d3 submodules alone
+weigh 30+ kB gzipped, well above the 10 kB-gz dashboard budget.
+
+**What L.3 ships instead.** A purpose-built SVG line chart
+component (`web/frontend/src/lib/components/TimelineChart.svelte`,
+~150 lines) that does linear x/y scales + a path with **gaps
+on null** (the canonical `d3.line().defined()` pattern,
+hand-rolled). Splits the input into contiguous non-null
+segments and emits one `<path>` per segment. Result: the
+entire observability page chunk is **0.46 kB gz** — under the
+budget by 20×, with all AC #5 / #3 invariants intact.
+
+**Spec correction.** D8 is hereby revised to:
+
+> Chart rendering uses purpose-built SVG components co-located
+> with the dashboard. D3 is NOT a dependency of the frontend.
+> The L.4 drill-down panel reuses the same TimelineChart
+> component as the L.3 dashboard.
+
+**Why this is not just a 'we did something different' note.**
+Future contributors reading the frozen spec would otherwise
+add D3 to satisfy D8, immediately blowing AC #16. The
+amendment is load-bearing.

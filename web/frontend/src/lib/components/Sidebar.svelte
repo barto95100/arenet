@@ -72,7 +72,14 @@
 		}
 	}
 
-	type IconName = 'routes' | 'audit' | 'topology' | 'security' | 'settings' | 'users';
+	type IconName =
+		| 'routes'
+		| 'audit'
+		| 'topology'
+		| 'observability'
+		| 'security'
+		| 'settings'
+		| 'users';
 
 	type Item = {
 		href: string;
@@ -92,6 +99,9 @@
 		{ href: '/routes', label: 'Routes', icon: 'routes' },
 		{ href: '/audit', label: 'Audit', icon: 'audit' },
 		{ href: '/topology', label: 'Topology', icon: 'topology' },
+		// Step L L.3 — historical metrics. Viewer-accessible per
+		// AC #17 (no role filter here; the API gate is enough).
+		{ href: '/observability', label: 'Observability', icon: 'observability' },
 		{ href: '/security', label: 'Security', icon: 'security', disabled: true, tooltip: 'Coming soon' },
 		{ href: '/admin/users', label: 'Users', icon: 'users' },
 		{ href: '/settings', label: 'Settings', icon: 'settings' }
@@ -138,6 +148,12 @@
 			<rect x="9" y="2" width="6" height="6" rx="1" />
 			<path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" />
 			<path d="M12 12V8" />
+		{:else if icon === 'observability'}
+			<!-- Lucide: bar-chart-3 -->
+			<path d="M3 3v18h18" />
+			<path d="M7 16v-4" />
+			<path d="M12 16v-9" />
+			<path d="M17 16v-6" />
 		{:else if icon === 'security'}
 			<!-- Lucide: shield -->
 			<path

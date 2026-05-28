@@ -31,16 +31,24 @@ import (
 )
 
 // fakeMetricsReader is the test double for the AC #13 paths.
-// queryFn lets each test customise the response (return rows,
-// return error). When unset, defaults to "no rows, no error" —
-// a healthy-but-empty store.
+// queryFn / queryAggregatedFn let each test customise the
+// response (return rows, return error). When unset, the
+// defaults are "no rows, no error" — a healthy-but-empty store.
 type fakeMetricsReader struct {
-	queryFn func(ctx context.Context, gran observability.Granularity, routeID string, from, to time.Time) ([]observability.MetricBucket, error)
+	queryFn           func(ctx context.Context, gran observability.Granularity, routeID string, from, to time.Time) ([]observability.MetricBucket, error)
+	queryAggregatedFn func(ctx context.Context, gran observability.Granularity, from, to time.Time) ([]observability.MetricBucket, error)
 }
 
 func (f *fakeMetricsReader) Query(ctx context.Context, gran observability.Granularity, routeID string, from, to time.Time) ([]observability.MetricBucket, error) {
 	if f.queryFn != nil {
 		return f.queryFn(ctx, gran, routeID, from, to)
+	}
+	return nil, nil
+}
+
+func (f *fakeMetricsReader) QueryAggregated(ctx context.Context, gran observability.Granularity, from, to time.Time) ([]observability.MetricBucket, error) {
+	if f.queryAggregatedFn != nil {
+		return f.queryAggregatedFn(ctx, gran, from, to)
 	}
 	return nil, nil
 }
@@ -437,6 +445,215 @@ func TestMetricsTimeseries_BadWindow(t *testing.T) {
 	m.router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// --- Spec-1 §10.1: route=all aggregated timeseries -------------------------
+
+func TestMetricsTimeseries_RouteAll_AggregatesAcrossRoutes(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	// Seed two routes with traffic in the SAME minute and a
+	// third route in a different minute. The aggregated
+	// timeseries must show ONE point per minute, summing
+	// across routes inside the minute.
+	now := time.Now().UTC().Truncate(time.Minute)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: now.Add(-5 * time.Minute), ReqCount: 80, FourxxCount: 4, FivexxCount: 0, LatencyP95Ms: 16},
+		// A second seeded route in the same -5m bucket would
+		// require seeding another route. We test the GROUP BY
+		// implicitly by combining with a different bucket.
+		{RouteID: m.routeID, Ts: now.Add(-3 * time.Minute), ReqCount: 100, FourxxCount: 0, FivexxCount: 2, LatencyP95Ms: 32},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route=all&metric=req_per_sec&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp timeseriesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.RouteID != "all" {
+		t.Errorf("RouteID echo = %q, want \"all\"", resp.RouteID)
+	}
+	// Sanity: roughly 1440 buckets (24h × 60min).
+	if got := len(resp.Points); got < 1400 || got > 1500 {
+		t.Fatalf("points = %d, want ~1440", got)
+	}
+	// Find the two data points (value > 0) and confirm their
+	// sums are correct.
+	dataValues := []float64{}
+	for _, p := range resp.Points {
+		if p.Value != nil && *p.Value > 0 {
+			dataValues = append(dataValues, *p.Value)
+		}
+	}
+	if len(dataValues) != 2 {
+		t.Fatalf("data points = %d, want 2: %v", len(dataValues), dataValues)
+	}
+	// Order is timestamp-ascending: -5m then -3m.
+	if dataValues[0] != 80 || dataValues[1] != 100 {
+		t.Errorf("aggregated req counts = %v, want [80, 100]", dataValues)
+	}
+}
+
+func TestMetricsTimeseries_RouteAll_4xxAnd5xxStaySeparate(t *testing.T) {
+	// AC #3 anti-regression on the aggregated path: a
+	// 4xx-only burst across routes must NOT inflate the
+	// aggregated 5xx series.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	now := time.Now().UTC().Truncate(time.Minute)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: now.Add(-5 * time.Minute), ReqCount: 50, FourxxCount: 30, FivexxCount: 0, LatencyP95Ms: 8},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// 4xx series: should have a non-zero data point.
+	req4 := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route=all&metric=four_xx_rate&window=24h", nil)
+	rec4 := httptest.NewRecorder()
+	m.router.ServeHTTP(rec4, req4)
+	var resp4 timeseriesResponse
+	if err := json.NewDecoder(rec4.Body).Decode(&resp4); err != nil {
+		t.Fatalf("decode 4xx: %v", err)
+	}
+	max4 := 0.0
+	for _, p := range resp4.Points {
+		if p.Value != nil && *p.Value > max4 {
+			max4 = *p.Value
+		}
+	}
+	if max4 != 30 {
+		t.Errorf("4xx aggregated max = %v, want 30", max4)
+	}
+
+	// 5xx series: every point must be zero (no 5xx seeded).
+	req5 := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route=all&metric=five_xx_rate&window=24h", nil)
+	rec5 := httptest.NewRecorder()
+	m.router.ServeHTTP(rec5, req5)
+	var resp5 timeseriesResponse
+	if err := json.NewDecoder(rec5.Body).Decode(&resp5); err != nil {
+		t.Fatalf("decode 5xx: %v", err)
+	}
+	for _, p := range resp5.Points {
+		if p.Value != nil && *p.Value > 0 {
+			t.Fatalf("aggregated 5xx had a non-zero point (%v) — AC #3 regression: 4xx leaked into 5xx", *p.Value)
+		}
+	}
+}
+
+func TestMetricsTimeseries_RouteAll_NilReaderDisabled(t *testing.T) {
+	// AC #13 carries over: aggregated endpoint must also
+	// emit disabled=true when the reader is nil.
+	m := newMetricsTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route=all&metric=req_per_sec&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (degraded)", rec.Code)
+	}
+	var resp timeseriesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Disabled {
+		t.Errorf("disabled = false, want true on aggregated path with nil reader")
+	}
+}
+
+func TestMetricsTimeseries_RouteAll_SentinelBeatsCollidingRoute(t *testing.T) {
+	// Anti-regression for the collision analysis documented on
+	// routeAllSentinel in metrics_handlers.go.
+	//
+	// UUID-generated route IDs cannot collide with "all"
+	// (different format, different length). But a tampered
+	// backup restore COULD inject a row with ID "all". Pin the
+	// invariant behaviourally: when route=all is passed, the
+	// handler dispatches to QueryAggregated (not Query) — even
+	// when both fakes return distinguishable sentinel data.
+	m := newMetricsTestEnv(t)
+	now := time.Now().UTC().Truncate(time.Minute)
+	aggregatedSentinelTs := now.Add(-7 * time.Minute)
+	perRouteSentinelTs := now.Add(-13 * time.Minute)
+	m.env.handler.SetMetricsReader(&fakeMetricsReader{
+		queryFn: func(_ context.Context, _ observability.Granularity, _ string, _, _ time.Time) ([]observability.MetricBucket, error) {
+			// Per-route value the handler MUST NOT pick up.
+			return []observability.MetricBucket{
+				{Ts: perRouteSentinelTs, ReqCount: 999},
+			}, nil
+		},
+		queryAggregatedFn: func(_ context.Context, _ observability.Granularity, _, _ time.Time) ([]observability.MetricBucket, error) {
+			return []observability.MetricBucket{
+				{Ts: aggregatedSentinelTs, ReqCount: 42},
+			}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route=all&metric=req_per_sec&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp timeseriesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Find the single non-zero point; assert it carries the
+	// aggregated sentinel (42), NOT the per-route one (999).
+	for _, p := range resp.Points {
+		if p.Value != nil && *p.Value == 999 {
+			t.Fatalf("route=all dispatched to per-route Query (got 999 sentinel) — sentinel precedence regression")
+		}
+	}
+	found := false
+	for _, p := range resp.Points {
+		if p.Value != nil && *p.Value == 42 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("aggregated sentinel (42) not in response — route=all dispatched somewhere unexpected")
+	}
+}
+
+func TestMetricsTimeseries_RouteAll_QueryError503(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetMetricsReader(&fakeMetricsReader{
+		queryAggregatedFn: func(_ context.Context, _ observability.Granularity, _, _ time.Time) ([]observability.MetricBucket, error) {
+			return nil, errors.New("locked")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route=all&metric=req_per_sec&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 }
 

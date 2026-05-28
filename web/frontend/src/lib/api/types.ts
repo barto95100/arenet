@@ -539,3 +539,63 @@ export class ApiError extends Error {
 		this.retryAfterSeconds = retryAfterSeconds;
 	}
 }
+
+// --- Step L observability types ---------------------------------------------
+
+// The four metrics the timeseries endpoint accepts. Mirrors the
+// Go-side `metricName` enum in internal/api/metrics_handlers.go.
+export type MetricName =
+	| 'req_per_sec'
+	| 'four_xx_rate'
+	| 'five_xx_rate'
+	| 'p95_latency_ms';
+
+export type MetricWindow = '24h' | '30d';
+
+// One point on the timeline. `value` is `number | null` — null
+// marks a missing-data gap that the chart MUST NOT connect
+// across (AC #5: a null p95 must render as a break in the
+// line, never as 0 ms which would draw a fake latency dip).
+//
+// Tied at the type level so a downstream consumer cannot
+// accidentally `value: 0` a null point — TypeScript narrows
+// `value` only after a `!== null` check.
+export interface TimeseriesPoint {
+	ts: string;
+	value: number | null;
+}
+
+export interface TimeseriesResponse {
+	routeId: string;
+	metric: MetricName;
+	window: MetricWindow;
+	bucketSizeSeconds: number;
+	// AC #13: when the observability subsystem failed at boot,
+	// the API returns disabled=true + an empty points array.
+	// The dashboard renders an "unavailable" empty state, not
+	// an error toast.
+	disabled?: boolean;
+	points: TimeseriesPoint[];
+}
+
+export interface SummaryRoute {
+	routeId: string;
+	host: string;
+	reqsPerMin: number;
+	fourxxPerMin: number;
+	fivexxPerMin: number;
+}
+
+export interface SummaryResponse {
+	generatedAt: string;
+	windowSeconds: number;
+	disabled?: boolean;
+	totalReqPerMin: number;
+	totalFourXxPerMin: number;
+	totalFiveXxPerMin: number;
+	// Null when no traffic landed in the window — same
+	// no-fake-dip rule as TimeseriesPoint.value.
+	globalP95LatencyMs: number | null;
+	activeRouteCount: number;
+	topRoutes: SummaryRoute[];
+}
