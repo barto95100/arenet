@@ -364,6 +364,19 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		apiHandler.SetUIOrigin(cfg.uiOrigin)
 		logger.Info("OIDC callback redirects will target SPA origin", "ui_origin", cfg.uiOrigin)
 	}
+	// Step L L.2 — attach the observability store to the API
+	// handler so /api/v1/metrics/* can serve history.
+	//
+	// Pass the interface value explicitly nil when the store
+	// failed to open (AC #13 degraded mode). Lifting a typed
+	// (*observability.Store)(nil) into MetricsReader would
+	// produce a non-nil interface wrapping a nil pointer — the
+	// handler's `h.metrics == nil` check would miss it and the
+	// next method call would NPE. The conditional assignment
+	// keeps the interface comparison honest.
+	if obsStore != nil {
+		apiHandler.SetMetricsReader(obsStore)
+	}
 	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.dev, logger)
 	router := api.NewRouter(apiHandler, cfg.dev, ipExtractor, wsTopologyHandler)
 

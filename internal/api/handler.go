@@ -24,6 +24,7 @@ import (
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
+	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -35,6 +36,20 @@ const timestampFormat = "2006-01-02T15:04:05.999Z07:00"
 // here (consumer side) so tests can inject a fake without booting Caddy.
 type CaddyReloader interface {
 	ReloadFromStore(ctx context.Context) error
+}
+
+// MetricsReader is the read surface the /api/v1/metrics/* handlers
+// depend on. Defined here (consumer side) so tests can inject a
+// fake that simulates the AC #13 degraded paths — store=nil
+// (boot failure) or Query returning an error (locked / corrupt
+// DB at runtime).
+//
+// *observability.Store satisfies this interface. The API layer
+// holds the interface type rather than the concrete *Store so the
+// handler tolerates a nil sentinel cleanly (no nil-pointer
+// dereference on method dispatch).
+type MetricsReader interface {
+	Query(ctx context.Context, gran observability.Granularity, routeID string, from, to time.Time) ([]observability.MetricBucket, error)
 }
 
 // AuditAppender is the subset of internal/audit the API depends on. Defined
@@ -81,6 +96,15 @@ type Handler struct {
 	// /healthz endpoint as uptime_seconds (Step H.3). Read-only after
 	// construction.
 	startTime time.Time
+	// metrics (Step L L.2) is the read surface for per-route
+	// metrics history. Set via SetMetricsReader after
+	// construction (same pattern as uiOrigin). nil means the
+	// observability subsystem failed to open at boot (AC #13
+	// degraded-mode) or that this Handler was built in a test
+	// that does not exercise the /metrics endpoints — both are
+	// expected; the handlers detect nil and emit the
+	// "disabled" response without panicking.
+	metrics MetricsReader
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -150,6 +174,19 @@ func NewHandler(
 // test scaffolding stays signature-compatible.
 func (h *Handler) SetUIOrigin(origin string) {
 	h.uiOrigin = strings.TrimRight(strings.TrimSpace(origin), "/")
+}
+
+// SetMetricsReader (Step L L.2) attaches the per-route metrics
+// history reader. Pass nil if observability boot failed — the
+// /api/v1/metrics/* endpoints will return the "disabled"
+// response cleanly rather than crashing (AC #13 degraded-mode
+// API half).
+//
+// Intentionally a setter (not a NewHandler arg) so the existing
+// test scaffolding stays signature-compatible — same convention
+// as SetUIOrigin.
+func (h *Handler) SetMetricsReader(m MetricsReader) {
+	h.metrics = m
 }
 
 // uiURL returns the URL to redirect to for the given SPA path

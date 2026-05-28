@@ -107,14 +107,21 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 
 		// Business endpoints — hard-auth gated per spec §5.2.
 		// Step K.2 §1.3 #12: viewer-accessible endpoints
-		// (read-only on routes / audit / topology) sit at this
-		// level. The admin-only sub-group below adds the role
-		// gate for write endpoints + settings + admin users.
+		// (read-only on routes / audit / topology / metrics) sit
+		// at this level. The admin-only sub-group below adds the
+		// role gate for write endpoints + settings + admin users.
 		r.Group(func(r chi.Router) {
 			r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.devMode))
 			r.Get("/routes", h.listRoutes)
 			r.Get("/routes/{id}", h.getRoute)
 			r.Get("/audit", h.listAudit)
+			// Step L L.2 — per-route metrics history.
+			// Read-only; viewer-accessible per AC #17. No
+			// write surface (there is nothing to write —
+			// metrics are produced by the in-process
+			// aggregator, never accepted via the API).
+			r.Get("/metrics/timeseries", h.metricsTimeseries)
+			r.Get("/metrics/summary", h.metricsSummary)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame
