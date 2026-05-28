@@ -131,6 +131,7 @@
 	</section>
 
 	<footer class="panel-footer">
+		<a href="/observability/{route.id}" class="edit-link">Historical →</a>
 		<a href="/routes" class="edit-link">Edit route ↗</a>
 	</footer>
 </div>

@@ -269,7 +269,11 @@ later step.
 					<tbody>
 						{#each summary?.topRoutes ?? [] as route (route.routeId)}
 							<tr>
-								<td>{route.host}</td>
+								<td>
+									<a href="/observability/{route.routeId}" class="host-link"
+										>{route.host}</a
+									>
+								</td>
 								<td class="num">{route.reqsPerMin}</td>
 								<td class="num warn">{route.fourxxPerMin}</td>
 								<td class="num down">{route.fivexxPerMin}</td>
@@ -394,5 +398,14 @@ later step.
 	}
 	.down {
 		color: var(--status-down);
+	}
+	.host-link {
+		color: var(--text-primary);
+		text-decoration: none;
+		border-bottom: 1px dashed var(--text-muted);
+	}
+	.host-link:hover {
+		color: var(--accent-cyan);
+		border-bottom-color: var(--accent-cyan);
 	}
 </style>
