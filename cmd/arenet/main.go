@@ -60,6 +60,7 @@ import (
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/metrics"
+	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/web"
 )
@@ -244,12 +245,70 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		}
 	}()
 
+	// Build the metrics ticker FIRST so we can wire the
+	// observability consumer (Step L L.7) on it BEFORE the tick
+	// goroutine starts. The ticker reads .consumer without
+	// synchronisation from its hot loop, so SetConsumer must
+	// happen pre-Run.
+	metricsTicker := metrics.NewTicker(metricsRegistry, metricsBroadcaster, &storeLister{store: store})
+
+	// Step L L.1 — observability subsystem (per-route metrics
+	// history on SQLite). AC #13 degraded-mode policy: if any
+	// step here fails, log the error and continue WITHOUT the
+	// metrics history. The Caddy data plane and the Step E live
+	// pipeline must keep running.
+	//
+	// The aggregator and retention runner are started even when
+	// the store is nil — they become silent no-ops (the
+	// aggregator still drains its ingress channel so the
+	// producer never blocks; the retention runner ticks but
+	// finds nothing to do). This uniform shape keeps the wire-up
+	// simple: the ticker always has a valid TickConsumer to feed.
+	obsPath := filepath.Join(cfg.dataDir, "metrics.db")
+	obsStore, obsErr := observability.Open(ctx, obsPath)
+	if obsErr != nil {
+		logger.Error("observability: metrics DB unavailable — continuing without metrics history (AC #13)",
+			"path", obsPath, "err", obsErr,
+		)
+		obsStore = nil
+	} else {
+		logger.Info("observability storage opened", "path", obsPath)
+	}
+	obsAggregator := observability.NewAggregator(obsStore, logger, 4096)
+	obsRetention := observability.NewRetentionRunner(obsStore, logger)
+	metricsTicker.SetConsumer(obsAggregator)
+	obsCtx, obsCancel := context.WithCancel(ctx)
+	var obsWG sync.WaitGroup
+	obsWG.Add(2)
+	go func() {
+		defer obsWG.Done()
+		obsAggregator.Run(obsCtx)
+	}()
+	go func() {
+		defer obsWG.Done()
+		obsRetention.Run(obsCtx)
+	}()
+	defer func() {
+		obsCancel()
+		obsWG.Wait()
+		if obsStore != nil {
+			if cerr := obsStore.Close(); cerr != nil {
+				logger.Error("observability store close error", "err", cerr)
+			}
+		}
+		logger.Info("observability subsystem stopped")
+	}()
+
 	// Start the metrics ticker AFTER caddymgr.Start so the first
 	// tick sees the registry already populated by the post-Start
 	// syncRegistry. Run on a child context so a Ctrl-C / shutdown
 	// cancels Run promptly; we wait for the goroutine to exit
-	// before returning from run().
-	metricsTicker := metrics.NewTicker(metricsRegistry, metricsBroadcaster, &storeLister{store: store})
+	// before returning from run(). The deferred tickerCancel
+	// fires BEFORE the obsCancel above (LIFO defer order), so
+	// the ticker stops sending to the aggregator before the
+	// aggregator's Run goroutine exits — no panic-on-closed-chan
+	// risk because the aggregator's in channel is buffered and
+	// never closed; the producer just stops calling.
 	tickerCtx, tickerCancel := context.WithCancel(ctx)
 	var tickerWG sync.WaitGroup
 	tickerWG.Add(1)

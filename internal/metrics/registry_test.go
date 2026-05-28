@@ -29,7 +29,7 @@ func TestRegistry_Inc_UnknownRoute_NoOp(t *testing.T) {
 	r := NewRegistry()
 	// No Sync, so no cells exist. Inc must not panic, must not
 	// silently create a cell.
-	r.Inc("unknown-id", 200)
+	r.Inc("unknown-id", 200, 0)
 	if got := len(r.cells); got != 0 {
 		t.Errorf("cells map grew unexpectedly: %d", got)
 	}
@@ -39,9 +39,9 @@ func TestRegistry_Inc_2xx_OnlyReqs(t *testing.T) {
 	r := NewRegistry()
 	r.Sync([]string{"r1"})
 
-	r.Inc("r1", 200)
-	r.Inc("r1", 201)
-	r.Inc("r1", 204)
+	r.Inc("r1", 200, 0)
+	r.Inc("r1", 201, 0)
+	r.Inc("r1", 204, 0)
 
 	got := r.Snapshot()
 	if got["r1"].Reqs != 3 {
@@ -56,10 +56,10 @@ func TestRegistry_Inc_5xx_BothCounters(t *testing.T) {
 	r := NewRegistry()
 	r.Sync([]string{"r1"})
 
-	r.Inc("r1", 500)
-	r.Inc("r1", 502)
-	r.Inc("r1", 503)
-	r.Inc("r1", 599)
+	r.Inc("r1", 500, 0)
+	r.Inc("r1", 502, 0)
+	r.Inc("r1", 503, 0)
+	r.Inc("r1", 599, 0)
 
 	got := r.Snapshot()
 	if got["r1"].Reqs != 4 {
@@ -70,23 +70,73 @@ func TestRegistry_Inc_5xx_BothCounters(t *testing.T) {
 	}
 }
 
-func TestRegistry_Inc_4xx_OnlyReqs(t *testing.T) {
-	// Spec §1.3: 4xx are NOT counted as errors. They bump reqs only.
+func TestRegistry_Inc_4xx_TrackedSeparatelyFrom5xx(t *testing.T) {
+	// Step L AC #3: 4xx and 5xx are tracked separately. A 4xx
+	// burst increments Errs4xx, NEVER the 5xx counter (Errs).
+	// Reciprocal coverage in TestRegistry_Inc_5xx below.
 	r := NewRegistry()
 	r.Sync([]string{"r1"})
 
-	r.Inc("r1", 400)
-	r.Inc("r1", 401)
-	r.Inc("r1", 403)
-	r.Inc("r1", 404)
-	r.Inc("r1", 499)
+	r.Inc("r1", 400, 0)
+	r.Inc("r1", 401, 0)
+	r.Inc("r1", 403, 0)
+	r.Inc("r1", 404, 0)
+	r.Inc("r1", 499, 0)
 
 	got := r.Snapshot()
 	if got["r1"].Reqs != 5 {
 		t.Errorf("Reqs=%d want 5", got["r1"].Reqs)
 	}
 	if got["r1"].Errs != 0 {
-		t.Errorf("Errs=%d want 0 (4xx must NOT count, spec §1.3)", got["r1"].Errs)
+		t.Errorf("Errs (5xx) = %d, want 0 — a 4xx burst MUST NOT increment 5xx (AC #3)", got["r1"].Errs)
+	}
+	if got["r1"].Errs4xx != 5 {
+		t.Errorf("Errs4xx = %d, want 5 (every 4xx should land in Errs4xx)", got["r1"].Errs4xx)
+	}
+}
+
+func TestRegistry_Inc_5xx_DoesNotIncrement4xx(t *testing.T) {
+	// Step L AC #3 reciprocal: a 5xx burst MUST NOT increment Errs4xx.
+	r := NewRegistry()
+	r.Sync([]string{"r1"})
+
+	r.Inc("r1", 500, 0)
+	r.Inc("r1", 502, 0)
+	r.Inc("r1", 503, 0)
+
+	got := r.Snapshot()
+	if got["r1"].Errs != 3 {
+		t.Errorf("Errs (5xx) = %d, want 3", got["r1"].Errs)
+	}
+	if got["r1"].Errs4xx != 0 {
+		t.Errorf("Errs4xx = %d, want 0 — a 5xx burst MUST NOT increment 4xx (AC #3)", got["r1"].Errs4xx)
+	}
+}
+
+func TestRegistry_Inc_LatencyP95(t *testing.T) {
+	// Step L: Inc records latency into the per-cell histogram;
+	// Snapshot drains the p95 in the returned Delta.
+	r := NewRegistry()
+	r.Sync([]string{"r1"})
+
+	// 95 fast requests + 5 slow ones — the p95 should sit in
+	// the fast region, not in the slow tail.
+	for i := 0; i < 95; i++ {
+		r.Inc("r1", 200, 10) // 10 ms
+	}
+	for i := 0; i < 5; i++ {
+		r.Inc("r1", 200, 1000) // 1000 ms
+	}
+
+	got := r.Snapshot()
+	if got["r1"].Reqs != 100 {
+		t.Fatalf("Reqs=%d, want 100", got["r1"].Reqs)
+	}
+	if got["r1"].LatencyP95Ms == 0 {
+		t.Fatalf("LatencyP95Ms = 0, want a positive ms value")
+	}
+	if got["r1"].LatencyP95Ms > 64 {
+		t.Errorf("LatencyP95Ms = %d, expected ~16-32 ms (fast region), got slow-tail", got["r1"].LatencyP95Ms)
 	}
 }
 
@@ -125,8 +175,8 @@ func TestRegistry_Sync_PreservesExistingCounters(t *testing.T) {
 	// Spec §11.2: route update in-place (same ID) preserves counters.
 	r := NewRegistry()
 	r.Sync([]string{"r1"})
-	r.Inc("r1", 200)
-	r.Inc("r1", 503)
+	r.Inc("r1", 200, 0)
+	r.Inc("r1", 503, 0)
 
 	// Re-sync with the same ID — counters MUST be preserved.
 	r.Sync([]string{"r1"})
@@ -165,7 +215,7 @@ func TestRegistry_Sync_NilSlice_DrainsAll(t *testing.T) {
 func TestRegistry_Sync_Idempotent(t *testing.T) {
 	r := NewRegistry()
 	r.Sync([]string{"r1", "r2"})
-	r.Inc("r1", 200)
+	r.Inc("r1", 200, 0)
 
 	// Capture pointers; idempotency means the same cells survive.
 	r1Before := r.cells["r1"]
@@ -192,8 +242,8 @@ func TestRegistry_Snapshot_ResetsCounters(t *testing.T) {
 	r := NewRegistry()
 	r.Sync([]string{"r1"})
 
-	r.Inc("r1", 200)
-	r.Inc("r1", 500)
+	r.Inc("r1", 200, 0)
+	r.Inc("r1", 500, 0)
 
 	first := r.Snapshot()
 	if first["r1"].Reqs != 2 || first["r1"].Errs != 1 {
@@ -213,11 +263,11 @@ func TestRegistry_Snapshot_DeltasNotCumulative(t *testing.T) {
 	r := NewRegistry()
 	r.Sync([]string{"r1"})
 
-	r.Inc("r1", 200)
-	r.Inc("r1", 200)
+	r.Inc("r1", 200, 0)
+	r.Inc("r1", 200, 0)
 	first := r.Snapshot()
 
-	r.Inc("r1", 200)
+	r.Inc("r1", 200, 0)
 	second := r.Snapshot()
 
 	if first["r1"].Reqs != 2 {
@@ -233,7 +283,7 @@ func TestRegistry_Snapshot_AllRoutesIncluded(t *testing.T) {
 	r := NewRegistry()
 	r.Sync([]string{"r1", "r2", "r3"})
 
-	r.Inc("r1", 200)
+	r.Inc("r1", 200, 0)
 	// r2 and r3 are silent.
 
 	got := r.Snapshot()
@@ -288,7 +338,7 @@ func TestRegistry_ConcurrentIncAndSnapshot(t *testing.T) {
 		incWg.Add(1)
 		go func() {
 			defer incWg.Done()
-			r.Inc("r1", 200)
+			r.Inc("r1", 200, 0)
 		}()
 	}
 	incWg.Wait()
@@ -323,7 +373,7 @@ func TestRegistry_ConcurrentIncAndSync(t *testing.T) {
 			case <-done:
 				return
 			default:
-				r.Inc("r1", 200)
+				r.Inc("r1", 200, 0)
 			}
 		}
 	}()
@@ -352,7 +402,7 @@ func BenchmarkRegistry_Inc(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		r.Inc("r1", 200)
+		r.Inc("r1", 200, 0)
 	}
 }
 
@@ -366,7 +416,7 @@ func BenchmarkRegistry_Snapshot_10Routes(b *testing.B) {
 	// Seed each cell with some traffic so Snapshot has work to do.
 	for _, id := range ids {
 		for k := 0; k < 100; k++ {
-			r.Inc(id, 200)
+			r.Inc(id, 200, 0)
 		}
 	}
 
@@ -376,7 +426,7 @@ func BenchmarkRegistry_Snapshot_10Routes(b *testing.B) {
 		_ = r.Snapshot()
 		// Re-seed lightly to keep work non-trivial across iterations.
 		for _, id := range ids {
-			r.Inc(id, 200)
+			r.Inc(id, 200, 0)
 		}
 	}
 }
@@ -390,7 +440,7 @@ func BenchmarkRegistry_Snapshot_100Routes(b *testing.B) {
 	r.Sync(ids)
 	for _, id := range ids {
 		for k := 0; k < 10; k++ {
-			r.Inc(id, 200)
+			r.Inc(id, 200, 0)
 		}
 	}
 
@@ -399,7 +449,7 @@ func BenchmarkRegistry_Snapshot_100Routes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = r.Snapshot()
 		for _, id := range ids {
-			r.Inc(id, 200)
+			r.Inc(id, 200, 0)
 		}
 	}
 }

@@ -1,0 +1,353 @@
+// Arenet - Homelab-friendly reverse proxy with integrated security
+// Copyright (C) 2026  Ludovic Ramos
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see https://www.gnu.org/licenses/.
+
+package observability
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// silentLogger discards log output during tests so the verbose
+// trace doesn't drown the test runner.
+func silentLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestAggregator_FlushAtMinuteBoundary(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	// Synthetic clock starts at 10:00:00.5 UTC. The aggregator
+	// initialises currentMinute to 10:00:00.
+	var nowAtomic atomic.Pointer[time.Time]
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 500_000_000, time.UTC)
+	nowAtomic.Store(&t0)
+	advance := func(d time.Duration) {
+		cur := *nowAtomic.Load()
+		next := cur.Add(d)
+		nowAtomic.Store(&next)
+	}
+
+	a := NewAggregator(s, silentLogger(), 16)
+	a.SetClock(func() time.Time { return *nowAtomic.Load() })
+
+	// Re-initialise currentMinute against the synthetic clock
+	// (production Run() does this; we drive flushes by hand).
+	a.currentMinute = a.now().Truncate(time.Minute)
+
+	// Ingest 3 ticks for r-a in the 10:00 minute, then 2 ticks
+	// for r-b. Drain the in channel into the absorb path
+	// manually since we are not running the goroutine.
+	for _, d := range []TickDelta{
+		{RouteID: "r-a", Reqs: 50, Fourxx: 1, Fivexx: 0, LatencyP95Ms: 16},
+		{RouteID: "r-a", Reqs: 60, Fourxx: 0, Fivexx: 1, LatencyP95Ms: 32},
+		{RouteID: "r-a", Reqs: 40, Fourxx: 2, Fivexx: 0, LatencyP95Ms: 8},
+		{RouteID: "r-b", Reqs: 10, Fourxx: 5, Fivexx: 0, LatencyP95Ms: 64},
+		{RouteID: "r-b", Reqs: 12, Fourxx: 3, Fivexx: 0, LatencyP95Ms: 128},
+	} {
+		a.absorb(d)
+	}
+
+	// No rollover yet: maybeFlush should be a no-op.
+	a.maybeFlush(ctx)
+	if got := a.FlushCount(); got != 0 {
+		t.Fatalf("FlushCount before rollover = %d, want 0", got)
+	}
+
+	// Advance clock past the minute boundary: 10:01:00.5.
+	advance(time.Minute)
+	a.maybeFlush(ctx)
+	if got := a.FlushCount(); got != 1 {
+		t.Fatalf("FlushCount after 1st rollover = %d, want 1", got)
+	}
+
+	// Persisted bucket should be at 10:00:00 (the just-closed
+	// minute), with r-a sums and r-b sums correct, and p95 =
+	// max of the per-tick p95 (32 for r-a, 128 for r-b).
+	bucketTs := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	rowsA, err := s.Query(ctx, Granularity1m, "r-a", bucketTs, bucketTs.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Query r-a: %v", err)
+	}
+	if len(rowsA) != 1 {
+		t.Fatalf("r-a rows = %d, want 1: %+v", len(rowsA), rowsA)
+	}
+	if rowsA[0].ReqCount != 150 {
+		t.Fatalf("r-a ReqCount = %d, want 150", rowsA[0].ReqCount)
+	}
+	if rowsA[0].FourxxCount != 3 {
+		t.Fatalf("r-a FourxxCount = %d, want 3", rowsA[0].FourxxCount)
+	}
+	if rowsA[0].FivexxCount != 1 {
+		t.Fatalf("r-a FivexxCount = %d, want 1", rowsA[0].FivexxCount)
+	}
+	if rowsA[0].LatencyP95Ms != 32 {
+		t.Fatalf("r-a LatencyP95Ms = %d, want 32 (max across ticks)", rowsA[0].LatencyP95Ms)
+	}
+
+	rowsB, err := s.Query(ctx, Granularity1m, "r-b", bucketTs, bucketTs.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Query r-b: %v", err)
+	}
+	if len(rowsB) != 1 || rowsB[0].ReqCount != 22 || rowsB[0].FourxxCount != 8 || rowsB[0].LatencyP95Ms != 128 {
+		t.Fatalf("r-b row mismatch: %+v", rowsB)
+	}
+
+	// A second maybeFlush at the same clock value must NOT
+	// re-flush (anti-regression for double-flush on the same
+	// minute).
+	a.maybeFlush(ctx)
+	if got := a.FlushCount(); got != 1 {
+		t.Fatalf("double maybeFlush at same minute caused FlushCount = %d, want 1", got)
+	}
+
+	// Advance another minute with no activity — the flush
+	// heartbeat counter increments (proves the loop is alive)
+	// but no row is inserted (the state map is empty). Verify
+	// both: counter goes to 2, no new bucket appears in the DB
+	// for the now-just-closed minute.
+	advance(time.Minute)
+	a.maybeFlush(ctx)
+	if got := a.FlushCount(); got != 2 {
+		t.Fatalf("empty rollover should still increment heartbeat: FlushCount = %d, want 2", got)
+	}
+	emptyTs := time.Date(2026, 5, 28, 10, 1, 0, 0, time.UTC)
+	rowsEmpty, err := s.Query(ctx, Granularity1m, "r-a", emptyTs, emptyTs.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Query empty bucket: %v", err)
+	}
+	if len(rowsEmpty) != 0 {
+		t.Fatalf("empty rollover inserted a phantom row: %+v", rowsEmpty)
+	}
+}
+
+func TestAggregator_IngestNonBlocking(t *testing.T) {
+	// AC #13: Ingest must never block. With a 1-slot channel
+	// and a goroutine that doesn't drain, the second Ingest
+	// drops cleanly instead of blocking.
+	a := NewAggregator(nil, silentLogger(), 1)
+	a.Ingest(TickDelta{RouteID: "r", Reqs: 1})
+	a.Ingest(TickDelta{RouteID: "r", Reqs: 1})
+	if a.Dropped() != 1 {
+		t.Fatalf("Dropped = %d, want 1", a.Dropped())
+	}
+}
+
+func TestAggregator_DegradedNilStore(t *testing.T) {
+	// AC #13: a nil store (failed boot-time Open) is the
+	// degraded mode. Ingest + flush must not panic and must
+	// not push to a nil DB.
+	a := NewAggregator(nil, silentLogger(), 16)
+	a.currentMinute = time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	a.absorb(TickDelta{RouteID: "r-a", Reqs: 100, LatencyP95Ms: 16})
+
+	// Manually move the clock forward and flush.
+	a.SetClock(func() time.Time {
+		return time.Date(2026, 5, 28, 10, 1, 0, 0, time.UTC)
+	})
+	a.maybeFlush(context.Background())
+
+	if a.FlushCount() != 1 {
+		t.Fatalf("FlushCount = %d, want 1 (degraded-mode flush still increments)", a.FlushCount())
+	}
+	if a.FlushErrors() != 0 {
+		t.Fatalf("FlushErrors = %d, want 0 (no DB to fail against)", a.FlushErrors())
+	}
+}
+
+// failingSink returns a synthetic error from every InsertBatch
+// after `errorAfter` calls. Used to exercise the AC #13
+// runtime-failure path without touching real I/O.
+type failingSink struct {
+	calls      int
+	errorAfter int    // 0 means error every call
+	err        error
+}
+
+func (f *failingSink) InsertBatch(_ context.Context, _ Granularity, _ []MetricBucket) error {
+	f.calls++
+	if f.errorAfter == 0 || f.calls > f.errorAfter {
+		return f.err
+	}
+	return nil
+}
+
+func TestAggregator_FlushErrorIsLoggedAndSwallowed(t *testing.T) {
+	// AC #13 runtime half: a sink whose InsertBatch returns an
+	// error mid-run MUST NOT panic, MUST NOT block, MUST NOT
+	// propagate to the caller, and MUST allow the next minute's
+	// accumulation to proceed normally (state was reset BEFORE
+	// the failing flush attempt, per aggregator.flush()).
+	sink := &failingSink{err: errors.New("disk full")}
+	a := newAggregatorWithSink(sink, silentLogger(), 16)
+
+	// Synthetic clock at 10:00:00.5 — aggregator starts at 10:00.
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 500_000_000, time.UTC)
+	var nowAtomic atomic.Pointer[time.Time]
+	nowAtomic.Store(&t0)
+	a.SetClock(func() time.Time { return *nowAtomic.Load() })
+	a.currentMinute = a.now().Truncate(time.Minute)
+
+	// Minute 1: ingest one tick, advance clock to 10:01:00.5,
+	// trigger flush — which must fail-silent.
+	a.absorb(TickDelta{RouteID: "r-a", Reqs: 100, LatencyP95Ms: 16})
+	next := t0.Add(time.Minute)
+	nowAtomic.Store(&next)
+	a.maybeFlush(context.Background())
+
+	if got := a.FlushErrors(); got != 1 {
+		t.Fatalf("FlushErrors after failing flush = %d, want 1", got)
+	}
+	if sink.calls != 1 {
+		t.Fatalf("sink called %d times, want 1", sink.calls)
+	}
+	if got := a.FlushCount(); got != 1 {
+		t.Fatalf("FlushCount = %d, want 1 (heartbeat still ticked)", got)
+	}
+
+	// Critical anti-regression: the in-memory state was reset
+	// before the failed flush. The next minute starts clean.
+	a.absorb(TickDelta{RouteID: "r-b", Reqs: 50, LatencyP95Ms: 32})
+	next2 := t0.Add(2 * time.Minute)
+	nowAtomic.Store(&next2)
+	a.maybeFlush(context.Background())
+
+	if got := a.FlushErrors(); got != 2 {
+		t.Fatalf("FlushErrors after 2 failing flushes = %d, want 2", got)
+	}
+	if sink.calls != 2 {
+		t.Fatalf("sink called %d times, want 2", sink.calls)
+	}
+
+	// Decisive: only r-b should have appeared in the SECOND
+	// flush (r-a's state was reset). Inspect the rows the
+	// failing sink was called with by extending failingSink to
+	// capture them — but a simpler proof is to switch to a
+	// recording sink on the third minute.
+	recorder := &recordingSink{}
+	a.sink = recorder
+	a.absorb(TickDelta{RouteID: "r-c", Reqs: 7, LatencyP95Ms: 8})
+	next3 := t0.Add(3 * time.Minute)
+	nowAtomic.Store(&next3)
+	a.maybeFlush(context.Background())
+
+	if len(recorder.rows) != 1 || recorder.rows[0].RouteID != "r-c" {
+		t.Fatalf("after two failed flushes, the third minute must contain ONLY r-c: got %+v", recorder.rows)
+	}
+}
+
+func TestAggregator_IngestStillNonBlockingDuringFlushErrors(t *testing.T) {
+	// Anti-regression: a stream of flush errors must NOT cause
+	// the ingress channel to back up. The data plane must keep
+	// being able to call Consume / Ingest without ever blocking.
+	sink := &failingSink{err: errors.New("locked")}
+	a := newAggregatorWithSink(sink, silentLogger(), 1024)
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	var nowAtomic atomic.Pointer[time.Time]
+	nowAtomic.Store(&t0)
+	a.SetClock(func() time.Time { return *nowAtomic.Load() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go a.Run(ctx)
+	defer func() {
+		cancel()
+		<-a.Done()
+	}()
+
+	// Spam Ingest from multiple goroutines. None should block.
+	const workers = 8
+	const perWorker = 100
+	for w := 0; w < workers; w++ {
+		go func() {
+			for i := 0; i < perWorker; i++ {
+				a.Ingest(TickDelta{RouteID: "r", Reqs: 1, LatencyP95Ms: 10})
+			}
+		}()
+	}
+	// Drive minute rollovers so the failing flush is exercised.
+	for i := 1; i <= 3; i++ {
+		next := t0.Add(time.Duration(i) * time.Minute)
+		nowAtomic.Store(&next)
+		// Yield to let the Run goroutine pick up the clock
+		// advance and call maybeFlush.
+		time.Sleep(50 * time.Millisecond)
+	}
+	// No assertion on counts here — we only assert this test
+	// returns at all (i.e., neither Ingest nor flush deadlocked).
+}
+
+// recordingSink captures the rows from each InsertBatch call.
+type recordingSink struct {
+	calls int
+	rows  []MetricBucket
+}
+
+func (r *recordingSink) InsertBatch(_ context.Context, _ Granularity, rows []MetricBucket) error {
+	r.calls++
+	r.rows = append([]MetricBucket(nil), rows...)
+	return nil
+}
+
+func TestAggregator_RunCleanShutdownFlushes(t *testing.T) {
+	// Verify the Run goroutine's defer-flush behaviour: ingest
+	// some events, cancel ctx, then wait for Done. The
+	// pre-cancellation accumulator should land as one bucket.
+	ctx, cancel := context.WithCancel(context.Background())
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	a := NewAggregator(s, silentLogger(), 16)
+	// Force the synthetic clock to be the same value
+	// throughout so the natural 1-s ticker can't trip a
+	// rollover; the only flush comes from the ctx.Done path.
+	fixed := time.Date(2026, 5, 28, 10, 0, 30, 0, time.UTC)
+	a.SetClock(func() time.Time { return fixed })
+
+	go a.Run(ctx)
+
+	a.Ingest(TickDelta{RouteID: "r-a", Reqs: 7, LatencyP95Ms: 64})
+
+	// Yield to let the goroutine receive the tick and absorb
+	// it. A short sleep is acceptable here — we are
+	// intentionally exercising the real goroutine path.
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	<-a.Done()
+
+	rowsA, err := s.Query(context.Background(), Granularity1m, "r-a",
+		time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 28, 10, 1, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Query r-a: %v", err)
+	}
+	if len(rowsA) != 1 || rowsA[0].ReqCount != 7 {
+		t.Fatalf("clean-shutdown final flush: rows=%+v", rowsA)
+	}
+}

@@ -44,6 +44,22 @@ type RouteMetadata struct {
 	Upstream string
 }
 
+// TickConsumer receives per-route deltas at every snapshot tick.
+// Step L L.7 wiring: the observability.Aggregator implements this
+// interface and folds the per-second deltas into per-minute
+// buckets. Defined here so internal/metrics does not import
+// internal/observability — the dependency direction stays
+// metrics → nothing.
+//
+// AC #13 contract: Consume MUST be non-blocking and MUST NOT
+// perform I/O on the calling goroutine (the ticker). A typical
+// implementation pushes the tick onto a buffered channel that a
+// separate goroutine drains; channel-full is a dropped tick, not a
+// stall.
+type TickConsumer interface {
+	Consume(routeID string, reqs, errs4xx, errs5xx uint64, latencyP95Ms int32)
+}
+
 // Ticker drives the per-tick snapshot loop (spec §4.3). On each tick
 // it calls Registry.Snapshot, joins the deltas with the current
 // route list, and publishes the resulting Snapshot to the broadcaster.
@@ -54,6 +70,7 @@ type Ticker struct {
 	registry    *Registry
 	broadcaster *Broadcaster
 	lister      RouteLister
+	consumer    TickConsumer // optional; nil disables the L.1 history fan-out
 }
 
 // NewTicker constructs a Ticker bound to the given registry,
@@ -75,6 +92,37 @@ func NewTicker(registry *Registry, broadcaster *Broadcaster, lister RouteLister)
 		broadcaster: broadcaster,
 		lister:      lister,
 	}
+}
+
+// SetConsumer attaches a TickConsumer that receives per-route
+// deltas alongside the WebSocket broadcast. nil clears the
+// consumer. Step L L.1 wires the observability.Aggregator here.
+// Safe to call before Run; not safe to call after Run has started
+// (the consumer is read without synchronisation from the tick
+// loop). main.go calls this once during boot.
+func (t *Ticker) SetConsumer(c TickConsumer) {
+	t.consumer = c
+}
+
+// MakeSnapshotForTest is a test-only entry point that runs one
+// tick of the Ticker's per-tick logic synchronously:
+//   - Read Registry deltas
+//   - Join with the route list
+//   - Publish to the broadcaster
+//   - Fan out to the TickConsumer (if any)
+//
+// Equivalent to one iteration of Run's select case at the given
+// `now` timestamp, but deterministic — the caller controls when
+// the snapshot happens. Used by the cross-package integration
+// test in internal/observability to exercise the full
+// metrics → observability seam without a real timer.
+//
+// Do NOT call from production code; the Run loop is the only
+// caller in prod.
+func (t *Ticker) MakeSnapshotForTest(ctx context.Context, now time.Time) Snapshot {
+	snap := t.makeSnapshot(ctx, now)
+	t.broadcaster.Publish(snap)
+	return snap
 }
 
 // Run drives the snapshot loop until ctx is cancelled. Blocking;
@@ -131,6 +179,13 @@ func (t *Ticker) makeSnapshot(ctx context.Context, now time.Time) Snapshot {
 			ReqPerSec:  d.Reqs, // == reqs since TickInterval == 1s (§5.2)
 			ErrRate5xx: errRate,
 		})
+		// Step L L.7: fan the same delta out to the observability
+		// aggregator if one is wired. Skip routes whose tick is
+		// fully idle to keep the channel pressure low (the
+		// aggregator's absorb() also ignores zero ReqCount).
+		if t.consumer != nil && (d.Reqs > 0 || d.Errs > 0 || d.Errs4xx > 0) {
+			t.consumer.Consume(rt.ID, d.Reqs, d.Errs4xx, d.Errs, d.LatencyP95Ms)
+		}
 	}
 	return Snapshot{T: now.UTC(), Routes: out}
 }

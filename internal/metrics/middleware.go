@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -120,8 +121,10 @@ func (h *RouteMetricsHandler) ServeHTTP(
 	w http.ResponseWriter, r *http.Request, next caddyhttp.Handler,
 ) error {
 	rec := newStatusRecorder(w)
+	start := time.Now()
 	defer func() {
-		h.registry.Inc(h.RouteID, rec.status)
+		durMs := float64(time.Since(start).Microseconds()) / 1000.0
+		h.registry.Inc(h.RouteID, rec.status, durMs)
 	}()
 	return next.ServeHTTP(rec, r)
 }

@@ -1,0 +1,232 @@
+// Arenet - Homelab-friendly reverse proxy with integrated security
+// Copyright (C) 2026  Ludovic Ramos
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see https://www.gnu.org/licenses/.
+
+package observability
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+)
+
+// Retention windows per Step L spec §1.3 D2.
+const (
+	// Retain1m is how long bucket_1m rows are kept before being
+	// pruned. Anything older has already been folded into the
+	// hourly bucket.
+	Retain1m = 24 * time.Hour
+	// Retain1h is how long bucket_1h rows are kept.
+	Retain1h = 30 * 24 * time.Hour
+)
+
+// RetentionRunner runs the hourly rollup + prune loop. Like the
+// Aggregator, all errors are logged and never propagated to the
+// request path (AC #13).
+type RetentionRunner struct {
+	store  *Store
+	logger *slog.Logger
+	now    func() time.Time
+
+	// lastRollupHour is the hour timestamp (truncated) for which
+	// the rollup has already been performed. The runner skips
+	// hours whose bucket_1h row already exists, so a restart in
+	// the middle of an hour does not double-aggregate.
+	lastRollupHour time.Time
+
+	done chan struct{}
+}
+
+// NewRetentionRunner builds a runner. store may be nil (degraded
+// mode); Run becomes a no-op loop in that case.
+func NewRetentionRunner(store *Store, logger *slog.Logger) *RetentionRunner {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &RetentionRunner{
+		store:  store,
+		logger: logger,
+		now:    func() time.Time { return time.Now().UTC() },
+		done:   make(chan struct{}),
+	}
+}
+
+// SetClock overrides the time source. For tests only.
+func (r *RetentionRunner) SetClock(now func() time.Time) {
+	r.now = now
+}
+
+// Done returns a channel closed once Run has exited.
+func (r *RetentionRunner) Done() <-chan struct{} {
+	return r.done
+}
+
+// Run drives the retention loop until ctx is cancelled. The
+// loop checks for an hour boundary every minute — a 1-minute
+// jitter on the rollup is acceptable (the timeline UI never
+// reads the current hour from bucket_1h anyway).
+//
+// Wrapped in recover() per AC #13.
+func (r *RetentionRunner) Run(ctx context.Context) {
+	defer close(r.done)
+	defer func() {
+		if rec := recover(); rec != nil {
+			r.logger.Error("observability: retention loop panic; rollup/prune disabled for the rest of this process",
+				slog.Any("panic", rec),
+			)
+		}
+	}()
+
+	// Catch up on the current state at boot so a restart picks
+	// up where it left off.
+	r.lastRollupHour = r.now().Truncate(time.Hour).Add(-time.Hour)
+
+	check := time.NewTicker(time.Minute)
+	defer check.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-check.C:
+			r.tick(ctx)
+		}
+	}
+}
+
+// Tick is a manual driver for tests — runs one rollup + prune
+// iteration against the current synthetic clock value.
+func (r *RetentionRunner) Tick(ctx context.Context) {
+	r.tick(ctx)
+}
+
+func (r *RetentionRunner) tick(ctx context.Context) {
+	if r.store == nil {
+		return
+	}
+	now := r.now()
+	currentHour := now.Truncate(time.Hour)
+
+	// Roll up every closed hour we have not yet rolled up. The
+	// catch-up case (multiple hours since last run) is small —
+	// the gap is bounded by the start delay or a paused
+	// process; we loop until we are caught up.
+	for h := r.lastRollupHour.Add(time.Hour); h.Before(currentHour); h = h.Add(time.Hour) {
+		if err := r.rollupHour(ctx, h); err != nil {
+			r.logger.Error("observability: rollup failed",
+				slog.Time("hour", h),
+				slog.String("err", err.Error()),
+			)
+			// Don't advance lastRollupHour on failure; we'll
+			// retry on the next tick.
+			return
+		}
+		r.lastRollupHour = h
+	}
+
+	// Prune. Cutoffs computed relative to now so the test
+	// drives them via the synthetic clock.
+	if _, err := r.store.PruneOlderThan(ctx, Granularity1m, now.Add(-Retain1m)); err != nil {
+		r.logger.Error("observability: prune 1m failed", slog.String("err", err.Error()))
+	}
+	if _, err := r.store.PruneOlderThan(ctx, Granularity1h, now.Add(-Retain1h)); err != nil {
+		r.logger.Error("observability: prune 1h failed", slog.String("err", err.Error()))
+	}
+}
+
+// rollupHour aggregates every bucket_1m row in [h, h+1h) per
+// route, into one bucket_1h row per route.
+//
+// p95 approximation per spec §2 AC #2: the hourly p95 is the
+// **req-count-weighted percentile-of-percentiles** across the
+// 60 minute samples. Since we only persisted one p95-int per
+// minute (not the underlying histogram), exact recomputation is
+// impossible — the spec acknowledges this and the L.5 smoke
+// asserts the rollup p95 sits within the per-minute envelope,
+// not equality to a recomputed exact p95.
+func (r *RetentionRunner) rollupHour(ctx context.Context, hourStart time.Time) error {
+	// One query for the whole hour, all routes.
+	rows, err := r.store.db.QueryContext(ctx, `
+SELECT route_id, req_count, fourxx_count, fivexx_count, latency_p95_ms
+FROM bucket_1m
+WHERE ts >= ? AND ts < ?
+`, hourStart.UTC().Unix(), hourStart.Add(time.Hour).UTC().Unix())
+	if err != nil {
+		return fmt.Errorf("rollup query: %w", err)
+	}
+	defer rows.Close()
+
+	type acc struct {
+		req      int64
+		fourxx   int64
+		fivexx   int64
+		p95w     int64 // sum of (req_count * latency_p95_ms)
+		p95wDen  int64 // sum of req_count for samples that had latency
+		p95plain int64 // unweighted max as fallback when no traffic
+	}
+	byRoute := make(map[string]*acc)
+	for rows.Next() {
+		var routeID string
+		var req, fourxx, fivexx int64
+		var p95 int32
+		if err := rows.Scan(&routeID, &req, &fourxx, &fivexx, &p95); err != nil {
+			return fmt.Errorf("rollup scan: %w", err)
+		}
+		a, ok := byRoute[routeID]
+		if !ok {
+			a = &acc{}
+			byRoute[routeID] = a
+		}
+		a.req += req
+		a.fourxx += fourxx
+		a.fivexx += fivexx
+		if req > 0 && p95 > 0 {
+			a.p95w += int64(p95) * req
+			a.p95wDen += req
+		}
+		if int64(p95) > a.p95plain {
+			a.p95plain = int64(p95)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rollup iterate: %w", err)
+	}
+	if len(byRoute) == 0 {
+		return nil
+	}
+
+	out := make([]MetricBucket, 0, len(byRoute))
+	for id, a := range byRoute {
+		var p95 int32
+		if a.p95wDen > 0 {
+			p95 = int32(a.p95w / a.p95wDen)
+		} else {
+			// No req-weighted data — keep the unweighted max
+			// as the representative value rather than 0,
+			// which would render as a fake "no latency" gap.
+			p95 = int32(a.p95plain)
+		}
+		out = append(out, MetricBucket{
+			RouteID:      id,
+			Ts:           hourStart,
+			ReqCount:     a.req,
+			FourxxCount:  a.fourxx,
+			FivexxCount:  a.fivexx,
+			LatencyP95Ms: p95,
+		})
+	}
+	return r.store.InsertBatch(ctx, Granularity1h, out)
+}
