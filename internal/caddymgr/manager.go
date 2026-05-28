@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -61,16 +63,15 @@ const (
 	httpsPortProd = 443
 )
 
-// Listen address forms ":<port>" derived from the int constants
-// above. Kept as their own consts so existing tests asserting on
-// the literal ":8080" / ":8443" / ":80" / ":443" strings keep
-// matching verbatim.
-const (
-	httpListenDev   = ":8080"
-	httpsListenDev  = ":8443"
-	httpListenProd  = ":80"
-	httpsListenProd = ":443"
-)
+// Listen address forms are derived from the int port constants
+// above at the call site via fmt.Sprintf(":%d", port) — this
+// keeps the string form mechanically consistent with the int
+// port returned by httpPortFor / httpsPortFor, including any
+// ARENET_HTTP_PORT / ARENET_HTTPS_PORT override (Step L.5
+// prereq). The old standalone string consts (httpListenDev,
+// httpsListenDev, httpListenProd, httpsListenProd) were
+// removed because they would have silently shadowed the
+// override.
 
 // ACME directory URLs (Step I.1).
 //
@@ -152,22 +153,21 @@ func (m *CaddyManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// httpListen returns the HTTP listen address based on devMode.
-// Step I.1: dev picks :8080, prod picks :80 (for ACME HTTP-01 +
-// the I.2 redirect).
+// httpListen returns the HTTP listen address based on devMode
+// and the optional env-var override (Step L.5 prereq). Step
+// I.1: dev picks :8080, prod picks :80 (for ACME HTTP-01 + the
+// I.2 redirect). The string form is derived from the int port
+// returned by httpPortFor so the boot-time log line ALWAYS
+// matches the listener's actual port even when the operator
+// overrides via ARENET_HTTP_PORT.
 func (m *CaddyManager) httpListen() string {
-	if m.devMode {
-		return httpListenDev
-	}
-	return httpListenProd
+	return fmt.Sprintf(":%d", httpPortFor(m.devMode))
 }
 
-// httpsListen returns the HTTPS listen address based on devMode.
+// httpsListen returns the HTTPS listen address based on devMode
+// and the optional ARENET_HTTPS_PORT override.
 func (m *CaddyManager) httpsListen() string {
-	if m.devMode {
-		return httpsListenDev
-	}
-	return httpsListenProd
+	return fmt.Sprintf(":%d", httpsPortFor(m.devMode))
 }
 
 // Stop halts the embedded Caddy. Safe to call when Start was never invoked.
@@ -1017,34 +1017,78 @@ func acmeDirectoryURL(devMode bool) string {
 	return acmeProdURL
 }
 
+// Env-var names for the optional data-plane port override (Step
+// L.5 prereq). Absent or invalid values fall back EXACTLY to the
+// devMode-based defaults — production deployments that do not
+// set these vars see the same :80/:443 behaviour they always
+// had.
+//
+// Both vars must be set together when overriding (an HTTP
+// override without HTTPS would leave the HTTPS side on the
+// default, which is rarely what an operator wants but is
+// supported; the validator only rejects unparseable / out-of-
+// range integers, not partial overrides).
+const (
+	envHTTPPort  = "ARENET_HTTP_PORT"
+	envHTTPSPort = "ARENET_HTTPS_PORT"
+)
+
+// portOverrideFromEnv reads name from the environment and parses
+// it as a port. Returns fallback on any failure (unset, empty,
+// non-numeric, out of [1, 65535]). The fallback path is the only
+// path that preserves the existing behaviour, so prod deployments
+// without the var set get exactly httpPortProd / httpsPortProd as
+// before this change.
+//
+// Errors are silent on the fallback path: the operator already
+// gets the boot-time "Caddy started" log line which surfaces the
+// effective ports, so a typo'd ARENET_HTTP_PORT is visible from
+// the log (the listener will be on the default, not the typo).
+func portOverrideFromEnv(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > 65535 {
+		return fallback
+	}
+	return n
+}
+
 // listenPortsFor returns the (HTTP, HTTPS) listen addresses based
 // on mode. Step I.1: dev keeps :8080/:8443, prod uses :80/:443.
+// Step L.5 prereq: ARENET_HTTP_PORT / ARENET_HTTPS_PORT override
+// either default when set to a valid port; invalid / absent
+// falls back to the devMode-based default (NEVER touches prod
+// :80/:443 unless the env var is explicitly set).
 func listenPortsFor(devMode bool) (string, string) {
-	if devMode {
-		return httpListenDev, httpsListenDev
-	}
-	return httpListenProd, httpsListenProd
+	return fmt.Sprintf(":%d", httpPortFor(devMode)),
+		fmt.Sprintf(":%d", httpsPortFor(devMode))
 }
 
 // httpPortFor returns the HTTP port number (int) used by this
 // mode. Same source of truth as listenPortsFor — the string
 // listen address `:8080` and the int port 8080 are mechanically
-// linked through the const block at the top of this file. Step
-// I.7 hotfix Finding #8: this int value is what Caddy expects in
-// apps.http.http_port to recognize our HTTP listener.
+// linked through this function (Step L.5 prereq centralised that
+// linkage). Step I.7 hotfix Finding #8: this int value is what
+// Caddy expects in apps.http.http_port to recognize our HTTP
+// listener.
 func httpPortFor(devMode bool) int {
+	fallback := httpPortProd
 	if devMode {
-		return httpPortDev
+		fallback = httpPortDev
 	}
-	return httpPortProd
+	return portOverrideFromEnv(envHTTPPort, fallback)
 }
 
 // httpsPortFor mirrors httpPortFor for the HTTPS side.
 func httpsPortFor(devMode bool) int {
+	fallback := httpsPortProd
 	if devMode {
-		return httpsPortDev
+		fallback = httpsPortDev
 	}
-	return httpsPortProd
+	return portOverrideFromEnv(envHTTPSPort, fallback)
 }
 
 // buildRedirectRoute returns the HTTP-side route entry that serves
