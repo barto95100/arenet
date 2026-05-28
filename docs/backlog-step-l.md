@@ -35,6 +35,25 @@ construction sites should answer this in <10 min.
 ignore-able; the latter would be a P1 OIDC reliability finding.
 Resolve before tagging `v0.8.0-step-l` (L.5 smoke).
 
+### Finding #L.5-1 — Cosmetic log line in main.go still hardcodes `:8080`
+
+Surfaced by the L.5 smoke (2026-05-28). When the operator
+overrides via `ARENET_HTTP_PORT=...`, Caddy correctly binds
+the requested port (`Caddy started http=:18080 ...` log line is
+authoritative) and the data-plane works. But the second log
+line `Arenet listening http=:8080 admin_api=:...` printed by
+`cmd/arenet/main.go` (around line 348, `listenAttrs`) is
+hardcoded to `":8080"` and ignores the override.
+
+Cosmetic only — no code path reads that string. Fix: ask
+`caddymgr` for the effective listen address. ~3-line change.
+Fix before another step smoke leans on this log line for
+assertion.
+
+**Triage**: cosmetic, non-blocking on the L tag, but trivial
+enough that it should land in a small follow-up commit before
+work on Step M starts.
+
 ### Finding #L.2-2 — Last bucket of historical timeline lags up to 1 minute
 
 By design: the aggregator flushes at the minute boundary, so the
