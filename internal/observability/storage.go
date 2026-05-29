@@ -768,6 +768,84 @@ func (s *Store) AggregateThrottleEventsByIP(ctx context.Context, filter Throttle
 	return out, nil
 }
 
+// DistinctWafEventSrcIPs returns the set of distinct source
+// IPs that appeared in waf_event rows within [from, to).
+// Powers the Step Q.3 /security/attackers-summary union: the
+// per-source IP set is small (capped by attacker diversity,
+// typically << 100 even on a noisy week), so the caller
+// merges this slice into a Go set rather than paying for a
+// SQL UNION across heterogeneous schemas.
+//
+// Either bound may be zero (open-ended) — same shape as
+// WafEventFilter. Empty result is not an error.
+func (s *Store) DistinctWafEventSrcIPs(ctx context.Context, from, to time.Time) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	q := `SELECT DISTINCT src_ip FROM waf_event WHERE 1=1`
+	args := []any{}
+	if !from.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, from.UTC().Unix())
+	}
+	if !to.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, to.UTC().Unix())
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: distinct waf_event src_ip: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			return nil, fmt.Errorf("observability: scan distinct waf_event src_ip: %w", err)
+		}
+		out = append(out, ip)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate distinct waf_event src_ip: %w", err)
+	}
+	return out, nil
+}
+
+// DistinctThrottleEventSrcIPs is the throttle_event-side
+// mirror of DistinctWafEventSrcIPs. Same contract.
+func (s *Store) DistinctThrottleEventSrcIPs(ctx context.Context, from, to time.Time) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	q := `SELECT DISTINCT src_ip FROM throttle_event WHERE 1=1`
+	args := []any{}
+	if !from.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, from.UTC().Unix())
+	}
+	if !to.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, to.UTC().Unix())
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: distinct throttle_event src_ip: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			return nil, fmt.Errorf("observability: scan distinct throttle_event src_ip: %w", err)
+		}
+		out = append(out, ip)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate distinct throttle_event src_ip: %w", err)
+	}
+	return out, nil
+}
+
 // AggregateWafEventsByRule returns one row per (rule_id,
 // category) tuple in the window, with the count of matching
 // events + the most-recent ts. Ordered by count DESC so the

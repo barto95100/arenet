@@ -144,6 +144,17 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// viewer-accessible gate as the other /security
 			// endpoints.
 			r.Get("/security/auth-failures", h.securityAuthFailures)
+			// Step Q.3 — rate-limit (throttle) event log.
+			// Pure event-shaped read of the throttle_event
+			// table, mirror of /security/events. Optional
+			// srcIp / tier filters. Same AC #14 contract.
+			r.Get("/security/throttle-events", h.securityThrottleEvents)
+			// Step Q.3 — attackers summary. Server-side
+			// union over WAF + throttle + audit source-IP
+			// sets (D6.A). One headline `uniqueIps` stat +
+			// a per-source breakdown for the dashboard's
+			// "by source" widget.
+			r.Get("/security/attackers-summary", h.securityAttackersSummary)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame

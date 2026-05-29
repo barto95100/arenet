@@ -445,3 +445,273 @@ func projectAuthFailureRecent(events []audit.Event, cap int) []authFailureRecent
 	}
 	return out
 }
+
+// --- Step Q.3: throttle event log -------------------------------------------
+
+// securityThrottleEventsLimitCap mirrors the storage-layer
+// throttleEventLimitCap (100) but lives here too as the
+// authoritative HTTP-surface contract — same convention as
+// securityEventsLimitCap.
+const securityThrottleEventsLimitCap = 100
+
+// securityThrottleEvent is the per-event wire shape — mirror
+// of observability.ThrottleEvent with camelCase JSON. Ts and
+// BlockedUntil are RFC3339 strings (same convention as the
+// WAF event endpoint).
+type securityThrottleEvent struct {
+	ID                   int64  `json:"id"`
+	Ts                   string `json:"ts"`
+	Tier                 int    `json:"tier"`
+	SrcIP                string `json:"srcIp"`
+	AttemptedUsername    string `json:"attemptedUsername"`
+	BlockedUntil         string `json:"blockedUntil"`
+	BlockDurationSeconds int    `json:"blockDurationSeconds"`
+}
+
+// securityThrottleEventsResponse is the wire shape of
+// GET /api/v1/security/throttle-events. Mirror of
+// securityEventsResponse. `disabled` follows the same AC #14
+// degraded-mode contract as the M endpoints.
+type securityThrottleEventsResponse struct {
+	Disabled bool                    `json:"disabled,omitempty"`
+	Events   []securityThrottleEvent `json:"events"`
+}
+
+// --- Step Q.3: attackers summary --------------------------------------------
+
+// attackersByBucketSource is the per-source count breakdown
+// returned alongside the union total. Spec D6.A wording:
+// "{waf: N, throttle: N, audit: N}".
+type attackersByBucketSource struct {
+	WAF      int `json:"waf"`
+	Throttle int `json:"throttle"`
+	Audit    int `json:"audit"`
+}
+
+// securityAttackersSummaryResponse is the wire shape of
+// GET /api/v1/security/attackers-summary per AC #9.
+//
+// `uniqueIps` is the union count: an IP that hit BOTH a WAF
+// rule AND a rate-limit block counts ONCE in the union, but
+// shows up under both `waf` and `throttle` in the per-source
+// breakdown. The frontend uses the union as the headline stat
+// card and the breakdown for the "by source" pie chart.
+//
+// Three-state disabled / partial contract (aligned with Q.2):
+//   - ALL three readers nil → `disabled: true` + empty body.
+//   - At least one nil but not all → `partial: true`. The
+//     union is honest about what we have, the dashboard can
+//     render an "incomplete data" hint.
+//   - All three present → neither flag set.
+//
+// The frontend uses `partial` to drive the same "incomplete"
+// affordance Q.2's auth-failures endpoint uses on its
+// scan-cap-hit case — operator mental model stays uniform.
+type securityAttackersSummaryResponse struct {
+	Disabled       bool                    `json:"disabled,omitempty"`
+	Partial        bool                    `json:"partial,omitempty"`
+	Window         string                  `json:"window"`
+	UniqueIps      int                     `json:"uniqueIps"`
+	ByBucketSource attackersByBucketSource `json:"byBucketSource"`
+}
+
+// securityAttackersSummary handles
+// GET /api/v1/security/attackers-summary. Required query
+// parameters:
+//   - window: 24h or 30d.
+//
+// Server-side union over three source tables (D6.A):
+//
+//   - waf_event.src_ip DISTINCT (via WafEventReader.
+//     DistinctWafEventSrcIPs)
+//   - throttle_event.src_ip DISTINCT (via ThrottleEventReader.
+//     DistinctThrottleEventSrcIPs)
+//   - audit bucket auth-failure IPs (via AuthFailureReader.
+//     QueryByActionRange + in-memory dedup over Event.IP)
+//
+// All three are unioned into one Go map[string]struct{} and
+// the size is returned as `uniqueIps`. The per-source counts
+// reflect the size of each source set BEFORE the union (so
+// `waf + throttle + audit >= uniqueIps`, equal when no
+// overlap).
+//
+// AC #14: ALL THREE readers missing → 200 with disabled=true.
+// A subset missing → the available data is returned (no
+// disabled flag); the missing source contributes 0 to its
+// breakdown slot. Either reader returning an error → 503.
+func (h *Handler) securityAttackersSummary(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	resp := securityAttackersSummaryResponse{Window: window}
+
+	if h.wafEvents == nil && h.throttleEvents == nil && h.authFailures == nil {
+		resp.Disabled = true
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	from, to, ok := securityWindowParams(window)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "window must be 24h or 30d")
+		return
+	}
+
+	// At least one reader present but not all three → the union
+	// is honest about its sources, but the operator deserves a
+	// "data incomplete" hint. Same shape as Q.2's `partial`
+	// flag (scan-cap-hit there; subset-down here). The all-nil
+	// short-circuit above takes precedence.
+	if h.wafEvents == nil || h.throttleEvents == nil || h.authFailures == nil {
+		resp.Partial = true
+	}
+
+	union := make(map[string]struct{})
+
+	if h.wafEvents != nil {
+		ips, err := h.wafEvents.DistinctWafEventSrcIPs(r.Context(), from, to)
+		if err != nil {
+			h.logger.Error("security: distinct waf src ip query failed", "err", err, "window", window)
+			writeError(w, http.StatusServiceUnavailable, "attackers summary unavailable")
+			return
+		}
+		resp.ByBucketSource.WAF = len(ips)
+		for _, ip := range ips {
+			if ip == "" {
+				continue
+			}
+			union[ip] = struct{}{}
+		}
+	}
+
+	if h.throttleEvents != nil {
+		ips, err := h.throttleEvents.DistinctThrottleEventSrcIPs(r.Context(), from, to)
+		if err != nil {
+			h.logger.Error("security: distinct throttle src ip query failed", "err", err, "window", window)
+			writeError(w, http.StatusServiceUnavailable, "attackers summary unavailable")
+			return
+		}
+		resp.ByBucketSource.Throttle = len(ips)
+		for _, ip := range ips {
+			if ip == "" {
+				continue
+			}
+			union[ip] = struct{}{}
+		}
+	}
+
+	if h.authFailures != nil {
+		// Spec D6.A: union over the audit-bucket auth-failure
+		// IPs. Reuse the same scan path as /security/auth-
+		// failures (single source of truth, D4.B), then
+		// collect distinct IPs in memory. Scan cap matches the
+		// auth-failures endpoint so the two views report the
+		// same "partial" horizon (consistency over the
+		// dashboard's mental model). Returns 0 IPs counted if
+		// the cap was hit before the window's `from` — the
+		// honest answer; the operator can correlate with
+		// /security/auth-failures's `partial` flag.
+		events, _, err := h.authFailures.QueryByActionRange(
+			r.Context(),
+			audit.AuthFailureActions(),
+			from,
+			to,
+			authFailuresScanCap,
+		)
+		if err != nil {
+			h.logger.Error("security: audit auth-failure scan failed", "err", err, "window", window)
+			writeError(w, http.StatusServiceUnavailable, "attackers summary unavailable")
+			return
+		}
+		auditIPs := make(map[string]struct{})
+		for _, e := range events {
+			if e.IP == "" {
+				continue
+			}
+			auditIPs[e.IP] = struct{}{}
+		}
+		resp.ByBucketSource.Audit = len(auditIPs)
+		for ip := range auditIPs {
+			union[ip] = struct{}{}
+		}
+	}
+
+	resp.UniqueIps = len(union)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// securityThrottleEvents handles GET /api/v1/security/throttle-events.
+// Query parameters (all optional):
+//   - limit: how many rows to return. Capped at
+//     securityThrottleEventsLimitCap. Defaults to the cap when
+//     unset.
+//   - srcIp: filter to a single source IP.
+//   - tier:  filter to tier 1 or 2.
+//
+// Response shape: {events: [{id, ts, tier, srcIp,
+// attemptedUsername, blockedUntil, blockDurationSeconds}, ...],
+// disabled?}. Auth: viewer-accessible (hard-auth-no-admin
+// gated at the route mount, AC #12). Pure read, no side effect.
+//
+// AC #14 degraded paths mirror /security/events:
+//   - h.throttleEvents == nil → 200 with disabled=true and
+//     events=[].
+//   - QueryThrottleEvents returns an error → 503 with the
+//     canonical envelope.
+func (h *Handler) securityThrottleEvents(w http.ResponseWriter, r *http.Request) {
+	resp := securityThrottleEventsResponse{Events: []securityThrottleEvent{}}
+
+	if h.throttleEvents == nil {
+		resp.Disabled = true
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	limit := securityThrottleEventsLimitCap
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		n, err := strconv.Atoi(rawLimit)
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		if n > securityThrottleEventsLimitCap {
+			n = securityThrottleEventsLimitCap
+		}
+		limit = n
+	}
+
+	tierFilter := 0
+	if rawTier := r.URL.Query().Get("tier"); rawTier != "" {
+		n, err := strconv.Atoi(rawTier)
+		if err != nil || (n != 1 && n != 2) {
+			writeError(w, http.StatusBadRequest, "tier must be 1 or 2")
+			return
+		}
+		tierFilter = n
+	}
+
+	filter := observability.ThrottleEventFilter{
+		SrcIP: r.URL.Query().Get("srcIp"),
+		Tier:  tierFilter,
+		Limit: limit,
+	}
+
+	events, err := h.throttleEvents.QueryThrottleEvents(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("security: query throttle_events failed", "err", err)
+		writeError(w, http.StatusServiceUnavailable, "throttle events unavailable")
+		return
+	}
+
+	resp.Events = make([]securityThrottleEvent, 0, len(events))
+	for _, e := range events {
+		resp.Events = append(resp.Events, securityThrottleEvent{
+			ID:                   e.ID,
+			Ts:                   e.Ts.Format(time.RFC3339),
+			Tier:                 e.Tier,
+			SrcIP:                e.SrcIP,
+			AttemptedUsername:    e.AttemptedUsername,
+			BlockedUntil:         e.BlockedUntil.Format(time.RFC3339),
+			BlockDurationSeconds: e.BlockDurationSeconds,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

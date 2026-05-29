@@ -79,6 +79,33 @@ type MetricsReader interface {
 type WafEventReader interface {
 	QueryWafEvents(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
 	AggregateWafEventsByRule(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
+	// DistinctWafEventSrcIPs is Q.3-only — powers the WAF
+	// arm of /security/attackers-summary's per-source union.
+	// Returns ALL distinct src IPs in [from, to), unbounded
+	// (the result is naturally small: attacker diversity in
+	// a 30d window is typically <<100 on a homelab).
+	DistinctWafEventSrcIPs(ctx context.Context, from, to time.Time) ([]string, error)
+}
+
+// ThrottleEventReader is the read surface the Step Q.3
+// /api/v1/security/throttle-events handler depends on, plus
+// the per-IP aggregation used by the attackers-summary
+// endpoint + the /metrics/summary new fields. *observability.
+// Store satisfies it via QueryThrottleEvents and
+// AggregateThrottleEventsByIP (Q.1 storage). Interface kept
+// for the same reason as WafEventReader — tests inject fakes
+// without SQLite.
+//
+// nil reader = AC #14 degraded-mode (boot-failed
+// observability subsystem); handlers detect nil and return
+// 200 with disabled=true rather than 503.
+type ThrottleEventReader interface {
+	QueryThrottleEvents(ctx context.Context, filter observability.ThrottleEventFilter) ([]observability.ThrottleEvent, error)
+	AggregateThrottleEventsByIP(ctx context.Context, filter observability.ThrottleEventAggregateFilter) ([]observability.ThrottleEventIPAggregate, error)
+	// DistinctThrottleEventSrcIPs powers the throttle arm of
+	// /security/attackers-summary's per-source union. Same
+	// contract as the WAF mirror on WafEventReader.
+	DistinctThrottleEventSrcIPs(ctx context.Context, from, to time.Time) ([]string, error)
 }
 
 // AuthFailureReader is the read surface the Step Q.2
@@ -168,6 +195,13 @@ type Handler struct {
 	// `wafEvents`: a missing reader yields a disabled-mode
 	// response, not 500 (AC #14).
 	authFailures AuthFailureReader
+	// throttleEvents (Step Q.3) is the read surface for the
+	// /api/v1/security/throttle-events endpoint + the per-IP
+	// aggregation behind /security/attackers-summary +
+	// /metrics/summary's totalThrottlePerMin /
+	// attackerIpsUnique. Backed by *observability.Store. Same
+	// nil-tolerance contract as wafEvents.
+	throttleEvents ThrottleEventReader
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -274,6 +308,14 @@ func (h *Handler) SetWafEventReader(r WafEventReader) {
 // handler only needs the range-scan path, not Append).
 func (h *Handler) SetAuthFailureReader(r AuthFailureReader) {
 	h.authFailures = r
+}
+
+// SetThrottleEventReader (Step Q.3) attaches the throttle
+// event reader used by /api/v1/security/throttle-events,
+// /security/attackers-summary, and the new /metrics/summary
+// fields. Same nil-tolerance contract as SetWafEventReader.
+func (h *Handler) SetThrottleEventReader(r ThrottleEventReader) {
+	h.throttleEvents = r
 }
 
 // uiURL returns the URL to redirect to for the given SPA path

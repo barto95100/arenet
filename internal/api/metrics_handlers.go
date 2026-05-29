@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -40,6 +41,22 @@ const (
 	// (gap-fill rule = 0 for missing buckets, same as the
 	// other count metrics). p95 null semantics do NOT apply.
 	metricWafBlockRate metricName = "waf_block_rate"
+	// Step Q.3 — throttle block rate. Reads
+	// bucket.ThrottleBlockCount, gap-filled with 0. Spec §3.5:
+	// throttle blocks aggregate under the sentinel
+	// route_id="_throttle"; the handler enforces that, so
+	// route=<uuid> returns all zeros (the bucket has no data
+	// at that key).
+	metricThrottleBlockRate metricName = "throttle_block_rate"
+	// Step Q.3 — auth failure rate. SPECIAL-CASED: detours
+	// through the AuthFailureReader.QueryByActionRange path
+	// (spec D4.B single source of truth) rather than reading
+	// a bucket column. The audit log is the canonical source;
+	// no bucket counter exists for this metric. Handler
+	// projects the audit-scan to the same {points: [{ts,
+	// value}]} wire shape as the bucket metrics, gap-filled
+	// with 0.
+	metricAuthFailureRate metricName = "auth_failure_rate"
 )
 
 // timeseriesPoint is one point on the timeline. Value is *float64
@@ -104,18 +121,25 @@ type summaryRoute struct {
 //     (operator sees an honest zero rather than an arbitrary
 //     route forced into the slot).
 type summaryResponse struct {
-	GeneratedAt         string            `json:"generatedAt"`
-	WindowSeconds       int               `json:"windowSeconds"`
-	Disabled            bool              `json:"disabled,omitempty"`
-	TotalReqPerMin      uint64            `json:"totalReqPerMin"`
-	TotalFourXxPerMin   uint64            `json:"totalFourXxPerMin"`
-	TotalFiveXxPerMin   uint64            `json:"totalFiveXxPerMin"`
-	TotalWafBlockedPerMin uint64          `json:"totalWafBlockedPerMin"`
-	GlobalP95LatencyMs  *float64          `json:"globalP95LatencyMs"` // null when no traffic
-	ActiveRouteCount    int               `json:"activeRouteCount"`
-	TopRoutes           []summaryRoute    `json:"topRoutes"`            // top 5 by reqsPerMin
-	TopAttackedRoute    *summaryRoute     `json:"topAttackedRoute"`    // single highest WAF count, all routes; null if none
-	WafBlocksByCategory map[string]uint64 `json:"wafBlocksByCategory"` // category → count; empty when no events
+	GeneratedAt           string `json:"generatedAt"`
+	WindowSeconds         int    `json:"windowSeconds"`
+	Disabled              bool   `json:"disabled,omitempty"`
+	TotalReqPerMin        uint64 `json:"totalReqPerMin"`
+	TotalFourXxPerMin     uint64 `json:"totalFourXxPerMin"`
+	TotalFiveXxPerMin     uint64 `json:"totalFiveXxPerMin"`
+	TotalWafBlockedPerMin uint64 `json:"totalWafBlockedPerMin"`
+	// Step Q.3 new fields per AC #11. Independent counters,
+	// same shape contract as TotalWafBlockedPerMin (a throttle
+	// block does NOT inflate the 4xx / 5xx fields, AC #15
+	// anti-regression).
+	TotalThrottlePerMin     uint64            `json:"totalThrottlePerMin"`
+	TotalAuthFailuresPerMin uint64            `json:"totalAuthFailuresPerMin"`
+	AttackerIpsUnique       int               `json:"attackerIpsUnique"`  // union over WAF + throttle + audit, just-closed minute
+	GlobalP95LatencyMs      *float64          `json:"globalP95LatencyMs"` // null when no traffic
+	ActiveRouteCount        int               `json:"activeRouteCount"`
+	TopRoutes               []summaryRoute    `json:"topRoutes"`           // top 5 by reqsPerMin
+	TopAttackedRoute        *summaryRoute     `json:"topAttackedRoute"`    // single highest WAF count, all routes; null if none
+	WafBlocksByCategory     map[string]uint64 `json:"wafBlocksByCategory"` // category → count; empty when no events
 }
 
 // routeAllSentinel selects the global aggregated timeseries (per
@@ -142,7 +166,7 @@ const routeAllSentinel = "all"
 // metricsTimeseries handles GET /api/v1/metrics/timeseries.
 // Query parameters:
 //   - route  : storage route UUID (per-route) OR "all"
-//              (global aggregate, Spec-1 §10.1)
+//     (global aggregate, Spec-1 §10.1)
 //   - metric : one of req_per_sec / four_xx_rate / five_xx_rate / p95_latency_ms
 //   - window : 24h (returns 1-minute buckets) or 30d (1-hour buckets)
 //
@@ -165,7 +189,7 @@ func (h *Handler) metricsTimeseries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isValidMetric(metric) {
-		writeError(w, http.StatusBadRequest, "metric must be one of req_per_sec, four_xx_rate, five_xx_rate, p95_latency_ms, waf_block_rate")
+		writeError(w, http.StatusBadRequest, "metric must be one of req_per_sec, four_xx_rate, five_xx_rate, p95_latency_ms, waf_block_rate, throttle_block_rate, auth_failure_rate")
 		return
 	}
 	gran, step, windowDur, ok := windowParams(window)
@@ -198,6 +222,48 @@ func (h *Handler) metricsTimeseries(w http.ResponseWriter, r *http.Request) {
 		Points:            []timeseriesPoint{},
 	}
 
+	now := time.Now().UTC()
+	to := now.Truncate(step).Add(step) // exclusive upper bound, next bucket boundary
+	from := to.Add(-windowDur)
+
+	// Step Q.3 — auth_failure_rate is special-cased per spec
+	// D4.B + AC #10: the data lives in the audit log, not in
+	// metrics.db. Detour through the AuthFailureReader and
+	// return early. Per AC #10, the per-route variant is
+	// "N/A — neither signal is per-route, so route=<uuid>
+	// returns all-zero". The "all" sentinel returns the real
+	// system-wide audit-scan projection.
+	if metric == metricAuthFailureRate {
+		if !aggregated {
+			// route=<uuid>: return the dense zero-filled
+			// timeseries WITHOUT scanning audit. AC #10
+			// literal contract.
+			resp.Points = gapFillAuthFailureZero(from, to, step)
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		if h.authFailures == nil {
+			// AC #14 degraded shape mirror.
+			resp.Disabled = true
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		events, _, err := h.authFailures.QueryByActionRange(
+			r.Context(),
+			audit.AuthFailureActions(),
+			from, to,
+			authFailuresScanCap,
+		)
+		if err != nil {
+			h.logger.Error("metrics: auth-failure scan failed", "err", err, "window", window)
+			writeError(w, http.StatusServiceUnavailable, "metrics history unavailable")
+			return
+		}
+		resp.Points = gapFillAuthFailureTimeseries(events, from, to, step)
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
 	if h.metrics == nil {
 		// AC #13 degraded mode: respond with disabled=true and
 		// empty points so the frontend can render a clean empty
@@ -208,10 +274,6 @@ func (h *Handler) metricsTimeseries(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-
-	now := time.Now().UTC()
-	to := now.Truncate(step).Add(step) // exclusive upper bound, next bucket boundary
-	from := to.Add(-windowDur)
 
 	var (
 		rows []observability.MetricBucket
@@ -398,6 +460,88 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.TopAttackedRoute = topAttacked
 
+	// Step Q.3 — TotalThrottlePerMin: read the sentinel
+	// route's bucket row for the just-closed minute. The
+	// observability aggregator stores throttle blocks under
+	// route_id = "_throttle" (spec §3.5); the per-route loop
+	// above doesn't iterate this sentinel because it's not in
+	// the storage.Route catalog. A targeted Query keeps the
+	// summary cheap (1 SQLite indexed lookup).
+	throttleRows, qerr := h.metrics.Query(r.Context(), observability.Granularity1m,
+		observability.ThrottleSentinelRouteID, from, to)
+	if qerr != nil {
+		h.logger.Error("metrics: summary throttle sentinel query failed", "err", qerr)
+		// Same trade-off as WafBlocksByCategory: don't fail
+		// the whole summary; the L counters + WAF total are
+		// useful on their own. Leave TotalThrottlePerMin=0.
+	} else if len(throttleRows) > 0 {
+		resp.TotalThrottlePerMin = uint64(throttleRows[0].ThrottleBlockCount)
+	}
+
+	// Step Q.3 — TotalAuthFailuresPerMin: audit-scan over the
+	// just-closed minute (D4.B single source of truth — no
+	// bucket counter for this metric). Same scan-cap discipline
+	// as /security/auth-failures (200) but a 1-minute window
+	// is tiny in practice; the cap is only the safety net.
+	if h.authFailures != nil {
+		events, _, aerr := h.authFailures.QueryByActionRange(r.Context(),
+			audit.AuthFailureActions(), from, to, authFailuresScanCap)
+		if aerr != nil {
+			h.logger.Error("metrics: summary audit auth-failure scan failed", "err", aerr)
+		} else {
+			resp.TotalAuthFailuresPerMin = uint64(len(events))
+		}
+	}
+
+	// Step Q.3 — AttackerIpsUnique: server-side union of WAF
+	// + throttle + audit source IPs over the just-closed
+	// minute. Same shape as /security/attackers-summary minus
+	// the per-source breakdown (the summary endpoint only
+	// surfaces the union count). Empty IPs filtered the same
+	// way (defence-in-depth on the spec §8.5 case).
+	attackers := make(map[string]struct{})
+	if h.wafEvents != nil {
+		ips, werr := h.wafEvents.DistinctWafEventSrcIPs(r.Context(), from, to)
+		if werr != nil {
+			h.logger.Error("metrics: summary waf distinct ip query failed", "err", werr)
+		} else {
+			for _, ip := range ips {
+				if ip == "" {
+					continue
+				}
+				attackers[ip] = struct{}{}
+			}
+		}
+	}
+	if h.throttleEvents != nil {
+		ips, terr := h.throttleEvents.DistinctThrottleEventSrcIPs(r.Context(), from, to)
+		if terr != nil {
+			h.logger.Error("metrics: summary throttle distinct ip query failed", "err", terr)
+		} else {
+			for _, ip := range ips {
+				if ip == "" {
+					continue
+				}
+				attackers[ip] = struct{}{}
+			}
+		}
+	}
+	if h.authFailures != nil {
+		events, _, aerr := h.authFailures.QueryByActionRange(r.Context(),
+			audit.AuthFailureActions(), from, to, authFailuresScanCap)
+		if aerr != nil {
+			// Already logged above for TotalAuthFailuresPerMin.
+		} else {
+			for _, e := range events {
+				if e.IP == "" {
+					continue
+				}
+				attackers[e.IP] = struct{}{}
+			}
+		}
+	}
+	resp.AttackerIpsUnique = len(attackers)
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -405,7 +549,8 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 
 func isValidMetric(m metricName) bool {
 	switch m {
-	case metricReqPerSec, metricFourXxRate, metricFiveXxRate, metricP95LatencyMs, metricWafBlockRate:
+	case metricReqPerSec, metricFourXxRate, metricFiveXxRate, metricP95LatencyMs,
+		metricWafBlockRate, metricThrottleBlockRate, metricAuthFailureRate:
 		return true
 	}
 	return false
@@ -419,6 +564,79 @@ func windowParams(window string) (gran observability.Granularity, step time.Dura
 		return observability.Granularity1h, time.Hour, 30 * 24 * time.Hour, true
 	}
 	return 0, 0, 0, false
+}
+
+// gapFillAuthFailureTimeseries projects a slice of audit
+// events (reverse-chronological, action-filtered by the
+// caller) into a dense timeseries of count-per-step buckets
+// over [from, to). Step Q.3: powers the
+// /metrics/timeseries?metric=auth_failure_rate detour. The
+// 24h window uses step=1m (1440 buckets), the 30d window uses
+// step=1h (720 buckets). Same gap-fill rule as the count
+// metrics: empty bucket emits 0 (not nil).
+//
+// Mirror of projectAuthFailureTimeseries in
+// security_handlers.go, generalised for variable step. Kept
+// separate so the auth-failures dashboard endpoint stays
+// per-minute-only (its frontend chart depends on it) while
+// the /metrics/timeseries endpoint can serve both
+// granularities through the same path.
+func gapFillAuthFailureTimeseries(events []audit.Event, from, to time.Time, step time.Duration) []timeseriesPoint {
+	fromBucket := from.UTC().Truncate(step)
+	toBucket := to.UTC().Truncate(step)
+	if !toBucket.After(fromBucket) {
+		return []timeseriesPoint{}
+	}
+	bucketCount := int(toBucket.Sub(fromBucket) / step)
+	if bucketCount <= 0 {
+		return []timeseriesPoint{}
+	}
+	counts := make([]int, bucketCount)
+	for _, e := range events {
+		ts := e.Timestamp.UTC().Truncate(step)
+		if ts.Before(fromBucket) || !ts.Before(toBucket) {
+			continue
+		}
+		idx := int(ts.Sub(fromBucket) / step)
+		if idx < 0 || idx >= bucketCount {
+			continue
+		}
+		counts[idx]++
+	}
+	out := make([]timeseriesPoint, bucketCount)
+	for i := 0; i < bucketCount; i++ {
+		v := float64(counts[i])
+		out[i] = timeseriesPoint{
+			Ts:    fromBucket.Add(time.Duration(i) * step).Format(time.RFC3339),
+			Value: &v,
+		}
+	}
+	return out
+}
+
+// gapFillAuthFailureZero is the all-zero variant of
+// gapFillAuthFailureTimeseries — used when route=<uuid> for
+// the auth_failure_rate metric (AC #10 "per-route returns
+// all-zero"). Cheap: skip the events scan entirely.
+func gapFillAuthFailureZero(from, to time.Time, step time.Duration) []timeseriesPoint {
+	fromBucket := from.UTC().Truncate(step)
+	toBucket := to.UTC().Truncate(step)
+	if !toBucket.After(fromBucket) {
+		return []timeseriesPoint{}
+	}
+	bucketCount := int(toBucket.Sub(fromBucket) / step)
+	if bucketCount <= 0 {
+		return []timeseriesPoint{}
+	}
+	out := make([]timeseriesPoint, bucketCount)
+	for i := 0; i < bucketCount; i++ {
+		v := 0.0
+		out[i] = timeseriesPoint{
+			Ts:    fromBucket.Add(time.Duration(i) * step).Format(time.RFC3339),
+			Value: &v,
+		}
+	}
+	return out
 }
 
 // gapFillTimeseries projects sparse Store rows into a dense slice
@@ -478,6 +696,9 @@ func pickMetricValue(row observability.MetricBucket, hit bool, metric metricName
 		return &v
 	case metricWafBlockRate:
 		v := float64(row.WafBlockCount)
+		return &v
+	case metricThrottleBlockRate:
+		v := float64(row.ThrottleBlockCount)
 		return &v
 	case metricP95LatencyMs:
 		if row.LatencyP95Ms <= 0 {

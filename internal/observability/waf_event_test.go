@@ -318,3 +318,80 @@ func TestAggregateWafEventsByRule_DistinctCategoriesPerRule(t *testing.T) {
 		t.Fatalf("expected 2 rows (one per category), got %d: %+v", len(got), got)
 	}
 }
+
+// --- Step Q.3: DistinctSrcIPs --------------------------------------------------
+
+func TestDistinctWafEventSrcIPs_DedupesAndRespectsWindow(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	seedEvents(t, s, []WafEvent{
+		// In-window: three events from two distinct IPs.
+		{Ts: t0, RouteID: "r", RuleID: "1", Category: "SQLi", SrcIP: "1.1.1.1"},
+		{Ts: t0.Add(time.Second), RouteID: "r", RuleID: "1", Category: "SQLi", SrcIP: "1.1.1.1"},
+		{Ts: t0.Add(2 * time.Second), RouteID: "r", RuleID: "1", Category: "SQLi", SrcIP: "2.2.2.2"},
+		// Out-of-window: must NOT appear in the distinct set.
+		{Ts: t0.Add(-time.Hour), RouteID: "r", RuleID: "1", Category: "SQLi", SrcIP: "9.9.9.9"},
+	})
+
+	ips, err := s.DistinctWafEventSrcIPs(ctx, t0, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("DistinctWafEventSrcIPs: %v", err)
+	}
+	if len(ips) != 2 {
+		t.Fatalf("len(ips) = %d, want 2 (window dedupes + excludes 9.9.9.9): %v", len(ips), ips)
+	}
+	have := map[string]bool{}
+	for _, ip := range ips {
+		have[ip] = true
+	}
+	if !have["1.1.1.1"] || !have["2.2.2.2"] {
+		t.Errorf("missing expected IPs in distinct set: %v", ips)
+	}
+	if have["9.9.9.9"] {
+		t.Errorf("out-of-window IP leaked: %v", ips)
+	}
+}
+
+func TestDistinctThrottleEventSrcIPs_DedupesAndRespectsWindow(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	if err := s.InsertThrottleEventBatch(ctx, []ThrottleEvent{
+		{Ts: t0, Tier: 1, SrcIP: "1.1.1.1", AttemptedUsername: "admin", BlockedUntil: t0.Add(15 * time.Minute), BlockDurationSeconds: 900},
+		{Ts: t0.Add(time.Second), Tier: 1, SrcIP: "1.1.1.1", AttemptedUsername: "admin", BlockedUntil: t0.Add(15 * time.Minute), BlockDurationSeconds: 900},
+		{Ts: t0.Add(2 * time.Second), Tier: 2, SrcIP: "3.3.3.3", AttemptedUsername: "root", BlockedUntil: t0.Add(time.Hour), BlockDurationSeconds: 3600},
+		// Out-of-window.
+		{Ts: t0.Add(-time.Hour), Tier: 1, SrcIP: "9.9.9.9", AttemptedUsername: "x", BlockedUntil: t0.Add(-time.Minute), BlockDurationSeconds: 900},
+	}); err != nil {
+		t.Fatalf("seed throttle: %v", err)
+	}
+
+	ips, err := s.DistinctThrottleEventSrcIPs(ctx, t0, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("DistinctThrottleEventSrcIPs: %v", err)
+	}
+	if len(ips) != 2 {
+		t.Fatalf("len(ips) = %d, want 2 (window dedupes + excludes 9.9.9.9): %v", len(ips), ips)
+	}
+	have := map[string]bool{}
+	for _, ip := range ips {
+		have[ip] = true
+	}
+	if !have["1.1.1.1"] || !have["3.3.3.3"] {
+		t.Errorf("missing expected IPs: %v", ips)
+	}
+	if have["9.9.9.9"] {
+		t.Errorf("out-of-window IP leaked: %v", ips)
+	}
+}

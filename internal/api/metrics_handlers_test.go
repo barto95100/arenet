@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
@@ -672,3 +673,372 @@ func TestMetricsTimeseries_UnknownRoute404(t *testing.T) {
 	}
 }
 
+// --- Step Q.3: throttle_block_rate + auth_failure_rate ----------------------
+
+func TestMetricsTimeseries_ThrottleBlockRate_ReadsBucketColumn(t *testing.T) {
+	// Verify the new throttle_block_rate metric reads from
+	// MetricBucket.ThrottleBlockCount with gap-fill = 0 for
+	// empty buckets. Spec §3.5: production stores throttle
+	// blocks under the sentinel route_id "_throttle"; this
+	// handler test seeds two rows under the test route ID
+	// (which has a valid storage.Route entry so the 404 guard
+	// passes) — the field-routing logic in pickMetricValue is
+	// what we're exercising, not the sentinel convention.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	now := time.Now().UTC().Truncate(time.Minute)
+	rows := []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: now.Add(-10 * time.Minute), ReqCount: 0, ThrottleBlockCount: 5},
+		{RouteID: m.routeID, Ts: now.Add(-5 * time.Minute), ReqCount: 0, ThrottleBlockCount: 3},
+	}
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, rows); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route="+m.routeID+"&metric=throttle_block_rate&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp timeseriesResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if string(resp.Metric) != "throttle_block_rate" {
+		t.Errorf("response metric = %q, want throttle_block_rate", resp.Metric)
+	}
+	// Counts gap-fill = 0; the two seeded rows surface as 5 + 3.
+	total := 0.0
+	for _, p := range resp.Points {
+		if p.Value == nil {
+			t.Fatal("count metric point has null value — AC #5 violation")
+		}
+		total += *p.Value
+	}
+	if total != 8 {
+		t.Errorf("sum of throttle_block_rate values = %v, want 8", total)
+	}
+}
+
+func TestMetricsTimeseries_AuthFailureRate_AuditScanDetour(t *testing.T) {
+	// auth_failure_rate detours through AuthFailureReader.
+	// Verify: route=all + readers wired + a few audit events
+	// → the timeseries reflects them, gap-filled with 0.
+	m := newMetricsTestEnv(t)
+	now := time.Now().UTC()
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			return []audit.Event{
+				{Action: audit.ActionLoginFailure, Timestamp: now.Add(-1 * time.Minute)},
+				{Action: audit.ActionLoginFailure, Timestamp: now.Add(-2 * time.Minute)},
+				{Action: audit.ActionOIDCLoginRejected, Timestamp: now.Add(-30 * time.Minute)},
+			}, false, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route=all&metric=auth_failure_rate&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp timeseriesResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	// 24h window @ 1m step = 1440 buckets.
+	if len(resp.Points) != 1440 {
+		t.Errorf("len(points) = %d, want 1440", len(resp.Points))
+	}
+	total := 0.0
+	for _, p := range resp.Points {
+		if p.Value == nil {
+			t.Fatal("auth_failure_rate point has null value — counts must gap-fill to 0")
+		}
+		total += *p.Value
+	}
+	if total != 3 {
+		t.Errorf("sum of auth_failure_rate values = %v, want 3 (seeded events)", total)
+	}
+}
+
+func TestMetricsTimeseries_AuthFailureRate_PerRouteIsAllZero(t *testing.T) {
+	// AC #10 literal: route=<uuid> for auth_failure_rate
+	// returns all-zero (signal is not per-route). Seed audit
+	// events; verify route=<routeID> returns 0s across the
+	// board.
+	m := newMetricsTestEnv(t)
+	now := time.Now().UTC()
+	called := false
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			called = true
+			return []audit.Event{
+				{Action: audit.ActionLoginFailure, Timestamp: now.Add(-1 * time.Minute)},
+			}, false, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route="+m.routeID+"&metric=auth_failure_rate&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp timeseriesResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	for _, p := range resp.Points {
+		if p.Value == nil || *p.Value != 0 {
+			t.Fatalf("per-route auth_failure_rate must be all-zero (AC #10), got %+v at %s", p.Value, p.Ts)
+		}
+	}
+	if called {
+		t.Error("per-route auth_failure_rate should NOT invoke the audit scan (AC #10 short-circuit)")
+	}
+}
+
+func TestMetricsTimeseries_AuthFailureRate_NilReader_Disabled(t *testing.T) {
+	// AC #14 mirror: nil AuthFailureReader → disabled=true
+	// for the auth_failure_rate detour.
+	m := newMetricsTestEnv(t)
+	// Intentionally NOT calling SetAuthFailureReader.
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route=all&metric=auth_failure_rate&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp timeseriesResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if !resp.Disabled {
+		t.Errorf("disabled = false, want true (nil reader)")
+	}
+}
+
+func TestMetricsTimeseries_AuthFailureRate_ScanError_503(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			return nil, false, errors.New("audit bucket missing")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route=all&metric=auth_failure_rate&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestMetricsTimeseries_NewMetrics_AcceptedByValidator(t *testing.T) {
+	// Anti-regression: the metricName enum extensions must
+	// be wired into isValidMetric. A future refactor that
+	// drops one would surface 400 here.
+	for _, m := range []string{"throttle_block_rate", "auth_failure_rate"} {
+		if !isValidMetric(metricName(m)) {
+			t.Errorf("metric %q rejected by isValidMetric", m)
+		}
+	}
+}
+
+// --- Step Q.3: metricsSummary new fields ------------------------------------
+
+func TestMetricsSummary_TotalThrottlePerMin_FromSentinelRow(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	now := time.Now().UTC()
+	// The summary reads the just-closed minute. Seed at that
+	// bucket under the sentinel route id.
+	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m,
+		[]observability.MetricBucket{
+			{RouteID: observability.ThrottleSentinelRouteID, Ts: prevMin, ThrottleBlockCount: 7},
+		}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp summaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.TotalThrottlePerMin != 7 {
+		t.Errorf("totalThrottlePerMin = %d, want 7", resp.TotalThrottlePerMin)
+	}
+}
+
+func TestMetricsSummary_TotalAuthFailuresPerMin_FromAuditScan(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	now := time.Now().UTC()
+	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
+	// Reader returns 3 events within the just-closed-minute window.
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, from, to time.Time, _ int) ([]audit.Event, bool, error) {
+			// Verify the handler asked for the just-closed minute.
+			if from != prevMin {
+				t.Errorf("audit scan from = %v, want %v", from, prevMin)
+			}
+			if to != prevMin.Add(time.Minute) {
+				t.Errorf("audit scan to = %v, want %v", to, prevMin.Add(time.Minute))
+			}
+			return []audit.Event{
+				{Action: audit.ActionLoginFailure, IP: "1.1.1.1", Timestamp: prevMin.Add(10 * time.Second)},
+				{Action: audit.ActionLoginFailure, IP: "1.1.1.1", Timestamp: prevMin.Add(20 * time.Second)},
+				{Action: audit.ActionOIDCLoginRejected, IP: "2.2.2.2", Timestamp: prevMin.Add(30 * time.Second)},
+			}, false, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp summaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.TotalAuthFailuresPerMin != 3 {
+		t.Errorf("totalAuthFailuresPerMin = %d, want 3", resp.TotalAuthFailuresPerMin)
+	}
+	// 2 distinct IPs from audit alone.
+	if resp.AttackerIpsUnique != 2 {
+		t.Errorf("attackerIpsUnique = %d, want 2", resp.AttackerIpsUnique)
+	}
+}
+
+func TestMetricsSummary_AttackerIpsUnique_UnionAcrossSources(t *testing.T) {
+	// Seed WAF + throttle + audit with overlapping IPs.
+	// WAF: 1.1.1.1, 2.2.2.2; Throttle: 2.2.2.2, 3.3.3.3;
+	// Audit: 3.3.3.3, 4.4.4.4. Union = 4 unique.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return []string{"1.1.1.1", "2.2.2.2"}, nil
+		},
+	})
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return []string{"2.2.2.2", "3.3.3.3"}, nil
+		},
+	})
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			return []audit.Event{
+				{Action: audit.ActionLoginFailure, IP: "3.3.3.3"},
+				{Action: audit.ActionLoginFailure, IP: "4.4.4.4"},
+			}, false, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp summaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.AttackerIpsUnique != 4 {
+		t.Errorf("attackerIpsUnique = %d, want 4 (union of overlapping sets)", resp.AttackerIpsUnique)
+	}
+}
+
+func TestMetricsSummary_QFieldsIndependentFromM(t *testing.T) {
+	// AC #15 anti-regression: Q-side fields (throttle, auth,
+	// attacker IPs) MUST NOT inflate the M field
+	// (TotalWafBlockedPerMin) or vice versa. Confirm by
+	// seeding throttle events but no WAF events → WAF total
+	// stays 0, throttle total > 0.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	now := time.Now().UTC()
+	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m,
+		[]observability.MetricBucket{
+			{RouteID: observability.ThrottleSentinelRouteID, Ts: prevMin, ThrottleBlockCount: 9},
+		}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	var resp summaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+
+	if resp.TotalThrottlePerMin != 9 {
+		t.Errorf("totalThrottlePerMin = %d, want 9", resp.TotalThrottlePerMin)
+	}
+	if resp.TotalWafBlockedPerMin != 0 {
+		t.Errorf("AC #15 violation: TotalWafBlockedPerMin = %d after throttle-only seed; want 0", resp.TotalWafBlockedPerMin)
+	}
+	if resp.TotalFourXxPerMin != 0 || resp.TotalFiveXxPerMin != 0 {
+		t.Errorf("throttle bumps leaked into L counters: 4xx=%d 5xx=%d", resp.TotalFourXxPerMin, resp.TotalFiveXxPerMin)
+	}
+}
+
+func TestMetricsSummary_NilReadersForQFields_FieldsStayZero(t *testing.T) {
+	// Degraded mode tolerance: with no throttle / authFailure
+	// readers wired, the new fields stay at 0. The summary
+	// still returns 200 with the L/M fields populated.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+	// Intentionally NOT calling SetAuthFailureReader /
+	// SetThrottleEventReader / SetWafEventReader.
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp summaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.TotalAuthFailuresPerMin != 0 || resp.AttackerIpsUnique != 0 {
+		t.Errorf("Q fields not zero with nil readers: throttle=%d auth=%d attackers=%d",
+			resp.TotalThrottlePerMin, resp.TotalAuthFailuresPerMin, resp.AttackerIpsUnique)
+	}
+}

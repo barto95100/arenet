@@ -39,8 +39,9 @@ import (
 // via aggregateFn. Defaults to no rows + no error so callers
 // that don't exercise the aggregate path don't have to set it.
 type fakeWafEventReader struct {
-	queryFn     func(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
-	aggregateFn func(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
+	queryFn      func(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
+	aggregateFn  func(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
+	distinctIPFn func(ctx context.Context, from, to time.Time) ([]string, error)
 }
 
 func (f *fakeWafEventReader) QueryWafEvents(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error) {
@@ -53,6 +54,13 @@ func (f *fakeWafEventReader) QueryWafEvents(ctx context.Context, filter observab
 func (f *fakeWafEventReader) AggregateWafEventsByRule(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error) {
 	if f.aggregateFn != nil {
 		return f.aggregateFn(ctx, filter)
+	}
+	return nil, nil
+}
+
+func (f *fakeWafEventReader) DistinctWafEventSrcIPs(ctx context.Context, from, to time.Time) ([]string, error) {
+	if f.distinctIPFn != nil {
+		return f.distinctIPFn(ctx, from, to)
 	}
 	return nil, nil
 }
@@ -1114,5 +1122,589 @@ func TestSecurityAuthFailures_PartialFlagPropagates(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	if !resp.Partial {
 		t.Errorf("partial = false in response, want true (reader signalled cap-hit)")
+	}
+}
+
+// --- /api/v1/security/throttle-events (Step Q.3) ----------------------------
+
+// fakeThrottleEventReader satisfies ThrottleEventReader. queryFn
+// + aggregateFn default to (nil, nil) so callers only set what
+// the test cares about — same shape as fakeWafEventReader.
+type fakeThrottleEventReader struct {
+	queryFn      func(ctx context.Context, filter observability.ThrottleEventFilter) ([]observability.ThrottleEvent, error)
+	aggregateFn  func(ctx context.Context, filter observability.ThrottleEventAggregateFilter) ([]observability.ThrottleEventIPAggregate, error)
+	distinctIPFn func(ctx context.Context, from, to time.Time) ([]string, error)
+}
+
+func (f *fakeThrottleEventReader) QueryThrottleEvents(ctx context.Context, filter observability.ThrottleEventFilter) ([]observability.ThrottleEvent, error) {
+	if f.queryFn != nil {
+		return f.queryFn(ctx, filter)
+	}
+	return nil, nil
+}
+
+func (f *fakeThrottleEventReader) AggregateThrottleEventsByIP(ctx context.Context, filter observability.ThrottleEventAggregateFilter) ([]observability.ThrottleEventIPAggregate, error) {
+	if f.aggregateFn != nil {
+		return f.aggregateFn(ctx, filter)
+	}
+	return nil, nil
+}
+
+func (f *fakeThrottleEventReader) DistinctThrottleEventSrcIPs(ctx context.Context, from, to time.Time) ([]string, error) {
+	if f.distinctIPFn != nil {
+		return f.distinctIPFn(ctx, from, to)
+	}
+	return nil, nil
+}
+
+func TestSecurityThrottleEvents_Anon401(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	raw := m.rawHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/throttle-events", nil)
+	rec := httptest.NewRecorder()
+	raw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anon status = %d, want 401", rec.Code)
+	}
+}
+
+func TestSecurityThrottleEvents_Viewer200(t *testing.T) {
+	// AC #12 mirror: viewer MUST read /throttle-events.
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{})
+
+	ctx := context.Background()
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "throttle-viewer", "Throttle Viewer", "sub-throttle-viewer")
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	if viewer.Role != auth.UserRoleViewer {
+		t.Fatalf("seed-viewer role = %q; want viewer", viewer.Role)
+	}
+	sessionStore := auth.NewSessionStore(m.env.store.DB())
+	s, err := sessionStore.Create(ctx, viewer.ID, false, "127.0.0.1", "test/1")
+	if err != nil {
+		t.Fatalf("seed viewer session: %v", err)
+	}
+	raw := m.rawHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/throttle-events", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: s.ID})
+	rec := httptest.NewRecorder()
+	raw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("VIEWER LOCKOUT REGRESSION on /security/throttle-events: status=%d body=%s", rec.Code, rec.Body)
+	}
+}
+
+func TestSecurityThrottleEvents_NilReader_DisabledResponse(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	// Intentionally do NOT call SetThrottleEventReader.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/throttle-events", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (degraded mode is OK, not 5xx)", rec.Code)
+	}
+	var resp securityThrottleEventsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Disabled {
+		t.Errorf("disabled = false, want true (nil reader = degraded)")
+	}
+	if len(resp.Events) != 0 {
+		t.Errorf("events = %d, want 0 (no data when disabled)", len(resp.Events))
+	}
+}
+
+func TestSecurityThrottleEvents_QueryError_503(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
+		queryFn: func(_ context.Context, _ observability.ThrottleEventFilter) ([]observability.ThrottleEvent, error) {
+			return nil, errors.New("disk full")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/throttle-events", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestSecurityThrottleEvents_InvalidLimit_400(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{})
+	cases := []string{"abc", "0", "-5", "1.5"}
+	for _, raw := range cases {
+		t.Run("limit="+raw, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/security/throttle-events?limit="+raw, nil)
+			rec := httptest.NewRecorder()
+			m.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("limit=%q status = %d, want 400", raw, rec.Code)
+			}
+		})
+	}
+}
+
+func TestSecurityThrottleEvents_InvalidTier_400(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{})
+	cases := []string{"0", "3", "-1", "abc"}
+	for _, raw := range cases {
+		t.Run("tier="+raw, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/security/throttle-events?tier="+raw, nil)
+			rec := httptest.NewRecorder()
+			m.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("tier=%q status = %d, want 400 (tier must be 1 or 2)", raw, rec.Code)
+			}
+		})
+	}
+}
+
+func TestSecurityThrottleEvents_LimitClampedAtCap(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	var observed observability.ThrottleEventFilter
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
+		queryFn: func(_ context.Context, f observability.ThrottleEventFilter) ([]observability.ThrottleEvent, error) {
+			observed = f
+			return nil, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/throttle-events?limit=500", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if observed.Limit != securityThrottleEventsLimitCap {
+		t.Errorf("filter.Limit = %d, want %d", observed.Limit, securityThrottleEventsLimitCap)
+	}
+}
+
+func TestSecurityThrottleEvents_FiltersPassed(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	var observed observability.ThrottleEventFilter
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
+		queryFn: func(_ context.Context, f observability.ThrottleEventFilter) ([]observability.ThrottleEvent, error) {
+			observed = f
+			return nil, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/throttle-events?srcIp=10.0.0.5&tier=2&limit=25", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if observed.SrcIP != "10.0.0.5" {
+		t.Errorf("filter.SrcIP = %q, want 10.0.0.5", observed.SrcIP)
+	}
+	if observed.Tier != 2 {
+		t.Errorf("filter.Tier = %d, want 2", observed.Tier)
+	}
+	if observed.Limit != 25 {
+		t.Errorf("filter.Limit = %d, want 25", observed.Limit)
+	}
+}
+
+func TestSecurityThrottleEvents_PayloadShape(t *testing.T) {
+	// Verify the wire shape per AC #7.
+	m := newMetricsTestEnv(t)
+	ts := time.Date(2026, 5, 29, 14, 0, 0, 0, time.UTC)
+	until := ts.Add(15 * time.Minute)
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
+		queryFn: func(_ context.Context, _ observability.ThrottleEventFilter) ([]observability.ThrottleEvent, error) {
+			return []observability.ThrottleEvent{
+				{
+					ID:                   42,
+					Ts:                   ts,
+					Tier:                 1,
+					SrcIP:                "1.2.3.4",
+					AttemptedUsername:    "admin",
+					BlockedUntil:         until,
+					BlockDurationSeconds: 900,
+				},
+			}, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/throttle-events", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp securityThrottleEventsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(resp.Events))
+	}
+	e := resp.Events[0]
+	if e.ID != 42 || e.Tier != 1 || e.SrcIP != "1.2.3.4" || e.AttemptedUsername != "admin" || e.BlockDurationSeconds != 900 {
+		t.Errorf("event field mismatch: %+v", e)
+	}
+	if e.Ts != ts.Format(time.RFC3339) {
+		t.Errorf("event.Ts = %q, want %q", e.Ts, ts.Format(time.RFC3339))
+	}
+	if e.BlockedUntil != until.Format(time.RFC3339) {
+		t.Errorf("event.BlockedUntil = %q, want %q", e.BlockedUntil, until.Format(time.RFC3339))
+	}
+}
+
+// --- /api/v1/security/attackers-summary (Step Q.3) --------------------------
+
+// installAttackerReaders is a helper that injects all three
+// readers expected by the attackers-summary handler. Each
+// reader is configurable via its distinct-IP function; pass
+// nil for "no rows" / "skip this source".
+func installAttackerReaders(t *testing.T, m *metricsTestEnv, wafIPs, throttleIPs []string, auditIPs []string) {
+	t.Helper()
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return wafIPs, nil
+		},
+	})
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return throttleIPs, nil
+		},
+	})
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			out := make([]audit.Event, 0, len(auditIPs))
+			for _, ip := range auditIPs {
+				out = append(out, audit.Event{Action: audit.ActionLoginFailure, IP: ip})
+			}
+			return out, false, nil
+		},
+	})
+}
+
+func TestSecurityAttackersSummary_Anon401(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	raw := m.rawHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	raw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anon status = %d, want 401", rec.Code)
+	}
+}
+
+func TestSecurityAttackersSummary_AllReadersNil_Disabled(t *testing.T) {
+	// AC #14: ALL three readers missing → disabled=true.
+	m := newMetricsTestEnv(t)
+	// Intentionally do NOT set any reader.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (degraded mode)", rec.Code)
+	}
+	var resp securityAttackersSummaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if !resp.Disabled {
+		t.Errorf("disabled = false, want true (no readers configured)")
+	}
+	if resp.UniqueIps != 0 {
+		t.Errorf("uniqueIps = %d in disabled response, want 0", resp.UniqueIps)
+	}
+}
+
+func TestSecurityAttackersSummary_InvalidWindow_400(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	installAttackerReaders(t, m, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=7d", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSecurityAttackersSummary_MissingWindow_400(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	installAttackerReaders(t, m, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSecurityAttackersSummary_UnionWithOverlap(t *testing.T) {
+	// Critical test for D6.A union correctness. Seed three
+	// sources with overlapping IPs and verify:
+	//   - uniqueIps = size of the SET union (not sum)
+	//   - byBucketSource = per-source SIZES (not the union)
+	//
+	// WAF: 1.1.1.1, 2.2.2.2, 3.3.3.3 (3 IPs)
+	// THROTTLE: 2.2.2.2, 4.4.4.4         (2 IPs, 2.2.2.2 also in WAF)
+	// AUDIT:   3.3.3.3, 5.5.5.5         (2 IPs, 3.3.3.3 also in WAF)
+	// UNION: {1,2,3,4,5} = 5 unique
+	m := newMetricsTestEnv(t)
+	installAttackerReaders(t,
+		m,
+		[]string{"1.1.1.1", "2.2.2.2", "3.3.3.3"},
+		[]string{"2.2.2.2", "4.4.4.4"},
+		[]string{"3.3.3.3", "5.5.5.5"},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp securityAttackersSummaryResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.UniqueIps != 5 {
+		t.Errorf("uniqueIps = %d, want 5 (union of overlapping sets)", resp.UniqueIps)
+	}
+	if resp.ByBucketSource.WAF != 3 {
+		t.Errorf("byBucketSource.waf = %d, want 3", resp.ByBucketSource.WAF)
+	}
+	if resp.ByBucketSource.Throttle != 2 {
+		t.Errorf("byBucketSource.throttle = %d, want 2", resp.ByBucketSource.Throttle)
+	}
+	// Audit dedupes empty IPs (none here) AND the in-handler
+	// map dedupes duplicates within audit (none here).
+	if resp.ByBucketSource.Audit != 2 {
+		t.Errorf("byBucketSource.audit = %d, want 2", resp.ByBucketSource.Audit)
+	}
+}
+
+func TestSecurityAttackersSummary_DuplicatesInOneSource_DeduplicatedForBreakdown(t *testing.T) {
+	// The audit source dedupes within itself (multiple
+	// auth-failure events from the same IP → ONE IP in the
+	// audit breakdown count, ONE entry in the union). WAF
+	// and Throttle distinct-IP queries return already-
+	// distinct slices at the storage layer (SELECT DISTINCT),
+	// so the test simulates that contract.
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			// Same IP 5 times → 1 unique
+			return []audit.Event{
+				{Action: audit.ActionLoginFailure, IP: "9.9.9.9"},
+				{Action: audit.ActionLoginFailure, IP: "9.9.9.9"},
+				{Action: audit.ActionLoginFailure, IP: "9.9.9.9"},
+				{Action: audit.ActionUnlockFailure, IP: "9.9.9.9"},
+				{Action: audit.ActionOIDCLoginRejected, IP: "9.9.9.9"},
+			}, false, nil
+		},
+	})
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{})
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	var resp securityAttackersSummaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.ByBucketSource.Audit != 1 {
+		t.Errorf("byBucketSource.audit = %d, want 1 (5 events from same IP → 1 unique)", resp.ByBucketSource.Audit)
+	}
+	if resp.UniqueIps != 1 {
+		t.Errorf("uniqueIps = %d, want 1", resp.UniqueIps)
+	}
+}
+
+func TestSecurityAttackersSummary_EmptyIPsIgnored(t *testing.T) {
+	// Audit events with empty IP (per spec §8.5 — IP
+	// extractor failed) must NOT contribute to the union
+	// or per-source counts.
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			return []audit.Event{
+				{Action: audit.ActionLoginFailure, IP: ""},
+				{Action: audit.ActionLoginFailure, IP: "8.8.8.8"},
+			}, false, nil
+		},
+	})
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return []string{"", "7.7.7.7"}, nil
+		},
+	})
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	var resp securityAttackersSummaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	// Union should be {7.7.7.7, 8.8.8.8} = 2; empty strings ignored.
+	if resp.UniqueIps != 2 {
+		t.Errorf("uniqueIps = %d, want 2 (empty IPs filtered)", resp.UniqueIps)
+	}
+}
+
+func TestSecurityAttackersSummary_PartialReaders_NoDisabledFlag(t *testing.T) {
+	// Three-state contract pinning (subset-nil branch):
+	//   - disabled MUST stay false (ALL nil is the only
+	//     disabled trigger).
+	//   - partial MUST be true (subset is down, signal is
+	//     honest-but-narrower).
+	//   - the union still reflects the readers that DID
+	//     respond.
+	// AC #14 wording per §3.4, aligned with Q.2's partial
+	// flag convention.
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return []string{"1.2.3.4"}, nil
+		},
+	})
+	// WAF + audit readers intentionally NOT set.
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp securityAttackersSummaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Disabled {
+		t.Errorf("disabled = true with one reader present, want false")
+	}
+	if !resp.Partial {
+		t.Errorf("partial = false with a subset of readers nil, want true")
+	}
+	if resp.UniqueIps != 1 {
+		t.Errorf("uniqueIps = %d, want 1 (throttle reader contributed)", resp.UniqueIps)
+	}
+	if resp.ByBucketSource.Throttle != 1 || resp.ByBucketSource.WAF != 0 || resp.ByBucketSource.Audit != 0 {
+		t.Errorf("byBucketSource mismatch: %+v", resp.ByBucketSource)
+	}
+}
+
+func TestSecurityAttackersSummary_PartialFlagFires_OnAnySingleNilReader(t *testing.T) {
+	// Explicit pinning of the partial-flag trigger across
+	// each individual reader being nil. Three sub-cases —
+	// one reader missing at a time, the other two wired with
+	// a single IP each. Verify `partial=true` in every case
+	// and the union/breakdown reflect what we DID get.
+	cases := []struct {
+		name       string
+		setupSkip  string // which reader to leave nil: "waf" | "throttle" | "audit"
+		wantWAF    int
+		wantThr    int
+		wantAudit  int
+		wantUnique int
+	}{
+		{name: "waf-nil", setupSkip: "waf", wantThr: 1, wantAudit: 1, wantUnique: 2},
+		{name: "throttle-nil", setupSkip: "throttle", wantWAF: 1, wantAudit: 1, wantUnique: 2},
+		{name: "audit-nil", setupSkip: "audit", wantWAF: 1, wantThr: 1, wantUnique: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMetricsTestEnv(t)
+			if tc.setupSkip != "waf" {
+				m.env.handler.SetWafEventReader(&fakeWafEventReader{
+					distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+						return []string{"7.7.7.7"}, nil
+					},
+				})
+			}
+			if tc.setupSkip != "throttle" {
+				m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
+					distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+						return []string{"8.8.8.8"}, nil
+					},
+				})
+			}
+			if tc.setupSkip != "audit" {
+				m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+					queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+						return []audit.Event{{Action: audit.ActionLoginFailure, IP: "9.9.9.9"}}, false, nil
+					},
+				})
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+			rec := httptest.NewRecorder()
+			m.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			var resp securityAttackersSummaryResponse
+			_ = json.NewDecoder(rec.Body).Decode(&resp)
+
+			if resp.Disabled {
+				t.Errorf("disabled = true with one reader missing; want false (only ALL-nil → disabled)")
+			}
+			if !resp.Partial {
+				t.Errorf("partial = false with reader %q missing; want true", tc.setupSkip)
+			}
+			if resp.ByBucketSource.WAF != tc.wantWAF {
+				t.Errorf("waf = %d, want %d", resp.ByBucketSource.WAF, tc.wantWAF)
+			}
+			if resp.ByBucketSource.Throttle != tc.wantThr {
+				t.Errorf("throttle = %d, want %d", resp.ByBucketSource.Throttle, tc.wantThr)
+			}
+			if resp.ByBucketSource.Audit != tc.wantAudit {
+				t.Errorf("audit = %d, want %d", resp.ByBucketSource.Audit, tc.wantAudit)
+			}
+			if resp.UniqueIps != tc.wantUnique {
+				t.Errorf("uniqueIps = %d, want %d", resp.UniqueIps, tc.wantUnique)
+			}
+		})
+	}
+}
+
+func TestSecurityAttackersSummary_AllPresent_NeitherFlag(t *testing.T) {
+	// Three-state contract pinning (all-present branch):
+	// when every reader is wired, neither `disabled` nor
+	// `partial` is set. The dashboard relies on this to
+	// decide whether to show the "data incomplete" hint.
+	m := newMetricsTestEnv(t)
+	installAttackerReaders(t,
+		m,
+		[]string{"1.1.1.1"},
+		[]string{"2.2.2.2"},
+		[]string{"3.3.3.3"},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp securityAttackersSummaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Disabled {
+		t.Errorf("disabled = true with all readers present, want false")
+	}
+	if resp.Partial {
+		t.Errorf("partial = true with all readers present, want false")
+	}
+	if resp.UniqueIps != 3 {
+		t.Errorf("uniqueIps = %d, want 3", resp.UniqueIps)
+	}
+}
+
+func TestSecurityAttackersSummary_ReaderError_503(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return nil, errors.New("disk full")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 }

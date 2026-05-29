@@ -456,6 +456,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		// inject them independently so future test scaffolds
 		// can mock one without the other.
 		apiHandler.SetWafEventReader(obsStore)
+		// Step Q.3 — throttle event reader. Backed by the
+		// same *observability.Store (the throttle_event
+		// table lives in metrics.db). Independent setter so
+		// a future test can stub it without touching the
+		// WAF reader. AC #14: nil obsStore → no setter call
+		// → endpoints return disabled=true.
+		apiHandler.SetThrottleEventReader(obsStore)
 	}
 	// Step Q.2 — auth-failure reader. Backed by the audit
 	// bucket (single source of truth, spec D2.B + D4.B), so
