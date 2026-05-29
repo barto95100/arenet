@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/observability"
 )
 
@@ -233,4 +234,214 @@ func (h *Handler) securityEventsByRule(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// --- Step Q.2: auth-failures timeline ---------------------------------------
+
+// authFailuresRecentCap bounds the `recent` feed in the
+// /security/auth-failures response. Spec §1.5 — the dashboard
+// only ever renders the most-recent N rows; deeper history is
+// accessed via the /audit endpoint. 100 keeps the wire payload
+// small and matches the WAF /security/events cap.
+const authFailuresRecentCap = 100
+
+// authFailuresScanCap is the hard cap on the audit-bucket
+// scan. Picked to comfortably cover a 30d window of
+// auth-failure events at credible homelab volume (spec D4: a
+// handful per day in normal operation, bursts capped by the
+// rate limiter itself — Tier 2 hard-blocks at 10/hour per IP).
+// Higher than the recent-feed cap because the per-minute
+// timeseries needs every matching row in the window, not just
+// the top 100.
+const authFailuresScanCap = audit.MaxLimit // 200
+
+// authFailureTimeseriesPoint is one (ts, value) pair on the
+// per-minute auth-failure timeline. Same wire shape as the L
+// metrics timeseries — keeps the frontend's chart code
+// uniform across data sources (spec §1.3 D4 trade-off
+// acknowledged).
+type authFailureTimeseriesPoint struct {
+	Ts    string `json:"ts"`
+	Value int    `json:"value"`
+}
+
+// authFailureRecentEvent is one row of the recent-events feed.
+// camelCase JSON matches the WAF event shape; Ts is RFC3339.
+//
+// Username is the captured-verbatim attempted username from
+// the audit record's actor_username_snapshot (parity with the
+// audit log's existing exposure, per Step Q spec §1.3 D8.A).
+// Message is the audit Event.Message (free text: "wrong
+// password", "user not found", etc.).
+type authFailureRecentEvent struct {
+	Ts       string `json:"ts"`
+	Action   string `json:"action"`
+	Username string `json:"username,omitempty"`
+	SrcIP    string `json:"srcIp,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+// securityAuthFailuresResponse is the wire shape of
+// GET /api/v1/security/auth-failures. Both projections come
+// from ONE audit scan (spec §5.2): the timeseries powers the
+// dashboard's auth-failure chart, the recent slice feeds the
+// mixed events widget.
+//
+// `partial` is true when the audit-bucket scan hit its
+// internal cap before reaching the window's `from` boundary —
+// the operator is warned that earlier matching events exist
+// but were not surfaced. Spec D4 — auth-failure volume is
+// expected to be tiny, so `partial=true` should be rare in
+// practice but is exposed for honesty.
+type securityAuthFailuresResponse struct {
+	Disabled   bool                         `json:"disabled,omitempty"`
+	Window     string                       `json:"window"`
+	Timeseries []authFailureTimeseriesPoint `json:"timeseries"`
+	Recent     []authFailureRecentEvent     `json:"recent"`
+	Partial    bool                         `json:"partial,omitempty"`
+}
+
+// securityAuthFailures handles GET /api/v1/security/auth-failures.
+// Query parameters:
+//   - window (required): 24h or 30d. Same vocabulary as the
+//     metrics timeseries + /security/events/by-rule endpoints.
+//
+// Response shape:
+//
+//	{
+//	  "window": "24h",
+//	  "timeseries": [{ts, value}, ...],   // per-minute, gap-filled=0
+//	  "recent":     [{ts, action, username, srcIp, message}, ...],
+//	  "partial":    bool                   // true iff scan cap reached
+//	}
+//
+// Implementation per spec §1.3 D4.B + §5.2: ONE audit-bucket
+// scan filtered to the auth-failure action set + the window
+// range, projected twice (groupBy minute + ts-desc head). No
+// second scan, no bucket counter — the audit table is the
+// single source of truth.
+//
+// Auth: viewer-accessible (hard-auth-no-admin gated at the
+// route mount, per AC #12). Pure read, no side effect.
+//
+// AC #14 paths:
+//   - h.authFailures == nil (audit/observability boot failed)
+//     → 200 with disabled=true + empty timeseries/recent.
+//   - scan error → 503 + canonical error envelope.
+func (h *Handler) securityAuthFailures(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	resp := securityAuthFailuresResponse{
+		Window:     window,
+		Timeseries: []authFailureTimeseriesPoint{},
+		Recent:     []authFailureRecentEvent{},
+	}
+
+	if h.authFailures == nil {
+		resp.Disabled = true
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	from, to, ok := securityWindowParams(window)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "window must be 24h or 30d")
+		return
+	}
+
+	events, partial, err := h.authFailures.QueryByActionRange(
+		r.Context(),
+		audit.AuthFailureActions(),
+		from,
+		to,
+		authFailuresScanCap,
+	)
+	if err != nil {
+		h.logger.Error("security: query audit auth-failures failed", "err", err, "window", window)
+		writeError(w, http.StatusServiceUnavailable, "auth failures unavailable")
+		return
+	}
+	resp.Partial = partial
+
+	// Two projections in one pass over the events slice.
+	// `events` is reverse-chronological (QueryByActionRange
+	// guarantee).
+	resp.Timeseries = projectAuthFailureTimeseries(events, from, to)
+	resp.Recent = projectAuthFailureRecent(events, authFailuresRecentCap)
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// projectAuthFailureTimeseries groups `events` into per-minute
+// buckets across [from, to), gap-filled with 0 for empty
+// minutes. Output is ts-ascending — same orientation as the L
+// metrics timeseries so the frontend can plot it directly.
+//
+// The window may span a few minutes (24h → 1440 buckets) up to
+// thousands (30d → 43200 buckets). A naive map[minute]int +
+// sort would scale; the implementation below pre-allocates a
+// dense slice and runs in O(events + buckets). Worth the
+// complexity because the 30d case is the worst case the
+// dashboard renders.
+func projectAuthFailureTimeseries(events []audit.Event, from, to time.Time) []authFailureTimeseriesPoint {
+	// Truncate from / to to whole minutes — the bucket key is
+	// the minute-start in UTC. `to` is exclusive so the last
+	// bucket included is the minute strictly before `to`.
+	fromMin := from.UTC().Truncate(time.Minute)
+	toMin := to.UTC().Truncate(time.Minute)
+	if !toMin.After(fromMin) {
+		return []authFailureTimeseriesPoint{}
+	}
+	bucketCount := int(toMin.Sub(fromMin) / time.Minute)
+	if bucketCount <= 0 {
+		return []authFailureTimeseriesPoint{}
+	}
+	counts := make([]int, bucketCount)
+	for _, e := range events {
+		ts := e.Timestamp.UTC().Truncate(time.Minute)
+		// Out-of-window events are skipped — the QueryByActionRange
+		// contract already filters but defence-in-depth costs
+		// nothing here.
+		if ts.Before(fromMin) || !ts.Before(toMin) {
+			continue
+		}
+		idx := int(ts.Sub(fromMin) / time.Minute)
+		if idx < 0 || idx >= bucketCount {
+			continue
+		}
+		counts[idx]++
+	}
+	out := make([]authFailureTimeseriesPoint, bucketCount)
+	for i := 0; i < bucketCount; i++ {
+		out[i] = authFailureTimeseriesPoint{
+			Ts:    fromMin.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
+			Value: counts[i],
+		}
+	}
+	return out
+}
+
+// projectAuthFailureRecent takes the head of `events` (already
+// reverse-chronological) up to `cap`, projected to the wire
+// shape. Cheap O(min(len(events), cap)) — no allocation past
+// the cap.
+func projectAuthFailureRecent(events []audit.Event, cap int) []authFailureRecentEvent {
+	if cap <= 0 || len(events) == 0 {
+		return []authFailureRecentEvent{}
+	}
+	n := len(events)
+	if n > cap {
+		n = cap
+	}
+	out := make([]authFailureRecentEvent, n)
+	for i := 0; i < n; i++ {
+		e := events[i]
+		out[i] = authFailureRecentEvent{
+			Ts:       e.Timestamp.UTC().Format(time.RFC3339),
+			Action:   e.Action,
+			Username: e.ActorUsernameSnapshot,
+			SrcIP:    e.IP,
+			Message:  e.Message,
+		}
+	}
+	return out
 }

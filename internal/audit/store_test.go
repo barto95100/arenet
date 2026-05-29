@@ -420,3 +420,193 @@ func readAll(t *testing.T, s *Store) []Event {
 	}
 	return out
 }
+
+// --- Step Q.2: QueryByActionRange ---------------------------------------------
+
+func TestQueryByActionRange_FilterByActionSet(t *testing.T) {
+	// Seed a mix of action types; verify QueryByActionRange returns
+	// ONLY the events whose Action matches the requested set. Spec
+	// §1.2 + Q.2 contract: the auth-failures endpoint must not
+	// surface login_success / route_created / etc.
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	seedActions := []string{
+		ActionLoginSuccess,
+		ActionLoginFailure, // auth fail
+		ActionRouteCreated,
+		ActionLoginFailure,  // auth fail
+		ActionUnlockFailure, // auth fail
+		ActionLogout,
+		ActionOIDCLoginRejected,   // auth fail
+		ActionOIDCCallbackInvalid, // auth fail
+		ActionPasswordChanged,
+	}
+	for _, a := range seedActions {
+		if err := s.Append(ctx, Event{Action: a}); err != nil {
+			t.Fatalf("Append %s: %v", a, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	got, hitCap, err := s.QueryByActionRange(ctx, AuthFailureActions(), time.Time{}, time.Time{}, MaxLimit)
+	if err != nil {
+		t.Fatalf("QueryByActionRange: %v", err)
+	}
+	if hitCap {
+		t.Errorf("hitCap = true, want false (limit not reached)")
+	}
+	if len(got) != 5 {
+		t.Fatalf("got %d auth-failure events, want 5: actions=%v", len(got), actionsOf(got))
+	}
+	// Verify every returned event is in the requested set; verify
+	// reverse-chronological order (most recent first).
+	allowed := map[string]struct{}{}
+	for _, a := range AuthFailureActions() {
+		allowed[a] = struct{}{}
+	}
+	for i, e := range got {
+		if _, ok := allowed[e.Action]; !ok {
+			t.Errorf("event[%d] action %q not in requested set", i, e.Action)
+		}
+		if i > 0 && e.Timestamp.After(got[i-1].Timestamp) {
+			t.Errorf("event[%d] ts %v is AFTER event[%d] ts %v (not reverse-chronological)",
+				i, e.Timestamp, i-1, got[i-1].Timestamp)
+		}
+	}
+}
+
+func TestQueryByActionRange_HitsCap(t *testing.T) {
+	// Seed N events with the same matching action, request limit M < N,
+	// verify hitCap=true + len(out)==M. Spec §5.2 contract.
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	const seeded = 8
+	for i := 0; i < seeded; i++ {
+		if err := s.Append(ctx, Event{Action: ActionLoginFailure}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	const limit = 3
+	got, hitCap, err := s.QueryByActionRange(ctx, []string{ActionLoginFailure}, time.Time{}, time.Time{}, limit)
+	if err != nil {
+		t.Fatalf("QueryByActionRange: %v", err)
+	}
+	if len(got) != limit {
+		t.Errorf("len(got) = %d, want %d", len(got), limit)
+	}
+	if !hitCap {
+		t.Errorf("hitCap = false, want true (older events exist beyond the cap)")
+	}
+}
+
+func TestQueryByActionRange_HitsCapExactly_NoOlderEvents(t *testing.T) {
+	// Edge: limit == number of matching events AND no older
+	// non-matching events exist past them. The current
+	// implementation peeks one Prev() to set hitCap — if the
+	// bucket is exhausted there, hitCap must stay false.
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	const seeded = 3
+	for i := 0; i < seeded; i++ {
+		if err := s.Append(ctx, Event{Action: ActionLoginFailure}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	got, hitCap, err := s.QueryByActionRange(ctx, []string{ActionLoginFailure}, time.Time{}, time.Time{}, seeded)
+	if err != nil {
+		t.Fatalf("QueryByActionRange: %v", err)
+	}
+	if len(got) != seeded {
+		t.Errorf("len(got) = %d, want %d", len(got), seeded)
+	}
+	if hitCap {
+		t.Errorf("hitCap = true; bucket has no more events, the cap is incidentally exact")
+	}
+}
+
+func TestQueryByActionRange_RangeBoundaries(t *testing.T) {
+	// `from` is inclusive, `to` is exclusive, events older than
+	// `from` short-circuit the walk (reverse-chronological).
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		if err := s.Append(ctx, Event{Action: ActionLoginFailure}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(3 * time.Millisecond)
+	}
+	all := readAll(t, s)
+	// readAll returns ascending order; pick all[1].Ts as `from`
+	// and all[4].Ts as `to` (exclusive) → matches all[1], all[2],
+	// all[3]. Same shape as TestList_FilterByTimeRange.
+	got, _, err := s.QueryByActionRange(ctx, []string{ActionLoginFailure}, all[1].Timestamp, all[4].Timestamp, MaxLimit)
+	if err != nil {
+		t.Fatalf("QueryByActionRange: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3 (range [all[1], all[4]))", len(got))
+	}
+}
+
+func TestQueryByActionRange_EmptyActionSet_MatchesEverything(t *testing.T) {
+	// nil / empty actions slice → no action filter (the range
+	// alone gates inclusion).
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	for _, a := range []string{ActionLoginSuccess, ActionLoginFailure, ActionRouteCreated} {
+		if err := s.Append(ctx, Event{Action: a}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	got, _, err := s.QueryByActionRange(ctx, nil, time.Time{}, time.Time{}, MaxLimit)
+	if err != nil {
+		t.Fatalf("QueryByActionRange: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("nil actions should match everything: got %d, want 3", len(got))
+	}
+}
+
+func TestQueryByActionRange_DefaultLimit(t *testing.T) {
+	// limit <= 0 → DefaultLimit (50). Seed more than 50 events.
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < DefaultLimit+5; i++ {
+		if err := s.Append(ctx, Event{Action: ActionLoginFailure}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, hitCap, err := s.QueryByActionRange(ctx, []string{ActionLoginFailure}, time.Time{}, time.Time{}, 0)
+	if err != nil {
+		t.Fatalf("QueryByActionRange: %v", err)
+	}
+	if len(got) != DefaultLimit {
+		t.Errorf("len(got) = %d, want %d (DefaultLimit applied for limit<=0)", len(got), DefaultLimit)
+	}
+	if !hitCap {
+		t.Errorf("hitCap = false; expected true (older matching events remain)")
+	}
+}
+
+// actionsOf is a tiny test helper: extract the Action field of every
+// event in a slice, for compact error reporting.
+func actionsOf(evts []Event) []string {
+	out := make([]string, len(evts))
+	for i, e := range evts {
+		out[i] = e.Action
+	}
+	return out
+}

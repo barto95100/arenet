@@ -203,6 +203,107 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Event, string, error) {
 	return out, nextCursor, nil
 }
 
+// QueryByActionRange walks the audit bucket in reverse chronological
+// order and returns the events whose Action is in `actions` and whose
+// Timestamp falls in [from, to). The walk stops at the first event
+// whose Timestamp is before `from`, OR when `limit` events have been
+// collected — whichever comes first.
+//
+// Returns (events, hitCap, error):
+//   - events: the matching slice, most-recent first.
+//   - hitCap: true when the walk stopped because `limit` was reached
+//     before the `from` boundary. The caller uses this to surface a
+//     "partial result" flag (Step Q §1.5 — the auth-failures endpoint
+//     exposes it to the dashboard).
+//   - error: bucket missing / JSON unmarshal failure.
+//
+// `actions` empty → no action filter (all events in the range). nil
+// actions slice is treated the same as empty. `to.IsZero()` → no
+// upper bound. `from.IsZero()` → no lower bound (the walk stops only
+// when the bucket is exhausted or limit is hit).
+//
+// limit <= 0 defaults to DefaultLimit; values above MaxLimit are
+// clamped silently — same convention as List.
+//
+// Implementation note: scans the bucket reverse-key, which is also
+// reverse chronological thanks to UUID v7 ordering. The action and
+// time filters are applied in memory — same trade-off as List(), and
+// the Step Q audit-failure volume is in the single-digits-per-minute
+// range in normal operation (spec §1.3 D4).
+func (s *Store) QueryByActionRange(ctx context.Context, actions []string, from, to time.Time, limit int) ([]Event, bool, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	if limit > MaxLimit {
+		limit = MaxLimit
+	}
+
+	// Pre-build the action set for O(1) membership test. nil slice
+	// = no filter (the empty-set case below short-circuits with
+	// "match-all").
+	var actionSet map[string]struct{}
+	if len(actions) > 0 {
+		actionSet = make(map[string]struct{}, len(actions))
+		for _, a := range actions {
+			actionSet[a] = struct{}{}
+		}
+	}
+
+	out := make([]Event, 0, limit)
+	hitCap := false
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketName))
+		if b == nil {
+			return fmt.Errorf("audit: bucket %q missing", bucketName)
+		}
+		c := b.Cursor()
+		for k, v := c.Last(); k != nil; k, v = c.Prev() {
+			var evt Event
+			if err := json.Unmarshal(v, &evt); err != nil {
+				return fmt.Errorf("audit: unmarshal event %x: %w", k, err)
+			}
+			// `from` cutoff: events older than `from` end the walk
+			// (the bucket is reverse-chronological so everything
+			// past this point is also older — short-circuit).
+			if !from.IsZero() && evt.Timestamp.Before(from) {
+				return nil
+			}
+			// `to` cutoff: events at-or-after `to` are skipped
+			// (but we keep walking — older events may still match).
+			if !to.IsZero() && !evt.Timestamp.Before(to) {
+				continue
+			}
+			if actionSet != nil {
+				if _, ok := actionSet[evt.Action]; !ok {
+					continue
+				}
+			}
+			out = append(out, evt)
+			if len(out) >= limit {
+				// Cap hit. If there is still at least one older
+				// event in the bucket (whether matching or not),
+				// the caller is owed a "partial" flag.
+				if k2, _ := c.Prev(); k2 != nil {
+					hitCap = true
+				}
+				return nil
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return out, hitCap, nil
+}
+
 // matches returns true if evt satisfies every non-zero field of f.
 // Zero values mean "no filter on this field".
 func matches(evt Event, f Filter) bool {

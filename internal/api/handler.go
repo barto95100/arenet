@@ -81,6 +81,27 @@ type WafEventReader interface {
 	AggregateWafEventsByRule(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
 }
 
+// AuthFailureReader is the read surface the Step Q.2
+// /api/v1/security/auth-failures handler depends on. The
+// production implementation is a thin adapter over
+// *audit.Store.QueryByActionRange — kept as an interface so
+// tests can inject a fake without booting bbolt, same pattern
+// as WafEventReader.
+//
+// Spec D2.B + D4.B: auth-failure data is derived from the
+// audit log on demand. No bucket counter, no parallel sink —
+// the audit table is the canonical single source of truth.
+//
+// A nil reader is the AC #14 boot-degraded case (boot-failed
+// audit store, which is the same bbolt handle the rest of the
+// app uses — so this is rare but possible if the bucket is
+// missing). Handlers detect nil and return 200 with
+// disabled=true, mirror of the M endpoints' degraded-mode
+// contract.
+type AuthFailureReader interface {
+	QueryByActionRange(ctx context.Context, actions []string, from, to time.Time, limit int) ([]audit.Event, bool, error)
+}
+
 // AuditAppender is the subset of internal/audit the API depends on. Defined
 // here (consumer side, decision D4) so tests can inject a fake without
 // booting bbolt. *audit.Store naturally satisfies this interface.
@@ -140,6 +161,13 @@ type Handler struct {
 	// `metrics` — boot-failed observability → degraded-mode
 	// response, not 500.
 	wafEvents WafEventReader
+	// authFailures (Step Q.2) is the read surface for the
+	// /api/v1/security/auth-failures endpoint. Backed by the
+	// existing audit bucket (spec D2.B + D4.B: single source of
+	// truth, no parallel sink). nil-tolerant in the same way as
+	// `wafEvents`: a missing reader yields a disabled-mode
+	// response, not 500 (AC #14).
+	authFailures AuthFailureReader
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -231,6 +259,21 @@ func (h *Handler) SetMetricsReader(m MetricsReader) {
 // security endpoints will return disabled-mode responses.
 func (h *Handler) SetWafEventReader(r WafEventReader) {
 	h.wafEvents = r
+}
+
+// SetAuthFailureReader (Step Q.2) attaches the auth-failure
+// reader used by /api/v1/security/auth-failures. The reader
+// is backed by the audit bucket (spec D2.B + D4.B). Same
+// nil-tolerance contract as SetWafEventReader: pass nil to
+// keep the endpoint in disabled-mode (AC #14).
+//
+// Note: this reader is conceptually independent of the
+// AuditAppender already on the handler — they share the
+// same underlying bbolt store in production, but the API
+// surface stays narrow on purpose (the auth-failures
+// handler only needs the range-scan path, not Append).
+func (h *Handler) SetAuthFailureReader(r AuthFailureReader) {
+	h.authFailures = r
 }
 
 // uiURL returns the URL to redirect to for the given SPA path

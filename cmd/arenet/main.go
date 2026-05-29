@@ -457,6 +457,16 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		// can mock one without the other.
 		apiHandler.SetWafEventReader(obsStore)
 	}
+	// Step Q.2 — auth-failure reader. Backed by the audit
+	// bucket (single source of truth, spec D2.B + D4.B), so
+	// it is INDEPENDENT of obsStore: when the metrics DB is
+	// sabotaged the auth-failures endpoint still works (the
+	// audit bucket lives in the main BoltDB, not metrics.db).
+	// The AC #14 degraded shape only fires if audit itself is
+	// unreachable; in normal builds auditStore is always
+	// non-nil since audit.NewStore panics on a nil DB
+	// upstream and boot has already aborted in that case.
+	apiHandler.SetAuthFailureReader(auditStore)
 	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.dev, logger)
 	router := api.NewRouter(apiHandler, cfg.dev, ipExtractor, wsTopologyHandler)
 

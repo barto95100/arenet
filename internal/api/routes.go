@@ -137,6 +137,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// to the most-recent 100 events on the 30d
 			// window.
 			r.Get("/security/events/by-rule", h.securityEventsByRule)
+			// Step Q.2 — auth-failure timeline derived from
+			// the audit log. Single audit-scan projected to
+			// per-minute timeseries + recent feed (spec
+			// §1.3 D4.B: single source of truth). Same
+			// viewer-accessible gate as the other /security
+			// endpoints.
+			r.Get("/security/auth-failures", h.securityAuthFailures)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame

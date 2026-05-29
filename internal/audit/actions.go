@@ -129,3 +129,28 @@ var allActions = []string{
 func AllActions() []string {
 	return slices.Clone(allActions)
 }
+
+// authFailureActions is the canonical set of audit actions that
+// represent an authentication-failure event. Listed in Step Q spec
+// §1.2 as the source for the /security/auth-failures timeline.
+//
+// Note: ActionUnlockFailure is included because the unlock flow is
+// the same credential surface (it shares the rate limiter); a
+// credential-stuffing attack against /unlock looks identical to one
+// against /login from an operator perspective.
+var authFailureActions = []string{
+	ActionLoginFailure,
+	ActionUnlockFailure,
+	ActionOIDCLoginRejected,
+	ActionOIDCCallbackInvalid,
+}
+
+// AuthFailureActions returns a fresh copy of the auth-failure action
+// set. Used by the Step Q audit-scan path (/security/auth-failures
+// handler + /metrics/timeseries?metric=auth_failure_rate detour).
+//
+// A new slice is returned on every call so callers cannot mutate the
+// package-level source of truth.
+func AuthFailureActions() []string {
+	return slices.Clone(authFailureActions)
+}

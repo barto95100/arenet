@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
@@ -853,5 +854,265 @@ func TestSecurityEventsByRule_TimeWindowFiltersOutStale(t *testing.T) {
 	}
 	if resp.Rows[0].RuleID != "recent" {
 		t.Errorf("row[0].RuleID = %q, want %q — stale event leaked past the 24h window", resp.Rows[0].RuleID, "recent")
+	}
+}
+
+// --- /api/v1/security/auth-failures (Step Q.2) ------------------------------
+
+// fakeAuthFailureReader satisfies AuthFailureReader for the
+// handler-level tests. queryFn controls the response (events,
+// partial flag, error). nil queryFn defaults to (nil, false, nil)
+// — empty result, no error.
+type fakeAuthFailureReader struct {
+	queryFn func(ctx context.Context, actions []string, from, to time.Time, limit int) ([]audit.Event, bool, error)
+}
+
+func (f *fakeAuthFailureReader) QueryByActionRange(ctx context.Context, actions []string, from, to time.Time, limit int) ([]audit.Event, bool, error) {
+	if f.queryFn != nil {
+		return f.queryFn(ctx, actions, from, to, limit)
+	}
+	return nil, false, nil
+}
+
+func TestSecurityAuthFailures_Anon401(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	raw := m.rawHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures?window=24h", nil)
+	rec := httptest.NewRecorder()
+	raw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anon status = %d, want 401", rec.Code)
+	}
+}
+
+func TestSecurityAuthFailures_Viewer200(t *testing.T) {
+	// AC #12 mirror: viewer MUST read the auth-failures endpoint.
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{})
+
+	ctx := context.Background()
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "authfail-viewer", "Auth Failures Viewer", "sub-authfail-viewer")
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	if viewer.Role != auth.UserRoleViewer {
+		t.Fatalf("seed-viewer role = %q; want viewer", viewer.Role)
+	}
+	sessionStore := auth.NewSessionStore(m.env.store.DB())
+	s, err := sessionStore.Create(ctx, viewer.ID, false, "127.0.0.1", "test/1")
+	if err != nil {
+		t.Fatalf("seed viewer session: %v", err)
+	}
+	raw := m.rawHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures?window=24h", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: s.ID})
+	rec := httptest.NewRecorder()
+	raw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("VIEWER LOCKOUT REGRESSION on /security/auth-failures: status=%d body=%s — AC #12 requires viewer-or-above read access", rec.Code, rec.Body)
+	}
+}
+
+func TestSecurityAuthFailures_NilReader_DisabledResponse(t *testing.T) {
+	// AC #14: nil reader → 200 with disabled=true, empty
+	// timeseries/recent. Same shape as the M /security/events
+	// degraded path.
+	m := newMetricsTestEnv(t)
+	// Intentionally do NOT call SetAuthFailureReader.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (degraded mode is OK, not 5xx)", rec.Code)
+	}
+	var resp securityAuthFailuresResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Disabled {
+		t.Errorf("disabled = false, want true (nil reader = degraded)")
+	}
+	if len(resp.Timeseries) != 0 || len(resp.Recent) != 0 {
+		t.Errorf("disabled response leaked data: timeseries=%d recent=%d", len(resp.Timeseries), len(resp.Recent))
+	}
+}
+
+func TestSecurityAuthFailures_ScanError_503(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			return nil, false, errors.New("audit bucket unreadable")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestSecurityAuthFailures_MissingWindow_400(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (missing window)", rec.Code)
+	}
+}
+
+func TestSecurityAuthFailures_InvalidWindow_400(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures?window=7d", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (window=7d is not 24h/30d)", rec.Code)
+	}
+}
+
+func TestSecurityAuthFailures_PassesAuthFailureActionsToReader(t *testing.T) {
+	// Verify the handler passes the canonical action set to
+	// the reader. Anti-regression against a future refactor
+	// that drops one of the four actions.
+	m := newMetricsTestEnv(t)
+	var observedActions []string
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, actions []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			observedActions = actions
+			return nil, false, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	want := audit.AuthFailureActions()
+	if len(observedActions) != len(want) {
+		t.Fatalf("len(observedActions) = %d, want %d (%v)", len(observedActions), len(want), want)
+	}
+	have := map[string]struct{}{}
+	for _, a := range observedActions {
+		have[a] = struct{}{}
+	}
+	for _, a := range want {
+		if _, ok := have[a]; !ok {
+			t.Errorf("auth-failure action %q missing from handler request", a)
+		}
+	}
+}
+
+func TestSecurityAuthFailures_TimeseriesGapFill(t *testing.T) {
+	// Seed 3 events at t-1m, t-2m, t-5m (all within the 24h
+	// window). Expect a dense 1440-point timeseries with 0s
+	// in the empty minutes.
+	m := newMetricsTestEnv(t)
+	now := time.Now().UTC()
+	events := []audit.Event{
+		{Action: audit.ActionLoginFailure, Timestamp: now.Add(-1 * time.Minute), IP: "1.2.3.4"},
+		{Action: audit.ActionLoginFailure, Timestamp: now.Add(-2 * time.Minute), IP: "1.2.3.4"},
+		{Action: audit.ActionLoginFailure, Timestamp: now.Add(-5 * time.Minute), IP: "5.6.7.8"},
+	}
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			return events, false, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp securityAuthFailuresResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// 24h window → 1440 minutes of buckets.
+	if len(resp.Timeseries) != 1440 {
+		t.Errorf("len(timeseries) = %d, want 1440 (24h × 60m gap-filled)", len(resp.Timeseries))
+	}
+	// Total event count across all points must equal the seeded count.
+	total := 0
+	nonZero := 0
+	for _, p := range resp.Timeseries {
+		total += p.Value
+		if p.Value > 0 {
+			nonZero++
+		}
+	}
+	if total != len(events) {
+		t.Errorf("sum(timeseries.value) = %d, want %d (seeded count)", total, len(events))
+	}
+	// Three events in three distinct minutes → three non-zero buckets.
+	if nonZero != 3 {
+		t.Errorf("non-zero bucket count = %d, want 3", nonZero)
+	}
+}
+
+func TestSecurityAuthFailures_RecentFeedSortedDesc(t *testing.T) {
+	// The fake returns events in reverse-chronological order
+	// (mirroring QueryByActionRange's contract); the handler
+	// must preserve that ordering in the `recent` projection.
+	m := newMetricsTestEnv(t)
+	now := time.Now().UTC()
+	events := []audit.Event{
+		{Action: audit.ActionLoginFailure, Timestamp: now.Add(-1 * time.Minute), IP: "10.0.0.1", ActorUsernameSnapshot: "admin"},
+		{Action: audit.ActionUnlockFailure, Timestamp: now.Add(-5 * time.Minute), IP: "10.0.0.2", ActorUsernameSnapshot: "root"},
+		{Action: audit.ActionOIDCLoginRejected, Timestamp: now.Add(-10 * time.Minute), IP: "10.0.0.3", ActorUsernameSnapshot: ""},
+	}
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			return events, false, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp securityAuthFailuresResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if len(resp.Recent) != 3 {
+		t.Fatalf("len(recent) = %d, want 3", len(resp.Recent))
+	}
+	if resp.Recent[0].SrcIP != "10.0.0.1" || resp.Recent[2].SrcIP != "10.0.0.3" {
+		t.Errorf("recent feed not preserved in ts-desc order: %+v", resp.Recent)
+	}
+	if resp.Recent[0].Action != audit.ActionLoginFailure {
+		t.Errorf("recent[0].Action = %q, want %q", resp.Recent[0].Action, audit.ActionLoginFailure)
+	}
+	if resp.Recent[0].Username != "admin" {
+		t.Errorf("recent[0].Username = %q, want %q", resp.Recent[0].Username, "admin")
+	}
+}
+
+func TestSecurityAuthFailures_PartialFlagPropagates(t *testing.T) {
+	// Reader signals partial=true → response.partial=true.
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			return []audit.Event{}, true, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/auth-failures?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	var resp securityAuthFailuresResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if !resp.Partial {
+		t.Errorf("partial = false in response, want true (reader signalled cap-hit)")
 	}
 }
