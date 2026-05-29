@@ -96,6 +96,20 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("observability: schema init: %w", err)
 	}
+	// Step M.1: run the migrate chain. Reads the current
+	// schema_version (bootstrap leaves it at 1 on a fresh DB)
+	// and applies every step up to currentSchemaVersion in a
+	// single transaction. Idempotent on an already-current DB.
+	var current int
+	row := db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_version`)
+	if err := row.Scan(&current); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("observability: read current schema_version: %w", err)
+	}
+	if err := migrate(ctx, db, current); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("observability: migrate: %w", err)
+	}
 	return &Store{db: db, path: path}, nil
 }
 
@@ -155,13 +169,14 @@ func (s *Store) InsertBatch(ctx context.Context, gran Granularity, rows []Metric
 		return fmt.Errorf("observability: begin tx: %w", err)
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO `+gran.tableName()+` (route_id, ts, req_count, fourxx_count, fivexx_count, latency_p95_ms)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO `+gran.tableName()+` (route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, latency_p95_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(route_id, ts) DO UPDATE SET
-  req_count      = excluded.req_count,
-  fourxx_count   = excluded.fourxx_count,
-  fivexx_count   = excluded.fivexx_count,
-  latency_p95_ms = excluded.latency_p95_ms
+  req_count       = excluded.req_count,
+  fourxx_count    = excluded.fourxx_count,
+  fivexx_count    = excluded.fivexx_count,
+  waf_block_count = excluded.waf_block_count,
+  latency_p95_ms  = excluded.latency_p95_ms
 `)
 	if err != nil {
 		_ = tx.Rollback()
@@ -175,6 +190,7 @@ ON CONFLICT(route_id, ts) DO UPDATE SET
 			r.ReqCount,
 			r.FourxxCount,
 			r.FivexxCount,
+			r.WafBlockCount,
 			r.LatencyP95Ms,
 		); err != nil {
 			_ = tx.Rollback()
@@ -202,7 +218,7 @@ func (s *Store) Query(ctx context.Context, gran Granularity, routeID string, fro
 		return nil, fmt.Errorf("observability: store closed")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT route_id, ts, req_count, fourxx_count, fivexx_count, latency_p95_ms
+SELECT route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, latency_p95_ms
 FROM `+gran.tableName()+`
 WHERE route_id = ? AND ts >= ? AND ts < ?
 ORDER BY ts ASC
@@ -215,7 +231,7 @@ ORDER BY ts ASC
 	for rows.Next() {
 		var b MetricBucket
 		var tsUnix int64
-		if err := rows.Scan(&b.RouteID, &tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.LatencyP95Ms); err != nil {
+		if err := rows.Scan(&b.RouteID, &tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.LatencyP95Ms); err != nil {
 			return nil, fmt.Errorf("observability: scan: %w", err)
 		}
 		b.Ts = time.Unix(tsUnix, 0).UTC()
@@ -257,9 +273,10 @@ func (s *Store) QueryAggregated(ctx context.Context, gran Granularity, from, to 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
   ts,
-  SUM(req_count)     AS req_total,
-  SUM(fourxx_count)  AS fourxx_total,
-  SUM(fivexx_count)  AS fivexx_total,
+  SUM(req_count)        AS req_total,
+  SUM(fourxx_count)     AS fourxx_total,
+  SUM(fivexx_count)     AS fivexx_total,
+  SUM(waf_block_count)  AS waf_total,
   CASE
     WHEN SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END) > 0
     THEN SUM(latency_p95_ms * CASE WHEN req_count > 0 THEN req_count ELSE 0 END) / SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END)
@@ -279,7 +296,7 @@ ORDER BY ts ASC
 		var b MetricBucket
 		var tsUnix int64
 		var p95 int64 // SQLite SUM/CASE returns INTEGER; scan as int64 then narrow
-		if err := rows.Scan(&tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &p95); err != nil {
+		if err := rows.Scan(&tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &p95); err != nil {
 			return nil, fmt.Errorf("observability: scan aggregated: %w", err)
 		}
 		b.Ts = time.Unix(tsUnix, 0).UTC()
@@ -307,6 +324,178 @@ func (s *Store) PruneOlderThan(ctx context.Context, gran Granularity, cutoff tim
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("observability: prune rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// --- Step M: waf_event store ------------------------------------------------
+
+// WafEvent is the observability-layer mirror of waf.Event
+// (same fields). Defined here so observability does not have
+// to import internal/waf (dependency direction stays clean:
+// the wiring layer in cmd/arenet/main.go bridges the two via
+// a small adapter). The fields are storage-flat: all data
+// already capped + redacted by the time it reaches Insert.
+//
+// See docs/superpowers/specs/2026-05-28-step-m-security.md
+// §3.1 for the field-level semantics.
+type WafEvent struct {
+	ID            int64
+	Ts            time.Time
+	RouteID       string
+	RuleID        string
+	Category      string // matches waf.OwaspCategory at the type level
+	Severity      int
+	SrcIP         string
+	RequestMethod string
+	RequestPath   string
+	PayloadSample string
+}
+
+// WafEventFilter narrows a QueryWafEvents call. All fields
+// are optional; the API layer at M.2 maps query-string
+// parameters into this struct. Limit > 100 is clamped by the
+// store as a defence-in-depth on top of the API-layer cap.
+type WafEventFilter struct {
+	RouteID  string
+	Category string
+	From     time.Time // inclusive
+	To       time.Time // exclusive; zero = open-ended (now)
+	Limit    int
+}
+
+// wafEventLimitCap bounds the result set defensively. The
+// API layer caps at 100 before calling; this is the
+// belt-and-braces for any future internal caller that forgets.
+const wafEventLimitCap = 100
+
+// InsertWafEventBatch persists a slice of WafEvent rows in a
+// single transaction. Errors are returned to the caller —
+// the production caller (waf.Sink) logs + counts + swallows
+// per AC #13 (the sink wraps this call; the store stays
+// honest about failures so test fakes can simulate them).
+//
+// Empty batch is a no-op.
+func (s *Store) InsertWafEventBatch(ctx context.Context, events []WafEvent) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("observability: store closed")
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("observability: begin waf_event tx: %w", err)
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO waf_event (ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("observability: prepare waf_event insert: %w", err)
+	}
+	defer stmt.Close()
+	for _, e := range events {
+		if _, err := stmt.ExecContext(ctx,
+			e.Ts.UTC().Unix(),
+			e.RouteID,
+			e.RuleID,
+			e.Category,
+			e.Severity,
+			e.SrcIP,
+			e.RequestMethod,
+			e.RequestPath,
+			e.PayloadSample,
+		); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("observability: insert waf_event (route=%s rule=%s): %w", e.RouteID, e.RuleID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("observability: commit waf_event: %w", err)
+	}
+	return nil
+}
+
+// QueryWafEvents returns the waf_event rows matching filter,
+// ts-descending (most recent first — the /security/events
+// endpoint's natural ordering). Empty filter returns the most
+// recent `wafEventLimitCap` rows. Limit > cap is silently
+// clamped down.
+//
+// The route_id / category filters short-circuit via the
+// matching index when set; the from/to filters use the ts
+// index. Pure read, safe to call concurrently with inserts.
+func (s *Store) QueryWafEvents(ctx context.Context, filter WafEventFilter) ([]WafEvent, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > wafEventLimitCap {
+		limit = wafEventLimitCap
+	}
+	q := `SELECT id, ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample
+	      FROM waf_event WHERE 1=1`
+	args := []any{}
+	if filter.RouteID != "" {
+		q += ` AND route_id = ?`
+		args = append(args, filter.RouteID)
+	}
+	if filter.Category != "" {
+		q += ` AND category = ?`
+		args = append(args, filter.Category)
+	}
+	if !filter.From.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, filter.From.UTC().Unix())
+	}
+	if !filter.To.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, filter.To.UTC().Unix())
+	}
+	q += ` ORDER BY ts DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: query waf_event: %w", err)
+	}
+	defer rows.Close()
+	var out []WafEvent
+	for rows.Next() {
+		var e WafEvent
+		var tsUnix int64
+		if err := rows.Scan(
+			&e.ID, &tsUnix, &e.RouteID, &e.RuleID, &e.Category, &e.Severity,
+			&e.SrcIP, &e.RequestMethod, &e.RequestPath, &e.PayloadSample,
+		); err != nil {
+			return nil, fmt.Errorf("observability: scan waf_event: %w", err)
+		}
+		e.Ts = time.Unix(tsUnix, 0).UTC()
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate waf_event: %w", err)
+	}
+	return out, nil
+}
+
+// PruneWafEventsOlderThan deletes waf_event rows with ts <
+// cutoff. Returns the number of rows deleted. Called by the
+// retention loop on the same hourly cadence as the bucket
+// prunes.
+func (s *Store) PruneWafEventsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("observability: store closed")
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM waf_event WHERE ts < ?`, cutoff.UTC().Unix())
+	if err != nil {
+		return 0, fmt.Errorf("observability: prune waf_event: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("observability: prune waf_event rows affected: %w", err)
 	}
 	return n, nil
 }

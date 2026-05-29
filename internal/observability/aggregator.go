@@ -42,17 +42,34 @@ type TickDelta struct {
 	Fourxx       uint64
 	Fivexx       uint64
 	LatencyP95Ms int32
+
+	// WafBlocks is the count of WAF block events to add to
+	// the current minute's accumulator. Distinct from the
+	// L counters (Reqs/Fourxx/Fivexx) because it flows from
+	// a different observation point: the arenet_waf Caddy
+	// module calls Aggregator.BumpWafBlocks(routeID) on
+	// every block, which enqueues a synthetic TickDelta
+	// with only WafBlocks set. Step E's Ticker.Consume
+	// path never sets this field.
+	WafBlocks uint64
 }
 
 // routeState is the aggregator's in-memory accumulator for one
 // route between two minute boundaries. All access is serialised
 // by the aggregator goroutine — no mutex needed.
+//
+// Step M: wafBlocks is the count of WAF block events emitted by
+// the waf.Sink for this route in the current minute, fed via
+// BumpWafBlocks (separate observation point from the Step E
+// Ticker.Consume path — the new arenet_waf Caddy module owns
+// the WAF observation point; see spec §3.3).
 type routeState struct {
-	req      int64
-	fourxx   int64
-	fivexx   int64
-	p95MaxMs int32 // max across all 1-second samples this minute
-	samples  int   // number of non-empty 1-second samples
+	req       int64
+	fourxx    int64
+	fivexx    int64
+	wafBlocks int64
+	p95MaxMs  int32 // max across all 1-second samples this minute
+	samples   int   // number of non-empty 1-second samples
 }
 
 // bucketSink is the minimal write surface the aggregator depends
@@ -171,6 +188,22 @@ func (a *Aggregator) Ingest(d TickDelta) {
 	}
 }
 
+// BumpWafBlocks increments the WAF block counter for routeID
+// in the current minute. Implements waf.BlockCounter; called
+// by waf.Sink.absorb on every absorbed WAF event (even ones
+// the LRU suppresses for event-table persistence). AC #3
+// invariant: the per-minute counter reflects attack volume,
+// not the de-duplicated event-log count.
+//
+// Non-blocking by construction: pushes onto the existing
+// ingress channel as a synthetic TickDelta with only the
+// WAF field set. Drops on full channel (counted via the
+// existing Dropped counter). Same AC #13 discipline as
+// Consume.
+func (a *Aggregator) BumpWafBlocks(routeID string) {
+	a.Ingest(TickDelta{RouteID: routeID, WafBlocks: 1})
+}
+
 // Consume implements metrics.TickConsumer. Adapter so the Step E
 // ticker can fan its per-route deltas out to the observability
 // pipeline without an import-direction reversal (internal/metrics
@@ -282,6 +315,7 @@ func (a *Aggregator) absorb(d TickDelta) {
 	rs.req += int64(d.Reqs)
 	rs.fourxx += int64(d.Fourxx)
 	rs.fivexx += int64(d.Fivexx)
+	rs.wafBlocks += int64(d.WafBlocks)
 	if d.LatencyP95Ms > rs.p95MaxMs {
 		rs.p95MaxMs = d.LatencyP95Ms
 	}
@@ -318,12 +352,13 @@ func (a *Aggregator) flush(ctx context.Context) {
 	rows := make([]MetricBucket, 0, len(a.state))
 	for id, rs := range a.state {
 		rows = append(rows, MetricBucket{
-			RouteID:      id,
-			Ts:           a.currentMinute,
-			ReqCount:     rs.req,
-			FourxxCount:  rs.fourxx,
-			FivexxCount:  rs.fivexx,
-			LatencyP95Ms: rs.p95MaxMs,
+			RouteID:       id,
+			Ts:            a.currentMinute,
+			ReqCount:      rs.req,
+			FourxxCount:   rs.fourxx,
+			FivexxCount:   rs.fivexx,
+			WafBlockCount: rs.wafBlocks,
+			LatencyP95Ms:  rs.p95MaxMs,
 		})
 	}
 	// Reset before the write so a slow / failing flush doesn't

@@ -62,6 +62,7 @@ import (
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
+	"github.com/barto95100/arenet/internal/waf"
 	"github.com/barto95100/arenet/web"
 )
 
@@ -298,6 +299,45 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		}
 		logger.Info("observability subsystem stopped")
 	}()
+
+	// Step M.1 — WAF event sink. Wraps the observability
+	// store's InsertWafEventBatch + the aggregator's
+	// BumpWafBlocks via two tiny adapters (the waf package's
+	// Inserter / BlockCounter interfaces). Both adapters
+	// tolerate a nil store (AC #13 degraded-mode):
+	//   - Inserter adapter holds the *observability.Store
+	//     reference; when nil, the sink's flush path is a
+	//     debug-logged no-op (events drop silently).
+	//   - BlockCounter adapter is the aggregator directly —
+	//     even in nil-store mode the aggregator drains its
+	//     channel so the sink never backs up.
+	//
+	// WAF events from the custom arenet_waf Caddy module
+	// reach this sink via the package-global SetGlobalSink
+	// pointer (set just below). The pattern mirrors
+	// metrics.SetRegistry — Caddy provisions modules from
+	// JSON config and cannot inject Go pointers, so a
+	// package-singleton is the only path.
+	wafSink := waf.NewSink(wafInserterAdapter{obsStore}, obsAggregator, logger, waf.SinkConfig{})
+	waf.SetGlobalSink(wafSink)
+	wafCtx, wafCancel := context.WithCancel(ctx)
+	var wafWG sync.WaitGroup
+	wafWG.Add(1)
+	go func() {
+		defer wafWG.Done()
+		wafSink.Run(wafCtx)
+	}()
+	defer func() {
+		wafCancel()
+		wafWG.Wait()
+		waf.SetGlobalSink(nil) // help GC + make test isolation cleaner
+		logger.Info("waf sink stopped")
+	}()
+	if obsStore != nil {
+		logger.Info("waf event sink wired", "store", obsPath)
+	} else {
+		logger.Info("waf event sink running in degraded mode (no persistence)")
+	}
 
 	// Start the metrics ticker AFTER caddymgr.Start so the first
 	// tick sees the registry already populated by the post-Start
@@ -596,6 +636,45 @@ func (l *storeLister) ListRoutesForMetrics(ctx context.Context) ([]metrics.Route
 		}
 	}
 	return out, nil
+}
+
+// wafInserterAdapter satisfies waf.Inserter by translating
+// waf.Event into observability.WafEvent and delegating to the
+// store. Defined here (consumer side) so internal/waf and
+// internal/observability stay decoupled — neither knows about
+// the other's exact type, main.go bridges them. Tolerates a
+// nil store: the sink's flush path then drops the batch
+// silently in degraded mode (AC #13).
+type wafInserterAdapter struct {
+	store *observability.Store
+}
+
+// InsertWafEventBatch implements waf.Inserter.
+func (a wafInserterAdapter) InsertWafEventBatch(ctx context.Context, events []waf.Event) error {
+	if a.store == nil {
+		// Degraded mode (boot-failed observability).
+		// Returning nil rather than an error so the sink
+		// records this as a successful flush (the events
+		// are intentionally discarded); a real error would
+		// inflate FlushErrBatches and confuse ops dashboards
+		// in a way that mis-attributes the boot failure.
+		return nil
+	}
+	rows := make([]observability.WafEvent, len(events))
+	for i, e := range events {
+		rows[i] = observability.WafEvent{
+			Ts:            e.Ts,
+			RouteID:       e.RouteID,
+			RuleID:        e.RuleID,
+			Category:      string(e.Category),
+			Severity:      e.Severity,
+			SrcIP:         e.SrcIP,
+			RequestMethod: e.RequestMethod,
+			RequestPath:   e.RequestPath,
+			PayloadSample: e.PayloadSample,
+		}
+	}
+	return a.store.InsertWafEventBatch(ctx, rows)
 }
 
 func main() {

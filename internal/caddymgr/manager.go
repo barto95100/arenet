@@ -42,6 +42,14 @@ import (
 	// a handler) is accepted by caddy.Load. Step E spec §3.
 	"github.com/barto95100/arenet/internal/metrics"
 
+	// Step M.1 — side-effect import: registers the arenet_waf
+	// Caddy module (internal/waf/module.go init()) so the
+	// `arenet_waf` handler ID buildWAFHandler now emits is
+	// resolvable at caddy.Load time. Replaces the legacy
+	// coraza-caddy/v2 import that previously registered the
+	// `waf` handler.
+	_ "github.com/barto95100/arenet/internal/waf"
+
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -680,7 +688,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//     mutations would otherwise confuse the rules);
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
-		if wafHandler := buildWAFHandler(r.WAFMode); wafHandler != nil {
+		if wafHandler := buildWAFHandler(r.ID, r.WAFMode); wafHandler != nil {
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -1137,76 +1145,68 @@ func buildRedirectRoute(hosts []string) httpRoute {
 	}
 }
 
-// buildWAFHandler returns the Caddy WAF handler config (Coraza-
-// powered) for the given mode, or nil when WAF is disabled (mode
-// "off" or empty) so the caller skips appending anything to the
+// buildWAFHandler returns the Caddy WAF handler config for the
+// given route + mode, or nil when WAF is disabled (mode "off"
+// or empty) so the caller skips appending anything to the
 // handler chain.
 //
-// The handler value emitted here is "waf", NOT "coraza": Caddy
-// resolves the `"handler"` JSON field to the LAST SEGMENT of the
-// module ID, and coraza-caddy/v2 registers itself as
-// `http.handlers.waf` (see CaddyModule() in coraza.go of the
-// upstream module — the project name is Coraza but the Caddy
-// module name is `waf`). Step I.7 hotfix corrected this from the
-// initial "coraza" guess; TestBuildConfigJSON_HandlersAllResolvable
-// is the anti-regression guard that calls caddy.GetModule on every
-// emitted handler ID.
+// Step M.1: emits the new `arenet_waf` handler (custom Caddy
+// module wrapping coraza/v3 directly, internal/waf/module.go)
+// in place of the legacy `waf` (coraza-caddy/v2) handler.
+// Spec §3.2 — full replacement, no per-route opt-in toggle.
+// The new module exposes per-rule events via a global
+// EventSink, which is what the Step M dashboard mocks
+// require (rule_id, OWASP category, severity, src_ip,
+// payload sample).
 //
-// Mode mapping (spec L5):
-//   - "detect" → SecRuleEngine DetectionOnly: rules are evaluated
-//     and matches are logged, but the request is forwarded
-//     untouched. The FortiWeb-style "safe shadow" mode — recommended
-//     starting point so admins can spot false positives before
-//     enforcing.
-//   - "block"  → SecRuleEngine On: matches yield a 403 short-circuit
-//     before the request reaches the upstream.
+// Mode mapping (spec L5, unchanged from I.4):
+//   - "detect": the module appends SecRuleEngine
+//     DetectionOnly to the directives + filters its
+//     per-match emission by severity (≤ Warning) so the
+//     dashboard sees real-attack signatures, not anomaly-
+//     scoring noise.
+//   - "block": SecRuleEngine On + per-Disruptive emission.
+//     Coraza interrupts; the module translates that into a
+//     403 (or whatever status the rule declared).
 //
-// Config shape — three things matter (Step I.7 hotfix Finding #4):
+// Config shape (unchanged from I.4 — same three Includes,
+// same load_owasp_crs requirement):
 //
-//  1. `load_owasp_crs: true` is REQUIRED. Without this flag,
-//     coraza-caddy does NOT register the embedded
-//     coraza-coreruleset/v4 FS as a root filesystem (see the
-//     `if m.LoadOWASPCRS` branch at coraza.go:107 in the upstream
-//     module). The `@owasp_crs/*.conf` alias then resolves to
-//     zero files at Include time and the WAF runs with no rules
-//     — exactly the silent failure Finding #4 caught at smoke.
+//  1. `load_owasp_crs: true` is REQUIRED. Without this flag
+//     the embedded coreruleset FS is not mounted and the
+//     `@owasp_crs` Include alias resolves to zero rules.
+//  2. THREE Includes needed: @coraza.conf-recommended,
+//     @crs-setup.conf.example, @owasp_crs/*.conf. Loading
+//     only @owasp_crs/*.conf silently degrades coverage
+//     because CRS rules reference undefined tx.* variables
+//     from @crs-setup.
+//  3. Directives are HARDCODED here on purpose (F2 in the
+//     I.4 audit): no API path lets an admin inject arbitrary
+//     Coraza directives.
 //
-//  2. THREE Includes are needed, not one. The canonical sequence
-//     documented in the coraza-caddy/v2 README is:
-//     - `@coraza.conf-recommended`  Coraza-level defaults
-//     (transaction lifecycle, body limits).
-//     - `@crs-setup.conf.example`   CRS variables every rule
-//     file assumes are set (paranoia level, anomaly threshold,
-//     allowed request methods, etc.).
-//     - `@owasp_crs/*.conf`         the actual rule files.
-//     Loading only `@owasp_crs/*.conf` runs rules against undefined
-//     `tx.*` variables, which silently degrades coverage.
+// Step M closes the `audit_waf_match` PARTIAL from I.4 + the
+// Step J §1.4 deferred item by emitting per-rule events
+// directly to internal/observability storage. The
+// route_id field is REQUIRED by the arenet_waf module's
+// Validate (it's how each event is attributed on the
+// dashboard).
 //
-//  3. Directives are HARDCODED here on purpose (F2 in the I.4
-//     audit): there is no API path that lets an admin inject
-//     arbitrary Coraza directives. Step K may add a per-route
-//     rule allowlist UI for false-positive tuning.
-//
-// Step I.4 ships WITHOUT an Arenet-side `audit_waf_match` event
-// (spec §5.4 mentioned a D7 enum bump 15→16; deferred to Step J —
-// see the commit message). Caddy's structured log captures WAF
-// matches at info level if the operator wants per-match
-// observability today.
-func buildWAFHandler(mode string) map[string]any {
+// Note: SecRuleEngine is NOT in the directives string here.
+// The arenet_waf module appends it itself based on its Mode
+// field so the module owns the policy decision (we don't
+// want two sources of truth disagreeing).
+func buildWAFHandler(routeID, mode string) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
 	}
-	engine := "On" // mode == "block"
-	if mode == "detect" {
-		engine = "DetectionOnly"
-	}
 	return map[string]any{
-		"handler":        "waf",
+		"handler":        "arenet_waf",
+		"route_id":       routeID,
+		"mode":           mode,
 		"load_owasp_crs": true,
 		"directives": "Include @coraza.conf-recommended\n" +
 			"Include @crs-setup.conf.example\n" +
-			"Include @owasp_crs/*.conf\n" +
-			"SecRuleEngine " + engine,
+			"Include @owasp_crs/*.conf",
 	}
 }
 

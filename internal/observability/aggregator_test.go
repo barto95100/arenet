@@ -351,3 +351,80 @@ func TestAggregator_RunCleanShutdownFlushes(t *testing.T) {
 		t.Fatalf("clean-shutdown final flush: rows=%+v", rowsA)
 	}
 }
+
+// TestAggregator_BumpWafBlocks_FlushesIntoBucketCounter pins
+// the M.1 integration: BumpWafBlocks (waf.BlockCounter
+// satisfaction) folds into the per-minute MetricBucket row's
+// WafBlockCount field on flush. Independent of the Step E
+// req / 4xx / 5xx counters (AC #3 invariant).
+func TestAggregator_BumpWafBlocks_FlushesIntoBucketCounter(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	var nowAtomic atomic.Pointer[time.Time]
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 500_000_000, time.UTC)
+	nowAtomic.Store(&t0)
+	advance := func(d time.Duration) {
+		cur := *nowAtomic.Load()
+		next := cur.Add(d)
+		nowAtomic.Store(&next)
+	}
+
+	a := NewAggregator(s, silentLogger(), 16)
+	a.SetClock(func() time.Time { return *nowAtomic.Load() })
+	a.currentMinute = a.now().Truncate(time.Minute)
+
+	// 5 WAF blocks on r-a, 2 on r-b — drive via the public
+	// BumpWafBlocks surface (synthetic TickDeltas with only
+	// WafBlocks set), absorbing manually since we don't run
+	// the goroutine.
+	for i := 0; i < 5; i++ {
+		a.BumpWafBlocks("r-a")
+	}
+	for i := 0; i < 2; i++ {
+		a.BumpWafBlocks("r-b")
+	}
+	// The Bump path goes through Ingest → channel; drain
+	// manually for deterministic flow.
+	for {
+		select {
+		case d := <-a.in:
+			a.absorb(d)
+		default:
+			goto drained
+		}
+	}
+drained:
+
+	// Roll over the minute, flush.
+	advance(time.Minute)
+	a.maybeFlush(ctx)
+
+	rowsA, err := s.Query(ctx, Granularity1m, "r-a",
+		time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 28, 10, 1, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Query r-a: %v", err)
+	}
+	if len(rowsA) != 1 {
+		t.Fatalf("r-a rows = %d, want 1: %+v", len(rowsA), rowsA)
+	}
+	if rowsA[0].WafBlockCount != 5 {
+		t.Errorf("r-a WafBlockCount = %d, want 5", rowsA[0].WafBlockCount)
+	}
+	// AC #3 invariant: WAF bumps must NOT touch req / 4xx / 5xx.
+	if rowsA[0].ReqCount != 0 || rowsA[0].FourxxCount != 0 || rowsA[0].FivexxCount != 0 {
+		t.Errorf("AC #3 violation — WAF bump leaked into L counters: %+v", rowsA[0])
+	}
+
+	rowsB, _ := s.Query(ctx, Granularity1m, "r-b",
+		time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 28, 10, 1, 0, 0, time.UTC))
+	if len(rowsB) != 1 || rowsB[0].WafBlockCount != 2 {
+		t.Fatalf("r-b WafBlockCount mismatch: %+v", rowsB)
+	}
+}

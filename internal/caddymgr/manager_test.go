@@ -848,33 +848,36 @@ func TestBuildConfigJSON_WAF_DetectMode(t *testing.T) {
 	}
 	httpRoutes := httpRoutesFromConfig(t, raw)
 	handlers := unwrapHandlers(httpRoutes[0])
-	// Chain: [metrics, waf, reverse_proxy] — the WAF handler value
-	// is "waf" (last segment of http.handlers.waf), NOT "coraza";
-	// the upstream coraza-caddy module registers itself under the
-	// generic Caddy name "waf". Step I.7 hotfix.
+	// Chain: [metrics, arenet_waf, reverse_proxy]. Step M.1
+	// swapped the legacy `waf` (coraza-caddy/v2) for the
+	// new `arenet_waf` (custom coraza/v3 wrapper with
+	// per-event capture). Spec §3.2.
 	if len(handlers) != 3 {
-		t.Fatalf("handler chain length = %d; want 3 (metrics + waf + proxy)", len(handlers))
+		t.Fatalf("handler chain length = %d; want 3 (metrics + arenet_waf + proxy)", len(handlers))
 	}
 	h1, _ := handlers[1].(map[string]any)
-	if h1["handler"] != "waf" {
-		t.Fatalf("handler[1] = %v; want waf (Caddy module id http.handlers.waf)", h1["handler"])
+	if h1["handler"] != "arenet_waf" {
+		t.Fatalf("handler[1] = %v; want arenet_waf (Step M.1 swap from legacy waf)", h1["handler"])
 	}
-	// Finding #4 hotfix: the `load_owasp_crs` flag MUST be present
-	// and true, otherwise coraza-caddy does not register the
-	// embedded coreruleset.FS and the @owasp_crs/* alias resolves
-	// to zero files at Include time.
+	if h1["route_id"] != "r1" {
+		t.Errorf("route_id = %v; want r1 (required for per-route event attribution)", h1["route_id"])
+	}
+	if h1["mode"] != "detect" {
+		t.Errorf("mode = %v; want detect", h1["mode"])
+	}
 	if v, ok := h1["load_owasp_crs"].(bool); !ok || !v {
 		t.Errorf("load_owasp_crs missing or false: %v (WAF would run with zero rules)", h1["load_owasp_crs"])
 	}
 	dir, _ := h1["directives"].(string)
-	if !strings.Contains(dir, "SecRuleEngine DetectionOnly") {
-		t.Errorf("directives missing DetectionOnly toggle: %q", dir)
+	// Step M.1: the directives string NO LONGER carries
+	// SecRuleEngine — the arenet_waf module appends it based
+	// on its Mode field so the module owns the policy.
+	if strings.Contains(dir, "SecRuleEngine") {
+		t.Errorf("Step M.1: directives must NOT include SecRuleEngine (module owns it via Mode): %q", dir)
 	}
-	// Finding #4 hotfix: the canonical three-Include sequence is
-	// required for CRS to function (Coraza defaults +
-	// CRS-setup variables + the rule files themselves). Loading
-	// only the third one runs rules against undefined tx.*
-	// variables.
+	// Finding #4 hotfix: the canonical three-Include sequence
+	// is required for CRS to function (Coraza defaults +
+	// CRS-setup variables + the rule files themselves).
 	for _, want := range []string{
 		"Include @coraza.conf-recommended",
 		"Include @crs-setup.conf.example",
@@ -897,21 +900,21 @@ func TestBuildConfigJSON_WAF_BlockMode(t *testing.T) {
 	httpRoutes := httpRoutesFromConfig(t, raw)
 	handlers := unwrapHandlers(httpRoutes[0])
 	h1, _ := handlers[1].(map[string]any)
-	if h1["handler"] != "waf" {
-		t.Fatalf("handler[1] = %v; want waf", h1["handler"])
+	if h1["handler"] != "arenet_waf" {
+		t.Fatalf("handler[1] = %v; want arenet_waf", h1["handler"])
+	}
+	if h1["route_id"] != "r1" {
+		t.Errorf("route_id = %v; want r1", h1["route_id"])
+	}
+	if h1["mode"] != "block" {
+		t.Errorf("mode = %v; want block", h1["mode"])
 	}
 	if v, ok := h1["load_owasp_crs"].(bool); !ok || !v {
 		t.Errorf("load_owasp_crs missing or false: %v", h1["load_owasp_crs"])
 	}
 	dir, _ := h1["directives"].(string)
-	if !strings.Contains(dir, "SecRuleEngine On") {
-		t.Errorf("directives missing block-mode toggle: %q", dir)
-	}
-	// Sanity: the engine setter is NOT "DetectionOnly" — guards
-	// against a copy-paste where "On" could degrade to "DetectionOnly"
-	// silently.
-	if strings.Contains(dir, "DetectionOnly") {
-		t.Errorf("block mode emitted DetectionOnly engine: %q", dir)
+	if strings.Contains(dir, "SecRuleEngine") {
+		t.Errorf("Step M.1: directives must NOT include SecRuleEngine: %q", dir)
 	}
 	for _, want := range []string{
 		"Include @coraza.conf-recommended",
@@ -939,8 +942,8 @@ func TestBuildConfigJSON_WAF_OffSkipsHandler(t *testing.T) {
 	}
 	for _, hh := range handlers {
 		m, _ := hh.(map[string]any)
-		if m["handler"] == "waf" {
-			t.Errorf("waf handler present despite WAFMode=off: %v", m)
+		if m["handler"] == "arenet_waf" || m["handler"] == "waf" {
+			t.Errorf("WAF handler present despite WAFMode=off: %v", m)
 		}
 	}
 }
@@ -1315,8 +1318,8 @@ func TestBuildConfigJSON_HandlersAllResolvable(t *testing.T) {
 	// stopped emitting one of them).
 	wantModules := []string{
 		"http.handlers.arenet_routemetrics",
+		"http.handlers.arenet_waf", // Step M.1: replaces legacy "http.handlers.waf" (coraza-caddy/v2)
 		"http.handlers.authentication",
-		"http.handlers.waf",
 		"http.handlers.headers",
 		"http.handlers.reverse_proxy",
 		"http.handlers.static_response",
