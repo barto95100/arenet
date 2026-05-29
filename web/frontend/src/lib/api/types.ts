@@ -542,13 +542,16 @@ export class ApiError extends Error {
 
 // --- Step L observability types ---------------------------------------------
 
-// The four metrics the timeseries endpoint accepts. Mirrors the
+// The five metrics the timeseries endpoint accepts. Mirrors the
 // Go-side `metricName` enum in internal/api/metrics_handlers.go.
+// `waf_block_rate` was added in Step M.2 — it's a count metric
+// (gap-fill = 0 for missing buckets, not null).
 export type MetricName =
 	| 'req_per_sec'
 	| 'four_xx_rate'
 	| 'five_xx_rate'
-	| 'p95_latency_ms';
+	| 'p95_latency_ms'
+	| 'waf_block_rate';
 
 export type MetricWindow = '24h' | '30d';
 
@@ -584,6 +587,10 @@ export interface SummaryRoute {
 	reqsPerMin: number;
 	fourxxPerMin: number;
 	fivexxPerMin: number;
+	// Step M.2 — per-route WAF blocks over the just-closed
+	// minute. Independent of fourxxPerMin/fivexxPerMin (AC
+	// #3): a WAF-blocked 403 does NOT inflate the 4xx count.
+	wafBlockedPerMin: number;
 }
 
 export interface SummaryResponse {
@@ -593,9 +600,66 @@ export interface SummaryResponse {
 	totalReqPerMin: number;
 	totalFourXxPerMin: number;
 	totalFiveXxPerMin: number;
+	// Step M.2 — system-wide WAF blocks counter + per-OWASP-
+	// category breakdown. Independent of the L 4xx/5xx
+	// totals (AC #3 reciprocal). wafBlocksByCategory is
+	// always a (possibly empty) map; an empty map means
+	// either no events landed in the window, or the WAF
+	// event reader is unavailable (degraded mode).
+	totalWafBlockedPerMin: number;
+	wafBlocksByCategory: Record<string, number>;
 	// Null when no traffic landed in the window — same
 	// no-fake-dip rule as TimeseriesPoint.value.
 	globalP95LatencyMs: number | null;
 	activeRouteCount: number;
 	topRoutes: SummaryRoute[];
+	// Step M.2 amendment — single most-attacked route over the
+	// window, ranked by wafBlockedPerMin across ALL routes
+	// (NOT filtered to topRoutes). null when no WAF activity.
+	// Spec §1.3 D8 — the M.3 dashboard headline reads from
+	// this field so a targeted attack on a low-traffic admin
+	// surface stays visible.
+	topAttackedRoute: SummaryRoute | null;
+}
+
+// --- Step M security types --------------------------------------------------
+
+// OWASP category strings emitted by the WAF event sink.
+// Mirrors internal/waf/event.go OwaspCategory enum.
+// `OTHER` is the catch-all for rules that don't match any
+// known CRS range.
+export type OwaspCategory = 'SQLi' | 'XSS' | 'RCE' | 'LFI' | 'PROTOCOL' | 'OTHER';
+
+// All categories in dashboard-display order. Frontend uses
+// this to render the CategoryDistribution strip with stable
+// left-to-right ordering even when a category has 0 events.
+export const ALL_OWASP_CATEGORIES: readonly OwaspCategory[] = [
+	'SQLi',
+	'XSS',
+	'RCE',
+	'LFI',
+	'PROTOCOL',
+	'OTHER'
+];
+
+// One WAF event row as returned by GET /api/v1/security/events.
+// Field shapes mirror observability.WafEvent via the M.2 wire
+// type — see internal/api/security_handlers.go for the source
+// of truth.
+export interface WafEvent {
+	id: number;
+	ts: string;
+	routeId: string;
+	ruleId: string;
+	category: OwaspCategory;
+	severity: number;
+	srcIp: string;
+	requestMethod: string;
+	requestPath: string;
+	payloadSample: string;
+}
+
+export interface WafEventsResponse {
+	disabled?: boolean;
+	events: WafEvent[];
 }

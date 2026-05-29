@@ -92,8 +92,9 @@
 	// Step D inserts Audit between Routes and Topology (spec §6.12).
 	// Step E enables Topology and switches its icon to Lucide `network`.
 	// Step F Chunk 1.6 added a placeholder /settings page (route exists
-	// + cliquable), so Settings is no longer disabled. Security remains
-	// disabled until Phase 2 ships an actual /security view.
+	// + cliquable), so Settings is no longer disabled.
+	// Step M.3 enables /security (WAF event dashboard); the
+	// Phase-2-deferred banner is gone.
 	// Step K.2 adds /admin/users, admin-only — filtered out for viewers.
 	const baseItems: Item[] = [
 		{ href: '/routes', label: 'Routes', icon: 'routes' },
@@ -102,7 +103,7 @@
 		// Step L L.3 — historical metrics. Viewer-accessible per
 		// AC #17 (no role filter here; the API gate is enough).
 		{ href: '/observability', label: 'Observability', icon: 'observability' },
-		{ href: '/security', label: 'Security', icon: 'security', disabled: true, tooltip: 'Coming soon' },
+		{ href: '/security', label: 'Security', icon: 'security' },
 		{ href: '/admin/users', label: 'Users', icon: 'users' },
 		{ href: '/settings', label: 'Settings', icon: 'settings' }
 	];

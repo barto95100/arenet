@@ -41,10 +41,11 @@ describe('Sidebar', () => {
 		render(Sidebar);
 
 		// Spec §6.12: Routes, Audit, Topology, Security, Settings.
-		// Disabled items (Security pre-Phase-2) have an <a> with no
-		// href and aria-disabled="true" — those don't satisfy ARIA
-		// role="link" so testing-library skips them. Query by visible
-		// text to cover both enabled and disabled items in one shot.
+		// Step L L.3 inserts Observability between Topology and
+		// Security; Step M.3 enables Security (previously
+		// disabled with a "Coming soon" tooltip). Query by
+		// visible text to keep the assertion stable across nav
+		// expansions.
 		expect(screen.getByText('Routes')).toBeInTheDocument();
 		expect(screen.getByText('Audit')).toBeInTheDocument();
 		expect(screen.getByText('Topology')).toBeInTheDocument();
