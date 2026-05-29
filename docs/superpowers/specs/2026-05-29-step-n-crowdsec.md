@@ -394,6 +394,18 @@ With D2.A (fail-open), an attacker who can take down LAPI ALSO disables the IP-r
 
 **AC #23 — License compliance.** Apache 2.0 NOTICE / LICENSE preserved for caddy-crowdsec-bouncer (Apache → AGPL one-way compatible).
 
+**AC #24 — CrowdSec blocks counted in fourxx_count (divergence vs M's AC #4).** A CrowdSec 403 response IS included in the `bucket.fourxx_count` counter, OPPOSITE to the WAF behaviour pinned by M's AC #4 (WAF 403s are excluded from fourxx_count via a Coraza callback that flags the request as wafBlocked, verified live at M.5 with 212 WAF blocks + 3 real backend 404s that "never collide"). The mechanism: `hslatman/caddy-crowdsec-bouncer` v0.12.1 exposes NO callback hook of any shape — confirmed by source read of `internal/core/core.go` and `internal/bouncer/stream.go` at v0.12.1, the Step-N spec research agent #1 found no listener registration API. We therefore cannot raise a "crowdsecBlocked" flag on the request context for the metrics middleware to honour.
+
+The architectural consequence:
+
+- `bucket.fourxx_count`  = real backend 4xx **+ CrowdSec 403s** (M's WAF 403s remain excluded).
+- `bucket.waf_block_count` = pure WAF signal (M's AC #4 invariant preserved).
+- `bucket.crowdsec_decision_count` (the new N.2 sentinel counter under route_id="_crowdsec") = pure CrowdSec signal, populated independently via the parallel StreamBouncer consumer's `BumpCrowdSecDecisions` hook.
+
+The pure CrowdSec signal IS available to operators — but at the sentinel-route counter, NOT at the per-route 4xx column. The N.4 dashboard surfaces the CrowdSec count as its own stat card so the operator never has to subtract.
+
+Smoke (N.5) verification: trip a CrowdSec 403 on one route, hit the same route with a real backend-404 path, query `bucket_1m`. Expected row: `fourxx_count = 2` (both the CrowdSec block AND the backend 404), `crowdsec_decision_count = 1`, `waf_block_count = 0`. A test under `internal/caddymgr` cannot reach this AC because the metrics observation happens at request-time, NOT in the JSON-build path; AC #24 is therefore declared smoke-only.
+
 ---
 
 ## 3. Architecture

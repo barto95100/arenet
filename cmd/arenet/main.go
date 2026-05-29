@@ -235,6 +235,27 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		logger.Warn("at least one route has acmeChallenge=dns-01 but the OVH DNS provider is not fully configured — cert renewal will fail until you complete the provider config under Settings")
 	}
 
+	// Step N.1 — CrowdSec bouncer config. Read from env vars
+	// (admin-Settings UI is a future revision; v1.0 is env-only).
+	// MUST be set BEFORE mgr.Start so the initial Caddy config
+	// includes apps.crowdsec from the first emitted JSON.
+	//
+	// AC #13 (fail-open at boot): empty API key → no apps.crowdsec
+	// block, no per-route handler prepend, data plane runs without
+	// IP-reputation gate. WAF + rate-limiter still active.
+	csURL := os.Getenv("ARENET_CROWDSEC_API_URL")
+	csKey := os.Getenv("ARENET_CROWDSEC_API_KEY")
+	mgr.SetCrowdSecConfig(csURL, csKey)
+	if csKey != "" {
+		effURL := csURL
+		if effURL == "" {
+			effURL = "http://127.0.0.1:8080/"
+		}
+		logger.Info("crowdsec bouncer wired", "lapi_url", effURL)
+	} else {
+		logger.Info("crowdsec bouncer not configured (set ARENET_CROWDSEC_API_KEY to enable the IP-reputation gate)")
+	}
+
 	if err := mgr.Start(ctx); err != nil {
 		return err
 	}

@@ -110,8 +110,32 @@ type CaddyManager struct {
 	devMode   bool
 	acmeEmail string
 
+	// crowdsec (Step N.1) holds the LAPI connection config. Both
+	// fields are read from env vars at boot by main.go and pushed
+	// via SetCrowdSecConfig BEFORE Start; once set they are
+	// embedded in every emitted Caddy config (AC #14 invariant:
+	// route mutations must NOT silently drop the bouncer). Empty
+	// APIKey is the degraded-mode signal — buildConfigJSON omits
+	// the apps.crowdsec block entirely AND skips the per-route
+	// handler prepend (AC #13 fail-open at boot).
+	crowdsec crowdsecConfig
+
 	mu      sync.Mutex
 	started bool
+}
+
+// crowdsecConfig is the manager-side mirror of the bouncer's
+// connection settings. Step N.1 only exposes the two
+// operator-facing fields (api_url + api_key); the rest of the
+// bouncer's tuning (ticker_interval, enable_streaming,
+// enable_hard_fails) is fixed per the Step N spec D1/D2/D7
+// arbitrage and emitted as literals in buildCrowdSecApp.
+//
+// A future Step N revision could expose the tuning fields via
+// admin Settings; v1.0 keeps the surface narrow.
+type crowdsecConfig struct {
+	apiURL string
+	apiKey string
 }
 
 // New constructs a CaddyManager. The store and logger must be non-nil.
@@ -141,6 +165,38 @@ func New(store *storage.Store, logger *slog.Logger, registry *metrics.Registry, 
 		devMode:   devMode,
 		acmeEmail: acmeEmail,
 	}, nil
+}
+
+// SetCrowdSecConfig (Step N.1) installs the LAPI connection
+// settings consumed by the embedded caddy-crowdsec-bouncer.
+// MUST be called BEFORE Start when the operator wants the
+// reputation gate; calling it after Start has no effect on
+// already-running Caddy until the next reload (any route
+// mutation will trigger an applyLocked that picks up the new
+// config).
+//
+// Both fields trimmed; an empty apiKey is the degraded-mode
+// signal (AC #13): buildConfigJSON omits the apps.crowdsec
+// block AND the per-route handler prepend. The data plane keeps
+// running with WAF + rate-limiter active, just without
+// IP-reputation enforcement.
+func (m *CaddyManager) SetCrowdSecConfig(apiURL, apiKey string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.crowdsec.apiURL = strings.TrimSpace(apiURL)
+	m.crowdsec.apiKey = strings.TrimSpace(apiKey)
+}
+
+// crowdSecEnabled reports whether the manager has the LAPI key
+// configured. Used by buildOpts plumbing + by the boot log
+// line in main.go. Reads under the mutex to stay race-free
+// against an admin-side SetCrowdSecConfig from a settings
+// handler (no such handler exists yet at N.1 — env-driven
+// only — but the API surface stays correct for future use).
+func (m *CaddyManager) crowdSecEnabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.crowdsec.apiKey != ""
 }
 
 // Start launches the embedded Caddy with the config derived from the store.
@@ -269,6 +325,7 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		ACMEEmail:            m.acmeEmail,
 		DNSProvider:          dnsProvider,
 		ForwardAuthProviders: fwdAuthMap,
+		CrowdSec:             m.crowdsec,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -320,6 +377,28 @@ type loggingConfig struct {
 
 type appsConfig struct {
 	HTTP httpApp `json:"http"`
+	// Step N.1 — embedded CrowdSec bouncer Caddy app. Pointer
+	// with omitempty so the JSON shape is byte-identical to
+	// pre-N when the operator hasn't configured a LAPI key
+	// (AC #13 degraded mode). Populated by buildCrowdSecApp
+	// when buildOpts.CrowdSec.apiKey != "".
+	CrowdSec *crowdsecApp `json:"crowdsec,omitempty"`
+}
+
+// crowdsecApp is the Caddy "crowdsec" app config block. JSON
+// tags mirror github.com/hslatman/caddy-crowdsec-bouncer
+// v0.12.1 crowdsec/crowdsec.go:59-89 verbatim. Only the
+// operator-facing fields are exposed at N.1; the remaining
+// tuning (appsec_*, metrics_interval, enable_caddy_metrics)
+// stays at the upstream default per Step N spec §3.4 (scope
+// constrained to IP-reputation gate; AppSec is explicitly
+// out-of-scope per §8).
+type crowdsecApp struct {
+	APIURL          string `json:"api_url"`
+	APIKey          string `json:"api_key"`
+	TickerInterval  string `json:"ticker_interval"`
+	EnableStreaming bool   `json:"enable_streaming"`
+	EnableHardFails bool   `json:"enable_hard_fails"`
 }
 
 type httpApp struct {
@@ -432,6 +511,12 @@ type buildOpts struct {
 	// failing the reload — same posture as the J.4 DNS-01
 	// fall-back.
 	ForwardAuthProviders map[string]storage.ForwardAuthProvider
+	// CrowdSec (Step N.1) is the LAPI connection config. Zero-
+	// value APIKey means "not configured" — buildConfigJSON
+	// silently omits both the apps.crowdsec block and the
+	// per-route handler prepend (AC #13 fail-open: data plane
+	// keeps running without the reputation gate).
+	CrowdSec crowdsecConfig
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -579,6 +664,46 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// Metrics MUST stay first to observe the final status code
 		// (§11.5 invariant).
 		handlers := []map[string]any{metricsHandler}
+		// Step N.1 — CrowdSec reputation gate. Slot RIGHT AFTER
+		// metrics and BEFORE every other gate (auth, WAF,
+		// headers): the IP-reputation check is the first wall.
+		// A blocked IP returns 403 without exposing any of the
+		// downstream gates to forged traffic.
+		//
+		// DIVERGENCE FROM STEP M (acknowledged & forced):
+		// CrowdSec 403s ARE counted in fourxx_count. This is
+		// OPPOSITE to WAF behaviour (M's AC #4, verified live
+		// at M.5 with 212 WAF blocks + 3 real backend 404s
+		// that "never collide"), not consistent with it.
+		//
+		// Mechanism in M: internal/waf's Caddy module fires a
+		// callback into the request context that sets a
+		// wafBlocked flag; the metrics middleware reads that
+		// flag and skips the 4xx classification.
+		// hslatman/caddy-crowdsec-bouncer v0.12.1 exposes NO
+		// callback hook of any shape (confirmed by source
+		// read of internal/core/core.go and
+		// internal/bouncer/stream.go — there is no listener
+		// registration API nor a context flag we can read
+		// after the handler returns). The 403 therefore
+		// reaches the metrics middleware as a GENERIC 4xx.
+		//
+		// Operator interpretation on the M+Q+N dashboard:
+		//   - bucket.fourxx_count  = real backend 4xx + CrowdSec 403s
+		//   - bucket.waf_block_count = pure WAF signal (M's AC #4
+		//     guarantees no contamination)
+		//   - bucket.crowdsec_decision_count (N.2) = pure
+		//     CrowdSec signal via the sentinel "_crowdsec"
+		//     route + the BumpCrowdSecDecisions hook.
+		// Pinned by N spec AC #N1-divergence-vs-M.
+		//
+		// Only emitted when the LAPI key is configured (same
+		// flag controls the apps.crowdsec block emission).
+		// Empty-key path keeps the chain byte-identical to
+		// pre-N for the AC #16/#17 anti-regression guarantee.
+		if opts.CrowdSec.apiKey != "" {
+			handlers = append(handlers, map[string]any{"handler": "crowdsec"})
+		}
 		// Step K.4 — captured here so the passthrough-route block
 		// below (post-handler-chain construction) can read the
 		// resolved provider without re-doing the map lookup. nil
@@ -890,22 +1015,63 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	// is recognized as listening on THE HTTP port, auto_https is
 	// disabled on it, no TLS policies are injected. arenet_https
 	// listens on THE HTTPS port and keeps its cert management.
-	full := map[string]any{
-		"apps": map[string]any{
-			"http": map[string]any{
-				"http_port":  httpPortFor(opts.DevMode),
-				"https_port": httpsPortFor(opts.DevMode),
-				"servers":    cfg.Apps.HTTP.Servers,
-			},
-			"tls": map[string]any{
-				"automation": map[string]any{
-					"policies": buildTLSPolicies(acme, opts),
-				},
+	apps := map[string]any{
+		"http": map[string]any{
+			"http_port":  httpPortFor(opts.DevMode),
+			"https_port": httpsPortFor(opts.DevMode),
+			"servers":    cfg.Apps.HTTP.Servers,
+		},
+		"tls": map[string]any{
+			"automation": map[string]any{
+				"policies": buildTLSPolicies(acme, opts),
 			},
 		},
 	}
+	// Step N.1 — apps.crowdsec block. Inject ONLY when the
+	// operator has provided a LAPI key; empty key is the
+	// degraded-mode signal (AC #13). The handler prepend on
+	// every route is conditioned on the same flag (see the
+	// per-route loop above).
+	//
+	// AC #14 invariant: this code path runs on EVERY reload
+	// (every route mutation goes through buildConfigJSON); the
+	// apps.crowdsec block must therefore reappear in every
+	// emitted config or the bouncer is silently removed from
+	// the running Caddy instance. Pinned by
+	// TestBuildConfigJSON_WithCrowdSec_ReloadPreserves.
+	if app := buildCrowdSecApp(opts.CrowdSec); app != nil {
+		apps["crowdsec"] = app
+	}
 
+	full := map[string]any{"apps": apps}
 	return json.MarshalIndent(full, "", "  ")
+}
+
+// buildCrowdSecApp renders the apps.crowdsec JSON block from
+// the manager's stored config. Returns nil when no key is set
+// (degraded mode — caller skips the apps map injection AND
+// the per-route handler prepend).
+//
+// Field values reflect Step N spec arbitrage:
+//   - D1.A enable_streaming=true (streaming mode, sub-ms hot path).
+//   - D2.A enable_hard_fails=false (fail-open on LAPI down).
+//   - D7.A ticker_interval=60s (match Caddy bouncer default,
+//     same cadence as the parallel go-cs-bouncer consumer in N.2).
+func buildCrowdSecApp(cfg crowdsecConfig) *crowdsecApp {
+	if cfg.apiKey == "" {
+		return nil
+	}
+	apiURL := cfg.apiURL
+	if apiURL == "" {
+		apiURL = "http://127.0.0.1:8080/"
+	}
+	return &crowdsecApp{
+		APIURL:          apiURL,
+		APIKey:          cfg.apiKey,
+		TickerInterval:  "60s",
+		EnableStreaming: true,
+		EnableHardFails: false,
+	}
 }
 
 // buildTLSPolicies returns the tls.automation.policies array.
