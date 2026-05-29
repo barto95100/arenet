@@ -5,28 +5,42 @@
 -->
 
 <!--
-Step M.3 — /security dashboard.
+Step Q.4 — /security dashboard.
+
+Extends the M.3 layout with the Step Q rate-limit and audit
+auth-failure signals. The per-route drill-down at
+/security/[routeId] STAYS M.4-WAF-only (per spec D5
+carve-out: throttle + auth are per-IP, not per-route).
 
 Layout (top → bottom):
   - PageHeader
-  - 5 stat cards: WAF blocks/min, top-attacked-route
-    blocks/min, % requests blocked, total 4xx/min for
-    context, # active WAF-enabled routes
-  - Category distribution strip (SQLi / XSS / RCE / LFI /
-    PROTOCOL / OTHER)
-  - 3 independent timeline charts on route=all (AC #3): WAF
-    blocks (the headline), 4xx for context, req for context
-  - Top-5 table filtered to WAF-enabled routes (D6=B)
-  - Recent WAF events widget (limit=20, no filter)
+  - 8 stat cards in two rows on wide screens:
+    Row 1 (M):  WAF blocks/min, top-attacked route, %req
+                blocked, 4xx/min, WAF-enabled routes
+    Row 2 (Q):  THROTTLE/min, AUTH-FAIL/min, ATTACKER IPs
+                unique
+  - Category distribution strip (WAF only — throttle / auth
+    don't have an OWASP taxonomy)
+  - 5 timeline charts on route=all (3 M + 2 Q): WAF blocks,
+    THROTTLE/min (Q), AUTH-FAIL/min (Q), 4xx for context,
+    req for context
+  - Top-5 table filtered to WAF-enabled routes (D6=B,
+    unchanged from M)
+  - Mixed events widget (WAF + THROTTLE + AUTH interleaved
+    by ts desc) — replaces M's WAF-only WafEventList
 
 States:
   - AC #13 disabled (boot-failed observability) → single
-    panel, no charts, no error toast.
+    panel, no charts, no error toast. AC #14 applies the
+    same shape per-Q-endpoint.
   - AC #7 zero routes → panel pointing to /routes.
-  - AC #7 zero WAF-enabled routes → panel asking the
-    operator to enable WAF on a route.
-  - AC #7 zero traffic → cards at zero, charts show in-SVG
-    "no data" label, category strip shows "no WAF events".
+  - AC #7 zero WAF-enabled routes → still rendered as the
+    M empty state (the dashboard is more useful with at
+    least one WAF-enabled route, even though Q signals
+    don't require one — auth failures and throttle blocks
+    surface regardless).
+  - Zero traffic → cards at zero, charts show in-SVG
+    "no data" label.
 
 Step F design tokens only.
 -->
@@ -39,14 +53,22 @@ Step F design tokens only.
 	import Spinner from '$lib/components/Spinner.svelte';
 	import TimelineChart from '$lib/components/TimelineChart.svelte';
 	import CategoryDistribution from '$lib/components/CategoryDistribution.svelte';
-	import WafEventList from '$lib/components/WafEventList.svelte';
+	import MixedEventList from '$lib/components/MixedEventList.svelte';
 	import { fetchSummary, fetchTimeseries } from '$lib/api/metrics';
-	import { fetchEvents } from '$lib/api/security';
+	import {
+		fetchAttackersSummary,
+		fetchAuthFailures,
+		fetchEvents,
+		fetchThrottleEvents
+	} from '$lib/api/security';
 	import { listRoutes } from '$lib/api/client';
 	import type {
+		AttackersSummaryResponse,
+		AuthFailureRecentEvent,
 		MetricWindow,
 		Route,
 		SummaryResponse,
+		ThrottleEvent,
 		TimeseriesPoint,
 		TimeseriesResponse,
 		WafEvent
@@ -61,10 +83,20 @@ Step F design tokens only.
 	let summary = $state<SummaryResponse | null>(null);
 	let allRoutes = $state<Route[]>([]);
 	let recentEvents = $state<WafEvent[]>([]);
+	// Step Q.4 — three new event sources for the mixed feed
+	// + the attackers-summary partial-state hint.
+	let recentThrottle = $state<ThrottleEvent[]>([]);
+	let recentAuthFailures = $state<AuthFailureRecentEvent[]>([]);
+	let attackersSummary = $state<AttackersSummaryResponse | null>(null);
 
 	let reqSeries = $state<TimeseriesPoint[]>([]);
 	let fourxxSeries = $state<TimeseriesPoint[]>([]);
 	let wafSeries = $state<TimeseriesPoint[]>([]);
+	// Step Q.4 — two new chart series (throttle + auth-fail).
+	// Both fetched on route=all (the signals are not
+	// per-route per spec §3.5 / AC #10).
+	let throttleSeries = $state<TimeseriesPoint[]>([]);
+	let authFailSeries = $state<TimeseriesPoint[]>([]);
 
 	const disabled = $derived(summary?.disabled === true);
 	const noRoutes = $derived(!disabled && allRoutes.length === 0);
@@ -131,24 +163,48 @@ Step F design tokens only.
 				reqSeries = [];
 				fourxxSeries = [];
 				wafSeries = [];
+				throttleSeries = [];
+				authFailSeries = [];
 				recentEvents = [];
+				recentThrottle = [];
+				recentAuthFailures = [];
+				attackersSummary = null;
 				return;
 			}
 
-			// 3 independent timeline series + the recent events
-			// widget, all fetched in parallel. Charts use
-			// route=all per Spec-1 §10.1 (global view; consistent
-			// with /observability semantics).
-			const [req, fourxx, waf, events] = await Promise.all([
-				fetchTimeseries('all', 'req_per_sec', window),
-				fetchTimeseries('all', 'four_xx_rate', window),
-				fetchTimeseries('all', 'waf_block_rate', window),
-				fetchEvents({ limit: 20 })
-			]);
+			// Step Q.4 — 5 timeline series (3 M + 2 Q) + 3 event
+			// feeds + attackers summary, all fetched in parallel.
+			// Per-Q-endpoint AC #14 disabled is handled at the
+			// response level (events arrays come back empty,
+			// timeseries gap-filled with 0).
+			//
+			// All series use route=all: per AC #10, neither
+			// throttle nor auth-failure is per-route. The "all"
+			// sentinel's QueryAggregated SUMs across every route
+			// including the throttle sentinel ("_throttle",
+			// spec §3.5), which is exactly the system-wide view
+			// we want here.
+			const [req, fourxx, waf, throttle, authFail, events, throttleEvts, authFails, attackers] =
+				await Promise.all([
+					fetchTimeseries('all', 'req_per_sec', window),
+					fetchTimeseries('all', 'four_xx_rate', window),
+					fetchTimeseries('all', 'waf_block_rate', window),
+					fetchTimeseries('all', 'throttle_block_rate', window),
+					fetchTimeseries('all', 'auth_failure_rate', window),
+					fetchEvents({ limit: 20 }),
+					fetchThrottleEvents({ limit: 20 }),
+					fetchAuthFailures(window),
+					fetchAttackersSummary(window)
+				]);
 			reqSeries = trimTrailing(req);
 			fourxxSeries = trimTrailing(fourxx);
 			wafSeries = trimTrailing(waf);
+			throttleSeries = trimTrailing(throttle);
+			authFailSeries = trimTrailing(authFail);
 			recentEvents = events.events;
+			recentThrottle = throttleEvts.events;
+			recentAuthFailures = authFails.recent;
+			attackersSummary = attackers;
 		} catch (err) {
 			loadError = err instanceof ApiError ? err.message : 'failed to load security data';
 			pushToast(loadError, 'danger');
@@ -241,7 +297,8 @@ Step F design tokens only.
 		>
 	</div>
 
-	<!-- 5 stat cards -->
+	<!-- 8 stat cards: 5 M + 3 Q. CSS auto-fit grid wraps to
+	     2 rows on narrow viewports. -->
 	<div class="stat-grid">
 		<StatCard label="WAF blocks / min" value={summary?.totalWafBlockedPerMin ?? 0} />
 		<StatCard
@@ -251,7 +308,22 @@ Step F design tokens only.
 		<StatCard label="% requests blocked" value={fmtPct(pctBlocked)} />
 		<StatCard label="4xx / min (context)" value={summary?.totalFourXxPerMin ?? 0} />
 		<StatCard label="Routes avec WAF" value={wafEnabledRoutes.length} />
+		<!-- Step Q.4 — 3 new headline cards. THROTTLE / min +
+		     AUTH-FAIL / min are per-minute counts (just-closed
+		     minute). ATTACKER IPs unique is the server-side
+		     union over the same window. -->
+		<StatCard label="Throttle blocks / min" value={summary?.totalThrottlePerMin ?? 0} />
+		<StatCard label="Auth fails / min" value={summary?.totalAuthFailuresPerMin ?? 0} />
+		<StatCard label="Attacker IPs unique" value={summary?.attackerIpsUnique ?? 0} />
 	</div>
+
+	{#if attackersSummary?.partial === true}
+		<div class="partial-hint" role="status">
+			Données partielles — au moins une source (WAF, throttle ou
+			audit) est indisponible. Les chiffres affichés reflètent
+			les sources qui ont répondu.
+		</div>
+	{/if}
 
 	<!-- Category distribution strip -->
 	<Card>
@@ -261,9 +333,9 @@ Step F design tokens only.
 		</div>
 	</Card>
 
-	<!-- 3 independent timeline charts (route=all). AC #3:
-	     each chart is a SEPARATE visual block — never
-	     stacked or overlaid. -->
+	<!-- 5 independent timeline charts (route=all). AC #3 /
+	     AC #10: each chart is a SEPARATE visual block —
+	     never stacked or overlaid. -->
 	<div class="chart-grid">
 		<Card>
 			<div class="chart-block">
@@ -273,6 +345,34 @@ Step F design tokens only.
 					color="var(--status-down)"
 					formatValue={fmtCount}
 					label="System-wide WAF blocks per minute"
+				/>
+			</div>
+		</Card>
+		<!-- Step Q.4 — throttle (rate-limit) blocks / min,
+		     system-wide. Server sums across the sentinel
+		     route_id when route=all (spec §3.5). -->
+		<Card>
+			<div class="chart-block">
+				<h3>Throttle blocks / minute</h3>
+				<TimelineChart
+					points={throttleSeries}
+					color="var(--status-warn)"
+					formatValue={fmtCount}
+					label="System-wide rate-limit blocks per minute"
+				/>
+			</div>
+		</Card>
+		<!-- Step Q.4 — auth-failure rate, audit-scan-backed
+		     (spec D4.B). Same wire shape as the bucket
+		     metrics; gap-filled to 0. -->
+		<Card>
+			<div class="chart-block">
+				<h3>Auth fails / minute</h3>
+				<TimelineChart
+					points={authFailSeries}
+					color="var(--status-info)"
+					formatValue={fmtCount}
+					label="System-wide authentication failures per minute"
 				/>
 			</div>
 		</Card>
@@ -339,11 +439,20 @@ Step F design tokens only.
 		</div>
 	</Card>
 
-	<!-- Recent events feed -->
+	<!-- Step Q.4 — mixed events feed (WAF + THROTTLE +
+	     AUTH). Replaces the M.3 WAF-only WafEventList; the
+	     drill-down at /security/[routeId] still uses
+	     WafEventList because the per-route view is WAF-only
+	     by spec D5 carve-out. -->
 	<Card>
 		<div class="block">
-			<h3>Événements WAF récents</h3>
-			<WafEventList events={recentEvents} {hostByRouteId} />
+			<h3>Événements de sécurité récents</h3>
+			<MixedEventList
+				wafEvents={recentEvents}
+				throttleEvents={recentThrottle}
+				authFailures={recentAuthFailures}
+				{hostByRouteId}
+			/>
 		</div>
 	</Card>
 {/if}
@@ -404,6 +513,15 @@ Step F design tokens only.
 		grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 		gap: 0.75rem;
 		margin: 0 0 1rem 0;
+	}
+	.partial-hint {
+		background: var(--bg-surface);
+		border-left: 3px solid var(--status-warn);
+		padding: 0.5rem 0.75rem;
+		font-size: var(--text-sm);
+		color: var(--text-secondary);
+		margin: 0 0 1rem 0;
+		border-radius: 0 4px 4px 0;
 	}
 	.block {
 		padding: 1rem;

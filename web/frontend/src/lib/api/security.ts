@@ -9,8 +9,11 @@
 
 import { request } from './client';
 import type {
+	AttackersSummaryResponse,
+	AuthFailuresResponse,
 	MetricWindow,
 	OwaspCategory,
+	ThrottleEventsResponse,
 	WafEventsByRuleResponse,
 	WafEventsResponse
 } from './types';
@@ -60,4 +63,68 @@ export function fetchEventsByRule(
 ): Promise<WafEventsByRuleResponse> {
 	const qs = new URLSearchParams({ route, window });
 	return request<WafEventsByRuleResponse>('GET', `/security/events/by-rule?${qs.toString()}`);
+}
+
+/**
+ * Step Q.3 — typed client wrapper around GET
+ * /api/v1/security/throttle-events.
+ *
+ * Filters are optional:
+ *   - `limit` is clamped server-side at 100.
+ *   - `srcIp` filters to a single source IP (exact match).
+ *   - `tier` filters to tier 1 or 2; any other value is
+ *     rejected by the backend with a 400.
+ *
+ * AC #14 degraded-mode path: when the observability subsystem
+ * failed at boot, the response carries `disabled: true` and an
+ * empty `events` array. Same shape contract as fetchEvents.
+ */
+export interface FetchThrottleEventsParams {
+	limit?: number;
+	srcIp?: string;
+	tier?: 1 | 2;
+}
+
+export function fetchThrottleEvents(
+	params: FetchThrottleEventsParams = {}
+): Promise<ThrottleEventsResponse> {
+	const qs = new URLSearchParams();
+	if (params.limit !== undefined) qs.set('limit', String(params.limit));
+	if (params.srcIp) qs.set('srcIp', params.srcIp);
+	if (params.tier !== undefined) qs.set('tier', String(params.tier));
+	const suffix = qs.toString() ? `?${qs.toString()}` : '';
+	return request<ThrottleEventsResponse>('GET', `/security/throttle-events${suffix}`);
+}
+
+/**
+ * Step Q.2 — typed client wrapper around GET
+ * /api/v1/security/auth-failures.
+ *
+ * `window` is REQUIRED (backend returns 400 on missing). The
+ * response carries BOTH a per-minute timeseries for the
+ * dashboard chart AND a recent feed for the mixed-events
+ * widget — single audit-scan, two projections (D4.B).
+ *
+ * `partial: true` signals the scan hit its 200-row cap before
+ * reaching the window's `from`. AC #14 disabled contract on
+ * nil reader.
+ */
+export function fetchAuthFailures(window: MetricWindow): Promise<AuthFailuresResponse> {
+	const qs = new URLSearchParams({ window });
+	return request<AuthFailuresResponse>('GET', `/security/auth-failures?${qs.toString()}`);
+}
+
+/**
+ * Step Q.3 — typed client wrapper around GET
+ * /api/v1/security/attackers-summary. Server-side union over
+ * WAF + throttle + audit source-IP sets over the window.
+ *
+ * Three-state disabled/partial contract: ALL readers nil →
+ * disabled; subset nil → partial; all present → neither.
+ * Caller renders an "incomplete data" hint when `partial`
+ * is true.
+ */
+export function fetchAttackersSummary(window: MetricWindow): Promise<AttackersSummaryResponse> {
+	const qs = new URLSearchParams({ window });
+	return request<AttackersSummaryResponse>('GET', `/security/attackers-summary?${qs.toString()}`);
 }

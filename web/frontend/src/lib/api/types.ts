@@ -551,7 +551,18 @@ export type MetricName =
 	| 'four_xx_rate'
 	| 'five_xx_rate'
 	| 'p95_latency_ms'
-	| 'waf_block_rate';
+	| 'waf_block_rate'
+	// Step Q.3 — rate-limit (throttle) blocks per minute.
+	// Reads bucket.ThrottleBlockCount; spec §3.5 stores under
+	// the sentinel route_id "_throttle", so the dashboard
+	// passes route="_throttle" for the global series.
+	| 'throttle_block_rate'
+	// Step Q.3 — auth-failure rate. Server-side detour via
+	// the audit log (D4.B: single source of truth, no bucket
+	// counter). route="all" returns the system-wide series;
+	// route=<uuid> returns all-zero (AC #10 — neither signal
+	// is per-route).
+	| 'auth_failure_rate';
 
 export type MetricWindow = '24h' | '30d';
 
@@ -607,6 +618,23 @@ export interface SummaryResponse {
 	// either no events landed in the window, or the WAF
 	// event reader is unavailable (degraded mode).
 	totalWafBlockedPerMin: number;
+	// Step Q.3 — rate-limit (throttle) blocks counted by the
+	// auth handler over the just-closed minute, system-wide.
+	// AC #15: independent of totalWafBlockedPerMin and the
+	// L 4xx/5xx totals — a Tier-1 / Tier-2 block does NOT
+	// inflate any of those fields.
+	totalThrottlePerMin: number;
+	// Step Q.3 — count of authentication-failure audit events
+	// over the just-closed minute. Source: server-side audit-
+	// scan (D2.B/D4.B). Same independence contract as
+	// totalThrottlePerMin.
+	totalAuthFailuresPerMin: number;
+	// Step Q.3 — server-side union of distinct source IPs
+	// across WAF + throttle + audit auth-failure events over
+	// the just-closed minute. An IP that hit multiple
+	// sources counts ONCE. The dashboard renders this as
+	// the "ATTACKER IPs unique" headline card.
+	attackerIpsUnique: number;
 	wafBlocksByCategory: Record<string, number>;
 	// Null when no traffic landed in the window — same
 	// no-fake-dip rule as TimeseriesPoint.value.
@@ -679,4 +707,132 @@ export interface WafEventRuleAggregate {
 export interface WafEventsByRuleResponse {
 	disabled?: boolean;
 	rows: WafEventRuleAggregate[];
+}
+
+// --- Step Q security types --------------------------------------------------
+
+/**
+ * One rate-limit (throttle) block event as returned by
+ * GET /api/v1/security/throttle-events. Mirrors the Go
+ * wire type securityThrottleEvent in
+ * internal/api/security_handlers.go.
+ *
+ * Tier is 1 (5 fails / 5 min → 15 min block) or 2 (10 fails
+ * / 1 h → 1 h block) per spec D1.A. BlockDurationSeconds is
+ * the original duration assigned when the block fired —
+ * preserved verbatim so the UI can format "blocked for X"
+ * without rounding the live `blockedUntil` countdown.
+ *
+ * AttemptedUsername is captured-verbatim per spec D8.A:
+ * parity with the existing audit log's exposure. The
+ * dashboard renders it as the "user attempted" hint so an
+ * operator under credential-stuffing sees which usernames
+ * the attacker is spraying.
+ */
+export interface ThrottleEvent {
+	id: number;
+	ts: string;
+	tier: 1 | 2;
+	srcIp: string;
+	attemptedUsername: string;
+	blockedUntil: string;
+	blockDurationSeconds: number;
+}
+
+export interface ThrottleEventsResponse {
+	disabled?: boolean;
+	events: ThrottleEvent[];
+}
+
+/**
+ * One audit-derived auth-failure event as returned in the
+ * `recent` slice of GET /api/v1/security/auth-failures.
+ * Action is one of the four audit constants the backend
+ * surfaces via audit.AuthFailureActions(): login_failure,
+ * unlock_failure, oidc_login_rejected, oidc_callback_invalid.
+ *
+ * username + srcIp + message may be empty strings (the audit
+ * record may have been written without them — e.g. the IP
+ * extractor failed, spec §8.5). Frontend renders "—" in
+ * that case rather than blanking the row.
+ */
+export type AuthFailureAction =
+	| 'login_failure'
+	| 'unlock_failure'
+	| 'oidc_login_rejected'
+	| 'oidc_callback_invalid';
+
+export interface AuthFailureRecentEvent {
+	ts: string;
+	action: AuthFailureAction;
+	username: string;
+	srcIp: string;
+	message: string;
+}
+
+/**
+ * GET /api/v1/security/auth-failures response.
+ *
+ * `timeseries` is the per-minute count over the window
+ * (1440 buckets for 24h), gap-filled with 0. Same wire
+ * shape as the L metrics timeseries minus the
+ * disabled/null cells — auth-failures is a count metric.
+ *
+ * `recent` is the head-of-feed for the mixed-events widget,
+ * ts-descending, capped at 100 server-side.
+ *
+ * `partial: true` is set when the audit-bucket scan hit its
+ * 200-row internal cap before reaching the window's `from`
+ * boundary. Operator hint that earlier matching events
+ * exist but were not surfaced — rare in practice (spec D4
+ * volume), exposed for honesty.
+ */
+export interface AuthFailureTimeseriesPoint {
+	ts: string;
+	value: number;
+}
+
+export interface AuthFailuresResponse {
+	disabled?: boolean;
+	window: MetricWindow;
+	timeseries: AuthFailureTimeseriesPoint[];
+	recent: AuthFailureRecentEvent[];
+	partial?: boolean;
+}
+
+/**
+ * GET /api/v1/security/attackers-summary response.
+ *
+ * `uniqueIps` is the server-side union count across WAF,
+ * throttle, and audit auth-failure source-IP sets over the
+ * window. An IP that hit multiple sources counts ONCE.
+ *
+ * `byBucketSource` is the per-source pre-union breakdown —
+ * the dashboard's "by source" widget. SUM(byBucketSource)
+ * ≥ uniqueIps (equal when no overlap).
+ *
+ * Three-state disabled / partial contract (aligned with
+ * Q.2):
+ *   - All three backend readers nil → disabled=true, empty
+ *     bodies.
+ *   - At least one nil but not all → partial=true, the
+ *     union reflects the readers that DID respond.
+ *   - All three present → neither flag set.
+ *
+ * The frontend uses `partial` to drive an "incomplete data"
+ * affordance — same convention as
+ * AuthFailuresResponse.partial.
+ */
+export interface AttackersByBucketSource {
+	waf: number;
+	throttle: number;
+	audit: number;
+}
+
+export interface AttackersSummaryResponse {
+	disabled?: boolean;
+	partial?: boolean;
+	window: MetricWindow;
+	uniqueIps: number;
+	byBucketSource: AttackersByBucketSource;
 }
