@@ -8,7 +8,12 @@
 // declared in lib/api/types.ts.
 
 import { request } from './client';
-import type { OwaspCategory, WafEventsResponse } from './types';
+import type {
+	MetricWindow,
+	OwaspCategory,
+	WafEventsByRuleResponse,
+	WafEventsResponse
+} from './types';
 
 export interface FetchEventsParams {
 	limit?: number;
@@ -37,4 +42,22 @@ export function fetchEvents(params: FetchEventsParams = {}): Promise<WafEventsRe
 	if (params.category) qs.set('category', params.category);
 	const suffix = qs.toString() ? `?${qs.toString()}` : '';
 	return request<WafEventsResponse>('GET', `/security/events${suffix}`);
+}
+
+/**
+ * Per-(rule, category) aggregate over the window. Used by
+ * the M.4 drill-down's per-rule breakdown table; server-
+ * side aggregation avoids the most-recent-100 truncation
+ * that client-side group-by would silently produce on a 30d
+ * window.
+ *
+ * Both parameters are REQUIRED — the backend returns 400 if
+ * either is missing.
+ */
+export function fetchEventsByRule(
+	route: string,
+	window: MetricWindow
+): Promise<WafEventsByRuleResponse> {
+	const qs = new URLSearchParams({ route, window });
+	return request<WafEventsByRuleResponse>('GET', `/security/events/by-rule?${qs.toString()}`);
 }

@@ -230,6 +230,18 @@ Viewer-accessible — relies on the API gate (AC #17).
 					<dt>ID</dt>
 					<dd><code>{routeId}</code></dd>
 				</dl>
+				<!-- M.4 step 3 cross-link: pivot to the security view
+				     for this route. Hidden when WAF is off — the
+				     security drill-down would just show its AC #10
+				     "WAF non activé" panel; offering the link from
+				     the perf view would be misleading. -->
+				{#if route.wafMode === 'detect' || route.wafMode === 'block'}
+					<div class="pivot">
+						<a href="/security/{routeId}">
+							View security drill-down (WAF events) →
+						</a>
+					</div>
+				{/if}
 			</div>
 		</Card>
 	{/if}
@@ -350,5 +362,16 @@ Viewer-accessible — relies on the API gate (AC #17).
 		background: var(--bg-surface);
 		padding: 0 0.25rem;
 		border-radius: 2px;
+	}
+	.pivot {
+		margin-top: 0.75rem;
+		font-size: var(--text-sm);
+	}
+	.pivot a {
+		color: var(--accent-cyan);
+		text-decoration: none;
+	}
+	.pivot a:hover {
+		text-decoration: underline;
 	}
 </style>

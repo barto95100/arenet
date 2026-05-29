@@ -663,3 +663,20 @@ export interface WafEventsResponse {
 	disabled?: boolean;
 	events: WafEvent[];
 }
+
+// One row of the per-rule aggregate returned by
+// GET /api/v1/security/events/by-rule (M.2 amendment #2).
+// Used by the M.4 drill-down's per-rule breakdown table.
+// `lastSeen` is the most-recent event ts for the (ruleId,
+// category) tuple over the window.
+export interface WafEventRuleAggregate {
+	ruleId: string;
+	category: OwaspCategory;
+	count: number;
+	lastSeen: string;
+}
+
+export interface WafEventsByRuleResponse {
+	disabled?: boolean;
+	rows: WafEventRuleAggregate[];
+}
