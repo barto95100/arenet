@@ -58,6 +58,20 @@ type MetricsReader interface {
 	QueryAggregated(ctx context.Context, gran observability.Granularity, from, to time.Time) ([]observability.MetricBucket, error)
 }
 
+// WafEventReader is the read surface the Step M security
+// handlers depend on: per-event WAF rows with optional
+// filters (route, category, time range). Defined here
+// (consumer side) so tests inject a fake without spinning
+// up SQLite, same pattern as MetricsReader.
+//
+// *observability.Store satisfies this interface. A nil
+// reader is the AC #13 degraded-mode case (boot-failed
+// observability subsystem); handlers detect nil and return
+// 200 with disabled=true rather than 500.
+type WafEventReader interface {
+	QueryWafEvents(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
+}
+
 // AuditAppender is the subset of internal/audit the API depends on. Defined
 // here (consumer side, decision D4) so tests can inject a fake without
 // booting bbolt. *audit.Store naturally satisfies this interface.
@@ -111,6 +125,12 @@ type Handler struct {
 	// expected; the handlers detect nil and emit the
 	// "disabled" response without panicking.
 	metrics MetricsReader
+	// wafEvents (Step M.2) is the read surface for the
+	// /api/v1/security/events endpoint + the WafBlocksByCategory
+	// field on /metrics/summary. Same nil-tolerance contract as
+	// `metrics` — boot-failed observability → degraded-mode
+	// response, not 500.
+	wafEvents WafEventReader
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -193,6 +213,15 @@ func (h *Handler) SetUIOrigin(origin string) {
 // as SetUIOrigin.
 func (h *Handler) SetMetricsReader(m MetricsReader) {
 	h.metrics = m
+}
+
+// SetWafEventReader (Step M.2) attaches the WAF event reader
+// used by /api/v1/security/events + the WafBlocksByCategory
+// field of /metrics/summary. Same nil-tolerance contract as
+// SetMetricsReader: pass nil if observability boot failed; the
+// security endpoints will return disabled-mode responses.
+func (h *Handler) SetWafEventReader(r WafEventReader) {
+	h.wafEvents = r
 }
 
 // uiURL returns the URL to redirect to for the given SPA path

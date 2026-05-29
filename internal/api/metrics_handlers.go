@@ -35,6 +35,11 @@ const (
 	metricFourXxRate   metricName = "four_xx_rate"
 	metricFiveXxRate   metricName = "five_xx_rate"
 	metricP95LatencyMs metricName = "p95_latency_ms"
+	// Step M.2 — WAF block rate as a count metric. Routes
+	// through the existing timeseries handler unchanged
+	// (gap-fill rule = 0 for missing buckets, same as the
+	// other count metrics). p95 null semantics do NOT apply.
+	metricWafBlockRate metricName = "waf_block_rate"
 )
 
 // timeseriesPoint is one point on the timeline. Value is *float64
@@ -62,26 +67,41 @@ type timeseriesResponse struct {
 
 // summaryRoute is the per-route entry of the summary response.
 type summaryRoute struct {
-	RouteID     string `json:"routeId"`
-	Host        string `json:"host"`
-	ReqsPerMin  uint64 `json:"reqsPerMin"`
-	FourxxPerMin uint64 `json:"fourxxPerMin"`
-	FivexxPerMin uint64 `json:"fivexxPerMin"`
+	RouteID          string `json:"routeId"`
+	Host             string `json:"host"`
+	ReqsPerMin       uint64 `json:"reqsPerMin"`
+	FourxxPerMin     uint64 `json:"fourxxPerMin"`
+	FivexxPerMin     uint64 `json:"fivexxPerMin"`
+	WafBlockedPerMin uint64 `json:"wafBlockedPerMin"`
 }
 
 // summaryResponse is the wire shape of GET /metrics/summary.
 // AC #6: 4xx and 5xx are EXPOSED SEPARATELY. The fields below
 // are independent counters; no aggregate "errors" field exists.
+//
+// Step M.2 (spec §3.4):
+//   - TotalWafBlockedPerMin: sum of waf_block_count across all
+//     routes for the just-closed minute. Independent from the
+//     L counters — a WAF block increments THIS field, not
+//     TotalFourXxPerMin / TotalFiveXxPerMin (AC #3 / #4).
+//   - WafBlocksByCategory: per-OWASP-category breakdown of the
+//     events emitted during the same window. Populated by
+//     querying waf_event grouped by category client-side; the
+//     dashboard's category distribution strip reads this map
+//     directly. Empty when the WAF event reader is unavailable
+//     (degraded mode) OR when no events landed in the window.
 type summaryResponse struct {
-	GeneratedAt        string         `json:"generatedAt"`
-	WindowSeconds      int            `json:"windowSeconds"`
-	Disabled           bool           `json:"disabled,omitempty"`
-	TotalReqPerMin     uint64         `json:"totalReqPerMin"`
-	TotalFourXxPerMin  uint64         `json:"totalFourXxPerMin"`
-	TotalFiveXxPerMin  uint64         `json:"totalFiveXxPerMin"`
-	GlobalP95LatencyMs *float64       `json:"globalP95LatencyMs"` // null when no traffic
-	ActiveRouteCount   int            `json:"activeRouteCount"`
-	TopRoutes          []summaryRoute `json:"topRoutes"` // top 5 by reqsPerMin
+	GeneratedAt         string            `json:"generatedAt"`
+	WindowSeconds       int               `json:"windowSeconds"`
+	Disabled            bool              `json:"disabled,omitempty"`
+	TotalReqPerMin      uint64            `json:"totalReqPerMin"`
+	TotalFourXxPerMin   uint64            `json:"totalFourXxPerMin"`
+	TotalFiveXxPerMin   uint64            `json:"totalFiveXxPerMin"`
+	TotalWafBlockedPerMin uint64          `json:"totalWafBlockedPerMin"`
+	GlobalP95LatencyMs  *float64          `json:"globalP95LatencyMs"` // null when no traffic
+	ActiveRouteCount    int               `json:"activeRouteCount"`
+	TopRoutes           []summaryRoute    `json:"topRoutes"`            // top 5 by reqsPerMin
+	WafBlocksByCategory map[string]uint64 `json:"wafBlocksByCategory"` // category → count; empty when no events
 }
 
 // routeAllSentinel selects the global aggregated timeseries (per
@@ -131,7 +151,7 @@ func (h *Handler) metricsTimeseries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isValidMetric(metric) {
-		writeError(w, http.StatusBadRequest, "metric must be one of req_per_sec, four_xx_rate, five_xx_rate, p95_latency_ms")
+		writeError(w, http.StatusBadRequest, "metric must be one of req_per_sec, four_xx_rate, five_xx_rate, p95_latency_ms, waf_block_rate")
 		return
 	}
 	gran, step, windowDur, ok := windowParams(window)
@@ -206,9 +226,10 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	bucketTs := now.Truncate(time.Minute).Add(-time.Minute) // the just-closed minute
 	resp := summaryResponse{
-		GeneratedAt:   now.Format(time.RFC3339),
-		WindowSeconds: 60,
-		TopRoutes:     []summaryRoute{},
+		GeneratedAt:         now.Format(time.RFC3339),
+		WindowSeconds:       60,
+		TopRoutes:           []summaryRoute{},
+		WafBlocksByCategory: map[string]uint64{},
 	}
 
 	if h.metrics == nil {
@@ -232,6 +253,7 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		Req          uint64
 		Fourxx       uint64
 		Fivexx       uint64
+		WafBlocked   uint64
 		LatencyP95Ms int32
 	}
 	byID := make(map[string]*rowAgg, len(routes))
@@ -263,10 +285,12 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		agg.Req = uint64(row.ReqCount)
 		agg.Fourxx = uint64(row.FourxxCount)
 		agg.Fivexx = uint64(row.FivexxCount)
+		agg.WafBlocked = uint64(row.WafBlockCount)
 		agg.LatencyP95Ms = row.LatencyP95Ms
 		resp.TotalReqPerMin += agg.Req
 		resp.TotalFourXxPerMin += agg.Fourxx
 		resp.TotalFiveXxPerMin += agg.Fivexx
+		resp.TotalWafBlockedPerMin += agg.WafBlocked
 		if row.LatencyP95Ms > 0 && row.ReqCount > 0 {
 			latencyWeightedSum += uint64(row.LatencyP95Ms) * uint64(row.ReqCount)
 			latencyWeightDen += uint64(row.ReqCount)
@@ -280,6 +304,34 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	// resp.GlobalP95LatencyMs stays nil → JSON null per AC #5
 	// when no traffic landed in the window.
 
+	// Step M.2 — WafBlocksByCategory. Pulled from the per-event
+	// log, NOT the bucket counter, because the bucket only knows
+	// the total (waf_block_count) — categories live on each
+	// event row. Single query over the just-closed minute,
+	// grouped client-side. The reader may be nil (degraded
+	// mode); in that case the map stays empty and the dashboard
+	// renders its category strip as all zeros, which is the
+	// honest "no data" answer.
+	if h.wafEvents != nil {
+		events, qerr := h.wafEvents.QueryWafEvents(r.Context(), observability.WafEventFilter{
+			From:  from,
+			To:    to,
+			Limit: 100, // cap per spec §1.4 / handler-layer convention
+		})
+		if qerr != nil {
+			h.logger.Error("metrics: summary waf_event query failed", "err", qerr)
+			// Don't fail the whole summary on a WAF-event read
+			// error: the bucket-side numbers are already
+			// populated and useful. Leave the category map
+			// empty + log; the operator can correlate via the
+			// /security/events endpoint directly.
+		} else {
+			for _, e := range events {
+				resp.WafBlocksByCategory[e.Category]++
+			}
+		}
+	}
+
 	// Build top-5 by reqsPerMin.
 	top := make([]summaryRoute, 0, len(byID))
 	for id, agg := range byID {
@@ -288,11 +340,12 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.ActiveRouteCount++
 		top = append(top, summaryRoute{
-			RouteID:      id,
-			Host:         agg.Host,
-			ReqsPerMin:   agg.Req,
-			FourxxPerMin: agg.Fourxx,
-			FivexxPerMin: agg.Fivexx,
+			RouteID:          id,
+			Host:             agg.Host,
+			ReqsPerMin:       agg.Req,
+			FourxxPerMin:     agg.Fourxx,
+			FivexxPerMin:     agg.Fivexx,
+			WafBlockedPerMin: agg.WafBlocked,
 		})
 	}
 	sortTopByReqs(top)
@@ -308,7 +361,7 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 
 func isValidMetric(m metricName) bool {
 	switch m {
-	case metricReqPerSec, metricFourXxRate, metricFiveXxRate, metricP95LatencyMs:
+	case metricReqPerSec, metricFourXxRate, metricFiveXxRate, metricP95LatencyMs, metricWafBlockRate:
 		return true
 	}
 	return false
@@ -378,6 +431,9 @@ func pickMetricValue(row observability.MetricBucket, hit bool, metric metricName
 		return &v
 	case metricFiveXxRate:
 		v := float64(row.FivexxCount)
+		return &v
+	case metricWafBlockRate:
+		v := float64(row.WafBlockCount)
 		return &v
 	case metricP95LatencyMs:
 		if row.LatencyP95Ms <= 0 {

@@ -122,6 +122,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// aggregator, never accepted via the API).
 			r.Get("/metrics/timeseries", h.metricsTimeseries)
 			r.Get("/metrics/summary", h.metricsSummary)
+			// Step M.2 — WAF event log. Read-only,
+			// viewer-accessible per AC #12. Same auth shape
+			// as /metrics; the data is event-shaped
+			// (sparse per-block rows) rather than bucketed
+			// timeseries, which is why it gets its own
+			// endpoint despite living under the /security/
+			// prefix (spec §1.3 D2 carve-out).
+			r.Get("/security/events", h.securityEvents)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame

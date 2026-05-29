@@ -416,6 +416,12 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	// keeps the interface comparison honest.
 	if obsStore != nil {
 		apiHandler.SetMetricsReader(obsStore)
+		// Step M.2 — same nil-guard discipline for the WAF
+		// event reader. Both the bucket metrics and the
+		// per-event log live on *observability.Store; we
+		// inject them independently so future test scaffolds
+		// can mock one without the other.
+		apiHandler.SetWafEventReader(obsStore)
 	}
 	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.dev, logger)
 	router := api.NewRouter(apiHandler, cfg.dev, ipExtractor, wsTopologyHandler)
