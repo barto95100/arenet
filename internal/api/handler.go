@@ -68,8 +68,17 @@ type MetricsReader interface {
 // reader is the AC #13 degraded-mode case (boot-failed
 // observability subsystem); handlers detect nil and return
 // 200 with disabled=true rather than 500.
+//
+// AggregateWafEventsByRule (M.2 amendment #2) returns the
+// per-(rule_id, category) aggregate over the window. Used by
+// the M.4 drill-down's per-rule table. Server-side aggregation
+// rather than client-side group-by on the events list — the
+// latter silently truncated to the most-recent 100 events,
+// which broke the spec §5.4 promise of "over the window" on
+// 30d windows.
 type WafEventReader interface {
 	QueryWafEvents(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
+	AggregateWafEventsByRule(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
 }
 
 // AuditAppender is the subset of internal/audit the API depends on. Defined

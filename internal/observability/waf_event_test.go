@@ -186,3 +186,135 @@ func TestWafEvent_EmptyBatch_NoOp(t *testing.T) {
 		t.Fatalf("empty batch: %v", err)
 	}
 }
+
+// --- M.2 amendment #2: AggregateWafEventsByRule -----------------------------
+
+func TestAggregateWafEventsByRule_GroupsByRuleAndCategory(t *testing.T) {
+	// 3 rules / 4 categories on the same route over the
+	// same window. Aggregation should produce one row per
+	// (rule, category) tuple, with correct counts and the
+	// most-recent ts per tuple.
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	seedEvents(t, s, []WafEvent{
+		// rule 942100 / SQLi — 3 events, span 0..2 min.
+		{Ts: t0, RouteID: "r", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1"},
+		{Ts: t0.Add(1 * time.Minute), RouteID: "r", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.2"},
+		{Ts: t0.Add(2 * time.Minute), RouteID: "r", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.3"},
+		// rule 941100 / XSS — 2 events.
+		{Ts: t0.Add(30 * time.Second), RouteID: "r", RuleID: "941100", Category: "XSS", SrcIP: "2.2.2.1"},
+		{Ts: t0.Add(90 * time.Second), RouteID: "r", RuleID: "941100", Category: "XSS", SrcIP: "2.2.2.2"},
+		// rule 932100 / RCE — 1 event, most recent overall.
+		{Ts: t0.Add(3 * time.Minute), RouteID: "r", RuleID: "932100", Category: "RCE", SrcIP: "3.3.3.1"},
+	})
+
+	got, err := s.AggregateWafEventsByRule(ctx, WafEventAggregateFilter{
+		RouteID: "r",
+		From:    t0.Add(-1 * time.Hour),
+		To:      t0.Add(1 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Aggregate: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("rows = %d, want 3 (one per rule+category): %+v", len(got), got)
+	}
+
+	// Order: count DESC. Most-counted = 942100 SQLi (3),
+	// then 941100 XSS (2), then 932100 RCE (1).
+	if got[0].RuleID != "942100" || got[0].Category != "SQLi" || got[0].Count != 3 {
+		t.Errorf("row[0] = %+v, want 942100/SQLi/3", got[0])
+	}
+	if got[1].RuleID != "941100" || got[1].Category != "XSS" || got[1].Count != 2 {
+		t.Errorf("row[1] = %+v, want 941100/XSS/2", got[1])
+	}
+	if got[2].RuleID != "932100" || got[2].Category != "RCE" || got[2].Count != 1 {
+		t.Errorf("row[2] = %+v, want 932100/RCE/1", got[2])
+	}
+
+	// LastSeen for 942100 must be the third event at t0+2m.
+	wantLast := t0.Add(2 * time.Minute)
+	if !got[0].LastSeen.Equal(wantLast) {
+		t.Errorf("row[0].LastSeen = %v, want %v", got[0].LastSeen, wantLast)
+	}
+}
+
+func TestAggregateWafEventsByRule_FilterByRoute(t *testing.T) {
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	seedEvents(t, s, []WafEvent{
+		{Ts: t0, RouteID: "r-a", RuleID: "942100", Category: "SQLi"},
+		{Ts: t0.Add(time.Minute), RouteID: "r-b", RuleID: "942100", Category: "SQLi"},
+		{Ts: t0.Add(2 * time.Minute), RouteID: "r-a", RuleID: "942100", Category: "SQLi"},
+	})
+
+	got, _ := s.AggregateWafEventsByRule(ctx, WafEventAggregateFilter{RouteID: "r-a"})
+	if len(got) != 1 {
+		t.Fatalf("r-a rows = %d, want 1", len(got))
+	}
+	if got[0].Count != 2 {
+		t.Errorf("r-a aggregate count = %d, want 2 (r-b's row must NOT inflate it)", got[0].Count)
+	}
+}
+
+func TestAggregateWafEventsByRule_FilterByTimeRange(t *testing.T) {
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	seedEvents(t, s, []WafEvent{
+		{Ts: t0.Add(-2 * time.Hour), RouteID: "r", RuleID: "1", Category: "SQLi"},
+		{Ts: t0, RouteID: "r", RuleID: "1", Category: "SQLi"},
+		{Ts: t0.Add(2 * time.Hour), RouteID: "r", RuleID: "1", Category: "SQLi"},
+	})
+
+	got, _ := s.AggregateWafEventsByRule(ctx, WafEventAggregateFilter{
+		RouteID: "r",
+		From:    t0.Add(-time.Hour),
+		To:      t0.Add(time.Hour),
+	})
+	if len(got) != 1 || got[0].Count != 1 {
+		t.Fatalf("time-range filter wrong: got %+v, want 1 row with count=1", got)
+	}
+}
+
+func TestAggregateWafEventsByRule_EmptyWindow(t *testing.T) {
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+	got, err := s.AggregateWafEventsByRule(ctx, WafEventAggregateFilter{
+		From: time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 5, 28, 11, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("empty window should yield 0 rows, got %d", len(got))
+	}
+}
+
+func TestAggregateWafEventsByRule_DistinctCategoriesPerRule(t *testing.T) {
+	// Defensive check: if the same rule_id ever appears
+	// against two categories (config drift), the aggregation
+	// emits one row PER (rule, category) tuple. Frontend
+	// then shows both — honest about the inconsistency.
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	seedEvents(t, s, []WafEvent{
+		{Ts: t0, RouteID: "r", RuleID: "999999", Category: "OTHER"},
+		{Ts: t0.Add(time.Minute), RouteID: "r", RuleID: "999999", Category: "PROTOCOL"},
+	})
+
+	got, _ := s.AggregateWafEventsByRule(ctx, WafEventAggregateFilter{RouteID: "r"})
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rows (one per category), got %d: %+v", len(got), got)
+	}
+}

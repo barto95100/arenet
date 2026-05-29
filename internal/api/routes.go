@@ -130,6 +130,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// endpoint despite living under the /security/
 			// prefix (spec §1.3 D2 carve-out).
 			r.Get("/security/events", h.securityEvents)
+			// M.2 amendment #2 — per-(rule, category)
+			// aggregate over the window. Used by the M.4
+			// drill-down's per-rule table; replaces the
+			// client-side group-by that silently truncated
+			// to the most-recent 100 events on the 30d
+			// window.
+			r.Get("/security/events/by-rule", h.securityEventsByRule)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame

@@ -133,3 +133,104 @@ func (h *Handler) securityEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// --- M.2 amendment #2: per-rule aggregate -----------------------------------
+
+// securityEventByRule is one row of the aggregate response.
+// ts is the most-recent event ts for the (rule_id, category)
+// tuple over the window.
+type securityEventByRule struct {
+	RuleID   string `json:"ruleId"`
+	Category string `json:"category"`
+	Count    int64  `json:"count"`
+	LastSeen string `json:"lastSeen"`
+}
+
+// securityEventsByRuleResponse is the wire shape of
+// GET /api/v1/security/events/by-rule.
+type securityEventsByRuleResponse struct {
+	Disabled bool                  `json:"disabled,omitempty"`
+	Rows     []securityEventByRule `json:"rows"`
+}
+
+// securityWindowParams maps a `window` query parameter
+// (24h/30d) to a [from, to) time range relative to now. Mirrors
+// the metrics-handler convention but returns just the time
+// bounds (no Granularity — aggregation isn't bucketed).
+func securityWindowParams(window string) (from, to time.Time, ok bool) {
+	now := time.Now().UTC()
+	switch window {
+	case "24h":
+		return now.Add(-24 * time.Hour), now, true
+	case "30d":
+		return now.Add(-30 * 24 * time.Hour), now, true
+	}
+	return time.Time{}, time.Time{}, false
+}
+
+// securityEventsByRule handles GET /api/v1/security/events/by-rule.
+// Query parameters:
+//   - route   (required): filter aggregation to a single route
+//     UUID. Empty route would aggregate across all routes,
+//     which the dashboard's per-route view never wants — the
+//     handler requires it explicitly to surface 400 on
+//     missing route rather than silently returning a
+//     system-wide aggregate.
+//   - window  (required): 24h or 30d. Same wording as the
+//     metrics timeseries endpoint to keep operator mental
+//     model consistent.
+//
+// Response shape:
+//
+//	{ rows: [{ruleId, category, count, lastSeen}, ...] }
+//
+// Ordered by count DESC (storage-layer guarantee).
+//
+// AC #13 paths mirror the events endpoint: nil WafEventReader
+// → 200 disabled=true + rows=[]; storage error → 503.
+//
+// Closes the M.4 deviation flagged at review: the drill-down's
+// per-rule table now reflects the full WINDOW, not just the
+// most-recent 100 events.
+func (h *Handler) securityEventsByRule(w http.ResponseWriter, r *http.Request) {
+	resp := securityEventsByRuleResponse{Rows: []securityEventByRule{}}
+
+	if h.wafEvents == nil {
+		resp.Disabled = true
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	routeID := r.URL.Query().Get("route")
+	if routeID == "" {
+		writeError(w, http.StatusBadRequest, "route is required")
+		return
+	}
+	from, to, ok := securityWindowParams(r.URL.Query().Get("window"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "window must be 24h or 30d")
+		return
+	}
+
+	rows, err := h.wafEvents.AggregateWafEventsByRule(r.Context(), observability.WafEventAggregateFilter{
+		RouteID: routeID,
+		From:    from,
+		To:      to,
+	})
+	if err != nil {
+		h.logger.Error("security: aggregate waf_events by rule failed", "err", err, "route", routeID)
+		writeError(w, http.StatusServiceUnavailable, "security events unavailable")
+		return
+	}
+
+	resp.Rows = make([]securityEventByRule, 0, len(rows))
+	for _, r := range rows {
+		resp.Rows = append(resp.Rows, securityEventByRule{
+			RuleID:   r.RuleID,
+			Category: r.Category,
+			Count:    r.Count,
+			LastSeen: r.LastSeen.Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

@@ -499,3 +499,83 @@ func (s *Store) PruneWafEventsOlderThan(ctx context.Context, cutoff time.Time) (
 	}
 	return n, nil
 }
+
+// WafEventRuleAggregate is one row of the per-rule breakdown
+// surfaced by AggregateWafEventsByRule and consumed by the M.4
+// drill-down's per-rule table.
+//
+// Group key is (RuleID, Category). Two CRS rules sharing an ID
+// are theoretically possible across upstream config drift, so
+// the SQL groups by both — in practice the (rule_id → category)
+// mapping is stable, but the query stays honest.
+type WafEventRuleAggregate struct {
+	RuleID   string
+	Category string
+	Count    int64
+	LastSeen time.Time
+}
+
+// WafEventAggregateFilter narrows AggregateWafEventsByRule.
+// Same shape as WafEventFilter minus Category (the aggregation
+// is BY category; filtering by it would defeat the purpose) and
+// minus Limit (an aggregated result is bounded by the number of
+// distinct rules tripped in the window — typically << 100 — so
+// no client-driven cap is needed).
+type WafEventAggregateFilter struct {
+	RouteID string
+	From    time.Time // inclusive
+	To      time.Time // exclusive; zero = open-ended (now)
+}
+
+// AggregateWafEventsByRule returns one row per (rule_id,
+// category) tuple in the window, with the count of matching
+// events + the most-recent ts. Ordered by count DESC so the
+// API layer can hand it to the frontend table as-is.
+//
+// Closes the M.4 drift the spec §5.4 wording calls out:
+// "per-rule breakdown table for the route's blocks OVER THE
+// WINDOW". The M.4 frontend used to derive this client-side
+// from the most-recent-100 events, which silently degraded on
+// a 30d window. This endpoint computes it server-side from the
+// full row set, honouring the window boundaries.
+func (s *Store) AggregateWafEventsByRule(ctx context.Context, filter WafEventAggregateFilter) ([]WafEventRuleAggregate, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	q := `SELECT rule_id, category, COUNT(*) AS cnt, MAX(ts) AS last_ts
+	      FROM waf_event WHERE 1=1`
+	args := []any{}
+	if filter.RouteID != "" {
+		q += ` AND route_id = ?`
+		args = append(args, filter.RouteID)
+	}
+	if !filter.From.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, filter.From.UTC().Unix())
+	}
+	if !filter.To.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, filter.To.UTC().Unix())
+	}
+	q += ` GROUP BY rule_id, category ORDER BY cnt DESC, last_ts DESC`
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: aggregate waf_event by rule: %w", err)
+	}
+	defer rows.Close()
+	var out []WafEventRuleAggregate
+	for rows.Next() {
+		var agg WafEventRuleAggregate
+		var lastUnix int64
+		if err := rows.Scan(&agg.RuleID, &agg.Category, &agg.Count, &lastUnix); err != nil {
+			return nil, fmt.Errorf("observability: scan waf_event aggregate: %w", err)
+		}
+		agg.LastSeen = time.Unix(lastUnix, 0).UTC()
+		out = append(out, agg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate waf_event aggregate: %w", err)
+	}
+	return out, nil
+}

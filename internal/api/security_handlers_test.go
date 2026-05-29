@@ -33,13 +33,25 @@ import (
 // fakeWafEventReader is the test double for WafEventReader.
 // Either return a fixed slice OR an error via the queryFn
 // indirection — same pattern as fakeMetricsReader.
+//
+// M.2 amendment #2: also satisfies AggregateWafEventsByRule
+// via aggregateFn. Defaults to no rows + no error so callers
+// that don't exercise the aggregate path don't have to set it.
 type fakeWafEventReader struct {
-	queryFn func(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
+	queryFn     func(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
+	aggregateFn func(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
 }
 
 func (f *fakeWafEventReader) QueryWafEvents(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error) {
 	if f.queryFn != nil {
 		return f.queryFn(ctx, filter)
+	}
+	return nil, nil
+}
+
+func (f *fakeWafEventReader) AggregateWafEventsByRule(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error) {
+	if f.aggregateFn != nil {
+		return f.aggregateFn(ctx, filter)
 	}
 	return nil, nil
 }
@@ -640,4 +652,206 @@ func bytes_Contains(haystack, needle []byte) bool {
 		}
 	}
 	return false
+}
+
+// --- M.2 amendment #2: /api/v1/security/events/by-rule ----------------------
+
+func TestSecurityEventsByRule_Anon401(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	raw := m.rawHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/security/events/by-rule?route="+m.routeID+"&window=24h", nil)
+	rec := httptest.NewRecorder()
+	raw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anon status = %d, want 401", rec.Code)
+	}
+}
+
+func TestSecurityEventsByRule_NilReader_DisabledResponse(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/security/events/by-rule?route="+m.routeID+"&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (degraded mode is OK, not 5xx)", rec.Code)
+	}
+	var resp securityEventsByRuleResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Disabled {
+		t.Errorf("disabled = false, want true (nil reader = degraded)")
+	}
+}
+
+func TestSecurityEventsByRule_QueryError_503(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{
+		aggregateFn: func(_ context.Context, _ observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error) {
+			return nil, errors.New("disk full")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/security/events/by-rule?route="+m.routeID+"&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestSecurityEventsByRule_MissingRoute_400(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{})
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/security/events/by-rule?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (missing route)", rec.Code)
+	}
+}
+
+func TestSecurityEventsByRule_BadWindow_400(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{})
+
+	for _, w := range []string{"", "7d", "bogus", "1h"} {
+		t.Run("window="+w, func(t *testing.T) {
+			url := "/api/v1/security/events/by-rule?route=" + m.routeID
+			if w != "" {
+				url += "&window=" + w
+			}
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			rec := httptest.NewRecorder()
+			m.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("window=%q status = %d, want 400", w, rec.Code)
+			}
+		})
+	}
+}
+
+func TestSecurityEventsByRule_WindowMapping_24hAnd30d(t *testing.T) {
+	// Pin the window→time-range mapping: 24h passes a
+	// ~24h-ago `From`, 30d passes ~30d-ago. The handler
+	// uses time.Now() so the test compares with a tolerance.
+	m := newMetricsTestEnv(t)
+	var observed observability.WafEventAggregateFilter
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{
+		aggregateFn: func(_ context.Context, f observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error) {
+			observed = f
+			return nil, nil
+		},
+	})
+
+	for _, tc := range []struct {
+		window  string
+		wantAgo time.Duration
+	}{
+		{"24h", 24 * time.Hour},
+		{"30d", 30 * 24 * time.Hour},
+	} {
+		t.Run("window="+tc.window, func(t *testing.T) {
+			now := time.Now().UTC()
+			req := httptest.NewRequest(http.MethodGet,
+				"/api/v1/security/events/by-rule?route="+m.routeID+"&window="+tc.window, nil)
+			rec := httptest.NewRecorder()
+			m.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			// Filter passed to the reader must have From ≈ now-window.
+			delta := observed.From.Sub(now.Add(-tc.wantAgo))
+			if delta < -5*time.Second || delta > 5*time.Second {
+				t.Errorf("filter.From offset from expected = %v; want ≈0 (delta from now-%v)", delta, tc.wantAgo)
+			}
+		})
+	}
+}
+
+func TestSecurityEventsByRule_HappyPath_AggregateRoundTrip(t *testing.T) {
+	// End-to-end: real :memory: store seeded with events
+	// spanning multiple rules, AggregateWafEventsByRule
+	// flows through the handler, response shape verified.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+	m.env.handler.SetWafEventReader(obsStore)
+
+	now := time.Now().UTC()
+	if err := obsStore.InsertWafEventBatch(context.Background(), []observability.WafEvent{
+		{Ts: now.Add(-2 * time.Hour), RouteID: m.routeID, RuleID: "942100", Category: "SQLi", Severity: 2, SrcIP: "1.1.1.1", RequestMethod: "GET", RequestPath: "/", PayloadSample: ""},
+		{Ts: now.Add(-90 * time.Minute), RouteID: m.routeID, RuleID: "942100", Category: "SQLi", Severity: 2, SrcIP: "1.1.1.2", RequestMethod: "GET", RequestPath: "/", PayloadSample: ""},
+		{Ts: now.Add(-1 * time.Hour), RouteID: m.routeID, RuleID: "941100", Category: "XSS", Severity: 3, SrcIP: "2.2.2.1", RequestMethod: "GET", RequestPath: "/", PayloadSample: ""},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/security/events/by-rule?route="+m.routeID+"&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp securityEventsByRuleResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (942100 + 941100)", len(resp.Rows))
+	}
+	// Ordered by count DESC: 942100 (2) first, 941100 (1) second.
+	if resp.Rows[0].RuleID != "942100" || resp.Rows[0].Count != 2 || resp.Rows[0].Category != "SQLi" {
+		t.Errorf("row[0] = %+v, want 942100/SQLi/2", resp.Rows[0])
+	}
+	if resp.Rows[1].RuleID != "941100" || resp.Rows[1].Count != 1 || resp.Rows[1].Category != "XSS" {
+		t.Errorf("row[1] = %+v, want 941100/XSS/1", resp.Rows[1])
+	}
+}
+
+func TestSecurityEventsByRule_TimeWindowFiltersOutStale(t *testing.T) {
+	// The spec §5.4 drift this amendment fixes: on a 24h
+	// window, events older than 24h must NOT appear in the
+	// aggregate. Seed events 25h old + 1h old; query 24h;
+	// expect only the 1h-old.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetWafEventReader(obsStore)
+
+	now := time.Now().UTC()
+	if err := obsStore.InsertWafEventBatch(context.Background(), []observability.WafEvent{
+		{Ts: now.Add(-25 * time.Hour), RouteID: m.routeID, RuleID: "stale", Category: "SQLi"},
+		{Ts: now.Add(-1 * time.Hour), RouteID: m.routeID, RuleID: "recent", Category: "SQLi"},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/security/events/by-rule?route="+m.routeID+"&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var resp securityEventsByRuleResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if len(resp.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1 (only the 1h-old event)", len(resp.Rows))
+	}
+	if resp.Rows[0].RuleID != "recent" {
+		t.Errorf("row[0].RuleID = %q, want %q — stale event leaked past the 24h window", resp.Rows[0].RuleID, "recent")
+	}
 }
