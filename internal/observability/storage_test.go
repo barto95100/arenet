@@ -37,10 +37,10 @@ func TestSchema_InitIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema version 1: %v", err)
 	}
-	// Step M.1: a fresh boot now runs the v1→v2 migration
-	// as part of Open(), so a freshly-created DB lands at v2.
-	if v1 != 2 {
-		t.Fatalf("schema version = %d, want 2", v1)
+	// A fresh boot replays the full migrate chain as part
+	// of Open(), so the DB lands at currentSchemaVersion.
+	if v1 != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", v1, currentSchemaVersion)
 	}
 	if err := s1.Close(); err != nil {
 		t.Fatalf("close 1: %v", err)
@@ -57,8 +57,8 @@ func TestSchema_InitIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema version 2: %v", err)
 	}
-	if v2 != 2 {
-		t.Fatalf("after reopen schema version = %d, want 2", v2)
+	if v2 != currentSchemaVersion {
+		t.Fatalf("after reopen schema version = %d, want %d", v2, currentSchemaVersion)
 	}
 }
 
@@ -76,8 +76,8 @@ func TestOpen_InMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema version: %v", err)
 	}
-	if v != 2 {
-		t.Fatalf("in-memory schema version = %d, want 2", v)
+	if v != currentSchemaVersion {
+		t.Fatalf("in-memory schema version = %d, want %d", v, currentSchemaVersion)
 	}
 }
 

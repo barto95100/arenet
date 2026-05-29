@@ -89,19 +89,20 @@ func TestMigrate_FreshDB_LandsAtCurrentVersion(t *testing.T) {
 	}
 }
 
-func TestMigrate_V1ToV2_PreservesExistingData(t *testing.T) {
+func TestMigrate_V1ToCurrent_PreservesExistingData(t *testing.T) {
 	// Spec AC #6: opening a pre-Step-M metrics.db (schema v1)
-	// must add the v2 columns + tables AND keep the existing
-	// rows intact. The migration runs in a single transaction
-	// so partial failure cannot land at v1.5.
+	// must replay the full migrate chain to currentSchemaVersion
+	// AND keep the existing rows intact. Each step runs in a
+	// single transaction so partial failure cannot land at a
+	// half-version.
 	ctx := context.Background()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "v1-metrics.db")
 
 	openV1OnDisk(t, dbPath)
 
-	// Now open via the production code path — the migrate
-	// chain should bump the file from v1 to v2.
+	// Open via the production code path — the migrate chain
+	// should bump the file from v1 to currentSchemaVersion.
 	s, err := Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("Open v1 DB: %v", err)
@@ -117,12 +118,12 @@ func TestMigrate_V1ToV2_PreservesExistingData(t *testing.T) {
 	}
 
 	// Existing data must still be present and accessible
-	// through the v2 Query path (proving the new column was
-	// added with a sensible default for old rows).
-	row := s.db.QueryRowContext(ctx, `SELECT req_count, fourxx_count, fivexx_count, waf_block_count, latency_p95_ms FROM bucket_1m WHERE route_id = 'r-pre-m'`)
-	var req, fourxx, fivexx, waf int64
+	// through the current Query path (proving the new columns
+	// were added with sensible defaults for old rows).
+	row := s.db.QueryRowContext(ctx, `SELECT req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, latency_p95_ms FROM bucket_1m WHERE route_id = 'r-pre-m'`)
+	var req, fourxx, fivexx, waf, throttle int64
 	var p95 int32
-	if err := row.Scan(&req, &fourxx, &fivexx, &waf, &p95); err != nil {
+	if err := row.Scan(&req, &fourxx, &fivexx, &waf, &throttle, &p95); err != nil {
 		t.Fatalf("scan pre-migrate row: %v", err)
 	}
 	if req != 42 || fourxx != 3 || fivexx != 1 || p95 != 16 {
@@ -131,31 +132,38 @@ func TestMigrate_V1ToV2_PreservesExistingData(t *testing.T) {
 	if waf != 0 {
 		t.Fatalf("pre-existing row should have waf_block_count=0 (default for migrated rows), got %d", waf)
 	}
+	if throttle != 0 {
+		t.Fatalf("pre-existing row should have throttle_block_count=0 (default for migrated rows), got %d", throttle)
+	}
 
-	// The new waf_event table + indexes must be present.
+	// The waf_event table (v2) + throttle_event table (v3)
+	// must both be present after the full chain replay.
 	var name string
 	if err := s.db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name='waf_event'`).Scan(&name); err != nil {
 		t.Fatalf("waf_event table missing after migrate: %v", err)
 	}
+	if err := s.db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name='throttle_event'`).Scan(&name); err != nil {
+		t.Fatalf("throttle_event table missing after migrate: %v", err)
+	}
 }
 
-func TestMigrate_RerunOnV2_IsNoOp(t *testing.T) {
+func TestMigrate_RerunOnCurrent_IsNoOp(t *testing.T) {
 	// Idempotency: re-opening an already-current DB does
 	// nothing (no transaction even started). Verified
 	// indirectly by Open succeeding and the version
 	// remaining unchanged.
 	ctx := context.Background()
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "v2-metrics.db")
+	dbPath := filepath.Join(dir, "current-metrics.db")
 
-	// Fresh open → lands at v2.
+	// Fresh open → lands at currentSchemaVersion.
 	s1, err := Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
 	_ = s1.Close()
 
-	// Second open → must succeed and stay at v2.
+	// Second open → must succeed and stay at currentSchemaVersion.
 	s2, err := Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
@@ -167,5 +175,138 @@ func TestMigrate_RerunOnV2_IsNoOp(t *testing.T) {
 	}
 	if v != currentSchemaVersion {
 		t.Fatalf("second open changed version: %d → %d", currentSchemaVersion, v)
+	}
+}
+
+// openV2OnDisk creates a fresh DB at path with the Step M v2
+// schema baseline (bootstrap v1 + bucket waf_block_count
+// columns + waf_event table) and version=2. Used to exercise
+// the v2→v3 migration path against a real on-disk DB without
+// replaying v1→v2 — guards against a future refactor that
+// hides a v2→v3 bug behind the v1 fast path.
+func openV2OnDisk(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatalf("openV2OnDisk: %v", err)
+	}
+	defer db.Close()
+	const v2Schema = `
+	CREATE TABLE bucket_1m (
+	  route_id TEXT NOT NULL,
+	  ts INTEGER NOT NULL,
+	  req_count INTEGER NOT NULL,
+	  fourxx_count INTEGER NOT NULL,
+	  fivexx_count INTEGER NOT NULL,
+	  waf_block_count INTEGER NOT NULL DEFAULT 0,
+	  latency_p95_ms INTEGER NOT NULL,
+	  PRIMARY KEY (route_id, ts)
+	);
+	CREATE INDEX idx_bucket_1m_ts ON bucket_1m (ts);
+	CREATE TABLE bucket_1h (
+	  route_id TEXT NOT NULL,
+	  ts INTEGER NOT NULL,
+	  req_count INTEGER NOT NULL,
+	  fourxx_count INTEGER NOT NULL,
+	  fivexx_count INTEGER NOT NULL,
+	  waf_block_count INTEGER NOT NULL DEFAULT 0,
+	  latency_p95_ms INTEGER NOT NULL,
+	  PRIMARY KEY (route_id, ts)
+	);
+	CREATE INDEX idx_bucket_1h_ts ON bucket_1h (ts);
+	CREATE TABLE waf_event (
+	  id INTEGER PRIMARY KEY AUTOINCREMENT,
+	  ts INTEGER NOT NULL,
+	  route_id TEXT NOT NULL,
+	  rule_id TEXT NOT NULL,
+	  category TEXT NOT NULL,
+	  severity INTEGER NOT NULL,
+	  src_ip TEXT NOT NULL,
+	  request_method TEXT NOT NULL,
+	  request_path TEXT NOT NULL,
+	  payload_sample TEXT NOT NULL
+	);
+	CREATE INDEX idx_waf_event_ts          ON waf_event (ts);
+	CREATE INDEX idx_waf_event_route_ts    ON waf_event (route_id, ts);
+	CREATE INDEX idx_waf_event_category_ts ON waf_event (category, ts);
+	CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+	-- Natural post-v1→v2-migration state: one row at 2.
+	-- (Open()'s bootstrap is now guarded against injecting a
+	-- phantom version=1 row on reopen — see the comment in
+	-- storage.go schemaSQL.)
+	INSERT INTO schema_version (version) VALUES (2);
+	`
+	if _, err := db.Exec(v2Schema); err != nil {
+		t.Fatalf("openV2OnDisk seed: %v", err)
+	}
+	// Seed one bucket row + one waf_event row so the
+	// migration's "preserve old data" guarantee can be
+	// asserted post-upgrade.
+	if _, err := db.Exec(`INSERT INTO bucket_1m (route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, latency_p95_ms)
+	                      VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"r-pre-q", int64(1700000000), int64(99), int64(7), int64(2), int64(11), int32(22)); err != nil {
+		t.Fatalf("seed bucket_1m: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO waf_event (ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample)
+	                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		int64(1700000000), "r-pre-q", "942100", "SQLI", 5, "1.2.3.4", "GET", "/login", ""); err != nil {
+		t.Fatalf("seed waf_event: %v", err)
+	}
+}
+
+func TestMigrate_V2ToV3_PreservesExistingData(t *testing.T) {
+	// Spec Q AC #6 (mirror of M's): opening a pre-Step-Q
+	// metrics.db (schema v2) must add throttle_block_count columns
+	// + throttle_event table + indexes WITHOUT touching
+	// existing bucket or waf_event rows.
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "v2-metrics.db")
+
+	openV2OnDisk(t, dbPath)
+
+	s, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open v2 DB: %v", err)
+	}
+	defer s.Close()
+
+	v, err := s.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("schema version: %v", err)
+	}
+	if v != currentSchemaVersion {
+		t.Fatalf("after v2→v3 migrate version = %d, want %d", v, currentSchemaVersion)
+	}
+
+	// Bucket row preserved + throttle_block_count defaulted to 0.
+	row := s.db.QueryRowContext(ctx, `SELECT req_count, waf_block_count, throttle_block_count FROM bucket_1m WHERE route_id = 'r-pre-q'`)
+	var req, waf, throttle int64
+	if err := row.Scan(&req, &waf, &throttle); err != nil {
+		t.Fatalf("scan pre-Q bucket row: %v", err)
+	}
+	if req != 99 || waf != 11 {
+		t.Fatalf("v2 bucket data corrupted: req=%d waf=%d (want 99, 11)", req, waf)
+	}
+	if throttle != 0 {
+		t.Fatalf("pre-existing bucket row should have throttle_block_count=0, got %d", throttle)
+	}
+
+	// waf_event row preserved.
+	var rule string
+	if err := s.db.QueryRowContext(ctx, `SELECT rule_id FROM waf_event WHERE route_id = 'r-pre-q'`).Scan(&rule); err != nil {
+		t.Fatalf("scan pre-Q waf_event row: %v", err)
+	}
+	if rule != "942100" {
+		t.Fatalf("v2 waf_event data corrupted: rule=%s want 942100", rule)
+	}
+
+	// throttle_event table + indexes present.
+	var name string
+	if err := s.db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name='throttle_event'`).Scan(&name); err != nil {
+		t.Fatalf("throttle_event table missing after v2→v3 migrate: %v", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_throttle_event_srcip_ts'`).Scan(&name); err != nil {
+		t.Fatalf("idx_throttle_event_srcip_ts missing after v2→v3 migrate: %v", err)
 	}
 }

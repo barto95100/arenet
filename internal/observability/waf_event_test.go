@@ -134,7 +134,7 @@ func TestWafEvent_LimitClampedToCap(t *testing.T) {
 	events := make([]WafEvent, 200)
 	for i := range events {
 		events[i] = WafEvent{
-			Ts: t0.Add(time.Duration(i) * time.Second),
+			Ts:      t0.Add(time.Duration(i) * time.Second),
 			RouteID: "r", RuleID: "1", Category: "SQLi",
 		}
 	}
@@ -160,7 +160,7 @@ func TestWafEvent_PruneOlderThan(t *testing.T) {
 	seedEvents(t, s, []WafEvent{
 		{Ts: now.Add(-31 * 24 * time.Hour), RouteID: "r", RuleID: "1", Category: "SQLi"}, // stale
 		{Ts: now.Add(-29 * 24 * time.Hour), RouteID: "r", RuleID: "1", Category: "SQLi"}, // kept
-		{Ts: now, RouteID: "r", RuleID: "1", Category: "SQLi"},                            // kept
+		{Ts: now, RouteID: "r", RuleID: "1", Category: "SQLi"},                           // kept
 	})
 	n, err := s.PruneWafEventsOlderThan(ctx, now.Add(-30*24*time.Hour))
 	if err != nil {

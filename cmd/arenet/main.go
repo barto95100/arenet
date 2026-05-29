@@ -62,6 +62,7 @@ import (
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
+	"github.com/barto95100/arenet/internal/throttle"
 	"github.com/barto95100/arenet/internal/waf"
 	"github.com/barto95100/arenet/web"
 )
@@ -337,6 +338,39 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		logger.Info("waf event sink wired", "store", obsPath)
 	} else {
 		logger.Info("waf event sink running in degraded mode (no persistence)")
+	}
+
+	// Step Q.1 — Throttle (rate-limit) event sink. Mirror of
+	// the WAF wiring above. The auth handler's rate limiter
+	// reaches this sink via the package-global SetGlobalSink
+	// pointer; same rationale as waf.SetGlobalSink — internal
+	// /auth lives in a different package and the rate limiter
+	// predates the sink's lifecycle (it is constructed before
+	// obsStore is opened, so constructor injection isn't
+	// viable).
+	//
+	// AC #13 degraded-mode mirror: nil obsStore → adapter
+	// returns nil from each flush (events drop silently rather
+	// than inflating FlushErrBatches).
+	throttleSink := throttle.NewSink(throttleInserterAdapter{obsStore}, obsAggregator, logger, throttle.SinkConfig{})
+	throttle.SetGlobalSink(throttleSink)
+	throttleCtx, throttleCancel := context.WithCancel(ctx)
+	var throttleWG sync.WaitGroup
+	throttleWG.Add(1)
+	go func() {
+		defer throttleWG.Done()
+		throttleSink.Run(throttleCtx)
+	}()
+	defer func() {
+		throttleCancel()
+		throttleWG.Wait()
+		throttle.SetGlobalSink(nil)
+		logger.Info("throttle sink stopped")
+	}()
+	if obsStore != nil {
+		logger.Info("throttle event sink wired", "store", obsPath)
+	} else {
+		logger.Info("throttle event sink running in degraded mode (no persistence)")
 	}
 
 	// Start the metrics ticker AFTER caddymgr.Start so the first
@@ -681,6 +715,36 @@ func (a wafInserterAdapter) InsertWafEventBatch(ctx context.Context, events []wa
 		}
 	}
 	return a.store.InsertWafEventBatch(ctx, rows)
+}
+
+// throttleInserterAdapter satisfies throttle.Inserter by
+// translating throttle.Event into observability.ThrottleEvent
+// and delegating to the store. Same shape as
+// wafInserterAdapter — keeps internal/throttle and
+// internal/observability decoupled. Tolerates a nil store
+// (AC #13 degraded mode) by returning nil so the sink does
+// not record the boot failure as a runtime flush error.
+type throttleInserterAdapter struct {
+	store *observability.Store
+}
+
+// InsertThrottleEventBatch implements throttle.Inserter.
+func (a throttleInserterAdapter) InsertThrottleEventBatch(ctx context.Context, events []throttle.Event) error {
+	if a.store == nil {
+		return nil
+	}
+	rows := make([]observability.ThrottleEvent, len(events))
+	for i, e := range events {
+		rows[i] = observability.ThrottleEvent{
+			Ts:                   e.Ts,
+			Tier:                 e.Tier,
+			SrcIP:                e.SrcIP,
+			AttemptedUsername:    e.AttemptedUsername,
+			BlockedUntil:         e.BlockedUntil,
+			BlockDurationSeconds: e.BlockDurationSeconds,
+		}
+	}
+	return a.store.InsertThrottleEventBatch(ctx, rows)
 }
 
 func main() {

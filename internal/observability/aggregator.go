@@ -52,7 +52,29 @@ type TickDelta struct {
 	// with only WafBlocks set. Step E's Ticker.Consume
 	// path never sets this field.
 	WafBlocks uint64
+
+	// ThrottleBlocks is the count of rate-limit block events
+	// to add to the current minute's accumulator. Same shape
+	// as WafBlocks but flows from a different observation
+	// point: the auth handler's rate limiter calls
+	// Aggregator.BumpThrottleBlocks(srcIP), which enqueues a
+	// synthetic TickDelta with only ThrottleBlocks set AND
+	// RouteID forced to ThrottleSentinelRouteID. The srcIP
+	// is intentionally dropped at the bucket layer (per-IP
+	// detail lives in the throttle_event table); the bucket
+	// is a per-minute count under the sentinel route.
+	// Spec §3.5.
+	ThrottleBlocks uint64
 }
+
+// ThrottleSentinelRouteID is the load-bearing convention from
+// Step Q spec §3.5: throttle blocks aggregate into the bucket
+// layer under a sentinel route ID that never collides with a
+// real route. UUIDs don't start with an underscore, so
+// "_throttle" is safe across the whole lifecycle of the
+// system. The frontend's "throttle/min" stat card reads
+// bucket rows WHERE route_id = ThrottleSentinelRouteID.
+const ThrottleSentinelRouteID = "_throttle"
 
 // routeState is the aggregator's in-memory accumulator for one
 // route between two minute boundaries. All access is serialised
@@ -63,13 +85,20 @@ type TickDelta struct {
 // BumpWafBlocks (separate observation point from the Step E
 // Ticker.Consume path — the new arenet_waf Caddy module owns
 // the WAF observation point; see spec §3.3).
+//
+// Step Q: throttleBlocks is the count of rate-limit block
+// events for this route in the current minute. In practice
+// "this route" is the sentinel ThrottleSentinelRouteID — the
+// throttle layer is per-IP, not per-route, and lands in a
+// single per-minute slot under the sentinel. Spec §3.5.
 type routeState struct {
-	req       int64
-	fourxx    int64
-	fivexx    int64
-	wafBlocks int64
-	p95MaxMs  int32 // max across all 1-second samples this minute
-	samples   int   // number of non-empty 1-second samples
+	req            int64
+	fourxx         int64
+	fivexx         int64
+	wafBlocks      int64
+	throttleBlocks int64
+	p95MaxMs       int32 // max across all 1-second samples this minute
+	samples        int   // number of non-empty 1-second samples
 }
 
 // bucketSink is the minimal write surface the aggregator depends
@@ -204,6 +233,26 @@ func (a *Aggregator) BumpWafBlocks(routeID string) {
 	a.Ingest(TickDelta{RouteID: routeID, WafBlocks: 1})
 }
 
+// BumpThrottleBlocks increments the per-minute throttle block
+// counter under the sentinel route ID. Implements
+// throttle.BlockCounter; called by throttle.Sink.absorb on
+// every absorbed rate-limit event (incl. LRU-suppressed) —
+// same bump-then-suppress invariant as BumpWafBlocks.
+//
+// srcIP is accepted to match the throttle.BlockCounter
+// signature but is intentionally NOT used as the aggregator
+// key. Per-IP detail lives in the throttle_event table; the
+// bucket layer is per-minute counts under a sentinel route.
+// Spec §3.5: piggy-backs on the existing per-route flush path
+// rather than introducing a new top-level aggregator slot.
+//
+// Non-blocking by construction. Same AC #13 discipline as
+// BumpWafBlocks / Consume.
+func (a *Aggregator) BumpThrottleBlocks(srcIP string) {
+	_ = srcIP // intentionally unused — see doc comment.
+	a.Ingest(TickDelta{RouteID: ThrottleSentinelRouteID, ThrottleBlocks: 1})
+}
+
 // Consume implements metrics.TickConsumer. Adapter so the Step E
 // ticker can fan its per-route deltas out to the observability
 // pipeline without an import-direction reversal (internal/metrics
@@ -316,6 +365,7 @@ func (a *Aggregator) absorb(d TickDelta) {
 	rs.fourxx += int64(d.Fourxx)
 	rs.fivexx += int64(d.Fivexx)
 	rs.wafBlocks += int64(d.WafBlocks)
+	rs.throttleBlocks += int64(d.ThrottleBlocks)
 	if d.LatencyP95Ms > rs.p95MaxMs {
 		rs.p95MaxMs = d.LatencyP95Ms
 	}
@@ -352,13 +402,14 @@ func (a *Aggregator) flush(ctx context.Context) {
 	rows := make([]MetricBucket, 0, len(a.state))
 	for id, rs := range a.state {
 		rows = append(rows, MetricBucket{
-			RouteID:       id,
-			Ts:            a.currentMinute,
-			ReqCount:      rs.req,
-			FourxxCount:   rs.fourxx,
-			FivexxCount:   rs.fivexx,
-			WafBlockCount: rs.wafBlocks,
-			LatencyP95Ms:  rs.p95MaxMs,
+			RouteID:            id,
+			Ts:                 a.currentMinute,
+			ReqCount:           rs.req,
+			FourxxCount:        rs.fourxx,
+			FivexxCount:        rs.fivexx,
+			WafBlockCount:      rs.wafBlocks,
+			ThrottleBlockCount: rs.throttleBlocks,
+			LatencyP95Ms:       rs.p95MaxMs,
 		})
 	}
 	// Reset before the write so a slow / failing flush doesn't

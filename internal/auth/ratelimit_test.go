@@ -29,6 +29,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/barto95100/arenet/internal/throttle"
 )
 
 // newTestRateLimiter constructs a RateLimiter with a logger writing
@@ -483,4 +485,127 @@ func TestRateLimiter_ConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// captureSink is a minimal throttle.EventSink fake used only
+// by the Step Q rate-limit emit tests. Lives in the test
+// file so production code carries no test-only dependency.
+type captureSink struct {
+	mu     sync.Mutex
+	events []throttle.Event
+}
+
+func (c *captureSink) Emit(e throttle.Event) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, e)
+}
+
+func (c *captureSink) snapshot() []throttle.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]throttle.Event, len(c.events))
+	copy(out, c.events)
+	return out
+}
+
+func TestRateLimiter_Tier1Block_EmitsThrottleEvent(t *testing.T) {
+	rl, _, _ := newTestRateLimiter(t)
+
+	cs := &captureSink{}
+	throttle.SetGlobalSink(cs)
+	t.Cleanup(func() { throttle.SetGlobalSink(nil) })
+
+	for i := 0; i < Tier1Threshold; i++ {
+		rl.Hit("198.51.100.10", "admin")
+	}
+
+	got := cs.snapshot()
+	if len(got) == 0 {
+		t.Fatal("Tier 1 threshold crossing should have emitted at least one throttle event")
+	}
+	last := got[len(got)-1]
+	if last.Tier != 1 {
+		t.Errorf("last event Tier = %d, want 1", last.Tier)
+	}
+	if last.SrcIP != "198.51.100.10" {
+		t.Errorf("last event SrcIP = %q, want 198.51.100.10", last.SrcIP)
+	}
+	if last.AttemptedUsername != "admin" {
+		t.Errorf("last event AttemptedUsername = %q, want admin", last.AttemptedUsername)
+	}
+	wantSec := int((Tier1Block).Round(time.Second) / time.Second)
+	if last.BlockDurationSeconds != wantSec {
+		t.Errorf("last event BlockDurationSeconds = %d, want %d (= Tier1Block)", last.BlockDurationSeconds, wantSec)
+	}
+}
+
+func TestRateLimiter_Tier2Block_EmitsThrottleEvent(t *testing.T) {
+	rl, _, clock := newTestRateLimiter(t)
+
+	cs := &captureSink{}
+	throttle.SetGlobalSink(cs)
+	t.Cleanup(func() { throttle.SetGlobalSink(nil) })
+
+	// Same shape as TestRateLimiter_Tier2_10FailuresIn1Hour:
+	// space hits 6 min apart so Tier 1's 5-min window never
+	// trips, only Tier 2's 1h window. (Tier1 would otherwise
+	// fire first and we'd see Tier-1 events.)
+	for i := 0; i < Tier2Threshold; i++ {
+		rl.Hit("198.51.100.20", "root")
+		advance(clock, 6*time.Minute)
+	}
+
+	got := cs.snapshot()
+	if len(got) == 0 {
+		t.Fatal("Tier 2 threshold crossing should have emitted at least one throttle event")
+	}
+	// Find a Tier-2 event in the captures (the last few hits
+	// should produce Tier-2; earlier hits could not have
+	// produced any block).
+	found := false
+	for _, e := range got {
+		if e.Tier == 2 && e.SrcIP == "198.51.100.20" && e.AttemptedUsername == "root" {
+			found = true
+			wantSec := int((Tier2Block).Round(time.Second) / time.Second)
+			if e.BlockDurationSeconds != wantSec {
+				t.Errorf("Tier-2 event BlockDurationSeconds = %d, want %d (= Tier2Block)", e.BlockDurationSeconds, wantSec)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no Tier-2 event found in captured emissions: %+v", got)
+	}
+}
+
+func TestRateLimiter_NoBlock_NoEmit(t *testing.T) {
+	// Pre-threshold failures must NOT emit throttle events.
+	// The audit log carries them; the throttle event log is
+	// for BLOCK decisions only (spec D1.A).
+	rl, _, _ := newTestRateLimiter(t)
+
+	cs := &captureSink{}
+	throttle.SetGlobalSink(cs)
+	t.Cleanup(func() { throttle.SetGlobalSink(nil) })
+
+	for i := 0; i < Tier1Threshold-1; i++ {
+		rl.Hit("198.51.100.30", "user")
+	}
+
+	if got := cs.snapshot(); len(got) != 0 {
+		t.Errorf("expected 0 emissions before threshold crossed, got %d: %+v", len(got), got)
+	}
+}
+
+func TestRateLimiter_NoGlobalSink_DoesNotPanic(t *testing.T) {
+	// AC #13 degraded mode: rate limiter MUST tolerate a nil
+	// global sink (e.g. observability store failed at boot).
+	rl, _, _ := newTestRateLimiter(t)
+	throttle.SetGlobalSink(nil) // belt-and-braces
+
+	for i := 0; i < Tier1Threshold; i++ {
+		rl.Hit("198.51.100.40", "user")
+	}
+	// Test passes if Hit didn't panic.
 }

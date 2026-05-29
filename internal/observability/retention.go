@@ -38,6 +38,14 @@ const (
 	// need post-incident forensics beyond 30 days should
 	// snapshot metrics.db externally.
 	RetainWafEvents = 30 * 24 * time.Hour
+
+	// RetainThrottleEvents is how long per-event
+	// throttle_event rows are kept at row granularity (Step
+	// Q, spec §1.3 D9.A). Matches the WAF event horizon for
+	// consistency: an operator investigating an incident at
+	// day 29 should find both WAF and rate-limit signal,
+	// not one without the other.
+	RetainThrottleEvents = 30 * 24 * time.Hour
 )
 
 // RetentionRunner runs the hourly rollup + prune loop. Like the
@@ -157,6 +165,12 @@ func (r *RetentionRunner) tick(ctx context.Context) {
 	if _, err := r.store.PruneWafEventsOlderThan(ctx, now.Add(-RetainWafEvents)); err != nil {
 		r.logger.Error("observability: prune waf_event failed", slog.String("err", err.Error()))
 	}
+	// Step Q: prune throttle_event rows older than
+	// RetainThrottleEvents (30 d at row granularity — see
+	// spec §3.6 + §1.3 D9.A).
+	if _, err := r.store.PruneThrottleEventsOlderThan(ctx, now.Add(-RetainThrottleEvents)); err != nil {
+		r.logger.Error("observability: prune throttle_event failed", slog.String("err", err.Error()))
+	}
 }
 
 // rollupHour aggregates every bucket_1m row in [h, h+1h) per
@@ -172,7 +186,7 @@ func (r *RetentionRunner) tick(ctx context.Context) {
 func (r *RetentionRunner) rollupHour(ctx context.Context, hourStart time.Time) error {
 	// One query for the whole hour, all routes.
 	rows, err := r.store.db.QueryContext(ctx, `
-SELECT route_id, req_count, fourxx_count, fivexx_count, waf_block_count, latency_p95_ms
+SELECT route_id, req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, latency_p95_ms
 FROM bucket_1m
 WHERE ts >= ? AND ts < ?
 `, hourStart.UTC().Unix(), hourStart.Add(time.Hour).UTC().Unix())
@@ -186,6 +200,7 @@ WHERE ts >= ? AND ts < ?
 		fourxx   int64
 		fivexx   int64
 		wafBlock int64
+		throttle int64
 		p95w     int64 // sum of (req_count * latency_p95_ms)
 		p95wDen  int64 // sum of req_count for samples that had latency
 		p95plain int64 // unweighted max as fallback when no traffic
@@ -193,9 +208,9 @@ WHERE ts >= ? AND ts < ?
 	byRoute := make(map[string]*acc)
 	for rows.Next() {
 		var routeID string
-		var req, fourxx, fivexx, wafBlock int64
+		var req, fourxx, fivexx, wafBlock, throttle int64
 		var p95 int32
-		if err := rows.Scan(&routeID, &req, &fourxx, &fivexx, &wafBlock, &p95); err != nil {
+		if err := rows.Scan(&routeID, &req, &fourxx, &fivexx, &wafBlock, &throttle, &p95); err != nil {
 			return fmt.Errorf("rollup scan: %w", err)
 		}
 		a, ok := byRoute[routeID]
@@ -207,6 +222,7 @@ WHERE ts >= ? AND ts < ?
 		a.fourxx += fourxx
 		a.fivexx += fivexx
 		a.wafBlock += wafBlock
+		a.throttle += throttle
 		if req > 0 && p95 > 0 {
 			a.p95w += int64(p95) * req
 			a.p95wDen += req
@@ -234,13 +250,14 @@ WHERE ts >= ? AND ts < ?
 			p95 = int32(a.p95plain)
 		}
 		out = append(out, MetricBucket{
-			RouteID:       id,
-			Ts:            hourStart,
-			ReqCount:      a.req,
-			FourxxCount:   a.fourxx,
-			FivexxCount:   a.fivexx,
-			WafBlockCount: a.wafBlock,
-			LatencyP95Ms:  p95,
+			RouteID:            id,
+			Ts:                 hourStart,
+			ReqCount:           a.req,
+			FourxxCount:        a.fourxx,
+			FivexxCount:        a.fivexx,
+			WafBlockCount:      a.wafBlock,
+			ThrottleBlockCount: a.throttle,
+			LatencyP95Ms:       p95,
 		})
 	}
 	return r.store.InsertBatch(ctx, Granularity1h, out)

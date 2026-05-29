@@ -57,7 +57,15 @@ CREATE INDEX IF NOT EXISTS idx_bucket_1h_ts ON bucket_1h (ts);
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (1);
+-- Seed the bootstrap version 1 ONLY when the table is empty.
+-- Using INSERT OR IGNORE here would inject a phantom row at
+-- version=1 on every reopen of an already-migrated DB (e.g.
+-- one at v2 or v3). That phantom row breaks the next
+-- migration's UPDATE-all-rows-to-N statement with a PK
+-- collision. Latent until the first time we bump past v2 —
+-- caught by TestMigrate_V2ToV3_PreservesExistingData.
+INSERT INTO schema_version (version)
+  SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 `
 
 // Store owns the SQLite handle for the metrics database. Safe
@@ -169,13 +177,14 @@ func (s *Store) InsertBatch(ctx context.Context, gran Granularity, rows []Metric
 		return fmt.Errorf("observability: begin tx: %w", err)
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO `+gran.tableName()+` (route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, latency_p95_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO `+gran.tableName()+` (route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, latency_p95_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(route_id, ts) DO UPDATE SET
   req_count       = excluded.req_count,
   fourxx_count    = excluded.fourxx_count,
   fivexx_count    = excluded.fivexx_count,
   waf_block_count = excluded.waf_block_count,
+  throttle_block_count = excluded.throttle_block_count,
   latency_p95_ms  = excluded.latency_p95_ms
 `)
 	if err != nil {
@@ -191,6 +200,7 @@ ON CONFLICT(route_id, ts) DO UPDATE SET
 			r.FourxxCount,
 			r.FivexxCount,
 			r.WafBlockCount,
+			r.ThrottleBlockCount,
 			r.LatencyP95Ms,
 		); err != nil {
 			_ = tx.Rollback()
@@ -218,7 +228,7 @@ func (s *Store) Query(ctx context.Context, gran Granularity, routeID string, fro
 		return nil, fmt.Errorf("observability: store closed")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, latency_p95_ms
+SELECT route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, latency_p95_ms
 FROM `+gran.tableName()+`
 WHERE route_id = ? AND ts >= ? AND ts < ?
 ORDER BY ts ASC
@@ -231,7 +241,7 @@ ORDER BY ts ASC
 	for rows.Next() {
 		var b MetricBucket
 		var tsUnix int64
-		if err := rows.Scan(&b.RouteID, &tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.LatencyP95Ms); err != nil {
+		if err := rows.Scan(&b.RouteID, &tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.ThrottleBlockCount, &b.LatencyP95Ms); err != nil {
 			return nil, fmt.Errorf("observability: scan: %w", err)
 		}
 		b.Ts = time.Unix(tsUnix, 0).UTC()
@@ -277,6 +287,7 @@ SELECT
   SUM(fourxx_count)     AS fourxx_total,
   SUM(fivexx_count)     AS fivexx_total,
   SUM(waf_block_count)  AS waf_total,
+  SUM(throttle_block_count)  AS throttle_total,
   CASE
     WHEN SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END) > 0
     THEN SUM(latency_p95_ms * CASE WHEN req_count > 0 THEN req_count ELSE 0 END) / SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END)
@@ -296,7 +307,7 @@ ORDER BY ts ASC
 		var b MetricBucket
 		var tsUnix int64
 		var p95 int64 // SQLite SUM/CASE returns INTEGER; scan as int64 then narrow
-		if err := rows.Scan(&tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &p95); err != nil {
+		if err := rows.Scan(&tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.ThrottleBlockCount, &p95); err != nil {
 			return nil, fmt.Errorf("observability: scan aggregated: %w", err)
 		}
 		b.Ts = time.Unix(tsUnix, 0).UTC()
@@ -525,6 +536,236 @@ type WafEventAggregateFilter struct {
 	RouteID string
 	From    time.Time // inclusive
 	To      time.Time // exclusive; zero = open-ended (now)
+}
+
+// --- Step Q: throttle_event store -------------------------------------------
+
+// ThrottleEvent is the observability-layer mirror of
+// throttle.Event (same fields). Defined here so observability
+// does not have to import internal/throttle (dependency
+// direction stays clean: the wiring layer in cmd/arenet/main.go
+// bridges the two via a small adapter — same pattern as the
+// WafEvent adapter from Step M).
+//
+// AttemptedUsername is stored verbatim — parity with the audit
+// log per spec §1.3 D8.A. SrcIP is the request's effective
+// remote address (after the shared trusted-proxy chain).
+type ThrottleEvent struct {
+	ID                   int64
+	Ts                   time.Time
+	Tier                 int // 1 or 2 per spec §1.3 D1
+	SrcIP                string
+	AttemptedUsername    string
+	BlockedUntil         time.Time
+	BlockDurationSeconds int
+}
+
+// ThrottleEventFilter narrows a QueryThrottleEvents call. All
+// fields are optional; the API layer at Q.3 maps query-string
+// parameters into this struct.
+type ThrottleEventFilter struct {
+	SrcIP string
+	Tier  int       // 0 = any tier, 1 or 2 = exact
+	From  time.Time // inclusive
+	To    time.Time // exclusive; zero = open-ended (now)
+	Limit int
+}
+
+// throttleEventLimitCap bounds the result set defensively.
+// API layer caps at 100; this is the belt-and-braces.
+const throttleEventLimitCap = 100
+
+// InsertThrottleEventBatch persists a slice of ThrottleEvent
+// rows in a single transaction. Errors are returned to the
+// caller — the production caller (throttle.Sink) logs +
+// counts + swallows per AC #13. Empty batch is a no-op.
+func (s *Store) InsertThrottleEventBatch(ctx context.Context, events []ThrottleEvent) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("observability: store closed")
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("observability: begin throttle_event tx: %w", err)
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO throttle_event (ts, tier, src_ip, attempted_username, blocked_until, block_duration_seconds)
+VALUES (?, ?, ?, ?, ?, ?)
+`)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("observability: prepare throttle_event insert: %w", err)
+	}
+	defer stmt.Close()
+	for _, e := range events {
+		if _, err := stmt.ExecContext(ctx,
+			e.Ts.UTC().Unix(),
+			e.Tier,
+			e.SrcIP,
+			e.AttemptedUsername,
+			e.BlockedUntil.UTC().Unix(),
+			e.BlockDurationSeconds,
+		); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("observability: insert throttle_event (ip=%s tier=%d): %w", e.SrcIP, e.Tier, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("observability: commit throttle_event: %w", err)
+	}
+	return nil
+}
+
+// QueryThrottleEvents returns the throttle_event rows matching
+// filter, ts-descending (most-recent first — natural ordering
+// for the timeline UI). Empty filter returns the most-recent
+// `throttleEventLimitCap` rows.
+func (s *Store) QueryThrottleEvents(ctx context.Context, filter ThrottleEventFilter) ([]ThrottleEvent, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > throttleEventLimitCap {
+		limit = throttleEventLimitCap
+	}
+	q := `SELECT id, ts, tier, src_ip, attempted_username, blocked_until, block_duration_seconds
+	      FROM throttle_event WHERE 1=1`
+	args := []any{}
+	if filter.SrcIP != "" {
+		q += ` AND src_ip = ?`
+		args = append(args, filter.SrcIP)
+	}
+	if filter.Tier != 0 {
+		q += ` AND tier = ?`
+		args = append(args, filter.Tier)
+	}
+	if !filter.From.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, filter.From.UTC().Unix())
+	}
+	if !filter.To.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, filter.To.UTC().Unix())
+	}
+	q += ` ORDER BY ts DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: query throttle_event: %w", err)
+	}
+	defer rows.Close()
+	var out []ThrottleEvent
+	for rows.Next() {
+		var e ThrottleEvent
+		var tsUnix, blockedUntilUnix int64
+		if err := rows.Scan(
+			&e.ID, &tsUnix, &e.Tier, &e.SrcIP, &e.AttemptedUsername,
+			&blockedUntilUnix, &e.BlockDurationSeconds,
+		); err != nil {
+			return nil, fmt.Errorf("observability: scan throttle_event: %w", err)
+		}
+		e.Ts = time.Unix(tsUnix, 0).UTC()
+		e.BlockedUntil = time.Unix(blockedUntilUnix, 0).UTC()
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate throttle_event: %w", err)
+	}
+	return out, nil
+}
+
+// PruneThrottleEventsOlderThan deletes throttle_event rows
+// with ts < cutoff. Returns the number of rows deleted. Called
+// by the retention loop on the same hourly cadence as the
+// bucket and waf_event prunes.
+func (s *Store) PruneThrottleEventsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("observability: store closed")
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM throttle_event WHERE ts < ?`, cutoff.UTC().Unix())
+	if err != nil {
+		return 0, fmt.Errorf("observability: prune throttle_event: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("observability: prune throttle_event rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// ThrottleEventIPAggregate is one row of the per-IP breakdown
+// surfaced by AggregateThrottleEventsByIP. Mirror of
+// WafEventRuleAggregate — Step Q spec §3.3 lists "top blocked
+// IPs over the window" as a server-side aggregation, matching
+// the M.4 lesson that client-side aggregation over a 30d
+// window silently degrades.
+type ThrottleEventIPAggregate struct {
+	SrcIP    string
+	Tier1    int64
+	Tier2    int64
+	Total    int64
+	LastSeen time.Time
+}
+
+// ThrottleEventAggregateFilter narrows
+// AggregateThrottleEventsByIP. Same shape as
+// ThrottleEventFilter minus Tier (the aggregation is BY tier
+// already — Tier1 and Tier2 are separate columns) and minus
+// Limit (number of distinct IPs in a window is small; the API
+// layer applies a top-N if it wants one).
+type ThrottleEventAggregateFilter struct {
+	From time.Time // inclusive
+	To   time.Time // exclusive; zero = open-ended (now)
+}
+
+// AggregateThrottleEventsByIP returns one row per src_ip in
+// the window, with Tier-1 + Tier-2 counts + the most-recent
+// ts. Ordered by total DESC so the API layer can hand it to
+// the frontend table as-is.
+func (s *Store) AggregateThrottleEventsByIP(ctx context.Context, filter ThrottleEventAggregateFilter) ([]ThrottleEventIPAggregate, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	q := `SELECT
+	        src_ip,
+	        SUM(CASE WHEN tier = 1 THEN 1 ELSE 0 END) AS tier1,
+	        SUM(CASE WHEN tier = 2 THEN 1 ELSE 0 END) AS tier2,
+	        COUNT(*)                                   AS total,
+	        MAX(ts)                                    AS last_ts
+	      FROM throttle_event WHERE 1=1`
+	args := []any{}
+	if !filter.From.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, filter.From.UTC().Unix())
+	}
+	if !filter.To.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, filter.To.UTC().Unix())
+	}
+	q += ` GROUP BY src_ip ORDER BY total DESC, last_ts DESC`
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: aggregate throttle_event by ip: %w", err)
+	}
+	defer rows.Close()
+	var out []ThrottleEventIPAggregate
+	for rows.Next() {
+		var agg ThrottleEventIPAggregate
+		var lastUnix int64
+		if err := rows.Scan(&agg.SrcIP, &agg.Tier1, &agg.Tier2, &agg.Total, &lastUnix); err != nil {
+			return nil, fmt.Errorf("observability: scan throttle_event aggregate: %w", err)
+		}
+		agg.LastSeen = time.Unix(lastUnix, 0).UTC()
+		out = append(out, agg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate throttle_event aggregate: %w", err)
+	}
+	return out, nil
 }
 
 // AggregateWafEventsByRule returns one row per (rule_id,

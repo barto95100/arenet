@@ -183,7 +183,7 @@ func TestAggregator_DegradedNilStore(t *testing.T) {
 // runtime-failure path without touching real I/O.
 type failingSink struct {
 	calls      int
-	errorAfter int    // 0 means error every call
+	errorAfter int // 0 means error every call
 	err        error
 }
 
@@ -426,5 +426,82 @@ drained:
 		time.Date(2026, 5, 28, 10, 1, 0, 0, time.UTC))
 	if len(rowsB) != 1 || rowsB[0].WafBlockCount != 2 {
 		t.Fatalf("r-b WafBlockCount mismatch: %+v", rowsB)
+	}
+}
+
+// TestAggregator_BumpThrottleBlocks_FlushesUnderSentinel pins
+// the Q.1 integration: BumpThrottleBlocks (throttle.BlockCounter
+// satisfaction) folds into the per-minute MetricBucket row's
+// ThrottleBlockCount field on flush, under the sentinel route
+// ID ThrottleSentinelRouteID. Per-IP detail is NOT keyed at
+// the bucket layer — different src IPs all aggregate into the
+// same sentinel slot. Spec §3.5.
+func TestAggregator_BumpThrottleBlocks_FlushesUnderSentinel(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	var nowAtomic atomic.Pointer[time.Time]
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 500_000_000, time.UTC)
+	nowAtomic.Store(&t0)
+	advance := func(d time.Duration) {
+		cur := *nowAtomic.Load()
+		next := cur.Add(d)
+		nowAtomic.Store(&next)
+	}
+
+	a := NewAggregator(s, silentLogger(), 16)
+	a.SetClock(func() time.Time { return *nowAtomic.Load() })
+	a.currentMinute = a.now().Truncate(time.Minute)
+
+	// 4 blocks from one IP + 3 from another — all aggregate
+	// under the sentinel route ID, not per-IP.
+	for i := 0; i < 4; i++ {
+		a.BumpThrottleBlocks("1.2.3.4")
+	}
+	for i := 0; i < 3; i++ {
+		a.BumpThrottleBlocks("5.6.7.8")
+	}
+	for {
+		select {
+		case d := <-a.in:
+			a.absorb(d)
+		default:
+			goto drained
+		}
+	}
+drained:
+
+	advance(time.Minute)
+	a.maybeFlush(ctx)
+
+	// Query under the sentinel — that's where ALL throttle
+	// blocks land per spec §3.5.
+	rows, err := s.Query(ctx, Granularity1m, ThrottleSentinelRouteID,
+		time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 28, 10, 1, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Query sentinel: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("sentinel rows = %d, want 1: %+v", len(rows), rows)
+	}
+	if rows[0].ThrottleBlockCount != 7 {
+		t.Errorf("ThrottleBlockCount = %d, want 7 (4 + 3 across two IPs)", rows[0].ThrottleBlockCount)
+	}
+	// Per-IP slots MUST NOT exist — the bucket layer is
+	// per-minute sentinel-keyed, not per-IP.
+	wrong, _ := s.Query(ctx, Granularity1m, "1.2.3.4",
+		time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 28, 10, 1, 0, 0, time.UTC))
+	if len(wrong) != 0 {
+		t.Errorf("found %d rows keyed by IP — bucket layer must be sentinel-keyed", len(wrong))
+	}
+	// AC #3 invariant: throttle bumps must NOT touch req / 4xx / 5xx / waf.
+	if rows[0].ReqCount != 0 || rows[0].FourxxCount != 0 || rows[0].FivexxCount != 0 || rows[0].WafBlockCount != 0 {
+		t.Errorf("AC #3 violation — throttle bump leaked into L/M counters: %+v", rows[0])
 	}
 }

@@ -24,10 +24,15 @@ import (
 
 // currentSchemaVersion is the latest schema version this
 // build of Arenet writes. Bumped per Step that touches the
-// schema. Step L shipped at v1; Step M bumps to v2 (adds the
-// waf_block_count column on both bucket tables + creates the
-// waf_event table). Downgrade is not supported.
-const currentSchemaVersion = 2
+// schema:
+//   - v1: Step L bootstrap (bucket_1m + bucket_1h).
+//   - v2: Step M (waf_block_count column on both bucket
+//     tables + waf_event table + indexes).
+//   - v3: Step Q (throttle_block_count column on both bucket
+//     tables + throttle_event table + indexes).
+//
+// Downgrade is not supported.
+const currentSchemaVersion = 3
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -83,6 +88,7 @@ func migrate(ctx context.Context, db *sql.DB, currentVersion int) error {
 // v0. The first real step is index 1 (v1→v2) for Step M.
 var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
 	1: migrateV1toV2,
+	2: migrateV2toV3,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -114,6 +120,41 @@ func migrateV1toV2(ctx context.Context, tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_waf_event_ts          ON waf_event (ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_waf_event_route_ts    ON waf_event (route_id, ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_waf_event_category_ts ON waf_event (category, ts)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV2toV3 — Step Q. Adds the throttle_block_count column on
+// both bucket tables (default 0 so existing rows get a
+// sensible value) AND creates the throttle_event table with
+// its two indexes (ts for time-range scans, src_ip+ts for
+// per-IP drill-down filters). Unlike waf_event, there is no
+// category dimension to index — tier is a small enum (1 or 2)
+// and SQLite will scan it cheaply.
+//
+// SQLite's ALTER TABLE ADD COLUMN is a metadata-only
+// operation in modern versions — it does NOT rewrite the
+// table, so the migration is O(1) regardless of row count.
+func migrateV2toV3(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`ALTER TABLE bucket_1m ADD COLUMN throttle_block_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE bucket_1h ADD COLUMN throttle_block_count INTEGER NOT NULL DEFAULT 0`,
+		`CREATE TABLE IF NOT EXISTS throttle_event (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  ts INTEGER NOT NULL,
+		  tier INTEGER NOT NULL,
+		  src_ip TEXT NOT NULL,
+		  attempted_username TEXT NOT NULL,
+		  blocked_until INTEGER NOT NULL,
+		  block_duration_seconds INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_throttle_event_ts       ON throttle_event (ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_throttle_event_srcip_ts ON throttle_event (src_ip, ts)`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {

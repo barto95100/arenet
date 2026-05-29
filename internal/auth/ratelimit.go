@@ -27,6 +27,8 @@ import (
 	"time"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
+
+	"github.com/barto95100/arenet/internal/throttle"
 )
 
 // Rate-limit thresholds and windows for per-IP auth failure tracking.
@@ -179,12 +181,18 @@ func (rl *RateLimiter) Hit(ip, attemptedUsername string) {
 		return
 	}
 
-	// Snapshot fields needed for the optional Tier 2 log; populated
-	// while the mutex is held, then emitted after Unlock.
+	// Snapshot fields needed for the optional Tier 2 log + the
+	// Step Q throttle event; populated while the mutex is held,
+	// emitted/logged AFTER Unlock. Same pattern as the original
+	// Tier 2 Warn line, generalised — keeps the auth hot path
+	// off the global throttle sink and any custom slog handler
+	// I/O (D7.A: emit outside mutex).
 	var (
-		tier2Triggered  bool
+		blockTriggered  bool
+		emittedTier     int
 		logCount        int
 		logBlockedUntil time.Time
+		logBlockDur     time.Duration
 	)
 
 	rl.mu.Lock()
@@ -235,22 +243,45 @@ func (rl *RateLimiter) Hit(ip, attemptedUsername string) {
 			c.blockedUntil = candidate
 			c.blockDuration = newBlock
 		}
+		// Step Q D1.A: emit on EVERY block decision (Tier 1
+		// OR Tier 2). The sink layer's LRU bounds repeat
+		// noise; the bucket counter bumps on every absorbed
+		// emit (incl. LRU-suppressed) so the timeline tick
+		// reflects attack volume.
+		blockTriggered = true
+		emittedTier = triggeredTier
+		logBlockedUntil = c.blockedUntil
+		logBlockDur = c.blockDuration
 		if triggeredTier == 2 {
-			tier2Triggered = true
 			logCount = tier2Count
-			logBlockedUntil = c.blockedUntil
 		}
 	}
 	rl.mu.Unlock()
 
-	if tier2Triggered {
-		rl.logger.Warn("rate limit tier 2 triggered, IP blocked",
-			slog.String("ip", ip),
-			slog.String("username_attempted", attemptedUsername),
-			slog.Int("failure_count_window", logCount),
-			slog.Time("blocked_until", logBlockedUntil),
-			slog.String("suggestion", "consider blocking this IP at network level"),
-		)
+	// Emit OUTSIDE the mutex. Tier 2 keeps its operator-facing
+	// Warn line (existing AC-RATE-04); Tier 1 stays silent on
+	// slog (high-volume during a credential-stuffing build-up;
+	// the dashboard is the right surface for that — D1 §94).
+	if blockTriggered {
+		if emittedTier == 2 {
+			rl.logger.Warn("rate limit tier 2 triggered, IP blocked",
+				slog.String("ip", ip),
+				slog.String("username_attempted", attemptedUsername),
+				slog.Int("failure_count_window", logCount),
+				slog.Time("blocked_until", logBlockedUntil),
+				slog.String("suggestion", "consider blocking this IP at network level"),
+			)
+		}
+		if sink := throttle.GetGlobalSink(); sink != nil {
+			sink.Emit(throttle.Event{
+				Ts:                   now,
+				Tier:                 emittedTier,
+				SrcIP:                ip,
+				AttemptedUsername:    attemptedUsername,
+				BlockedUntil:         logBlockedUntil,
+				BlockDurationSeconds: int(logBlockDur.Round(time.Second) / time.Second),
+			})
+		}
 	}
 }
 

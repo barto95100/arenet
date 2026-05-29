@@ -28,13 +28,14 @@ import "time"
 // null per AC #5 (a "0 ms p95" would render as a fake latency
 // dip on the timeline chart).
 type MetricBucket struct {
-	RouteID       string
-	Ts            time.Time
-	ReqCount      int64
-	FourxxCount   int64
-	FivexxCount   int64
-	WafBlockCount int64 // Step M: count of WAF blocks captured this window.
-	LatencyP95Ms  int32
+	RouteID            string
+	Ts                 time.Time
+	ReqCount           int64
+	FourxxCount        int64
+	FivexxCount        int64
+	WafBlockCount      int64 // Step M: count of WAF blocks captured this window.
+	ThrottleBlockCount int64 // Step Q: count of rate-limit blocks (Tier 1 + Tier 2) captured this window. Per-IP rows live under routeID="_throttle" (spec §3.5).
+	LatencyP95Ms       int32
 }
 
 // Granularity selects the destination table for Insert / Query.
