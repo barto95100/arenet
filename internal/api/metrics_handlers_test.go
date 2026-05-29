@@ -1042,3 +1042,225 @@ func TestMetricsSummary_NilReadersForQFields_FieldsStayZero(t *testing.T) {
 			resp.TotalThrottlePerMin, resp.TotalAuthFailuresPerMin, resp.AttackerIpsUnique)
 	}
 }
+
+// --- Step N.3: crowdsec_decision_rate + new summary fields ----------------
+
+func TestMetricsTimeseries_CrowdSecDecisionRate_ReadsBucketColumn(t *testing.T) {
+	// Same shape as throttle_block_rate (Q.3): the new metric
+	// reads from MetricBucket.CrowdSecDecisionCount with gap-
+	// fill = 0 for empty buckets. Spec N §3.5: production
+	// stores decisions under sentinel "_crowdsec"; this test
+	// seeds rows under the test route ID to exercise the
+	// field-routing logic in pickMetricValue specifically.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	now := time.Now().UTC().Truncate(time.Minute)
+	rows := []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: now.Add(-10 * time.Minute), CrowdSecDecisionCount: 11},
+		{RouteID: m.routeID, Ts: now.Add(-5 * time.Minute), CrowdSecDecisionCount: 4},
+	}
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, rows); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/metrics/timeseries?route="+m.routeID+"&metric=crowdsec_decision_rate&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp timeseriesResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if string(resp.Metric) != "crowdsec_decision_rate" {
+		t.Errorf("response metric = %q, want crowdsec_decision_rate", resp.Metric)
+	}
+	total := 0.0
+	for _, p := range resp.Points {
+		if p.Value == nil {
+			t.Fatal("count metric point has null value — AC #5 violation")
+		}
+		total += *p.Value
+	}
+	if total != 15 {
+		t.Errorf("sum of crowdsec_decision_rate values = %v, want 15", total)
+	}
+}
+
+func TestMetricsTimeseries_NewMetric_AcceptedByValidator(t *testing.T) {
+	// Anti-regression: a future refactor that drops
+	// crowdsec_decision_rate from isValidMetric / pickMetricValue
+	// would surface 400 here.
+	if !isValidMetric(metricName("crowdsec_decision_rate")) {
+		t.Errorf("metric crowdsec_decision_rate rejected by isValidMetric")
+	}
+}
+
+func TestMetricsSummary_TotalCrowdSecDecisionsPerMin_FromSentinelRow(t *testing.T) {
+	// Mirror of TestMetricsSummary_TotalThrottlePerMin_FromSentinelRow.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	now := time.Now().UTC()
+	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m,
+		[]observability.MetricBucket{
+			{RouteID: observability.CrowdSecSentinelRouteID, Ts: prevMin, CrowdSecDecisionCount: 23},
+		}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp summaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.TotalCrowdSecDecisionsPerMin != 23 {
+		t.Errorf("totalCrowdSecDecisionsPerMin = %d, want 23", resp.TotalCrowdSecDecisionsPerMin)
+	}
+}
+
+func TestMetricsSummary_ActiveCrowdSecIpsUnique_FromDistinctIPs(t *testing.T) {
+	// The decisions reader's DistinctDecisionSrcIPs feeds
+	// ActiveCrowdSecIpsUnique + the union for
+	// AttackerIpsUnique. Mirror of the Q.3 attacker-IP
+	// branch for the throttle source.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return []string{"185.142.86.0/24", "8.8.8.8", ""}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp summaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	// Empty IP filtered; CIDR + IP both count.
+	if resp.ActiveCrowdSecIpsUnique != 2 {
+		t.Errorf("activeCrowdSecIpsUnique = %d, want 2 (empty filtered)", resp.ActiveCrowdSecIpsUnique)
+	}
+	if resp.AttackerIpsUnique != 2 {
+		t.Errorf("attackerIpsUnique = %d, want 2 (crowdsec arm + empty filter)", resp.AttackerIpsUnique)
+	}
+}
+
+func TestMetricsSummary_AttackerIpsUnique_UnionAcrossFourSources(t *testing.T) {
+	// Step N.3 extension: union now spans 4 sources.
+	// WAF: 1.1.1.1
+	// Throttle: 2.2.2.2
+	// Audit: 3.3.3.3
+	// CrowdSec: 1.1.1.1 (overlaps WAF), 4.4.4.4
+	// Union: {1,2,3,4} = 4 unique.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return []string{"1.1.1.1"}, nil
+		},
+	})
+	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return []string{"2.2.2.2"}, nil
+		},
+	})
+	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
+		queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
+			return []audit.Event{{Action: audit.ActionLoginFailure, IP: "3.3.3.3"}}, false, nil
+		},
+	})
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return []string{"1.1.1.1", "4.4.4.4"}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp summaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.AttackerIpsUnique != 4 {
+		t.Errorf("attackerIpsUnique = %d, want 4 (union of 4 overlapping sources)", resp.AttackerIpsUnique)
+	}
+	if resp.ActiveCrowdSecIpsUnique != 2 {
+		t.Errorf("activeCrowdSecIpsUnique = %d, want 2", resp.ActiveCrowdSecIpsUnique)
+	}
+}
+
+func TestMetricsSummary_NFieldsIndependentFromMQ(t *testing.T) {
+	// AC #N.24-style anti-regression: CrowdSec fields (the new
+	// summary additions) MUST NOT inflate any of the M/Q
+	// fields (WAF block, throttle, auth-failures), and vice
+	// versa. Seed ONLY a CrowdSec sentinel row → confirm
+	// crowdsec total > 0 AND all other totals stay 0.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	now := time.Now().UTC()
+	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m,
+		[]observability.MetricBucket{
+			{RouteID: observability.CrowdSecSentinelRouteID, Ts: prevMin, CrowdSecDecisionCount: 12},
+		}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	var resp summaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+
+	if resp.TotalCrowdSecDecisionsPerMin != 12 {
+		t.Errorf("totalCrowdSecDecisionsPerMin = %d, want 12", resp.TotalCrowdSecDecisionsPerMin)
+	}
+	if resp.TotalWafBlockedPerMin != 0 {
+		t.Errorf("AC #N.24 violation: TotalWafBlockedPerMin = %d after crowdsec-only seed; want 0", resp.TotalWafBlockedPerMin)
+	}
+	if resp.TotalThrottlePerMin != 0 {
+		t.Errorf("AC #N.24 violation: TotalThrottlePerMin = %d after crowdsec-only seed; want 0", resp.TotalThrottlePerMin)
+	}
+	if resp.TotalFourXxPerMin != 0 || resp.TotalFiveXxPerMin != 0 {
+		t.Errorf("CrowdSec bump leaked into L counters: 4xx=%d 5xx=%d", resp.TotalFourXxPerMin, resp.TotalFiveXxPerMin)
+	}
+}

@@ -480,12 +480,22 @@ type securityThrottleEventsResponse struct {
 // --- Step Q.3: attackers summary --------------------------------------------
 
 // attackersByBucketSource is the per-source count breakdown
-// returned alongside the union total. Spec D6.A wording:
-// "{waf: N, throttle: N, audit: N}".
+// returned alongside the union total. Spec D6.A wording on
+// Q.3 was "{waf: N, throttle: N, audit: N}"; Step N.3 adds a
+// 4th source: "{waf: N, throttle: N, audit: N, crowdsec: N}".
+//
+// The crowdsec field carries the count of distinct values
+// (IP / CIDR / country / AS) in the decision_event table
+// over the window — including non-IP scopes. This is
+// intentional: a CrowdSec community blocklist Range scope
+// like "185.142.86.0/24" represents an attacker as much as
+// a single IP and counts toward the operator's situational
+// awareness.
 type attackersByBucketSource struct {
 	WAF      int `json:"waf"`
 	Throttle int `json:"throttle"`
 	Audit    int `json:"audit"`
+	CrowdSec int `json:"crowdsec"`
 }
 
 // securityAttackersSummaryResponse is the wire shape of
@@ -543,7 +553,10 @@ func (h *Handler) securityAttackersSummary(w http.ResponseWriter, r *http.Reques
 	window := r.URL.Query().Get("window")
 	resp := securityAttackersSummaryResponse{Window: window}
 
-	if h.wafEvents == nil && h.throttleEvents == nil && h.authFailures == nil {
+	// Step N.3 extension: 4-source contract. ALL FOUR readers
+	// nil → disabled. Any subset nil → partial. All four
+	// present → neither flag set.
+	if h.wafEvents == nil && h.throttleEvents == nil && h.authFailures == nil && h.decisions == nil {
 		resp.Disabled = true
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -555,12 +568,12 @@ func (h *Handler) securityAttackersSummary(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// At least one reader present but not all three → the union
+	// At least one reader present but not all four → the union
 	// is honest about its sources, but the operator deserves a
 	// "data incomplete" hint. Same shape as Q.2's `partial`
 	// flag (scan-cap-hit there; subset-down here). The all-nil
 	// short-circuit above takes precedence.
-	if h.wafEvents == nil || h.throttleEvents == nil || h.authFailures == nil {
+	if h.wafEvents == nil || h.throttleEvents == nil || h.authFailures == nil || h.decisions == nil {
 		resp.Partial = true
 	}
 
@@ -630,6 +643,29 @@ func (h *Handler) securityAttackersSummary(w http.ResponseWriter, r *http.Reques
 		}
 		resp.ByBucketSource.Audit = len(auditIPs)
 		for ip := range auditIPs {
+			union[ip] = struct{}{}
+		}
+	}
+
+	// Step N.3 — CrowdSec arm of the union. Same shape as
+	// the WAF / throttle distinct-IP queries: the storage
+	// returns SELECT DISTINCT value (which can be an IP, a
+	// CIDR, a country code, or an AS — depends on the
+	// LAPI decision's scope). The bucket-source `crowdsec`
+	// count INCLUDES non-IP scopes intentionally (see
+	// attackersByBucketSource doc comment).
+	if h.decisions != nil {
+		ips, err := h.decisions.DistinctDecisionSrcIPs(r.Context(), from, to)
+		if err != nil {
+			h.logger.Error("security: distinct decision src ip query failed", "err", err, "window", window)
+			writeError(w, http.StatusServiceUnavailable, "attackers summary unavailable")
+			return
+		}
+		resp.ByBucketSource.CrowdSec = len(ips)
+		for _, ip := range ips {
+			if ip == "" {
+				continue
+			}
 			union[ip] = struct{}{}
 		}
 	}
@@ -711,6 +747,136 @@ func (h *Handler) securityThrottleEvents(w http.ResponseWriter, r *http.Request)
 			AttemptedUsername:    e.AttemptedUsername,
 			BlockedUntil:         e.BlockedUntil.Format(time.RFC3339),
 			BlockDurationSeconds: e.BlockDurationSeconds,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// --- Step N.3: CrowdSec decision log ----------------------------------------
+
+// securityDecisionsLimitCap mirrors the storage-layer
+// decisionEventLimitCap (100). Same convention as
+// securityEventsLimitCap / securityThrottleEventsLimitCap.
+const securityDecisionsLimitCap = 100
+
+// securityDecision is the per-event wire shape — mirror of
+// observability.DecisionEvent with camelCase JSON. Ts and
+// ExpiresAt are RFC3339 strings (consistent with WAF + throttle
+// event endpoints). Per Step N spec D5.B, the wire surface is
+// the operator-facing subset (no `id` from upstream LAPI; `id`
+// here is Arenet's local autoincrement, useful as a stable
+// pagination cursor surface in a future revision).
+type securityDecision struct {
+	ID              int64  `json:"id"`
+	UUID            string `json:"uuid"`
+	Ts              string `json:"ts"`
+	Scope           string `json:"scope"`
+	Value           string `json:"value"`
+	Type            string `json:"type"`
+	Scenario        string `json:"scenario"`
+	ExpiresAt       string `json:"expiresAt"`
+	DurationSeconds int    `json:"durationSeconds"`
+}
+
+// securityDecisionsResponse is the wire shape of
+// GET /api/v1/security/decisions. Mirror of
+// securityThrottleEventsResponse. `disabled` follows the AC
+// #15 degraded-mode contract (nil DecisionReader, e.g. LAPI
+// key not configured + observability DB unavailable).
+type securityDecisionsResponse struct {
+	Disabled bool               `json:"disabled,omitempty"`
+	Events   []securityDecision `json:"events"`
+}
+
+// securityDecisions handles GET /api/v1/security/decisions.
+// Query parameters (all optional):
+//   - limit:     how many rows to return. Capped at
+//     securityDecisionsLimitCap. Defaults to the
+//     cap when unset.
+//   - scope:     filter to "ip" | "range" | "country" | "as".
+//     Free-form on the wire (the storage layer
+//     does an exact match without enum
+//     validation — the LAPI scope vocabulary is
+//     operator-controlled, and rejecting an
+//     unknown scope here would force every spec
+//     bump to coordinate with Arenet).
+//   - srcIp:     exact-match filter on the decision's
+//     `value` field (the LAPI value depends on
+//     scope; for ip/range scopes it IS an IP /
+//     CIDR). The query parameter is named
+//     "srcIp" rather than "value" for consistency
+//     with the throttle-events endpoint operator
+//     mental model.
+//   - scenario:  exact-match filter on the LAPI scenario
+//     name (e.g. "crowdsecurity/http-probing").
+//   - onlyActive: when "true", exclude rows whose
+//     expires_at <= now (decision revoked or
+//     expired). Default false: return all rows
+//     in the window including expired ones, so
+//     the operator dashboard can show forensic
+//     "what WAS banned yesterday" views.
+//
+// Response shape: {events: [{id, uuid, ts, scope, value,
+// type, scenario, expiresAt, durationSeconds}], disabled?}.
+//
+// Auth: viewer-accessible (hard-auth-no-admin gated at the
+// route mount, AC #N.20). Pure read, no side effect.
+//
+// AC #15 degraded paths mirror /security/throttle-events:
+//   - h.decisions == nil → 200 with disabled=true and
+//     events=[].
+//   - QueryDecisionEvents returns an error → 503.
+func (h *Handler) securityDecisions(w http.ResponseWriter, r *http.Request) {
+	resp := securityDecisionsResponse{Events: []securityDecision{}}
+
+	if h.decisions == nil {
+		resp.Disabled = true
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	limit := securityDecisionsLimitCap
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		n, err := strconv.Atoi(rawLimit)
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		if n > securityDecisionsLimitCap {
+			n = securityDecisionsLimitCap
+		}
+		limit = n
+	}
+
+	onlyActive := r.URL.Query().Get("onlyActive") == "true"
+
+	filter := observability.DecisionEventFilter{
+		Scope:      r.URL.Query().Get("scope"),
+		Value:      r.URL.Query().Get("srcIp"),
+		Scenario:   r.URL.Query().Get("scenario"),
+		Limit:      limit,
+		OnlyActive: onlyActive,
+	}
+
+	events, err := h.decisions.QueryDecisionEvents(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("security: query decision_events failed", "err", err)
+		writeError(w, http.StatusServiceUnavailable, "decisions unavailable")
+		return
+	}
+
+	resp.Events = make([]securityDecision, 0, len(events))
+	for _, e := range events {
+		resp.Events = append(resp.Events, securityDecision{
+			ID:              e.ID,
+			UUID:            e.UUID,
+			Ts:              e.Ts.Format(time.RFC3339),
+			Scope:           e.Scope,
+			Value:           e.Value,
+			Type:            e.Type,
+			Scenario:        e.Scenario,
+			ExpiresAt:       e.ExpiresAt.Format(time.RFC3339),
+			DurationSeconds: e.DurationSeconds,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)

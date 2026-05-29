@@ -571,6 +571,11 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		// WAF reader. AC #14: nil obsStore → no setter call
 		// → endpoints return disabled=true.
 		apiHandler.SetThrottleEventReader(obsStore)
+		// Step N.3 — CrowdSec decision reader. Backed by the
+		// same *observability.Store (decision_event table from
+		// N.2 storage). Same nil-obsStore degraded path as the
+		// throttle reader above.
+		apiHandler.SetDecisionReader(obsStore)
 	}
 	// Step Q.2 — auth-failure reader. Backed by the audit
 	// bucket (single source of truth, spec D2.B + D4.B), so

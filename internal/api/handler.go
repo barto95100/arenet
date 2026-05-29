@@ -108,6 +108,33 @@ type ThrottleEventReader interface {
 	DistinctThrottleEventSrcIPs(ctx context.Context, from, to time.Time) ([]string, error)
 }
 
+// DecisionReader is the read surface the Step N.3
+// /api/v1/security/decisions handler depends on, plus the
+// per-IP aggregation used by the attackers-summary endpoint
+// (4th union source) + the /metrics/summary new fields
+// (totalCrowdSecDecisionsPerMin, activeCrowdSecIpsUnique).
+//
+// *observability.Store satisfies it via QueryDecisionEvents
+// (Step N.2 storage). Same nil-tolerance contract as
+// WafEventReader / ThrottleEventReader — handlers detect nil
+// and return 200 with disabled=true (AC #15).
+//
+// Decisions are sourced from the parallel
+// go-cs-bouncer.StreamBouncer consumer wired in N.2; the
+// caddy-crowdsec-bouncer enforces them at the proxy edge.
+// Both consumers poll the same LAPI; if LAPI is unreachable
+// both feeds go quiet but the reader still serves what's
+// cached in metrics.db.
+type DecisionReader interface {
+	QueryDecisionEvents(ctx context.Context, filter observability.DecisionEventFilter) ([]observability.DecisionEvent, error)
+	// DistinctDecisionSrcIPs powers the crowdsec arm of
+	// /security/attackers-summary's per-source union. Same
+	// contract as the WAF + throttle mirrors: the result is
+	// naturally bounded (attacker diversity in a 30d window
+	// stays small even with community blocklists).
+	DistinctDecisionSrcIPs(ctx context.Context, from, to time.Time) ([]string, error)
+}
+
 // AuthFailureReader is the read surface the Step Q.2
 // /api/v1/security/auth-failures handler depends on. The
 // production implementation is a thin adapter over
@@ -202,6 +229,14 @@ type Handler struct {
 	// attackerIpsUnique. Backed by *observability.Store. Same
 	// nil-tolerance contract as wafEvents.
 	throttleEvents ThrottleEventReader
+	// decisions (Step N.3) is the read surface for the
+	// /api/v1/security/decisions endpoint + the crowdsec arm
+	// of /security/attackers-summary + /metrics/summary's
+	// totalCrowdSecDecisionsPerMin / activeCrowdSecIpsUnique.
+	// Backed by *observability.Store (decision_event table
+	// from N.2 storage). Same nil-tolerance contract as
+	// throttleEvents.
+	decisions DecisionReader
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -316,6 +351,16 @@ func (h *Handler) SetAuthFailureReader(r AuthFailureReader) {
 // fields. Same nil-tolerance contract as SetWafEventReader.
 func (h *Handler) SetThrottleEventReader(r ThrottleEventReader) {
 	h.throttleEvents = r
+}
+
+// SetDecisionReader (Step N.3) attaches the CrowdSec
+// decision reader used by /api/v1/security/decisions, the
+// 4th-source arm of /security/attackers-summary, and the new
+// /metrics/summary fields (totalCrowdSecDecisionsPerMin,
+// activeCrowdSecIpsUnique). Same nil-tolerance contract as
+// SetThrottleEventReader.
+func (h *Handler) SetDecisionReader(r DecisionReader) {
+	h.decisions = r
 }
 
 // uiURL returns the URL to redirect to for the given SPA path

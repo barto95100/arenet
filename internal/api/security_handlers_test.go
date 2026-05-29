@@ -1157,6 +1157,30 @@ func (f *fakeThrottleEventReader) DistinctThrottleEventSrcIPs(ctx context.Contex
 	return nil, nil
 }
 
+// fakeDecisionReader satisfies DecisionReader. Step N.3 mirror
+// of fakeThrottleEventReader. Default returns (nil, nil) so
+// tests that don't care about the crowdsec arm can wire the
+// reader as a no-op present-reader (avoids triggering the
+// partial flag).
+type fakeDecisionReader struct {
+	queryFn      func(ctx context.Context, filter observability.DecisionEventFilter) ([]observability.DecisionEvent, error)
+	distinctIPFn func(ctx context.Context, from, to time.Time) ([]string, error)
+}
+
+func (f *fakeDecisionReader) QueryDecisionEvents(ctx context.Context, filter observability.DecisionEventFilter) ([]observability.DecisionEvent, error) {
+	if f.queryFn != nil {
+		return f.queryFn(ctx, filter)
+	}
+	return nil, nil
+}
+
+func (f *fakeDecisionReader) DistinctDecisionSrcIPs(ctx context.Context, from, to time.Time) ([]string, error) {
+	if f.distinctIPFn != nil {
+		return f.distinctIPFn(ctx, from, to)
+	}
+	return nil, nil
+}
+
 func TestSecurityThrottleEvents_Anon401(t *testing.T) {
 	m := newMetricsTestEnv(t)
 	raw := m.rawHandler(t)
@@ -1357,11 +1381,12 @@ func TestSecurityThrottleEvents_PayloadShape(t *testing.T) {
 
 // --- /api/v1/security/attackers-summary (Step Q.3) --------------------------
 
-// installAttackerReaders is a helper that injects all three
-// readers expected by the attackers-summary handler. Each
+// installAttackerReaders is a helper that injects all FOUR
+// readers expected by the attackers-summary handler (Step N.3
+// extended the original Q.3 trio with a crowdsec arm). Each
 // reader is configurable via its distinct-IP function; pass
 // nil for "no rows" / "skip this source".
-func installAttackerReaders(t *testing.T, m *metricsTestEnv, wafIPs, throttleIPs []string, auditIPs []string) {
+func installAttackerReaders(t *testing.T, m *metricsTestEnv, wafIPs, throttleIPs []string, auditIPs []string, crowdsecIPs []string) {
 	t.Helper()
 	m.env.handler.SetWafEventReader(&fakeWafEventReader{
 		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
@@ -1380,6 +1405,11 @@ func installAttackerReaders(t *testing.T, m *metricsTestEnv, wafIPs, throttleIPs
 				out = append(out, audit.Event{Action: audit.ActionLoginFailure, IP: ip})
 			}
 			return out, false, nil
+		},
+	})
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return crowdsecIPs, nil
 		},
 	})
 }
@@ -1417,7 +1447,7 @@ func TestSecurityAttackersSummary_AllReadersNil_Disabled(t *testing.T) {
 
 func TestSecurityAttackersSummary_InvalidWindow_400(t *testing.T) {
 	m := newMetricsTestEnv(t)
-	installAttackerReaders(t, m, nil, nil, nil)
+	installAttackerReaders(t, m, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=7d", nil)
 	rec := httptest.NewRecorder()
 	m.router.ServeHTTP(rec, req)
@@ -1428,7 +1458,7 @@ func TestSecurityAttackersSummary_InvalidWindow_400(t *testing.T) {
 
 func TestSecurityAttackersSummary_MissingWindow_400(t *testing.T) {
 	m := newMetricsTestEnv(t)
-	installAttackerReaders(t, m, nil, nil, nil)
+	installAttackerReaders(t, m, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary", nil)
 	rec := httptest.NewRecorder()
 	m.router.ServeHTTP(rec, req)
@@ -1453,6 +1483,7 @@ func TestSecurityAttackersSummary_UnionWithOverlap(t *testing.T) {
 		[]string{"1.1.1.1", "2.2.2.2", "3.3.3.3"},
 		[]string{"2.2.2.2", "4.4.4.4"},
 		[]string{"3.3.3.3", "5.5.5.5"},
+		nil, // crowdsec arm intentionally empty in this 3-source test; the 4-source case is TestSecurityAttackersSummary_UnionAcrossFourSources
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
@@ -1503,6 +1534,7 @@ func TestSecurityAttackersSummary_DuplicatesInOneSource_DeduplicatedForBreakdown
 	})
 	m.env.handler.SetWafEventReader(&fakeWafEventReader{})
 	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{})
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{}) // 4th reader present-but-empty so partial does not fire
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
 	rec := httptest.NewRecorder()
@@ -1536,6 +1568,7 @@ func TestSecurityAttackersSummary_EmptyIPsIgnored(t *testing.T) {
 		},
 	})
 	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{})
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{}) // 4th reader present-but-empty
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
 	rec := httptest.NewRecorder()
@@ -1549,22 +1582,23 @@ func TestSecurityAttackersSummary_EmptyIPsIgnored(t *testing.T) {
 }
 
 func TestSecurityAttackersSummary_PartialReaders_NoDisabledFlag(t *testing.T) {
-	// Three-state contract pinning (subset-nil branch):
-	//   - disabled MUST stay false (ALL nil is the only
+	// Four-state contract pinning (subset-nil branch — Step
+	// N.3 extended the original Q.3 three-state to four):
+	//   - disabled MUST stay false (ALL FOUR nil is the only
 	//     disabled trigger).
 	//   - partial MUST be true (subset is down, signal is
 	//     honest-but-narrower).
 	//   - the union still reflects the readers that DID
 	//     respond.
-	// AC #14 wording per §3.4, aligned with Q.2's partial
-	// flag convention.
+	// AC #14 wording per §3.4 + N AC #15, aligned with Q.2's
+	// partial flag convention.
 	m := newMetricsTestEnv(t)
 	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{
 		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
 			return []string{"1.2.3.4"}, nil
 		},
 	})
-	// WAF + audit readers intentionally NOT set.
+	// WAF + audit + crowdsec readers intentionally NOT set.
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
 	rec := httptest.NewRecorder()
@@ -1583,28 +1617,34 @@ func TestSecurityAttackersSummary_PartialReaders_NoDisabledFlag(t *testing.T) {
 	if resp.UniqueIps != 1 {
 		t.Errorf("uniqueIps = %d, want 1 (throttle reader contributed)", resp.UniqueIps)
 	}
-	if resp.ByBucketSource.Throttle != 1 || resp.ByBucketSource.WAF != 0 || resp.ByBucketSource.Audit != 0 {
+	if resp.ByBucketSource.Throttle != 1 ||
+		resp.ByBucketSource.WAF != 0 ||
+		resp.ByBucketSource.Audit != 0 ||
+		resp.ByBucketSource.CrowdSec != 0 {
 		t.Errorf("byBucketSource mismatch: %+v", resp.ByBucketSource)
 	}
 }
 
 func TestSecurityAttackersSummary_PartialFlagFires_OnAnySingleNilReader(t *testing.T) {
 	// Explicit pinning of the partial-flag trigger across
-	// each individual reader being nil. Three sub-cases —
-	// one reader missing at a time, the other two wired with
-	// a single IP each. Verify `partial=true` in every case
-	// and the union/breakdown reflect what we DID get.
+	// each individual reader being nil. FOUR sub-cases —
+	// one reader missing at a time (N.3 extended Q.3's 3
+	// readers to 4), the other three wired with a single IP
+	// each. Verify `partial=true` in every case and the
+	// union/breakdown reflect what we DID get.
 	cases := []struct {
-		name       string
-		setupSkip  string // which reader to leave nil: "waf" | "throttle" | "audit"
-		wantWAF    int
-		wantThr    int
-		wantAudit  int
-		wantUnique int
+		name         string
+		setupSkip    string // which reader to leave nil: "waf" | "throttle" | "audit" | "crowdsec"
+		wantWAF      int
+		wantThr      int
+		wantAudit    int
+		wantCrowdSec int
+		wantUnique   int
 	}{
-		{name: "waf-nil", setupSkip: "waf", wantThr: 1, wantAudit: 1, wantUnique: 2},
-		{name: "throttle-nil", setupSkip: "throttle", wantWAF: 1, wantAudit: 1, wantUnique: 2},
-		{name: "audit-nil", setupSkip: "audit", wantWAF: 1, wantThr: 1, wantUnique: 2},
+		{name: "waf-nil", setupSkip: "waf", wantThr: 1, wantAudit: 1, wantCrowdSec: 1, wantUnique: 3},
+		{name: "throttle-nil", setupSkip: "throttle", wantWAF: 1, wantAudit: 1, wantCrowdSec: 1, wantUnique: 3},
+		{name: "audit-nil", setupSkip: "audit", wantWAF: 1, wantThr: 1, wantCrowdSec: 1, wantUnique: 3},
+		{name: "crowdsec-nil", setupSkip: "crowdsec", wantWAF: 1, wantThr: 1, wantAudit: 1, wantUnique: 3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1627,6 +1667,13 @@ func TestSecurityAttackersSummary_PartialFlagFires_OnAnySingleNilReader(t *testi
 				m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
 					queryFn: func(_ context.Context, _ []string, _, _ time.Time, _ int) ([]audit.Event, bool, error) {
 						return []audit.Event{{Action: audit.ActionLoginFailure, IP: "9.9.9.9"}}, false, nil
+					},
+				})
+			}
+			if tc.setupSkip != "crowdsec" {
+				m.env.handler.SetDecisionReader(&fakeDecisionReader{
+					distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+						return []string{"6.6.6.6"}, nil
 					},
 				})
 			}
@@ -1655,6 +1702,9 @@ func TestSecurityAttackersSummary_PartialFlagFires_OnAnySingleNilReader(t *testi
 			if resp.ByBucketSource.Audit != tc.wantAudit {
 				t.Errorf("audit = %d, want %d", resp.ByBucketSource.Audit, tc.wantAudit)
 			}
+			if resp.ByBucketSource.CrowdSec != tc.wantCrowdSec {
+				t.Errorf("crowdsec = %d, want %d", resp.ByBucketSource.CrowdSec, tc.wantCrowdSec)
+			}
 			if resp.UniqueIps != tc.wantUnique {
 				t.Errorf("uniqueIps = %d, want %d", resp.UniqueIps, tc.wantUnique)
 			}
@@ -1663,16 +1713,19 @@ func TestSecurityAttackersSummary_PartialFlagFires_OnAnySingleNilReader(t *testi
 }
 
 func TestSecurityAttackersSummary_AllPresent_NeitherFlag(t *testing.T) {
-	// Three-state contract pinning (all-present branch):
-	// when every reader is wired, neither `disabled` nor
-	// `partial` is set. The dashboard relies on this to
-	// decide whether to show the "data incomplete" hint.
+	// Four-state contract pinning (all-present branch — Step
+	// N.3 extended the original Q.3 three-state from 3 to 4
+	// readers): when EVERY reader is wired (waf + throttle +
+	// audit + crowdsec), neither `disabled` nor `partial` is
+	// set. The dashboard relies on this to decide whether to
+	// show the "data incomplete" hint.
 	m := newMetricsTestEnv(t)
 	installAttackerReaders(t,
 		m,
 		[]string{"1.1.1.1"},
 		[]string{"2.2.2.2"},
 		[]string{"3.3.3.3"},
+		[]string{"4.4.4.4"},
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
@@ -1689,8 +1742,8 @@ func TestSecurityAttackersSummary_AllPresent_NeitherFlag(t *testing.T) {
 	if resp.Partial {
 		t.Errorf("partial = true with all readers present, want false")
 	}
-	if resp.UniqueIps != 3 {
-		t.Errorf("uniqueIps = %d, want 3", resp.UniqueIps)
+	if resp.UniqueIps != 4 {
+		t.Errorf("uniqueIps = %d, want 4 (one IP per source, no overlap)", resp.UniqueIps)
 	}
 }
 
@@ -1699,6 +1752,268 @@ func TestSecurityAttackersSummary_ReaderError_503(t *testing.T) {
 	m.env.handler.SetWafEventReader(&fakeWafEventReader{
 		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
 			return nil, errors.New("disk full")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+// --- /api/v1/security/decisions (Step N.3) ----------------------------------
+
+func TestSecurityDecisions_Anon401(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	raw := m.rawHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/decisions", nil)
+	rec := httptest.NewRecorder()
+	raw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anon status = %d, want 401", rec.Code)
+	}
+}
+
+func TestSecurityDecisions_Viewer200(t *testing.T) {
+	// AC #N.20 (mirror of Q.3's AC #12): viewer MUST read
+	// /security/decisions.
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{})
+
+	ctx := context.Background()
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "decisions-viewer", "Decisions Viewer", "sub-decisions-viewer")
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	if viewer.Role != auth.UserRoleViewer {
+		t.Fatalf("seed-viewer role = %q; want viewer", viewer.Role)
+	}
+	sessionStore := auth.NewSessionStore(m.env.store.DB())
+	s, err := sessionStore.Create(ctx, viewer.ID, false, "127.0.0.1", "test/1")
+	if err != nil {
+		t.Fatalf("seed viewer session: %v", err)
+	}
+	raw := m.rawHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/decisions", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: s.ID})
+	rec := httptest.NewRecorder()
+	raw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("VIEWER LOCKOUT REGRESSION on /security/decisions: status=%d body=%s", rec.Code, rec.Body)
+	}
+}
+
+func TestSecurityDecisions_NilReader_DisabledResponse(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/decisions", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (degraded mode is OK)", rec.Code)
+	}
+	var resp securityDecisionsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Disabled {
+		t.Errorf("disabled = false, want true (nil reader = degraded)")
+	}
+	if len(resp.Events) != 0 {
+		t.Errorf("events = %d, want 0 (no data when disabled)", len(resp.Events))
+	}
+}
+
+func TestSecurityDecisions_QueryError_503(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{
+		queryFn: func(_ context.Context, _ observability.DecisionEventFilter) ([]observability.DecisionEvent, error) {
+			return nil, errors.New("disk full")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/decisions", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestSecurityDecisions_InvalidLimit_400(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{})
+	cases := []string{"abc", "0", "-5", "1.5"}
+	for _, raw := range cases {
+		t.Run("limit="+raw, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/security/decisions?limit="+raw, nil)
+			rec := httptest.NewRecorder()
+			m.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("limit=%q status = %d, want 400", raw, rec.Code)
+			}
+		})
+	}
+}
+
+func TestSecurityDecisions_LimitClampedAtCap(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	var observed observability.DecisionEventFilter
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{
+		queryFn: func(_ context.Context, f observability.DecisionEventFilter) ([]observability.DecisionEvent, error) {
+			observed = f
+			return nil, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/decisions?limit=500", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if observed.Limit != securityDecisionsLimitCap {
+		t.Errorf("filter.Limit = %d, want %d", observed.Limit, securityDecisionsLimitCap)
+	}
+}
+
+func TestSecurityDecisions_FiltersPassed(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	var observed observability.DecisionEventFilter
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{
+		queryFn: func(_ context.Context, f observability.DecisionEventFilter) ([]observability.DecisionEvent, error) {
+			observed = f
+			return nil, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/decisions?scope=range&srcIp=185.142.86.0/24&scenario=crowdsecurity/http-probing&limit=25&onlyActive=true", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if observed.Scope != "range" {
+		t.Errorf("filter.Scope = %q, want range", observed.Scope)
+	}
+	if observed.Value != "185.142.86.0/24" {
+		t.Errorf("filter.Value = %q, want 185.142.86.0/24 (srcIp query param maps to Value field)", observed.Value)
+	}
+	if observed.Scenario != "crowdsecurity/http-probing" {
+		t.Errorf("filter.Scenario = %q, want crowdsecurity/http-probing", observed.Scenario)
+	}
+	if observed.Limit != 25 {
+		t.Errorf("filter.Limit = %d, want 25", observed.Limit)
+	}
+	if !observed.OnlyActive {
+		t.Error("filter.OnlyActive = false, want true (onlyActive=true query param)")
+	}
+}
+
+func TestSecurityDecisions_PayloadShape(t *testing.T) {
+	// Pin the wire shape promised by the Step Q.4 mock UI's
+	// "185.142.86.0/24 · SQLi · auto"-style rows: {scope,
+	// value, scenario, type} columns must round-trip
+	// verbatim from the storage layer.
+	m := newMetricsTestEnv(t)
+	ts := time.Date(2026, 5, 29, 14, 0, 0, 0, time.UTC)
+	exp := ts.Add(24 * time.Hour)
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{
+		queryFn: func(_ context.Context, _ observability.DecisionEventFilter) ([]observability.DecisionEvent, error) {
+			return []observability.DecisionEvent{
+				{
+					ID:              7,
+					UUID:            "uuid-185-range",
+					Ts:              ts,
+					Scope:           "range",
+					Value:           "185.142.86.0/24",
+					Type:            "ban",
+					Scenario:        "crowdsecurity/http-probing",
+					ExpiresAt:       exp,
+					DurationSeconds: 86400,
+				},
+			}, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/decisions", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp securityDecisionsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(resp.Events))
+	}
+	e := resp.Events[0]
+	if e.ID != 7 || e.UUID != "uuid-185-range" || e.Scope != "range" ||
+		e.Value != "185.142.86.0/24" || e.Type != "ban" ||
+		e.Scenario != "crowdsecurity/http-probing" || e.DurationSeconds != 86400 {
+		t.Errorf("event field mismatch: %+v", e)
+	}
+	if e.Ts != ts.Format(time.RFC3339) {
+		t.Errorf("event.Ts = %q, want %q", e.Ts, ts.Format(time.RFC3339))
+	}
+	if e.ExpiresAt != exp.Format(time.RFC3339) {
+		t.Errorf("event.ExpiresAt = %q, want %q", e.ExpiresAt, exp.Format(time.RFC3339))
+	}
+}
+
+// --- /api/v1/security/attackers-summary 4th-source extension (Step N.3) ----
+
+func TestSecurityAttackersSummary_UnionAcrossFourSources(t *testing.T) {
+	// Step N.3 extension: the union now spans 4 sources.
+	//
+	// WAF:      1.1.1.1, 2.2.2.2
+	// THROTTLE: 3.3.3.3
+	// AUDIT:    4.4.4.4
+	// CROWDSEC: 5.5.5.5, 2.2.2.2 (overlaps WAF)
+	// UNION:    {1,2,3,4,5} = 5 unique
+	m := newMetricsTestEnv(t)
+	installAttackerReaders(t,
+		m,
+		[]string{"1.1.1.1", "2.2.2.2"},
+		[]string{"3.3.3.3"},
+		[]string{"4.4.4.4"},
+		[]string{"5.5.5.5", "2.2.2.2"},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp securityAttackersSummaryResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.UniqueIps != 5 {
+		t.Errorf("uniqueIps = %d, want 5 (union of 4 overlapping sources)", resp.UniqueIps)
+	}
+	if resp.ByBucketSource.WAF != 2 {
+		t.Errorf("waf = %d, want 2", resp.ByBucketSource.WAF)
+	}
+	if resp.ByBucketSource.Throttle != 1 {
+		t.Errorf("throttle = %d, want 1", resp.ByBucketSource.Throttle)
+	}
+	if resp.ByBucketSource.Audit != 1 {
+		t.Errorf("audit = %d, want 1", resp.ByBucketSource.Audit)
+	}
+	if resp.ByBucketSource.CrowdSec != 2 {
+		t.Errorf("crowdsec = %d, want 2", resp.ByBucketSource.CrowdSec)
+	}
+	if resp.Disabled || resp.Partial {
+		t.Errorf("disabled=%v partial=%v; want both false with all 4 readers wired", resp.Disabled, resp.Partial)
+	}
+}
+
+func TestSecurityAttackersSummary_CrowdSecReaderError_503(t *testing.T) {
+	// Any of the 4 readers returning an error → 503.
+	// Validates the crowdsec arm's error path (Step N.3
+	// extension to Q.3's TestSecurityAttackersSummary_ReaderError_503).
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetDecisionReader(&fakeDecisionReader{
+		distinctIPFn: func(_ context.Context, _, _ time.Time) ([]string, error) {
+			return nil, errors.New("crowdsec mirror lost lapi connection")
 		},
 	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/attackers-summary?window=24h", nil)

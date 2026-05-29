@@ -57,6 +57,16 @@ const (
 	// value}]} wire shape as the bucket metrics, gap-filled
 	// with 0.
 	metricAuthFailureRate metricName = "auth_failure_rate"
+	// Step N.3 — crowdsec decision rate. Reads
+	// bucket.CrowdSecDecisionCount, gap-filled with 0. Same
+	// shape as throttle_block_rate. Spec N §3.5: decisions
+	// aggregate under the sentinel route_id="_crowdsec".
+	// The dashboard passes route=all (the
+	// QueryAggregated path SUMs across all routes including
+	// the sentinel — same trick as Q.4 uses for throttle).
+	// route=<uuid> returns all zeros (no per-route concept
+	// for CrowdSec decisions, mirror of AC #10 for throttle).
+	metricCrowdSecDecisionRate metricName = "crowdsec_decision_rate"
 )
 
 // timeseriesPoint is one point on the timeline. Value is *float64
@@ -132,9 +142,25 @@ type summaryResponse struct {
 	// same shape contract as TotalWafBlockedPerMin (a throttle
 	// block does NOT inflate the 4xx / 5xx fields, AC #15
 	// anti-regression).
-	TotalThrottlePerMin     uint64            `json:"totalThrottlePerMin"`
-	TotalAuthFailuresPerMin uint64            `json:"totalAuthFailuresPerMin"`
-	AttackerIpsUnique       int               `json:"attackerIpsUnique"`  // union over WAF + throttle + audit, just-closed minute
+	TotalThrottlePerMin     uint64 `json:"totalThrottlePerMin"`
+	TotalAuthFailuresPerMin uint64 `json:"totalAuthFailuresPerMin"`
+	AttackerIpsUnique       int    `json:"attackerIpsUnique"` // union over WAF + throttle + audit + crowdsec, just-closed minute
+	// Step N.3 new fields. Same independence contract as the
+	// Q.3 trio above: a CrowdSec decision arriving in the
+	// minute does NOT inflate 4xx / 5xx / waf_block_count /
+	// throttle_block_count (AC #N.24 declared-divergence note:
+	// the data-plane 403 emitted BY a CrowdSec block IS
+	// counted in fourxx_count because hslatman's bouncer has
+	// no callback to flag the request, but the BUCKET counter
+	// `crowdsec_decision_count` populated here is the pure
+	// CrowdSec signal — operator dashboard reads from this).
+	TotalCrowdSecDecisionsPerMin uint64 `json:"totalCrowdSecDecisionsPerMin"`
+	// ActiveCrowdSecIpsUnique counts distinct decision `value`
+	// strings (IP / CIDR / country / AS) in the
+	// decision_event table over the just-closed minute. Same
+	// caveat as attackersByBucketSource.CrowdSec: includes
+	// non-IP scopes intentionally.
+	ActiveCrowdSecIpsUnique int               `json:"activeCrowdSecIpsUnique"`
 	GlobalP95LatencyMs      *float64          `json:"globalP95LatencyMs"` // null when no traffic
 	ActiveRouteCount        int               `json:"activeRouteCount"`
 	TopRoutes               []summaryRoute    `json:"topRoutes"`           // top 5 by reqsPerMin
@@ -189,7 +215,7 @@ func (h *Handler) metricsTimeseries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isValidMetric(metric) {
-		writeError(w, http.StatusBadRequest, "metric must be one of req_per_sec, four_xx_rate, five_xx_rate, p95_latency_ms, waf_block_rate, throttle_block_rate, auth_failure_rate")
+		writeError(w, http.StatusBadRequest, "metric must be one of req_per_sec, four_xx_rate, five_xx_rate, p95_latency_ms, waf_block_rate, throttle_block_rate, auth_failure_rate, crowdsec_decision_rate")
 		return
 	}
 	gran, step, windowDur, ok := windowParams(window)
@@ -478,6 +504,22 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		resp.TotalThrottlePerMin = uint64(throttleRows[0].ThrottleBlockCount)
 	}
 
+	// Step N.3 — TotalCrowdSecDecisionsPerMin: read the
+	// CrowdSec sentinel row (spec N §3.5: "_crowdsec"). Same
+	// pattern as TotalThrottlePerMin above. Independent of
+	// the throttle counter; AC #N.24 anti-regression: a
+	// CrowdSec decision does NOT inflate
+	// totalThrottlePerMin and vice versa.
+	crowdsecRows, qerr := h.metrics.Query(r.Context(), observability.Granularity1m,
+		observability.CrowdSecSentinelRouteID, from, to)
+	if qerr != nil {
+		h.logger.Error("metrics: summary crowdsec sentinel query failed", "err", qerr)
+		// Leave TotalCrowdSecDecisionsPerMin=0 — same
+		// trade-off as the throttle sentinel above.
+	} else if len(crowdsecRows) > 0 {
+		resp.TotalCrowdSecDecisionsPerMin = uint64(crowdsecRows[0].CrowdSecDecisionCount)
+	}
+
 	// Step Q.3 — TotalAuthFailuresPerMin: audit-scan over the
 	// just-closed minute (D4.B single source of truth — no
 	// bucket counter for this metric). Same scan-cap discipline
@@ -540,6 +582,28 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Step N.3 — CrowdSec arm of the union + the
+	// ActiveCrowdSecIpsUnique count. Same shape as the WAF /
+	// throttle distinct-IP branches: storage SELECT DISTINCT
+	// value over the window.
+	if h.decisions != nil {
+		ips, derr := h.decisions.DistinctDecisionSrcIPs(r.Context(), from, to)
+		if derr != nil {
+			h.logger.Error("metrics: summary decision distinct ip query failed", "err", derr)
+		} else {
+			// Count first (pre-union) for the per-source
+			// dashboard card, then merge into the union.
+			activeCrowdSecCount := 0
+			for _, ip := range ips {
+				if ip == "" {
+					continue
+				}
+				activeCrowdSecCount++
+				attackers[ip] = struct{}{}
+			}
+			resp.ActiveCrowdSecIpsUnique = activeCrowdSecCount
+		}
+	}
 	resp.AttackerIpsUnique = len(attackers)
 
 	writeJSON(w, http.StatusOK, resp)
@@ -550,7 +614,8 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 func isValidMetric(m metricName) bool {
 	switch m {
 	case metricReqPerSec, metricFourXxRate, metricFiveXxRate, metricP95LatencyMs,
-		metricWafBlockRate, metricThrottleBlockRate, metricAuthFailureRate:
+		metricWafBlockRate, metricThrottleBlockRate, metricAuthFailureRate,
+		metricCrowdSecDecisionRate:
 		return true
 	}
 	return false
@@ -699,6 +764,9 @@ func pickMetricValue(row observability.MetricBucket, hit bool, metric metricName
 		return &v
 	case metricThrottleBlockRate:
 		v := float64(row.ThrottleBlockCount)
+		return &v
+	case metricCrowdSecDecisionRate:
+		v := float64(row.CrowdSecDecisionCount)
 		return &v
 	case metricP95LatencyMs:
 		if row.LatencyP95Ms <= 0 {
