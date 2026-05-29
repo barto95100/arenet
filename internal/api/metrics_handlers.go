@@ -90,6 +90,19 @@ type summaryRoute struct {
 //     dashboard's category distribution strip reads this map
 //     directly. Empty when the WAF event reader is unavailable
 //     (degraded mode) OR when no events landed in the window.
+//
+// Step M.2 Spec-1 amendment:
+//   - TopAttackedRoute: the single route with the highest
+//     WAF block count over the window, computed across ALL
+//     routes (NOT filtered to TopRoutes' traffic-ranked set).
+//     Critical for the M.3 dashboard's "top route blocks/min"
+//     headline: a targeted attack on a low-traffic admin /
+//     auth surface — exactly the case that matters on an
+//     internet-exposed proxy — would otherwise be invisible
+//     because the route never reaches the traffic top-5.
+//     Nullable: null when no WAF activity in the window
+//     (operator sees an honest zero rather than an arbitrary
+//     route forced into the slot).
 type summaryResponse struct {
 	GeneratedAt         string            `json:"generatedAt"`
 	WindowSeconds       int               `json:"windowSeconds"`
@@ -101,6 +114,7 @@ type summaryResponse struct {
 	GlobalP95LatencyMs  *float64          `json:"globalP95LatencyMs"` // null when no traffic
 	ActiveRouteCount    int               `json:"activeRouteCount"`
 	TopRoutes           []summaryRoute    `json:"topRoutes"`            // top 5 by reqsPerMin
+	TopAttackedRoute    *summaryRoute     `json:"topAttackedRoute"`    // single highest WAF count, all routes; null if none
 	WafBlocksByCategory map[string]uint64 `json:"wafBlocksByCategory"` // category → count; empty when no events
 }
 
@@ -353,6 +367,36 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		top = top[:5]
 	}
 	resp.TopRoutes = top
+
+	// Step M.2 amendment — TopAttackedRoute: the single route
+	// with the highest WAF block count over the window,
+	// computed across ALL routes (NOT filtered to the
+	// traffic-ranked top-5). This is the headline for the M.3
+	// dashboard's "top route blocks/min" card; the spec
+	// §1.3 D8 wording is explicit ("top-attacked-route
+	// blocks/min"). A targeted attack on a low-traffic admin
+	// or auth surface — exactly the case that matters on an
+	// internet-exposed proxy — would be invisible if we
+	// constrained the ranking to TopRoutes. Walks byID once;
+	// O(N) over the route catalog. Stays nil when no WAF
+	// activity in the window (operator sees an honest zero).
+	var topAttacked *summaryRoute
+	for id, agg := range byID {
+		if agg.WafBlocked == 0 {
+			continue
+		}
+		if topAttacked == nil || agg.WafBlocked > topAttacked.WafBlockedPerMin {
+			topAttacked = &summaryRoute{
+				RouteID:          id,
+				Host:             agg.Host,
+				ReqsPerMin:       agg.Req,
+				FourxxPerMin:     agg.Fourxx,
+				FivexxPerMin:     agg.Fivexx,
+				WafBlockedPerMin: agg.WafBlocked,
+			}
+		}
+	}
+	resp.TopAttackedRoute = topAttacked
 
 	writeJSON(w, http.StatusOK, resp)
 }

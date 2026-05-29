@@ -27,6 +27,7 @@ import (
 
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/observability"
+	"github.com/barto95100/arenet/internal/storage"
 )
 
 // fakeWafEventReader is the test double for WafEventReader.
@@ -498,4 +499,145 @@ func TestMetricsSummary_WafEventsReader_NilLeavesMapEmpty(t *testing.T) {
 	if len(resp.WafBlocksByCategory) != 0 {
 		t.Errorf("WafBlocksByCategory has %d entries with nil reader, want 0", len(resp.WafBlocksByCategory))
 	}
+}
+
+// --- M.2 amendment: TopAttackedRoute -----------------------------------------
+
+// TestMetricsSummary_TopAttackedRoute_SortsAcrossAllRoutesByWafBlocks is the
+// load-bearing test for the M.2 amendment: TopAttackedRoute must
+// be computed across ALL routes, NOT filtered to the traffic-
+// ranked top-5. The motivating scenario — a low-traffic auth/
+// admin surface taking a targeted attack — would be invisible
+// in the dashboard headline if the ranking were constrained to
+// the traffic top-5. This is exactly the case that matters on
+// an internet-exposed proxy.
+func TestMetricsSummary_TopAttackedRoute_SortsAcrossAllRoutesByWafBlocks(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+	m.env.handler.SetWafEventReader(obsStore)
+
+	// Seed a SECOND route — the low-traffic "admin" surface
+	// that takes the WAF heat. m.routeID is the high-traffic
+	// route created by newMetricsTestEnv.
+	adminRoute, err := m.env.store.CreateRoute(context.Background(), storage.Route{
+		Host:      "admin.test",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:2", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+		WAFMode:   "block",
+	})
+	if err != nil {
+		t.Fatalf("seed admin route: %v", err)
+	}
+
+	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
+		// High-traffic "main" route — 10000 req, zero WAF.
+		// Would dominate TopRoutes (sorted by traffic).
+		{RouteID: m.routeID, Ts: prevMinute, ReqCount: 10000, FourxxCount: 5, FivexxCount: 0, WafBlockCount: 0, LatencyP95Ms: 8},
+		// Low-traffic "admin" route — 50 req, but 50 WAF
+		// blocks (every request was an attack). MUST become
+		// TopAttackedRoute despite being way down the
+		// traffic ranking.
+		{RouteID: adminRoute.ID, Ts: prevMinute, ReqCount: 50, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 50, LatencyP95Ms: 4},
+	}); err != nil {
+		t.Fatalf("seed bucket: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp summaryResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// TopRoutes is sorted by traffic: main route comes first.
+	if len(resp.TopRoutes) == 0 || resp.TopRoutes[0].RouteID != m.routeID {
+		t.Fatalf("TopRoutes[0] = %+v, want main route at top by traffic", resp.TopRoutes)
+	}
+
+	// TopAttackedRoute is the LOAD-BEARING field — must be the
+	// admin route despite being lower in traffic.
+	if resp.TopAttackedRoute == nil {
+		t.Fatal("TopAttackedRoute is nil; expected the admin route to dominate by WAF count")
+	}
+	if resp.TopAttackedRoute.RouteID != adminRoute.ID {
+		t.Errorf("TopAttackedRoute.RouteID = %q (host=%q), want admin route %q (50 WAF blocks > main route's 0) — sorting must be across ALL routes, not constrained to TopRoutes",
+			resp.TopAttackedRoute.RouteID, resp.TopAttackedRoute.Host, adminRoute.ID)
+	}
+	if resp.TopAttackedRoute.WafBlockedPerMin != 50 {
+		t.Errorf("TopAttackedRoute.WafBlockedPerMin = %d, want 50", resp.TopAttackedRoute.WafBlockedPerMin)
+	}
+}
+
+func TestMetricsSummary_TopAttackedRoute_NilWhenNoWafActivity(t *testing.T) {
+	// When no route had a WAF block in the window, the field
+	// is JSON null — honest "nothing here" rather than
+	// arbitrarily picking a route with 0 blocks.
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+	m.env.handler.SetWafEventReader(obsStore)
+
+	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: prevMinute, ReqCount: 100, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 0, LatencyP95Ms: 8},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	// Capture the body bytes BEFORE Decode consumes them,
+	// so the wire-shape sanity check below sees the actual
+	// payload.
+	bodyBytes := rec.Body.Bytes()
+	var resp summaryResponse
+	_ = json.Unmarshal(bodyBytes, &resp)
+	if resp.TopAttackedRoute != nil {
+		t.Errorf("TopAttackedRoute = %+v, want nil (no WAF activity in window)", resp.TopAttackedRoute)
+	}
+	// Sanity on the JSON wire shape: the field MUST serialize
+	// as `null`, not omitted, so the frontend type can rely
+	// on it being present. encoding/json may insert whitespace
+	// after the colon depending on Go version + encoder
+	// settings; check both the dense and the space variants.
+	if !bytes_Contains(bodyBytes, []byte(`"topAttackedRoute":null`)) &&
+		!bytes_Contains(bodyBytes, []byte(`"topAttackedRoute": null`)) {
+		t.Errorf("wire JSON missing topAttackedRoute:null field — frontend expects the key always present.\nbody=%s", string(bodyBytes))
+	}
+}
+
+// bytes_Contains is a tiny dep-free substring check. Avoids
+// pulling bytes just for this one assertion site.
+func bytes_Contains(haystack, needle []byte) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		match := true
+		for j := 0; j < len(needle); j++ {
+			if haystack[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
