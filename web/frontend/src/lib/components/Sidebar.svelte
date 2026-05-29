@@ -78,6 +78,7 @@
 		| 'topology'
 		| 'observability'
 		| 'security'
+		| 'crowdsec'
 		| 'settings'
 		| 'users';
 
@@ -104,6 +105,11 @@
 		// AC #17 (no role filter here; the API gate is enough).
 		{ href: '/observability', label: 'Observability', icon: 'observability' },
 		{ href: '/security', label: 'Security', icon: 'security' },
+		// Step N.4 — CrowdSec decisions drill-down. Per N spec
+		// §5.4, mounted as its own top-level item (rather than
+		// nested under Security) because the sidebar is flat in
+		// v1.x — a sub-nav refactor is out of scope.
+		{ href: '/security/decisions', label: 'CrowdSec', icon: 'crowdsec' },
 		{ href: '/admin/users', label: 'Users', icon: 'users' },
 		{ href: '/settings', label: 'Settings', icon: 'settings' }
 	];
@@ -160,6 +166,15 @@
 			<path
 				d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
 			/>
+		{:else if icon === 'crowdsec'}
+			<!-- Lucide: shield-ban — IP reputation gate. Same
+			     shield silhouette as Security but with a
+			     diagonal "no" stroke to mark the deny-list
+			     posture. -->
+			<path
+				d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+			/>
+			<line x1="9" y1="9" x2="15" y2="15" />
 		{:else if icon === 'settings'}
 			<!-- Lucide: settings -->
 			<path

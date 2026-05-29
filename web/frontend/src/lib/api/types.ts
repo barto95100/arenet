@@ -562,7 +562,13 @@ export type MetricName =
 	// counter). route="all" returns the system-wide series;
 	// route=<uuid> returns all-zero (AC #10 — neither signal
 	// is per-route).
-	| 'auth_failure_rate';
+	| 'auth_failure_rate'
+	// Step N.3 — CrowdSec decision rate. Reads
+	// bucket.CrowdSecDecisionCount via the QueryAggregated
+	// SUM path on route="all" (which includes the sentinel
+	// "_crowdsec" row — same trick as throttle). route=<uuid>
+	// returns all-zero (mirror of throttle).
+	| 'crowdsec_decision_rate';
 
 export type MetricWindow = '24h' | '30d';
 
@@ -634,7 +640,24 @@ export interface SummaryResponse {
 	// the just-closed minute. An IP that hit multiple
 	// sources counts ONCE. The dashboard renders this as
 	// the "ATTACKER IPs unique" headline card.
+	//
+	// Step N.3 extension: the union now spans 4 sources
+	// (waf + throttle + audit + crowdsec). The number can
+	// be larger than pre-N if a CrowdSec community
+	// blocklist contributes IPs not seen by the other gates.
 	attackerIpsUnique: number;
+	// Step N.3 — total CrowdSec decisions captured by the
+	// parallel StreamBouncer consumer over the just-closed
+	// minute (dedupe-before-bump per N spec D4.A — counts
+	// NEW decisions, not re-polled active ones). Read from
+	// the sentinel "_crowdsec" bucket row. AC #N.24:
+	// independent of every other counter.
+	totalCrowdSecDecisionsPerMin: number;
+	// Step N.3 — count of distinct decision `value` strings
+	// (IP / CIDR / country / AS) in the just-closed minute.
+	// Includes non-IP scopes intentionally; the dashboard's
+	// "Active CrowdSec attackers" card surfaces this number.
+	activeCrowdSecIpsUnique: number;
 	wafBlocksByCategory: Record<string, number>;
 	// Null when no traffic landed in the window — same
 	// no-fake-dip rule as TimeseriesPoint.value.
@@ -811,13 +834,13 @@ export interface AuthFailuresResponse {
  * the dashboard's "by source" widget. SUM(byBucketSource)
  * ≥ uniqueIps (equal when no overlap).
  *
- * Three-state disabled / partial contract (aligned with
- * Q.2):
- *   - All three backend readers nil → disabled=true, empty
+ * Four-state disabled / partial contract (Step N.3 extended
+ * the original Q.3 three-state to four):
+ *   - All four backend readers nil → disabled=true, empty
  *     bodies.
  *   - At least one nil but not all → partial=true, the
  *     union reflects the readers that DID respond.
- *   - All three present → neither flag set.
+ *   - All four present → neither flag set.
  *
  * The frontend uses `partial` to drive an "incomplete data"
  * affordance — same convention as
@@ -827,6 +850,12 @@ export interface AttackersByBucketSource {
 	waf: number;
 	throttle: number;
 	audit: number;
+	// Step N.3 — 4th source: distinct CrowdSec decision
+	// `value` strings (IP / CIDR / country / AS). Includes
+	// non-IP scopes intentionally — a Range-scoped community
+	// blocklist entry is just as much an attacker indicator
+	// as a single IP.
+	crowdsec: number;
 }
 
 export interface AttackersSummaryResponse {
@@ -835,4 +864,65 @@ export interface AttackersSummaryResponse {
 	window: MetricWindow;
 	uniqueIps: number;
 	byBucketSource: AttackersByBucketSource;
+}
+
+// --- Step N CrowdSec types --------------------------------------------------
+
+/**
+ * LAPI decision scope. Strings are free-form on the wire
+ * (the LAPI vocabulary is operator-controlled; new scopes
+ * could appear via custom community scenarios), but the
+ * documented values are the four below.
+ */
+export type DecisionScope = 'ip' | 'range' | 'country' | 'as';
+
+/**
+ * LAPI decision action type. The bouncer translates these
+ * to HTTP responses:
+ *   - `ban`: 403 (default).
+ *   - `captcha`: 403 (no captcha challenge implemented in
+ *     caddy-crowdsec-bouncer v0.12.1; functionally a ban —
+ *     upstream issue #46).
+ *   - `throttle`: 429 + Retry-After header.
+ *
+ * Free-form string on the wire for forward-compat with
+ * future LAPI extensions.
+ */
+export type DecisionType = 'ban' | 'captcha' | 'throttle';
+
+/**
+ * One CrowdSec LAPI decision row, mirror of
+ * observability.DecisionEvent (storage) + N spec D5.B
+ * operator-facing subset.
+ *
+ * UUID is LAPI's stable cross-instance identifier (drift-
+ * safe across CrowdSec restarts; the LAPI server-local `id`
+ * was intentionally dropped at the storage layer for
+ * stability — see N spec §1.3 D5.B).
+ *
+ * Scope + Value together describe WHAT the decision targets:
+ *   - "ip" + "1.2.3.4"            → single IP.
+ *   - "range" + "185.142.86.0/24" → CIDR (community blocklist).
+ *   - "country" + "RU"            → all IPs from a country.
+ *   - "as" + "AS12345"            → all IPs from an AS.
+ *
+ * ExpiresAt is the absolute moment the decision becomes
+ * inactive. The retention layer (server-side) prunes rows
+ * 30d after ExpiresAt per N spec D8.A.
+ */
+export interface Decision {
+	id: number;
+	uuid: string;
+	ts: string;
+	scope: string;
+	value: string;
+	type: string;
+	scenario: string;
+	expiresAt: string;
+	durationSeconds: number;
+}
+
+export interface DecisionsResponse {
+	disabled?: boolean;
+	events: Decision[];
 }

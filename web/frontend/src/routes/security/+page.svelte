@@ -58,6 +58,7 @@ Step F design tokens only.
 	import {
 		fetchAttackersSummary,
 		fetchAuthFailures,
+		fetchDecisions,
 		fetchEvents,
 		fetchThrottleEvents
 	} from '$lib/api/security';
@@ -65,6 +66,7 @@ Step F design tokens only.
 	import type {
 		AttackersSummaryResponse,
 		AuthFailureRecentEvent,
+		Decision,
 		MetricWindow,
 		Route,
 		SummaryResponse,
@@ -88,6 +90,10 @@ Step F design tokens only.
 	let recentThrottle = $state<ThrottleEvent[]>([]);
 	let recentAuthFailures = $state<AuthFailureRecentEvent[]>([]);
 	let attackersSummary = $state<AttackersSummaryResponse | null>(null);
+	// Step N.4 — 4th event source for the mixed feed
+	// (CrowdSec LAPI decisions captured by the parallel
+	// StreamBouncer consumer).
+	let recentDecisions = $state<Decision[]>([]);
 
 	let reqSeries = $state<TimeseriesPoint[]>([]);
 	let fourxxSeries = $state<TimeseriesPoint[]>([]);
@@ -97,6 +103,10 @@ Step F design tokens only.
 	// per-route per spec §3.5 / AC #10).
 	let throttleSeries = $state<TimeseriesPoint[]>([]);
 	let authFailSeries = $state<TimeseriesPoint[]>([]);
+	// Step N.4 — CrowdSec decision rate chart series.
+	// Same route=all convention as throttle: aggregated
+	// SUM includes the "_crowdsec" sentinel row.
+	let crowdsecSeries = $state<TimeseriesPoint[]>([]);
 
 	const disabled = $derived(summary?.disabled === true);
 	const noRoutes = $derived(!disabled && allRoutes.length === 0);
@@ -165,45 +175,63 @@ Step F design tokens only.
 				wafSeries = [];
 				throttleSeries = [];
 				authFailSeries = [];
+				crowdsecSeries = [];
 				recentEvents = [];
 				recentThrottle = [];
 				recentAuthFailures = [];
+				recentDecisions = [];
 				attackersSummary = null;
 				return;
 			}
 
-			// Step Q.4 — 5 timeline series (3 M + 2 Q) + 3 event
-			// feeds + attackers summary, all fetched in parallel.
-			// Per-Q-endpoint AC #14 disabled is handled at the
-			// response level (events arrays come back empty,
-			// timeseries gap-filled with 0).
+			// Step Q.4 + N.4 — 6 timeline series (3 M + 2 Q +
+			// 1 N) + 4 event feeds + attackers summary, all
+			// fetched in parallel. Per-endpoint AC degraded
+			// shape is handled at the response level (events
+			// arrays come back empty, timeseries gap-filled
+			// with 0).
 			//
 			// All series use route=all: per AC #10, neither
-			// throttle nor auth-failure is per-route. The "all"
-			// sentinel's QueryAggregated SUMs across every route
-			// including the throttle sentinel ("_throttle",
-			// spec §3.5), which is exactly the system-wide view
-			// we want here.
-			const [req, fourxx, waf, throttle, authFail, events, throttleEvts, authFails, attackers] =
-				await Promise.all([
-					fetchTimeseries('all', 'req_per_sec', window),
-					fetchTimeseries('all', 'four_xx_rate', window),
-					fetchTimeseries('all', 'waf_block_rate', window),
-					fetchTimeseries('all', 'throttle_block_rate', window),
-					fetchTimeseries('all', 'auth_failure_rate', window),
-					fetchEvents({ limit: 20 }),
-					fetchThrottleEvents({ limit: 20 }),
-					fetchAuthFailures(window),
-					fetchAttackersSummary(window)
-				]);
+			// throttle nor auth-failure nor CrowdSec is
+			// per-route. The "all" sentinel's QueryAggregated
+			// SUMs across every route including the sentinels
+			// ("_throttle" + "_crowdsec", N spec §3.5), which
+			// is exactly the system-wide view we want.
+			const [
+				req,
+				fourxx,
+				waf,
+				throttle,
+				authFail,
+				crowdsec,
+				events,
+				throttleEvts,
+				authFails,
+				decisions,
+				attackers
+			] = await Promise.all([
+				fetchTimeseries('all', 'req_per_sec', window),
+				fetchTimeseries('all', 'four_xx_rate', window),
+				fetchTimeseries('all', 'waf_block_rate', window),
+				fetchTimeseries('all', 'throttle_block_rate', window),
+				fetchTimeseries('all', 'auth_failure_rate', window),
+				fetchTimeseries('all', 'crowdsec_decision_rate', window),
+				fetchEvents({ limit: 20 }),
+				fetchThrottleEvents({ limit: 20 }),
+				fetchAuthFailures(window),
+				fetchDecisions({ limit: 20 }),
+				fetchAttackersSummary(window)
+			]);
 			reqSeries = trimTrailing(req);
 			fourxxSeries = trimTrailing(fourxx);
 			wafSeries = trimTrailing(waf);
 			throttleSeries = trimTrailing(throttle);
 			authFailSeries = trimTrailing(authFail);
+			crowdsecSeries = trimTrailing(crowdsec);
 			recentEvents = events.events;
 			recentThrottle = throttleEvts.events;
 			recentAuthFailures = authFails.recent;
+			recentDecisions = decisions.events;
 			attackersSummary = attackers;
 		} catch (err) {
 			loadError = err instanceof ApiError ? err.message : 'failed to load security data';
@@ -297,8 +325,8 @@ Step F design tokens only.
 		>
 	</div>
 
-	<!-- 8 stat cards: 5 M + 3 Q. CSS auto-fit grid wraps to
-	     2 rows on narrow viewports. -->
+	<!-- 10 stat cards: 5 M + 3 Q + 2 N. CSS auto-fit grid
+	     wraps to multiple rows on narrow viewports. -->
 	<div class="stat-grid">
 		<StatCard label="WAF blocks / min" value={summary?.totalWafBlockedPerMin ?? 0} />
 		<StatCard
@@ -308,20 +336,27 @@ Step F design tokens only.
 		<StatCard label="% requests blocked" value={fmtPct(pctBlocked)} />
 		<StatCard label="4xx / min (context)" value={summary?.totalFourXxPerMin ?? 0} />
 		<StatCard label="Routes avec WAF" value={wafEnabledRoutes.length} />
-		<!-- Step Q.4 — 3 new headline cards. THROTTLE / min +
+		<!-- Step Q.4 — 3 headline cards. THROTTLE / min +
 		     AUTH-FAIL / min are per-minute counts (just-closed
 		     minute). ATTACKER IPs unique is the server-side
 		     union over the same window. -->
 		<StatCard label="Throttle blocks / min" value={summary?.totalThrottlePerMin ?? 0} />
 		<StatCard label="Auth fails / min" value={summary?.totalAuthFailuresPerMin ?? 0} />
 		<StatCard label="Attacker IPs unique" value={summary?.attackerIpsUnique ?? 0} />
+		<!-- Step N.4 — 2 headline cards: CrowdSec decisions/
+		     min (NEW decisions arriving from LAPI, dedupe-
+		     before-bump per N D4.A) + Active CrowdSec
+		     attackers (distinct decision values in window —
+		     includes non-IP scopes). -->
+		<StatCard label="CrowdSec / min" value={summary?.totalCrowdSecDecisionsPerMin ?? 0} />
+		<StatCard label="Active CrowdSec bans" value={summary?.activeCrowdSecIpsUnique ?? 0} />
 	</div>
 
 	{#if attackersSummary?.partial === true}
 		<div class="partial-hint" role="status">
-			Données partielles — au moins une source (WAF, throttle ou
-			audit) est indisponible. Les chiffres affichés reflètent
-			les sources qui ont répondu.
+			Données partielles — au moins une source (WAF, throttle,
+			audit ou CrowdSec) est indisponible. Les chiffres affichés
+			reflètent les sources qui ont répondu.
 		</div>
 	{/if}
 
@@ -373,6 +408,22 @@ Step F design tokens only.
 					color="var(--status-info)"
 					formatValue={fmtCount}
 					label="System-wide authentication failures per minute"
+				/>
+			</div>
+		</Card>
+		<!-- Step N.4 — CrowdSec decision rate, sentinel-
+		     keyed at "_crowdsec" + aggregated via the "all"
+		     SUM path. Dedupe-before-bump per N D4.A means
+		     each tick is a NEW decision arriving, not a
+		     repeat of an active one. -->
+		<Card>
+			<div class="chart-block">
+				<h3>CrowdSec decisions / minute</h3>
+				<TimelineChart
+					points={crowdsecSeries}
+					color="var(--status-down)"
+					formatValue={fmtCount}
+					label="System-wide CrowdSec decisions per minute"
 				/>
 			</div>
 		</Card>
@@ -451,6 +502,7 @@ Step F design tokens only.
 				wafEvents={recentEvents}
 				throttleEvents={recentThrottle}
 				authFailures={recentAuthFailures}
+				decisions={recentDecisions}
 				{hostByRouteId}
 			/>
 		</div>

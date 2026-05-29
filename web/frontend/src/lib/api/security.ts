@@ -11,6 +11,7 @@ import { request } from './client';
 import type {
 	AttackersSummaryResponse,
 	AuthFailuresResponse,
+	DecisionsResponse,
 	MetricWindow,
 	OwaspCategory,
 	ThrottleEventsResponse,
@@ -127,4 +128,48 @@ export function fetchAuthFailures(window: MetricWindow): Promise<AuthFailuresRes
 export function fetchAttackersSummary(window: MetricWindow): Promise<AttackersSummaryResponse> {
 	const qs = new URLSearchParams({ window });
 	return request<AttackersSummaryResponse>('GET', `/security/attackers-summary?${qs.toString()}`);
+}
+
+/**
+ * Step N.3 — typed client wrapper around GET
+ * /api/v1/security/decisions.
+ *
+ * Filters are optional:
+ *   - `limit` is clamped server-side at 100.
+ *   - `scope` filters to a single LAPI scope (`ip`, `range`,
+ *     `country`, `as` — free-form string for forward-compat).
+ *   - `srcIp` is exact-match on the decision's `value`
+ *     field (named `srcIp` for operator-mental-model
+ *     consistency with the throttle-events endpoint).
+ *   - `scenario` filters on the LAPI scenario name
+ *     (e.g. `crowdsecurity/http-probing`).
+ *   - `onlyActive` excludes rows whose `expiresAt` is in
+ *     the past — i.e. revoked or expired decisions.
+ *     Default false: include forensic "what WAS banned
+ *     yesterday" rows.
+ *
+ * AC #15 degraded-mode path: when the LAPI key isn't
+ * configured OR the observability subsystem failed at boot,
+ * the response carries `disabled: true` and an empty
+ * `events` array.
+ */
+export interface FetchDecisionsParams {
+	limit?: number;
+	scope?: string;
+	srcIp?: string;
+	scenario?: string;
+	onlyActive?: boolean;
+}
+
+export function fetchDecisions(
+	params: FetchDecisionsParams = {}
+): Promise<DecisionsResponse> {
+	const qs = new URLSearchParams();
+	if (params.limit !== undefined) qs.set('limit', String(params.limit));
+	if (params.scope) qs.set('scope', params.scope);
+	if (params.srcIp) qs.set('srcIp', params.srcIp);
+	if (params.scenario) qs.set('scenario', params.scenario);
+	if (params.onlyActive) qs.set('onlyActive', 'true');
+	const suffix = qs.toString() ? `?${qs.toString()}` : '';
+	return request<DecisionsResponse>('GET', `/security/decisions${suffix}`);
 }

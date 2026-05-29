@@ -47,6 +47,7 @@ Color discipline (Step F design tokens):
 <script lang="ts">
 	import type {
 		AuthFailureRecentEvent,
+		Decision,
 		OwaspCategory,
 		ThrottleEvent,
 		WafEvent
@@ -56,11 +57,20 @@ Color discipline (Step F design tokens):
 		wafEvents: WafEvent[];
 		throttleEvents: ThrottleEvent[];
 		authFailures: AuthFailureRecentEvent[];
+		// Step N.4 — 4th source: CrowdSec LAPI decisions
+		// (ban / captcha / throttle). Decisions don't carry a
+		// routeId — the bouncer matches at the IP layer
+		// before per-route dispatch. Optional + default []
+		// so older callers that don't yet pass this prop
+		// (i.e. the per-route drill-down which intentionally
+		// stays WAF-only per N spec §5.4 + Q D5) still
+		// compile.
+		decisions?: Decision[];
 		/**
 		 * Optional map of routeId → host string so the WAF
 		 * row's target cell can show the friendly host instead
-		 * of a bare UUID prefix. Throttle / auth events don't
-		 * carry a routeId.
+		 * of a bare UUID prefix. Throttle / auth / crowdsec
+		 * events don't carry a routeId.
 		 */
 		hostByRouteId?: Record<string, string>;
 	}
@@ -68,10 +78,11 @@ Color discipline (Step F design tokens):
 		wafEvents,
 		throttleEvents,
 		authFailures,
+		decisions = [],
 		hostByRouteId = {}
 	}: Props = $props();
 
-	type Kind = 'WAF' | 'THROTTLE' | 'AUTH';
+	type Kind = 'WAF' | 'THROTTLE' | 'AUTH' | 'CROWDSEC';
 
 	// Unified row shape for the table. Each event source is
 	// projected into this shape once, then merged. `key` is
@@ -95,7 +106,14 @@ Color discipline (Step F design tokens):
 	const KIND_COLOR: Record<Kind, string> = {
 		WAF: 'var(--status-down)',
 		THROTTLE: 'var(--status-warn)',
-		AUTH: 'var(--status-info)'
+		AUTH: 'var(--status-info)',
+		// Step N.4 — CROWDSEC reuses the WAF down/red palette
+		// because the operator semantic is the same ("this IP
+		// is currently blocked"). The scenario badge cell
+		// disambiguates the type at a glance: "SQLi" comes
+		// from CrowdSec's hub scenarios (e.g.
+		// "crowdsecurity/http-probing"), not OWASP CRS.
+		CROWDSEC: 'var(--status-down)'
 	};
 
 	const CATEGORY_COLOR: Record<OwaspCategory, string> = {
@@ -127,6 +145,29 @@ Color discipline (Step F design tokens):
 			return `blocked ${m}m`;
 		}
 		return `blocked ${seconds}s`;
+	}
+
+	// Step N.4 — shorten a CrowdSec scenario name for the
+	// detail badge cell. Hub scenarios are namespaced as
+	// "crowdsecurity/http-probing"; the operator-facing
+	// short form is the suffix after the slash. Custom
+	// scenarios without the namespace render verbatim.
+	function shortScenario(s: string): string {
+		if (!s) return 'ban';
+		const i = s.lastIndexOf('/');
+		return i >= 0 ? s.slice(i + 1) : s;
+	}
+
+	// formatDecisionTarget builds the "scope · value" string
+	// for the target cell. CrowdSec decisions don't have a
+	// route or username — the natural target is the scope+
+	// value pair: "ip · 1.2.3.4", "range · 185.142.86.0/24",
+	// "country · RU", "as · AS12345". Empty scope falls
+	// back to value alone.
+	function formatDecisionTarget(scope: string, value: string): string {
+		if (!value) return '—';
+		if (!scope) return value;
+		return `${scope} · ${value}`;
 	}
 
 	const rows = $derived.by<Row[]>(() => {
@@ -176,12 +217,32 @@ Color discipline (Step F design tokens):
 				extra: e.message || ''
 			});
 		}
-		// Merge sort by ts descending. The three sources are
+		// Step N.4 — 4th source: CrowdSec LAPI decisions. The
+		// natural row identity is the LAPI UUID (stable across
+		// our restarts and the bouncer's cache rebuilds). The
+		// target cell shows scope+value (e.g. "range ·
+		// 185.142.86.0/24") rather than a single field
+		// because the scope is operator-semantic context the
+		// dashboard owes the reader.
+		for (const e of decisions) {
+			out.push({
+				key: `cs-${e.uuid}`,
+				tsIso: e.ts,
+				tsEpochMs: new Date(e.ts).getTime(),
+				kind: 'CROWDSEC',
+				detail: shortScenario(e.scenario),
+				detailColor: 'var(--status-down)',
+				target: formatDecisionTarget(e.scope, e.value),
+				srcIp: e.value || '—',
+				extra: e.type || 'ban'
+			});
+		}
+		// Merge sort by ts descending. The four sources are
 		// each individually ordered by ts desc (server-side
-		// guarantee on WAF/throttle; Q.2 guarantee on audit),
-		// so a plain stable sort is correct and bounded by
-		// O((W+T+A) log (W+T+A)) — trivially small at the
-		// dashboard's 20+100+100 cap.
+		// guarantee on WAF/throttle/decisions; Q.2 guarantee
+		// on audit), so a plain stable sort is correct and
+		// bounded by O((W+T+A+D) log (...)) — trivially
+		// small at the dashboard's 20-per-source cap.
 		out.sort((a, b) => b.tsEpochMs - a.tsEpochMs);
 		return out;
 	});
