@@ -59,6 +59,7 @@ import (
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/caddymgr"
+	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
@@ -392,6 +393,92 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		logger.Info("throttle event sink wired", "store", obsPath)
 	} else {
 		logger.Info("throttle event sink running in degraded mode (no persistence)")
+	}
+
+	// Step N.2 — CrowdSec decision event sink. Mirror of the
+	// throttle wiring above, with TWO structural twists per N
+	// spec:
+	//   1. Dedupe BEFORE bump (D4.A): the LRU gates BOTH the
+	//      event-table row AND the BlockCounter bump,
+	//      preventing the bucket counter from inflating by
+	//      (active_count × polls_per_minute) every minute.
+	//   2. Parallel consumer architecture (D3.A): the
+	//      caddy-crowdsec-bouncer (wired by N.1 in caddymgr)
+	//      enforces decisions at the proxy edge; Arenet runs
+	//      its OWN independent go-cs-bouncer.StreamBouncer
+	//      consumer here to mirror decisions into the
+	//      decision_event table for the dashboard. Both
+	//      consumers poll LAPI at TickerInterval (60s per
+	//      D7.A); bandwidth duplication is negligible
+	//      against a homelab LAPI.
+	//
+	// AC #13 degraded-mode discipline mirrors M / Q:
+	//   - nil obsStore (boot-failed observability) → adapter
+	//     returns nil from each flush.
+	//   - empty csKey (LAPI not configured at N.1 step) →
+	//     the LiveSource is NOT built; the Consumer is NOT
+	//     started; the Sink runs as a no-op drain that
+	//     anything (e.g. a future test injection) can still
+	//     emit into without crashing.
+	crowdsecSink := crowdsec.NewSink(crowdsecInserterAdapter{obsStore}, obsAggregator, logger, crowdsec.SinkConfig{})
+	crowdsec.SetGlobalSink(crowdsecSink)
+	crowdsecCtx, crowdsecCancel := context.WithCancel(ctx)
+	var crowdsecWG sync.WaitGroup
+	crowdsecWG.Add(1)
+	go func() {
+		defer crowdsecWG.Done()
+		crowdsecSink.Run(crowdsecCtx)
+	}()
+
+	// Spawn the parallel StreamBouncer consumer ONLY when the
+	// LAPI key is configured. The caddy-crowdsec-bouncer side
+	// is wired separately (N.1) and uses the same env vars;
+	// when csKey is empty, BOTH consumers are absent and
+	// /security/decisions returns disabled=true (AC #15).
+	if csKey != "" {
+		csEffURL := csURL
+		if csEffURL == "" {
+			csEffURL = "http://127.0.0.1:8080/"
+		}
+		liveSrc, srcErr := crowdsec.NewLiveSource(crowdsec.LiveSourceConfig{
+			APIURL:         csEffURL,
+			APIKey:         csKey,
+			UserAgent:      "arenet/1.1 (mirror-consumer)",
+			TickerInterval: crowdsec.SleepInterval,
+		}, logger)
+		if srcErr != nil {
+			// Fail-open per AC #13: a LiveSource init failure
+			// (bad URL shape, etc.) does NOT abort boot. The
+			// bouncer-side enforcement may still come up
+			// (different code path); only the mirror is
+			// disabled. Operator sees the ERROR log line +
+			// /security/decisions returns disabled=true.
+			logger.Error("crowdsec mirror consumer: LiveSource init failed; mirror disabled (data plane unaffected — bouncer enforcement may still be active)",
+				"err", srcErr)
+		} else {
+			crowdsecConsumer := crowdsec.NewConsumer(liveSrc, crowdsecSink, logger)
+			crowdsecWG.Add(1)
+			go func() {
+				defer crowdsecWG.Done()
+				crowdsecConsumer.Run(crowdsecCtx)
+			}()
+			logger.Info("crowdsec mirror consumer wired", "lapi_url", csEffURL, "ticker", crowdsec.SleepInterval)
+		}
+	} else {
+		logger.Info("crowdsec mirror consumer not configured (set ARENET_CROWDSEC_API_KEY to enable the dashboard mirror)")
+	}
+
+	defer func() {
+		crowdsecCancel()
+		crowdsecWG.Wait()
+		crowdsec.SetGlobalSink(nil)
+		logger.Info("crowdsec sink stopped")
+	}()
+
+	if obsStore != nil {
+		logger.Info("crowdsec event sink wired", "store", obsPath)
+	} else {
+		logger.Info("crowdsec event sink running in degraded mode (no persistence)")
 	}
 
 	// Start the metrics ticker AFTER caddymgr.Start so the first
@@ -783,6 +870,47 @@ func (a throttleInserterAdapter) InsertThrottleEventBatch(ctx context.Context, e
 		}
 	}
 	return a.store.InsertThrottleEventBatch(ctx, rows)
+}
+
+// crowdsecInserterAdapter satisfies crowdsec.Inserter by
+// translating crowdsec.Decision → observability.DecisionEvent
+// and delegating to the store. Same shape as wafInserterAdapter
+// and throttleInserterAdapter — keeps internal/crowdsec and
+// internal/observability decoupled. Tolerates a nil store
+// (AC #13 degraded mode).
+type crowdsecInserterAdapter struct {
+	store *observability.Store
+}
+
+// InsertDecisionEventBatch implements crowdsec.Inserter.
+func (a crowdsecInserterAdapter) InsertDecisionEventBatch(ctx context.Context, events []crowdsec.Decision) error {
+	if a.store == nil {
+		return nil
+	}
+	rows := make([]observability.DecisionEvent, len(events))
+	for i, e := range events {
+		rows[i] = observability.DecisionEvent{
+			UUID:            e.UUID,
+			Ts:              e.Ts,
+			Scope:           e.Scope,
+			Value:           e.Value,
+			Type:            e.Type,
+			Scenario:        e.Scenario,
+			ExpiresAt:       e.ExpiresAt,
+			DurationSeconds: e.DurationSeconds,
+		}
+	}
+	return a.store.InsertDecisionEventBatch(ctx, rows)
+}
+
+// MarkDecisionExpired implements crowdsec.Inserter for the
+// tombstone path: LAPI signals revoke → soft-delete on the
+// stored row (expires_at = now). nil-tolerant per AC #13.
+func (a crowdsecInserterAdapter) MarkDecisionExpired(ctx context.Context, uuid string) error {
+	if a.store == nil {
+		return nil
+	}
+	return a.store.MarkDecisionExpired(ctx, uuid)
 }
 
 func main() {

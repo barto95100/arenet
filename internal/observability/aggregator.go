@@ -65,6 +65,20 @@ type TickDelta struct {
 	// is a per-minute count under the sentinel route.
 	// Spec §3.5.
 	ThrottleBlocks uint64
+
+	// CrowdSecDecisions is the count of NEW CrowdSec decisions
+	// (dedupe-before-bump per Step N spec D4.A) to add to the
+	// current minute's accumulator. Same shape as WafBlocks
+	// and ThrottleBlocks but flows from a different
+	// observation point: the parallel go-cs-bouncer.StreamBouncer
+	// consumer in internal/crowdsec/stream.go calls
+	// Aggregator.BumpCrowdSecDecisions(srcIP) on EVERY FIRST-
+	// SIGHT decision UUID (not every absorb — the LRU in
+	// crowdsec.Sink gates the bump). RouteID is forced to
+	// CrowdSecSentinelRouteID. srcIP is dropped at the bucket
+	// layer (per-IP detail lives in the decision_event table).
+	// N spec §3.5.
+	CrowdSecDecisions uint64
 }
 
 // ThrottleSentinelRouteID is the load-bearing convention from
@@ -75,6 +89,13 @@ type TickDelta struct {
 // system. The frontend's "throttle/min" stat card reads
 // bucket rows WHERE route_id = ThrottleSentinelRouteID.
 const ThrottleSentinelRouteID = "_throttle"
+
+// CrowdSecSentinelRouteID is the Step N mirror of
+// ThrottleSentinelRouteID: decision activity is per-IP (or
+// per-CIDR / country / AS), not per-route, so it lands in a
+// single per-minute slot keyed by this sentinel. N spec §3.5.
+// "_crowdsec" — UUID prefix safety same as Q.
+const CrowdSecSentinelRouteID = "_crowdsec"
 
 // routeState is the aggregator's in-memory accumulator for one
 // route between two minute boundaries. All access is serialised
@@ -92,13 +113,14 @@ const ThrottleSentinelRouteID = "_throttle"
 // throttle layer is per-IP, not per-route, and lands in a
 // single per-minute slot under the sentinel. Spec §3.5.
 type routeState struct {
-	req            int64
-	fourxx         int64
-	fivexx         int64
-	wafBlocks      int64
-	throttleBlocks int64
-	p95MaxMs       int32 // max across all 1-second samples this minute
-	samples        int   // number of non-empty 1-second samples
+	req               int64
+	fourxx            int64
+	fivexx            int64
+	wafBlocks         int64
+	throttleBlocks    int64
+	crowdsecDecisions int64
+	p95MaxMs          int32 // max across all 1-second samples this minute
+	samples           int   // number of non-empty 1-second samples
 }
 
 // bucketSink is the minimal write surface the aggregator depends
@@ -253,6 +275,31 @@ func (a *Aggregator) BumpThrottleBlocks(srcIP string) {
 	a.Ingest(TickDelta{RouteID: ThrottleSentinelRouteID, ThrottleBlocks: 1})
 }
 
+// BumpCrowdSecDecisions increments the per-minute decision
+// counter under the sentinel route ID. Implements
+// crowdsec.BlockCounter; called by crowdsec.Sink.absorbEmit
+// on FIRST SIGHT of a decision UUID (the LRU in the sink
+// dedupes BEFORE this counter bump — that's the Step N spec
+// D4.A structural inversion vs M/Q where the LRU dedupes
+// AFTER the bump).
+//
+// srcIP is the bouncer-observed `value` from the LAPI
+// decision (IP, CIDR, country code, or AS — depends on
+// scope). Accepted to match the crowdsec.BlockCounter
+// signature but intentionally NOT used as the aggregator
+// key. Per-IP / per-CIDR detail lives in the decision_event
+// table; the bucket layer is per-minute counts under a
+// sentinel route. N spec §3.5: piggy-backs on the existing
+// per-route flush path rather than introducing a new
+// top-level aggregator slot.
+//
+// Non-blocking by construction. Same AC #13 discipline as
+// BumpThrottleBlocks / BumpWafBlocks / Consume.
+func (a *Aggregator) BumpCrowdSecDecisions(srcIP string) {
+	_ = srcIP // intentionally unused — see doc comment.
+	a.Ingest(TickDelta{RouteID: CrowdSecSentinelRouteID, CrowdSecDecisions: 1})
+}
+
 // Consume implements metrics.TickConsumer. Adapter so the Step E
 // ticker can fan its per-route deltas out to the observability
 // pipeline without an import-direction reversal (internal/metrics
@@ -366,6 +413,7 @@ func (a *Aggregator) absorb(d TickDelta) {
 	rs.fivexx += int64(d.Fivexx)
 	rs.wafBlocks += int64(d.WafBlocks)
 	rs.throttleBlocks += int64(d.ThrottleBlocks)
+	rs.crowdsecDecisions += int64(d.CrowdSecDecisions)
 	if d.LatencyP95Ms > rs.p95MaxMs {
 		rs.p95MaxMs = d.LatencyP95Ms
 	}
@@ -402,14 +450,15 @@ func (a *Aggregator) flush(ctx context.Context) {
 	rows := make([]MetricBucket, 0, len(a.state))
 	for id, rs := range a.state {
 		rows = append(rows, MetricBucket{
-			RouteID:            id,
-			Ts:                 a.currentMinute,
-			ReqCount:           rs.req,
-			FourxxCount:        rs.fourxx,
-			FivexxCount:        rs.fivexx,
-			WafBlockCount:      rs.wafBlocks,
-			ThrottleBlockCount: rs.throttleBlocks,
-			LatencyP95Ms:       rs.p95MaxMs,
+			RouteID:               id,
+			Ts:                    a.currentMinute,
+			ReqCount:              rs.req,
+			FourxxCount:           rs.fourxx,
+			FivexxCount:           rs.fivexx,
+			WafBlockCount:         rs.wafBlocks,
+			ThrottleBlockCount:    rs.throttleBlocks,
+			CrowdSecDecisionCount: rs.crowdsecDecisions,
+			LatencyP95Ms:          rs.p95MaxMs,
 		})
 	}
 	// Reset before the write so a slow / failing flush doesn't

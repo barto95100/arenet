@@ -505,3 +505,76 @@ drained:
 		t.Errorf("AC #3 violation — throttle bump leaked into L/M counters: %+v", rows[0])
 	}
 }
+
+// TestAggregator_BumpCrowdSecDecisions_FlushesUnderSentinel
+// pins the Step N.2 integration: BumpCrowdSecDecisions
+// (crowdsec.BlockCounter satisfaction) folds into the
+// per-minute MetricBucket's CrowdSecDecisionCount field on
+// flush, under the sentinel route ID CrowdSecSentinelRouteID
+// ("_crowdsec"). Mirror of the throttle test above plus AC
+// #N.15-equivalent: CrowdSec bumps do NOT inflate WAF /
+// throttle / 4xx / 5xx counters.
+func TestAggregator_BumpCrowdSecDecisions_FlushesUnderSentinel(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	var nowAtomic atomic.Pointer[time.Time]
+	t0 := time.Date(2026, 5, 28, 10, 0, 0, 500_000_000, time.UTC)
+	nowAtomic.Store(&t0)
+	advance := func(d time.Duration) {
+		cur := *nowAtomic.Load()
+		next := cur.Add(d)
+		nowAtomic.Store(&next)
+	}
+
+	a := NewAggregator(s, silentLogger(), 16)
+	a.SetClock(func() time.Time { return *nowAtomic.Load() })
+	a.currentMinute = a.now().Truncate(time.Minute)
+
+	// 5 decisions from one IP + 4 from another + 2 from a
+	// CIDR — all aggregate under the sentinel route ID.
+	for i := 0; i < 5; i++ {
+		a.BumpCrowdSecDecisions("1.2.3.4")
+	}
+	for i := 0; i < 4; i++ {
+		a.BumpCrowdSecDecisions("5.6.7.8")
+	}
+	for i := 0; i < 2; i++ {
+		a.BumpCrowdSecDecisions("10.0.0.0/24")
+	}
+	for {
+		select {
+		case d := <-a.in:
+			a.absorb(d)
+		default:
+			goto drained
+		}
+	}
+drained:
+
+	advance(time.Minute)
+	a.maybeFlush(ctx)
+
+	rows, err := s.Query(ctx, Granularity1m, CrowdSecSentinelRouteID,
+		time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 28, 10, 1, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Query sentinel: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("sentinel rows = %d, want 1: %+v", len(rows), rows)
+	}
+	if rows[0].CrowdSecDecisionCount != 11 {
+		t.Errorf("CrowdSecDecisionCount = %d, want 11 (5+4+2)", rows[0].CrowdSecDecisionCount)
+	}
+	// AC #N.15-equivalent independence: CrowdSec bumps MUST
+	// NOT touch req / 4xx / 5xx / waf / throttle counters.
+	if rows[0].ReqCount != 0 || rows[0].FourxxCount != 0 || rows[0].FivexxCount != 0 ||
+		rows[0].WafBlockCount != 0 || rows[0].ThrottleBlockCount != 0 {
+		t.Errorf("AC #N.15 violation — CrowdSec bump leaked into L/M/Q counters: %+v", rows[0])
+	}
+}

@@ -30,9 +30,11 @@ import (
 //     tables + waf_event table + indexes).
 //   - v3: Step Q (throttle_block_count column on both bucket
 //     tables + throttle_event table + indexes).
+//   - v4: Step N (crowdsec_decision_count column on both
+//     bucket tables + decision_event table + indexes).
 //
 // Downgrade is not supported.
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -89,6 +91,7 @@ func migrate(ctx context.Context, db *sql.DB, currentVersion int) error {
 var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
 	1: migrateV1toV2,
 	2: migrateV2toV3,
+	3: migrateV3toV4,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -155,6 +158,48 @@ func migrateV2toV3(ctx context.Context, tx *sql.Tx) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_throttle_event_ts       ON throttle_event (ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_throttle_event_srcip_ts ON throttle_event (src_ip, ts)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV3toV4 — Step N. Adds the crowdsec_decision_count
+// column on both bucket tables AND creates the decision_event
+// table with three indexes (ts for time-range scans,
+// value+ts for per-IP-or-CIDR drill-down, scenario+ts for
+// per-scenario aggregation).
+//
+// `uuid` is declared UNIQUE so duplicate-poll insertion
+// surfaces as a constraint violation that the Sink's
+// dedupe-before-bump path normally prevents — defence-in-
+// depth against a future stream-consumer bug.
+// `value` is the bouncer-observed IP / CIDR / country / AS
+// (the LAPI decision's `Value` field interpreted per `Scope`).
+//
+// SQLite's ALTER TABLE ADD COLUMN is a metadata-only
+// operation; the migration is O(1) regardless of row count.
+func migrateV3toV4(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`ALTER TABLE bucket_1m ADD COLUMN crowdsec_decision_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE bucket_1h ADD COLUMN crowdsec_decision_count INTEGER NOT NULL DEFAULT 0`,
+		`CREATE TABLE IF NOT EXISTS decision_event (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  uuid TEXT NOT NULL UNIQUE,
+		  ts INTEGER NOT NULL,
+		  scope TEXT NOT NULL,
+		  value TEXT NOT NULL,
+		  type TEXT NOT NULL,
+		  scenario TEXT NOT NULL,
+		  expires_at INTEGER NOT NULL,
+		  duration_seconds INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_decision_event_ts          ON decision_event (ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_decision_event_value_ts    ON decision_event (value, ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_decision_event_scenario_ts ON decision_event (scenario, ts)`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {

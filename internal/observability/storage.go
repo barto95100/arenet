@@ -177,15 +177,16 @@ func (s *Store) InsertBatch(ctx context.Context, gran Granularity, rows []Metric
 		return fmt.Errorf("observability: begin tx: %w", err)
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO `+gran.tableName()+` (route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, latency_p95_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO `+gran.tableName()+` (route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, crowdsec_decision_count, latency_p95_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(route_id, ts) DO UPDATE SET
-  req_count       = excluded.req_count,
-  fourxx_count    = excluded.fourxx_count,
-  fivexx_count    = excluded.fivexx_count,
-  waf_block_count = excluded.waf_block_count,
-  throttle_block_count = excluded.throttle_block_count,
-  latency_p95_ms  = excluded.latency_p95_ms
+  req_count               = excluded.req_count,
+  fourxx_count            = excluded.fourxx_count,
+  fivexx_count            = excluded.fivexx_count,
+  waf_block_count         = excluded.waf_block_count,
+  throttle_block_count    = excluded.throttle_block_count,
+  crowdsec_decision_count = excluded.crowdsec_decision_count,
+  latency_p95_ms          = excluded.latency_p95_ms
 `)
 	if err != nil {
 		_ = tx.Rollback()
@@ -201,6 +202,7 @@ ON CONFLICT(route_id, ts) DO UPDATE SET
 			r.FivexxCount,
 			r.WafBlockCount,
 			r.ThrottleBlockCount,
+			r.CrowdSecDecisionCount,
 			r.LatencyP95Ms,
 		); err != nil {
 			_ = tx.Rollback()
@@ -228,7 +230,7 @@ func (s *Store) Query(ctx context.Context, gran Granularity, routeID string, fro
 		return nil, fmt.Errorf("observability: store closed")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, latency_p95_ms
+SELECT route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, crowdsec_decision_count, latency_p95_ms
 FROM `+gran.tableName()+`
 WHERE route_id = ? AND ts >= ? AND ts < ?
 ORDER BY ts ASC
@@ -241,7 +243,7 @@ ORDER BY ts ASC
 	for rows.Next() {
 		var b MetricBucket
 		var tsUnix int64
-		if err := rows.Scan(&b.RouteID, &tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.ThrottleBlockCount, &b.LatencyP95Ms); err != nil {
+		if err := rows.Scan(&b.RouteID, &tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.ThrottleBlockCount, &b.CrowdSecDecisionCount, &b.LatencyP95Ms); err != nil {
 			return nil, fmt.Errorf("observability: scan: %w", err)
 		}
 		b.Ts = time.Unix(tsUnix, 0).UTC()
@@ -283,11 +285,12 @@ func (s *Store) QueryAggregated(ctx context.Context, gran Granularity, from, to 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
   ts,
-  SUM(req_count)        AS req_total,
-  SUM(fourxx_count)     AS fourxx_total,
-  SUM(fivexx_count)     AS fivexx_total,
-  SUM(waf_block_count)  AS waf_total,
-  SUM(throttle_block_count)  AS throttle_total,
+  SUM(req_count)              AS req_total,
+  SUM(fourxx_count)           AS fourxx_total,
+  SUM(fivexx_count)           AS fivexx_total,
+  SUM(waf_block_count)        AS waf_total,
+  SUM(throttle_block_count)   AS throttle_total,
+  SUM(crowdsec_decision_count) AS crowdsec_total,
   CASE
     WHEN SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END) > 0
     THEN SUM(latency_p95_ms * CASE WHEN req_count > 0 THEN req_count ELSE 0 END) / SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END)
@@ -307,7 +310,7 @@ ORDER BY ts ASC
 		var b MetricBucket
 		var tsUnix int64
 		var p95 int64 // SQLite SUM/CASE returns INTEGER; scan as int64 then narrow
-		if err := rows.Scan(&tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.ThrottleBlockCount, &p95); err != nil {
+		if err := rows.Scan(&tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.ThrottleBlockCount, &b.CrowdSecDecisionCount, &p95); err != nil {
 			return nil, fmt.Errorf("observability: scan aggregated: %w", err)
 		}
 		b.Ts = time.Unix(tsUnix, 0).UTC()
@@ -895,6 +898,257 @@ func (s *Store) AggregateWafEventsByRule(ctx context.Context, filter WafEventAgg
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("observability: iterate waf_event aggregate: %w", err)
+	}
+	return out, nil
+}
+
+// --- Step N: decision_event store ------------------------------------------
+
+// DecisionEvent is the observability-layer mirror of
+// crowdsec.Decision (storage-flat shape, narrowed per Step N
+// spec D5.B: drop `id` + `origin`). Defined here so the
+// observability package does NOT import internal/crowdsec —
+// the cmd/arenet/main.go wiring bridges the two via a small
+// adapter (same pattern as M's wafInserterAdapter +
+// Q's throttleInserterAdapter).
+type DecisionEvent struct {
+	ID              int64
+	UUID            string
+	Ts              time.Time
+	Scope           string // "ip" | "range" | "country" | "as"
+	Value           string // IP, CIDR, country code, AS
+	Type            string // "ban" | "captcha" | "throttle"
+	Scenario        string
+	ExpiresAt       time.Time
+	DurationSeconds int
+}
+
+// DecisionEventFilter narrows a QueryDecisionEvents call. All
+// fields optional; the API layer at N.3 maps query-string
+// parameters into this struct. Limit > 100 is clamped by the
+// store as a defence-in-depth on top of the API-layer cap
+// (mirror of WafEventFilter / ThrottleEventFilter discipline).
+type DecisionEventFilter struct {
+	Scope      string
+	Value      string // exact match on the LAPI decision's value (IP / CIDR / country code)
+	Scenario   string
+	From       time.Time
+	To         time.Time
+	Limit      int
+	OnlyActive bool // when true, exclude rows whose expires_at <= now (revoked or expired)
+}
+
+const decisionEventLimitCap = 100
+
+// InsertDecisionEventBatch persists a slice of DecisionEvent
+// rows in a single transaction. UPSERT on `uuid` because the
+// stream consumer's LRU is in-memory only — a process restart
+// drops the LRU, the next ?startup=true response re-sends every
+// active decision, and our sink would re-Emit them. UPSERT
+// keeps the row identity stable across restarts (idempotent
+// insert) without needing a pre-INSERT existence check.
+//
+// On UPSERT, `expires_at` and `duration_seconds` are refreshed
+// — LAPI may have extended a decision via `cscli decisions add`
+// with a longer duration on the same UUID.
+//
+// Empty batch is a no-op. Errors returned to caller — the
+// production caller (crowdsec.Sink) logs + counts + swallows
+// per AC #13.
+func (s *Store) InsertDecisionEventBatch(ctx context.Context, events []DecisionEvent) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("observability: store closed")
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("observability: begin decision_event tx: %w", err)
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO decision_event (uuid, ts, scope, value, type, scenario, expires_at, duration_seconds)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(uuid) DO UPDATE SET
+  expires_at       = excluded.expires_at,
+  duration_seconds = excluded.duration_seconds
+`)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("observability: prepare decision_event insert: %w", err)
+	}
+	defer stmt.Close()
+	for _, e := range events {
+		if _, err := stmt.ExecContext(ctx,
+			e.UUID,
+			e.Ts.UTC().Unix(),
+			e.Scope,
+			e.Value,
+			e.Type,
+			e.Scenario,
+			e.ExpiresAt.UTC().Unix(),
+			e.DurationSeconds,
+		); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("observability: insert decision_event (uuid=%s value=%s): %w", e.UUID, e.Value, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("observability: commit decision_event: %w", err)
+	}
+	return nil
+}
+
+// MarkDecisionExpired flags a decision row as inactive by
+// setting `expires_at` to NOW. The row stays in the table for
+// the operator dashboard's historical view; the
+// retention.go prune step removes it after the 30d horizon
+// (Step N spec D8.A).
+//
+// Soft delete rather than DELETE because forensic operators
+// need to see "the IP 1.2.3.4 WAS banned for 2 hours
+// yesterday under scenario http-probing" even after the ban
+// is revoked.
+//
+// No-op when the uuid is not in the table — same defensive
+// posture as the sink's Tombstone path (LAPI may signal
+// deletion of a decision we never persisted, e.g. dropped on
+// the channel via droppedByChannel).
+func (s *Store) MarkDecisionExpired(ctx context.Context, uuid string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("observability: store closed")
+	}
+	if uuid == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE decision_event SET expires_at = ? WHERE uuid = ?`,
+		time.Now().UTC().Unix(), uuid)
+	if err != nil {
+		return fmt.Errorf("observability: mark decision_event expired: %w", err)
+	}
+	return nil
+}
+
+// QueryDecisionEvents returns decision_event rows matching the
+// filter, ts-descending (most-recent first). Empty filter
+// returns the most-recent decisionEventLimitCap rows.
+func (s *Store) QueryDecisionEvents(ctx context.Context, filter DecisionEventFilter) ([]DecisionEvent, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > decisionEventLimitCap {
+		limit = decisionEventLimitCap
+	}
+	q := `SELECT id, uuid, ts, scope, value, type, scenario, expires_at, duration_seconds
+	      FROM decision_event WHERE 1=1`
+	args := []any{}
+	if filter.Scope != "" {
+		q += ` AND scope = ?`
+		args = append(args, filter.Scope)
+	}
+	if filter.Value != "" {
+		q += ` AND value = ?`
+		args = append(args, filter.Value)
+	}
+	if filter.Scenario != "" {
+		q += ` AND scenario = ?`
+		args = append(args, filter.Scenario)
+	}
+	if !filter.From.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, filter.From.UTC().Unix())
+	}
+	if !filter.To.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, filter.To.UTC().Unix())
+	}
+	if filter.OnlyActive {
+		q += ` AND expires_at > ?`
+		args = append(args, time.Now().UTC().Unix())
+	}
+	q += ` ORDER BY ts DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: query decision_event: %w", err)
+	}
+	defer rows.Close()
+	var out []DecisionEvent
+	for rows.Next() {
+		var e DecisionEvent
+		var tsUnix, expiresAtUnix int64
+		if err := rows.Scan(&e.ID, &e.UUID, &tsUnix, &e.Scope, &e.Value, &e.Type, &e.Scenario, &expiresAtUnix, &e.DurationSeconds); err != nil {
+			return nil, fmt.Errorf("observability: scan decision_event: %w", err)
+		}
+		e.Ts = time.Unix(tsUnix, 0).UTC()
+		e.ExpiresAt = time.Unix(expiresAtUnix, 0).UTC()
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate decision_event: %w", err)
+	}
+	return out, nil
+}
+
+// PruneDecisionEventsOlderThan deletes decision_event rows
+// with ts < cutoff. Called by the retention loop on the same
+// hourly cadence as the bucket and waf_event / throttle_event
+// prunes.
+func (s *Store) PruneDecisionEventsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("observability: store closed")
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM decision_event WHERE ts < ?`, cutoff.UTC().Unix())
+	if err != nil {
+		return 0, fmt.Errorf("observability: prune decision_event: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("observability: prune decision_event rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// DistinctDecisionSrcIPs returns the set of distinct `value`
+// strings (CrowdSec's IP / CIDR / country code) seen in
+// decision_event rows within [from, to). Powers the Step N.3
+// extension to /security/attackers-summary that adds CrowdSec
+// as a 4th union source (Q.3 had 3: waf, throttle, audit).
+//
+// The result is naturally bounded: even a noisy LAPI returns
+// at most a few thousand distinct attackers in a 30d window.
+// No further cap applied.
+func (s *Store) DistinctDecisionSrcIPs(ctx context.Context, from, to time.Time) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	q := `SELECT DISTINCT value FROM decision_event WHERE 1=1`
+	args := []any{}
+	if !from.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, from.UTC().Unix())
+	}
+	if !to.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, to.UTC().Unix())
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: distinct decision_event value: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("observability: scan distinct decision_event value: %w", err)
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate distinct decision_event value: %w", err)
 	}
 	return out, nil
 }

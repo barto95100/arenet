@@ -310,3 +310,149 @@ func TestMigrate_V2ToV3_PreservesExistingData(t *testing.T) {
 		t.Fatalf("idx_throttle_event_srcip_ts missing after v2→v3 migrate: %v", err)
 	}
 }
+
+// openV3OnDisk creates a fresh DB at path with the Step Q v3
+// schema baseline (full v1+v2+v3 shape) and version=3. Used
+// to exercise the v3→v4 migration path against a real on-disk
+// DB without replaying earlier steps — guards against a future
+// refactor that hides a v3→v4 bug behind the v1 / v2 fast paths.
+func openV3OnDisk(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatalf("openV3OnDisk: %v", err)
+	}
+	defer db.Close()
+	const v3Schema = `
+	CREATE TABLE bucket_1m (
+	  route_id TEXT NOT NULL,
+	  ts INTEGER NOT NULL,
+	  req_count INTEGER NOT NULL,
+	  fourxx_count INTEGER NOT NULL,
+	  fivexx_count INTEGER NOT NULL,
+	  waf_block_count INTEGER NOT NULL DEFAULT 0,
+	  throttle_block_count INTEGER NOT NULL DEFAULT 0,
+	  latency_p95_ms INTEGER NOT NULL,
+	  PRIMARY KEY (route_id, ts)
+	);
+	CREATE INDEX idx_bucket_1m_ts ON bucket_1m (ts);
+	CREATE TABLE bucket_1h (
+	  route_id TEXT NOT NULL,
+	  ts INTEGER NOT NULL,
+	  req_count INTEGER NOT NULL,
+	  fourxx_count INTEGER NOT NULL,
+	  fivexx_count INTEGER NOT NULL,
+	  waf_block_count INTEGER NOT NULL DEFAULT 0,
+	  throttle_block_count INTEGER NOT NULL DEFAULT 0,
+	  latency_p95_ms INTEGER NOT NULL,
+	  PRIMARY KEY (route_id, ts)
+	);
+	CREATE INDEX idx_bucket_1h_ts ON bucket_1h (ts);
+	CREATE TABLE waf_event (
+	  id INTEGER PRIMARY KEY AUTOINCREMENT,
+	  ts INTEGER NOT NULL, route_id TEXT NOT NULL, rule_id TEXT NOT NULL,
+	  category TEXT NOT NULL, severity INTEGER NOT NULL, src_ip TEXT NOT NULL,
+	  request_method TEXT NOT NULL, request_path TEXT NOT NULL, payload_sample TEXT NOT NULL
+	);
+	CREATE INDEX idx_waf_event_ts          ON waf_event (ts);
+	CREATE INDEX idx_waf_event_route_ts    ON waf_event (route_id, ts);
+	CREATE INDEX idx_waf_event_category_ts ON waf_event (category, ts);
+	CREATE TABLE throttle_event (
+	  id INTEGER PRIMARY KEY AUTOINCREMENT,
+	  ts INTEGER NOT NULL, tier INTEGER NOT NULL, src_ip TEXT NOT NULL,
+	  attempted_username TEXT NOT NULL, blocked_until INTEGER NOT NULL,
+	  block_duration_seconds INTEGER NOT NULL
+	);
+	CREATE INDEX idx_throttle_event_ts       ON throttle_event (ts);
+	CREATE INDEX idx_throttle_event_srcip_ts ON throttle_event (src_ip, ts);
+	CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+	INSERT INTO schema_version (version) VALUES (3);
+	`
+	if _, err := db.Exec(v3Schema); err != nil {
+		t.Fatalf("openV3OnDisk seed: %v", err)
+	}
+	// Seed one bucket row + one waf_event + one throttle_event
+	// so the v3→v4 migration's "preserve old data" guarantee
+	// can be asserted post-upgrade.
+	if _, err := db.Exec(`INSERT INTO bucket_1m (route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, latency_p95_ms)
+	                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"r-pre-n", int64(1700000000), int64(50), int64(2), int64(0), int64(7), int64(3), int32(15)); err != nil {
+		t.Fatalf("seed bucket_1m: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO waf_event (ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample)
+	                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		int64(1700000000), "r-pre-n", "942100", "SQLI", 5, "1.2.3.4", "GET", "/", ""); err != nil {
+		t.Fatalf("seed waf_event: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO throttle_event (ts, tier, src_ip, attempted_username, blocked_until, block_duration_seconds)
+	                      VALUES (?, ?, ?, ?, ?, ?)`,
+		int64(1700000000), 1, "5.6.7.8", "admin", int64(1700000900), 900); err != nil {
+		t.Fatalf("seed throttle_event: %v", err)
+	}
+}
+
+func TestMigrate_V3ToV4_PreservesExistingData(t *testing.T) {
+	// Spec N AC #6 (mirror of Q's): opening a pre-Step-N
+	// metrics.db (schema v3) must add crowdsec_decision_count
+	// columns + decision_event table + 3 indexes WITHOUT
+	// touching existing bucket / waf_event / throttle_event
+	// rows.
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "v3-metrics.db")
+
+	openV3OnDisk(t, dbPath)
+
+	s, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open v3 DB: %v", err)
+	}
+	defer s.Close()
+
+	v, err := s.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("schema version: %v", err)
+	}
+	if v != currentSchemaVersion {
+		t.Fatalf("after v3→v4 migrate version = %d, want %d", v, currentSchemaVersion)
+	}
+
+	// Bucket row preserved + crowdsec_decision_count defaulted to 0.
+	row := s.db.QueryRowContext(ctx, `SELECT req_count, waf_block_count, throttle_block_count, crowdsec_decision_count FROM bucket_1m WHERE route_id = 'r-pre-n'`)
+	var req, waf, throttle, crowdsec int64
+	if err := row.Scan(&req, &waf, &throttle, &crowdsec); err != nil {
+		t.Fatalf("scan pre-N bucket row: %v", err)
+	}
+	if req != 50 || waf != 7 || throttle != 3 {
+		t.Fatalf("v3 bucket data corrupted: req=%d waf=%d throttle=%d (want 50 / 7 / 3)", req, waf, throttle)
+	}
+	if crowdsec != 0 {
+		t.Fatalf("pre-existing bucket row should have crowdsec_decision_count=0, got %d", crowdsec)
+	}
+
+	// waf_event + throttle_event rows preserved.
+	var ruleID, srcIP string
+	if err := s.db.QueryRowContext(ctx, `SELECT rule_id FROM waf_event WHERE route_id = 'r-pre-n'`).Scan(&ruleID); err != nil {
+		t.Fatalf("scan pre-N waf_event row: %v", err)
+	}
+	if ruleID != "942100" {
+		t.Fatalf("v3 waf_event data corrupted: rule_id=%s want 942100", ruleID)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT src_ip FROM throttle_event WHERE tier = 1`).Scan(&srcIP); err != nil {
+		t.Fatalf("scan pre-N throttle_event row: %v", err)
+	}
+	if srcIP != "5.6.7.8" {
+		t.Fatalf("v3 throttle_event data corrupted: src_ip=%s want 5.6.7.8", srcIP)
+	}
+
+	// decision_event table + 3 indexes present.
+	var name string
+	if err := s.db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name='decision_event'`).Scan(&name); err != nil {
+		t.Fatalf("decision_event table missing after v3→v4 migrate: %v", err)
+	}
+	for _, idx := range []string{"idx_decision_event_ts", "idx_decision_event_value_ts", "idx_decision_event_scenario_ts"} {
+		if err := s.db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&name); err != nil {
+			t.Fatalf("%s missing after v3→v4 migrate: %v", idx, err)
+		}
+	}
+}
