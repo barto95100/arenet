@@ -262,6 +262,51 @@ func (s *Store) DeleteManagedDomain(ctx context.Context, apex string) error {
 	})
 }
 
+// --- Convention: ACMEChallenge="" semantics across managed-domain lifecycle ---
+//
+// The empty string in Route.ACMEChallenge is a J-era contract
+// that this step PRESERVES: validate() accepts "" as input,
+// and the API + Caddy-config generator both treat "" as
+// equivalent to "http-01". A POST /routes with the field
+// omitted is a valid route on the HTTP-01 path. That contract
+// pre-dates Step O and must not change — flipping "" to
+// "uninitialized requires operator action" would break every
+// existing route fixture, every J-era backup snapshot, and
+// the entire on-boarding path where a new operator creates a
+// route without ever touching the ACME section.
+//
+// Therefore, in this package, "" ALWAYS means "use project
+// default → HTTP-01". The validator never rejects it, the
+// generator never errors on it, and the route is operable
+// the moment it's persisted.
+//
+// Consequence for the managed-domain reverse path
+// (DeleteManagedDomainWithRouteMigration below): a covered
+// route whose ACMEChallenge was "inherited" reverts to "" on
+// managed-domain delete. That's a CLEAN revert at the storage
+// layer (the row is valid, the route is operable), but it
+// does mean the next caddymgr reload triggers a fresh
+// per-route HTTP-01 challenge for every revert-affected
+// route — exactly the rate-limit footgun this step exists
+// to prevent.
+//
+// The mitigation is at the O.3 API layer, NOT here: the
+// DELETE /settings/managed-domains/{apex} endpoint will
+// expose an explicit `revertTo` query parameter (one of
+// "", "http-01", "dns-01") and the O.4 frontend will surface
+// a confirm-dialog warning ("This will trigger N HTTP-01
+// challenges. Continue?") before calling DELETE. The storage
+// layer stays semantically simple; the operator decision is
+// surfaced where it makes sense to surface it.
+//
+// If a future step changes the routes.go validator to
+// distinguish "" (project default) from a new explicit
+// "uninitialized" sentinel — for instance to force
+// post-revert routes into a "needs attention" UI state
+// instead of silently re-challenging — that's a J-contract
+// migration, NOT an O-spec change. Acceptable; out of scope
+// here.
+
 // PutManagedDomainWithRouteMigration is the atomic API-layer
 // helper that wraps the spec D8.A invariant: PUT a managed
 // domain AND mutate every covered route's ACMEChallenge to

@@ -187,6 +187,8 @@ Where does the "Managed domains" widget live in the Settings page?
 
 **AC #20 — Viewer-accessible reads.** `GET /settings/managed-domains` available to viewer role; PUT / DELETE require admin. (Same posture as DNS-provider endpoints in J.)
 
+**AC #21 — Managed-domain DELETE exposes an explicit `revertTo` choice.** `DELETE /settings/managed-domains/{apex}?revertTo=<value>` accepts `revertTo` in `{"", "http-01", "dns-01"}` and sets the covered-route ACMEChallenge field to that value during the reverse migration. Default `""` (J-era "project default → HTTP-01"). The O.4 frontend surfaces a confirm dialog warning the operator when `revertTo=""` or `"http-01"`: "This will trigger N HTTP-01 challenges on next reload. Continue?" — N is the count of covered routes computed at confirm time. Added in response to the O.1 convention review: the storage layer keeps `""` semantically simple (= project default), but the operator gets to choose at delete time whether the silent fallback is acceptable for their case.
+
 ---
 
 ## 3. Architecture
@@ -294,6 +296,24 @@ api/routes.go (effectiveCertSource computation + validation)
 ```
 
 The predicate function lives in `caddymgr/` because caddymgr is the primary consumer; api/ imports caddymgr (existing import direction from Step J, untouched). The predicate is package-public (`caddymgr.IsHostCoveredByManagedDomain`) so api/ can call it without an import cycle.
+
+### 3.8 Convention: ACMEChallenge="" semantics across the managed-domain lifecycle
+
+Surfaced during the O.1 review. The empty string in `Route.ACMEChallenge` is a J-era contract that this step PRESERVES:
+
+- `storage.validate()` accepts `""` as input.
+- The API + the Caddy-config generator both treat `""` as equivalent to `"http-01"`.
+- A `POST /routes` with the field omitted is a valid route on the HTTP-01 path.
+
+Flipping `""` to "uninitialized → operator action required" would break every existing route fixture, every J-era backup snapshot, and the on-boarding path where a new operator creates a route without ever touching the ACME section. That's a regression risk far worse than the silent-fallback footgun we'd be guarding against (which is a one-shot at managed-domain delete time, recoverable).
+
+**Therefore, this spec locks the convention: `""` ALWAYS means "use project default → HTTP-01".** The validator never rejects it; the generator never errors on it; the route is operable the moment it's persisted.
+
+**Consequence for the managed-domain reverse path** (`DeleteManagedDomainWithRouteMigration`): a covered route whose ACMEChallenge was `"inherited"` reverts to `""` on managed-domain delete. That's a CLEAN revert at the storage layer — but the next caddymgr reload triggers a fresh per-route HTTP-01 challenge for every revert-affected route. Exactly the rate-limit footgun this step exists to prevent.
+
+**Mitigation lives at the O.3 API layer, not in storage.** Per AC #21: `DELETE /settings/managed-domains/{apex}` exposes a `revertTo` query parameter so the operator explicitly chooses the post-revert ACMEChallenge value at delete time. O.4 surfaces a confirm dialog warning when the choice would trigger N challenges. The storage layer stays semantically simple; the operator decision is surfaced where it matters.
+
+If a future step distinguishes `""` (project default) from a new explicit "uninitialized" sentinel — for instance to force post-revert routes into a "needs attention" UI state instead of silently re-challenging — that's a J-contract migration, NOT an O-spec change. Acceptable; out of scope here.
 
 ---
 
