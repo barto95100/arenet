@@ -320,12 +320,25 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		fwdAuthMap[p.Name] = p
 	}
 
+	// Step O.2: read the instance-level managed domains so
+	// buildConfigJSON can emit ONE wildcard TLS policy per
+	// declared apex and skip per-route ACME partition for
+	// covered hosts. Empty list is the normal state on a fresh
+	// install — D5.A byte-equality short-circuit then applies.
+	// AC #14 invariant: this read runs on EVERY applyLocked,
+	// guaranteeing the wildcard policies survive every reload.
+	managedDomains, err := m.store.ListManagedDomains(ctx)
+	if err != nil {
+		return fmt.Errorf("list managed domains: %w", err)
+	}
+
 	cfgJSON, err := buildConfigJSON(routes, buildOpts{
 		DevMode:              m.devMode,
 		ACMEEmail:            m.acmeEmail,
 		DNSProvider:          dnsProvider,
 		ForwardAuthProviders: fwdAuthMap,
 		CrowdSec:             m.crowdsec,
+		ManagedDomains:       managedDomains,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -517,6 +530,18 @@ type buildOpts struct {
 	// per-route handler prepend (AC #13 fail-open: data plane
 	// keeps running without the reputation gate).
 	CrowdSec crowdsecConfig
+	// ManagedDomains (Step O.2) is the list of operator-declared
+	// wildcard managed domains. Empty slice means "no managed
+	// domains" — the D5.A invariant requires that buildConfigJSON
+	// emits byte-equal output to Step J in that state. Each
+	// managed domain produces ONE TLS policy covering `*.<apex>`
+	// (+ `<apex>` when IncludeApex). Routes whose host is covered
+	// by a managed domain AND which do NOT opt out via
+	// UseDedicatedCert skip the per-route HTTP-01 / DNS-01
+	// partition — the wildcard policy serves them at handshake
+	// time. Read from BoltDB on every applyLocked (AC #14:
+	// preserved on every Caddy reload).
+	ManagedDomains []storage.ManagedDomain
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -920,9 +945,43 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				if !certmagic.SubjectQualifiesForPublicCert(h) {
 					continue
 				}
-				if r.ACMEChallenge == storage.ACMEChallengeDNS01 {
+				// Step O.2 (D5.A short-circuit on empty managed
+				// domains): when the route's host is covered by
+				// a managed domain AND the route does NOT opt
+				// out via UseDedicatedCert, skip the per-route
+				// partition — the wildcard policy at
+				// `*.<apex>` will serve the cert at handshake
+				// time via certmagic's wildcard expansion. The
+				// covered+opt-out path (UseDedicatedCert=true)
+				// emits its own per-route policy ALONGSIDE the
+				// wildcard, sharing the apex but with a
+				// dedicated key (D1.B).
+				if !r.UseDedicatedCert {
+					if _, covered := IsHostCoveredByManagedDomain(h, opts.ManagedDomains); covered {
+						continue
+					}
+				}
+				switch r.ACMEChallenge {
+				case storage.ACMEChallengeDNS01:
 					acme.DNS01 = append(acme.DNS01, h)
-				} else {
+				case storage.ACMEChallengeInherited:
+					// Defensive: a route persisted as
+					// "inherited" should always be covered by
+					// some managed domain (the storage layer
+					// only sets "inherited" inside the managed-
+					// domain create handler). Reaching this
+					// fallback means the operator deleted the
+					// managing apex without invoking the
+					// reverse migration — programming-error
+					// path. Same posture as J.4's "dns-01 with
+					// no provider" defensive fall-back: route
+					// to HTTP-01 so the host still gets a cert
+					// rather than silently dropping it from
+					// every policy. The dashboard will show
+					// the route as "per-route ACME" instead
+					// of "inherited"; the operator notices.
+					acme.HTTP01 = append(acme.HTTP01, h)
+				default:
 					acme.HTTP01 = append(acme.HTTP01, h)
 				}
 			}
@@ -1125,18 +1184,97 @@ func buildTLSPolicies(partition acmePartition, opts buildOpts) []map[string]any 
 			{"module": "internal"},
 		},
 	}
-	if len(partition.HTTP01) == 0 && len(partition.DNS01) == 0 {
+	// Step O.2 — managed-domain wildcard policies. Computed up
+	// front so the empty-managed-domains case stays a strict
+	// no-op and the no-TLS short-circuit below preserves D5.A
+	// byte-equality. Order in the final array: per-route
+	// policies (HTTP-01 + DNS-01) FIRST, then wildcard
+	// policies, then internal catch-all. This ordering is
+	// load-bearing for the D1.B per-route opt-out: Caddy's
+	// getAutomationPolicyForName (modules/caddytls/tls.go:862-
+	// 878 in v2.11.3) walks the policies slice and returns
+	// the FIRST match via certmagic.MatchWildcard — so a
+	// per-route policy listing `payments.example.com` MUST
+	// precede the wildcard `*.example.com` policy to win for
+	// the opt-out host. Empirically validated by the J-era
+	// behaviour the byte-equality test pins.
+	managedPolicies := buildManagedDomainPolicies(opts)
+
+	if len(partition.HTTP01) == 0 && len(partition.DNS01) == 0 && len(managedPolicies) == 0 {
 		return []map[string]any{internalPolicy}
 	}
-	policies := make([]map[string]any, 0, 3)
+	policies := make([]map[string]any, 0, 3+len(managedPolicies))
 	if len(partition.HTTP01) > 0 {
 		policies = append(policies, buildACMEPolicy(partition.HTTP01, opts, nil))
 	}
 	if len(partition.DNS01) > 0 && dnsProviderConfigured(opts.DNSProvider) {
 		policies = append(policies, buildACMEPolicy(partition.DNS01, opts, &opts.DNSProvider))
 	}
+	policies = append(policies, managedPolicies...)
 	policies = append(policies, internalPolicy)
 	return policies
+}
+
+// buildManagedDomainPolicies returns one TLS policy per managed
+// domain in opts.ManagedDomains. Empty input → nil (the D5.A
+// short-circuit invariant: buildTLSPolicies treats nil and an
+// empty slice identically, the per-route partition logic above
+// is unchanged when no managed domains are declared, and the
+// emitted Caddy JSON is byte-equal to Step J).
+//
+// For each managed domain `<apex>`:
+//   - subjects = ["*.<apex>"] if IncludeApex == false
+//   - subjects = ["*.<apex>", "<apex>"] if IncludeApex == true (D2.C)
+//
+// Issuer selection (D4.A "loud unconfigured state"):
+//   - When the DNS provider that this managed domain references
+//     is configured (the v1.2 value space is {"ovh"} per D3.B,
+//     so we always look at opts.DNSProvider for now), emit the
+//     acme issuer with the dns-01 challenge sub-block.
+//   - When the DNS provider is NOT configured, emit the
+//     internal issuer — the wildcard policy stays in the JSON
+//     (a subsequent reload doesn't drop it), routes serve
+//     internal-CA self-signed certs, no ACME traffic. The
+//     Settings UI surfaces the unconfigured state separately
+//     (AC #8). This avoids the infinite-ACME-retry risk
+//     called out in §5 risks.
+//
+// Multi-managed-domain (D6.A): the slice is iterated verbatim
+// — N managed domains produce N policies. The provider config
+// is shared across all OVH-using managed domains (one OVH
+// account covers all zones the operator owns).
+func buildManagedDomainPolicies(opts buildOpts) []map[string]any {
+	if len(opts.ManagedDomains) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(opts.ManagedDomains))
+	for _, md := range opts.ManagedDomains {
+		var subjects []string
+		if md.IncludeApex {
+			subjects = []string{"*." + md.Apex, md.Apex}
+		} else {
+			subjects = []string{"*." + md.Apex}
+		}
+		// D4.A: configured → DNS-01 ACME; unconfigured →
+		// internal CA (loud unconfigured state, no silent
+		// HTTP-01 fallback because wildcards EXIGENT DNS-01).
+		// v1.2 value space for Provider is {"ovh"} (D3.B
+		// forward-compat enum), so the lookup currently
+		// always goes to opts.DNSProvider. When future
+		// providers land, this switch becomes a per-Provider
+		// dispatch.
+		if md.Provider == storage.ManagedDomainProviderOVH && dnsProviderConfigured(opts.DNSProvider) {
+			out = append(out, buildACMEPolicy(subjects, opts, &opts.DNSProvider))
+		} else {
+			out = append(out, map[string]any{
+				"subjects": subjects,
+				"issuers": []map[string]any{
+					{"module": "internal"},
+				},
+			})
+		}
+	}
+	return out
 }
 
 // buildACMEPolicy returns a single tls.automation.policies entry
