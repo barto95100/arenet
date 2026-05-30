@@ -91,3 +91,39 @@ v0.0.15 pin forced the simpler shape. Restoring it is a 6-line
 diff.)
 
 **Triage.** Cosmetic logging consistency, no functional impact.
+
+## 2. Test-coverage gaps surfaced by N.5
+
+### Finding #N.5-1 — No dedicated unit test for the decision_event prune branch
+
+`internal/observability/retention.go:184` calls
+`PruneDecisionEventsOlderThan(now - RetainDecisionEvents)` from the
+shared retention loop. The SQL DELETE itself is verified by
+`TestStore_PruneOlderThan` (pre-N), but no test pins:
+
+- that the retention loop calls the decision-event prune at the
+  expected cadence;
+- that `RetainDecisionEvents` is honoured (the cutoff is
+  computed from the right horizon);
+- that a closed/nil store skips silently (AC #13 carry-forward).
+
+N.5 declared AC #5 (30d retention prune) as N/A-smoke because the
+real 30d wall-clock wait is infeasible — that remains true. But
+the absence of even a synthetic test (with a clock injection or a
+hand-set ts in the row) is a coverage gap, not a functional bug.
+The Go test suite is green; this finding is about future
+defensibility, not a Step-N blocker.
+
+**Suggested test.** A new `TestRetention_PruneDecisionEvents_OlderThan30d`
+under `internal/observability/retention_test.go` that:
+
+1. Inserts a decision_event row at `now - 31d`.
+2. Inserts another at `now - 1d`.
+3. Calls `r.Tick(ctx, now)` (or the rollup loop entrypoint).
+4. Asserts the 31d row is gone, the 1d row survives.
+
+The other two retention test files in this package show the
+shape — this is a ~30-line addition.
+
+**Triage.** Test-coverage gap. Defer to a follow-up cleanup
+chunk; not a fix-before-tag for `v1.1.0-step-n`.
