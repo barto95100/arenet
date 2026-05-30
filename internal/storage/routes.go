@@ -42,16 +42,27 @@ const (
 	LBPolicyFirst              = "first"
 )
 
-// Step J.4 ACME challenge enum (§5.4).
+// Step J.4 ACME challenge enum (§5.4), extended by Step O.1 with
+// the "inherited" sentinel.
 //
 // Empty string is NOT in the enum but is treated by the API and the
 // generator as equivalent to ACMEChallengeHTTP01 (default + the
 // no-migration zero-value for pre-J.4 rows). Storage.validate
 // accepts the empty string explicitly so the boot zero-value path
 // works without a migration.
+//
+// Step O.1: ACMEChallengeInherited marks a route whose certificate
+// is provisioned by a managed domain's wildcard policy (spec D8.A).
+// The value is set by the managed-domain create handler when a
+// covered route's previous value (http-01 / dns-01) becomes
+// meaningless, and reverted back to "" on managed-domain delete.
+// Operators do not set this directly via the route-edit UI; the
+// frontend hides the ACMEChallenge selector when a managed domain
+// covers the host.
 const (
-	ACMEChallengeHTTP01 = "http-01"
-	ACMEChallengeDNS01  = "dns-01"
+	ACMEChallengeHTTP01    = "http-01"
+	ACMEChallengeDNS01     = "dns-01"
+	ACMEChallengeInherited = "inherited"
 )
 
 // Step K.1 per-route authentication mode (§5.1). One of three
@@ -231,6 +242,15 @@ type Route struct {
 	// the instance-level DNSProviderConfig to be configured; the
 	// API enforces that at edit time (§5.4).
 	ACMEChallenge string `json:"acme_challenge"`
+	// UseDedicatedCert (Step O.1, spec D1.B) opts a covered route
+	// OUT of the managed-domain wildcard cert and into per-route
+	// ACME issuance. Default false: routes whose host is covered by
+	// a managed domain inherit the wildcard cert. When true, the
+	// route emits its own ACME challenge (HTTP-01 or DNS-01 per
+	// ACMEChallenge) regardless of any covering managed domain. The
+	// validator rejects UseDedicatedCert=true alongside
+	// ACMEChallenge="inherited" (inconsistent — pick one path).
+	UseDedicatedCert bool `json:"use_dedicated_cert,omitempty"`
 	// HealthCheck (Step J.2) is the active health-check configuration
 	// Caddy applies to every Upstream in the pool. Zero-value
 	// (Enabled: false) means no probe runs — the generator omits the
@@ -360,20 +380,29 @@ func (r *Route) validate() error {
 	default:
 		return fmt.Errorf("route: auth_mode %q must be one of \"none\", \"basic\", \"forward_auth\"", r.AuthMode)
 	}
-	// Step J.4: ACMEChallenge enum check. The empty string is
+	// Step J.4 + O.1: ACMEChallenge enum check. The empty string is
 	// accepted explicitly — a pre-J.4 row reads back with no
 	// `acme_challenge` key (zero value ""), and the API + generator
-	// both treat that as equivalent to "http-01". The two-valued
-	// enum + empty is the only accepted set; any other value is a
-	// programming error (the API rejects unknown values with a
-	// friendlier message before reaching here). The cross-rules
-	// (wildcard host requires dns-01, dns-01 requires a configured
-	// DNSProviderConfig) belong at the API layer — storage stays a
-	// pure grid (same separation as J.1 / J.2).
+	// both treat that as equivalent to "http-01". Step O.1 adds the
+	// "inherited" sentinel for routes covered by a managed-domain
+	// wildcard (spec D8.A). Any other value is a programming error
+	// (the API rejects unknown values with a friendlier message
+	// before reaching here). The cross-rules (wildcard host requires
+	// dns-01, dns-01 requires a configured DNSProviderConfig,
+	// "inherited" requires a covering managed domain) belong at the
+	// API layer — storage stays a pure grid (same separation as J.1
+	// / J.2).
 	switch r.ACMEChallenge {
-	case "", ACMEChallengeHTTP01, ACMEChallengeDNS01:
+	case "", ACMEChallengeHTTP01, ACMEChallengeDNS01, ACMEChallengeInherited:
 	default:
-		return fmt.Errorf("route: acme_challenge %q must be http-01 or dns-01", r.ACMEChallenge)
+		return fmt.Errorf("route: acme_challenge %q must be http-01, dns-01, or inherited", r.ACMEChallenge)
+	}
+	// Step O.1 spec D1.B: UseDedicatedCert=true alongside
+	// ACMEChallenge="inherited" is inconsistent — the route either
+	// inherits the wildcard (inherited) OR opts out into a dedicated
+	// per-route cert (useDedicatedCert) but not both.
+	if r.UseDedicatedCert && r.ACMEChallenge == ACMEChallengeInherited {
+		return errors.New(`route: use_dedicated_cert cannot be true while acme_challenge is "inherited" (pick one)`)
 	}
 	// Step J.2: active health-check validation, gated by Enabled.
 	// When Enabled is false the sub-fields are inert; storage does

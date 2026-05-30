@@ -46,6 +46,11 @@ const (
 	// keyed "default"). Future-proof for multi-IdP without a
 	// schema rewrite. See oidc_config.go.
 	bucketOIDCConfig = "oidc_config"
+	// Step O.1 — instance-level wildcard-certificate managed-domain
+	// declarations, keyed by apex (e.g. "example.com"). One row per
+	// managed domain; multiple domains coexist (spec D6.A). See
+	// managed_domain.go.
+	bucketManagedDomains = "managed_domains"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -86,6 +91,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketDNSProviders),         // Step J.4
 			[]byte(bucketForwardAuthProviders), // Step K.1
 			[]byte(bucketOIDCConfig),           // Step K.2
+			[]byte(bucketManagedDomains),       // Step O.1
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)

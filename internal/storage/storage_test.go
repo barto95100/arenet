@@ -66,7 +66,7 @@ func TestNewStore_EmptyPath(t *testing.T) {
 func TestNewStore_CreatesAllBuckets(t *testing.T) {
 	s := newTestStore(t)
 
-	want := []string{"routes", "users", "sessions", "audit"}
+	want := []string{"routes", "users", "sessions", "audit", "managed_domains"}
 	err := s.DB().View(func(tx *bolt.Tx) error {
 		for _, name := range want {
 			if b := tx.Bucket([]byte(name)); b == nil {
