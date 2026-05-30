@@ -127,24 +127,38 @@ func validateUpstreamPool(pool []upstreamReq) error {
 // validateACMEChallenge enforces the Step J.4 §5.4 rules on a
 // route's per-route ACME challenge selection. The caller has
 // already normalised the empty string to "http-01" (POST / PUT
-// default), so a value reaching this function is one of the two
+// default), so a value reaching this function is one of the
 // enum values — anything else is rejected.
 //
 // Cross-rules enforced here:
-//   - The challenge must be exactly "http-01" or "dns-01".
+//   - The challenge must be exactly "http-01" / "dns-01" /
+//     "inherited" (the Step O.1 sentinel for routes covered by
+//     a managed-domain wildcard).
 //   - If ANY host in the route's hostname set (primary Host +
 //     Aliases) is a wildcard, the challenge MUST be "dns-01".
 //     HTTP-01 cannot issue wildcards (proving control of
 //     "*.example.com" is impossible via an HTTP request to any
 //     concrete host).
 //
-// The DNS-01-requires-a-configured-provider rule lives in
-// createRoute / updateRoute (it needs the store handle) so this
-// pure function stays handle-free and testable.
+// "inherited" intentionally skips the wildcard check: a covered
+// route delegates cert issuance to the managed-domain wildcard
+// policy, which is itself emitted with the DNS-01 challenge
+// (caddymgr §3.3). The wildcard-coverage cross-rule (must EXIST
+// a managed domain that covers the host) lives in createRoute /
+// updateRoute because it needs the store handle.
+//
+// The DNS-01-requires-a-configured-provider rule also lives in
+// createRoute / updateRoute (same reason: needs the store
+// handle). This pure function stays handle-free and testable.
 func validateACMEChallenge(challenge, host string, aliases []string) error {
-	if challenge != storage.ACMEChallengeHTTP01 && challenge != storage.ACMEChallengeDNS01 {
-		return fmt.Errorf("acmeChallenge %q must be %q or %q",
-			challenge, storage.ACMEChallengeHTTP01, storage.ACMEChallengeDNS01)
+	switch challenge {
+	case storage.ACMEChallengeHTTP01, storage.ACMEChallengeDNS01, storage.ACMEChallengeInherited:
+	default:
+		return fmt.Errorf("acmeChallenge %q must be %q, %q, or %q",
+			challenge,
+			storage.ACMEChallengeHTTP01,
+			storage.ACMEChallengeDNS01,
+			storage.ACMEChallengeInherited)
 	}
 	if challenge == storage.ACMEChallengeHTTP01 {
 		if isWildcardHost(host) {

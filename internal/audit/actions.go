@@ -85,6 +85,16 @@ const (
 	ActionConfigExported         = "config_exported"
 	ActionConfigRestored         = "config_restored"
 	ActionConfigRestoredRejected = "config_restored_rejected"
+
+	// Step O.3 — managed-domain CRUD (2). The Created event
+	// also carries the count of covered routes whose ACMEChallenge
+	// was mutated to "inherited" (D8.A migration), so the audit
+	// log records the cross-cutting effect of the operator action.
+	// The Deleted event symmetrically carries the count of routes
+	// reverted from "inherited" to the operator-chosen revertTo
+	// value (AC #21).
+	ActionManagedDomainCreated = "managed_domain_created"
+	ActionManagedDomainDeleted = "managed_domain_deleted"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -119,6 +129,8 @@ var allActions = []string{
 	ActionConfigExported,
 	ActionConfigRestored,
 	ActionConfigRestoredRejected,
+	ActionManagedDomainCreated,
+	ActionManagedDomainDeleted,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

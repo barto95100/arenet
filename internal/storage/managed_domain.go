@@ -407,12 +407,38 @@ func (s *Store) PutManagedDomainWithRouteMigration(
 // untouched (operator may have manually overridden via the
 // per-route opt-out at some earlier point).
 //
-// Mirror of PutManagedDomainWithRouteMigration. The isCovered
-// closure is injected for the same import-direction reason.
+// Thin wrapper around DeleteManagedDomainWithRouteMigrationRevertTo
+// with revertTo="". Kept as a separate entry point so existing
+// O.1 unit tests and any caller that wants the default revert
+// behaviour stay terse.
 func (s *Store) DeleteManagedDomainWithRouteMigration(
 	ctx context.Context,
 	apex string,
 	isCovered func(host string) bool,
+) (int, error) {
+	return s.DeleteManagedDomainWithRouteMigrationRevertTo(ctx, apex, isCovered, "")
+}
+
+// DeleteManagedDomainWithRouteMigrationRevertTo is the
+// parameterised version of the reverse migration. revertTo
+// MUST be one of {"", "http-01", "dns-01"} — the caller (api
+// layer) validates this BEFORE invocation. Storage defensively
+// trusts the input enum here; an unknown value would land in
+// the route's ACMEChallenge and the route validator would
+// reject it on the next round-trip (defence-in-depth, not the
+// front-line gate).
+//
+// The revertTo value is what the covered routes' ACMEChallenge
+// is set to (instead of the default ""). Spec AC #21: the API
+// layer exposes this on DELETE /settings/managed-domains/{apex}
+// via a `?revertTo=` query parameter so the operator explicitly
+// chooses the post-revert behaviour (avoids the silent
+// HTTP-01-burst footgun called out in spec §3.8).
+func (s *Store) DeleteManagedDomainWithRouteMigrationRevertTo(
+	ctx context.Context,
+	apex string,
+	isCovered func(host string) bool,
+	revertTo string,
 ) (int, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
@@ -449,7 +475,7 @@ func (s *Store) DeleteManagedDomainWithRouteMigration(
 			if !hit {
 				return nil
 			}
-			r.ACMEChallenge = ""
+			r.ACMEChallenge = revertTo
 			r.UpdatedAt = time.Now().UTC()
 			newRaw, err := json.Marshal(r)
 			if err != nil {

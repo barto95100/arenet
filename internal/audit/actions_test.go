@@ -20,13 +20,13 @@ import "testing"
 
 // TestAllActions_Count guards against accidental drift from D7
 // (Step D shipped 15) + Step J.4 (+1 = 16) + Step K.1 (+2 = 18)
-// + Step K.2 (+7 = 25) + Step K.3 (+3 = 28). Adding or removing
-// actions without updating the spec / decisions doc is a process
-// violation; this test forces the conversation.
+// + Step K.2 (+7 = 25) + Step K.3 (+3 = 28) + Step O.3 (+2 = 30).
+// Adding or removing actions without updating the spec / decisions
+// doc is a process violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 28
+	const wantCount = 30
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2)", got, wantCount)
 	}
 }
 
@@ -102,6 +102,9 @@ func TestAllActions_ExactSet(t *testing.T) {
 		"config_exported":               true,
 		"config_restored":               true,
 		"config_restored_rejected":      true,
+		// Step O.3 (+2) — managed-domain CRUD audit events.
+		"managed_domain_created": true,
+		"managed_domain_deleted": true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {

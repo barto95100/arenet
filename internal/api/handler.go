@@ -18,12 +18,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
+	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -469,13 +471,18 @@ type routeRequest struct {
 	// re-typing the WAF mode every time.
 	WAFMode string `json:"wafMode"`
 	// Step J.4 — ACME challenge type for this route's TLS cert.
-	// One of "" / "http-01" / "dns-01". On POST and PUT, empty
-	// string is normalised to "http-01" (the §5.4 default and the
-	// pre-J.4 behaviour) — there is no preserve-on-omit semantic
-	// like wafMode, because the value carries no secret and the
-	// per-route ACME challenge is naturally specified on every
-	// edit (TLS section of the form).
+	// One of "" / "http-01" / "dns-01" / "inherited" (the Step
+	// O.1 addition). On POST and PUT, empty string is normalised
+	// to "http-01" (the §5.4 default and the pre-J.4 behaviour)
+	// UNLESS the host is covered by a managed domain AND
+	// UseDedicatedCert is false, in which case the API rewrites
+	// the field to "inherited" so the storage row reflects the
+	// derived state. No preserve-on-omit semantic.
 	ACMEChallenge string `json:"acmeChallenge"`
+	// Step O.1 — opt-out from a covering managed-domain wildcard
+	// (spec D1.B). Defaults to false. When the host is NOT
+	// covered by any managed domain, this field has no effect.
+	UseDedicatedCert bool `json:"useDedicatedCert,omitempty"`
 	// Step J.2 — active health check, pointer so nil distinguishes
 	// "block absent from JSON" from "block present with explicit
 	// disabled" (see healthCheckReq doc-comment). createRoute: nil
@@ -603,11 +610,29 @@ type routeResponse struct {
 	ResponseHeaders map[string]string `json:"responseHeaders"`
 	// Step I.4 — WAF mode, one of "off" / "detect" / "block".
 	WAFMode string `json:"wafMode"`
-	// Step J.4 — ACME challenge type, one of "http-01" / "dns-01".
-	// Surfaced as the normalised value (a pre-J.4 row read back
-	// reports "http-01", not the storage "" zero value), so the
-	// frontend has a single, consistent state to render.
+	// Step J.4 — ACME challenge type, one of "http-01" / "dns-01"
+	// / "inherited" (the Step O.1 addition for routes covered by
+	// a managed-domain wildcard). Surfaced as the normalised
+	// value (a pre-J.4 row read back reports "http-01", not the
+	// storage "" zero value), so the frontend has a single,
+	// consistent state to render.
 	ACMEChallenge string `json:"acmeChallenge"`
+	// Step O.1 — per-route opt-out from the managed-domain
+	// wildcard (spec D1.B). When true on a covered route, the
+	// route emits its OWN per-route ACME policy alongside the
+	// wildcard. Default false. Omitempty on the wire — a pre-O
+	// route never serialises the field.
+	UseDedicatedCert bool `json:"useDedicatedCert,omitempty"`
+	// Step O.3 — derived field telling the operator which TLS
+	// policy actually serves this route's cert (AC #4). One of:
+	//   - "managed-domain:<apex>" (covered by a wildcard)
+	//   - "per-route-acme:dns-01" (per-route DNS-01 ACME)
+	//   - "per-route-acme:http-01" (per-route HTTP-01 ACME)
+	//   - "per-route-internal" (private host → internal CA)
+	// Omitempty: routes without TLS, or pre-O computations that
+	// don't have managed-domain context, render an empty string
+	// and the frontend hides the badge.
+	EffectiveCertSource string `json:"effectiveCertSource,omitempty"`
 	// Step J.2 — active health check. Always present on a stored
 	// route (storage.HealthCheck has no omitempty); when Enabled
 	// is false the rest of the sub-fields carry zero values and
@@ -658,14 +683,15 @@ func toResponse(r storage.Route) routeResponse {
 		authMode = storage.RouteAuthNone
 	}
 	return routeResponse{
-		ID:              r.ID,
-		Host:            r.Host,
-		Upstreams:       upstreamsResp,
-		LBPolicy:        r.LBPolicy,
-		TLSEnabled:      r.TLSEnabled,
-		RedirectToHTTPS: r.RedirectToHTTPS,
-		Aliases:         aliases,
-		AuthMode:        authMode,
+		ID:               r.ID,
+		Host:             r.Host,
+		Upstreams:        upstreamsResp,
+		LBPolicy:         r.LBPolicy,
+		TLSEnabled:       r.TLSEnabled,
+		RedirectToHTTPS:  r.RedirectToHTTPS,
+		Aliases:          aliases,
+		AuthMode:         authMode,
+		UseDedicatedCert: r.UseDedicatedCert,
 		BasicAuth: basicAuthResp{
 			Username:    r.BasicAuth.Username,
 			PasswordSet: r.BasicAuth.PasswordHash != "",
@@ -691,4 +717,103 @@ func toResponse(r storage.Route) routeResponse {
 		CreatedAt: r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt: r.UpdatedAt.UTC().Format(timestampFormat),
 	}
+}
+
+// computeEffectiveCertSource (Step O.3 / AC #4) derives the
+// human-readable cert-source label for a route given the current
+// set of managed domains. Pure function — no I/O. Mirrors the
+// caddymgr partition logic (§3.2 + §3.3): a covered route whose
+// UseDedicatedCert is false → "managed-domain:<apex>". Otherwise
+// falls back to the per-route ACME path or internal CA.
+//
+// Empty return value means "no inference made" — emitted on the
+// wire as the zero-string (omitempty drops the field) so a
+// pre-O frontend doesn't see a misleading state. Reached when:
+//   - TLSEnabled is false (no cert needed).
+//   - Host is private (certmagic.SubjectQualifiesForPublicCert
+//     would reject it — we approximate that here with a simple
+//     "is the host a literal IP / .local / loopback?" check
+//     would over-engineer this; instead, we let
+//     "per-route-internal" be the catch-all for any private
+//     host that reaches the catch-all policy in caddymgr).
+//
+// The function takes the managed-domain slice as input rather
+// than reading from the store so it stays cheap to call once
+// per route in the list handler (the caller passes the slice
+// fetched once at the top of listRoutes).
+func computeEffectiveCertSource(r storage.Route, mds []storage.ManagedDomain) string {
+	if !r.TLSEnabled {
+		return ""
+	}
+	// Covered + not-opted-out → managed-domain wildcard.
+	if !r.UseDedicatedCert {
+		for _, h := range r.AllHosts() {
+			if md, ok := caddymgr.IsHostCoveredByManagedDomain(h, mds); ok {
+				return "managed-domain:" + md.Apex
+			}
+		}
+	}
+	// Per-route path. Normalise the storage zero-value "" /
+	// "inherited" (defensive — should not occur for non-
+	// covered hosts) to "http-01".
+	switch r.ACMEChallenge {
+	case storage.ACMEChallengeDNS01:
+		return "per-route-acme:dns-01"
+	case storage.ACMEChallengeHTTP01, "", storage.ACMEChallengeInherited:
+		// Private hosts caddymgr filters out of the ACME
+		// partitions land on the internal CA. We can't
+		// reliably distinguish here without re-implementing
+		// certmagic.SubjectQualifiesForPublicCert, so the
+		// label is the per-route ACME default. The
+		// dashboard surfacing this is honest about
+		// "what would be emitted if this host qualified for
+		// a public cert" rather than chasing the runtime
+		// classification.
+		return "per-route-acme:http-01"
+	}
+	return "per-route-internal"
+}
+
+// reconcileManagedDomainCoverage (Step O.3 / spec D1.B + D8.A)
+// is the cross-rule helper applied at the top of createRoute /
+// updateRoute. Returns the (possibly-rewritten) ACMEChallenge
+// value the storage row should carry, or a user-facing error
+// to surface as a 400.
+//
+// Rules (in order of evaluation):
+//   - Host NOT covered + UseDedicatedCert=true → reject. The
+//     opt-out only makes sense when there IS a managed domain
+//     to opt out OF. This is a defensive guard; the frontend
+//     hides the toggle in this case (AC #12).
+//   - Host covered + UseDedicatedCert=true → keep the
+//     operator-supplied ACMEChallenge (http-01 / dns-01).
+//     The wildcard policy still emits, but this route's per-
+//     route policy precedes it in the JSON (caddymgr §3.3) so
+//     the dedicated cert serves for THIS host.
+//   - Host covered + UseDedicatedCert=false → rewrite the
+//     ACMEChallenge to "inherited" regardless of the
+//     operator-supplied value. This is the D8.A invariant:
+//     the storage row reflects the derived state truthfully.
+//   - Host NOT covered + UseDedicatedCert=false → keep the
+//     operator-supplied ACMEChallenge unchanged. The J-era
+//     per-route path is undisturbed (the spec D5.A invariant
+//     surfaced at the API layer).
+//
+// The mds slice is fetched ONCE at the handler entry — the
+// helper itself is pure.
+func reconcileManagedDomainCoverage(challenge string, useDedicated bool, host string, aliases []string, mds []storage.ManagedDomain) (string, error) {
+	covered := false
+	for _, h := range append([]string{host}, aliases...) {
+		if _, ok := caddymgr.IsHostCoveredByManagedDomain(h, mds); ok {
+			covered = true
+			break
+		}
+	}
+	if useDedicated && !covered {
+		return "", errors.New("useDedicatedCert can only be true when the route's host is covered by a managed domain")
+	}
+	if covered && !useDedicated {
+		return storage.ACMEChallengeInherited, nil
+	}
+	return challenge, nil
 }

@@ -157,9 +157,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			r.Get("/security/attackers-summary", h.securityAttackersSummary)
 			// Step N.3 — CrowdSec decision event log. Pure
 			// event-shaped read of the decision_event table.
-			// Optional scope / srcIp / scenario / onlyActive
+			// Optional scope / scenario / srcIp / onlyActive
 			// filters. Same AC #15 contract.
 			r.Get("/security/decisions", h.securityDecisions)
+			// Step O.3 — managed-domain list (read).
+			// Viewer-accessible per AC #20 (parallel to
+			// the DNS-provider GET — both are config reads
+			// the dashboard's SSL section binds to).
+			r.Get("/settings/managed-domains", h.listManagedDomains)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame
@@ -196,6 +201,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// Step K.3 — backup / restore.
 				r.Get("/admin/backup", h.getBackup)
 				r.Post("/admin/restore", h.postRestore)
+				// Step O.3 — managed-domain CRUD writes.
+				// POST creates + runs the D8.A migration
+				// atomically. DELETE supports the AC #21
+				// `?revertTo=` query parameter so the
+				// operator explicitly picks the post-revert
+				// ACMEChallenge value.
+				r.Post("/settings/managed-domains", h.createManagedDomain)
+				r.Delete("/settings/managed-domains/{apex}", h.deleteManagedDomain)
 			})
 		})
 	})
@@ -209,9 +222,22 @@ func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list routes")
 		return
 	}
+	// Step O.3 AC #4: fetch managed domains ONCE per list call
+	// so the derived effectiveCertSource on every routeResponse
+	// is computed off a consistent snapshot. A storage failure
+	// here is non-fatal — we proceed with empty mds and the
+	// per-route field falls back to the per-route ACME label
+	// (no managed-domain inference). Logged so the operator
+	// notices via the slog stream.
+	mds, mdErr := h.store.ListManagedDomains(r.Context())
+	if mdErr != nil {
+		h.logger.Warn("list managed domains for effectiveCertSource — continuing without", "err", mdErr)
+	}
 	out := make([]routeResponse, 0, len(routes))
 	for _, rt := range routes {
-		out = append(out, toResponse(rt))
+		resp := toResponse(rt)
+		resp.EffectiveCertSource = computeEffectiveCertSource(rt, mds)
+		out = append(out, resp)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -228,7 +254,15 @@ func (h *Handler) getRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get route")
 		return
 	}
-	writeJSON(w, http.StatusOK, toResponse(rt))
+	// Step O.3 AC #4 — same enrichment as listRoutes. Storage
+	// failure on the managed-domains fetch is non-fatal.
+	mds, mdErr := h.store.ListManagedDomains(r.Context())
+	if mdErr != nil {
+		h.logger.Warn("list managed domains for effectiveCertSource — continuing without", "err", mdErr)
+	}
+	resp := toResponse(rt)
+	resp.EffectiveCertSource = computeEffectiveCertSource(rt, mds)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // validateAliasesStructural runs the same hostname rule used for the
@@ -586,6 +620,24 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	if req.ACMEChallenge == "" {
 		req.ACMEChallenge = storage.ACMEChallengeHTTP01
 	}
+	// Step O.3: managed-domain coverage reconciliation (spec D1.B
+	// + D8.A). Rewrite to "inherited" when the host is covered
+	// and the operator didn't opt out; reject when the operator
+	// opted out but no managed domain covers the host. The
+	// reconciled value flows through validateACMEChallenge
+	// (which now accepts "inherited") + the storage write.
+	mds, mdErr := h.store.ListManagedDomains(r.Context())
+	if mdErr != nil {
+		h.logger.Error("list managed domains (route create)", "err", mdErr)
+		writeError(w, http.StatusInternalServerError, "failed to load managed domains")
+		return
+	}
+	reconciled, err := reconcileManagedDomainCoverage(req.ACMEChallenge, req.UseDedicatedCert, req.Host, req.Aliases, mds)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.ACMEChallenge = reconciled
 	if err := validateACMEChallenge(req.ACMEChallenge, req.Host, req.Aliases); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -703,11 +755,12 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		ForwardAuth: storage.ForwardAuthRouteConfig{
 			ProviderName: req.ForwardAuth.ProviderName,
 		},
-		RequestHeaders:  req.RequestHeaders,
-		ResponseHeaders: req.ResponseHeaders,
-		WAFMode:         req.WAFMode,
-		ACMEChallenge:   req.ACMEChallenge,
-		HealthCheck:     storeHC,
+		RequestHeaders:   req.RequestHeaders,
+		ResponseHeaders:  req.ResponseHeaders,
+		WAFMode:          req.WAFMode,
+		ACMEChallenge:    req.ACMEChallenge,
+		UseDedicatedCert: req.UseDedicatedCert,
+		HealthCheck:      storeHC,
 	}
 	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
 	// the corresponding sub-struct (storage trusts the API to
@@ -757,7 +810,13 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		AfterJSON:  mustMarshalForAudit(routeForAudit(created)),
 	})
 
-	writeJSON(w, http.StatusCreated, toResponse(created))
+	// Step O.3: enrich the response with the derived
+	// effectiveCertSource (AC #4). `mds` was fetched earlier in
+	// the handler for the reconcile pass — reuse it rather than
+	// re-querying.
+	resp := toResponse(created)
+	resp.EffectiveCertSource = computeEffectiveCertSource(created, mds)
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
@@ -900,6 +959,23 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	if req.ACMEChallenge == "" {
 		req.ACMEChallenge = storage.ACMEChallengeHTTP01
 	}
+	// Step O.3: managed-domain coverage reconciliation. Same
+	// rules as createRoute — see reconcileManagedDomainCoverage
+	// for the four-state matrix. The reconciled ACMEChallenge
+	// flows through the rest of the handler verbatim, including
+	// the storage write below.
+	mds, mdErr := h.store.ListManagedDomains(r.Context())
+	if mdErr != nil {
+		h.logger.Error("list managed domains (route update)", "err", mdErr)
+		writeError(w, http.StatusInternalServerError, "failed to load managed domains")
+		return
+	}
+	reconciled, err := reconcileManagedDomainCoverage(req.ACMEChallenge, req.UseDedicatedCert, req.Host, req.Aliases, mds)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.ACMEChallenge = reconciled
 	if err := validateACMEChallenge(req.ACMEChallenge, req.Host, req.Aliases); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1032,11 +1108,12 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		ForwardAuth: storage.ForwardAuthRouteConfig{
 			ProviderName: req.ForwardAuth.ProviderName,
 		},
-		RequestHeaders:  req.RequestHeaders,
-		ResponseHeaders: req.ResponseHeaders,
-		WAFMode:         req.WAFMode,
-		ACMEChallenge:   req.ACMEChallenge,
-		HealthCheck:     storeHC,
+		RequestHeaders:   req.RequestHeaders,
+		ResponseHeaders:  req.ResponseHeaders,
+		WAFMode:          req.WAFMode,
+		ACMEChallenge:    req.ACMEChallenge,
+		UseDedicatedCert: req.UseDedicatedCert,
+		HealthCheck:      storeHC,
 	}
 	if newRoute.AuthMode != storage.RouteAuthBasic {
 		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}
@@ -1091,7 +1168,11 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		AfterJSON:  mustMarshalForAudit(routeForAudit(updated)),
 	})
 
-	writeJSON(w, http.StatusOK, toResponse(updated))
+	// Step O.3: enrich the response with effectiveCertSource
+	// (AC #4). `mds` was fetched earlier for the reconcile pass.
+	resp := toResponse(updated)
+	resp.EffectiveCertSource = computeEffectiveCertSource(updated, mds)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) deleteRoute(w http.ResponseWriter, r *http.Request) {
