@@ -1,0 +1,161 @@
+{
+  "$schema_comment": "Shared fixture for the managed-domain coverage predicate (Step O spec §3.2, RFC 6125 §6.4.3). Consumed by Go test TestIsHostCoveredByManagedDomain_FixtureFile + the future TS port test (web/frontend/src/routes/routes/+page.svelte::findCoveringManagedDomain), when a vitest harness lands per docs/backlog-step-o.md #O.4-1. The fixture is the SINGLE source of truth: drift between the two implementations fails one of the two tests in CI.",
+  "$schema_version": 1,
+  "$rules": [
+    "host is covered by managed domain `apex` iff host has exactly ONE more label than the apex (single-label wildcard rule, RFC 6125 §6.4.3)",
+    "multi-label depth (e.g. `deep.app.example.com` vs apex `example.com`) is NOT covered",
+    "bare apex is covered iff IncludeApex == true (spec D2.C)",
+    "host and apex are both lowercase+trailing-dot-stripped before compare (DNS is case-insensitive; trailing dot is canonical per RFC 1035)",
+    "wildcard route-host (`*.foo`) is NEVER covered — we EMIT the wildcard, we don't consume it",
+    "double-wildcard (`*.*.foo`) is NEVER covered",
+    "empty host returns not-covered",
+    "empty managed-domains slice short-circuits to not-covered for every host (spec D5.A byte-equality invariant)",
+    "managed-domain rows with empty apex are skipped defensively"
+  ],
+  "managed_domain_sets": {
+    "default": [
+      { "apex": "example.com", "includeApex": true,  "provider": "ovh" },
+      { "apex": "noapex.com",  "includeApex": false, "provider": "ovh" }
+    ],
+    "multi_domain": [
+      { "apex": "alpha.com", "includeApex": true, "provider": "ovh" },
+      { "apex": "beta.com",  "includeApex": true, "provider": "ovh" }
+    ],
+    "empty": [],
+    "empty_apex_only": [
+      { "apex": "", "includeApex": false, "provider": "ovh" }
+    ]
+  },
+  "cases": [
+    {
+      "name": "single-label subdomain covered",
+      "mds_set": "default",
+      "host": "app.example.com",
+      "want_found": true,
+      "want_apex": "example.com"
+    },
+    {
+      "name": "bare apex covered when includeApex=true",
+      "mds_set": "default",
+      "host": "example.com",
+      "want_found": true,
+      "want_apex": "example.com"
+    },
+    {
+      "name": "uppercase host normalised to lowercase",
+      "mds_set": "default",
+      "host": "App.Example.Com",
+      "want_found": true,
+      "want_apex": "example.com"
+    },
+    {
+      "name": "trailing-dot host normalised",
+      "mds_set": "default",
+      "host": "app.example.com.",
+      "want_found": true,
+      "want_apex": "example.com"
+    },
+    {
+      "name": "uppercase + trailing-dot host normalised",
+      "mds_set": "default",
+      "host": "App.Example.Com.",
+      "want_found": true,
+      "want_apex": "example.com"
+    },
+    {
+      "name": "multi-label depth NOT covered (RFC 6125 §6.4.3)",
+      "mds_set": "default",
+      "host": "deep.app.example.com",
+      "want_found": false
+    },
+    {
+      "name": "bare apex NOT covered when includeApex=false",
+      "mds_set": "default",
+      "host": "noapex.com",
+      "want_found": false
+    },
+    {
+      "name": "single-label sub of includeApex=false IS covered (wildcard still applies)",
+      "mds_set": "default",
+      "host": "app.noapex.com",
+      "want_found": true,
+      "want_apex": "noapex.com"
+    },
+    {
+      "name": "host with no managed-domain suffix NOT covered",
+      "mds_set": "default",
+      "host": "other.org",
+      "want_found": false
+    },
+    {
+      "name": "wildcard route-host itself NOT covered (we emit it, not consume it)",
+      "mds_set": "default",
+      "host": "*.example.com",
+      "want_found": false
+    },
+    {
+      "name": "double-wildcard NOT covered",
+      "mds_set": "default",
+      "host": "*.*.example.com",
+      "want_found": false
+    },
+    {
+      "name": "empty host NOT covered",
+      "mds_set": "default",
+      "host": "",
+      "want_found": false
+    },
+    {
+      "name": "empty mds short-circuit (D5.A invariant)",
+      "mds_set": "empty",
+      "host": "app.example.com",
+      "want_found": false
+    },
+    {
+      "name": "mds with empty apex skipped (defensive)",
+      "mds_set": "empty_apex_only",
+      "host": "app.example.com",
+      "want_found": false
+    },
+    {
+      "name": "D6.A multi — single-label sub of alpha.com resolves to alpha",
+      "mds_set": "multi_domain",
+      "host": "hello.alpha.com",
+      "want_found": true,
+      "want_apex": "alpha.com"
+    },
+    {
+      "name": "D6.A multi — single-label sub of beta.com resolves to beta",
+      "mds_set": "multi_domain",
+      "host": "app.beta.com",
+      "want_found": true,
+      "want_apex": "beta.com"
+    },
+    {
+      "name": "D6.A multi — host unrelated to any apex NOT covered",
+      "mds_set": "multi_domain",
+      "host": "app.gamma.com",
+      "want_found": false
+    },
+    {
+      "name": "single hyphen label covered",
+      "mds_set": "default",
+      "host": "my-app.example.com",
+      "want_found": true,
+      "want_apex": "example.com"
+    },
+    {
+      "name": "label that is just digits covered",
+      "mds_set": "default",
+      "host": "1.example.com",
+      "want_found": true,
+      "want_apex": "example.com"
+    },
+    {
+      "name": "host equal to wildcard form NOT covered (defensive symmetry)",
+      "mds_set": "default",
+      "host": "*.example.com",
+      "want_found": false
+    }
+  ]
+}

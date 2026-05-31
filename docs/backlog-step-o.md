@@ -59,13 +59,22 @@ while the route-edit modal shows the J-era ACME selector
 **Recommendation.** Option B (shared fixture file + a vitest
 harness) — adds the test cost where we want it (CI-time drift
 detection) without per-keystroke server traffic and without a
-new codegen. Acceptable to defer until either implementation
-actually changes; today's TS port is a 20-line function
-matching the Go shape line-for-line. The unit tests added in
-O.1 (`internal/caddymgr/managed_domain_test.go`) already pin
-the Go shape; an analogous TS test ships when vitest is added.
+new codegen.
 
-**Triage.** Cosmetic / future-maintenance hardening. No
+**Status (sweep 2026-05-31).** Option B Go-half landed:
+- Fixture file: `internal/caddymgr/testdata/managed-domain-coverage-cases.json`
+  (20 cases incl. the multi-domain D6.A subset + edge cases).
+- Go consumer: `internal/caddymgr/managed_domain_fixture_test.go::TestIsHostCoveredByManagedDomain_FixtureFile`.
+
+TS half deferred until a vitest harness lands. When that
+happens, mirror the Go consumer at
+`web/frontend/src/routes/routes/managed-domain-coverage.test.ts`
+(or wherever vitest tests are co-located), reading the same
+JSON file via Vite's `import.meta.glob` or a fs.readFileSync.
+Drift between the two implementations then fails one side in
+CI.
+
+**Triage.** Drift-detection hardening, Go half complete. No
 functional bug today.
 
 ### Finding #O.4-2 — `acmeChallenge:"inherited"` form-load normalisation loses prior per-route choice
