@@ -51,6 +51,11 @@ const (
 	// managed domain; multiple domains coexist (spec D6.A). See
 	// managed_domain.go.
 	bucketManagedDomains = "managed_domains"
+	// Step P.1 — instance-level auto-classify (write-side LAPI)
+	// configuration: the watcher credentials (machine-id + password)
+	// + the per-category rule set. Single bucket, two keys
+	// ("credentials" + "rules"). See automation_config.go.
+	bucketAutomation = "automation"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -92,6 +97,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketForwardAuthProviders), // Step K.1
 			[]byte(bucketOIDCConfig),           // Step K.2
 			[]byte(bucketManagedDomains),       // Step O.1
+			[]byte(bucketAutomation),           // Step P.1
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)
