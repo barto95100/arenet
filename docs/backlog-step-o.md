@@ -146,38 +146,77 @@ fixing in a follow-up chunk before any external user faces it.
 ### Finding #O.5-1 — Live wildcard issuance smoke is structurally blocked by the caddymgr→OVH coupling
 
 Surfaced during the O.5 plan review and confirmed by the live
-smoke. The caddymgr emits the wildcard TLS policy with
-`provider.name = "ovh"`, which certmagic dispatches to the
-upstream OVH provider module (`certmagic-dns/ovh` via
-`dns.providers.ovh`). That module makes outbound HTTP calls to
-the OVH API (`https://eu.api.ovh.com`) to set / clear the
-`_acme-challenge` TXT record during the DNS-01 dance.
+smoke. **TL;DR**: Step O ships a feature that depends on a
+real DNS provider + zone for true end-to-end validation, but
+the homelab smoke harness cannot provide either at zero cost.
+The mitigation is a layered defence (unit tests + caddy.
+Validate provisioning + REST integration tests) that is the
+right ROI for the homelab target. Documented here so a future
+maintainer reaching this question has the analysis already
+done.
 
-Without real OVH credentials + a real OVH-managed DNS zone,
-the DNS-01 challenge cannot complete. The Pebble-only path
-considered in the O.5 plan (Option A) does NOT unblock this:
-Pebble would be a happy ACME server, but the OVH provider
-module would still try to call the real OVH API with fake
-credentials and fail before the TXT record ever lands.
+**Why it's structural, not configurational.** The caddymgr
+emits the wildcard TLS policy with `provider.name = "ovh"`,
+which certmagic dispatches to the upstream OVH provider module
+(`certmagic-dns/ovh` via `dns.providers.ovh`). That module
+makes outbound HTTP calls to the OVH API
+(`https://eu.api.ovh.com`) to set / clear the `_acme-challenge`
+TXT record during the DNS-01 dance.
 
-**Result for the smoke:** AC #1 (single ACME challenge covers
-N routes), AC #2 (apex SAN included), AC #8 (DNS-01 unavailable
-fallback), and AC #15 (J unchanged — live J-era per-route
-HTTP-01) all stayed PARTIAL with citation to:
+The certmagic provider abstraction was designed for production
+DNS interaction — there is no test-mode override surface in the
+upstream API. A test harness cannot redirect the OVH module to
+a local fake; it would need to:
+- replace the module entirely (Option A below — code change), or
+- supply real credentials + a real zone (Option B), or
+- accept the gap and document it (Option C, in effect today).
 
-- `internal/caddymgr/managed_domain_emission_test.go::TestBuildConfigJSON_LoadsCleanly_WithManagedDomain` — exercises `caddy.Validate` on the emitted config, provisioning every module including `dns.providers.ovh`.
-- `internal/caddymgr/managed_domain_emission_test.go::TestBuildConfigJSON_ManagedDomain_NoProvider_InternalIssuer` — pins the D4.A internal-CA fallback when DNS provider is unconfigured.
+**What about Pebble?** Pebble (the standalone ACME validator
+used for local cert-issuance testing in the upstream Caddy
+test suite) does NOT unblock this. Pebble would be a happy
+ACME server, but the OVH provider module would still try to
+call the real OVH API with fake credentials and fail before
+the TXT record ever lands. The bottleneck is the provider
+module's outbound API call, not the ACME server.
+
+**Result for the O.5 smoke**:
+
+| AC | Why PARTIAL |
+|----|-------------|
+| #1 (single ACME challenge covers N routes) | Live cert issuance blocked (this finding). |
+| #2 (apex SAN included, D2.C) | Same — depends on a successful issuance. |
+| #8 (DNS-01 unavailable disables wildcard, D4.A) | The JSON emission of the `internal` issuer fallback IS unit-pinned; the live path of "operator erases creds → routes serve self-signed" is observable but not separately exercised because Caddy's internal CA flow is upstream-tested. |
+| #15 (J unchanged) | Two-part AC. **Byte-equality at the no-managed-domains baseline = PASS** (pinned by AC #3 + `TestBuildConfigJSON_NoManagedDomains_EqualsStepJ_Bytes`). **Live J-era per-route HTTP-01 issuance = PARTIAL** for the same reason as #1/#2 — though this part is carry-forward from Step J's own smoke (`docs/smoke-test-step-j.md`), NOT new gap from O. |
+
+The JSON-emission shape that would feed a live cert issuance
+IS pinned by:
+
+- `internal/caddymgr/managed_domain_emission_test.go::TestBuildConfigJSON_LoadsCleanly_WithManagedDomain` — exercises `caddy.Validate` on the emitted config, provisioning every module including `dns.providers.ovh`. Catches the "unknown module" / module-ID-drift class of bug.
 - `internal/caddymgr/managed_domain_emission_test.go::TestBuildConfigJSON_ManagedDomain_EmitsWildcardPolicy` — pins the multi-SAN cert shape (D2.C IncludeApex toggle).
+- `internal/caddymgr/managed_domain_emission_test.go::TestBuildConfigJSON_ManagedDomain_NoProvider_InternalIssuer` — pins the D4.A internal-CA fallback when DNS provider is unconfigured (no silent HTTP-01 fall-back footgun).
 - `internal/caddymgr/managed_domain_emission_test.go::TestBuildConfigJSON_ManagedDomain_ReloadPreserves` — pins AC #14 deterministic JSON across reloads.
-- `internal/api/managed_domain_test.go` — pins the full REST integration surface.
+- `internal/api/managed_domain_test.go` — pins the full REST integration surface (the wire contract operators consume).
 
-**Future paths to a true live cert-issuance smoke.**
+**What this means for operators today.** The feature is
+production-ready for the homelab target. The unit-test layer
+catches structural drift (module IDs, JSON shape, reload
+preservation, cross-rules) without requiring a real cert
+issuance every test run. The remaining live-issuance gap
+matters most when:
+- a new certmagic / Caddy major version changes the provider
+  module's contract (caught by `caddy.Validate` provisioning),
+- an Arenet-side bug emits a malformed wildcard policy
+  (caught by the same unit + the REST integration tests),
+- the OVH API itself changes (out of scope — upstream
+  responsibility).
+
+**Future paths to a true live cert-issuance smoke**:
 
 - **Option A — Refactor caddymgr for a mockable provider at
   test time.** Introduce a provider-name → certmagic-module
   registry on `*CaddyManager` that tests can override with a
-  fake-DNS provider (uses challtestsrv internally; updates the
-  TXT record at a local DNS responder Pebble can validate
+  fake-DNS provider (uses challtestsrv internally; updates
+  the TXT record at a local DNS responder Pebble can validate
   against). Pros: full live issuance in CI / smoke; no
   external dependencies. Cons: caddymgr surface change; the
   test-only override must not leak to production code paths.
@@ -190,21 +229,26 @@ HTTP-01) all stayed PARTIAL with citation to:
   determinism harmed by network flakiness, secrets management
   for CI.
 
-- **Option C — Manual periodic smoke against a homelab
-  operator's real zone.** Document the steps in this backlog;
-  the project maintainer runs them quarterly. Pros: zero CI
-  cost. Cons: not deterministic, no regression gate.
+- **Option C (status quo) — Manual periodic smoke against a
+  homelab operator's real zone.** No standing CI requirement;
+  the project maintainer can run a manual smoke against a
+  real OVH zone when releasing a major version. Pros: zero
+  CI cost. Cons: not deterministic, no regression gate.
 
-**Recommendation.** Option A when (a) a second DNS provider
-lands (Cloudflare via D3.B forward-compat) and there's
-genuine integration to test, OR (b) a J→O regression bug
-surfaces in the wild that the existing unit tests didn't
-catch. Until then, the layered defence (unit tests +
-caddy.Validate provisioning + REST integration tests) is the
-right ROI for a homelab project.
+**Recommendation.** Stay with the current layered defence
+(effectively Option C) until one of:
+- a second DNS provider lands (Cloudflare via D3.B
+  forward-compat) — at that point the integration surface
+  doubles and Option A becomes a real ROI win,
+- a J→O regression bug surfaces in the wild that the
+  existing unit tests didn't catch — evidence that the
+  unit-test layer is insufficient,
+- the project moves beyond the homelab target — production
+  deployments need the full Option A or B.
 
 **Triage.** Architectural trade-off, documented for future
 reference. No functional bug today. The O.5 smoke verdict
-PARTIAL on AC #1/#2/#8/#13/#15 reflects this trade-off
-honestly per the spec §5.5 "PARTIAL acceptables sur cas
-documentés" guidance.
+PARTIAL on AC #1 / #2 / #8 / #13 + the live half of #15
+reflects this trade-off honestly per the spec §5.5
+"PARTIAL acceptables sur cas documentés" guidance — the
+verdict was PASS overall.
