@@ -227,12 +227,23 @@
 			responseHeaders: { ...(r.responseHeaders ?? {}) },
 			wafMode: r.wafMode,
 			// Step O: "inherited" is a server-derived value the
-			// frontend never sends back; reload it as the J-era
-			// default so the (hidden when covered) selector
-			// has a valid base state if the operator clicks the
-			// useDedicatedCert opt-out toggle.
+			// frontend never sends back. Reload it as "" (empty)
+			// rather than "http-01" so the dropdown doesn't show
+			// a misleading default if the operator opts out of
+			// the wildcard via useDedicatedCert. The form state
+			// is "no per-route challenge picked yet" — accurate
+			// to what's stored.
+			//
+			// Per backlog #O.4-2: the onUseDedicatedCertToggle
+			// handler ALSO clears acmeChallenge to "" on every
+			// false → true transition, AND the Save button is
+			// gated by dedicatedOptOutPendingChoice. So even if
+			// a stored value sneaks through here (e.g. a covered
+			// route with acmeChallenge="dns-01" in storage, which
+			// shouldn't happen under D8.A but is defended against),
+			// the operator must explicitly re-pick on opt-out.
 			acmeChallenge:
-				r.acmeChallenge === 'inherited' ? 'http-01' : r.acmeChallenge,
+				r.acmeChallenge === 'inherited' ? '' : r.acmeChallenge,
 			useDedicatedCert: r.useDedicatedCert ?? false,
 			// Step J.2: the server's HealthCheck is always present
 			// on the wire (no omitempty). The form holds it as-is;
@@ -399,6 +410,44 @@
 	// not a consumer of one — so the predicate returns null and
 	// the J-era acmeLockedToDNS01 path takes over.
 	const coveringManagedDomain = $derived(findCoveringManagedDomain(formData.host));
+
+	// Step O.4 backlog #O.4-2 — handler for the useDedicatedCert
+	// checkbox. The plain bind:checked path would have silently
+	// left the route's previous acmeChallenge value in place when
+	// the operator toggles the opt-out on — but for routes that
+	// were previously on a managed-domain wildcard, the form-load
+	// path normalised acmeChallenge "inherited" → "http-01" as a
+	// non-restorable default (the operator's original per-route
+	// choice was lost at managed-domain-create time). Defaulting
+	// the dropdown to http-01 on opt-out toggle would mean ANY
+	// operator clicking the toggle accidentally provisions an
+	// HTTP-01 cert with no explicit decision.
+	//
+	// Fix per backlog #O.4-2 Option B: when the toggle flips
+	// false → true, clear acmeChallenge to "" so the dropdown
+	// renders unselected. Submit is disabled until the operator
+	// picks. Toggling back true → false re-engages the managed-
+	// domain wildcard and the dropdown disappears, so we don't
+	// need to restore anything.
+	function onUseDedicatedCertToggle(next: boolean): void {
+		const wasOptedOut = formData.useDedicatedCert;
+		formData.useDedicatedCert = next;
+		if (!wasOptedOut && next) {
+			// false → true: force explicit choice. Empty
+			// acmeChallenge is rejected by the backend
+			// reconcile too, so this matches server contract.
+			formData.acmeChallenge = '';
+		}
+	}
+
+	// Step O.4 backlog #O.4-2 — submit guard. Covered + opted out
+	// + no acmeChallenge picked = pending operator decision.
+	// Button stays disabled until the dropdown resolves.
+	const dedicatedOptOutPendingChoice = $derived(
+		coveringManagedDomain !== null &&
+			formData.useDedicatedCert &&
+			(formData.acmeChallenge === '' || formData.acmeChallenge === 'inherited')
+	);
 
 	// Step J.4: when the host or any alias is a wildcard, the
 	// challenge selector is LOCKED to "dns-01" (greyed). Used as
@@ -1076,7 +1125,12 @@
 						</span>
 					</div>
 					<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
-						<input type="checkbox" bind:checked={formData.useDedicatedCert} />
+						<input
+							type="checkbox"
+							checked={formData.useDedicatedCert}
+							onchange={(e) =>
+								onUseDedicatedCertToggle((e.target as HTMLInputElement).checked)}
+						/>
 						Use a dedicated cert for this route (opt out of the wildcard)
 					</label>
 					<p class="text-xs text-muted mt-1">
@@ -1099,6 +1153,17 @@
 						disabled={acmeLockedToDNS01}
 						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-60 disabled:cursor-not-allowed"
 					>
+						{#if dedicatedOptOutPendingChoice}
+							<!-- #O.4-2 force-explicit-choice — empty value
+							     is the unselected state forced by the
+							     toggle handler. The placeholder option
+							     renders the empty selection clearly to
+							     the operator (otherwise the browser
+							     would silently render the first option
+							     as visually selected without it being
+							     the bound value). -->
+							<option value="" disabled>— pick one —</option>
+						{/if}
 						<option value="http-01">HTTP-01 (default, port 80)</option>
 						<option value="dns-01">DNS-01 (required for wildcards)</option>
 					</select>
@@ -1109,12 +1174,26 @@
 						<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
 							<input
 								type="checkbox"
-								bind:checked={formData.useDedicatedCert}
+								checked={formData.useDedicatedCert}
+								onchange={(e) =>
+									onUseDedicatedCertToggle(
+										(e.target as HTMLInputElement).checked
+									)}
 							/>
 							Use a dedicated cert (inherits <code class="font-mono"
 								>*.{coveringManagedDomain.apex}</code
 							> when unchecked)
 						</label>
+					{/if}
+					{#if dedicatedOptOutPendingChoice}
+						<!-- #O.4-2 force-explicit-choice — submit is
+						     disabled until the operator picks. The
+						     hint sits next to the now-unselected
+						     dropdown so the cause is obvious. -->
+						<p class="text-xs text-warn mt-1">
+							Pick HTTP-01 or DNS-01 above — opting out of the wildcard
+							requires an explicit per-route ACME challenge.
+						</p>
 					{/if}
 					{#if acmeLockedToDNS01}
 						<p class="text-xs text-muted mt-1">
@@ -1489,7 +1568,11 @@
 	</form>
 	{#snippet footer()}
 		<Button variant="ghost" onclick={() => (formOpen = false)}>Cancel</Button>
-		<Button onclick={submitForm} loading={submitting}>
+		<Button
+			onclick={submitForm}
+			loading={submitting}
+			disabled={dedicatedOptOutPendingChoice}
+		>
 			{formMode === 'create' ? 'Create' : 'Save'}
 		</Button>
 	{/snippet}
