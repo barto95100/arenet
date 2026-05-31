@@ -58,6 +58,7 @@ import (
 	"github.com/barto95100/arenet/internal/api"
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
+	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/metrics"
@@ -587,6 +588,32 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	// non-nil since audit.NewStore panics on a nil DB
 	// upstream and boot has already aborted in that case.
 	apiHandler.SetAuthFailureReader(auditStore)
+
+	// Step P.3 — auto-classify trigger engine wiring.
+	// Read rules + credentials from BoltDB, build the
+	// engine + manager, start the goroutines, register
+	// the global Manager so the REST API handlers can
+	// reconfigure at runtime. AC #15 degraded-mode: any
+	// failure here logs WARN and disables the engine —
+	// the data plane is unaffected.
+	automationEngineCtx, automationEngineCancel := context.WithCancel(ctx)
+	var automationWG sync.WaitGroup
+	if err := wireAutomation(automationEngineCtx, &automationWG, store, obsStore, auditStore, crowdsecSink, logger); err != nil {
+		logger.Warn("automation: trigger engine disabled", "err", err)
+	}
+	defer func() {
+		automationEngineCancel()
+		automationWG.Wait()
+		automation.SetManager(nil)
+		// Detach the tombstone listener so the
+		// crowdsec.Sink doesn't fire into a stopped
+		// engine on shutdown.
+		if crowdsecSink != nil {
+			crowdsecSink.SetTombstoneListener(nil)
+		}
+		logger.Info("automation engine stopped")
+	}()
+
 	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.dev, logger)
 	router := api.NewRouter(apiHandler, cfg.dev, ipExtractor, wsTopologyHandler)
 

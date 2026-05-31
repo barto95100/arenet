@@ -95,6 +95,17 @@ const (
 	// value (AC #21).
 	ActionManagedDomainCreated = "managed_domain_created"
 	ActionManagedDomainDeleted = "managed_domain_deleted"
+
+	// Step P.3 — auto-classify lifecycle (2). DecisionPushed
+	// emitted by the trigger engine's writer goroutine after
+	// a successful POST /v1/alerts to LAPI; carries
+	// target_id = "<scope>:<value>" + after_json with the
+	// scenario, duration, and triggering event ID for
+	// operator drill-down. RuleChanged emitted by the
+	// PUT /settings/automation/* handlers with before/after
+	// JSON (watcher passwords redacted, J.4 pattern).
+	ActionAutomationDecisionPushed = "automation_decision_pushed"
+	ActionAutomationRuleChanged    = "automation_rule_changed"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -131,6 +142,8 @@ var allActions = []string{
 	ActionConfigRestoredRejected,
 	ActionManagedDomainCreated,
 	ActionManagedDomainDeleted,
+	ActionAutomationDecisionPushed,
+	ActionAutomationRuleChanged,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

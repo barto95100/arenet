@@ -61,6 +61,13 @@ type WatcherCredentials struct {
 // instance.
 const automationKeyCredentials = "credentials"
 
+// automationKeyRules is the BoltDB key for the auto-classify
+// rule set. The value is stored as an opaque JSON blob so
+// storage doesn't depend on internal/automation (would invert
+// the dependency direction documented in spec §3.9). The API
+// layer + main.go marshal/unmarshal automation.RuleSet.
+const automationKeyRules = "rules"
+
 // validate runs strict last-line-of-defence shape checks on
 // WatcherCredentials. The API layer handles the preserve-on-
 // edit merge BEFORE this function — by the time validate runs
@@ -167,5 +174,96 @@ func (s *Store) DeleteWatcherCredentials(ctx context.Context) error {
 			return nil
 		}
 		return b.Delete([]byte(automationKeyCredentials))
+	})
+}
+
+// GetAutomationRulesRaw returns the persisted rule-set as
+// raw JSON bytes. ErrNotFound on fresh install — the caller
+// (API layer + main.go) materialises automation.DefaultRuleSet()
+// in that case rather than seeding a "default" row at bucket
+// init (avoids drift: the default value lives in one place,
+// internal/automation/rules.go).
+//
+// Storage holds the JSON blob opaquely — does NOT import
+// internal/automation (would invert the dependency direction
+// documented in spec §3.9: automation → storage, not the
+// reverse). The blob shape MUST match automation.RuleSet's
+// MarshalJSON; the API layer + boot wiring enforce that via
+// type-aware decode at the consumption point.
+func (s *Store) GetAutomationRulesRaw(ctx context.Context) (json.RawMessage, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	var out json.RawMessage
+	err := s.db.View(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(bucketAutomation))
+		raw := b.Get([]byte(automationKeyRules))
+		if raw == nil {
+			return ErrNotFound
+		}
+		// Copy: BoltDB-owned bytes are invalidated after the
+		// txn ends. Tests caught this once on a different
+		// bucket; the discipline applies here too.
+		out = append(out, raw...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PutAutomationRulesRaw persists the rule-set as opaque JSON.
+// The caller has already validated the parsed RuleSet (via
+// automation.RuleSet.Validate); storage's role is the commit
+// point. Empty / malformed JSON is rejected with a shape
+// check (must be non-empty + start with `{`).
+func (s *Store) PutAutomationRulesRaw(ctx context.Context, raw json.RawMessage) error {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	if len(raw) == 0 {
+		return errors.New("automation_rules: payload must not be empty")
+	}
+	// Defensive shape check — must look like a JSON object
+	// to catch a programming error where the caller passed
+	// a stringified value or a bare array.
+	if raw[0] != '{' {
+		return fmt.Errorf("automation_rules: payload must be a JSON object (starts with '{'), got first byte %q", raw[0])
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Copy to a fresh slice — the caller's RawMessage may
+		// be backed by a temporary buffer; we want to own the
+		// bytes we persist.
+		buf := make([]byte, len(raw))
+		copy(buf, raw)
+		return tx.Bucket([]byte(bucketAutomation)).Put([]byte(automationKeyRules), buf)
+	})
+}
+
+// DeleteAutomationRulesRaw removes the persisted rule-set
+// row. Idempotent (no-op when absent). Operator-facing
+// "reset to defaults" path; the next GetAutomationRulesRaw
+// returns ErrNotFound and the API layer seeds
+// automation.DefaultRuleSet().
+func (s *Store) DeleteAutomationRulesRaw(ctx context.Context) error {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(bucketAutomation))
+		if b.Get([]byte(automationKeyRules)) == nil {
+			return nil
+		}
+		return b.Delete([]byte(automationKeyRules))
 	})
 }

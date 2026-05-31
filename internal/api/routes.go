@@ -165,6 +165,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// the DNS-provider GET — both are config reads
 			// the dashboard's SSL section binds to).
 			r.Get("/settings/managed-domains", h.listManagedDomains)
+			// Step P.3 — auto-classify config (read).
+			// Viewer-accessible per AC #20. Returns both
+			// the rule set + a credentials-configured
+			// boolean so the frontend renders the whole
+			// section state in one round-trip.
+			r.Get("/settings/automation", h.getAutomation)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame
@@ -209,6 +215,15 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// ACMEChallenge value.
 				r.Post("/settings/managed-domains", h.createManagedDomain)
 				r.Delete("/settings/managed-domains/{apex}", h.deleteManagedDomain)
+				// Step P.3 — auto-classify config writes.
+				// PUT /rules atomic-swaps the live engine's
+				// RuleSet (no restart). PUT /credentials
+				// recreates the WatcherClient + swaps the
+				// engine's writer pointer atomically (P.2
+				// commit-body checklist item #3, recreate-
+				// and-swap path).
+				r.Put("/settings/automation/rules", h.putAutomationRules)
+				r.Put("/settings/automation/credentials", h.putAutomationCredentials)
 			})
 		})
 	})

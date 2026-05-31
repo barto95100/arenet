@@ -121,6 +121,25 @@ type ActiveDecisionChecker interface {
 	HasActiveDecision(ctx context.Context, scope, value, scenario string) (bool, error)
 }
 
+// WriterProvider is the recreate-and-swap accessor for the
+// engine's writer (P.3 wiring). At each intent the writer
+// loop calls Writer() to fetch the CURRENT WatcherClient —
+// nil disables the push (no-op drain). The production
+// implementation (*DefaultManager) atomically swaps the
+// underlying *WatcherClient when the operator updates
+// credentials via PUT /settings/automation/credentials, so
+// the next intent picks up the new client without restarting
+// the writer goroutine. Sticky loginFailed flag on the old
+// client is discarded with the old client (P.2 commit-body
+// checklist item #3, recreate-and-swap arbitrated path).
+//
+// Tests + the boot path that doesn't yet need recreation can
+// still pass a static Writer via EngineConfig.Writer; the
+// engine prefers WriterProvider when both are set.
+type WriterProvider interface {
+	Writer() Writer
+}
+
 // EngineConfig holds the trigger engine's wiring. The three
 // Reader interfaces are required (the engine can't tick
 // without them); Writer + AuditEmitter + ActiveDecisionChecker
@@ -132,7 +151,15 @@ type EngineConfig struct {
 	Throttle ThrottleEventReader
 	Audit    AuditEventReader
 
-	Writer        Writer
+	// Writer is the static writer (test path + the
+	// pre-P.3 wiring). When set, EngineConfig.Writer is
+	// used for every intent.
+	Writer Writer
+	// WriterProvider (P.3) is the recreate-and-swap
+	// accessor. When set, takes precedence over Writer.
+	// Production wiring passes the DefaultManager here.
+	WriterProvider WriterProvider
+
 	AuditEmitter  AuditEmitter
 	DedupeChecker ActiveDecisionChecker
 
@@ -300,6 +327,23 @@ func (e *Engine) Run(ctx context.Context) {
 // + callers use it to await clean shutdown.
 func (e *Engine) Done() <-chan struct{} { return e.done }
 
+// SetWriterProvider injects the recreate-and-swap writer
+// accessor at boot time. Used by cmd/arenet/main.go to wire
+// the DefaultManager — the Engine reads currentWriter() per
+// intent, so the swap takes effect without restarting the
+// writer goroutine. nil clears the provider (engine falls
+// back to the static cfg.Writer).
+func (e *Engine) SetWriterProvider(p WriterProvider) {
+	// Engine reads cfg.WriterProvider lock-free in
+	// currentWriter() — concurrent reads happen on every
+	// intent. A mutex would add overhead per-intent; instead
+	// we rely on the boot-time-only semantics: this method
+	// is called ONCE during wireAutomation, before Run()
+	// starts. Setting after Run starts is a programmer
+	// error.
+	e.cfg.WriterProvider = p
+}
+
 // tick performs one polling pass: query each enabled source,
 // group events by (src_ip, source), check thresholds, apply
 // cooldown + dedupe, emit intents. Errors per source are
@@ -431,7 +475,7 @@ func (e *Engine) readWaf(ctx context.Context, now time.Time) []SourceEvent {
 	}
 	e.cursorMu.Unlock()
 
-	events, err := e.cfg.Waf.QueryWafEvents(ctx, wafFilter{
+	events, err := e.cfg.Waf.QueryWafEvents(ctx, WafFilter{
 		From:  cursor,
 		To:    now,
 		Limit: queryLimit,
@@ -480,7 +524,7 @@ func (e *Engine) readThrottle(ctx context.Context, now time.Time) []SourceEvent 
 	}
 	e.cursorMu.Unlock()
 
-	events, err := e.cfg.Throttle.QueryThrottleEvents(ctx, throttleFilter{
+	events, err := e.cfg.Throttle.QueryThrottleEvents(ctx, ThrottleFilter{
 		From:  cursor,
 		To:    now,
 		Limit: queryLimit,
@@ -560,38 +604,48 @@ func (e *Engine) advanceCursor(src Source, ts time.Time) {
 //     increment totalPushPermanent, log, drop. Don't loop on
 //     these — the next intent retries fresh (the operator may
 //     have fixed the issue between).
+//
+// The writer is resolved per-intent via currentWriter() so
+// the P.3 recreate-and-swap path (DefaultManager) reaches the
+// engine without restarting any goroutine.
 func (e *Engine) writerLoop(ctx context.Context) {
-	if e.cfg.Writer == nil {
-		// No writer wired (AC #15 boot-degraded or unit
-		// test path). Drain the channel as a no-op so
-		// emit-side select never blocks.
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-e.intents:
-				// drop silently
-			}
-		}
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case intent := <-e.intents:
-			e.processIntent(ctx, intent)
+			w := e.currentWriter()
+			if w == nil {
+				// AC #15 boot-degraded path or post-PUT
+				// ClearCredentials. Drain silently — the
+				// intent was a valid threshold trip but
+				// the operator has explicitly disabled
+				// the writer.
+				continue
+			}
+			e.processIntent(ctx, w, intent)
 		}
 	}
 }
 
-func (e *Engine) processIntent(ctx context.Context, intent Intent) {
+// currentWriter returns the active writer. Prefers the
+// WriterProvider (recreate-and-swap path) over the static
+// Writer config field, so a Manager swap takes effect
+// immediately.
+func (e *Engine) currentWriter() Writer {
+	if e.cfg.WriterProvider != nil {
+		return e.cfg.WriterProvider.Writer()
+	}
+	return e.cfg.Writer
+}
+
+func (e *Engine) processIntent(ctx context.Context, writer Writer, intent Intent) {
 	scenario := intent.Source.Scenario()
 	alert := buildAlert(intent, e.cfg.Now())
 
 	backoff := writerBackoffInitial
 	for attempt := 1; attempt <= writerMaxRetries; attempt++ {
-		_, err := e.cfg.Writer.PushAlert(ctx, alert)
+		_, err := writer.PushAlert(ctx, alert)
 		if err == nil {
 			e.totalPushSuccess.Add(1)
 			// Record success in dedupe so the next tick

@@ -69,12 +69,12 @@ type SourceEvent struct {
 // category here (the engine groups events by Source after
 // the query so a single read pass serves multiple rules).
 type WafEventReader interface {
-	QueryWafEvents(ctx context.Context, filter wafFilter) ([]SourceEvent, error)
+	QueryWafEvents(ctx context.Context, filter WafFilter) ([]SourceEvent, error)
 }
 
 // ThrottleEventReader is the throttle-side mirror.
 type ThrottleEventReader interface {
-	QueryThrottleEvents(ctx context.Context, filter throttleFilter) ([]SourceEvent, error)
+	QueryThrottleEvents(ctx context.Context, filter ThrottleFilter) ([]SourceEvent, error)
 }
 
 // AuditEventReader is the audit-side mirror.
@@ -82,19 +82,19 @@ type AuditEventReader interface {
 	QueryAuthFailureEvents(ctx context.Context, from, to time.Time, limit int) ([]SourceEvent, error)
 }
 
-// wafFilter / throttleFilter are tiny per-source filter
+// WafFilter / ThrottleFilter are tiny per-source filter
 // shapes that match the observability-store filters at the
 // fields the engine actually needs. Defined here (not in
 // observability) so the engine stays independent of the
 // observability package's wider filter surface (and so the
 // fakes in tests don't need to import observability).
-type wafFilter struct {
+type WafFilter struct {
 	From  time.Time
 	To    time.Time
 	Limit int
 }
 
-type throttleFilter struct {
+type ThrottleFilter struct {
 	From  time.Time
 	To    time.Time
 	Limit int
@@ -105,12 +105,12 @@ type throttleFilter struct {
 // pathological-attack-volume queries pinning the DB.
 const queryLimit = 1000
 
-// sourceFromWafCategory maps the observability-layer category
+// SourceFromWafCategory maps the observability-layer category
 // string (M.1 OWASP enum) to the trigger-engine Source. Any
 // unknown category falls through to SourceWafOther so a
 // future M extension that adds a new category doesn't drop
 // events silently.
-func sourceFromWafCategory(cat string) Source {
+func SourceFromWafCategory(cat string) Source {
 	switch cat {
 	case "SQLi":
 		return SourceWafSQLi
@@ -127,11 +127,11 @@ func sourceFromWafCategory(cat string) Source {
 	}
 }
 
-// sourceFromThrottleTier maps the throttle Tier int (1 / 2)
+// SourceFromThrottleTier maps the throttle Tier int (1 / 2)
 // to the trigger-engine Source. Any other value lands in
 // SourceThrottleTier1 (defensive — the upstream type only
 // emits 1 or 2 per Q's enum).
-func sourceFromThrottleTier(tier int) Source {
+func SourceFromThrottleTier(tier int) Source {
 	switch tier {
 	case 2:
 		return SourceThrottleTier2

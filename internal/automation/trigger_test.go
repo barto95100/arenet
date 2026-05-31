@@ -35,7 +35,7 @@ type fakeWafReader struct {
 	events []SourceEvent
 }
 
-func (f *fakeWafReader) QueryWafEvents(_ context.Context, filter wafFilter) ([]SourceEvent, error) {
+func (f *fakeWafReader) QueryWafEvents(_ context.Context, filter WafFilter) ([]SourceEvent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []SourceEvent
@@ -52,7 +52,7 @@ type fakeThrottleReader struct {
 	events []SourceEvent
 }
 
-func (f *fakeThrottleReader) QueryThrottleEvents(_ context.Context, filter throttleFilter) ([]SourceEvent, error) {
+func (f *fakeThrottleReader) QueryThrottleEvents(_ context.Context, filter ThrottleFilter) ([]SourceEvent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []SourceEvent

@@ -151,3 +151,64 @@ func TestWatcherCredentials_Delete_Idempotent(t *testing.T) {
 		t.Errorf("second delete should return nil, got %v", err)
 	}
 }
+
+func TestAutomationRulesRaw_PutGet_Roundtrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	raw := []byte(`{"rules":{"waf-sqli":{"enabled":true}}}`)
+	if err := s.PutAutomationRulesRaw(ctx, raw); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := s.GetAutomationRulesRaw(ctx)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != string(raw) {
+		t.Errorf("roundtrip mismatch: got %s, want %s", got, raw)
+	}
+}
+
+func TestAutomationRulesRaw_Get_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.GetAutomationRulesRaw(context.Background()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound on fresh install, got %v", err)
+	}
+}
+
+func TestAutomationRulesRaw_Put_RejectsEmpty(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.PutAutomationRulesRaw(context.Background(), nil); err == nil {
+		t.Error("expected error on nil payload, got nil")
+	}
+	if err := s.PutAutomationRulesRaw(context.Background(), []byte{}); err == nil {
+		t.Error("expected error on empty payload, got nil")
+	}
+}
+
+func TestAutomationRulesRaw_Put_RejectsNonObject(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.PutAutomationRulesRaw(context.Background(), []byte("[1,2]")); err == nil {
+		t.Error("expected error on array payload, got nil")
+	}
+	if err := s.PutAutomationRulesRaw(context.Background(), []byte(`"string"`)); err == nil {
+		t.Error("expected error on string payload, got nil")
+	}
+}
+
+func TestAutomationRulesRaw_Delete_Idempotent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.DeleteAutomationRulesRaw(ctx); err != nil {
+		t.Errorf("delete on missing should be nil, got %v", err)
+	}
+	if err := s.PutAutomationRulesRaw(ctx, []byte(`{"rules":{}}`)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := s.DeleteAutomationRulesRaw(ctx); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.GetAutomationRulesRaw(ctx); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+}
