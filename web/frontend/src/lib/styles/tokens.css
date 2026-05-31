@@ -22,6 +22,16 @@
  *
  * Spec ref: docs/superpowers/specs/2026-05-31-step-r-oklch-migration.md §4.1.
  * Mock ref: docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html:11-44.
+ *
+ * ⚠ Naming drift — known debt (do not rename in this step):
+ * --accent-cyan now holds a purple-blue value (oklch 68% 0.21 255),
+ * NOT a cyan hue. The identifier is preserved because 90+ component
+ * references read it; renaming would be a wide cosmetic refactor with
+ * regression risk during the aesthetic migration. Treat --accent-cyan
+ * as "the brand accent token, currently purple-blue" and consume the
+ * mock-naming alias --accent in new code. A future step can do the
+ * --accent-cyan → --accent rename as a focused cleanup (tracked in
+ * docs/backlog-step-r.md). Same drift applies to --shadow-glow-cyan.
  */
 
 /* ------------------------------------------------------------------
