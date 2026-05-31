@@ -10,6 +10,11 @@
 import { request } from './client';
 import type {
 	AdminUser,
+	AutomationCredentialsRequest,
+	AutomationCredentialsView,
+	AutomationResponse,
+	AutomationRulesRequest,
+	AutomationRuleSet,
 	DNSProviderOVH,
 	DNSProviderOVHRequest,
 	ForwardAuthProvider,
@@ -73,6 +78,21 @@ export const settingsApi = {
 			`/settings/managed-domains/${encodeURIComponent(apex)}${qs}`
 		);
 	},
+
+	// Step P.3 — auto-classify (write-back to LAPI) config.
+	// GET is viewer-accessible (returns rules + credentials.
+	// configured boolean). The two PUTs are admin-only:
+	// /rules atomically swaps the live RuleSet; /credentials
+	// recreate-and-swaps the live WatcherClient (J.4
+	// preserve-on-empty-password).
+	getAutomation: (): Promise<AutomationResponse> =>
+		request<AutomationResponse>('GET', '/settings/automation'),
+	putAutomationRules: (r: AutomationRulesRequest): Promise<AutomationRulesRequest> =>
+		request<AutomationRulesRequest>('PUT', '/settings/automation/rules', r),
+	putAutomationCredentials: (
+		r: AutomationCredentialsRequest
+	): Promise<AutomationCredentialsView> =>
+		request<AutomationCredentialsView>('PUT', '/settings/automation/credentials', r),
 
 	// Step K.2 — OIDC config (single row, "default" key on the
 	// backend). PUT preserves the clientSecret when empty (J.4

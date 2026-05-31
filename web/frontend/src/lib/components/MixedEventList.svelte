@@ -225,12 +225,24 @@ Color discipline (Step F design tokens):
 		// because the scope is operator-semantic context the
 		// dashboard owes the reader.
 		for (const e of decisions) {
+			// Step P.4: prefix the detail badge with "auto:"
+			// when the scenario was emitted by Arenet's
+			// auto-classify loop (D3.3.A: scenario.startsWith
+			// "arenet/"). Matches the spec mock UI promise of
+			// "auto:waf-sqli" / "auto:auth-burst" rows. Keeps
+			// the existing color (status-down — decisions are
+			// blocks at the proxy edge regardless of who
+			// pushed them).
+			const isAuto = e.scenario.startsWith('arenet/');
+			const detail = isAuto
+				? `auto:${shortScenario(e.scenario)}`
+				: shortScenario(e.scenario);
 			out.push({
 				key: `cs-${e.uuid}`,
 				tsIso: e.ts,
 				tsEpochMs: new Date(e.ts).getTime(),
 				kind: 'CROWDSEC',
-				detail: shortScenario(e.scenario),
+				detail,
 				detailColor: 'var(--status-down)',
 				target: formatDecisionTarget(e.scope, e.value),
 				srcIp: e.value || '—',

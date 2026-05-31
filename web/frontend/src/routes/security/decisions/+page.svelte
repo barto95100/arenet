@@ -46,7 +46,7 @@ Step F design tokens only.
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { fetchDecisions } from '$lib/api/security';
 	import type { Decision } from '$lib/api/types';
-	import { ApiError } from '$lib/api/types';
+	import { ApiError, isArenetAutoScenario } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 
 	let loading = $state(true);
@@ -234,7 +234,17 @@ Step F design tokens only.
 									</span>
 								</td>
 								<td class="mono">{d.value || '—'}</td>
-								<td class="mono">{shortScenario(d.scenario)}</td>
+								<td class="mono">
+									{shortScenario(d.scenario)}
+									{#if isArenetAutoScenario(d.scenario)}
+										<!-- Step P.4: provenance badge for
+										     auto-classified decisions
+										     (scenario.startsWith("arenet/")). -->
+										<span class="badge auto-badge" title="Auto-classified by Arenet (Step P)">
+											auto
+										</span>
+									{/if}
+								</td>
 								<td>
 									<span class="badge" style:background={typeColor(d.type)}>
 										{d.type || 'ban'}
@@ -350,6 +360,15 @@ Step F design tokens only.
 		font-weight: 600;
 		letter-spacing: 0.04em;
 		white-space: nowrap;
+	}
+	/* Step P.4: provenance badge — accent-cyan so an
+	   operator scanning the decisions table can pick out
+	   the Arenet-originated rows at a glance. */
+	.auto-badge {
+		background: var(--accent-cyan);
+		margin-left: 0.4rem;
+		font-size: var(--text-xs, 10px);
+		text-transform: uppercase;
 	}
 	.empty-inline {
 		padding: 1rem;

@@ -484,6 +484,135 @@ export interface ManagedDomainDeleteResponse {
 export type ManagedDomainRevertTo = '' | 'http-01' | 'dns-01';
 
 /**
+ * Step P.3 — auto-classify Source enum (mirror of
+ * automation.Source in Go). Nine categories: 6 WAF + 2
+ * throttle + auth-burst. The frontend renders one Rule row
+ * per Source under the Security Automation Card.
+ */
+export type AutomationSource =
+	| 'waf-sqli'
+	| 'waf-xss'
+	| 'waf-rce'
+	| 'waf-lfi'
+	| 'waf-protocol'
+	| 'waf-other'
+	| 'throttle-tier1'
+	| 'throttle-tier2'
+	| 'auth-burst';
+
+/**
+ * Step P.3 — per-Source rule. Mirrors automation.Rule's JSON
+ * tags. Threshold / Window / Duration / Cooldown values are
+ * inert when Enabled is false (the backend's Validate skips
+ * non-enabled rules so a disabled-by-default operator can
+ * leave the inputs blank without errors).
+ *
+ * Durations are nanoseconds on the wire (Go's
+ * time.Duration MarshalJSON default). The Settings UI
+ * presents human-friendly forms ("60s", "4h") that we
+ * convert on submit.
+ */
+export interface AutomationRule {
+	enabled: boolean;
+	threshold: number;
+	window_ns: number;
+	duration_ns: number;
+	cooldown_ns: number;
+}
+
+/**
+ * Step P.3 — the operator-facing rule set. One Rule per
+ * Source; the backend's DefaultRuleSet pre-populates every
+ * Source on a fresh install, so the map is always full.
+ */
+export interface AutomationRuleSet {
+	rules: Record<AutomationSource, AutomationRule>;
+}
+
+/**
+ * Step P.3 — GET /api/v1/settings/automation response shape.
+ * Rules + credentials in one round-trip so the Settings UI
+ * renders the full section state without a second request.
+ * Password is ALWAYS redacted (configured flag is the single
+ * source of truth for "is the writer wired").
+ */
+export interface AutomationResponse {
+	rules: AutomationRuleSet;
+	credentials: AutomationCredentialsView;
+}
+
+export interface AutomationCredentialsView {
+	lapiUrl: string;
+	machineId: string;
+	configured: boolean;
+}
+
+/**
+ * Step P.3 — PUT /api/v1/settings/automation/credentials body.
+ * Empty password triggers the preserve-on-edit path (J.4
+ * pattern); non-empty overwrites. All-blank fields erase the
+ * row + ClearCredentials on the running engine.
+ */
+export interface AutomationCredentialsRequest {
+	lapiUrl: string;
+	machineId: string;
+	password: string;
+}
+
+/**
+ * Step P.3 — PUT /api/v1/settings/automation/rules envelope.
+ * The single `rules` key mirrors the GET response shape so
+ * the same body can be round-tripped without surgery.
+ */
+export interface AutomationRulesRequest {
+	rules: AutomationRuleSet;
+}
+
+/**
+ * Step P.3 — all known Source values, in the same order the
+ * Go AllSources() emits. UI lists rules in this order so the
+ * operator-facing layout is deterministic.
+ */
+export const AUTOMATION_SOURCES: readonly AutomationSource[] = [
+	'waf-sqli',
+	'waf-xss',
+	'waf-rce',
+	'waf-lfi',
+	'waf-protocol',
+	'waf-other',
+	'throttle-tier1',
+	'throttle-tier2',
+	'auth-burst'
+] as const;
+
+/**
+ * Step P.3 — operator-friendly Source labels for the
+ * Settings UI. Keep concise (column header width); the
+ * Tooltip / aria-label can carry the longer description.
+ */
+export const AUTOMATION_SOURCE_LABELS: Record<AutomationSource, string> = {
+	'waf-sqli': 'WAF · SQLi',
+	'waf-xss': 'WAF · XSS',
+	'waf-rce': 'WAF · RCE',
+	'waf-lfi': 'WAF · LFI',
+	'waf-protocol': 'WAF · Protocol',
+	'waf-other': 'WAF · Other',
+	'throttle-tier1': 'Throttle · Tier 1',
+	'throttle-tier2': 'Throttle · Tier 2',
+	'auth-burst': 'Auth · Burst'
+};
+
+/**
+ * Step P.4 — provenance helper. Returns true iff a CrowdSec
+ * decision's scenario was emitted by Arenet's auto-classify
+ * loop (D3.3.A prefix convention). Used by /security/decisions
+ * + MixedEventList to render the "auto" badge.
+ */
+export function isArenetAutoScenario(scenario: string): boolean {
+	return scenario.startsWith('arenet/');
+}
+
+/**
  * Step K.2 — OIDC SSO configuration as returned by GET
  * /api/v1/settings/oidc. The clientSecret is always blanked on the
  * wire (server-side redaction, mirrors the J.4 DNS-provider and

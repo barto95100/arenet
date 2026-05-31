@@ -28,8 +28,14 @@
 	import { authApi, type Session } from '$lib/api/auth';
 	import { settingsApi } from '$lib/api/settings';
 	import {
+		AUTOMATION_SOURCES,
+		AUTOMATION_SOURCE_LABELS,
 		FORWARD_AUTH_PROVIDER_KINDS,
 		OVH_ENDPOINTS,
+		type AutomationCredentialsView,
+		type AutomationRule,
+		type AutomationRuleSet,
+		type AutomationSource,
 		type DNSProviderOVH,
 		type ForwardAuthProvider,
 		type ForwardAuthProviderKind,
@@ -321,6 +327,146 @@
 		dnsProvider !== null && !dnsProvider.configured
 	);
 
+	// --- Security Automation section (Step P.4 / spec D8.A) ------------------
+
+	// Rule set (one row per Source) + credentials view. The
+	// load fetches both in one GET; the persistence path is
+	// two distinct PUTs so an operator who edits only rules
+	// doesn't have to re-enter their watcher password.
+	let automationRules = $state<AutomationRuleSet>({
+		rules: {} as Record<AutomationSource, AutomationRule>
+	});
+	let automationCreds = $state<AutomationCredentialsView>({
+		lapiUrl: '',
+		machineId: '',
+		configured: false
+	});
+	let automationLoading = $state(true);
+	let automationLoadError = $state<string | null>(null);
+
+	// Rules form working copy. The operator edits in this
+	// shape (rule fields as nanosecond numbers — matches the
+	// wire). On save we ship the full set; backend validate
+	// rejects partial.
+	let rulesDraft = $state<Record<AutomationSource, AutomationRule>>(
+		{} as Record<AutomationSource, AutomationRule>
+	);
+	let rulesSubmitting = $state(false);
+	let rulesFormError = $state<string | null>(null);
+
+	// Credentials form. Empty password triggers the J.4
+	// preserve-on-edit path (server keeps stored value).
+	// Operator-visible placeholder when configured:
+	// "leave blank to keep current" (P.3 commit forward
+	// note #2).
+	let credsForm = $state({ lapiUrl: '', machineId: '', password: '' });
+	let credsSubmitting = $state(false);
+	let credsFormError = $state<string | null>(null);
+
+	async function loadAutomation(): Promise<void> {
+		automationLoading = true;
+		automationLoadError = null;
+		try {
+			const res = await settingsApi.getAutomation();
+			automationRules = res.rules;
+			automationCreds = res.credentials;
+			// Seed the working copy from the loaded set;
+			// re-runs on every load so the operator sees
+			// the live state, not a stale draft.
+			rulesDraft = { ...res.rules.rules };
+			credsForm = {
+				lapiUrl: res.credentials.lapiUrl,
+				machineId: res.credentials.machineId,
+				password: ''
+			};
+		} catch (err) {
+			automationLoadError =
+				err instanceof Error ? err.message : 'Failed to load automation config';
+		} finally {
+			automationLoading = false;
+		}
+	}
+
+	async function submitAutomationRules(): Promise<void> {
+		rulesSubmitting = true;
+		rulesFormError = null;
+		try {
+			await settingsApi.putAutomationRules({
+				rules: { rules: rulesDraft }
+			});
+			pushToast('Automation rules saved', 'success');
+			await loadAutomation();
+		} catch (err) {
+			rulesFormError = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			rulesSubmitting = false;
+		}
+	}
+
+	async function submitAutomationCredentials(): Promise<void> {
+		credsSubmitting = true;
+		credsFormError = null;
+		try {
+			const res = await settingsApi.putAutomationCredentials({
+				lapiUrl: credsForm.lapiUrl,
+				machineId: credsForm.machineId,
+				password: credsForm.password
+			});
+			automationCreds = res;
+			pushToast(
+				res.configured
+					? 'Automation credentials saved'
+					: 'Automation credentials cleared',
+				'success'
+			);
+			credsForm.password = '';
+		} catch (err) {
+			credsFormError = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			credsSubmitting = false;
+		}
+	}
+
+	// Helper: ns ↔ "60s" / "4h" / "7d" round-trip. Keep the
+	// UI numbers operator-friendly without abandoning the
+	// wire's nanosecond format.
+	function nsToHuman(ns: number): string {
+		if (ns <= 0) return '0s';
+		const s = Math.floor(ns / 1e9);
+		if (s % 86400 === 0) return `${s / 86400}d`;
+		if (s % 3600 === 0) return `${s / 3600}h`;
+		if (s % 60 === 0) return `${s / 60}m`;
+		return `${s}s`;
+	}
+	function humanToNs(s: string): number {
+		const m = s.trim().match(/^(\d+)\s*([smhd]?)$/);
+		if (!m) return 0;
+		const n = Number(m[1]);
+		switch (m[2]) {
+			case 'd': return n * 86400 * 1e9;
+			case 'h': return n * 3600 * 1e9;
+			case 'm': return n * 60 * 1e9;
+			default:  return n * 1e9; // 's' or empty = seconds
+		}
+	}
+
+	// Per-rule field accessors. Svelte 5 runes work better
+	// with explicit getter / setter than direct bind:value
+	// on a nested map field.
+	function getRule(s: AutomationSource): AutomationRule {
+		return rulesDraft[s] ?? {
+			enabled: false, threshold: 0, window_ns: 0, duration_ns: 0, cooldown_ns: 0
+		};
+	}
+	function setRuleField<K extends keyof AutomationRule>(
+		s: AutomationSource,
+		key: K,
+		value: AutomationRule[K]
+	): void {
+		const r = getRule(s);
+		rulesDraft = { ...rulesDraft, [s]: { ...r, [key]: value } };
+	}
+
 	// --- Forward-auth providers section (Step K.1 §5.1) ----------------------
 
 	// List + an inline form for create-or-edit. The form keeps an
@@ -461,6 +607,7 @@
 		void loadDNS01Status();
 		void loadForwardAuthProviders();
 		void loadManagedDomains();
+		void loadAutomation();
 	});
 </script>
 
@@ -899,6 +1046,205 @@
 				per-route ACME selector is hidden in the route editor and the cert
 				is provisioned once for all covered sub-domains.
 			</p>
+		</Card>
+	</div>
+
+	<!-- ROW 2.7 — Security Automation (Step P.4 / spec D8.A).
+	     New top-level Settings section, sibling of SSL /
+	     Certificates. Two forms in one Card: per-category
+	     rule toggles (top) + watcher credentials (bottom).
+	     The two persist via independent PUTs so an
+	     operator who edits only rules doesn't re-enter
+	     their watcher password. -->
+	<div class="mb-6">
+		<Card padding="p-6">
+			<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
+				<div>
+					<h2 class="text-xl font-semibold">Security Automation</h2>
+					<p class="text-xs text-muted mt-1">
+						Push CrowdSec bans to LAPI automatically when WAF / throttle / auth-failure events cross operator-configured thresholds. Decisions appear in the CrowdSec dashboard with scenario prefix <code>arenet/</code>.
+					</p>
+				</div>
+				{#if automationLoading}
+					<Spinner size="sm" />
+				{:else if automationCreds.configured}
+					<Badge variant="status-up">Configured</Badge>
+				{:else}
+					<Badge variant="status-warn">Not configured</Badge>
+				{/if}
+			</header>
+
+			{#if automationLoadError}
+				<p class="text-sm text-down mb-3" role="alert">
+					Failed to load automation config: {automationLoadError}
+				</p>
+			{/if}
+
+			<!-- Watcher credentials sub-form -->
+			<section class="mb-6">
+				<h3 class="text-base font-medium mb-2">Watcher credentials</h3>
+				<p class="text-xs text-muted mb-3">
+					Run <code>cscli machines add arenet-writer</code> on your CrowdSec host and paste the resulting credentials here. Distinct from the read-side bouncer key (Step N): writes to LAPI require a watcher per CrowdSec's auth model.
+				</p>
+				<form
+					class="grid grid-cols-1 md:grid-cols-2 gap-4"
+					onsubmit={(e) => {
+						e.preventDefault();
+						void submitAutomationCredentials();
+					}}
+				>
+					<div class="md:col-span-2">
+						<label for="auto-lapi-url" class="text-sm font-medium text-secondary block mb-1">
+							LAPI URL
+						</label>
+						<input
+							id="auto-lapi-url"
+							type="text"
+							bind:value={credsForm.lapiUrl}
+							placeholder="http://127.0.0.1:8080/"
+							autocomplete="off"
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+						/>
+					</div>
+					<div>
+						<label for="auto-machine-id" class="text-sm font-medium text-secondary block mb-1">
+							Machine ID
+						</label>
+						<input
+							id="auto-machine-id"
+							type="text"
+							bind:value={credsForm.machineId}
+							placeholder="arenet-writer"
+							autocomplete="off"
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+						/>
+					</div>
+					<div>
+						<label for="auto-password" class="text-sm font-medium text-secondary block mb-1">
+							Password
+						</label>
+						<input
+							id="auto-password"
+							type="password"
+							autocomplete="off"
+							bind:value={credsForm.password}
+							placeholder={automationCreds.configured ? '••• set (leave blank to keep)' : ''}
+							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+						/>
+					</div>
+					{#if credsFormError}
+						<p class="text-sm text-down md:col-span-2" role="alert">{credsFormError}</p>
+					{/if}
+					<div class="md:col-span-2 flex justify-end">
+						<Button type="submit" disabled={credsSubmitting}>
+							{credsSubmitting ? 'Saving…' : 'Save credentials'}
+						</Button>
+					</div>
+				</form>
+				<p class="text-xs text-muted mt-2">
+					Submit with all three fields blank to erase the stored credentials and disable the auto-classify writer (operator may keep rules configured for a future re-enable).
+				</p>
+			</section>
+
+			<!-- Per-category rule toggles -->
+			<section>
+				<h3 class="text-base font-medium mb-2">Trigger rules</h3>
+				<p class="text-xs text-muted mb-3">
+					Each category is disabled by default. When enabled, Arenet bans a source IP after <em>threshold</em> events in <em>window</em>, for <em>duration</em>, with a <em>cooldown</em> after an operator unban that suppresses re-ban for that long.
+				</p>
+				<form
+					onsubmit={(e) => {
+						e.preventDefault();
+						void submitAutomationRules();
+					}}
+				>
+					<div class="overflow-x-auto">
+						<table class="w-full text-sm">
+							<thead>
+								<tr class="text-left text-xs text-secondary uppercase">
+									<th class="py-2 pr-3">Category</th>
+									<th class="py-2 px-2">Enabled</th>
+									<th class="py-2 px-2">Threshold</th>
+									<th class="py-2 px-2">Window</th>
+									<th class="py-2 px-2">Duration</th>
+									<th class="py-2 px-2">Cooldown</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each AUTOMATION_SOURCES as src (src)}
+									<tr class="border-t border-border-subtle">
+										<td class="py-2 pr-3 font-mono">{AUTOMATION_SOURCE_LABELS[src]}</td>
+										<td class="py-2 px-2">
+											<input
+												type="checkbox"
+												checked={getRule(src).enabled}
+												onchange={(e) =>
+													setRuleField(src, 'enabled', (e.target as HTMLInputElement).checked)}
+												aria-label={`Enable ${AUTOMATION_SOURCE_LABELS[src]}`}
+											/>
+										</td>
+										<td class="py-2 px-2">
+											<input
+												type="number"
+												min="1"
+												value={getRule(src).threshold}
+												oninput={(e) =>
+													setRuleField(src, 'threshold', Number((e.target as HTMLInputElement).value))}
+												class="w-16 bg-surface border border-border-default rounded-md px-2 py-1 text-sm font-mono"
+												aria-label={`Threshold for ${AUTOMATION_SOURCE_LABELS[src]}`}
+											/>
+										</td>
+										<td class="py-2 px-2">
+											<input
+												type="text"
+												value={nsToHuman(getRule(src).window_ns)}
+												onchange={(e) =>
+													setRuleField(src, 'window_ns', humanToNs((e.target as HTMLInputElement).value))}
+												placeholder="60s"
+												class="w-20 bg-surface border border-border-default rounded-md px-2 py-1 text-sm font-mono"
+												aria-label={`Window for ${AUTOMATION_SOURCE_LABELS[src]}`}
+											/>
+										</td>
+										<td class="py-2 px-2">
+											<input
+												type="text"
+												value={nsToHuman(getRule(src).duration_ns)}
+												onchange={(e) =>
+													setRuleField(src, 'duration_ns', humanToNs((e.target as HTMLInputElement).value))}
+												placeholder="4h"
+												class="w-20 bg-surface border border-border-default rounded-md px-2 py-1 text-sm font-mono"
+												aria-label={`Duration for ${AUTOMATION_SOURCE_LABELS[src]}`}
+											/>
+										</td>
+										<td class="py-2 px-2">
+											<input
+												type="text"
+												value={nsToHuman(getRule(src).cooldown_ns)}
+												onchange={(e) =>
+													setRuleField(src, 'cooldown_ns', humanToNs((e.target as HTMLInputElement).value))}
+												placeholder="24h"
+												class="w-20 bg-surface border border-border-default rounded-md px-2 py-1 text-sm font-mono"
+												aria-label={`Cooldown for ${AUTOMATION_SOURCE_LABELS[src]}`}
+											/>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					{#if rulesFormError}
+						<p class="text-sm text-down mt-3" role="alert">{rulesFormError}</p>
+					{/if}
+					<div class="flex justify-end mt-4">
+						<Button type="submit" disabled={rulesSubmitting}>
+							{rulesSubmitting ? 'Saving…' : 'Save rules'}
+						</Button>
+					</div>
+				</form>
+				<p class="text-xs text-muted mt-2">
+					Cooldown defaults reflect category mistake-distribution: AUTH 7 days (operator unbans typically reflect real users), WAF SQLi/RCE/XSS/LFI 24 hours (suspected false positives), PROTOCOL/OTHER/Throttle 4 hours (maintenance-action unbans). Tune per-row.
+				</p>
+			</section>
 		</Card>
 	</div>
 
