@@ -139,9 +139,31 @@ export interface Route {
 	/**
 	 * Step J.4 — ACME challenge type. The backend normalises the
 	 * pre-J.4 storage zero value "" to "http-01" before serialising,
-	 * so callers always see one of the two enum values on the wire.
+	 * so callers always see one of the enum values on the wire.
+	 * Step O.1 adds "inherited" for routes covered by a managed-
+	 * domain wildcard; the frontend hides the ACME selector and
+	 * shows an inheritance badge instead.
 	 */
 	acmeChallenge: ACMEChallenge;
+	/**
+	 * Step O.1 — per-route opt-out from a covering managed-domain
+	 * wildcard (spec D1.B). When true on a covered route, the route
+	 * emits its own per-route ACME cert alongside the wildcard.
+	 * Omitted on the wire for pre-O routes (`omitempty` on the Go
+	 * side); default false.
+	 */
+	useDedicatedCert?: boolean;
+	/**
+	 * Step O.3 — derived field telling the operator which TLS policy
+	 * actually serves this route's cert (spec AC #4). One of:
+	 *   - "managed-domain:<apex>"
+	 *   - "per-route-acme:dns-01"
+	 *   - "per-route-acme:http-01"
+	 *   - "per-route-internal"
+	 * Empty / omitted for routes without TLS (the dashboard hides
+	 * the badge in that case).
+	 */
+	effectiveCertSource?: string;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -150,9 +172,10 @@ export interface Route {
  * Step J.4 — per-route ACME challenge type. "http-01" is the
  * default (and the pre-J.4 behaviour). "dns-01" is required for
  * wildcard hosts and depends on a configured DNS provider in
- * Settings.
+ * Settings. Step O.1 adds "inherited" for routes covered by a
+ * managed-domain wildcard.
  */
-export type ACMEChallenge = 'http-01' | 'dns-01';
+export type ACMEChallenge = 'http-01' | 'dns-01' | 'inherited';
 
 /**
  * Step K.1 — per-route auth mode enum. See Route.authMode for
@@ -327,9 +350,21 @@ export interface RouteRequest {
 	 * Step J.4 — ACME challenge type. Empty string on POST/PUT is
 	 * normalised by the backend to "http-01" (no preserve-on-omit
 	 * semantic — the value carries no secret and is naturally
-	 * supplied on every form submit).
+	 * supplied on every form submit). The backend (O.3) may
+	 * rewrite the value to "inherited" if the host is covered by
+	 * a managed domain AND useDedicatedCert is false; the
+	 * frontend doesn't send "inherited" directly.
 	 */
 	acmeChallenge: ACMEChallenge | '';
+	/**
+	 * Step O.1 — opt-out from a covering managed-domain wildcard
+	 * (spec D1.B). Default false. Omitting the field on the wire
+	 * is equivalent to false. When true on a route whose host is
+	 * covered by a managed domain, the route emits its own
+	 * per-route ACME cert alongside the wildcard. Sending true on
+	 * an uncovered route is rejected by the backend with 400.
+	 */
+	useDedicatedCert?: boolean;
 }
 
 /**
@@ -374,6 +409,79 @@ export const OVH_ENDPOINTS: readonly string[] = [
 	'soyoustart-eu',
 	'soyoustart-ca'
 ] as const;
+
+/**
+ * Step O.1 — managed-domain declaration. One row per apex; the
+ * caddymgr emits ONE wildcard TLS policy covering every route
+ * whose host is `<single-label>.<apex>` (plus the bare apex
+ * when `includeApex` is true, per spec D2.C).
+ *
+ * The `provider` enum value space is currently {"ovh"} (D3.B
+ * forward-compat); future Cloudflare / Route53 additions are
+ * additive without migration.
+ */
+export interface ManagedDomain {
+	apex: string;
+	includeApex: boolean;
+	provider: ManagedDomainProvider;
+}
+
+/**
+ * Step O.1 — POST /api/v1/settings/managed-domains body shape.
+ * `includeApex` is optional on the wire (the backend defaults
+ * to `true` per spec D2.C when the field is omitted);
+ * `provider` defaults to "ovh" when omitted.
+ */
+export interface ManagedDomainRequest {
+	apex: string;
+	includeApex?: boolean;
+	provider?: ManagedDomainProvider;
+}
+
+/**
+ * Step O.1 — managed-domain provider enum. v1.2 value space is
+ * {"ovh"}; the type is open-ended (`string` widened via the
+ * union below) so future Cloudflare / Route53 values don't
+ * require a frontend type rebuild at the same time as the
+ * backend enum extension.
+ */
+export type ManagedDomainProvider = 'ovh';
+
+/**
+ * Step O.3 — GET /api/v1/settings/managed-domains envelope.
+ * Wrapping in `{ domains: [] }` rather than returning a bare
+ * array leaves room for future top-level fields (e.g. a
+ * `disabled` flag for AC #13 carry-forward) without breaking
+ * the wire contract.
+ */
+export interface ManagedDomainsListResponse {
+	domains: ManagedDomain[];
+}
+
+/**
+ * Step O.3 — DELETE /api/v1/settings/managed-domains/{apex}
+ * response shape. The `mutatedRoutes` count tells the frontend
+ * how many covered routes had their ACMEChallenge reverted, so
+ * the post-action toast can surface "N routes reverted to
+ * <revertTo>" honestly. Mirrors the audit event's message.
+ */
+export interface ManagedDomainDeleteResponse {
+	mutatedRoutes: number;
+}
+
+/**
+ * Step O.3 — `revertTo` query parameter value space for
+ * DELETE (AC #21). The operator picks at delete time:
+ *   - "" → covered routes revert to "" (project default, J-era
+ *     fallback → HTTP-01 on next reload).
+ *   - "http-01" → explicit per-route HTTP-01 (same effect as
+ *     "" but the audit + route detail surface a deliberate
+ *     choice).
+ *   - "dns-01" → explicit per-route DNS-01 (requires the DNS
+ *     provider to remain configured; otherwise the route
+ *     serves internal-CA until provider returns).
+ */
+export type ManagedDomainRevertTo = '' | 'http-01' | 'dns-01';
 
 /**
  * Step K.2 — OIDC SSO configuration as returned by GET

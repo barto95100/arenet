@@ -13,6 +13,7 @@
 		ForwardAuthProvider,
 		HealthCheck,
 		LBPolicy,
+		ManagedDomain,
 		Route,
 		RouteRequest,
 		Upstream
@@ -93,6 +94,7 @@
 			responseHeaders: {},
 			wafMode: 'detect',
 			acmeChallenge: 'http-01',
+			useDedicatedCert: false,
 			healthCheck: {
 				enabled: false,
 				uri: '',
@@ -194,6 +196,10 @@
 		// operator may have just made in Settings.
 		void loadDNSProvider();
 		void loadForwardAuthProviders();
+		// Step O.4: refresh managed-domains too — operator may
+		// have just declared a new apex; the form's contextual
+		// inheritance badge needs the up-to-date list.
+		void loadManagedDomainsForRoutes();
 	}
 
 	function openEdit(r: Route) {
@@ -220,7 +226,14 @@
 			requestHeaders: { ...(r.requestHeaders ?? {}) },
 			responseHeaders: { ...(r.responseHeaders ?? {}) },
 			wafMode: r.wafMode,
-			acmeChallenge: r.acmeChallenge,
+			// Step O: "inherited" is a server-derived value the
+			// frontend never sends back; reload it as the J-era
+			// default so the (hidden when covered) selector
+			// has a valid base state if the operator clicks the
+			// useDedicatedCert opt-out toggle.
+			acmeChallenge:
+				r.acmeChallenge === 'inherited' ? 'http-01' : r.acmeChallenge,
+			useDedicatedCert: r.useDedicatedCert ?? false,
 			// Step J.2: the server's HealthCheck is always present
 			// on the wire (no omitempty). The form holds it as-is;
 			// edit-mode shows explicit values (server materialised
@@ -241,6 +254,9 @@
 		basicAuthPasswordSet = r.basicAuth?.passwordSet ?? false;
 		void loadDNSProvider();
 		void loadForwardAuthProviders();
+		// Step O.4: refresh managed-domains snapshot — see comment
+		// on the create-form openCreate path.
+		void loadManagedDomainsForRoutes();
 		// Step J.2 preserve-or-replace: the user has not touched the
 		// HC sub-form yet, so a submit without further interaction
 		// omits the block and triggers the preserve path. Any
@@ -315,6 +331,49 @@
 		}
 	}
 
+	// Step O.4 — managed-domains snapshot, loaded on mount + on
+	// form open (same cadence as the DNS provider snapshot). Used
+	// to drive (a) the route-list `effectiveCertSource` badge
+	// already populated server-side and (b) the form's contextual
+	// "host is covered by *.<apex>" hint + useDedicatedCert toggle.
+	let managedDomains = $state<ManagedDomain[]>([]);
+
+	async function loadManagedDomainsForRoutes() {
+		try {
+			const res = await settingsApi.listManagedDomains();
+			managedDomains = res.domains;
+		} catch (_err) {
+			managedDomains = [];
+		}
+	}
+
+	// Pure JS port of caddymgr.IsHostCoveredByManagedDomain (spec
+	// §3.2 + RFC 6125 §6.4.3). Single-label wildcard, case-
+	// insensitive, trailing dot canonicalised. Returns the matching
+	// ManagedDomain or null. Kept in this file rather than a
+	// shared util because it's the only frontend caller for now;
+	// extract when a second caller lands (likely never — server
+	// emits effectiveCertSource directly).
+	function findCoveringManagedDomain(host: string): ManagedDomain | null {
+		if (!host) return null;
+		const h = host.toLowerCase().replace(/\.$/, '');
+		if (h.startsWith('*.')) return null;
+		for (const md of managedDomains) {
+			const apex = md.apex.toLowerCase().replace(/\.$/, '');
+			if (!apex) continue;
+			if (h === apex) {
+				if (md.includeApex) return md;
+				continue;
+			}
+			const suffix = '.' + apex;
+			if (!h.endsWith(suffix)) continue;
+			const prefix = h.slice(0, -suffix.length);
+			if (prefix === '' || prefix.includes('.')) continue;
+			return md;
+		}
+		return null;
+	}
+
 	// (β) bandeau gate: any persisted route is on dns-01 while the
 	// provider is not fully configured. Derived from the loaded
 	// routes + provider snapshot; updates automatically when either
@@ -330,6 +389,16 @@
 	function isWildcardHost(h: string): boolean {
 		return /^\*\.[A-Za-z0-9-.]+$/.test(h.trim());
 	}
+
+	// Step O.4 — derived covering managed domain for the form's
+	// current host. When non-null, the per-route ACME selector is
+	// hidden and an inheritance badge is shown (AC #11). Operator
+	// can opt out via the useDedicatedCert checkbox to fall back
+	// to the J-era per-route ACME path. Wildcard route-hosts
+	// (`*.foo`) are never "covered" — the wildcard IS the cert,
+	// not a consumer of one — so the predicate returns null and
+	// the J-era acmeLockedToDNS01 path takes over.
+	const coveringManagedDomain = $derived(findCoveringManagedDomain(formData.host));
 
 	// Step J.4: when the host or any alias is a wildcard, the
 	// challenge selector is LOCKED to "dns-01" (greyed). Used as
@@ -622,7 +691,12 @@
 	}
 
 	onMount(async () => {
-		await Promise.all([loadRoutes(), loadDNSProvider(), loadForwardAuthProviders()]);
+		await Promise.all([
+			loadRoutes(),
+			loadDNSProvider(),
+			loadForwardAuthProviders(),
+			loadManagedDomainsForRoutes()
+		]);
 	});
 
 	const stats = $derived({
@@ -750,7 +824,31 @@
 				</td>
 				<td class="px-4 py-3">
 					{#if r.tlsEnabled}
-						<Badge variant="tls">TLS</Badge>
+						<div class="flex flex-wrap items-center gap-1">
+							<Badge variant="tls">TLS</Badge>
+							<!-- Step O.4 (AC #4): surface the derived
+							     effectiveCertSource as a compact badge so
+							     the operator sees at a glance which TLS
+							     policy serves this route's cert. The
+							     "managed-domain:<apex>" case is the most
+							     informative since it tells the operator
+							     the route is inheriting a wildcard. -->
+							{#if r.effectiveCertSource?.startsWith('managed-domain:')}
+								<span
+									title={`Inherits wildcard from *.${r.effectiveCertSource.slice('managed-domain:'.length)}`}
+								>
+									<Badge variant="current">wildcard</Badge>
+								</span>
+							{:else if r.effectiveCertSource === 'per-route-acme:dns-01'}
+								<span title="Per-route DNS-01 ACME">
+									<Badge variant="neutral">DNS-01</Badge>
+								</span>
+							{:else if r.effectiveCertSource === 'per-route-internal'}
+								<span title="Internal CA (self-signed)">
+									<Badge variant="neutral">internal</Badge>
+								</span>
+							{/if}
+						</div>
 					{:else}
 						<span class="text-muted">—</span>
 					{/if}
@@ -949,46 +1047,95 @@
 				: 'Enable TLS to use HTTPS redirect.'}
 		/>
 
-		<!-- Step J.4: ACME challenge selector. Visible only when TLS
-		     is on. Locked to "dns-01" when host or any alias is a
-		     wildcard (the only ACME challenge that can issue
-		     wildcard certs). When dns-01 is selected without a
-		     configured DNS provider, an inline hint points to
-		     /settings. -->
+		<!-- Step J.4 + O.4: ACME challenge selector. Visible only
+		     when TLS is on. Locked to "dns-01" when host or any
+		     alias is a wildcard. Step O.4 (AC #11 + #12): when the
+		     host is covered by a managed domain AND the operator
+		     hasn't opted out via useDedicatedCert, the selector
+		     hides entirely and an inheritance badge takes its
+		     place. When covered + opted out, the selector returns
+		     and the operator picks http-01/dns-01 like J. -->
 		{#if formData.tlsEnabled}
-			<div>
-				<label
-					for="route-acme-challenge"
-					class="text-sm font-medium text-secondary block mb-1"
-				>
-					ACME challenge
-				</label>
-				<select
-					id="route-acme-challenge"
-					bind:value={formData.acmeChallenge}
-					disabled={acmeLockedToDNS01}
-					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-60 disabled:cursor-not-allowed"
-				>
-					<option value="http-01">HTTP-01 (default, port 80)</option>
-					<option value="dns-01">DNS-01 (required for wildcards)</option>
-				</select>
-				{#if acmeLockedToDNS01}
+			{#if coveringManagedDomain && !formData.useDedicatedCert}
+				<!-- AC #11: covered + inheriting. Show the wildcard
+				     badge + the opt-out toggle. The selector is
+				     gone — the wildcard cert serves this route. -->
+				<div>
+					<span class="text-sm font-medium text-secondary block mb-1"
+						>Certificate</span
+					>
+					<div
+						class="rounded border border-info/40 bg-info/10 px-3 py-2 text-sm"
+					>
+						<span class="font-medium">Inherits wildcard from</span>
+						<code class="font-mono">*.{coveringManagedDomain.apex}</code>
+						<span class="text-muted">
+							(managed via <a href="/settings" class="text-cyan hover:underline"
+								>SSL / Certificates</a
+							>)
+						</span>
+					</div>
+					<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
+						<input type="checkbox" bind:checked={formData.useDedicatedCert} />
+						Use a dedicated cert for this route (opt out of the wildcard)
+					</label>
 					<p class="text-xs text-muted mt-1">
-						Wildcard hosts require DNS-01.
+						Use this for routes that need a separate key (e.g. payments,
+						staging) — the route will request its own ACME cert alongside
+						the wildcard.
 					</p>
-				{:else if formData.acmeChallenge === 'dns-01' && (!dnsProvider || !dnsProvider.configured)}
-					<p class="text-xs text-down mt-1">
-						DNS-01 requires a configured DNS provider —
-						<a href="/settings" class="text-cyan hover:underline">configure it under Settings</a>.
-					</p>
-				{:else}
-					<p class="text-xs text-muted mt-1">
-						HTTP-01 proves control via port 80. DNS-01 proves it
-						via a `_acme-challenge` TXT record and is the only
-						option for wildcard certs.
-					</p>
-				{/if}
-			</div>
+				</div>
+			{:else}
+				<div>
+					<label
+						for="route-acme-challenge"
+						class="text-sm font-medium text-secondary block mb-1"
+					>
+						ACME challenge
+					</label>
+					<select
+						id="route-acme-challenge"
+						bind:value={formData.acmeChallenge}
+						disabled={acmeLockedToDNS01}
+						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-60 disabled:cursor-not-allowed"
+					>
+						<option value="http-01">HTTP-01 (default, port 80)</option>
+						<option value="dns-01">DNS-01 (required for wildcards)</option>
+					</select>
+					{#if coveringManagedDomain && formData.useDedicatedCert}
+						<!-- AC #11 opt-out path: show the per-route
+						     selector AND the toggle (checked) so the
+						     operator can flip back to inheritance. -->
+						<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
+							<input
+								type="checkbox"
+								bind:checked={formData.useDedicatedCert}
+							/>
+							Use a dedicated cert (inherits <code class="font-mono"
+								>*.{coveringManagedDomain.apex}</code
+							> when unchecked)
+						</label>
+					{/if}
+					{#if acmeLockedToDNS01}
+						<p class="text-xs text-muted mt-1">
+							Wildcard hosts require DNS-01.
+						</p>
+					{:else if formData.acmeChallenge === 'dns-01' && (!dnsProvider || !dnsProvider.configured)}
+						<p class="text-xs text-down mt-1">
+							DNS-01 requires a configured DNS provider —
+							<a href="/settings" class="text-cyan hover:underline"
+								>configure it under Settings</a
+							>.
+						</p>
+					{:else}
+						<p class="text-xs text-muted mt-1">
+							HTTP-01 proves control via port 80. DNS-01 proves it
+							via a `_acme-challenge` TXT record and is the only
+							option for wildcard certs.
+						</p>
+					{/if}
+				</div>
+			{/if}
 		{/if}
 
 		<!-- Step K.1 — per-route auth: radio group (none / basic /

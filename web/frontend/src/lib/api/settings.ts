@@ -14,6 +14,11 @@ import type {
 	DNSProviderOVHRequest,
 	ForwardAuthProvider,
 	ForwardAuthProviderRequest,
+	ManagedDomain,
+	ManagedDomainDeleteResponse,
+	ManagedDomainRequest,
+	ManagedDomainRevertTo,
+	ManagedDomainsListResponse,
 	OIDCAllowedIdentity,
 	OIDCAllowlistAddRequest,
 	OIDCConfig,
@@ -48,6 +53,26 @@ export const settingsApi = {
 		),
 	deleteForwardAuthProvider: (name: string): Promise<void> =>
 		request<void>('DELETE', `/settings/forward-auth/providers/${encodeURIComponent(name)}`),
+
+	// Step O.3 — managed-domain (wildcard certificate) CRUD.
+	// Viewer-accessible GET; admin-only POST + DELETE. The
+	// DELETE endpoint accepts an explicit `revertTo` query
+	// parameter so the operator chooses the post-revert
+	// ACMEChallenge value for the covered routes (AC #21).
+	listManagedDomains: (): Promise<ManagedDomainsListResponse> =>
+		request<ManagedDomainsListResponse>('GET', '/settings/managed-domains'),
+	createManagedDomain: (r: ManagedDomainRequest): Promise<ManagedDomain> =>
+		request<ManagedDomain>('POST', '/settings/managed-domains', r),
+	deleteManagedDomain: (
+		apex: string,
+		revertTo: ManagedDomainRevertTo
+	): Promise<ManagedDomainDeleteResponse> => {
+		const qs = revertTo ? `?revertTo=${encodeURIComponent(revertTo)}` : '';
+		return request<ManagedDomainDeleteResponse>(
+			'DELETE',
+			`/settings/managed-domains/${encodeURIComponent(apex)}${qs}`
+		);
+	},
 
 	// Step K.2 — OIDC config (single row, "default" key on the
 	// backend). PUT preserves the clientSecret when empty (J.4
