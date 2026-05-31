@@ -3,104 +3,167 @@
  * Copyright (C) 2026  Ludovic Ramos
  * Licensed under the GNU AGPL v3 or later. See LICENSE.
  *
- * Step F design tokens — single source of truth for every visual
- * constant (color, spacing, radius, shadow, motion, typography).
+ * Design tokens — single source of truth for every visual constant
+ * (color, spacing, radius, shadow, motion, typography).
  *
- * Tokens are role-named, not hue-named: a component reads
- * `--bg-elevated` and does not care whether it's #11161f (dark)
- * or #ffffff (light). The swap happens on `<html data-theme>`.
+ * Step R.1 migration (2026-06-01): primary palette migrated from HEX
+ * to OKLCH per the docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html
+ * mock. Role-names from Step F (--bg-base, --text-primary, --accent-cyan,
+ * etc.) are preserved so 90+ existing component references stay valid
+ * during the R.2-R.4 chrome + per-page migration; their VALUES are swapped
+ * to OKLCH equivalents. The mock's naming (--bg, --surface, --fg, --accent)
+ * is added as a parallel alias group so R.2 can paste mock markup verbatim
+ * without renaming.
  *
- * Spec ref: docs/superpowers/specs/2026-05-19-step-f-design-polish.md §2.
+ * Theme system: D2 outcome = single dark theme in v1.4. The light theme
+ * tokens are kept architecturally symmetric (in OKLCH) so a future step
+ * can re-enable theme switching by flipping the [data-theme="light"]
+ * activation path; no toggle is shipped in v1.4.
+ *
+ * Spec ref: docs/superpowers/specs/2026-05-31-step-r-oklch-migration.md §4.1.
+ * Mock ref: docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html:11-44.
  */
 
 /* ------------------------------------------------------------------
  * Dark theme (default + opt-in via [data-theme="dark"])
+ * OKLCH values mirror the mock's :11-44 token block. Role-name mapping:
+ *   mock                       step F role-name (kept)
+ *   --bg            (oklch 15) --bg-base
+ *   --surface       (oklch 19) --bg-elevated
+ *   --surface-2     (oklch 22) --bg-surface
+ *   --surface-hi    (oklch 26) --bg-hover
+ *   --border        (oklch 28) --border-subtle
+ *   --border-hi     (oklch 34) --border-default
+ *   --fg            (oklch 96) --text-primary
+ *   --fg-muted      (oklch 68) --text-secondary
+ *   --fg-dim        (oklch 54) --text-muted
+ *   --accent        (oklch 68 0.21 255) --accent-cyan  [color shift: cyan → purple-blue]
  * ------------------------------------------------------------------ */
 :root,
 [data-theme='dark'] {
 	/* Backgrounds */
-	--bg-base: #0a0e14;
-	--bg-sidebar: #060a10;
-	--bg-elevated: #11161f;
-	--bg-surface: #1a212b;
-	--bg-hover: #1f2733;
+	--bg-base: oklch(15% 0.005 250);
+	--bg-sidebar: oklch(12% 0.005 250);
+	--bg-elevated: oklch(19% 0.006 250);
+	--bg-surface: oklch(22% 0.007 250);
+	--bg-hover: oklch(26% 0.008 250);
 
 	/* Borders */
-	--border-subtle: #1f2733;
-	--border-default: #2a3441;
-	--border-strong: #3a4554;
+	--border-subtle: oklch(28% 0.009 250);
+	--border-default: oklch(34% 0.011 250);
+	--border-strong: oklch(42% 0.014 250);
 
 	/* Text */
-	--text-primary: #e6edf3;
-	--text-secondary: #8b949e;
-	--text-muted: #4a5568;
-	--text-inverse: #0a0e14;
+	--text-primary: oklch(96% 0.005 250);
+	--text-secondary: oklch(68% 0.012 250);
+	--text-muted: oklch(54% 0.011 250);
+	--text-inverse: oklch(15% 0.005 250);
 
-	/* Signature (cyan accent) */
-	--accent-cyan: #00d9ff;
-	--accent-cyan-d: #00a8c7;
+	/* Signature accent — Step R shift from cyan (#00d9ff) to purple-blue
+	 * (oklch 68% 0.21 255). The old --accent-cyan name is preserved so
+	 * existing components keep rendering; the hue is what changes. */
+	--accent-cyan: oklch(68% 0.21 255);
+	--accent-cyan-d: oklch(62% 0.22 255);
 
-	/* Status */
-	--status-up: #00ff88;
-	--status-warn: #ffaa00;
-	--status-down: #ff4757;
-	--status-info: #a78bfa;
-	--status-meta: #94a3b8;
+	/* Status — OKLCH equivalents of the mock's --ok/--warn/--bad/--info. */
+	--status-up: oklch(72% 0.16 150);
+	--status-warn: oklch(80% 0.14 85);
+	--status-down: oklch(66% 0.20 25);
+	--status-info: oklch(72% 0.12 230);
+	--status-meta: oklch(62% 0.012 250);
 
-	/* Shadows */
+	/* Shadows — unchanged from Step F. Pure-black RGBA on dark surfaces
+	 * looks correct regardless of the underlying hue shift. */
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
 	--shadow-md: 0 4px 8px rgba(0, 0, 0, 0.5);
 	--shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.6);
-	--shadow-glow-cyan: 0 0 16px rgba(0, 217, 255, 0.4);
-	--shadow-glow-red: 0 0 16px rgba(255, 71, 87, 0.4);
+	--shadow-glow-cyan: 0 0 16px oklch(68% 0.21 255 / 0.4);
+	--shadow-glow-red: 0 0 16px oklch(66% 0.20 25 / 0.4);
 }
 
 /* ------------------------------------------------------------------
- * Light theme
+ * Light theme — symmetric OKLCH values, kept for forward-compat
+ * (D2 outcome: not user-activatable in v1.4 but architecturally
+ * preserved so a future step can re-enable theme switching).
  * ------------------------------------------------------------------ */
 [data-theme='light'] {
 	/* Backgrounds */
-	--bg-base: #fafafa;
-	--bg-sidebar: #f4f4f5;
-	--bg-elevated: #ffffff;
-	--bg-surface: #f8f8f8;
-	--bg-hover: #ececef; /* Slightly darker than --bg-sidebar (#f4f4f5) so hover is visible on sidebar items. */
+	--bg-base: oklch(98% 0.005 250);
+	--bg-sidebar: oklch(95% 0.006 250);
+	--bg-elevated: oklch(100% 0 0);
+	--bg-surface: oklch(96% 0.005 250);
+	--bg-hover: oklch(93% 0.007 250);
 
 	/* Borders */
-	--border-subtle: #e4e4e7;
-	--border-default: #d4d4d8;
-	--border-strong: #a1a1aa;
+	--border-subtle: oklch(90% 0.008 250);
+	--border-default: oklch(84% 0.010 250);
+	--border-strong: oklch(70% 0.014 250);
 
 	/* Text */
-	--text-primary: #18181b;
-	--text-secondary: #52525b;
-	--text-muted: #a1a1aa;
-	--text-inverse: #ffffff;
+	--text-primary: oklch(18% 0.006 250);
+	--text-secondary: oklch(38% 0.010 250);
+	--text-muted: oklch(60% 0.012 250);
+	--text-inverse: oklch(100% 0 0);
 
 	/* Signature */
-	--accent-cyan: #0891b2;
-	--accent-cyan-d: #0e7490;
+	--accent-cyan: oklch(52% 0.18 255);
+	--accent-cyan-d: oklch(46% 0.20 255);
 
 	/* Status */
-	--status-up: #16a34a;
-	--status-warn: #d97706;
-	--status-down: #dc2626;
-	--status-info: #7c3aed;
-	--status-meta: #71717a;
+	--status-up: oklch(55% 0.16 150);
+	--status-warn: oklch(62% 0.16 85);
+	--status-down: oklch(54% 0.20 25);
+	--status-info: oklch(54% 0.16 290);
+	--status-meta: oklch(55% 0.012 250);
 
 	/* Shadows */
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
 	--shadow-md: 0 4px 8px rgba(0, 0, 0, 0.08);
 	--shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.12);
-	--shadow-glow-cyan: 0 0 16px rgba(8, 145, 178, 0.25);
-	--shadow-glow-red: 0 0 16px rgba(220, 38, 38, 0.25);
+	--shadow-glow-cyan: 0 0 16px oklch(52% 0.18 255 / 0.25);
+	--shadow-glow-red: 0 0 16px oklch(54% 0.20 25 / 0.25);
 }
 
 /* ------------------------------------------------------------------
- * Mode-independent tokens (spacing, radii, motion, typography)
+ * Mock-naming aliases — the docs/superpowers/mocks/2026-05-31-step-r-
+ * aesthetic.html mock uses --bg / --surface / --fg / --accent. These
+ * aliases point at the role-name tokens so R.2 (Sidebar + Topbar) and
+ * R.4 (per-page migration) can paste mock markup verbatim without
+ * renaming. Both naming groups resolve to the same OKLCH value.
+ * ------------------------------------------------------------------ */
+:root,
+[data-theme='dark'],
+[data-theme='light'] {
+	--bg: var(--bg-base);
+	--surface: var(--bg-elevated);
+	--surface-2: var(--bg-surface);
+	--surface-hi: var(--bg-hover);
+
+	--border: var(--border-subtle);
+	--border-hi: var(--border-default);
+
+	--fg: var(--text-primary);
+	--fg-muted: var(--text-secondary);
+	--fg-dim: var(--text-muted);
+
+	--accent: var(--accent-cyan);
+}
+
+/* Accent-derived translucent variants — used by the mock's
+ * .nav-item.active background and similar accent-soft surfaces.
+ * Built with color-mix on the accent token so a future hue change
+ * propagates through both --accent-cyan consumers and the soft/line
+ * variants. Chrome 111+, Safari 16.2+, Firefox 113+. */
+:root {
+	--accent-soft: color-mix(in oklch, var(--accent) 14%, transparent);
+	--accent-line: color-mix(in oklch, var(--accent) 45%, transparent);
+}
+
+/* ------------------------------------------------------------------
+ * Mode-independent tokens (spacing, radii, motion, typography, layout)
  * ------------------------------------------------------------------ */
 :root {
-	/* Spacing (4 px ladder, Tailwind-aligned). §2.3 */
+	/* Spacing (4 px ladder, Tailwind-aligned). */
 	--space-1: 4px;
 	--space-2: 8px;
 	--space-3: 12px;
@@ -112,26 +175,35 @@
 	--space-12: 48px;
 	--space-16: 64px;
 
-	/* Radii. §2.4 */
-	--radius-sm: 4px;
-	--radius-md: 6px;
-	--radius-lg: 8px;
+	/* Radii. Mock uses --radius 8px / --radius-sm 6px / --radius-lg 12px;
+	 * Step F established sm 4 / md 6 / lg 8 / xl 12. The two systems
+	 * overlap at 6/8/12; we keep both name-groups as aliases. */
+	--radius-sm: 6px;
+	--radius-md: 8px;
+	--radius-lg: 12px;
 	--radius-xl: 12px;
 	--radius-full: 9999px;
+	/* Mock-naming aliases. */
+	--radius: 8px;
 
-	/* Motion — linear transitions. §2.6
-	 * Springs live in lib/styles/motion.ts (TS, not CSS). */
-	--motion-fast: 100ms cubic-bezier(0.4, 0, 0.2, 1); /* Linear-instant feel — hover, focus */
-	--motion-base: 200ms cubic-bezier(0.4, 0, 0.2, 1); /* Default — most state changes */
-	--motion-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1); /* Deliberate — panels, route changes */
+	/* Layout — sidebar + topbar dimensions from mock :41-42. */
+	--sb-width: 232px;
+	--tb-height: 56px;
 
-	/* Typography. §2.7
-	 * Geist Mono is added in Sub-task 1.3; the stack already lists
-	 * it first so the cascade picks it up the moment the @font-face
-	 * declarations land. JetBrains Mono stays as fallback during
-	 * the migration window. */
+	/* Motion — linear transitions. Springs live in lib/styles/motion.ts. */
+	--motion-fast: 100ms cubic-bezier(0.4, 0, 0.2, 1);
+	--motion-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+	--motion-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
+
+	/* Typography. Mock uses Inter (display + body) and JetBrains Mono.
+	 * Step F also shipped Geist Mono as primary; we keep it first in the
+	 * mono cascade — the mock's font-family chain falls back to JetBrains
+	 * Mono which is also self-hosted (web/frontend/static/fonts/). */
 	--font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-	--font-mono: 'Geist Mono', ui-monospace, 'JetBrains Mono', monospace;
+	--font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+	/* Mock-naming aliases (mock uses --font-display + --font-body). */
+	--font-display: var(--font-sans);
+	--font-body: var(--font-sans);
 
 	--text-xs: 11px;
 	--text-sm: 13px;
@@ -145,61 +217,41 @@
 	 * variant pairs. All mode-independent unless noted.
 	 * ------------------------------------------------------------------ */
 
-	/* Text drawn on top of saturated colored backgrounds (filled
-	 * badges, primary buttons, accent banners). White holds enough
-	 * contrast on both the dark and light accent/status values. */
 	--text-on-color: #ffffff;
 
-	/* Full-surface dim overlays. Sombre uniformly across themes:
-	 * a light-translucent overlay in light theme reads as washed
-	 * out (Linear/Vercel/Notion all keep dark overlays). */
-	--overlay-modal: rgba(10, 14, 20, 0.8); /* Modal backdrop. */
-	--overlay-lock: rgba(10, 14, 20, 0.95); /* LockScreen — more opaque. */
+	--overlay-modal: oklch(15% 0.005 250 / 0.8);
+	--overlay-lock: oklch(15% 0.005 250 / 0.95);
 
-	/* Badge variants — tinted background + saturated border.
-	 * Uses color-mix() so the underlying token follows [data-theme],
-	 * keeping the 15% tint consistent in both modes. Chrome 111+,
-	 * Safari 16.2+, Firefox 113+ — safe for Step F (2026). */
-	--badge-info-bg: color-mix(in srgb, var(--accent-cyan) 15%, transparent);
+	--badge-info-bg: color-mix(in oklch, var(--accent-cyan) 15%, transparent);
 	--badge-info-border: var(--accent-cyan);
 
-	--badge-success-bg: color-mix(in srgb, var(--status-up) 15%, transparent);
+	--badge-success-bg: color-mix(in oklch, var(--status-up) 15%, transparent);
 	--badge-success-border: var(--status-up);
 
-	--badge-warning-bg: color-mix(in srgb, var(--status-warn) 15%, transparent);
+	--badge-warning-bg: color-mix(in oklch, var(--status-warn) 15%, transparent);
 	--badge-warning-border: var(--status-warn);
 
-	--badge-danger-bg: color-mix(in srgb, var(--status-down) 15%, transparent);
+	--badge-danger-bg: color-mix(in oklch, var(--status-down) 15%, transparent);
 	--badge-danger-border: var(--status-down);
 
-	--badge-violet-bg: color-mix(in srgb, var(--status-info) 15%, transparent);
+	--badge-violet-bg: color-mix(in oklch, var(--status-info) 15%, transparent);
 	--badge-violet-border: var(--status-info);
 
-	--badge-meta-bg: color-mix(in srgb, var(--status-meta) 15%, transparent);
+	--badge-meta-bg: color-mix(in oklch, var(--status-meta) 15%, transparent);
 	--badge-meta-border: var(--status-meta);
 
-	/* Strong variants (30% tint) for badges that carry white text
-	 * (--text-on-color). The base @15% works for badges whose text
-	 * is the saturated color itself (Badge.svelte component) but
-	 * isn't legible enough for filled white-text usage like the
-	 * AuditRow category badges — surfaced during Chunk 3 smoke in
-	 * light theme where blank-on-pale-tint dropped below the
-	 * readable contrast threshold. */
-	--badge-info-bg-strong: color-mix(in srgb, var(--accent-cyan) 30%, transparent);
-	--badge-warning-bg-strong: color-mix(in srgb, var(--status-warn) 30%, transparent);
-	--badge-danger-bg-strong: color-mix(in srgb, var(--status-down) 30%, transparent);
-	--badge-violet-bg-strong: color-mix(in srgb, var(--status-info) 30%, transparent);
-	--badge-meta-bg-strong: color-mix(in srgb, var(--status-meta) 30%, transparent);
+	--badge-info-bg-strong: color-mix(in oklch, var(--accent-cyan) 30%, transparent);
+	--badge-warning-bg-strong: color-mix(in oklch, var(--status-warn) 30%, transparent);
+	--badge-danger-bg-strong: color-mix(in oklch, var(--status-down) 30%, transparent);
+	--badge-violet-bg-strong: color-mix(in oklch, var(--status-info) 30%, transparent);
+	--badge-meta-bg-strong: color-mix(in oklch, var(--status-meta) 30%, transparent);
 
-	/* Toast variants — same recipe as badges, slightly stronger
-	 * tint (20%) because toasts are larger surfaces and need to
-	 * read more clearly at a glance. */
-	--toast-success-bg: color-mix(in srgb, var(--status-up) 20%, transparent);
+	--toast-success-bg: color-mix(in oklch, var(--status-up) 20%, transparent);
 	--toast-success-border: var(--status-up);
 
-	--toast-danger-bg: color-mix(in srgb, var(--status-down) 20%, transparent);
+	--toast-danger-bg: color-mix(in oklch, var(--status-down) 20%, transparent);
 	--toast-danger-border: var(--status-down);
 
-	--toast-info-bg: color-mix(in srgb, var(--accent-cyan) 20%, transparent);
+	--toast-info-bg: color-mix(in oklch, var(--accent-cyan) 20%, transparent);
 	--toast-info-border: var(--accent-cyan);
 }

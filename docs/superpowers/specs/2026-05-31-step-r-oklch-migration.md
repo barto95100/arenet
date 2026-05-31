@@ -1,6 +1,6 @@
 # Step R — OKLCH visual migration + sidebar/topbar refonte + IA reorg
 
-**Status**: FROZEN 2026-05-31 — 7 decisions arbitrated (D1=A, D2=A, D3=A, D4 re-framed, D5=A, D6=A, D7=A). Rationale-of-record locked.
+**Status**: FROZEN 2026-05-31 — 7 decisions arbitrated (D1=A, D2=A, D3=A, D4 re-framed, D5=A, D6=A, D7=A). Rationale-of-record locked. D8 (sort des sous-routes `/security/decisions` + `/security/[routeId]`) added 2026-06-01 as OPEN; arbitrage required before R.3 commence. R.1 (tokens + fonts) lance en parallèle, orthogonal à D8.
 **Author**: Ludo + Claude.
 **Predecessor**: Step P (auto-classify loop, tagged `v1.3.0-step-p`).
 **Map page deferred** to a later step — Step R does NOT introduce the `/map` route; the sidebar nav item is added but the screen ships in a future iteration.
@@ -85,6 +85,27 @@ All 7 decisions arbitrated 2026-05-31. Each entry: outcome → rationale-of-reco
 **Outcome**: hover/active state animations via CSS `transition` only. No motion library (no `motion-one`, no Framer-equivalent). Svelte's built-in `transition:fade` directive may be used sparingly for page-level transitions if needed.
 
 **Rationale-of-record**: the mock's motion vocabulary is hover-on-button + fade-in-on-load + active-row rail indicator — all expressible in `transition: <prop> <duration> <easing>`. No spring physics, no orchestrated sequences. Adding a motion library adds bundle weight + dependency surface for what amounts to hover states. Future motion needs (coordinated dashboard tile reveal etc.) would justify a follow-up step.
+
+### D8 — Sort des sous-routes `/security/decisions` et `/security/[routeId]` (OPEN — arbitrage avant R.3)
+
+**Question**: la D4 reframing repurpose `/security` (events page) en page de configuration cross-cutting (TLS + headers + auth providers). Mais le code actuel a déjà DEUX sous-routes attachées au namespace `/security/` :
+
+- `/security/decisions` — timeline des decisions CrowdSec + filtres + 4-source attackers union (shipped M.1 + N + Q + P).
+- `/security/[routeId]` — drill-down par-route (sécurité par route — quels events, quelles decisions, quel auth-burst).
+
+Le mock prend `/waf` comme surface WAF-spécifique avec une card compacte "IP — listes" (4 entrées visibles) qui ne reproduit ni la timeline complète des decisions, ni les drill-downs per-route. Prendre le mock littéralement = ces deux sous-routes disparaissent (régression fonctionnelle).
+
+**Options**:
+
+- **(a) Consolider dans `/waf` minimal**. La card "IP — listes" du mock remplace la timeline + les drill-downs. Perte fonctionnelle nette. **REJETÉE** au brief : Step R = aesthetic migration PURE, anti-régression fonctionnelle est l'AC #1.
+- **(b) Routes préservées, invisibles en sidebar, accessibles via "Voir tout" link**. `/security/decisions` et `/security/[routeId]` restent comme aujourd'hui (re-skinnées en OKLCH dans R.4 mais inchangées fonctionnellement). Pas d'entrée sidebar dédiée. Le `/waf` "IP — listes" card a un footer link "Voir toute la timeline →" qui pointe vers `/security/decisions`. La page `/routes` détail-row a un link "Sécurité de cette route →" qui pointe vers `/security/[routeId]`. Coût: ~zéro re-routing (les routes existent déjà, on rajoute deux links). Pas de perte.
+- **(c) Sub-routes sous `/waf` (`/waf/decisions`, `/waf/route/[id]`)** OU restent sous `/security/` avec sub-nav interne (tabs ou breadcrumb-secondaire). Forte préservation IA, "tout ce qui est WAF est sous /waf" comme principe. Coût: re-routing des deux sous-routes (déplacement de `web/frontend/src/routes/security/decisions/` → `web/frontend/src/routes/waf/decisions/` etc.) + breaking changes sur les liens internes.
+
+**Reco**: **(b)**. Zéro régression fonctionnelle (alignement AC #1), zéro re-routing, coût ~deux liens à ajouter. Les sous-routes restent organisées sous `/security/` parce que c'est le namespace que M+N+Q+P utilisent dans leur code (storage layer, audit, REST handlers `/api/v1/security/*` etc.) — re-router le frontend sans toucher le backend force une dissociation namespace-URL qui rend le code plus dur à suivre. L'invisibilité sidebar est OK : les entry points naturels (`/waf` card + `/routes` detail) couvrent l'accès opérationnel.
+
+Si (c) est préféré pour des raisons IA fortes ("tout WAF sous /waf"), version pragmatique : déplacer SEULEMENT la timeline (`/security/decisions` → `/waf/decisions`) mais garder le drill-down per-route sous `/security/[routeId]` parce qu'il aggrège auth-burst + throttle + WAF ensemble (pas un drill-down WAF-only). Moitié-(c) qui évite la dissociation backend/frontend la plus grossière.
+
+**Arbitrage**: à acter avant R.3 commence. R.1 (tokens + fonts) est orthogonal et peut démarrer en parallèle.
 
 ---
 

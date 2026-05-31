@@ -88,6 +88,10 @@ body {
 	background: var(--bg-base);
 	color: var(--text-primary);
 	font-family: var(--font-sans);
+	/* Step R AC #10 — tabular-nums load-bearing for KPI grid alignment
+	 * (mock's .kpi-val + .delta + metric stats rely on monospaced
+	 * digit widths even within proportional Inter). */
+	font-variant-numeric: tabular-nums;
 	min-height: 100vh;
 	/* Theme swap transition (§10.2 — body background+color animate;
 	 * the [data-theme] attribute change itself is instant). */
