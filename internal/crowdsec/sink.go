@@ -120,6 +120,14 @@ type Sink struct {
 
 	mu      sync.Mutex
 	pending []Decision
+
+	// Step P.2 — opt-in tombstone fanout. The auto-classify
+	// trigger engine registers a listener via
+	// SetTombstoneListener to drive its operator-cooldown
+	// LRU (spec D6.A). nil = no fanout, AC #21 (Step N
+	// read-side unchanged) preserved.
+	tombstoneListenerMu sync.RWMutex
+	tombstoneListener   func(uuid string)
 }
 
 // sinkOp is the discriminated union pushed onto the ingress
@@ -296,15 +304,45 @@ func (s *Sink) absorbEmit(d Decision) {
 func (s *Sink) absorbTombstone(uuid string) {
 	s.lru.forget(uuid)
 	atomic.AddUint64(&s.tombstoneCount, 1)
-	if s.inserter == nil {
-		return
+	if s.inserter != nil {
+		if err := s.inserter.MarkDecisionExpired(context.Background(), uuid); err != nil {
+			s.logger.Error("crowdsec: mark decision expired failed",
+				slog.String("uuid", uuid),
+				slog.String("err", err.Error()),
+			)
+		}
 	}
-	if err := s.inserter.MarkDecisionExpired(context.Background(), uuid); err != nil {
-		s.logger.Error("crowdsec: mark decision expired failed",
-			slog.String("uuid", uuid),
-			slog.String("err", err.Error()),
-		)
+	// Step P.2 — fan out to the auto-classify cooldown LRU
+	// listener if one is registered. Spec D6.A + §3.6. The
+	// listener resolves the UUID to (src_ip, scenario) via
+	// the observability decision_event mirror table. Errors
+	// inside the listener are the listener's responsibility;
+	// we don't surface them here because the original
+	// tombstone-absorb semantic (LRU forget + persistence
+	// mark) is unaffected by listener failures.
+	s.tombstoneListenerMu.RLock()
+	fn := s.tombstoneListener
+	s.tombstoneListenerMu.RUnlock()
+	if fn != nil {
+		fn(uuid)
 	}
+}
+
+// SetTombstoneListener installs (or unregisters via nil) a
+// callback that fires on every successful tombstone absorption.
+// Spec §3.6 (D6.A): the auto-classify trigger engine uses this
+// to drive its operator-cooldown LRU. nil clears the listener
+// (the AC #15 boot-degraded path where no automation is wired
+// returns to zero-cost fanout).
+//
+// AC #21 invariant: the original absorbTombstone path (LRU
+// forget + MarkDecisionExpired) executes regardless of whether
+// a listener is registered. The fanout is purely additive.
+// Pinned by TestSink_AbsorbTombstone_NoListener_Unchanged.
+func (s *Sink) SetTombstoneListener(fn func(uuid string)) {
+	s.tombstoneListenerMu.Lock()
+	s.tombstoneListener = fn
+	s.tombstoneListenerMu.Unlock()
 }
 
 // flush serialises the in-flight buffer and resets it. AC #13:

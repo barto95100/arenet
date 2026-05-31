@@ -460,3 +460,108 @@ func TestSink_RecoversFromPanic(t *testing.T) {
 		t.Fatal("sink Done did not fire — recover may have failed")
 	}
 }
+
+// TestSink_TombstoneListener_FiredOnAbsorb pins spec §3.6 /
+// D6.A: when a tombstone-listener is registered, it fires on
+// every successful absorbTombstone with the decision's UUID.
+// The trigger engine uses this to seed its cooldown LRU.
+func TestSink_TombstoneListener_FiredOnAbsorb(t *testing.T) {
+	rec := &recordingInserter{}
+	s := NewSink(rec, nil, silentLogger(), SinkConfig{
+		FlushInterval:  20 * time.Millisecond,
+		FlushBatchSize: 1000,
+	})
+
+	var (
+		mu        sync.Mutex
+		seenUUIDs []string
+	)
+	s.SetTombstoneListener(func(uuid string) {
+		mu.Lock()
+		seenUUIDs = append(seenUUIDs, uuid)
+		mu.Unlock()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.Run(ctx)
+	s.Emit(Decision{UUID: "u-listener-1", Value: "1.2.3.4", Type: "ban"})
+	time.Sleep(50 * time.Millisecond)
+	s.Tombstone("u-listener-1")
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-s.Done()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seenUUIDs) != 1 {
+		t.Fatalf("listener fired %d times, want 1", len(seenUUIDs))
+	}
+	if seenUUIDs[0] != "u-listener-1" {
+		t.Errorf("listener got uuid=%q, want u-listener-1", seenUUIDs[0])
+	}
+}
+
+// TestSink_AbsorbTombstone_NoListener_Unchanged pins AC #21
+// (Step N read-side unchanged): when no listener is
+// registered, the existing absorbTombstone path
+// (LRU forget + MarkDecisionExpired) executes identically
+// to the pre-P.2 behaviour. No new code path for the
+// no-listener case.
+func TestSink_AbsorbTombstone_NoListener_Unchanged(t *testing.T) {
+	rec := &recordingInserter{}
+	s := NewSink(rec, nil, silentLogger(), SinkConfig{
+		FlushInterval:  20 * time.Millisecond,
+		FlushBatchSize: 1000,
+	})
+	// NO SetTombstoneListener call — fanout is nil.
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.Run(ctx)
+
+	s.Emit(Decision{UUID: "u-no-listener", Value: "1.2.3.4", Type: "ban"})
+	time.Sleep(50 * time.Millisecond)
+	s.Tombstone("u-no-listener")
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-s.Done()
+
+	// Tombstone counter advanced — proves the original
+	// absorbTombstone path ran.
+	if got := s.TombstoneCount(); got != 1 {
+		t.Errorf("TombstoneCount = %d, want 1 (listener=nil must NOT skip the absorb path)", got)
+	}
+	// And the inserter saw the MarkDecisionExpired call —
+	// recorded as a tombstone in the test fake.
+	if rec.tombCount() != 1 {
+		t.Errorf("inserter.tombCount = %d, want 1 (MarkDecisionExpired must still fire)", rec.tombCount())
+	}
+}
+
+// TestSink_TombstoneListener_NilRegistration_DisablesFanout
+// pins the unregister path: SetTombstoneListener(nil)
+// removes the listener. Subsequent tombstones fire only the
+// original absorbTombstone path.
+func TestSink_TombstoneListener_NilRegistration_DisablesFanout(t *testing.T) {
+	rec := &recordingInserter{}
+	s := NewSink(rec, nil, silentLogger(), SinkConfig{
+		FlushInterval:  20 * time.Millisecond,
+		FlushBatchSize: 1000,
+	})
+
+	var calls atomic.Int32
+	s.SetTombstoneListener(func(_ string) { calls.Add(1) })
+	// Now unregister.
+	s.SetTombstoneListener(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.Run(ctx)
+	s.Emit(Decision{UUID: "u-unreg", Value: "1.2.3.4", Type: "ban"})
+	time.Sleep(50 * time.Millisecond)
+	s.Tombstone("u-unreg")
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-s.Done()
+
+	if calls.Load() != 0 {
+		t.Errorf("listener calls = %d, want 0 after unregister", calls.Load())
+	}
+}
