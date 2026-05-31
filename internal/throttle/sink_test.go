@@ -231,6 +231,48 @@ func TestSink_CleanShutdownFlushesPending(t *testing.T) {
 	}
 }
 
+// TestSink_CrashLossBound_FlushedEventsPersist_PendingLost is the
+// throttle-side companion of the L+M+Q+N+O crash-recovery
+// consolidation pinned in backlog #M.5-3. See the WAF sink
+// test of the same name for the full rationale; this is the
+// throttle_event-table equivalent (Step Q.1 sink shape).
+func TestSink_CrashLossBound_FlushedEventsPersist_PendingLost(t *testing.T) {
+	rec := &recordingInserter{}
+	s := NewSink(rec, nil, silentLogger(), SinkConfig{
+		FlushInterval:  10 * time.Second,
+		FlushBatchSize: 3,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.Run(ctx)
+
+	// 7 distinct IPs → LRU passes all through; tier=1 fixed.
+	for i := 0; i < 7; i++ {
+		s.Emit(Event{SrcIP: "ip-crash-" + strconv.Itoa(i), Tier: 1, Ts: time.Now()})
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && rec.batchCount() < 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := rec.totalEvents(); got != 6 {
+		t.Fatalf("pre-crash disk state: persisted=%d, want 6 (2 full batches)", got)
+	}
+	if got := rec.batchCount(); got != 2 {
+		t.Fatalf("pre-crash batch count: %d, want 2", got)
+	}
+	if got := s.FlushedEvents(); got != 6 {
+		t.Fatalf("FlushedEvents = %d, want 6", got)
+	}
+
+	// The 7th event is in pending — would be lost on SIGKILL.
+
+	cancel()
+	<-s.Done()
+	if got := rec.totalEvents(); got != 7 {
+		t.Fatalf("post-cancel disk state: persisted=%d, want 7 (SIGTERM-path recovery)", got)
+	}
+}
+
 func TestSink_RecoversFromPanic(t *testing.T) {
 	// AC #13: a panic inside the goroutine MUST be recovered
 	// + logged, sink exits cleanly, no proxy impact. We test

@@ -70,6 +70,22 @@ documented and unit-tested; the live re-validation cost
 for low marginal evidence. Pick up if Step Q's rate-limit
 events work touches the sink shape.
 
+**Status (post-O sweep 2026-05-31).** Resolved at unit level
+across all three event-table sinks. Step Q's throttle sink +
+Step N's decision sink both inherit the same batched-channel-
+flush shape, so the consolidation is now properly L+M+Q+N (O
+adds no new sink). Three new tests landed, identically named
+`TestSink_CrashLossBound_FlushedEventsPersist_PendingLost` in
+`internal/{waf,throttle,crowdsec}/sink_test.go`. Each test
+pins the FLIP SIDE of the existing clean-shutdown contract:
+events flushed pre-crash → on disk; events still in the
+pending slice → lost. The bound is at-most (FlushBatchSize -
+1) events + the unbuffered channel residue.
+
+Live full-restart smoke deliberately NOT added — the live
+infra cost vs unit-test coverage is now well-balanced, and
+the per-sink invariant tests are deterministic + isolated.
+
 ---
 
 ## 2. Closed

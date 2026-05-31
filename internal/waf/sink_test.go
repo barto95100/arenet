@@ -228,6 +228,92 @@ func TestSink_CleanShutdownFlushesPending(t *testing.T) {
 	}
 }
 
+// TestSink_CrashLossBound_FlushedEventsPersist_PendingLost pins
+// the SIGKILL crash semantic per backlog #M.5-3 (consolidated
+// across L+M+Q+N+O). The invariant:
+//
+//   - Events flushed before the crash → durably on disk.
+//   - Events still in the in-memory pending slice or input
+//     channel at crash time → LOST.
+//
+// The bound is: at-most one batch's worth of events
+// (FlushBatchSize - 1, since the Nth event triggers the flush)
+// + whatever sits in the unbuffered input channel.
+//
+// Why this exists (alongside TestSink_BatchedFlushAt and
+// TestSink_CleanShutdownFlushesPending):
+//   - TestSink_BatchedFlushAt asserts that batch fills DO flush.
+//   - TestSink_CleanShutdownFlushesPending asserts that
+//     ctx-cancel flushes the trailing remainder.
+//   - This test asserts the FLIP SIDE: ABSENT ctx-cancel
+//     (i.e. SIGKILL semantic), the remainder is INDEED lost —
+//     the invariant the operator must understand for crash
+//     planning. Pin the bound so a future refactor that adds
+//     a write-ahead log or per-event flush silently shifts
+//     the contract.
+//
+// The companion tests in the throttle + crowdsec sink packages
+// pin the same invariant for the corresponding event types
+// (waf_event / throttle_event / decision_event all share the
+// batched-channel-flush shape).
+func TestSink_CrashLossBound_FlushedEventsPersist_PendingLost(t *testing.T) {
+	rec := &recordingInserter{}
+	s := NewSink(rec, nil, silentLogger(), SinkConfig{
+		FlushInterval:  10 * time.Second, // disable timer flush
+		FlushBatchSize: 3,                // deterministic batch boundary
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.Run(ctx)
+
+	// Emit 7 events with distinct triples (LRU passes them
+	// all through). At FlushBatchSize=3 we expect:
+	//   - 2 batches of 3 → 6 events on disk pre-crash.
+	//   - 1 event still in the pending slice → lost on crash.
+	for i := 0; i < 7; i++ {
+		s.Emit(Event{
+			RouteID: "r",
+			SrcIP:   "ip",
+			RuleID:  "crash-bound-" + string(rune('a'+i)),
+			Ts:      time.Now(),
+		})
+	}
+
+	// Wait for the 2 expected batches to land. Bounded poll
+	// so a slow CI doesn't flake.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && rec.batchCount() < 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// At crash time (BEFORE we cancel), check the disk state.
+	if got := rec.totalEvents(); got != 6 {
+		t.Fatalf("pre-crash disk state: persisted=%d, want 6 (2 full batches)", got)
+	}
+	if got := rec.batchCount(); got != 2 {
+		t.Fatalf("pre-crash batch count: %d, want 2", got)
+	}
+	// FlushedEvents is the sink's own counter; must agree
+	// with the recorder.
+	if got := s.FlushedEvents(); got != 6 {
+		t.Fatalf("FlushedEvents = %d, want 6 (matches rec.totalEvents)", got)
+	}
+
+	// "Crash" simulation: we observe HERE, before cancel,
+	// that the 7th event is in the pending slice, not on
+	// disk. This is the bound — a SIGKILL at this exact
+	// moment loses that event.
+
+	// Clean up so the test exits. The post-cancel flush
+	// is the SIGTERM path already pinned by
+	// TestSink_CleanShutdownFlushesPending; we re-check the
+	// recovered count here for symmetry.
+	cancel()
+	<-s.Done()
+	if got := rec.totalEvents(); got != 7 {
+		t.Fatalf("post-cancel disk state: persisted=%d, want 7 (the 7th event lands on clean shutdown)", got)
+	}
+}
+
 func TestSink_RecoversFromPanic(t *testing.T) {
 	// AC #13: a panic inside the goroutine MUST be recovered
 	// + logged, sink exits cleanly, no proxy impact. We test

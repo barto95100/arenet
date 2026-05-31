@@ -71,6 +71,12 @@ func (r *recordingInserter) tombCount() int {
 	return len(r.tombstones)
 }
 
+func (r *recordingInserter) batchCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.batches)
+}
+
 // failingInserter returns the configured error.
 type failingInserter struct {
 	err         error
@@ -360,6 +366,59 @@ func TestSink_CleanShutdownFlushesPending(t *testing.T) {
 
 	if rec.totalEvents() != 1 {
 		t.Fatalf("clean shutdown lost the in-flight event: persisted=%d", rec.totalEvents())
+	}
+}
+
+// TestSink_CrashLossBound_FlushedEventsPersist_PendingLost is the
+// crowdsec-side companion of the L+M+Q+N+O crash-recovery
+// consolidation pinned in backlog #M.5-3. See the WAF sink
+// test of the same name for the full rationale; this is the
+// decision_event-table equivalent (Step N.2 sink shape).
+//
+// One semantic difference vs WAF / throttle worth noting:
+// crowdsec's sink dedupes BEFORE bump per spec N D4.A (LRU
+// gates the bucket counter), but the persistence path is the
+// same batched-channel-flush shape, so the crash-loss bound
+// is identical. Re-emit-on-restart is the recovery mechanism
+// for crowdsec (LAPI re-sends every active decision on
+// ?startup=true; the next Emit re-stores any in-flight rows
+// lost on crash).
+func TestSink_CrashLossBound_FlushedEventsPersist_PendingLost(t *testing.T) {
+	rec := &recordingInserter{}
+	s := NewSink(rec, nil, silentLogger(), SinkConfig{
+		FlushInterval:  10 * time.Second,
+		FlushBatchSize: 3,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.Run(ctx)
+
+	// 7 distinct UUIDs so the LRU passes all through.
+	for i := 0; i < 7; i++ {
+		s.Emit(Decision{UUID: "u-crash-" + strconv.Itoa(i), Value: "1.2.3.4"})
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && rec.batchCount() < 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := rec.totalEvents(); got != 6 {
+		t.Fatalf("pre-crash disk state: persisted=%d, want 6 (2 full batches)", got)
+	}
+	if got := rec.batchCount(); got != 2 {
+		t.Fatalf("pre-crash batch count: %d, want 2", got)
+	}
+	if got := s.FlushedEvents(); got != 6 {
+		t.Fatalf("FlushedEvents = %d, want 6", got)
+	}
+
+	// The 7th decision is in pending — would be lost on SIGKILL.
+	// LAPI re-emit on restart recovers it (see test
+	// rationale comment above).
+
+	cancel()
+	<-s.Done()
+	if got := rec.totalEvents(); got != 7 {
+		t.Fatalf("post-cancel disk state: persisted=%d, want 7 (SIGTERM-path recovery)", got)
 	}
 }
 
