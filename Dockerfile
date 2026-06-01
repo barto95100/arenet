@@ -78,6 +78,10 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
       -o /out/arenet \
       ./cmd/arenet
 
+# Pre-create the runtime data dir so stage 3 can COPY it into the
+# image with nonroot ownership (named-volume case fix).
+RUN mkdir -p /out/data
+
 # -----------------------------------------------------------------
 # Stage 3 — distroless runtime
 # -----------------------------------------------------------------
@@ -87,6 +91,15 @@ FROM gcr.io/distroless/static-debian12:nonroot
 # binary lives at /usr/local/bin/arenet; the data directory at
 # /var/lib/arenet matches the spec D4 default.
 COPY --from=backend /out/arenet /usr/local/bin/arenet
+
+# Pre-create /var/lib/arenet with nonroot ownership so named
+# volumes inherit the correct ownership on first mount. Without
+# this, Docker creates the dir implicitly via WORKDIR with root
+# ownership, and the named volume becomes root-owned → nonroot
+# (UID 65532) can't write → restart loop with permission denied.
+# Bind mounts require the operator to chown the host dir
+# separately (see docs/install/docker-quickstart.md).
+COPY --from=backend --chown=nonroot:nonroot /out/data /var/lib/arenet
 
 # Data plane ports + admin port. The container EXPOSE is purely
 # informational — Docker doesn't open ports without an explicit

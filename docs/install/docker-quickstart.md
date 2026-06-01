@@ -55,6 +55,23 @@ Arenet's state (routes, users, certs, audit log, observability
 counters). Cold-stop + tar of that volume is the canonical
 backup procedure — see `docs/operations/backup.md`.
 
+**Using a bind mount instead?** If you've modified the compose
+file to use a bind mount (e.g. `./data:/var/lib/arenet` or
+`/home/you/arenet/data:/var/lib/arenet`) for easier backup or
+inspection, you must pre-create the host directory with the
+correct ownership *before* the first `docker compose up`:
+
+```bash
+mkdir -p ./data
+sudo chown -R 65532:65532 ./data
+```
+
+The container runs as user 65532 (distroless `nonroot`); without
+this chown the container can't write to your bind mount and will
+restart-loop with `permission denied`. Named volumes don't need
+this step — Docker inherits the correct ownership from the image
+automatically.
+
 ## 4. Get the setup token
 
 On first boot Arenet generates a one-shot setup token. Tail the
