@@ -26,6 +26,7 @@ import (
 
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/backup"
+	appconfig "github.com/barto95100/arenet/internal/config"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -45,7 +46,7 @@ import (
 // 0o600 (owner-readable only) and a warning is printed to stderr
 // BEFORE the file is written. The 0o600 protection is enforced by
 // Arenet at write time — we don't rely on the operator.
-func runExportCLI(ctx context.Context, logger *slog.Logger, cfg config) error {
+func runExportCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) error {
 	dbPath := dbPathForCLI(cfg)
 	store, err := storage.NewStore(dbPath)
 	if err != nil {
@@ -54,7 +55,7 @@ func runExportCLI(ctx context.Context, logger *slog.Logger, cfg config) error {
 	defer func() { _ = store.Close() }()
 	users := auth.NewUserStore(store.DB())
 
-	if cfg.includeSecrets {
+	if cfg.IncludeSecrets {
 		fmt.Fprintln(os.Stderr,
 			"WARNING: --include-secrets requested. The exported file will\n"+
 				"contain PLAINTEXT secrets (admin password hashes, OVH API\n"+
@@ -64,7 +65,7 @@ func runExportCLI(ctx context.Context, logger *slog.Logger, cfg config) error {
 				"at rest (age / GPG / vault).")
 	}
 
-	snap, err := backup.Export(ctx, store, users, version, cfg.includeSecrets)
+	snap, err := backup.Export(ctx, store, users, version, cfg.IncludeSecrets)
 	if err != nil {
 		return fmt.Errorf("export: %w", err)
 	}
@@ -74,18 +75,18 @@ func runExportCLI(ctx context.Context, logger *slog.Logger, cfg config) error {
 	}
 
 	mode := os.FileMode(0o644)
-	if cfg.includeSecrets {
+	if cfg.IncludeSecrets {
 		// Spec §5.3 §B clarification: 0o600 on the write path
 		// when secrets are in the file. Arenet enforces, not the
 		// operator.
 		mode = 0o600
 	}
-	if err := os.WriteFile(cfg.exportPath, body, mode); err != nil {
-		return fmt.Errorf("write %s: %w", cfg.exportPath, err)
+	if err := os.WriteFile(cfg.ExportPath, body, mode); err != nil {
+		return fmt.Errorf("write %s: %w", cfg.ExportPath, err)
 	}
 	logger.Info("config exported",
-		"path", cfg.exportPath,
-		"secrets_included", cfg.includeSecrets,
+		"path", cfg.ExportPath,
+		"secrets_included", cfg.IncludeSecrets,
 		"routes", len(snap.Routes),
 		"users", len(snap.Users),
 		"dns_providers", len(snap.DNSProviders),
@@ -106,14 +107,14 @@ func runExportCLI(ctx context.Context, logger *slog.Logger, cfg config) error {
 // The boot WARN about incomplete rows is also handled by the
 // SUBSEQUENT normal boot, not this one — when the operator wires
 // the IncompleteRows persistence in J.4's boot WARN pattern.
-func runRestoreCLI(ctx context.Context, logger *slog.Logger, cfg config) error {
-	body, err := os.ReadFile(cfg.restorePath)
+func runRestoreCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) error {
+	body, err := os.ReadFile(cfg.RestorePath)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", cfg.restorePath, err)
+		return fmt.Errorf("read %s: %w", cfg.RestorePath, err)
 	}
 	var snap backup.Snapshot
 	if err := json.Unmarshal(body, &snap); err != nil {
-		return fmt.Errorf("parse %s: %w", cfg.restorePath, err)
+		return fmt.Errorf("parse %s: %w", cfg.RestorePath, err)
 	}
 
 	dbPath := dbPathForCLI(cfg)
@@ -125,8 +126,8 @@ func runRestoreCLI(ctx context.Context, logger *slog.Logger, cfg config) error {
 	users := auth.NewUserStore(store.DB())
 
 	report, err := backup.Import(ctx, store, users, &snap, backup.ImportOptions{
-		AllowIncompleteRestore: cfg.allowIncompleteRestore,
-		AllowEmptyUsers:        cfg.allowEmptyUsers,
+		AllowIncompleteRestore: cfg.AllowIncompleteRestore,
+		AllowEmptyUsers:        cfg.AllowEmptyUsers,
 	})
 	if err != nil {
 		// Print the full actionable message to stderr — the
@@ -138,7 +139,7 @@ func runRestoreCLI(ctx context.Context, logger *slog.Logger, cfg config) error {
 	}
 
 	logger.Info("config restored",
-		"path", cfg.restorePath,
+		"path", cfg.RestorePath,
 		"schema_version", report.SchemaVersion,
 		"secrets_included_in_source", report.SecretsIncludedInSource,
 		"allow_incomplete_restore", report.AllowIncompleteRestore,
@@ -165,6 +166,6 @@ func runRestoreCLI(ctx context.Context, logger *slog.Logger, cfg config) error {
 	return nil
 }
 
-func dbPathForCLI(cfg config) string {
-	return filepath.Join(cfg.dataDir, "arenet.db")
+func dbPathForCLI(cfg *appconfig.Config) string {
+	return filepath.Join(cfg.DataDir, "arenet.db")
 }

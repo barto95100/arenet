@@ -60,6 +60,7 @@ import (
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/caddymgr"
+	appconfig "github.com/barto95100/arenet/internal/config"
 	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
@@ -71,63 +72,13 @@ import (
 
 const version = "DEV"
 
-type config struct {
-	adminPort       string
-	dataDir         string
-	dev             bool
-	insertTestRoute bool
-	// Step K.3 — backup / restore flags. When exportPath OR
-	// restorePath is set, run() short-circuits before Caddy
-	// boots: the binary becomes a one-shot CLI tool.
-	exportPath             string
-	restorePath            string
-	includeSecrets         bool
-	allowIncompleteRestore bool
-	allowEmptyUsers        bool
-	// Step S.1 — distroless Docker image healthcheck. Distroless has
-	// no curl/wget; compose / k8s liveness probes need an in-binary
-	// way to probe the admin API. When --healthcheck is set, the
-	// binary becomes a one-shot client: GET <healthcheckURL>, exit
-	// 0 on 2xx, exit 1 otherwise. NEVER starts Caddy or the admin
-	// API. Used as the compose `healthcheck.test` command.
-	healthcheckURL string
-	// Step K.2 dev — when the SPA is served by a separate dev
-	// server (Vite on :5173 typically) the OIDC callback's
-	// in-handler 302 redirects (/routes on success,
-	// /login?error=... on failure) cannot be relative — the
-	// browser would land on :8001/routes which is API-only and
-	// 404s. Setting --ui-origin=http://localhost:5173 makes the
-	// callback emit absolute redirects to the frontend origin.
-	// Empty (prod default) keeps the relative redirects, which
-	// is correct when the static SPA is served by Arenet from
-	// the same origin as the API.
-	uiOrigin string
-}
-
-func parseFlags() config {
-	var cfg config
-	flag.StringVar(&cfg.adminPort, "admin-port", ":8001", "address:port for the admin API (e.g. :8001)")
-	flag.StringVar(&cfg.dataDir, "data-dir", "./data", "directory where Arenet stores its data")
-	flag.BoolVar(&cfg.dev, "dev", false, "enable development mode (verbose logging, no TLS auto-issuance)")
-	flag.BoolVar(&cfg.insertTestRoute, "insert-test-route", false,
-		"insert a test route (test.local -> http://127.0.0.1:9999) before starting Caddy")
-	flag.StringVar(&cfg.exportPath, "export", "",
-		"Step K.3: export the configuration to PATH and exit (default redacts secrets)")
-	flag.StringVar(&cfg.restorePath, "restore", "",
-		"Step K.3: restore the configuration from PATH and exit (before Caddy starts)")
-	flag.BoolVar(&cfg.includeSecrets, "include-secrets", false,
-		"Step K.3: include plaintext secrets in --export output (warning printed to stderr)")
-	flag.BoolVar(&cfg.allowIncompleteRestore, "allow-incomplete-restore", false,
-		"Step K.3: accept --restore inputs whose sentinels cannot be inherited; affected secret fields are cleared")
-	flag.BoolVar(&cfg.allowEmptyUsers, "allow-empty-users", false,
-		"Step K.3: accept --restore inputs with zero users (next boot re-triggers the setup-token flow)")
-	flag.StringVar(&cfg.uiOrigin, "ui-origin", "",
-		"Step K.2 dev: absolute origin of the SPA dev server (e.g. http://localhost:5173); empty in prod (static SPA served by Arenet)")
-	flag.StringVar(&cfg.healthcheckURL, "healthcheck", "",
-		"Step S.1: probe URL (e.g. http://127.0.0.1:8001/healthz) and exit 0 on 2xx, 1 otherwise. Used as the Docker compose healthcheck command since distroless has no curl. Never starts the server.")
-	flag.Parse()
-	return cfg
-}
+// Step S.3 (2026-06-01): the local `type config struct` +
+// parseFlags() were replaced by the centralised internal/config
+// package. The new Load() function implements the spec D5
+// precedence (flag > env > file > default) and is unit-tested
+// independently. main() now calls appconfig.Load(os.Args[1:])
+// and the resulting *appconfig.Config carries the same fields
+// (now exported / PascalCase) consumed by run() below.
 
 func newLogger(dev bool) *slog.Logger {
 	level := slog.LevelInfo
@@ -161,18 +112,18 @@ func ensureTestRoute(ctx context.Context, logger *slog.Logger, store *storage.St
 	return nil
 }
 
-func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
+func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retErr error) {
 	logger.Info("Arenet starting",
 		"version", version,
-		"admin_port", cfg.adminPort,
-		"data_dir", cfg.dataDir,
-		"dev", cfg.dev,
+		"admin_port", cfg.AdminPort,
+		"data_dir", cfg.DataDir,
+		"dev", cfg.Dev,
 	)
 
-	if err := os.MkdirAll(cfg.dataDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return err
 	}
-	dbPath := filepath.Join(cfg.dataDir, "arenet.db")
+	dbPath := filepath.Join(cfg.DataDir, "arenet.db")
 
 	store, err := storage.NewStore(dbPath)
 	if err != nil {
@@ -188,7 +139,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	}()
 	logger.Info("storage opened", "path", dbPath)
 
-	if cfg.insertTestRoute {
+	if cfg.InsertTestRoute {
 		if err := ensureTestRoute(ctx, logger, store); err != nil {
 			return err
 		}
@@ -217,7 +168,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	// already opted into TLS — the operator likely wants expiry
 	// notifications and a `caa` identity tied to a mailbox.
 	acmeEmail := os.Getenv("ARENET_ACME_EMAIL")
-	mgr, err := caddymgr.New(store, logger, metricsRegistry, cfg.dev, acmeEmail)
+	mgr, err := caddymgr.New(store, logger, metricsRegistry, cfg.Dev, acmeEmail)
 	if err != nil {
 		return err
 	}
@@ -298,7 +249,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	// producer never blocks; the retention runner ticks but
 	// finds nothing to do). This uniform shape keeps the wire-up
 	// simple: the ticker always has a valid TickConsumer to feed.
-	obsPath := filepath.Join(cfg.dataDir, "metrics.db")
+	obsPath := filepath.Join(cfg.DataDir, "metrics.db")
 	obsStore, obsErr := observability.Open(ctx, obsPath)
 	if obsErr != nil {
 		logger.Error("observability: metrics DB unavailable — continuing without metrics history (AC #13)",
@@ -550,11 +501,11 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	apiHandler := api.NewHandler(
 		store, mgr, auditStore,
 		userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder,
-		cfg.dev, logger,
+		cfg.Dev, logger,
 	)
-	if cfg.uiOrigin != "" {
-		apiHandler.SetUIOrigin(cfg.uiOrigin)
-		logger.Info("OIDC callback redirects will target SPA origin", "ui_origin", cfg.uiOrigin)
+	if cfg.UIOrigin != "" {
+		apiHandler.SetUIOrigin(cfg.UIOrigin)
+		logger.Info("OIDC callback redirects will target SPA origin", "ui_origin", cfg.UIOrigin)
 	}
 	// Step L L.2 — attach the observability store to the API
 	// handler so /api/v1/metrics/* can serve history.
@@ -623,11 +574,11 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 		logger.Info("automation engine stopped")
 	}()
 
-	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.dev, logger)
-	router := api.NewRouter(apiHandler, cfg.dev, ipExtractor, wsTopologyHandler)
+	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.Dev, logger)
+	router := api.NewRouter(apiHandler, cfg.Dev, ipExtractor, wsTopologyHandler)
 
-	if cfg.dev {
-		router.Get("/", devLandingHandler(cfg.adminPort))
+	if cfg.Dev {
+		router.Get("/", devLandingHandler(cfg.AdminPort))
 	} else {
 		staticFS, ferr := web.StaticFS()
 		if ferr != nil {
@@ -637,7 +588,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	}
 
 	adminSrv := &http.Server{
-		Addr:              cfg.adminPort,
+		Addr:              cfg.AdminPort,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -668,7 +619,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config) (retErr error) {
 	// overrides via ARENET_HTTP_PORT / ARENET_HTTPS_PORT (Step L
 	// backlog #L.5-1). The existing "Caddy started" log line above
 	// is sourced from the same accessor.
-	listenAttrs := []any{"http", mgr.HTTPListen(), "admin_api", cfg.adminPort}
+	listenAttrs := []any{"http", mgr.HTTPListen(), "admin_api", cfg.AdminPort}
 	if httpsActive {
 		listenAttrs = append(listenAttrs, "https", mgr.HTTPSListen())
 	}
@@ -955,8 +906,18 @@ func (a crowdsecInserterAdapter) MarkDecisionExpired(ctx context.Context, uuid s
 }
 
 func main() {
-	cfg := parseFlags()
-	logger := newLogger(cfg.dev)
+	cfg, err := appconfig.Load(os.Args[1:])
+	if err != nil {
+		// --help / -h prints the usage to stderr inside Load
+		// and returns flag.ErrHelp; exit 0 in that case so the
+		// shell doesn't treat a help request as failure.
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fmt.Fprintln(os.Stderr, "arenet: config load failed:", err)
+		os.Exit(2)
+	}
+	logger := newLogger(cfg.Dev)
 	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -968,8 +929,8 @@ func main() {
 	// compose stack runs this) and has zero side-effects beyond
 	// the outbound HTTP probe. Distroless containers use this
 	// because they have no curl/wget.
-	if cfg.healthcheckURL != "" {
-		if err := runHealthcheckCLI(ctx, cfg.healthcheckURL); err != nil {
+	if cfg.HealthcheckURL != "" {
+		if err := runHealthcheckCLI(ctx, cfg.HealthcheckURL); err != nil {
 			// Stderr only; healthcheck output is captured by the
 			// container runtime, not the user. Plain text, no JSON.
 			fmt.Fprintln(os.Stderr, err.Error())
@@ -983,18 +944,18 @@ func main() {
 	// exit. Caddy never starts; the admin API never listens.
 	// Mutual exclusion: --export AND --restore together is a
 	// usage error.
-	if cfg.exportPath != "" && cfg.restorePath != "" {
+	if cfg.ExportPath != "" && cfg.RestorePath != "" {
 		logger.Error("--export and --restore cannot be combined")
 		os.Exit(2)
 	}
-	if cfg.exportPath != "" {
+	if cfg.ExportPath != "" {
 		if err := runExportCLI(ctx, logger, cfg); err != nil {
 			logger.Error("export failed", "err", err)
 			os.Exit(1)
 		}
 		return
 	}
-	if cfg.restorePath != "" {
+	if cfg.RestorePath != "" {
 		if err := runRestoreCLI(ctx, logger, cfg); err != nil {
 			logger.Error("restore failed", "err", err)
 			os.Exit(1)
