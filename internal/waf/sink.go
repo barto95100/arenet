@@ -115,29 +115,29 @@ type EventSink interface {
 // exits cleanly (the sink stays alive in degraded mode,
 // dropping subsequent emits).
 type Sink struct {
-	inserter      Inserter
-	counter       BlockCounter
-	logger        *slog.Logger
-	lru           *emitLRU
-	in            chan Event
-	flushInterval time.Duration
+	inserter       Inserter
+	counter        BlockCounter
+	logger         *slog.Logger
+	lru            *emitLRU
+	in             chan Event
+	flushInterval  time.Duration
 	flushBatchSize int
-	done          chan struct{}
+	done           chan struct{}
 
 	// Counters. atomics so tests can assert without locks.
-	emitted              uint64 // events that passed the channel + LRU and are pending or persisted
-	droppedByChannel     uint64 // Emit calls where the channel was full
-	suppressedByLRU      uint64 // emits where the triple was recently seen
-	flushSuccessBatches  uint64 // successful InsertWafEventBatch calls
-	flushErrBatches      uint64 // failed InsertWafEventBatch calls
-	flushedEvents        uint64 // total events successfully persisted
+	emitted             uint64 // events that passed the channel + LRU and are pending or persisted
+	droppedByChannel    uint64 // Emit calls where the channel was full
+	suppressedByLRU     uint64 // emits where the triple was recently seen
+	flushSuccessBatches uint64 // successful InsertWafEventBatch calls
+	flushErrBatches     uint64 // failed InsertWafEventBatch calls
+	flushedEvents       uint64 // total events successfully persisted
 
 	// Mutex protects the in-flight buffer. The flush
 	// goroutine holds it for the duration of a flush so
 	// emits arriving during the flush land in the next
 	// batch.
-	mu       sync.Mutex
-	pending  []Event
+	mu      sync.Mutex
+	pending []Event
 }
 
 // SinkConfig groups the tunables; nil-valued fields fall

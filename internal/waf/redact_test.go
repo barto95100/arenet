@@ -104,11 +104,11 @@ func TestRedact_NonSensitivePathPreserved(t *testing.T) {
 	// documented in §1.6.2: attack payloads we WANT to keep
 	// visible must NOT be touched.
 	cases := []string{
-		"/api?path=../etc/passwd",     // LFI probe
-		"/search?q=<script>alert(1)",  // XSS probe
-		"/sql?id=1+OR+1=1+--",         // SQLi probe
+		"/api?path=../etc/passwd",      // LFI probe
+		"/search?q=<script>alert(1)",   // XSS probe
+		"/sql?id=1+OR+1=1+--",          // SQLi probe
 		"/cmd?run=%3B+cat+/etc/shadow", // RCE probe
-		"/normal?foo=bar&page=2",      // benign
+		"/normal?foo=bar&page=2",       // benign
 	}
 	for _, in := range cases {
 		t.Run("input="+in, func(t *testing.T) {

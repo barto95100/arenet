@@ -280,15 +280,138 @@ regression. Clear future-feature shape documented.
 
 ---
 
-## 2. (Reserved for further items discovered during R.3-R.5)
+## 2. Feature gaps (migrated from spec §6.3 at R.5 verdict)
 
-The bulk of Step R's backlog candidates is the feature-gap list
-already enumerated in the spec §6.3 "Backlog seeding" of
-`docs/superpowers/specs/2026-05-31-step-r-oklch-migration.md`
-(OWASP CRS granular toggles, manual IP lists, geo-blocking with
-MaxMind, global TLS config UI, security headers UI, CSP nonce
-injection, per-route paranoia, Caddyfile import, topology
-historical replay, Logs GeoIP column, full Map page). Those are
-listed in the spec to avoid duplication; they migrate to this
-backlog file at the R.5 verdict commit, mirroring the M/N/O/P
-pattern.
+Each entry was a mock-promised widget without a backend
+implementation today. Step R shipped them as either omitted
+sections or read-only placeholders; the resolution paths below
+document what a future focused step would implement.
+
+### Finding #R-WAF-categories — OWASP CRS category granular toggles
+
+Mock promises per-category on/off + paranoia per category.
+Backend has no toggle API (Coraza rule registry is read-only
+from Arenet's perspective). Spec §6.1 /waf audit OUT-OF-SCOPE.
+R.4.3.a shipped read-only event-count tiles with explicit
+"granular control deferred" banner.
+
+**Completion shape**: new `/api/v1/waf/categories` endpoint with
+GET (list with enabled/disabled state) + PUT (toggle); BoltDB
+storage for the override set; Coraza configuration emission
+filtered by the override map.
+
+### Finding #R-WAF-manual-iplist — Manual IP allow/deny lists
+
+Mock shows operator-curated allow/deny IP/CIDR lists separate
+from CrowdSec auto-decisions. Backend has no storage. Spec
+§6.1 OMITTED.
+
+**Completion shape**: new storage entity + CRUD endpoints, Caddy
+matcher integration for the deny side, allow side bypasses both
+WAF + CrowdSec gates (carefully scoped — allow-list overrides
+are powerful).
+
+### Finding #R-WAF-geo — Geo-blocking via MaxMind GeoLite2
+
+Zero `geoip|maxmind|GeoLite` references in `internal/`. Requires
+external dep (MaxMind SDK), DB file shipping/download, IP→country
+middleware, country-list storage, handlers. Spec §6.1 OMITTED.
+
+**Completion shape**: focused step given the MaxMind licensing
+footprint (GeoLite2 is free with attribution; SaaS API or DB
+download both have constraints to design around).
+
+### Finding #R-SEC-tls — Global TLS config UI
+
+`MinVersion|TLSVersion|Curves|CipherSuites|http3` returns ZERO
+hits in `internal/caddymgr/`. Caddy supports all as built-ins
+but Arenet uses Caddy defaults (no exposure). Spec §6.1 /security
+shipped a read-only "Caddy defaults" card.
+
+**Completion shape**: TLS policy storage + emission in caddymgr
+config translation. Likely "edge TLS policy" step bundling with
+#R-SEC-headers.
+
+### Finding #R-SEC-headers — Security headers controller
+
+HSTS / X-Frame-Options / X-Content-Type-Options / Referrer-Policy
+/ Permissions-Policy: zero header injection middleware in the
+handler chain. Spec §6.1 /security OMITTED (the page shows a
+"not yet exposed" empty-state).
+
+**Completion shape**: per-route + global header policy storage,
+Caddy handler emission, frontend editor in `/security` (or
+`/routes` detail for per-route override).
+
+### Finding #R-SEC-csp — CSP with dynamic nonce injection
+
+More substantial than static headers — per-request nonce gen +
+template injection + CSP middleware coordination. Spec §6.1
+/security OMITTED.
+
+**Completion shape**: own focused step. Templating implications
+(the nonce must propagate into emitted HTML responses).
+
+### Finding #R-ROUTES-paranoia — Per-route WAF paranoia override
+
+Coraza supports per-route paranoia internally but Arenet's
+caddymgr emits a global setting only. Spec §6.1 /routes
+flagged as a "static info" pill in v1.4.
+
+**Completion shape**: extend `Route` shape with `wafParanoia`
+field, caddymgr emission per-route, frontend control in routes
+detail.
+
+### Finding #R-ROUTES-caddyfile — Caddyfile import
+
+`backup_handlers.go` has JSON import; symmetric Caddyfile import
+not implemented. Spec §6.1 /routes OMITTED (the Import button
+was removed from the mock-promised UI).
+
+**Completion shape**: Caddyfile parser (Caddy's parser is
+available as a library) + storage translation. Light backend
+step.
+
+### Finding #R-TOPO-window — Topology time-window selector + replay
+
+Mock shows 5min / 1h / 24h selector + historical replay. Current
+topology WS emits live-only. Spec §6.1 /topology OMITTED (live
+view shipped without the selector).
+
+**Completion shape**: historical topology data query against
+observability aggregator, frontend replay player.
+
+### Finding #R-LOGS-geoip — GeoIP country annotation per log row
+
+Depends on #R-WAF-geo (MaxMind dep). Spec §6.1 /logs OMITTED
+(country column empty in v1.4).
+
+**Completion shape**: lands with #R-WAF-geo since both share the
+MaxMind dep.
+
+### Finding #R-MAP — Full Map page
+
+`/map` ships as ComingSoon placeholder in v1.4. Full feature
+needs MaxMind GeoLite2 + map rendering + marker logic for
+sources of traffic + CrowdSec decisions geo-distribution.
+
+**Completion shape**: future step bundling #R-WAF-geo +
+#R-LOGS-geoip + the map UI itself.
+
+---
+
+## 3. Migration map
+
+| Spec §6.3 seed | Backlog entry |
+|---|---|
+| WAF: OWASP CRS granular toggles | #R-WAF-categories |
+| WAF: manual IP lists | #R-WAF-manual-iplist |
+| WAF: geo-blocking MaxMind | #R-WAF-geo |
+| Security: TLS config | #R-SEC-tls |
+| Security: headers controller | #R-SEC-headers |
+| Security: CSP nonce | #R-SEC-csp |
+| Routes: per-route paranoia | #R-ROUTES-paranoia |
+| Routes: Caddyfile import | #R-ROUTES-caddyfile |
+| Topology: window + replay | #R-TOPO-window |
+| Logs: GeoIP column | #R-LOGS-geoip |
+| Map: full page | #R-MAP |
