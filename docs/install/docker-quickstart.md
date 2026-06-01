@@ -30,6 +30,20 @@ The image is multi-arch (linux/amd64 + linux/arm64); your machine
 gets the right variant automatically. Image size: ~22 MB
 compressed, ~94 MB uncompressed on disk.
 
+
+**If pull fails with `denied`** (image not yet published for your
+version, or you're an early adopter building before the first
+release): if you cloned the repo in step 1, you can build the
+image locally instead. Run this once from the repo root:
+
+```bash
+docker build -t ghcr.io/barto95100/arenet:latest .
+```
+
+The build takes 2-3 minutes (frontend bundle + Go binary). Once
+it completes, the local image satisfies `docker compose up -d`
+in step 3 — no further changes needed.
+
 ## 3. Start the stack
 
 ```bash
