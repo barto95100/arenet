@@ -343,7 +343,9 @@ Per D4 reframing, this page becomes the cross-cutting security policy configurat
 - **Light theme / theme switcher** — D2 outcome.
 - **Command palette** (full ⌘K with action search) — v1.4 ships the topbar search input as a basic route-filter only.
 - **Real RBAC viewer mode** — D6 outcome; v1.4 ships the toggle as a cosmetic affordance.
-- **Notifications panel** with full inline event stream — v1.4 ships the notifications button as a deep-link to `/dashboard` (where the WAF events card now lives); no inline panel.
+- **Notifications panel + bell icon** — v1.4 hides the notifications icon in the topbar entirely. With the alerting step deferred to `docs/superpowers/specs/_deferred/2026-05-31-step-r-alerting.md`, there is no `/alerts` target; deep-linking the bell to `/security/decisions` would be semantically wrong (notifications ≠ enforcement decisions). Re-introduced when the alerting step lands. Tracked in `docs/backlog-step-r.md` #R-3.
+- **Déployer button functional action** — v1.4 renders the button visually (per mock) but ships it disabled with a "Bientôt disponible" tooltip. The real action (reload Caddy / apply staged config / commit pending route changes) is feature work outside the aesthetic migration scope. Tracked in `docs/backlog-step-r.md` #R-4.
+- **Sidebar collapsed/expanded state** — Step F shipped a localStorage-persisted collapsed mode (64px collapsed / 256px expanded). R.2 removes it: the mock specifies a fixed 232px sidebar with no collapse button by design (focus on content area). The removal IS a UX regression for operators who used the Step F collapse. Tracked in `docs/backlog-step-r.md` #R-2 — if operator demand re-emerges (smaller screens, multi-monitor workflows where the sidebar feels heavy), a future step can re-introduce a collapse toggle with the new visual language. Not in v1.4 because the mock provides no design for the collapsed state.
 - **Storybook / component-library extraction** — components stay co-located.
 - **D3 topology rework** beyond palette migration + zoom-button wiring — animation logic unchanged.
 - **Production deployment artefacts** — that's Step S.

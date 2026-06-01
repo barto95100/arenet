@@ -59,7 +59,109 @@ visual debt sweeps.
 
 ---
 
-## 2. (Reserved for further items discovered during R.2-R.5)
+### Finding #R-2 — Sidebar collapsed/expanded state removed
+
+Step F shipped a localStorage-persisted collapsed sidebar mode
+(`arenet_sidebar_collapsed`, 64px collapsed / 256px expanded).
+R.2 removes it: the new mock at
+`docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html:54-88`
+specifies a fixed 232px sidebar with no collapse button, by
+design. The R.2 sidebar matches that.
+
+**Operational consequence**: operators who used the Step F
+collapse (smaller screens, multi-monitor workflows where the
+sidebar felt heavy) lose that affordance. The chrome footprint
+in v1.4 is 232px fixed at all viewport sizes ≥ the desktop
+threshold.
+
+**Re-introduction shape** (if demand emerges):
+
+- Restore the `collapsed` bindable prop on `Sidebar.svelte` and
+  the `arenet_sidebar_collapsed` localStorage key.
+- Design the collapsed state: 64px-ish width, icon-only nav
+  items, sidebar-foot reduced to avatar only, no nav-section
+  labels. The mock provides NO design for this — a fresh
+  micro-design pass is needed to match the OKLCH visual.
+- Re-add the chevron toggle button. The mock's sidebar has no
+  obvious place for it; design choice required.
+- Re-introduce the Tooltip wrap on collapsed items so labels
+  surface on hover.
+- Update `Sidebar.test.ts` with the collapse-cycle test
+  coverage (the Step F tests for this lived at lines 75-112 of
+  the old test file — removed in R.2.5 because the feature is
+  gone).
+
+**Recommendation.** Don't re-introduce speculatively. If a user
+asks for it (or smoke testing on smaller laptop screens reveals
+the friction), open a focused step to do the design + impl
+together. Until then the fixed-width sidebar is the v1.4 norm.
+
+**Triage.** Acknowledged feature regression. The mock-driven
+brief takes precedence in R; if the regression is felt, the
+fix path is well-scoped here.
+
+### Finding #R-3 — Topbar notifications icon hidden
+
+R.2's Topbar omits the notifications bell icon entirely. The
+mock shows it (`docs/superpowers/mocks/2026-05-31-step-r-
+aesthetic.html:739`) with a badge count. The omission is
+deliberate: with the alerting step deferred to
+`docs/superpowers/specs/_deferred/2026-05-31-step-r-alerting.md`,
+there is no `/alerts` endpoint or route to deep-link from the
+bell. Pointing it at `/security/decisions` would be
+semantically wrong — notifications represent operator-facing
+alerts (something needs attention), decisions represent
+enforcement actions (a block was applied). Different surfaces.
+
+**Re-introduction shape** (alongside the alerting step):
+
+- Restore the notifications button in `Topbar.svelte`.
+- Wire the badge count to the alerting source (whatever the
+  alerting step lands — likely a `/v1/alerts/unread` count
+  endpoint).
+- Deep-link to the new `/alerts` route or a notifications
+  panel overlay (the alerting spec covers the choice).
+
+**Triage.** Mock-feature visually hidden, no functional regression
+(the feature didn't exist before R either). Re-emerges with the
+alerting step.
+
+### Finding #R-4 — Topbar Déployer button is cosmetic
+
+R.2's Topbar ships the Déployer button disabled with a "Bientôt
+disponible" tooltip. The mock shows it as the primary action
+button on every page. The real action — reload Caddy / apply
+staged config / commit pending route changes — is feature work
+outside the aesthetic migration scope.
+
+**Implementation shape** (future step):
+
+- Wire the button to a backend action that flushes any staged
+  configuration. Today route mutations write through directly
+  to Caddy (`internal/caddymgr/`); the "staged config" concept
+  doesn't currently exist as a first-class entity. The button
+  implies a workflow where edits accumulate and require an
+  explicit deploy gesture — that workflow needs design work
+  before implementation.
+- Likely surfaces: `internal/caddymgr/staging.go` (new), `/api/
+  v1/config/deploy` (new), Topbar.svelte action handler, status
+  feedback while the deploy runs (loading bar via the existing
+  `loading` store).
+- Disabled state when no pending changes: read a `pendingChanges`
+  count from a new endpoint; button disabled when count=0.
+
+**Recommendation.** This is a meaningful UX/architecture step on
+its own (staging concept + apply gesture). Bundle into a future
+step focused on configuration workflow if/when operators ask for
+the staged-edits pattern. Until then the direct-write model is
+the v1.x behaviour.
+
+**Triage.** Mock-feature shown as disabled visual; no functional
+regression. Clear future-feature shape documented.
+
+---
+
+## 2. (Reserved for further items discovered during R.3-R.5)
 
 The bulk of Step R's backlog candidates is the feature-gap list
 already enumerated in the spec §6.3 "Backlog seeding" of

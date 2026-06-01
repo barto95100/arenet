@@ -29,9 +29,18 @@
   Search (⌘K hint): v1.4 ships the input as a visual affordance.
   The command-palette wiring is OUT OF SCOPE (spec §6.2).
 
-  Notifications: deep-links to /dashboard's "Événements WAF récents"
-  card per D4 reframing + spec §6.2. Badge count is a placeholder
-  in v1.4 (wired in R.4 along with the events card).
+  Notifications + Déployer (v1.4 status):
+
+  - Notifications: HIDDEN in v1.4. With the alerting step deferred
+    (see docs/superpowers/specs/_deferred/2026-05-31-step-r-alerting.md),
+    there is no /alerts target; pointing the bell at /security/decisions
+    would be semantically wrong (notifications ≠ decisions). Re-
+    introduced when the alerting step lands. Tracked in
+    docs/backlog-step-r.md #R-3.
+  - Déployer: present visually but disabled with a "Bientôt
+    disponible" tooltip. The real action (reload Caddy / apply
+    staged config) is feature work outside the aesthetic migration
+    scope. Tracked in docs/backlog-step-r.md #R-4.
 -->
 <script lang="ts">
 	import { page } from '$app/state';
@@ -141,18 +150,17 @@
 		>Viewer</button>
 	</div>
 
-	<a
-		href="/dashboard"
-		class="tb-btn"
-		aria-label="Notifications — voir les événements récents"
-	>
-		<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-			<path d="M2 4l6 4 6-4M2 4v8h12V4" />
-		</svg>
-		<span>Notifications</span>
-	</a>
+	<!-- Notifications icon hidden in v1.4 — no /alerts target while
+	     the alerting step is deferred. Will be re-introduced with
+	     that step (backlog #R-3). -->
 
-	<button type="button" class="tb-btn primary write-action" aria-label="Déployer la configuration en attente">
+	<button
+		type="button"
+		class="tb-btn primary write-action"
+		disabled
+		title="Bientôt disponible — l'action de déploiement arrive dans une étape future"
+		aria-label="Déployer la configuration en attente (bientôt disponible)"
+	>
 		<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
 			<path d="M8 3v10M3 8h10" />
 		</svg>
@@ -293,7 +301,15 @@
 		border-color: transparent;
 		font-weight: 500;
 	}
-	.tb-btn.primary:hover {
+	.tb-btn.primary:hover:not(:disabled) {
 		background: oklch(62% 0.22 255);
+	}
+	.tb-btn:disabled {
+		cursor: not-allowed;
+		opacity: 0.5;
+	}
+	.tb-btn.primary:disabled {
+		background: var(--accent);
+		filter: saturate(0.6);
 	}
 </style>
