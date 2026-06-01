@@ -112,7 +112,7 @@ Viewer-accessible — relies on the API gate (AC #17).
 <PageHeader title="Observability" subtitle={route?.host ?? routeId} />
 
 <div class="back-link">
-	<a href="/observability">← Vue globale</a>
+	<a href="/dashboard">← Dashboard</a>
 </div>
 
 {#if loading}
@@ -128,8 +128,8 @@ Viewer-accessible — relies on the API gate (AC #17).
 		<div class="empty-wrap">
 			<h3>Route introuvable</h3>
 			<p>
-				La route <code>{routeId}</code> n'existe pas (ou plus). Retournez à
-				la <a href="/observability">vue globale</a> ou à la liste des
+				La route <code>{routeId}</code> n'existe pas (ou plus). Retournez au
+				<a href="/dashboard">dashboard</a> ou à la liste des
 				<a href="/routes">routes</a>.
 			</p>
 		</div>

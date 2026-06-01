@@ -925,6 +925,16 @@
 			{#snippet expanded(r)}
 				<div class="mb-3 flex flex-wrap gap-2">
 					<a
+						href={`/observability/${r.id}`}
+						class="inline-flex items-center gap-1.5 rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-hover transition-colors"
+					>
+						<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+							<path d="M3 3v10h10" />
+							<path d="M5 11l3-3 2 2 3-4" />
+						</svg>
+						Metrics for this route →
+					</a>
+					<a
 						href={`/security/${r.id}`}
 						class="inline-flex items-center gap-1.5 rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-hover transition-colors"
 					>

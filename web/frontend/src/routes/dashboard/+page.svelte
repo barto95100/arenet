@@ -336,7 +336,9 @@
 				<tbody>
 					{#each summary?.topRoutes ?? [] as r (r.routeId)}
 						<tr>
-							<td class="mono">{r.host}</td>
+							<td class="mono">
+								<a href={`/observability/${r.routeId}`} class="host-link">{r.host}</a>
+							</td>
 							<td class="mono right">{r.reqsPerMin}</td>
 							<td class="mono right warn-text">{r.fourxxPerMin}</td>
 							<td class="mono right bad-text">{r.fivexxPerMin}</td>
@@ -516,6 +518,15 @@
 	.mono { font-family: var(--font-mono); font-size: 12px; }
 	.right { text-align: right; }
 	.dim { color: var(--fg-dim); }
+	.host-link {
+		color: var(--fg);
+		text-decoration: none;
+		border-bottom: 1px dashed var(--fg-dim);
+	}
+	.host-link:hover {
+		color: var(--accent);
+		border-bottom-color: var(--accent);
+	}
 	.warn-text { color: var(--warn); }
 	.bad-text { color: var(--bad); }
 	.empty-row { color: var(--fg-muted); font-size: 12px; padding: 12px 0; text-align: center; font-style: italic; }
