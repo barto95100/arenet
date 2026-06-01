@@ -616,7 +616,11 @@
 </svelte:head>
 
 <div class="mx-auto max-w-5xl">
-	<PageHeader title="Settings" subtitle="Manage your account and preferences." />
+	<PageHeader
+		eyebrow="Administration · Settings"
+		title="Settings"
+		subtitle="Manage your account, sessions, DNS provider, certificates, security automation and SSO providers."
+	/>
 
 	<!-- Asymmetric layout (Chunk 6.5 smoke fix):
 	     - Row 1: 2-column grid (lg+) → Account + Appearance.
@@ -899,15 +903,14 @@
 		</Card>
 	</div>
 
-	<!-- ROW 2.6 — SSL / Certificates (Step O.4 / spec D9.B).
-	     New top-level Settings section, sibling of DNS provider.
-	     Declares managed domains so caddymgr emits ONE wildcard
-	     TLS policy per apex covering every route under
-	     `*.<apex>` (plus the bare apex when includeApex is true).
-	     D4.A: when the DNS provider is unconfigured, an inline
-	     banner directs the operator to the DNS provider section
-	     above — wildcards EXIGENT DNS-01, no silent HTTP-01
-	     fallback. -->
+	<!-- ROW 2.6 — SSL / Certificates section.
+	     Step R.4.4.b: the full managed-domains CRUD is preserved
+	     here for v1.4 (operator continuity — the workflow's been
+	     in /settings since O.4 and moving the editing surface
+	     while also restyling would compound user disruption). The
+	     read-only summary at /certs links back to this section
+	     for editing. A future step can extract the full CRUD UI
+	     to /certs once the visual settles. -->
 	<div class="mb-6">
 		<Card padding="p-6">
 			<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
@@ -915,7 +918,8 @@
 					<h2 class="text-xl font-semibold">SSL / Certificates</h2>
 					<p class="text-xs text-muted mt-1">
 						Managed domains issue ONE wildcard cert per apex via DNS-01
-						(covers every sub-domain route under it).
+						(covers every sub-domain route under it). The read-only
+						summary lives at <a href="/certs" class="text-cyan hover:underline">/certs</a>.
 					</p>
 				</div>
 				{#if managedDomainsLoading}
