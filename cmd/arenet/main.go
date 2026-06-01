@@ -84,6 +84,13 @@ type config struct {
 	includeSecrets         bool
 	allowIncompleteRestore bool
 	allowEmptyUsers        bool
+	// Step S.1 — distroless Docker image healthcheck. Distroless has
+	// no curl/wget; compose / k8s liveness probes need an in-binary
+	// way to probe the admin API. When --healthcheck is set, the
+	// binary becomes a one-shot client: GET <healthcheckURL>, exit
+	// 0 on 2xx, exit 1 otherwise. NEVER starts Caddy or the admin
+	// API. Used as the compose `healthcheck.test` command.
+	healthcheckURL string
 	// Step K.2 dev — when the SPA is served by a separate dev
 	// server (Vite on :5173 typically) the OIDC callback's
 	// in-handler 302 redirects (/routes on success,
@@ -116,6 +123,8 @@ func parseFlags() config {
 		"Step K.3: accept --restore inputs with zero users (next boot re-triggers the setup-token flow)")
 	flag.StringVar(&cfg.uiOrigin, "ui-origin", "",
 		"Step K.2 dev: absolute origin of the SPA dev server (e.g. http://localhost:5173); empty in prod (static SPA served by Arenet)")
+	flag.StringVar(&cfg.healthcheckURL, "healthcheck", "",
+		"Step S.1: probe URL (e.g. http://127.0.0.1:8001/healthz) and exit 0 on 2xx, 1 otherwise. Used as the Docker compose healthcheck command since distroless has no curl. Never starts the server.")
 	flag.Parse()
 	return cfg
 }
@@ -952,6 +961,22 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Step S.1 — Docker healthcheck short-circuit. Runs BEFORE
+	// the K.3 export/restore branches because it's the smallest
+	// + most-frequent code path (every healthcheck.interval the
+	// compose stack runs this) and has zero side-effects beyond
+	// the outbound HTTP probe. Distroless containers use this
+	// because they have no curl/wget.
+	if cfg.healthcheckURL != "" {
+		if err := runHealthcheckCLI(ctx, cfg.healthcheckURL); err != nil {
+			// Stderr only; healthcheck output is captured by the
+			// container runtime, not the user. Plain text, no JSON.
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Step K.3 — CLI export / restore short-circuits. The binary
 	// becomes a one-shot tool: open BoltDB, do the operation,

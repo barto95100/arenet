@@ -1,0 +1,47 @@
+# Arenet — Docker build context exclusions.
+# Step S.1.
+#
+# The Docker build context is rooted at the repo. We exclude:
+#   - Build artefacts that get regenerated in-image (the frontend
+#     build output, Go test cache, local `arenet` binary).
+#   - Editor / OS noise (.vscode, .DS_Store).
+#   - VCS internals (.git is large + irrelevant for the build).
+#   - Doc-only directories that don't ship in the binary.
+
+# Editor / OS noise.
+.DS_Store
+.vscode
+.idea
+*.swp
+
+# VCS internals.
+.git
+.gitignore
+.gitattributes
+
+# Skill / plugin metadata (Claude Code, etc.).
+.claude
+
+# Frontend build artefacts (regenerated in stage 1).
+web/frontend/node_modules
+web/frontend/build
+web/frontend/.svelte-kit
+
+# Backend build artefacts.
+/arenet
+/data
+/tmp
+
+# Test caches.
+**/*_test.go.cache
+
+# Local dev databases.
+*.db
+*.db.bak
+
+# Documentation — useful in the repo, not in the image.
+docs/
+README.md
+
+# Existing CI / GitHub config.
+.github/
