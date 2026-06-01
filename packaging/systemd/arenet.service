@@ -33,7 +33,7 @@ EnvironmentFile=-/etc/arenet/arenet.env
 # Default arguments. Operators override via the env file:
 #   ARENET_ADMIN_BIND, ARENET_DATA_DIR, ARENET_LOG_LEVEL
 # All map to the binary's flags via D5 precedence.
-ExecStart=/usr/local/bin/arenet
+ExecStart=/usr/local/bin/arenet --data-dir=/var/lib/arenet
 
 WorkingDirectory=/var/lib/arenet
 
