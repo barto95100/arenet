@@ -70,23 +70,31 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 	r.Get("/healthz", h.healthz)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Step S.4 — admin-wide rate-limit. Lifted from the
-		// /auth-only scope to cover every /api/v1/* endpoint. The
-		// limiter only counts 401/403 responses (auth.RateLimiter.
-		// Middleware semantics), so authenticated traffic on
-		// /routes, /security, /settings, etc. is NOT throttled —
-		// only failed auth attempts are. This catches credential-
-		// stuffing attacks regardless of which endpoint they hit,
-		// not just /auth/login. D6's loopback-default admin makes
-		// this a belt-and-braces protection (most operators won't
-		// expose admin to LAN), but the cost is one chi.Use call
-		// + the same limiter that already shipped in Step Q.
-		r.Use(h.rateLimiter.Middleware())
-
-		// Auth subtree (rate-limit inherited from the /api/v1
-		// level above — was previously scoped here in Step Q;
-		// moved up in S.4).
 		r.Route("/auth", func(r chi.Router) {
+			// S.5 smoke finding #5 — rate-limit scoped back to
+			// /auth/* only (Step Q's original scope), reverting
+			// the Step S.4 lift to /api/v1/*. The broader scope
+			// caused Tier 1 (15min block) to fire on legitimate
+			// SPA usage: the frontend's /auth/me session check
+			// returns 401 when unauthenticated (common: first
+			// load, post-logout, expired session), and a handful
+			// of failed POST /auth/login attempts (typos during
+			// setup) hammer the same bucket. Result: operator
+			// locked out of the UI for 15 minutes on a fresh
+			// install. Smoke evidence: UI Logs page captured
+			// "WARN 429 POST /auth/login · Rate-limit tier 1 ·
+			// bloqué 900s · user ?" on first-page-load through
+			// the setup wizard, immediately followed by
+			// /auth/me 429s blocking the login screen.
+			//
+			// Reverting to Step Q's scope ships v1.0.0 with a
+			// known-good rate-limit behaviour. Broader
+			// /api/v1/* DDoS protection deferred to a future
+			// focused step with proper endpoint carveouts
+			// (exempt GET /auth/me, GET /auth/sessions, GET
+			// /auth/heartbeat) + thresholds calibrated against
+			// real SPA traffic patterns.
+			r.Use(h.rateLimiter.Middleware())
 
 			// No-auth subgroup: /setup, /login + OIDC login flow
 			// (the login IS the auth — these endpoints can't
