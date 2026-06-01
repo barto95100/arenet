@@ -70,9 +70,23 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 	r.Get("/healthz", h.healthz)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Auth subtree: rate-limited per IP (spec §5.2).
+		// Step S.4 — admin-wide rate-limit. Lifted from the
+		// /auth-only scope to cover every /api/v1/* endpoint. The
+		// limiter only counts 401/403 responses (auth.RateLimiter.
+		// Middleware semantics), so authenticated traffic on
+		// /routes, /security, /settings, etc. is NOT throttled —
+		// only failed auth attempts are. This catches credential-
+		// stuffing attacks regardless of which endpoint they hit,
+		// not just /auth/login. D6's loopback-default admin makes
+		// this a belt-and-braces protection (most operators won't
+		// expose admin to LAN), but the cost is one chi.Use call
+		// + the same limiter that already shipped in Step Q.
+		r.Use(h.rateLimiter.Middleware())
+
+		// Auth subtree (rate-limit inherited from the /api/v1
+		// level above — was previously scoped here in Step Q;
+		// moved up in S.4).
 		r.Route("/auth", func(r chi.Router) {
-			r.Use(h.rateLimiter.Middleware())
 
 			// No-auth subgroup: /setup, /login + OIDC login flow
 			// (the login IS the auth — these endpoints can't
