@@ -191,40 +191,40 @@
 {:else if disabled}
 	<div class="screen-head">
 		<div>
-			<div class="eyebrow">Aperçu</div>
-			<h1>État de la passerelle</h1>
+			<div class="eyebrow">Aperçu · Dashboard</div>
+			<h1>Gateway status</h1>
 		</div>
 	</div>
 	<div class="card empty">
-		<h3>Métriques indisponibles</h3>
+		<h3>Metrics unavailable</h3>
 		<p>
-			Le sous-système d'observabilité n'a pas pu démarrer. Le proxy continue de
-			fonctionner ; seule l'historique des métriques est manquant. Consultez les
-			logs Arenet pour la cause exacte.
+			The observability subsystem failed to start. The proxy is still serving
+			traffic; only the metric history is missing. Check the Arenet logs for the
+			root cause.
 		</p>
 	</div>
 {:else if noRoutes}
 	<div class="screen-head">
 		<div>
-			<div class="eyebrow">Aperçu</div>
-			<h1>État de la passerelle</h1>
+			<div class="eyebrow">Aperçu · Dashboard</div>
+			<h1>Gateway status</h1>
 		</div>
 	</div>
 	<div class="card empty">
-		<h3>Aucune route configurée</h3>
+		<h3>No routes configured yet</h3>
 		<p>
-			Créez une route depuis la page <a href="/routes">Routes</a> pour commencer
-			à collecter des métriques.
+			Add one from the <a href="/routes">Routes</a> page to start collecting
+			metrics.
 		</p>
 	</div>
 {:else}
 	<div class="screen-head">
 		<div>
-			<div class="eyebrow">Vue d'ensemble</div>
-			<h1>État de la passerelle</h1>
+			<div class="eyebrow">Aperçu · Dashboard</div>
+			<h1>Gateway status</h1>
 			<div class="sub">
-				Trafic temps réel à travers vos {routes.length} routes, événements WAF récents,
-				et services en amont. Fenêtre {window}.
+				Real-time traffic across your {routes.length} routes, recent WAF events,
+				and upstream services. Window {window}.
 			</div>
 		</div>
 	</div>
@@ -232,31 +232,31 @@
 	<!-- KPIs -->
 	<div class="kpis">
 		<div class="kpi">
-			<div class="kpi-label">Requêtes / s</div>
+			<div class="kpi-label">Requests / s</div>
 			<div class="kpi-val">{kpiReqPerSec}<span class="unit">req/s</span></div>
 			<div class="kpi-foot">
-				{summary?.totalReqPerMin ?? 0} req/min · {summary?.activeRouteCount ?? 0} routes actives
+				{summary?.totalReqPerMin ?? 0} req/min · {summary?.activeRouteCount ?? 0} active routes
 			</div>
 		</div>
 		<div class="kpi">
-			<div class="kpi-label">Latence p95</div>
+			<div class="kpi-label">p95 latency</div>
 			<div class="kpi-val">{fmtP95(kpiP95)}<span class="unit">ms</span></div>
 			<div class="kpi-foot">
-				{kpiP95 === null ? 'aucune donnée dans la fenêtre' : 'global, fenêtre 24h'}
+				{kpiP95 === null ? 'no data in window' : 'global, 24h window'}
 			</div>
 		</div>
 		<div class="kpi">
-			<div class="kpi-label">Taux d'erreur 5xx</div>
+			<div class="kpi-label">5xx error rate</div>
 			<div class="kpi-val">{kpi5xxPct}<span class="unit">%</span></div>
 			<div class="kpi-foot">
 				{summary?.totalFiveXxPerMin ?? 0} 5xx/min · {summary?.totalFourXxPerMin ?? 0} 4xx/min
 			</div>
 		</div>
 		<div class="kpi">
-			<div class="kpi-label">Blocages WAF / h</div>
+			<div class="kpi-label">WAF blocks / h</div>
 			<div class="kpi-val">{kpiWafPerHour}</div>
 			<div class="kpi-foot">
-				{summary?.attackerIpsUnique ?? 0} IP uniques · {summary?.totalThrottlePerMin ?? 0} throttle/min
+				{summary?.attackerIpsUnique ?? 0} unique IPs · {summary?.totalThrottlePerMin ?? 0} throttle/min
 			</div>
 		</div>
 	</div>
@@ -265,7 +265,7 @@
 	<div class="two-col main-row">
 		<div class="card">
 			<div class="card-h">
-				<h3>Trafic — fenêtre {window}</h3>
+				<h3>Traffic — {window} window</h3>
 				<div class="seg">
 					<button
 						class:on={chartMetric === 'req_per_sec'}
@@ -273,11 +273,11 @@
 					>
 					<button
 						class:on={chartMetric === 'p95_latency_ms'}
-						onclick={() => switchMetric('p95_latency_ms')}>Latence</button
+						onclick={() => switchMetric('p95_latency_ms')}>Latency</button
 					>
 					<button
 						class:on={chartMetric === 'five_xx_rate'}
-						onclick={() => switchMetric('five_xx_rate')}>Erreurs</button
+						onclick={() => switchMetric('five_xx_rate')}>Errors</button
 					>
 				</div>
 			</div>
@@ -296,8 +296,8 @@
 
 		<div class="card">
 			<div class="card-h">
-				<h3>Événements WAF récents</h3>
-				<div class="meta">5 derniers</div>
+				<h3>Recent WAF events</h3>
+				<div class="meta">last 5</div>
 			</div>
 			<div class="stack">
 				{#each recentEvents as ev (ev.id)}
@@ -305,12 +305,12 @@
 						<span class="pill bad">block</span>
 						<div class="what">
 							<b>{ev.category} · {ev.ruleId}</b>
-							<span>{ev.requestMethod} {ev.requestPath} — depuis {ev.srcIp}</span>
+							<span>{ev.requestMethod} {ev.requestPath} — from {ev.srcIp}</span>
 						</div>
 						<div class="when">{fmtRelative(ev.ts)}</div>
 					</div>
 				{:else}
-					<div class="empty-row">Aucun événement WAF récent dans la fenêtre.</div>
+					<div class="empty-row">No recent WAF events in the window.</div>
 				{/each}
 			</div>
 		</div>
@@ -321,7 +321,7 @@
 		<div class="card">
 			<div class="card-h">
 				<h3>Top routes</h3>
-				<div class="meta">trié par RPS</div>
+				<div class="meta">sorted by RPS</div>
 			</div>
 			<table>
 				<thead>
@@ -343,7 +343,7 @@
 							<td class="mono right">{r.wafBlockedPerMin}</td>
 						</tr>
 					{:else}
-						<tr><td colspan="5" class="empty-row">Aucune donnée dans la fenêtre.</td></tr>
+						<tr><td colspan="5" class="empty-row">No data in the window.</td></tr>
 					{/each}
 				</tbody>
 			</table>
@@ -351,8 +351,8 @@
 
 		<div class="card">
 			<div class="card-h">
-				<h3>Services amont</h3>
-				<div class="meta">{upstreams.length} distincts</div>
+				<h3>Upstream services</h3>
+				<div class="meta">{upstreams.length} distinct</div>
 			</div>
 			<div class="stack">
 				{#each upstreams as u (u.url)}
@@ -361,7 +361,7 @@
 						<span class="mono dim">{u.routes.length} route{u.routes.length > 1 ? 's' : ''}</span>
 					</div>
 				{:else}
-					<div class="empty-row">Aucun upstream configuré.</div>
+					<div class="empty-row">No upstreams configured.</div>
 				{/each}
 			</div>
 		</div>
@@ -370,9 +370,9 @@
 	<!-- Live tail preview -->
 	<div class="card tail-card">
 		<div class="card-h">
-			<h3>Événements WAF — flux récent</h3>
+			<h3>WAF events — recent feed</h3>
 			<div class="meta">
-				<a href="/logs" class="meta-link">Ouvrir Logs →</a>
+				<a href="/logs" class="meta-link">Open Logs →</a>
 			</div>
 		</div>
 		<div class="logs">
@@ -391,7 +391,7 @@
 					</span>
 				</div>
 			{:else}
-				<div class="empty-row">Aucun événement récent.</div>
+				<div class="empty-row">No recent events.</div>
 			{/each}
 		</div>
 	</div>

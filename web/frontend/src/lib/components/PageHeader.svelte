@@ -3,40 +3,46 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  PageHeader (Step F §5.3 — new in Chunk 3.2).
+  PageHeader — page-level header surface.
 
-  Surface for page-level controls. Holds a title, an optional
-  subtitle, and a right-aligned actions slot. Used by:
+  Step R.4.2 visual refonte: mirrors the mock's .screen-head
+  pattern at docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html
+  :749-760 — optional eyebrow (mono caps over the title) + title +
+  subtitle, plus a right-aligned actions slot. The component is the
+  single point of truth for page-head visual so all 10 existing
+  call sites pick up the new style without per-page changes.
 
-    - Routes page    → "Add route" primary button
-    - Audit page     → filter chips + "Clear all"
-    - Settings page  → (no actions for now)
-    - Topology page  → connection status (StatusDot + label) + the
-                       "Waiting for first tick…" notice (J.6)
+  Public API (add-only — `eyebrow` is the new prop):
 
-  Setup / Login pages stay headerless — they have their own UX
-  patterns (centered card).
-
-  Public API (add-only per §1.3):
-
+    eyebrow  — string (optional, mono caps small-text breadcrumb-ish
+               header — e.g. "Vue d'ensemble", "Sécurité · WAF")
     title    — string (required)
     subtitle — string (optional)
     actions  — Snippet (optional, right-aligned)
+
+  Used by: Routes, Audit, Settings, Topology, Observability,
+  Security, Security/[id], Security/decisions, Admin/users.
+  R.4.1 Dashboard ships its own inline .screen-head; future
+  cleanup can switch it to this component.
 -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 
 	interface Props {
+		eyebrow?: string;
 		title: string;
 		subtitle?: string;
 		actions?: Snippet;
 	}
 
-	let { title, subtitle, actions }: Props = $props();
+	let { eyebrow, title, subtitle, actions }: Props = $props();
 </script>
 
 <header class="page-header">
 	<div class="page-header__text">
+		{#if eyebrow}
+			<div class="page-header__eyebrow">{eyebrow}</div>
+		{/if}
 		<h1 class="page-header__title">{title}</h1>
 		{#if subtitle}
 			<p class="page-header__subtitle">{subtitle}</p>
@@ -54,28 +60,39 @@
 		display: flex;
 		align-items: flex-start;
 		justify-content: space-between;
-		gap: var(--space-4);
-		padding-bottom: var(--space-6);
-		margin-bottom: var(--space-6);
-		border-bottom: 1px solid var(--border-subtle);
+		gap: 16px;
+		margin-bottom: 18px;
+	}
+	.page-header__text {
+		min-width: 0;
+	}
+	.page-header__eyebrow {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--fg-muted);
+		margin-bottom: 6px;
 	}
 	.page-header__title {
-		font-size: var(--text-2xl);
+		font-size: 22px;
 		font-weight: 600;
-		color: var(--text-primary);
+		color: var(--fg);
 		line-height: 1.2;
+		letter-spacing: -0.01em;
 		margin: 0;
 	}
 	.page-header__subtitle {
-		margin-top: var(--space-1);
-		font-size: var(--text-sm);
-		color: var(--text-secondary);
+		margin-top: 6px;
+		font-size: 13px;
+		color: var(--fg-muted);
 		line-height: 1.5;
+		max-width: 640px;
 	}
 	.page-header__actions {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
+		gap: 8px;
 		flex-shrink: 0;
 	}
 </style>

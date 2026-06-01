@@ -126,6 +126,48 @@ enforcement actions (a block was applied). Different surfaces.
 (the feature didn't exist before R either). Re-emerges with the
 alerting step.
 
+### Finding #R-5 — Service registry / route-by-service tagging
+
+R.4.1's Dashboard "Services amont" card aggregates by distinct
+upstream URL (e.g. `10.0.4.12:8080`, `s3://arenet-static`)
+because that's what the backend exposes today. The mock at
+`docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html:914-928`
+aggregates by service *name* (`api-core`, `web-app`, `auth-svc`,
+`media-cdn`, `ws-gateway`, `billing-api`, `notification`) with a
+per-service health rollup and instance count. The backend has no
+concept of a "service" today — only routes pointing at upstream
+URLs.
+
+**Operational consequence**: the v1.4 Services amont card reads
+as a list of backend URLs rather than the higher-level service
+inventory operators think in. Acceptable for v1.4 (the data IS
+real), but the operator mental model "I have 3 api-core
+instances, 1 currently degraded" can't be surfaced.
+
+**Feature shape** (future step):
+
+- Add a `Service` entity: `internal/storage/service.go` with
+  `id` / `name` / `description` / `tags`. CRUD endpoints under
+  `/api/v1/services`.
+- Add `serviceId` (nullable) on `Route` (and via cascade on
+  `Upstream`), plus an optional UI affordance to tag a route
+  with its owning service.
+- Health rollup endpoint: `GET /api/v1/services` returns each
+  service with `instanceCount` (count of upstreams across all
+  routes tagged with it), `degradedCount`, `medianP95Ms`
+  derived from observability per-route metrics.
+- Update the dashboard card to render the service-name view
+  when at least one service is defined; fall back to the
+  current per-upstream-URL view otherwise.
+
+**Recommendation.** Bundle into a focused future step if/when
+operators ask for the service-inventory mental model in preprod
+or production. Until then the per-URL view is the operator-
+truth surface.
+
+**Triage.** Backend feature gap, not a regression. Documented up
+front to track the resolution shape if demand appears.
+
 ### Finding #R-4 — Topbar Déployer button is cosmetic
 
 R.2's Topbar ships the Déployer button disabled with a "Bientôt

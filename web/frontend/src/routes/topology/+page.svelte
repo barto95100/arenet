@@ -202,7 +202,11 @@
 </svelte:head>
 
 <div class="page">
-	<PageHeader title="Topology" subtitle="Live network visualization.">
+	<PageHeader
+		eyebrow="Aperçu · Topology"
+		title="Topology"
+		subtitle="Live network visualization."
+	>
 		{#snippet actions()}
 			{#if showWaitingForTick}
 				<span class="waiting" aria-live="polite">Waiting for first tick…</span>
@@ -215,9 +219,9 @@
 	</PageHeader>
 
 	{#if routesList.length === 0 && topology.connectionStatus !== 'reconnecting'}
-		<div class="empty">
+		<div class="card empty">
 			<p>No routes configured yet.</p>
-			<p class="text-secondary">
+			<p class="dim">
 				Visit <a class="link" href="/routes">Routes</a> to add one. Live ticks will appear here once the server has emitted them.
 			</p>
 		</div>
@@ -250,57 +254,62 @@
 
 <style>
 	.page {
-		padding: 1.5rem;
+		padding: 0;
 	}
-	/* J.6: .page-header, .title, .subtitle, .status-block,
-	   .status-dot{,-up,-warn,-down} removed — replaced by the
-	   shared <PageHeader> + <StatusDot> atomic. Only the slot-
-	   content layout (.waiting / .status) stays here since it
-	   describes content inside PageHeader's actions snippet, not
-	   the atomic itself. */
 	.waiting {
-		font-size: 0.75rem;
-		color: var(--text-secondary);
+		font-size: 11.5px;
+		color: var(--fg-muted);
+		font-family: var(--font-mono);
 	}
 	.status {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.5rem;
-		font-size: 0.875rem;
-		color: var(--text-secondary);
+		gap: 8px;
+		font-size: 12.5px;
+		color: var(--fg-muted);
 	}
 
-	.svg-wrap {
-		position: relative;
-		background: var(--bg-base);
-		border: 1px solid var(--border-subtle);
-		border-radius: var(--radius-lg);
-		padding: var(--space-4);
-		overflow: hidden;
+	/* .card.empty + .svg-wrap consume the R.4.1 primitives:
+	   .card is the shared surface; .empty is a modifier that
+	   re-uses the dashboard's empty-state pattern. */
+	.card {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: 14px 16px;
 	}
-	.controls-overlay {
-		position: absolute;
-		top: var(--space-3);
-		right: var(--space-3);
-		z-index: 20;
-		pointer-events: auto;
-	}
-
-	.empty {
+	.card.empty {
+		padding: 48px 32px;
 		text-align: center;
-		padding: 4rem 1rem;
-		color: var(--text-primary);
 	}
-	.empty p {
-		margin: 0.25rem 0;
+	.card.empty p {
+		margin: 4px 0;
+		color: var(--fg);
+	}
+	.dim {
+		color: var(--fg-muted);
+		font-size: 13px;
 	}
 	.link {
-		color: var(--accent-cyan);
+		color: var(--accent);
 	}
 	.link:hover {
 		text-decoration: underline;
 	}
-	.text-secondary {
-		color: var(--text-secondary);
+
+	.svg-wrap {
+		position: relative;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: 16px;
+		overflow: hidden;
+	}
+	.controls-overlay {
+		position: absolute;
+		top: 12px;
+		right: 12px;
+		z-index: 20;
+		pointer-events: auto;
 	}
 </style>

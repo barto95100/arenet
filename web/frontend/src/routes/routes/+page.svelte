@@ -760,7 +760,11 @@
 	}
 </script>
 
-<PageHeader title="Routes" subtitle="Manage reverse proxy routes.">
+<PageHeader
+	eyebrow="Trafic · Routes"
+	title="Routes"
+	subtitle="Manage reverse proxy routes — hosts, upstreams, TLS, WAF, authentication."
+>
 	{#snippet actions()}
 		<Button onclick={openCreate}>+ Add route</Button>
 	{/snippet}
