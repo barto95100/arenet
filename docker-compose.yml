@@ -1,0 +1,106 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# Step S.2 — Reference docker-compose.yml for homelab installs.
+#
+# 5-minute quickstart:
+#
+#   docker compose pull
+#   docker compose up -d
+#   docker compose logs -f arenet | grep "Setup token"
+#   ssh -L 8001:localhost:8001 <homelab-host>    # see admin access note below
+#   # then open http://localhost:8001 in your browser
+#
+# Data plane (the HTTP/HTTPS traffic Arenet proxies) is exposed on
+# the host's :80 and :443 — operators reach it from LAN. The admin
+# UI on :8001 binds to 127.0.0.1 ONLY by default for security:
+# someone on the LAN cannot reach /api/v1 without authenticating
+# AND tunnelling.
+
+services:
+  arenet:
+    image: ghcr.io/barto95100/arenet:latest
+    container_name: arenet
+    restart: unless-stopped
+
+    # Port mapping.
+    #
+    # 80/443 → data plane, LAN-accessible (that's the whole point
+    # of a reverse proxy).
+    #
+    # 8001 → admin UI + REST API. Bound to 127.0.0.1 ONLY by
+    # default. To access from a workstation on your LAN, choose
+    # one of:
+    #
+    #   Option 1 — SSH tunnel (recommended, no config change):
+    #     From the workstation, run:
+    #       ssh -L 8001:localhost:8001 <homelab-host>
+    #     Then open http://localhost:8001 in your browser.
+    #
+    #   Option 2 — Bind admin to LAN (less secure, plaintext):
+    #     Replace the line below with:
+    #       - "8001:8001"
+    #     AND set ARENET_ADMIN_BIND=0.0.0.0:8001 in `environment:`.
+    #     Anyone on your LAN can now reach the admin port over
+    #     plain HTTP — put a TLS terminator in front (Caddy,
+    #     Nginx, Cloudflare Tunnel) before relying on this for
+    #     anything sensitive.
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8001:8001"
+
+    # Persistent state. The named volume holds:
+    #   - arenet.db   (BoltDB: routes, users, audit, secrets)
+    #   - metrics.db  (SQLite: observability counters)
+    #   - certmagic/  (TLS certs + ACME state)
+    # Cold-stop + tar of this volume is the canonical backup
+    # procedure — see docs/operations/backup.md.
+    volumes:
+      - arenet-data:/var/lib/arenet
+
+    # Step D5 — env vars override the binary's default flags.
+    # Precedence: --flag > env > config-file > default.
+    environment:
+      # Default loopback bind. Override to 0.0.0.0:8001 for
+      # LAN-exposed admin (see ports comment above).
+      ARENET_ADMIN_BIND: 127.0.0.1:8001
+
+      # Where the binary writes its state. Matches the volume
+      # mount; do not change unless you're also changing the
+      # `volumes:` mount target.
+      ARENET_DATA_DIR: /var/lib/arenet
+
+      # Log level: debug | info | warn | error. Production
+      # default is info; bump to debug for troubleshooting.
+      ARENET_LOG_LEVEL: info
+
+    # Caddy binds :80 and :443 — these are privileged ports on
+    # Linux. CAP_NET_BIND_SERVICE lets the nonroot user inside
+    # the container bind them without running as root.
+    cap_add:
+      - NET_BIND_SERVICE
+
+    # In-binary healthcheck (Step S.1 --healthcheck CLI).
+    # Distroless has no curl/wget, so we use the binary itself
+    # as the probe.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/arenet", "--healthcheck=http://127.0.0.1:8001/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # Best-effort security defaults. Operators can comment these
+    # out if a specific deployment needs more privileges (e.g.
+    # raw socket access for a network probe sidecar).
+    security_opt:
+      - no-new-privileges:true
+    read_only: false  # /var/lib/arenet is the writable mount;
+                      # the rest of the filesystem can be RO in
+                      # a future hardening pass (see backlog).
+
+volumes:
+  arenet-data:
+    name: arenet-data

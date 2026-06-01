@@ -1,0 +1,143 @@
+# Quickstart — Docker (5 minutes)
+
+This is the fastest path to a running Arenet instance. The whole
+thing fits in five terminal commands and the `/setup` browser
+wizard.
+
+**You'll need**: a Linux host with Docker + Docker Compose v2
+(Docker Desktop on macOS/Windows works for testing, but the
+homelab deploy target is Linux).
+
+---
+
+## 1. Grab the compose file
+
+```bash
+mkdir -p ~/arenet && cd ~/arenet
+curl -O https://raw.githubusercontent.com/barto95100/arenet/main/docker-compose.yml
+```
+
+(Alternatively, clone the repo and `cd` into it — the file lives
+at the root.)
+
+## 2. Pull the image
+
+```bash
+docker compose pull
+```
+
+The image is multi-arch (linux/amd64 + linux/arm64); your machine
+gets the right variant automatically. Image size: ~22 MB
+compressed, ~94 MB uncompressed on disk.
+
+## 3. Start the stack
+
+```bash
+docker compose up -d
+```
+
+A named volume `arenet-data` is created on first boot to hold
+Arenet's state (routes, users, certs, audit log, observability
+counters). Cold-stop + tar of that volume is the canonical
+backup procedure — see `docs/operations/backup.md`.
+
+## 4. Get the setup token
+
+On first boot Arenet generates a one-shot setup token. Tail the
+logs to grab it:
+
+```bash
+docker compose logs arenet | grep "Setup token"
+```
+
+You'll see a line like:
+
+```
+time=2026-06-01T15:24:48.451Z level=INFO msg="Setup token: 822305f5fce4c05b39a5c4915b32f77a9637ae0379c3d25fa9e2938b45a24863"
+```
+
+Copy that token — you'll paste it into the browser in a moment.
+
+## 5. Open the admin UI
+
+**By default Arenet's admin port :8001 binds to 127.0.0.1 only**
+(your data plane on :80 / :443 is fully LAN-accessible — only
+the admin UI is loopback-restricted, to avoid serving a plaintext
+admin endpoint on your LAN by accident).
+
+To reach the admin from a workstation on your LAN, pick one of:
+
+### Option 1 — SSH tunnel (recommended, no config change)
+
+From your workstation:
+
+```bash
+ssh -L 8001:localhost:8001 <homelab-host>
+```
+
+Leave that terminal running. Then in your browser, open:
+
+```
+http://localhost:8001
+```
+
+The browser hits your local tunnel; the tunnel forwards to the
+homelab box's loopback :8001.
+
+### Option 2 — Bind admin to the LAN (less secure)
+
+If you don't want the SSH tunnel, edit your `docker-compose.yml`
+on the homelab box:
+
+```yaml
+ports:
+  - "80:80"
+  - "443:443"
+  - "8001:8001"                    # was: "127.0.0.1:8001:8001"
+environment:
+  ARENET_ADMIN_BIND: 0.0.0.0:8001  # was: 127.0.0.1:8001
+```
+
+Then `docker compose up -d` to apply. Now anyone on your LAN can
+reach the admin port over plain HTTP — put a TLS terminator
+(Caddy / Nginx / Cloudflare Tunnel) in front before relying on
+this for anything sensitive.
+
+### Finish setup
+
+In the browser:
+
+1. Paste the setup token from step 4.
+2. Create your first admin user (username + password).
+3. The wizard logs you in automatically.
+
+You're done. Add your first route from the Routes page and
+Arenet starts proxying.
+
+---
+
+## What's next
+
+- **Add a route**: from the Routes page, click "+ Add route".
+  Hostname + upstream URL is the minimum; TLS + WAF + auth are
+  per-route toggles.
+- **Backup your data**: see `docs/operations/backup.md`.
+- **Harden the install**: see `docs/operations/hardening.md`
+  (admin TLS options, rate limits, secret storage).
+- **Troubleshooting**: `docs/operations/troubleshooting.md`
+  covers log levels, common boot warnings, and the "I can't
+  reach the admin port" checklist.
+
+## If something went wrong
+
+```bash
+docker compose logs arenet | tail -50    # last 50 log lines
+docker compose ps arenet                 # container state
+docker exec arenet /usr/local/bin/arenet --healthcheck=http://127.0.0.1:8001/healthz
+                                         # in-container probe
+```
+
+If `docker compose ps` shows the container unhealthy, the
+healthcheck is failing — check the logs above for the cause
+(usually a port collision, a missing env var, or the volume
+mount being unwritable).

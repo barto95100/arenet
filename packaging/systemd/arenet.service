@@ -1,0 +1,81 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# Step S.2 — systemd unit for native Linux installs (alternative
+# to Docker). Used by packaging/systemd/install.sh which handles
+# user creation + data-dir setup + unit placement.
+#
+# After install:
+#   sudo systemctl enable --now arenet
+#   sudo systemctl status arenet
+#   sudo journalctl -u arenet -f
+#
+# Config is sourced from /etc/arenet/arenet.env (optional). The
+# binary's defaults are sane; the env file is only needed to
+# override admin bind / data dir / log level.
+
+[Unit]
+Description=Arenet — homelab reverse proxy with integrated security
+Documentation=https://github.com/barto95100/arenet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arenet
+Group=arenet
+
+# Optional env-file. The "-" prefix means "ignore if missing"
+# (don't fail-start when the operator hasn't created one).
+EnvironmentFile=-/etc/arenet/arenet.env
+
+# Default arguments. Operators override via the env file:
+#   ARENET_ADMIN_BIND, ARENET_DATA_DIR, ARENET_LOG_LEVEL
+# All map to the binary's flags via D5 precedence.
+ExecStart=/usr/local/bin/arenet
+
+WorkingDirectory=/var/lib/arenet
+
+# Bind privileged ports (:80 / :443) as the nonroot arenet user.
+# CapabilityBoundingSet restricts the binary to ONLY this
+# capability — no chroot, no audit, no sysadmin.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+# Filesystem hardening. The binary writes only to
+# /var/lib/arenet; everything else is read-only or invisible.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/arenet
+
+# Network hardening (allow only IPv4 + IPv6; no other address
+# families needed). RestrictAddressFamilies is intentionally
+# permissive on AF_NETLINK so Caddy can read interface info
+# for its bind logic.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=false  # Go's runtime needs writable+exec
+                              # in some code paths; tighter
+                              # value breaks startup.
+
+# Restart policy. Restart on crash; back off if we're failing
+# repeatedly (don't spin a death loop hammering systemd).
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Log routing — journald captures stdout/stderr by default. Set
+# ARENET_LOG_FORMAT=json in the env file to get structured logs.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arenet
+
+[Install]
+WantedBy=multi-user.target
