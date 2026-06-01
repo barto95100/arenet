@@ -923,6 +923,18 @@
 				</td>
 			{/snippet}
 			{#snippet expanded(r)}
+				<div class="mb-3 flex flex-wrap gap-2">
+					<a
+						href={`/security/${r.id}`}
+						class="inline-flex items-center gap-1.5 rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-hover transition-colors"
+					>
+						<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+							<rect x="3" y="7" width="10" height="7" rx="1" />
+							<path d="M5 7V5a3 3 0 016 0v2" />
+						</svg>
+						Security for this route →
+					</a>
+				</div>
 				<dl class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
 					<dt class="text-secondary">ID</dt>
 					<dd class="font-mono">{r.id}</dd>

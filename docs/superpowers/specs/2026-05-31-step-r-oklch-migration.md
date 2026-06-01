@@ -74,6 +74,8 @@ All 7 decisions arbitrated 2026-05-31. Each entry: outcome → rationale-of-reco
 
 **Rationale-of-record**: Arenet is pre-1.0; no public bookmark surface to preserve. A duplicate route creates canonicalisation drift (two URLs maintaining the same eyebrow + h1 content). The mock places Certificates at top level under Sécurité, signalling that operators view cert state independently of the Settings configuration grid.
 
+**Implementation deviation (R.4.4.b, 2026-06-01)**: D5 strict implied full extraction of the SSL editor to `/certs`. In R.4.4 a softer split was adopted — the SSL/Certificates Card (managed-domains CRUD form) stays in `/settings`, and `/certs` is shipped as a read-only summary that links back to `/settings` for editing. Reason: moving the editing workflow in the same step that restyles the entire UI would compound the operator disruption — two unrelated migrations colliding. The read-only `/certs` summary still satisfies the IA reorg goal (top-level Sécurité entry for cert visibility); only the editor extraction is deferred. Full editor extraction to `/certs` is tracked in `docs/backlog-step-r.md` #R-6 as a focused future step.
+
 ### D6 — View-as toggle: cosmetic-only ✓ (Outcome: A)
 
 **Outcome**: view-as toggle (topbar `:731`) ships as a cosmetic UI affordance in v1.4. Clicking toggles a body class that greys out mutation buttons for visual preview; backend session permissions are unchanged. Tooltip: "Aperçu visuel — l'application des permissions arrive dans une étape future".

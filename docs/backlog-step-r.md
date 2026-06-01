@@ -126,6 +126,83 @@ enforcement actions (a block was applied). Different surfaces.
 (the feature didn't exist before R either). Re-emerges with the
 alerting step.
 
+### Finding #R-7 — Per-route metrics drill-down at /observability/[routeId]
+
+R.4.5 redirects `/observability` (index) to `/dashboard` but
+PRESERVES `/observability/[routeId]/+page.svelte` — the
+per-route metrics drill-down (Step L.4). Reason: the new
+`/dashboard` shows global aggregates; it does NOT replace the
+per-route metrics view (timeseries per single route, p95 per
+route, etc.). Folding it into `/dashboard` would have expanded
+R.4.1 scope significantly.
+
+The drill-down currently:
+- Sits at the legacy URL (no longer reachable from the new
+  sidebar — `/observability` index redirects).
+- Renders in the legacy HEX-cyan visual (R.1 token swap means
+  the cyan reads as the new purple-blue, but the layout is
+  still Step F-era).
+- Lacks an explicit entry point in v1.4 — operators must
+  type the URL directly OR get there via a future Dashboard
+  drill-down link.
+
+**Completion shape** (focused future step):
+
+- Either restyle `/observability/[routeId]` in the new visual
+  + add a "Drill down →" link from Dashboard's "Top routes"
+  rows OR fold the content into a `/dashboard/[routeId]`
+  route (more aggressive IA reorg).
+- Tracks alongside the topology time-window selector + log
+  GeoIP work in a future observability-themed step.
+
+**Triage.** Hidden but functional. Tokens cascade so the
+visual isn't broken, only stale. No regression (the page
+worked before, works now, just not surfaced).
+
+### Finding #R-6 — Move SSL editor from /settings to /certs
+
+D5's strict reading was "move `/settings/certificates` → top-level
+`/certs`": full extraction of the SSL editor (managed-domains
+CRUD form) to the new top-level route.
+
+R.4.4.b adopted a **softer split** for v1.4 — the SSL Card
+(managed-domains CRUD form + DNS provider unconfigured banner)
+stays in `/settings`, and `/certs` ships as a read-only summary
+that links back to `/settings` for editing. Reason: moving the
+editing workflow in the same step that restyles the whole UI
+would compound the operator disruption (visual change + workflow
+displacement landing together = two unrelated migrations
+colliding). The read-only `/certs` summary already satisfies the
+IA reorg goal (top-level Sécurité entry for cert visibility).
+
+**Completion shape** (focused future step):
+
+- Move the entire SSL/Certificates Card from
+  `web/frontend/src/routes/settings/+page.svelte` to
+  `web/frontend/src/routes/certs/+page.svelte`.
+- Move associated state from settings's `<script>` block:
+  `managedDomains`, `managedDomainsLoading`,
+  `managedDomainsLoadError`, `sslDNSUnconfigured`, all the
+  `md*` form state, the declare/delete actions, the
+  `ConfirmDialog` for `mdDeleteApex`.
+- Update the link copy in `/settings`'s now-empty section
+  ("Managed domains live at /certs" — or remove the section
+  entirely).
+- Verify the DNS provider unconfigured banner still cross-
+  references the DNS provider section in `/settings`.
+- Update `docs/backlog-step-r.md` to close this finding.
+
+**Recommendation.** Bundle into a focused future step OR roll
+into the next cert-themed work (e.g. when adding ACME provider
+diversity beyond OVH, or when extracting per-cert runtime
+metadata per #R-CERT-meta). Until then the softer split is
+the v1.4 norm: operators edit in `/settings`, view in `/certs`.
+
+**Triage.** D5 deviation acknowledged. The IA reorg goal IS
+met (top-level Sécurité entry, separation of viewing from the
+settings configuration grid). Only the editor location is
+deferred for operator-disruption hygiene.
+
 ### Finding #R-5 — Service registry / route-by-service tagging
 
 R.4.1's Dashboard "Services amont" card aggregates by distinct

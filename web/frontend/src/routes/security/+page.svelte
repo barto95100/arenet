@@ -86,6 +86,34 @@
 {#if loading}
 	<div class="loading-wrap"><Spinner /></div>
 {:else}
+	<!-- D8 sub-route entry points FIRST. Step R.4.3 originally placed
+	     this section at the bottom; R.4.5 promotes it to the top so
+	     operators landing on /security looking for the (now-moved)
+	     events surface find the links immediately, not after three
+	     config cards. UX note from the R.4.3 review. -->
+	<div class="card d8-entry">
+		<div class="card-h">
+			<h3>Security events &amp; decisions</h3>
+			<div class="meta">Where the events surface moved to</div>
+		</div>
+		<div class="link-list">
+			<a href="/security/decisions" class="link-row primary">
+				<div>
+					<b>CrowdSec decisions timeline →</b>
+					<span>Full timeline of blocked IPs (auto + community list contributions). Filter by source, scope or scenario. Step N read-side surface — was previously rendered as a sub-section of this page.</span>
+				</div>
+				<span class="arrow">→</span>
+			</a>
+			<a href="/dashboard" class="link-row primary">
+				<div>
+					<b>Dashboard event feed →</b>
+					<span>Recent WAF blocks across all routes, sorted by recency. For a single-route drill-down, open the route from <span class="inline-ref">/routes</span> and click "Security for this route".</span>
+				</div>
+				<span class="arrow">→</span>
+			</a>
+		</div>
+	</div>
+
 	<!-- TLS read-only card -->
 	<div class="card">
 		<div class="card-h">
@@ -165,28 +193,6 @@
 		</div>
 	</div>
 
-	<!-- D8 sub-route entry points -->
-	<div class="card">
-		<div class="card-h">
-			<h3>Security events &amp; decisions</h3>
-		</div>
-		<div class="link-list">
-			<a href="/security/decisions" class="link-row">
-				<div>
-					<b>CrowdSec decisions timeline</b>
-					<span>Full timeline of blocked IPs (auto + community list contributions). Step N read-side surface.</span>
-				</div>
-				<span class="arrow">→</span>
-			</a>
-			<a href="/dashboard" class="link-row">
-				<div>
-					<b>Dashboard event feed</b>
-					<span>Recent WAF blocks across all routes. For per-route drill-down, open a route from /routes and click "Security".</span>
-				</div>
-				<span class="arrow">→</span>
-			</a>
-		</div>
-	</div>
 {/if}
 
 <style>
@@ -304,7 +310,26 @@
 	.link-row > div { flex: 1; min-width: 0; }
 	.link-row b { display: block; color: var(--fg); font-weight: 500; font-size: 13px; margin-bottom: 2px; }
 	.link-row span { color: var(--fg-muted); font-size: 12px; line-height: 1.5; }
+	.link-row span .inline-ref { color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
 	.arrow { color: var(--accent); font-size: 18px; flex: none; }
+
+	/* D8 entry card — accent-tinted to signal "the events surface
+	   moved; here's where it went". Promoted to the top of the
+	   page per the UX note. */
+	.card.d8-entry {
+		border-color: var(--accent-line);
+		background: color-mix(in oklch, var(--accent) 5%, var(--surface));
+	}
+	.card.d8-entry .link-row.primary {
+		background: var(--surface);
+		border-color: var(--border-hi);
+	}
+	.card.d8-entry .link-row.primary:hover {
+		background: var(--surface-hi);
+	}
+	.card.d8-entry .link-row.primary b {
+		color: var(--accent);
+	}
 
 	.mono { font-family: var(--font-mono); font-size: 12px; }
 	.dim { color: var(--fg-muted); }
