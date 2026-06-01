@@ -3,10 +3,17 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  Root layout shell (spec §6.7). Drives the auth state machine and
-  hosts the always-mounted ChangePasswordModal, the conditional
-  LockScreen overlay, the compromised-password banner, and the
-  heartbeat lifecycle.
+  Root layout shell. Drives the auth state machine and hosts the
+  always-mounted ChangePasswordModal, the conditional LockScreen
+  overlay, the compromised-password banner, and the heartbeat
+  lifecycle.
+
+  Step R.2 chrome (2026-06-01): replaces the Step F collapsed-
+  capable sidebar with the new fixed-width Sidebar + Topbar combo
+  matching docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html.
+  The mock has no collapse mode — sidebar is fixed --sb-width
+  (232px). The SIDEBAR_STORAGE_KEY persistence is removed because
+  there is nothing to persist.
 
   State transitions:
 
@@ -14,8 +21,9 @@
     anonymous    → render children unchanged (so /login and /setup,
                    which use +layout@.svelte resets, take over)
                    + redirect non-login/setup paths to /login
-    authenticated → Sidebar + main + optional banner + LockScreen=false
-    locked       → Sidebar + main + LockScreen overlay (z-1000)
+    authenticated → Sidebar + Topbar + main + optional banner
+                    + LockScreen=false
+    locked       → Sidebar + Topbar + main + LockScreen overlay (z-1000)
 
   Bootstrap runs once at mount. Subsequent state changes happen via
   the API client interceptors (401 → clear, 403 → setLocked) and the
@@ -28,6 +36,7 @@
 	import { page } from '$app/state';
 	import favicon from '$lib/assets/favicon.svg';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import Topbar from '$lib/components/Topbar.svelte';
 	import LockScreen from '$lib/components/LockScreen.svelte';
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 	import ToastContainer from '$lib/components/ToastContainer.svelte';
@@ -39,23 +48,13 @@
 	import { authApi } from '$lib/api/auth';
 
 	const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes (spec §6.7)
-	const SIDEBAR_STORAGE_KEY = 'arenet.sidebar.collapsed';
 
 	let { children } = $props();
 
-	let collapsed = $state(false);
 	let heartbeatId: ReturnType<typeof setInterval> | null = null;
 	let changePasswordModalOpen = $state(false);
 
 	onMount(async () => {
-		// Restore sidebar collapsed preference (Step C).
-		try {
-			const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
-			if (stored === 'true') collapsed = true;
-		} catch {
-			/* localStorage unavailable (private mode, etc.) — ignore */
-		}
-
 		// Bootstrap the auth store. This call sets state to one of
 		// authenticated / locked / anonymous (or leaves unknown on
 		// network failure so the user can refresh).
@@ -84,15 +83,6 @@
 	onDestroy(() => {
 		idle.stop();
 		stopHeartbeat();
-	});
-
-	$effect(() => {
-		// Persist sidebar collapsed preference (Step C).
-		try {
-			localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
-		} catch {
-			/* ignore */
-		}
 	});
 
 	function startHeartbeat(): void {
@@ -161,16 +151,28 @@
 		</div>
 	{/if}
 
-	<div class="flex min-h-screen">
-		<Sidebar bind:collapsed />
-		<main class="flex-1 p-6 relative" aria-busy={$loading} aria-live="polite">
-			{#if $loading}
-				<div class="absolute left-0 right-0 top-0 h-0.5 overflow-hidden">
-					<div class="h-full w-1/3 bg-cyan loading-shimmer"></div>
+	<div class="app-shell">
+		<Sidebar />
+		<div class="app-col">
+			<Topbar />
+			{#if auth.user?.role === 'viewer'}
+				<div class="ro-banner" role="status">
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+						<rect x="3" y="7" width="10" height="7" rx="1" />
+						<path d="M5 7V5a3 3 0 016 0v2" />
+					</svg>
+					<span>Mode <b>lecture seule</b> — votre compte a le rôle <b>viewer</b>. Contactez un administrateur pour obtenir les droits d'écriture.</span>
 				</div>
 			{/if}
-			{@render children?.()}
-		</main>
+			<main class="app-main" aria-busy={$loading} aria-live="polite">
+				{#if $loading}
+					<div class="loading-bar">
+						<div class="loading-shimmer"></div>
+					</div>
+				{/if}
+				{@render children?.()}
+			</main>
+		</div>
 	</div>
 
 	<ToastContainer />
@@ -184,15 +186,51 @@
 {/if}
 
 <style>
+	.app-shell {
+		display: flex;
+		min-height: 100vh;
+		background: var(--bg);
+	}
+	.app-col {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		min-width: 0; /* allow inner content to scroll horizontally if needed */
+	}
+	.app-main {
+		flex: 1;
+		padding: 22px;
+		position: relative;
+	}
+	.ro-banner {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 8px 14px;
+		background: oklch(80% 0.14 85 / 0.10);
+		border-bottom: 1px solid oklch(80% 0.14 85 / 0.3);
+		color: var(--status-warn);
+		font-size: 12.5px;
+	}
+	.ro-banner svg { flex: none; }
+	.ro-banner b { color: oklch(86% 0.14 85); font-weight: 500; }
+
+	.loading-bar {
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 0;
+		height: 2px;
+		overflow: hidden;
+	}
 	.loading-shimmer {
+		height: 100%;
+		width: 33%;
+		background: var(--accent);
 		animation: shimmer 1.5s ease-in-out infinite;
 	}
 	@keyframes shimmer {
-		0% {
-			transform: translateX(-100%);
-		}
-		100% {
-			transform: translateX(400%);
-		}
+		0% { transform: translateX(-100%); }
+		100% { transform: translateX(400%); }
 	}
 </style>

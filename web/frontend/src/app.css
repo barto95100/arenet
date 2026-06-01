@@ -108,3 +108,16 @@ body {
 		transition-duration: 0s !important;
 	}
 }
+
+/* Step R.2 view-as toggle (D6 — cosmetic-only). Body class set by
+ * the Topbar's "Viewer" button; the backend session role is NOT
+ * mutated. CSS mirrors the mock at
+ * docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html:582-601. */
+body.viewer .admin-only { display: none !important; }
+body.viewer .write-action,
+body.viewer .tb-btn.primary {
+	pointer-events: none;
+	opacity: 0.4;
+	filter: saturate(0.4);
+}
+body.viewer .ro-banner { display: flex !important; }

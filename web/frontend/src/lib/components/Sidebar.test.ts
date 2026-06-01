@@ -2,24 +2,24 @@
 // Copyright (C) 2026  Ludovic Ramos
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-// Sidebar component tests (Step F Chunk 7.3, spec §11.3 — 4 tests).
-// Behavior-based per §11.2.
+// Sidebar component tests (Step R.2 refonte).
+//
+// The mock at docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html
+// :655-714 specifies 4 nav-sections (Aperçu / Trafic / Sécurité /
+// Administration) + 10 nav items + a sidebar-foot with avatar +
+// identity + sign-out icon. There is no collapsed mode (the prior
+// Step F tests covered collapse+expand; those assertions are
+// dropped because the feature is removed by design).
 //
 // Sidebar depends on:
-//   - $app/state's `page` rune for currentPath → must be mocked
-//     because SvelteKit's runtime isn't available in jsdom.
-//   - auth + theme stores: read defensively (auth.user?.) so the
-//     defaults are fine in tests; no stub needed.
-//   - localStorage for collapsed persistence (Chunk 3.4) — jsdom
-//     provides a real localStorage by default.
+//   - $app/state's `page` rune for currentPath → mocked.
+//   - auth store: defaults are OK for the "renders 10 items" base
+//     case (no user → role !== 'admin' → Administration hidden).
+//     The admin-visibility test sets the role explicitly via the
+//     store.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock $app/state BEFORE importing Sidebar. The page object exposes
-// a `url` with a `pathname` — Sidebar reads page.url.pathname into a
-// $derived. Default to '/routes' (so the Routes nav item is active);
-// individual tests can override by replaying vi.doMock per render if
-// needed.
 vi.mock('$app/state', () => ({
 	page: {
 		url: new URL('http://localhost/routes')
@@ -27,29 +27,54 @@ vi.mock('$app/state', () => ({
 }));
 
 import { render, screen } from '@testing-library/svelte';
-import userEvent from '@testing-library/user-event';
 import Sidebar from './Sidebar.svelte';
+import { auth } from '$lib/stores/auth.svelte';
 
 describe('Sidebar', () => {
 	beforeEach(() => {
-		// Clear localStorage between tests so each starts from a known
-		// state (no persisted collapsed value).
-		localStorage.clear();
+		// Reset the auth store between tests so admin-visibility
+		// assertions start from a known state.
+		auth.user = null;
 	});
 
-	it('renders the five nav items in spec order', () => {
+	it('renders the 3 always-visible nav sections + 8 items for an anonymous/viewer user', () => {
 		render(Sidebar);
 
-		// Spec §6.12: Routes, Audit, Topology, Security, Settings.
-		// Step L L.3 inserts Observability between Topology and
-		// Security; Step M.3 enables Security (previously
-		// disabled with a "Coming soon" tooltip). Query by
-		// visible text to keep the assertion stable across nav
-		// expansions.
-		expect(screen.getByText('Routes')).toBeInTheDocument();
-		expect(screen.getByText('Audit')).toBeInTheDocument();
+		// Section labels (mock-naming).
+		expect(screen.getByText('Aperçu')).toBeInTheDocument();
+		expect(screen.getByText('Trafic')).toBeInTheDocument();
+		expect(screen.getByText('Sécurité')).toBeInTheDocument();
+		// Administration is admin-only; default = no user set in store.
+		expect(screen.queryByText('Administration')).not.toBeInTheDocument();
+
+		// 8 non-admin nav items.
+		expect(screen.getByText('Dashboard')).toBeInTheDocument();
 		expect(screen.getByText('Topology')).toBeInTheDocument();
+		expect(screen.getByText('Map')).toBeInTheDocument();
+		expect(screen.getByText('Routes')).toBeInTheDocument();
+		expect(screen.getByText('Logs')).toBeInTheDocument();
+		expect(screen.getByText('WAF')).toBeInTheDocument();
 		expect(screen.getByText('Security')).toBeInTheDocument();
+		expect(screen.getByText('Certificates')).toBeInTheDocument();
+
+		// Admin items absent.
+		expect(screen.queryByText('Utilisateurs')).not.toBeInTheDocument();
+		expect(screen.queryByText('Settings')).not.toBeInTheDocument();
+	});
+
+	it('renders all 4 sections + 10 items for an admin user', () => {
+		auth.user = {
+			username: 'admin',
+			displayName: 'Admin',
+			role: 'admin',
+			mfa: 'none',
+			passwordCompromised: false
+		} as never; // shape compatibility — we only read role here.
+
+		render(Sidebar);
+
+		expect(screen.getByText('Administration')).toBeInTheDocument();
+		expect(screen.getByText('Utilisateurs')).toBeInTheDocument();
 		expect(screen.getByText('Settings')).toBeInTheDocument();
 	});
 
@@ -57,57 +82,23 @@ describe('Sidebar', () => {
 		// Mock returns pathname='/routes' so Routes is the active item.
 		render(Sidebar);
 
-		// Find the Routes link. It should carry aria-current="page" per
-		// Sidebar's `aria-current={active ? 'page' : undefined}`.
 		const routes = screen
 			.getAllByRole('link', { hidden: false })
 			.find((l) => l.textContent?.includes('Routes'));
 		expect(routes).toBeDefined();
 		expect(routes).toHaveAttribute('aria-current', 'page');
 
-		// Audit (non-current) should NOT have aria-current.
-		const audit = screen
+		// Dashboard (non-current) should NOT have aria-current.
+		const dashboard = screen
 			.getAllByRole('link', { hidden: false })
-			.find((l) => l.textContent?.includes('Audit'));
-		expect(audit).not.toHaveAttribute('aria-current');
+			.find((l) => l.textContent?.includes('Dashboard'));
+		expect(dashboard).not.toHaveAttribute('aria-current');
 	});
 
-	it('clicking the collapse button writes the new state to localStorage', async () => {
-		const user = userEvent.setup();
+	it('exposes a sign-out button in the sidebar-foot', () => {
 		render(Sidebar);
-
-		// Initially `collapsed` defaults to false; the button label is
-		// "Collapse sidebar" via aria-label.
-		const collapseBtn = screen.getByRole('button', {
-			name: 'Collapse sidebar'
-		});
-		await user.click(collapseBtn);
-
-		// After click, Sidebar called localStorage.setItem with
-		// arenet_sidebar_collapsed=true. jsdom's localStorage is a
-		// real Storage instance — read it back to assert.
-		expect(localStorage.getItem('arenet_sidebar_collapsed')).toBe('true');
-
-		// The button's aria-label has flipped (collapsed=true).
-		expect(
-			screen.getByRole('button', { name: 'Expand sidebar' })
-		).toBeInTheDocument();
-	});
-
-	it('hydrates collapsed=true from localStorage on mount', () => {
-		// Seed localStorage BEFORE render — the onMount handler reads
-		// arenet_sidebar_collapsed and flips the bindable accordingly.
-		localStorage.setItem('arenet_sidebar_collapsed', 'true');
-		render(Sidebar);
-
-		// The button now reads "Expand sidebar" because the onMount
-		// read the persisted value.
-		expect(
-			screen.getByRole('button', { name: 'Expand sidebar' })
-		).toBeInTheDocument();
-		// Conversely, "Collapse sidebar" is gone.
-		expect(
-			screen.queryByRole('button', { name: 'Collapse sidebar' })
-		).not.toBeInTheDocument();
+		const signOut = screen.getByRole('button', { name: 'Sign out' });
+		expect(signOut).toBeInTheDocument();
+		expect(signOut).not.toBeDisabled();
 	});
 });

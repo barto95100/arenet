@@ -3,63 +3,119 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  Sidebar (Step F §5.2 — Chunk 3.4 refonte). Pinned-collapsible primary
-  nav + footer block with user avatar, theme indicator and the
-  expand/collapse toggle. Collapsed state persists in localStorage
-  under arenet_sidebar_collapsed.
+  Sidebar (Step R.2 refonte). Fixed-width primary nav matching the
+  mock at docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html
+  :655-714. Replaces the Step F collapsed/expanded sidebar with a
+  fixed 232px layout — the mock is intentionally not collapsible.
 
-  Public API (add-only per §1.3): `collapsed` (bindable boolean,
-  default false). Caller can still drive it from outside; the
-  store-side onMount() picks up the persisted value if any and
-  overrides the default — bindable means the caller sees that.
+  Structure: brand block (gradient mark + name + env pill) + 4
+  nav-sections (Aperçu / Trafic / Sécurité / Administration) +
+  10 nav items + sidebar-foot (avatar + identity + sign-out).
+
+  Per spec D8 outcome, /security/decisions and /security/[routeId]
+  are NOT exposed in the sidebar — they remain reachable via
+  "Voir tout" links injected from /waf + /routes detail pages
+  in R.4. Same for /admin/users which is still routed but the
+  sidebar entry points to the new /users top-level route.
+
+  Admin-only filter: viewer-role users see Aperçu / Trafic /
+  Sécurité; the Administration section is hidden in its entirety.
+
+  Width is locked to var(--sb-width); no collapsed mode (mock has
+  no collapse button, by design).
 -->
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { fade } from 'svelte/transition';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import StatusDot from './StatusDot.svelte';
-	import Tooltip from './Tooltip.svelte';
 	import { auth } from '$lib/stores/auth.svelte';
-	import { theme } from '$lib/stores/theme.svelte';
 
-	interface Props {
-		collapsed?: boolean;
+	type IconName =
+		| 'dashboard'
+		| 'topology'
+		| 'map'
+		| 'routes'
+		| 'logs'
+		| 'waf'
+		| 'security'
+		| 'certs'
+		| 'users'
+		| 'settings';
+
+	type NavItem = {
+		href: string;
+		label: string;
+		icon: IconName;
+		adminOnly?: boolean;
+	};
+
+	type NavSection = {
+		label: string;
+		items: NavItem[];
+		adminOnly?: boolean;
+	};
+
+	const sections: NavSection[] = [
+		{
+			label: 'Aperçu',
+			items: [
+				{ href: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
+				{ href: '/topology', label: 'Topology', icon: 'topology' },
+				{ href: '/map', label: 'Map', icon: 'map' }
+			]
+		},
+		{
+			label: 'Trafic',
+			items: [
+				{ href: '/routes', label: 'Routes', icon: 'routes' },
+				{ href: '/logs', label: 'Logs', icon: 'logs' }
+			]
+		},
+		{
+			label: 'Sécurité',
+			items: [
+				{ href: '/waf', label: 'WAF', icon: 'waf' },
+				{ href: '/security', label: 'Security', icon: 'security' },
+				{ href: '/certs', label: 'Certificates', icon: 'certs' }
+			]
+		},
+		{
+			label: 'Administration',
+			adminOnly: true,
+			items: [
+				{ href: '/users', label: 'Utilisateurs', icon: 'users', adminOnly: true },
+				{ href: '/settings', label: 'Settings', icon: 'settings', adminOnly: true }
+			]
+		}
+	];
+
+	const isAdmin = $derived(auth.user?.role === 'admin');
+	const visibleSections = $derived(sections.filter((s) => !s.adminOnly || isAdmin));
+
+	const currentPath = $derived(page.url.pathname);
+	function isActive(href: string): boolean {
+		// Exact-match for clean hrefs; for /security we DO want it active
+		// only on the exact /security route, not on /security/decisions
+		// or /security/[routeId] (those have their own context per D8).
+		return currentPath === href;
 	}
 
-	let { collapsed = $bindable(false) }: Props = $props();
+	// Identity block: 2-letter avatar derived from displayName / username.
+	const userInitials = $derived(
+		(() => {
+			const name = auth.user?.displayName || auth.user?.username || '?';
+			const parts = name.split(/\s+/).filter(Boolean);
+			if (parts.length >= 2) {
+				return (parts[0][0] + parts[1][0]).toUpperCase();
+			}
+			return name.slice(0, 2).toUpperCase();
+		})()
+	);
+	const userLabel = $derived(auth.user?.displayName || auth.user?.username || '');
+	const userRole = $derived(auth.user?.role ?? '');
 
-	// Persistence (Step F §5.2). The collapsed state lives in
-	// localStorage under arenet_sidebar_collapsed; it is read once
-	// at mount and written on every toggle. SSR-safe via the typeof
-	// guard; private-browsing failures swallow silently.
-	const SIDEBAR_LS_KEY = 'arenet_sidebar_collapsed';
-
-	onMount(() => {
-		try {
-			const stored = localStorage.getItem(SIDEBAR_LS_KEY);
-			if (stored === 'true') collapsed = true;
-			else if (stored === 'false') collapsed = false;
-		} catch (_) {
-			// Private-browsing / quota — keep the default (or whatever
-			// the caller passed via the bindable prop).
-		}
-	});
-
-	function toggleCollapsed(): void {
-		collapsed = !collapsed;
-		try {
-			localStorage.setItem(SIDEBAR_LS_KEY, String(collapsed));
-		} catch (_) {
-			// Same fallback as mount — non-fatal.
-		}
-	}
-
-	// Step K.2 — Sign out. Posts /auth/logout (kills the server-side
-	// session + revokes the cookie), then redirects to /login. The
-	// auth store handles its own state clearing; the goto ensures
-	// the user lands on the public login page even if the route they
-	// were on is still mounted.
+	// Sign-out (preserved from Step F sidebar). Sign-out lives in the
+	// sidebar-foot as an icon button to the right of the identity block,
+	// per the mock's compact footer layout.
 	let signingOut = $state(false);
 	async function signOut(): Promise<void> {
 		if (signingOut) return;
@@ -71,343 +127,254 @@
 			void goto('/login');
 		}
 	}
-
-	type IconName =
-		| 'routes'
-		| 'audit'
-		| 'topology'
-		| 'observability'
-		| 'security'
-		| 'crowdsec'
-		| 'settings'
-		| 'users';
-
-	type Item = {
-		href: string;
-		label: string;
-		icon: IconName;
-		disabled?: boolean;
-		tooltip?: string;
-	};
-
-	// Step D inserts Audit between Routes and Topology (spec §6.12).
-	// Step E enables Topology and switches its icon to Lucide `network`.
-	// Step F Chunk 1.6 added a placeholder /settings page (route exists
-	// + cliquable), so Settings is no longer disabled.
-	// Step M.3 enables /security (WAF event dashboard); the
-	// Phase-2-deferred banner is gone.
-	// Step K.2 adds /admin/users, admin-only — filtered out for viewers.
-	const baseItems: Item[] = [
-		{ href: '/routes', label: 'Routes', icon: 'routes' },
-		{ href: '/audit', label: 'Audit', icon: 'audit' },
-		{ href: '/topology', label: 'Topology', icon: 'topology' },
-		// Step L L.3 — historical metrics. Viewer-accessible per
-		// AC #17 (no role filter here; the API gate is enough).
-		{ href: '/observability', label: 'Observability', icon: 'observability' },
-		{ href: '/security', label: 'Security', icon: 'security' },
-		// Step N.4 — CrowdSec decisions drill-down. Per N spec
-		// §5.4, mounted as its own top-level item (rather than
-		// nested under Security) because the sidebar is flat in
-		// v1.x — a sub-nav refactor is out of scope.
-		{ href: '/security/decisions', label: 'CrowdSec', icon: 'crowdsec' },
-		{ href: '/admin/users', label: 'Users', icon: 'users' },
-		{ href: '/settings', label: 'Settings', icon: 'settings' }
-	];
-	const items = $derived(
-		baseItems.filter((it) => it.href !== '/admin/users' || auth.user?.role === 'admin')
-	);
-
-	const currentPath = $derived(page.url.pathname);
-	const isActive = (href: string) => currentPath === href;
-
-	// Footer block helpers (Step F §5.2 footer pinned).
-	const userInitial = $derived(
-		(auth.user?.displayName || auth.user?.username || '?').slice(0, 1).toUpperCase()
-	);
-	const userLabel = $derived(auth.user?.displayName || auth.user?.username || '');
 </script>
 
 {#snippet itemIcon(icon: IconName)}
-	<svg
-		class="w-[18px] h-[18px] shrink-0"
-		viewBox="0 0 24 24"
-		fill="none"
-		stroke="currentColor"
-		stroke-width="2"
-		stroke-linecap="round"
-		stroke-linejoin="round"
-		aria-hidden="true"
-	>
-		{#if icon === 'routes'}
-			<!-- Lucide: share-2 -->
-			<circle cx="18" cy="5" r="3" />
-			<circle cx="6" cy="12" r="3" />
-			<circle cx="18" cy="19" r="3" />
-			<line x1="8.59" x2="15.42" y1="13.51" y2="17.49" />
-			<line x1="15.41" x2="8.59" y1="6.51" y2="10.49" />
-		{:else if icon === 'audit'}
-			<!-- Lucide: activity -->
-			<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.5.5 0 0 1-.96 0L9.24 2.18a.5.5 0 0 0-.96 0l-2.35 8.36A2 2 0 0 1 4 12H2" />
+	<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+		{#if icon === 'dashboard'}
+			<rect x="2" y="2" width="5" height="6" rx="1" />
+			<rect x="9" y="2" width="5" height="4" rx="1" />
+			<rect x="2" y="10" width="5" height="4" rx="1" />
+			<rect x="9" y="8" width="5" height="6" rx="1" />
 		{:else if icon === 'topology'}
-			<!-- Lucide: network -->
-			<rect x="16" y="16" width="6" height="6" rx="1" />
-			<rect x="2" y="16" width="6" height="6" rx="1" />
-			<rect x="9" y="2" width="6" height="6" rx="1" />
-			<path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" />
-			<path d="M12 12V8" />
-		{:else if icon === 'observability'}
-			<!-- Lucide: bar-chart-3 -->
-			<path d="M3 3v18h18" />
-			<path d="M7 16v-4" />
-			<path d="M12 16v-9" />
-			<path d="M17 16v-6" />
+			<circle cx="3" cy="3" r="1.5" />
+			<circle cx="3" cy="13" r="1.5" />
+			<circle cx="13" cy="3" r="1.5" />
+			<circle cx="13" cy="13" r="1.5" />
+			<circle cx="8" cy="8" r="2" />
+			<path d="M4.2 4 6.5 6.6M9.5 6.6 11.8 4M4.2 12 6.5 9.4M9.5 9.4 11.8 12" />
+		{:else if icon === 'map'}
+			<circle cx="8" cy="8" r="6" />
+			<path d="M2 8h12M8 2c2 1.8 2 10.2 0 12M8 2c-2 1.8-2 10.2 0 12" />
+		{:else if icon === 'routes'}
+			<circle cx="3" cy="8" r="2" />
+			<circle cx="13" cy="8" r="2" />
+			<path d="M5 8h6" />
+		{:else if icon === 'logs'}
+			<path d="M3 3h10v10H3z" />
+			<path d="M5 6h6M5 8.5h6M5 11h4" />
+		{:else if icon === 'waf'}
+			<path d="M8 1l5 2v5c0 3.5-2.5 6-5 7-2.5-1-5-3.5-5-7V3l5-2z" />
 		{:else if icon === 'security'}
-			<!-- Lucide: shield -->
-			<path
-				d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
-			/>
-		{:else if icon === 'crowdsec'}
-			<!-- Lucide: shield-ban — IP reputation gate. Same
-			     shield silhouette as Security but with a
-			     diagonal "no" stroke to mark the deny-list
-			     posture. -->
-			<path
-				d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
-			/>
-			<line x1="9" y1="9" x2="15" y2="15" />
-		{:else if icon === 'settings'}
-			<!-- Lucide: settings -->
-			<path
-				d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"
-			/>
-			<circle cx="12" cy="12" r="3" />
+			<rect x="3" y="7" width="10" height="7" rx="1" />
+			<path d="M5 7V5a3 3 0 016 0v2" />
+		{:else if icon === 'certs'}
+			<rect x="2.5" y="3" width="11" height="8" rx="1" />
+			<path d="M5.5 13l1 2 1.5-1 1.5 1 1-2" />
+			<circle cx="8" cy="7" r="2" />
 		{:else if icon === 'users'}
-			<!-- Lucide: users -->
-			<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-			<circle cx="9" cy="7" r="4" />
-			<path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-			<path d="M16 3.13a4 4 0 0 1 0 7.75" />
+			<circle cx="6" cy="5.5" r="2.5" />
+			<path d="M1.5 13.5c.5-2.5 2.4-4 4.5-4s4 1.5 4.5 4" />
+			<circle cx="11.5" cy="6.5" r="1.8" />
+			<path d="M11.5 10c1.7 0 3 1.1 3.2 2.8" />
+		{:else if icon === 'settings'}
+			<circle cx="8" cy="8" r="2" />
+			<path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5L13 13M3 13l1.5-1.5M11.5 4.5L13 3" />
 		{/if}
 	</svg>
 {/snippet}
 
-<aside
-	class="sidebar flex flex-col bg-sidebar border-r border-border-subtle h-screen sticky top-0"
-	style:width={collapsed ? '64px' : '256px'}
-	aria-label="Primary"
->
-	<div class="px-4 py-5 border-b border-border-subtle">
-		<span class="font-mono text-base font-bold tracking-widest">
-			<span class="text-cyan">A</span><span class:hidden={collapsed}>RENET</span>
-		</span>
+<aside class="sidebar" aria-label="Primary">
+	<div class="brand">
+		<div class="brand-mark" aria-hidden="true">A</div>
+		<div class="brand-name">AreNET</div>
+		<div class="brand-env">dev</div>
 	</div>
 
-	<nav class="flex-1 py-3 flex flex-col gap-1">
-		{#each items as item (item.href)}
+	{#each visibleSections as section (section.label)}
+		<div class="nav-section">{section.label}</div>
+		{#each section.items as item (item.href)}
 			{@const active = isActive(item.href)}
-			{#if collapsed}
-				<Tooltip label={item.tooltip ?? item.label} side="right">
-					{#snippet children()}
-						<a
-							href={item.disabled ? undefined : item.href}
-							aria-current={active ? 'page' : undefined}
-							aria-disabled={item.disabled ? 'true' : undefined}
-							tabindex={item.disabled ? -1 : 0}
-							class="nav-item nav-item-collapsed mx-2 px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-3"
-							class:active
-							class:disabled={item.disabled}
-						>
-							{@render itemIcon(item.icon)}
-						</a>
-					{/snippet}
-				</Tooltip>
-			{:else}
-				<a
-					href={item.disabled ? undefined : item.href}
-					title={item.tooltip ?? item.label}
-					aria-current={active ? 'page' : undefined}
-					aria-disabled={item.disabled ? 'true' : undefined}
-					tabindex={item.disabled ? -1 : 0}
-					class="nav-item mx-2 px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-3"
-					class:active
-					class:disabled={item.disabled}
-				>
-					{@render itemIcon(item.icon)}
-					<span>{item.label}</span>
-				</a>
-			{/if}
-		{/each}
-	</nav>
-
-	<!-- Footer block (Step F §5.2). Mounts with a 200 ms fade so it
-	     doesn't pop in cold on first paint; the parent aside is
-	     persistent so the fade fires once per session, not on every
-	     route change. -->
-	<div
-		class="sidebar-footer px-4 py-3 border-t border-border-subtle flex flex-col gap-2"
-		transition:fade={{ duration: 200 }}
-	>
-		<!-- Connection status. The StatusDot is small (8x8); wrapping
-		     it in a 24x24 .footer-icon-slot aligns its trailing label
-		     with the avatar/theme rows (Chunk 3.5 smoke fix). -->
-		<div class="flex items-center gap-2 text-xs" class:justify-center={collapsed}>
-			<span class="footer-icon-slot">
-				<StatusDot status="up" />
-			</span>
-			<span class:hidden={collapsed} class="text-secondary">Connected</span>
-		</div>
-
-		<!-- User identity (avatar with initial + display name when expanded). -->
-		<div class="flex items-center gap-2 text-sm" class:justify-center={collapsed}>
-			<span
-				class="avatar inline-flex items-center justify-center w-6 h-6 rounded-full bg-elevated border border-border-default shrink-0"
-				aria-label={`Signed in as ${userLabel}`}
+			<a
+				href={item.href}
+				class="nav-item"
+				class:active
+				aria-current={active ? 'page' : undefined}
 			>
-				{userInitial}
-			</span>
-			<span class:hidden={collapsed} class="text-primary truncate">{userLabel}</span>
-		</div>
+				{@render itemIcon(item.icon)}
+				<span>{item.label}</span>
+			</a>
+		{/each}
+	{/each}
 
-		<!-- Step K.2 — Sign out. Visible in both expanded and
-		     collapsed states (icon-only when collapsed). Calls
-		     auth.logout() then redirects to /login. -->
+	<div class="sidebar-foot">
+		<div class="avatar" aria-label={`Signed in as ${userLabel}`}>{userInitials}</div>
+		<div class="who">
+			{userLabel}
+			<small>{userRole}</small>
+		</div>
 		<button
 			type="button"
-			class="signout-btn flex items-center gap-2 text-xs text-secondary hover:text-primary transition-colors disabled:opacity-50"
-			class:justify-center={collapsed}
+			class="signout"
 			aria-label="Sign out"
+			title="Sign out"
 			disabled={signingOut}
 			onclick={signOut}
 		>
-			<span class="footer-icon-slot" aria-hidden="true">
-				<!-- Lucide: log-out -->
-				<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-					<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-					<polyline points="16 17 21 12 16 7" />
-					<line x1="21" x2="9" y1="12" y2="12" />
-				</svg>
-			</span>
-			<span class:hidden={collapsed}>{signingOut ? 'Signing out…' : 'Sign out'}</span>
-		</button>
-
-		<!-- Theme indicator (passive — does not toggle; the active
-		     control lives in Settings). Sun for light, moon for dark.
-		     Reads theme.current directly so it tracks the store.
-		     The icon (14x14 sun/moon) sits inside a 24x24 .footer-icon-slot
-		     so the trailing label aligns with the other footer rows. -->
-		<div class="flex items-center gap-2 text-xs" class:justify-center={collapsed}>
-			<span class="footer-icon-slot text-muted" aria-hidden="true">
-				{#if theme.current === 'light'}
-					<!-- Lucide: sun -->
-					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-						<circle cx="12" cy="12" r="4" />
-						<path d="M12 2v2" />
-						<path d="M12 20v2" />
-						<path d="m4.93 4.93 1.41 1.41" />
-						<path d="m17.66 17.66 1.41 1.41" />
-						<path d="M2 12h2" />
-						<path d="M20 12h2" />
-						<path d="m6.34 17.66-1.41 1.41" />
-						<path d="m19.07 4.93-1.41 1.41" />
-					</svg>
-				{:else}
-					<!-- Lucide: moon -->
-					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-						<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
-					</svg>
-				{/if}
-			</span>
-			<span class:hidden={collapsed} class="text-secondary capitalize">{theme.current}</span>
-		</div>
-
-		<!-- Expand / collapse toggle (chevron). -->
-		<button
-			type="button"
-			class="collapse-btn text-xs text-secondary hover:text-primary self-start transition-colors"
-			class:self-center={collapsed}
-			aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-			onclick={toggleCollapsed}
-		>
-			{#if collapsed}
-				<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-					<!-- Lucide: chevrons-right -->
-					<path d="m6 17 5-5-5-5" />
-					<path d="m13 17 5-5-5-5" />
-				</svg>
-			{:else}
-				<span class="inline-flex items-center gap-1">
-					<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-						<!-- Lucide: chevrons-left -->
-						<path d="m11 17-5-5 5-5" />
-						<path d="m18 17-5-5 5-5" />
-					</svg>
-					Collapse
-				</span>
-			{/if}
+			<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+				<path d="M6 13H4a1 1 0 01-1-1V4a1 1 0 011-1h2" />
+				<path d="M10 11l3-3-3-3" />
+				<line x1="13" y1="8" x2="6" y2="8" />
+			</svg>
 		</button>
 	</div>
 </aside>
 
 <style>
 	.sidebar {
-		/* Width change drives the collapse animation; CSS transition
-		 * uses var(--motion-base) so a future global tweak applies
-		 * uniformly. Previously this was Tailwind's transition-[width]
-		 * duration-200 utility which hardcoded 200ms; the token-based
-		 * form is equivalent today but follows the design system. */
-		transition: width var(--motion-base);
+		width: var(--sb-width);
+		background: oklch(13% 0.005 250);
+		border-right: 1px solid var(--border);
+		padding: 18px 12px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		position: sticky;
+		top: 0;
+		height: 100vh;
+		flex: none;
 	}
+
+	.brand {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 6px 8px 18px;
+		margin-bottom: 6px;
+		border-bottom: 1px solid var(--border);
+	}
+	.brand-mark {
+		width: 30px;
+		height: 30px;
+		border-radius: 7px;
+		background: linear-gradient(140deg, var(--accent) 0%, oklch(52% 0.22 265) 100%);
+		display: grid;
+		place-items: center;
+		color: #fff;
+		font-family: var(--font-display);
+		font-weight: 600;
+		font-size: 15px;
+		letter-spacing: -0.02em;
+		box-shadow: inset 0 1px 0 oklch(82% 0.18 250 / 0.5), 0 1px 0 oklch(0% 0 0 / 0.4);
+	}
+	.brand-name {
+		font-family: var(--font-display);
+		font-size: 16px;
+		font-weight: 600;
+		letter-spacing: -0.02em;
+		color: var(--fg);
+	}
+	.brand-env {
+		margin-left: auto;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--fg-muted);
+		background: var(--surface);
+		border: 1px solid var(--border);
+		padding: 2px 6px;
+		border-radius: 4px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+
+	.nav-section {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--fg-dim);
+		padding: 14px 10px 6px;
+	}
+
 	.nav-item {
-		position: relative;
-		color: var(--text-secondary);
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 7px 10px;
+		border-radius: var(--radius-sm);
+		color: var(--fg-muted);
+		font-size: 13.5px;
+		font-weight: 450;
+		text-decoration: none;
+		transition: background 0.12s, color 0.12s;
 	}
-	.nav-item:hover:not(.disabled) {
-		background-color: var(--bg-hover);
-		color: var(--text-primary);
+	.nav-item:hover {
+		background: var(--surface);
+		color: var(--fg);
 	}
 	.nav-item.active {
-		color: var(--text-primary);
-		background-color: var(--bg-hover);
-		box-shadow: var(--shadow-glow-cyan);
+		background: var(--accent-soft);
+		color: oklch(82% 0.16 255);
+		box-shadow: inset 2px 0 0 var(--accent);
 	}
-	/* Cyan rail on the left edge of the active item. The fixed-position
-	 * approach keeps it independent of the item's content height. */
-	.nav-item.active::before {
-		content: '';
-		position: absolute;
-		left: -8px;
-		top: var(--space-2);
-		bottom: var(--space-2);
-		width: 4px;
-		border-radius: 2px;
-		background-color: var(--accent-cyan);
+	.nav-item .ic {
+		width: 16px;
+		height: 16px;
+		flex: none;
+		opacity: 0.9;
 	}
-	.nav-item.disabled {
-		color: var(--text-muted);
-		cursor: not-allowed;
-		pointer-events: none;
-	}
-	/* Collapsed items center their icon (no label rendered). */
-	.nav-item-collapsed {
-		justify-content: center;
+
+	.sidebar-foot {
+		margin-top: auto;
+		padding: 10px;
+		border-top: 1px solid var(--border);
+		display: flex;
+		align-items: center;
+		gap: 10px;
 	}
 	.avatar {
-		font-size: var(--text-xs);
-		font-weight: 600;
-		color: var(--text-secondary);
-		line-height: 1;
+		width: 28px;
+		height: 28px;
+		border-radius: 50%;
+		background: var(--surface-hi);
+		display: grid;
+		place-items: center;
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--fg);
+		font-family: var(--font-mono);
+		flex: none;
 	}
-	/* 24x24 wrapper for footer-row icons so labels (Connected /
-	 * username / theme name) align under each other regardless of
-	 * the icon's intrinsic size. Avatar is already 24x24 so it
-	 * does not need this class; StatusDot (8x8) and the theme
-	 * sun/moon SVG (14x14) do. Chunk 3.5 smoke fix. */
-	.footer-icon-slot {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 24px;
-		height: 24px;
-		flex-shrink: 0;
+	.who {
+		font-size: 12.5px;
+		line-height: 1.25;
+		color: var(--fg);
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.who small {
+		display: block;
+		color: var(--fg-dim);
+		font-size: 11px;
+		text-transform: capitalize;
+	}
+	.signout {
+		width: 26px;
+		height: 26px;
+		display: grid;
+		place-items: center;
+		background: transparent;
+		border: 1px solid transparent;
+		border-radius: var(--radius-sm);
+		color: var(--fg-muted);
+		cursor: pointer;
+		flex: none;
+		transition: background 0.12s, color 0.12s, border-color 0.12s;
+	}
+	.signout:hover:not(:disabled) {
+		background: var(--surface);
+		color: var(--fg);
+		border-color: var(--border);
+	}
+	.signout:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.signout svg {
+		width: 14px;
+		height: 14px;
 	}
 </style>
