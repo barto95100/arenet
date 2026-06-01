@@ -22,7 +22,7 @@ The implicit goal: **enable real operational feedback**. After Step S ships, the
 | Sub | Surface | What it produces |
 |-----|---------|------------------|
 | S.1 | Docker image | Multi-arch (linux/amd64 + linux/arm64) `Dockerfile` producing a single binary image. Build via `docker buildx`. CI workflow to publish on tag. Base image = distroless or Alpine — see D2. |
-| S.2 | Compose + systemd | `docker-compose.yml` reference stack: arenet container + named volumes for `arenet.db` / `metrics.db` / `audit.db` / `certmagic/` + port mapping (80/443 data plane + 9994 admin). Plus `packaging/systemd/arenet.service` for native-Linux installs. |
+| S.2 | Compose + systemd | `docker-compose.yml` reference stack: arenet container + named volumes for `arenet.db` / `metrics.db` / `audit.db` / `certmagic/` + port mapping (80/443 data plane + 8001 admin). Plus `packaging/systemd/arenet.service` for native-Linux installs. |
 | S.3 | Config + init | Config loading: env vars + optional `--config` file (TOML/YAML — D5). First-boot wizard via `/setup` (Step K-era) handles admin creation; no CLI init command needed unless D7 says otherwise. Data dir layout per D4. |
 | S.4 | Hardening + doc | Admin TLS (D6 — Caddy self-cert vs reverse-proxy vs HTTP-only). Rate-limit on `/api/*` admin endpoints (Step Q already has the pieces — wire a default global limit). Secrets handling (env-only / file / Docker secrets — D5). README + `docs/install/` quickstart (Docker 5-min + native systemd) + `docs/operations/` (backup, upgrade, hardening checklist). |
 | S.5 | Smoke + verdict | Real homelab install on the operator's machine. AC matrix: container builds for both archs, compose stack boots, /setup completes, admin endpoint reachable, data persists across container restart, schema migration runs cleanly on upgrade from v1.4.0-step-r-built binary. Verdict doc at `docs/smoke-test-step-s.md`. |
@@ -30,7 +30,7 @@ The implicit goal: **enable real operational feedback**. After Step S ships, the
 ### 1.3 What this step DOES NOT do
 
 - **HA / multi-host**: state is BoltDB + SQLite on local disk; no distributed-storage abstraction, no leader election. Future big-refactor step (Step T or later).
-- **Automated TLS for admin port 9994**: ACME chicken-egg (Arenet needs to be running to provision its own cert; admin port needs the cert to be running). Worked around in D6 with operator-side options (self-signed default, reverse-proxy-in-front recipe, or HTTP-localhost-only). Real auto-TLS for admin is a follow-up.
+- **Automated TLS for admin port 8001**: ACME chicken-egg (Arenet needs to be running to provision its own cert; admin port needs the cert to be running). Worked around in D6 with operator-side options (self-signed default, reverse-proxy-in-front recipe, or HTTP-localhost-only). Real auto-TLS for admin is a follow-up.
 - **Kubernetes manifests**: future. Helm chart + k8s Service/Deployment YAML can be done once compose works and we have operator feedback on what defaults make sense.
 - **Distro packages (.deb / .rpm)**: future. systemd unit is the bridge; package wrappers can come if/when operator demand surfaces.
 - **CI test matrix expansion**: existing `go test ./...` + `npm test` coverage carries over. Step S doesn't add new test surfaces beyond the docker-build smoke.
@@ -44,7 +44,7 @@ All 9 decisions arbitrated 2026-06-01. Each entry: Outcome → rationale-of-reco
 
 ### D1 — Binary scope: single-binary ✓ (Outcome: A)
 
-**Outcome**: one `arenet` binary serves both data plane (:80 / :443) and admin plane (:9994).
+**Outcome**: one `arenet` binary serves both data plane (:80 / :443) and admin plane (:8001).
 
 **Rationale-of-record**: matches the CLAUDE.md architecture diagram + the codebase as-built. Admin state (auth, audit, idle timer) and data plane (route config, observability counters, WAF event sink) share too much state to split cleanly without a massive refactor. The homelab audience values "one binary, one process, one systemd unit" simplicity. Same-process risk (an admin-plane bug affecting data plane) is mitigated by existing test coverage; if a real incident surfaces the need to split, it becomes a focused future step.
 
@@ -64,9 +64,11 @@ S.1 commit message + spec amendment document the verdict path taken. NO speculat
 
 ### D3 — Default port mapping ✓ (Outcome: A)
 
-**Outcome**: `80:80 443:443` on the host; admin `127.0.0.1:9994:9994` loopback-only by default.
+**Outcome**: `80:80 443:443` on the host; admin `127.0.0.1:8001:8001` loopback-only by default.
 
 **Rationale-of-record**: matches operator mental model ("a reverse proxy listens on :80/:443"). Loopback-only admin binding makes LAN exposure an explicit operator override (D6), not an accident. Privileged port bind on Linux is handled transparently by Docker; the systemd unit ships `AmbientCapabilities=CAP_NET_BIND_SERVICE` so the binary runs as the non-root `arenet` user with bind permission.
+
+**Port number history note (clarification 2026-06-01)**: the admin port default is **`:8001`** — that's what the binary's `--admin-port` flag has defaulted to since Step D (`cmd/arenet/main.go:109`). The prior steps' smoke-test docs (M / Q / N / O / P) explicitly used `-admin-port=:9994` to avoid potential collision with whatever else might be running on the dev machine — `:9994` was a **smoke-test convention**, not the production default. S.4 documentation will surface this distinction in `docs/operations/troubleshooting.md` so an operator who reads old smoke logs and sees `:9994` doesn't get confused.
 
 ### D4 — Data dir layout ✓ (Outcome: A)
 
@@ -82,7 +84,7 @@ S.1 commit message + spec amendment document the verdict path taken. NO speculat
 
 ### D6 — Admin port TLS: loopback default ✓ (Outcome: A)
 
-**Outcome**: admin port :9994 binds `127.0.0.1` by default. Three operator paths documented:
+**Outcome**: admin port :8001 binds `127.0.0.1` by default. Three operator paths documented:
 1. **Default (loopback only)**: accessed via SSH tunnel from workstation. Zero TLS bootstrap.
 2. **Reverse-proxy-in-front**: operator runs an HTTPS terminator (Caddy / Nginx / Cloudflare Tunnel) in front. Recipe in `docs/operations/hardening.md`.
 3. **Self-signed (advanced)**: optional `ARENET_ADMIN_TLS_CERT` + `ARENET_ADMIN_TLS_KEY` env vars; if both set, admin binds HTTPS with the supplied cert. Operator manages cert lifecycle.
@@ -100,11 +102,11 @@ the admin UI is loopback-restricted. To access the admin from
 a workstation on your LAN, choose one of:
 
   Option 1 — SSH tunnel (recommended, no config change):
-    ssh -L 9994:localhost:9994 <homelab-host>
-    open http://localhost:9994 in your browser
+    ssh -L 8001:localhost:8001 <homelab-host>
+    open http://localhost:8001 in your browser
 
   Option 2 — Bind admin to LAN (less secure, plaintext):
-    Set ARENET_ADMIN_BIND=0.0.0.0:9994 in your compose env or
+    Set ARENET_ADMIN_BIND=0.0.0.0:8001 in your compose env or
     /etc/arenet/arenet.env, then restart. Anyone on your LAN
     can now reach the admin port over plain HTTP — put a TLS
     terminator in front before relying on this for anything
@@ -139,15 +141,15 @@ This paragraph lands in the quickstart MAIN BODY, not in a "production hardening
 |---|----|---|
 | 1 | Docker image builds for linux/amd64 + linux/arm64 | `docker buildx build --platform linux/amd64,linux/arm64 -t arenet:test .` succeeds; image inspected with `docker manifest inspect` shows both arch entries. |
 | 2 | Image size — **AMENDED at S.1 first build per D2 binding side-exigence**. New ceiling: **uncompressed ≤ 100 MB AND registry-compressed ≤ 30 MB**. | Measured at S.1 (commit `<TBD>`): `docker images` reports **94.1 MB uncompressed** for `arenet:s1-local` (linux/arm64, distroless static + static Go binary built with `-ldflags "-s -w" -trimpath`). `docker save \| gzip \| wc -c` reports **22.4 MB registry-compressed**. **Path A taken**: amend both ceilings with rationale. The monolithic single-binary approach (D1) bundles the SvelteKit frontend (embed.FS) + every Caddy module + Coraza WAF + CrowdSec bouncer + observability/automation deps; the cost is inherent and acceptable for the v1.0 ship target. Reference comparison: Caddy official ~50 MB, Traefik ~120 MB — Arenet at ~94 MB uncompressed / 22.4 MB compressed slots reasonably between them. No speculative compression work (UPX, sidecar, aggressive strip) attempted, preserving the D1 simplicity. **VERDICT: PASS against amended ceiling.** |
-| 3 | Compose stack boots cleanly | `docker compose up -d` against the reference `docker-compose.yml` brings arenet up; healthcheck on `/api/v1/healthz` returns 200 within 10s. |
+| 3 | Compose stack boots cleanly | `docker compose up -d` against the reference `docker-compose.yml` brings arenet up; healthcheck on `/healthz` returns 200 within 10s. |
 | 4 | Data persists across container restart | Stop + remove arenet container, recreate with same volumes; existing routes / users / audit log still present. |
 | 5 | systemd unit installs + starts | `systemctl daemon-reload && systemctl start arenet` on a Linux box starts the binary as the `arenet` user with `CAP_NET_BIND_SERVICE`; `systemctl status` shows active (running). |
 | 6 | First-boot setup completes | Fresh data dir + browser to admin port → `/setup` wizard creates admin user; subsequent browser visit to `/login` accepts the new credentials. |
 | 7 | Schema migration runs on upgrade | v1.4.0-step-r binary started against v1.4 data dir → no-op (schema is current). Future migrations: documented contract that v1.X+1 against v1.X data is auto-migrate + log. Pinned by re-running existing M/N/O/P/R migration test suites against the packaged binary. |
-| 8 | Admin port loopback default | Fresh install: `curl http://127.0.0.1:9994/api/v1/healthz` works from inside the box; `curl http://<LAN-IP>:9994/api/v1/healthz` from another machine fails (connection refused, not 401). |
+| 8 | Admin port loopback default | Fresh install: `curl http://127.0.0.1:8001/healthz` works from inside the box; `curl http://<LAN-IP>:8001/healthz` from another machine fails (connection refused, not 401). |
 | 9 | Hardening checklist documented + verified | `docs/operations/hardening.md` exists, lists: admin TLS options (D6 three paths), `/api/*` rate limiting (Step Q wired in), default-deny network posture, secret storage. Each item has a "verify" command. |
 | 10 | Backup + restore documented + verified | `docs/operations/backup.md` shows a working backup script (stop arenet → tar the data dir → restart) and the inverse restore. Verified by: snapshot before a config mutation → restore → mutation gone. |
-| 11 | Quickstart 5-min path actually 5 min — **MUST include inline LAN-override copy per D6 binding side-exigence** | `docs/install/docker-quickstart.md` followed end-to-end on a fresh VM produces a running, browser-accessible Arenet in ≤ 5 minutes wall-clock. Timed by the operator during S.5 smoke. The quickstart MUST show the SSH-tunnel + `ARENET_ADMIN_BIND=0.0.0.0:9994` LAN-override paragraph in the main body (verbatim per D6) — NOT in a separate hardening doc. Smoke verifies the paragraph is present + readable as a first-time-operator. |
+| 11 | Quickstart 5-min path actually 5 min — **MUST include inline LAN-override copy per D6 binding side-exigence** | `docs/install/docker-quickstart.md` followed end-to-end on a fresh VM produces a running, browser-accessible Arenet in ≤ 5 minutes wall-clock. Timed by the operator during S.5 smoke. The quickstart MUST show the SSH-tunnel + `ARENET_ADMIN_BIND=0.0.0.0:8001` LAN-override paragraph in the main body (verbatim per D6) — NOT in a separate hardening doc. Smoke verifies the paragraph is present + readable as a first-time-operator. |
 | 12 | Standard lint/test gates | `go vet ./...`, `go test ./...`, `npm run check`, `npm run build` all green on the tip. |
 | 13 | Image is non-root + minimal capabilities | `docker inspect arenet:test` shows USER set to a non-root UID; CAP_NET_BIND_SERVICE is the only capability granted in the compose example. |
 | 14 | CI workflow publishes on tag | `.github/workflows/release.yml` triggers on `v*` tag push, runs buildx for amd64+arm64, pushes to a configured registry (ghcr.io default). Dry-run verified before live publish. |
@@ -158,7 +160,7 @@ This paragraph lands in the quickstart MAIN BODY, not in a "production hardening
 
 ### 4.1 Single-binary boundary
 
-Per D1, one `arenet` binary serves :80 / :443 (data plane) + :9994 (admin plane). All code lives in the existing repo structure; Step S adds **packaging + config glue**, not new internal/ packages (except possibly `internal/config/` if the env+file precedence logic earns its own package — TBD during S.3).
+Per D1, one `arenet` binary serves :80 / :443 (data plane) + :8001 (admin plane). All code lives in the existing repo structure; Step S adds **packaging + config glue**, not new internal/ packages (except possibly `internal/config/` if the env+file precedence logic earns its own package — TBD during S.3).
 
 ### 4.2 Docker artefact
 
@@ -189,7 +191,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend /out/arenet /usr/local/bin/arenet
 USER nonroot:nonroot
-EXPOSE 80 443 9994
+EXPOSE 80 443 8001
 ENTRYPOINT ["/usr/local/bin/arenet"]
 ```
 
@@ -210,7 +212,7 @@ services:
       # put a TLS-terminating reverse proxy in front (see
       # docs/operations/hardening.md). Uncomment ONLY if you
       # understand the implications.
-      - "127.0.0.1:9994:9994"
+      - "127.0.0.1:8001:8001"
     volumes:
       - arenet-data:/var/lib/arenet
     environment:
@@ -228,7 +230,7 @@ volumes:
   arenet-data:
 ```
 
-Note: a `arenet healthcheck` subcommand is needed because distroless has no curl/wget. Simple HTTP client subcommand against `127.0.0.1:9994/api/v1/healthz`.
+Note: a `arenet healthcheck` subcommand is needed because distroless has no curl/wget. Simple HTTP client subcommand against `127.0.0.1:8001/healthz`.
 
 ### 4.4 systemd unit
 
@@ -268,7 +270,7 @@ WantedBy=multi-user.target
 
 Keys:
 - `ARENET_DATA_DIR` (default `/var/lib/arenet`)
-- `ARENET_ADMIN_BIND` (default `127.0.0.1:9994`)
+- `ARENET_ADMIN_BIND` (default `127.0.0.1:8001`)
 - `ARENET_DATA_BIND_HTTP` (default `:80`)
 - `ARENET_DATA_BIND_HTTPS` (default `:443`)
 - `ARENET_LOG_LEVEL` (default `info`)
@@ -315,7 +317,7 @@ The D6 quickstart LAN-override paragraph (verbatim text in the D6 decision body 
 ## 6. Out of scope (rationale-of-record)
 
 - **HA / multi-host clustering**. State is local-disk BoltDB + SQLite; distributing it requires a new storage abstraction (Postgres? embedded etcd? consensus?) + leader election + replication strategy + split-brain handling. That's a big-refactor step in its own right and there's no operator demand yet. Run a single Arenet instance per homelab; failover via a separate HA layer (keepalived, etc.) if needed.
-- **Automated TLS for admin port 9994**. Caddy can self-cert against an internal CA, but the bootstrap is chicken-egg: Arenet needs to be up to issue the cert; the cert is needed to expose the admin port. Solvable (use a self-signed cert at boot, rotate later) but operationally awkward + adds error paths. Defer until operator feedback says the loopback-only / reverse-proxy-in-front paths are inadequate.
+- **Automated TLS for admin port 8001**. Caddy can self-cert against an internal CA, but the bootstrap is chicken-egg: Arenet needs to be up to issue the cert; the cert is needed to expose the admin port. Solvable (use a self-signed cert at boot, rotate later) but operationally awkward + adds error paths. Defer until operator feedback says the loopback-only / reverse-proxy-in-front paths are inadequate.
 - **Kubernetes Helm chart / manifests**. The homelab audience for v1.0 is single-node docker-compose or systemd. K8s deployment is a different operator profile (multi-node clusters, GitOps pipelines); the manifests should be designed against operator feedback, not speculation. Future step once compose ships.
 - **Distro packages (.deb / .rpm)**. systemd unit + tarball install is the bridge for native Linux. Packaging adds release infrastructure (signing keys, repository hosting, distro-specific build matrices) without solving an unsolved problem — operators who want native install can run the systemd unit today. Defer until packaging demand is concrete.
 - **CI test matrix expansion**. Existing `go test ./...` + `npm test` coverage carries forward; Step S adds the docker-build smoke as a new CI surface but doesn't expand the test matrix beyond it. Coverage gaps in M/N/O/P/R remain backlog items in their respective steps.
