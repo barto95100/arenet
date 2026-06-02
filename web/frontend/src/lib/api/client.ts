@@ -22,8 +22,16 @@ import { idle } from '$lib/stores/idle.svelte';
 import { pushToast } from '$lib/stores/toast';
 import { goto } from '$app/navigation';
 
-const BASE: string = (import.meta.env.VITE_API_BASE_URL ?? '') as string;
-
+// In production (the binary serves both API and frontend), always use
+// same-origin paths regardless of any VITE_API_BASE_URL value baked
+// into the bundle. Step #S-21 fix: without this guard, a non-empty
+// VITE_API_BASE_URL in .env (intentional for dev — see vite.config
+// proxy) gets compiled into the prod bundle, breaking every admin
+// context other than localhost (LAN HTTP admin, FQDN admin, etc.)
+// with cross-origin fetches that the binary cannot satisfy via CORS.
+const BASE: string = import.meta.env.DEV
+	? ((import.meta.env.VITE_API_BASE_URL ?? '') as string)
+	: '';
 /**
  * Send an HTTP request to /api/v1/<path> with JSON body/response
  * semantics. Generic on the response type T. Throws ApiError on any

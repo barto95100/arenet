@@ -124,7 +124,15 @@ export class TopologyClient {
 	constructor(opts: TopologyClientOptions) {
 		this.opts = opts;
 		this.WS = opts.webSocketImpl ?? (typeof WebSocket !== 'undefined' ? WebSocket : (undefined as never));
-		this.url = opts.url ?? buildWSURL(import.meta.env?.VITE_API_BASE_URL as string | undefined);
+		// Step #S-21: same gate as client.ts — VITE_API_BASE_URL is a
+		// dev-only override (see vite.config proxy); in prod let
+		// buildWSURL fall back to window.location.origin so the WS
+		// connects to the same origin the page was loaded from.
+		this.url = opts.url ?? buildWSURL(
+			import.meta.env.DEV
+				? (import.meta.env?.VITE_API_BASE_URL as string | undefined)
+				: undefined
+		);
 	}
 
 	/** Begin the connection lifecycle. Idempotent — calling twice
