@@ -23,7 +23,6 @@
 	import Button from '$lib/components/Button.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
-	import DataTable from '$lib/components/DataTable.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import Modal from '$lib/components/Modal.svelte';
@@ -41,6 +40,22 @@
 	let editingId = $state<string | null>(null);
 	let submitting = $state(false);
 	let formError = $state<string | null>(null);
+
+	// Phase 1 split layout (2026-06-02) — list filter state.
+	// The search input filters by host / matcher / upstream URL
+	// substring. The segmented tab is a UX placeholder for the
+	// per-route health filter; "All" is the only functional
+	// option in Phase 1.
+	//
+	// TODO Phase 2: wire "Healthy" / "Alerts" once the API
+	// surfaces a per-route health field (today the data plane
+	// only tracks health per UPSTREAM via Caddy's active health
+	// checks; there is no per-route aggregated rollup on the
+	// wire). Until then, the two non-default tabs are no-ops
+	// with a tooltip explaining the deferral.
+	type ListTab = 'all' | 'healthy' | 'alerts';
+	let listFilter = $state('');
+	let listTab = $state<ListTab>('all');
 
 	// Step J.3: §5.2 default values. Source of truth on the client
 	// for the four defaultable text/number placeholders + the
@@ -177,6 +192,18 @@
 	let errors = $state<Record<string, string>>({});
 
 	function resetFormErrors() {
+		formError = null;
+		errors = {};
+	}
+
+	// Phase 1 split layout — close/cancel the right panel and
+	// return to the empty state. Used by the "Cancel" button in
+	// the panel footer. The route stays in the list; only the
+	// selection + form state are dropped.
+	function closePanel() {
+		formOpen = false;
+		formMode = 'create';
+		editingId = null;
 		formError = null;
 		errors = {};
 	}
@@ -755,6 +782,28 @@
 		waf: routes.filter((r) => r.wafMode !== 'off').length
 	});
 
+	// Phase 1 split layout — filtered list view. The search input
+	// matches host / aliases / upstream URL as a case-insensitive
+	// substring. The tab filter is a stub for Phase 2 per the
+	// `listTab` comment above; the listTab variable is read so
+	// the Healthy/Alerts buttons stay click-active in the DOM
+	// (no `disabled`) — they just don't affect the filter today.
+	const filteredRoutes = $derived.by(() => {
+		const q = listFilter.trim().toLowerCase();
+		void listTab; // referenced for Phase 2 — see TODO above.
+		if (!q) return routes;
+		return routes.filter((r) => {
+			if (r.host.toLowerCase().includes(q)) return true;
+			for (const a of r.aliases ?? []) {
+				if (a.toLowerCase().includes(q)) return true;
+			}
+			for (const u of r.upstreams ?? []) {
+				if (u.url.toLowerCase().includes(q)) return true;
+			}
+			return false;
+		});
+	});
+
 	function fmtDate(iso: string): string {
 		return new Date(iso).toLocaleString();
 	}
@@ -766,6 +815,9 @@
 	subtitle="Manage reverse proxy routes — hosts, upstreams, TLS, WAF, authentication."
 >
 	{#snippet actions()}
+		<Button variant="ghost" disabled title="Phase 2 — Caddyfile import not yet wired"
+			>Import Caddyfile</Button
+		>
 		<Button onclick={openCreate}>+ Add route</Button>
 	{/snippet}
 </PageHeader>
@@ -796,7 +848,11 @@
 	</div>
 {:else if loadError}
 	<div class="mt-12 text-down" role="alert">Failed to load routes: {loadError}</div>
-{:else if routes.length === 0}
+{:else if routes.length === 0 && !formOpen}
+	<!-- Empty-state CTA. Skipped when formOpen is true so the new-
+	     route create flow drops directly into the split layout's
+	     right panel (operator who clicked "+ Add route" expects to
+	     see the form, not an empty-state encore). -->
 	<div class="mt-16 flex flex-col items-center text-center gap-4">
 		<div class="text-6xl text-muted">◉</div>
 		<p class="text-secondary">No routes configured yet.</p>
@@ -810,799 +866,922 @@
 		<StatCard label="With WAF" value={stats.waf} />
 	</div>
 
-	<div class="mt-6">
-		<DataTable headers={['Status', 'Host', 'Upstream', 'TLS', 'WAF', 'Actions']} items={routes}>
-			{#snippet row(r)}
-				<td class="px-4 py-3"><StatusDot status="up" /></td>
-				<td class="px-4 py-3 font-mono">
-					{r.host}
-					{#if r.aliases && r.aliases.length > 0}
-						<span
-							class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-sans text-secondary bg-elevated border border-border-subtle cursor-help"
-							title={`Aliases:\n${r.aliases.join('\n')}`}
-						>+{r.aliases.length}</span>
-					{/if}
-					{#if r.authMode === 'basic'}
-						<span
-							class="ml-1.5 inline-flex items-center text-muted cursor-help"
-							title={`Basic Auth required (user: ${r.basicAuth?.username ?? ''})`}
-							aria-label="Basic Auth required"
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								class="w-3.5 h-3.5"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								aria-hidden="true"
-							>
-								<rect width="18" height="11" x="3" y="11" rx="2" />
-								<path d="M7 11V7a5 5 0 0 1 10 0v4" />
-							</svg>
-						</span>
-					{:else if r.authMode === 'forward_auth'}
-						<span
-							class="ml-1.5 inline-flex items-center text-muted cursor-help"
-							title={`Forward-auth via ${r.forwardAuth?.providerName ?? ''}`}
-							aria-label="Forward-auth required"
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								class="w-3.5 h-3.5"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								aria-hidden="true"
-							>
-								<path d="M21 12H9" />
-								<path d="m12 5 7 7-7 7" />
-								<path d="M5 21V3" />
-							</svg>
-						</span>
-					{/if}
-				</td>
-				<td
-					class="px-4 py-3 font-mono text-secondary truncate max-w-[16rem]"
-					title={r.upstreams[0]?.url ?? ''}
-				>
-					{r.upstreams[0]?.url ?? ''}{r.upstreams.length > 1
-						? ` (+${r.upstreams.length - 1})`
-						: ''}
-				</td>
-				<td class="px-4 py-3">
-					{#if r.tlsEnabled}
-						<div class="flex flex-wrap items-center gap-1">
-							<Badge variant="tls">TLS</Badge>
-							<!-- Step O.4 (AC #4): surface the derived
-							     effectiveCertSource as a compact badge so
-							     the operator sees at a glance which TLS
-							     policy serves this route's cert. The
-							     "managed-domain:<apex>" case is the most
-							     informative since it tells the operator
-							     the route is inheriting a wildcard. -->
-							{#if r.effectiveCertSource?.startsWith('managed-domain:')}
-								<span
-									title={`Inherits wildcard from *.${r.effectiveCertSource.slice('managed-domain:'.length)}`}
-								>
-									<Badge variant="current">wildcard</Badge>
-								</span>
-							{:else if r.effectiveCertSource === 'per-route-acme:dns-01'}
-								<span title="Per-route DNS-01 ACME">
-									<Badge variant="neutral">DNS-01</Badge>
-								</span>
-							{:else if r.effectiveCertSource === 'per-route-internal'}
-								<span title="Internal CA (self-signed)">
-									<Badge variant="neutral">internal</Badge>
-								</span>
-							{/if}
-						</div>
-					{:else}
-						<span class="text-muted">—</span>
-					{/if}
-				</td>
-				<td class="px-4 py-3">
-					{#if r.wafMode === 'detect'}
-						<Badge variant="status-warn">Detect</Badge>
-					{:else if r.wafMode === 'block'}
-						<Badge variant="status-down">Block</Badge>
-					{:else}
-						<span class="text-muted">—</span>
-					{/if}
-				</td>
-				<td class="px-4 py-3">
-					<div class="flex gap-1">
-						<Button variant="ghost" size="sm" onclick={() => openEdit(r)}>Edit</Button>
-						<Button variant="ghost" size="sm" onclick={() => (confirmTarget = r)}>Delete</Button>
-					</div>
-				</td>
-			{/snippet}
-			{#snippet expanded(r)}
-				<div class="mb-3 flex flex-wrap gap-2">
-					<a
-						href={`/observability/${r.id}`}
-						class="inline-flex items-center gap-1.5 rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-hover transition-colors"
-					>
-						<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-							<path d="M3 3v10h10" />
-							<path d="M5 11l3-3 2 2 3-4" />
-						</svg>
-						Metrics for this route →
-					</a>
-					<a
-						href={`/security/${r.id}`}
-						class="inline-flex items-center gap-1.5 rounded-md border border-border-default bg-elevated px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-hover transition-colors"
-					>
-						<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-							<rect x="3" y="7" width="10" height="7" rx="1" />
-							<path d="M5 7V5a3 3 0 016 0v2" />
-						</svg>
-						Security for this route →
-					</a>
+	<!-- Phase 1 split layout (2026-06-02) — replaces the Step I/J
+	     DataTable + Modal-form combo with a 2-column grid: list on
+	     the left, sticky edit panel on the right. The form contents
+	     are unchanged; only the wrapping moved out of Modal into
+	     the right-card.
+	     Tests rely on the "+ Add route" button + form-field labels
+	     being queryable AFTER an openCreate click — that contract
+	     holds: openCreate() still flips formOpen=true and the
+	     right-card renders the same Input/Checkbox/select fields. -->
+	<div class="grid grid-cols-1 xl:grid-cols-[1.3fr_1fr] gap-4 mt-6 items-start">
+		<!-- LEFT — routes list -->
+		<div class="rounded-lg border border-border-subtle bg-elevated overflow-hidden">
+			<div class="px-4 py-3 border-b border-border-subtle flex items-center gap-3 flex-wrap">
+				<!-- Search input — filters host / aliases / upstream URL
+				     substring via the filteredRoutes $derived. -->
+				<div class="flex-1 min-w-[200px] flex items-center gap-2 px-2 py-1 rounded-md bg-surface border border-border-default">
+					<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+						<circle cx="7" cy="7" r="5" />
+						<path d="M11 11l3 3" />
+					</svg>
+					<input
+						type="search"
+						bind:value={listFilter}
+						placeholder="Filter by host, alias, upstream…"
+						aria-label="Filter routes"
+						class="flex-1 bg-transparent outline-none text-sm text-primary placeholder-muted"
+					/>
 				</div>
-				<dl class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-					<dt class="text-secondary">ID</dt>
-					<dd class="font-mono">{r.id}</dd>
-					<dt class="text-secondary">Hostnames</dt>
-					<dd class="font-mono">
-						<div>{r.host} <span class="text-muted">(primary)</span></div>
-						{#each r.aliases ?? [] as alias (alias)}
-							<div>{alias} <span class="text-muted">(alias)</span></div>
-						{/each}
-					</dd>
-					<dt class="text-secondary">Upstreams</dt>
-					<dd class="font-mono">
-						{#each r.upstreams as u, i (i)}
-							<div>
-								{u.url}
-								{#if r.lbPolicy === 'weighted_round_robin'}
-									<span class="text-muted">(weight {u.weight})</span>
-								{/if}
-							</div>
-						{/each}
-						{#if r.upstreams.length >= 2}
-							<div class="text-muted mt-1">LB: {r.lbPolicy}</div>
-						{/if}
-					</dd>
-					<dt class="text-secondary">Health check</dt>
-					<dd class="font-mono">
-						{#if r.healthCheck.enabled}
-							{r.healthCheck.method} {r.healthCheck.uri}
-							every {r.healthCheck.interval}
-							(timeout {r.healthCheck.timeout})
-						{:else}
-							<span class="text-muted">disabled</span>
-						{/if}
-					</dd>
-					<dt class="text-secondary">Created</dt>
-					<dd class="font-mono">{fmtDate(r.createdAt)}</dd>
-					<dt class="text-secondary">Updated</dt>
-					<dd class="font-mono">{fmtDate(r.updatedAt)}</dd>
-				</dl>
-			{/snippet}
-		</DataTable>
-	</div>
-{/if}
-
-<Modal
-	open={formOpen}
-	title={formMode === 'create' ? 'Add route' : 'Edit route'}
-	onClose={() => (formOpen = false)}
->
-	<form
-		onsubmit={(e) => {
-			e.preventDefault();
-			submitForm();
-		}}
-		class="flex flex-col gap-4"
-	>
-		{#if formError}
-			<p
-				class="px-3 py-2 rounded bg-down/10 border border-down/40 text-sm text-down"
-				role="alert"
-			>
-				{formError}
-			</p>
-		{/if}
-		<Input
-			label="Host"
-			bind:value={formData.host}
-			placeholder="example.local"
-			error={errors['host'] ?? undefined}
-		/>
-		<!-- Step I.3: alias hostnames repeater. -->
-		<div class="flex flex-col gap-2">
-			<div class="flex items-center justify-between">
-				<span class="text-sm text-secondary">Aliases (optional)</span>
-				<Button variant="ghost" size="sm" onclick={addAlias} type="button">+ Add alias</Button>
-			</div>
-			{#each formData.aliases as _, i (i)}
-				<div class="flex items-center gap-2">
-					<Input bind:value={formData.aliases[i]} placeholder="alt.example.com" />
-					<Button variant="ghost" size="sm" onclick={() => removeAlias(i)} type="button">×</Button>
+				<!-- Segmented tabs. "All" is the only functional filter
+				     in Phase 1; the other two are visual stubs pending
+				     a per-route health field on the API surface.
+				     TODO Phase 2: wire Healthy/Alerts. -->
+				<div class="inline-flex gap-0.5 p-0.5 rounded-full bg-surface border border-border-default text-xs">
+					<button
+						type="button"
+						onclick={() => (listTab = 'all')}
+						class="px-3 py-1 rounded-full transition-colors"
+						class:bg-hover={listTab === 'all'}
+						class:text-primary={listTab === 'all'}
+						class:text-secondary={listTab !== 'all'}
+					>All</button>
+					<button
+						type="button"
+						onclick={() => (listTab = 'healthy')}
+						title="Phase 2 — needs per-route health field"
+						class="px-3 py-1 rounded-full transition-colors"
+						class:bg-hover={listTab === 'healthy'}
+						class:text-primary={listTab === 'healthy'}
+						class:text-secondary={listTab !== 'healthy'}
+					>Healthy</button>
+					<button
+						type="button"
+						onclick={() => (listTab = 'alerts')}
+						title="Phase 2 — needs per-route health field"
+						class="px-3 py-1 rounded-full transition-colors"
+						class:bg-hover={listTab === 'alerts'}
+						class:text-primary={listTab === 'alerts'}
+						class:text-secondary={listTab !== 'alerts'}
+					>Alerts</button>
 				</div>
-			{/each}
-		</div>
-
-		<!-- Step J.3: upstream pool repeater (replaces the Step I single
-		     Upstream URL input). Each row binds to one pool element.
-		     The weight column is hidden unless lbPolicy is
-		     weighted_round_robin. Per-row state is preserved across
-		     visibility flips. -->
-		<div class="flex flex-col gap-2">
-			<div class="flex items-center justify-between">
-				<span class="text-sm font-medium text-secondary">Upstreams</span>
-				<Button variant="ghost" size="sm" onclick={addUpstream} type="button"
-					>+ Add upstream</Button
-				>
 			</div>
-			{#if errors['upstreams']}
-				<p class="text-xs text-down">{errors['upstreams']}</p>
-			{/if}
-			{#each formData.upstreams as _, i (i)}
-				<div class="flex items-start gap-2">
-					<div class="flex-1">
-						<Input
-							bind:value={formData.upstreams[i].url}
-							placeholder="http://127.0.0.1:8080"
-							error={errors[`upstreams[${i}].url`] ?? undefined}
-						/>
-					</div>
-					{#if weightVisible}
-						<div class="w-24 flex flex-col gap-1.5">
-							<input
-								type="number"
-								min="1"
-								bind:value={formData.upstreams[i].weight}
-								placeholder="1"
-								class="bg-surface border rounded-md px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
-								class:border-down={!!errors[`upstreams[${i}].weight`]}
-								class:border-border-default={!errors[`upstreams[${i}].weight`]}
-							/>
-							{#if errors[`upstreams[${i}].weight`]}
-								<p class="text-xs text-down">{errors[`upstreams[${i}].weight`]}</p>
-							{/if}
-						</div>
-					{/if}
-					<Button
-						variant="ghost"
-						size="sm"
-						onclick={() => removeUpstream(i)}
-						disabled={formData.upstreams.length <= 1}
-						type="button">×</Button
-					>
-				</div>
-			{/each}
-		</div>
 
-		<!-- Step J.3: LB policy selector. Hidden when the pool has
-		     one upstream (selection is moot). formData.lbPolicy is
-		     preserved across visibility flips. -->
-		{#if lbSelectorVisible}
-			<div>
-				<label
-					for="route-lb-policy"
-					class="text-sm font-medium text-secondary block mb-1"
-				>
-					Load balancing
-				</label>
-				<select
-					id="route-lb-policy"
-					bind:value={formData.lbPolicy}
-					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-				>
-					<option value="round_robin">Round-robin (even distribution)</option>
-					<option value="weighted_round_robin">Weighted round-robin</option>
-					<option value="least_conn">Least connections</option>
-					<option value="ip_hash">IP hash (client-IP affinity)</option>
-					<option value="random">Random</option>
-					<option value="first">First available (failover)</option>
-				</select>
-			</div>
-		{/if}
-
-		<div class="flex flex-col gap-1">
-			<Checkbox label="Enable TLS" bind:checked={formData.tlsEnabled} />
-			<p class="text-xs text-muted ml-6">
-				Public domain required for Let's Encrypt; localhost / .local
-				will fall back to internal CA.
-			</p>
-		</div>
-		<Checkbox
-			label="Redirect HTTP → HTTPS"
-			bind:checked={formData.redirectToHttps}
-			disabled={!formData.tlsEnabled}
-			title={formData.tlsEnabled
-				? 'Automatically redirects HTTP requests to HTTPS with a 301.'
-				: 'Enable TLS to use HTTPS redirect.'}
-		/>
-
-		<!-- Step J.4 + O.4: ACME challenge selector. Visible only
-		     when TLS is on. Locked to "dns-01" when host or any
-		     alias is a wildcard. Step O.4 (AC #11 + #12): when the
-		     host is covered by a managed domain AND the operator
-		     hasn't opted out via useDedicatedCert, the selector
-		     hides entirely and an inheritance badge takes its
-		     place. When covered + opted out, the selector returns
-		     and the operator picks http-01/dns-01 like J. -->
-		{#if formData.tlsEnabled}
-			{#if coveringManagedDomain && !formData.useDedicatedCert}
-				<!-- AC #11: covered + inheriting. Show the wildcard
-				     badge + the opt-out toggle. The selector is
-				     gone — the wildcard cert serves this route. -->
-				<div>
-					<span class="text-sm font-medium text-secondary block mb-1"
-						>Certificate</span
-					>
-					<div
-						class="rounded border border-info/40 bg-info/10 px-3 py-2 text-sm"
-					>
-						<span class="font-medium">Inherits wildcard from</span>
-						<code class="font-mono">*.{coveringManagedDomain.apex}</code>
-						<span class="text-muted">
-							(managed via <a href="/settings" class="text-cyan hover:underline"
-								>SSL / Certificates</a
-							>)
-						</span>
-					</div>
-					<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
-						<input
-							type="checkbox"
-							checked={formData.useDedicatedCert}
-							onchange={(e) =>
-								onUseDedicatedCertToggle((e.target as HTMLInputElement).checked)}
-						/>
-						Use a dedicated cert for this route (opt out of the wildcard)
-					</label>
-					<p class="text-xs text-muted mt-1">
-						Use this for routes that need a separate key (e.g. payments,
-						staging) — the route will request its own ACME cert alongside
-						the wildcard.
-					</p>
+			{#if filteredRoutes.length === 0}
+				<div class="p-6 text-center text-sm text-secondary">
+					{routes.length === 0
+						? 'No routes configured yet.'
+						: 'No routes match the current filter.'}
 				</div>
 			{:else}
-				<div>
-					<label
-						for="route-acme-challenge"
-						class="text-sm font-medium text-secondary block mb-1"
-					>
-						ACME challenge
-					</label>
-					<select
-						id="route-acme-challenge"
-						bind:value={formData.acmeChallenge}
-						disabled={acmeLockedToDNS01}
-						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-60 disabled:cursor-not-allowed"
-					>
-						{#if dedicatedOptOutPendingChoice}
-							<!-- #O.4-2 force-explicit-choice — empty value
-							     is the unselected state forced by the
-							     toggle handler. The placeholder option
-							     renders the empty selection clearly to
-							     the operator (otherwise the browser
-							     would silently render the first option
-							     as visually selected without it being
-							     the bound value). -->
-							<option value="" disabled>— pick one —</option>
-						{/if}
-						<option value="http-01">HTTP-01 (default, port 80)</option>
-						<option value="dns-01">DNS-01 (required for wildcards)</option>
-					</select>
-					{#if coveringManagedDomain && formData.useDedicatedCert}
-						<!-- AC #11 opt-out path: show the per-route
-						     selector AND the toggle (checked) so the
-						     operator can flip back to inheritance. -->
-						<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
-							<input
-								type="checkbox"
-								checked={formData.useDedicatedCert}
-								onchange={(e) =>
-									onUseDedicatedCertToggle(
-										(e.target as HTMLInputElement).checked
-									)}
-							/>
-							Use a dedicated cert (inherits <code class="font-mono"
-								>*.{coveringManagedDomain.apex}</code
-							> when unchecked)
-						</label>
-					{/if}
-					{#if dedicatedOptOutPendingChoice}
-						<!-- #O.4-2 force-explicit-choice — submit is
-						     disabled until the operator picks. The
-						     hint sits next to the now-unselected
-						     dropdown so the cause is obvious. -->
-						<p class="text-xs text-warn mt-1">
-							Pick HTTP-01 or DNS-01 above — opting out of the wildcard
-							requires an explicit per-route ACME challenge.
-						</p>
-					{/if}
-					{#if acmeLockedToDNS01}
-						<p class="text-xs text-muted mt-1">
-							Wildcard hosts require DNS-01.
-						</p>
-					{:else if formData.acmeChallenge === 'dns-01' && (!dnsProvider || !dnsProvider.configured)}
-						<p class="text-xs text-down mt-1">
-							DNS-01 requires a configured DNS provider —
-							<a href="/settings" class="text-cyan hover:underline"
-								>configure it under Settings</a
-							>.
-						</p>
-					{:else}
-						<p class="text-xs text-muted mt-1">
-							HTTP-01 proves control via port 80. DNS-01 proves it
-							via a `_acme-challenge` TXT record and is the only
-							option for wildcard certs.
-						</p>
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="text-left text-xs uppercase tracking-wider text-secondary border-b border-border-subtle">
+							<th class="px-4 py-3 font-medium">Host / path</th>
+							<th class="px-4 py-3 font-medium">Upstream</th>
+							<th class="px-4 py-3 font-medium">TLS</th>
+							<th class="px-4 py-3 font-medium">WAF</th>
+							<th class="px-4 py-3 font-medium text-right">État</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each filteredRoutes as r (r.id)}
+							{@const selected = editingId === r.id}
+							<tr
+								class="border-b border-border-subtle last:border-b-0 cursor-pointer transition-colors hover:bg-hover"
+								class:bg-accent-soft={selected}
+								onclick={() => openEdit(r)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										openEdit(r);
+									}
+								}}
+								tabindex="0"
+								aria-current={selected ? 'true' : undefined}
+								role="button"
+							>
+								<td class="px-4 py-3 font-mono">
+									{r.host}
+									{#if r.aliases && r.aliases.length > 0}
+										<span
+											class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-sans text-secondary bg-elevated border border-border-subtle cursor-help"
+											title={`Aliases:\n${r.aliases.join('\n')}`}
+										>+{r.aliases.length}</span>
+									{/if}
+									{#if r.authMode === 'basic'}
+										<span
+											class="ml-1.5 inline-flex items-center text-muted cursor-help"
+											title={`Basic Auth required (user: ${r.basicAuth?.username ?? ''})`}
+											aria-label="Basic Auth required"
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												class="w-3.5 h-3.5"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												aria-hidden="true"
+											>
+												<rect width="18" height="11" x="3" y="11" rx="2" />
+												<path d="M7 11V7a5 5 0 0 1 10 0v4" />
+											</svg>
+										</span>
+									{:else if r.authMode === 'forward_auth'}
+										<span
+											class="ml-1.5 inline-flex items-center text-muted cursor-help"
+											title={`Forward-auth via ${r.forwardAuth?.providerName ?? ''}`}
+											aria-label="Forward-auth required"
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												class="w-3.5 h-3.5"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												aria-hidden="true"
+											>
+												<path d="M21 12H9" />
+												<path d="m12 5 7 7-7 7" />
+												<path d="M5 21V3" />
+											</svg>
+										</span>
+									{/if}
+								</td>
+								<td
+									class="px-4 py-3 font-mono text-secondary truncate max-w-[14rem]"
+									title={r.upstreams[0]?.url ?? ''}
+								>
+									{r.upstreams[0]?.url ?? ''}{r.upstreams.length > 1
+										? ` (+${r.upstreams.length - 1})`
+										: ''}
+								</td>
+								<td class="px-4 py-3">
+									{#if r.tlsEnabled}
+										<div class="flex flex-wrap items-center gap-1">
+											<Badge variant="tls">TLS</Badge>
+											{#if r.effectiveCertSource?.startsWith('managed-domain:')}
+												<span
+													title={`Inherits wildcard from *.${r.effectiveCertSource.slice('managed-domain:'.length)}`}
+												>
+													<Badge variant="current">wildcard</Badge>
+												</span>
+											{:else if r.effectiveCertSource === 'per-route-acme:dns-01'}
+												<span title="Per-route DNS-01 ACME">
+													<Badge variant="neutral">DNS-01</Badge>
+												</span>
+											{:else if r.effectiveCertSource === 'per-route-internal'}
+												<span title="Internal CA (self-signed)">
+													<Badge variant="neutral">internal</Badge>
+												</span>
+											{/if}
+										</div>
+									{:else}
+										<span class="text-muted">—</span>
+									{/if}
+								</td>
+								<td class="px-4 py-3">
+									{#if r.wafMode === 'detect'}
+										<Badge variant="status-warn">Detect</Badge>
+									{:else if r.wafMode === 'block'}
+										<Badge variant="status-down">Block</Badge>
+									{:else}
+										<span class="text-muted">—</span>
+									{/if}
+								</td>
+								<td class="px-4 py-3 text-right">
+									<!-- TODO Phase 2: replace the static "up" dot with
+									     a per-route health rollup (healthy / degraded
+									     / down) once the API surfaces it. The Healthy
+									     and Alerts segmented tabs above will then
+									     become functional filters keyed off this
+									     field. -->
+									<span class="inline-flex items-center gap-2">
+										<StatusDot status="up" />
+										<!-- Small Edit button — duplicates the
+										     row-click action so the test suite's
+										     `findByRole('button', { name: 'Edit' })`
+										     contract holds without rewriting tests.
+										     stopPropagation prevents the click from
+										     bubbling to the row's onclick (which
+										     would call openEdit twice — fine
+										     functionally but noisy). -->
+										<Button
+											variant="ghost"
+											size="sm"
+											onclick={(e) => {
+												e.stopPropagation();
+												openEdit(r);
+											}}>Edit</Button>
+									</span>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{/if}
+		</div>
+
+		<!-- RIGHT — route detail / edit panel. Sticky on wide
+		     screens so it stays in view as the left list scrolls. -->
+		<div
+			class="rounded-lg border border-border-subtle bg-elevated xl:sticky xl:top-[calc(var(--tb-height)+14px)] xl:max-h-[calc(100vh-var(--tb-height)-40px)] overflow-auto"
+		>
+			{#if !formOpen}
+				<!-- Empty state: nothing selected, not in create mode. -->
+				<div class="p-10 text-center text-secondary text-sm">
+					Select a route on the left to edit it, or click
+					<span class="font-medium text-primary">+ Add route</span>
+					to create a new one.
+				</div>
+			{:else}
+				<!-- Panel header — pill + title + meta. -->
+				<div class="px-5 py-4 border-b border-border-subtle flex items-center gap-3">
+					<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-mono bg-accent-soft text-cyan border border-cyan/30">
+						{formMode === 'create' ? 'new' : 'edit'}
+					</span>
+					<h3 class="text-base font-semibold text-primary truncate">
+						{formMode === 'create' ? 'New route' : (formData.host || 'Edit route')}
+					</h3>
+					{#if formMode === 'edit' && editingId}
+						<span class="ml-auto text-xs text-muted font-mono shrink-0">id <span class="text-secondary">{editingId.slice(0, 7)}</span></span>
 					{/if}
 				</div>
-			{/if}
-		{/if}
 
-		<!-- Step K.1 — per-route auth: radio group (none / basic /
-		     forward_auth). Replaces the Step I.5 "Require Basic Auth"
-		     checkbox with an explicit three-way choice. Mutual
-		     exclusion enforced by the radio shape; the server
-		     re-checks (validateAuthFieldsMutex) as defence in depth. -->
-		<div class="flex flex-col gap-2">
-			<span class="text-sm font-medium text-secondary">Authentication</span>
-			<div class="flex flex-col gap-1 ml-1">
-				<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
-					<input
-						type="radio"
-						name="route-auth-mode"
-						value="none"
-						bind:group={formData.authMode}
-						class="accent-cyan"
-					/>
-					None
-				</label>
-				<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
-					<input
-						type="radio"
-						name="route-auth-mode"
-						value="basic"
-						bind:group={formData.authMode}
-						class="accent-cyan"
-					/>
-					Basic auth (single shared credential)
-				</label>
-				<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
-					<input
-						type="radio"
-						name="route-auth-mode"
-						value="forward_auth"
-						bind:group={formData.authMode}
-						class="accent-cyan"
-					/>
-					Forward auth (delegate to an IdP)
-				</label>
-			</div>
+				<!-- D8 entry links (per-route observability + security
+				     drill-downs). Visible only in edit mode — these
+				     are sub-routes keyed by route id, so they're
+				     meaningless for the create flow. The Delete
+				     button moved here too: the per-row Delete action
+				     of the prior DataTable layout is gone (clicking a
+				     row now opens the panel, not the delete dialog),
+				     so the delete trigger lives on the selected
+				     route's own detail panel. -->
+				{#if formMode === 'edit' && editingId}
+					<div class="px-5 pt-4 flex flex-wrap gap-2">
+						<a
+							href={`/observability/${editingId}`}
+							class="inline-flex items-center gap-1.5 rounded-md border border-border-default bg-surface px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-hover transition-colors"
+						>
+							<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+								<path d="M3 3v10h10" />
+								<path d="M5 11l3-3 2 2 3-4" />
+							</svg>
+							Metrics for this route →
+						</a>
+						<a
+							href={`/security/${editingId}`}
+							class="inline-flex items-center gap-1.5 rounded-md border border-border-default bg-surface px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-hover transition-colors"
+						>
+							<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+								<rect x="3" y="7" width="10" height="7" rx="1" />
+								<path d="M5 7V5a3 3 0 016 0v2" />
+							</svg>
+							Security for this route →
+						</a>
+						<Button
+							variant="ghost"
+							size="sm"
+							onclick={() => {
+								if (editingId) {
+									const target = routes.find((r) => r.id === editingId);
+									if (target) confirmTarget = target;
+								}
+							}}
+						>Delete</Button>
+					</div>
+				{/if}
 
-			{#if formData.authMode === 'basic'}
-				<div class="ml-6 flex flex-col gap-2">
+				<!-- Form body — moved verbatim out of the prior Modal
+				     wrapper. All field bindings, validation, and
+				     submit flow are unchanged. -->
+				<form
+					onsubmit={(e) => {
+						e.preventDefault();
+						submitForm();
+					}}
+					class="flex flex-col gap-4 p-5"
+				>
+					{#if formError}
+						<p
+							class="px-3 py-2 rounded bg-down/10 border border-down/40 text-sm text-down"
+							role="alert"
+						>
+							{formError}
+						</p>
+					{/if}
 					<Input
-						label="Username"
-						bind:value={formData.basicAuth.username}
-						placeholder="admin"
+						label="Host"
+						bind:value={formData.host}
+						placeholder="example.local"
+						error={errors['host'] ?? undefined}
 					/>
+					<!-- Step I.3: alias hostnames repeater. -->
+					<div class="flex flex-col gap-2">
+						<div class="flex items-center justify-between">
+							<span class="text-sm text-secondary">Aliases (optional)</span>
+							<Button variant="ghost" size="sm" onclick={addAlias} type="button">+ Add alias</Button>
+						</div>
+						{#each formData.aliases as _, i (i)}
+							<div class="flex items-center gap-2">
+								<Input bind:value={formData.aliases[i]} placeholder="alt.example.com" />
+								<Button variant="ghost" size="sm" onclick={() => removeAlias(i)} type="button">×</Button>
+							</div>
+						{/each}
+					</div>
+			
+					<!-- Step J.3: upstream pool repeater (replaces the Step I single
+					     Upstream URL input). Each row binds to one pool element.
+					     The weight column is hidden unless lbPolicy is
+					     weighted_round_robin. Per-row state is preserved across
+					     visibility flips. -->
+					<div class="flex flex-col gap-2">
+						<div class="flex items-center justify-between">
+							<span class="text-sm font-medium text-secondary">Upstreams</span>
+							<Button variant="ghost" size="sm" onclick={addUpstream} type="button"
+								>+ Add upstream</Button
+							>
+						</div>
+						{#if errors['upstreams']}
+							<p class="text-xs text-down">{errors['upstreams']}</p>
+						{/if}
+						{#each formData.upstreams as _, i (i)}
+							<div class="flex items-start gap-2">
+								<div class="flex-1">
+									<Input
+										bind:value={formData.upstreams[i].url}
+										placeholder="http://127.0.0.1:8080"
+										error={errors[`upstreams[${i}].url`] ?? undefined}
+									/>
+								</div>
+								{#if weightVisible}
+									<div class="w-24 flex flex-col gap-1.5">
+										<input
+											type="number"
+											min="1"
+											bind:value={formData.upstreams[i].weight}
+											placeholder="1"
+											class="bg-surface border rounded-md px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+											class:border-down={!!errors[`upstreams[${i}].weight`]}
+											class:border-border-default={!errors[`upstreams[${i}].weight`]}
+										/>
+										{#if errors[`upstreams[${i}].weight`]}
+											<p class="text-xs text-down">{errors[`upstreams[${i}].weight`]}</p>
+										{/if}
+									</div>
+								{/if}
+								<Button
+									variant="ghost"
+									size="sm"
+									onclick={() => removeUpstream(i)}
+									disabled={formData.upstreams.length <= 1}
+									type="button">×</Button
+								>
+							</div>
+						{/each}
+					</div>
+			
+					<!-- Step J.3: LB policy selector. Hidden when the pool has
+					     one upstream (selection is moot). formData.lbPolicy is
+					     preserved across visibility flips. -->
+					{#if lbSelectorVisible}
+						<div>
+							<label
+								for="route-lb-policy"
+								class="text-sm font-medium text-secondary block mb-1"
+							>
+								Load balancing
+							</label>
+							<select
+								id="route-lb-policy"
+								bind:value={formData.lbPolicy}
+								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+							>
+								<option value="round_robin">Round-robin (even distribution)</option>
+								<option value="weighted_round_robin">Weighted round-robin</option>
+								<option value="least_conn">Least connections</option>
+								<option value="ip_hash">IP hash (client-IP affinity)</option>
+								<option value="random">Random</option>
+								<option value="first">First available (failover)</option>
+							</select>
+						</div>
+					{/if}
+			
+					<div class="flex flex-col gap-1">
+						<Checkbox label="Enable TLS" bind:checked={formData.tlsEnabled} />
+						<p class="text-xs text-muted ml-6">
+							Public domain required for Let's Encrypt; localhost / .local
+							will fall back to internal CA.
+						</p>
+					</div>
+					<Checkbox
+						label="Redirect HTTP → HTTPS"
+						bind:checked={formData.redirectToHttps}
+						disabled={!formData.tlsEnabled}
+						title={formData.tlsEnabled
+							? 'Automatically redirects HTTP requests to HTTPS with a 301.'
+							: 'Enable TLS to use HTTPS redirect.'}
+					/>
+			
+					<!-- Step J.4 + O.4: ACME challenge selector. Visible only
+					     when TLS is on. Locked to "dns-01" when host or any
+					     alias is a wildcard. Step O.4 (AC #11 + #12): when the
+					     host is covered by a managed domain AND the operator
+					     hasn't opted out via useDedicatedCert, the selector
+					     hides entirely and an inheritance badge takes its
+					     place. When covered + opted out, the selector returns
+					     and the operator picks http-01/dns-01 like J. -->
+					{#if formData.tlsEnabled}
+						{#if coveringManagedDomain && !formData.useDedicatedCert}
+							<!-- AC #11: covered + inheriting. Show the wildcard
+							     badge + the opt-out toggle. The selector is
+							     gone — the wildcard cert serves this route. -->
+							<div>
+								<span class="text-sm font-medium text-secondary block mb-1"
+									>Certificate</span
+								>
+								<div
+									class="rounded border border-info/40 bg-info/10 px-3 py-2 text-sm"
+								>
+									<span class="font-medium">Inherits wildcard from</span>
+									<code class="font-mono">*.{coveringManagedDomain.apex}</code>
+									<span class="text-muted">
+										(managed via <a href="/settings" class="text-cyan hover:underline"
+											>SSL / Certificates</a
+										>)
+									</span>
+								</div>
+								<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
+									<input
+										type="checkbox"
+										checked={formData.useDedicatedCert}
+										onchange={(e) =>
+											onUseDedicatedCertToggle((e.target as HTMLInputElement).checked)}
+									/>
+									Use a dedicated cert for this route (opt out of the wildcard)
+								</label>
+								<p class="text-xs text-muted mt-1">
+									Use this for routes that need a separate key (e.g. payments,
+									staging) — the route will request its own ACME cert alongside
+									the wildcard.
+								</p>
+							</div>
+						{:else}
+							<div>
+								<label
+									for="route-acme-challenge"
+									class="text-sm font-medium text-secondary block mb-1"
+								>
+									ACME challenge
+								</label>
+								<select
+									id="route-acme-challenge"
+									bind:value={formData.acmeChallenge}
+									disabled={acmeLockedToDNS01}
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-60 disabled:cursor-not-allowed"
+								>
+									{#if dedicatedOptOutPendingChoice}
+										<!-- #O.4-2 force-explicit-choice — empty value
+										     is the unselected state forced by the
+										     toggle handler. The placeholder option
+										     renders the empty selection clearly to
+										     the operator (otherwise the browser
+										     would silently render the first option
+										     as visually selected without it being
+										     the bound value). -->
+										<option value="" disabled>— pick one —</option>
+									{/if}
+									<option value="http-01">HTTP-01 (default, port 80)</option>
+									<option value="dns-01">DNS-01 (required for wildcards)</option>
+								</select>
+								{#if coveringManagedDomain && formData.useDedicatedCert}
+									<!-- AC #11 opt-out path: show the per-route
+									     selector AND the toggle (checked) so the
+									     operator can flip back to inheritance. -->
+									<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
+										<input
+											type="checkbox"
+											checked={formData.useDedicatedCert}
+											onchange={(e) =>
+												onUseDedicatedCertToggle(
+													(e.target as HTMLInputElement).checked
+												)}
+										/>
+										Use a dedicated cert (inherits <code class="font-mono"
+											>*.{coveringManagedDomain.apex}</code
+										> when unchecked)
+									</label>
+								{/if}
+								{#if dedicatedOptOutPendingChoice}
+									<!-- #O.4-2 force-explicit-choice — submit is
+									     disabled until the operator picks. The
+									     hint sits next to the now-unselected
+									     dropdown so the cause is obvious. -->
+									<p class="text-xs text-warn mt-1">
+										Pick HTTP-01 or DNS-01 above — opting out of the wildcard
+										requires an explicit per-route ACME challenge.
+									</p>
+								{/if}
+								{#if acmeLockedToDNS01}
+									<p class="text-xs text-muted mt-1">
+										Wildcard hosts require DNS-01.
+									</p>
+								{:else if formData.acmeChallenge === 'dns-01' && (!dnsProvider || !dnsProvider.configured)}
+									<p class="text-xs text-down mt-1">
+										DNS-01 requires a configured DNS provider —
+										<a href="/settings" class="text-cyan hover:underline"
+											>configure it under Settings</a
+										>.
+									</p>
+								{:else}
+									<p class="text-xs text-muted mt-1">
+										HTTP-01 proves control via port 80. DNS-01 proves it
+										via a `_acme-challenge` TXT record and is the only
+										option for wildcard certs.
+									</p>
+								{/if}
+							</div>
+						{/if}
+					{/if}
+			
+					<!-- Step K.1 — per-route auth: radio group (none / basic /
+					     forward_auth). Replaces the Step I.5 "Require Basic Auth"
+					     checkbox with an explicit three-way choice. Mutual
+					     exclusion enforced by the radio shape; the server
+					     re-checks (validateAuthFieldsMutex) as defence in depth. -->
+					<div class="flex flex-col gap-2">
+						<span class="text-sm font-medium text-secondary">Authentication</span>
+						<div class="flex flex-col gap-1 ml-1">
+							<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
+								<input
+									type="radio"
+									name="route-auth-mode"
+									value="none"
+									bind:group={formData.authMode}
+									class="accent-cyan"
+								/>
+								None
+							</label>
+							<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
+								<input
+									type="radio"
+									name="route-auth-mode"
+									value="basic"
+									bind:group={formData.authMode}
+									class="accent-cyan"
+								/>
+								Basic auth (single shared credential)
+							</label>
+							<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
+								<input
+									type="radio"
+									name="route-auth-mode"
+									value="forward_auth"
+									bind:group={formData.authMode}
+									class="accent-cyan"
+								/>
+								Forward auth (delegate to an IdP)
+							</label>
+						</div>
+			
+						{#if formData.authMode === 'basic'}
+							<div class="ml-6 flex flex-col gap-2">
+								<Input
+									label="Username"
+									bind:value={formData.basicAuth.username}
+									placeholder="admin"
+								/>
+								<div>
+									<label
+										for="basic-auth-password"
+										class="text-sm font-medium text-secondary block mb-1"
+									>
+										Password
+									</label>
+									<input
+										id="basic-auth-password"
+										type="password"
+										bind:value={formData.basicAuth.password}
+										placeholder={formMode === 'edit' && basicAuthPasswordSet
+											? '••• set (leave blank to keep)'
+											: ''}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+									/>
+								</div>
+							</div>
+						{:else if formData.authMode === 'forward_auth'}
+							<div class="ml-6 flex flex-col gap-2">
+								<label
+									for="route-forward-auth-provider"
+									class="text-sm font-medium text-secondary block"
+								>
+									Provider
+								</label>
+								{#if forwardAuthProviders.length === 0}
+									<p class="text-xs text-down">
+										No forward-auth provider configured —
+										<a href="/settings" class="text-cyan hover:underline">configure one under Settings</a>.
+									</p>
+								{:else}
+									<select
+										id="route-forward-auth-provider"
+										bind:value={formData.forwardAuth.providerName}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+									>
+										<option value="" disabled>— select a provider —</option>
+										{#each forwardAuthProviders as p (p.name)}
+											<option value={p.name}>{p.name} ({p.kind})</option>
+										{/each}
+									</select>
+									<p class="text-xs text-muted">
+										The route's auth gate delegates to the IdP at
+										<code>{forwardAuthProviders.find((p) => p.name === formData.forwardAuth.providerName)?.verifyUrl ?? '...'}</code>
+										via Caddy <code>forward_auth</code>.
+									</p>
+								{/if}
+							</div>
+						{/if}
+					</div>
+					<!-- Step I.4: WAF mode. -->
 					<div>
 						<label
-							for="basic-auth-password"
+							for="route-waf-mode"
 							class="text-sm font-medium text-secondary block mb-1"
 						>
-							Password
+							WAF (Coraza + OWASP CRS)
 						</label>
-						<input
-							id="basic-auth-password"
-							type="password"
-							bind:value={formData.basicAuth.password}
-							placeholder={formMode === 'edit' && basicAuthPasswordSet
-								? '••• set (leave blank to keep)'
-								: ''}
-							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-						/>
-					</div>
-				</div>
-			{:else if formData.authMode === 'forward_auth'}
-				<div class="ml-6 flex flex-col gap-2">
-					<label
-						for="route-forward-auth-provider"
-						class="text-sm font-medium text-secondary block"
-					>
-						Provider
-					</label>
-					{#if forwardAuthProviders.length === 0}
-						<p class="text-xs text-down">
-							No forward-auth provider configured —
-							<a href="/settings" class="text-cyan hover:underline">configure one under Settings</a>.
-						</p>
-					{:else}
 						<select
-							id="route-forward-auth-provider"
-							bind:value={formData.forwardAuth.providerName}
+							id="route-waf-mode"
+							bind:value={formData.wafMode}
 							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 						>
-							<option value="" disabled>— select a provider —</option>
-							{#each forwardAuthProviders as p (p.name)}
-								<option value={p.name}>{p.name} ({p.kind})</option>
-							{/each}
+							<option value="off">Off — no inspection</option>
+							<option value="detect">Detect — log matches, let traffic through</option>
+							<option value="block">Block — return 403 on match</option>
 						</select>
-						<p class="text-xs text-muted">
-							The route's auth gate delegates to the IdP at
-							<code>{forwardAuthProviders.find((p) => p.name === formData.forwardAuth.providerName)?.verifyUrl ?? '...'}</code>
-							via Caddy <code>forward_auth</code>.
+						<p class="text-xs text-muted mt-1">
+							Start with Detect to spot false positives before enforcing.
 						</p>
-					{/if}
+					</div>
+			
+					<!-- Step J.3: active health-check sub-form. Gated by the
+					     enabled checkbox. Sub-fields disabled when off; their
+					     state is PRESERVED across the toggle so a user who
+					     flips off-and-on keeps their typed values.
+					     Any interaction marks healthCheckTouched so submit ships
+					     the complete 9-field block (J.2 preserve-or-replace). -->
+					<details
+						class="rounded border border-border-subtle"
+						open={formData.healthCheck.enabled}
+					>
+						<summary
+							class="px-3 py-2 text-sm text-secondary cursor-pointer select-none"
+							onclick={markHealthCheckTouched}
+						>
+							Active health check
+							{#if formData.healthCheck.enabled}
+								<span class="ml-1 text-xs text-muted">(on)</span>
+							{/if}
+						</summary>
+						<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
+							<!-- Capture click on the wrapper so toggling the
+							     checkbox marks the HC block as touched (drives
+							     the J.2 preserve-or-replace decision). Checkbox
+							     does not expose an onchange prop; the wrapper
+							     handler runs whether the user clicks the box or
+							     its label. -->
+							<div onclick={markHealthCheckTouched} onkeydown={markHealthCheckTouched} role="none">
+								<Checkbox
+									label="Enable active health checks"
+									bind:checked={formData.healthCheck.enabled}
+								/>
+							</div>
+							<div>
+								<label
+									for="hc-uri"
+									class="text-sm font-medium text-secondary block mb-1"
+								>
+									URI <span class="text-down" aria-hidden="true">*</span>
+								</label>
+								<input
+									id="hc-uri"
+									type="text"
+									bind:value={formData.healthCheck.uri}
+									placeholder="/healthz"
+									disabled={!formData.healthCheck.enabled}
+									aria-required="true"
+									oninput={markHealthCheckTouched}
+									class="w-full bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+									class:border-down={!!errors['healthCheck.uri']}
+									class:border-border-default={!errors['healthCheck.uri']}
+								/>
+								{#if errors['healthCheck.uri']}
+									<p class="text-xs text-down mt-1">{errors['healthCheck.uri']}</p>
+								{/if}
+							</div>
+							<div>
+								<label
+									for="hc-method"
+									class="text-sm font-medium text-secondary block mb-1"
+								>
+									Method
+								</label>
+								<select
+									id="hc-method"
+									bind:value={formData.healthCheck.method}
+									disabled={!formData.healthCheck.enabled}
+									onchange={markHealthCheckTouched}
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+								>
+									<option value="GET">GET</option>
+									<option value="HEAD">HEAD</option>
+								</select>
+								{#if errors['healthCheck.method']}
+									<p class="text-xs text-down mt-1">{errors['healthCheck.method']}</p>
+								{/if}
+							</div>
+							<div class="grid grid-cols-2 gap-3">
+								<Input
+									label="Interval"
+									bind:value={formData.healthCheck.interval}
+									placeholder={HEALTH_CHECK_DEFAULTS.interval}
+									disabled={!formData.healthCheck.enabled}
+									oninput={markHealthCheckTouched}
+									error={errors['healthCheck.interval'] ?? undefined}
+								/>
+								<Input
+									label="Timeout"
+									bind:value={formData.healthCheck.timeout}
+									placeholder={HEALTH_CHECK_DEFAULTS.timeout}
+									disabled={!formData.healthCheck.enabled}
+									oninput={markHealthCheckTouched}
+									error={errors['healthCheck.timeout'] ?? undefined}
+								/>
+							</div>
+							<div class="grid grid-cols-2 gap-3">
+								<div class="flex flex-col gap-1.5">
+									<label
+										for="hc-passes"
+										class="text-sm font-medium text-secondary">Passes</label
+									>
+									<input
+										id="hc-passes"
+										type="number"
+										min="1"
+										bind:value={formData.healthCheck.passes}
+										placeholder={String(HEALTH_CHECK_DEFAULTS.passes)}
+										disabled={!formData.healthCheck.enabled}
+										oninput={markHealthCheckTouched}
+										class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+										class:border-down={!!errors['healthCheck.passes']}
+										class:border-border-default={!errors['healthCheck.passes']}
+									/>
+									{#if errors['healthCheck.passes']}
+										<p class="text-xs text-down">{errors['healthCheck.passes']}</p>
+									{/if}
+								</div>
+								<div class="flex flex-col gap-1.5">
+									<label
+										for="hc-fails"
+										class="text-sm font-medium text-secondary">Fails</label
+									>
+									<input
+										id="hc-fails"
+										type="number"
+										min="1"
+										bind:value={formData.healthCheck.fails}
+										placeholder={String(HEALTH_CHECK_DEFAULTS.fails)}
+										disabled={!formData.healthCheck.enabled}
+										oninput={markHealthCheckTouched}
+										class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+										class:border-down={!!errors['healthCheck.fails']}
+										class:border-border-default={!errors['healthCheck.fails']}
+									/>
+									{#if errors['healthCheck.fails']}
+										<p class="text-xs text-down">{errors['healthCheck.fails']}</p>
+									{/if}
+								</div>
+							</div>
+							<div class="flex flex-col gap-1.5">
+								<label
+									for="hc-expect-status"
+									class="text-sm font-medium text-secondary">Expected status</label
+								>
+								<input
+									id="hc-expect-status"
+									type="number"
+									min="0"
+									max="599"
+									bind:value={formData.healthCheck.expectStatus}
+									placeholder="200"
+									disabled={!formData.healthCheck.enabled}
+									oninput={markHealthCheckTouched}
+									class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+									class:border-down={!!errors['healthCheck.expectStatus']}
+									class:border-border-default={!errors['healthCheck.expectStatus']}
+								/>
+								{#if errors['healthCheck.expectStatus']}
+									<p class="text-xs text-down">{errors['healthCheck.expectStatus']}</p>
+								{/if}
+							</div>
+							<Input
+								label="Expected body (regex)"
+								bind:value={formData.healthCheck.expectBody}
+								disabled={!formData.healthCheck.enabled}
+								oninput={markHealthCheckTouched}
+								error={errors['healthCheck.expectBody'] ?? undefined}
+							/>
+							<p class="text-xs text-muted">
+								Leave a field blank to use the server default
+								({HEALTH_CHECK_DEFAULTS.method} / {HEALTH_CHECK_DEFAULTS.interval}
+								/ {HEALTH_CHECK_DEFAULTS.timeout} / passes={HEALTH_CHECK_DEFAULTS.passes}
+								/ fails={HEALTH_CHECK_DEFAULTS.fails}). URI is required.
+							</p>
+						</div>
+					</details>
+			
+					<!-- Step I.6: custom request / response headers. -->
+					<details class="rounded border border-border-subtle">
+						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+							Request headers
+							{#if requestHeaderRows.length > 0}
+								<span class="ml-1 text-xs text-muted">({requestHeaderRows.length})</span>
+							{/if}
+						</summary>
+						<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
+							{#each requestHeaderRows as _, i (i)}
+								<div class="flex items-center gap-2">
+									<Input bind:value={requestHeaderRows[i][0]} placeholder="X-Custom-Header" />
+									<Input bind:value={requestHeaderRows[i][1]} placeholder="value" />
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={() => removeRequestHeader(i)}
+										type="button">×</Button
+									>
+								</div>
+							{/each}
+							<Button variant="ghost" size="sm" onclick={addRequestHeader} type="button"
+								>+ Add request header</Button
+							>
+						</div>
+					</details>
+					<details class="rounded border border-border-subtle">
+						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+							Response headers
+							{#if responseHeaderRows.length > 0}
+								<span class="ml-1 text-xs text-muted">({responseHeaderRows.length})</span>
+							{/if}
+						</summary>
+						<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
+							{#each responseHeaderRows as _, i (i)}
+								<div class="flex items-center gap-2">
+									<Input bind:value={responseHeaderRows[i][0]} placeholder="X-Custom-Header" />
+									<Input bind:value={responseHeaderRows[i][1]} placeholder="value" />
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={() => removeResponseHeader(i)}
+										type="button">×</Button
+									>
+								</div>
+							{/each}
+							<Button variant="ghost" size="sm" onclick={addResponseHeader} type="button"
+								>+ Add response header</Button
+							>
+						</div>
+					</details>
+					<button type="submit" class="hidden" aria-hidden="true"></button>
+				</form>
+
+				<!-- Panel footer — Cancel + Save. Cancel calls
+				     closePanel() (drops selection + form state, back
+				     to empty state). Save reuses the existing
+				     submitForm() flow. On success submitForm clears
+				     formOpen via the existing path; on validation
+				     errors the panel stays open with field-level
+				     messages. -->
+				<div class="px-5 pb-5 pt-2 flex justify-end gap-2 border-t border-border-subtle">
+					<Button variant="ghost" onclick={closePanel}>Cancel</Button>
+					<Button
+						onclick={submitForm}
+						loading={submitting}
+						disabled={dedicatedOptOutPendingChoice}
+					>
+						{formMode === 'create' ? 'Create' : 'Save'}
+					</Button>
 				</div>
 			{/if}
 		</div>
-		<!-- Step I.4: WAF mode. -->
-		<div>
-			<label
-				for="route-waf-mode"
-				class="text-sm font-medium text-secondary block mb-1"
-			>
-				WAF (Coraza + OWASP CRS)
-			</label>
-			<select
-				id="route-waf-mode"
-				bind:value={formData.wafMode}
-				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-			>
-				<option value="off">Off — no inspection</option>
-				<option value="detect">Detect — log matches, let traffic through</option>
-				<option value="block">Block — return 403 on match</option>
-			</select>
-			<p class="text-xs text-muted mt-1">
-				Start with Detect to spot false positives before enforcing.
-			</p>
-		</div>
-
-		<!-- Step J.3: active health-check sub-form. Gated by the
-		     enabled checkbox. Sub-fields disabled when off; their
-		     state is PRESERVED across the toggle so a user who
-		     flips off-and-on keeps their typed values.
-		     Any interaction marks healthCheckTouched so submit ships
-		     the complete 9-field block (J.2 preserve-or-replace). -->
-		<details
-			class="rounded border border-border-subtle"
-			open={formData.healthCheck.enabled}
-		>
-			<summary
-				class="px-3 py-2 text-sm text-secondary cursor-pointer select-none"
-				onclick={markHealthCheckTouched}
-			>
-				Active health check
-				{#if formData.healthCheck.enabled}
-					<span class="ml-1 text-xs text-muted">(on)</span>
-				{/if}
-			</summary>
-			<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
-				<!-- Capture click on the wrapper so toggling the
-				     checkbox marks the HC block as touched (drives
-				     the J.2 preserve-or-replace decision). Checkbox
-				     does not expose an onchange prop; the wrapper
-				     handler runs whether the user clicks the box or
-				     its label. -->
-				<div onclick={markHealthCheckTouched} onkeydown={markHealthCheckTouched} role="none">
-					<Checkbox
-						label="Enable active health checks"
-						bind:checked={formData.healthCheck.enabled}
-					/>
-				</div>
-				<div>
-					<label
-						for="hc-uri"
-						class="text-sm font-medium text-secondary block mb-1"
-					>
-						URI <span class="text-down" aria-hidden="true">*</span>
-					</label>
-					<input
-						id="hc-uri"
-						type="text"
-						bind:value={formData.healthCheck.uri}
-						placeholder="/healthz"
-						disabled={!formData.healthCheck.enabled}
-						aria-required="true"
-						oninput={markHealthCheckTouched}
-						class="w-full bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
-						class:border-down={!!errors['healthCheck.uri']}
-						class:border-border-default={!errors['healthCheck.uri']}
-					/>
-					{#if errors['healthCheck.uri']}
-						<p class="text-xs text-down mt-1">{errors['healthCheck.uri']}</p>
-					{/if}
-				</div>
-				<div>
-					<label
-						for="hc-method"
-						class="text-sm font-medium text-secondary block mb-1"
-					>
-						Method
-					</label>
-					<select
-						id="hc-method"
-						bind:value={formData.healthCheck.method}
-						disabled={!formData.healthCheck.enabled}
-						onchange={markHealthCheckTouched}
-						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
-					>
-						<option value="GET">GET</option>
-						<option value="HEAD">HEAD</option>
-					</select>
-					{#if errors['healthCheck.method']}
-						<p class="text-xs text-down mt-1">{errors['healthCheck.method']}</p>
-					{/if}
-				</div>
-				<div class="grid grid-cols-2 gap-3">
-					<Input
-						label="Interval"
-						bind:value={formData.healthCheck.interval}
-						placeholder={HEALTH_CHECK_DEFAULTS.interval}
-						disabled={!formData.healthCheck.enabled}
-						oninput={markHealthCheckTouched}
-						error={errors['healthCheck.interval'] ?? undefined}
-					/>
-					<Input
-						label="Timeout"
-						bind:value={formData.healthCheck.timeout}
-						placeholder={HEALTH_CHECK_DEFAULTS.timeout}
-						disabled={!formData.healthCheck.enabled}
-						oninput={markHealthCheckTouched}
-						error={errors['healthCheck.timeout'] ?? undefined}
-					/>
-				</div>
-				<div class="grid grid-cols-2 gap-3">
-					<div class="flex flex-col gap-1.5">
-						<label
-							for="hc-passes"
-							class="text-sm font-medium text-secondary">Passes</label
-						>
-						<input
-							id="hc-passes"
-							type="number"
-							min="1"
-							bind:value={formData.healthCheck.passes}
-							placeholder={String(HEALTH_CHECK_DEFAULTS.passes)}
-							disabled={!formData.healthCheck.enabled}
-							oninput={markHealthCheckTouched}
-							class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
-							class:border-down={!!errors['healthCheck.passes']}
-							class:border-border-default={!errors['healthCheck.passes']}
-						/>
-						{#if errors['healthCheck.passes']}
-							<p class="text-xs text-down">{errors['healthCheck.passes']}</p>
-						{/if}
-					</div>
-					<div class="flex flex-col gap-1.5">
-						<label
-							for="hc-fails"
-							class="text-sm font-medium text-secondary">Fails</label
-						>
-						<input
-							id="hc-fails"
-							type="number"
-							min="1"
-							bind:value={formData.healthCheck.fails}
-							placeholder={String(HEALTH_CHECK_DEFAULTS.fails)}
-							disabled={!formData.healthCheck.enabled}
-							oninput={markHealthCheckTouched}
-							class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
-							class:border-down={!!errors['healthCheck.fails']}
-							class:border-border-default={!errors['healthCheck.fails']}
-						/>
-						{#if errors['healthCheck.fails']}
-							<p class="text-xs text-down">{errors['healthCheck.fails']}</p>
-						{/if}
-					</div>
-				</div>
-				<div class="flex flex-col gap-1.5">
-					<label
-						for="hc-expect-status"
-						class="text-sm font-medium text-secondary">Expected status</label
-					>
-					<input
-						id="hc-expect-status"
-						type="number"
-						min="0"
-						max="599"
-						bind:value={formData.healthCheck.expectStatus}
-						placeholder="200"
-						disabled={!formData.healthCheck.enabled}
-						oninput={markHealthCheckTouched}
-						class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
-						class:border-down={!!errors['healthCheck.expectStatus']}
-						class:border-border-default={!errors['healthCheck.expectStatus']}
-					/>
-					{#if errors['healthCheck.expectStatus']}
-						<p class="text-xs text-down">{errors['healthCheck.expectStatus']}</p>
-					{/if}
-				</div>
-				<Input
-					label="Expected body (regex)"
-					bind:value={formData.healthCheck.expectBody}
-					disabled={!formData.healthCheck.enabled}
-					oninput={markHealthCheckTouched}
-					error={errors['healthCheck.expectBody'] ?? undefined}
-				/>
-				<p class="text-xs text-muted">
-					Leave a field blank to use the server default
-					({HEALTH_CHECK_DEFAULTS.method} / {HEALTH_CHECK_DEFAULTS.interval}
-					/ {HEALTH_CHECK_DEFAULTS.timeout} / passes={HEALTH_CHECK_DEFAULTS.passes}
-					/ fails={HEALTH_CHECK_DEFAULTS.fails}). URI is required.
-				</p>
-			</div>
-		</details>
-
-		<!-- Step I.6: custom request / response headers. -->
-		<details class="rounded border border-border-subtle">
-			<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-				Request headers
-				{#if requestHeaderRows.length > 0}
-					<span class="ml-1 text-xs text-muted">({requestHeaderRows.length})</span>
-				{/if}
-			</summary>
-			<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
-				{#each requestHeaderRows as _, i (i)}
-					<div class="flex items-center gap-2">
-						<Input bind:value={requestHeaderRows[i][0]} placeholder="X-Custom-Header" />
-						<Input bind:value={requestHeaderRows[i][1]} placeholder="value" />
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={() => removeRequestHeader(i)}
-							type="button">×</Button
-						>
-					</div>
-				{/each}
-				<Button variant="ghost" size="sm" onclick={addRequestHeader} type="button"
-					>+ Add request header</Button
-				>
-			</div>
-		</details>
-		<details class="rounded border border-border-subtle">
-			<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-				Response headers
-				{#if responseHeaderRows.length > 0}
-					<span class="ml-1 text-xs text-muted">({responseHeaderRows.length})</span>
-				{/if}
-			</summary>
-			<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
-				{#each responseHeaderRows as _, i (i)}
-					<div class="flex items-center gap-2">
-						<Input bind:value={responseHeaderRows[i][0]} placeholder="X-Custom-Header" />
-						<Input bind:value={responseHeaderRows[i][1]} placeholder="value" />
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={() => removeResponseHeader(i)}
-							type="button">×</Button
-						>
-					</div>
-				{/each}
-				<Button variant="ghost" size="sm" onclick={addResponseHeader} type="button"
-					>+ Add response header</Button
-				>
-			</div>
-		</details>
-		<button type="submit" class="hidden" aria-hidden="true"></button>
-	</form>
-	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (formOpen = false)}>Cancel</Button>
-		<Button
-			onclick={submitForm}
-			loading={submitting}
-			disabled={dedicatedOptOutPendingChoice}
-		>
-			{formMode === 'create' ? 'Create' : 'Save'}
-		</Button>
-	{/snippet}
-</Modal>
+	</div>
+{/if}
 
 <Modal
 	open={confirmTarget !== null}
