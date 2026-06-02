@@ -92,7 +92,19 @@ jobs:
           IMAGE="ghcr.io/${{ github.repository_owner }}/arenet"
           TAGS="${IMAGE}:${{ steps.meta.outputs.version }}"
           if [ "${{ steps.meta.outputs.stable }}" = "true" ]; then
+            # Step #S-7: publish moving major (v1) + minor (v1.0)
+            # aliases for stable releases so downstream pinners
+            # can choose their level of update commitment:
+            #   - :v1.0.1 — exact pin, never moves
+            #   - :v1.0   — accepts patch updates within minor
+            #   - :v1     — accepts minor + patch within major
+            #   - :latest — accepts everything
+            VERSION="${{ steps.meta.outputs.version }}"
+            MAJOR="$(echo "$VERSION" | cut -d. -f1)"
+            MINOR="$(echo "$VERSION" | cut -d. -f1-2)"          
             TAGS="${TAGS},${IMAGE}:latest"
+            TAGS="${TAGS},${IMAGE}:${MAJOR}"
+            TAGS="${TAGS},${IMAGE}:${MINOR}"            
           fi
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
           echo "Computed tags: ${TAGS}"
