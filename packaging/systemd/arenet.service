@@ -21,6 +21,13 @@ Documentation=https://github.com/barto95100/arenet
 After=network-online.target
 Wants=network-online.target
 
+# Restart rate limit (Step #S-10): these directives belong to
+# [Unit], not [Service]. Putting them in [Service] makes systemd
+# emit "Unknown key 'StartLimitIntervalSec' in section [Service],
+# ignoring." and silently disables the rate limit.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
 [Service]
 Type=simple
 User=arenet
@@ -60,16 +67,17 @@ ReadWritePaths=/var/lib/arenet
 # for its bind logic.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
 LockPersonality=true
-MemoryDenyWriteExecute=false  # Go's runtime needs writable+exec
-                              # in some code paths; tighter
-                              # value breaks startup.
 
+# Go's runtime needs writable+exec in some code paths; a tighter
+# value (MemoryDenyWriteExecute=true) breaks startup. Step #S-10:
+# inline comments after `=value` are NOT supported by systemd —
+# they get parsed as part of the value and rejected as
+# "Invalid argument". Comment block lives above the directive.
+MemoryDenyWriteExecute=false
 # Restart policy. Restart on crash; back off if we're failing
 # repeatedly (don't spin a death loop hammering systemd).
 Restart=on-failure
 RestartSec=5s
-StartLimitBurst=5
-StartLimitIntervalSec=300
 
 # Log routing — journald captures stdout/stderr by default. Set
 # ARENET_LOG_FORMAT=json in the env file to get structured logs.
