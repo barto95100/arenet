@@ -36,6 +36,15 @@ func slogLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 			switch {
 			case ww.Status() >= 500:
 				level = slog.LevelError
+			case ww.Status() == 404:
+				// Step #S-5: 404 is too noisy at WARN level. Browsers
+				// routinely request favicon.ico, /apple-touch-icon
+				// variants, prefetched assets that don't exist, scanners
+				// probing for common paths — none of these are operator-
+				// actionable. Demote to DEBUG so they remain available
+				// when explicitly enabled but stay out of the default log
+				// stream.
+				level = slog.LevelDebug
 			case ww.Status() >= 400:
 				level = slog.LevelWarn
 			}
