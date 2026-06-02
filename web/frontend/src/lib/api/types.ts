@@ -628,6 +628,15 @@ export interface OIDCConfig {
 	scopes: string[];
 	redirectUrl: string;
 	/**
+     * Step #S-17 — opt-in: relax the §1.6 Δ7 guard (email_verified
+     * required on Pass 2 bootstrap) for IdPs that don't emit
+     * email_verified=true by default (Authentik admin-created
+     * accounts being the typical case). Always emitted by the
+     * server (default false). Required field on this response
+     * shape so the GUI checkbox can reflect the current state.
+     */
+    acceptUnverifiedEmail: boolean;	
+	/**
 	 * Provider kind (optional) — drives the SSO button logo on
 	 * the login page. Empty = "generic" fallback. Mirrors the
 	 * ForwardAuthProviderKind enum.
@@ -660,6 +669,12 @@ export interface OIDCConfigRequest {
 	clientSecret: string;
 	scopes: string[];
 	redirectUrl: string;
+    /**
+     * Step #S-17 — opt-in: see OIDCConfig.acceptUnverifiedEmail.
+     * Optional on the request shape (the backend defaults to
+     * false when omitted, matching the OIDCConfig zero value).
+     */
+    acceptUnverifiedEmail?: boolean;	
 	kind?: OIDCProviderKind;
 }
 
