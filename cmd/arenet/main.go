@@ -70,7 +70,17 @@ import (
 	"github.com/barto95100/arenet/web"
 )
 
-const version = "DEV"
+// version is overridable at link time via ldflags:
+//
+//   go build -ldflags="-X main.version=v1.0.1" ./cmd/arenet
+//
+// Step #S-13 fix: this MUST be a var, not a const. Go's -ldflags
+// -X directive can only write to a package-level variable; a
+// const target is silently ignored by the linker (no warning, no
+// error), leaving the value at its declared default. The
+// Dockerfile and release workflow both inject the real version
+// this way at build time.
+var version = "DEV"
 
 // Step S.3 (2026-06-01): the local `type config struct` +
 // parseFlags() were replaced by the centralised internal/config
