@@ -429,7 +429,14 @@ type automaticHTTPSConfig struct {
 	Disable             bool `json:"disable"`
 	DisableRedirects    bool `json:"disable_redirects,omitempty"`
 	DisableCertificates bool `json:"disable_certificates,omitempty"`
-	SkipCerts           bool `json:"skip,omitempty"`
+	// Skip lists hostnames that Caddy's auto-HTTPS should NOT
+	// auto-acquire certs for. Used by Step #S-20 to prevent per-
+	// host cert acquisition on routes covered by a managed-domain
+	// wildcard (which is pre-acquired via apps.tls.certificates.
+	// automate). Caddy's automatic_https.skip is a list of names,
+	// NOT a bool — the prior `SkipCerts bool` declaration was a
+	// type bug that emitted JSON Caddy would silently ignore.
+	Skip []string `json:"skip,omitempty"`
 }
 
 type tlsConnectionPolicy struct {
@@ -1042,6 +1049,14 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			Listen: []string{httpsListen},
 			AutomaticHTTPS: &automaticHTTPSConfig{
 				DisableRedirects: true,
+				// Step #S-20: routes covered by a managed-domain
+				// wildcard (ACMEChallenge == "inherited") must be
+				// skipped from Caddy's per-host auto-cert flow, so
+				// Caddy serves the wildcard cert (pre-acquired via
+				// apps.tls.certificates.automate) for them at TLS
+				// handshake via SNI matching instead of obtaining
+				// a separate cert per route.
+				Skip: buildSkipList(routes),
 			},
 			TLSConnPolicies: []tlsConnectionPolicy{{}},
 			Routes:          httpsRoutes,
@@ -1080,11 +1095,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			"https_port": httpsPortFor(opts.DevMode),
 			"servers":    cfg.Apps.HTTP.Servers,
 		},
-		"tls": map[string]any{
-			"automation": map[string]any{
-				"policies": buildTLSPolicies(acme, opts),
-			},
-		},
+		"tls": buildTLSApp(acme, opts),
 	}
 	// Step N.1 — apps.crowdsec block. Inject ONLY when the
 	// operator has provided a LAPI key; empty key is the
@@ -1273,6 +1284,91 @@ func buildManagedDomainPolicies(opts buildOpts) []map[string]any {
 				},
 			})
 		}
+	}
+	return out
+}
+
+// buildTLSApp returns the full apps.tls section, combining the
+// automation policies (per-route ACME + managed-domain wildcards
+// + internal catch-all) with the certificates.automate list when
+// managed domains are declared.
+//
+// When opts.ManagedDomains is empty, the returned map contains
+// only the "automation" key — byte-equal to the pre-S-20 emission.
+// This preserves the D5.A short-circuit invariant pinned by
+// TestBuildConfigJSON_NoManagedDomains_PreservesShape (or
+// equivalent test name).
+func buildTLSApp(acme acmePartition, opts buildOpts) map[string]any {
+	tls := map[string]any{
+		"automation": map[string]any{
+			"policies": buildTLSPolicies(acme, opts),
+		},
+	}
+	if automate := buildAutomateList(opts.ManagedDomains); len(automate) > 0 {
+		tls["certificates"] = map[string]any{
+			"automate": automate,
+		}
+	}
+	return tls
+}
+
+// buildAutomateList returns the subjects Caddy should proactively
+// pre-acquire via ACME at config-load time, computed from declared
+// managed domains.
+//
+// Without this list, Caddy lazily acquires per-host certs ON-DEMAND
+// when each route's hostname is first hit — defeating the
+// "one wildcard cert covers all sub-domains under <apex>" intent
+// the managed-domain feature promises in its GUI.
+//
+// With this list, Caddy proactively obtains `*.<apex>` (and `<apex>`
+// when IncludeApex is true) at boot, then serves it for any matching
+// sub-domain at TLS handshake via SNI wildcard matching.
+//
+// Step #S-20 fix. Companion of buildSkipList (which prevents the
+// per-host fallback by removing covered hostnames from Caddy's
+// automatic_https eligible list).
+func buildAutomateList(managedDomains []storage.ManagedDomain) []string {
+	if len(managedDomains) == 0 {
+		return nil
+	}
+	out := make([]string, 0, 2*len(managedDomains))
+	for _, md := range managedDomains {
+		out = append(out, "*."+md.Apex)
+		if md.IncludeApex {
+			out = append(out, md.Apex)
+		}
+	}
+	return out
+}
+
+// buildSkipList returns the route hostnames (Host + every Alias) of
+// routes whose ACMEChallenge == "inherited" — i.e., routes covered
+// by a managed-domain wildcard. These names go into
+// apps.http.servers.arenet_https.automatic_https.skip so Caddy
+// does NOT add them to its auto-managed cert acquisition list.
+//
+// Without this skip, Caddy would obtain a separate per-host cert
+// for each route via the wildcard policy's DNS-01 challenge config
+// (the policy matches via wildcard but Caddy obtains the *specific*
+// hostname, not the policy's subjects). With the skip, the wildcard
+// cert from buildAutomateList is served for all matching routes via
+// SNI matching at TLS handshake.
+//
+// Routes with explicit ACMEChallenge ("http-01" or "dns-01") are
+// NOT skipped — they get their own cert as the operator intended.
+//
+// Step #S-20 fix. Companion of buildAutomateList.
+func buildSkipList(routes []storage.Route) []string {
+	out := make([]string, 0, len(routes))
+	for _, route := range routes {
+		if route.ACMEChallenge == storage.ACMEChallengeInherited {
+			out = append(out, route.Host)
+			out = append(out, route.Aliases...)
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
