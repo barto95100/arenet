@@ -123,3 +123,111 @@ jobs:
           for t in "${T[@]}"; do
             echo "  - \`${t}\`" >> "$GITHUB_STEP_SUMMARY"
           done
+  build-binaries:
+    name: Build native binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: web/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          set -euo pipefail
+          OUT="arenet-linux-${{ matrix.arch }}"
+          go build \
+            -ldflags "-s -w -X main.version=${{ steps.meta.outputs.version }}" \
+            -trimpath \
+            -o "$OUT" \
+            ./cmd/arenet
+          chmod +x "$OUT"
+          file "$OUT"
+          echo "Built ${OUT} with version=${{ steps.meta.outputs.version }}"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arenet-linux-${{ matrix.arch }}
+          path: arenet-linux-${{ matrix.arch }}
+          retention-days: 1
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'push'
+    needs: [build-and-publish, build-binaries]
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve version + stable flag
+        id: meta
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if printf '%s\n' "${VERSION}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            STABLE=true
+          else
+            STABLE=false
+          fi
+          echo "stable=${STABLE}" >> "$GITHUB_OUTPUT"
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten layout + generate checksums
+        run: |
+          set -euo pipefail
+          find artifacts -type f -name "arenet-linux-*" -exec mv {} . \;
+          sha256sum arenet-linux-* > checksums.txt
+          echo "Released assets:"
+          ls -la arenet-linux-* checksums.txt
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          name: ${{ steps.meta.outputs.version }}
+          prerelease: ${{ steps.meta.outputs.stable == 'false' }}
+          generate_release_notes: true
+          files: |
+            arenet-linux-amd64
+            arenet-linux-arm64
+            checksums.txt
