@@ -1097,6 +1097,22 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		},
 		"tls": buildTLSApp(acme, opts),
 	}
+	// Step #S-19v2: suppress Caddy's default local-CA root install
+	// attempt. v1.0.2 (now reverted) tried to set this via the typed
+	// cfg.Apps.PKI struct field, but the JSON marshal path here
+	// builds the apps map manually and only pulled HTTP.Servers from
+	// cfg — silently dropping PKI. Adding the block directly to the
+	// map (same pattern as CrowdSec below) so it actually lands in
+	// the emitted JSON. install_trust:false keeps the local CA
+	// functional for the catch-all SNI fallback but skips the
+	// hostile sudo + certutil install attempt at boot.
+	apps["pki"] = map[string]any{
+		"certificate_authorities": map[string]any{
+			"local": map[string]any{
+				"install_trust": false,
+			},
+		},
+	}
 	// Step N.1 — apps.crowdsec block. Inject ONLY when the
 	// operator has provided a LAPI key; empty key is the
 	// degraded-mode signal (AC #13). The handler prepend on
