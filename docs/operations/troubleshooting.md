@@ -146,6 +146,99 @@ forward-only but the rollback is at the operator's discretion;
 older binaries refuse to start against a newer schema (would
 silently corrupt). The safe path is restore.
 
+## "SSO login fails with invalid_state or hangs after the IdP"
+
+A common homelab gotcha when your IdP (Authentik, Keycloak,
+Authelia, etc.) is exposed via a **public DNS name** AND Arenet
+runs on the **same LAN** as the IdP.
+
+### Symptom
+
+- Click "Sign in with SSO" on the Arenet login page.
+- The IdP login page appears and you authenticate successfully.
+- Browser redirects back to Arenet's
+  `/api/v1/auth/oidc/callback`.
+- You see `invalid_state` or a generic error and land on
+  `/login?error=internal`. Arenet logs show
+  `oidc: token exchange failed` or `oidc: state mismatch`.
+
+### Root cause
+
+The OIDC flow requires **two** HTTPS round trips to the IdP:
+
+1. The **browser** redirects to the IdP (authorization request)
+   — works because the browser resolves the public DNS name and
+   reaches the IdP via the router's NAT loopback.
+2. The **Arenet backend** then talks to the IdP directly to
+   exchange the authorization code for tokens (token request).
+   This is a *server-to-server* call from inside the LAN, and
+   it takes the same NAT loopback path.
+
+If your router does not support NAT loopback (a.k.a. hairpin
+NAT), or if firewall rules block intra-LAN traffic to the
+router's WAN IP, step 2 fails silently and the callback never
+completes.
+
+### Diagnosis
+
+On the host running `arenet`:
+
+```bash
+curl -v https://auth.example.com/application/o/<slug>/.well-known/openid-configuration
+```
+
+- Connection refused / timeout / TLS error → NAT loopback is
+  the culprit. Apply one of the fixes below.
+- Valid JSON response → the network path is fine. Likely a
+  `redirect_uri` mismatch instead. Check that the `Redirect URL`
+  set in Settings → OIDC matches **exactly** one of the allowed
+  redirect URIs registered with the IdP — schemes, ports, and
+  trailing slashes count.
+
+### Fix A — Split-horizon DNS (recommended)
+
+Make the LAN-side resolver return the IdP's **internal IP** for
+the public hostname. The browser keeps hitting the public DNS,
+but the backend resolves to the internal IP and bypasses the
+NAT loopback entirely.
+
+Pi-hole, AdGuard Home, or dnsmasq:
+
+```
+address=/auth.example.com/192.168.1.10
+```
+
+Unbound:
+
+```yaml
+local-data: "auth.example.com IN A 192.168.1.10"
+```
+
+Verify on the Arenet host:
+
+```bash
+dig auth.example.com +short
+# → should print the LAN IP (e.g. 192.168.1.10)
+```
+
+### Fix B — Enable NAT loopback / hairpin on the router
+
+Some routers (OpenWrt, OPNsense, pfSense, EdgeRouter…) can
+enable hairpin NAT globally or per port-forward rule. Consult
+your router's documentation. Avoid this on consumer ISP-supplied
+routers — many advertise the feature but implement it
+inconsistently.
+
+### Fix C — Point Arenet at the internal IdP URL directly
+
+If you control the IdP, set Arenet's `Issuer URL` (Settings →
+OIDC) to the IdP's internal address — e.g.
+`http://192.168.1.10:9000/application/o/<slug>/`. The IdP must
+accept this issuer; most validate that the issuer string in the
+ID token matches what Arenet expects. For Authentik you may
+need to add the internal URL under the application's *Advanced
+settings → Trusted OIDC sources*.
+
 ## Where to find logs
 
 | Install | Command |
