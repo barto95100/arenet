@@ -18,6 +18,7 @@ package auth
 
 import (
 	"context"
+	"crypto/tls" 
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -489,13 +490,18 @@ func TestHardAuthMiddleware_NoCookie_DelegatesToSoftAuth401(t *testing.T) {
 }
 
 // --- Cookie attribute tests ----------------------------------------------
-
-func TestClearSessionCookie_ProdMode_IncludesSecure(t *testing.T) {
+// Step #S-11: Secure is set based on the actual request scheme,
+// not a devMode flag. A request with r.TLS != nil represents an
+// HTTPS handshake that terminated at this server, so the cookie
+// is flagged Secure.
+func TestClearSessionCookie_TLSRequest_IncludesSecure(t *testing.T) {
 	rec := httptest.NewRecorder()
-	clearSessionCookie(rec, false)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.TLS = &tls.ConnectionState{} // non-nil marker: request came over TLS
+	clearSessionCookie(rec, r)
 	got := rec.Header().Get("Set-Cookie")
 	if !strings.Contains(got, "Secure") {
-		t.Errorf("prod cookie clear should include Secure; got %q", got)
+		t.Errorf("TLS-request cookie clear should include Secure; got %q", got)
 	}
 	if !strings.Contains(got, "HttpOnly") {
 		t.Errorf("missing HttpOnly: %q", got)
@@ -511,12 +517,16 @@ func TestClearSessionCookie_ProdMode_IncludesSecure(t *testing.T) {
 	}
 }
 
-func TestClearSessionCookie_DevMode_OmitsSecure(t *testing.T) {
+// Step #S-11: a plain HTTP request (r.TLS == nil) means the browser
+// is on a non-secure context, so the cookie must NOT be flagged
+// Secure — the browser would otherwise silently refuse it.
+func TestClearSessionCookie_PlainHTTPRequest_OmitsSecure(t *testing.T) {	
 	rec := httptest.NewRecorder()
-	clearSessionCookie(rec, true)
+	r := httptest.NewRequest(http.MethodGet, "/", nil) // r.TLS is nil
+	clearSessionCookie(rec, r)
 	got := rec.Header().Get("Set-Cookie")
 	if strings.Contains(got, "Secure") {
-		t.Errorf("dev mode cookie clear must NOT include Secure; got %q", got)
+		t.Errorf("plain-HTTP request cookie clear must NOT include Secure; got %q", got)
 	}
 	if !strings.Contains(got, "HttpOnly") {
 		t.Errorf("HttpOnly must still be set in dev mode: %q", got)

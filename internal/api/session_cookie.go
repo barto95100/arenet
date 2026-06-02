@@ -48,7 +48,8 @@ const themeCookieMaxAge = 30 * 24 * 60 * 60
 //
 // The Max-Age depends on rememberMe (24h or 30d sliding TTL). The
 // Secure attribute is omitted in --dev mode (HTTP local).
-func setSessionCookie(w http.ResponseWriter, sessionID string, rememberMe, devMode bool) {
+func setSessionCookie(w http.ResponseWriter, r *http.Request, sessionID string, rememberMe bool) {
+
 	maxAge := int(auth.SessionTTLDefault.Seconds())
 	if rememberMe {
 		maxAge = int(auth.SessionTTLRememberMe.Seconds())
@@ -59,7 +60,7 @@ func setSessionCookie(w http.ResponseWriter, sessionID string, rememberMe, devMo
 		Path:     "/",
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   !devMode,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 }
@@ -82,14 +83,14 @@ func setSessionCookie(w http.ResponseWriter, sessionID string, rememberMe, devMo
 // Caller MUST pass a normalized value ("dark" or "light"); pre-Step-F
 // users with `""` should be mapped to "dark" before this call so the
 // cookie always carries a useful value for the bootstrap script.
-func setThemeCookie(w http.ResponseWriter, theme string, devMode bool) {
+func setThemeCookie(w http.ResponseWriter, r *http.Request, theme string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     themeCookieName,
 		Value:    theme,
 		Path:     "/",
 		MaxAge:   themeCookieMaxAge,
 		HttpOnly: false,
-		Secure:   !devMode,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -100,14 +101,14 @@ func setThemeCookie(w http.ResponseWriter, theme string, devMode bool) {
 //
 // The attributes other than MaxAge MUST exactly match the values used
 // at set time, otherwise some browsers refuse the deletion.
-func clearThemeCookieOnResponse(w http.ResponseWriter, devMode bool) {
+func clearThemeCookieOnResponse(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     themeCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: false,
-		Secure:   !devMode,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -122,4 +123,28 @@ func normalizeThemeForCookie(theme string) string {
 		return auth.ThemeLight
 	}
 	return auth.ThemeDark
+}
+// isSecureRequest returns true when the request was served over TLS,
+// in which case cookies may be set with the Secure attribute.
+//
+// When the request arrives over HTTP (operator using admin via
+// loopback HTTP or LAN HTTP — D6 default loopback admin), cookies
+// MUST NOT have Secure: browsers silently refuse to store Secure
+// cookies on non-HTTPS contexts (with localhost as the only
+// exception, treated as secure-context), causing login to appear
+// to succeed (POST /login → 200) but the session cookie to be
+// dropped — every subsequent request comes in with no cookie and
+// hits the 401 unauthenticated path. See finding #S-11.
+//
+// Future-proofing: when Arenet sits behind a TLS-terminating
+// upstream proxy (Caddy, Traefik, Nginx), X-Forwarded-Proto
+// would carry the original scheme. Trusting this header requires
+// gating on the trusted-proxies list (Arenet already has the
+// infrastructure via ARENET_TRUSTED_PROXIES). Adding the
+// X-Forwarded-Proto path is intentionally deferred — the common
+// deployments (SSH-tunneled loopback admin, direct HTTPS via
+// Arenet's own TLS, or LAN HTTP admin) all work with the r.TLS
+// check alone.
+func isSecureRequest(r *http.Request) bool {
+	return r != nil && r.TLS != nil
 }

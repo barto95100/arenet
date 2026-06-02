@@ -18,6 +18,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -84,12 +85,32 @@ func postJSON(t *testing.T, router http.Handler, path string, body any) *httptes
 	return rec
 }
 
+// postJSONTLS is identical to postJSON but marks the request as
+// TLS-terminated (r.TLS != nil). Used to assert cookie attributes
+// that depend on the scheme — Step #S-11 made the Secure flag
+// scheme-aware, so a test that verifies the production-like
+// behaviour (admin GUI served over HTTPS → cookies flagged Secure)
+// must use this variant instead of postJSON.
+func postJSONTLS(t *testing.T, router http.Handler, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	buf, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(buf)))
+	req.Header.Set("Content-Type", "application/json")
+	req.TLS = &tls.ConnectionState{}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
 // --- POST /api/v1/auth/setup tests ---------------------------------------
 
 func TestSetup_HappyPath(t *testing.T) {
 	env, token := setupTestEnv(t)
 
-	rec := postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
+	rec := postJSONTLS(t, env.router, "/api/v1/auth/setup", map[string]string{
 		"setupToken":  token,
 		"username":    "admin",
 		"displayName": "Site Admin",
@@ -548,7 +569,7 @@ func TestLogin_HappyPath(t *testing.T) {
 	// (Reset above is mostly cosmetic; we use len(events)-N comparisons.)
 	_ = uid
 
-	rec := postJSON(t, env.router, "/api/v1/auth/login", map[string]any{
+	rec := postJSONTLS(t, env.router, "/api/v1/auth/login", map[string]any{
 		"username":   "admin",
 		"password":   testAdminPassword,
 		"rememberMe": false,
@@ -1406,6 +1427,7 @@ func TestLogin_SetsThemeCookie(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
 		strings.NewReader(`{"username":"admin","password":"`+testAdminPassword+`","rememberMe":false}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.TLS = &tls.ConnectionState{} // Step #S-11: simulate HTTPS-terminated request
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1432,9 +1454,9 @@ func TestLogin_SetsThemeCookie(t *testing.T) {
 	if c.MaxAge != 30*24*60*60 {
 		t.Errorf("MaxAge = %d, want 2592000 (30 days)", c.MaxAge)
 	}
-	// devMode=false in setupTestEnv → Secure should be true.
+	// Step #S-11: TLS-terminated request → cookie flagged Secure.
 	if !c.Secure {
-		t.Error("Secure = false; want true in prod-mode (devMode false)")
+		t.Error("Secure = false; want true on TLS request")
 	}
 }
 

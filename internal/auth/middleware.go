@@ -68,7 +68,7 @@ func SoftAuthMiddleware(sessions sessionStore, users userStore, devMode bool) fu
 				// Distinguishing them is preserved at the storage layer
 				// for observability (spec §3.3), but the user-visible
 				// outcome is identical: drop the stale cookie and 401.
-				clearSessionCookie(w, devMode)
+				clearSessionCookie(w, r)
 				writeAuthError(w, "no active session")
 				return
 			}
@@ -78,7 +78,7 @@ func SoftAuthMiddleware(sessions sessionStore, users userStore, devMode bool) fu
 				if errors.Is(err, ErrUserNotFound) {
 					// Session references a deleted user. Clean up and 401.
 					_ = sessions.Delete(r.Context(), session.ID)
-					clearSessionCookie(w, devMode)
+					clearSessionCookie(w, r)
 					writeAuthError(w, "no active session")
 					return
 				}
@@ -217,16 +217,22 @@ func writeServiceUnavailable(w http.ResponseWriter, message string) {
 // clearSessionCookie sets a Set-Cookie header that instructs the
 // browser to drop the arenet_session cookie. All cookie attributes
 // match those used at creation (HttpOnly, SameSite=Strict, Path=/)
-// so the browser correctly matches the cookie for deletion. Secure
-// is omitted in dev mode (HTTP local) per spec §4.11.
-func clearSessionCookie(w http.ResponseWriter, devMode bool) {
+// so the browser correctly matches the cookie for deletion.
+//
+// Step #S-11: Secure is set based on the actual request scheme
+// (TLS terminated by Arenet) rather than the devMode flag. Browsers
+// silently drop Secure cookies on non-HTTPS (with localhost as the
+// only exception), so a prod deployment accessed via LAN HTTP must
+// not flag the cookie Secure or the browser will refuse to store it
+// — breaking login despite a 200 response.
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1, // sentinel for "delete now"
 		HttpOnly: true,
-		Secure:   !devMode,
+		Secure:   r != nil && r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 	})
 }
