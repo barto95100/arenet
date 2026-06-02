@@ -41,12 +41,12 @@ func TestOIDCMatchAllowlist_EmailUnverifiedRejected(t *testing.T) {
 		{Email: "alice@example.com", DisplayName: "Alice"},
 	}
 	// Same email, but the token says NOT verified.
-	_, idx, isBootstrap := matchAllowlist(entries, "sub-attacker-123", "alice@example.com", false /* email_verified */)
+	_, idx, isBootstrap := matchAllowlist(entries, "sub-attacker-123", "alice@example.com", false /* email_verified */, false)
 	if idx >= 0 {
 		t.Errorf("unverified-email attacker matched bootstrap entry; idx=%d isBootstrap=%v", idx, isBootstrap)
 	}
 	// And the same call with verified=true must match.
-	match, idx, isBootstrap := matchAllowlist(entries, "sub-real-456", "alice@example.com", true)
+	match, idx, isBootstrap := matchAllowlist(entries, "sub-real-456", "alice@example.com", true, false)
 	if idx != 0 || !isBootstrap || match.Email != "alice@example.com" {
 		t.Errorf("verified-email match failed: idx=%d isBootstrap=%v match=%v", idx, isBootstrap, match)
 	}
@@ -57,7 +57,7 @@ func TestOIDCMatchAllowlist_SubPassMatchesPostCanonicalisation(t *testing.T) {
 		{Email: "alice@example.com", Sub: "sub-canonical-789"},
 	}
 	// Sub-pass first: matches regardless of email / email_verified.
-	match, idx, isBootstrap := matchAllowlist(entries, "sub-canonical-789", "doesnt-matter@x.test", false)
+	match, idx, isBootstrap := matchAllowlist(entries, "sub-canonical-789", "doesnt-matter@x.test", false, false)
 	if idx != 0 || isBootstrap || match.Sub != "sub-canonical-789" {
 		t.Errorf("sub-pass match failed: idx=%d isBootstrap=%v match=%v", idx, isBootstrap, match)
 	}
@@ -67,7 +67,7 @@ func TestOIDCMatchAllowlist_EmailEmptyRejected(t *testing.T) {
 	entries := []storage.OIDCAllowedIdentity{
 		{Email: "alice@example.com"},
 	}
-	_, idx, _ := matchAllowlist(entries, "sub-x", "", true)
+	_, idx, _ := matchAllowlist(entries, "sub-x", "", true, false)
 	if idx >= 0 {
 		t.Errorf("empty email matched a bootstrap entry; idx=%d", idx)
 	}
@@ -81,7 +81,7 @@ func TestOIDCMatchAllowlist_CanonicalisedEntrySkipsEmailPass(t *testing.T) {
 	entries := []storage.OIDCAllowedIdentity{
 		{Email: "alice@example.com", Sub: "sub-already-canonical"},
 	}
-	_, idx, _ := matchAllowlist(entries, "sub-different", "alice@example.com", true)
+	_, idx, _ := matchAllowlist(entries, "sub-different", "alice@example.com", true, false)
 	if idx >= 0 {
 		t.Errorf("email-pass matched a canonicalised entry; idx=%d", idx)
 	}
@@ -91,7 +91,7 @@ func TestOIDCMatchAllowlist_EmailCaseInsensitive(t *testing.T) {
 	entries := []storage.OIDCAllowedIdentity{
 		{Email: "Alice@Example.com"},
 	}
-	match, idx, _ := matchAllowlist(entries, "sub-x", "alice@EXAMPLE.COM", true)
+	match, idx, _ := matchAllowlist(entries, "sub-x", "alice@EXAMPLE.COM", true, false)
 	if idx != 0 || match.Email != "Alice@Example.com" {
 		t.Errorf("case-insensitive match failed: idx=%d match=%v", idx, match)
 	}
@@ -530,7 +530,7 @@ func TestOIDCAllowlist_AddWithPrefilledSub_FirstLoginMatchesPass1WithUnverifiedE
 	// spec §5.2 invariant ("the verified-email guard does
 	// not apply there"). This is the property that lets the
 	// pre-fill skip Δ7.
-	match, idx, isBootstrap := matchAllowlist(got.AllowedIdentities, "sub-from-authentik-xyz", "alice@example.com", false)
+	match, idx, isBootstrap := matchAllowlist(got.AllowedIdentities, "sub-from-authentik-xyz", "alice@example.com", false, false)
 	if idx != 0 || isBootstrap || match.Sub != "sub-from-authentik-xyz" {
 		t.Fatalf("PASS-1 BYPASS REGRESSION: pre-filled sub did not match via Pass 1 with email_verified=false; idx=%d isBootstrap=%v match=%v", idx, isBootstrap, match)
 	}
@@ -728,6 +728,37 @@ func TestOIDCConfig_EmptyKindAccepted(t *testing.T) {
 	})
 	if err != nil {
 		t.Errorf("storage validate rejected empty kind (legacy): %v", err)
+	}
+}
+
+// TestOIDCMatchAllowlist_AcceptUnverifiedEmail_BypassesD7 pins the
+// Step #S-17 escape hatch: when the operator sets
+// OIDCConfig.AcceptUnverifiedEmail = true, an unverified-email
+// match canonicalises a pending invite (Pass 2 succeeds despite
+// emailVerified=false).
+func TestOIDCMatchAllowlist_AcceptUnverifiedEmail_BypassesD7(t *testing.T) {
+	entries := []storage.OIDCAllowedIdentity{
+		{Email: "alice@example.com", DisplayName: "Alice"},
+	}
+	// emailVerified=false, acceptUnverifiedEmail=true → bootstrap succeeds.
+	match, idx, isBootstrap := matchAllowlist(entries, "sub-attacker-but-trusted-idp", "alice@example.com", false, true)
+	if idx != 0 || !isBootstrap || match.Email != "alice@example.com" {
+		t.Errorf("AcceptUnverifiedEmail=true should bypass Δ7: idx=%d isBootstrap=%v match=%v", idx, isBootstrap, match)
+	}
+}
+
+// TestOIDCMatchAllowlist_AcceptUnverifiedEmail_DefaultPreservesD7
+// is a regression guard: the new toggle MUST default to false,
+// preserving the §1.6 Δ7 invariant for installs that don't
+// explicitly opt in.
+func TestOIDCMatchAllowlist_AcceptUnverifiedEmail_DefaultPreservesD7(t *testing.T) {
+	entries := []storage.OIDCAllowedIdentity{
+		{Email: "alice@example.com"},
+	}
+	// emailVerified=false, acceptUnverifiedEmail=false (default).
+	_, idx, _ := matchAllowlist(entries, "sub-x", "alice@example.com", false, false)
+	if idx >= 0 {
+		t.Errorf("Δ7 REGRESSION: default (acceptUnverifiedEmail=false) accepted unverified email; idx=%d", idx)
 	}
 }
 

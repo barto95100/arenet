@@ -45,6 +45,7 @@
 		clientId: '',
 		clientSecret: '',
 		redirectUrl: '',
+		acceptUnverifiedEmail: false,
 		scopes: 'openid profile email', // space-separated for the textarea/input
 		kind: '' as OIDCProviderKind | ''
 	});
@@ -69,6 +70,7 @@
 			form.issuerUrl = cfg.issuerUrl;
 			form.clientId = cfg.clientId;
 			form.redirectUrl = cfg.redirectUrl;
+			form.acceptUnverifiedEmail = cfg.acceptUnverifiedEmail ?? false;
 			form.scopes = (cfg.scopes ?? []).join(' ');
 			form.kind = (cfg.kind ?? '') as OIDCProviderKind | '';
 			// clientSecret stays "" — server redacts on GET; user only
@@ -101,6 +103,7 @@
 				clientId: form.clientId.trim(),
 				clientSecret: form.clientSecret, // empty preserves
 				redirectUrl: form.redirectUrl.trim(),
+				acceptUnverifiedEmail: form.acceptUnverifiedEmail,
 				scopes,
 				...(form.kind ? { kind: form.kind } : {})
 			});
@@ -311,6 +314,24 @@
 			</p>
 		</div>
 
+		<div class="md:col-span-2">
+			<label class="text-sm font-medium text-secondary inline-flex items-center gap-2">
+				<input
+					type="checkbox"
+					bind:checked={form.acceptUnverifiedEmail}
+					class="rounded border-border-default bg-surface text-cyan focus:ring-cyan"
+				/>
+				Accept unverified email on first login (advanced)
+			</label>
+			<p class="text-xs text-muted mt-1">
+				Off by default. Enable only when your IdP does not assert
+				<code class="font-mono">email_verified=true</code> on its ID tokens
+				(Authentik admin-created accounts being the typical case) and you
+				fully control IdP-side account creation. Relaxes the Δ7 guard for the
+				allowlist Email-bootstrap pass — only safe when the IdP itself is
+				trusted.
+			</p>
+		</div>
 		{#if formError}
 			<p class="text-sm text-down md:col-span-2" role="alert">{formError}</p>
 		{/if}

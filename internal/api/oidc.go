@@ -183,6 +183,14 @@ type oidcConfigRequest struct {
 	ClientSecret string   `json:"clientSecret"`
 	Scopes       []string `json:"scopes"`
 	RedirectURL  string   `json:"redirectUrl"`
+	// AcceptUnverifiedEmail relaxes the §1.6 Δ7 guard on the
+    // allowlist Email-pass bootstrap (Step #S-17). False by
+    // default. Set true ONLY for self-hosted, operator-
+    // controlled IdPs that don't emit email_verified=true by
+    // default (Authentik admin-created users being the
+    // motivating case). See storage.OIDCConfig.
+    // AcceptUnverifiedEmail for the threat model.
+    AcceptUnverifiedEmail bool `json:"acceptUnverifiedEmail"`	
 	// Kind (optional) — provider kind for UI per-IdP hints
 	// (login SSO button logo). One of "authentik" / "keycloak" /
 	// "authelia" / "generic". Empty is accepted (treated as
@@ -201,6 +209,10 @@ type oidcConfigResponse struct {
 	ClientSecretSet   bool                          `json:"clientSecretSet"`
 	Scopes            []string                      `json:"scopes"`
 	RedirectURL       string                        `json:"redirectUrl"`
+    // Step #S-17: surface the operator's opt-in for the Δ7
+    // relaxation so the Settings → OIDC GUI can render the
+    // current state of the checkbox.
+    AcceptUnverifiedEmail bool                      `json:"acceptUnverifiedEmail"`
 	Kind              string                        `json:"kind"`
 	AllowedIdentities []oidcAllowedIdentityResponse `json:"allowedIdentities"`
 	Configured        bool                          `json:"configured"`
@@ -240,6 +252,7 @@ func oidcConfigToResponse(c storage.OIDCConfig, configured bool) oidcConfigRespo
 		ClientSecretSet:   c.ClientSecret != "",
 		Scopes:            scopes,
 		RedirectURL:       c.RedirectURL,
+		AcceptUnverifiedEmail: c.AcceptUnverifiedEmail,
 		Kind:              c.Kind,
 		AllowedIdentities: identities,
 		Configured:        configured,
@@ -312,6 +325,7 @@ func (h *Handler) putOIDCConfig(w http.ResponseWriter, r *http.Request) {
 		ClientSecret:      clientSecret,
 		Scopes:            req.Scopes,
 		RedirectURL:       strings.TrimSpace(req.RedirectURL),
+		AcceptUnverifiedEmail: req.AcceptUnverifiedEmail,
 		Kind:              strings.TrimSpace(req.Kind),
 		AllowedIdentities: previous.AllowedIdentities,
 		CreatedAt:         previous.CreatedAt,
@@ -604,8 +618,8 @@ func (h *Handler) oidcInitiateLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	setOIDCFlowCookie(w, oidcStateCookie, state, h.devMode)
-	setOIDCFlowCookie(w, oidcNonceCookie, nonce, h.devMode)
+	setOIDCFlowCookie(w, r, oidcStateCookie, state)
+	setOIDCFlowCookie(w, r, oidcNonceCookie, nonce)
 
 	authURL := oauthCfg.AuthCodeURL(state, oidc.Nonce(nonce))
 	http.Redirect(w, r, authURL, http.StatusFound)
@@ -665,7 +679,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Single-use: clear the state cookie now that we've consumed it.
-	clearOIDCFlowCookie(w, oidcStateCookie, h.devMode)
+	clearOIDCFlowCookie(w, r, oidcStateCookie)
 
 	// Nonce cookie — kept until ID-token verification reads it.
 	nonceCookie, err := r.Cookie(oidcNonceCookie)
@@ -677,7 +691,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, h.uiURL("/login?error=invalid_state"), http.StatusFound)
 		return
 	}
-	clearOIDCFlowCookie(w, oidcNonceCookie, h.devMode)
+	clearOIDCFlowCookie(w, r, oidcNonceCookie)
 
 	cfg, err := h.store.GetOIDCConfig(r.Context())
 	if err != nil || !cfg.Enabled {
@@ -760,7 +774,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Allowlist match: Sub-pass first (steady-state),
 	// Email-pass second (bootstrap, with email_verified guard).
-	match, matchIdx, isBootstrap := matchAllowlist(cfg.AllowedIdentities, claims.Sub, claims.Email, claims.EmailVerified)
+	match, matchIdx, isBootstrap := matchAllowlist(cfg.AllowedIdentities, claims.Sub, claims.Email, claims.EmailVerified, cfg.AcceptUnverifiedEmail)
 	if matchIdx < 0 {
 		h.appendAudit(r, audit.Event{
 			Action:  audit.ActionOIDCLoginRejected,
@@ -818,8 +832,8 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, h.uiURL("/login?error=internal"), http.StatusFound)
 		return
 	}
-	setSessionCookie(w, sess.ID, false, h.devMode)
-	setThemeCookie(w, normalizeThemeForCookie(user.ThemePreference), h.devMode)
+	setSessionCookie(w, r, sess.ID, false)
+	setThemeCookie(w, r, normalizeThemeForCookie(user.ThemePreference))
 
 	// Best-effort LastLoginAt.
 	go func(uid string) {
@@ -843,11 +857,20 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 // (1) match by Sub, (2) match by Email with the mandatory
 // email_verified == true guard.
 //
-// SECURITY (§1.6 Δ7): the Email-pass REQUIRES emailVerified ==
-// true. An IdP-side malicious account claiming someone else's
-// unverified email never canonicalises into a pending invite.
-// Pinned by TestOIDCMatchAllowlist_EmailUnverifiedRejected.
-func matchAllowlist(entries []storage.OIDCAllowedIdentity, sub, email string, emailVerified bool) (storage.OIDCAllowedIdentity, int, bool) {
+// SECURITY (§1.6 Δ7): by default the Email-pass REQUIRES
+// emailVerified == true. An IdP-side malicious account claiming
+// someone else's unverified email never canonicalises into a
+// pending invite. Pinned by
+// TestOIDCMatchAllowlist_EmailUnverifiedRejected.
+//
+// Step #S-17 escape hatch: when acceptUnverifiedEmail is true,
+// the Δ7 guard is relaxed. The operator MUST have explicitly
+// opted in via OIDCConfig.AcceptUnverifiedEmail — this targets
+// IdPs that don't emit email_verified by default (Authentik
+// admin-created users) on instances where the operator
+// controls account creation IdP-side. See OIDCConfig.
+// AcceptUnverifiedEmail for the full threat model.
+func matchAllowlist(entries []storage.OIDCAllowedIdentity, sub, email string, emailVerified, acceptUnverifiedEmail bool) (storage.OIDCAllowedIdentity, int, bool) {
 	// First pass — match by Sub (steady state).
 	for i, e := range entries {
 		if e.Sub != "" && e.Sub == sub {
@@ -855,9 +878,12 @@ func matchAllowlist(entries []storage.OIDCAllowedIdentity, sub, email string, em
 		}
 	}
 	// Second pass — match by Email, BUT only if the IdP
-	// asserted email_verified. An unverified email never
+ 	// asserted email_verified (§1.6 Δ7), unless the operator
 	// canonicalises an invite (§1.6 Δ7).
-	if !emailVerified {
+	// opted in via OIDCConfig.AcceptUnverifiedEmail (Step
+	// #S-17). An unverified email never canonicalises an
+	// invite in the default secure mode.
+	if !emailVerified && !acceptUnverifiedEmail {
 		return storage.OIDCAllowedIdentity{}, -1, false
 	}
 	emailLower := strings.ToLower(strings.TrimSpace(email))
@@ -966,27 +992,25 @@ func constantTimeStringEqual(a, b string) bool {
 	}
 	return diff == 0
 }
-
-func setOIDCFlowCookie(w http.ResponseWriter, name, value string, devMode bool) {
+func setOIDCFlowCookie(w http.ResponseWriter, r *http.Request, name, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
 		Path:     "/",
 		Expires:  time.Now().Add(oidcCookieTTL),
 		HttpOnly: true,
-		Secure:   !devMode,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode, // Lax: cookie travels on the IdP→callback redirect
 	})
 }
-
-func clearOIDCFlowCookie(w http.ResponseWriter, name string, devMode bool) {
+func clearOIDCFlowCookie(w http.ResponseWriter, r *http.Request, name string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   !devMode,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 }

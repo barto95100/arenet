@@ -55,10 +55,27 @@ type OIDCConfig struct {
 	// (exposed via /auth/oidc/status) so the login page can pick
 	// the right logo BEFORE bootstrap; this is metadata, not a
 	// secret.
+	AllowedIdentities []OIDCAllowedIdentity `json:"allowed_identities"`
 	Kind              string                `json:"kind,omitempty"`
 	Scopes            []string              `json:"scopes"`
 	RedirectURL       string                `json:"redirect_url"`
-	AllowedIdentities []OIDCAllowedIdentity `json:"allowed_identities"`
+// AcceptUnverifiedEmail relaxes the §1.6 Δ7 guard for the
+// allowlist bootstrap pass: when true, an Email-pass match
+// canonicalises into a pending invite even if the IdP did
+// NOT assert email_verified=true in the ID token.
+//
+// Default false (secure). Opt-in for IdPs that don't emit
+// email_verified by default (e.g. Authentik admin-created
+// users) when the operator fully controls the IdP and
+// trusts its admin-created accounts.
+//
+// Step #S-17 escape hatch. Documented trade-off: enabling
+// this lets a hypothetical malicious IdP-side actor who
+// controls any account on the IdP claim an unverified email
+// matching a pending invite. Only safe to enable for self-
+// hosted, operator-controlled IdPs where account creation
+// is also operator-controlled (the typical homelab pattern).
+	AcceptUnverifiedEmail bool                 `json:"accept_unverified_email,omitempty"`	
 	CreatedAt         time.Time             `json:"created_at"`
 	UpdatedAt         time.Time             `json:"updated_at"`
 }
