@@ -763,8 +763,13 @@ export class ApiError extends Error {
 	status: number;
 	kind: ErrorKind;
 	retryAfterSeconds?: number;
-
-	constructor(message: string, status: number, kind?: ErrorKind, retryAfterSeconds?: number) {
+	// Optional machine-readable code from the response body
+	// (e.g. "oidc_unlock_unsupported"). Step #S-24 — first
+	// consumer is LockScreen, which redirects OIDC users to a
+	// fresh SSO sign-in when password-based unlock is rejected.
+	code?: string;
+	
+	constructor(message: string, status: number, kind?: ErrorKind, retryAfterSeconds?: number, code?: string) {
 		super(message);
 		this.status = status;
 		if (kind !== undefined) {
@@ -774,6 +779,7 @@ export class ApiError extends Error {
 			this.kind = status === 400 || status === 409 ? 'validation' : 'system';
 		}
 		this.retryAfterSeconds = retryAfterSeconds;
+		this.code = code;
 	}
 }
 

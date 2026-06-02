@@ -193,10 +193,10 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	setSessionCookie(w, sess.ID, false, h.devMode)
+	setSessionCookie(w, r, sess.ID, false)
 	// Setup creates a brand-new user with ThemePreference="" — normalized
 	// to "dark" so the FOUC bootstrap has a useful value (spec §4.5).
-	setThemeCookie(w, normalizeThemeForCookie(user.ThemePreference), h.devMode)
+	setThemeCookie(w, r, normalizeThemeForCookie(user.ThemePreference))
 
 	// Step 7: invalidate the setup token (single-use, spec §4.2).
 	h.setupToken.Invalidate()
@@ -303,10 +303,10 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	setSessionCookie(w, sess.ID, req.RememberMe, h.devMode)
+	setSessionCookie(w, r, sess.ID, req.RememberMe)
 	// Also set the theme cookie so the FOUC bootstrap script picks up
 	// the user's stored preference on the next paint (spec §4.5).
-	setThemeCookie(w, normalizeThemeForCookie(user.ThemePreference), h.devMode)
+	setThemeCookie(w, r, normalizeThemeForCookie(user.ThemePreference))
 
 	// Best-effort: record LastLoginAt; log warning on failure but
 	// never fail the login response. Bounded by a 5-second timeout
@@ -393,7 +393,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	// Clear the theme cookie too — the "explicit logout" lifecycle path
 	// in spec §4.5 clears both cookies. (Silent expirations leave the
 	// theme cookie in place; only the explicit /logout call wipes it.)
-	clearThemeCookieOnResponse(w, h.devMode)
+	clearThemeCookieOnResponse(w, r)
 
 	h.appendAudit(r, audit.Event{
 		Action:                audit.ActionLogout,
@@ -532,6 +532,23 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step #S-24: OIDC users have no local password hash — there's no
+	// way to unlock an idle-locked OIDC session with a password. Return
+	// a clear, actionable error code (oidc_unlock_unsupported) so the
+	// frontend redirects the user to a fresh SSO sign-in instead of
+	// failing with a generic 500 from argon2id on an empty hash.
+	if user.AuthSource == auth.UserAuthSourceOIDC {
+	    h.appendAudit(r, audit.Event{
+	        Action:  audit.ActionUnlockFailure,
+	        Message: "oidc_unlock_unsupported",
+	    })
+	    writeJSON(w, http.StatusBadRequest, map[string]string{
+	        "error": "OIDC users cannot unlock with a local password — please sign in again via SSO",
+	        "code":  "oidc_unlock_unsupported",
+	    })
+	    return
+	}
+	
 	match, err := argon2id.ComparePasswordAndHash(req.Password, user.PasswordHash)
 	if err != nil {
 		h.logger.Error("unlock: argon2id compare failed", "err", err, "user_id", userID)
@@ -871,7 +888,7 @@ func (h *Handler) updateTheme(w http.ResponseWriter, r *http.Request) {
 	// next paint reflects the new preference immediately (spec §4.5).
 	// req.Theme is already validated to be exactly "dark" or "light"
 	// at this point — no need to re-normalize.
-	setThemeCookie(w, req.Theme, h.devMode)
+	setThemeCookie(w, r, req.Theme)
 
 	w.WriteHeader(http.StatusNoContent)
 }

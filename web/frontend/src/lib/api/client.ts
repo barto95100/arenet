@@ -104,8 +104,9 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 			const errBody = await safeJSON(res);
 			const msg =
 				typeof errBody?.error === 'string' ? errBody.error : `HTTP ${res.status}`;
+			const code = typeof errBody?.code === 'string' ? errBody.code : undefined
 			const kind = res.status >= 500 ? 'system' : 'validation';
-			throw new ApiError(msg, res.status, kind);
+			throw new ApiError(msg, res.status, kind, undefined, code);
 		}
 
 		if (res.status === 204) return undefined as T;

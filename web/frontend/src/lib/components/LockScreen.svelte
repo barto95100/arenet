@@ -30,6 +30,7 @@
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
+	import { goto } from '$app/navigation';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { ApiError } from '$lib/api/types';
 
@@ -65,6 +66,17 @@
 			// and this component unmounts via the parent's {#if} guard.
 		} catch (err) {
 			if (err instanceof ApiError) {
+				// Step #S-24: OIDC users have no local password — backend
+				// returns 400 + code:oidc_unlock_unsupported. Logout +
+				// redirect to /login so the user can re-authenticate via
+				// SSO. The full fix #S-25 (v1.0.2) will replace this modal
+				// entirely with a "Sign in again via SSO" button for OIDC
+				// users — for now we hand off to the login screen.
+				if (err.code === 'oidc_unlock_unsupported') {
+					auth.clear();
+					await goto('/login?reason=oidc_unlock_required');
+					return;
+				}				
 				error = err.status === 401 ? 'Mot de passe incorrect.' : err.message;
 			} else {
 				error = 'Erreur inattendue.';
