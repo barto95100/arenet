@@ -100,6 +100,24 @@
 
 	<div class="lockscreen-card">
 		<h2 id="lockscreen-title" class="lockscreen-title">Session verrouillée.</h2>
+
+		{#if auth.user?.authSource === 'oidc'}
+			<!-- Step #S-25: OIDC users have no local password.
+				Render a re-authenticate button that hands off to
+				the existing /api/v1/auth/oidc/login endpoint, which
+				starts a fresh SSO flow and lands the user back here
+				authenticated. The quick-fix #S-24 (backend returns
+				400 + code:oidc_unlock_unsupported on POST /unlock)
+				remains in place as a safety net. -->
+			<p class="lockscreen-sub">
+				Connecté en tant que
+				<span class="lockscreen-user">{auth.user?.username ?? ''}</span> via SSO.
+				Re-authentifie-toi pour reprendre.
+			</p>
+			<a class="lockscreen-submit" href="/api/v1/auth/oidc/login">
+				<span class="lockscreen-submit-label">Se reconnecter avec SSO</span>
+			</a>
+		{:else}		
 		<p class="lockscreen-sub">
 			Connecté en tant que
 			<span class="lockscreen-user">{auth.user?.username ?? ''}</span>.
@@ -189,6 +207,7 @@
 				<span class="lockscreen-submit-label">Déverrouiller</span>
 			</button>
 		</form>
+		{/if}
 	</div>
 </div>
 
