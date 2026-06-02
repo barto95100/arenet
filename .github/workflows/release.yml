@@ -210,6 +210,7 @@ jobs:
       - name: Download binary artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: arenet-linux-*
           path: artifacts
 
       - name: Flatten layout + generate checksums
