@@ -39,20 +39,6 @@
 	font-display: swap;
 	src: url('/fonts/Inter-Bold.woff2') format('woff2');
 }
-@font-face {
-	font-family: 'JetBrains Mono';
-	font-style: normal;
-	font-weight: 400;
-	font-display: swap;
-	src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
-}
-@font-face {
-	font-family: 'JetBrains Mono';
-	font-style: normal;
-	font-weight: 500;
-	font-display: swap;
-	src: url('/fonts/JetBrainsMono-Medium.woff2') format('woff2');
-}
 
 /* Geist Mono — primary monospace per spec §2.7. Self-hosted from
  * @fontsource/geist-mono (OFL-1.1). Latin subset only; ~13 kB / weight.

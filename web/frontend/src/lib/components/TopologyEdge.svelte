@@ -166,7 +166,7 @@
 		opacity: 0.5;
 	}
 	.edge-label {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		font-weight: 500;
 		pointer-events: none;

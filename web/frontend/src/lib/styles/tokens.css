@@ -205,12 +205,13 @@
 	--motion-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
 	--motion-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
 
-	/* Typography. Mock uses Inter (display + body) and JetBrains Mono.
-	 * Step F also shipped Geist Mono as primary; we keep it first in the
-	 * mono cascade — the mock's font-family chain falls back to JetBrains
-	 * Mono which is also self-hosted (web/frontend/static/fonts/). */
+    /* Typography. Inter for sans (display + body), Geist Mono for
+     * mono. Both are self-hosted (web/frontend/static/fonts/);
+     * the mono cascade falls back directly to ui-monospace (system
+     * mono) if Geist Mono is unavailable. Step #S-3 dropped JetBrains
+     * Mono — Geist Mono is now the single shipped monospace face. */
 	--font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-	--font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+	--font-mono: 'Geist Mono', ui-monospace, monospace;
 	/* Mock-naming aliases (mock uses --font-display + --font-body). */
 	--font-display: var(--font-sans);
 	--font-body: var(--font-sans);

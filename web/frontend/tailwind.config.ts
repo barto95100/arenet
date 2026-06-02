@@ -48,7 +48,7 @@ const config: Config = {
 			fontFamily: {
 				// Match tokens.css §2.7 stacks exactly.
 				sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
-				mono: ['Geist Mono', 'ui-monospace', 'JetBrains Mono', 'monospace']
+				mono: ['Geist Mono', 'ui-monospace', 'monospace']
 			},
 			fontSize: {
 				// Match tokens.css §2.7 sizing exactly (was 12/14/16/20/28/36

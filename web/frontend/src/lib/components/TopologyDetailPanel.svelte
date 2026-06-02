@@ -188,7 +188,7 @@
 		word-break: break-all;
 	}
 	.subtitle {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-family: ui-monospace, monospace;
 		font-size: 0.75rem;
 		color: var(--text-secondary);
 		margin: 0.25rem 0 0;
@@ -224,7 +224,7 @@
 		text-align: center;
 	}
 	.metric-value {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-family: ui-monospace, monospace;
 		font-size: 1.5rem;
 		font-weight: 600;
 		color: var(--text-primary);

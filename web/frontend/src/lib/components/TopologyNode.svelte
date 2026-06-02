@@ -149,7 +149,7 @@
 	}
 	.metrics {
 		fill: var(--text-secondary);
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-family: ui-monospace, monospace;
 		font-size: 11px;
 		pointer-events: none;
 	}
@@ -211,7 +211,7 @@
 	}
 	.tooltip-stats {
 		fill: var(--text-secondary);
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-family: ui-monospace, monospace;
 		font-size: 10px;
 	}
 	.tooltip-group {

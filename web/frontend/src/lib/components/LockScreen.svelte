@@ -231,7 +231,7 @@
 		--radius-lg: 14px;
 		--font-display: 'Inter', system-ui, -apple-system, sans-serif;
 		--font-body: 'Inter', system-ui, -apple-system, sans-serif;
-		--font-mono: 'Geist Mono', ui-monospace, 'JetBrains Mono', monospace;
+		--font-mono: 'Geist Mono', ui-monospace, monospace;
 
 		position: fixed;
 		inset: 0;
