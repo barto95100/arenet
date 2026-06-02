@@ -390,10 +390,6 @@ type loggingConfig struct {
 
 type appsConfig struct {
 	HTTP httpApp `json:"http"`
-	// Step #S-19: pki app with install_trust:false on the
-	// local CA. Always emitted (no omitempty) so the install
-	// attempt is consistently suppressed across deployments.
-	PKI *pkiApp `json:"pki,omitempty"`	
 	// Step N.1 — embedded CrowdSec bouncer Caddy app. Pointer
 	// with omitempty so the JSON shape is byte-identical to
 	// pre-N when the operator hasn't configured a LAPI key
@@ -416,34 +412,6 @@ type crowdsecApp struct {
 	TickerInterval  string `json:"ticker_interval"`
 	EnableStreaming bool   `json:"enable_streaming"`
 	EnableHardFails bool   `json:"enable_hard_fails"`
-}
-
-
-// pkiApp embeds the Caddy `pki` app config block.
-//
-// Step #S-19: Caddy auto-instantiates a local CA at startup
-// and, by default, tries to install its root certificate into
-// the operating-system + browser trust stores via sudo
-// + certutil. This is noisy and pointless for Arenet:
-//   - All real traffic uses ACME/LE-issued public certs.
-//   - The local CA is only used internally for the catch-all
-//     127.0.0.1 fallback (so Caddy can answer SNI requests
-//     it doesn't otherwise have a cert for) — that path never
-//     leaves the box.
-//   - Under systemd the sudo prompt fails non-interactively
-//     and we end up with a noisy "failed to install root
-//     certificate" ERROR line on every start.
-//
-// Setting install_trust:false on the "local" CA suppresses
-// the install attempt entirely. The CA remains functional;
-// only the side-effect (modifying the host trust store) is
-// disabled.
-type pkiApp struct {
-    CertificateAuthorities map[string]pkiCertificateAuthority `json:"certificate_authorities,omitempty"`
-}
-
-type pkiCertificateAuthority struct {
-    InstallTrust bool `json:"install_trust"`
 }
 
 type httpApp struct {
@@ -1098,11 +1066,6 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	cfg := caddyConfig{
 		Apps: appsConfig{
 			HTTP: httpApp{Servers: servers},
-			PKI: &pkiApp{
-				CertificateAuthorities: map[string]pkiCertificateAuthority{
-					"local": {InstallTrust: false},
-				},
-			},
 		},
 	}
 
