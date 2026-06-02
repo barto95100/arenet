@@ -36,7 +36,7 @@
 # -----------------------------------------------------------------
 # Stage 1 — frontend build (SvelteKit → static HTML+CSS+JS)
 # -----------------------------------------------------------------
-FROM node:20-alpine AS frontend
+FROM node:24-alpine AS frontend
 WORKDIR /src/web/frontend
 
 # Layer-cached deps install: copy lockfiles first.
