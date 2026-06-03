@@ -88,24 +88,7 @@ export interface TopologyUpstream {
 // Svelte Flow's Node<T> constraint.
 // ---------------------------------------------------------------------------
 
-/** Vue A col 0 — a protocol entry point (port + transport + handlers). */
-export type EntryPointNodeData = {
-        kind: 'entry-point';
-        protocol: string;                // ":443 HTTPS"
-        subtitle: string;                // "TLS 1.3 · ALPN h2"
-        hosts: string[];                 // ["api.arenet.fr", "admin.arenet.fr"]
-        reqPerSec: number;
-} & Record<string, unknown>;
-
-/** Vue B col 0 — an aggregated consumer source. */
-export type ConsumerNodeData = {
-        kind: 'consumer';
-        label: string;
-        subtitle: string;
-        meta: string[];
-} & Record<string, unknown>;
-
-/** Vue B col 1 — primary host serving a route.
+/** Col 0 — primary host serving a route.
  *
  *  C16 (2026-06-03): `wafLevel` carries route-level WAF state —
  *  rendered as a Lucide Shield/ShieldCheck glyph next to the host.
@@ -195,32 +178,11 @@ export type UpstreamNodeData = {
         fairnessRatio: number;           // 0-1
 } & Record<string, unknown>;
 
-/** Vue A col 2 — a simplified upstream service node. Less detail
- *  than BackendClusterNode (no per-backend fairness bars) because
- *  the protocol view focuses on entry-point → service flow shape
- *  rather than load-balancing breakdown. The `state` field is
- *  pre-computed by the layout builder so the component is pure
- *  presentation. */
-export type ServiceNodeData = {
-        kind: 'service';
-        serviceName: string;             // "api-v2"
-        runtime?: string;                // "Go"
-        primaryAddress: string;          // "10.0.4.12:8080"
-        additionalUpstreamCount?: number;// 2 -> "+2" badge
-        statusLine: string;              // "healthy · p99 38 ms" / "5xx 14% · timeout 5 s"
-        reqPerSec: number;
-        extraMeta?: string;              // "cache 94%", "1 248 sockets ouverts"
-        state: 'healthy' | 'warn' | 'bad';
-} & Record<string, unknown>;
-
 export type TopologyNodeData =
-        | EntryPointNodeData
-        | ConsumerNodeData
         | FQDNNodeData
         | CaddyHubNodeData
         | BackendClusterNodeData
-        | UpstreamNodeData
-        | ServiceNodeData;
+        | UpstreamNodeData;
 
 // ---------------------------------------------------------------------------
 // Edge data
@@ -244,8 +206,6 @@ export interface TopologyGraph {
         nodes: TopologyNode[];
         edges: TopologyEdge[];
 }
-
-export type TopologyViewMode = 'protocol' | 'service-to-backend';
 
 // ---------------------------------------------------------------------------
 // Tier resolution — single source of truth for AnimatedFlowEdge

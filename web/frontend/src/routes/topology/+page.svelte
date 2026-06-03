@@ -31,34 +31,27 @@
 	import { SvelteFlow, Background, Controls, useSvelteFlow, type NodeTypes, type EdgeTypes, type Node, type Edge } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 
-	import { buildProtocolGraph, buildServiceToBackendGraph } from './_layout';
-	import type { TopologyRoute, TopologyViewMode } from './_types';
+	import { buildTopologyGraph } from './_layout';
+	import type { TopologyRoute } from './_types';
 	import { fetchSnapshot, connectLiveStream, TopologyFetchError } from './_api';
 
-	// Custom node components — one per `kind` emitted by the layout builders.
-	import EntryPointNode from './_components/nodes/EntryPointNode.svelte';
-	import ConsumerNode from './_components/nodes/ConsumerNode.svelte';
+	// Custom node components — one per `kind` emitted by the layout builder.
 	import FQDNNode from './_components/nodes/FQDNNode.svelte';
 	import CaddyHubNode from './_components/nodes/CaddyHubNode.svelte';
-	import ServiceNode from './_components/nodes/ServiceNode.svelte';
 	import BackendClusterNode from './_components/nodes/BackendClusterNode.svelte';
 	import UpstreamNode from './_components/nodes/UpstreamNode.svelte';
 	import AnimatedFlowEdge from './_components/edges/AnimatedFlowEdge.svelte';
 	import FlowApiBridge from './_components/FlowApiBridge.svelte';
 
 	// Page-level UI
-	import ViewToggle from './_components/ViewToggle.svelte';
 	import TopologySidebar from './_components/TopologySidebar.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 
 	type FlowApi = ReturnType<typeof useSvelteFlow<Node, Edge>>;
 
 	const nodeTypes: NodeTypes = {
-		'entry-point': EntryPointNode,
-		consumer: ConsumerNode,
 		fqdn: FQDNNode,
 		caddy: CaddyHubNode,
-		service: ServiceNode,
 		'backend-cluster': BackendClusterNode,
 		upstream: UpstreamNode,
 	};
@@ -67,12 +60,13 @@
 		'animated-flow': AnimatedFlowEdge,
 	};
 
-	// View + graph state. routes is the live data; graph is the
-	// builder output for the current view.
-	let currentView = $state<TopologyViewMode>('service-to-backend');
+	// Graph state. routes is the live data; nodes/edges are the
+	// builder output. C6b-i collapsed the two-view design into a
+	// single buildTopologyGraph call — no view toggle, no second
+	// canvas mode.
 	let routes = $state<TopologyRoute[]>([]);
-	let nodes = $state.raw([] as ReturnType<typeof buildServiceToBackendGraph>['nodes']);
-	let edges = $state.raw([] as ReturnType<typeof buildServiceToBackendGraph>['edges']);
+	let nodes = $state.raw([] as ReturnType<typeof buildTopologyGraph>['nodes']);
+	let edges = $state.raw([] as ReturnType<typeof buildTopologyGraph>['edges']);
 
 	// Page-status state. 'loading' shows the centered spinner;
 	// 'error' shows the error panel + retry button; 'connected'
@@ -128,23 +122,17 @@
 	// so we do a partial reassignment only when the id set
 	// actually changes between ticks.
 	//
-	// `preservePositions: false` (used by switchView) opts out of
-	// position preservation — switching layouts is an intentional
-	// re-layout. We then do a full array reassignment so the
-	// builder's new positions land everywhere.
-	function rebuildGraph(
-		routesIn: TopologyRoute[],
-		view: TopologyViewMode,
-		preservePositions = true,
-	): void {
-		const graph = view === 'protocol'
-			? buildProtocolGraph(routesIn)
-			: buildServiceToBackendGraph(routesIn);
+	// C6b-i dropped the view-mode argument: with no Vue protocole,
+	// there's nothing to switch between. The function now only
+	// distinguishes "first build" (full reassignment, no prior
+	// state) from "tick" (in-place data updates via the flow API).
+	function rebuildGraph(routesIn: TopologyRoute[]): void {
+		const graph = buildTopologyGraph(routesIn);
 
-		// First call or view switch: reassign the full arrays. No
-		// existing state to reconcile against. The builder's
-		// positions are the truth.
-		if (!preservePositions || nodes.length === 0 || flowApi === null) {
+		// First call: reassign the full arrays. No existing state
+		// to reconcile against. The builder's positions are the
+		// truth.
+		if (nodes.length === 0 || flowApi === null) {
 			nodes = graph.nodes;
 			edges = graph.edges;
 			return;
@@ -222,24 +210,13 @@
 		}
 	}
 
-	function switchView(view: TopologyViewMode): void {
-		if (view === currentView) return;
-		currentView = view;
-		// Intentional re-layout — discard preserved positions.
-		// The two views have different column structures, so
-		// preserved positions wouldn't make sense anyway (a node
-		// dragged in service-to-backend's col 3 would land in
-		// protocol's col 2 mid-air).
-		rebuildGraph(routes, view, false);
-	}
-
 	async function loadInitial(): Promise<void> {
 		pageStatus = 'loading';
 		pageError = '';
 		try {
 			const snap = await fetchSnapshot();
 			routes = snap.routes;
-			rebuildGraph(routes, currentView);
+			rebuildGraph(routes);
 			pageStatus = 'connected';
 			// Now that we have the initial graph, open the live
 			// stream. The WS handler's initial-emit-on-connect
@@ -268,7 +245,7 @@
 		closeStream = connectLiveStream(
 			(nextRoutes) => {
 				routes = nextRoutes;
-				rebuildGraph(nextRoutes, currentView);
+				rebuildGraph(nextRoutes);
 				liveStatus = 'live';
 			},
 			() => {
@@ -326,7 +303,6 @@
 		<div class="topo-content">
 			<div class="topo-canvas-wrap">
 				<div class="canvas-toolbar">
-					<ViewToggle value={currentView} onChange={switchView} />
 					<div class="live-indicator" class:reconnecting={liveStatus === 'reconnecting'}>
 						<span class="dot"></span>
 						<span class="label">{liveStatus === 'live' ? 'live' : 'reconnecting…'}</span>
@@ -411,15 +387,18 @@
 		flex-direction: column;
 	}
 
+	/* Slimmer toolbar than pre-C6b-i — it only carries the live
+	   indicator now that the view toggle is gone. Right-aligned so
+	   the indicator sits in its natural spot without needing the
+	   previous absolute-positioning hack. */
 	.canvas-toolbar {
 		flex: 0 0 auto;
 		display: flex;
-		justify-content: center;
+		justify-content: flex-end;
 		align-items: center;
-		padding: 10px 12px;
+		padding: 6px 12px;
 		border-bottom: 1px solid var(--border, oklch(28% 0.009 250));
 		background: var(--surface-2, oklch(22% 0.007 250));
-		position: relative;
 	}
 
 	.canvas-frame {
@@ -485,14 +464,11 @@
 		background: var(--surface-hi, oklch(26% 0.008 250));
 	}
 
-	/* Live indicator — small absolute-positioned pill on the
-	   right side of the toolbar. Doesn't shift the centered
-	   ViewToggle. */
+	/* Live indicator — small pill. Used to be absolute-positioned
+	   to coexist with a centered ViewToggle; C6b-i dropped the
+	   toggle, so the indicator now flows naturally inside the
+	   flex-end toolbar. */
 	.live-indicator {
-		position: absolute;
-		right: 14px;
-		top: 50%;
-		transform: translateY(-50%);
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;

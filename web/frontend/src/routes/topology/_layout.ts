@@ -3,29 +3,31 @@
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 /**
- * Layout builders for the topology canvas.
+ * Layout builder for the topology canvas.
  *
- * Two pure functions, one per view mode:
- *   buildServiceToBackendGraph  4 columns: Consumer -> FQDN -> Caddy -> Cluster
- *   buildProtocolGraph          3 columns: EntryPoint -> Caddy -> Service
+ * Single pure function `buildTopologyGraph(routes)` that emits a
+ * three-column graph:
  *
- * Both share the same Caddy hub model and the same edge tier
- * resolution (resolveFlowTier from _types.ts). Helpers below are
- * shared across the two builders.
+ *   col 0 (FQDN)        primary host per route
+ *   col 1 (Caddy hub)   single central hub node
+ *   col 2 (backends)    one BackendCluster group per route with N
+ *                       UpstreamNode children inside (sub-flow);
+ *                       caddy-hub fans out to one edge per upstream
  *
- * `fitView` on <SvelteFlow> recenters at mount; switching views
- * after that does not refit automatically — that's intentional,
- * the user keeps their current zoom/pan when toggling.
+ * C6b-i (2026-06-04) simplified this module: the previous
+ * "Vue protocole" entry-point layout and the consumer column on
+ * the service view were Phase-1 mock leakage — entry-point and
+ * consumer fixtures were hardcoded constants, the view toggle
+ * exposed a second canvas that carried no real data. Dropping
+ * both views collapses the layout to a single source-of-truth
+ * builder reading only from the live route list.
  */
 
 import type {
         BackendClusterNodeData,
         CaddyHubNodeData,
-        ConsumerNodeData,
-        EntryPointNodeData,
         FlowEdgeData,
         FQDNNodeData,
-        ServiceNodeData,
         TopologyEdge,
         TopologyGraph,
         TopologyNode,
@@ -38,21 +40,14 @@ import type {
 // Layout constants
 // ---------------------------------------------------------------------------
 
-/** Vue B (service -> backend): 4 columns at 0/300/600/900. */
-const COL_X_SERVICE = {
-        CONSUMER: 0,
-        FQDN: 300,
-        CADDY: 600,
-        BACKEND: 900,
-} as const;
-
-/** Vue A (protocol): 3 columns spread over the same 900px width
- *  so the canvas bounds stay roughly identical when toggling
- *  between views — less jarring visually. */
-const COL_X_PROTOCOL = {
-        ENTRY_POINT: 0,
-        CADDY: 450,
-        SERVICE: 900,
+/** Three-column layout: FQDN → Caddy hub → BackendCluster. The
+ *  cluster column was 900px in the four-column service view; with
+ *  the consumer column removed (C6b-i) everything shifts left,
+ *  the canvas occupies 0..800 horizontally instead of 0..900. */
+const COL_X = {
+        FQDN: 0,
+        CADDY: 400,
+        BACKEND: 800,
 } as const;
 
 const ROW_SPACING_Y = 150;
@@ -93,98 +88,25 @@ function clusterTotalHeight(n: number, hasWarning: boolean): number {
         return hasWarning ? base + CLUSTER_WARNING_FOOTER_HEIGHT : base;
 }
 
-// ---------------------------------------------------------------------------
-// Hardcoded fixtures — Phase 1 only.
-// Will be replaced by data-driven derivation once the backend
-// exposes the corresponding telemetry.
-// ---------------------------------------------------------------------------
-
-const DEFAULT_CONSUMERS: ConsumerNodeData[] = [
-        {
-                kind: 'consumer',
-                label: 'Web app',
-                subtitle: 'desktop + tablette',
-                meta: ['TLS 1.3 · Chrome / Firefox / Safari'],
-        },
-        {
-                kind: 'consumer',
-                label: 'Mobile app',
-                subtitle: 'iOS / Android',
-                meta: ['SwiftUI + Kotlin · WS 1.2k'],
-        },
-];
-
-/** Entry-point fixtures for Vue A col 0. Numbers mirror the mock
- *  so the visual diff is easy to verify. Real values will come
- *  from Caddy's listener metrics in Phase 2. */
-const DEFAULT_ENTRY_POINTS: EntryPointNodeData[] = [
-        {
-                kind: 'entry-point',
-                protocol: ':443 HTTPS',
-                subtitle: 'TLS 1.3 · ALPN h2',
-                hosts: ['api.arenet.fr', 'admin.arenet.fr'],
-                reqPerSec: 812,
-        },
-        {
-                kind: 'entry-point',
-                protocol: ':443 QUIC/HTTP3',
-                subtitle: 'UDP · 0-RTT activé',
-                hosts: ['app.arenet.fr'],
-                reqPerSec: 386,
-        },
-        {
-                kind: 'entry-point',
-                protocol: ':80 HTTP',
-                subtitle: 'redirect -> 443',
-                hosts: ['tous les hôtes'],
-                reqPerSec: 42,
-        },
-        {
-                kind: 'entry-point',
-                protocol: ':443 WebSocket',
-                subtitle: 'Upgrade · proxy_protocol',
-                hosts: ['ws.arenet.fr/socket'],
-                reqPerSec: 84,
-        },
-        {
-                kind: 'entry-point',
-                protocol: ':443 admin (forward_auth)',
-                subtitle: 'OIDC · IP allowlist',
-                hosts: ['admin.arenet.fr'],
-                reqPerSec: 8,
-        },
-];
-
 // ===========================================================================
-// Public API — Vue B (Service -> Backend)
+// Public API — buildTopologyGraph
 // ===========================================================================
 
 /**
- * Build the Vue Service -> Backend graph from a route list.
+ * Build the topology graph from the live route list. Single source
+ * of truth — no fixtures, no view variants.
  *
- *   col 0 (consumers)   placeholder fixtures (Phase 1)
- *   col 1 (FQDN)        primary host per route
- *   col 2 (caddy)       single central hub node
- *   col 3 (backends)    one BackendCluster per route, carrying its
- *                       full upstream pool so the node component
- *                       can render fairness bars per row
+ *   col 0 (FQDN)        primary host per route
+ *   col 1 (Caddy hub)   single central hub node
+ *   col 2 (backends)    one BackendCluster group per route with N
+ *                       UpstreamNode children inside (sub-flow);
+ *                       caddy-hub fans out to one edge per upstream
  */
-export function buildServiceToBackendGraph(routes: TopologyRoute[]): TopologyGraph {
+export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
         const nodes: TopologyNode[] = [];
         const edges: TopologyEdge[] = [];
 
-        // Col 0 — consumers
-        const consumerYs = computeStackYs(DEFAULT_CONSUMERS.length);
-        DEFAULT_CONSUMERS.forEach((data, i) => {
-                nodes.push({
-                        id: `consumer-${i}`,
-                        type: 'consumer',
-                        position: { x: COL_X_SERVICE.CONSUMER, y: consumerYs[i] },
-                        data,
-                });
-        });
-
-        // Col 1 — FQDN
+        // Col 0 — FQDN
         const fqdnYs = computeStackYs(routes.length);
         routes.forEach((route, i) => {
                 const data: FQDNNodeData = {
@@ -203,23 +125,22 @@ export function buildServiceToBackendGraph(routes: TopologyRoute[]): TopologyGra
                 nodes.push({
                         id: `fqdn-${route.id}`,
                         type: 'fqdn',
-                        position: { x: COL_X_SERVICE.FQDN, y: fqdnYs[i] },
+                        position: { x: COL_X.FQDN, y: fqdnYs[i] },
                         data,
                 });
         });
 
-        // Col 2 — Caddy hub
-        nodes.push(buildCaddyNode(routes, COL_X_SERVICE.CADDY));
+        // Col 1 — Caddy hub
+        nodes.push(buildCaddyNode(routes, COL_X.CADDY));
 
-        // Col 3 — Backend clusters as sub-flow groups + N upstream children
+        // Col 2 — Backend clusters as sub-flow groups + N upstream children
         //
         // Each cluster is a group node sized to fit its upstream pool.
         // Cluster Ys are computed so the *centers* of variable-height
-        // groups remain evenly spaced (mirrors the protocol view's
-        // visual rhythm and prevents overlap when one route has many
-        // upstreams). Children carry parentId + extent: 'parent' so
-        // Svelte Flow keeps them inside the group when the user drags
-        // either the parent or a child.
+        // groups remain evenly spaced and prevent overlap when one
+        // route has many upstreams. Children carry parentId +
+        // extent: 'parent' so Svelte Flow keeps them inside the group
+        // when the user drags either the parent or a child.
         const clusterWarnings = routes.map(deriveClusterWarning);
         const clusterHeights = routes.map((r, i) =>
                 clusterTotalHeight(r.upstreams.length, clusterWarnings[i] !== undefined),
@@ -244,7 +165,7 @@ export function buildServiceToBackendGraph(routes: TopologyRoute[]): TopologyGra
                 nodes.push({
                         id: clusterId,
                         type: 'backend-cluster',
-                        position: { x: COL_X_SERVICE.BACKEND, y: clusterYs[i] },
+                        position: { x: COL_X.BACKEND, y: clusterYs[i] },
                         width: CLUSTER_WIDTH,
                         height: clusterHeights[i],
                         data: clusterData,
@@ -282,23 +203,7 @@ export function buildServiceToBackendGraph(routes: TopologyRoute[]): TopologyGra
                 });
         });
 
-        // Edges: consumer -> FQDN fan-out, FQDN -> caddy, caddy -> cluster
-        DEFAULT_CONSUMERS.forEach((_, ci) => {
-                routes.forEach((route) => {
-                        edges.push(makeFlowEdge(
-                                `e-c${ci}-fqdn-${route.id}`,
-                                `consumer-${ci}`,
-                                `fqdn-${route.id}`,
-                                {
-                                        kind: 'flow',
-                                        reqPerSec: route.reqPerSec / DEFAULT_CONSUMERS.length,
-                                        p99LatencyMs: route.p99LatencyMs,
-                                        errorRate5xx: route.errorRate5xx,
-                                },
-                        ));
-                });
-        });
-
+        // Edges: FQDN -> caddy, caddy -> upstream (fan-out per cluster)
         routes.forEach((route) => {
                 edges.push(makeFlowEdge(
                         `e-fqdn-${route.id}-caddy`,
@@ -354,81 +259,7 @@ export function buildServiceToBackendGraph(routes: TopologyRoute[]): TopologyGra
 }
 
 // ===========================================================================
-// Public API — Vue A (Protocol)
-// ===========================================================================
-
-/**
- * Build the Vue Protocol graph from a route list.
- *
- *   col 0 (entry points)  hardcoded Caddy listeners (Phase 1)
- *   col 1 (caddy)         single central hub node (same as Vue B)
- *   col 2 (services)      one ServiceNode per route, derived from
- *                         the route's primary upstream
- *
- * Edges: each entry point -> Caddy with its own reqPerSec; Caddy ->
- * each service with the route's metrics. The entry-point side
- * focuses on inbound flow shape; the service side on per-route
- * health and latency.
- */
-export function buildProtocolGraph(routes: TopologyRoute[]): TopologyGraph {
-        const nodes: TopologyNode[] = [];
-        const edges: TopologyEdge[] = [];
-
-        // Col 0 — Entry points (fixtures)
-        const epYs = computeStackYs(DEFAULT_ENTRY_POINTS.length);
-        DEFAULT_ENTRY_POINTS.forEach((data, i) => {
-                nodes.push({
-                        id: `ep-${i}`,
-                        type: 'entry-point',
-                        position: { x: COL_X_PROTOCOL.ENTRY_POINT, y: epYs[i] },
-                        data,
-                });
-        });
-
-        // Col 1 — Caddy hub
-        nodes.push(buildCaddyNode(routes, COL_X_PROTOCOL.CADDY));
-
-        // Col 2 — Services (one per route)
-        const serviceYs = computeStackYs(routes.length);
-        routes.forEach((route, i) => {
-                nodes.push({
-                        id: `service-${route.id}`,
-                        type: 'service',
-                        position: { x: COL_X_PROTOCOL.SERVICE, y: serviceYs[i] },
-                        data: deriveServiceFromRoute(route),
-                });
-        });
-
-        // Edges: each entry point -> Caddy
-        DEFAULT_ENTRY_POINTS.forEach((ep, i) => {
-                edges.push(makeFlowEdge(
-                        `e-ep${i}-caddy`,
-                        `ep-${i}`,
-                        'caddy-hub',
-                        {
-                                kind: 'flow',
-                                reqPerSec: ep.reqPerSec,
-                                p99LatencyMs: 0,  // listener-level latency not tracked
-                                errorRate5xx: 0,
-                        },
-                ));
-        });
-
-        // Caddy -> each service
-        routes.forEach((route) => {
-                edges.push(makeFlowEdge(
-                        `e-caddy-service-${route.id}`,
-                        'caddy-hub',
-                        `service-${route.id}`,
-                        routeFlowData(route),
-                ));
-        });
-
-        return { nodes, edges };
-}
-
-// ===========================================================================
-// Shared helpers
+// Helpers
 // ===========================================================================
 
 function buildCaddyNode(routes: TopologyRoute[], x: number): TopologyNode {
@@ -444,37 +275,6 @@ function buildCaddyNode(routes: TopologyRoute[], x: number): TopologyNode {
                 type: 'caddy',
                 position: { x, y: 0 },
                 data,
-        };
-}
-
-/** Derive a ServiceNodeData from a route's primary upstream. */
-function deriveServiceFromRoute(route: TopologyRoute): ServiceNodeData {
-        const primary = route.upstreams[0];
-        const additionalUpstreamCount = Math.max(0, route.upstreams.length - 1);
-
-        const state: ServiceNodeData['state'] =
-                route.errorRate5xx > 0
-                        ? 'bad'
-                        : route.p99LatencyMs > 300
-                        ? 'warn'
-                        : 'healthy';
-
-        const statusLine =
-                route.errorRate5xx > 0
-                        ? `5xx ${route.errorRate5xx}% · timeout 5s`
-                        : route.p99LatencyMs > 300
-                        ? `latence ↑ · p99 ${Math.round(route.p99LatencyMs)} ms`
-                        : `healthy · p99 ${Math.round(route.p99LatencyMs)} ms`;
-
-        return {
-                kind: 'service',
-                serviceName: route.clusterLabel ?? deriveClusterLabel(route.host),
-                runtime: primary?.runtime,
-                primaryAddress: primary?.url ?? '(no upstream)',
-                additionalUpstreamCount: additionalUpstreamCount > 0 ? additionalUpstreamCount : undefined,
-                statusLine,
-                reqPerSec: route.reqPerSec,
-                state,
         };
 }
 
