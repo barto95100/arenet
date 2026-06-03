@@ -107,12 +107,16 @@ export type OnTick = (routes: TopologyRoute[], generatedAt: string) => void;
 export type OnDisconnect = () => void;
 
 /** wsBaseURL derives the WebSocket origin from the current page's
- *  location, swapping http→ws / https→wss. In prod (BASE === '')
- *  this matches the API origin (same-origin). In dev (Vite at
- *  :5173, API at :8001) BASE is the VITE_API_BASE_URL string —
- *  but Vite's proxy ALSO forwards the /api path on :5173 to the
- *  backend including WebSocket upgrades, so we can stay on the
- *  page's origin in both modes and let Vite proxy. */
+ *  location, swapping http→ws / https→wss. In prod (binary serves
+ *  the SPA and the API on the same origin) this matches the API
+ *  origin trivially. In dev (Vite at :5173, API at :8001) Vite's
+ *  proxy forwards the WS upgrade to :8001 ONLY because vite.config.ts
+ *  declares the /api proxy in the full-object form with `ws: true`.
+ *  The shorthand `'/api': 'http://localhost:8001'` form does NOT
+ *  forward WebSocket upgrades — only plain HTTP — so the upgrade
+ *  hits Vite's dev server and silently fails. If you ever see the
+ *  topology page stuck on "reconnecting…" in dev, verify the
+ *  vite.config.ts proxy block still has `ws: true`. */
 function wsBaseURL(): string {
 	if (typeof window === 'undefined') {
 		// SSR/build-time safety. Should never be hit at runtime —
