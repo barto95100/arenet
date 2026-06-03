@@ -74,6 +74,14 @@
 
         function tierConfig(t: FlowTier): TierConfig {
                 switch (t) {
+                        case 'dead':
+                                // Exactly-zero traffic — no particles. The
+                                // {#each Array.from({ length: 0 })} render
+                                // emits no <circle>, so the edge shows only
+                                // its stroke line. count > 0 was confusing
+                                // ("two pale particles where there is no
+                                // traffic at all").
+                                return { count: 0, durS: 0, radius: 0, opacity: 0, glowPx: 0 };
                         case 'idle':
                                 return { count: 2, durS: 6, radius: 1.4, opacity: 0.55, glowPx: 0 };
                         case 'low':
@@ -91,6 +99,12 @@
 
         function tierColor(t: FlowTier): string {
                 switch (t) {
+                        case 'dead':
+                                // Slightly dimmer than 'idle' so the eye
+                                // reads "no traffic" rather than "almost no
+                                // traffic". Same hue family — still part of
+                                // the gray-blue palette, just lower-chroma.
+                                return 'oklch(50% 0.008 250)';
                         case 'idle':
                                 return 'oklch(60% 0.01 250)';
                         case 'low':
@@ -106,7 +120,17 @@
 
         function tierStrokeStyle(t: FlowTier): string {
                 const color = tierColor(t);
-                const opacity = t === 'idle' ? 0.3 : t === 'bad' ? 0.6 : t === 'warn' ? 0.5 : 0.45;
+                // 'dead' lines are dimmer than 'idle' (which is itself the
+                // dimmest tier with particles). Stroke opacity 0.2 keeps
+                // the edge visible — operator still sees the connection
+                // exists — but it recedes visually compared to any route
+                // carrying real traffic.
+                let opacity: number;
+                if (t === 'dead') opacity = 0.2;
+                else if (t === 'idle') opacity = 0.3;
+                else if (t === 'bad') opacity = 0.6;
+                else if (t === 'warn') opacity = 0.5;
+                else opacity = 0.45;
                 const dashed = t === 'bad' ? ' stroke-dasharray: 4 4;' : '';
                 return `stroke: ${color}; stroke-opacity: ${opacity}; stroke-width: 1.5;${dashed}`;
         }

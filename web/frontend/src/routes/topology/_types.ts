@@ -34,7 +34,7 @@ export type LBPolicy =
 
 export type HealthStatus = 'healthy' | 'unhealthy' | 'draining' | 'unknown';
 
-export type FlowTier = 'idle' | 'low' | 'mid' | 'high' | 'warn' | 'bad';
+export type FlowTier = 'dead' | 'idle' | 'low' | 'mid' | 'high' | 'warn' | 'bad';
 
 // ---------------------------------------------------------------------------
 // Domain types — input
@@ -186,7 +186,16 @@ export type TopologyViewMode = 'protocol' | 'service-to-backend';
 //        ≥ 400 req/s → 'high'
 //        150–400     → 'mid'
 //        20–150      → 'low'
-//        < 20        → 'idle'
+//        (0, 20)     → 'idle' (pale particles)
+//        exactly 0   → 'dead' (no particles, line only)
+//
+// The 'dead' tier (added 2026-06-03) carves out exactly-zero
+// traffic from 'idle'. Browser smoke surfaced the confusion:
+// 'idle' rendered two pale particles even when the route was
+// truly silent (reqPerSec === 0), reading as "a trickle of
+// traffic where there is none". 'dead' keeps the edge line
+// drawn so the operator still sees the route exists, but skips
+// the particle animation so silent routes look silent.
 // ---------------------------------------------------------------------------
 
 export function resolveFlowTier(data: FlowEdgeData): FlowTier {
@@ -195,5 +204,9 @@ export function resolveFlowTier(data: FlowEdgeData): FlowTier {
         if (data.reqPerSec >= 400) return 'high';
         if (data.reqPerSec >= 150) return 'mid';
         if (data.reqPerSec >= 20) return 'low';
-        return 'idle';
+        // Exactly-zero traffic gets its own tier so AnimatedFlowEdge
+        // can suppress the particle render. Any positive sub-20
+        // value still falls into 'idle' (pale particles).
+        if (data.reqPerSec > 0) return 'idle';
+        return 'dead';
 }

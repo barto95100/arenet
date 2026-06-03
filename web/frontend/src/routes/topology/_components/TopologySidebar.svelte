@@ -61,11 +61,15 @@
 
         // Each tier's "dots" preview in the legend. Inline 4-circle
         // SVG so the per-tier color + glow filter can apply via CSS.
+        // The 'dead' tier (added 2026-06-03) gets a legend row so the
+        // operator can distinguish "no traffic at all" (no particles,
+        // dim line) from "quasi-inactif" (pale particles, < 20 req/s).
         const LEGEND_ROWS: { tier: FlowTier; label: string }[] = [
                 { tier: 'high', label: '≥ 400 req/s — flux principal' },
                 { tier: 'mid', label: '150 – 400 req/s' },
                 { tier: 'low', label: '20 – 150 req/s' },
                 { tier: 'idle', label: '< 20 req/s — quasi-inactif' },
+                { tier: 'dead', label: '0 req/s — aucun trafic' },
                 { tier: 'warn', label: 'latence élevée (p99 > 300 ms)' },
                 { tier: 'bad', label: 'erreurs upstream (5xx ou timeout)' },
         ];
