@@ -84,10 +84,53 @@
 
 	let closeStream: (() => void) | null = null;
 
-	function rebuildGraph(routesIn: TopologyRoute[], view: TopologyViewMode): void {
+	// Drag-preservation across live ticks. The layout builders emit
+	// stable node ids per route, but each rebuild also emits FRESH
+	// layout positions — without intervention, a user who drags a
+	// node would see it snap back to the laid-out position on the
+	// next WS tick. The fix: capture the current per-id position
+	// just before the rebuild, then override the new nodes' positions
+	// where the id matches.
+	//
+	// `preservePositions: false` is used by switchView to opt out
+	// of the preservation — switching layouts is an intentional
+	// re-layout, the user expects new positions.
+	function rebuildGraph(
+		routesIn: TopologyRoute[],
+		view: TopologyViewMode,
+		preservePositions = true,
+	): void {
+		// Snapshot the current (potentially user-dragged) positions
+		// keyed by node id. We read from `nodes` which is the live
+		// $state.raw — Svelte Flow's `bind:nodes` writes drag deltas
+		// back here, so this captures the latest user state.
+		let savedPositions: Map<string, { x: number; y: number }> | null = null;
+		if (preservePositions && nodes.length > 0) {
+			savedPositions = new Map();
+			for (const n of nodes) {
+				if (n.position) {
+					savedPositions.set(n.id, { x: n.position.x, y: n.position.y });
+				}
+			}
+		}
+
 		const graph = view === 'protocol'
 			? buildProtocolGraph(routesIn)
 			: buildServiceToBackendGraph(routesIn);
+
+		// Re-apply user positions where the id survived from the
+		// previous rebuild. New ids (a route added since last tick)
+		// keep the builder's laid-out position; removed ids simply
+		// drop out — nothing to restore.
+		if (savedPositions !== null) {
+			for (const n of graph.nodes) {
+				const saved = savedPositions.get(n.id);
+				if (saved) {
+					n.position = saved;
+				}
+			}
+		}
+
 		nodes = graph.nodes;
 		edges = graph.edges;
 	}
@@ -95,7 +138,12 @@
 	function switchView(view: TopologyViewMode): void {
 		if (view === currentView) return;
 		currentView = view;
-		rebuildGraph(routes, view);
+		// Intentional re-layout — discard preserved positions.
+		// The two views have different column structures, so
+		// preserved positions wouldn't make sense anyway (a node
+		// dragged in service-to-backend's col 3 would land in
+		// protocol's col 2 mid-air).
+		rebuildGraph(routes, view, false);
 	}
 
 	async function loadInitial(): Promise<void> {
