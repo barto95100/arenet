@@ -106,6 +106,19 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
         const nodes: TopologyNode[] = [];
         const edges: TopologyEdge[] = [];
 
+        // C14b (2026-06-04): UpstreamNode bar width is a
+        // global-relative ratio reqPerSec / globalMax. Compute once
+        // up front so every upstream's data carries its own
+        // pre-divided loadRatio. Falls back to 0 across the board
+        // when nothing has traffic — avoids divide-by-zero and keeps
+        // all bars empty at idle for a clean baseline.
+        let globalMaxReqPerSec = 0;
+        for (const r of routes) {
+                for (const u of r.upstreams) {
+                        if (u.reqPerSec > globalMaxReqPerSec) globalMaxReqPerSec = u.reqPerSec;
+                }
+        }
+
         // Col 0 — FQDN
         const fqdnYs = computeStackYs(routes.length);
         routes.forEach((route, i) => {
@@ -175,6 +188,10 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                 route.upstreams.forEach((upstream, ui) => {
                         const childY = CLUSTER_PADDING_TOP + ui * (UPSTREAM_HEIGHT + UPSTREAM_GAP_Y);
                         const { displayUrl, wasHttps } = formatUpstreamUrl(upstream.url);
+                        const loadRatio =
+                                globalMaxReqPerSec > 0
+                                        ? upstream.reqPerSec / globalMaxReqPerSec
+                                        : 0;
                         const childData: UpstreamNodeData = {
                                 kind: 'upstream',
                                 upstreamId: upstream.id,
@@ -186,7 +203,7 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                                 healthCheckConfigured: upstream.healthCheckConfigured,
                                 reqPerSec: upstream.reqPerSec,
                                 p99LatencyMs: upstream.p99LatencyMs,
-                                fairnessRatio: upstream.fairnessRatio,
+                                loadRatio,
                         };
                         nodes.push({
                                 id: `upstream-${route.id}-${upstream.id}`,

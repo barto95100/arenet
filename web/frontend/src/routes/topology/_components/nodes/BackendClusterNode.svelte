@@ -126,7 +126,15 @@
                 height: 100%;
                 box-sizing: border-box;
                 background: var(--surface-2, oklch(22% 0.007 250));
-                border: 1px solid var(--border, oklch(28% 0.009 250));
+                /* Dashed wrapper border (C14a, 2026-06-04) — signals
+                   "this is a logical group container", not a regular
+                   card. The upstream children inside paint with solid
+                   borders so they read as concrete cards, and the
+                   group reads as the bounding context. The left edge
+                   stays solid + state-colored via the .cluster-node[
+                   data-state] rules below so the health-accent
+                   doesn't get visually fragmented by the dashes. */
+                border: 1px dashed var(--border, oklch(28% 0.009 250));
                 border-radius: 8px;
                 font-family: var(--font-display, system-ui, sans-serif);
                 color: var(--fg, oklch(96% 0.005 250));

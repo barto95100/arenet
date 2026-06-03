@@ -175,7 +175,18 @@ export type UpstreamNodeData = {
         displayUrl: string;
         reqPerSec: number;
         p99LatencyMs: number;
-        fairnessRatio: number;           // 0-1
+        // Load ratio relative to the busiest upstream across the
+        // whole canvas (C14b, 2026-06-04). Pre-computed at layout
+        // time so the bar width is a simple `loadRatio * 100%`.
+        // Single source of comparison — all upstream bars share the
+        // same scale, the eye spots hot upstreams regardless of
+        // which cluster they belong to. globalMax === 0 yields 0
+        // here (clean empty bars at idle).
+        //
+        // Replaces the previous `fairnessRatio` which was a
+        // per-cluster weight share — meaningless on single-upstream
+        // clusters (always 1.0) and not comparable across clusters.
+        loadRatio: number;               // 0-1
 } & Record<string, unknown>;
 
 export type TopologyNodeData =

@@ -35,6 +35,13 @@
      In Stage B, the stripe takes color from the real probe while
      the glyph stays neutral — two independent signals (configured
      vs. status).
+   - C14b load bar (2026-06-04): bar width was a per-cluster
+     fairnessRatio (the upstream's weight share), meaningless on
+     single-upstream clusters and not comparable across clusters.
+     It's now a global-relative loadRatio pre-computed by
+     _layout.ts as reqPerSec / globalMax across all upstreams in
+     the canvas — single comparison scale, busy upstreams stand
+     out regardless of cluster, idle upstreams all read empty.
 -->
 <script lang="ts">
         import { Handle, Position, type NodeProps } from '@xyflow/svelte';
@@ -88,10 +95,10 @@
                 <span class="up-p99">p99 {Math.round(data.p99LatencyMs)} ms</span>
         </div>
         <div class="up-line-2">
-                <div class="fairness-bar" aria-label="Fairness {Math.round(data.fairnessRatio * 100)}%">
+                <div class="load-bar" aria-label="Charge relative {Math.round(data.loadRatio * 100)}%">
                         <div
-                                class="fairness-fill"
-                                style:width="{Math.round(data.fairnessRatio * 100)}%"
+                                class="load-fill"
+                                style:width="{Math.round(data.loadRatio * 100)}%"
                         ></div>
                 </div>
                 <span class="up-rps">
@@ -191,8 +198,10 @@
                 text-align: right;
         }
 
-        /* ---------- Fairness bar ---------- */
-        .fairness-bar {
+        /* ---------- Load bar (C14b, 2026-06-04) ----------
+           Width = reqPerSec / globalMax pre-computed in _layout.ts.
+           Was the fairness/weight-share bar before C14b. */
+        .load-bar {
                 flex: 1 1 auto;
                 height: 4px;
                 background: var(--border, oklch(28% 0.009 250));
@@ -200,24 +209,24 @@
                 overflow: hidden;
         }
 
-        .fairness-fill {
+        .load-fill {
                 height: 100%;
                 background: var(--accent, oklch(68% 0.21 255));
                 border-radius: 2px;
                 transition: width 0.6s ease;
         }
 
-        /* Fairness fill color follows the same monitored-only rule
-           as the accent stripe (C13). When unmonitored, the bar
-           stays the default accent blue — there's no probe data to
-           color it by. */
-        .upstream-node[data-monitored='true'][data-status='draining'] .fairness-fill {
+        /* Fill color follows the same monitored-only rule as the
+           accent stripe (C13). When unmonitored, the bar stays the
+           default accent blue — there's no probe data to color it
+           by, only load to show. */
+        .upstream-node[data-monitored='true'][data-status='draining'] .load-fill {
                 background: var(--warn, oklch(80% 0.14 85));
         }
-        .upstream-node[data-monitored='true'][data-status='unhealthy'] .fairness-fill {
+        .upstream-node[data-monitored='true'][data-status='unhealthy'] .load-fill {
                 background: var(--bad, oklch(66% 0.20 25));
         }
-        .upstream-node[data-monitored='true'][data-status='unknown'] .fairness-fill {
+        .upstream-node[data-monitored='true'][data-status='unknown'] .load-fill {
                 background: var(--fg-dim, oklch(54% 0.011 250));
         }
 
