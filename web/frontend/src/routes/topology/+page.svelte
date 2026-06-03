@@ -3,313 +3,182 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  Topology page (spec §6.1). Wires the TopologyClient WebSocket
-  lifecycle to the TopologyStore, then renders the SVG topology +
-  optional detail panel.
+  Topology v2 — Phase 1.3.
 
-  - Hard-auth is enforced by +layout.svelte; this page assumes
-    auth.state === 'authenticated' at mount.
-  - prefers-reduced-motion is observed and forwarded to TopologySvg.
-  - On 401 handshake, the client redirects to /login (auth store
-    clears in the layout).
+  Two-column page layout (canvas | sidebar) with a centered view
+  toggle on top of the canvas that swaps between:
+
+    - Vue protocole         entry-points -> Caddy -> services
+    - Vue service -> backend  consumers -> FQDN -> Caddy -> clusters
+
+  Both views share the Caddy hub and the AnimatedFlowEdge. The
+  toggle does not refit the canvas; the user keeps their zoom/pan
+  when switching, which is the right behavior when comparing the
+  two perspectives side-by-side.
 -->
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
-	import { goto } from '$app/navigation';
-	import { topology } from '$lib/stores/topology.svelte';
-	import { viewport } from '$lib/topology/viewport.svelte';
-	import { computeTopologyBBox } from '$lib/topology/bounds';
-	import { shouldAutoFit } from '$lib/topology/auto-fit';
-	import { TopologyClient, type Snapshot, type ConnectionStatus } from '$lib/api/topology';
-	import TopologySvg from '$lib/components/TopologySvg.svelte';
-	import TopologyControls from '$lib/components/TopologyControls.svelte';
-	import TopologyDetailPanel from '$lib/components/TopologyDetailPanel.svelte';
-	import PageHeader from '$lib/components/PageHeader.svelte';
-	import StatusDot from '$lib/components/StatusDot.svelte';
+        import { SvelteFlow, Background, Controls, type NodeTypes, type EdgeTypes } from '@xyflow/svelte';
+        import '@xyflow/svelte/dist/style.css';
 
-	let client: TopologyClient | null = null;
+        import { buildProtocolGraph, buildServiceToBackendGraph } from './_layout';
+        import { mockRoutes } from './_mock-data';
+        import type { TopologyViewMode } from './_types';
 
-	// Selected route ID (detail panel open when non-null).
-	let selectedRouteId = $state<string | null>(null);
+        // Custom node components — one per `kind` emitted by the layout builders.
+        import EntryPointNode from './_components/nodes/EntryPointNode.svelte';
+        import ConsumerNode from './_components/nodes/ConsumerNode.svelte';
+        import FQDNNode from './_components/nodes/FQDNNode.svelte';
+        import CaddyHubNode from './_components/nodes/CaddyHubNode.svelte';
+        import ServiceNode from './_components/nodes/ServiceNode.svelte';
+        import BackendClusterNode from './_components/nodes/BackendClusterNode.svelte';
+        import AnimatedFlowEdge from './_components/edges/AnimatedFlowEdge.svelte';
 
-	// prefers-reduced-motion gate (spec §6.6).
-	let reducedMotion = $state(false);
-	let motionMQ: MediaQueryList | null = null;
+        // Page-level UI
+        import ViewToggle from './_components/ViewToggle.svelte';
+        import TopologySidebar from './_components/TopologySidebar.svelte';
 
-	// Live viewport dimensions of the .svg-wrap surface — bound via
-	// the template below. Chunk 4b.4 TopologyControls reads these
-	// for fit-view + zoom-to-center math.
-	let wrapWidth = $state(0);
-	let wrapHeight = $state(0);
+        const nodeTypes: NodeTypes = {
+                'entry-point': EntryPointNode,
+                consumer: ConsumerNode,
+                fqdn: FQDNNode,
+                caddy: CaddyHubNode,
+                service: ServiceNode,
+                'backend-cluster': BackendClusterNode,
+        };
 
-	function onMotionChange(): void {
-		if (motionMQ) reducedMotion = motionMQ.matches;
-	}
+        const edgeTypes: EdgeTypes = {
+                'animated-flow': AnimatedFlowEdge,
+        };
 
-	function handleSnapshot(snap: Snapshot): void {
-		topology.apply(snap);
-		// If the currently-selected route disappeared from the
-		// snapshot, close the panel.
-		if (selectedRouteId !== null && !topology.get(selectedRouteId)) {
-			selectedRouteId = null;
-		}
-	}
+        // Current view + initial graph. We default to Vue service -> backend
+        // because it's the richest view (per-backend fairness bars) and is
+        // what most operators will want to land on.
+        let currentView = $state<TopologyViewMode>('service-to-backend');
+        const initial = buildServiceToBackendGraph(mockRoutes);
+        let nodes = $state.raw(initial.nodes);
+        let edges = $state.raw(initial.edges);
 
-	function handleStatus(s: ConnectionStatus): void {
-		topology.setStatus(s);
-	}
-
-	function handleUnauthorized(): void {
-		// Same flow as the rest of the API client (Step D): redirect
-		// to /login. The auth store's bootstrap on the next load will
-		// transition to anonymous.
-		goto('/login');
-	}
-
-	function onSelectRoute(id: string): void {
-		// Second click on the same node closes the panel
-		// (spec §6.9).
-		selectedRouteId = selectedRouteId === id ? null : id;
-	}
-
-	onMount(() => {
-		// Reduced motion media query (spec §6.6).
-		if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-			motionMQ = window.matchMedia('(prefers-reduced-motion: reduce)');
-			reducedMotion = motionMQ.matches;
-			motionMQ.addEventListener('change', onMotionChange);
-		}
-
-		// WS lifecycle.
-		client = new TopologyClient({
-			onSnapshot: handleSnapshot,
-			onStatus: handleStatus,
-			onUnauthorized: handleUnauthorized
-		});
-		client.attachVisibilityListener();
-		client.connect();
-	});
-
-	onDestroy(() => {
-		client?.destroy();
-		client = null;
-		if (motionMQ) {
-			motionMQ.removeEventListener('change', onMotionChange);
-			motionMQ = null;
-		}
-		// Don't clear the store on unmount — the user may navigate
-		// back to /topology shortly; the store survives across
-		// navigations until full page reload.
-	});
-
-	// EXPLICIT VERSION COUNTER subscription.
-	//
-	// Reading `topology.routes.values()` alone (whether via getter
-	// or inline iteration) was empirically not enough to invalidate
-	// these `$derived` blocks across the module boundary — see the
-	// long doc-comment in topology.svelte.ts for the full saga.
-	//
-	// Pairing each read with `void topology.version` subscribes the
-	// $derived to a plain $state(number) that IS reliably reactive
-	// cross-module. Every mutator on the store bumps `version`, the
-	// $derived invalidates, the closure re-runs, and the iteration
-	// reads the now-current Map contents.
-	//
-	// The `void` cast discards the value — we only need the
-	// subscription side-effect.
-	const routesList = $derived.by(() => {
-		void topology.version;
-		return Array.from(topology.routes.values());
-	});
-	const totalReqPerSec = $derived.by(() => {
-		void topology.version;
-		let total = 0;
-		for (const r of topology.routes.values()) total += r.reqPerSec;
-		return total;
-	});
-	const selectedRoute = $derived(
-		selectedRouteId !== null ? topology.get(selectedRouteId) : null
-	);
-
-	const statusLabel = $derived.by(() => {
-		switch (topology.connectionStatus) {
-			case 'connected':
-				return 'connected';
-			case 'reconnecting':
-				return 'reconnecting…';
-			case 'disconnected':
-				return 'disconnected';
-		}
-	});
-	const statusDot = $derived.by(() => {
-		switch (topology.connectionStatus) {
-			case 'connected':
-				return 'up';
-			case 'reconnecting':
-				return 'warn';
-			case 'disconnected':
-				return 'down';
-		}
-	});
-
-	const showWaitingForTick = $derived(
-		topology.connectionStatus === 'connected' && topology.lastTickAt === null
-	);
-
-	// J.6 — auto-fit on the first non-empty data tick (Finding #10
-	// from the Step I smoke). The naive "call fitView from onMount"
-	// trap is that at mount the topology store is empty: nodes
-	// arrive via the first WebSocket snapshot at ~1 Hz, so a fit
-	// computed before that snapshot runs against zero nodes and
-	// produces an identity (or NaN) transform.
-	//
-	// Correct trigger: watch `routesList.length` and fire fitView()
-	// the first time it transitions from 0 to > 0. The local
-	// `hasFit` flag guards against re-firing on every subsequent
-	// tick — re-fitting on every snapshot would make the viewport
-	// jump every second as routes appear/disappear, which would be
-	// worse than the pre-J.6 behaviour.
-	//
-	// The fit also waits for the wrap to have measured a non-zero
-	// viewport size (wrapWidth > 0, wrapHeight > 0); without this
-	// guard the first $effect tick fires before bind:clientWidth/
-	// Height has reported the rendered surface, and fitView would
-	// divide by zero in viewport.fitView's clamp.
-	let hasFit = $state(false);
-	$effect(() => {
-		if (
-			!shouldAutoFit({
-				hasFit,
-				routesCount: routesList.length,
-				viewportWidth: wrapWidth,
-				viewportHeight: wrapHeight
-			})
-		) {
-			return;
-		}
-		viewport.fitView(
-			computeTopologyBBox(routesList.length),
-			wrapWidth,
-			wrapHeight,
-			40
-		);
-		hasFit = true;
-	});
+        function switchView(view: TopologyViewMode): void {
+                if (view === currentView) return;
+                currentView = view;
+                const graph = view === 'protocol'
+                        ? buildProtocolGraph(mockRoutes)
+                        : buildServiceToBackendGraph(mockRoutes);
+                nodes = graph.nodes;
+                edges = graph.edges;
+        }
 </script>
 
 <svelte:head>
-	<title>Topology — Arenet</title>
+        <title>Topology v2 — Arenet</title>
 </svelte:head>
 
-<div class="page">
-	<PageHeader
-		eyebrow="Aperçu · Topology"
-		title="Topology"
-		subtitle="Live network visualization."
-	>
-		{#snippet actions()}
-			{#if showWaitingForTick}
-				<span class="waiting" aria-live="polite">Waiting for first tick…</span>
-			{/if}
-			<span class="status" aria-live="polite">
-				<StatusDot status={statusDot} />
-				{statusLabel}
-			</span>
-		{/snippet}
-	</PageHeader>
+<div class="topo-page">
+        <header class="topo-header">
+                <div class="eyebrow">TRAFIC · VUE FLUX</div>
+                <h1>Topology</h1>
+                <p class="lede">
+                        Points d'entrée du reverse proxy à gauche, services en amont à droite.
+                        L'épaisseur et la luminosité de chaque ligne reflètent le débit en temps
+                        réel sur ce flux.
+                </p>
+        </header>
 
-	{#if routesList.length === 0 && topology.connectionStatus !== 'reconnecting'}
-		<div class="card empty">
-			<p>No routes configured yet.</p>
-			<p class="dim">
-				Visit <a class="link" href="/routes">Routes</a> to add one. Live ticks will appear here once the server has emitted them.
-			</p>
-		</div>
-	{:else}
-		<!-- bind:clientWidth/Height supplies the live viewport size
-		     to TopologyControls so fit-view / zoom-to-center math
-		     reads off the actual rendered surface rather than a
-		     hardcoded guess. -->
-		<div class="svg-wrap" bind:clientWidth={wrapWidth} bind:clientHeight={wrapHeight}>
-			<TopologySvg
-				routes={routesList}
-				{selectedRouteId}
-				{reducedMotion}
-				{onSelectRoute}
-				{totalReqPerSec}
-			/>
-			<div class="controls-overlay">
-				<TopologyControls
-					viewportSize={{ width: wrapWidth, height: wrapHeight }}
-					routesCount={routesList.length}
-				/>
-			</div>
-		</div>
-	{/if}
+        <div class="topo-content">
+                <div class="topo-canvas-wrap">
+                        <div class="canvas-toolbar">
+                                <ViewToggle value={currentView} onChange={switchView} />
+                        </div>
+                        <div class="canvas-frame">
+                                <SvelteFlow
+                                        bind:nodes
+                                        bind:edges
+                                        {nodeTypes}
+                                        {edgeTypes}
+                                        fitView
+                                        nodesDraggable
+                                        nodesConnectable={false}
+                                        elementsSelectable
+                                        proOptions={{ hideAttribution: true }}
+                                >
+                                        <Background />
+                                        <Controls />
+                                </SvelteFlow>
+                        </div>
+                </div>
 
-	{#if selectedRoute}
-		<TopologyDetailPanel route={selectedRoute} onClose={() => (selectedRouteId = null)} />
-	{/if}
+                <TopologySidebar routes={mockRoutes} />
+        </div>
 </div>
 
 <style>
-	.page {
-		padding: 0;
-	}
-	.waiting {
-		font-size: 11.5px;
-		color: var(--fg-muted);
-		font-family: var(--font-mono);
-	}
-	.status {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 12.5px;
-		color: var(--fg-muted);
-	}
+        .topo-page {
+                display: flex;
+                flex-direction: column;
+                height: 100%;
+                min-height: 0;
+                padding: 24px;
+                gap: 18px;
+                box-sizing: border-box;
+        }
 
-	/* .card.empty + .svg-wrap consume the R.4.1 primitives:
-	   .card is the shared surface; .empty is a modifier that
-	   re-uses the dashboard's empty-state pattern. */
-	.card {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		padding: 14px 16px;
-	}
-	.card.empty {
-		padding: 48px 32px;
-		text-align: center;
-	}
-	.card.empty p {
-		margin: 4px 0;
-		color: var(--fg);
-	}
-	.dim {
-		color: var(--fg-muted);
-		font-size: 13px;
-	}
-	.link {
-		color: var(--accent);
-	}
-	.link:hover {
-		text-decoration: underline;
-	}
+        .topo-header {
+                flex: 0 0 auto;
+        }
 
-	.svg-wrap {
-		position: relative;
-		background: var(--bg);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		padding: 16px;
-		overflow: hidden;
-	}
-	.controls-overlay {
-		position: absolute;
-		top: 12px;
-		right: 12px;
-		z-index: 20;
-		pointer-events: auto;
-	}
+        .eyebrow {
+                font-family: var(--font-mono, ui-monospace, monospace);
+                font-size: 11px;
+                color: var(--accent, oklch(68% 0.21 255));
+                letter-spacing: 0.06em;
+                margin-bottom: 8px;
+        }
+
+        h1 {
+                font-size: 28px;
+                font-weight: 600;
+                margin: 0 0 4px 0;
+        }
+
+        .lede {
+                color: var(--fg-muted, oklch(68% 0.012 250));
+                font-size: 13px;
+                margin: 0;
+                max-width: 720px;
+                line-height: 1.5;
+        }
+
+        .topo-content {
+                flex: 1 1 auto;
+                min-height: 0;
+                display: flex;
+                gap: 14px;
+        }
+
+        .topo-canvas-wrap {
+                flex: 1 1 auto;
+                min-width: 0;
+                border: 1px solid var(--border, oklch(28% 0.009 250));
+                border-radius: 8px;
+                overflow: hidden;
+                background: var(--bg, oklch(15% 0.005 250));
+                display: flex;
+                flex-direction: column;
+        }
+
+        .canvas-toolbar {
+                flex: 0 0 auto;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 10px 12px;
+                border-bottom: 1px solid var(--border, oklch(28% 0.009 250));
+                background: var(--surface-2, oklch(22% 0.007 250));
+        }
+
+        .canvas-frame {
+                flex: 1 1 auto;
+                min-height: 0;
+                position: relative;
+        }
 </style>
