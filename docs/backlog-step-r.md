@@ -727,3 +727,44 @@ production log noise.
 **Triage.** Operational noise, not a correctness issue. The
 probe itself is doing the right thing (1 s cadence matches the
 metrics tick) — only the logging side-effect needs muting.
+
+### Finding #R-TOPO-alpn — expose real ALPN protocol list on the FQDN node
+
+Surfaced during the C6b smoke (`#R-TOPO-v2-phase2` Critique
+17, 2026-06-04). The topology canvas's FQDN nodes used to
+render a hardcoded `"HTTPS · h2 · h3"` subtitle for every
+TLS-enabled route, regardless of whether HTTP/2 or HTTP/3
+were actually negotiable. The mock leaked from Phase 1 — the
+backend has no model for the route's ALPN protocol list, so
+the frontend was inventing one.
+
+C17 dropped the suffix entirely for v1.1.0 (FQDN now renders
+just `"HTTPS"` or `"HTTP"` based on `route.tlsEnabled`). This
+seed tracks the real-data follow-up.
+
+**Fix shape**: source the ALPN list from Caddy's listener
+config. Caddy exposes per-server `protocols` (e.g.
+`["h1", "h2", "h3"]`) and per-listener TLS policy `alpn`
+overrides. `caddymgr` already builds this config block when
+emitting the HTTP/HTTPS app, so the values are known
+build-time. Two viable paths:
+
+- **Wire-shape path**: add `Route.ALPNProtocols []string`
+  populated by `BuildSnapshot` from the route's known TLS
+  policy. Frontend renders only the protocols actually
+  configured. Backward-compatible — frontend gates the
+  protocol-detail line on the list being non-empty.
+- **Stage-B alternative**: surface the negotiated protocol
+  per upstream request via the metrics pipeline (real ALPN
+  outcome, not just configured set). Harder; needs the
+  per-request flow that `#R-TOPO-upstream-metrics` is
+  threading anyway.
+
+The configured-set path is the lighter lift and matches the
+operator-mental-model question ("what CAN this route serve").
+The runtime-negotiated path is honest about reality but
+overkill for v1.1.0's needs.
+
+**Triage.** Phase-1 mock cleanup. Land alongside or after
+`#R-TOPO-upstream-metrics` since both touch the same
+`BuildSnapshot` projection.

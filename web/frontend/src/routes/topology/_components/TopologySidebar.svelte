@@ -39,11 +39,26 @@
                 return `${Math.round(rps)} r/s`;
         }
 
-        // "→ {cluster} · {ip}" subtitle of each top-flux row.
-        function firstUpstreamLabel(r: TopologyRoute): string {
-                if (r.upstreams.length === 0) return '(no upstream)';
-                const cluster = r.clusterLabel ?? r.host.split('.')[0];
-                return `${cluster} · ${r.upstreams[0].url}`;
+        // "→ {host:port}, {host:port}, +N autres" subtitle. The
+        // sub-line communicates WHERE the route points (its upstream
+        // pool); echoing the FQDN here read as noise (Critique 15b,
+        // 2026-06-03). The host:port form mirrors UpstreamNode's
+        // scheme-stripped display so the two surfaces speak the same
+        // language.
+        const TOPFLUX_MAX_INLINE_UPSTREAMS = 3;
+        const SCHEME_RX = /^(?:https?|h2c?):\/\//i;
+        function stripScheme(url: string): string {
+                return url.replace(SCHEME_RX, '');
+        }
+        function upstreamsLabel(r: TopologyRoute): string {
+                if (r.upstreams.length === 0) return '(aucun upstream)';
+                const stripped = r.upstreams.map((u) => stripScheme(u.url));
+                if (stripped.length <= TOPFLUX_MAX_INLINE_UPSTREAMS) {
+                        return stripped.join(', ');
+                }
+                const head = stripped.slice(0, TOPFLUX_MAX_INLINE_UPSTREAMS).join(', ');
+                const extra = stripped.length - TOPFLUX_MAX_INLINE_UPSTREAMS;
+                return `${head}, +${extra} autres`;
         }
 
         // Optional inline badge surfaced next to the upstream label
@@ -109,12 +124,13 @@
 
         <!-- =========================================================
              Panel 2 — Top flux (live list)
+
+             Header simplified per Critique 15a (2026-06-03): the
+             canvas toolbar already shows a live/reconnecting dot,
+             so the "live" pill here was redundant noise.
         ========================================================= -->
         <section class="panel">
-                <header class="panel-head">
-                        <h3>Top flux</h3>
-                        <span class="live-pill">live</span>
-                </header>
+                <h3>Top flux</h3>
                 <ul class="topflux-list">
                         {#each sortedRoutes as route (route.id)}
                                 {@const tier = routeTier(route)}
@@ -125,7 +141,7 @@
                                                 <span class="rps">{formatRate(route.reqPerSec)}</span>
                                         </div>
                                         <div class="topflux-line-2">
-                                                <span class="up-label">→ {firstUpstreamLabel(route)}</span>
+                                                <span class="up-label">→ {upstreamsLabel(route)}</span>
                                                 {#if badge}
                                                         <span class="badge">{badge}</span>
                                                 {/if}
@@ -177,28 +193,6 @@
                 font-weight: 600;
                 margin: 0 0 12px 0;
                 color: var(--fg, oklch(96% 0.005 250));
-        }
-
-        .panel-head {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 12px;
-        }
-
-        .panel-head h3 {
-                margin: 0;
-        }
-
-        .live-pill {
-                font-family: var(--font-mono, ui-monospace, monospace);
-                font-size: 10px;
-                padding: 2px 6px;
-                border-radius: 4px;
-                background: var(--accent-soft, oklch(68% 0.21 255 / 0.14));
-                color: var(--accent, oklch(68% 0.21 255));
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
         }
 
         /* ---------- Legend ---------- */

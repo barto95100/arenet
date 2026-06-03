@@ -105,12 +105,24 @@ export type ConsumerNodeData = {
         meta: string[];
 } & Record<string, unknown>;
 
-/** Vue B col 1 — primary host serving a route. */
+/** Vue B col 1 — primary host serving a route.
+ *
+ *  C16 (2026-06-03): `wafLevel` carries route-level WAF state —
+ *  rendered as a Lucide Shield/ShieldCheck glyph next to the host.
+ *
+ *  C17 (2026-06-04): `aliases` is the additional-hosts list for
+ *  the route, used to populate the "X hosts" subline tooltip with
+ *  real hostnames. `protocols` is now derived strictly from
+ *  TLS-enabled (HTTPS / HTTP) until the backend exposes the real
+ *  ALPN list — the previous "HTTPS · h2 · h3" was mock leakage.
+ *  See `#R-TOPO-alpn` in docs/backlog-step-r.md. */
 export type FQDNNodeData = {
         kind: 'fqdn';
         host: string;
         protocols: string;
         meta: string;
+        aliases?: string[];
+        wafLevel: 'off' | 'detect' | 'block';
 } & Record<string, unknown>;
 
 /** Both views — the single central Caddy hub. */

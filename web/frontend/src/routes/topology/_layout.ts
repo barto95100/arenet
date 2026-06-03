@@ -190,8 +190,15 @@ export function buildServiceToBackendGraph(routes: TopologyRoute[]): TopologyGra
                 const data: FQDNNodeData = {
                         kind: 'fqdn',
                         host: route.host,
-                        protocols: route.tlsEnabled ? 'HTTPS · h2 · h3' : 'HTTP',
+                        // C17a (2026-06-04): drop the mock "h2 · h3" suffix.
+                        // The backend doesn't expose real ALPN protocols yet
+                        // — surfacing fake ones lied about HTTP/2 / HTTP/3
+                        // availability. See #R-TOPO-alpn for the real-data
+                        // follow-up.
+                        protocols: route.tlsEnabled ? 'HTTPS' : 'HTTP',
                         meta: `${formatRate(route.reqPerSec)} · ${aliasCountLabel(route)}`,
+                        aliases: route.aliases,
+                        wafLevel: route.wafLevel ?? 'off',
                 };
                 nodes.push({
                         id: `fqdn-${route.id}`,
