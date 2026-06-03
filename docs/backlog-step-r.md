@@ -415,3 +415,91 @@ sources of traffic + CrowdSec decisions geo-distribution.
 | Topology: window + replay | #R-TOPO-window |
 | Logs: GeoIP column | #R-LOGS-geoip |
 | Map: full page | #R-MAP |
+
+---
+
+## 4. Topology v2 Stage B
+
+### Finding #R-TOPO-upstream-metrics — real per-upstream instrumentation + p95 fanout
+
+`#R-TOPO-v2-phase2` shipped Stage A: wire types + endpoints (HTTP
+GET + WebSocket) with best-effort synthesised values where the
+metrics pipeline doesn't expose them yet. The wire contract is
+locked, the frontend consumes the payload directly — but some
+fields reflect operator INTENT (configured weights) rather than
+measured reality. Stage B replaces those without changing the
+wire shape.
+
+**Field-by-field gap (what Stage A ships vs what Stage B fixes)**:
+
+| Wire field | Stage A | Stage B target |
+|---|---|---|
+| `upstreams[].reqPerSec` | route reqPerSec × weight share | real per-upstream counter |
+| `upstreams[].p99LatencyMs` | route-level p95 echoed | per-upstream histogram |
+| `upstreams[].fairnessRatio` | weight share | derived from real counts |
+| `routes[].p99LatencyMs` | latest-tick p95 from the 60-slot ring | **true window p95** from raw bucket counts + p99 instead of p95 |
+
+**Two-track implementation shape**:
+
+**Track 1 — per-upstream measurement**. Caddy's `reverse_proxy`
+selector chooses an upstream then dispatches; our metrics
+middleware sees `RouteID` only (the chosen upstream isn't passed
+back). Two viable paths:
+
+- (a) Custom selector hook — register an Arenet wrapper around
+  Caddy's selector that increments a per-(routeID, upstreamURL)
+  counter on each pick. Cleanest, hottest path stays in-process.
+  Requires understanding Caddy's selector module interface +
+  registering as a Caddy module.
+- (b) Admin-API polling — the existing `/reverse_proxy/upstreams`
+  Caddy endpoint already returns `{address, num_requests, fails}`
+  (Stage A uses it for the `status` field). Compute deltas
+  between polls. Simpler, no Caddy module work, but address
+  uniqueness across routes is a concern (one upstream URL
+  shared by 2 routes lands in one cache entry).
+
+Recommendation: (b) for v1 — the delta-polling against the
+existing admin endpoint can ship without touching Caddy's
+internals. If address-uniqueness becomes a problem in practice
+(operators with shared backends), upgrade to (a).
+
+**Track 2 — `metrics.TickConsumer` fanout for true window
+p95**. The current `metrics.Ticker.SetConsumer` slot is single-
+consumer (Step L's observability owns it). A small fanout
+wrapper in `cmd/arenet/` would let both the observability
+consumer AND the new topology consumer receive ticks. The
+topology consumer's job: push the `Delta.LatencyP95Ms` field
+(currently dropped from `RouteSnapshot`) into the
+`SlidingWindow` so the per-tick p95s are kept and true window
+percentiles can be computed.
+
+Alternative: keep per-tick raw bucket counts in the window
+instead of the post-p95 values. Then a window aggregate can
+compute a real percentile across the merged distribution.
+Heavier (17 buckets × 60 slots × N routes = 1020 × N counters
+in memory) but statistically correct.
+
+**Operational consequence of staying on Stage A**:
+
+- Per-upstream traffic-share visuals (fairness bars) reflect
+  configured weights, not actual picks. An operator wondering
+  "why is upstream X getting less traffic than Y?" can't
+  diagnose imbalance from the canvas — the bars just show the
+  weight ratio.
+- Per-upstream latency is uniform across a cluster on the
+  canvas. A single slow backend within a healthy cluster
+  doesn't visually stand out.
+- `routes[].p99LatencyMs` is actually p95 — the spec permits
+  this substitute. Numerically the gap is small for healthy
+  routes; for tail-latency outliers (long-tail p99 distinct
+  from p95), Stage A under-reports.
+
+**Recommendation.** Focused future step when operator feedback
+makes one of the above pain points concrete. Until then,
+Stage A is honest about its limitations (documented in the
+wire contract at `docs/api/topology.md` §Stage A) and the
+canvas reads as designed.
+
+**Triage.** Backlog feature, not a regression. The wire
+contract stays stable across the Stage A → Stage B transition;
+no frontend changes will be needed.

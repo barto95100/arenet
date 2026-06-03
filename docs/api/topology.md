@@ -14,10 +14,13 @@ replace the mock import with a live data feed.
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 1     | Frontend canvas (Svelte Flow + custom nodes/edges + sidebar) | shipped |
-| 2     | **Live data feed (this spec)** | spec |
+| 2     | Live data feed (this spec) — Stage A | **shipped** |
+| 2 / B | Per-upstream measured instrumentation (replaces weight-split estimates) | backlog (#R-TOPO-upstream-metrics) |
 | 2.1   | Operator actions (drain upstream, reload Caddy, snapshot export) | future |
 
 Phase 2.1 is intentionally deferred so Phase 2 can ship read-only.
+Stage B is deferred so Phase 2 can ship without backend-instrumentation
+churn — see "Stage A limitations" below for the exact contract drift.
 
 ---
 
@@ -120,8 +123,15 @@ as a fallback after a WebSocket reconnect.
 
 Pushes the latest snapshot to the client every **2 seconds**.
 
-**Auth**: session cookie. Role: viewer or admin. Connection closed
-with code 4401 if unauthenticated, 4403 if role insufficient.
+**Auth**: session cookie. Role: viewer or admin. Authentication is
+enforced by the chi router's HardAuthMiddleware BEFORE the WebSocket
+upgrade — an unauthenticated dial receives HTTP `401 Unauthorized`
+and a session that's been locked (idle past `SessionIdleTimeout`)
+receives HTTP `403 Forbidden`, both as regular HTTP responses. The
+WebSocket upgrade NEVER happens on auth failure. (Earlier drafts of
+this doc mentioned in-WS close codes `4401`/`4403`; that was
+aspirational. The shipped pattern matches the existing
+`/api/v1/ws/topology` endpoint.)
 
 **Message format**: identical to the `GET /snapshot` payload — full
 snapshot per tick (Design A). No diff/delta protocol in Phase 2.
@@ -151,6 +161,65 @@ If 2s turns out problematic, this should be configurable via env:
 
 **Reconnect**: client closes/reopens; server sends current snapshot
 immediately on connection, then continues normal ticks.
+
+---
+
+## Stage A limitations (shipped 2026-06-03)
+
+Phase 2 ships in two stages so the read-only contract can land
+without blocking on backend instrumentation changes:
+
+- **Stage A** (this iteration) — wire types + endpoints land with
+  best-effort synthesised values where the metrics pipeline
+  doesn't expose them yet. Frontend can consume the payload
+  directly and renders correctly; values reflect operator INTENT
+  (configured weights) more than measured reality where noted.
+- **Stage B** (backlog `#R-TOPO-upstream-metrics`) — replaces the
+  synthesised fields with real per-upstream measurements.
+
+### Synthesised / approximate fields
+
+| Wire field | Stage A behaviour | Stage B target |
+|---|---|---|
+| `routes[].p99LatencyMs` | **p95 substitute** — the existing metrics histogram already drains p95 per tick (Step L). True window p95 is not aggregated across the 60 slots (aggregating per-tick percentiles is statistically dubious); the LATEST slot's p95 is reported. | p99 from the histogram + true window aggregation |
+| `routes[].errorRate5xx` | Count-weighted mean across the 60-slot window. `sum(errs) / max(sum(reqs), 1) × 100`. Correct shape; this is not synthesised. | unchanged |
+| `routes[].reqPerSec` | Arithmetic mean across populated slots (sum / count, not sum / 60). Real measurement. | unchanged |
+| `routes[].rateLimited` | Always `false` — storage doesn't model a per-route rate-limit flag. The route-level rate-limit handler is currently global. | per-route bit when storage models it |
+| `routes[].mtlsRequired` | Always `false` — storage doesn't model mTLS yet. | per-route bit when storage models it |
+| `upstreams[].reqPerSec` | **Synthesised** — route reqPerSec × (upstream weight / sum of weights). Reflects configured weight share, NOT measured per-upstream traffic. Caddy's LB selector doesn't currently surface per-pick counts back to the metrics middleware. | real per-upstream counter (custom selector hook or `/reverse_proxy/upstreams` `num_requests` polling) |
+| `upstreams[].p99LatencyMs` | Echoes the route-level p95 to every upstream of that route. No per-upstream latency histogram exists today. | per-upstream histogram |
+| `upstreams[].fairnessRatio` | Configured weight share (sums to ≈ 1.0 by construction). | derived from real per-upstream counts |
+| `upstreams[].status` | **Real** — `/reverse_proxy/upstreams` Caddy admin endpoint, polled every 1 s by a background refresher. `Fails > 0` → `unhealthy`; address absent → `unknown`. `draining` reserved for Phase 2.1. | unchanged |
+| `upstreams[].runtime` | Always omitted (no source — operator metadata not modelled). | new storage field when there's a tagging UI |
+
+### Window aggregation note
+
+The 60-slot ring lives entirely server-side in
+`internal/api/topology.SlidingWindow`. The source metrics ticker
+stays at 1 Hz (`metrics.TickInterval`); the stream handler pushes
+every source tick into the ring, then emits a frame every Nth tick
+where `N = ceil(ARENET_TOPOLOGY_TICK_MS / 1000)`. Non-multiple
+`tickMs` values are snapped UP at handler-init time so the
+operator's "slower emit" intent is respected.
+
+The window's per-tick `p95LatencyMs` push currently receives `0`
+from the broadcaster fan-out path (the wire shape
+`metrics.RouteSnapshot` drops `LatencyP95Ms` for backward compat
+with the Step E contract). Stage B will wire a
+`metrics.TickConsumer` fanout to feed real p95 into the ring.
+
+### What this means for the frontend
+
+The frontend doesn't need to know any of this — the wire shape
+matches the `TopologyRoute` / `TopologyUpstream` interfaces and
+the canvas renders correctly. The values just **reflect intent**
+where they reflect intent (configured weights) and **reflect
+measurement** where they reflect measurement (route-level
+reqPerSec, errorRate5xx, upstream health). The visual story is
+faithful enough for the operator to spot real problems (a SPOF
+shows as 1.0 fairness, a 5xx incident shows as a bad-tier edge);
+Stage B sharpens the numerical fidelity without changing the
+wire contract.
 
 ---
 
@@ -237,29 +306,36 @@ These will share the same auth and the same spec process:
 
 ---
 
-## Open questions for CC
+## Open questions — resolved during Stage A implementation
 
-Items to clarify when reading the backend before implementing:
-
-1. Does the existing collector already maintain a 60s sliding
-   window per route / per upstream? Or only point-in-time
-   instantaneous values?
-2. Is `fairnessRatio` already tracked, or does the LB layer only
-   know "next pick" without keeping per-upstream historical counts?
-3. Is `runtime` (Go / Next.js / Python …) stored anywhere, or is it
-   purely operator-supplied metadata? If yes, where?
-4. Are aliases (multiple hosts -> same route) modelled as
-   separate routes or as `aliases[]` on a single route in storage?
-   The frontend assumes the latter.
-5. What's the existing pattern for WebSocket endpoints in Arenet
-   (if any)? Mirror it.
+1. **60 s sliding window already maintained server-side?** No.
+   The existing metrics collector is per-1 s-tick deltas, per
+   route only. Stage A added the
+   `internal/api/topology.SlidingWindow` (60-slot ring buffer,
+   server-side, fed by the broadcaster fan-out).
+2. **`fairnessRatio` tracked?** No. Caddy's LB selector
+   doesn't surface per-pick counts back to our metrics
+   middleware. Stage A synthesises it from configured weight
+   shares; Stage B (`#R-TOPO-upstream-metrics`) will replace
+   this with real per-upstream counts (either a custom selector
+   hook or `/reverse_proxy/upstreams` `num_requests` polling).
+3. **`runtime` stored?** No. Pure operator metadata, no source
+   in storage. Stage A omits the field; Stage B can add a
+   per-upstream tagging surface if/when operators ask for it.
+4. **Aliases modelling?** `aliases[]` on a single route is
+   correct. `storage.Route.Aliases []string` carries them; the
+   wire shape exposes them as `routes[].aliases`.
+5. **Existing WS pattern?** `/api/v1/ws/topology` — gorilla
+   upgrade + Broadcaster fan-out + buffered subscriber channels
+   + slow-client drop + hard-auth-before-upgrade. Stage A's
+   `StreamHandler` mirrors this exactly.
 
 ---
 
 ## File layout
 docs/api/topology.md           this spec
 web/frontend/src/routes/topology/
-_api.ts                      to-be-added (Phase 2)
+_api.ts                      shipped (Phase 2)
 _mock-data.ts                kept for dev / fallback
 _types.ts                    unchanged — backend payload matches
 ...
