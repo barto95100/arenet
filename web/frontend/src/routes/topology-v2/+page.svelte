@@ -3,16 +3,15 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  Topology v2 — Service → Backend view (Phase 1).
+  Topology v2 — Service → Backend view (Phase 1.2).
+
+  Two-column layout under the page header:
+    - canvas (Svelte Flow) takes the remaining width
+    - right sidebar (Légende + Top flux + Actions rapides) is fixed 280px
 
   Pipeline: mock routes → _layout.ts → SvelteFlow with custom
-  node/edge types. The four custom node components (Consumer,
-  FQDN, CaddyHub, BackendCluster) and the AnimatedFlowEdge match
-  the mock at docs/mocks/pages/index.html.
-
-  Phase 2 will swap `mockRoutes` for a live fetch / WebSocket
-  feed and add the protocol-view toggle + the right-side flux
-  sidebar.
+  node/edge types. The sidebar reads the same mockRoutes to keep
+  its Top flux ranking in sync with the canvas.
 -->
 <script lang="ts">
         import { SvelteFlow, Background, Controls, type NodeTypes, type EdgeTypes } from '@xyflow/svelte';
@@ -26,10 +25,8 @@
         import CaddyHubNode from './_components/nodes/CaddyHubNode.svelte';
         import BackendClusterNode from './_components/nodes/BackendClusterNode.svelte';
         import AnimatedFlowEdge from './_components/edges/AnimatedFlowEdge.svelte';
+        import TopologySidebar from './_components/TopologySidebar.svelte';
 
-        // Map node `type` strings (set in _layout.ts) to component
-        // implementations. Keys MUST match the `type` field emitted by
-        // the layout builder.
         const nodeTypes: NodeTypes = {
                 consumer: ConsumerNode,
                 fqdn: FQDNNode,
@@ -41,9 +38,6 @@
                 'animated-flow': AnimatedFlowEdge,
         };
 
-        // Build the graph once at mount. When the live data feed lands,
-        // replace mockRoutes with the fetched payload and (optionally)
-        // rebuild on incoming WebSocket ticks.
         const graph = buildServiceToBackendGraph(mockRoutes);
         let nodes = $state.raw(graph.nodes);
         let edges = $state.raw(graph.edges);
@@ -64,21 +58,25 @@
                 </p>
         </header>
 
-        <div class="topo-canvas-wrap">
-                <SvelteFlow
-                        bind:nodes
-                        bind:edges
-                        {nodeTypes}
-                        {edgeTypes}
-                        fitView
-                        nodesDraggable
-                        nodesConnectable={false}
-                        elementsSelectable
-                        proOptions={{ hideAttribution: true }}
-                >
-                        <Background />
-                        <Controls />
-                </SvelteFlow>
+        <div class="topo-content">
+                <div class="topo-canvas-wrap">
+                        <SvelteFlow
+                                bind:nodes
+                                bind:edges
+                                {nodeTypes}
+                                {edgeTypes}
+                                fitView
+                                nodesDraggable
+                                nodesConnectable={false}
+                                elementsSelectable
+                                proOptions={{ hideAttribution: true }}
+                        >
+                                <Background />
+                                <Controls />
+                        </SvelteFlow>
+                </div>
+
+                <TopologySidebar routes={mockRoutes} />
         </div>
 </div>
 
@@ -119,9 +117,16 @@
                 line-height: 1.5;
         }
 
-        .topo-canvas-wrap {
+        .topo-content {
                 flex: 1 1 auto;
                 min-height: 0;
+                display: flex;
+                gap: 14px;
+        }
+
+        .topo-canvas-wrap {
+                flex: 1 1 auto;
+                min-width: 0;
                 border: 1px solid var(--border, oklch(28% 0.009 250));
                 border-radius: 8px;
                 overflow: hidden;
