@@ -503,3 +503,108 @@ canvas reads as designed.
 **Triage.** Backlog feature, not a regression. The wire
 contract stays stable across the Stage A → Stage B transition;
 no frontend changes will be needed.
+
+### Finding #R-TOPO-health-coherence — status "healthy" misleading without configured health check
+
+Surfaced during the C4 browser smoke (`#R-TOPO-v2-phase2`).
+`CaddyStatusProber` (in `internal/api/topology/caddyprobe.go`)
+polls Caddy's `/reverse_proxy/upstreams` admin endpoint for ALL
+routes regardless of whether the operator configured an active
+health check on the route. The endpoint reports per-upstream
+`num_requests` + `fails` counters maintained by Caddy
+internally — those are NOT a user-configured health check; they
+reflect whatever passive accounting Caddy does on its own
+(`UnhealthyRequestCount` threshold, request fail count, etc.).
+
+**Operational consequence**: a route with `healthCheck.enabled
+= false` (no active health check configured) still shows
+`status: "healthy"` in the topology canvas as long as Caddy
+hasn't accumulated `fails > 0` for the upstream. Operators
+reading the canvas could misinterpret this as "Arenet is
+actively probing this upstream and it's healthy" when in
+reality Arenet is doing no probing at all — the "healthy"
+badge is just "Caddy hasn't tripped its passive failure
+counter on this address yet".
+
+The same issue applies on the `/api/v1/topology/snapshot`
+HTTP endpoint and the stream WS — both call
+`status.Status(url)` per upstream and inherit the same
+ambiguity.
+
+**Fix shape** (focused future step):
+
+- `topology.BuildSnapshot` reads the route's
+  `HealthCheck.Enabled` field. When false, force the
+  upstream `status` to `"unknown"` regardless of what the
+  `StatusLookup` reports.
+- When true, keep the current behaviour (Caddy admin probe
+  drives healthy/unhealthy).
+- Frontend `_types.ts` `HealthStatus` enum already includes
+  `"unknown"` — no wire-shape change.
+- Update `docs/api/topology.md` §Stage A limitations to
+  reflect the new semantics: "status is meaningful only for
+  routes with active health check configured; routes
+  without health-check config report `unknown`".
+
+**Operational consequence of the fix**: routes with no health
+check land in "unknown" by default. Operators wanting healthy/
+unhealthy signal must enable the per-route active health
+check in `/routes`. That's a feature-discoverability nudge,
+not a regression — today's "always healthy until Caddy
+notices" is silent dishonesty; "unknown until you configure"
+is honest about the state.
+
+**Triage.** UX/correctness gap, not a crash. Backlog
+candidate for the next topology-themed step.
+
+### Finding #R-TOPO-probe-logging — 1 Caddy admin probe log/second is too noisy for prod
+
+`CaddyStatusProber.Refresh` (called every 1 s by the background
+refresher in `cmd/arenet/topology_wiring.go`) hits Caddy's admin
+endpoint `/reverse_proxy/upstreams`. Caddy's admin module logs
+every received request at `info` level:
+
+```
+{"level":"info","ts":1780500917.566231,"logger":"admin.api",
+ "msg":"received request","method":"GET",
+ "host":"127.0.0.1:2019","uri":"/reverse_proxy/upstreams",
+ "remote_ip":"127.0.0.1","remote_port":"63748",
+ "headers":{"User-Agent":["arenet-topology-probe"]...}}
+```
+
+That's **86,400 log lines per day** from the probe alone, on a
+production install. Operators using journalctl / docker logs
+will have a hard time finding actual events.
+
+**Fix shape options**:
+
+- **Option A — silence at Caddy's admin logger**. Configure a
+  Caddy log filter that drops `admin.api` messages where
+  `headers.User-Agent` contains `arenet-topology-probe`.
+  Requires emitting a Caddy log config block alongside the
+  HTTP/HTTPS app config that `caddymgr` already builds. The
+  filter shape lands in Caddy v2's logging.encoders/.filters
+  surface.
+- **Option B — bump Caddy admin log level**. Caddy's admin
+  logger has its own level knob; setting it to `warn` would
+  drop the per-request info lines but also other admin-
+  facing info we might want. Probably too broad.
+- **Option C — switch from HTTP probe to in-process API**.
+  Caddy's `reverseproxy.Upstream.Healthy()` is callable
+  in-process via the `caddyhttp.GetUpstreamHosts()` accessor
+  IF we register a module that has access to the pool.
+  Bypasses the admin endpoint entirely — no log lines, no
+  HTTP overhead. Larger surgery (custom Caddy module
+  registration), more invasive than warranted for a logging
+  cleanup.
+
+**Recommendation**: Option A. Caddy log filters are configured
+declaratively in the same JSON Arenet already emits via
+`caddymgr`; the change adds maybe 10 lines to the config
+emitter + a Caddy module side-effect import for the
+`filter.delete` filter type. No runtime overhead, no
+production log noise.
+
+**Triage.** Operational noise, not a correctness issue. The
+probe itself is doing the right thing (1 s cadence matches the
+metrics tick) — only the logging side-effect needs muting.
