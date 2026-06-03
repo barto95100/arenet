@@ -125,13 +125,8 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                 const data: FQDNNodeData = {
                         kind: 'fqdn',
                         host: route.host,
-                        // C17a (2026-06-04): drop the mock "h2 · h3" suffix.
-                        // The backend doesn't expose real ALPN protocols yet
-                        // — surfacing fake ones lied about HTTP/2 / HTTP/3
-                        // availability. See #R-TOPO-alpn for the real-data
-                        // follow-up.
-                        protocols: route.tlsEnabled ? 'HTTPS' : 'HTTP',
-                        meta: `${formatRate(route.reqPerSec)} · ${aliasCountLabel(route)}`,
+                        protocols: formatProtocols(route),
+                        meta: formatFQDNMeta(route),
                         aliases: route.aliases,
                         wafLevel: route.wafLevel ?? 'off',
                 };
@@ -280,12 +275,14 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
 // ===========================================================================
 
 function buildCaddyNode(routes: TopologyRoute[], x: number): TopologyNode {
+        // C21 (2026-06-04) trimmed the visible content of the hub
+        // to "Caddy" + aggregate req/s; version + instanceId now
+        // surface only as a hover tooltip in the component.
         const data: CaddyHubNodeData = {
                 kind: 'caddy',
                 version: 'Caddy 2.8',
                 instanceId: 'arenet-instance',
                 aggregateReqPerSec: routes.reduce((sum, r) => sum + r.reqPerSec, 0),
-                chips: deriveCaddyChips(routes),
         };
         return {
                 id: 'caddy-hub',
@@ -379,17 +376,41 @@ function deriveClusterWarning(route: TopologyRoute): string | undefined {
         return undefined;
 }
 
-function deriveCaddyChips(routes: TopologyRoute[]): CaddyHubNodeData['chips'] {
-        const chips: CaddyHubNodeData['chips'] = ['L7-LB'];
-        if (routes.some((r) => r.wafLevel === 'block' || r.wafLevel === 'detect')) chips.push('WAF');
-        if (routes.some((r) => r.rateLimited)) chips.push('RATE');
-        if (routes.some((r) => r.mtlsRequired)) chips.push('mTLS');
-        return chips;
+/** FQDN protocols label.
+ *
+ *  C18 (2026-06-04): renders "HTTP → HTTPS" when the route has
+ *  TLS enabled AND http→https redirect configured, otherwise just
+ *  "HTTPS" / "HTTP". The arrow communicates "plain-HTTP requests
+ *  get bounced", which the operator can't otherwise see from the
+ *  canvas. tlsEnabled === false short-circuits to "HTTP" (you
+ *  can't redirect to a non-existent HTTPS endpoint).
+ *
+ *  C17a (2026-06-04 same commit): the previous "HTTPS · h2 · h3"
+ *  mock suffix is gone — the backend doesn't expose real ALPN
+ *  yet (#R-TOPO-alpn).
+ */
+function formatProtocols(route: TopologyRoute): string {
+        if (!route.tlsEnabled) return 'HTTP';
+        if (route.httpRedirect) return 'HTTP → HTTPS';
+        return 'HTTPS';
 }
 
-function aliasCountLabel(route: TopologyRoute): string {
-        const n = (route.aliases?.length ?? 0) + 1;
-        return n === 1 ? '1 host' : `${n} hosts`;
+/** FQDN meta line.
+ *
+ *  Always shows the current req/s. C17b + C19 (2026-06-04):
+ *  appends an alias count ONLY when the route actually has
+ *  aliases. The label uses "alias(es)" terminology so the
+ *  primary FQDN (already shown above) isn't counted in the
+ *  number — operator's mental model is "the FQDN plus how
+ *  many additional hosts", and "1 host" for a route with no
+ *  aliases was confusing noise.
+ */
+function formatFQDNMeta(route: TopologyRoute): string {
+        const rate = formatRate(route.reqPerSec);
+        const aliasCount = route.aliases?.length ?? 0;
+        if (aliasCount === 0) return rate;
+        if (aliasCount === 1) return `${rate} · 1 alias`;
+        return `${rate} · ${aliasCount} aliases`;
 }
 
 function formatRate(rps: number): string {

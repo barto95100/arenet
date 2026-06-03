@@ -69,6 +69,16 @@ type Route struct {
 	RateLimited  bool   `json:"rateLimited,omitempty"`
 	MTLSRequired bool   `json:"mtlsRequired,omitempty"`
 
+	// HTTPRedirect mirrors storage.Route.RedirectToHTTPS. When true,
+	// Arenet emits a Caddy redirect from :80 → :443 for the route's
+	// host. The frontend uses this to render "HTTP → HTTPS" instead
+	// of plain "HTTPS" on the FQDN node so the operator can tell
+	// at a glance whether plain-HTTP requests get bounced (Critique
+	// 18, 2026-06-04). TLSEnabled = false implies HTTPRedirect = false
+	// (you can't redirect to a non-existent HTTPS endpoint); the
+	// frontend treats the combination consistently.
+	HTTPRedirect bool `json:"httpRedirect"`
+
 	// HasHealthCheck mirrors storage.Route.HealthCheck.Enabled. The
 	// frontend uses this to drive the per-upstream "monitored"
 	// shield indicator (#R-TOPO-health-coherence v1.1.0 compromise,

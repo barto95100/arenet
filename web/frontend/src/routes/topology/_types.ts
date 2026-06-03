@@ -57,6 +57,12 @@ export interface TopologyRoute {
         rateLimited?: boolean;
         mtlsRequired?: boolean;
 
+        // True when storage.Route.RedirectToHTTPS is true. Drives
+        // the "HTTP → HTTPS" protocols label variant on the FQDN
+        // node (C18, 2026-06-04). The backend always emits the
+        // field; tlsEnabled === false implies httpRedirect === false.
+        httpRedirect: boolean;
+
         // True when storage.Route.HealthCheck.Enabled is true on
         // the backend. Drives the per-upstream shield indicator
         // (#R-TOPO-health-coherence v1.1.0). NOT optional — the
@@ -108,13 +114,21 @@ export type FQDNNodeData = {
         wafLevel: 'off' | 'detect' | 'block';
 } & Record<string, unknown>;
 
-/** Both views — the single central Caddy hub. */
+/** The single central Caddy hub.
+ *
+ *  C21 (2026-06-04) trimmed the visible content to "Caddy" label +
+ *  aggregate req/s only. `version` and `instanceId` are still on
+ *  the payload but the component surfaces them only via a hover
+ *  tooltip — they're identity, not focal content. `chips` was
+ *  removed entirely: L7-LB / WAF / RATE / mTLS all moved out (WAF
+ *  is now on the FQDN node via Critique 16; L7-LB was redundant
+ *  with what Caddy is; RATE / mTLS removed for a clean round
+ *  focal point). */
 export type CaddyHubNodeData = {
         kind: 'caddy';
         version: string;
         instanceId: string;
         aggregateReqPerSec: number;
-        chips: ('WAF' | 'RATE' | 'mTLS' | 'L7-LB')[];
 } & Record<string, unknown>;
 
 /** Vue B col 3 — group container for a route's upstream pool.

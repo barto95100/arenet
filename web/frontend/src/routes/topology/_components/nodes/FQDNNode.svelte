@@ -12,12 +12,28 @@
   Lock = upstream TLS, Shield = WAF.
 
   C17 (2026-06-04): aliases tooltip. When the route has aliases,
-  the meta line (e.g. "2 hosts") gets a `title` listing the full
+  the meta line (e.g. "2 aliases") gets a `title` listing the full
   hostnames — primary first, then aliases. Operator can hover to
   see the real names without expanding the node. The "h2 · h3"
   protocol suffix was dropped from the protocols line in _layout.ts
   because the backend doesn't expose real ALPN data yet (see
   #R-TOPO-alpn).
+
+  C17b + C19 (2026-06-04): the alias count moved from "host(s)"
+  to "alias(es)" terminology and is omitted when the route has 0
+  aliases — both done in _layout.ts's formatFQDNMeta. The component
+  just renders whatever string the layout hands it.
+
+  C18 (2026-06-04): protocols line shows "HTTP → HTTPS" when the
+  route has TLS + httpRedirect both enabled; "HTTPS" when TLS
+  without redirect; "HTTP" otherwise. All decided in
+  formatProtocols() in _layout.ts.
+
+  C20 (2026-06-04): no target handle. FQDN is the source-of-flow
+  in col 0 — nothing connects into its left edge in the C6b-i
+  layout. The leftover orphan handle from earlier views was
+  visually confusing, same problem as Critique 6 on the cluster
+  parent.
 -->
 <script lang="ts">
         import { Handle, Position, type NodeProps } from '@xyflow/svelte';
@@ -36,8 +52,6 @@
 </script>
 
 <div class="fqdn-node">
-        <Handle type="target" position={Position.Left} />
-
         <div class="host-row">
                 <span class="host">{data.host}</span>
                 {#if data.wafLevel === 'detect'}

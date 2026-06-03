@@ -1,10 +1,12 @@
 <!--
-  CaddyHubNode — Col 2 of both views. The single central hub.
+  CaddyHubNode — the single central routing focal point.
 
-  Shows the running Caddy version + Arenet instance id + aggregate
-  inbound req/s, with chips for the active site-wide capabilities
-  (WAF, rate-limit, mTLS, L7-LB). Pulse glow on the border keeps it
-  visually anchored as the conversation piece of the topology.
+  C21 (2026-06-04) reshape: round container, content trimmed to
+  "Caddy" label + aggregate req/s. Version + instanceId moved to a
+  hover tooltip; the previous chip block (L7-LB / WAF / RATE / mTLS)
+  is gone entirely. The round geometry visually distinguishes the
+  hub from the rectangular FQDN and cluster nodes — "this is the
+  routing center" without needing words.
 -->
 <script lang="ts">
         import { Handle, Position, type NodeProps } from '@xyflow/svelte';
@@ -16,81 +18,60 @@
                 if (rps >= 1000) return `${(rps / 1000).toFixed(1)} k req/s`;
                 return `${Math.round(rps)} req/s`;
         }
+
+        // Tooltip surfacing the static identifiers the visible label
+        // used to show. Format: "<version> · <instanceId>".
+        let hubTooltip = $derived(`${data.version} · ${data.instanceId}`);
 </script>
 
-<div class="caddy-node">
+<div class="caddy-node" title={hubTooltip}>
         <Handle type="target" position={Position.Left} />
 
-        <div class="caddy-title">{data.version}</div>
-        <div class="caddy-instance">{data.instanceId}</div>
+        <div class="caddy-title">Caddy</div>
         <div class="caddy-rate">{formatRate(data.aggregateReqPerSec)}</div>
-
-        {#if data.chips.length > 0}
-                <div class="chips">
-                        {#each data.chips as chip (chip)}
-                                <span class="chip">{chip}</span>
-                        {/each}
-                </div>
-        {/if}
 
         <Handle type="source" position={Position.Right} />
 </div>
 
 <style>
         .caddy-node {
-                width: 180px;
-                padding: 14px 14px 10px 14px;
+                /* Round 130x130 focal point. The accent border + soft
+                   outer glow keep the hub the eye-catcher of the
+                   canvas without adding any text decoration. */
+                width: 130px;
+                height: 130px;
+                border-radius: 50%;
+                box-sizing: border-box;
                 background: var(--surface, oklch(19% 0.006 250));
-                border: 1.5px solid var(--accent-line, oklch(68% 0.21 255 / 0.45));
-                border-radius: 10px;
+                border: 1.5px solid var(--accent-line, oklch(68% 0.21 255 / 0.55));
+                box-shadow: 0 0 22px oklch(68% 0.21 255 / 0.18);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 4px;
                 font-family: var(--font-display, system-ui, sans-serif);
                 color: var(--fg, oklch(96% 0.005 250));
                 font-size: 12px;
                 text-align: center;
-                box-shadow: 0 0 18px oklch(68% 0.21 255 / 0.14);
         }
 
         .caddy-title {
-                font-size: 14px;
+                font-size: 15px;
                 font-weight: 600;
-                margin-bottom: 2px;
-        }
-
-        .caddy-instance {
-                font-family: var(--font-mono, ui-monospace, monospace);
-                font-size: 10.5px;
-                color: var(--fg-muted, oklch(68% 0.012 250));
-                letter-spacing: 0.03em;
-                text-transform: uppercase;
-                margin-bottom: 6px;
+                letter-spacing: 0.01em;
         }
 
         .caddy-rate {
                 font-family: var(--font-mono, ui-monospace, monospace);
-                font-size: 11px;
+                font-size: 12px;
                 color: var(--accent, oklch(68% 0.21 255));
                 font-weight: 500;
-                margin-bottom: 8px;
         }
 
-        .chips {
-                display: flex;
-                justify-content: center;
-                flex-wrap: wrap;
-                gap: 4px;
-        }
-
-        .chip {
-                font-family: var(--font-mono, ui-monospace, monospace);
-                font-size: 9.5px;
-                padding: 2px 6px;
-                border: 1px solid var(--border-hi, oklch(34% 0.011 250));
-                border-radius: 4px;
-                color: var(--fg-muted, oklch(68% 0.012 250));
-                background: var(--surface-2, oklch(22% 0.007 250));
-                letter-spacing: 0.04em;
-        }
-
+        /* Svelte Flow wrapper override — keep the wrapper transparent
+           so only our round .caddy-node paints. Without this the
+           wrapper's default rectangular box would frame the circle. */
         :global(.svelte-flow__node-caddy) {
                 padding: 0;
                 background: transparent;

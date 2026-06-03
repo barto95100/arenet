@@ -130,6 +130,7 @@ func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Rout
 		// map. We surface false rather than fabricate.
 		RateLimited:    false,
 		MTLSRequired:   false,
+		HTTPRedirect:   r.RedirectToHTTPS,
 		HasHealthCheck: r.HealthCheck.Enabled,
 		ClusterLabel:   r.Host,
 	}

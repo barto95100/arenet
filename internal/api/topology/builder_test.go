@@ -301,6 +301,42 @@ func TestBuildSnapshot_HealthCheckConfiguredPropagates(t *testing.T) {
 	}
 }
 
+// TestBuildSnapshot_HTTPRedirectPropagates verifies Critique 18
+// wire-shape extension: Route.HTTPRedirect mirrors
+// storage.Route.RedirectToHTTPS so the frontend can render the
+// "HTTP → HTTPS" protocols variant on the FQDN node. Default-zero
+// path covered alongside the explicit-true case.
+func TestBuildSnapshot_HTTPRedirectPropagates(t *testing.T) {
+	redirectRoute := storage.Route{
+		ID:               "r-redirect",
+		Host:             "redirect.example",
+		LBPolicy:         "round_robin",
+		TLSEnabled:       true,
+		RedirectToHTTPS:  true,
+		Upstreams:        []storage.Upstream{{URL: "http://10.0.0.1:80", Weight: 1}},
+	}
+	plainRoute := storage.Route{
+		ID:        "r-plain",
+		Host:      "plain.example",
+		LBPolicy:  "round_robin",
+		Upstreams: []storage.Upstream{{URL: "http://10.0.0.2:80", Weight: 1}},
+		// TLSEnabled, RedirectToHTTPS both zero-value
+	}
+	resp := BuildSnapshot(
+		[]storage.Route{redirectRoute, plainRoute},
+		nil, nil, time.Now(),
+	)
+	if len(resp.Routes) != 2 {
+		t.Fatalf("len Routes: got %d, want 2", len(resp.Routes))
+	}
+	if !resp.Routes[0].HTTPRedirect {
+		t.Errorf("redirect route HTTPRedirect = false; want true")
+	}
+	if resp.Routes[1].HTTPRedirect {
+		t.Errorf("plain route HTTPRedirect = true; want false (zero-value)")
+	}
+}
+
 func TestHostBasename(t *testing.T) {
 	cases := map[string]string{
 		"api.arenet.fr":   "api",
