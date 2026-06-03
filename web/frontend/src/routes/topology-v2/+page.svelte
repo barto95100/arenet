@@ -3,34 +3,46 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  Topology v2 — Service → Backend view (Phase 1.2).
+  Topology v2 — Phase 1.3.
 
-  Two-column layout under the page header:
-    - canvas (Svelte Flow) takes the remaining width
-    - right sidebar (Légende + Top flux + Actions rapides) is fixed 280px
+  Two-column page layout (canvas | sidebar) with a centered view
+  toggle on top of the canvas that swaps between:
 
-  Pipeline: mock routes → _layout.ts → SvelteFlow with custom
-  node/edge types. The sidebar reads the same mockRoutes to keep
-  its Top flux ranking in sync with the canvas.
+    - Vue protocole         entry-points -> Caddy -> services
+    - Vue service -> backend  consumers -> FQDN -> Caddy -> clusters
+
+  Both views share the Caddy hub and the AnimatedFlowEdge. The
+  toggle does not refit the canvas; the user keeps their zoom/pan
+  when switching, which is the right behavior when comparing the
+  two perspectives side-by-side.
 -->
 <script lang="ts">
         import { SvelteFlow, Background, Controls, type NodeTypes, type EdgeTypes } from '@xyflow/svelte';
         import '@xyflow/svelte/dist/style.css';
 
-        import { buildServiceToBackendGraph } from './_layout';
+        import { buildProtocolGraph, buildServiceToBackendGraph } from './_layout';
         import { mockRoutes } from './_mock-data';
+        import type { TopologyViewMode } from './_types';
 
+        // Custom node components — one per `kind` emitted by the layout builders.
+        import EntryPointNode from './_components/nodes/EntryPointNode.svelte';
         import ConsumerNode from './_components/nodes/ConsumerNode.svelte';
         import FQDNNode from './_components/nodes/FQDNNode.svelte';
         import CaddyHubNode from './_components/nodes/CaddyHubNode.svelte';
+        import ServiceNode from './_components/nodes/ServiceNode.svelte';
         import BackendClusterNode from './_components/nodes/BackendClusterNode.svelte';
         import AnimatedFlowEdge from './_components/edges/AnimatedFlowEdge.svelte';
+
+        // Page-level UI
+        import ViewToggle from './_components/ViewToggle.svelte';
         import TopologySidebar from './_components/TopologySidebar.svelte';
 
         const nodeTypes: NodeTypes = {
+                'entry-point': EntryPointNode,
                 consumer: ConsumerNode,
                 fqdn: FQDNNode,
                 caddy: CaddyHubNode,
+                service: ServiceNode,
                 'backend-cluster': BackendClusterNode,
         };
 
@@ -38,9 +50,23 @@
                 'animated-flow': AnimatedFlowEdge,
         };
 
-        const graph = buildServiceToBackendGraph(mockRoutes);
-        let nodes = $state.raw(graph.nodes);
-        let edges = $state.raw(graph.edges);
+        // Current view + initial graph. We default to Vue service -> backend
+        // because it's the richest view (per-backend fairness bars) and is
+        // what most operators will want to land on.
+        let currentView = $state<TopologyViewMode>('service-to-backend');
+        const initial = buildServiceToBackendGraph(mockRoutes);
+        let nodes = $state.raw(initial.nodes);
+        let edges = $state.raw(initial.edges);
+
+        function switchView(view: TopologyViewMode): void {
+                if (view === currentView) return;
+                currentView = view;
+                const graph = view === 'protocol'
+                        ? buildProtocolGraph(mockRoutes)
+                        : buildServiceToBackendGraph(mockRoutes);
+                nodes = graph.nodes;
+                edges = graph.edges;
+        }
 </script>
 
 <svelte:head>
@@ -60,20 +86,25 @@
 
         <div class="topo-content">
                 <div class="topo-canvas-wrap">
-                        <SvelteFlow
-                                bind:nodes
-                                bind:edges
-                                {nodeTypes}
-                                {edgeTypes}
-                                fitView
-                                nodesDraggable
-                                nodesConnectable={false}
-                                elementsSelectable
-                                proOptions={{ hideAttribution: true }}
-                        >
-                                <Background />
-                                <Controls />
-                        </SvelteFlow>
+                        <div class="canvas-toolbar">
+                                <ViewToggle value={currentView} onChange={switchView} />
+                        </div>
+                        <div class="canvas-frame">
+                                <SvelteFlow
+                                        bind:nodes
+                                        bind:edges
+                                        {nodeTypes}
+                                        {edgeTypes}
+                                        fitView
+                                        nodesDraggable
+                                        nodesConnectable={false}
+                                        elementsSelectable
+                                        proOptions={{ hideAttribution: true }}
+                                >
+                                        <Background />
+                                        <Controls />
+                                </SvelteFlow>
+                        </div>
                 </div>
 
                 <TopologySidebar routes={mockRoutes} />
@@ -131,5 +162,23 @@
                 border-radius: 8px;
                 overflow: hidden;
                 background: var(--bg, oklch(15% 0.005 250));
+                display: flex;
+                flex-direction: column;
+        }
+
+        .canvas-toolbar {
+                flex: 0 0 auto;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 10px 12px;
+                border-bottom: 1px solid var(--border, oklch(28% 0.009 250));
+                background: var(--surface-2, oklch(22% 0.007 250));
+        }
+
+        .canvas-frame {
+                flex: 1 1 auto;
+                min-height: 0;
+                position: relative;
         }
 </style>
