@@ -45,7 +45,12 @@ import (
 // at GET /api/v1/ws/topology inside the hard-auth subgroup
 // (spec §5.1 + §7.1). Tests that do not exercise the topology
 // endpoint pass nil — the route is then simply not registered.
-func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopologyHandler) chi.Router {
+//
+// Phase 2 #R-TOPO-v2 — when non-nil, snapshotHandler serves
+// GET /api/v1/topology/snapshot inside the same hard-auth
+// subgroup. Viewer + admin both accepted (read-only endpoint).
+// Tests that do not exercise this endpoint pass nil.
+func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopologyHandler, snapshotHandler *SnapshotHandler) chi.Router {
 	if ipExtractor == nil {
 		panic("api.NewRouter: ipExtractor is nil")
 	}
@@ -199,6 +204,15 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// — spec §5.1 + §7.1.
 			if ws != nil {
 				r.Get("/ws/topology", ws.ServeHTTP)
+			}
+
+			// Phase 2 #R-TOPO-v2 — topology snapshot (one-shot
+			// read; the /stream WS counterpart lands in C3).
+			// Same hard-auth gate as the rest of this subgroup:
+			// viewer + admin both accepted, write surface lives
+			// in Phase 2.1.
+			if snapshotHandler != nil {
+				r.Get("/topology/snapshot", snapshotHandler.ServeHTTP)
 			}
 
 			// Admin-only sub-group (Step K.2 §1.3 decision 12).

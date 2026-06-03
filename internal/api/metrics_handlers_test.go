@@ -84,7 +84,7 @@ func newMetricsTestEnv(t *testing.T) *metricsTestEnv {
 func (m *metricsTestEnv) rawHandler(t *testing.T) http.Handler {
 	t.Helper()
 	ipExtractor, _ := auth.NewIPExtractor("")
-	return NewRouter(m.env.handler, false, ipExtractor, nil)
+	return NewRouter(m.env.handler, false, ipExtractor, nil, nil)
 }
 
 // --- AC #17 auth gate --------------------------------------------------------

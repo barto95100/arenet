@@ -56,6 +56,7 @@ import (
 	_ "github.com/caddy-dns/ovh"
 
 	"github.com/barto95100/arenet/internal/api"
+	"github.com/barto95100/arenet/internal/api/topology"
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/automation"
@@ -585,7 +586,23 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	}()
 
 	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.Dev, logger)
-	router := api.NewRouter(apiHandler, cfg.Dev, ipExtractor, wsTopologyHandler)
+
+	// Phase 2 #R-TOPO-v2 C2 — snapshot HTTP endpoint dependencies.
+	// The sliding window is shared with C3's WS handler (TBD); for
+	// C2 alone it's empty (Aggregate returns zero, BuildSnapshot
+	// emits "idle route" rows — well-formed, not broken).
+	//
+	// The Caddy status prober is refreshed on a 1-second background
+	// ticker (see topology_wiring.go::topologyProbeInterval). The
+	// HTTP handler reads the cached statuses at memory-read speed;
+	// no per-request 200ms probe penalty.
+	topologyWindow := topology.NewSlidingWindow()
+	topologyStatusProber := topology.NewCaddyStatusProber()
+	topologySnapshotHandler := newTopologySnapshotHandler(
+		ctx, store, topologyWindow, topologyStatusProber, logger,
+	)
+
+	router := api.NewRouter(apiHandler, cfg.Dev, ipExtractor, wsTopologyHandler, topologySnapshotHandler)
 
 	if cfg.Dev {
 		router.Get("/", devLandingHandler(cfg.AdminPort))
