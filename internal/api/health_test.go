@@ -37,7 +37,7 @@ func TestHealthz_Returns200WithStatusOK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIPExtractor: %v", err)
 	}
-	router := NewRouter(h, false, ipExtractor, nil, nil)
+	router := NewRouter(h, false, ipExtractor, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()

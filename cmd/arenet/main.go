@@ -587,22 +587,32 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 
 	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.Dev, logger)
 
-	// Phase 2 #R-TOPO-v2 C2 — snapshot HTTP endpoint dependencies.
-	// The sliding window is shared with C3's WS handler (TBD); for
-	// C2 alone it's empty (Aggregate returns zero, BuildSnapshot
-	// emits "idle route" rows — well-formed, not broken).
+	// Phase 2 #R-TOPO-v2 C2 + C3 — topology endpoints.
 	//
-	// The Caddy status prober is refreshed on a 1-second background
-	// ticker (see topology_wiring.go::topologyProbeInterval). The
-	// HTTP handler reads the cached statuses at memory-read speed;
-	// no per-request 200ms probe penalty.
+	// The sliding window + Caddy status prober are SHARED between
+	// the C2 snapshot endpoint and the C3 stream endpoint. A
+	// single background goroutine refreshes the prober every 1 s
+	// (see topology_wiring.go::topologyProbeInterval); both
+	// endpoints read the cached statuses at memory-read speed.
+	//
+	// The stream handler subscribes to the metrics broadcaster
+	// each connection; the window is fed by per-subscriber pushes
+	// (acknowledged Stage A wastefulness when multiple subscribers
+	// exist, but cheap at homelab cardinality).
 	topologyWindow := topology.NewSlidingWindow()
 	topologyStatusProber := topology.NewCaddyStatusProber()
 	topologySnapshotHandler := newTopologySnapshotHandler(
 		ctx, store, topologyWindow, topologyStatusProber, logger,
 	)
+	topologyStreamHandler := api.NewStreamHandler(
+		metricsBroadcaster, store, topologyWindow, topologyStatusProber,
+		cfg.TopologyTickMs, cfg.Dev, logger,
+	)
 
-	router := api.NewRouter(apiHandler, cfg.Dev, ipExtractor, wsTopologyHandler, topologySnapshotHandler)
+	router := api.NewRouter(
+		apiHandler, cfg.Dev, ipExtractor,
+		wsTopologyHandler, topologySnapshotHandler, topologyStreamHandler,
+	)
 
 	if cfg.Dev {
 		router.Get("/", devLandingHandler(cfg.AdminPort))

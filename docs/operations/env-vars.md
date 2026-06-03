@@ -231,6 +231,28 @@ defaults; you'll typically touch 2–3 on a real install.
   flipping TLS on the first public-domain route.
 - **Source**: `cmd/arenet/main.go:180`.
 
+### `ARENET_TOPOLOGY_TICK_MS`
+
+- **Purpose**: emit cadence of the `/api/v1/topology/stream`
+  WebSocket in milliseconds. Each tick the server re-builds
+  the topology snapshot (route list × sliding-window metrics
+  × Caddy upstream status) and pushes a frame to every
+  connected client. The source metrics ticker stays at 1 Hz;
+  this knob only changes how often the WS emits.
+- **Default**: `2000` (2-second emit). 1 s reads too jumpy for
+  eyeball metric rates, 5 s feels stale during an incident,
+  2 s is the standard ops-dashboard cadence.
+- **Format**: positive integer (milliseconds).
+- **Example**: `ARENET_TOPOLOGY_TICK_MS=2000`
+- **Notes**: the WS handler snaps the value UP to the nearest
+  multiple of 1000 (since the source ticker is 1 Hz, smaller
+  multiples would duplicate-emit the same data). Non-positive
+  / non-numeric / empty values are ignored and the default
+  survives — protects against footgun configurations that
+  would either spam the WS or freeze it. Phase 2 #R-TOPO-v2.
+- **Source**: `internal/config/config.go` (struct field
+  `TopologyTickMs`; env parser around the `LookupEnv` block).
+
 ---
 
 ## CrowdSec integration

@@ -274,3 +274,68 @@ func TestHealthcheckFlag(t *testing.T) {
 		t.Errorf("HealthcheckURL: got %q, want http://127.0.0.1:8001/healthz", cfg.HealthcheckURL)
 	}
 }
+
+func TestTopologyTickMs_Default(t *testing.T) {
+	withEnv(t, nil)
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TopologyTickMs != 2000 {
+		t.Errorf("TopologyTickMs default: got %d, want 2000", cfg.TopologyTickMs)
+	}
+}
+
+func TestTopologyTickMs_EnvOverride(t *testing.T) {
+	withEnv(t, map[string]string{"ARENET_TOPOLOGY_TICK_MS": "5000"})
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TopologyTickMs != 5000 {
+		t.Errorf("TopologyTickMs env: got %d, want 5000", cfg.TopologyTickMs)
+	}
+}
+
+func TestTopologyTickMs_FlagOverride(t *testing.T) {
+	withEnv(t, map[string]string{"ARENET_TOPOLOGY_TICK_MS": "5000"})
+	cfg, err := Load([]string{"--topology-tick-ms=3000"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TopologyTickMs != 3000 {
+		t.Errorf("TopologyTickMs flag wins: got %d, want 3000", cfg.TopologyTickMs)
+	}
+}
+
+func TestTopologyTickMs_InvalidEnvIgnored(t *testing.T) {
+	// Non-numeric, zero, and negative values are ignored — the
+	// default (2000) survives.
+	for _, bad := range []string{"abc", "0", "-1000", ""} {
+		withEnv(t, map[string]string{"ARENET_TOPOLOGY_TICK_MS": bad})
+		cfg, err := Load(nil)
+		if err != nil {
+			t.Fatalf("Load(%q): %v", bad, err)
+		}
+		if cfg.TopologyTickMs != 2000 {
+			t.Errorf("TopologyTickMs with bad env %q: got %d, want 2000 (default kept)",
+				bad, cfg.TopologyTickMs)
+		}
+	}
+}
+
+func TestTopologyTickMs_TOMLFile(t *testing.T) {
+	withEnv(t, nil)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "arenet.toml")
+	if err := os.WriteFile(path, []byte(`topology-tick-ms = 4000`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := Load([]string{"--config=" + path})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TopologyTickMs != 4000 {
+		t.Errorf("TopologyTickMs TOML: got %d, want 4000", cfg.TopologyTickMs)
+	}
+}

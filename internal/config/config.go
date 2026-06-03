@@ -102,6 +102,20 @@ type Config struct {
 	// Used as the Docker compose healthcheck command.
 	HealthcheckURL string `toml:"healthcheck"`
 
+	// TopologyTickMs (Phase 2 #R-TOPO-v2) is the emit cadence of
+	// the /api/v1/topology/stream WebSocket in milliseconds. The
+	// source metrics ticker stays at 1 Hz (metrics.TickInterval);
+	// the stream handler aggregates ceil(TopologyTickMs / 1000)
+	// source ticks per emit. Snapped to a positive multiple of
+	// 1000 by the WS handler (a non-multiple is accepted and
+	// rounded UP at handler init time, not here, to keep this
+	// struct a pure data carrier).
+	//
+	// Default 2000 (2 s emit) per spec discussion: 1 s too jumpy,
+	// 5 s too stale during an incident, 2 s standard for ops
+	// dashboards.
+	TopologyTickMs int `toml:"topology-tick-ms"`
+
 	// ConfigPath is the path to the TOML config file. NOT a
 	// TOML field itself (would be self-referential); only a
 	// flag + env. The default empty string means "no config
@@ -114,9 +128,10 @@ type Config struct {
 // defaults. This is the "level 4" of the precedence stack.
 func NewDefault() *Config {
 	return &Config{
-		AdminPort: ":8001",
-		DataDir:   "./data",
-		Dev:       false,
+		AdminPort:      ":8001",
+		DataDir:        "./data",
+		Dev:            false,
+		TopologyTickMs: 2000,
 	}
 }
 
@@ -159,8 +174,9 @@ func Load(args []string) (*Config, error) {
 		fAllowIncRes = flagSet.Bool("allow-incomplete-restore", false, "Step K.3: accept --restore inputs whose sentinels cannot be inherited; affected secret fields are cleared.")
 		fAllowEmptyU = flagSet.Bool("allow-empty-users", false, "Step K.3: accept --restore inputs with zero users (next boot re-triggers the setup-token flow).")
 		fUIOrigin    = flagSet.String("ui-origin", "", "Step K.2 dev: absolute origin of the SPA dev server (e.g. http://localhost:5173); empty in prod (static SPA served by Arenet).")
-		fHealthcheck = flagSet.String("healthcheck", "", "Step S.1: probe URL (e.g. http://127.0.0.1:8001/healthz) and exit 0 on 2xx, 1 otherwise. Used as the Docker compose healthcheck command since distroless has no curl. Never starts the server.")
-		fConfig      = flagSet.String("config", "", "Step S.3: path to a TOML config file. Optional; env vars + flags override file values (precedence: flag > env > file > default).")
+		fHealthcheck     = flagSet.String("healthcheck", "", "Step S.1: probe URL (e.g. http://127.0.0.1:8001/healthz) and exit 0 on 2xx, 1 otherwise. Used as the Docker compose healthcheck command since distroless has no curl. Never starts the server.")
+		fTopologyTickMs  = flagSet.Int("topology-tick-ms", 0, "Phase 2 #R-TOPO-v2: emit cadence of the /api/v1/topology/stream WebSocket in milliseconds. Default 2000. Snapped UP to the nearest multiple of 1000 (source metrics tick is 1 Hz).")
+		fConfig          = flagSet.String("config", "", "Step S.3: path to a TOML config file. Optional; env vars + flags override file values (precedence: flag > env > file > default).")
 	)
 	// Track which flags were explicitly set so we can apply ONLY
 	// those (vs zero-value defaults that should NOT override file
@@ -232,6 +248,9 @@ func Load(args []string) (*Config, error) {
 	if wasSet["healthcheck"] {
 		cfg.HealthcheckURL = *fHealthcheck
 	}
+	if wasSet["topology-tick-ms"] {
+		cfg.TopologyTickMs = *fTopologyTickMs
+	}
 
 	return cfg, nil
 }
@@ -302,5 +321,15 @@ func applyEnv(cfg *Config) {
 	}
 	if v, ok := os.LookupEnv("ARENET_HEALTHCHECK"); ok {
 		cfg.HealthcheckURL = v
+	}
+	if v, ok := os.LookupEnv("ARENET_TOPOLOGY_TICK_MS"); ok {
+		// strconv.Atoi rejects empty / non-numeric / negative-with-
+		// non-leading-minus. We additionally guard against
+		// non-positive values — a zero or negative tick would
+		// either spam the WS or freeze it; safer to ignore and
+		// keep the default than to honour a footgun.
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.TopologyTickMs = n
+		}
 	}
 }

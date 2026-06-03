@@ -47,10 +47,11 @@ import (
 // endpoint pass nil — the route is then simply not registered.
 //
 // Phase 2 #R-TOPO-v2 — when non-nil, snapshotHandler serves
-// GET /api/v1/topology/snapshot inside the same hard-auth
-// subgroup. Viewer + admin both accepted (read-only endpoint).
-// Tests that do not exercise this endpoint pass nil.
-func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopologyHandler, snapshotHandler *SnapshotHandler) chi.Router {
+// GET /api/v1/topology/snapshot and streamHandler serves
+// GET /api/v1/topology/stream, both inside the same hard-auth
+// subgroup. Viewer + admin both accepted (read-only endpoints).
+// Tests that do not exercise these endpoints pass nil.
+func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopologyHandler, snapshotHandler *SnapshotHandler, streamHandler *StreamHandler) chi.Router {
 	if ipExtractor == nil {
 		panic("api.NewRouter: ipExtractor is nil")
 	}
@@ -207,12 +208,20 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			}
 
 			// Phase 2 #R-TOPO-v2 — topology snapshot (one-shot
-			// read; the /stream WS counterpart lands in C3).
-			// Same hard-auth gate as the rest of this subgroup:
-			// viewer + admin both accepted, write surface lives
-			// in Phase 2.1.
+			// read) + stream (WS push). Same hard-auth gate as
+			// the rest of this subgroup: viewer + admin both
+			// accepted, write surface lives in Phase 2.1.
+			//
+			// The stream's hard-auth happens BEFORE the WS
+			// upgrade (the middleware writes 401/403 and the
+			// connection is never upgraded), matching the
+			// existing /ws/topology pattern. No in-WS close
+			// codes for auth failures.
 			if snapshotHandler != nil {
 				r.Get("/topology/snapshot", snapshotHandler.ServeHTTP)
+			}
+			if streamHandler != nil {
+				r.Get("/topology/stream", streamHandler.ServeHTTP)
 			}
 
 			// Admin-only sub-group (Step K.2 §1.3 decision 12).
