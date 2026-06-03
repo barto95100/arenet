@@ -129,8 +129,14 @@ func TestBuildSnapshot_SingleUpstreamGetsAllTraffic(t *testing.T) {
 		t.Errorf("single upstream split: got reqPerSec=%v fairness=%v, want 400 and 1.0",
 			u.ReqPerSec, u.FairnessRatio)
 	}
-	if u.Status != StatusHealthy {
-		t.Errorf("status: got %q, want %q", u.Status, StatusHealthy)
+	// v1.1.0 status policy (#R-TOPO-health-coherence): the prober
+	// is still consulted (and the stub here returns StatusHealthy)
+	// but the result is intentionally dropped — every upstream
+	// reports StatusUnknown until Stage B real-probe ingestion.
+	// The test fixture used to assert StatusHealthy here; the
+	// stub's canned value is now expected to be ignored.
+	if u.Status != StatusUnknown {
+		t.Errorf("status: got %q, want %q (v1.1.0 always-unknown)", u.Status, StatusUnknown)
 	}
 	if u.P99LatencyMs != 42 {
 		t.Errorf("upstream p99 echo: got %d, want 42", u.P99LatencyMs)
@@ -226,6 +232,72 @@ func TestBuildSnapshot_AliasesIsClonedNotAliased(t *testing.T) {
 	routes[0].Aliases[0] = "MUTATED"
 	if resp.Routes[0].Aliases[0] == "MUTATED" {
 		t.Errorf("Aliases is aliased to storage slice; want clone")
+	}
+}
+
+// TestBuildSnapshot_HealthCheckConfiguredPropagates verifies the
+// v1.1.0 #R-TOPO-health-coherence contract: HasHealthCheck on the
+// route and HealthCheckConfigured on every upstream both mirror
+// storage.Route.HealthCheck.Enabled. Status remains StatusUnknown
+// regardless, even when the prober would have returned StatusHealthy
+// — the prober result is intentionally dropped (see builder.go).
+func TestBuildSnapshot_HealthCheckConfiguredPropagates(t *testing.T) {
+	hcRoute := storage.Route{
+		ID:        "r-hc",
+		Host:      "monitored.example",
+		LBPolicy:  "round_robin",
+		Upstreams: []storage.Upstream{{URL: "http://10.0.0.1:80", Weight: 1}},
+		HealthCheck: storage.HealthCheck{
+			Enabled:  true,
+			URI:      "/healthz",
+			Interval: "10s",
+			Timeout:  "2s",
+			Method:   "GET",
+		},
+	}
+	noHCRoute := storage.Route{
+		ID:        "r-nohc",
+		Host:      "unmonitored.example",
+		LBPolicy:  "round_robin",
+		Upstreams: []storage.Upstream{{URL: "http://10.0.0.2:80", Weight: 1}},
+		// HealthCheck: zero-value (Enabled=false)
+	}
+	// Prober claims both upstreams healthy — the v1.1.0 policy must
+	// ignore it and surface StatusUnknown for both.
+	s := stubStatus{statuses: map[string]string{
+		"http://10.0.0.1:80": StatusHealthy,
+		"http://10.0.0.2:80": StatusHealthy,
+	}}
+	resp := BuildSnapshot(
+		[]storage.Route{hcRoute, noHCRoute},
+		stubMetrics{id: "r-hc", agg: Aggregate{ReqPerSec: 10}},
+		s,
+		time.Now(),
+	)
+	if len(resp.Routes) != 2 {
+		t.Fatalf("len Routes: got %d, want 2", len(resp.Routes))
+	}
+	hc := resp.Routes[0]
+	nohc := resp.Routes[1]
+	if !hc.HasHealthCheck {
+		t.Errorf("hc route HasHealthCheck = false; want true")
+	}
+	if nohc.HasHealthCheck {
+		t.Errorf("nohc route HasHealthCheck = true; want false")
+	}
+	if !hc.Upstreams[0].HealthCheckConfigured {
+		t.Errorf("hc upstream HealthCheckConfigured = false; want true")
+	}
+	if nohc.Upstreams[0].HealthCheckConfigured {
+		t.Errorf("nohc upstream HealthCheckConfigured = true; want false")
+	}
+	// Both upstreams must report unknown despite the prober saying
+	// healthy — the operator-flagged misleading-green case.
+	if hc.Upstreams[0].Status != StatusUnknown {
+		t.Errorf("hc status: got %q, want %q", hc.Upstreams[0].Status, StatusUnknown)
+	}
+	if nohc.Upstreams[0].Status != StatusUnknown {
+		t.Errorf("nohc status: got %q, want %q", nohc.Upstreams[0].Status, StatusUnknown)
 	}
 }
 

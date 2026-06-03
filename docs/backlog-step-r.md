@@ -504,7 +504,15 @@ canvas reads as designed.
 contract stays stable across the Stage A → Stage B transition;
 no frontend changes will be needed.
 
-### Finding #R-TOPO-health-coherence — status "healthy" misleading without configured health check
+### Finding #R-TOPO-health-coherence — status "healthy" misleading without configured health check — RESOLVED in C6 (2026-06-03)
+
+**Status**: RESOLVED in `#R-TOPO-v2-phase2` C6 with the v1.1.0
+compromise scope. See "Resolution" block at the end of this
+entry. Stage B follow-up tracked separately as
+`#R-TOPO-real-health-probe` below.
+
+---
+
 
 Surfaced during the C4 browser smoke (`#R-TOPO-v2-phase2`).
 `CaddyStatusProber` (in `internal/api/topology/caddyprobe.go`)
@@ -556,6 +564,117 @@ is honest about the state.
 
 **Triage.** UX/correctness gap, not a crash. Backlog
 candidate for the next topology-themed step.
+
+**Resolution (C6, 2026-06-03)** — operator's C6 browser smoke
+elevated this from backlog to v1.1.0 blocker. The investigation
+surfaced a deeper issue: even when the route has a health check
+configured, the `/reverse_proxy/upstreams` admin endpoint
+doesn't surface the active health-probe outcome, only the
+passive `num_requests` + `fails` proxy-error counters. Mapping
+`fails == 0 → healthy` was lying even for monitored routes
+(Caddy stops sending traffic to an unhealthy upstream → its
+`fails` counter stays at 0). The original fix shape (gate the
+prober on `HealthCheck.Enabled`) was therefore necessary but
+insufficient.
+
+The v1.1.0-shipped compromise:
+
+- `BuildSnapshot` ALWAYS emits `status: "unknown"` for every
+  upstream. The prober is still polled (so the wire shape stays
+  stable for Stage B) but the result is intentionally dropped
+  in `buildRoute` — see `internal/api/topology/builder.go`
+  docstring.
+- A new wire field `Upstream.HealthCheckConfigured` (bool)
+  mirrors the parent route's `HealthCheck.Enabled`. The
+  frontend renders a small Lucide Activity (ECG-line) glyph
+  next to the upstream URL when true, signalling "this
+  upstream is being watched" without claiming anything about
+  the probe outcome. (Originally specced as a shield glyph;
+  swapped to Activity per Critique 12 — shield reads as
+  security/WAF, Activity is the universal monitoring metaphor.)
+- A companion wire field `Route.HasHealthCheck` (bool) carries
+  the same signal at route granularity (currently consumed only
+  via the denormalised upstream field, but available for any
+  future per-route UI affordance).
+- UpstreamNode lost its inner status dot in the same C6 pass
+  (Critique 8) — the left-edge accent is now the sole status
+  signal, color-coded gray for the universal `unknown` state.
+
+**Operational consequence post-fix**: every upstream renders
+gray-accented "unknown" until Stage B lands; routes with a
+configured health check additionally show a Lucide Activity
+(ECG-line) glyph so the operator can tell "this is monitored"
+from "this isn't". No more misleading-green. Tracked in
+`#R-TOPO-real-health-probe` below for the real probe
+ingestion follow-up.
+
+Files touched:
+- `internal/api/topology/types.go` — added `Route.HasHealthCheck`,
+  `Upstream.HealthCheckConfigured`. Both non-omitempty.
+- `internal/api/topology/builder.go` — drop probe result,
+  populate the new bools.
+- `internal/api/topology/builder_test.go` — new
+  `TestBuildSnapshot_HealthCheckConfiguredPropagates`,
+  updated the canned-status test to expect unknown.
+- `web/frontend/src/routes/topology/_types.ts` — TopologyRoute,
+  TopologyUpstream, UpstreamNodeData widened.
+- `web/frontend/src/routes/topology/_components/nodes/UpstreamNode.svelte`
+  — dropped status dot, added lock + shield glyphs.
+
+### Finding #R-TOPO-real-health-probe — surface real per-upstream health-probe outcome
+
+Surfaced as the residual scope of `#R-TOPO-health-coherence`'s
+v1.1.0 resolution (2026-06-03). The topology canvas currently
+emits `status: "unknown"` for every upstream because the only
+data source available — Caddy's `/reverse_proxy/upstreams`
+admin endpoint — exposes the passive `num_requests` + `fails`
+counters, NOT the active health-probe outcome. Even for routes
+with a configured health check, mapping `fails == 0 → healthy`
+was unsound (Caddy stops routing to an unhealthy upstream,
+keeping its `fails` counter at 0).
+
+**Fix shape**: ingest the actual probe outcome. Two viable
+approaches:
+
+1. **Caddy events** (`caddy.fs.events` / module-level events on
+   the reverse-proxy module): subscribe via the admin events
+   stream `GET /events` and update a per-upstream status
+   cache when probe-success / probe-failure events arrive.
+   Pros: zero polling, push-based, matches Caddy's idiomatic
+   integration. Cons: Caddy's event surface for active health
+   checks must be confirmed via the upstream source — not
+   every internal probe outcome necessarily emits an event.
+2. **Custom Caddy selector module** that wraps the standard
+   selectors (`first`, `round_robin`, `random`, etc.), records
+   per-upstream success/failure in an in-memory map, and
+   exposes the map via either a new admin route or a method
+   call from the Arenet binary (Caddy is embedded as a library
+   here, so direct Go-API access is on the table). Pros: full
+   control, no Caddy-version event-schema dependency. Cons:
+   requires shipping and maintaining a Caddy module.
+
+**Empirical-verification reminder** (CLAUDE.md): before
+committing to an approach, verify the Caddy events surface
+actually emits health-probe events with a small probe
+harness. The Step I.7 history (`docs/smoke-test-step-i.md`)
+shows audit-time assumptions about Caddy internals have a
+track record of being wrong.
+
+**Frontend ripple when this lands**:
+
+- `UpstreamNode` already handles healthy/unhealthy/draining/
+  unknown via the left-accent color — wire the real statuses
+  in and the Activity glyph (currently the only "monitored"
+  signal) can stay or be removed depending on whether the
+  operator still wants the visual distinction.
+- `internal/api/topology/builder.go` — re-enable the probe
+  result propagation (currently intentionally dropped, see
+  the in-file docstring).
+
+**Triage.** Quality-of-life, not a crash. Land after
+`#R-TOPO-upstream-metrics` Stage B; the two share the
+"real per-upstream data" theme and the probe ingestion is
+cheaper after the metrics fanout is in place.
 
 ### Finding #R-TOPO-probe-logging — 1 Caddy admin probe log/second is too noisy for prod
 

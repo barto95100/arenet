@@ -69,6 +69,14 @@ type Route struct {
 	RateLimited  bool   `json:"rateLimited,omitempty"`
 	MTLSRequired bool   `json:"mtlsRequired,omitempty"`
 
+	// HasHealthCheck mirrors storage.Route.HealthCheck.Enabled. The
+	// frontend uses this to drive the per-upstream "monitored"
+	// shield indicator (#R-TOPO-health-coherence v1.1.0 compromise,
+	// 2026-06-03). When false, no health-check block is in the
+	// route's Caddy config and the upstreams are not being probed —
+	// the UI must NOT show green/red status for these.
+	HasHealthCheck bool `json:"hasHealthCheck"`
+
 	ClusterLabel string `json:"clusterLabel,omitempty"`
 }
 
@@ -83,22 +91,34 @@ type Route struct {
 //     operator's INTENT (configured weight share), not measured
 //     reality. Stage B (#R-TOPO-upstream-metrics) replaces these
 //     with real per-upstream counters.
-//   - status is "healthy" / "unhealthy" / "unknown" derived from
-//     Caddy's /reverse_proxy/upstreams admin endpoint when reachable;
-//     "unknown" when the endpoint is unreachable or the upstream
-//     address is not present in Caddy's hosts pool (e.g. zero-
-//     traffic upstream). "draining" is reserved for Phase 2.1
-//     when the drain mutation lands.
+//   - status v1.1.0 compromise (#R-TOPO-health-coherence): ALWAYS
+//     "unknown" right now. The Caddy /reverse_proxy/upstreams admin
+//     endpoint surfaces only num_requests + fails (proxy-error
+//     counter), neither of which is the health-probe outcome. Mapping
+//     "fails=0" to "healthy" was lying — a route with no health
+//     check OR with a failing health check (Caddy stops routing →
+//     fails stays 0) both reported green. We now surface the
+//     unambiguous truth: "we don't know yet". The shield indicator
+//     (HealthCheckConfigured) tells the operator at least whether
+//     a probe is configured. Real probe ingestion lands in Stage B
+//     (#R-TOPO-real-health-probe).
+//   - healthCheckConfigured mirrors the parent route's
+//     HasHealthCheck (denormalised onto each upstream so the
+//     frontend doesn't have to thread the route into the upstream
+//     component). When true, the frontend renders a small shield
+//     glyph next to the URL — "this upstream is being watched" —
+//     even though we can't surface the probe result yet.
 //   - runtime is absent until storage models operator-supplied
 //     runtime metadata.
 type Upstream struct {
-	ID            string  `json:"id"`
-	URL           string  `json:"url"`
-	Runtime       string  `json:"runtime,omitempty"`
-	Status        string  `json:"status"`
-	ReqPerSec     float64 `json:"reqPerSec"`
-	P99LatencyMs  int32   `json:"p99LatencyMs"`
-	FairnessRatio float64 `json:"fairnessRatio"`
+	ID                    string  `json:"id"`
+	URL                   string  `json:"url"`
+	Runtime               string  `json:"runtime,omitempty"`
+	Status                string  `json:"status"`
+	HealthCheckConfigured bool    `json:"healthCheckConfigured"`
+	ReqPerSec             float64 `json:"reqPerSec"`
+	P99LatencyMs          int32   `json:"p99LatencyMs"`
+	FairnessRatio         float64 `json:"fairnessRatio"`
 }
 
 // HealthStatus enum values mirroring the frontend `HealthStatus`

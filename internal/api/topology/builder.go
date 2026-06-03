@@ -98,6 +98,18 @@ func BuildSnapshot(
 // buildRoute is the per-route projection. Split out so the
 // (route, metrics, status) ternary is testable independently of
 // the storage list iteration.
+//
+// v1.1.0 status policy (#R-TOPO-health-coherence): every upstream
+// reports StatusUnknown. The `status` lookup is still resolved (so
+// the prober keeps polling Caddy and the wire shape stays stable
+// for Stage B) but the value is intentionally NOT propagated. Doing
+// otherwise risks the misleading-green case the operator caught:
+// a route without a health check sees fails=0 → looked "healthy"
+// even though Caddy was never probing it. We surface unknown until
+// real probe ingestion lands in Stage B (#R-TOPO-real-health-probe).
+// HealthCheckConfigured carries the only honest signal we have
+// today — whether a probe is configured — letting the frontend
+// distinguish "unmonitored unknown" from "monitored unknown".
 func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Route {
 	agg := metrics.Aggregate(r.ID)
 	out := Route{
@@ -116,9 +128,10 @@ func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Rout
 		// today the rate-limit handler is global (Step Q.4 +
 		// S.4 lift to /api/v1) so there is no per-route bit to
 		// map. We surface false rather than fabricate.
-		RateLimited:  false,
-		MTLSRequired: false,
-		ClusterLabel: r.Host,
+		RateLimited:    false,
+		MTLSRequired:   false,
+		HasHealthCheck: r.HealthCheck.Enabled,
+		ClusterLabel:   r.Host,
 	}
 
 	// Build the upstream list. weight-split first; status second
@@ -145,13 +158,17 @@ func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Rout
 			w = 1
 		}
 		share := float64(w) / float64(totalWeight)
+		// Probe lookup retained for future Stage B use — see
+		// builder docstring for why the result is dropped today.
+		_ = status.Status(u.URL)
 		out.Upstreams = append(out.Upstreams, Upstream{
-			ID:            fmt.Sprintf("%s-%d", r.ID, i),
-			URL:           u.URL,
-			Status:        status.Status(u.URL),
-			ReqPerSec:     agg.ReqPerSec * share,
-			P99LatencyMs:  agg.P95LatencyMs,
-			FairnessRatio: share,
+			ID:                    fmt.Sprintf("%s-%d", r.ID, i),
+			URL:                   u.URL,
+			Status:                StatusUnknown,
+			HealthCheckConfigured: r.HealthCheck.Enabled,
+			ReqPerSec:             agg.ReqPerSec * share,
+			P99LatencyMs:          agg.P95LatencyMs,
+			FairnessRatio:         share,
 		})
 	}
 	return out

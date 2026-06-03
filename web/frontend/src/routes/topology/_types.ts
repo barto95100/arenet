@@ -57,6 +57,12 @@ export interface TopologyRoute {
         rateLimited?: boolean;
         mtlsRequired?: boolean;
 
+        // True when storage.Route.HealthCheck.Enabled is true on
+        // the backend. Drives the per-upstream shield indicator
+        // (#R-TOPO-health-coherence v1.1.0). NOT optional — the
+        // backend always emits the field.
+        hasHealthCheck: boolean;
+
         clusterLabel?: string;
 }
 
@@ -65,6 +71,12 @@ export interface TopologyUpstream {
         url: string;
         runtime?: string;
         status: HealthStatus;
+
+        // Mirrors the parent route's hasHealthCheck — denormalised
+        // by the backend so the UpstreamNode component doesn't have
+        // to thread the route in. True ⇒ render a small "monitored"
+        // shield next to the URL.
+        healthCheckConfigured: boolean;
 
         reqPerSec: number;
         p99LatencyMs: number;
@@ -110,18 +122,65 @@ export type CaddyHubNodeData = {
         chips: ('WAF' | 'RATE' | 'mTLS' | 'L7-LB')[];
 } & Record<string, unknown>;
 
-/** Vue B col 3 — full per-route cluster card with fairness bars,
- *  LB policy, health ratio, and optional SPOF warning. The richest
- *  node type in the topology. */
+/** Vue B col 3 — group container for a route's upstream pool.
+ *
+ *  Sub-flow restructure (2026-06-03): the cluster used to render
+ *  one card with N upstream rows AND a single inbound edge from
+ *  caddy-hub. The N edges critique called this out — the operator
+ *  couldn't see per-upstream flow shape. We now emit:
+ *    - one BackendClusterNode group (this payload, no upstreams[])
+ *    - N UpstreamNode children with parentId + extent: 'parent'
+ *    - N edges from caddy-hub to each child
+ *
+ *  The cluster node itself only carries header metadata; the
+ *  per-upstream rendering moved to UpstreamNode. `lbPolicy` is
+ *  still surfaced in the header but hidden by the component when
+ *  totalCount === 1 (round_robin over 1 target is meaningless). */
 export type BackendClusterNodeData = {
         kind: 'backend-cluster';
         clusterLabel: string;
         runtime?: string;
         lbPolicy: LBPolicy;
-        upstreams: TopologyUpstream[];
         healthyCount: number;
+        // Strictly status === 'unhealthy'. Distinct from
+        // `totalCount - healthyCount` because 'unknown' is its own
+        // third state in v1.1.0 — see Critique 9 / Regression A.
+        unhealthyCount: number;
         totalCount: number;
+        // Mirrors the parent route's hasHealthCheck. Drives the
+        // header's "monitored" framing: when false we can't talk
+        // about "sains" because nothing is being probed.
+        hasHealthCheck: boolean;
         warning?: string;
+} & Record<string, unknown>;
+
+/** Vue B col 3 child — one upstream inside a cluster group.
+ *
+ *  Rendered as a sibling of the cluster header in Svelte Flow's
+ *  sub-flow layout (parentId points at `cluster-${routeId}` on
+ *  the Node, NOT on this data payload). Carries everything the
+ *  presentation needs from the source TopologyUpstream plus a
+ *  pre-computed flow tier — the parent's data no longer holds an
+ *  upstreams[] array, so each child must be self-sufficient. */
+export type UpstreamNodeData = {
+        kind: 'upstream';
+        upstreamId: string;
+        url: string;
+        runtime?: string;
+        status: HealthStatus;
+        healthCheckConfigured: boolean;
+        // Whether the original url started with https/h2 (or any
+        // TLS-bearing scheme). Surfaced as a tiny lock glyph next to
+        // the displayDisplayed URL so we don't lose the TLS info when
+        // stripping the scheme.
+        wasHttps: boolean;
+        // Url with scheme stripped for display (http://, https://,
+        // h2://, h2c:// removed). The original is preserved on `url`
+        // for tooltips and any future copy-to-clipboard action.
+        displayUrl: string;
+        reqPerSec: number;
+        p99LatencyMs: number;
+        fairnessRatio: number;           // 0-1
 } & Record<string, unknown>;
 
 /** Vue A col 2 — a simplified upstream service node. Less detail
@@ -148,6 +207,7 @@ export type TopologyNodeData =
         | FQDNNodeData
         | CaddyHubNodeData
         | BackendClusterNodeData
+        | UpstreamNodeData
         | ServiceNodeData;
 
 // ---------------------------------------------------------------------------

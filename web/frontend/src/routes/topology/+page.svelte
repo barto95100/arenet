@@ -28,7 +28,7 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { SvelteFlow, Background, Controls, type NodeTypes, type EdgeTypes } from '@xyflow/svelte';
+	import { SvelteFlow, Background, Controls, useSvelteFlow, type NodeTypes, type EdgeTypes, type Node, type Edge } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 
 	import { buildProtocolGraph, buildServiceToBackendGraph } from './_layout';
@@ -42,12 +42,16 @@
 	import CaddyHubNode from './_components/nodes/CaddyHubNode.svelte';
 	import ServiceNode from './_components/nodes/ServiceNode.svelte';
 	import BackendClusterNode from './_components/nodes/BackendClusterNode.svelte';
+	import UpstreamNode from './_components/nodes/UpstreamNode.svelte';
 	import AnimatedFlowEdge from './_components/edges/AnimatedFlowEdge.svelte';
+	import FlowApiBridge from './_components/FlowApiBridge.svelte';
 
 	// Page-level UI
 	import ViewToggle from './_components/ViewToggle.svelte';
 	import TopologySidebar from './_components/TopologySidebar.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+
+	type FlowApi = ReturnType<typeof useSvelteFlow<Node, Edge>>;
 
 	const nodeTypes: NodeTypes = {
 		'entry-point': EntryPointNode,
@@ -56,6 +60,7 @@
 		caddy: CaddyHubNode,
 		service: ServiceNode,
 		'backend-cluster': BackendClusterNode,
+		upstream: UpstreamNode,
 	};
 
 	const edgeTypes: EdgeTypes = {
@@ -84,55 +89,137 @@
 
 	let closeStream: (() => void) | null = null;
 
-	// Drag-preservation across live ticks. The layout builders emit
-	// stable node ids per route, but each rebuild also emits FRESH
-	// layout positions — without intervention, a user who drags a
-	// node would see it snap back to the laid-out position on the
-	// next WS tick. The fix: capture the current per-id position
-	// just before the rebuild, then override the new nodes' positions
-	// where the id matches.
+	// Flow API captured from inside <SvelteFlow> via FlowApiBridge.
+	// Null until the bridge mounts (first frame after <SvelteFlow>
+	// renders). rebuildGraph's tick path requires it for the
+	// updateNodeData / updateEdge calls — if it's still null on a
+	// tick (extremely brief window during initial mount) we fall
+	// back to the array-reassignment path, which works but remounts.
+	let flowApi: FlowApi | null = null;
+
+	// Live-tick reconciliation.
 	//
-	// `preservePositions: false` is used by switchView to opt out
-	// of the preservation — switching layouts is an intentional
-	// re-layout, the user expects new positions.
+	// Three invariants matter on every WS tick:
+	//   1. User-dragged node positions must survive the rebuild
+	//      (F1 — operator browser feedback 2026-06-03).
+	//   2. Custom edge components (AnimatedFlowEdge) must NOT
+	//      remount, so their SMIL <animateMotion> animations
+	//      don't snap back to t=0 every tick (C4 — sawtooth
+	//      jitter, 2026-06-03).
+	//   3. Custom node components (UpstreamNode etc.) must
+	//      observe live data updates — not just remain mounted.
+	//      Regression B (2026-06-03): the earlier in-place
+	//      `prev.data = fresh.data` mutation kept the wrapper
+	//      mounted (good for SMIL continuity) but didn't cross
+	//      the reactivity boundary into children that destructured
+	//      `data` via $props(), so per-upstream req/s went stale.
+	//
+	// Solution: use Svelte Flow's first-class updateNodeData /
+	// updateEdge APIs for ids present in both old and new graphs.
+	// These mutate the internal store in a way the framework
+	// observes AND propagate the new data into the rendered child
+	// component without unmounting it. The same call also keeps
+	// edge identity stable, so AnimatedFlowEdge's SMIL continues
+	// uninterrupted.
+	//
+	// For ids that appear or disappear, we still need an array
+	// reassignment (the API doesn't have a single add/remove
+	// primitive that preserves the others' identity in one call),
+	// so we do a partial reassignment only when the id set
+	// actually changes between ticks.
+	//
+	// `preservePositions: false` (used by switchView) opts out of
+	// position preservation — switching layouts is an intentional
+	// re-layout. We then do a full array reassignment so the
+	// builder's new positions land everywhere.
 	function rebuildGraph(
 		routesIn: TopologyRoute[],
 		view: TopologyViewMode,
 		preservePositions = true,
 	): void {
-		// Snapshot the current (potentially user-dragged) positions
-		// keyed by node id. We read from `nodes` which is the live
-		// $state.raw — Svelte Flow's `bind:nodes` writes drag deltas
-		// back here, so this captures the latest user state.
-		let savedPositions: Map<string, { x: number; y: number }> | null = null;
-		if (preservePositions && nodes.length > 0) {
-			savedPositions = new Map();
-			for (const n of nodes) {
-				if (n.position) {
-					savedPositions.set(n.id, { x: n.position.x, y: n.position.y });
-				}
-			}
-		}
-
 		const graph = view === 'protocol'
 			? buildProtocolGraph(routesIn)
 			: buildServiceToBackendGraph(routesIn);
 
-		// Re-apply user positions where the id survived from the
-		// previous rebuild. New ids (a route added since last tick)
-		// keep the builder's laid-out position; removed ids simply
-		// drop out — nothing to restore.
-		if (savedPositions !== null) {
-			for (const n of graph.nodes) {
-				const saved = savedPositions.get(n.id);
-				if (saved) {
-					n.position = saved;
-				}
-			}
+		// First call or view switch: reassign the full arrays. No
+		// existing state to reconcile against. The builder's
+		// positions are the truth.
+		if (!preservePositions || nodes.length === 0 || flowApi === null) {
+			nodes = graph.nodes;
+			edges = graph.edges;
+			return;
 		}
 
-		nodes = graph.nodes;
+		// Compare id sets. If add or remove happened, fall back to
+		// array reassignment with position preservation (the F1
+		// pattern from before the API rewrite). The data update
+		// for surviving nodes still goes through updateNodeData
+		// so child components react.
+		const prevNodeIds = new Set<string>();
+		for (const n of nodes) prevNodeIds.add(n.id);
+		const nextNodeIds = new Set<string>();
+		for (const n of graph.nodes) nextNodeIds.add(n.id);
+		const prevEdgeIds = new Set<string>();
+		for (const e of edges) prevEdgeIds.add(e.id);
+		const nextEdgeIds = new Set<string>();
+		for (const e of graph.edges) nextEdgeIds.add(e.id);
+
+		const idsetEqual = (a: Set<string>, b: Set<string>): boolean => {
+			if (a.size !== b.size) return false;
+			for (const x of a) if (!b.has(x)) return false;
+			return true;
+		};
+
+		const nodesIdsetEqual = idsetEqual(prevNodeIds, nextNodeIds);
+		const edgesIdsetEqual = idsetEqual(prevEdgeIds, nextEdgeIds);
+
+		if (nodesIdsetEqual && edgesIdsetEqual) {
+			// Fast path: same id sets. Push data changes through
+			// Svelte Flow's first-class APIs so children re-render
+			// without the wrapper being unmounted.
+			for (const fresh of graph.nodes) {
+				flowApi.updateNodeData(fresh.id, fresh.data, { replace: true });
+			}
+			for (const fresh of graph.edges) {
+				flowApi.updateEdge(fresh.id, { data: fresh.data });
+			}
+			return;
+		}
+
+		// Mixed: some ids added, some removed. Preserve drag
+		// positions for ids that survived; emit fresh entries for
+		// new ones; drop removed ones implicitly via the new
+		// array. New entries land via array reassignment (Svelte
+		// Flow handles their initial mount); survivors update via
+		// updateNodeData *after* the reassignment to ensure their
+		// child components see the new data prop too.
+		const prevPositionsById = new Map<string, { x: number; y: number }>();
+		for (const n of nodes) {
+			if (n.position) prevPositionsById.set(n.id, { x: n.position.x, y: n.position.y });
+		}
+		const nextNodes = graph.nodes.map((fresh) => {
+			const savedPos = prevPositionsById.get(fresh.id);
+			if (savedPos) {
+				return { ...fresh, position: savedPos };
+			}
+			return fresh;
+		});
+		nodes = nextNodes;
 		edges = graph.edges;
+
+		// Reactivity flush then data push for survivors. Without
+		// this, ids that survived the membership change would
+		// receive their fresh data via the array reassignment AND
+		// the child render would unmount-remount because the
+		// reassignment replaced the node object refs. The
+		// updateNodeData call is idempotent — pushing the same
+		// data we just put in the array — but it nudges the
+		// framework into the no-remount data-only update path.
+		for (const fresh of graph.nodes) {
+			if (prevNodeIds.has(fresh.id)) {
+				flowApi.updateNodeData(fresh.id, fresh.data, { replace: true });
+			}
+		}
 	}
 
 	function switchView(view: TopologyViewMode): void {
@@ -259,6 +346,7 @@
 					>
 						<Background />
 						<Controls />
+						<FlowApiBridge onReady={(api) => (flowApi = api)} />
 					</SvelteFlow>
 				</div>
 			</div>

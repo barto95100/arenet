@@ -3,42 +3,67 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  BackendClusterNode — the richest custom node in the topology
-  canvas. Renders a cluster of upstreams behind one route, with:
+  BackendClusterNode — sub-flow group container for a route's
+  upstream pool.
 
-    - Header chip: cluster name + LB policy + health ratio
-    - One row per upstream: address, runtime, p99, req/s, fairness bar
-    - Optional warning footer (SPOF, partial outage, etc.)
+  Restructured 2026-06-03 (#R-TOPO-v2-phase2 C6). Previously this
+  node rendered N upstream rows internally and the cluster received
+  a single inbound edge from caddy-hub. Now this is purely a
+  decorative group: the upstream rows are real Svelte Flow children
+  (UpstreamNode), each with its own edge from the hub. The cluster
+  payload here only carries header metadata + an optional warning.
 
-  The single source of truth for what to render is the
-  BackendClusterNodeData payload built in layout.ts. This component
-  is pure presentation: no fetches, no stores, no side effects.
+  Three operator-feedback driven changes:
+   - C1: removed the "Pas de cluster — ≥ 2 réplicas" warning. Single-
+         replica is a legitimate homelab pattern; the header already
+         shows "1 sain / 1" unambiguously.
+   - C2: LB policy chip hides when totalCount === 1 (round_robin
+         over 1 target is semantically meaningless).
+   - C3: the group container holds the children (parentId+extent).
 -->
 <script lang="ts">
-        import { Handle, Position, type NodeProps } from '@xyflow/svelte';
-        import type {
-                BackendClusterNodeData,
-                HealthStatus,
-                LBPolicy,
-                TopologyUpstream,
-        } from '../../_types';
+        import { type NodeProps } from '@xyflow/svelte';
+        import type { BackendClusterNodeData, LBPolicy } from '../../_types';
 
-        // Svelte Flow passes the node payload as `data`. We narrow
-        // the union to BackendClusterNodeData here for type-safe field
-        // access — layout.ts is the only place that constructs these
-        // and tags them via `type: 'backend-cluster'`.
         let { data }: NodeProps & { data: BackendClusterNodeData } = $props();
 
-        // Cluster-level health state, drives header color.
         let clusterState = $derived(deriveClusterState(data));
+        let showLBPolicy = $derived(data.totalCount > 1);
+        // Header line. Three-state aware (Regression A, 2026-06-03):
+        //   - no upstreams              "0 upstream"
+        //   - all unknown (v1.1.0 norm) "{N} upstream(s)" (no health
+        //                               qualifier — we don't know)
+        //   - else                      "{healthy} sains / {total}"
+        // The shield glyph in UpstreamNode carries the "monitored"
+        // signal; the cluster header doesn't need to repeat it.
+        let headerCountLine = $derived(formatHeaderCountLine(data));
 
-        function deriveClusterState(d: BackendClusterNodeData): 'healthy' | 'warn' | 'bad' {
-                if (d.healthyCount === 0) return 'bad';
-                if (d.healthyCount < d.totalCount) return 'warn';
-                // Warning string can also force a 'warn' tint even when
-                // all upstreams are healthy (e.g. SPOF on single replica).
+        function deriveClusterState(d: BackendClusterNodeData): 'healthy' | 'warn' | 'bad' | 'neutral' {
+                if (d.totalCount === 0) return 'bad';
+                // Strictly-unhealthy upstreams drive the bad/warn states.
+                // 'unknown' is now neutral — no green lie, no red panic.
+                if (d.unhealthyCount === d.totalCount) return 'bad';
+                if (d.unhealthyCount > 0) return 'warn';
                 if (d.warning) return 'warn';
-                return 'healthy';
+                // All upstreams healthy → green. All upstreams unknown
+                // (the v1.1.0 reality until Stage B probes land) →
+                // neutral gray; the operator can still tell the cluster
+                // is configured but shouldn't read it as "validated OK".
+                if (d.healthyCount === d.totalCount) return 'healthy';
+                return 'neutral';
+        }
+
+        function formatHeaderCountLine(d: BackendClusterNodeData): string {
+                if (d.totalCount === 0) return '0 upstream';
+                // v1.1.0 norm: every upstream reports unknown. Drop the
+                // "sains" qualifier entirely — claiming X-of-Y sains
+                // when X is always 0 was the second half of Regression A
+                // ("0 SAINS / 1" on every single-upstream route).
+                const allUnknown = d.healthyCount === 0 && d.unhealthyCount === 0;
+                if (allUnknown) {
+                        return d.totalCount === 1 ? '1 upstream' : `${d.totalCount} upstreams`;
+                }
+                return `${d.healthyCount} sains / ${d.totalCount}`;
         }
 
         function formatLBPolicy(p: LBPolicy): string {
@@ -57,30 +82,16 @@
                                 return 'FIRST';
                 }
         }
-
-        function statusDotClass(s: HealthStatus): string {
-                return `dot dot-${s}`;
-        }
-
-        function formatRate(rps: number): string {
-                if (rps >= 1000) return `${(rps / 1000).toFixed(1)}k r/s`;
-                return `${Math.round(rps)} r/s`;
-        }
-
-        // Stable id helper for the fairness bar inner — purely cosmetic,
-        // lets CSS animations / future micro-interactions key on a real
-        // DOM id without inventing one inline.
-        function upstreamRowId(u: TopologyUpstream): string {
-                return `up-${u.id}`;
-        }
 </script>
 
 <div class="cluster-node" data-state={clusterState}>
-        <!-- Inbound handle (Caddy -> cluster). We only declare the
-             target side; clusters never source flow in our topology. -->
-        <Handle type="target" position={Position.Left} />
-
-        <!-- Header -->
+        <!-- No <Handle> on the parent. Critique 6 (2026-06-03): the
+             orphan target handle was visually confusing — it implied
+             "connect here" but no edge ever targets the parent now
+             that children are real nodes. The empty-upstreams
+             fallback edge case (route with 0 upstreams) is handled
+             in _layout.ts by emitting a node-level target without
+             relying on a custom handle. -->
         <header class="cluster-header">
                 <div class="cluster-title">
                         <span class="cluster-label">{data.clusterLabel}</span>
@@ -89,37 +100,14 @@
                         {/if}
                 </div>
                 <div class="cluster-meta">
-                        <span class="lb-policy">{formatLBPolicy(data.lbPolicy)}</span>
-                        <span class="sep">·</span>
-                        <span class="health-ratio">
-                                {data.healthyCount} sains / {data.totalCount}
-                        </span>
+                        {#if showLBPolicy}
+                                <span class="lb-policy">{formatLBPolicy(data.lbPolicy)}</span>
+                                <span class="sep">·</span>
+                        {/if}
+                        <span class="health-ratio">{headerCountLine}</span>
                 </div>
         </header>
 
-        <!-- Upstream rows -->
-        <ul class="upstream-list">
-                {#each data.upstreams as upstream (upstream.id)}
-                        <li class="upstream-row" id={upstreamRowId(upstream)} data-status={upstream.status}>
-                                <div class="up-line-1">
-                                        <span class={statusDotClass(upstream.status)} aria-hidden="true"></span>
-                                        <span class="up-url">{upstream.url}</span>
-                                        <span class="up-p99">p99 {Math.round(upstream.p99LatencyMs)} ms</span>
-                                </div>
-                                <div class="up-line-2">
-                                        <div class="fairness-bar" aria-label="Fairness {Math.round(upstream.fairnessRatio * 100)}%">
-                                                <div
-                                                        class="fairness-fill"
-                                                        style:width="{Math.round(upstream.fairnessRatio * 100)}%"
-                                                ></div>
-                                        </div>
-                                        <span class="up-rps">{formatRate(upstream.reqPerSec)}</span>
-                                </div>
-                        </li>
-                {/each}
-        </ul>
-
-        <!-- Optional warning footer -->
         {#if data.warning}
                 <footer class="cluster-warning">
                         <svg class="warn-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
@@ -134,19 +122,22 @@
 
 <style>
         .cluster-node {
-                width: 260px;
-                background: var(--surface, oklch(19% 0.006 250));
+                width: 100%;
+                height: 100%;
+                box-sizing: border-box;
+                background: var(--surface-2, oklch(22% 0.007 250));
                 border: 1px solid var(--border, oklch(28% 0.009 250));
                 border-radius: 8px;
-                overflow: hidden;
                 font-family: var(--font-display, system-ui, sans-serif);
                 color: var(--fg, oklch(96% 0.005 250));
                 font-size: 12px;
                 box-shadow: 0 1px 0 rgb(0 0 0 / 0.4);
+                /* Children paint on top of us — explicit relative
+                   positioning so the group footer (warning) stays
+                   below the upstream cards. */
+                position: relative;
         }
 
-        /* State-dependent left border accent — quickly scannable
-           when many clusters share the column. */
         .cluster-node[data-state='healthy'] {
                 border-left: 2px solid var(--accent, oklch(68% 0.21 255));
         }
@@ -156,12 +147,20 @@
         .cluster-node[data-state='bad'] {
                 border-left: 2px solid var(--bad, oklch(66% 0.20 25));
         }
+        /* Three-state aware accent (Regression A): all-unknown clusters
+           — the v1.1.0 default — render with a neutral gray accent.
+           Distinct from healthy (blue) so the operator doesn't read
+           green into an unverified state. */
+        .cluster-node[data-state='neutral'] {
+                border-left: 2px solid var(--fg-dim, oklch(54% 0.011 250));
+        }
 
-        /* ---------- Header ---------- */
         .cluster-header {
                 padding: 10px 12px 8px 12px;
                 border-bottom: 1px solid var(--border, oklch(28% 0.009 250));
                 background: var(--surface-2, oklch(22% 0.007 250));
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
         }
 
         .cluster-title {
@@ -196,123 +195,22 @@
                 color: var(--fg-dim, oklch(54% 0.011 250));
         }
 
-        /* ---------- Upstream rows ---------- */
-        .upstream-list {
-                list-style: none;
-                margin: 0;
-                padding: 4px 0;
-        }
-
-        .upstream-row {
-                padding: 7px 12px;
-                display: flex;
-                flex-direction: column;
-                gap: 4px;
-        }
-
-        .upstream-row + .upstream-row {
-                border-top: 1px solid var(--border, oklch(28% 0.009 250));
-        }
-
-        .up-line-1 {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                font-family: var(--font-mono, ui-monospace, monospace);
-                font-size: 11.5px;
-        }
-
-        .up-line-2 {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-        }
-
-        .up-url {
-                flex: 1 1 auto;
-                color: var(--fg, oklch(96% 0.005 250));
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-        }
-
-        .up-p99 {
-                flex: 0 0 auto;
-                color: var(--fg-muted, oklch(68% 0.012 250));
-                font-size: 10.5px;
-        }
-
-        .up-rps {
-                flex: 0 0 auto;
-                font-family: var(--font-mono, ui-monospace, monospace);
-                font-size: 10.5px;
-                color: var(--fg-muted, oklch(68% 0.012 250));
-                min-width: 56px;
-                text-align: right;
-        }
-
-        /* ---------- Status dot ---------- */
-        .dot {
-                flex: 0 0 auto;
-                width: 7px;
-                height: 7px;
-                border-radius: 50%;
-                background: var(--fg-dim, oklch(54% 0.011 250));
-        }
-        .dot-healthy {
-                background: var(--ok, oklch(72% 0.16 150));
-                box-shadow: 0 0 4px oklch(72% 0.16 150 / 0.55);
-        }
-        .dot-unhealthy {
-                background: var(--bad, oklch(66% 0.20 25));
-                box-shadow: 0 0 4px oklch(66% 0.20 25 / 0.6);
-        }
-        .dot-draining {
-                background: var(--warn, oklch(80% 0.14 85));
-        }
-        .dot-unknown {
-                background: var(--fg-dim, oklch(54% 0.011 250));
-        }
-
-        /* ---------- Fairness bar ---------- */
-        .fairness-bar {
-                flex: 1 1 auto;
-                height: 4px;
-                background: var(--border, oklch(28% 0.009 250));
-                border-radius: 2px;
-                overflow: hidden;
-        }
-
-        .fairness-fill {
-                height: 100%;
-                background: var(--accent, oklch(68% 0.21 255));
-                border-radius: 2px;
-                transition: width 0.6s ease;
-        }
-
-        /* Color the fill by the row status — a draining or unhealthy
-           upstream's share is more striking when it's not blue. */
-        .upstream-row[data-status='draining'] .fairness-fill {
-                background: var(--warn, oklch(80% 0.14 85));
-        }
-        .upstream-row[data-status='unhealthy'] .fairness-fill {
-                background: var(--bad, oklch(66% 0.20 25));
-        }
-        .upstream-row[data-status='unknown'] .fairness-fill {
-                background: var(--fg-dim, oklch(54% 0.011 250));
-        }
-
-        /* ---------- Warning footer ---------- */
         .cluster-warning {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                right: 0;
                 display: flex;
                 align-items: flex-start;
                 gap: 6px;
                 padding: 8px 12px;
                 border-top: 1px solid var(--border, oklch(28% 0.009 250));
-                background: oklch(22% 0.007 250 / 0.5);
+                background: oklch(22% 0.007 250 / 0.65);
                 color: var(--warn, oklch(80% 0.14 85));
                 font-size: 11px;
                 line-height: 1.4;
+                border-bottom-left-radius: 8px;
+                border-bottom-right-radius: 8px;
         }
 
         .cluster-warning .warn-ico {
@@ -322,16 +220,13 @@
                 margin-top: 1px;
         }
 
-        /* Bad-state warning has stronger color */
         .cluster-node[data-state='bad'] .cluster-warning {
                 color: var(--bad, oklch(66% 0.20 25));
         }
 
-        /* Svelte Flow injects its own .svelte-flow__node wrapper around
-           our component. We don't need its default padding/box-shadow —
-           override below. The :global selector targets the wrapper from
-           inside our scoped component, which is the documented pattern
-           in the Svelte Flow custom-nodes guide. */
+        /* Svelte Flow wrapper override — same pattern as UpstreamNode.
+           Without this, the wrapper's default padding/border would
+           double up with our .cluster-node visual frame. */
         :global(.svelte-flow__node-backend-cluster) {
                 padding: 0;
                 background: transparent;

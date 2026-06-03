@@ -31,6 +31,7 @@ import type {
         TopologyNode,
         TopologyRoute,
         TopologyUpstream,
+        UpstreamNodeData,
 } from './_types';
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,42 @@ const COL_X_PROTOCOL = {
 } as const;
 
 const ROW_SPACING_Y = 150;
+
+/** Sub-flow cluster geometry (Vue B col 3). Children are positioned
+ *  relative to the cluster group node — so x/y here is local. The
+ *  group's width/height must accommodate header + N stacked upstream
+ *  cards with the configured padding. Children stack vertically. */
+// Cluster sized to fit "host.example.local:8443" (~22 chars at the
+// upstream card's monospaced font) without truncation, plus the
+// fairness bar + r/s readout below. Bumped from 260 → 300 in C6
+// after the operator flagged mid-IP truncation of "http://192.168…"
+// (Critique 7). Both views' col 3 is rightmost so the widening
+// only pushes the canvas a bit further right — no other column
+// needs to move.
+const CLUSTER_WIDTH = 300;
+const CLUSTER_HEADER_HEIGHT = 56;
+const CLUSTER_PADDING_TOP = CLUSTER_HEADER_HEIGHT + 4;
+const CLUSTER_PADDING_BOTTOM = 8;
+const CLUSTER_WARNING_FOOTER_HEIGHT = 34;
+const UPSTREAM_HEIGHT = 56;
+const UPSTREAM_GAP_Y = 6;
+const UPSTREAM_X_INSET = 8;          // inset from cluster left edge
+const UPSTREAM_INNER_WIDTH = CLUSTER_WIDTH - UPSTREAM_X_INSET * 2;
+
+/** Vertical extent occupied by N upstream cards (no padding). */
+function upstreamsBlockHeight(n: number): number {
+        if (n === 0) return 0;
+        return n * UPSTREAM_HEIGHT + (n - 1) * UPSTREAM_GAP_Y;
+}
+
+/** Total cluster group height for N upstream children. When a warning
+ *  is present, reserve extra bottom space so the absolute-positioned
+ *  warning footer in BackendClusterNode doesn't overlap the last
+ *  upstream card. */
+function clusterTotalHeight(n: number, hasWarning: boolean): number {
+        const base = CLUSTER_PADDING_TOP + upstreamsBlockHeight(n) + CLUSTER_PADDING_BOTTOM;
+        return hasWarning ? base + CLUSTER_WARNING_FOOTER_HEIGHT : base;
+}
 
 // ---------------------------------------------------------------------------
 // Hardcoded fixtures — Phase 1 only.
@@ -167,25 +204,74 @@ export function buildServiceToBackendGraph(routes: TopologyRoute[]): TopologyGra
         // Col 2 — Caddy hub
         nodes.push(buildCaddyNode(routes, COL_X_SERVICE.CADDY));
 
-        // Col 3 — Backend clusters
-        const clusterYs = computeStackYs(routes.length);
+        // Col 3 — Backend clusters as sub-flow groups + N upstream children
+        //
+        // Each cluster is a group node sized to fit its upstream pool.
+        // Cluster Ys are computed so the *centers* of variable-height
+        // groups remain evenly spaced (mirrors the protocol view's
+        // visual rhythm and prevents overlap when one route has many
+        // upstreams). Children carry parentId + extent: 'parent' so
+        // Svelte Flow keeps them inside the group when the user drags
+        // either the parent or a child.
+        const clusterWarnings = routes.map(deriveClusterWarning);
+        const clusterHeights = routes.map((r, i) =>
+                clusterTotalHeight(r.upstreams.length, clusterWarnings[i] !== undefined),
+        );
+        const clusterYs = computeStackYsForHeights(clusterHeights);
         routes.forEach((route, i) => {
                 const healthyCount = route.upstreams.filter((u) => u.status === 'healthy').length;
-                const data: BackendClusterNodeData = {
+                const unhealthyCount = route.upstreams.filter((u) => u.status === 'unhealthy').length;
+                const totalCount = route.upstreams.length;
+                const clusterId = `cluster-${route.id}`;
+                const clusterData: BackendClusterNodeData = {
                         kind: 'backend-cluster',
                         clusterLabel: route.clusterLabel ?? deriveClusterLabel(route.host),
                         runtime: dominantRuntime(route.upstreams),
                         lbPolicy: route.lbPolicy,
-                        upstreams: route.upstreams,
                         healthyCount,
-                        totalCount: route.upstreams.length,
-                        warning: deriveClusterWarning(route),
+                        unhealthyCount,
+                        totalCount,
+                        hasHealthCheck: route.hasHealthCheck,
+                        warning: clusterWarnings[i],
                 };
                 nodes.push({
-                        id: `cluster-${route.id}`,
+                        id: clusterId,
                         type: 'backend-cluster',
                         position: { x: COL_X_SERVICE.BACKEND, y: clusterYs[i] },
-                        data,
+                        width: CLUSTER_WIDTH,
+                        height: clusterHeights[i],
+                        data: clusterData,
+                });
+
+                // Upstream children. Position is local to the parent.
+                route.upstreams.forEach((upstream, ui) => {
+                        const childY = CLUSTER_PADDING_TOP + ui * (UPSTREAM_HEIGHT + UPSTREAM_GAP_Y);
+                        const { displayUrl, wasHttps } = formatUpstreamUrl(upstream.url);
+                        const childData: UpstreamNodeData = {
+                                kind: 'upstream',
+                                upstreamId: upstream.id,
+                                url: upstream.url,
+                                displayUrl,
+                                wasHttps,
+                                runtime: upstream.runtime,
+                                status: upstream.status,
+                                healthCheckConfigured: upstream.healthCheckConfigured,
+                                reqPerSec: upstream.reqPerSec,
+                                p99LatencyMs: upstream.p99LatencyMs,
+                                fairnessRatio: upstream.fairnessRatio,
+                        };
+                        nodes.push({
+                                id: `upstream-${route.id}-${upstream.id}`,
+                                type: 'upstream',
+                                position: { x: UPSTREAM_X_INSET, y: childY },
+                                width: UPSTREAM_INNER_WIDTH,
+                                height: UPSTREAM_HEIGHT,
+                                parentId: clusterId,
+                                extent: 'parent',
+                                draggable: false,
+                                selectable: false,
+                                data: childData,
+                        });
                 });
         });
 
@@ -215,13 +301,46 @@ export function buildServiceToBackendGraph(routes: TopologyRoute[]): TopologyGra
                 ));
         });
 
+        // Caddy hub -> each upstream child (N edges per cluster).
+        //
+        // Pre-restructure (one edge per cluster) hid per-upstream flow
+        // shape — the operator couldn't tell which replica was hot. We
+        // now emit one edge per upstream, carrying that upstream's
+        // own reqPerSec / p99 / a synthesized 5xx (route-level — we
+        // don't have per-upstream error rates yet, see Stage B).
+        //
+        // Falls back to a single edge to the cluster group when the
+        // route has 0 upstreams (degenerate route): the cluster node
+        // still renders its empty-pool warning, and the edge lets the
+        // operator see the route exists.
         routes.forEach((route) => {
-                edges.push(makeFlowEdge(
-                        `e-caddy-cluster-${route.id}`,
-                        'caddy-hub',
-                        `cluster-${route.id}`,
-                        routeFlowData(route),
-                ));
+                if (route.upstreams.length === 0) {
+                        edges.push(makeFlowEdge(
+                                `e-caddy-cluster-${route.id}`,
+                                'caddy-hub',
+                                `cluster-${route.id}`,
+                                routeFlowData(route),
+                        ));
+                        return;
+                }
+                route.upstreams.forEach((upstream) => {
+                        edges.push(makeFlowEdge(
+                                `e-caddy-upstream-${route.id}-${upstream.id}`,
+                                'caddy-hub',
+                                `upstream-${route.id}-${upstream.id}`,
+                                {
+                                        kind: 'flow',
+                                        reqPerSec: upstream.reqPerSec,
+                                        p99LatencyMs: upstream.p99LatencyMs,
+                                        // Per-upstream 5xx not yet instrumented (Stage B
+                                        // — #R-TOPO-upstream-metrics). Route-level rate is
+                                        // the closest signal: if the route is bleeding 5xx,
+                                        // surfacing it on every upstream edge is honest about
+                                        // the lack of per-replica visibility.
+                                        errorRate5xx: route.errorRate5xx,
+                                },
+                        ));
+                });
         });
 
         return { nodes, edges };
@@ -377,6 +496,28 @@ function computeStackYs(count: number): number[] {
         return Array.from({ length: count }, (_, i) => startY + i * ROW_SPACING_Y);
 }
 
+/** Stack variable-height blocks vertically with a constant gap
+ *  between them, centered around y=0. Returns the TOP-Y of each
+ *  block (Svelte Flow positions nodes by their top-left corner).
+ *
+ *  Used for backend clusters whose height grows with the number
+ *  of upstreams — a fixed-row stacker would overlap a tall
+ *  cluster with its neighbour. */
+function computeStackYsForHeights(heights: number[]): number[] {
+        if (heights.length === 0) return [];
+        const totalHeight =
+                heights.reduce((sum, h) => sum + h, 0) +
+                (heights.length - 1) * ROW_SPACING_Y;
+        const startTop = -totalHeight / 2;
+        const ys: number[] = [];
+        let cursor = startTop;
+        for (const h of heights) {
+                ys.push(cursor);
+                cursor += h + ROW_SPACING_Y;
+        }
+        return ys;
+}
+
 function deriveClusterLabel(host: string): string {
         const parts = host.split('.');
         return parts[0] || host;
@@ -398,10 +539,19 @@ function dominantRuntime(upstreams: TopologyUpstream[]): string | undefined {
 function deriveClusterWarning(route: TopologyRoute): string | undefined {
         const ups = route.upstreams;
         if (ups.length === 0) return 'Aucun upstream configuré';
-        const healthy = ups.filter((u) => u.status === 'healthy').length;
-        if (healthy === 0) return 'Tous les upstreams sont indisponibles';
-        if (ups.length === 1) return "Pas de cluster — recommandé d'ajouter ≥ 2 réplicas";
-        if (healthy < ups.length) return `${ups.length - healthy} upstream(s) hors-service`;
+        // Three-state aware (Regression A, 2026-06-03). v1.1.0 emits
+        // 'unknown' for every upstream — "no probe data yet, not the
+        // same as bad". The warning must fire ONLY for STRICTLY
+        // unhealthy upstreams. Previously this fired whenever
+        // healthyCount === 0, which is true in the all-unknown case
+        // too → red "Tous les upstreams sont indisponibles" on every
+        // route in the canvas.
+        const unhealthy = ups.filter((u) => u.status === 'unhealthy').length;
+        if (unhealthy === ups.length) return 'Tous les upstreams sont indisponibles';
+        if (unhealthy > 0) return `${unhealthy} upstream(s) hors-service`;
+        // All upstreams unknown OR all healthy OR a mix without any
+        // strictly-unhealthy → no warning. The header surfaces the
+        // count breakdown for those cases.
         return undefined;
 }
 
@@ -421,4 +571,26 @@ function aliasCountLabel(route: TopologyRoute): string {
 function formatRate(rps: number): string {
         if (rps >= 1000) return `${(rps / 1000).toFixed(1)} k req/s`;
         return `${Math.round(rps)} req/s`;
+}
+
+/** Strip http://, https://, h2://, h2c:// from an upstream URL for
+ *  display, and report whether the original used a TLS-bearing scheme.
+ *
+ *  The original full URL stays in TopologyUpstream.url for tooltips
+ *  and future copy actions; this just produces the short label for
+ *  the UpstreamNode card.
+ *
+ *  Why not surface scheme as a separate field from the backend? The
+ *  Caddy reverse_proxy upstream string is what the operator typed —
+ *  storage doesn't decompose it. Doing the split client-side avoids
+ *  a backend types change and keeps the wire shape backwards
+ *  compatible.
+ */
+const SCHEME_RX = /^(https?|h2c?):\/\//i;
+function formatUpstreamUrl(rawUrl: string): { displayUrl: string; wasHttps: boolean } {
+        const m = rawUrl.match(SCHEME_RX);
+        if (!m) return { displayUrl: rawUrl, wasHttps: false };
+        const scheme = m[1].toLowerCase();
+        const wasHttps = scheme === 'https' || scheme === 'h2';
+        return { displayUrl: rawUrl.slice(m[0].length), wasHttps };
 }
