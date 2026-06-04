@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/caddyserver/caddy/v2"
+	"go.uber.org/zap"
 )
 
 // CaddyModuleID is the identifier the Caddy registry uses for the
@@ -78,10 +79,19 @@ func getTracker() *HCStatusTracker {
 }
 
 // EventHandler is the caddyevents.Handler module that translates
-// "healthy"/"unhealthy" events into tracker state changes. Empty
-// struct: the module carries no JSON-configurable state — the
-// tracker reference comes from the package-level singleton.
-type EventHandler struct{}
+// "healthy"/"unhealthy" events into tracker state changes.
+//
+// Carries no JSON-configurable state. The tracker reference comes
+// from the package-level singleton; the logger is captured during
+// Provision (Nop fallback if Caddy hands us nil) so future debug
+// emission can be re-enabled without restructuring the module.
+// Keeping the logger field even when we don't emit at runtime
+// pays the cost once (single field, set in Provision) and avoids
+// re-dipping into Caddy's global logger any time we DO want to
+// log — operator-runnable diagnostics are one line away.
+type EventHandler struct {
+	logger *zap.Logger
+}
 
 // CaddyModule satisfies caddy.Module so RegisterModule accepts us.
 func (EventHandler) CaddyModule() caddy.ModuleInfo {
@@ -91,11 +101,20 @@ func (EventHandler) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-// Provision is a no-op for this handler — we have nothing to set
-// up that depends on the Caddy context. The tracker singleton is
-// installed by main before Caddy ever loads its config, so by the
-// time Provision runs the reference is already there.
-func (EventHandler) Provision(_ caddy.Context) error {
+// Provision captures the Caddy-context logger for future
+// diagnostics. The tracker singleton is installed by main before
+// caddy.Load runs, so it's reliably non-nil by the time Provision
+// fires; we don't surface that here, but a future debug pass can
+// log it without taking new dependencies.
+//
+// Returns nil unconditionally — Provision has no failure path the
+// caller can act on, and a failing Provision would tear down the
+// whole subscription.
+func (h *EventHandler) Provision(ctx caddy.Context) error {
+	h.logger = ctx.Logger()
+	if h.logger == nil {
+		h.logger = zap.NewNop()
+	}
 	return nil
 }
 
@@ -110,7 +129,7 @@ func (EventHandler) Provision(_ caddy.Context) error {
 // missing/malformed payload because event-source contracts can
 // shift with Caddy versions and we'd rather degrade silently
 // than spam Caddy's error log on every probe.
-func (EventHandler) Handle(_ context.Context, e caddy.Event) error {
+func (h *EventHandler) Handle(_ context.Context, e caddy.Event) error {
 	t := getTracker()
 	if t == nil {
 		return nil
@@ -125,9 +144,8 @@ func (EventHandler) Handle(_ context.Context, e caddy.Event) error {
 	case "unhealthy":
 		t.RecordUnhealthy(host)
 	default:
-		// Subscription should already filter on these two event
-		// names, but be defensive: an unexpected event name is a
-		// no-op, not an error.
+		// Subscription filters on these two names, but be defensive:
+		// an unexpected event name is a no-op, not an error.
 	}
 	return nil
 }
@@ -155,11 +173,16 @@ func extractHost(data map[string]any) (string, bool) {
 // optionally honored during Provision. We duplicate the
 // single-method Handler interface here to avoid taking an import
 // dependency on modules/caddyevents just for the guard.
+//
+// Both interfaces are satisfied by *EventHandler (pointer
+// receivers) since Provision mutates the struct (stores the
+// logger). Caddy's CaddyModule.New returns a *EventHandler, so
+// the runtime instance is always addressable.
 type handlerLike interface {
 	Handle(context.Context, caddy.Event) error
 }
 
 var (
-	_ handlerLike       = EventHandler{}
-	_ caddy.Provisioner = EventHandler{}
+	_ handlerLike       = (*EventHandler)(nil)
+	_ caddy.Provisioner = (*EventHandler)(nil)
 )

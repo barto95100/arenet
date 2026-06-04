@@ -59,7 +59,7 @@ func withFreshTracker(t *testing.T) *HCStatusTracker {
 
 func TestEventHandler_HealthyEventRecordsHealthy(t *testing.T) {
 	tr := withFreshTracker(t)
-	h := EventHandler{}
+	h := &EventHandler{}
 	ev := makeEvent(t, "healthy", map[string]any{"host": "10.0.0.1:80"})
 
 	if err := h.Handle(context.Background(), ev); err != nil {
@@ -72,7 +72,7 @@ func TestEventHandler_HealthyEventRecordsHealthy(t *testing.T) {
 
 func TestEventHandler_UnhealthyEventRecordsUnhealthy(t *testing.T) {
 	tr := withFreshTracker(t)
-	h := EventHandler{}
+	h := &EventHandler{}
 	ev := makeEvent(t, "unhealthy", map[string]any{"host": "10.0.0.2:80"})
 
 	if err := h.Handle(context.Background(), ev); err != nil {
@@ -85,7 +85,7 @@ func TestEventHandler_UnhealthyEventRecordsUnhealthy(t *testing.T) {
 
 func TestEventHandler_UnknownEventNameIsNoOp(t *testing.T) {
 	tr := withFreshTracker(t)
-	h := EventHandler{}
+	h := &EventHandler{}
 	// A future Caddy version might add new events on the same
 	// source. The handler must ignore them gracefully — no panic,
 	// no spurious state change.
@@ -101,7 +101,7 @@ func TestEventHandler_UnknownEventNameIsNoOp(t *testing.T) {
 
 func TestEventHandler_MissingHostFieldIsNoOp(t *testing.T) {
 	tr := withFreshTracker(t)
-	h := EventHandler{}
+	h := &EventHandler{}
 	ev := makeEvent(t, "healthy", map[string]any{"not-host": "x"})
 
 	if err := h.Handle(context.Background(), ev); err != nil {
@@ -116,7 +116,7 @@ func TestEventHandler_MissingHostFieldIsNoOp(t *testing.T) {
 
 func TestEventHandler_HostFieldNotStringIsNoOp(t *testing.T) {
 	tr := withFreshTracker(t)
-	h := EventHandler{}
+	h := &EventHandler{}
 	// Defensive: a payload-shape regression where "host" arrives
 	// as a non-string (int, struct, whatever) must not panic.
 	ev := makeEvent(t, "healthy", map[string]any{"host": 42})
@@ -134,7 +134,7 @@ func TestEventHandler_NilTrackerIsSafe(t *testing.T) {
 	SetTracker(nil)
 	t.Cleanup(func() { SetTracker(prev) })
 
-	h := EventHandler{}
+	h := &EventHandler{}
 	ev := makeEvent(t, "healthy", map[string]any{"host": "10.0.0.1:80"})
 	// Missing tracker singleton should be treated as "no consumer
 	// installed" — no error, no panic, just drop the event.
@@ -144,12 +144,18 @@ func TestEventHandler_NilTrackerIsSafe(t *testing.T) {
 }
 
 func TestEventHandler_ProvisionIsNoOp(t *testing.T) {
-	// Provision currently does nothing; this test pins the
-	// contract so a future change has to update both the test
-	// and the docstring intentionally.
-	h := EventHandler{}
+	// Provision captures the Caddy-context logger and emits a
+	// "provisioned" debug line. The test pins the no-error
+	// contract — future changes that introduce a failure mode
+	// must update both the test and the docstring intentionally.
+	h := &EventHandler{}
 	if err := h.Provision(caddy.Context{Context: context.Background()}); err != nil {
 		t.Errorf("Provision: got error %v, want nil", err)
+	}
+	// Logger should have been set (to a real or Nop zap.Logger);
+	// never nil after Provision so Handle can safely call it.
+	if h.logger == nil {
+		t.Error("Provision did not capture a logger (h.logger is nil)")
 	}
 }
 

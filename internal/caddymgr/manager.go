@@ -1150,11 +1150,23 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	// This block must be re-emitted on EVERY reload — same
 	// invariant as the crowdsec block above — or the subscription
 	// is silently torn down on the next caddy.Load call.
+	// "modules" filter targets the ORIGIN module ID — the module
+	// instance whose ctx called Emit. For active-health-checker
+	// events that's the reverse_proxy handler itself
+	// ("http.handlers.reverse_proxy"), not a fictitious
+	// ".health_checker" submodule. The events App's dispatch walks
+	// UP the module tree from the origin (caddyevents/app.go:269-
+	// 313), so a more-specific filter would never match: an
+	// origin "http.handlers.reverse_proxy" never reaches a
+	// subscription filtered on "http.handlers.reverse_proxy.x".
+	// First-debug-round of #R-TOPO-real-health-probe Stage B
+	// caught this when the operator saw all-unknown statuses
+	// despite probes firing — no events were reaching our handler.
 	apps["events"] = map[string]any{
 		"subscriptions": []map[string]any{
 			{
 				"events":  []string{"healthy", "unhealthy"},
-				"modules": []string{"http.handlers.reverse_proxy.health_checker"},
+				"modules": []string{"http.handlers.reverse_proxy"},
 				"handlers": []map[string]any{
 					{
 						"handler": "arenet_topology_hc",
