@@ -31,11 +31,31 @@
 #     races since Stage B (HCStatusTracker map access). -count=1
 #     disables Go's test cache so CI always exercises the live
 #     code path, never cached results.
+#
+#     Asymmetric step ordering: this job sets up Node and runs
+#     `npm ci` + `npm run build` BEFORE the Go steps. Reason:
+#     `web/embed.go:31` declares `//go:embed all:frontend/build`,
+#     so any Go compile pass — including `go vet` and `go test`'s
+#     test-binary build — fails fast with
+#     "pattern all:frontend/build: no matching files found" if
+#     web/frontend/build/ is absent. The directory is gitignored
+#     (and the .gitkeep referenced in web/embed.go's docstring
+#     isn't on disk in current main), so on a fresh checkout the
+#     frontend MUST be built first. release.yml handles the same
+#     constraint inside its multi-stage Dockerfile; this workflow
+#     handles it in-line.
+#
 #   - frontend-test runs `npm ci` + `npm run check` + `npm test` +
 #     `npm run build`. The build step is in the gate because a
 #     type that passes svelte-check can still break the bundled
 #     output — keeping the production build green guarantees
 #     no surprise at release tag time.
+#
+# Yes, the frontend gets built twice in CI (once in backend-test
+# to satisfy //go:embed, once in frontend-test as a real gate).
+# The cost is ~2-3 min per job in parallel — acceptable at this
+# scale. A single-build-job-with-artifact-upload pattern is more
+# complex and not justified.
 #
 # Caching: setup-go's built-in module cache + setup-node's npm
 # cache keyed on package-lock.json. No buildx cache needed — this
@@ -72,6 +92,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # //go:embed gate: web/embed.go pulls frontend/build into
+      # the binary, so Go's compile pass (which `go vet` and
+      # `go test` both trigger) fails immediately on a fresh
+      # checkout where build/ doesn't exist. Build the frontend
+      # first; the Go steps then have an embeddable directory.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/frontend/package-lock.json
+
+      - name: Build frontend (for //go:embed)
+        # `npm ci` is the install matching the lockfile;
+        # `npm run build` produces web/frontend/build/ which
+        # web/embed.go embeds. We do NOT run `npm run check` or
+        # `npm test` here — those are the frontend-test job's
+        # gates, kept distinct so a frontend-only failure
+        # surfaces in the frontend-test job rather than masking
+        # it in backend-test's logs.
+        working-directory: web/frontend
+        run: |
+          npm ci
+          npm run build
 
       - name: Setup Go
         uses: actions/setup-go@v5
