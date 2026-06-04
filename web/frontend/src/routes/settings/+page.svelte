@@ -38,10 +38,7 @@
 		type AutomationSource,
 		type DNSProviderOVH,
 		type ForwardAuthProvider,
-		type ForwardAuthProviderKind,
-		type ManagedDomain,
-		type ManagedDomainProvider,
-		type ManagedDomainRevertTo
+		type ForwardAuthProviderKind
 	} from '$lib/api/types';
 	import { ApiError } from '$lib/api/types';
 	import { listRoutes } from '$lib/api/client';
@@ -55,7 +52,6 @@
 	import Toggle from '$lib/components/Toggle.svelte';
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-	import Modal from '$lib/components/Modal.svelte';
 	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
 	import BackupSection from '$lib/components/BackupSection.svelte';
 
@@ -232,100 +228,14 @@
 		anyDNS01Route && dnsProvider !== null && !dnsProvider.configured
 	);
 
-	// --- SSL / Certificates section (Step O.4 / spec D9.B) -------------------
-
-	// Managed-domain list + the inline create form. Each managed
-	// domain emits ONE wildcard TLS policy at the proxy edge
-	// covering every route under `*.<apex>` (plus the bare apex
-	// when includeApex is true, spec D2.C).
-	let managedDomains = $state<ManagedDomain[]>([]);
-	let managedDomainsLoading = $state(true);
-	let managedDomainsLoadError = $state<string | null>(null);
-
-	let mdForm = $state({
-		apex: '',
-		includeApex: true,
-		provider: 'ovh' as ManagedDomainProvider
-	});
-	let mdSubmitting = $state(false);
-	let mdFormError = $state<string | null>(null);
-
-	// Delete-confirmation state. The operator picks the
-	// post-revert ACMEChallenge value (AC #21) before
-	// confirming — the dialog warns about HTTP-01 challenge
-	// burst for the "" / "http-01" choices.
-	let mdDeleteOpen = $state(false);
-	let mdDeleteApex = $state('');
-	let mdDeleteRevertTo = $state<ManagedDomainRevertTo>('');
-	let mdDeleteError = $state<string | null>(null);
-
-	async function loadManagedDomains(): Promise<void> {
-		managedDomainsLoading = true;
-		managedDomainsLoadError = null;
-		try {
-			const res = await settingsApi.listManagedDomains();
-			managedDomains = res.domains;
-		} catch (err) {
-			managedDomainsLoadError =
-				err instanceof Error ? err.message : 'Failed to load managed domains';
-		} finally {
-			managedDomainsLoading = false;
-		}
-	}
-
-	async function submitManagedDomain(): Promise<void> {
-		mdSubmitting = true;
-		mdFormError = null;
-		try {
-			await settingsApi.createManagedDomain({
-				apex: mdForm.apex.trim(),
-				includeApex: mdForm.includeApex,
-				provider: mdForm.provider
-			});
-			pushToast('Managed domain created', 'success');
-			mdForm.apex = '';
-			mdForm.includeApex = true;
-			await loadManagedDomains();
-		} catch (err) {
-			mdFormError = err instanceof ApiError ? err.message : String(err);
-		} finally {
-			mdSubmitting = false;
-		}
-	}
-
-	function openDeleteManagedDomain(apex: string): void {
-		mdDeleteApex = apex;
-		mdDeleteRevertTo = '';
-		mdDeleteError = null;
-		mdDeleteOpen = true;
-	}
-
-	async function confirmDeleteManagedDomain(): Promise<void> {
-		mdDeleteError = null;
-		try {
-			const res = await settingsApi.deleteManagedDomain(mdDeleteApex, mdDeleteRevertTo);
-			pushToast(
-				res.mutatedRoutes === 0
-					? 'Managed domain deleted'
-					: `Managed domain deleted (${res.mutatedRoutes} route${res.mutatedRoutes === 1 ? '' : 's'} reverted)`,
-				'success'
-			);
-			mdDeleteOpen = false;
-			await loadManagedDomains();
-		} catch (err) {
-			mdDeleteError = err instanceof ApiError ? err.message : String(err);
-		}
-	}
-
-	// SSL section is functional only when the DNS provider is
-	// configured (spec D4.A: wildcards EXIGENT DNS-01, no silent
-	// fallback). The banner is purely informational — the create
-	// form stays enabled so the operator can stage a managed
-	// domain before configuring DNS, and the backend will emit an
-	// internal-CA-issuer policy until DNS lands.
-	const sslDNSUnconfigured = $derived(
-		dnsProvider !== null && !dnsProvider.configured
-	);
+	// --- SSL / Certificates state — MIGRATED to /certs (#R-6 Pack A) ---------
+	//
+	// The managed-domain CRUD UI moved to web/frontend/src/routes/
+	// certs/+page.svelte. State, helpers, and the delete modal
+	// were lifted verbatim — see backlog-step-r.md §1 #R-6.
+	// The DNS provider OVH credentials section above remains in
+	// /settings since credentials are instance-level secrets,
+	// distinct from per-apex managed-domain declarations.
 
 	// --- Security Automation section (Step P.4 / spec D8.A) ------------------
 
@@ -606,7 +516,7 @@
 		void loadDNSProvider();
 		void loadDNS01Status();
 		void loadForwardAuthProviders();
-		void loadManagedDomains();
+		// loadManagedDomains() moved to /certs in #R-6 Pack A.
 		void loadAutomation();
 	});
 </script>
@@ -903,155 +813,14 @@
 		</Card>
 	</div>
 
-	<!-- ROW 2.6 — SSL / Certificates section.
-	     Step R.4.4.b: the full managed-domains CRUD is preserved
-	     here for v1.4 (operator continuity — the workflow's been
-	     in /settings since O.4 and moving the editing surface
-	     while also restyling would compound user disruption). The
-	     read-only summary at /certs links back to this section
-	     for editing. A future step can extract the full CRUD UI
-	     to /certs once the visual settles. -->
-	<div class="mb-6">
-		<Card padding="p-6">
-			<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
-				<div>
-					<h2 class="text-xl font-semibold">SSL / Certificates</h2>
-					<p class="text-xs text-muted mt-1">
-						Managed domains issue ONE wildcard cert per apex via DNS-01
-						(covers every sub-domain route under it). The read-only
-						summary lives at <a href="/certs" class="text-cyan hover:underline">/certs</a>.
-					</p>
-				</div>
-				{#if managedDomainsLoading}
-					<Spinner size="sm" />
-				{:else if managedDomains.length > 0}
-					<Badge variant="status-up"
-						>{managedDomains.length} managed domain{managedDomains.length === 1
-							? ''
-							: 's'}</Badge
-					>
-				{:else}
-					<Badge variant="neutral">None declared</Badge>
-				{/if}
-			</header>
-
-			{#if sslDNSUnconfigured}
-				<div
-					class="mb-4 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm"
-					role="alert"
-				>
-					<strong class="font-semibold">DNS provider unconfigured.</strong>
-					Wildcard issuance is disabled — covered routes will serve
-					self-signed certs from Caddy's internal CA until you configure
-					the DNS provider in the section above.
-				</div>
-			{/if}
-
-			{#if managedDomainsLoadError}
-				<p class="text-sm text-down mb-3" role="alert">
-					Failed to load managed domains: {managedDomainsLoadError}
-				</p>
-			{/if}
-
-			<!-- Existing managed domains list -->
-			{#if managedDomains.length > 0}
-				<ul class="mb-4 divide-y divide-border-subtle">
-					{#each managedDomains as md (md.apex)}
-						<li class="flex items-center justify-between py-2">
-							<div>
-								<div class="font-mono text-sm">
-									*.{md.apex}{#if md.includeApex}<span class="text-muted"
-											>, {md.apex}</span
-										>{/if}
-								</div>
-								<div class="text-xs text-muted">
-									Provider: {md.provider}
-									{#if md.includeApex}
-										· includes apex
-									{/if}
-								</div>
-							</div>
-							<Button
-								variant="ghost"
-								onclick={() => openDeleteManagedDomain(md.apex)}
-								aria-label={`Delete managed domain ${md.apex}`}
-							>
-								Delete
-							</Button>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-
-			<!-- Inline create form -->
-			<form
-				class="grid grid-cols-1 md:grid-cols-2 gap-4"
-				onsubmit={(e) => {
-					e.preventDefault();
-					void submitManagedDomain();
-				}}
-			>
-				<div class="md:col-span-2">
-					<label for="md-apex" class="text-sm font-medium text-secondary block mb-1"
-						>Apex domain</label
-					>
-					<input
-						id="md-apex"
-						type="text"
-						bind:value={mdForm.apex}
-						placeholder="example.com"
-						autocomplete="off"
-						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-					/>
-					<p class="text-xs text-muted mt-1">
-						Bare domain (no leading <code>*.</code>) — the wildcard is
-						implied. Issues a cert for <code>*.{mdForm.apex || 'example.com'}</code>.
-					</p>
-				</div>
-
-				<div>
-					<label for="md-provider" class="text-sm font-medium text-secondary block mb-1"
-						>DNS provider</label
-					>
-					<select
-						id="md-provider"
-						bind:value={mdForm.provider}
-						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-					>
-						<option value="ovh">OVH</option>
-					</select>
-				</div>
-
-				<div class="flex items-center gap-2 md:mt-7">
-					<input
-						id="md-include-apex"
-						type="checkbox"
-						bind:checked={mdForm.includeApex}
-					/>
-					<label for="md-include-apex" class="text-sm text-secondary"
-						>Include bare apex in cert SAN</label
-					>
-				</div>
-
-				{#if mdFormError}
-					<p class="text-sm text-down md:col-span-2" role="alert">{mdFormError}</p>
-				{/if}
-
-				<div class="md:col-span-2 flex justify-end">
-					<Button type="submit" disabled={mdSubmitting || mdForm.apex.trim() === ''}>
-						{mdSubmitting ? 'Declaring…' : 'Declare managed domain'}
-					</Button>
-				</div>
-			</form>
-
-			<p class="text-xs text-muted mt-4">
-				Declaring a managed domain marks every existing route under
-				<code>*.&lt;apex&gt;</code> as covered by the wildcard. The route's
-				per-route ACME selector is hidden in the route editor and the cert
-				is provisioned once for all covered sub-domains.
-			</p>
-		</Card>
-	</div>
+	<!-- ROW 2.6 — SSL / Certificates section migrated to /certs
+	     in #R-6 Pack A (2026-06-04). The managed-domains CRUD
+	     editor now lives at web/frontend/src/routes/certs/
+	     +page.svelte alongside the existing read-only catalog.
+	     The DNS provider OVH credentials section above stays
+	     here — credentials are an instance-level secret distinct
+	     from per-apex managed-domain declarations. See
+	     docs/backlog-step-r.md §1 #R-6 RESOLVED entry. -->
 
 	<!-- ROW 2.7 — Security Automation (Step P.4 / spec D8.A).
 	     New top-level Settings section, sibling of SSL /
@@ -1551,61 +1320,7 @@
 		onConfirm={confirmRevoke}
 	/>
 
-	<!-- Step O.4 — delete-managed-domain dialog with revertTo
-	     dropdown (AC #21). Built on Modal directly rather than
-	     ConfirmDialog so the operator picks the post-revert
-	     ACMEChallenge value before confirming. The warning text
-	     explicitly calls out the rate-limit risk of the "" /
-	     "http-01" choices when the operator has many covered
-	     routes. -->
-	{#if mdDeleteOpen}
-		<Modal
-			open={mdDeleteOpen}
-			title={`Delete managed domain ${mdDeleteApex}?`}
-			onClose={() => (mdDeleteOpen = false)}
-		>
-			{#snippet children()}
-				<p class="text-sm text-secondary mb-3">
-					Covered routes' ACMEChallenge will be reverted. Pick the
-					post-revert challenge value below.
-				</p>
-				<div class="mb-3">
-					<label
-						for="md-delete-revert-to"
-						class="text-sm font-medium text-secondary block mb-1"
-					>
-						Revert covered routes to
-					</label>
-					<select
-						id="md-delete-revert-to"
-						bind:value={mdDeleteRevertTo}
-						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-					>
-						<option value="">Default (HTTP-01 on next reload)</option>
-						<option value="http-01">Explicit HTTP-01</option>
-						<option value="dns-01">Explicit DNS-01</option>
-					</select>
-				</div>
-				{#if mdDeleteRevertTo === '' || mdDeleteRevertTo === 'http-01'}
-					<p
-						class="text-sm text-warn rounded border border-warn/40 bg-warn/10 px-3 py-2"
-						role="alert"
-					>
-						<strong>Heads up.</strong> Each covered route will request its own HTTP-01
-						cert on the next reload. Many routes on one apex may hit Let's
-						Encrypt's per-domain rate limit (50 certs / week).
-					</p>
-				{/if}
-				{#if mdDeleteError}
-					<p class="text-sm text-down mt-3" role="alert">{mdDeleteError}</p>
-				{/if}
-			{/snippet}
-			{#snippet footer()}
-				<Button variant="ghost" onclick={() => (mdDeleteOpen = false)}>Cancel</Button>
-				<Button variant="danger" onclick={() => void confirmDeleteManagedDomain()}
-					>Delete</Button
-				>
-			{/snippet}
-		</Modal>
-	{/if}
+	<!-- Step O.4 delete-managed-domain dialog migrated to /certs
+	     in #R-6 Pack A (2026-06-04). See
+	     web/frontend/src/routes/certs/+page.svelte. -->
 </div>

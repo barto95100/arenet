@@ -194,19 +194,34 @@ The drill-down currently:
 visual isn't broken, only stale. No regression (the page
 worked before, works now, just not surfaced).
 
-### Finding #R-6 — Move SSL editor from /settings to /certs — PARTIAL (catalog migrated, editor pending)
+### Finding #R-6 — Move SSL editor from /settings to /certs — RESOLVED in Pack A (2026-06-04)
 
-**Status**: PARTIAL.
+**Status**: RESOLVED.
 - Read-only catalog migrated in R.4.3.c (commit `4691eb2`,
   later refined). `/certs/+page.svelte` now serves as the
   top-level Sécurité IA entry for cert visibility.
-- Editor migration still pending; `/settings/+page.svelte`
-  retains the SSL/managed-domains CRUD form (the "softer
-  split" recorded in §R.4.4.b — see below).
-- Remaining work: lift the editor block from
-  `/settings/+page.svelte` into `/certs/+page.svelte` and
-  rewire its store dependency. Detailed list in
-  "Completion shape" below.
+- Editor migrated in Pack A (this commit, 2026-06-04). The
+  managed-domains CRUD form (apex input, DNS provider select,
+  includeApex checkbox, Declare button, inline Delete +
+  revertTo modal) and the DNS-provider-unconfigured warning
+  all live in `/certs/+page.svelte` now. `/settings` no
+  longer carries an SSL section; the DNS provider OVH
+  credentials block stays in `/settings` since credentials
+  are instance-level secrets distinct from per-apex
+  declarations.
+- Pack A also added a prominent "Renouvellement automatique"
+  info card on `/certs` so the certmagic-driven auto-renewal
+  behaviour is visible (previously invisible — the UI never
+  said anything about it). Surfaced during the operator UX
+  review alongside the audit.
+- Pack B (per-certificate runtime metadata: issuer, SAN list,
+  expiry, last-renewal timestamp) remains a separate Step T
+  concern — it requires a backend API surface that doesn't
+  exist today. The ℹ "Per-certificate runtime metadata is
+  not exposed" banner stays in place until Pack B lands.
+- Pack C (full visual redesign per the original mock) is
+  deferred to a later step alongside any cross-page visual
+  refresh.
 
 D5's strict reading was "move `/settings/certificates` → top-level
 `/certs`": full extraction of the SSL editor (managed-domains
