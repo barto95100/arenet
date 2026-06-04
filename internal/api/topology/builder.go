@@ -99,17 +99,29 @@ func BuildSnapshot(
 // (route, metrics, status) ternary is testable independently of
 // the storage list iteration.
 //
-// v1.1.0 status policy (#R-TOPO-health-coherence): every upstream
-// reports StatusUnknown. The `status` lookup is still resolved (so
-// the prober keeps polling Caddy and the wire shape stays stable
-// for Stage B) but the value is intentionally NOT propagated. Doing
-// otherwise risks the misleading-green case the operator caught:
-// a route without a health check sees fails=0 → looked "healthy"
-// even though Caddy was never probing it. We surface unknown until
-// real probe ingestion lands in Stage B (#R-TOPO-real-health-probe).
-// HealthCheckConfigured carries the only honest signal we have
-// today — whether a probe is configured — letting the frontend
-// distinguish "unmonitored unknown" from "monitored unknown".
+// Stage B status policy (post-#R-TOPO-real-health-probe,
+// 2026-06-04): routes with HealthCheck.Enabled true consult the
+// StatusLookup, now satisfied by *caddyhc.HCStatusTracker. The
+// tracker captures Caddy's active-health-checker "healthy" /
+// "unhealthy" events as they happen — see caddyhc package docs.
+//
+// Routes WITHOUT a configured health check still report
+// StatusUnknown unconditionally, regardless of any state the
+// tracker might be carrying. Two reasons:
+//   1. The tracker has no way to forget addresses when the
+//      operator removes a health check from a route — stale state
+//      could otherwise paint green/red on an upstream that is no
+//      longer being probed (the original misleading-green case
+//      from #R-TOPO-health-coherence).
+//   2. HealthCheckConfigured is the honest signal "this upstream
+//      is being watched"; respecting it as the gate keeps the
+//      Stage B semantics consistent with the v1.1.0 contract the
+//      Activity glyph + accent stripe were built around.
+//
+// The lookup returns the empty string ("" / StatusUnknown) for
+// addresses it hasn't seen yet (warm-up window between Caddy
+// reload and the first probe outcome). The builder maps that
+// path-through transparently — wire shape stays well-typed.
 func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Route {
 	agg := metrics.Aggregate(r.ID)
 	out := Route{
@@ -159,13 +171,20 @@ func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Rout
 			w = 1
 		}
 		share := float64(w) / float64(totalWeight)
-		// Probe lookup retained for future Stage B use — see
-		// builder docstring for why the result is dropped today.
-		_ = status.Status(u.URL)
+		// Stage B: consult the tracker only when the route has a
+		// configured probe. The HC-gate avoids the stale-state
+		// misleading-green case described in the buildRoute
+		// docstring.
+		upstreamStatus := StatusUnknown
+		if r.HealthCheck.Enabled {
+			if s := status.Status(u.URL); s != "" {
+				upstreamStatus = s
+			}
+		}
 		out.Upstreams = append(out.Upstreams, Upstream{
 			ID:                    fmt.Sprintf("%s-%d", r.ID, i),
 			URL:                   u.URL,
-			Status:                StatusUnknown,
+			Status:                upstreamStatus,
 			HealthCheckConfigured: r.HealthCheck.Enabled,
 			ReqPerSec:             agg.ReqPerSec * share,
 			P99LatencyMs:          agg.P95LatencyMs,

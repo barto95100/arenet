@@ -50,6 +50,14 @@ import (
 	// `waf` handler.
 	_ "github.com/barto95100/arenet/internal/waf"
 
+	// #R-TOPO-real-health-probe (Stage B, 2026-06-04) — side-effect
+	// import: registers the arenet_topology_hc events handler so
+	// the apps.events.subscriptions block buildConfigJSON emits is
+	// resolvable at caddy.Load time. The actual tracker singleton
+	// is installed by cmd/arenet before this manager calls
+	// caddy.Load; the handler module's Provision pulls it then.
+	_ "github.com/barto95100/arenet/internal/caddyhc"
+
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -1127,6 +1135,33 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	// TestBuildConfigJSON_WithCrowdSec_ReloadPreserves.
 	if app := buildCrowdSecApp(opts.CrowdSec); app != nil {
 		apps["crowdsec"] = app
+	}
+
+	// #R-TOPO-real-health-probe (Stage B, 2026-06-04): subscribe
+	// to Caddy's active-health-checker events ("healthy" /
+	// "unhealthy") and route them into the AreNET-side
+	// HCStatusTracker so the topology snapshot can surface real
+	// per-upstream probe outcomes. The handler module is
+	// implemented in internal/caddyhc (registered into Caddy's
+	// global module registry by that package's init); its
+	// Provision pulls the process-wide tracker singleton set by
+	// cmd/arenet before this config is loaded.
+	//
+	// This block must be re-emitted on EVERY reload — same
+	// invariant as the crowdsec block above — or the subscription
+	// is silently torn down on the next caddy.Load call.
+	apps["events"] = map[string]any{
+		"subscriptions": []map[string]any{
+			{
+				"events":  []string{"healthy", "unhealthy"},
+				"modules": []string{"http.handlers.reverse_proxy.health_checker"},
+				"handlers": []map[string]any{
+					{
+						"handler": "arenet_topology_hc",
+					},
+				},
+			},
+		},
 	}
 
 	full := map[string]any{"apps": apps}

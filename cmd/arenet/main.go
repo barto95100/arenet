@@ -60,6 +60,7 @@ import (
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/automation"
+	"github.com/barto95100/arenet/internal/caddyhc"
 	"github.com/barto95100/arenet/internal/caddymgr"
 	appconfig "github.com/barto95100/arenet/internal/config"
 	"github.com/barto95100/arenet/internal/crowdsec"
@@ -587,25 +588,30 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 
 	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.Dev, logger)
 
-	// Phase 2 #R-TOPO-v2 C2 + C3 — topology endpoints.
+	// Phase 2 #R-TOPO-v2 — topology endpoints with Stage B health
+	// signal (post-#R-TOPO-real-health-probe, 2026-06-04).
 	//
-	// The sliding window + Caddy status prober are SHARED between
-	// the C2 snapshot endpoint and the C3 stream endpoint. A
-	// single background goroutine refreshes the prober every 1 s
-	// (see topology_wiring.go::topologyProbeInterval); both
-	// endpoints read the cached statuses at memory-read speed.
+	// Sliding window + per-upstream health tracker are SHARED
+	// between the snapshot endpoint and the stream endpoint. The
+	// tracker is fed by Caddy's events App via the
+	// internal/caddyhc EventHandler module — caddymgr emits an
+	// apps.events.subscriptions block referencing the handler in
+	// every config it builds. We install the tracker BEFORE
+	// caddymgr.Start so it's in place by the time Caddy provisions
+	// the handler module and starts firing health-checker events.
 	//
 	// The stream handler subscribes to the metrics broadcaster
 	// each connection; the window is fed by per-subscriber pushes
 	// (acknowledged Stage A wastefulness when multiple subscribers
 	// exist, but cheap at homelab cardinality).
 	topologyWindow := topology.NewSlidingWindow()
-	topologyStatusProber := topology.NewCaddyStatusProber()
+	hcTracker := caddyhc.NewTracker()
+	caddyhc.SetTracker(hcTracker)
 	topologySnapshotHandler := newTopologySnapshotHandler(
-		ctx, store, topologyWindow, topologyStatusProber, logger,
+		store, topologyWindow, hcTracker, logger,
 	)
 	topologyStreamHandler := api.NewStreamHandler(
-		metricsBroadcaster, store, topologyWindow, topologyStatusProber,
+		metricsBroadcaster, store, topologyWindow, hcTracker,
 		cfg.TopologyTickMs, cfg.Dev, logger,
 	)
 

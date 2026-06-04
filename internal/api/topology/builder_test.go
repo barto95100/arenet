@@ -129,14 +129,13 @@ func TestBuildSnapshot_SingleUpstreamGetsAllTraffic(t *testing.T) {
 		t.Errorf("single upstream split: got reqPerSec=%v fairness=%v, want 400 and 1.0",
 			u.ReqPerSec, u.FairnessRatio)
 	}
-	// v1.1.0 status policy (#R-TOPO-health-coherence): the prober
-	// is still consulted (and the stub here returns StatusHealthy)
-	// but the result is intentionally dropped — every upstream
-	// reports StatusUnknown until Stage B real-probe ingestion.
-	// The test fixture used to assert StatusHealthy here; the
-	// stub's canned value is now expected to be ignored.
+	// Stage B HC gate: this route has no HealthCheck configured
+	// (zero-value), so the tracker's StatusHealthy is intentionally
+	// masked. Status stays StatusUnknown regardless of probe state.
+	// See TestBuildSnapshot_HealthCheckConfiguredPropagates for
+	// the gate-pass case where the tracker output flows through.
 	if u.Status != StatusUnknown {
-		t.Errorf("status: got %q, want %q (v1.1.0 always-unknown)", u.Status, StatusUnknown)
+		t.Errorf("status: got %q, want %q (HC gate false → masked)", u.Status, StatusUnknown)
 	}
 	if u.P99LatencyMs != 42 {
 		t.Errorf("upstream p99 echo: got %d, want 42", u.P99LatencyMs)
@@ -238,9 +237,11 @@ func TestBuildSnapshot_AliasesIsClonedNotAliased(t *testing.T) {
 // TestBuildSnapshot_HealthCheckConfiguredPropagates verifies the
 // v1.1.0 #R-TOPO-health-coherence contract: HasHealthCheck on the
 // route and HealthCheckConfigured on every upstream both mirror
-// storage.Route.HealthCheck.Enabled. Status remains StatusUnknown
-// regardless, even when the prober would have returned StatusHealthy
-// — the prober result is intentionally dropped (see builder.go).
+// storage.Route.HealthCheck.Enabled. Stage B status policy
+// (#R-TOPO-real-health-probe, 2026-06-04): when the route has a
+// configured health check, the StatusLookup result flows through;
+// when it doesn't, Status stays unknown regardless of any stale
+// state the tracker might be carrying.
 func TestBuildSnapshot_HealthCheckConfiguredPropagates(t *testing.T) {
 	hcRoute := storage.Route{
 		ID:        "r-hc",
@@ -262,8 +263,11 @@ func TestBuildSnapshot_HealthCheckConfiguredPropagates(t *testing.T) {
 		Upstreams: []storage.Upstream{{URL: "http://10.0.0.2:80", Weight: 1}},
 		// HealthCheck: zero-value (Enabled=false)
 	}
-	// Prober claims both upstreams healthy — the v1.1.0 policy must
-	// ignore it and surface StatusUnknown for both.
+	// Tracker reports BOTH upstreams as healthy. The Stage B
+	// builder must respect the HC gate: only the configured route
+	// gets the healthy state through; the unmonitored route stays
+	// unknown so we don't paint green on something the operator
+	// chose not to probe.
 	s := stubStatus{statuses: map[string]string{
 		"http://10.0.0.1:80": StatusHealthy,
 		"http://10.0.0.2:80": StatusHealthy,
@@ -291,13 +295,66 @@ func TestBuildSnapshot_HealthCheckConfiguredPropagates(t *testing.T) {
 	if nohc.Upstreams[0].HealthCheckConfigured {
 		t.Errorf("nohc upstream HealthCheckConfigured = true; want false")
 	}
-	// Both upstreams must report unknown despite the prober saying
-	// healthy — the operator-flagged misleading-green case.
-	if hc.Upstreams[0].Status != StatusUnknown {
-		t.Errorf("hc status: got %q, want %q", hc.Upstreams[0].Status, StatusUnknown)
+	// Stage B propagation: HC-configured route picks up healthy
+	// from the tracker; unmonitored stays unknown.
+	if hc.Upstreams[0].Status != StatusHealthy {
+		t.Errorf("hc status: got %q, want %q (tracker healthy with HC gate true)", hc.Upstreams[0].Status, StatusHealthy)
 	}
 	if nohc.Upstreams[0].Status != StatusUnknown {
-		t.Errorf("nohc status: got %q, want %q", nohc.Upstreams[0].Status, StatusUnknown)
+		t.Errorf("nohc status: got %q, want %q (HC gate must mask tracker state)", nohc.Upstreams[0].Status, StatusUnknown)
+	}
+}
+
+// TestBuildSnapshot_TrackerUnhealthyPropagatesWhenHCEnabled covers
+// the failure side of the Stage B status flow: a route with a
+// configured probe and a tracker reporting unhealthy must surface
+// unhealthy on the wire. Companion to the healthy-case test above.
+func TestBuildSnapshot_TrackerUnhealthyPropagatesWhenHCEnabled(t *testing.T) {
+	route := storage.Route{
+		ID:        "r-down",
+		Host:      "down.example",
+		LBPolicy:  "round_robin",
+		Upstreams: []storage.Upstream{{URL: "http://10.0.0.9:80", Weight: 1}},
+		HealthCheck: storage.HealthCheck{
+			Enabled: true,
+			URI:     "/healthz",
+		},
+	}
+	s := stubStatus{statuses: map[string]string{
+		"http://10.0.0.9:80": StatusUnhealthy,
+	}}
+	resp := BuildSnapshot(
+		[]storage.Route{route},
+		stubMetrics{}, s, time.Now(),
+	)
+	if got := resp.Routes[0].Upstreams[0].Status; got != StatusUnhealthy {
+		t.Errorf("unhealthy status: got %q, want %q", got, StatusUnhealthy)
+	}
+}
+
+// TestBuildSnapshot_TrackerWarmupReturnsUnknown verifies the warm-
+// up window contract: a route with HC enabled but no event yet
+// observed (tracker returns "") must surface unknown, not a
+// fabricated healthy.
+func TestBuildSnapshot_TrackerWarmupReturnsUnknown(t *testing.T) {
+	route := storage.Route{
+		ID:        "r-warm",
+		Host:      "warm.example",
+		LBPolicy:  "round_robin",
+		Upstreams: []storage.Upstream{{URL: "http://10.0.0.5:80", Weight: 1}},
+		HealthCheck: storage.HealthCheck{
+			Enabled: true,
+			URI:     "/healthz",
+		},
+	}
+	// Empty stub: no entry for this URL → returns StatusUnknown ("").
+	s := stubStatus{statuses: map[string]string{}}
+	resp := BuildSnapshot(
+		[]storage.Route{route},
+		stubMetrics{}, s, time.Now(),
+	)
+	if got := resp.Routes[0].Upstreams[0].Status; got != StatusUnknown {
+		t.Errorf("warmup status: got %q, want %q", got, StatusUnknown)
 	}
 }
 

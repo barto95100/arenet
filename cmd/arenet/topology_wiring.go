@@ -18,76 +18,39 @@
 // internal/api/topology package (shared shape + builder) and the
 // internal/api HTTP layer.
 //
-// This file owns construction-time wiring: it builds the snapshot
-// handler with a CaddyStatusProber that is refreshed on a 1-second
-// background ticker. The cached statuses are then served to every
-// HTTP request without re-probing inline — keeps the snapshot
-// endpoint cheap (no 200 ms probe penalty per request) and the
-// per-upstream Status() lookup at memory-read speed.
+// Pre-Stage B this file owned a background goroutine that polled
+// Caddy's /reverse_proxy/upstreams admin endpoint every second
+// and cached results into a CaddyStatusProber. With Stage B
+// (#R-TOPO-real-health-probe, 2026-06-04) the source-of-truth
+// for status moved to Caddy's events App: the caddymgr emits a
+// subscription pointing at the internal/caddyhc EventHandler
+// module, which records "healthy"/"unhealthy" events as they
+// transition. No polling, no goroutine, no warm-up call needed
+// at boot — the tracker simply returns StatusUnknown for any
+// upstream it hasn't received an event for yet.
 
 package main
 
 import (
-	"context"
 	"log/slog"
-	"time"
 
 	"github.com/barto95100/arenet/internal/api"
 	"github.com/barto95100/arenet/internal/api/topology"
+	"github.com/barto95100/arenet/internal/caddyhc"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
-// topologyProbeInterval is the cadence at which the background
-// goroutine refreshes the Caddy admin status cache. 1 second is
-// chosen to match the metrics sampler tick (a status that
-// changed within the last second is "fresh enough" for the
-// topology canvas's slower 2-second emit cadence in C3, AND for
-// the on-demand snapshot endpoint).
-const topologyProbeInterval = 1 * time.Second
-
-// newTopologySnapshotHandler builds the api.SnapshotHandler and
-// starts a background goroutine that refreshes the Caddy admin
-// status cache every topologyProbeInterval. The goroutine
-// terminates when ctx is cancelled (typically the cmd/arenet
-// process context).
-//
-// The prober reference is shared between the background refresher
-// and the api.SnapshotHandler — the CaddyStatusProber type is
-// goroutine-safe (Refresh and Status hold the same mutex), so
-// concurrent reads from the HTTP handler and writes from the
-// refresher are safe.
-//
-// For the C3 stream handler, the SAME prober + window will be
-// shared: a single background refresher serves both endpoints,
-// no extra goroutine per WS subscriber.
+// newTopologySnapshotHandler wires the api.SnapshotHandler with
+// the shared sliding window and the process-wide HC status
+// tracker. The tracker reference is also held by the caddyhc
+// package singleton (installed via SetTracker before the caddymgr
+// emits the events-subscription config), so reads here and writes
+// from Caddy's event-dispatch goroutine share the same map.
 func newTopologySnapshotHandler(
-	ctx context.Context,
 	store *storage.Store,
 	window *topology.SlidingWindow,
-	prober *topology.CaddyStatusProber,
+	tracker *caddyhc.HCStatusTracker,
 	logger *slog.Logger,
 ) *api.SnapshotHandler {
-	// Prime the cache once at boot so the first snapshot request
-	// doesn't return all-unknown statuses before the first tick.
-	// 200 ms blocking call at startup is fine — it runs once,
-	// during the cmd/arenet main() init sequence.
-	prober.Refresh(ctx)
-
-	// Background refresher. The goroutine respects ctx so a
-	// clean shutdown (SIGTERM) stops the probing without leaking.
-	go func() {
-		ticker := time.NewTicker(topologyProbeInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				logger.Debug("topology probe refresher stopped")
-				return
-			case <-ticker.C:
-				prober.Refresh(ctx)
-			}
-		}
-	}()
-
-	return api.NewSnapshotHandler(store, window, prober, logger)
+	return api.NewSnapshotHandler(store, window, tracker, logger)
 }
