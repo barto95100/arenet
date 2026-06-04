@@ -621,7 +621,17 @@ Files touched:
 - `web/frontend/src/routes/topology/_components/nodes/UpstreamNode.svelte`
   — dropped status dot, added lock + shield glyphs.
 
-### Finding #R-TOPO-real-health-probe — surface real per-upstream health-probe outcome
+### Finding #R-TOPO-real-health-probe — surface real per-upstream health-probe outcome — RESOLVED in Stage B (2026-06-04)
+
+**Status**: RESOLVED in the Stage B follow-up to
+`#R-TOPO-health-coherence`. See "Resolution" block at the end
+of this entry. The original fix-shape proposals below are kept
+as historical context — Option 1 (Caddy events) was the path
+taken after empirical verification, with one twist: the
+embedded-host subscription path required a Caddy event-handler
+module rather than a programmatic `Subscribe` call.
+
+---
 
 Surfaced as the residual scope of `#R-TOPO-health-coherence`'s
 v1.1.0 resolution (2026-06-03). The topology canvas currently
@@ -633,8 +643,8 @@ with a configured health check, mapping `fails == 0 → healthy`
 was unsound (Caddy stops routing to an unhealthy upstream,
 keeping its `fails` counter at 0).
 
-**Fix shape**: ingest the actual probe outcome. Two viable
-approaches:
+**Fix shape** (original proposal): ingest the actual probe
+outcome. Two viable approaches:
 
 1. **Caddy events** (`caddy.fs.events` / module-level events on
    the reverse-proxy module): subscribe via the admin events
@@ -675,6 +685,113 @@ track record of being wrong.
 `#R-TOPO-upstream-metrics` Stage B; the two share the
 "real per-upstream data" theme and the probe ingestion is
 cheaper after the metrics fanout is in place.
+
+**Resolution (Stage B, 2026-06-04)** — implemented via Option 1
+(Caddy events), confirmed by empirical investigation of Caddy
+v2.11.3's source at
+`modules/caddyhttp/reverseproxy/healthchecks.go:479` and `:502`:
+
+```go
+h.events.Emit(h.ctx, "healthy",   map[string]any{"host": hostAddr})
+h.events.Emit(h.ctx, "unhealthy", map[string]any{"host": hostAddr})
+```
+
+The active health checker emits first-class transition events
+at the exact moment a state flip crosses the configured
+pass/fail thresholds. Payload is `map[string]any{"host":
+"<host:port>"}` — no scheme, built from `addr.JoinHostPort(0)`
+at `healthchecks.go:347`. No time-window heuristic needed; no
+log parsing needed.
+
+**One twist** the original Option 1 description glossed over:
+`caddyevents.App.Subscribe` is rejected after the events App
+has called `Start()` (`caddyevents/app.go:167`), and
+`caddy.Load(cfgJSON, true)` completes the App's Provision →
+Start cycle internally before returning. The brief's first
+draft suggested a zap-core wrapper to work around this, but
+the right answer is the same way every Caddy extension
+subscribes to events: register a custom event-handler module
+and reference it from the JSON config's
+`apps.events.subscriptions[].handlers[]`. The handler's
+Provision runs DURING the events App's Provision phase — well
+inside the subscription window.
+
+Implementation:
+
+- **`internal/caddyhc/`** (new package). `HCStatusTracker` is a
+  thread-safe map[string]string keyed on normalized addresses
+  ("host:port"; scheme + path/query stripped via
+  `NormalizeAddr`). `EventHandler` is a `caddyevents.Handler`
+  module registered as `events.handlers.arenet_topology_hc`;
+  its `Handle` reads `e.Data["host"]`, switches on
+  `e.Name()` between "healthy"/"unhealthy", and delegates
+  into a package-level tracker singleton installed by
+  `cmd/arenet` before `caddy.Load` runs.
+- **`internal/caddymgr/manager.go::buildConfigJSON`** emits
+  the `apps.events.subscriptions` block on EVERY reload (same
+  invariant as `apps.crowdsec` — re-emit-or-lose-it). The
+  block targets `modules:
+  ["http.handlers.reverse_proxy.health_checker"]` with
+  `events: ["healthy", "unhealthy"]` dispatched to the
+  `arenet_topology_hc` handler.
+- **`internal/api/topology/builder.go`** flips the per-upstream
+  status logic: when `route.HealthCheck.Enabled` is true,
+  consult `tracker.Status(u.URL)`; otherwise hold at
+  `StatusUnknown` regardless of tracker state (the HC gate
+  guards against stale state if the operator removes a probe
+  from a route).
+- **`internal/api/topology/caddyprobe.go`** and its test deleted
+  entirely. The poller had no consumer left — events are the
+  truth source — and `num_requests`/`fails` from
+  `/reverse_proxy/upstreams` were never genuine probe outcomes
+  (the bug this finding was originally about).
+- **`cmd/arenet/topology_wiring.go`** dropped the 1s
+  background refresher goroutine, the warm-up `Refresh(ctx)`
+  at boot, and the context parameter — the tracker is fully
+  event-driven.
+
+Tests:
+
+- `internal/caddyhc/tracker_test.go` covers empty-tracker
+  unknown, healthy/unhealthy recording, recovery, distinct-addr
+  isolation, normalization parity between storage URL forms
+  and event host forms, the empty-addr guard, the
+  `NormalizeAddr` table, and concurrent Record/Status under
+  `-race`.
+- `internal/caddyhc/listener_test.go` covers the happy paths
+  for each event name, unknown-event no-op, missing/non-string
+  host no-op, nil-tracker no-op, the Provision no-op contract
+  pin, and the `CaddyModule().ID` assertion (brittle on
+  purpose — the caddymgr config references the string).
+- `internal/api/topology/builder_test.go`:
+  `TestBuildSnapshot_HealthCheckConfiguredPropagates` flipped
+  to assert Stage B propagation (HC-on + tracker healthy →
+  healthy on the wire; HC-off + tracker healthy → still
+  unknown via the HC gate). Companion tests added for the
+  unhealthy and warm-up paths
+  (`TestBuildSnapshot_TrackerUnhealthyPropagatesWhenHCEnabled`,
+  `TestBuildSnapshot_TrackerWarmupReturnsUnknown`).
+
+No wire-shape change visible to the frontend: the existing
+`HealthStatus` enum already covered healthy/unhealthy/unknown
+since C9, and `UpstreamNode`'s `data-monitored` gating from
+C13 still hides the accent stripe on routes without a
+configured probe. The visual diff after deploy is purely the
+status values populating with real semantics.
+
+Files touched in the resolution:
+
+- new `internal/caddyhc/listener.go`,
+  `internal/caddyhc/tracker.go`,
+  `internal/caddyhc/listener_test.go`,
+  `internal/caddyhc/tracker_test.go`
+- modified `internal/api/topology/builder.go`,
+  `internal/api/topology/builder_test.go`,
+  `internal/caddymgr/manager.go`,
+  `cmd/arenet/main.go`,
+  `cmd/arenet/topology_wiring.go`
+- deleted `internal/api/topology/caddyprobe.go`,
+  `internal/api/topology/caddyprobe_test.go`
 
 ### Finding #R-TOPO-probe-logging — 1 Caddy admin probe log/second is too noisy for prod
 
