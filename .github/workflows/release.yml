@@ -4,20 +4,27 @@
 #
 # Step S.4 — multi-arch Docker release workflow.
 #
+# Migrated from QEMU emulation to native GitHub-hosted runners
+# (ubuntu-24.04-arm went GA in Aug 2025) for arm64 builds. The two
+# arches build in parallel on their respective native runners,
+# each pushes its image by digest, and a final merge job
+# assembles a multi-arch manifest. Replaces the previous single
+# build-and-publish job that took ~30 min under QEMU; expected
+# wall-clock now ~10-12 min, dominated by the slower of the two
+# native builds (~5-10 min each, running in parallel).
+#
 # Triggers:
 #   - Push of a v* tag (e.g. v1.0.0): runs the full build +
 #     publish to ghcr.io, tagging the image with both the version
-#     and (only on stable tags) "latest".
+#     and (only on stable tags) "latest" / major / minor aliases.
 #   - Manual workflow_dispatch: dry-run path with no registry
-#     push. Useful for verifying the buildx setup before cutting
-#     a real release tag.
+#     push, no merge, no release creation. Useful for verifying
+#     the buildx setup before cutting a real release tag.
 #
 # Stable tag detection: a tag is "stable" iff it matches
-# v[0-9]+.[0-9]+.[0-9]+ (no -rc / -beta / -alpha / -step-... ).
-# Stable tags get the "latest" alias; everything else is the
-# version tag only (per spec D9 — and per the historical project
-# convention of v1.4.0-step-r-spec being a pre-arbitrage marker,
-# v1.0.0-step-s-spec the transitional pivot tag, etc.).
+# v[0-9]+.[0-9]+.[0-9]+ (no -rc / -beta / -alpha / -step-...).
+# Stable tags get the "latest" + major + minor aliases per spec
+# #S-7; everything else is the version tag only.
 
 name: release
 
@@ -36,17 +43,30 @@ permissions:
   contents: read
   packages: write
 
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/arenet
+
 jobs:
-  build-and-publish:
-    name: Build &amp; publish multi-arch image
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve version + stable flag
+      - name: Resolve version
         id: meta
         run: |
           set -euo pipefail
@@ -57,20 +77,8 @@ jobs:
             # tag is unique but obviously not a release.
             VERSION="dispatch-${GITHUB_SHA::7}"
           fi
-          # Stable iff strictly v<major>.<minor>.<patch>.
-          if printf '%s\n' "${VERSION}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            STABLE=true
-          else
-            STABLE=false
-          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "stable=${STABLE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version=${VERSION} stable=${STABLE}"
-
-      - name: Set up QEMU (for arm64 cross-compile)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
+          echo "Resolved version=${VERSION}"
 
       - name: Set up Docker buildx
         uses: docker/setup-buildx-action@v3
@@ -85,11 +93,72 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Native runner — no QEMU setup needed. Each matrix branch
+      # builds for its own arch only and pushes the image by digest
+      # (not by tag) so the merge job can later assemble a manifest
+      # combining both arches under the real version tags. Cache
+      # is scoped per-arch so amd64 and arm64 don't trample each
+      # other's layers (the cache key includes the scope name).
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: ${{ github.event_name == 'push' }}
+          outputs: |
+            type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name == 'push' }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha,scope=build-${{ matrix.arch }}
+          cache-to: type=gha,scope=build-${{ matrix.arch }},mode=max
+          provenance: false
+
+      - name: Export digest
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+          echo "Captured digest: ${digest}"
+
+      - name: Upload digest
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge multi-arch manifest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    if: github.event_name == 'push'
+    needs: build
+
+    steps:
+      - name: Resolve version + stable flag
+        id: meta
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/}"
+          if printf '%s\n' "${VERSION}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            STABLE=true
+          else
+            STABLE=false
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "stable=${STABLE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=${VERSION} stable=${STABLE}"
+
       - name: Compute image tags
         id: tags
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/${{ github.repository_owner }}/arenet"
+          IMAGE="${{ env.IMAGE_NAME }}"
           TAGS="${IMAGE}:${{ steps.meta.outputs.version }}"
           if [ "${{ steps.meta.outputs.stable }}" = "true" ]; then
             # Step #S-7: publish moving major (v1) + minor (v1.0)
@@ -101,43 +170,76 @@ jobs:
             #   - :latest — accepts everything
             VERSION="${{ steps.meta.outputs.version }}"
             MAJOR="$(echo "$VERSION" | cut -d. -f1)"
-            MINOR="$(echo "$VERSION" | cut -d. -f1-2)"          
+            MINOR="$(echo "$VERSION" | cut -d. -f1-2)"
             TAGS="${TAGS},${IMAGE}:latest"
             TAGS="${TAGS},${IMAGE}:${MAJOR}"
-            TAGS="${TAGS},${IMAGE}:${MINOR}"            
+            TAGS="${TAGS},${IMAGE}:${MINOR}"
           fi
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
           echo "Computed tags: ${TAGS}"
 
-      - name: Build (and push on tag, dry-run on dispatch)
-        uses: docker/build-push-action@v6
+      - name: Download digests
+        uses: actions/download-artifact@v4
         with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' }}
-          tags: ${{ steps.tags.outputs.tags }}
-          build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
-          # Cache to GHA's runner cache to speed up rebuilds.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: false
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.IMAGE_NAME }}"
+
+          # Build the -t flag list from the computed tags CSV.
+          TAG_FLAGS=""
+          IFS=',' read -ra TAGS <<< "${{ steps.tags.outputs.tags }}"
+          for t in "${TAGS[@]}"; do
+            TAG_FLAGS="${TAG_FLAGS} -t ${t}"
+          done
+
+          # Build the source digest references list.
+          SOURCES=""
+          for d in *; do
+            SOURCES="${SOURCES} ${IMAGE}@sha256:${d}"
+          done
+
+          echo "Creating manifest:"
+          echo "  Tags:    ${TAG_FLAGS}"
+          echo "  Sources: ${SOURCES}"
+
+          docker buildx imagetools create ${TAG_FLAGS} ${SOURCES}
+
+          echo ""
+          echo "Inspecting result:"
+          docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
 
       - name: Summary
         run: |
           echo "## Release ${{ steps.meta.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Platforms: linux/amd64, linux/arm64" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Platforms: linux/amd64, linux/arm64 (native runners)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Stable: ${{ steps.meta.outputs.stable }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Pushed: ${{ github.event_name == 'push' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Pushed: true" >> "$GITHUB_STEP_SUMMARY"
           echo "- Tags:" >> "$GITHUB_STEP_SUMMARY"
           IFS=',' read -ra T <<< "${{ steps.tags.outputs.tags }}"
           for t in "${T[@]}"; do
             echo "  - \`${t}\`" >> "$GITHUB_STEP_SUMMARY"
           done
+
   build-binaries:
     name: Build native binaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     if: github.event_name == 'push'
     strategy:
@@ -199,10 +301,10 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     if: github.event_name == 'push'
-    needs: [build-and-publish, build-binaries]
+    needs: [merge, build-binaries]
     permissions:
       contents: write
     steps:
