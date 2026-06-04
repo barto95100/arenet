@@ -49,7 +49,7 @@ timeline + per-rule table already cover the longer window.
 Possible Step Q candidate alongside the rate-limit-events
 audit work.
 
-### Finding #M.5-3 — Crash-recovery not re-validated in M.5 (declared L-covered)
+### Finding #M.5-3 — Crash-recovery not re-validated in M.5 (declared L-covered) — RESOLVED in post-O sweep (2026-05-31)
 
 The L.5 smoke validated the SIGKILL crash-recovery path against
 the L counter buckets. Step M adds `waf_block_count` (rides the
@@ -70,8 +70,8 @@ documented and unit-tested; the live re-validation cost
 for low marginal evidence. Pick up if Step Q's rate-limit
 events work touches the sink shape.
 
-**Status (post-O sweep 2026-05-31).** Resolved at unit level
-across all three event-table sinks. Step Q's throttle sink +
+**Status**: RESOLVED in post-O sweep (2026-05-31). Resolved at
+unit level across all three event-table sinks. Step Q's throttle sink +
 Step N's decision sink both inherit the same batched-channel-
 flush shape, so the consolidation is now properly L+M+Q+N (O
 adds no new sink). Three new tests landed, identically named

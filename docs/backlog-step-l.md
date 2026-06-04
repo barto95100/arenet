@@ -5,9 +5,9 @@ convention used in `docs/backlog-step-j.md`.
 
 ## 1. From L.2 review (2026-05-28)
 
-### Finding #L.2-1 — Pre-existing staticcheck warning: `oidc.go pathJoin` unused
+### Finding #L.2-1 — Pre-existing staticcheck warning: `oidc.go pathJoin` unused — RESOLVED in M.0 sweep (2026-05-28)
 
-**Status: RESOLVED** (M.0 sweep, 2026-05-28).
+**Status**: RESOLVED in M.0 sweep (2026-05-28).
 
 Surfaced by the L.2 close-out `staticcheck ./internal/api/...`
 run. Predates Step L (introduced in commit `1d7bc19d`, Step K.2
@@ -30,9 +30,9 @@ before persistence. No call site uses string concatenation
 that should have routed through `pathJoin`. **Function is
 genuinely dead code; removed in the M.0 sweep commit.**
 
-### Finding #L.5-1 — main.go log line hardcoded :8080
+### Finding #L.5-1 — main.go log line hardcoded :8080 — RESOLVED in M.0 sweep (2026-05-28)
 
-**Status: RESOLVED** (M.0 sweep, 2026-05-28).
+**Status**: RESOLVED in M.0 sweep (2026-05-28).
 
 Surfaced by the L.5 smoke (2026-05-28). The "Arenet listening
 http=:8080" log line in `cmd/arenet/main.go` was hardcoded and
@@ -47,9 +47,9 @@ so the log line matches the actual bind, including under env
 override. Verified by reading the new `Arenet listening` line
 during the M.0 sweep smoke.
 
-### Finding #L.2-2 — Last bucket of historical timeline lags up to 1 minute
+### Finding #L.2-2 — Last bucket of historical timeline lags up to 1 minute — RESOLVED inline in L.3 (2026-05-28)
 
-**Status: RESOLVED** (handled inline in L.3, 2026-05-28).
+**Status**: RESOLVED inline in L.3 (2026-05-28).
 
 By design: the aggregator flushes at the minute boundary, so
 the current (in-progress) minute is not yet persisted to

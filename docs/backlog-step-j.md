@@ -76,7 +76,16 @@ Possible designs: extend the `WAFMode` enum (`perimeter-block` /
 `perimeter-detect`), or a separate orthogonal `WAFPosition` field
 (`after-auth` / `before-auth`). Spec it properly — not a hotfix.
 
-### Finding #10 — Topology auto-fit on load
+### Finding #10 — Topology auto-fit on load — RESOLVED in J.6 then preserved via Phase 3 (2026-05-25 → 2026-06-03)
+
+**Status**: RESOLVED. Shipped via Step J.6 (`a2ae797`,
+2026-05-25) — `onMount` fit-on-first-data wired against the
+custom topology page's viewport store. Subsequently preserved
+through `#R-TOPO-v2-phase3` (`566536d`, 2026-06-03) which
+replaced the custom page with the Svelte Flow canvas; auto-fit
+is now declarative via the `fitView` prop on `<SvelteFlow>`.
+See `docs/step-j-closeout.md` §"Deviations" for the full
+J.6 → Phase-3 supersession chain.
 
 The Topology page opens in a zoomed state where the graph overflows
 the viewport; the user must click "Reset view" to see the whole

@@ -50,37 +50,21 @@ precedence stack for things tuned per install) — not a bug.
 front so the resolution path is clear when the operator demand
 surfaces.
 
-### Finding #S-31 — `TestMetricsSummary_5xxOnly_4xxStaysZero` timing flake
+### Finding #S-31 — DEDUPED — see #Q-1 in docs/backlog-step-q.md
 
-`internal/api/metrics_handlers_test.go::TestMetricsSummary_5xxOnly_4xxStaysZero`
-intermittently fails with `TotalFiveXxPerMin = 0, want 3`. Observed
-during the `#R-TOPO-v2-phase2` C2 verification gate (2026-06-03);
-the same test passes deterministically when run in isolation
-(`go test -run TestMetricsSummary_5xxOnly_4xxStaysZero -count=3`
-exits 0).
+Originally tracked separately as
+`TestMetricsSummary_5xxOnly_4xxStaysZero` timing flake.
+Consolidated into [`#Q-1` in
+`docs/backlog-step-q.md`](backlog-step-q.md) on 2026-06-04 per
+the backlog cleanup audit (`docs/backlog-step-r.md` / Quick Win
+#2 audit verdict).
 
-**Operational consequence**: a single CI failure forces a re-run.
-The result is correct (the test asserts the right thing); the
-race window is in the test scaffolding, not in the production
-code path being exercised.
+Same root cause: minute-boundary race in the `metricsSummary`
+handler. Same fix sketch: clock injection on the API handler so
+the test and the handler share a synthetic `now()`. #Q-1 already
+named `TestMetricsSummary_5xxOnly_4xxStaysZero` as a "sibling"
+of `TestMetricsSummary_4xxAnd5xxAreIndependent` (its primary
+subject); the consolidation makes that relationship explicit.
 
-**Suspected cause** (not investigated in depth): the test sets up
-a few 5xx events via the WAF/throttle/metrics pipeline and then
-asserts the aggregator's per-minute counters. Under
-`-race` + concurrent test execution, the in-process metrics
-ticker (`metrics.TickInterval = 1s`) may drain the just-incremented
-counter into the previous bucket boundary, leaving 0 for the
-asserted bucket. The fix probably involves either freezing
-`time.Now` for the test or asserting against a cumulative total
-rather than a per-bucket projection.
-
-**Recommendation.** Light pass on the test only, not the
-production code. Reproduce with `go test -race -count=20
--run TestMetricsSummary_5xxOnly` to make the flake reliable,
-then either pin the bucket boundary deterministically or
-relax the assertion to `>=3` (the test's contract is "5xx
-events recorded", not "exactly 3 in this specific bucket").
-
-**Triage.** Test scaffolding flake. Not a release blocker — the
-re-run always passes. Documented up front so the next person
-who hits it has the resolution path mapped.
+This stub stays in place so historical citations to `#S-31`
+still resolve to a discoverable record.

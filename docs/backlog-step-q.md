@@ -50,6 +50,15 @@ focused change, NOT a side-load on a feature commit.
 a regression introduced by Q. Pick up as a standalone refactor
 in a later step.
 
+**Consolidated from #S-31 (2026-06-04 backlog audit).** Step S
+originally tracked the same root cause under a separate item
+`#S-31 — TestMetricsSummary_5xxOnly_4xxStaysZero timing flake`.
+The 2026-06-04 backlog cleanup audit identified the duplication —
+#S-31 and #Q-1 are the same minute-boundary race in the same
+metricsSummary handler, with the same fix sketch (clock
+injection on the handler). #Q-1 keeps the full body (it surfaced
+first); #S-31 is now a stub pointing here.
+
 ### Finding #Q-2 — Pre-existing gofmt drift on `internal/api/oidc.go`
 
 `gofmt -l -s ./internal/api/` reports `oidc.go` as drifted on a
