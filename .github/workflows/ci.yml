@@ -1,0 +1,129 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# CI workflow — test gate on every push to main and every PR
+# targeting main.
+#
+# Before this workflow existed, the only GitHub Actions automation
+# was release.yml, which fires exclusively on v* tags and builds the
+# multi-arch Docker image. Any regression introduced between two
+# release tags was invisible until the next release tried to build
+# — at which point it was already too late. The gap was flagged
+# during the Critique 11 work as a practice gap; this workflow
+# closes it.
+#
+# Triggers:
+#   - push to main: every merge commit goes through the gate.
+#   - pull_request targeting main (opened, synchronize, reopened):
+#     every PR is gated before merge, including subsequent pushes
+#     to an already-open PR.
+#   - workflow_dispatch: manual fire path, useful for re-running a
+#     stuck-in-cache run without pushing a new commit.
+#
+# Concurrency: a new push on the same ref cancels any in-flight CI
+# run. No point keeping a stale gate running when a newer commit
+# is already queued.
+#
+# Two parallel jobs:
+#   - backend-test runs `go vet` + `go test -race -count=1 ./...`.
+#     The -race flag is non-negotiable — it has caught real data
+#     races since Stage B (HCStatusTracker map access). -count=1
+#     disables Go's test cache so CI always exercises the live
+#     code path, never cached results.
+#   - frontend-test runs `npm ci` + `npm run check` + `npm test` +
+#     `npm run build`. The build step is in the gate because a
+#     type that passes svelte-check can still break the bundled
+#     output — keeping the production build green guarantees
+#     no surprise at release tag time.
+#
+# Caching: setup-go's built-in module cache + setup-node's npm
+# cache keyed on package-lock.json. No buildx cache needed — this
+# workflow builds nothing Docker.
+#
+# Permissions are reduced to contents:read; neither job needs
+# anything else (no registry push, no PR comment writes, no
+# release creation — that's release.yml's job).
+
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-test:
+    name: backend (go vet + go test -race)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race -count=1
+        # -race: catches data races (mandatory gate since Stage B
+        #   surfaced the HCStatusTracker map-access race).
+        # -count=1: disables Go's test cache; CI must always run
+        #   the actual tests against the current code, never
+        #   serve cached results.
+        run: go test -race -count=1 ./...
+
+  frontend-test:
+    name: frontend (check + test + build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/frontend/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: npm run check
+        # svelte-check + tsc — type errors fail here.
+        run: npm run check
+
+      - name: npm test
+        # vitest run — unit + component tests.
+        run: npm test
+
+      - name: npm run build
+        # Production build via adapter-static. Catches the rare
+        # type / dead-code-elimination issue that passes svelte-
+        # check but breaks the final bundle. Keeping it in the
+        # gate guarantees no surprise at release tag time, when
+        # release.yml does the same build inside the Docker
+        # image.
+        run: npm run build
