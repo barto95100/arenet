@@ -207,6 +207,40 @@
 		errors = {};
 	}
 
+	// DOM refs for the click-outside action (C11 Pack A polish
+	// round 3, 2026-06-06). panelEl bounds the inspector; tableEl
+	// bounds the routes table — clicks inside either are ignored
+	// by the outside-close logic. Clicks inside the table are
+	// handled by the per-row onclick (which calls
+	// selectOrToggleRoute), so the outside-close handler doesn't
+	// fight with row-targeted interactions.
+	let panelEl = $state<HTMLDivElement | null>(null);
+	let tableEl = $state<HTMLTableElement | null>(null);
+
+	// Svelte action: bind to the panel root, listens on document
+	// mousedown for the lifetime of the node, calls closePanel
+	// when the event target is outside BOTH the panel and the
+	// table. mousedown (not click) so the listener wins the race
+	// against any same-target click handlers — and because
+	// mousedown more naturally maps to "dismiss the inspector"
+	// (matches macOS list inspectors).
+	function clickOutsideToClose(node: HTMLElement) {
+		function handle(event: MouseEvent) {
+			if (!formOpen) return;
+			const target = event.target;
+			if (!(target instanceof Node)) return;
+			if (node.contains(target)) return;
+			if (tableEl?.contains(target)) return;
+			closePanel();
+		}
+		document.addEventListener('mousedown', handle, true);
+		return {
+			destroy() {
+				document.removeEventListener('mousedown', handle, true);
+			},
+		};
+	}
+
 	function openCreate() {
 		formMode = 'create';
 		editingId = null;
@@ -226,6 +260,20 @@
 		// have just declared a new apex; the form's contextual
 		// inheritance badge needs the up-to-date list.
 		void loadManagedDomainsForRoutes();
+	}
+
+	// Row click semantics (C11 Pack A polish round 3, 2026-06-06):
+	// clicking the already-selected row toggles the panel closed —
+	// macOS-Finder-list behaviour. Clicking any other row (or the
+	// same row when nothing is selected) opens the edit panel
+	// against it via openEdit. The keyboard Enter/Space path uses
+	// the same helper so the toggle is reachable without a mouse.
+	function selectOrToggleRoute(r: Route) {
+		if (editingId === r.id && formOpen) {
+			closePanel();
+			return;
+		}
+		openEdit(r);
 	}
 
 	function openEdit(r: Route) {
@@ -716,7 +764,13 @@
 				await updateRoute(editingId, payload);
 				pushToast('Route updated', 'success');
 			}
-			formOpen = false;
+			// Bug 1 fix (C11 Pack A polish round 3, 2026-06-06):
+			// Save MUST clear editingId so the route-row-selected
+			// highlight goes away — same symmetry Cancel has via
+			// closePanel(). Previously this only flipped
+			// formOpen=false, leaving editingId set and producing
+			// a phantom-selected row with no panel open.
+			closePanel();
 			await loadRoutes();
 		} catch (err) {
 			if (err instanceof ApiError && err.kind === 'validation') {
@@ -974,7 +1028,7 @@
 						: 'No routes match the current filter.'}
 				</div>
 			{:else}
-				<table class="w-full text-sm">
+				<table class="w-full text-sm" bind:this={tableEl}>
 					<thead>
 						<tr class="text-left text-xs uppercase tracking-wider text-secondary border-b border-border-subtle">
 							<th class="px-4 py-3 font-medium">Host / path</th>
@@ -989,13 +1043,14 @@
 							{@const selected = editingId === r.id}
 							{@const statusBadge = aggregateToBadge(r.aggregateStatus)}
 							<tr
-								class="border-b border-border-subtle last:border-b-0 cursor-pointer transition-colors hover:bg-hover"
-								class:bg-accent-soft={selected}
-								onclick={() => openEdit(r)}
+								class="route-row border-b border-border-subtle last:border-b-0 cursor-pointer transition-colors hover:bg-hover"
+								class:route-row-selected={selected}
+								data-testid={selected ? 'route-row-selected' : 'route-row'}
+								onclick={() => selectOrToggleRoute(r)}
 								onkeydown={(e) => {
 									if (e.key === 'Enter' || e.key === ' ') {
 										e.preventDefault();
-										openEdit(r);
+										selectOrToggleRoute(r);
 									}
 								}}
 								tabindex="0"
@@ -1115,25 +1170,14 @@
 									     Topology AND the existing TLS / Detect /
 									     Block badges in this same table. The
 									     Healthy / Alerts segmented tabs above
-									     filter on the same aggregateStatus. -->
-									<span class="inline-flex items-center gap-2">
-										<Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
-										<!-- Small Edit button — duplicates the
-										     row-click action so the test suite's
-										     `findByRole('button', { name: 'Edit' })`
-										     contract holds without rewriting tests.
-										     stopPropagation prevents the click from
-										     bubbling to the row's onclick (which
-										     would call openEdit twice — fine
-										     functionally but noisy). -->
-										<Button
-											variant="ghost"
-											size="sm"
-											onclick={(e) => {
-												e.stopPropagation();
-												openEdit(r);
-											}}>Edit</Button>
-									</span>
+									     filter on the same aggregateStatus.
+									     Polish round (2026-06-06): removed the
+									     redundant per-row "Edit" button — the
+									     whole <tr> is the affordance (cursor-
+									     pointer + hover tint + selected accent),
+									     matching the mock and avoiding the
+									     double-action anti-pattern. -->
+									<Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
 								</td>
 							</tr>
 						{/each}
@@ -1143,8 +1187,18 @@
 		</div>
 
 		<!-- RIGHT — route detail / edit panel. Sticky on wide
-		     screens so it stays in view as the left list scrolls. -->
+		     screens so it stays in view as the left list scrolls.
+		     bind:this + use:clickOutsideToClose wire the
+		     C11 Pack A polish round 3 dismiss-on-outside-click
+		     behaviour: a document mousedown landing outside this
+		     element AND outside the routes table closes the
+		     panel. Clicks on the table are left to the row
+		     onclick handlers (selectOrToggleRoute) so the toggle
+		     semantic for the already-selected row works without
+		     racing the outside listener. -->
 		<div
+			bind:this={panelEl}
+			use:clickOutsideToClose
 			class="rounded-lg border border-border-subtle bg-elevated xl:sticky xl:top-[calc(var(--tb-height)+14px)] xl:max-h-[calc(100vh-var(--tb-height)-40px)] overflow-auto"
 		>
 			{#if !formOpen}
@@ -1155,9 +1209,14 @@
 					to create a new one.
 				</div>
 			{:else}
-				<!-- Panel header — pill + title + meta. -->
+				<!-- Panel header — pill + title + meta. The pill border
+				     uses `border-cyan` (full opacity, same hue as the
+				     text) instead of the previous `border-cyan/30`
+				     which Tailwind v4 was resolving to a default-gray
+				     fallback (reading as a white-ish outline on dark
+				     mode and clashing visually with the cyan text). -->
 				<div class="px-5 py-4 border-b border-border-subtle flex items-center gap-3">
-					<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-mono bg-accent-soft text-cyan border border-cyan/30">
+					<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-mono bg-accent-soft text-cyan border border-cyan">
 						{formMode === 'create' ? 'new' : 'edit'}
 					</span>
 					<h3 class="text-base font-semibold text-primary truncate">
@@ -1855,3 +1914,26 @@
 		<Button variant="danger" loading={deleting} onclick={confirmDelete}>Delete</Button>
 	{/snippet}
 </Modal>
+
+<style>
+	/* Selected-row visual state for the Routes table (C11 Pack A
+	   polish, 2026-06-06). The Tailwind classes on the row carry
+	   the base + hover styles; this block layers the
+	   selected-when-editing affordance on top.
+
+	   The brief calls for "subtle accent tint + left-border
+	   accent" — using the shared --accent token (same as the
+	   .nav-item.active state and Topology's hub border) so a
+	   future theme change propagates everywhere. Inset
+	   box-shadow gives the left edge a 3px solid accent stripe
+	   without requiring a layout-shifting border. */
+	:global(tr.route-row-selected) {
+		background: color-mix(in oklch, var(--accent) 10%, transparent);
+		box-shadow: inset 3px 0 0 0 var(--accent);
+	}
+	/* Slightly stronger hover on the selected row so the click
+	   target still feels "live", not visually frozen. */
+	:global(tr.route-row-selected:hover) {
+		background: color-mix(in oklch, var(--accent) 16%, transparent);
+	}
+</style>

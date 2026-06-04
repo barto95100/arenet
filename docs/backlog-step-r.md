@@ -864,6 +864,85 @@ Remaining packs for the Routes page (out of scope for Pack A):
   table.
 - **C11 Pack C**: edit-panel revamp. Post-v1.2.
 
+**Polish round 1 — badge presentation (2026-06-05, amended
+into cc6e7a0).** Original Pack A draft used a `<StatusDot>`
+in the ÉTAT column; operator's first smoke called it
+ambiguous (dot-alone doesn't read at a glance). Swapped for
+an explicit uppercase `<Badge>` ("HEALTHY" / "DEGRADED" /
+"DOWN" / "UNKNOWN") matching the same pill style as the
+existing TLS / Detect / Block badges already in the row.
+`aggregateToBadge` returns `{label, variant}` mapping to
+Badge's `status-up` / `status-warn` / `status-down` /
+`neutral` variants — the same `--status-*` tokens Topology
+UpstreamNode + BackendClusterNode use. No inline colors.
+
+**Polish round 2 — table row interaction affordance
+(2026-06-06).** Two UX gaps after the badge polish:
+
+- Per-row "Edit" button was redundant noise alongside the
+  whole-row click target — classic double-action
+  anti-pattern. Removed entirely from the ÉTAT cell; the
+  whole `<tr>` is the affordance (already had
+  `cursor-pointer`, `hover:bg-hover`, `role="button"`,
+  `tabindex="0"`, and Enter/Space keydown handler from
+  Pack A).
+- Selected row carried no visual indication that an edit
+  panel was open against it — real footgun when multiple
+  routes share similar URLs (operator's test2 + arenet-test
+  both pointing at `192.168.99.10:8080`). Added a
+  `route-row-selected` class toggled on `editingId ===
+  r.id`, styled in a scoped `<style>` block with a
+  `--accent`-tinted background + 3px inset box-shadow on
+  the left edge. Hover state on the selected row tints
+  slightly stronger so the click target still feels live.
+  Same accent token as `.nav-item.active`, Topology hub
+  border, and elsewhere — theme-propagation safe.
+
+Frontend tests grew to 120 (was 117): new
+"table row interaction affordance" describe block covering
+(a) no per-row Edit button rendered, (b) row click opens
+the edit panel, (c) the selected row carries the
+`route-row-selected` class and (d) the highlight follows
+when another row is selected (alpha → beta deselects
+alpha, selects beta).
+
+**Polish round 3 — close paths + edit-pill border (2026-06-06,
+amended into 5a07275).** Polish 2's smoke caught two
+regressions in the close paths plus one visual nit on the
+edit-mode pill:
+
+- **Save left the row highlighted.** The submit handler was
+  flipping `formOpen = false` directly instead of going
+  through `closePanel()`, so `editingId` stayed set and the
+  row kept its `route-row-selected` class with no panel to
+  match. Fixed by routing Save through `closePanel()` — same
+  symmetry Cancel has always had.
+- **Click outside the panel did nothing.** The spec
+  announced "Save / Cancel / outside-click → panel closes"
+  but the outside-click path was missing. Added a Svelte
+  action `clickOutsideToClose` bound to the panel root that
+  listens on document `mousedown`. Closes the panel when the
+  target is neither inside the panel nor inside the routes
+  table (table-targeted clicks are left to the per-row
+  onclick to avoid racing the toggle semantic).
+- **Click the same selected row toggles closed.** Promoted
+  the row's `openEdit(r)` call to `selectOrToggleRoute(r)`,
+  which detects `editingId === r.id && formOpen` and calls
+  `closePanel()` instead. Matches macOS Finder list
+  inspector behaviour and is reachable from keyboard via the
+  existing Enter/Space onkeydown.
+- **Edit-pill border colour.** The "edit"/"new" pill in the
+  panel header had `border-cyan/30`; Tailwind v4 was
+  resolving the opacity-modified colour to a default-gray
+  fallback, reading as a white-ish outline on dark mode and
+  clashing with the cyan text. Dropped the `/30` → border
+  now matches the text colour (full-opacity cyan).
+
+Frontend tests grew to 124 (was 120): four new tests in the
+affordance describe block — Save closes + deselects;
+outside-click closes + deselects; in-panel click does NOT
+close; same-row click toggles closed.
+
 ### Finding #R-TOPO-hc-bootstrap-down — primed-healthy upstream that boots already down reads green for ~30-60s
 
 Stage B's bootstrap prime (cmd/arenet/main.go, 2026-06-04)

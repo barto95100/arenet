@@ -791,8 +791,12 @@ describe('Routes page — openEdit round-trip preserves HealthCheck', () => {
 		render(Page);
 
 		// Wait for listRoutes to settle and the table to render the
-		// row + Edit button.
-		const editBtn = await screen.findByRole('button', { name: 'Edit' });
+		// row. Polish round 2026-06-06 dropped the per-row "Edit"
+		// button — the whole <tr> is the affordance now, so we
+		// open the edit panel by clicking the row itself. Find by
+		// the host cell text and walk up to the row.
+		const hostCell = await screen.findByText('edit.example.com');
+		const row = hostCell.closest('tr')!;
 
 		// IMPORTANT: this test is meaningful only if the HC sub-form
 		// is actually mounted by openEdit. We assert against the
@@ -801,7 +805,7 @@ describe('Routes page — openEdit round-trip preserves HealthCheck', () => {
 		// silently drops a field. If we re-read each field from the
 		// DOM and used it to build the payload, a missing-field
 		// regression would be invisible. We do NOT do that.
-		await userEvent.click(editBtn);
+		await userEvent.click(row);
 		await tick();
 
 		// Mark HC touched (the wrapper onclick / oninput in the
@@ -965,5 +969,189 @@ describe('Routes page — aggregate health badges + filter tabs', () => {
 		expect(screen.queryByText(/0\/2 sains/)).not.toBeInTheDocument();
 		// No counter on the single-upstream healthy route.
 		expect(screen.queryByText(/1\/1 sains/)).not.toBeInTheDocument();
+	});
+});
+
+// --- C11 Pack A polish — table-row affordance ---------------------
+//
+// Operator's smoke after the badge polish caught two more UX
+// gaps: (1) the per-row "Edit" button was redundant noise next
+// to the whole-row click target, and (2) the selected row had
+// no visual indication, which is a real footgun when multiple
+// routes share similar URLs (operator's test2 + arenet-test
+// both point at 192.168.99.10:8080). This commit drops the
+// button entirely and adds a route-row-selected class on the
+// active row. These tests pin the new contract.
+describe('Routes page — table row interaction affordance', () => {
+	const mk = (id: string, host: string): Route =>
+		makeRoute({ id, host, upstreams: [{ url: 'http://127.0.0.1:9000', weight: 1 }] });
+
+	it('renders no per-row "Edit" button (whole-row affordance instead)', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			mk('r-a', 'alpha.example'),
+			mk('r-b', 'beta.example'),
+		]);
+		render(Page);
+
+		// Wait for the rows to render.
+		await screen.findByText('alpha.example');
+
+		// No button anywhere in the document with the accessible
+		// name "Edit" — the polish round explicitly removed it.
+		expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+	});
+
+	it('clicking a row opens the edit panel', async () => {
+		apiMock.listRoutes.mockResolvedValue([mk('r-a', 'alpha.example')]);
+		render(Page);
+
+		const hostCell = await screen.findByText('alpha.example');
+		const row = hostCell.closest('tr')!;
+
+		// Before click: the edit-panel form is not mounted. The
+		// most stable anchor is the host input — it's only in the
+		// DOM when the form is open. (createForm path also mounts
+		// it, but here we haven't opened the create form either.)
+		expect(screen.queryByLabelText('Host')).not.toBeInTheDocument();
+
+		await userEvent.click(row);
+		await tick();
+
+		// After click: the edit form is mounted and pre-populated
+		// with the clicked route's host.
+		const hostInput = screen.getByLabelText('Host') as HTMLInputElement;
+		expect(hostInput.value).toBe('alpha.example');
+	});
+
+	it('selected row gets the route-row-selected class; deselects when another row opens', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			mk('r-a', 'alpha.example'),
+			mk('r-b', 'beta.example'),
+		]);
+		render(Page);
+
+		const alphaCell = await screen.findByText('alpha.example');
+		const betaCell = screen.getByText('beta.example');
+		const alphaRow = alphaCell.closest('tr')!;
+		const betaRow = betaCell.closest('tr')!;
+
+		// Initial: no row selected.
+		expect(alphaRow.classList.contains('route-row-selected')).toBe(false);
+		expect(betaRow.classList.contains('route-row-selected')).toBe(false);
+
+		// Click alpha → alpha gets the selected class.
+		await userEvent.click(alphaRow);
+		await tick();
+		expect(alphaRow.classList.contains('route-row-selected')).toBe(true);
+		expect(betaRow.classList.contains('route-row-selected')).toBe(false);
+
+		// Click beta → beta selected, alpha deselected. The
+		// highlight follows the active editing route — critical
+		// for the operator-footgun scenario (similar URLs across
+		// routes).
+		await userEvent.click(betaRow);
+		await tick();
+		expect(alphaRow.classList.contains('route-row-selected')).toBe(false);
+		expect(betaRow.classList.contains('route-row-selected')).toBe(true);
+	});
+
+	// --- Polish round 3 (2026-06-06) — close paths -------------
+	// Operator caught two regressions in 5a07275: Save left the
+	// row highlighted (phantom selection with no panel), and
+	// click-outside did nothing. These tests pin the three
+	// close paths (Save / Cancel / outside-click) and the
+	// click-same-row toggle so the next refactor can't regress.
+
+	it('Save closes the panel AND deselects the row', async () => {
+		const route = mk('r-a', 'alpha.example');
+		apiMock.listRoutes.mockResolvedValue([route]);
+		apiMock.updateRoute.mockResolvedValue(route);
+
+		render(Page);
+
+		const hostCell = await screen.findByText('alpha.example');
+		const row = hostCell.closest('tr')!;
+		await userEvent.click(row);
+		await tick();
+
+		// Sanity: row is selected before Save.
+		expect(row.classList.contains('route-row-selected')).toBe(true);
+
+		// Submit. Re-using the same pattern as the validation
+		// suite — fireEvent.submit on the panel's form.
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick(); // closePanel + loadRoutes both schedule
+
+		// After Save: row is deselected (Bug 1 fix). The route is
+		// still rendered (loadRoutes ran), but no row carries the
+		// route-row-selected class.
+		const rowAfter = (await screen.findByText('alpha.example')).closest('tr')!;
+		expect(rowAfter.classList.contains('route-row-selected')).toBe(false);
+		// Form mount anchor is gone too — the panel closed.
+		expect(screen.queryByLabelText('Host')).not.toBeInTheDocument();
+	});
+
+	it('clicking outside the panel closes it and deselects the row', async () => {
+		apiMock.listRoutes.mockResolvedValue([mk('r-a', 'alpha.example')]);
+		render(Page);
+
+		const hostCell = await screen.findByText('alpha.example');
+		const row = hostCell.closest('tr')!;
+		await userEvent.click(row);
+		await tick();
+		expect(row.classList.contains('route-row-selected')).toBe(true);
+
+		// Click on the page <h1> heading — outside the panel
+		// AND outside the table. The mousedown listener should
+		// fire closePanel.
+		const heading = screen.getByRole('heading', { name: /Routes/i });
+		await fireEvent.mouseDown(heading);
+		await tick();
+
+		expect(row.classList.contains('route-row-selected')).toBe(false);
+		expect(screen.queryByLabelText('Host')).not.toBeInTheDocument();
+	});
+
+	it('clicking inside the panel does NOT close it', async () => {
+		apiMock.listRoutes.mockResolvedValue([mk('r-a', 'alpha.example')]);
+		render(Page);
+
+		const hostCell = await screen.findByText('alpha.example');
+		const row = hostCell.closest('tr')!;
+		await userEvent.click(row);
+		await tick();
+
+		// Click on a form input inside the panel — must not
+		// trigger closePanel. The host input is the most reliable
+		// in-panel anchor.
+		const hostInput = screen.getByLabelText('Host') as HTMLInputElement;
+		await fireEvent.mouseDown(hostInput);
+		await tick();
+
+		// Panel still open, row still selected.
+		expect(row.classList.contains('route-row-selected')).toBe(true);
+		expect(screen.getByLabelText('Host')).toBeInTheDocument();
+	});
+
+	it('clicking the same selected row toggles the panel closed', async () => {
+		apiMock.listRoutes.mockResolvedValue([mk('r-a', 'alpha.example')]);
+		render(Page);
+
+		const hostCell = await screen.findByText('alpha.example');
+		const row = hostCell.closest('tr')!;
+		await userEvent.click(row);
+		await tick();
+		expect(row.classList.contains('route-row-selected')).toBe(true);
+
+		// Click the same row again — toggle close (macOS Finder
+		// list inspector behaviour). The row's onclick calls
+		// selectOrToggleRoute which detects editingId === r.id
+		// and invokes closePanel instead of re-opening.
+		await userEvent.click(row);
+		await tick();
+
+		expect(row.classList.contains('route-row-selected')).toBe(false);
+		expect(screen.queryByLabelText('Host')).not.toBeInTheDocument();
 	});
 });
