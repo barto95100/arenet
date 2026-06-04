@@ -91,7 +91,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # //go:embed gate: web/embed.go pulls frontend/build into
       # the binary, so Go's compile pass (which `go vet` and
@@ -99,7 +99,7 @@ jobs:
       # checkout where build/ doesn't exist. Build the frontend
       # first; the Go steps then have an embeddable directory.
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'npm'
@@ -119,7 +119,7 @@ jobs:
           npm run build
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.25'
           cache: true
@@ -144,10 +144,10 @@ jobs:
         working-directory: web/frontend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'npm'
