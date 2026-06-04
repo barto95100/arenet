@@ -793,6 +793,77 @@ Files touched in the resolution:
 - deleted `internal/api/topology/caddyprobe.go`,
   `internal/api/topology/caddyprobe_test.go`
 
+### Finding #R-ROUTES-health-honest — Routes page ÉTAT column lied (always-green) — RESOLVED in C11 Pack A (2026-06-05)
+
+**Status**: RESOLVED. Operator caught the bug right after Stage B
+shipped: the Topology canvas was showing arenet-test as
+1-healthy-1-unhealthy (via the new HCStatusTracker), but the
+Routes page table painted a solid green dot on every row
+regardless. Same class of bug as the pre-C13 "gray everywhere"
+on Topology, except now it was "green everywhere".
+
+Resolution: extend the Routes API to share the Stage B
+HCStatusTracker singleton with the existing topology consumer,
+compute a per-route aggregate, attach it to the wire shape, and
+wire the frontend filter tabs + ÉTAT badge against the new field.
+
+Backend (`internal/api/handler.go`, `routes_health.go`,
+`routes.go`):
+- New `HCStatusReader` interface in the api package (mirrors the
+  topology builder's StatusLookup) so the handler doesn't take a
+  caddyhc import.
+- New `Handler.hcStatus` field + `SetHCStatusReader` setter,
+  same nil-tolerance contract as the other Set\*Reader methods.
+- `routeResponse` gains `AggregateStatus`, `HealthyUpstreamCount`,
+  `TotalUpstreamCount`.
+- `computeRouteAggregateHealth` pure helper with the precedence
+  table documented inline (C13 gate → no upstreams → all-
+  unhealthy → any-unhealthy → all-healthy → warm-up). Unit tests
+  cover all four states + the gate + warm-up + nil-reader +
+  single-upstream + empty-pool edge cases.
+- `listRoutes` / `getRoute` enrich each response after
+  `toResponse`, same pattern as `EffectiveCertSource`.
+
+Wiring (`cmd/arenet/main.go`):
+- `apiHandler.SetHCStatusReader(hcTracker)` after the other
+  Set\*Reader calls. The tracker was already constructed +
+  primed before mgr.Start (Stage B), so the wire is just a
+  reference share.
+
+Frontend (`web/frontend/src/lib/api/types.ts`,
+`web/frontend/src/routes/routes/+page.svelte`):
+- `Route` type gains `aggregateStatus`, `healthyUpstreamCount`,
+  `totalUpstreamCount`.
+- Routes page ÉTAT column maps `aggregateStatus → StatusDot`:
+  healthy→up (green), degraded→warn (yellow), down→down (red),
+  unknown→idle (muted gray). Same `--status-*` CSS tokens as
+  Topology's UpstreamNode / BackendClusterNode for perceptual
+  consistency between the two pages.
+- Upstream cell appends "· N/M sains" on multi-upstream routes
+  with a verdict. Hidden for single-upstream pools and for
+  unknown-status routes.
+- "All / Healthy / Alerts" segmented tab filter wired against
+  `aggregateStatus`: Healthy matches strict `healthy` (unknown
+  doesn't count as healthy), Alerts matches `degraded || down`,
+  unknown excluded from both.
+- The page is still one-shot on mount (existing behaviour). Live
+  refresh is C11 Pack B scope.
+
+Verification: go vet clean, go test -race -count=1 on
+`internal/api/...` green (includes new
+`routes_health_test.go`), npm run check 0/0/0, npm test 113/113,
+npm run build succeeds. Browser smoke expected on redeploy:
+- arenet-test → DEGRADED yellow (1 healthy .99 + 1 down typo .9)
+- test2 → UNKNOWN gray (no HC configured — C13 gate)
+- ha → HEALTHY green (HC ok, tracker primed at boot)
+
+Remaining packs for the Routes page (out of scope for Pack A):
+- **C11 Pack B**: visual layout refactor matching the mock —
+  multiline host/path rendering, WAF level badges, TLS "1.3"
+  precision, optional removal of the 4 stats cards above the
+  table.
+- **C11 Pack C**: edit-panel revamp. Post-v1.2.
+
 ### Finding #R-TOPO-hc-bootstrap-down — primed-healthy upstream that boots already down reads green for ~30-60s
 
 Stage B's bootstrap prime (cmd/arenet/main.go, 2026-06-04)

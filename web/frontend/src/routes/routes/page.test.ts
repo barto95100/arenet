@@ -124,6 +124,11 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		},
 		createdAt: '2026-05-25T10:00:00.000Z',
 		updatedAt: '2026-05-25T10:00:00.000Z',
+		// Critique 11 Pack A defaults — match the no-HC-configured
+		// path (the gate forces unknown with healthy=0).
+		aggregateStatus: 'unknown',
+		healthyUpstreamCount: 0,
+		totalUpstreamCount: 1,
 		...overrides
 	};
 }
@@ -849,5 +854,116 @@ describe('Routes page — openEdit round-trip preserves HealthCheck', () => {
 		expect(payload.healthCheck.expectBody).toBe(seededHC.expectBody);
 		expect(payload.healthCheck.passes).toBe(seededHC.passes);
 		expect(payload.healthCheck.fails).toBe(seededHC.fails);
+	});
+});
+
+// --- C11 Pack A — aggregate health badge + filter tabs --------------
+//
+// Operator's Pack A smoke caught the original "static green dot"
+// mendacity; the polish round (this commit, amended a8a4723)
+// replaced the dot with an explicit uppercase Badge. These tests
+// pin the badge → variant mapping AND the segmented-tab filter
+// semantics so a future regression on either gets caught
+// immediately.
+describe('Routes page — aggregate health badges + filter tabs', () => {
+	const mkRoute = (
+		id: string,
+		host: string,
+		aggregateStatus: Route['aggregateStatus'],
+		healthy: number,
+		total: number,
+	): Route =>
+		makeRoute({
+			id,
+			host,
+			aggregateStatus,
+			healthyUpstreamCount: healthy,
+			totalUpstreamCount: total,
+			upstreams: Array.from({ length: total }, (_, i) => ({
+				url: `http://10.0.0.${i + 1}:80`,
+				weight: 1,
+			})),
+		});
+
+	it('renders one badge per route with the label matching aggregateStatus', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			mkRoute('r-h', 'healthy.example', 'healthy', 1, 1),
+			mkRoute('r-d', 'degraded.example', 'degraded', 1, 2),
+			mkRoute('r-down', 'down.example', 'down', 0, 1),
+			mkRoute('r-u', 'unknown.example', 'unknown', 0, 1),
+		]);
+		render(Page);
+
+		expect(await screen.findByText('HEALTHY')).toBeInTheDocument();
+		expect(screen.getByText('DEGRADED')).toBeInTheDocument();
+		expect(screen.getByText('DOWN')).toBeInTheDocument();
+		expect(screen.getByText('UNKNOWN')).toBeInTheDocument();
+	});
+
+	it('Healthy tab filters to aggregateStatus === healthy only', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			mkRoute('r-h', 'healthy.example', 'healthy', 1, 1),
+			mkRoute('r-d', 'degraded.example', 'degraded', 1, 2),
+			mkRoute('r-u', 'unknown.example', 'unknown', 0, 1),
+		]);
+		render(Page);
+
+		// Wait for the initial render — the Healthy badge being
+		// in the DOM is a reliable readiness signal that listRoutes
+		// resolved.
+		await screen.findByText('HEALTHY');
+
+		await userEvent.click(screen.getByRole('button', { name: 'Healthy' }));
+		await tick();
+
+		// Strict: unknown must NOT pass the Healthy filter. The
+		// gray-≠-green contract from the C13 Topology gate.
+		expect(screen.getByText('HEALTHY')).toBeInTheDocument();
+		expect(screen.queryByText('DEGRADED')).not.toBeInTheDocument();
+		expect(screen.queryByText('UNKNOWN')).not.toBeInTheDocument();
+	});
+
+	it('Alerts tab filters to degraded OR down; unknown excluded', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			mkRoute('r-h', 'healthy.example', 'healthy', 1, 1),
+			mkRoute('r-d', 'degraded.example', 'degraded', 1, 2),
+			mkRoute('r-down', 'down.example', 'down', 0, 1),
+			mkRoute('r-u', 'unknown.example', 'unknown', 0, 1),
+		]);
+		render(Page);
+
+		await screen.findByText('HEALTHY');
+
+		await userEvent.click(screen.getByRole('button', { name: 'Alerts' }));
+		await tick();
+
+		expect(screen.getByText('DEGRADED')).toBeInTheDocument();
+		expect(screen.getByText('DOWN')).toBeInTheDocument();
+		expect(screen.queryByText('HEALTHY')).not.toBeInTheDocument();
+		// "Unknown ≠ alert" — operator can't get false-positive
+		// noise from warm-up routes in the alerts list.
+		expect(screen.queryByText('UNKNOWN')).not.toBeInTheDocument();
+	});
+
+	it('multi-upstream "N/M sains" appears only for routes with a verdict', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			// Two upstreams, degraded → counter visible.
+			mkRoute('r-d', 'degraded.example', 'degraded', 1, 2),
+			// Single upstream, healthy → counter hidden (noise).
+			mkRoute('r-h1', 'single.example', 'healthy', 1, 1),
+			// Two upstreams, unknown → counter hidden (no verdict).
+			mkRoute('r-u2', 'warmup.example', 'unknown', 0, 2),
+		]);
+		render(Page);
+
+		await screen.findByText('DEGRADED');
+
+		// Counter present on the degraded multi-upstream route.
+		expect(screen.getByText(/1\/2 sains/)).toBeInTheDocument();
+		// No "0/2 sains" line for the unknown route (would be
+		// misleading on a non-monitored / warm-up route).
+		expect(screen.queryByText(/0\/2 sains/)).not.toBeInTheDocument();
+		// No counter on the single-upstream healthy route.
+		expect(screen.queryByText(/1\/1 sains/)).not.toBeInTheDocument();
 	});
 });

@@ -239,6 +239,29 @@ type Handler struct {
 	// from N.2 storage). Same nil-tolerance contract as
 	// throttleEvents.
 	decisions DecisionReader
+	// hcStatus (Critique 11 Pack A, 2026-06-05) is the per-
+	// upstream live status feed populated by the Stage B
+	// caddyhc tracker. Used by listRoutes / getRoute to attach
+	// an aggregateStatus to each route's response so the Routes
+	// page can paint honest health badges. Same nil-tolerance
+	// contract as the other readers: a nil hcStatus collapses
+	// the aggregate to "unknown" without erroring.
+	hcStatus HCStatusReader
+}
+
+// HCStatusReader is the read interface the Routes page uses to
+// derive per-route aggregate health from per-upstream tracker
+// state. Implemented by *caddyhc.HCStatusTracker, but declared
+// locally so this package doesn't import caddyhc (the topology
+// builder already uses the same minimal-interface pattern via
+// its own StatusLookup).
+//
+// Returns "healthy" / "unhealthy" / "" (empty == unknown / not
+// yet observed) for any given normalized upstream address. The
+// aggregation logic in computeRouteAggregateHealth maps "" and
+// any unrecognised value to the unknown state.
+type HCStatusReader interface {
+	Status(addr string) string
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -353,6 +376,23 @@ func (h *Handler) SetAuthFailureReader(r AuthFailureReader) {
 // fields. Same nil-tolerance contract as SetWafEventReader.
 func (h *Handler) SetThrottleEventReader(r ThrottleEventReader) {
 	h.throttleEvents = r
+}
+
+// SetHCStatusReader (Critique 11 Pack A, 2026-06-05) attaches
+// the per-upstream HC status feed used by listRoutes / getRoute
+// to compute aggregateStatus on each route's wire response. Pass
+// the *caddyhc.HCStatusTracker singleton that cmd/arenet already
+// constructs before mgr.Start; the topology builder consumes the
+// same tracker via its own minimal interface, so this is the
+// existing Stage B source of truth being shared with a second
+// HTTP consumer.
+//
+// Nil-tolerant: leaving this unset (or passing nil) collapses
+// every aggregateStatus to "unknown", which matches the
+// pre-Pack-A behaviour and the C13 honest-absence semantics for
+// routes without HC configured.
+func (h *Handler) SetHCStatusReader(r HCStatusReader) {
+	h.hcStatus = r
 }
 
 // SetDecisionReader (Step N.3) attaches the CrowdSec
@@ -638,8 +678,21 @@ type routeResponse struct {
 	// is false the rest of the sub-fields carry zero values and
 	// the generator omits the Caddy `health_checks` block.
 	HealthCheck healthCheckResp `json:"healthCheck"`
-	CreatedAt   string          `json:"createdAt"`
-	UpdatedAt   string          `json:"updatedAt"`
+	// Critique 11 Pack A (2026-06-05) — derived per-route
+	// aggregate from the Stage B HC tracker. One of:
+	//   "healthy"   — HC enabled AND every upstream healthy in tracker
+	//   "degraded"  — HC enabled, mix of healthy + unhealthy
+	//   "down"      — HC enabled AND every upstream unhealthy
+	//   "unknown"   — HC disabled, OR at least one upstream
+	//                 unobserved (warm-up window) without any
+	//                 unhealthy signal yet
+	// See computeRouteAggregateHealth's docstring for the full
+	// precedence table.
+	AggregateStatus      string `json:"aggregateStatus"`
+	HealthyUpstreamCount int    `json:"healthyUpstreamCount"`
+	TotalUpstreamCount   int    `json:"totalUpstreamCount"`
+	CreatedAt            string `json:"createdAt"`
+	UpdatedAt            string `json:"updatedAt"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with

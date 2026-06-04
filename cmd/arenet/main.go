@@ -608,6 +608,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// upstream and boot has already aborted in that case.
 	apiHandler.SetAuthFailureReader(auditStore)
 
+	// Critique 11 Pack A (2026-06-05) — share the Stage B HC
+	// tracker with the Routes API so listRoutes / getRoute
+	// attach the per-route aggregateStatus rollup. Tracker was
+	// constructed + primed before mgr.Start, so it's already
+	// receiving events by the time this setter fires.
+	apiHandler.SetHCStatusReader(hcTracker)
+
 	// Step P.3 — auto-classify trigger engine wiring.
 	// Read rules + credentials from BoltDB, build the
 	// engine + manager, start the goroutines, register

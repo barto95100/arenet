@@ -164,6 +164,27 @@ export interface Route {
 	 * the badge in that case).
 	 */
 	effectiveCertSource?: string;
+	/**
+	 * Critique 11 Pack A (2026-06-05) — derived per-route health
+	 * rollup the Routes API computes from the Stage B HC tracker.
+	 *   "healthy"  — HC enabled AND every upstream healthy
+	 *   "degraded" — HC enabled, at least one unhealthy upstream
+	 *   "down"     — HC enabled AND every upstream unhealthy
+	 *   "unknown"  — HC disabled, OR warm-up window with no
+	 *                unhealthy signal yet
+	 * Always present on a route response. See the backend
+	 * `computeRouteAggregateHealth` docstring for the full
+	 * precedence table.
+	 */
+	aggregateStatus: 'healthy' | 'degraded' | 'down' | 'unknown';
+	/**
+	 * Count of upstreams the HC tracker has observed as healthy.
+	 * Zero on routes without HC configured (the C13 gate doesn't
+	 * peek at tracker state). Used by the Routes table to render
+	 * "N/M sains" when the pool has multiple upstreams.
+	 */
+	healthyUpstreamCount: number;
+	totalUpstreamCount: number;
 	createdAt: string;
 	updatedAt: string;
 }

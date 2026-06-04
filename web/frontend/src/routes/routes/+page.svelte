@@ -23,7 +23,6 @@
 	import Button from '$lib/components/Button.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
-	import StatusDot from '$lib/components/StatusDot.svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -782,17 +781,30 @@
 		waf: routes.filter((r) => r.wafMode !== 'off').length
 	});
 
-	// Phase 1 split layout — filtered list view. The search input
-	// matches host / aliases / upstream URL as a case-insensitive
-	// substring. The tab filter is a stub for Phase 2 per the
-	// `listTab` comment above; the listTab variable is read so
-	// the Healthy/Alerts buttons stay click-active in the DOM
-	// (no `disabled`) — they just don't affect the filter today.
+	// Filtered list view. Two independent filters that AND
+	// together: the search input (case-insensitive substring on
+	// host / aliases / upstream URL) and the segmented Healthy /
+	// Alerts tab (Critique 11 Pack A, 2026-06-05).
+	//
+	// Healthy / Alerts semantics:
+	//   - 'all'     → no health filter; show every route
+	//   - 'healthy' → only routes with aggregateStatus === 'healthy'
+	//     (unknown does NOT count as healthy — gray ≠ green,
+	//     consistent with the Topology C13 gate.)
+	//   - 'alerts'  → routes in {degraded, down}. Unknown is also
+	//     excluded from alerts: we don't have a confirmed problem.
 	const filteredRoutes = $derived.by(() => {
 		const q = listFilter.trim().toLowerCase();
-		void listTab; // referenced for Phase 2 — see TODO above.
-		if (!q) return routes;
-		return routes.filter((r) => {
+		let pool = routes;
+		if (listTab === 'healthy') {
+			pool = pool.filter((r) => r.aggregateStatus === 'healthy');
+		} else if (listTab === 'alerts') {
+			pool = pool.filter(
+				(r) => r.aggregateStatus === 'degraded' || r.aggregateStatus === 'down',
+			);
+		}
+		if (!q) return pool;
+		return pool.filter((r) => {
 			if (r.host.toLowerCase().includes(q)) return true;
 			for (const a of r.aliases ?? []) {
 				if (a.toLowerCase().includes(q)) return true;
@@ -803,6 +815,33 @@
 			return false;
 		});
 	});
+
+	// Map the wire-level aggregate health to a Badge presentation
+	// (label + variant). The variant names map directly onto the
+	// shared --status-* design tokens, the same ones Topology
+	// UpstreamNode / BackendClusterNode + the TLS / Detect /
+	// Block badges already in this table use. No inline colors —
+	// a future theme change propagates everywhere automatically.
+	//
+	// Originally rendered as a StatusDot during C11 Pack A; the
+	// operator's smoke surfaced the dot-alone was ambiguous to
+	// scan, so the polish round swapped it for an explicit
+	// uppercase text badge matching the existing pill style.
+	function aggregateToBadge(s: Route['aggregateStatus']): {
+		label: string;
+		variant: 'status-up' | 'status-warn' | 'status-down' | 'neutral';
+	} {
+		switch (s) {
+			case 'healthy':
+				return { label: 'HEALTHY', variant: 'status-up' };
+			case 'degraded':
+				return { label: 'DEGRADED', variant: 'status-warn' };
+			case 'down':
+				return { label: 'DOWN', variant: 'status-down' };
+			default:
+				return { label: 'UNKNOWN', variant: 'neutral' };
+		}
+	}
 
 	function fmtDate(iso: string): string {
 		return new Date(iso).toLocaleString();
@@ -948,6 +987,7 @@
 					<tbody>
 						{#each filteredRoutes as r (r.id)}
 							{@const selected = editingId === r.id}
+							{@const statusBadge = aggregateToBadge(r.aggregateStatus)}
 							<tr
 								class="border-b border-border-subtle last:border-b-0 cursor-pointer transition-colors hover:bg-hover"
 								class:bg-accent-soft={selected}
@@ -1022,6 +1062,16 @@
 									{r.upstreams[0]?.url ?? ''}{r.upstreams.length > 1
 										? ` (+${r.upstreams.length - 1})`
 										: ''}
+									<!-- Critique 11 Pack A: "N/M sains" counter on
+									     multi-upstream routes whose HC tracker has
+									     a verdict. Hidden for single-upstream
+									     pools (noise) and for unknown-status pools
+									     (no verdict to count). -->
+									{#if r.totalUpstreamCount > 1 && r.aggregateStatus !== 'unknown'}
+										<span class="ml-1 text-xs text-muted"
+											>· {r.healthyUpstreamCount}/{r.totalUpstreamCount}
+											sains</span>
+									{/if}
 								</td>
 								<td class="px-4 py-3">
 									{#if r.tlsEnabled}
@@ -1057,14 +1107,17 @@
 									{/if}
 								</td>
 								<td class="px-4 py-3 text-right">
-									<!-- TODO Phase 2: replace the static "up" dot with
-									     a per-route health rollup (healthy / degraded
-									     / down) once the API surfaces it. The Healthy
-									     and Alerts segmented tabs above will then
-									     become functional filters keyed off this
-									     field. -->
+									<!-- Critique 11 Pack A (2026-06-05): per-route
+									     health rollup driven by the Stage B HC
+									     tracker. aggregateToBadge maps the wire-
+									     level enum to a Badge label + variant,
+									     sharing the --status-* CSS tokens with
+									     Topology AND the existing TLS / Detect /
+									     Block badges in this same table. The
+									     Healthy / Alerts segmented tabs above
+									     filter on the same aggregateStatus. -->
 									<span class="inline-flex items-center gap-2">
-										<StatusDot status="up" />
+										<Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
 										<!-- Small Edit button — duplicates the
 										     row-click action so the test suite's
 										     `findByRole('button', { name: 'Edit' })`

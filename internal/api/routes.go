@@ -297,6 +297,12 @@ func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {
 	for _, rt := range routes {
 		resp := toResponse(rt)
 		resp.EffectiveCertSource = computeEffectiveCertSource(rt, mds)
+		// Critique 11 Pack A: attach the per-route aggregate
+		// health rollup derived from the Stage B HC tracker.
+		// Nil-tolerant; collapses to "unknown" when the tracker
+		// isn't wired (mirrors the no-HC-configured gate).
+		resp.AggregateStatus, resp.HealthyUpstreamCount, resp.TotalUpstreamCount =
+			computeRouteAggregateHealth(rt, h.hcStatus)
 		out = append(out, resp)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -322,6 +328,11 @@ func (h *Handler) getRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := toResponse(rt)
 	resp.EffectiveCertSource = computeEffectiveCertSource(rt, mds)
+	// Critique 11 Pack A — see the comment in listRoutes for the
+	// rationale. Same nil-tolerance contract: missing tracker
+	// collapses to "unknown".
+	resp.AggregateStatus, resp.HealthyUpstreamCount, resp.TotalUpstreamCount =
+		computeRouteAggregateHealth(rt, h.hcStatus)
 	writeJSON(w, http.StatusOK, resp)
 }
 
