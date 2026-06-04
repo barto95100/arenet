@@ -793,7 +793,77 @@ Files touched in the resolution:
 - deleted `internal/api/topology/caddyprobe.go`,
   `internal/api/topology/caddyprobe_test.go`
 
-### Finding #R-TOPO-probe-logging — 1 Caddy admin probe log/second is too noisy for prod
+### Finding #R-TOPO-hc-bootstrap-down — primed-healthy upstream that boots already down reads green for ~30-60s
+
+Stage B's bootstrap prime (cmd/arenet/main.go, 2026-06-04)
+optimistically records every HC-configured upstream as
+StatusHealthy before Caddy starts. Required because Caddy's
+active health checker only emits "healthy"/"unhealthy" on
+STATE TRANSITIONS (`healthchecks.go:479/502` are gated on
+`setHealthy` returning true), and Caddy itself starts upstreams
+in the healthy state by default — so an upstream that boots
+healthy and stays healthy never transitions, never emits, and
+the tracker would have no entry. Without the prime, the
+topology canvas renders neutral-unknown indefinitely on routes
+the operator can plainly see are working.
+
+The trade-off the prime accepts: if an upstream is *down* at
+process boot, the tracker reports StatusHealthy until Caddy's
+first probe lands and emits the healthy→unhealthy transition.
+For default Caddy HC config (Interval=30s, defaults) that
+window is ~30-60s. The topology canvas will paint green for
+that brief period despite the operator's `curl` showing the
+upstream is refused.
+
+**Fix shape options** (none in scope for v1.1.0):
+
+1. **Drain primed-state on Caddy reload**: clear the tracker
+   inside the EventHandler's Provision (the module is
+   re-Provisioned on every caddy.Load). Forces a fresh
+   warm-up after every config change. Doesn't help the
+   initial-boot window since that's BEFORE any Caddy probe
+   cycle.
+
+2. **Synthetic probe at boot**: cmd/arenet does a one-shot
+   TCP dial to each upstream's host:port before priming and
+   records the result. Adds dial-noise complexity but
+   collapses the window from "first probe interval" to "first
+   dial result" (~ms instead of ~s). Risk: storage URL form
+   may not match an actually-reachable host:port for all
+   schemes (h2c, etc.).
+
+3. **Start with StatusUnknown (no prime), accept neutral
+   rendering on always-healthy routes**: reverts to the pre-
+   bootstrap behaviour for clarity, at the cost of the always-
+   gray-shield rendering the operator just walked away from.
+   Already explicitly rejected.
+
+4. **Caddy upstream feature request**: ask the Caddy
+   maintainers to emit an initial "healthy" event from
+   `activeHealthChecker` on its first successful probe even
+   when state didn't transition (opt-in flag). Cleanest
+   long-term, but external dependency.
+
+**Triage.** Cosmetic edge case under a narrow boot-time
+window. Real-world impact: ~30-60s of green-on-down after a
+process restart, which the operator notices only if they
+restart-and-look-immediately AND have an upstream that is
+genuinely down at that exact moment. Land if/when option 2
+(synthetic boot dial) becomes attractive for other reasons
+(e.g. needs a hostname↔addr resolver anyway).
+
+### Finding #R-TOPO-probe-logging — 1 Caddy admin probe log/second is too noisy for prod — RESOLVED in Stage B (2026-06-04)
+
+**Status**: RESOLVED as a side-effect of `#R-TOPO-real-health-probe`'s
+Stage B resolution. `CaddyStatusProber` and its 1s background
+refresher were both deleted in commit `d194588` (the events App
+became the truth source for status, the prober had no consumer
+left). With the polling gone, the admin-endpoint log line stream
+this finding was about no longer exists. No further work needed —
+the entire poll/log/noise chain is just absent in the post-Stage-B
+build.
+
+---
 
 `CaddyStatusProber.Refresh` (called every 1 s by the background
 refresher in `cmd/arenet/topology_wiring.go`) hits Caddy's admin

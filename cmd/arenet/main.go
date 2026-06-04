@@ -230,6 +230,53 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		logger.Info("crowdsec bouncer not configured (set ARENET_CROWDSEC_API_KEY to enable the IP-reputation gate)")
 	}
 
+	// #R-TOPO-real-health-probe (Stage B) — install the HC status
+	// tracker BEFORE mgr.Start. Caddy's events App provisions the
+	// arenet_topology_hc handler during caddy.Load (called from
+	// inside mgr.Start); the handler's Provision then captures
+	// the tracker via the package-level singleton. The Handle
+	// path queries getTracker() per event, so a delayed install
+	// would technically still work, but installing-then-starting
+	// is the honest order: Caddy can fire its first event the
+	// instant the active health-checker goroutine spawns, and we
+	// want the tracker ready by then.
+	hcTracker := caddyhc.NewTracker()
+	caddyhc.SetTracker(hcTracker)
+
+	// Bootstrap-prime the tracker so upstreams that boot healthy
+	// and stay healthy aren't stuck at StatusUnknown for the
+	// process's lifetime. Caddy's active health checker only
+	// emits "healthy"/"unhealthy" events on STATE TRANSITIONS
+	// (healthchecks.go:479/502: setHealthy returns true only when
+	// the call actually flipped state). Upstreams start healthy
+	// by default in Caddy; a route that boots healthy and stays
+	// healthy never transitions, so Caddy never emits, and the
+	// tracker would have no entry — the topology would render
+	// gray-unknown forever on a route the operator can plainly
+	// see is working.
+	//
+	// Priming-as-healthy mirrors Caddy's own optimistic default.
+	// The first real event from Caddy (either healthy → unhealthy
+	// on a failed probe, or the recovery transition back) will
+	// overwrite the primed state immediately. The window where
+	// the priming could be misleading: a downed upstream during
+	// the first ~30-60s after boot, before Caddy's first probe
+	// has time to fail. That's an acceptable trade-off — see
+	// #R-TOPO-hc-bootstrap-down in the backlog.
+	if routes, rerr := store.ListRoutes(ctx); rerr != nil {
+		logger.Warn("topology HC bootstrap: failed to read routes; skipping prime",
+			"err", rerr)
+	} else {
+		for _, r := range routes {
+			if !r.HealthCheck.Enabled {
+				continue
+			}
+			for _, u := range r.Upstreams {
+				hcTracker.RecordHealthy(u.URL)
+			}
+		}
+	}
+
 	if err := mgr.Start(ctx); err != nil {
 		return err
 	}
@@ -593,20 +640,18 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	//
 	// Sliding window + per-upstream health tracker are SHARED
 	// between the snapshot endpoint and the stream endpoint. The
-	// tracker is fed by Caddy's events App via the
-	// internal/caddyhc EventHandler module — caddymgr emits an
-	// apps.events.subscriptions block referencing the handler in
-	// every config it builds. We install the tracker BEFORE
-	// caddymgr.Start so it's in place by the time Caddy provisions
-	// the handler module and starts firing health-checker events.
+	// tracker (hcTracker) was constructed + installed + bootstrap-
+	// primed earlier, before mgr.Start, so by the time we reach
+	// here Caddy is already firing events into it and the bootstrap
+	// prime has set the optimistic-healthy default for every
+	// upstream of an HC-configured route. See the priming block
+	// next to the mgr.Start call.
 	//
 	// The stream handler subscribes to the metrics broadcaster
 	// each connection; the window is fed by per-subscriber pushes
 	// (acknowledged Stage A wastefulness when multiple subscribers
 	// exist, but cheap at homelab cardinality).
 	topologyWindow := topology.NewSlidingWindow()
-	hcTracker := caddyhc.NewTracker()
-	caddyhc.SetTracker(hcTracker)
 	topologySnapshotHandler := newTopologySnapshotHandler(
 		store, topologyWindow, hcTracker, logger,
 	)
