@@ -59,7 +59,25 @@ visual debt sweeps.
 
 ---
 
-### Finding #R-2 — Sidebar collapsed/expanded state removed
+### Finding #R-2 — Sidebar collapsed/expanded state removed — OBSOLETE-by-design (2026-06-04)
+
+**Status**: OBSOLETE-by-design.
+- The post-R.2 sidebar comment is now authoritative on this:
+  `Sidebar.svelte:9` reads "Replaces the Step F collapsed/
+  expanded sidebar with a fixed 232px layout — the mock is
+  intentionally not collapsible".
+- The 2026-06-04 backlog cleanup audit confirmed with the
+  operator that the dock-anchored sidebar pattern adopted in
+  R.2 is the v1.4 design intent — collapsibility is not a
+  deferred feature, it's a rejected one.
+- Reopen this entry only if a future UX iteration revisits
+  collapsibility. Until then, treat as closed.
+
+The body below is the original §1 backlog entry, preserved as
+the historical record of the regression-vs-design tension that
+the OBSOLETE-by-design verdict resolved.
+
+---
 
 Step F shipped a localStorage-persisted collapsed sidebar mode
 (`arenet_sidebar_collapsed`, 64px collapsed / 256px expanded).
@@ -126,7 +144,24 @@ enforcement actions (a block was applied). Different surfaces.
 (the feature didn't exist before R either). Re-emerges with the
 alerting step.
 
-### Finding #R-7 — Per-route metrics drill-down at /observability/[routeId]
+### Finding #R-7 — Per-route metrics drill-down at /observability/[routeId] — PARTIAL (page shipped, polish pending)
+
+**Status**: PARTIAL.
+- `/observability/[routeId]/+page.svelte` shipped in L.4
+  (commit `986ea7e`) and is functionally accessible by URL.
+- Remaining work (the scope #R-7 actually tracks):
+  - Restyle the page in the post-R.1 OKLCH visual; today the
+    layout is Step F-era and reads as the legacy HEX-cyan
+    even though tokens cascade to the new purple-blue.
+  - Add a Dashboard drill-down entry-point (e.g. "Drill down
+    →" link from `/dashboard`'s "Top routes" rows) so the
+    page is discoverable from UI nav, not URL-only.
+- The 2026-06-04 backlog cleanup audit initially classified
+  this as RESOLVED based on filesystem existence of the page;
+  re-reading the entry body during execution surfaced the
+  tracked scope is the polish work above, not the page
+  shipping. Same shape as #R-6 (catalog vs editor) — "page
+  exists" ≠ "backlog scope satisfied".
 
 R.4.5 redirects `/observability` (index) to `/dashboard` but
 PRESERVES `/observability/[routeId]/+page.svelte` — the
@@ -159,7 +194,19 @@ The drill-down currently:
 visual isn't broken, only stale. No regression (the page
 worked before, works now, just not surfaced).
 
-### Finding #R-6 — Move SSL editor from /settings to /certs
+### Finding #R-6 — Move SSL editor from /settings to /certs — PARTIAL (catalog migrated, editor pending)
+
+**Status**: PARTIAL.
+- Read-only catalog migrated in R.4.3.c (commit `4691eb2`,
+  later refined). `/certs/+page.svelte` now serves as the
+  top-level Sécurité IA entry for cert visibility.
+- Editor migration still pending; `/settings/+page.svelte`
+  retains the SSL/managed-domains CRUD form (the "softer
+  split" recorded in §R.4.4.b — see below).
+- Remaining work: lift the editor block from
+  `/settings/+page.svelte` into `/certs/+page.svelte` and
+  rewire its store dependency. Detailed list in
+  "Completion shape" below.
 
 D5's strict reading was "move `/settings/certificates` → top-level
 `/certs`": full extraction of the SSL editor (managed-domains
@@ -397,6 +444,18 @@ sources of traffic + CrowdSec decisions geo-distribution.
 
 **Completion shape**: future step bundling #R-WAF-geo +
 #R-LOGS-geoip + the map UI itself.
+
+**Status**: OPEN. `web/frontend/src/routes/map/+page.svelte` is
+a stub from R.2 (`4691eb2`); the page route exists in the
+sidebar nav so the visual continuity holds, but the full
+feature scope (geo-resolved traffic + decisions overlay on a
+world map) is still TODO. Annotation added 2026-06-04 by the
+backlog cleanup audit to prevent future re-audits from
+mis-classifying the stub presence as PARTIAL — page-shell
+existence alone does NOT satisfy the tracked scope. Parity
+note: the same audit-time correction applied to #R-7
+(per-route observability drill-down, PARTIAL: page exists,
+polish pending — see §1 above).
 
 ---
 
