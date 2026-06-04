@@ -449,3 +449,81 @@ Priorities set at the close of Step I, before the Step J spec is written.
   still labels it "Step F", which is stale: Step F shipped only the
   disabled sidebar shell, not the page. To be re-assigned to a
   dedicated later step.
+
+## 6. Step J closeout — deferred items confirmed deferred (2026-06-07)
+
+Retrospective audit added after Step J shipped (tag `v0.6.0-step-j`,
+2026-05-26) and after the subsequent v1.1.x line (Step N, Topology v2,
+Stage B, Critique 11) further extended the codebase. The audit
+confirms which §1.4 deferrals remain open and surfaces one §5.5
+supersession that closed via a different design path. See the
+companion retrospective: [docs/step-j-closeout.md](step-j-closeout.md).
+
+### 6.1 §1.4 deferred items — status confirmed
+
+Unchanged from spec; no §1.4 deferral was reopened between Step J
+shipping and the v1.1.x line. Recorded here so the deferred set is
+discoverable from a single backlog read without chasing the spec.
+
+- **AC #11 — `audit_waf_match` audit event.** Still deferred.
+  `coraza-caddy` v2.5.0 still exposes no match hook (byte-identical
+  to upstream `main` at last check). Re-evaluation gated on a
+  `coraza-caddy` release that adds an injectable match callback or
+  context-propagated transaction. Until then, this is a dedicated
+  WAF-step concern, not a bolt-on.
+- **AC #12 — `X-WAF-Match` response header.** Still deferred. Same
+  upstream limitation as AC #11.
+- **J.5 sub-task — WAF observability completion.** Still deferred.
+  Composite of AC #11 + AC #12.
+- **Passive health checks.** Still deferred. Step J shipped active
+  health checks only; the §1.3 decision 3 rationale (Caddy's passive-
+  check state is shared globally across handlers — unclear semantics
+  for Arenet's per-route handler model) is unchanged.
+- **Next-host retry** (`reverse_proxy` retry layer). Still deferred per
+  §1.3 decision 5.
+- **Six unused Caddy LB policies** — `header`, `cookie`, `query`, `uri`,
+  `client_ip_hash`, `random_choose`. Still deferred per §1.4.
+- **Per-upstream `max_requests`** concurrency cap. Still deferred per
+  §1.4.
+- **Circuit breaker.** Still not considered (experimental in upstream
+  Caddy).
+- **Dynamic upstreams** (DNS / SRV-resolved pools). Still not
+  considered (mutually exclusive with active health checks in Caddy).
+- **Perimeter-mode WAF**, **multi-user Basic Auth per route**, and the
+  **Security & Threat dashboard** — see §5 above. Status unchanged
+  except that multi-user Basic Auth was DECLINED post-K.1 (superseded
+  by forward_auth, already documented above).
+
+### 6.2 SUPERSEDED — §5.5 Topology `<PageHeader>` migration
+
+Step J.6 (`a2ae797`, 2026-05-25) shipped the spec §5.5 design verbatim:
+the Topology page's custom header was replaced with the standard
+`<PageHeader>` component, and the page-local status-dot span was
+swapped for the `<StatusDot>` atomic. The J.7 smoke verified this PASS.
+
+Post-J the v1.1.x line introduced `#R-TOPO-v2` (Topology Phase 1/2),
+which rebuilt the Topology page from scratch on `@xyflow/svelte`.
+Phase 3 (commit `566536d`, "promote v2 as the canonical /topology,
+drop legacy stack") replaced the J.6 page wholesale — the
+`<PageHeader>` migration was dropped in the rewrite, and the new
+Topology page ships its own custom `<header class="topo-header">`
+with eyebrow + `<h1>` + lede paragraph plus its own custom
+`.live-indicator` pill.
+
+**Status: SUPERSEDED — closed via Phase 2, no further action.**
+
+AC #13's intent (visual redesign + auto-fits on load) is satisfied
+by Phase 2 via the `fitView` prop on `<SvelteFlow>` plus the much
+broader visual redesign Phase 2 ships on top.
+
+**Rationale** (decided 2026-06-07): Routes and Topology both have
+intentional custom headers carrying richer content (eyebrows,
+multi-line ledes, live-indicators with their own state machine) than
+the `<PageHeader>` slot accommodates cleanly. `<PageHeader>` remains
+the convention for the simpler pages (Settings, Security,
+Observability). Retrofitting Topology back to `<PageHeader>` was
+considered and declined — it would regress operator-validated visual
+decisions from the v1.1.x line for no functional gain.
+
+No action required. Both the J.6 work and its supersession are
+historical records.
