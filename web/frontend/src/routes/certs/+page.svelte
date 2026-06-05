@@ -13,15 +13,23 @@
   - #R-6 Pack A (`06ba97a`): completed the §R-6 migration —
     Managed domains editor moved here from /settings, auto-renewal
     info card added.
-  - Step T T.4 (this commit): consumes the T.1 GET /api/certificates
-    runtime metadata. KPI cards now reflect the live cert pool;
-    the previous "TLS-enabled routes" read-only table is replaced
+  - Step T T.4 (`e8e6311`): consumed the T.1 GET /api/certificates
+    runtime metadata. KPI cards reflect the live cert pool;
+    the previous "TLS-enabled routes" read-only table replaced
     by the unified Domaines table with status badges and a
     Tous / Wildcard / Expirent bientôt tab filter. The stale
-    "runtime metadata not exposed" banner is removed (T.1 ships
+    "runtime metadata not exposed" banner removed (T.1 ships
     the data). Force-renew button intentionally absent per the
     Step T amendment (docs/step-t-spec-amendment.md, commit
     `c62d657`) — Caddy v2.11.3's renewal seam is unexported.
+  - Step T T.5 (this commit): reframes the bottom section from
+    "Managed domains" to "Politiques wildcard par apex" (the
+    semantically honest name — each row IS a per-apex wildcard
+    policy). Inline declaration form is hoisted into a modal
+    wizard launched by a header "+ Wildcard apex" button (matches
+    the existing add-flow pattern used by ChangePasswordModal).
+    Wire contract unchanged: same settingsApi.createManagedDomain
+    POST, same payload shape, same delete-with-revertTo modal.
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
@@ -31,6 +39,7 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import Tooltip from '$lib/components/Tooltip.svelte';
 	import Modal from '$lib/components/Modal.svelte';
+	import WildcardApexWizard from '$lib/components/certs/WildcardApexWizard.svelte';
 	import { settingsApi } from '$lib/api/settings';
 	import { certificatesApi } from '$lib/api/certificates';
 	import { listRoutes } from '$lib/api/client';
@@ -38,7 +47,6 @@
 	import type {
 		Certificate,
 		ManagedDomain,
-		ManagedDomainProvider,
 		ManagedDomainRevertTo,
 		Route,
 		DNSProviderOVH,
@@ -82,20 +90,10 @@
 	// when the GET fails (network blip / not-configured shape).
 	let dnsProviderConfigured = $state(false);
 
-	// Editor form state — mirrors the settings page's mdForm
-	// shape pre-migration. `apex` placeholder works as the
-	// example for the inferred wildcard hint string.
-	let mdForm = $state<{
-		apex: string;
-		includeApex: boolean;
-		provider: ManagedDomainProvider;
-	}>({
-		apex: '',
-		includeApex: true,
-		provider: 'ovh',
-	});
-	let mdSubmitting = $state(false);
-	let mdFormError = $state<string | null>(null);
+	// Step T T.5 — wizard-open state. Bindable; the wizard
+	// component handles its own form state (apex / provider /
+	// includeApex) so the page doesn't carry that anymore.
+	let wizardOpen = $state(false);
 
 	// Delete-confirmation modal state. Mirrors the settings
 	// page pre-migration verbatim — the revertTo dropdown is
@@ -199,25 +197,6 @@
 			if (err instanceof ApiError) pushToast(err.message, 'danger');
 		} finally {
 			loading = false;
-		}
-	}
-
-	async function submitManagedDomain(): Promise<void> {
-		mdSubmitting = true;
-		mdFormError = null;
-		try {
-			await settingsApi.createManagedDomain({
-				apex: mdForm.apex.trim(),
-				includeApex: mdForm.includeApex,
-				provider: mdForm.provider,
-			});
-			mdForm.apex = '';
-			mdForm.includeApex = true;
-			await loadManagedDomains();
-		} catch (err) {
-			mdFormError = err instanceof ApiError ? err.message : String(err);
-		} finally {
-			mdSubmitting = false;
 		}
 	}
 
@@ -450,28 +429,38 @@
 		{/if}
 	</div>
 
-	<!-- Managed domains — editor (migrated from /settings in
-	     Pack A). The previous read-only summary table is folded
-	     into the editor: the existing-domains list with inline
-	     Delete buttons replaces the standalone table; the create
-	     form sits below. Single source of managed-domain
-	     visibility + CRUD per the #R-6 spec. -->
-	<div class="card">
+	<!-- Step T T.5 — Politiques wildcard par apex. Reframe of the
+	     pre-T.5 "Managed domains" section: same wire contract,
+	     semantically honest French copy, declaration form hoisted
+	     into the WildcardApexWizard modal (header "+ Wildcard apex"
+	     button). Delete flow (revertTo modal) is unchanged. -->
+	<div class="card" data-testid="policies-card">
 		<div class="card-h">
-			<h3>Managed domains</h3>
+			<h3>Politiques wildcard par apex</h3>
 			<span class="card-h-meta">
 				{#if domains.length > 0}
-					{domains.length} déclaré{domains.length === 1 ? '' : 's'}
+					{domains.length} déclarée{domains.length === 1 ? '' : 's'}
 				{:else}
-					Aucun
+					Aucune
 				{/if}
 			</span>
+			<div class="card-h-actions">
+				<Button
+					variant="primary"
+					size="sm"
+					onclick={() => (wizardOpen = true)}
+					data-testid="open-wildcard-wizard"
+				>
+					{#snippet children()}+ Wildcard apex{/snippet}
+				</Button>
+			</div>
 		</div>
 
 		<p class="section-lead">
-			Une managed domain émet UN certificat wildcard par apex via DNS-01
-			(couvre toutes les routes en sous-domaine). Le DNS provider OVH se
-			configure dans <a href="/settings">Settings</a>.
+			Un apex géré émet UN certificat wildcard via DNS-01 (couvre toutes
+			les routes en sous-domaine). Le DNS provider se configure dans <a
+				href="/settings">Settings</a
+			>.
 		</p>
 
 		{#if sslDNSUnconfigured}
@@ -510,74 +499,29 @@
 			</ul>
 		{/if}
 
-		<form
-			class="md-form"
-			onsubmit={(e) => {
-				e.preventDefault();
-				void submitManagedDomain();
-			}}
-		>
-			<div class="md-form-row md-form-row-full">
-				<label for="md-apex">Apex domain</label>
-				<input
-					id="md-apex"
-					type="text"
-					bind:value={mdForm.apex}
-					placeholder="example.com"
-					autocomplete="off"
-					class="md-input mono"
-				/>
-				<p class="md-hint">
-					Bare domain (no leading <code>*.</code>) — the wildcard is
-					implied. Issues a cert for <code
-						>*.{mdForm.apex || 'example.com'}</code
-					>.
-				</p>
-			</div>
-
-			<div class="md-form-row">
-				<label for="md-provider">DNS provider</label>
-				<select
-					id="md-provider"
-					bind:value={mdForm.provider}
-					class="md-input"
-				>
-					<option value="ovh">OVH</option>
-				</select>
-			</div>
-
-			<div class="md-form-row md-form-row-checkbox">
-				<input
-					id="md-include-apex"
-					type="checkbox"
-					bind:checked={mdForm.includeApex}
-				/>
-				<label for="md-include-apex">Include bare apex in cert SAN</label>
-			</div>
-
-			{#if mdFormError}
-				<p class="md-form-error" role="alert">{mdFormError}</p>
-			{/if}
-
-			<div class="md-form-submit">
-				<Button
-					type="submit"
-					disabled={mdSubmitting || mdForm.apex.trim() === ''}
-				>
-					{mdSubmitting ? 'Declaring…' : 'Declare managed domain'}
-				</Button>
-			</div>
-		</form>
-
 		<p class="section-lead md-foot">
-			Declaring a managed domain marks every existing route under
-			<code>*.&lt;apex&gt;</code> as covered by the wildcard. The route's
-			per-route ACME selector is hidden in the route editor and the cert
-			is provisioned once for all covered sub-domains.
+			Déclarer un apex marque toutes les routes existantes sous
+			<code>*.&lt;apex&gt;</code> comme couvertes par le wildcard. Le
+			sélecteur ACME par route est masqué dans l'éditeur de routes, et le
+			certificat est provisionné une seule fois pour tous les
+			sous-domaines.
 		</p>
 	</div>
 
 {/if}
+
+<!-- Step T T.5 — wizard mount. Always mounted, gated by `open`
+     prop so form state survives reopens within a session.
+     loadManagedDomains is the onCreated callback so the new
+     policy row appears in the list the moment the wizard closes.
+     One-way prop + explicit onClose callback (same pattern as
+     the delete-managed-domain Modal above) avoids the
+     bidirectional-state surprises of $bindable. -->
+<WildcardApexWizard
+	open={wizardOpen}
+	onClose={() => (wizardOpen = false)}
+	onCreated={loadManagedDomains}
+/>
 
 <!-- Delete-managed-domain modal — verbatim port of the
      /settings dialog so the revertTo dropdown (spec O.4 AC #21)
@@ -788,32 +732,9 @@
 		color: var(--fg-muted);
 		margin-top: 3px;
 	}
-	.md-form {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 14px;
-	}
-	.md-form-row label {
-		display: block;
-		color: var(--fg);
-		font-size: 12.5px;
-		font-weight: 500;
-		margin-bottom: 4px;
-	}
-	.md-form-row-full {
-		grid-column: 1 / -1;
-	}
-	.md-form-row-checkbox {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		margin-top: 23px;
-	}
-	.md-form-row-checkbox label {
-		margin-bottom: 0;
-		font-weight: 400;
-		color: var(--fg-muted);
-	}
+	/* Delete-modal select reuses .md-input — kept after the T.5
+	   wizard hoist; the wizard owns its own scoped copy so this
+	   one survives only for the modal-field <select>. */
 	.md-input {
 		width: 100%;
 		background: var(--surface);
@@ -824,30 +745,12 @@
 		font-size: 13px;
 		font-family: inherit;
 	}
-	.md-input.mono {
-		font-family: var(--font-mono);
-		font-size: 12px;
-	}
-	.md-hint {
-		font-size: 11.5px;
-		color: var(--fg-muted);
-		margin: 6px 0 0 0;
-	}
-	.md-hint code {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--fg);
-	}
-	.md-form-error {
-		grid-column: 1 / -1;
-		color: var(--down);
-		font-size: 12.5px;
-		margin: 0;
-	}
-	.md-form-submit {
-		grid-column: 1 / -1;
-		display: flex;
-		justify-content: flex-end;
+
+	/* Step T T.5 — right-side actions area inside the section
+	   header. The container's flex gap separates it from the
+	   adjacent .card-h-meta count chip; no extra margin needed. */
+	.card-h-actions {
+		display: inline-flex;
 	}
 
 	/* Delete-managed-domain modal */

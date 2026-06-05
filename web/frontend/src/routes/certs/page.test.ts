@@ -152,26 +152,38 @@ describe('/certs — auto-renewal info card', () => {
 	});
 });
 
-describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pack A)', () => {
-	it('mounts the create form with all three controls', async () => {
+describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pack A; reframed by T.5)', () => {
+	it('inline form is gone — only the wizard trigger remains in the policies section', async () => {
 		render(Page);
+		// Post-T.5 regression check: the legacy inline "Declare
+		// managed domain" submit must NOT be in the DOM. The
+		// wizard trigger replaces it.
+		await screen.findByTestId('open-wildcard-wizard');
+		expect(
+			screen.queryByRole('button', { name: /declare managed domain/i }),
+		).not.toBeInTheDocument();
+		// The wizard modal isn't mounted until the trigger fires
+		// (Modal is gated by open=false).
+		expect(screen.queryByTestId('wildcard-wizard-form')).not.toBeInTheDocument();
+	});
 
-		// Wait for the page to settle (loading spinner gone).
-		// Wait until the editor is mounted (post-load) — the
-		// submit button is the most stable signal because it's
-		// only in the DOM inside the `{:else}` branch after
-		// loading flips to false. Plain text like "Managed
-		// domains" also appears in the PageHeader subtitle, so
-		// using it as a wait-anchor would resolve too early.
-		await screen.findByRole('button', { name: /declare managed domain/i });
+	it('clicking "+ Wildcard apex" opens the wizard with the three form controls', async () => {
+		render(Page);
+		const trigger = await screen.findByTestId('open-wildcard-wizard');
+		await userEvent.click(trigger);
+		await tick();
 
-		expect(screen.getByLabelText('Apex domain')).toBeInTheDocument();
+		// Wizard fields — same controls the pre-T.5 inline form
+		// exposed, just relocated. Labels stay identical so the
+		// vocabulary is preserved.
+		expect(await screen.findByLabelText('Apex domain')).toBeInTheDocument();
 		expect(screen.getByLabelText('DNS provider')).toBeInTheDocument();
 		expect(
 			screen.getByLabelText('Include bare apex in cert SAN'),
 		).toBeInTheDocument();
+		// Footer Declare button.
 		expect(
-			screen.getByRole('button', { name: /declare managed domain/i }),
+			screen.getByRole('button', { name: /^déclarer$/i }),
 		).toBeInTheDocument();
 	});
 
@@ -210,7 +222,7 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 		).toBeInTheDocument();
 	});
 
-	it('submitting the form calls settingsApi.createManagedDomain with trimmed apex', async () => {
+	it('submitting the wizard calls settingsApi.createManagedDomain with trimmed apex', async () => {
 		settingsMock.settingsApi.createManagedDomain.mockResolvedValue({
 			apex: 'new.example',
 			includeApex: true,
@@ -218,25 +230,20 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 		});
 
 		render(Page);
-		// Wait until the editor is mounted (post-load) — the
-		// submit button is the most stable signal because it's
-		// only in the DOM inside the `{:else}` branch after
-		// loading flips to false. Plain text like "Managed
-		// domains" also appears in the PageHeader subtitle, so
-		// using it as a wait-anchor would resolve too early.
-		await screen.findByRole('button', { name: /declare managed domain/i });
+		const trigger = await screen.findByTestId('open-wildcard-wizard');
+		await userEvent.click(trigger);
+		await tick();
 
-		const apexInput = screen.getByLabelText('Apex domain') as HTMLInputElement;
+		const apexInput = (await screen.findByTestId(
+			'wizard-apex-input',
+		)) as HTMLInputElement;
 		await userEvent.type(apexInput, '  new.example  ');
 
-		const submitBtn = screen.getByRole('button', {
-			name: /declare managed domain/i,
-		});
-		// fireEvent.submit on the form to bypass the user-event
-		// click-Enter dance — the form has onsubmit + the button
-		// is type=submit, so a direct submit on the form node is
-		// the cleanest path to fire the handler.
-		const form = submitBtn.closest('form')!;
+		// fireEvent.submit on the form so the test exercises the
+		// same code path Enter-in-input would (hidden submit button
+		// inside the form catches it; the footer Déclarer button
+		// has its own onclick wired to the same handler).
+		const form = screen.getByTestId('wildcard-wizard-form');
 		await fireEvent.submit(form);
 		await tick();
 
@@ -245,6 +252,64 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 			includeApex: true,
 			provider: 'ovh',
 		});
+	});
+
+	// Wizard close/submit/error contracts are unit-tested in
+	// WildcardApexWizard.test.ts. The page tests below stay narrow:
+	// trigger → wizard mounts → submission reaches the same API
+	// the pre-T.5 inline form did, and onCreated refreshes the list.
+	// We don't assert the wizard UNMOUNTS post-close at the page
+	// level because JSDOM doesn't drive svelte/transition out-
+	// animations the way browsers do, leaving the dialog node in
+	// the DOM after `open` flips to false. The behavioural
+	// contract (onClose fired, list refreshed) is verified at the
+	// component level.
+
+	it('successful submit through the page refreshes the policies list', async () => {
+		settingsMock.settingsApi.createManagedDomain.mockResolvedValue({
+			apex: 'new.example',
+			includeApex: true,
+			provider: 'ovh',
+		});
+		// First call (page load): empty. Second call (after
+		// wizard onCreated): the new policy. Reflects the
+		// loadManagedDomains-as-onCreated wiring.
+		settingsMock.settingsApi.listManagedDomains
+			.mockResolvedValueOnce({ domains: [] })
+			.mockResolvedValueOnce({
+				domains: [
+					{ apex: 'new.example', includeApex: true, provider: 'ovh' },
+				],
+			});
+
+		render(Page);
+		const trigger = await screen.findByTestId('open-wildcard-wizard');
+		await userEvent.click(trigger);
+		await tick();
+
+		const apexInput = (await screen.findByTestId(
+			'wizard-apex-input',
+		)) as HTMLInputElement;
+		await userEvent.type(apexInput, 'new.example');
+		const form = screen.getByTestId('wildcard-wizard-form');
+		await fireEvent.submit(form);
+
+		// Newly-declared policy appears in the list (refreshed
+		// via the onCreated callback the page passes to the
+		// wizard). findByRole waits for the refresh tick.
+		expect(
+			await screen.findByRole('button', {
+				name: 'Delete managed domain new.example',
+			}),
+		).toBeInTheDocument();
+	});
+
+	it('section header carries the T.5-reframed title "Politiques wildcard par apex"', async () => {
+		render(Page);
+		await screen.findByTestId('open-wildcard-wizard');
+		expect(
+			screen.getByText('Politiques wildcard par apex'),
+		).toBeInTheDocument();
 	});
 
 	it('clicking Delete on a domain opens the revertTo modal', async () => {
@@ -302,7 +367,7 @@ describe('/certs — DNS-provider-unconfigured warning', () => {
 		// loading flips to false. Plain text like "Managed
 		// domains" also appears in the PageHeader subtitle, so
 		// using it as a wait-anchor would resolve too early.
-		await screen.findByRole('button', { name: /declare managed domain/i });
+		await screen.findByTestId('open-wildcard-wizard');
 
 		// The warning text is a sentence the test pins partially
 		// so a future copy edit doesn't break the contract.
@@ -321,7 +386,7 @@ describe('/certs — DNS-provider-unconfigured warning', () => {
 		// loading flips to false. Plain text like "Managed
 		// domains" also appears in the PageHeader subtitle, so
 		// using it as a wait-anchor would resolve too early.
-		await screen.findByRole('button', { name: /declare managed domain/i });
+		await screen.findByTestId('open-wildcard-wizard');
 
 		expect(
 			screen.queryByText(/DNS provider unconfigured/i),
@@ -448,10 +513,9 @@ describe('/certs — Domaines table (T.4)', () => {
 		const err = await screen.findByTestId('certs-error');
 		expect(err.textContent ?? '').toMatch(/Impossible de récupérer/);
 		// Pack A editor MUST still mount even when certs failed
-		// (AC #13 degraded mode mirrored on the frontend).
-		expect(
-			screen.getByRole('button', { name: /declare managed domain/i }),
-		).toBeInTheDocument();
+		// (AC #13 degraded mode mirrored on the frontend). Post-
+		// T.5 the wizard trigger is the new declaration affordance.
+		expect(screen.getByTestId('open-wildcard-wizard')).toBeInTheDocument();
 	});
 });
 
