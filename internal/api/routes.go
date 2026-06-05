@@ -199,6 +199,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// boolean so the frontend renders the whole
 			// section state in one round-trip.
 			r.Get("/settings/automation", h.getAutomation)
+			// Step T T.1 — per-domain runtime cert metadata.
+			// Viewer-accessible — parallel to
+			// /settings/managed-domains above (both read
+			// surfaces the Certificates page binds to).
+			// Returns []CertRuntimeInfo sorted by NotAfter
+			// ascending. Degrades to [] when the tracker
+			// singleton is missing (AC #13).
+			r.Get("/certificates", h.listCertificates)
 			// Step E: live-metrics WebSocket. HardAuthMiddleware
 			// rejects the handshake (401 / 403) BEFORE the upgrade,
 			// so an unauthorized peer never sees an open WS frame

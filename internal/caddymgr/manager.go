@@ -58,6 +58,14 @@ import (
 	// caddy.Load; the handler module's Provision pulls it then.
 	_ "github.com/barto95100/arenet/internal/caddyhc"
 
+	// Step T T.1 (2026-06-05) — side-effect import: registers the
+	// arenet_cert_info events handler so the apps.events.subscriptions
+	// entry buildConfigJSON emits for "tls" origin events is
+	// resolvable at caddy.Load time. Same singleton-injection shape
+	// as caddyhc above: cmd/arenet installs the cert tracker before
+	// mgr.Start, the handler module's Provision pulls it.
+	_ "github.com/barto95100/arenet/internal/certinfo"
+
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -1162,6 +1170,18 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	// First-debug-round of #R-TOPO-real-health-probe Stage B
 	// caught this when the operator saw all-unknown statuses
 	// despite probes firing — no events were reaching our handler.
+	//
+	// Step T T.1 adds a SECOND subscription for certmagic events.
+	// Origin module for cert_obtaining / cert_obtained / cert_failed
+	// is "tls" — the top-level caddytls.TLS app (declared at
+	// modules/caddytls/tls.go:156). The certmagic.Config's emit
+	// callback flows through (*caddytls.TLS).onEvent which calls
+	// t.events.Emit(t.ctx, ...) — t.ctx is the TLS app's own
+	// caddy.Context, so the origin module ID dispatch sees is "tls".
+	// Filter MUST be "tls" or empty; "tls.issuance.acme" is a
+	// descendant and would never match (same trap as Stage B Bug 1).
+	// Verified empirically during T.1 recon against certmagic v0.25.3
+	// + caddy v2.11.3 — citations in internal/certinfo/types.go.
 	apps["events"] = map[string]any{
 		"subscriptions": []map[string]any{
 			{
@@ -1170,6 +1190,15 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				"handlers": []map[string]any{
 					{
 						"handler": "arenet_topology_hc",
+					},
+				},
+			},
+			{
+				"events":  []string{"cert_obtaining", "cert_obtained", "cert_failed"},
+				"modules": []string{"tls"},
+				"handlers": []map[string]any{
+					{
+						"handler": "arenet_cert_info",
 					},
 				},
 			},

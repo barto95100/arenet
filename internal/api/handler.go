@@ -26,6 +26,7 @@ import (
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/caddymgr"
+	"github.com/barto95100/arenet/internal/certinfo"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -247,6 +248,13 @@ type Handler struct {
 	// contract as the other readers: a nil hcStatus collapses
 	// the aggregate to "unknown" without erroring.
 	hcStatus HCStatusReader
+	// certInfo (Step T T.1, 2026-06-05) is the per-domain
+	// runtime cert metadata feed populated by internal/certinfo.
+	// Backs GET /api/certificates. Same nil-tolerance contract
+	// as hcStatus: a nil certInfo returns an empty list (not
+	// an error) so the Certificates page renders the "no data
+	// yet" empty state rather than 500ing.
+	certInfo CertInfoReader
 }
 
 // HCStatusReader is the read interface the Routes page uses to
@@ -262,6 +270,26 @@ type Handler struct {
 // any unrecognised value to the unknown state.
 type HCStatusReader interface {
 	Status(addr string) string
+}
+
+// CertInfoReader is the read interface the Certificates page
+// uses to surface per-domain runtime cert metadata. Implemented
+// by *certinfo.Tracker.
+//
+// Returns a freshly-allocated snapshot sorted by NotAfter
+// ascending (closest-to-expiry first); the API layer passes the
+// slice through verbatim — the wire-shape sort is the storage
+// layer's responsibility, not the HTTP handler's.
+//
+// Unlike HCStatusReader (declared without importing caddyhc to
+// avoid pulling Caddy module weight into the API package), this
+// interface returns the concrete certinfo.CertRuntimeInfo
+// pointer. certinfo is a pure types + state package with no
+// Caddy registration footprint at the type level — importing it
+// here costs nothing and gives the GET /api/certificates handler
+// compile-time JSON-shape guarantees.
+type CertInfoReader interface {
+	List() []*certinfo.CertRuntimeInfo
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -393,6 +421,20 @@ func (h *Handler) SetThrottleEventReader(r ThrottleEventReader) {
 // routes without HC configured.
 func (h *Handler) SetHCStatusReader(r HCStatusReader) {
 	h.hcStatus = r
+}
+
+// SetCertInfoReader (Step T T.1, 2026-06-05) attaches the
+// per-domain runtime cert metadata feed used by
+// GET /api/certificates. Pass the *certinfo.Tracker singleton
+// that cmd/arenet constructs and seeds via ReconcileFromDisk
+// before mgr.Start.
+//
+// Nil-tolerant: leaving this unset (or passing nil) makes the
+// endpoint respond with an empty list rather than 500ing —
+// matches the AC #13 degraded-mode convention used by the
+// metrics + security readers above.
+func (h *Handler) SetCertInfoReader(r CertInfoReader) {
+	h.certInfo = r
 }
 
 // SetDecisionReader (Step N.3) attaches the CrowdSec

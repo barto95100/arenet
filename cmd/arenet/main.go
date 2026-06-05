@@ -55,6 +55,8 @@ import (
 	// which feeds a DNS-01 fixture through caddy.Validate (§5.4).
 	_ "github.com/caddy-dns/ovh"
 
+	"github.com/caddyserver/caddy/v2"
+
 	"github.com/barto95100/arenet/internal/api"
 	"github.com/barto95100/arenet/internal/api/topology"
 	"github.com/barto95100/arenet/internal/audit"
@@ -62,6 +64,7 @@ import (
 	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/caddyhc"
 	"github.com/barto95100/arenet/internal/caddymgr"
+	"github.com/barto95100/arenet/internal/certinfo"
 	appconfig "github.com/barto95100/arenet/internal/config"
 	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/metrics"
@@ -74,7 +77,7 @@ import (
 
 // version is overridable at link time via ldflags:
 //
-//   go build -ldflags="-X main.version=v1.0.1" ./cmd/arenet
+//	go build -ldflags="-X main.version=v1.0.1" ./cmd/arenet
 //
 // Step #S-13 fix: this MUST be a var, not a const. Go's -ldflags
 // -X directive can only write to a package-level variable; a
@@ -275,6 +278,31 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 				hcTracker.RecordHealthy(u.URL)
 			}
 		}
+	}
+
+	// Step T T.1 (2026-06-05) — install the cert-info tracker
+	// BEFORE mgr.Start, same order as the hcTracker above and for
+	// the same reason: the arenet_cert_info handler's Provision
+	// pulls the singleton during caddy.Load (called from inside
+	// mgr.Start), and the first cert event can fire the instant
+	// certmagic's renewal loop spawns.
+	//
+	// Reconcile-from-disk seeds the tracker with every cert
+	// already on disk so the Certificates page shows correct
+	// state immediately on boot — without it, freshly-restarted
+	// AreNET would render an empty page until the next renewal /
+	// new issuance fired an event. ReconcileFromDisk tolerates
+	// a missing storage directory (fresh install) by returning
+	// (0, nil); only catastrophic I/O failures bubble an error.
+	certTracker := certinfo.NewTracker()
+	certinfo.SetTracker(certTracker)
+	certStorageDir := caddy.AppDataDir()
+	if seeded, rerr := certinfo.ReconcileFromDisk(certTracker, certStorageDir); rerr != nil {
+		logger.Warn("certinfo reconcile failed; tracker starts empty",
+			"err", rerr, "storage", certStorageDir)
+	} else {
+		logger.Info("certinfo reconcile complete",
+			"seeded", seeded, "storage", certStorageDir)
 	}
 
 	if err := mgr.Start(ctx); err != nil {
@@ -614,6 +642,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// constructed + primed before mgr.Start, so it's already
 	// receiving events by the time this setter fires.
 	apiHandler.SetHCStatusReader(hcTracker)
+
+	// Step T T.1 (2026-06-05) — share the cert-info tracker with
+	// the API so GET /api/certificates serves real data. Tracker
+	// was constructed + reconciled-from-disk + singleton-installed
+	// before mgr.Start (above), so it is already populated with
+	// every on-disk cert AND already receiving events from
+	// certmagic via the arenet_cert_info handler module by the
+	// time this setter fires.
+	apiHandler.SetCertInfoReader(certTracker)
 
 	// Step P.3 — auto-classify trigger engine wiring.
 	// Read rules + credentials from BoltDB, build the
