@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/barto95100/arenet/internal/audit"
+	"github.com/barto95100/arenet/internal/certinfo"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -561,6 +562,108 @@ func TestCreateRoute_UncoveredHost_DedicatedOptOut_Rejects(t *testing.T) {
 	env.router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("dedicated opt-out without coverage: status=%d, want 400 — body=%s",
+			rec.Code, rec.Body)
+	}
+}
+
+// --- Step T tracker-purge tests (post-T.5 hotfix) -----------------------
+
+// stubCertInfoPurger captures the Remove() calls the DELETE
+// managed-domain handler issues so the test can assert which
+// domains were purged. List() just returns whatever was seeded;
+// the handler doesn't read it on the delete path.
+type stubCertInfoPurger struct {
+	removed []string
+	present map[string]bool // when set, controls Remove return value
+}
+
+func (s *stubCertInfoPurger) List() []*certinfo.CertRuntimeInfo {
+	return nil
+}
+func (s *stubCertInfoPurger) Remove(domain string) bool {
+	s.removed = append(s.removed, domain)
+	if s.present == nil {
+		return true
+	}
+	return s.present[domain]
+}
+
+// TestManagedDomain_DELETE_PurgesTracker_IncludeApex pins the
+// post-T.5 hotfix: when an apex with includeApex=true is deleted,
+// the handler purges BOTH the wildcard ("*.<apex>") and the bare
+// apex ("<apex>") from the certinfo tracker. certmagic / Caddy
+// emit no cert-removal event so without this purge the OBTAIN_FAILED
+// ghost rows linger in /certs.
+func TestManagedDomain_DELETE_PurgesTracker_IncludeApex(t *testing.T) {
+	env := newTestEnv(t, false)
+	purger := &stubCertInfoPurger{}
+	env.handler.SetCertInfoReader(purger)
+
+	if rec := putManagedDomain(t, env, "example.com", true); rec.Code != http.StatusCreated {
+		t.Fatalf("seed: status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/settings/managed-domains/example.com", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	wantDomains := []string{"*.example.com", "example.com"}
+	if len(purger.removed) != len(wantDomains) {
+		t.Fatalf("removed=%v want=%v", purger.removed, wantDomains)
+	}
+	for i, d := range wantDomains {
+		if purger.removed[i] != d {
+			t.Errorf("removed[%d]=%q want=%q", i, purger.removed[i], d)
+		}
+	}
+}
+
+// TestManagedDomain_DELETE_PurgesTracker_NoIncludeApex pins that
+// when includeApex=false the handler purges ONLY the wildcard,
+// not the bare apex (which never had a cert in the first place).
+func TestManagedDomain_DELETE_PurgesTracker_NoIncludeApex(t *testing.T) {
+	env := newTestEnv(t, false)
+	purger := &stubCertInfoPurger{}
+	env.handler.SetCertInfoReader(purger)
+
+	if rec := putManagedDomain(t, env, "example.com", false); rec.Code != http.StatusCreated {
+		t.Fatalf("seed: status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/settings/managed-domains/example.com", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	want := []string{"*.example.com"}
+	if len(purger.removed) != len(want) || purger.removed[0] != want[0] {
+		t.Fatalf("removed=%v want=%v", purger.removed, want)
+	}
+}
+
+// TestManagedDomain_DELETE_NilPurger_NoCrash pins the
+// nil-tolerance contract: when SetCertInfoReader was never called
+// (test envs that skip the wiring; degraded prod with cert tracker
+// boot failure) the DELETE handler still succeeds — the purge is
+// an additive cleanup, not a precondition.
+func TestManagedDomain_DELETE_NilPurger_NoCrash(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Intentionally NOT calling SetCertInfoReader.
+
+	if rec := putManagedDomain(t, env, "example.com", true); rec.Code != http.StatusCreated {
+		t.Fatalf("seed: status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/settings/managed-domains/example.com", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE status=%d body=%s (must succeed even without tracker wired)",
 			rec.Code, rec.Body)
 	}
 }

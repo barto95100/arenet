@@ -37,6 +37,12 @@ func (s *stubCertInfoReader) List() []*certinfo.CertRuntimeInfo {
 	return s.items
 }
 
+// Remove is the post-T.5 purge hook the DELETE managed-domain
+// handler uses. The GET certificates tests don't exercise it but
+// the interface requires both methods, so the stub satisfies it
+// with a no-op that returns true (treats every removal as a hit).
+func (s *stubCertInfoReader) Remove(string) bool { return true }
+
 // TestListCertificates_PopulatedTracker pins the happy path:
 // SetCertInfoReader-attached tracker → GET /api/certificates →
 // 200 OK with the wire-shape array.

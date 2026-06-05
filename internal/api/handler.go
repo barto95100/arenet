@@ -272,14 +272,22 @@ type HCStatusReader interface {
 	Status(addr string) string
 }
 
-// CertInfoReader is the read interface the Certificates page
-// uses to surface per-domain runtime cert metadata. Implemented
-// by *certinfo.Tracker.
+// CertInfoReader is the seam the Certificates page uses to surface
+// per-domain runtime cert metadata. Implemented by *certinfo.Tracker.
 //
-// Returns a freshly-allocated snapshot sorted by NotAfter
+// List() returns a freshly-allocated snapshot sorted by NotAfter
 // ascending (closest-to-expiry first); the API layer passes the
-// slice through verbatim — the wire-shape sort is the storage
-// layer's responsibility, not the HTTP handler's.
+// slice through verbatim.
+//
+// Remove(domain) is a mutating hook the DELETE managed-domain
+// handler uses to purge ghost entries after a successful caddy
+// reload. Necessary because certmagic / Caddy v2.11.3 emit no
+// cert-removal event (verified empirically). Returns true when an
+// entry was actually present so the caller can log meaningful
+// counts. The "Reader" name is preserved despite the mutating
+// method to avoid churn across the existing hookup (SetCertInfoReader,
+// h.certInfo field) — the certinfo seam is one logical capability,
+// not two.
 //
 // Unlike HCStatusReader (declared without importing caddyhc to
 // avoid pulling Caddy module weight into the API package), this
@@ -290,6 +298,7 @@ type HCStatusReader interface {
 // compile-time JSON-shape guarantees.
 type CertInfoReader interface {
 	List() []*certinfo.CertRuntimeInfo
+	Remove(domain string) bool
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.

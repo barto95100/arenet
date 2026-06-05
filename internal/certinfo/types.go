@@ -162,6 +162,16 @@ const (
 	// event (informational — issuance has started; outcome not yet
 	// known).
 	EventCertObtaining EventKind = "cert_obtaining"
+	// EventCertRemoved is synthesized by the tracker (NOT by
+	// certmagic — Caddy v2.11.3 / certmagic v0.25.3 have no
+	// cert-removal event; verified empirically against the
+	// vendored sources). Fires from RemoveDomain, which the
+	// DELETE managed-domain API handler calls after a successful
+	// caddy reload to purge ghost entries (OBTAIN_FAILED rows
+	// for the removed apex). Forward-compat seam for Step T+1's
+	// ACME events log so it can record the purge alongside the
+	// other lifecycle events.
+	EventCertRemoved EventKind = "cert_removed"
 )
 
 // Event is the payload passed to Subscribe handlers. Decoupled from

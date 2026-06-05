@@ -277,6 +277,44 @@ func (t *Tracker) RecordObtaining(domain string) {
 	})
 }
 
+// Remove purges a single entry from the in-memory cache and
+// returns true when an entry was actually present. Called by the
+// DELETE managed-domain API handler after a successful caddy reload
+// so OBTAIN_FAILED ghost rows (for the apex that no longer exists
+// in the managed-domain list) don't linger in /certs.
+//
+// Necessary because certmagic / Caddy v2.11.3 emit no cert-removal
+// event (verified empirically against the vendored sources): the
+// only paths into the tracker are the three Record* methods called
+// from certmagic events, none of which trigger on a managed-domain
+// removal. Without this hook the only way to clear a ghost was an
+// Arenet restart, which is the recovery shape Step T was supposed
+// to eliminate.
+//
+// Fans out an EventCertRemoved synthetic event so Step T+1's ACME
+// events log captures the purge through the existing Subscribe
+// seam, no separate hook needed.
+func (t *Tracker) Remove(domain string) bool {
+	key := normalizeDomain(domain)
+	if key == "" {
+		return false
+	}
+	t.mu.Lock()
+	_, existed := t.byDomain[key]
+	if existed {
+		delete(t.byDomain, key)
+	}
+	t.mu.Unlock()
+	if existed {
+		t.fanOut(Event{
+			Kind:   EventCertRemoved,
+			Domain: key,
+			At:     t.now(),
+		})
+	}
+	return existed
+}
+
 // Subscribe attaches an EventHandler to the fan-out. Returns an
 // unsubscribe function the caller invokes on shutdown — the
 // tracker holds no lifecycle of its own beyond the subscriber

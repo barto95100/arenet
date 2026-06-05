@@ -327,6 +327,35 @@ func (h *Handler) deleteManagedDomain(w http.ResponseWriter, r *http.Request) {
 		Message:    formatRouteRevertMessage(mutated, revertTo),
 	})
 
+	// Purge tracker entries for the deleted apex. certmagic /
+	// Caddy v2.11.3 emit no cert-removal event (verified during
+	// the post-T.5 smoke), so OBTAIN_FAILED ghost rows for
+	// *.<apex> (+ <apex> when includeApex was true) would linger
+	// in /certs until an Arenet restart. The purge runs AFTER
+	// the audit append so the audit row is the canonical record
+	// of the user-initiated delete and the purge is a downstream
+	// state-cleanup effect. Nil-tolerant: when SetCertInfoReader
+	// was never called (e.g. test envs that skip the wiring) the
+	// purge silently no-ops and the rest of the handler is
+	// unaffected.
+	if h.certInfo != nil {
+		domainsToPurge := []string{"*." + apex}
+		if previous.IncludeApex {
+			domainsToPurge = append(domainsToPurge, apex)
+		}
+		purged := 0
+		for _, d := range domainsToPurge {
+			if h.certInfo.Remove(d) {
+				purged++
+			}
+		}
+		h.logger.Info("purged tracker entries for deleted apex",
+			"apex", apex,
+			"candidates", len(domainsToPurge),
+			"purged", purged,
+		)
+	}
+
 	writeJSON(w, http.StatusOK, deleteManagedDomainResponse{MutatedRoutes: mutated})
 }
 

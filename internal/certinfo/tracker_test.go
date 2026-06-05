@@ -314,6 +314,90 @@ func TestTracker_ConcurrentReadWrite(t *testing.T) {
 	wg.Wait()
 }
 
+// TestTracker_Remove pins the post-T.5 purge contract: when the
+// API DELETE managed-domain handler calls Remove for a domain it
+// owns, the in-memory cache loses the entry AND fans out a
+// synthetic EventCertRemoved event (no certmagic-side equivalent
+// exists — verified during the post-T.5 smoke recon).
+func TestTracker_Remove(t *testing.T) {
+	tr := NewTracker()
+	tr.RecordCert(&CertRuntimeInfo{
+		Domain:   "x.example.com",
+		NotAfter: time.Now().Add(60 * 24 * time.Hour),
+		Issuer:   "Let's Encrypt",
+	})
+	if _, ok := tr.Get("x.example.com"); !ok {
+		t.Fatalf("setup: Get miss")
+	}
+	if !tr.Remove("x.example.com") {
+		t.Fatalf("Remove returned false for present entry")
+	}
+	if _, ok := tr.Get("x.example.com"); ok {
+		t.Fatalf("entry still present after Remove")
+	}
+	if len(tr.List()) != 0 {
+		t.Fatalf("List() len=%d want=0 after Remove", len(tr.List()))
+	}
+}
+
+// TestTracker_Remove_NonExistent: idempotent — removing a domain
+// the tracker never saw returns false without erroring or
+// fanning out a spurious event.
+func TestTracker_Remove_NonExistent(t *testing.T) {
+	tr := NewTracker()
+	var fanouts int
+	tr.Subscribe(captureHandler{cb: func(Event) { fanouts++ }})
+
+	if tr.Remove("ghost.example.com") {
+		t.Fatalf("Remove returned true for absent entry")
+	}
+	if fanouts != 0 {
+		t.Fatalf("fanouts=%d on no-op Remove, want 0", fanouts)
+	}
+}
+
+// TestTracker_Remove_FanOut: present-entry Remove fans out an
+// EventCertRemoved event so Step T+1's ACME events log can
+// capture purges through the existing Subscribe seam.
+func TestTracker_Remove_FanOut(t *testing.T) {
+	tr := NewTracker()
+	tr.RecordCert(&CertRuntimeInfo{
+		Domain:   "x.example.com",
+		NotAfter: time.Now().Add(48 * time.Hour),
+	})
+	var got Event
+	tr.Subscribe(captureHandler{cb: func(e Event) {
+		if e.Kind == EventCertRemoved {
+			got = e
+		}
+	}})
+
+	tr.Remove("x.example.com")
+	if got.Kind != EventCertRemoved {
+		t.Fatalf("EventCertRemoved not received; got Kind=%q", got.Kind)
+	}
+	if got.Domain != "x.example.com" {
+		t.Fatalf("event.Domain=%q want=x.example.com", got.Domain)
+	}
+	if got.At.IsZero() {
+		t.Fatalf("event.At is zero")
+	}
+}
+
+// TestTracker_Remove_NormalizesDomain: same case+whitespace
+// normalization as the rest of the tracker so the API handler
+// can pass through the operator-typed apex without pre-trimming.
+func TestTracker_Remove_NormalizesDomain(t *testing.T) {
+	tr := NewTracker()
+	tr.RecordCert(&CertRuntimeInfo{
+		Domain:   "x.example.com",
+		NotAfter: time.Now().Add(48 * time.Hour),
+	})
+	if !tr.Remove("  X.Example.COM  ") {
+		t.Fatalf("Remove failed to match normalized key")
+	}
+}
+
 // TestSnapshot_NeverSerializesNilSANList pins the hotfix-following-
 // T.5 invariant: every snapshot the tracker emits via Get / List
 // MUST produce JSON where sanList is at worst an empty array,
