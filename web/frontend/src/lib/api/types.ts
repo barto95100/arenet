@@ -480,6 +480,49 @@ export interface ManagedDomainsListResponse {
 }
 
 /**
+ * Step T T.1 — runtime status enum surfaced by GET /api/certificates.
+ * Mirrors internal/certinfo/types.go Status. Locked vocabulary per
+ * spec §2 AC #2; the frontend renders one badge variant per value
+ * (see web/frontend/src/lib/utils/certificate-format.ts).
+ */
+export type CertificateStatus =
+	| 'VALID'
+	| 'RENEWAL_PENDING'
+	| 'EXPIRED'
+	| 'OBTAIN_FAILED'
+	| 'UNKNOWN';
+
+/**
+ * Step T T.1 — cert provenance classification. Drives the
+ * "<source> · <challenge>" sub-line under the DOMAINE column of
+ * the Domaines table. Mirrors internal/certinfo/types.go Source.
+ */
+export type CertificateSource = 'wildcard' | 'apex' | 'specific';
+
+/**
+ * Step T T.1 — GET /api/certificates row shape. Field-by-field
+ * mirror of internal/certinfo.CertRuntimeInfo (JSON tags pinned
+ * in internal/certinfo/types.go).
+ *
+ * notBefore / notAfter / lastErrorAt are RFC3339 strings on the
+ * wire (Go time.Time JSON encoding). lastError and lastErrorAt
+ * are present only when status === 'OBTAIN_FAILED' AND the
+ * failure happened within the 24h freshness window enforced
+ * server-side; otherwise both fields are omitted.
+ */
+export interface Certificate {
+	domain: string;
+	sanList: string[];
+	issuer: string;
+	notBefore: string;
+	notAfter: string;
+	status: CertificateStatus;
+	source: CertificateSource;
+	lastError?: string;
+	lastErrorAt?: string;
+}
+
+/**
  * Step O.3 — DELETE /api/v1/settings/managed-domains/{apex}
  * response shape. The `mutatedRoutes` count tells the frontend
  * how many covered routes had their ACMEChallenge reverted, so

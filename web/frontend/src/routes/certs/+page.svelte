@@ -9,30 +9,34 @@
   History:
   - R.2 (`4691eb2`): shipped as a minimal stub.
   - R.4.3.c: promoted to a read-only catalog summarising managed
-    domains + TLS-enabled routes. The full CRUD stayed at
-    `/settings` (the "softer split" — backlog §R-6 PARTIAL).
-  - #R-6 Pack A (this commit): completes the §R-6 migration. The
-    SSL/Certificates editor moves from `/settings` to `/certs`;
-    `/settings` no longer has an SSL section. The page also gains
-    an auto-renewal info card so the certmagic-driven automatic
-    renewal behaviour is visible to operators (previously
-    invisible — the UI never said anything about it).
-
-  Pack B (per-certificate runtime metadata: issuer, SAN list,
-  expiry, last-renewal timestamp) is a separate Step T concern —
-  it requires a backend API surface that doesn't exist today.
-  The ℹ banner about that gap stays in place until Pack B lands.
+    domains + TLS-enabled routes.
+  - #R-6 Pack A (`06ba97a`): completed the §R-6 migration —
+    Managed domains editor moved here from /settings, auto-renewal
+    info card added.
+  - Step T T.4 (this commit): consumes the T.1 GET /api/certificates
+    runtime metadata. KPI cards now reflect the live cert pool;
+    the previous "TLS-enabled routes" read-only table is replaced
+    by the unified Domaines table with status badges and a
+    Tous / Wildcard / Expirent bientôt tab filter. The stale
+    "runtime metadata not exposed" banner is removed (T.1 ships
+    the data). Force-renew button intentionally absent per the
+    Step T amendment (docs/step-t-spec-amendment.md, commit
+    `c62d657`) — Caddy v2.11.3's renewal seam is unexported.
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import Badge from '$lib/components/Badge.svelte';
+	import Tooltip from '$lib/components/Tooltip.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import { settingsApi } from '$lib/api/settings';
+	import { certificatesApi } from '$lib/api/certificates';
 	import { listRoutes } from '$lib/api/client';
 	import { ApiError } from '$lib/api/types';
 	import type {
+		Certificate,
 		ManagedDomain,
 		ManagedDomainProvider,
 		ManagedDomainRevertTo,
@@ -40,10 +44,36 @@
 		DNSProviderOVH,
 	} from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
+	import { relativeTime } from '$lib/utils/audit-format';
+	import {
+		RENEWAL_WINDOW_DAYS,
+		certificateSourceLabel,
+		certificateStatusLabel,
+		certificateStatusToBadgeVariant,
+		daysUntilExpiry,
+		dominantIssuer,
+		inferChallengeLabel,
+		isExpiringSoon,
+	} from '$lib/utils/certificate-format';
 
 	let loading = $state(true);
 	let domains = $state<ManagedDomain[]>([]);
 	let routes = $state<Route[]>([]);
+	let certs = $state<Certificate[]>([]);
+	// Tab filter for the Domaines table (AC #6 LOCKED). Local
+	// component state, not URL-anchored — sharing the page link
+	// implicitly means sharing the "Tous" default, which matches
+	// the operator's "what's the state of all my certs?" entry
+	// intent. URL-anchored tabs can be revisited if the dashboard
+	// gains deep-link conventions elsewhere.
+	type DomaineTab = 'all' | 'wildcard' | 'expiring';
+	let activeTab = $state<DomaineTab>('all');
+	// Distinct from the page-level `loading` (which gates the
+	// editor markup): certsLoadError is the soft-fail state for
+	// the Domaines table specifically. A 5xx on /api/certificates
+	// must NOT take down the managed-domains editor (AC #13
+	// degraded-mode policy mirrored on the frontend).
+	let certsLoadError = $state(false);
 
 	// DNS provider state — used to render the "DNS provider
 	// unconfigured" warning in the editor. The page reads it on
@@ -85,6 +115,41 @@
 	// managed domain ahead of configuring OVH credentials.
 	const sslDNSUnconfigured = $derived(!dnsProviderConfigured);
 
+	// Step T T.4 — runtime KPI derivations from the cert list.
+	// All four cards must reflect the LIVE state (T.4 brief A);
+	// the pre-T.4 cards were config viewers that didn't change
+	// when a cert was issued or expired.
+	const certsTotal = $derived(certs.length);
+	const certsWildcard = $derived(certs.filter((c) => c.source === 'wildcard').length);
+	const certsSpecific = $derived(
+		certs.filter((c) => c.source === 'specific' || c.source === 'apex').length
+	);
+	const certsExpiringSoon = $derived(certs.filter((c) => isExpiringSoon(c)).length);
+	const principalIssuer = $derived(dominantIssuer(certs));
+	// ACME method KPI: DNS-01 wins as soon as at least one
+	// managed-domain is declared (we're using DNS-01 for at least
+	// some of the cert pool); else "Auto" (HTTP-01 default).
+	const acmeMethodLabel = $derived(domains.length > 0 ? 'DNS-01' : 'Auto');
+	const acmeMethodSub = $derived(
+		domains.length > 0 ? `via ${domains[0].provider.toUpperCase()}` : 'HTTP-01'
+	);
+
+	// Filtered cert list per the active tab. Pure client-side —
+	// no refetch — so tab switching is instant. Empty-state copy
+	// branches on activeTab so the operator sees the right
+	// "nothing in this category" message.
+	const filteredCerts = $derived.by(() => {
+		switch (activeTab) {
+			case 'wildcard':
+				return certs.filter((c) => c.source === 'wildcard');
+			case 'expiring':
+				return certs.filter((c) => isExpiringSoon(c));
+			case 'all':
+			default:
+				return certs;
+		}
+	});
+
 	async function loadDNSProvider(): Promise<void> {
 		try {
 			const p: DNSProviderOVH = await settingsApi.getDNSProviderOVH();
@@ -106,12 +171,28 @@
 		}
 	}
 
+	// Step T T.4 — load the runtime cert list. Soft-failing on
+	// purpose: a 5xx must NOT block the rest of the page (the
+	// managed-domains editor and renewal info card stay
+	// functional). The Domaines table renders the certsLoadError
+	// branch instead.
+	async function loadCertificates(): Promise<void> {
+		try {
+			certs = await certificatesApi.list();
+			certsLoadError = false;
+		} catch {
+			certs = [];
+			certsLoadError = true;
+		}
+	}
+
 	async function load(): Promise<void> {
 		try {
 			const [rs] = await Promise.all([
 				listRoutes(),
 				loadManagedDomains(),
 				loadDNSProvider(),
+				loadCertificates(),
 			]);
 			routes = rs;
 		} catch (err) {
@@ -177,25 +258,29 @@
 	<div class="loading-wrap"><Spinner /></div>
 {:else}
 	<div class="kpis">
-		<div class="kpi">
-			<div class="kpi-label">Managed domains</div>
-			<div class="kpi-val">{managedCount}</div>
-			<div class="kpi-foot">DNS-01 wildcard apex</div>
+		<div class="kpi" data-testid="kpi-certs-actifs">
+			<div class="kpi-label">Certificats actifs</div>
+			<div class="kpi-val">{certsTotal}</div>
+			<div class="kpi-foot">
+				{certsWildcard} wildcard · {certsSpecific} spécifique{certsSpecific === 1 ? '' : 's'}
+			</div>
 		</div>
-		<div class="kpi">
-			<div class="kpi-label">TLS-enabled routes</div>
-			<div class="kpi-val">{tlsCount}</div>
-			<div class="kpi-foot">across {routes.length} total routes</div>
+		<div class="kpi" data-testid="kpi-expirent-bientot">
+			<div class="kpi-label">Expirent &lt; {RENEWAL_WINDOW_DAYS} jours</div>
+			<div class="kpi-val">{certsExpiringSoon}</div>
+			<div class="kpi-foot">
+				{certsExpiringSoon > 0 ? 'renouvellement auto programmé' : '—'}
+			</div>
 		</div>
-		<div class="kpi">
-			<div class="kpi-label">ACME method</div>
-			<div class="kpi-val mode">Auto</div>
-			<div class="kpi-foot">HTTP-01 + DNS-01 (wildcard)</div>
+		<div class="kpi" data-testid="kpi-emetteur">
+			<div class="kpi-label">Émetteur principal</div>
+			<div class="kpi-val mode">{principalIssuer}</div>
+			<div class="kpi-foot">&nbsp;</div>
 		</div>
-		<div class="kpi">
-			<div class="kpi-label">Issuer</div>
-			<div class="kpi-val mode">Let's Encrypt</div>
-			<div class="kpi-foot">certmagic default</div>
+		<div class="kpi" data-testid="kpi-methode">
+			<div class="kpi-label">Méthode ACME</div>
+			<div class="kpi-val mode">{acmeMethodLabel}</div>
+			<div class="kpi-foot">{acmeMethodSub}</div>
 		</div>
 	</div>
 
@@ -234,26 +319,135 @@
 		</div>
 	</div>
 
-	<!-- Per-cert metadata gap notice -->
-	<div class="ro-banner">
-		<svg
-			width="14"
-			height="14"
-			viewBox="0 0 16 16"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="1.6"
-			aria-hidden="true"
-		>
-			<circle cx="8" cy="8" r="6.5" />
-			<path d="M8 5v3.5M8 11v.5" />
-		</svg>
-		<span
-			>Per-certificate runtime metadata (issuer, SAN list, expiry, last
-			renewal) is not exposed via the Arenet API today. The lists below
-			show the <em>configured</em> certificate scope — what certmagic
-			provisions on behalf of each route or managed domain.</span
-		>
+	<!-- Step T T.4 — unified Domaines table. Live runtime cert
+	     metadata from GET /api/certificates (T.1, commit 1350777).
+	     Replaces the pre-T.4 "TLS-enabled routes" read-only table
+	     (which only knew the configured shape, never the actual
+	     cert state). No row actions — force-renew button absent
+	     per the Step T amendment (Caddy renewal seam unexported). -->
+	<div class="card" data-testid="domaines-card">
+		<div class="card-h">
+			<h3>Domaines</h3>
+			<div class="tabs" role="tablist" aria-label="Filter certificates">
+				<button
+					type="button"
+					role="tab"
+					class="tab"
+					class:active={activeTab === 'all'}
+					aria-selected={activeTab === 'all'}
+					data-testid="tab-all"
+					onclick={() => (activeTab = 'all')}
+				>
+					Tous
+				</button>
+				<button
+					type="button"
+					role="tab"
+					class="tab"
+					class:active={activeTab === 'wildcard'}
+					aria-selected={activeTab === 'wildcard'}
+					data-testid="tab-wildcard"
+					onclick={() => (activeTab = 'wildcard')}
+				>
+					Wildcard
+				</button>
+				<button
+					type="button"
+					role="tab"
+					class="tab"
+					class:active={activeTab === 'expiring'}
+					aria-selected={activeTab === 'expiring'}
+					data-testid="tab-expiring"
+					onclick={() => (activeTab = 'expiring')}
+				>
+					Expirent bientôt
+				</button>
+			</div>
+		</div>
+
+		{#if certsLoadError}
+			<div class="empty-row" data-testid="certs-error">
+				Impossible de récupérer les certificats (le service backend a
+				répondu en erreur). Le reste de cette page reste utilisable.
+			</div>
+		{:else if certs.length === 0}
+			<div class="empty-row" data-testid="certs-empty">
+				Aucun certificat actif.
+				<div class="empty-sub">
+					Les certificats sont auto-provisionnés à la création d'une
+					route TLS ou à la déclaration d'un apex géré.
+				</div>
+			</div>
+		{:else if filteredCerts.length === 0}
+			<div class="empty-row" data-testid="certs-tab-empty">
+				Aucun certificat dans cette catégorie.
+			</div>
+		{:else}
+			<table data-testid="certs-table">
+				<thead>
+					<tr>
+						<th>Domaine</th>
+						<th>Émetteur</th>
+						<th>SAN</th>
+						<th>Émis le</th>
+						<th>Expire dans</th>
+						<th>État</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each filteredCerts as cert (cert.domain)}
+						{@const days = daysUntilExpiry(cert)}
+						<tr data-testid="cert-row" data-domain={cert.domain}>
+							<td>
+								<div class="mono">{cert.domain}</div>
+								<div class="dim cell-sub">
+									{certificateSourceLabel(cert.source)} · {inferChallengeLabel(
+										cert.source
+									)}
+								</div>
+							</td>
+							<td>{cert.issuer || '—'}</td>
+							<td class="mono">
+								{cert.sanList.length} SAN
+							</td>
+							<td class="dim">{relativeTime(cert.notBefore)}</td>
+							<td>
+								<span
+									class="expiry"
+									class:expiry-warn={days <= RENEWAL_WINDOW_DAYS && days > 0}
+									class:expiry-down={days <= 0}
+								>
+									{#if days <= 0}
+										expiré
+									{:else}
+										{days} jour{days === 1 ? '' : 's'}
+									{/if}
+								</span>
+							</td>
+							<td>
+								{#if cert.status === 'OBTAIN_FAILED' && cert.lastError}
+									<Tooltip
+										label={`${cert.lastError}${
+											cert.lastErrorAt
+												? ` (${relativeTime(cert.lastErrorAt)})`
+												: ''
+										}`}
+									>
+										<Badge variant={certificateStatusToBadgeVariant(cert.status)}>
+											{certificateStatusLabel(cert.status)}
+										</Badge>
+									</Tooltip>
+								{:else}
+									<Badge variant={certificateStatusToBadgeVariant(cert.status)}>
+										{certificateStatusLabel(cert.status)}
+									</Badge>
+								{/if}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		{/if}
 	</div>
 
 	<!-- Managed domains — editor (migrated from /settings in
@@ -383,55 +577,6 @@
 		</p>
 	</div>
 
-	<!-- TLS-enabled routes (unchanged from R.4.3.c) -->
-	<div class="card">
-		<div class="card-h">
-			<h3>TLS-enabled routes</h3>
-			<a href="/routes" class="meta-link">Manage →</a>
-		</div>
-		{#if tlsRoutes.length === 0}
-			<div class="empty-row">
-				No TLS-enabled routes. Enable TLS on a route in <a
-					href="/routes">/routes</a
-				> to have certmagic provision a certificate.
-			</div>
-		{:else}
-			<table>
-				<thead>
-					<tr>
-						<th>Host</th>
-						<th>Aliases</th>
-						<th>HTTPS redirect</th>
-						<th>ACME mode</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each tlsRoutes as r (r.id)}
-						<tr>
-							<td class="mono">{r.host}</td>
-							<td class="mono dim"
-								>{(r.aliases ?? []).length > 0
-									? (r.aliases ?? []).join(', ')
-									: '—'}</td
-							>
-							<td>
-								{#if r.redirectToHttps}
-									<span class="pill ok">301 → https</span>
-								{:else}
-									<span class="dim">—</span>
-								{/if}
-							</td>
-							<td>
-								<span class="pill info"
-									>Auto (HTTP-01 or DNS-01)</span
-								>
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		{/if}
-	</div>
 {/if}
 
 <!-- Delete-managed-domain modal — verbatim port of the
@@ -510,16 +655,6 @@
 		font-size: 11.5px;
 		font-family: var(--font-mono);
 	}
-	.meta-link {
-		margin-left: auto;
-		color: var(--accent);
-		font-size: 12.5px;
-		text-decoration: none;
-	}
-	.meta-link:hover {
-		text-decoration: underline;
-	}
-
 	.section-lead {
 		color: var(--fg-muted);
 		font-size: 12.5px;
@@ -577,7 +712,7 @@
 	/* Auto-renewal info card. Uses the accent token for the
 	   border + a soft accent tint for the background so the
 	   panel reads as "informational + assuring", not a
-	   warning. Distinct from the warn-tinted .ro-banner below. */
+	   warning. */
 	.renewal-card {
 		display: flex;
 		gap: 14px;
@@ -612,29 +747,6 @@
 	}
 	.renewal-body a:hover {
 		text-decoration: underline;
-	}
-
-	.ro-banner {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
-		padding: 10px 12px;
-		margin-bottom: 14px;
-		background: color-mix(in oklch, var(--warn) 8%, transparent);
-		border: 1px solid color-mix(in oklch, var(--warn) 28%, transparent);
-		border-radius: var(--radius-sm);
-		color: var(--fg-muted);
-		font-size: 12px;
-		line-height: 1.5;
-	}
-	.ro-banner svg {
-		flex: none;
-		color: var(--warn);
-		margin-top: 2px;
-	}
-	.ro-banner em {
-		color: var(--fg);
-		font-style: italic;
 	}
 
 	.warn-box {
@@ -802,23 +914,57 @@
 		color: var(--fg-dim);
 	}
 
-	.pill {
+	/* Step T T.4 — Domaines table tab filter (AC #6 LOCKED).
+	   Renders top-right of the card header; small pills styled
+	   like text-tabs (subtle separation, accent underline on
+	   active). The button reset matches the other inline
+	   tablists in the app (Topology Phase 2 protocol toggles). */
+	.tabs {
+		margin-left: auto;
 		display: inline-flex;
-		align-items: center;
-		padding: 2px 8px;
-		border-radius: 999px;
-		font-family: var(--font-mono);
-		font-size: 10px;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
+		gap: 4px;
 	}
-	.pill.ok {
-		background: color-mix(in oklch, var(--ok) 18%, transparent);
-		color: var(--ok);
+	.tab {
+		appearance: none;
+		background: transparent;
+		border: 1px solid transparent;
+		color: var(--fg-muted);
+		font-size: 11.5px;
+		font-family: inherit;
+		padding: 4px 10px;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		transition: color var(--motion-fast, 120ms), background var(--motion-fast, 120ms);
 	}
-	.pill.info {
-		background: color-mix(in oklch, var(--info) 18%, transparent);
-		color: var(--info);
+	.tab:hover {
+		color: var(--fg);
+		background: var(--bg-elevated);
+	}
+	.tab.active {
+		color: var(--fg);
+		background: var(--bg-elevated);
+		border-color: var(--border-default);
+	}
+
+	/* Sub-line under a primary cell (e.g. "<source> · <challenge>"
+	   under DOMAINE). Smaller + dim so it doesn't compete with
+	   the cell's main content. */
+	.cell-sub {
+		font-size: 11px;
+		margin-top: 3px;
+	}
+
+	/* EXPIRE DANS column color states — amber inside the renewal
+	   window, red once expired. Plain text color flip (not a
+	   pill) per the mock's minimalist treatment. */
+	.expiry {
+		font-variant-numeric: tabular-nums;
+	}
+	.expiry-warn {
+		color: var(--status-warn);
+	}
+	.expiry-down {
+		color: var(--status-down);
 	}
 
 	.empty-row {
@@ -827,12 +973,10 @@
 		padding: 24px;
 		text-align: center;
 	}
-	.empty-row a {
-		color: var(--accent);
-		text-decoration: none;
-	}
-	.empty-row a:hover {
-		text-decoration: underline;
+	.empty-sub {
+		margin-top: 6px;
+		font-size: 11.5px;
+		color: var(--fg-dim);
 	}
 
 	.loading-wrap {

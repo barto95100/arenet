@@ -2,28 +2,26 @@
 // Copyright (C) 2026  Ludovic Ramos
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-// /certs page tests — pin the contract of the #R-6 Pack A
-// migration: editor mounted on /certs, auto-renewal info card
-// rendered, /settings no longer carries the managed-domains UI.
-//
-// Test surface:
-//   - Auto-renewal info card always renders post-load.
-//   - Managed-domains editor mounts (add form + existing-domains
-//     list with inline Delete) on /certs.
-//   - The editor uses the same settingsApi endpoints as the
-//     pre-migration /settings UI (createManagedDomain,
-//     deleteManagedDomain, listManagedDomains, getDNSProviderOVH).
-//   - DNS-provider-unconfigured warning surfaces when the
-//     configured flag is false.
+// /certs page tests — pin the contract of:
+//   - #R-6 Pack A migration: editor mounted on /certs,
+//     auto-renewal info card rendered, /settings no longer
+//     carries the managed-domains UI.
+//   - Step T T.4: unified Domaines table fed by GET
+//     /api/certificates, runtime KPI cards, Tous/Wildcard/
+//     Expirent bientôt tab filter, status badges per AC #10,
+//     OBTAIN_FAILED tooltip, empty + error states. Pack A
+//     editor must remain functional even when /api/certificates
+//     fails (AC #13 degraded mode mirrored on the frontend).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
+import type { Certificate } from '$lib/api/types';
 
 // Mocks. Same vi.hoisted pattern as the Routes page tests so the
 // module imports happen after the mock factories are in place.
-const { toastMock, apiMock, settingsMock } = vi.hoisted(() => ({
+const { toastMock, apiMock, settingsMock, certsMock } = vi.hoisted(() => ({
 	toastMock: { pushToast: vi.fn() },
 	apiMock: {
 		listRoutes: vi.fn(),
@@ -36,13 +34,82 @@ const { toastMock, apiMock, settingsMock } = vi.hoisted(() => ({
 			getDNSProviderOVH: vi.fn(),
 		},
 	},
+	certsMock: {
+		certificatesApi: {
+			list: vi.fn(),
+		},
+	},
 }));
 
 vi.mock('$lib/stores/toast', () => toastMock);
 vi.mock('$lib/api/client', () => apiMock);
 vi.mock('$lib/api/settings', () => settingsMock);
+vi.mock('$lib/api/certificates', () => certsMock);
 
 import Page from './+page.svelte';
+
+// Anchor "now" for the fixture so daysUntilExpiry calculations
+// land at deterministic values regardless of when CI runs. We
+// stub Date in tests that depend on the precise day count;
+// fixture timestamps are computed relative to this anchor.
+const NOW = new Date('2026-06-05T12:00:00Z');
+
+function daysFromNow(days: number): string {
+	return new Date(NOW.getTime() + days * 86400000).toISOString();
+}
+
+// Step T T.4 — fixture covering every status the AC #10 badge
+// table maps. Tests that don't need the full set reach into this
+// list by domain.
+const fixtureCerts: Certificate[] = [
+	{
+		domain: 'valid.example.com',
+		sanList: ['valid.example.com'],
+		issuer: "Let's Encrypt",
+		notBefore: daysFromNow(-60),
+		notAfter: daysFromNow(60),
+		status: 'VALID',
+		source: 'specific',
+	},
+	{
+		domain: 'soon.example.com',
+		sanList: ['soon.example.com', 'www.soon.example.com'],
+		issuer: "Let's Encrypt",
+		notBefore: daysFromNow(-70),
+		notAfter: daysFromNow(15),
+		status: 'RENEWAL_PENDING',
+		source: 'specific',
+	},
+	{
+		domain: '*.wild.example.com',
+		sanList: ['*.wild.example.com'],
+		issuer: "Let's Encrypt",
+		notBefore: daysFromNow(-30),
+		notAfter: daysFromNow(60),
+		status: 'VALID',
+		source: 'wildcard',
+	},
+	{
+		domain: 'expired.example.com',
+		sanList: ['expired.example.com'],
+		issuer: "Let's Encrypt",
+		notBefore: daysFromNow(-120),
+		notAfter: daysFromNow(-3),
+		status: 'EXPIRED',
+		source: 'specific',
+	},
+	{
+		domain: 'broken.example.com',
+		sanList: ['broken.example.com'],
+		issuer: "Let's Encrypt",
+		notBefore: daysFromNow(-30),
+		notAfter: daysFromNow(60),
+		status: 'OBTAIN_FAILED',
+		source: 'specific',
+		lastError: 'DNS lookup failed: NXDOMAIN',
+		lastErrorAt: daysFromNow(-0.01),
+	},
+];
 
 beforeEach(() => {
 	toastMock.pushToast.mockReset();
@@ -51,9 +118,10 @@ beforeEach(() => {
 	settingsMock.settingsApi.createManagedDomain.mockReset();
 	settingsMock.settingsApi.deleteManagedDomain.mockReset();
 	settingsMock.settingsApi.getDNSProviderOVH.mockReset();
+	certsMock.certificatesApi.list.mockReset();
 
 	// Sensible defaults: no routes, no domains, DNS provider
-	// configured. Individual tests override these.
+	// configured, no certs. Individual tests override these.
 	apiMock.listRoutes.mockResolvedValue([]);
 	settingsMock.settingsApi.listManagedDomains.mockResolvedValue({
 		domains: [],
@@ -65,6 +133,7 @@ beforeEach(() => {
 		consumerKey: '',
 		configured: true,
 	});
+	certsMock.certificatesApi.list.mockResolvedValue([]);
 });
 
 describe('/certs — auto-renewal info card', () => {
@@ -257,5 +326,199 @@ describe('/certs — DNS-provider-unconfigured warning', () => {
 		expect(
 			screen.queryByText(/DNS provider unconfigured/i),
 		).not.toBeInTheDocument();
+	});
+});
+
+// Step T T.4 — unified Domaines table tests. The fixture covers
+// every status the AC #10 badge mapping handles; per-test mocks
+// reach into `fixtureCerts` by domain name to keep each test's
+// scope narrow.
+
+describe('/certs — runtime KPI cards (T.4)', () => {
+	it('Certificats actifs counts total + breaks down wildcard / spécifique', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		const card = await screen.findByTestId('kpi-certs-actifs');
+		// 5 fixture certs, 1 wildcard, 4 specific.
+		expect(card.textContent ?? '').toMatch(/5/);
+		expect(card.textContent ?? '').toMatch(/1 wildcard/);
+		expect(card.textContent ?? '').toMatch(/4 spécifiques/);
+	});
+
+	it('Expirent < 30 jours surfaces the renewal-window count', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		const card = await screen.findByTestId('kpi-expirent-bientot');
+		// fixtureCerts: soon (15d), expired (-3d), broken (60d but
+		// status fresh-failed doesn't affect daysUntilExpiry). The
+		// "expiring soon" predicate is days <= 30, so soon + expired
+		// = 2.
+		expect(card.textContent ?? '').toMatch(/2/);
+		expect(card.textContent ?? '').toMatch(/renouvellement auto programmé/);
+	});
+
+	it('Émetteur principal surfaces the dominant issuer', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		const card = await screen.findByTestId('kpi-emetteur');
+		expect(card.textContent ?? '').toMatch(/Let's Encrypt/);
+	});
+
+	it('Méthode ACME shows Auto when no managed domain declared', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		const card = await screen.findByTestId('kpi-methode');
+		expect(card.textContent ?? '').toMatch(/Auto/);
+	});
+
+	it('Méthode ACME flips to DNS-01 when at least one managed domain is declared', async () => {
+		settingsMock.settingsApi.listManagedDomains.mockResolvedValue({
+			domains: [{ apex: 'example.com', includeApex: true, provider: 'ovh' }],
+		});
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		const card = await screen.findByTestId('kpi-methode');
+		expect(card.textContent ?? '').toMatch(/DNS-01/);
+		expect(card.textContent ?? '').toMatch(/via OVH/);
+	});
+});
+
+describe('/certs — Domaines table (T.4)', () => {
+	it('renders one row per certificate with domain + issuer + SAN cells', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+		const rows = screen.getAllByTestId('cert-row');
+		expect(rows).toHaveLength(fixtureCerts.length);
+		// Wildcard row carries 1 SAN; broken carries 1 SAN; soon
+		// carries 2 (verifies sanList.length flows through).
+		const soonRow = rows.find((r) => r.dataset.domain === 'soon.example.com')!;
+		expect(soonRow.textContent ?? '').toMatch(/2 SAN/);
+	});
+
+	it('status badge label matches AC #10 vocabulary for each status', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+		// VALID → VALIDE, RENEWAL_PENDING → RENOUV. AUTO,
+		// EXPIRED → EXPIRÉ, OBTAIN_FAILED → ÉCHEC.
+		expect(screen.getAllByText('VALIDE').length).toBeGreaterThan(0);
+		expect(screen.getByText('RENOUV. AUTO')).toBeInTheDocument();
+		expect(screen.getByText('EXPIRÉ')).toBeInTheDocument();
+		expect(screen.getByText('ÉCHEC')).toBeInTheDocument();
+	});
+
+	it('OBTAIN_FAILED row carries the lastError tooltip', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+		const echec = screen.getByText('ÉCHEC');
+		// Tooltip wraps the badge; the bubble mounts on hover/focus.
+		// We assert the wrapper's aria-describedby contract by
+		// simulating focus and reading the bubble text.
+		const wrapper = echec.closest('.tt-wrapper') as HTMLElement | null;
+		expect(wrapper).not.toBeNull();
+		await fireEvent.focusIn(wrapper!);
+		await tick();
+		expect(
+			screen.getByText(/DNS lookup failed: NXDOMAIN/),
+		).toBeInTheDocument();
+	});
+
+	it('expired row labels the EXPIRE DANS cell as "expiré"', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+		const rows = screen.getAllByTestId('cert-row');
+		const expired = rows.find((r) => r.dataset.domain === 'expired.example.com')!;
+		expect(expired.textContent ?? '').toMatch(/expiré/);
+	});
+
+	it('shows the page-level empty state when no certs exist', async () => {
+		// Default mock already returns []; explicit for clarity.
+		certsMock.certificatesApi.list.mockResolvedValue([]);
+		render(Page);
+		const empty = await screen.findByTestId('certs-empty');
+		expect(empty.textContent ?? '').toMatch(/Aucun certificat actif/);
+	});
+
+	it('shows the error banner when /api/certificates rejects', async () => {
+		certsMock.certificatesApi.list.mockRejectedValue(new Error('boom'));
+		render(Page);
+		const err = await screen.findByTestId('certs-error');
+		expect(err.textContent ?? '').toMatch(/Impossible de récupérer/);
+		// Pack A editor MUST still mount even when certs failed
+		// (AC #13 degraded mode mirrored on the frontend).
+		expect(
+			screen.getByRole('button', { name: /declare managed domain/i }),
+		).toBeInTheDocument();
+	});
+});
+
+describe('/certs — Domaines tabs (T.4)', () => {
+	it('Wildcard tab filters to source=wildcard rows only', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+
+		const tab = screen.getByTestId('tab-wildcard');
+		await userEvent.click(tab);
+		await tick();
+
+		const rows = screen.getAllByTestId('cert-row');
+		expect(rows).toHaveLength(1);
+		expect(rows[0].dataset.domain).toBe('*.wild.example.com');
+	});
+
+	it('Expirent bientôt tab filters to certs within the renewal window OR already expired', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+
+		const tab = screen.getByTestId('tab-expiring');
+		await userEvent.click(tab);
+		await tick();
+
+		const rows = screen.getAllByTestId('cert-row');
+		// soon (15d) + expired (-3d) qualify; valid/wild/broken
+		// have notAfter beyond the 30d window.
+		expect(rows.map((r) => r.dataset.domain).sort()).toEqual(
+			['expired.example.com', 'soon.example.com'].sort(),
+		);
+	});
+
+	it('per-tab empty state surfaces when the active filter yields zero rows', async () => {
+		// All-VALID fixture, no wildcards — the Wildcard tab MUST
+		// render the per-tab empty branch, NOT the page-level
+		// "Aucun certificat actif" copy.
+		certsMock.certificatesApi.list.mockResolvedValue([
+			{
+				domain: 'one.example.com',
+				sanList: ['one.example.com'],
+				issuer: "Let's Encrypt",
+				notBefore: daysFromNow(-30),
+				notAfter: daysFromNow(60),
+				status: 'VALID',
+				source: 'specific',
+			},
+		]);
+		render(Page);
+		await screen.findByTestId('certs-table');
+
+		const tab = screen.getByTestId('tab-wildcard');
+		await userEvent.click(tab);
+		await tick();
+
+		expect(screen.getByTestId('certs-tab-empty')).toBeInTheDocument();
+		// And the page-level empty state must NOT be shown — the
+		// dataset isn't empty, just the filter.
+		expect(screen.queryByTestId('certs-empty')).not.toBeInTheDocument();
+	});
+
+	it('Tous tab is the default selection on first render', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		const tab = await screen.findByTestId('tab-all');
+		expect(tab.getAttribute('aria-selected')).toBe('true');
 	});
 });
