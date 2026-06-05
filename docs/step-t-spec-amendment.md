@@ -1,3 +1,9 @@
+<!--
+Arenet - Homelab-friendly reverse proxy with integrated security
+Copyright (C) 2026  Ludovic Ramos
+Licensed under the GNU AGPL v3 or later. See LICENSE.
+-->
+
 # Step T — Amendment: Force-Renew Deferred (2026-06-05)
 
 ## Context
