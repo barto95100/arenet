@@ -31,7 +31,17 @@ name: release
 on:
   push:
     tags:
+      # Real ship tags trigger the release pipeline. Spec freeze
+      # tags (e.g. v0.6.0-step-j-spec, v1.2.0-step-t-spec) are
+      # design markers, NOT releases — they intentionally do
+      # nothing here. The 2026-06-05 v1.2.0-step-t-spec push
+      # surfaced this gap: it triggered a full Docker build that
+      # landed a misleading image on ghcr.io for a spec-only
+      # commit. The negation excludes any tag ending in -spec,
+      # which covers every spec-freeze convention we've used
+      # since Step F.
       - 'v*'
+      - '!v*-spec'
   workflow_dispatch:
     inputs:
       reason:
@@ -111,7 +121,17 @@ jobs:
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha,scope=build-${{ matrix.arch }}
-          cache-to: type=gha,scope=build-${{ matrix.arch }},mode=max
+          # ignore-error=true absorbs transient GHA cache-export
+          # flakes (docker/buildx#2929). The 2026-06-05 build of
+          # v1.2.0-step-t-spec succeeded at the image push step
+          # but failed at cache export with "error writing layer
+          # blob: not_found" on a 123-byte base-image config
+          # blob — GHA's blob store returning 404 partway through
+          # the mode=max write-back. Cache is best-effort by
+          # design; the image push is the real success criterion,
+          # and a transient cache failure should not invalidate a
+          # successful build.
+          cache-to: type=gha,scope=build-${{ matrix.arch }},mode=max,ignore-error=true
           provenance: false
 
       - name: Export digest
