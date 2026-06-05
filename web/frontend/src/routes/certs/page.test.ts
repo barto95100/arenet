@@ -101,22 +101,21 @@ const fixtureCerts: Certificate[] = [
 	{
 		// OBTAIN_FAILED fixtures mirror the empirically-captured
 		// wire shape against AreNET-test on 2026-06-05: the
-		// backend emits sanList=null for entries that never
-		// reached cert_obtained (no on-disk leaf to parse). The
-		// snapshot()-level hotfix in tracker.go now coerces nil
-		// to [], but the test keeps the null shape so the
-		// frontend null-coalescing read (cert.sanList ?? []) is
-		// exercised on every page test that loads fixtureCerts —
-		// regression check survives if the backend ever
-		// reintroduces the nil-slice gotcha.
-		domain: 'broken.example.com',
+		// backend emits sanList=null (hotfix coerces to []),
+		// notBefore/notAfter as Go zero-time, and source as
+		// empty string for entries that never reached
+		// cert_obtained. The polish layer derives the source
+		// from the domain string and skips zero-time rendering
+		// so the table cells don't surface "il y a 2027 ans"
+		// or "expiré" for never-obtained certs.
+		domain: '*.test.local',
 		sanList: null,
 		issuer: '',
-		notBefore: daysFromNow(-30),
-		notAfter: daysFromNow(60),
+		notBefore: '0001-01-01T00:00:00Z',
+		notAfter: '0001-01-01T00:00:00Z',
 		status: 'OBTAIN_FAILED',
-		source: 'specific',
-		lastError: "subject 'broken.example.com' does not qualify for a public certificate",
+		source: '' as unknown as Certificate['source'],
+		lastError: "subject '*.test.local' does not qualify for a public certificate",
 		lastErrorAt: daysFromNow(-0.01),
 	},
 ];
@@ -410,24 +409,29 @@ describe('/certs — DNS-provider-unconfigured warning', () => {
 // scope narrow.
 
 describe('/certs — runtime KPI cards (T.4)', () => {
-	it('Certificats actifs counts total + breaks down wildcard / spécifique', async () => {
+	it('Certificats actifs breakdown sums to the total (resolveSource handles empty source)', async () => {
 		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
 		render(Page);
 		const card = await screen.findByTestId('kpi-certs-actifs');
-		// 5 fixture certs, 1 wildcard, 4 specific.
+		// 5 fixture certs: 2 wildcard (*.wild.example.com explicit +
+		// *.test.local derived-from-domain), 3 specific. Polish:
+		// resolveSource classifies the OBTAIN_FAILED row by its
+		// domain string instead of dropping it (pre-polish the
+		// breakdown was 4 total / 1+1 visible).
 		expect(card.textContent ?? '').toMatch(/5/);
-		expect(card.textContent ?? '').toMatch(/1 wildcard/);
-		expect(card.textContent ?? '').toMatch(/4 spécifiques/);
+		expect(card.textContent ?? '').toMatch(/2 wildcard/);
+		expect(card.textContent ?? '').toMatch(/3 spécifiques/);
 	});
 
-	it('Expirent < 30 jours surfaces the renewal-window count', async () => {
+	it('Expirent < 30 jours excludes OBTAIN_FAILED + zero-time entries', async () => {
 		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
 		render(Page);
 		const card = await screen.findByTestId('kpi-expirent-bientot');
-		// fixtureCerts: soon (15d), expired (-3d), broken (60d but
-		// status fresh-failed doesn't affect daysUntilExpiry). The
-		// "expiring soon" predicate is days <= 30, so soon + expired
-		// = 2.
+		// fixtureCerts post-polish: soon (15d, RENEWAL_PENDING) +
+		// expired (-3d, EXPIRED) = 2. The *.test.local OBTAIN_FAILED
+		// row has notAfter = Go zero-time which would have trivially
+		// satisfied "<= now+30d" pre-polish; the new isExpiringSoon
+		// filter correctly excludes it.
 		expect(card.textContent ?? '').toMatch(/2/);
 		expect(card.textContent ?? '').toMatch(/renouvellement auto programmé/);
 	});
@@ -489,14 +493,14 @@ describe('/certs — Domaines table (T.4)', () => {
 		// cert_obtained (Go nil-slice gotcha — see
 		// internal/certinfo/tracker.go snapshot). The frontend's
 		// cert.sanList.length read crashed on null. Both sides
-		// fixed; the broken.example.com fixture above carries
+		// fixed; the *.test.local fixture above carries
 		// sanList=null to ensure this regression is caught if
 		// either side reverts.
 		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
 		render(Page);
 		await screen.findByTestId('certs-table');
 		const rows = screen.getAllByTestId('cert-row');
-		const broken = rows.find((r) => r.dataset.domain === 'broken.example.com')!;
+		const broken = rows.find((r) => r.dataset.domain === '*.test.local')!;
 		expect(broken).toBeDefined();
 		expect(broken.textContent ?? '').toMatch(/0 SAN/);
 	});
@@ -525,6 +529,41 @@ describe('/certs — Domaines table (T.4)', () => {
 		const rows = screen.getAllByTestId('cert-row');
 		const expired = rows.find((r) => r.dataset.domain === 'expired.example.com')!;
 		expect(expired.textContent ?? '').toMatch(/expiré/);
+	});
+
+	it('OBTAIN_FAILED row with zero-time dates renders cells as "—" instead of "expiré" / "il y a 2027 ans"', async () => {
+		// Polish regression: pre-polish the EXPIRE DANS column
+		// rendered "expiré" for OBTAIN_FAILED entries because
+		// daysUntilExpiry returned a huge-negative number for
+		// notAfter=0001-01-01, and ÉMIS LE rendered "il y a 2027
+		// ans" via the relativeTime helper. Both should now be "—".
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+		const rows = screen.getAllByTestId('cert-row');
+		const broken = rows.find((r) => r.dataset.domain === '*.test.local')!;
+		expect(broken).toBeDefined();
+		const text = broken.textContent ?? '';
+		expect(text).not.toMatch(/expiré/);
+		expect(text).not.toMatch(/ans/);
+		// Both ÉMIS LE and EXPIRE DANS should render "—".
+		// (Two em-dashes minimum in this row.)
+		expect((text.match(/—/g) ?? []).length).toBeGreaterThanOrEqual(2);
+	});
+
+	it('OBTAIN_FAILED wildcard-domain row classifies as wildcard in the type sub-line', async () => {
+		// Polish regression: pre-polish the *.test.local row
+		// showed "spécifique · HTTP-01" (because source was empty
+		// → fell through to the specific default). With
+		// resolveSource + status-aware inferChallengeLabel, the
+		// row now reads "wildcard · DNS-01" — operator-correct.
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+		const rows = screen.getAllByTestId('cert-row');
+		const broken = rows.find((r) => r.dataset.domain === '*.test.local')!;
+		expect(broken.textContent ?? '').toMatch(/wildcard · DNS-01/);
+		expect(broken.textContent ?? '').not.toMatch(/spécifique/);
 	});
 
 	it('shows the page-level empty state when no certs exist', async () => {

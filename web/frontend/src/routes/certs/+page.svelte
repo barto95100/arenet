@@ -58,10 +58,13 @@
 		certificateSourceLabel,
 		certificateStatusLabel,
 		certificateStatusToBadgeVariant,
+		countByEffectiveSource,
 		daysUntilExpiry,
 		dominantIssuer,
 		inferChallengeLabel,
 		isExpiringSoon,
+		isZeroTimestamp,
+		resolveSource,
 	} from '$lib/utils/certificate-format';
 
 	let loading = $state(true);
@@ -118,10 +121,16 @@
 	// the pre-T.4 cards were config viewers that didn't change
 	// when a cert was issued or expired.
 	const certsTotal = $derived(certs.length);
-	const certsWildcard = $derived(certs.filter((c) => c.source === 'wildcard').length);
-	const certsSpecific = $derived(
-		certs.filter((c) => c.source === 'specific' || c.source === 'apex').length
-	);
+	// Breakdown via resolveSource so OBTAIN_FAILED entries (which
+	// carry source="" on the wire) still classify correctly —
+	// pre-polish the breakdown didn't sum to the total.
+	const certsBreakdown = $derived(countByEffectiveSource(certs));
+	const certsWildcard = $derived(certsBreakdown.wildcard);
+	const certsSpecific = $derived(certsBreakdown.specific);
+	// isExpiringSoon now excludes OBTAIN_FAILED + zero-time
+	// entries, so the count matches operator expectations
+	// ("renewal scheduled" should not include certs that haven't
+	// been obtained yet).
 	const certsExpiringSoon = $derived(certs.filter((c) => isExpiringSoon(c)).length);
 	const principalIssuer = $derived(dominantIssuer(certs));
 	// ACME method KPI: DNS-01 wins as soon as at least one
@@ -375,13 +384,16 @@
 				</thead>
 				<tbody>
 					{#each filteredCerts as cert (cert.domain)}
+						{@const effectiveSource = resolveSource(cert)}
 						{@const days = daysUntilExpiry(cert)}
+						{@const notBeforeMissing = isZeroTimestamp(cert.notBefore)}
 						<tr data-testid="cert-row" data-domain={cert.domain}>
 							<td>
 								<div class="mono">{cert.domain}</div>
 								<div class="dim cell-sub">
-									{certificateSourceLabel(cert.source)} · {inferChallengeLabel(
-										cert.source
+									{certificateSourceLabel(effectiveSource)} · {inferChallengeLabel(
+										effectiveSource,
+										cert.status
 									)}
 								</div>
 							</td>
@@ -389,14 +401,20 @@
 							<td class="mono">
 								{(cert.sanList ?? []).length} SAN
 							</td>
-							<td class="dim">{relativeTime(cert.notBefore)}</td>
+							<td class="dim">
+								{notBeforeMissing ? '—' : relativeTime(cert.notBefore)}
+							</td>
 							<td>
 								<span
 									class="expiry"
-									class:expiry-warn={days <= RENEWAL_WINDOW_DAYS && days > 0}
-									class:expiry-down={days <= 0}
+									class:expiry-warn={days !== null &&
+										days <= RENEWAL_WINDOW_DAYS &&
+										days > 0}
+									class:expiry-down={days !== null && days <= 0}
 								>
-									{#if days <= 0}
+									{#if days === null}
+										—
+									{:else if days <= 0}
 										expiré
 									{:else}
 										{days} jour{days === 1 ? '' : 's'}

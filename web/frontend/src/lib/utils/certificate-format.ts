@@ -101,9 +101,40 @@ export function certificateSourceLabel(source: CertificateSource): string {
 }
 
 /**
+ * Effective source classification for display. The backend leaves
+ * Source as the Go zero-value empty string on OBTAIN_FAILED
+ * placeholder entries that never reached cert_obtained (the
+ * Source field isn't known until a cert is successfully parsed).
+ * On the wire that surfaces as `"source": ""` which TypeScript
+ * widens to a value outside the CertificateSource union.
+ *
+ * Fall-through heuristic: a domain starting with "*." is a
+ * wildcard whatever the source field says. Otherwise the
+ * empty source defaults to "specific" (the most-common path).
+ *
+ * Pure function — UX heuristic only, no I/O. Tested against
+ * the empirically-captured wire shape from AreNET-test on
+ * 2026-06-05.
+ */
+export function resolveSource(cert: Certificate): CertificateSource {
+	if (cert.source === 'wildcard' || cert.source === 'apex' || cert.source === 'specific') {
+		return cert.source;
+	}
+	if (cert.domain.startsWith('*.')) return 'wildcard';
+	return 'specific';
+}
+
+/**
  * Best-guess ACME challenge label for the sub-line under DOMAINE.
  * Wildcard-source certs go through DNS-01 (the only way certmagic
  * can fulfill *.x). Specific / apex certs default to HTTP-01.
+ *
+ * For OBTAIN_FAILED entries we don't know the challenge yet —
+ * there's no successful obtain to learn from. Return '—' so the
+ * table doesn't claim "HTTP-01" for a cert that hasn't even
+ * been attempted via that challenge type. The wildcard path is
+ * the exception: certmagic CAN ONLY fulfill *.x via DNS-01, so
+ * the label is accurate even before a successful obtain.
  *
  * This is a UX heuristic — the backend doesn't currently surface
  * the actual challenge used per cert (would require certmagic
@@ -111,23 +142,43 @@ export function certificateSourceLabel(source: CertificateSource): string {
  * a real backend-supplied field; today the heuristic is operator-
  * correct in 100% of AreNET-configured paths.
  */
-export function inferChallengeLabel(source: CertificateSource): string {
+export function inferChallengeLabel(
+	source: CertificateSource,
+	status?: Certificate['status']
+): string {
 	if (source === 'wildcard') return 'DNS-01';
+	if (status === 'OBTAIN_FAILED') return '—';
 	return 'HTTP-01';
 }
 
 /**
- * Whole-day count between now and the cert's notAfter. Positive
- * for future expiries (the typical case); negative when the cert
- * has already expired. Used by both the EXPIRE DANS column and
- * the "Expirent bientôt" tab filter.
+ * True when the parsed ISO timestamp is Go's zero-time
+ * ("0001-01-01T00:00:00Z") or an unparseable string. OBTAIN_FAILED
+ * entries that never reached cert_obtained have zero-valued
+ * NotBefore / NotAfter on the wire; rendering them as relative
+ * times would surface "il y a 2 027 ans" / "expiré" which are
+ * cosmetically wrong (the cert hasn't been obtained, not "expired").
+ */
+export function isZeroTimestamp(iso: string | null | undefined): boolean {
+	if (!iso) return true;
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) return true;
+	return d.getUTCFullYear() <= 1;
+}
+
+/**
+ * Whole-day count between now and the cert's notAfter. Returns
+ * null for certs whose notAfter is zero-valued (never obtained) —
+ * callers should treat null as "—" / "n/a", NOT as 0 or "expired".
+ * Otherwise positive for future expiries, negative for past.
  *
  * Rounding: floor on positive, ceil on negative — so "in 0 days"
  * means "expires today" and "-1 days" means "expired yesterday".
  */
-export function daysUntilExpiry(cert: Certificate, now: Date = new Date()): number {
+export function daysUntilExpiry(cert: Certificate, now: Date = new Date()): number | null {
+	if (isZeroTimestamp(cert.notAfter)) return null;
 	const notAfter = new Date(cert.notAfter);
-	if (Number.isNaN(notAfter.getTime())) return 0;
+	if (Number.isNaN(notAfter.getTime())) return null;
 	const diffMs = notAfter.getTime() - now.getTime();
 	const days = diffMs / (1000 * 60 * 60 * 24);
 	return diffMs >= 0 ? Math.floor(days) : Math.ceil(days);
@@ -139,11 +190,51 @@ export function daysUntilExpiry(cert: Certificate, now: Date = new Date()): numb
  * — matches the backend's RENEWAL_PENDING status derivation so
  * the tab surfaces the same set the badge highlights.
  *
- * Includes already-expired certs (the operator surely wants to
- * see those in the "expiring soon" bucket too).
+ * Excludes:
+ *   - OBTAIN_FAILED entries: their notAfter is the Go zero-value
+ *     (0001-01-01) which trivially compares < now+30d; surfacing
+ *     them in the "Expirent bientôt" bucket would be misleading
+ *     (they haven't been obtained yet, so there's nothing to
+ *     renew). The dedicated ÉCHEC badge already calls them out.
+ *   - Zero-time entries from any other path (defensive — the
+ *     daysUntilExpiry null return signals "no known expiry").
+ *
+ * Includes already-expired certs with valid timestamps (the
+ * operator surely wants to see those in the bucket too).
  */
 export function isExpiringSoon(cert: Certificate, now: Date = new Date()): boolean {
-	return daysUntilExpiry(cert, now) <= RENEWAL_WINDOW_DAYS;
+	if (cert.status === 'OBTAIN_FAILED') return false;
+	const days = daysUntilExpiry(cert, now);
+	if (days === null) return false;
+	return days <= RENEWAL_WINDOW_DAYS;
+}
+
+/**
+ * Wildcard-vs-specific breakdown for the "Certificats actifs"
+ * KPI sub-label. Uses resolveSource so OBTAIN_FAILED entries
+ * with empty source still get classified honestly — pre-polish
+ * the breakdown didn't sum to the total because empty-source
+ * entries fell out of both wildcard and specific filters.
+ *
+ * Apex-source certs count toward the "spécifique" bucket because
+ * the KPI sub-label is wildcard-vs-non-wildcard (the apex policy
+ * IS a "specific" cert in operator vocabulary, distinct from a
+ * wildcard cert).
+ */
+export function countByEffectiveSource(certs: Certificate[]): {
+	wildcard: number;
+	specific: number;
+} {
+	let wildcard = 0;
+	let specific = 0;
+	for (const c of certs) {
+		if (resolveSource(c) === 'wildcard') {
+			wildcard++;
+		} else {
+			specific++;
+		}
+	}
+	return { wildcard, specific };
 }
 
 /**

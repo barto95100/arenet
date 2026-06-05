@@ -12,11 +12,14 @@ import {
 	certificateSourceLabel,
 	certificateStatusLabel,
 	certificateStatusToBadgeVariant,
+	countByEffectiveSource,
 	daysUntilExpiry,
 	dominantIssuer,
 	inferChallengeLabel,
 	isExpiringSoon,
+	isZeroTimestamp,
 	RENEWAL_WINDOW_DAYS,
+	resolveSource,
 } from './certificate-format';
 
 const NOW = new Date('2026-06-05T12:00:00Z');
@@ -78,6 +81,80 @@ describe('inferChallengeLabel', () => {
 		expect(inferChallengeLabel('specific')).toBe('HTTP-01');
 		expect(inferChallengeLabel('apex')).toBe('HTTP-01');
 	});
+	it('returns — for OBTAIN_FAILED non-wildcards (no successful obtain to learn from)', () => {
+		expect(inferChallengeLabel('specific', 'OBTAIN_FAILED')).toBe('—');
+		expect(inferChallengeLabel('apex', 'OBTAIN_FAILED')).toBe('—');
+	});
+	it('still returns DNS-01 for OBTAIN_FAILED wildcards (only path certmagic can use)', () => {
+		expect(inferChallengeLabel('wildcard', 'OBTAIN_FAILED')).toBe('DNS-01');
+	});
+});
+
+describe('resolveSource', () => {
+	it('passes through explicit sources verbatim', () => {
+		expect(resolveSource(mkCert({ source: 'wildcard' }))).toBe('wildcard');
+		expect(resolveSource(mkCert({ source: 'apex' }))).toBe('apex');
+		expect(resolveSource(mkCert({ source: 'specific' }))).toBe('specific');
+	});
+	it('derives wildcard from a *.x domain when source is empty', () => {
+		const c = mkCert({
+			domain: '*.test.local',
+			source: '' as unknown as Certificate['source'],
+		});
+		expect(resolveSource(c)).toBe('wildcard');
+	});
+	it('defaults to specific when source is empty and domain is not *.x', () => {
+		const c = mkCert({
+			domain: 'api.example.com',
+			source: '' as unknown as Certificate['source'],
+		});
+		expect(resolveSource(c)).toBe('specific');
+	});
+});
+
+describe('countByEffectiveSource', () => {
+	it('breakdown sums to the total (no entries lost to empty-source filtering)', () => {
+		const certs: Certificate[] = [
+			mkCert({ domain: 'a.example.com', source: 'specific' }),
+			mkCert({ domain: '*.b.example.com', source: 'wildcard' }),
+			// OBTAIN_FAILED-shaped entries — empty source, wildcard
+			// domain string. Pre-polish these fell out of both
+			// wildcard and specific filters.
+			mkCert({
+				domain: '*.test.local',
+				source: '' as unknown as Certificate['source'],
+				status: 'OBTAIN_FAILED',
+			}),
+			mkCert({
+				domain: 'broken.example.com',
+				source: '' as unknown as Certificate['source'],
+				status: 'OBTAIN_FAILED',
+			}),
+		];
+		const { wildcard, specific } = countByEffectiveSource(certs);
+		expect(wildcard).toBe(2);
+		expect(specific).toBe(2);
+		expect(wildcard + specific).toBe(certs.length);
+	});
+	it('returns zeros for an empty list', () => {
+		expect(countByEffectiveSource([])).toEqual({ wildcard: 0, specific: 0 });
+	});
+});
+
+describe('isZeroTimestamp', () => {
+	it('detects Go zero time (0001-01-01T00:00:00Z)', () => {
+		expect(isZeroTimestamp('0001-01-01T00:00:00Z')).toBe(true);
+	});
+	it('detects empty / null / undefined / malformed input', () => {
+		expect(isZeroTimestamp('')).toBe(true);
+		expect(isZeroTimestamp(null)).toBe(true);
+		expect(isZeroTimestamp(undefined)).toBe(true);
+		expect(isZeroTimestamp('not-a-date')).toBe(true);
+	});
+	it('returns false for real timestamps', () => {
+		expect(isZeroTimestamp('2026-06-05T12:00:00Z')).toBe(false);
+		expect(isZeroTimestamp('2020-01-01T00:00:00Z')).toBe(false);
+	});
 });
 
 describe('daysUntilExpiry', () => {
@@ -93,9 +170,13 @@ describe('daysUntilExpiry', () => {
 		});
 		expect(daysUntilExpiry(c, NOW)).toBe(-5);
 	});
-	it('returns 0 when notAfter is malformed', () => {
+	it('returns null when notAfter is malformed', () => {
 		const c = mkCert({ notAfter: 'not-a-date' });
-		expect(daysUntilExpiry(c, NOW)).toBe(0);
+		expect(daysUntilExpiry(c, NOW)).toBeNull();
+	});
+	it('returns null when notAfter is Go zero-time (never obtained)', () => {
+		const c = mkCert({ notAfter: '0001-01-01T00:00:00Z' });
+		expect(daysUntilExpiry(c, NOW)).toBeNull();
 	});
 });
 
@@ -117,6 +198,20 @@ describe('isExpiringSoon', () => {
 			notAfter: new Date(NOW.getTime() - 3 * 86400000).toISOString(),
 		});
 		expect(isExpiringSoon(c, NOW)).toBe(true);
+	});
+	it('does NOT flag OBTAIN_FAILED entries (no obtained cert to renew)', () => {
+		const c = mkCert({
+			status: 'OBTAIN_FAILED',
+			notAfter: '0001-01-01T00:00:00Z',
+		});
+		expect(isExpiringSoon(c, NOW)).toBe(false);
+	});
+	it('does NOT flag zero-time entries even when status is not OBTAIN_FAILED', () => {
+		const c = mkCert({
+			status: 'UNKNOWN',
+			notAfter: '0001-01-01T00:00:00Z',
+		});
+		expect(isExpiringSoon(c, NOW)).toBe(false);
 	});
 });
 
