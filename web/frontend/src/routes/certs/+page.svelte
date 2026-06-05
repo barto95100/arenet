@@ -277,7 +277,11 @@
 	     banner so it's the first content the operator sees after
 	     the at-a-glance numbers. Reassures that renewal is
 	     automatic — addresses the operator's "is renewal
-	     automated?" gap. -->
+	     automated?" gap.
+
+	     Satisfies AC #13 (auto-renewal info card preserved) —
+	     Step T spec v1.2.0-step-t-spec. Originally shipped in
+	     06ba97a (Pack A); carried forward unchanged through T.4. -->
 	<div class="renewal-card" data-testid="auto-renewal-card">
 		<div class="renewal-icon" aria-hidden="true">
 			<svg
@@ -312,7 +316,11 @@
 	     Replaces the pre-T.4 "TLS-enabled routes" read-only table
 	     (which only knew the configured shape, never the actual
 	     cert state). No row actions — force-renew button absent
-	     per the Step T amendment (Caddy renewal seam unexported). -->
+	     per the Step T amendment (Caddy renewal seam unexported).
+
+	     Satisfies AC #5 (unified Domaines table) + AC #6 (tabs
+	     filter Tous / Wildcard / Expirent bientôt) — Step T spec
+	     v1.2.0-step-t-spec, implemented by e8e6311 (T.4). -->
 	<div class="card" data-testid="domaines-card">
 		<div class="card-h">
 			<h3>Domaines</h3>
@@ -451,7 +459,11 @@
 	     pre-T.5 "Managed domains" section: same wire contract,
 	     semantically honest French copy, declaration form hoisted
 	     into the WildcardApexWizard modal (header "+ Wildcard apex"
-	     button). Delete flow (revertTo modal) is unchanged. -->
+	     button). Delete flow (revertTo modal) is unchanged.
+
+	     Satisfies AC #11 (reframe copy LOCKED) + AC #12 (delete-
+	     with-revertTo modal preserved) — Step T spec
+	     v1.2.0-step-t-spec, implemented by 6b03f1c (T.5). -->
 	<div class="card" data-testid="policies-card">
 		<div class="card-h">
 			<h3>Politiques wildcard par apex</h3>

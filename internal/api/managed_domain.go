@@ -237,6 +237,11 @@ func (h *Handler) createManagedDomain(w http.ResponseWriter, r *http.Request) {
 // routes (the spec §3.8 convention surfaced where the operator
 // makes the decision).
 //
+// Satisfies AC #12 (delete-with-revertTo modal preserved — the
+// Pack A contract carries forward to the unified Domaines table's
+// per-row delete action). Step T spec v1.2.0-step-t-spec.
+// Implemented by 06ba97a (Pack A) + e4177e4 (tracker purge hotfix).
+//
 // revertTo value space:
 //   - ""        → routes revert to "" (J-era default → HTTP-01
 //     on next reload). N HTTP-01 challenges fire.

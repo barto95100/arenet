@@ -27,6 +27,10 @@ import (
 // cert the internal/certinfo tracker knows about, sorted by
 // NotAfter ascending (closest-to-expiry first per spec §3.2).
 //
+// Satisfies AC #1 (runtime metadata exposed) + AC #4 (single
+// source of truth — no parallel endpoint).
+// Step T spec v1.2.0-step-t-spec, implemented by 1350777 (T.1).
+//
 // Degraded mode (AC #13): when h.certInfo is nil — typically
 // because cmd/arenet's reconcile path failed at boot and the
 // singleton was never installed — the endpoint returns 200 with

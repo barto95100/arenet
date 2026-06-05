@@ -7,6 +7,11 @@
 // AC #10 LOCKED contract (spec §1.4 + AC #10); the renewal-window
 // constant matches the backend's RenewalMargin in
 // internal/certinfo/tracker.go (30 days).
+//
+// Satisfies AC #2 (status enum surface) + AC #10 (badge palette
+// LOCKED) — Step T spec v1.2.0-step-t-spec.
+// Implemented by e8e6311 (T.4); resolveSource + zero-time guards
+// added by c6013f2 (polish HF2).
 
 import type { Certificate, CertificateStatus, CertificateSource } from '$lib/api/types';
 

@@ -12,6 +12,9 @@
   wildcard par apex" lives in the section header and modal title;
   the API surface keeps its frozen v1 vocabulary.
 
+  Satisfies AC #9 ("+ Wildcard apex" wizard) — Step T spec
+  v1.2.0-step-t-spec, implemented by 6b03f1c (T.5).
+
   Stays mounted across show/hide cycles so the parent can keep
   form state via the bindable `open` prop (matches the
   ChangePasswordModal pattern shipped in Chunk 7).

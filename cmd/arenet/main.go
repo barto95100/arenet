@@ -287,6 +287,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// mgr.Start), and the first cert event can fire the instant
 	// certmagic's renewal loop spawns.
 	//
+	// Satisfies AC #1 cold-start bootstrap (Step T spec
+	// v1.2.0-step-t-spec). Implemented by 1350777 (T.1);
+	// wire-up safety belt by 30418ea (HF4).
+	//
 	// Reconcile-from-disk seeds the tracker with every cert
 	// already on disk so the Certificates page shows correct
 	// state immediately on boot — without it, freshly-restarted

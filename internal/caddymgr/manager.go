@@ -1182,6 +1182,10 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	// descendant and would never match (same trap as Stage B Bug 1).
 	// Verified empirically during T.1 recon against certmagic v0.25.3
 	// + caddy v2.11.3 — citations in internal/certinfo/types.go.
+	//
+	// Satisfies AC #1 + AC #4 cert-event ingestion path
+	// (Step T spec v1.2.0-step-t-spec).
+	// Implemented by 1350777 (T.1).
 	apps["events"] = map[string]any{
 		"subscriptions": []map[string]any{
 			{

@@ -76,6 +76,9 @@ import "time"
 
 // Status is the per-certificate health classification surfaced to
 // the frontend. Locked enum vocabulary (§2 AC #2 of the Step T spec).
+//
+// Satisfies AC #2 + AC #10 (Step T spec v1.2.0-step-t-spec).
+// Implemented by 1350777 (T.1).
 type Status string
 
 const (

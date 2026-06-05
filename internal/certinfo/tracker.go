@@ -88,6 +88,12 @@ type entry struct {
 // installs it as the package-level singleton via SetTracker, then
 // seeds it via ReconcileFromDisk before mgr.Start so the cache is
 // populated before any cert_* event flows in.
+//
+// Satisfies AC #1 (runtime metadata exposed) — the tracker is the
+// in-memory source-of-truth GET /api/certificates reads from.
+// Satisfies AC #18 (forward-compat seam) — Subscribe() declared
+// below is the hook Step T+1's ACME events log attaches to.
+// Step T spec v1.2.0-step-t-spec, implemented by 1350777 (T.1).
 func NewTracker() *Tracker {
 	return &Tracker{
 		byDomain: make(map[string]*entry),
