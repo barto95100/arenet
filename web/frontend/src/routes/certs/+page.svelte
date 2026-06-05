@@ -387,7 +387,7 @@
 							</td>
 							<td>{cert.issuer || '—'}</td>
 							<td class="mono">
-								{cert.sanList.length} SAN
+								{(cert.sanList ?? []).length} SAN
 							</td>
 							<td class="dim">{relativeTime(cert.notBefore)}</td>
 							<td>

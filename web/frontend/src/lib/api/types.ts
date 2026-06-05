@@ -512,7 +512,16 @@ export type CertificateSource = 'wildcard' | 'apex' | 'specific';
  */
 export interface Certificate {
 	domain: string;
-	sanList: string[];
+	/**
+	 * Subject Alternative Names. Pre-hotfix the backend could
+	 * marshal this as JSON `null` for OBTAIN_FAILED entries that
+	 * never reached the cert_obtained code path (Go nil-slice
+	 * gotcha — see internal/certinfo/tracker.go snapshot()). The
+	 * backend now coerces nil to [], but the type stays nullable
+	 * so older Arenet builds + any future regression are absorbed
+	 * by frontend readers via `cert.sanList ?? []`.
+	 */
+	sanList: string[] | null;
 	issuer: string;
 	notBefore: string;
 	notAfter: string;

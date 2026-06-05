@@ -17,6 +17,8 @@
 package certinfo
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -310,6 +312,108 @@ func TestTracker_ConcurrentReadWrite(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
+}
+
+// TestSnapshot_NeverSerializesNilSANList pins the hotfix-following-
+// T.5 invariant: every snapshot the tracker emits via Get / List
+// MUST produce JSON where sanList is at worst an empty array,
+// never `null`. The crash this prevents:
+//
+//   - Backend constructs an entry without SANList (RecordFailure
+//     for a never-seen domain → placeholder entry; cert_obtained
+//     fallback when on-disk leaf read failed → minimal entry).
+//   - snapshot() copies SANList via append([]string(nil), nil...)
+//     which returns nil (Go nil-slice gotcha).
+//   - encoding/json renders nil []string as JSON null.
+//   - Frontend Domaines table reads cert.sanList.length →
+//     TypeError on null.
+//
+// Empirically captured against AreNET-test on 2026-06-05 with
+// OBTAIN_FAILED rows for *.test.local. The fix in tracker.go
+// snapshot() forces a non-nil slice before assignment; this
+// test pins it so a future refactor doesn't reintroduce the
+// gotcha at any constructor path.
+func TestSnapshot_NeverSerializesNilSANList(t *testing.T) {
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name  string
+		setup func(tr *Tracker)
+		key   string
+	}{
+		{
+			name: "RecordFailure-only — placeholder entry (no prior cert obtained)",
+			setup: func(tr *Tracker) {
+				tr.RecordFailure("never.example.com", "boom")
+			},
+			key: "never.example.com",
+		},
+		{
+			name: "RecordCert with nil SANList — cert_obtained fallback path",
+			setup: func(tr *Tracker) {
+				tr.RecordCert(&CertRuntimeInfo{
+					Domain:   "fallback.example.com",
+					Issuer:   "Let's Encrypt",
+					Source:   SourceSpecific,
+					NotAfter: now.Add(60 * 24 * time.Hour),
+					// SANList intentionally omitted (nil)
+				})
+			},
+			key: "fallback.example.com",
+		},
+		{
+			name: "RecordCert with empty SANList — explicit empty",
+			setup: func(tr *Tracker) {
+				tr.RecordCert(&CertRuntimeInfo{
+					Domain:   "empty.example.com",
+					SANList:  []string{},
+					Issuer:   "Let's Encrypt",
+					Source:   SourceSpecific,
+					NotAfter: now.Add(60 * 24 * time.Hour),
+				})
+			},
+			key: "empty.example.com",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := NewTracker()
+			tr.SetNow(fixedNow(now))
+			tc.setup(tr)
+
+			info, ok := tr.Get(tc.key)
+			if !ok {
+				t.Fatalf("Get(%q) miss", tc.key)
+			}
+			if info.SANList == nil {
+				t.Fatalf("snapshot SANList is nil — snapshot() must coerce to []")
+			}
+			data, err := json.Marshal(info)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			if strings.Contains(string(data), `"sanList":null`) {
+				t.Fatalf(
+					"sanList serializes to null — frontend assumes array. body=%s",
+					data,
+				)
+			}
+			// Round-trip: List() goes through the same snapshot
+			// path, so the whole-list output must also be
+			// null-free.
+			listData, err := json.Marshal(tr.List())
+			if err != nil {
+				t.Fatalf("json.Marshal(List): %v", err)
+			}
+			if strings.Contains(string(listData), `"sanList":null`) {
+				t.Fatalf(
+					"List() serializes some sanList to null. body=%s",
+					listData,
+				)
+			}
+		})
+	}
 }
 
 func randDomain(i int) string {

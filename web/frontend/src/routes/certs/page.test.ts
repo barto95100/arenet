@@ -99,14 +99,24 @@ const fixtureCerts: Certificate[] = [
 		source: 'specific',
 	},
 	{
+		// OBTAIN_FAILED fixtures mirror the empirically-captured
+		// wire shape against AreNET-test on 2026-06-05: the
+		// backend emits sanList=null for entries that never
+		// reached cert_obtained (no on-disk leaf to parse). The
+		// snapshot()-level hotfix in tracker.go now coerces nil
+		// to [], but the test keeps the null shape so the
+		// frontend null-coalescing read (cert.sanList ?? []) is
+		// exercised on every page test that loads fixtureCerts —
+		// regression check survives if the backend ever
+		// reintroduces the nil-slice gotcha.
 		domain: 'broken.example.com',
-		sanList: ['broken.example.com'],
-		issuer: "Let's Encrypt",
+		sanList: null,
+		issuer: '',
 		notBefore: daysFromNow(-30),
 		notAfter: daysFromNow(60),
 		status: 'OBTAIN_FAILED',
 		source: 'specific',
-		lastError: 'DNS lookup failed: NXDOMAIN',
+		lastError: "subject 'broken.example.com' does not qualify for a public certificate",
 		lastErrorAt: daysFromNow(-0.01),
 	},
 ];
@@ -473,6 +483,24 @@ describe('/certs — Domaines table (T.4)', () => {
 		expect(screen.getByText('ÉCHEC')).toBeInTheDocument();
 	});
 
+	it('renders an OBTAIN_FAILED row with null sanList as "0 SAN" without crashing (hotfix regression)', async () => {
+		// Pre-hotfix the backend marshaled sanList as JSON null
+		// for OBTAIN_FAILED entries that never reached
+		// cert_obtained (Go nil-slice gotcha — see
+		// internal/certinfo/tracker.go snapshot). The frontend's
+		// cert.sanList.length read crashed on null. Both sides
+		// fixed; the broken.example.com fixture above carries
+		// sanList=null to ensure this regression is caught if
+		// either side reverts.
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+		const rows = screen.getAllByTestId('cert-row');
+		const broken = rows.find((r) => r.dataset.domain === 'broken.example.com')!;
+		expect(broken).toBeDefined();
+		expect(broken.textContent ?? '').toMatch(/0 SAN/);
+	});
+
 	it('OBTAIN_FAILED row carries the lastError tooltip', async () => {
 		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
 		render(Page);
@@ -486,7 +514,7 @@ describe('/certs — Domaines table (T.4)', () => {
 		await fireEvent.focusIn(wrapper!);
 		await tick();
 		expect(
-			screen.getByText(/DNS lookup failed: NXDOMAIN/),
+			screen.getByText(/does not qualify for a public certificate/),
 		).toBeInTheDocument();
 	});
 

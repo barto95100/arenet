@@ -132,9 +132,22 @@ func (t *Tracker) List() []*CertRuntimeInfo {
 // the read lock — it accesses entry fields directly.
 func (t *Tracker) snapshot(e *entry) *CertRuntimeInfo {
 	now := t.now()
+	// SAN list must never marshal to JSON null. Go nil-slice
+	// gotcha: `append([]string(nil), nil...)` returns nil, and
+	// encoding/json renders a nil []string as `null`. The
+	// frontend's Domaines table reads cert.sanList.length and
+	// would crash on null. Force an empty (non-nil) slice when
+	// the source entry was created via a path that never
+	// populated SANList (placeholder from RecordFailure for a
+	// never-seen domain; cert_obtained fallback when the on-disk
+	// leaf read failed). Hotfix following T.5 / T.4 deploy.
+	sans := append([]string(nil), e.SANList...)
+	if sans == nil {
+		sans = []string{}
+	}
 	out := &CertRuntimeInfo{
 		Domain:    e.Domain,
-		SANList:   append([]string(nil), e.SANList...),
+		SANList:   sans,
 		Issuer:    e.Issuer,
 		NotBefore: e.NotBefore,
 		NotAfter:  e.NotAfter,
