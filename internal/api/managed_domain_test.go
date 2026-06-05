@@ -667,3 +667,79 @@ func TestManagedDomain_DELETE_NilPurger_NoCrash(t *testing.T) {
 			rec.Code, rec.Body)
 	}
 }
+
+// TestManagedDomain_DELETE_PurgesRealTracker pins the post-deploy
+// concern that the e4177e4 hotfix smoke surfaced: the existing
+// stub-based purge tests above prove the handler CALLS Remove,
+// but they don't prove a real *certinfo.Tracker satisfies the
+// widened CertInfoReader interface. A future refactor that drops
+// Tracker.Remove (or narrows the interface signature) would let
+// the build stay green AND the stub tests stay green while
+// production silently no-ops the purge. This test exercises the
+// real Tracker end-to-end so that gap is closed.
+//
+// Also doubles as the canonical example of "wire a real Tracker
+// into the test env" for any future Step T+N work that needs to
+// drive cert-state changes through the API layer.
+func TestManagedDomain_DELETE_PurgesRealTracker(t *testing.T) {
+	env := newTestEnv(t, false)
+	tracker := certinfo.NewTracker()
+	env.handler.SetCertInfoReader(tracker)
+
+	// Pre-seed the tracker the same way certmagic would after
+	// cert_failed events fire for an unsupported TLD (.local
+	// doesn't qualify for a public cert — the production
+	// reproducer that triggered the 2026-06-05 smoke).
+	tracker.RecordFailure("*.example.com", "subject does not qualify")
+	tracker.RecordFailure("example.com", "subject does not qualify")
+	if _, ok := tracker.Get("*.example.com"); !ok {
+		t.Fatalf("seed: *.example.com missing from tracker")
+	}
+	if _, ok := tracker.Get("example.com"); !ok {
+		t.Fatalf("seed: example.com missing from tracker")
+	}
+
+	if rec := putManagedDomain(t, env, "example.com", true); rec.Code != http.StatusCreated {
+		t.Fatalf("seed managed domain: status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/settings/managed-domains/example.com", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	// Both entries must be gone from the REAL tracker.
+	if _, ok := tracker.Get("*.example.com"); ok {
+		t.Errorf("*.example.com still in tracker after DELETE — purge didn't reach Tracker.Remove")
+	}
+	if _, ok := tracker.Get("example.com"); ok {
+		t.Errorf("example.com still in tracker after DELETE — purge didn't reach Tracker.Remove")
+	}
+	if len(tracker.List()) != 0 {
+		t.Errorf("tracker.List() len=%d want=0 after DELETE", len(tracker.List()))
+	}
+
+	// And the boot-time invariant: HasCertInfoPurger reports
+	// the wire-up state honestly. The boot log in cmd/arenet
+	// reads this same getter; the test guarantees it returns
+	// true after a SetCertInfoReader call.
+	if !env.handler.HasCertInfoPurger() {
+		t.Errorf("HasCertInfoPurger=false after SetCertInfoReader — boot log would mislead")
+	}
+}
+
+// TestHasCertInfoPurger_NilWhenUnset pins the negative path of
+// HasCertInfoPurger: without a SetCertInfoReader call, the getter
+// reports false. cmd/arenet logs this state at boot; a future
+// regression where someone forgets to wire the tracker would
+// surface as "purger_present=false" in journalctl instead of
+// silently no-opping the DELETE purge.
+func TestHasCertInfoPurger_NilWhenUnset(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Intentionally NOT calling SetCertInfoReader.
+	if env.handler.HasCertInfoPurger() {
+		t.Errorf("HasCertInfoPurger=true without SetCertInfoReader — wire-up signal is broken")
+	}
+}

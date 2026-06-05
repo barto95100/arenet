@@ -446,6 +446,26 @@ func (h *Handler) SetCertInfoReader(r CertInfoReader) {
 	h.certInfo = r
 }
 
+// HasCertInfoPurger reports whether the cert-info seam is wired
+// AND satisfies the post-T.5 purge contract (CertInfoReader was
+// widened with Remove() in the e4177e4 hotfix).
+//
+// cmd/arenet calls this after SetCertInfoReader and logs the
+// result at boot so any future wire-up regression — e.g. the
+// setter is removed in a refactor, or a reader implementation
+// drops the Remove method — is immediately visible in journalctl
+// instead of silently no-opping the DELETE managed-domain purge
+// path. The 2026-06-05 post-deploy investigation that revealed
+// the gap is the reason this exists.
+//
+// Returns false if the certInfo field is nil (degraded mode
+// or boot ordering bug); returns true otherwise. The interface
+// guarantees Remove is callable when non-nil — there's no
+// halfway state to surface.
+func (h *Handler) HasCertInfoPurger() bool {
+	return h.certInfo != nil
+}
+
 // SetDecisionReader (Step N.3) attaches the CrowdSec
 // decision reader used by /api/v1/security/decisions, the
 // 4th-source arm of /security/attackers-summary, and the new
