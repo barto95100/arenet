@@ -9,11 +9,14 @@
   access-log stream. The mock at
   docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html:2352-2400
   shows a live tail of all traffic (info / ok / warn / err / block);
-  the closest we can do today is unify the three event streams the
-  backend DOES expose:
+  the closest we can do today is unify the four event streams the
+  backend exposes:
     - WAF events (Step M) — blocked requests with rule ID.
     - Throttle events (Step Q) — rate-limited auth attempts.
     - Auth-failure events (Step Q) — login_failure / oidc_*.
+    - Cert lifecycle events (Step U) — obtained / failed /
+      ocsp_revoked. Added by U.5; the page title rename to
+      "Activity log" lands in U.6.
   Each row is mapped to a unified shape sorted ts-desc.
 
   Filters:
@@ -37,13 +40,15 @@
 	import {
 		fetchEvents,
 		fetchThrottleEvents,
-		fetchAuthFailures
+		fetchAuthFailures,
+		fetchCertEvents
 	} from '$lib/api/security';
 	import { ApiError } from '$lib/api/types';
 	import type {
-		WafEvent,
+		AuthFailureRecentEvent,
+		CertEvent,
 		ThrottleEvent,
-		AuthFailureRecentEvent
+		WafEvent
 	} from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 
@@ -124,13 +129,97 @@
 		};
 	}
 
+	// Truncate cert_failed error strings so the row height stays
+	// stable. The full error remains queryable via the search
+	// textbox (the backend index matches against the full
+	// error_msg column).
+	const CERT_ERROR_MAX = 60;
+	function truncateError(s: string): string {
+		if (s.length <= CERT_ERROR_MAX) return s;
+		return s.slice(0, CERT_ERROR_MAX - 3) + '...';
+	}
+
+	// Compose the REQUEST column content per spec §4 architecture
+	// component 7 (frontend additive). Each event type gets a
+	// distinct one-line representation so an operator scanning
+	// the table can read the row at a glance.
+	function formatCertDetail(e: CertEvent): string {
+		switch (e.eventType) {
+			case 'cert_obtained': {
+				const tail: string[] = [];
+				if (e.issuer) tail.push(e.issuer);
+				if (e.challenge) tail.push(e.challenge);
+				if (e.renewal) tail.push('renouvellement');
+				return tail.length > 0
+					? `cert.obtained · ${tail.join(' · ')}`
+					: 'cert.obtained';
+			}
+			case 'cert_failed':
+				return e.error
+					? `cert.failed · ${truncateError(e.error)}`
+					: 'cert.failed';
+			case 'cert_ocsp_revoked':
+				return 'cert.revoked · révocation OCSP';
+			default:
+				return 'cert.event';
+		}
+	}
+
+	// Map cert events into the unified row shape (Step U.5).
+	//
+	// Level mapping (flagged in the U.5 commit body for review):
+	//   - cert INFO → 'info' (matches the existing taxonomy
+	//     verbatim).
+	//   - cert ERROR → 'warn' (pragmatic placement). The
+	//     existing LevelTag union doesn't have 'error' — adding
+	//     one would introduce a new filter button which the U.5
+	//     brief explicitly forbids. 'warn' is the right bucket:
+	//     a cert failure is an operational concern that demands
+	//     attention but isn't an HTTP-block event (cert events
+	//     have no Source IP and no request lifecycle). The U.6
+	//     page rename to "Activity log" doesn't change this
+	//     mapping; a future taxonomy refactor could introduce a
+	//     dedicated 'error' level if operators report that warn
+	//     clusters obscure security warnings.
+	//
+	// Other column conventions:
+	//   - method = "ACME" (cert events come from the ACME
+	//     issuance pipeline; matches the dim-style "method tag"
+	//     the other sources use).
+	//   - path = domain (the cert subject — the operator's
+	//     primary scan target). search across path + detail
+	//     covers domain + issuer keywords.
+	//   - code = "—" (em-dash; cert events have no HTTP status).
+	//   - srcIp = "(interne)" (system-emitted; the existing
+	//     mono-dim styling on the Source IP column renders this
+	//     unobtrusively).
+	function mapCert(e: CertEvent): UnifiedRow {
+		return {
+			key: `cert-${e.timestamp}-${e.domain}-${e.eventType}`,
+			ts: e.timestamp,
+			level: e.level === 'INFO' ? 'info' : 'warn',
+			code: '—',
+			source: 'cert',
+			method: 'ACME',
+			path: e.domain,
+			detail: formatCertDetail(e),
+			srcIp: '(interne)'
+		};
+	}
+
 	async function load(): Promise<void> {
 		loadError = null;
 		try {
-			const [waf, throttle, auth] = await Promise.allSettled([
+			// Step U.5 — 4 parallel sources via Promise.allSettled
+			// so any one source's failure (e.g. cert-events
+			// endpoint in degraded mode or 5xx) doesn't take
+			// down the page. Each fulfilled result is mapped
+			// into UnifiedRow shape and merged.
+			const [waf, throttle, auth, certs] = await Promise.allSettled([
 				fetchEvents({ limit: 100 }),
 				fetchThrottleEvents({ limit: 100 }),
-				fetchAuthFailures('24h')
+				fetchAuthFailures('24h'),
+				fetchCertEvents({ limit: 100 })
 			]);
 
 			const merged: UnifiedRow[] = [];
@@ -142,6 +231,9 @@
 			}
 			if (auth.status === 'fulfilled') {
 				for (const e of auth.value.recent ?? []) merged.push(mapAuth(e));
+			}
+			if (certs.status === 'fulfilled') {
+				for (const e of certs.value.events ?? []) merged.push(mapCert(e));
 			}
 
 			merged.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
