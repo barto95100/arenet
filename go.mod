@@ -20,7 +20,9 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/hslatman/caddy-crowdsec-bouncer v0.12.1
 	github.com/jcchavezs/mergefs v0.1.1
+	github.com/oschwald/geoip2-golang v1.9.0
 	go.etcd.io/bbolt v1.4.3
+	go.uber.org/zap v1.27.1
 	golang.org/x/oauth2 v0.36.0
 	modernc.org/sqlite v1.51.0
 )
@@ -126,6 +128,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
+	github.com/oschwald/maxminddb-golang v1.12.0 // indirect
 	github.com/ovh/go-ovh v1.7.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
@@ -200,7 +203,6 @@ require (
 	go.step.sm/crypto v0.77.1 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.1 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect

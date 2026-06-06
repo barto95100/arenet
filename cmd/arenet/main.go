@@ -67,6 +67,7 @@ import (
 	"github.com/barto95100/arenet/internal/certinfo"
 	appconfig "github.com/barto95100/arenet/internal/config"
 	"github.com/barto95100/arenet/internal/crowdsec"
+	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
@@ -350,6 +351,63 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	} else {
 		logger.Info("observability storage opened", "path", obsPath)
 	}
+
+	// Step V.1 — GeoIP lookup + server position auto-detect.
+	//
+	// Both components are degraded-mode tolerant per spec §3.7:
+	// missing MMDB or network failure yields nil/no-position, V.2
+	// sinks read nil as "skip enrichment", V.4 will surface manual
+	// override as the operator escape hatch. No fatal exit, no
+	// panic — matches the AC #13 pattern from Step T.
+	//
+	// MMDB path resolution per spec §3.2: ARENET_GEOIP_MMDB env
+	// override beats the canonical /var/lib/arenet path. Boot-log
+	// signals follow the HF4 pattern (commit 30418ea) so future
+	// wire-up regressions surface in journalctl, not silently.
+	geoMMDBPath := os.Getenv("ARENET_GEOIP_MMDB")
+	if geoMMDBPath == "" {
+		geoMMDBPath = "/var/lib/arenet/GeoLite2-City.mmdb"
+	}
+	geoLookup, geoErr := geo.NewLookup(geoMMDBPath)
+	if geoErr != nil {
+		logger.Warn("geoip database not loaded — geo enrichment degraded",
+			"path", geoMMDBPath, "present", false, "err", geoErr)
+	} else {
+		logger.Info("geoip database loaded",
+			"path", geoMMDBPath, "present", true)
+		defer func() {
+			if cerr := geoLookup.Close(); cerr != nil {
+				logger.Warn("geoip database close error", "err", cerr)
+			}
+		}()
+	}
+
+	// Public IP auto-detect — non-fatal. Result is stashed in
+	// `serverPosition` for V.4 to expose via GET endpoint; V.2
+	// sinks read `geoLookup` directly for enrichment. Detection
+	// requires both an open MMDB AND a reachable ipify endpoint
+	// (or ARENET_PUBLIC_IP override) — first failure short-
+	// circuits to manual-override territory.
+	var serverPosition *geo.ServerPosition
+	if geoLookup != nil {
+		serverPosition, geoErr = geo.DetectFromPublicIP(geoLookup)
+		if geoErr != nil {
+			logger.Warn("server position auto-detect failed; manual override required (V.4)",
+				"err", geoErr)
+		} else {
+			logger.Info("server position auto-detected",
+				"lat", serverPosition.Lat, "lon", serverPosition.Lon,
+				"city", serverPosition.City, "country", serverPosition.Country,
+				"mode", serverPosition.Mode)
+		}
+	} else {
+		logger.Info("server position auto-detect skipped (geoip database absent)")
+	}
+	// V.2 reads geoLookup, V.4 reads serverPosition. Silence the
+	// "declared and not used" check until those sub-tasks wire the
+	// consumers in.
+	_ = serverPosition
+
 	obsAggregator := observability.NewAggregator(obsStore, logger, 4096)
 	obsRetention := observability.NewRetentionRunner(obsStore, logger)
 	metricsTicker.SetConsumer(obsAggregator)
