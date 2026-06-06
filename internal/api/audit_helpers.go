@@ -22,9 +22,34 @@ import (
 	"log/slog"
 	"net/http"
 
+	"time"
+
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
+	"github.com/barto95100/arenet/internal/observability"
 )
+
+// authFailureKind maps audit Action constants to AuthEvent
+// kinds for the Step V.2 sink fan-out. Returns the kind +
+// true when the action is an auth failure that should reach
+// the auth_event sink; returns (_, false) for every other
+// audit action so the fan-out branch is a no-op for non-auth
+// audit writes (route changes, settings edits, etc.).
+//
+// The map is the single point of truth for which audit
+// actions cross into the auth_event stream. Add a new entry
+// here when a new auth-failure audit action ships; no other
+// site needs to know.
+func authFailureKind(action string) (observability.AuthEventKind, bool) {
+	switch action {
+	case audit.ActionLoginFailure:
+		return observability.AuthEventKindLoginFailure, true
+	case audit.ActionOIDCLoginRejected, audit.ActionOIDCCallbackInvalid:
+		return observability.AuthEventKindOIDCCallbackRejected, true
+	default:
+		return 0, false
+	}
+}
 
 // appendAudit emits an audit event with context enrichment (spec §5.9).
 //
@@ -87,6 +112,26 @@ func (h *Handler) appendAudit(r *http.Request, evt audit.Event) {
 			slog.String("action", evt.Action),
 			slog.String("target_id", evt.TargetID),
 		)
+	}
+
+	// Step V.2: parallel fan-out to the auth_event sink for
+	// auth-failure actions. Order is audit-first / sink-second
+	// per spec §3.6 ("a real-time fan-out parallel to it, not
+	// a replacement"). Submit is non-blocking + nil-safe so a
+	// degraded sink never stalls the request goroutine. Only
+	// auth-failure actions reach the sink — settings edits,
+	// route changes, etc. flow through audit alone.
+	if h.authSink != nil {
+		if kind, ok := authFailureKind(evt.Action); ok {
+			h.authSink.Submit(observability.AuthEvent{
+				Ts:       time.Now().UTC(),
+				Kind:     kind,
+				SrcIP:    evt.IP,
+				Username: evt.ActorUsernameSnapshot,
+				Path:     r.URL.Path,
+				Details:  evt.Message,
+			})
+		}
 	}
 }
 

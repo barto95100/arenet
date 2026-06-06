@@ -266,6 +266,31 @@ type Handler struct {
 	// total: 0, hasMore: false, degraded: true} rather than
 	// returning 5xx.
 	certEvents CertEventReader
+	// authSink (Step V.2, 2026-06-06) is the parallel fan-out
+	// sink that receives auth-failure events alongside the
+	// existing audit-bucket Append (spec §3.6). The audit log
+	// keeps the canonical record; this sink is the real-time
+	// stream the V.3 geo bus consumes.
+	//
+	// Nil-tolerant: a nil sink makes the appendAudit fan-out
+	// path a no-op so the auth-failure response is never
+	// blocked by degraded observability. Set via
+	// SetAuthEventSink after construction; cmd/arenet logs
+	// present=<bool> at boot per the HF4 pattern.
+	authSink AuthEventSubmitter
+}
+
+// AuthEventSubmitter is the seam internal/api/audit_helpers.go
+// uses to fan auth failures (401/403 audit actions) into the
+// new auth_event sink (Step V.2). Implemented by
+// *observability.AuthEventSink; declared here so this package
+// does not import internal/observability for a one-method
+// dependency (mirror of the CertEventReader pattern). The
+// Submit method is non-blocking + nil-receiver-safe at the
+// implementation; the audit_helpers caller adds an
+// extra nil-check on the field for clarity.
+type AuthEventSubmitter interface {
+	Submit(e observability.AuthEvent)
 }
 
 // HCStatusReader is the read interface the Routes page uses to
@@ -519,6 +544,29 @@ func (h *Handler) SetCertEventReader(r CertEventReader) {
 // pattern (commit 30418ea + backlog #R-API-boot-log-audit).
 func (h *Handler) HasCertEventReader() bool {
 	return h.certEvents != nil
+}
+
+// SetAuthEventSink (Step V.2, 2026-06-06) attaches the auth
+// failure sink the appendAudit helper fan-outs to alongside
+// the canonical audit-bucket Append. The audit log keeps the
+// canonical record per Step Q D2.B; this sink is the real-
+// time stream the V.3 geo bus consumes.
+//
+// Nil-tolerant: a nil sink leaves the fan-out path as a
+// no-op so degraded observability never breaks the 401/403
+// response. Same convention every other observability seam
+// honors.
+func (h *Handler) SetAuthEventSink(s AuthEventSubmitter) {
+	h.authSink = s
+}
+
+// HasAuthEventSink reports whether the auth-event fan-out
+// seam is wired. cmd/arenet calls this after
+// SetAuthEventSink and logs sink_present=<bool> per the HF4
+// boot-log pattern (commit 30418ea) so any future wire-up
+// regression surfaces in journalctl.
+func (h *Handler) HasAuthEventSink() bool {
+	return h.authSink != nil
 }
 
 // SetDecisionReader (Step N.3) attaches the CrowdSec

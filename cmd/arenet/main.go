@@ -653,6 +653,50 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		"subscribed", true,
 	)
 
+	// Step V.2 — Auth event sink. Mirror of the cert event
+	// sink shape above (channel + batcher, AC #13 degraded mode
+	// when obsStore is nil). The audit_helpers.appendAudit
+	// fan-out in internal/api submits to this sink alongside
+	// the existing audit-bucket Append per spec §3.6. The
+	// audit log keeps the canonical record; this sink is the
+	// real-time stream the V.3 geo bus consumes.
+	//
+	// Subscription wire (audit_helpers fan-out → sink) happens
+	// when apiHandler.SetAuthEventSink fires below.
+	authEventSink := observability.NewAuthEventSink(obsStore, logger, observability.AuthSinkConfig{})
+	authEventCtx, authEventCancel := context.WithCancel(ctx)
+	if err := authEventSink.Start(authEventCtx); err != nil {
+		authEventCancel()
+		return fmt.Errorf("start auth event sink: %w", err)
+	}
+	defer func() {
+		authEventCancel()
+		if stopErr := authEventSink.Stop(5 * time.Second); stopErr != nil {
+			logger.Error("auth event sink stop timeout", slog.String("err", stopErr.Error()))
+		}
+		logger.Info("auth event sink stopped")
+	}()
+	logger.Info("auth event sink wired",
+		"present", true,
+		"store", obsPath,
+		"degraded", obsStore == nil,
+	)
+
+	// Step V.2 — Geo event enricher. Pure translation layer
+	// from the per-source event types (waf/throttle/crowdsec/
+	// auth) to the common GeoEvent shape spec §5.6 locks. V.3
+	// will read this `geoEnricher` for the bus + WS broadcaster
+	// wire-up. Nil-tolerant per V.1 contract: a missing MMDB
+	// leaves the Lookup as nil and the enricher returns
+	// UNK-country events instead of panicking.
+	geoEnricher := geo.NewEnricher(geoLookup)
+	logger.Info("geo event enricher wired",
+		"lookup_present", geoEnricher.HasLookup(),
+	)
+	// V.3 reads geoEnricher into the geo bus. Silence the
+	// "declared and not used" check until that lands.
+	_ = geoEnricher
+
 	// Start the metrics ticker AFTER caddymgr.Start so the first
 	// tick sees the registry already populated by the post-Start
 	// syncRegistry. Run on a child context so a Ctrl-C / shutdown
@@ -800,6 +844,17 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// cert-events endpoint degradation.
 	logger.Info("api handler wired with cert event reader",
 		"reader_present", apiHandler.HasCertEventReader(),
+	)
+	// Step V.2 — wire the auth_event sink fan-out into the
+	// appendAudit helper. Per spec §3.6 the audit log keeps
+	// the canonical record; this Sink is the real-time stream
+	// the V.3 geo bus reads. HF4 boot-log pattern (commit
+	// 30418ea) — any future regression where SetAuthEventSink
+	// goes missing surfaces here as sink_present=false instead
+	// of silent geo-stream degradation.
+	apiHandler.SetAuthEventSink(authEventSink)
+	logger.Info("api handler wired with auth event sink",
+		"sink_present", apiHandler.HasAuthEventSink(),
 	)
 
 	// Step P.3 — auto-classify trigger engine wiring.

@@ -54,6 +54,15 @@ const (
 	// would create confusing dashboard gaps.
 	RetainDecisionEvents = 30 * 24 * time.Hour
 
+	// RetainAuthEvents is how long per-event auth_event rows
+	// are kept at row granularity (Step V.2, spec §3.6). Set
+	// to 30 days — auth failures are operationally
+	// short-window security signals (login brute-force,
+	// session anomalies), not lifecycle records. Mirrors the
+	// WAF / throttle / decision horizons; explicitly NOT the
+	// 90 d cert horizon.
+	RetainAuthEvents = 30 * 24 * time.Hour
+
 	// RetainCertEvents is how long per-event cert_event rows
 	// are kept at row granularity (Step U, spec §3.2). Set
 	// to 90 days deliberately — matches the Let's Encrypt
@@ -203,6 +212,14 @@ func (r *RetentionRunner) tick(ctx context.Context) {
 	// obtained/failed events for correlation.
 	if _, err := r.store.PruneCertEventsOlderThan(ctx, now.Add(-RetainCertEvents)); err != nil {
 		r.logger.Error("observability: prune cert_event failed", slog.String("err", err.Error()))
+	}
+	// Step V.2: prune auth_event rows older than
+	// RetainAuthEvents (30 d at row granularity — see Step V
+	// spec §3.6). Same horizon as the security-event tables;
+	// auth failures are a real-time signal, not a lifecycle
+	// record.
+	if _, err := r.store.PruneAuthEventsOlderThan(ctx, now.Add(-RetainAuthEvents)); err != nil {
+		r.logger.Error("observability: prune auth_event failed", slog.String("err", err.Error()))
 	}
 }
 

@@ -32,9 +32,13 @@ import (
 //     tables + throttle_event table + indexes).
 //   - v4: Step N (crowdsec_decision_count column on both
 //     bucket tables + decision_event table + indexes).
+//   - v5: Step U.1 (cert_event table + indexes).
+//   - v6: Step V.2 (auth_event table + indexes). 30 d
+//     retention per spec §3.6 (short-window security
+//     signal, not lifecycle record).
 //
 // Downgrade is not supported.
-const currentSchemaVersion = 5
+const currentSchemaVersion = 6
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -93,6 +97,7 @@ var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
 	2: migrateV2toV3,
 	3: migrateV3toV4,
 	4: migrateV4toV5,
+	5: migrateV5toV6,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -251,6 +256,48 @@ func migrateV4toV5(ctx context.Context, tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_cert_event_ts            ON cert_event (ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_cert_event_domain_ts     ON cert_event (domain, ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_cert_event_event_type_ts ON cert_event (event_type, ts)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV5toV6 — Step V.2. Creates the auth_event table with
+// the three indexes that match the read patterns spec §3.6
+// anticipates: ts for the time-ordered list, src_ip+ts for
+// per-IP drill-down (the geo map and the future per-IP
+// timeline), kind+ts for filtered queries like "show me all
+// session_expired events".
+//
+// Column shape locked at spec §3.6: kind (NOT "reason"),
+// src_ip (NOT "source_ip"), username (NOT "user"). These names
+// match the audit-bucket vocabulary so an operator joining
+// auth_event with audit.Event on src_ip / username sees the
+// same identifier on both sides.
+//
+// Indexes mirror cert_event's shape (Step U.1) so this table
+// reads identically to its siblings — same ts-desc walks, same
+// per-value drill-down strategy.
+//
+// SQLite's CREATE TABLE IF NOT EXISTS makes the migration
+// idempotent under partial-failure replay.
+func migrateV5toV6(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS auth_event (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  ts INTEGER NOT NULL,
+		  kind TEXT NOT NULL,
+		  src_ip TEXT NOT NULL,
+		  username TEXT NOT NULL DEFAULT '',
+		  path TEXT NOT NULL DEFAULT '',
+		  details TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_auth_event_ts        ON auth_event (ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_auth_event_src_ip_ts ON auth_event (src_ip, ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_auth_event_kind_ts   ON auth_event (kind, ts)`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {
