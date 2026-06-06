@@ -147,23 +147,46 @@ func ParseCertEventType(s string) CertEventType {
 	}
 }
 
-// CertEventFilter narrows a QueryCertEvents call. All fields
-// are optional; the API layer (U.3) maps query-string
-// parameters into this struct. Limit > certEventLimitCap is
-// clamped by the store.
+// CertEventFilter narrows a QueryCertEvents / CountCertEvents
+// call. All fields are optional; the API layer (U.3) maps
+// query-string parameters into this struct. Limit > the cap
+// constant (per the calling endpoint's contract) is clamped by
+// the store.
 type CertEventFilter struct {
 	Domain string
-	Type   string    // matches the String() form: "cert_obtained" / ...
-	Level  string    // matches the String() form: "INFO" / "ERROR"
+	Type   string // matches the String() form: "cert_obtained" / ...
+	// Level is the single-value short-circuit used by the
+	// pre-U.3 callers. Levels (plural) is the U.3 multi-value
+	// path; when Levels is non-empty it takes precedence over
+	// Level. Both empty = all levels.
+	Level  string
+	Levels []CertEventLevel
 	From   time.Time // inclusive
 	To     time.Time // exclusive; zero = open-ended (now)
+	// Search applies a case-insensitive substring match across
+	// domain, issuer, error_msg, and details columns. Empty
+	// string = no search filter (NOT a literal "match
+	// everything containing empty"). The U.3 HTTP layer trims
+	// whitespace before passing.
+	Search string
 	Limit  int
 }
 
-// certEventLimitCap defensively bounds the result set. The
-// API layer caps at 100 before calling; this is the
-// belt-and-braces for any future internal caller that forgets.
+// certEventLimitCap defensively bounds the result set for
+// callers that don't supply an explicit Limit. The U.3 HTTP
+// surface caps separately at certEventAPILimitCap = 1000.
 const certEventLimitCap = 100
+
+// certEventAPILimitCap is the upper bound the U.3 HTTP
+// endpoint clamps `limit` to. Larger than certEventLimitCap
+// because the Activity log page may legitimately want a wider
+// window than the default 100 for an investigation. SQLite
+// scan over an indexed cert_event table stays cheap at this
+// size given the table's expected cardinality (per-domain
+// volume is bounded by the 90d retention window × renewal
+// cadence; a homelab with 50 domains tops out in the low
+// thousands).
+const certEventAPILimitCap = 1000
 
 // InsertCertEventBatch persists a slice of CertEvent rows in
 // a single transaction. Errors are returned to the caller —
@@ -220,25 +243,26 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	return nil
 }
 
-// QueryCertEvents returns the cert_event rows matching
-// filter, ts-descending (most recent first — the Activity log
-// page's natural ordering). Empty filter returns the most
-// recent certEventLimitCap rows. Limit > cap is silently
-// clamped down.
+// buildCertEventWhere builds the shared WHERE clause + args
+// slice used by both QueryCertEvents and CountCertEvents. The
+// returned clause starts with " WHERE 1=1" so callers can
+// append "AND..." conditions; callers append their own ORDER /
+// LIMIT.
 //
-// The domain / event_type / level filters short-circuit via
-// the matching index when set; the from/to filters use the
-// ts index. Pure read, safe to call concurrently with inserts.
-func (s *Store) QueryCertEvents(ctx context.Context, filter CertEventFilter) ([]CertEvent, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("observability: store closed")
-	}
-	limit := filter.Limit
-	if limit <= 0 || limit > certEventLimitCap {
-		limit = certEventLimitCap
-	}
-	q := `SELECT id, ts, level, event_type, domain, issuer, challenge, renewal, error_msg, details
-	      FROM cert_event WHERE 1=1`
+// Search applies a case-insensitive LIKE %X% across domain,
+// issuer, error_msg, and details. SQLite's default LIKE is
+// case-insensitive for ASCII (which covers domain + the
+// English error strings certmagic emits); for portability the
+// clause emits explicit `COLLATE NOCASE` so the behavior is
+// stable across SQLite builds with case-sensitive LIKE pragma.
+//
+// Levels []CertEventLevel takes precedence over the single
+// Level field when non-empty: it expands to
+// `level IN (?, ?, ...)`. Empty Levels falls back to the
+// single-value Level filter (or no filter when that's empty
+// too).
+func buildCertEventWhere(filter CertEventFilter) (string, []any) {
+	q := ` WHERE 1=1`
 	args := []any{}
 	if filter.Domain != "" {
 		q += ` AND domain = ?`
@@ -248,7 +272,18 @@ func (s *Store) QueryCertEvents(ctx context.Context, filter CertEventFilter) ([]
 		q += ` AND event_type = ?`
 		args = append(args, filter.Type)
 	}
-	if filter.Level != "" {
+	if len(filter.Levels) > 0 {
+		// IN (?, ?, ...) — placeholder count matches len.
+		q += ` AND level IN (`
+		for i, lvl := range filter.Levels {
+			if i > 0 {
+				q += `, `
+			}
+			q += `?`
+			args = append(args, lvl.String())
+		}
+		q += `)`
+	} else if filter.Level != "" {
 		q += ` AND level = ?`
 		args = append(args, filter.Level)
 	}
@@ -260,7 +295,45 @@ func (s *Store) QueryCertEvents(ctx context.Context, filter CertEventFilter) ([]
 		q += ` AND ts < ?`
 		args = append(args, filter.To.UTC().Unix())
 	}
-	q += ` ORDER BY ts DESC, id DESC LIMIT ?`
+	if s := filter.Search; s != "" {
+		// Single bound parameter reused across four LIKE
+		// comparisons. SQLite's query planner handles this
+		// fine for our cardinality; if profiling ever shows
+		// the search dominating, we can add a FTS5 virtual
+		// table later.
+		needle := "%" + s + "%"
+		q += ` AND (` +
+			`domain    LIKE ? COLLATE NOCASE OR ` +
+			`issuer    LIKE ? COLLATE NOCASE OR ` +
+			`error_msg LIKE ? COLLATE NOCASE OR ` +
+			`details   LIKE ? COLLATE NOCASE)`
+		args = append(args, needle, needle, needle, needle)
+	}
+	return q, args
+}
+
+// QueryCertEvents returns the cert_event rows matching
+// filter, ts-descending (most recent first — the Activity log
+// page's natural ordering). Empty filter returns the most
+// recent certEventLimitCap rows. Limit > cap is silently
+// clamped down.
+//
+// The domain / event_type / level filters short-circuit via
+// the matching index when set; the from/to filters use the
+// ts index. Search uses LIKE %X% across four text columns
+// (case-insensitive). Pure read, safe to call concurrently
+// with inserts.
+func (s *Store) QueryCertEvents(ctx context.Context, filter CertEventFilter) ([]CertEvent, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > certEventLimitCap {
+		limit = certEventLimitCap
+	}
+	where, args := buildCertEventWhere(filter)
+	q := `SELECT id, ts, level, event_type, domain, issuer, challenge, renewal, error_msg, details
+	      FROM cert_event` + where + ` ORDER BY ts DESC, id DESC LIMIT ?`
 	args = append(args, limit)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -290,6 +363,27 @@ func (s *Store) QueryCertEvents(ctx context.Context, filter CertEventFilter) ([]
 		return nil, fmt.Errorf("observability: iterate cert_event: %w", err)
 	}
 	return out, nil
+}
+
+// CountCertEvents returns the total number of cert_event rows
+// matching `filter`, IGNORING the filter's Limit. The U.3 HTTP
+// surface uses this to populate the response's `total` and
+// derive `hasMore` (true iff Total > len(Events)).
+//
+// Pure read, safe to call concurrently with inserts. Uses the
+// same WHERE-clause helper as QueryCertEvents so any future
+// filter addition automatically applies to both.
+func (s *Store) CountCertEvents(ctx context.Context, filter CertEventFilter) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("observability: store closed")
+	}
+	where, args := buildCertEventWhere(filter)
+	q := `SELECT COUNT(*) FROM cert_event` + where
+	var n int64
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("observability: count cert_event: %w", err)
+	}
+	return n, nil
 }
 
 // PruneCertEventsOlderThan deletes cert_event rows with ts <

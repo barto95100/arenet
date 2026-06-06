@@ -255,6 +255,17 @@ type Handler struct {
 	// an error) so the Certificates page renders the "no data
 	// yet" empty state rather than 500ing.
 	certInfo CertInfoReader
+	// certEvents (Step U.3, 2026-06-06) is the cert_event
+	// table read surface. Backs GET /api/v1/observability/
+	// cert-events — the Activity log page's cert source.
+	// Backed by *observability.Store (cert_event table from
+	// U.1 storage); the U.2 sink writes the rows the U.3
+	// handler reads. Nil-tolerant per AC #13 of Step T (the
+	// degraded-mode contract carried forward): a nil
+	// certEvents collapses the response to {events: [],
+	// total: 0, hasMore: false, degraded: true} rather than
+	// returning 5xx.
+	certEvents CertEventReader
 }
 
 // HCStatusReader is the read interface the Routes page uses to
@@ -299,6 +310,25 @@ type HCStatusReader interface {
 type CertInfoReader interface {
 	List() []*certinfo.CertRuntimeInfo
 	Remove(domain string) bool
+}
+
+// CertEventReader is the read surface the Step U.3 Activity
+// log endpoint depends on. *observability.Store satisfies it
+// via QueryCertEvents + CountCertEvents (U.1 storage shipped
+// the QueryCertEvents primitive in commit 05fea9f; U.3 added
+// CountCertEvents for the response's `total` + `hasMore`
+// envelope).
+//
+// Same minimal-interface pattern as the WAF / throttle /
+// decision readers above — kept narrow so tests can inject a
+// fake without booting SQLite. Same nil-tolerance contract as
+// the others (AC #13 degraded mode of Step T carried forward):
+// handlers detect nil and return 200 with degraded=true rather
+// than 5xx, so an observability boot failure doesn't take down
+// the Activity log page.
+type CertEventReader interface {
+	QueryCertEvents(ctx context.Context, filter observability.CertEventFilter) ([]observability.CertEvent, error)
+	CountCertEvents(ctx context.Context, filter observability.CertEventFilter) (int64, error)
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -464,6 +494,31 @@ func (h *Handler) SetCertInfoReader(r CertInfoReader) {
 // halfway state to surface.
 func (h *Handler) HasCertInfoPurger() bool {
 	return h.certInfo != nil
+}
+
+// SetCertEventReader (Step U.3, 2026-06-06) attaches the
+// cert_event table reader used by GET /api/v1/observability/
+// cert-events. Pass the *observability.Store the U.1 sink
+// writes into; same store that backs the existing WAF /
+// throttle / decision endpoints.
+//
+// Nil-tolerant per AC #13: leaving this unset (or passing nil)
+// makes the endpoint respond with the degraded envelope
+// (empty events, total=0, hasMore=false, degraded=true) rather
+// than 500ing — same convention every other observability
+// reader honors.
+func (h *Handler) SetCertEventReader(r CertEventReader) {
+	h.certEvents = r
+}
+
+// HasCertEventReader reports whether the cert-event seam is
+// wired. cmd/arenet calls this after SetCertEventReader and
+// logs the result at boot so any future wire-up regression
+// surfaces as reader_present=false in journalctl instead of
+// silent degradation. Generalizes the HF4 purger_present
+// pattern (commit 30418ea + backlog #R-API-boot-log-audit).
+func (h *Handler) HasCertEventReader() bool {
+	return h.certEvents != nil
 }
 
 // SetDecisionReader (Step N.3) attaches the CrowdSec

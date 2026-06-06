@@ -346,3 +346,201 @@ func TestCertEventLevel_StringRoundTrip(t *testing.T) {
 		t.Errorf("Parse(invalid) = %v, want Info fallback", got)
 	}
 }
+
+// --- U.3 storage extensions: Search + CountCertEvents -----------------------
+
+// TestQueryCertEvents_SearchCaseInsensitive pins the LIKE
+// %X% COLLATE NOCASE behavior across the four searchable
+// columns. The Activity log textbox matches operator queries
+// like "let's encrypt" against rows that store "Let's
+// Encrypt", and "cert" against the event_type token (but the
+// search is column-scoped — event_type is NOT in the search
+// set; the operator filters event types via the dedicated
+// `level` parameter).
+func TestQueryCertEvents_SearchCaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+
+	t0 := time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC)
+	seedCertEvents(t, s, []CertEvent{
+		{Ts: t0, Type: CertEventTypeObtained, Domain: "ApI.example.com", Issuer: "Let's Encrypt"},
+		{Ts: t0.Add(time.Minute), Type: CertEventTypeFailed, Domain: "test.local", Error: "Subject DOES NOT qualify for a public CERTIFICATE"},
+		{Ts: t0.Add(2 * time.Minute), Type: CertEventTypeObtained, Domain: "other.com", Issuer: "ZeroSSL", Details: "ARI hint: retry-after 24h"},
+	})
+
+	cases := []struct {
+		name        string
+		search      string
+		wantDomains []string
+	}{
+		{"matches domain case-insensitive", "API.EXAMPLE", []string{"ApI.example.com"}},
+		{"matches issuer case-insensitive", "let's encrypt", []string{"ApI.example.com"}},
+		{"matches error_msg case-insensitive", "qualify for a public", []string{"test.local"}},
+		{"matches details case-insensitive", "retry-after", []string{"other.com"}},
+		{"non-matching needle returns empty", "no-such-substring", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.QueryCertEvents(ctx, CertEventFilter{Search: tc.search})
+			if err != nil {
+				t.Fatalf("Query: %v", err)
+			}
+			if len(got) != len(tc.wantDomains) {
+				t.Fatalf("len=%d want=%d", len(got), len(tc.wantDomains))
+			}
+			for i, e := range got {
+				if e.Domain != tc.wantDomains[i] {
+					t.Errorf("row[%d].Domain=%q want=%q", i, e.Domain, tc.wantDomains[i])
+				}
+			}
+		})
+	}
+}
+
+// TestQueryCertEvents_LevelsMulti pins the U.3 multi-level
+// filter: Levels=[INFO, ERROR] returns everything,
+// Levels=[ERROR] returns only ERROR rows. Falls back to
+// single-Level when Levels is empty.
+func TestQueryCertEvents_LevelsMulti(t *testing.T) {
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+
+	t0 := time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC)
+	seedCertEvents(t, s, []CertEvent{
+		{Ts: t0, Level: CertEventLevelInfo, Type: CertEventTypeObtained, Domain: "ok"},
+		{Ts: t0.Add(time.Minute), Level: CertEventLevelError, Type: CertEventTypeFailed, Domain: "bad"},
+	})
+
+	// Both levels via Levels=[INFO, ERROR] → 2 rows.
+	got, err := s.QueryCertEvents(ctx, CertEventFilter{
+		Levels: []CertEventLevel{CertEventLevelInfo, CertEventLevelError},
+	})
+	if err != nil {
+		t.Fatalf("Query both levels: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("multi-level = %d rows, want 2", len(got))
+	}
+
+	// ERROR only via Levels=[ERROR] → 1 row.
+	got, err = s.QueryCertEvents(ctx, CertEventFilter{
+		Levels: []CertEventLevel{CertEventLevelError},
+	})
+	if err != nil {
+		t.Fatalf("Query ERROR: %v", err)
+	}
+	if len(got) != 1 || got[0].Domain != "bad" {
+		t.Errorf("ERROR-only = %d rows; first.Domain=%q want=bad", len(got), got[0].Domain)
+	}
+}
+
+// TestQueryCertEvents_LevelsTakesPrecedenceOverLevel: when
+// both single Level and Levels are set, Levels wins. The
+// HTTP handler only sets Levels; this pins the storage
+// contract so an internal caller mixing both gets the
+// documented behavior.
+func TestQueryCertEvents_LevelsTakesPrecedenceOverLevel(t *testing.T) {
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+	t0 := time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC)
+	seedCertEvents(t, s, []CertEvent{
+		{Ts: t0, Level: CertEventLevelInfo, Domain: "info"},
+		{Ts: t0.Add(time.Minute), Level: CertEventLevelError, Domain: "err"},
+	})
+
+	// Level="INFO" would normally return 1; Levels=[ERROR]
+	// overrides and returns the ERROR row only.
+	got, err := s.QueryCertEvents(ctx, CertEventFilter{
+		Level:  "INFO",
+		Levels: []CertEventLevel{CertEventLevelError},
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 || got[0].Domain != "err" {
+		t.Errorf("precedence: got %d rows; first=%+v", len(got), got[0])
+	}
+}
+
+// TestCountCertEvents_MatchesQueryTotal pins the invariant
+// the U.3 handler relies on: CountCertEvents returns the same
+// number QueryCertEvents would return if Limit weren't
+// applied. Filter must be honored identically.
+func TestCountCertEvents_MatchesQueryTotal(t *testing.T) {
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+
+	t0 := time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC)
+	batch := make([]CertEvent, 0, 50)
+	for i := 0; i < 50; i++ {
+		batch = append(batch, CertEvent{
+			Ts:     t0.Add(time.Duration(i) * time.Second),
+			Type:   CertEventTypeObtained,
+			Domain: "x",
+		})
+	}
+	seedCertEvents(t, s, batch)
+
+	// No filter: Count == 50.
+	total, err := s.CountCertEvents(ctx, CertEventFilter{})
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if total != 50 {
+		t.Errorf("Count = %d, want 50", total)
+	}
+
+	// Limited query still gets capped, but Count is unaffected
+	// — that's the whole point of the separate primitive.
+	got, _ := s.QueryCertEvents(ctx, CertEventFilter{Limit: 10})
+	if len(got) != 10 {
+		t.Errorf("Query Limit=10 returned %d", len(got))
+	}
+	total, _ = s.CountCertEvents(ctx, CertEventFilter{Limit: 10})
+	if total != 50 {
+		t.Errorf("Count with Limit=10 = %d, want 50 (Count ignores Limit)", total)
+	}
+}
+
+// TestCountCertEvents_HonorsSearchFilter pins that the
+// Search filter applies to Count the same way it does to
+// Query — required for HasMore to compute correctly when
+// the operator searches.
+func TestCountCertEvents_HonorsSearchFilter(t *testing.T) {
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+	t0 := time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC)
+	seedCertEvents(t, s, []CertEvent{
+		{Ts: t0, Domain: "a.example.com", Issuer: "Let's Encrypt"},
+		{Ts: t0.Add(time.Minute), Domain: "b.example.com", Issuer: "ZeroSSL"},
+		{Ts: t0.Add(2 * time.Minute), Domain: "c.example.com", Issuer: "Let's Encrypt"},
+	})
+
+	total, err := s.CountCertEvents(ctx, CertEventFilter{Search: "let's encrypt"})
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("Count with Search='lets encrypt' = %d, want 2", total)
+	}
+}
+
+// TestCountCertEvents_EmptyTable pins the boundary: Count on
+// an empty table returns 0 without error.
+func TestCountCertEvents_EmptyTable(t *testing.T) {
+	ctx := context.Background()
+	s, _ := Open(ctx, ":memory:")
+	defer s.Close()
+	total, err := s.CountCertEvents(ctx, CertEventFilter{})
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("Count empty table = %d, want 0", total)
+	}
+}

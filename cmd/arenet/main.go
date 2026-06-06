@@ -690,6 +690,12 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		// N.2 storage). Same nil-obsStore degraded path as the
 		// throttle reader above.
 		apiHandler.SetDecisionReader(obsStore)
+		// Step U.3 — cert event reader. Backed by the same
+		// *observability.Store (cert_event table from U.1
+		// storage; U.2's sink writes the rows this reader
+		// serves). The endpoint at /observability/cert-events
+		// powers the Activity log page's cert source.
+		apiHandler.SetCertEventReader(obsStore)
 	}
 	// Step Q.2 — auth-failure reader. Backed by the audit
 	// bucket (single source of truth, spec D2.B + D4.B), so
@@ -727,6 +733,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// next investigation.
 	logger.Info("api handler wired with cert tracker",
 		"purger_present", apiHandler.HasCertInfoPurger(),
+	)
+	// Step U.3 — log the cert-event reader wire-up state.
+	// Mirrors the HF4 purger_present pattern (backlog
+	// #R-API-boot-log-audit). A future regression where the
+	// SetCertEventReader call goes missing surfaces here as
+	// reader_present=false instead of silent /observability/
+	// cert-events endpoint degradation.
+	logger.Info("api handler wired with cert event reader",
+		"reader_present", apiHandler.HasCertEventReader(),
 	)
 
 	// Step P.3 — auto-classify trigger engine wiring.

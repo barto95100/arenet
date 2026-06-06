@@ -188,6 +188,19 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// Optional scope / scenario / srcIp / onlyActive
 			// filters. Same AC #15 contract.
 			r.Get("/security/decisions", h.securityDecisions)
+			// Step U.3 — cert lifecycle event log. Pure
+			// event-shaped read of the cert_event table (U.1
+			// schema v5, populated by the U.2 sink that
+			// subscribes to the certinfo Tracker's AC #18
+			// Subscribe seam). Optional limit / since / until /
+			// level / search filters per spec §5.1. Endpoint
+			// lives under /observability/ rather than /security/
+			// because cert events are not security-scoped
+			// (lifecycle is the umbrella concept; the §3.4 page
+			// rename to "Activity log" reflects that scope
+			// widening). Same hard-auth + AC #13 degraded-mode
+			// contract as the security siblings above.
+			r.Get("/observability/cert-events", h.securityCertEvents)
 			// Step O.3 — managed-domain list (read).
 			// Viewer-accessible per AC #20 (parallel to
 			// the DNS-provider GET — both are config reads
