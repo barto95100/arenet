@@ -150,10 +150,10 @@
                 border-left: 2px solid var(--accent, oklch(68% 0.21 255));
         }
         .cluster-node[data-state='warn'] {
-                border-left: 2px solid var(--warn, oklch(80% 0.14 85));
+                border-left: 2px solid var(--status-warn);
         }
         .cluster-node[data-state='bad'] {
-                border-left: 2px solid var(--bad, oklch(66% 0.20 25));
+                border-left: 2px solid var(--status-down);
         }
         /* Three-state aware accent (Regression A): all-unknown clusters
            — the v1.1.0 default — render with a neutral gray accent.
@@ -214,7 +214,7 @@
                 padding: 8px 12px;
                 border-top: 1px solid var(--border, oklch(28% 0.009 250));
                 background: oklch(22% 0.007 250 / 0.65);
-                color: var(--warn, oklch(80% 0.14 85));
+                color: var(--status-warn);
                 font-size: 11px;
                 line-height: 1.4;
                 border-bottom-left-radius: 8px;
@@ -229,7 +229,7 @@
         }
 
         .cluster-node[data-state='bad'] .cluster-warning {
-                color: var(--bad, oklch(66% 0.20 25));
+                color: var(--status-down);
         }
 
         /* Svelte Flow wrapper override — same pattern as UpstreamNode.

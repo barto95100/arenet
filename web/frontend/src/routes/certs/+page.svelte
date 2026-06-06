@@ -726,8 +726,8 @@
 	.warn-box {
 		margin-bottom: 12px;
 		padding: 10px 12px;
-		background: color-mix(in oklch, var(--warn) 10%, transparent);
-		border: 1px solid color-mix(in oklch, var(--warn) 32%, transparent);
+		background: color-mix(in oklch, var(--status-warn) 10%, transparent);
+		border: 1px solid color-mix(in oklch, var(--status-warn) 32%, transparent);
 		border-radius: var(--radius-sm);
 		color: var(--fg);
 		font-size: 12.5px;
@@ -801,15 +801,15 @@
 	}
 	.modal-warn {
 		padding: 8px 12px;
-		background: color-mix(in oklch, var(--warn) 10%, transparent);
-		border: 1px solid color-mix(in oklch, var(--warn) 30%, transparent);
+		background: color-mix(in oklch, var(--status-warn) 10%, transparent);
+		border: 1px solid color-mix(in oklch, var(--status-warn) 30%, transparent);
 		border-radius: var(--radius-sm);
 		color: var(--fg);
 		font-size: 12.5px;
 		margin: 0;
 	}
 	.modal-error {
-		color: var(--down);
+		color: var(--status-down);
 		font-size: 12.5px;
 		margin: 12px 0 0 0;
 	}

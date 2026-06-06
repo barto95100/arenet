@@ -280,7 +280,6 @@
 		--accent: oklch(68% 0.21 255);
 		--accent-soft: oklch(68% 0.21 255 / 0.14);
 		--accent-line: oklch(68% 0.21 255 / 0.45);
-		--ok: oklch(72% 0.16 150);
 		--radius: 8px;
 		--radius-sm: 6px;
 		--radius-lg: 14px;

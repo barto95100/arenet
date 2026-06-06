@@ -239,12 +239,12 @@
         }
 
         .tier-warn {
-                color: var(--warn, oklch(80% 0.14 85));
+                color: var(--status-warn);
                 filter: drop-shadow(0 0 1.5px currentColor);
         }
 
         .tier-bad {
-                color: var(--bad, oklch(66% 0.20 25));
+                color: var(--status-down);
                 filter: drop-shadow(0 0 1.5px currentColor);
         }
 
@@ -324,11 +324,11 @@
 
         .topflux-line-2 .badge {
                 flex: 0 0 auto;
-                color: var(--warn, oklch(80% 0.14 85));
+                color: var(--status-warn);
         }
 
         .topflux-row[data-tier='bad'] .topflux-line-2 .badge {
-                color: var(--bad, oklch(66% 0.20 25));
+                color: var(--status-down);
         }
 
         .topflux-bar {
@@ -347,11 +347,11 @@
         }
 
         .topflux-row[data-tier='warn'] .topflux-bar-fill {
-                background: var(--warn, oklch(80% 0.14 85));
+                background: var(--status-warn);
         }
 
         .topflux-row[data-tier='bad'] .topflux-bar-fill {
-                background: var(--bad, oklch(66% 0.20 25));
+                background: var(--status-down);
         }
 
         /* ---------- Actions ---------- */

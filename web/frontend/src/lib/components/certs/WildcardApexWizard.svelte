@@ -224,7 +224,7 @@
 	}
 	.form-error {
 		grid-column: 1 / -1;
-		color: var(--down);
+		color: var(--status-down);
 		font-size: 12.5px;
 		margin: 0;
 	}

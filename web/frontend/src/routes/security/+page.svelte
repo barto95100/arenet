@@ -230,14 +230,14 @@
 		gap: 8px;
 		padding: 10px 12px;
 		margin-bottom: 14px;
-		background: color-mix(in oklch, var(--warn) 8%, transparent);
-		border: 1px solid color-mix(in oklch, var(--warn) 28%, transparent);
+		background: color-mix(in oklch, var(--status-warn) 8%, transparent);
+		border: 1px solid color-mix(in oklch, var(--status-warn) 28%, transparent);
 		border-radius: var(--radius-sm);
 		color: var(--fg-muted);
 		font-size: 12px;
 		line-height: 1.5;
 	}
-	.ro-banner svg { flex: none; color: var(--warn); margin-top: 2px; }
+	.ro-banner svg { flex: none; color: var(--status-warn); margin-top: 2px; }
 
 	.kv-grid {
 		display: grid;
@@ -271,12 +271,12 @@
 		color: var(--fg-muted);
 	}
 	.pill.on {
-		background: color-mix(in oklch, var(--ok) 18%, transparent);
-		color: var(--ok);
+		background: color-mix(in oklch, var(--status-up) 18%, transparent);
+		color: var(--status-up);
 	}
 	.pill.configured {
-		background: color-mix(in oklch, var(--warn) 18%, transparent);
-		color: var(--warn);
+		background: color-mix(in oklch, var(--status-warn) 18%, transparent);
+		color: var(--status-warn);
 	}
 
 	.empty {

@@ -167,9 +167,9 @@
 			case 'req_per_sec':
 				return 'var(--accent)';
 			case 'p95_latency_ms':
-				return 'var(--info)';
+				return 'var(--status-info)';
 			case 'five_xx_rate':
-				return 'var(--bad)';
+				return 'var(--status-down)';
 			default:
 				return 'var(--accent)';
 		}
@@ -401,7 +401,7 @@
 
 <style>
 	.loading-wrap { display: flex; justify-content: center; padding: 48px; }
-	.card.error { padding: 16px; color: var(--bad); border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+	.card.error { padding: 16px; color: var(--status-down); border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
 
 	.screen-head {
 		display: flex; align-items: flex-start; justify-content: space-between;
@@ -508,7 +508,7 @@
 		letter-spacing: 0.05em;
 		flex: none;
 	}
-	.pill.bad { background: color-mix(in oklch, var(--bad) 18%, transparent); color: var(--bad); }
+	.pill.bad { background: color-mix(in oklch, var(--status-down) 18%, transparent); color: var(--status-down); }
 
 	table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 	th, td { padding: 7px 8px; text-align: left; }
@@ -527,8 +527,8 @@
 		color: var(--accent);
 		border-bottom-color: var(--accent);
 	}
-	.warn-text { color: var(--warn); }
-	.bad-text { color: var(--bad); }
+	.warn-text { color: var(--status-warn); }
+	.bad-text { color: var(--status-down); }
 	.empty-row { color: var(--fg-muted); font-size: 12px; padding: 12px 0; text-align: center; font-style: italic; }
 
 	.upstream-row {
@@ -558,7 +558,7 @@
 		letter-spacing: 0.05em;
 		text-align: center;
 	}
-	.log-lvl.block { background: color-mix(in oklch, var(--bad) 18%, transparent); color: var(--bad); }
+	.log-lvl.block { background: color-mix(in oklch, var(--status-down) 18%, transparent); color: var(--status-down); }
 	.log-msg { color: var(--fg); }
 	.log-msg .k { color: var(--fg-dim); }
 </style>

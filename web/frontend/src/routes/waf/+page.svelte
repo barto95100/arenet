@@ -240,7 +240,7 @@
 		padding: 14px 16px;
 		margin-bottom: 14px;
 	}
-	.card.error { color: var(--bad); }
+	.card.error { color: var(--status-down); }
 	.card.empty {
 		padding: 32px;
 		text-align: center;
@@ -281,14 +281,14 @@
 		gap: 8px;
 		padding: 10px 12px;
 		margin-bottom: 14px;
-		background: color-mix(in oklch, var(--warn) 8%, transparent);
-		border: 1px solid color-mix(in oklch, var(--warn) 28%, transparent);
+		background: color-mix(in oklch, var(--status-warn) 8%, transparent);
+		border: 1px solid color-mix(in oklch, var(--status-warn) 28%, transparent);
 		border-radius: var(--radius-sm);
 		color: var(--fg-muted);
 		font-size: 12px;
 		line-height: 1.5;
 	}
-	.ro-notice svg { flex: none; color: var(--warn); margin-top: 2px; }
+	.ro-notice svg { flex: none; color: var(--status-warn); margin-top: 2px; }
 
 	.cat-grid {
 		display: flex;

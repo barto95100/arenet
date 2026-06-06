@@ -429,7 +429,7 @@
 		max-width: 480px;
 		padding: 20px 24px;
 		background: var(--surface, oklch(19% 0.006 250));
-		border: 1px solid color-mix(in oklch, var(--bad, oklch(66% 0.20 25)) 40%, transparent);
+		border: 1px solid color-mix(in oklch, var(--status-down) 40%, transparent);
 		border-radius: 8px;
 		text-align: center;
 	}
@@ -437,7 +437,7 @@
 	.error-title {
 		font-size: 14px;
 		font-weight: 600;
-		color: var(--bad, oklch(66% 0.20 25));
+		color: var(--status-down);
 		margin-bottom: 6px;
 	}
 
@@ -476,15 +476,15 @@
 		font-size: 10.5px;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
-		color: var(--ok, oklch(72% 0.16 150));
+		color: var(--status-up);
 		padding: 4px 10px;
 		border-radius: 999px;
-		background: color-mix(in oklch, var(--ok, oklch(72% 0.16 150)) 14%, transparent);
+		background: color-mix(in oklch, var(--status-up) 14%, transparent);
 	}
 
 	.live-indicator.reconnecting {
-		color: var(--warn, oklch(80% 0.14 85));
-		background: color-mix(in oklch, var(--warn, oklch(80% 0.14 85)) 14%, transparent);
+		color: var(--status-warn);
+		background: color-mix(in oklch, var(--status-warn) 14%, transparent);
 	}
 
 	.live-indicator .dot {

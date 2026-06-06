@@ -138,13 +138,13 @@
            renders gray; Stage B real-probe ingestion will paint
            healthy/unhealthy/draining colors via these same rules. */
         .upstream-node[data-monitored='true'][data-status='healthy'] {
-                border-left: 3px solid var(--ok, oklch(72% 0.16 150));
+                border-left: 3px solid var(--status-up);
         }
         .upstream-node[data-monitored='true'][data-status='unhealthy'] {
-                border-left: 3px solid var(--bad, oklch(66% 0.20 25));
+                border-left: 3px solid var(--status-down);
         }
         .upstream-node[data-monitored='true'][data-status='draining'] {
-                border-left: 3px solid var(--warn, oklch(80% 0.14 85));
+                border-left: 3px solid var(--status-warn);
         }
         .upstream-node[data-monitored='true'][data-status='unknown'] {
                 border-left: 3px solid var(--fg-dim, oklch(54% 0.011 250));
@@ -221,10 +221,10 @@
            default accent blue — there's no probe data to color it
            by, only load to show. */
         .upstream-node[data-monitored='true'][data-status='draining'] .load-fill {
-                background: var(--warn, oklch(80% 0.14 85));
+                background: var(--status-warn);
         }
         .upstream-node[data-monitored='true'][data-status='unhealthy'] .load-fill {
-                background: var(--bad, oklch(66% 0.20 25));
+                background: var(--status-down);
         }
         .upstream-node[data-monitored='true'][data-status='unknown'] .load-fill {
                 background: var(--fg-dim, oklch(54% 0.011 250));

@@ -440,10 +440,10 @@
 		gap: 6px;
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: var(--ok);
+		color: var(--status-up);
 		padding: 4px 10px;
 		border-radius: 999px;
-		background: color-mix(in oklch, var(--ok) 14%, transparent);
+		background: color-mix(in oklch, var(--status-up) 14%, transparent);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
 	}
@@ -514,8 +514,8 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.log-row:last-child { border-bottom: none; }
-	.log-row.level-block { background: color-mix(in oklch, var(--bad) 8%, transparent); }
-	.log-row.level-warn { background: color-mix(in oklch, var(--warn) 6%, transparent); }
+	.log-row.level-block { background: color-mix(in oklch, var(--status-down) 8%, transparent); }
+	.log-row.level-warn { background: color-mix(in oklch, var(--status-warn) 6%, transparent); }
 
 	.log-time { color: var(--fg-dim); font-size: 11px; }
 	.log-lvl {
@@ -527,9 +527,9 @@
 		text-align: center;
 		justify-self: start;
 	}
-	.log-lvl.block { background: color-mix(in oklch, var(--bad) 18%, transparent); color: var(--bad); }
-	.log-lvl.warn { background: color-mix(in oklch, var(--warn) 18%, transparent); color: var(--warn); }
-	.log-lvl.info { background: color-mix(in oklch, var(--info) 18%, transparent); color: var(--info); }
+	.log-lvl.block { background: color-mix(in oklch, var(--status-down) 18%, transparent); color: var(--status-down); }
+	.log-lvl.warn { background: color-mix(in oklch, var(--status-warn) 18%, transparent); color: var(--status-warn); }
+	.log-lvl.info { background: color-mix(in oklch, var(--status-info) 18%, transparent); color: var(--status-info); }
 	.log-msg { color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.log-msg .k { color: var(--fg-dim); }
 	.right { text-align: right; }
