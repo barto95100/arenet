@@ -11,6 +11,8 @@ import { request } from './client';
 import type {
 	AttackersSummaryResponse,
 	AuthFailuresResponse,
+	CertEventLevel,
+	CertEventsResponse,
 	DecisionsResponse,
 	MetricWindow,
 	OwaspCategory,
@@ -172,4 +174,58 @@ export function fetchDecisions(
 	if (params.onlyActive) qs.set('onlyActive', 'true');
 	const suffix = qs.toString() ? `?${qs.toString()}` : '';
 	return request<DecisionsResponse>('GET', `/security/decisions${suffix}`);
+}
+
+/**
+ * Step U.4 — typed client wrapper around GET
+ * /api/v1/observability/cert-events. The endpoint backs the
+ * Activity log page's cert source (U.5 wires it into the
+ * unified-table aggregator alongside WAF / throttle / auth
+ * failures).
+ *
+ * Path is /observability/ NOT /security/ because cert
+ * lifecycle is broader than security per the §3.4 page
+ * rename: the Activity log unifies WAF + throttle + auth +
+ * cert events, and the cert source lands under the
+ * lifecycle umbrella. Other fetch* methods stay on
+ * /security/... unchanged.
+ *
+ * Filters are all optional per spec §5.1:
+ *   - `limit` clamped server-side at 1000 (silent cap; bad
+ *     value returns 400 per the U.3 handler).
+ *   - `since` / `until` RFC 3339 timestamps. Bad parse → 400,
+ *     until <= since → 400.
+ *   - `level` is a multi-value subset of {INFO, ERROR},
+ *     joined with comma in the URL. Unknown values → 400.
+ *   - `search` is a substring match across domain, issuer,
+ *     error_msg, details (case-insensitive). Trimmed
+ *     server-side; empty = no filter.
+ *
+ * AC #13 degraded-mode path: when the observability
+ * subsystem failed at boot OR the cert-event reader was
+ * never wired, the response carries `degraded: true` and an
+ * empty `events` array + `total: 0`. Callers should surface
+ * a clean empty state, not a hostile error toast.
+ */
+export interface FetchCertEventsParams {
+	limit?: number;
+	since?: string;
+	until?: string;
+	level?: CertEventLevel[];
+	search?: string;
+}
+
+export function fetchCertEvents(
+	params: FetchCertEventsParams = {}
+): Promise<CertEventsResponse> {
+	const qs = new URLSearchParams();
+	if (params.limit !== undefined) qs.set('limit', String(params.limit));
+	if (params.since) qs.set('since', params.since);
+	if (params.until) qs.set('until', params.until);
+	if (params.level && params.level.length > 0) {
+		qs.set('level', params.level.join(','));
+	}
+	if (params.search) qs.set('search', params.search);
+	const suffix = qs.toString() ? `?${qs.toString()}` : '';
+	return request<CertEventsResponse>('GET', `/observability/cert-events${suffix}`);
 }

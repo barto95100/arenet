@@ -1257,3 +1257,83 @@ export interface DecisionsResponse {
 	disabled?: boolean;
 	events: Decision[];
 }
+
+// --- Step U cert event types --------------------------------------------------
+
+/**
+ * Level of a cert lifecycle event in the Activity log.
+ * Matches the backend's CertEventLevel.String() output
+ * (internal/observability/cert_event.go). INFO covers
+ * cert_obtained; ERROR covers cert_failed + cert_ocsp_revoked
+ * (the latter is a security-relevant signal per Step U spec
+ * §3.6).
+ */
+export type CertEventLevel = 'INFO' | 'ERROR';
+
+/**
+ * Event type lineage from certmagic. The frontend renders
+ * each as a different row variant in the Activity log table.
+ * Matches CertEventType.String() output verbatim so an
+ * operator searching the table textbox for "cert_failed"
+ * matches the typed token. cert_obtaining is NOT persisted
+ * per spec §3.3 — it never appears in the wire shape.
+ */
+export type CertEventType = 'cert_obtained' | 'cert_failed' | 'cert_ocsp_revoked';
+
+/**
+ * One cert lifecycle event row as returned by
+ * GET /api/v1/observability/cert-events. Field shapes mirror
+ * observability.CertEvent via the U.3 wire type
+ * certEventResponseItem in
+ * internal/api/cert_events_handler.go (the camelCase JSON
+ * tags map 1-to-1 to the snake_case columns in cert_event).
+ *
+ * Empty-string defaults match the U.1 schema NOT NULL
+ * DEFAULT '' constraints: a producer that omits issuer (e.g.
+ * a cert_failed row) sends "" not null. The Activity log
+ * mapper treats empty strings as "no data" rather than
+ * rendering blank pills.
+ *
+ * Per the U.3 handler's omitempty discipline, only Timestamp,
+ * Level, EventType, and Domain are guaranteed present on
+ * every row; the other fields may be absent (omitempty) when
+ * empty. TypeScript declares them as required for clarity
+ * but the runtime tolerates missing fields (treated as "").
+ */
+export interface CertEvent {
+	timestamp: string;
+	level: CertEventLevel;
+	eventType: CertEventType;
+	domain: string;
+	issuer: string;
+	challenge: '' | 'DNS-01' | 'HTTP-01';
+	renewal: boolean;
+	error: string;
+	details: string;
+}
+
+/**
+ * Wire shape of GET /api/v1/observability/cert-events.
+ *
+ * `total` is the count of rows matching the filter ignoring
+ * limit (CountCertEvents in the U.3 backend) — lets the UI
+ * surface "showing N of M".
+ *
+ * `hasMore` is true iff total > events.length — pagination
+ * hint for a future load-more affordance; U.5 doesn't
+ * implement load-more, but the frontend type carries the
+ * field so a future increment can wire it without a
+ * type-level migration.
+ *
+ * `degraded` is omitted on the happy path (omitempty); true
+ * when the backend reader was nil (boot failure or missed
+ * wire-up). Mirrors the `disabled?` field on WAF / throttle
+ * / decision responses for operator mental-model uniformity.
+ * AC #13 degraded-mode contract carried forward from Step T.
+ */
+export interface CertEventsResponse {
+	events: CertEvent[];
+	total: number;
+	hasMore: boolean;
+	degraded?: boolean;
+}
