@@ -175,6 +175,18 @@ const (
 	// ACME events log so it can record the purge alongside the
 	// other lifecycle events.
 	EventCertRemoved EventKind = "cert_removed"
+	// EventCertOCSPRevoked fires on certmagic's
+	// "cert_ocsp_revoked" event (maintain.go:375). Step U.2
+	// added this kind — T.1's subscription deliberately did
+	// NOT cover OCSP because the tracker had no policy for
+	// it; U.2 introduces persistence to the cert_event table
+	// (via the AC #18 Subscribe seam) but does NOT change
+	// tracker Status because the cert may still serve
+	// requests until certmagic replaces it. Spec §3.6 locked
+	// decision: this is INCLUDED as level=ERROR because cert
+	// revocation is a security-relevant signal (may indicate
+	// key compromise).
+	EventCertOCSPRevoked EventKind = "cert_ocsp_revoked"
 )
 
 // Event is the payload passed to Subscribe handlers. Decoupled from

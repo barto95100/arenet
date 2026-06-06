@@ -235,6 +235,122 @@ func TestCaddyEventHandler_UnknownEvent(t *testing.T) {
 	}
 }
 
+// TestCaddyEventHandler_CertOCSPRevoked pins the U.2 dispatch:
+// a cert_ocsp_revoked Caddy event lands on tracker.RecordRevoked
+// which fans out EventCertOCSPRevoked WITHOUT mutating tracker
+// state (the cert remains operationally VALID until certmagic
+// replaces it per spec §3.6).
+func TestCaddyEventHandler_CertOCSPRevoked(t *testing.T) {
+	tr := NewTracker()
+	withSingletonTracker(t, tr)
+	// Pre-seed a VALID cert so we can confirm the revocation
+	// does NOT change its tracker status.
+	tr.RecordCert(&CertRuntimeInfo{
+		Domain:   "x.example.com",
+		NotAfter: time.Now().Add(60 * 24 * time.Hour),
+		Issuer:   "Let's Encrypt",
+	})
+
+	var captured Event
+	tr.Subscribe(captureHandler{cb: func(e Event) {
+		if e.Kind == EventCertOCSPRevoked {
+			captured = e
+		}
+	}})
+
+	h := &CaddyEventHandler{logger: zap.NewNop()}
+	ev := newTestEvent(t, "cert_ocsp_revoked", map[string]any{
+		"identifier": "x.example.com",
+	})
+	if err := h.Handle(context.Background(), ev); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if captured.Kind != EventCertOCSPRevoked {
+		t.Fatalf("EventCertOCSPRevoked not fanned out; got Kind=%q", captured.Kind)
+	}
+	if captured.Domain != "x.example.com" {
+		t.Errorf("event.Domain = %q, want x.example.com", captured.Domain)
+	}
+	// State unchanged.
+	info, ok := tr.Get("x.example.com")
+	if !ok {
+		t.Fatalf("tracker entry purged by revocation — must NOT happen per spec §3.6")
+	}
+	if info.Status != StatusValid {
+		t.Errorf("post-revocation status = %q, want VALID (revocation does not change tracker status)", info.Status)
+	}
+}
+
+// TestCaddyEventHandler_CertObtained_RenewalBit pins the U.2
+// renewal disambiguation: the listener extracts renewal=true
+// from the cert_obtained payload and threads it through
+// RecordCertWithRenewal so the fan-out Event carries the bit.
+// The adapter relies on this for the cert_event row.
+func TestCaddyEventHandler_CertObtained_RenewalBit(t *testing.T) {
+	tr := NewTracker()
+	withSingletonTracker(t, tr)
+
+	var captured Event
+	tr.Subscribe(captureHandler{cb: func(e Event) {
+		if e.Kind == EventCertObtained {
+			captured = e
+		}
+	}})
+
+	h := &CaddyEventHandler{logger: zap.NewNop()}
+	// No certificate_path → falls into the fallback branch (the
+	// listener still calls RecordCertWithRenewal with the
+	// renewal bool). This is the simpler test path; the
+	// happy-path branch is already covered by the existing
+	// TestCaddyEventHandler_CertObtained test.
+	ev := newTestEvent(t, "cert_obtained", map[string]any{
+		"identifier": "renewed.example.com",
+		"issuer":     "acme-v02.api.letsencrypt.org-directory",
+		"renewal":    true,
+	})
+	if err := h.Handle(context.Background(), ev); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if captured.Kind != EventCertObtained {
+		t.Fatalf("EventCertObtained not received; got Kind=%q", captured.Kind)
+	}
+	if !captured.IsRenewal {
+		t.Errorf("IsRenewal = false, want true (renewal payload field was true)")
+	}
+}
+
+// TestCaddyEventHandler_CertObtained_NoRenewalField pins the
+// defensive default: a cert_obtained payload that omits the
+// renewal field falls back to IsRenewal=false (legitimate
+// first-issuance path).
+func TestCaddyEventHandler_CertObtained_NoRenewalField(t *testing.T) {
+	tr := NewTracker()
+	withSingletonTracker(t, tr)
+
+	var captured Event
+	tr.Subscribe(captureHandler{cb: func(e Event) {
+		if e.Kind == EventCertObtained {
+			captured = e
+		}
+	}})
+
+	h := &CaddyEventHandler{logger: zap.NewNop()}
+	ev := newTestEvent(t, "cert_obtained", map[string]any{
+		"identifier": "first.example.com",
+		"issuer":     "acme-v02.api.letsencrypt.org-directory",
+		// renewal field intentionally omitted
+	})
+	if err := h.Handle(context.Background(), ev); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if captured.IsRenewal {
+		t.Errorf("IsRenewal = true, want false (renewal field omitted = first issuance)")
+	}
+}
+
 // TestExtractError covers the polymorphic-payload defensive path:
 // certmagic stores the error as the Go `error` value, but
 // formatters / mocks may pass it through as string.

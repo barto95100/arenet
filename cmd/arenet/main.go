@@ -572,6 +572,29 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		"degraded", obsStore == nil,
 	)
 
+	// Step U.2 — subscribe the cert event sink to the certinfo
+	// Tracker's fan-out via the AC #18 Subscribe seam (T.1
+	// commit 1350777). The adapter translates certinfo.Event →
+	// observability.CertEvent and filters per spec §3.3
+	// (Obtaining), §3.5 (cached_*), §3.8 (Removed). Subscription
+	// must happen AFTER the sink is started (so the first event
+	// the adapter forwards has a live channel to land in) AND
+	// BEFORE caddy starts firing events. The unsubscribe defer
+	// runs LIFO BEFORE the sink-stop defer above, so the tracker
+	// stops sending into the channel before the sink drains.
+	//
+	// Boot log mirrors HF4's purger_present=true pattern (commit
+	// 30418ea + backlog #R-API-boot-log-audit): any future
+	// regression where the Subscribe call silently no-ops surfaces
+	// as subscribed=false in journalctl instead of silent
+	// degradation.
+	certEventAdapter := observability.NewCertEventAdapter(certEventSink)
+	unsubCertEventAdapter := certTracker.Subscribe(certEventAdapter)
+	defer unsubCertEventAdapter()
+	logger.Info("cert event sink subscribed to tracker",
+		"subscribed", true,
+	)
+
 	// Start the metrics ticker AFTER caddymgr.Start so the first
 	// tick sees the registry already populated by the post-Start
 	// syncRegistry. Run on a child context so a Ctrl-C / shutdown

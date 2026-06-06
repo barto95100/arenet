@@ -193,7 +193,29 @@ func (t *Tracker) snapshot(e *entry) *CertRuntimeInfo {
 // tracker itself doesn't carry. Reconcile defaults Source to
 // SourceSpecific; the event handler upgrades it to wildcard/apex
 // when it can infer from the cert's primary subject.
+//
+// Delegates to RecordCertWithRenewal with renewal=false — every
+// pre-U.2 caller treated cert_obtained without renewal context.
+// Kept as the legacy entry point so reconcile-from-disk and any
+// other historical caller stays signature-compatible.
 func (t *Tracker) RecordCert(c *CertRuntimeInfo) {
+	t.RecordCertWithRenewal(c, false)
+}
+
+// RecordCertWithRenewal is the U.2 variant of RecordCert that
+// forwards the certmagic event payload's `renewal` bool through
+// the fan-out. The cert_event sink (Step U.2 adapter) uses this
+// to distinguish a fresh issue (Renewal=false) from a successful
+// renewal (Renewal=true) when persisting the row to cert_event —
+// matching certmagic config.go:728 payload semantics (verified
+// during T.1 empirical recon).
+//
+// ReconcileFromDisk continues to call RecordCert (renewal=false)
+// because the disk-state path has no signal to disambiguate; the
+// cert_event row that would result from a reconcile-replay would
+// be a no-op anyway because the listener handles fresh
+// cert_obtained events directly.
+func (t *Tracker) RecordCertWithRenewal(c *CertRuntimeInfo, renewal bool) {
 	if c == nil {
 		return
 	}
@@ -218,17 +240,18 @@ func (t *Tracker) RecordCert(c *CertRuntimeInfo) {
 	e.LastErrorAt = time.Time{}
 	t.mu.Unlock()
 
-	// Forward-compat seam: fan out a synthetic Event so Step T+1
-	// consumers see the obtain through Subscribe. The
-	// ReconcileFromDisk path also calls RecordCert; in that case
-	// the event fires with At=now and Kind=EventCertObtained
-	// without IsRenewal (we don't know from disk-state alone
-	// whether this was the first issuance or a renewal).
+	// Forward-compat seam: fan out a synthetic Event so Subscribe
+	// consumers (Step U.2 cert_event sink, future ACME log
+	// consumers) see the obtain. IsRenewal reflects the
+	// certmagic payload bit when the listener-side caller has
+	// it; reconcile-from-disk passes renewal=false because the
+	// disk-state path can't disambiguate.
 	t.fanOut(Event{
-		Kind:   EventCertObtained,
-		Domain: key,
-		Issuer: c.Issuer,
-		At:     t.now(),
+		Kind:      EventCertObtained,
+		Domain:    key,
+		IsRenewal: renewal,
+		Issuer:    c.Issuer,
+		At:        t.now(),
 	})
 }
 
@@ -278,6 +301,32 @@ func (t *Tracker) RecordObtaining(domain string) {
 	}
 	t.fanOut(Event{
 		Kind:   EventCertObtaining,
+		Domain: key,
+		At:     t.now(),
+	})
+}
+
+// RecordRevoked is the OCSP-revocation hook (Step U.2). Mirror
+// of RecordObtaining: fan-out only, NO state mutation. The
+// cert may still serve requests until certmagic replaces it
+// (per spec §3.6 — the tracker's Status enum has no REVOKED
+// value because the cert remains operationally VALID from the
+// reverse-proxy's POV). The signal is persisted as a
+// security-relevant event in the cert_event table via the
+// adapter that subscribes to the tracker's fan-out.
+//
+// Caddy v2.11.3 / certmagic v0.25.3 emit cert_ocsp_revoked at
+// maintain.go:375 with payload {identifier, certificate};
+// caddymgr's events subscription was extended in U.2 to
+// include the event name, and listener.go dispatches to this
+// method.
+func (t *Tracker) RecordRevoked(domain string) {
+	key := normalizeDomain(domain)
+	if key == "" {
+		return
+	}
+	t.fanOut(Event{
+		Kind:   EventCertOCSPRevoked,
 		Domain: key,
 		At:     t.now(),
 	})

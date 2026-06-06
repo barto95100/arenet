@@ -1198,7 +1198,14 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				},
 			},
 			{
-				"events":  []string{"cert_obtaining", "cert_obtained", "cert_failed"},
+				// Step U.2 added cert_ocsp_revoked to this list
+				// (verified emit site: certmagic v0.25.3
+				// maintain.go:375). Single subscription block per
+				// T.1's AC #18 pattern — adding to the events
+				// array, NOT a parallel block, so the same
+				// arenet_cert_info handler dispatches all four
+				// cert lifecycle signals.
+				"events":  []string{"cert_obtaining", "cert_obtained", "cert_failed", "cert_ocsp_revoked"},
 				"modules": []string{"tls"},
 				"handlers": []map[string]any{
 					{

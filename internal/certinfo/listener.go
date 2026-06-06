@@ -143,6 +143,12 @@ func (h *CaddyEventHandler) Handle(_ context.Context, e caddy.Event) error {
 		if !ok {
 			return nil
 		}
+		// Renewal disambiguation per certmagic config.go:728
+		// payload — verified during T.1 empirical recon. The
+		// bool defaults to false when the field is missing
+		// (cert_obtained from a non-renewal path won't carry
+		// it, and the zero value is the right answer there).
+		renewal := extractBool(e.Data, "renewal")
 		// Re-read the on-disk leaf to pick up the freshly-issued
 		// metadata (NotBefore, NotAfter, SAN list, issuer). The
 		// event payload's certificate_path is the canonical
@@ -151,7 +157,7 @@ func (h *CaddyEventHandler) Handle(_ context.Context, e caddy.Event) error {
 		issuerKey, _ := extractString(e.Data, "issuer")
 		info := buildCertInfoFromEvent(domain, certPath, issuerKey, h.logger)
 		if info != nil {
-			t.RecordCert(info)
+			t.RecordCertWithRenewal(info, renewal)
 		} else {
 			// We know the cert obtained successfully but failed to
 			// read the metadata back from disk (transient I/O,
@@ -159,11 +165,11 @@ func (h *CaddyEventHandler) Handle(_ context.Context, e caddy.Event) error {
 			// the tracker at least knows the domain exists; the
 			// next List() will surface Status=UNKNOWN until reconcile
 			// or a future event fills in metadata.
-			t.RecordCert(&CertRuntimeInfo{
+			t.RecordCertWithRenewal(&CertRuntimeInfo{
 				Domain: domain,
 				Issuer: decodeIssuerLabel(issuerKey),
 				Source: inferSourceFromSubject(domain),
-			})
+			}, renewal)
 		}
 
 	case "cert_failed":
@@ -174,12 +180,43 @@ func (h *CaddyEventHandler) Handle(_ context.Context, e caddy.Event) error {
 		errMsg := extractError(e.Data)
 		t.RecordFailure(domain, errMsg)
 
+	case "cert_ocsp_revoked":
+		// Step U.2 added this dispatch (certmagic maintain.go:375
+		// emit site). The payload carries {identifier, certificate}
+		// but we only need the domain — the cert object would let
+		// us extract OCSP-specific metadata in a future step, but
+		// the cert_event row carries only domain + level + type
+		// + ts per spec §5.2.
+		domain, ok := extractString(e.Data, "identifier")
+		if !ok {
+			return nil
+		}
+		t.RecordRevoked(domain)
+
 	default:
-		// Subscription filters on these three names. Defensive
+		// Subscription filters on these four names. Defensive
 		// no-op for any unexpected event name (cached_managed_cert
 		// etc. flow past us without state change).
 	}
 	return nil
+}
+
+// extractBool reads a bool-typed field from the event data map.
+// Returns false when the field is missing or not a bool. Used
+// for the renewal disambiguation in cert_obtained.
+func extractBool(data map[string]any, key string) bool {
+	if data == nil {
+		return false
+	}
+	raw, ok := data[key]
+	if !ok {
+		return false
+	}
+	b, ok := raw.(bool)
+	if !ok {
+		return false
+	}
+	return b
 }
 
 // buildCertInfoFromEvent re-reads the on-disk leaf at certPath and

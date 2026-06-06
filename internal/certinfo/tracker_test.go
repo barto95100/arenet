@@ -533,3 +533,115 @@ func (c captureHandler) HandleCertEvent(e Event) {
 		c.cb(e)
 	}
 }
+
+// TestTracker_RecordRevoked pins the U.2 OCSP-revocation hook:
+// fan-out only, NO state mutation (the cert may still serve
+// requests until certmagic replaces it). Mirrors
+// TestTracker_RecordObtaining's shape.
+func TestTracker_RecordRevoked(t *testing.T) {
+	tr := NewTracker()
+	tr.RecordCert(&CertRuntimeInfo{
+		Domain:   "x.example.com",
+		NotAfter: time.Now().Add(60 * 24 * time.Hour),
+		Issuer:   "Let's Encrypt",
+	})
+
+	var got Event
+	tr.Subscribe(captureHandler{cb: func(e Event) {
+		if e.Kind == EventCertOCSPRevoked {
+			got = e
+		}
+	}})
+
+	tr.RecordRevoked("x.example.com")
+
+	if got.Kind != EventCertOCSPRevoked {
+		t.Fatalf("EventCertOCSPRevoked not received; got Kind=%q", got.Kind)
+	}
+	if got.Domain != "x.example.com" {
+		t.Errorf("event.Domain = %q, want x.example.com", got.Domain)
+	}
+
+	// Cert metadata UNTOUCHED — Status should still be VALID.
+	info, ok := tr.Get("x.example.com")
+	if !ok {
+		t.Fatalf("Get miss after RecordRevoked — state must NOT be purged")
+	}
+	if info.Status != StatusValid {
+		t.Errorf("Status after RecordRevoked = %q, want VALID (revocation does not change tracker status per spec §3.6)", info.Status)
+	}
+}
+
+// TestTracker_RecordRevoked_EmptyDomain pins the defensive
+// shape: empty/whitespace domain is a no-op (no fan-out).
+func TestTracker_RecordRevoked_EmptyDomain(t *testing.T) {
+	tr := NewTracker()
+	var fanouts int
+	tr.Subscribe(captureHandler{cb: func(Event) { fanouts++ }})
+	tr.RecordRevoked("   ")
+	if fanouts != 0 {
+		t.Errorf("fan-out on empty domain = %d, want 0", fanouts)
+	}
+}
+
+// TestTracker_RecordCertWithRenewal_FansOutRenewalBit pins the
+// U.2 renewal disambiguation: the IsRenewal bool on the
+// fanned-out Event reflects the caller's renewal arg. The
+// adapter relies on this to map the row's Renewal column
+// correctly.
+func TestTracker_RecordCertWithRenewal_FansOutRenewalBit(t *testing.T) {
+	tr := NewTracker()
+	var captured []Event
+	tr.Subscribe(captureHandler{cb: func(e Event) {
+		captured = append(captured, e)
+	}})
+
+	tr.RecordCertWithRenewal(&CertRuntimeInfo{
+		Domain:   "fresh.example.com",
+		NotAfter: time.Now().Add(60 * 24 * time.Hour),
+		Issuer:   "Let's Encrypt",
+	}, false)
+	tr.RecordCertWithRenewal(&CertRuntimeInfo{
+		Domain:   "renewed.example.com",
+		NotAfter: time.Now().Add(60 * 24 * time.Hour),
+		Issuer:   "Let's Encrypt",
+	}, true)
+
+	if len(captured) != 2 {
+		t.Fatalf("captured = %d events, want 2", len(captured))
+	}
+	if captured[0].Kind != EventCertObtained || captured[0].IsRenewal {
+		t.Errorf("captured[0]: %+v, want Obtained/IsRenewal=false", captured[0])
+	}
+	if captured[1].Kind != EventCertObtained || !captured[1].IsRenewal {
+		t.Errorf("captured[1]: %+v, want Obtained/IsRenewal=true", captured[1])
+	}
+}
+
+// TestTracker_RecordCert_LegacyPath_NoRenewal pins the
+// backwards-compat shape: RecordCert (without renewal arg)
+// still delegates to RecordCertWithRenewal with renewal=false.
+// Reconcile-from-disk uses this path, and the resulting
+// fan-out must be unchanged from pre-U.2 semantics.
+func TestTracker_RecordCert_LegacyPath_NoRenewal(t *testing.T) {
+	tr := NewTracker()
+	var got Event
+	tr.Subscribe(captureHandler{cb: func(e Event) {
+		if e.Kind == EventCertObtained {
+			got = e
+		}
+	}})
+
+	tr.RecordCert(&CertRuntimeInfo{
+		Domain:   "x.example.com",
+		NotAfter: time.Now().Add(60 * 24 * time.Hour),
+		Issuer:   "Let's Encrypt",
+	})
+
+	if got.Kind != EventCertObtained {
+		t.Fatalf("EventCertObtained not received; got Kind=%q", got.Kind)
+	}
+	if got.IsRenewal {
+		t.Errorf("legacy RecordCert produced IsRenewal=true; want false (compat default)")
+	}
+}
