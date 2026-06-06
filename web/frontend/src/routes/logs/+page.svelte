@@ -15,8 +15,9 @@
     - Throttle events (Step Q) — rate-limited auth attempts.
     - Auth-failure events (Step Q) — login_failure / oidc_*.
     - Cert lifecycle events (Step U) — obtained / failed /
-      ocsp_revoked. Added by U.5; the page title rename to
-      "Activity log" lands in U.6.
+      ocsp_revoked. Added by U.5 (commit d769cad); the page
+      title rename "Security events" → "Activity log" lands
+      in U.6 (this commit) reflecting the widened scope.
   Each row is mapped to a unified shape sorted ts-desc.
 
   Filters:
@@ -293,8 +294,8 @@
 
 <PageHeader
 	eyebrow="Trafic · Logs"
-	title="Security events"
-	subtitle="Real-time stream of WAF, throttling and authentication-failure events. Full access-log tail (2xx/3xx) is deferred to a future step — see backlog."
+	title="Activity log"
+	subtitle="Flux en temps réel des événements WAF, throttling, échecs d'authentification et cycle de vie des certificats. La capture complète du trafic 2xx/3xx est différée — voir backlog."
 >
 	{#snippet actions()}
 		<button class="tb-btn" onclick={togglePause}>
