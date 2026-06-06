@@ -533,6 +533,45 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		logger.Info("crowdsec event sink running in degraded mode (no persistence)")
 	}
 
+	// Step U.1 — Cert event sink. Subscribes (in U.2) to the
+	// internal/certinfo.Tracker via the AC #18 Subscribe seam
+	// from T.1 (commit 1350777) and persists lifecycle events
+	// to the cert_event table (schema v5). U.1 ships the sink
+	// + the boot-log signal; the actual Subscribe wire-up
+	// arrives with U.2, so this sink starts here with zero
+	// producers and remains idle until then. That's
+	// intentional: U.1's role is to ship a working
+	// infrastructure U.2 can plug into without a second main.go
+	// edit.
+	//
+	// AC #13 degraded-mode mirror: nil obsStore (boot-failed
+	// observability) → adapter returns nil from each flush
+	// (events drop silently rather than inflating
+	// FlushErrBatches). The sink runs as a no-op drain.
+	//
+	// Boot log generalizes the HF4 purger_present=true pattern
+	// (commit 30418ea, backlog #R-API-boot-log-audit): future
+	// wire-up regressions surface as present=false in
+	// journalctl instead of silent degradation.
+	certEventSink := observability.NewCertEventSink(certEventInserterAdapter{obsStore}, logger, observability.CertSinkConfig{})
+	certEventCtx, certEventCancel := context.WithCancel(ctx)
+	if err := certEventSink.Start(certEventCtx); err != nil {
+		certEventCancel()
+		return fmt.Errorf("start cert event sink: %w", err)
+	}
+	defer func() {
+		certEventCancel()
+		if stopErr := certEventSink.Stop(5 * time.Second); stopErr != nil {
+			logger.Error("cert event sink stop timeout", slog.String("err", stopErr.Error()))
+		}
+		logger.Info("cert event sink stopped")
+	}()
+	logger.Info("cert event sink wired",
+		"present", true,
+		"store", obsPath,
+		"degraded", obsStore == nil,
+	)
+
 	// Start the metrics ticker AFTER caddymgr.Start so the first
 	// tick sees the registry already populated by the post-Start
 	// syncRegistry. Run on a child context so a Ctrl-C / shutdown
@@ -1050,6 +1089,30 @@ func (a crowdsecInserterAdapter) MarkDecisionExpired(ctx context.Context, uuid s
 		return nil
 	}
 	return a.store.MarkDecisionExpired(ctx, uuid)
+}
+
+// certEventInserterAdapter satisfies observability.CertInserter
+// by delegating to *observability.Store. Degenerate vs the
+// WAF / throttle / crowdsec adapters because the cert sink
+// already uses observability.CertEvent directly (the sink
+// lives in the same package as the storage shape — no
+// translation needed). The adapter exists only for the
+// nil-store guard (AC #13 degraded mode: nil store → return
+// nil rather than nil-pointer-panic).
+type certEventInserterAdapter struct {
+	store *observability.Store
+}
+
+// InsertCertEventBatch implements observability.CertInserter.
+func (a certEventInserterAdapter) InsertCertEventBatch(ctx context.Context, events []observability.CertEvent) error {
+	if a.store == nil {
+		// Degraded mode (boot-failed observability). Returning
+		// nil rather than an error so the sink records this as
+		// a successful flush; a real error would inflate
+		// FlushErrBatches and mis-attribute the boot failure.
+		return nil
+	}
+	return a.store.InsertCertEventBatch(ctx, events)
 }
 
 func main() {

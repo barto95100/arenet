@@ -53,6 +53,17 @@ const (
 	// for the same reason: heterogeneous retention windows
 	// would create confusing dashboard gaps.
 	RetainDecisionEvents = 30 * 24 * time.Hour
+
+	// RetainCertEvents is how long per-event cert_event rows
+	// are kept at row granularity (Step U, spec §3.2). Set
+	// to 90 days deliberately — matches the Let's Encrypt
+	// certificate lifecycle so an operator investigating a
+	// renewal failure has the full preceding obtain/renewal
+	// history in the Activity log. Longer than the WAF /
+	// throttle / decision horizons because cert events are
+	// far lower volume (tens per day per domain max) and a
+	// renewal cycle is naturally 90d.
+	RetainCertEvents = 90 * 24 * time.Hour
 )
 
 // RetentionRunner runs the hourly rollup + prune loop. Like the
@@ -183,6 +194,15 @@ func (r *RetentionRunner) tick(ctx context.Context) {
 	// N spec §3.7 + §1.3 D8.A).
 	if _, err := r.store.PruneDecisionEventsOlderThan(ctx, now.Add(-RetainDecisionEvents)); err != nil {
 		r.logger.Error("observability: prune decision_event failed", slog.String("err", err.Error()))
+	}
+	// Step U.1: prune cert_event rows older than RetainCertEvents
+	// (90 d at row granularity — see Step U spec §3.2). Longer
+	// horizon than the security tables because a single LE
+	// renewal cycle is 90d, and an operator investigating a
+	// renewal-loop incident needs the full cycle's worth of
+	// obtained/failed events for correlation.
+	if _, err := r.store.PruneCertEventsOlderThan(ctx, now.Add(-RetainCertEvents)); err != nil {
+		r.logger.Error("observability: prune cert_event failed", slog.String("err", err.Error()))
 	}
 }
 

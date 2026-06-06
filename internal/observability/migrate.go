@@ -34,7 +34,7 @@ import (
 //     bucket tables + decision_event table + indexes).
 //
 // Downgrade is not supported.
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -92,6 +92,7 @@ var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
 	1: migrateV1toV2,
 	2: migrateV2toV3,
 	3: migrateV3toV4,
+	4: migrateV4toV5,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -200,6 +201,56 @@ func migrateV3toV4(ctx context.Context, tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_decision_event_ts          ON decision_event (ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_decision_event_value_ts    ON decision_event (value, ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_decision_event_scenario_ts ON decision_event (scenario, ts)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV4toV5 — Step U.1. Creates the cert_event table
+// with the three indexes that match the read patterns the
+// Activity log handler needs (ts for the time-ordered list,
+// domain+ts for per-domain history drill-down, event_type+ts
+// for filtered queries like "show me all failures").
+//
+// Unlike v2/v3/v4 there is no bucket-table column to add: cert
+// events don't aggregate into per-minute counters (volume is
+// too low; a single domain produces a handful of rows per day,
+// per the §3.2 retention rationale). The schema is purely the
+// per-event table.
+//
+// Columns chosen to match the wire shape from spec §5.2
+// (camelCase JSON tags map to snake_case columns). `ts` is
+// seconds-since-epoch consistent with waf_event /
+// throttle_event / decision_event; the brief's "ts_unix_ns"
+// proposal was a transcription drift — uniformity with the
+// existing tables wins so an operator querying metrics.db
+// reads the same unit everywhere.
+//
+// SQLite's CREATE TABLE IF NOT EXISTS makes the migration
+// idempotent under partial-failure replay (a v4→v5 that died
+// after the CREATE but before the schema_version bump
+// re-applies cleanly on next boot).
+func migrateV4toV5(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS cert_event (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  ts INTEGER NOT NULL,
+		  level TEXT NOT NULL,
+		  event_type TEXT NOT NULL,
+		  domain TEXT NOT NULL,
+		  issuer TEXT NOT NULL DEFAULT '',
+		  challenge TEXT NOT NULL DEFAULT '',
+		  renewal INTEGER NOT NULL DEFAULT 0,
+		  error_msg TEXT NOT NULL DEFAULT '',
+		  details TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cert_event_ts            ON cert_event (ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_cert_event_domain_ts     ON cert_event (domain, ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_cert_event_event_type_ts ON cert_event (event_type, ts)`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {
