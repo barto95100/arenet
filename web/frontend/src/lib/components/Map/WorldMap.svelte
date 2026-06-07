@@ -309,7 +309,30 @@
 	// nextEventIdx. Run inside an $effect so prop mutations
 	// from the page (replay batch + per-WS-frame appends)
 	// trigger spawn without double-spawning replayed events.
+	//
+	// V.8.HF2 — gate spawn on `countries !== null`. The
+	// TopoJSON fetch + parse takes ~500-1000 ms on cold
+	// load; the page's replay-then-WS pipeline routinely
+	// delivered events while the map was still blank,
+	// producing arcs animating against an empty black
+	// background that the countries layer then "snapped
+	// in" around (operator video review,
+	// #R-MAP-arc-load-race).
+	//
+	// Reading `countries` here makes the effect re-fire
+	// when the TopoJSON load resolves; nextEventIdx is
+	// NOT advanced on the early-return, so accumulated
+	// events spawn in one batch as soon as countries
+	// becomes available. The {#each arcs} body's
+	// per-tick re-render (HF1) then animates them
+	// against a fully-painted map.
 	$effect(() => {
+		if (countries === null) {
+			// TopoJSON still loading — defer spawn.
+			// Subscribe to countries so the effect re-fires
+			// when it lands.
+			return;
+		}
 		if (arenetLat === null || arenetLon === null) {
 			// Degraded mode — no Arenet target, no arcs.
 			// Skip spawn but DON'T reset nextEventIdx so a

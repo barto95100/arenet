@@ -33,11 +33,14 @@ describe('timing constants', () => {
 });
 
 describe('arcControl', () => {
-	it('returns the midpoint lifted by 30% of the source→target distance', () => {
+	it('returns the midpoint lifted by ARC_ELEVATION_FACTOR (0.15 per HF2) of source→target distance', () => {
 		const [cx, cy] = arcControl([0, 0], [100, 0]);
 		expect(cx).toBe(50);
-		// Midpoint y = 0, lifted by 30% × 100 = 30, so cy = -30.
-		expect(cy).toBe(-30);
+		// Midpoint y = 0, lifted by 15% × 100 = 15, so cy = -15.
+		// (V.8.HF2: was -30 with the original 0.3 factor —
+		// changed to flatten the arc after operator video
+		// review surfaced an end-of-travel descent.)
+		expect(cy).toBe(-15);
 	});
 
 	it('zero-distance produces the same point on x and y', () => {

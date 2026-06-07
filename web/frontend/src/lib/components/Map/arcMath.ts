@@ -22,11 +22,23 @@ export const ARC_TOTAL_MS = ARC_TRAVEL_MS + ARC_FADE_MS;
 
 /**
  * Quadratic Bezier control point for an arc from `source`
- * to `target`. Midpoint lifted 30 % of the Euclidean
- * distance above the line, giving each arc a
- * great-circle feel without paying for an actual
+ * to `target`. Midpoint lifted by ARC_ELEVATION_FACTOR of
+ * the Euclidean distance above the line, giving each arc
+ * a great-circle feel without paying for an actual
  * great-circle projection.
+ *
+ * V.8.HF2: factor lowered from 0.3 → 0.15 after operator
+ * frame-by-frame video review (#R-MAP-arc-curve-asymmetry).
+ * The original 0.3 elevation made the apparent visual
+ * trajectory terminate ~25 px above the Arenet marker
+ * before snapping down in the final ~10 % of animation
+ * — perceived as "destination point is lower than the
+ * arc's curve". 0.15 yields a flatter, more natural arc
+ * that converges smoothly onto the target with no
+ * end-of-travel descent.
  */
+export const ARC_ELEVATION_FACTOR = 0.15;
+
 export function arcControl(
 	source: [number, number],
 	target: [number, number]
@@ -34,7 +46,7 @@ export function arcControl(
 	const mx = (source[0] + target[0]) / 2;
 	const my = (source[1] + target[1]) / 2;
 	const dist = Math.hypot(target[0] - source[0], target[1] - source[1]);
-	return [mx, my - dist * 0.3];
+	return [mx, my - dist * ARC_ELEVATION_FACTOR];
 }
 
 /** Quadratic bezier point at parameter t ∈ [0, 1]. */

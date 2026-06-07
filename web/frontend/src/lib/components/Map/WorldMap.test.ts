@@ -327,6 +327,57 @@ describe('WorldMap — V.6 arc layer', () => {
 // (progress=0 → path collapsed at source) and a later
 // frame (progress>0 → path extends toward the target).
 
+describe('WorldMap — V.8.HF2 TopoJSON load gating', () => {
+	// V.8.HF2 regression: arcs MUST NOT spawn before the
+	// countries layer is painted. Operator video review
+	// surfaced replay arcs animating against a blank black
+	// background while the TopoJSON was still parsing
+	// (~500-1000 ms on cold load), with the countries
+	// "snapping in" around already-moving arcs
+	// (#R-MAP-arc-load-race). The fix gates the spawn
+	// $effect on `countries !== null`; the test mocks a
+	// slow TopoJSON fetch and asserts: 0 arcs while the
+	// fetch is pending, then arcs spawn the moment the
+	// fetch resolves.
+	it('buffers events until TopoJSON loads, then spawns them all', async () => {
+		let resolveFetch: (resp: Response) => void = () => {};
+		const fetchPromise = new Promise<Response>((resolve) => {
+			resolveFetch = resolve;
+		});
+		vi.spyOn(globalThis, 'fetch').mockReturnValue(fetchPromise);
+
+		render(WorldMap, {
+			props: {
+				arenetLat: 48.8566,
+				arenetLon: 2.3522,
+				events: [
+					mkEvent({ category: 'waf', sourceLat: 51.5074, sourceLon: -0.1278 }),
+					mkEvent({ category: 'auth', sourceLat: 35.6762, sourceLon: 139.6503 })
+				]
+			}
+		});
+
+		// Give Svelte a tick to run the spawn effect against
+		// the still-pending TopoJSON. Arcs MUST be empty.
+		await new Promise((r) => setTimeout(r, 30));
+		expect(screen.getByTestId('worldmap-arcs').querySelectorAll('path').length).toBe(0);
+
+		// Resolve the fetch — countries lands, the spawn
+		// effect re-fires, the buffered events spawn.
+		resolveFetch(
+			new Response(JSON.stringify(FIXTURE_TOPOJSON), {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' }
+			})
+		);
+
+		await waitFor(() => {
+			const arcs = screen.getByTestId('worldmap-arcs');
+			expect(arcs.querySelectorAll('path').length).toBe(2);
+		});
+	});
+});
+
 describe('WorldMap — V.8.HF1 tick-driven re-render', () => {
 	beforeEach(() => {
 		vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
