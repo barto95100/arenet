@@ -249,6 +249,59 @@ export function fetchServerPosition(): Promise<ServerPosition> {
 }
 
 /**
+ * Step V.7 — operator-supplied manual override of the
+ * Arenet server position. Backed by V.4 PUT
+ * /api/v1/observability/server-position (commit 822b634).
+ *
+ * Admin-only on the backend (RequireAdminMiddleware in
+ * routes.go); non-admin sessions get 403 surfaced as
+ * ApiError. Validation happens server-side per spec §5.2:
+ *
+ *   - lat ∈ [-90, 90]
+ *   - lon ∈ [-180, 180]
+ *   - city / country: operator display strings (empty OK).
+ *
+ * The wrapper does NOT validate client-side — the page
+ * component owns the inline form-error UX; this keeps
+ * the wire shape honest about which side rejected.
+ *
+ * Returns the saved position (mode="manual",
+ * sourceIp:undefined, detectedAt=time of write).
+ */
+export function putServerPosition(body: {
+	lat: number;
+	lon: number;
+	city: string;
+	country: string;
+}): Promise<ServerPosition> {
+	return request<ServerPosition>('PUT', '/observability/server-position', body);
+}
+
+/**
+ * Step V.7 — re-run the V.1 ipify-then-GeoIP auto-detect
+ * path without rebooting. Backed by V.4 POST
+ * /api/v1/observability/server-position:redetect (commit
+ * 822b634; chi router matches the literal `:redetect`
+ * suffix because chi does not reserve `:`).
+ *
+ * Admin-only. Useful when the operator's public IP
+ * changes (DDNS, network move) and they want the map to
+ * re-center without a restart.
+ *
+ * Per spec §5.3, returns the degraded shape (200 +
+ * degraded:true + zeroed lat/lon) when the redetect
+ * itself fails (network down, MMDB absent). The caller
+ * should branch on the `degraded` flag rather than
+ * treating the 200 as unqualified success.
+ */
+export function redetectServerPosition(): Promise<ServerPosition> {
+	return request<ServerPosition>(
+		'POST',
+		'/observability/server-position:redetect'
+	);
+}
+
+/**
  * Step V.5 — fetch the in-memory geo events ring buffer
  * (V.3 spec §5.4). Used by the /map page on mount to
  * populate the initial paint; the WS stream

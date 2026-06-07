@@ -275,3 +275,103 @@ describe('/map page — V.6 replay + WS', () => {
 		expect(streamCapture.closeCalls).toBe(1);
 	});
 });
+
+describe('/map page — V.7 LAN counter', () => {
+	const happyPosition: ServerPosition = {
+		lat: 48.8566,
+		lon: 2.3522,
+		city: 'Paris',
+		country: 'FR',
+		mode: 'auto'
+	};
+
+	it('does not render the LAN pill when no LAN events have arrived', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		render(MapPage);
+		await waitFor(() => {
+			expect(streamCapture.onEvent).not.toBeNull();
+		});
+		expect(screen.queryByTestId('map-lan-pill')).toBeNull();
+	});
+
+	it('renders the LAN pill once a LAN event arrives', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		render(MapPage);
+		await waitFor(() => {
+			expect(streamCapture.onEvent).not.toBeNull();
+		});
+		streamCapture.onEvent?.(mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 }));
+		await waitFor(() => {
+			expect(screen.getByTestId('map-lan-pill')).toBeInTheDocument();
+			expect(
+				screen.getByTestId('map-lan-pill-count').textContent
+			).toBe('1');
+		});
+	});
+
+	it('increments the LAN count per LAN event (not non-LAN)', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		render(MapPage);
+		await waitFor(() => {
+			expect(streamCapture.onEvent).not.toBeNull();
+		});
+		streamCapture.onEvent?.(mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 }));
+		streamCapture.onEvent?.(mkEvent({ isLan: false })); // non-LAN, no bump
+		streamCapture.onEvent?.(mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 }));
+		streamCapture.onEvent?.(mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 }));
+		await waitFor(() => {
+			expect(
+				screen.getByTestId('map-lan-pill-count').textContent
+			).toBe('3');
+		});
+	});
+
+	it('seeds the LAN counter from the replay', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		fetchGeoEventsReplayMock.mockResolvedValue({
+			events: [
+				mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 }),
+				mkEvent({ isLan: false }),
+				mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 })
+			],
+			total: 3
+		});
+		render(MapPage);
+		await waitFor(() => {
+			expect(screen.getByTestId('map-lan-pill-count').textContent).toBe('2');
+		});
+	});
+
+	it('uses singular "interne" for count=1 and plural "internes" for >1', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		fetchGeoEventsReplayMock.mockResolvedValue({
+			events: [mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 })],
+			total: 1
+		});
+		render(MapPage);
+		await waitFor(() => {
+			const pill = screen.getByTestId('map-lan-pill');
+			expect(pill.textContent ?? '').toContain('interne');
+			expect(pill.textContent ?? '').not.toContain('internes');
+		});
+
+		streamCapture.onEvent?.(mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 }));
+		await waitFor(() => {
+			const pill = screen.getByTestId('map-lan-pill');
+			expect(pill.textContent ?? '').toContain('internes');
+		});
+	});
+
+	it('has a tooltip explaining why LAN events do not arc', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		fetchGeoEventsReplayMock.mockResolvedValue({
+			events: [mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 })],
+			total: 1
+		});
+		render(MapPage);
+		await waitFor(() => {
+			const pill = screen.getByTestId('map-lan-pill');
+			expect(pill.getAttribute('title') ?? '').toContain('LAN');
+		});
+	});
+});

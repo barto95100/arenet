@@ -54,6 +54,7 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
 	import BackupSection from '$lib/components/BackupSection.svelte';
+	import ServerPositionSection from '$lib/components/ServerPositionSection.svelte';
 
 	const options: [
 		{ value: Theme; label: string },
@@ -1266,6 +1267,13 @@
 
 	<!-- ROW 2.9 — Backup & restore (Step K.3 §5.3). -->
 	<BackupSection />
+
+	<!-- ROW 2.95 — Server geographic position (Step V.7 §5.1-§5.3).
+	     Operator-facing UI for the V.4 server-position endpoints:
+	     mode badge (Auto/Manuel/Dégradé), lat/lon/city/country
+	     form with [-90, 90] / [-180, 180] inline validation,
+	     Re-détecter button driving the POST :redetect path. -->
+	<ServerPositionSection />
 
 	<!-- ROW 3 — About, full-width (footer-meta, intentionally aerated) -->
 	<Card padding="p-6">

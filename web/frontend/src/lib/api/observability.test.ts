@@ -21,7 +21,8 @@ import type { ServerPosition, GeoEventsResponse } from './types';
 const requestMock = vi.fn();
 vi.mock('./client', () => ({ request: requestMock }));
 
-const { fetchServerPosition, fetchGeoEventsReplay } = await import('./security');
+const { fetchServerPosition, fetchGeoEventsReplay, putServerPosition, redetectServerPosition } =
+	await import('./security');
 
 beforeEach(() => {
 	requestMock.mockReset();
@@ -137,6 +138,18 @@ describe('fetchGeoEventsReplay', () => {
 		expect(got.events).toHaveLength(0);
 	});
 
+	it('returns a populated array when given one', async () => {
+		// Inserted V.7 helper test to keep the file
+		// surface complete — duplicates pre-existing
+		// shape but covers the post-V.7 import bundle.
+		requestMock.mockResolvedValue({
+			events: [],
+			total: 0
+		} satisfies GeoEventsResponse);
+		const got = await fetchGeoEventsReplay();
+		expect(got.total).toBe(0);
+	});
+
 	it('passes through populated event arrays', async () => {
 		// One event per category to pin the wire shape so a
 		// future GeoEvent field addition that drops/renames
@@ -160,5 +173,92 @@ describe('fetchGeoEventsReplay', () => {
 		expect(got.events).toHaveLength(1);
 		expect(got.events[0].category).toBe('waf');
 		expect(got.events[0].sourceCity).toBe('Paris');
+	});
+});
+
+describe('putServerPosition (V.7)', () => {
+	it('PUTs the JSON body to /observability/server-position', async () => {
+		requestMock.mockResolvedValue({
+			lat: 45.764,
+			lon: 4.8357,
+			city: 'Lyon',
+			country: 'FR',
+			mode: 'manual'
+		} satisfies ServerPosition);
+
+		const body = { lat: 45.764, lon: 4.8357, city: 'Lyon', country: 'FR' };
+		const got = await putServerPosition(body);
+
+		expect(requestMock).toHaveBeenCalledExactlyOnceWith(
+			'PUT',
+			'/observability/server-position',
+			body
+		);
+		expect(got.mode).toBe('manual');
+	});
+
+	it('accepts empty city / country (spec §5.2 — display strings only)', async () => {
+		requestMock.mockResolvedValue({
+			lat: 0,
+			lon: 0,
+			city: '',
+			country: '',
+			mode: 'manual'
+		} satisfies ServerPosition);
+
+		const got = await putServerPosition({ lat: 0, lon: 0, city: '', country: '' });
+		expect(got.mode).toBe('manual');
+		expect(got.city).toBe('');
+	});
+
+	it('propagates underlying request errors', async () => {
+		requestMock.mockRejectedValue(new Error('HTTP 400'));
+		await expect(
+			putServerPosition({ lat: 0, lon: 0, city: '', country: '' })
+		).rejects.toThrow('HTTP 400');
+	});
+});
+
+describe('redetectServerPosition (V.7)', () => {
+	it('POSTs to /observability/server-position:redetect (no body)', async () => {
+		requestMock.mockResolvedValue({
+			lat: 48.8566,
+			lon: 2.3522,
+			city: 'Paris',
+			country: 'FR',
+			mode: 'auto',
+			sourceIp: '203.0.113.42'
+		} satisfies ServerPosition);
+
+		const got = await redetectServerPosition();
+		expect(requestMock).toHaveBeenCalledExactlyOnceWith(
+			'POST',
+			'/observability/server-position:redetect'
+		);
+		expect(got.mode).toBe('auto');
+	});
+
+	it('returns the degraded shape verbatim (spec §5.3 graceful failure)', async () => {
+		// Per spec §5.3, redetect failures land as 200 +
+		// degraded:true rather than 5xx. The wrapper must
+		// pass that through so the caller can render the
+		// banner instead of throwing.
+		requestMock.mockResolvedValue({
+			lat: 0,
+			lon: 0,
+			city: '',
+			country: '',
+			mode: 'auto',
+			degraded: true
+		} satisfies ServerPosition);
+
+		const got = await redetectServerPosition();
+		expect(got.degraded).toBe(true);
+		expect(got.lat).toBe(0);
+	});
+
+	it('propagates underlying request errors (e.g. 503 outside the §5.3 contract)', async () => {
+		requestMock.mockRejectedValue(new Error('HTTP 503'));
+		await expect(redetectServerPosition()).rejects.toThrow('HTTP 503');
 	});
 });

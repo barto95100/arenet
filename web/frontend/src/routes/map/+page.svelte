@@ -65,6 +65,15 @@
 	let events: GeoEvent[] = $state([]);
 	let wsState: GeoEventStreamState = $state('connecting');
 	let wsHandle: GeoEventStreamHandle | null = null;
+	// Step V.7 — LAN counter. WorldMap.svelte skips LAN
+	// events from the arc spawn per spec §3.8 because they
+	// would all originate at the Arenet position and clutter
+	// the world view. To keep that internal traffic visible
+	// to the operator (a sudden LAN spike still means
+	// something), we count it here and surface a small chip
+	// next to the WS status pill. Resets per page mount —
+	// the operator can clear it by reloading the page.
+	let lanCount = $state(0);
 
 	onMount(async () => {
 		// Step 1 — load position. A failure here is fatal:
@@ -88,6 +97,12 @@
 		try {
 			const replay = await fetchGeoEventsReplay(REPLAY_LIMIT);
 			events = replay.events;
+			// V.7 — seed the LAN counter from the replay so a
+			// page reload doesn't reset it to zero when LAN
+			// traffic was already in the ring buffer.
+			for (const ev of replay.events) {
+				if (ev.isLan) lanCount++;
+			}
 		} catch (err) {
 			// eslint-disable-next-line no-console
 			console.warn('[map] geo events replay failed; live stream still attempted', err);
@@ -98,6 +113,13 @@
 		// state-change callback feeds the status pill.
 		wsHandle = openGeoEventStream(
 			(event) => {
+				// V.7 — bump the LAN counter alongside the
+				// events append. The counter increments for
+				// every LAN event regardless of whether the
+				// downstream arc layer renders it (it does
+				// not, per spec §3.8) so the operator's
+				// internal-traffic signal is preserved.
+				if (event.isLan) lanCount++;
 				// Append + cap. Identity churn matters: the
 				// WorldMap $effect watches events.length so
 				// a new tail entry triggers an arc spawn
@@ -152,6 +174,20 @@
 		</div>
 	{/if}
 	<div class="map-frame" data-testid="map-frame">
+		<div class="map-overlay-pills">
+		{#if lanCount > 0}
+			<div
+				class="lan-pill"
+				data-testid="map-lan-pill"
+				data-lan-count={lanCount}
+				role="status"
+				title="Trafic interne (LAN/RFC1918) reçu depuis l'ouverture de la page. Ces événements ne sont pas affichés sur la carte mondiale car leur origine est l'instance Arenet elle-même."
+			>
+				<span class="lan-pill__icon" aria-hidden="true">⌂</span>
+				<span data-testid="map-lan-pill-count">{lanCount}</span>
+				<span class="lan-pill__label">interne{lanCount > 1 ? 's' : ''} (LAN)</span>
+			</div>
+		{/if}
 		<div
 			class="ws-pill ws-pill--{wsState}"
 			data-testid="map-ws-pill"
@@ -168,6 +204,7 @@
 			{:else}
 				Hors ligne
 			{/if}
+		</div>
 		</div>
 		<WorldMap
 			arenetLat={degraded ? null : position.lat}
@@ -217,14 +254,25 @@
 		margin-top: 8px;
 	}
 
+	/* V.7 — top-right pill stack. The WS pill (V.6) and
+	   the LAN counter pill (V.7) share an absolute-
+	   positioned flex row so they line up without each
+	   pill needing its own top/right offset. */
+	.map-overlay-pills {
+		position: absolute;
+		top: 10px;
+		right: 12px;
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		z-index: 1;
+	}
+
 	/* WebSocket status pill — top-right of the map frame.
 	   Mirrors the connection-status surface from the
 	   topology page (the operator's mental model for live
 	   data is already established there). */
 	.ws-pill {
-		position: absolute;
-		top: 10px;
-		right: 12px;
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
@@ -237,8 +285,38 @@
 		background: var(--bg-surface);
 		border: 1px solid var(--border-subtle);
 		border-radius: 999px;
-		z-index: 1;
 		pointer-events: none;
+	}
+
+	/* LAN events counter — same pill shape as the WS pill
+	   so they sit next to each other visually. The tooltip
+	   on hover (title attr on the markup) explains why
+	   these events don't render as arcs. Pointer-events
+	   on so the title attr triggers. */
+	.lan-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 10px;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-secondary);
+		background: var(--bg-surface);
+		border: 1px solid var(--border-subtle);
+		border-radius: 999px;
+		cursor: help;
+	}
+	.lan-pill__icon {
+		font-size: 13px;
+		line-height: 1;
+		color: var(--status-meta);
+	}
+	.lan-pill__label {
+		color: var(--text-muted);
+		text-transform: none;
+		letter-spacing: 0;
 	}
 	.ws-pill__dot {
 		width: 7px;
