@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -49,6 +50,75 @@ var ErrRegistryNotInstalled = errors.New(
 	"metrics: registry not installed; call SetRegistry before caddymgr.Start",
 )
 
+// NormalSubmitter is the seam V.1.2 calls on every eligible
+// successful request. Declared in this package (not as
+// internal/geo.NormalSink) so the metrics module has zero
+// import-time dependency on internal/geo. The production
+// type *geo.DefaultNormalSink satisfies this interface
+// structurally; V.1.3 installs it via SetNormalSubmitter
+// in cmd/arenet/main.go.
+//
+// Tests substitute a stub without needing the geo package
+// (no MMDB, no LRU, no Bus).
+//
+// The signature is (status, srcIP, routeID) — 3 args, no
+// method. The D1 method gate (HEAD/OPTIONS rejected) runs
+// in eligibleForNormal BEFORE Submit is called, so the
+// sink doesn't need to re-check it.
+type NormalSubmitter interface {
+	Submit(status int, srcIP, routeID string)
+}
+
+// ClientIPFunc is the seam for extracting the trusted-proxy-
+// aware client IP from a request. cmd/arenet wires the real
+// implementation (backed by auth.IPExtractor honoring
+// ARENET_TRUSTED_PROXIES); the package default
+// RemoteAddrClientIPFn is a degraded fallback that strips
+// the port from r.RemoteAddr — correct for direct-deployed
+// homelabs, wrong when arenet sits behind another proxy.
+type ClientIPFunc func(r *http.Request) string
+
+// RemoteAddrClientIPFn is the default ClientIPFunc used when
+// SetClientIPFn was never called. Strips the port from
+// r.RemoteAddr; returns the raw string if it can't be
+// parsed (e.g. AF_UNIX socket — shouldn't happen for
+// arenet's HTTP listeners but kept defensive).
+func RemoteAddrClientIPFn(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// hardcodedExcludePaths is the spec §D3 "non-overridable"
+// path-prefix blocklist. Operator's
+// ARENET_NORMAL_TRAFFIC_EXCLUDE_PATHS extends, doesn't
+// replace, this list.
+//
+//   - /healthz: orchestrator probes, not user traffic.
+//   - /metrics: Prometheus scrape, not user traffic.
+//   - /api/v1/ws/topology: the live topology WS stream;
+//     the operator's own dashboard tab opens this on every
+//     /topology page mount.
+//   - /api/v1/ws/geo-events: the V.3 WS stream that
+//     delivers the very arcs we're about to emit. Without
+//     this exclusion, opening /map triggers a WS upgrade
+//     → arenet emits a "normal" event for the upgrade →
+//     enricher publishes the event back over the same WS
+//     → operator sees their own connection arc on the
+//     map. Pre-empted per the V.1 spec freeze §7 finding
+//     (commit e87269f).
+var hardcodedExcludePaths = []string{
+	"/healthz",
+	"/metrics",
+	"/api/v1/ws/topology",
+	"/api/v1/ws/geo-events",
+}
+
 func init() {
 	caddy.RegisterModule(RouteMetricsHandler{})
 }
@@ -64,10 +134,34 @@ type RouteMetricsHandler struct {
 	// empty).
 	RouteID string `json:"route_id,omitempty"`
 
+	// ExcludePaths is the operator-configurable path-prefix
+	// blocklist for V.1 normal-traffic emission (spec §D3).
+	// Extends (does NOT replace) hardcodedExcludePaths. Each
+	// entry is matched as a prefix against r.URL.Path. Set
+	// from JSON config — caddymgr threads the env-var
+	// extension into the route-handler emit.
+	//
+	// Empty (default) means only the hardcoded list applies.
+	ExcludePaths []string `json:"exclude_paths,omitempty"`
+
 	// registry is resolved at Provision time. Not serialized: Caddy
 	// instantiates modules from JSON and cannot inject Go pointers
 	// (spec §3.4).
 	registry *Registry
+
+	// normalSink is resolved at Provision time from the
+	// process-wide GlobalNormalSubmitter(). Nil when V.1 is
+	// disabled (the operator never set
+	// ARENET_NORMAL_TRAFFIC_SAMPLE_PCT, or set it to 0); in
+	// that case the defer's V.1 branch is a single nil-check
+	// — no measurable per-request cost.
+	normalSink NormalSubmitter
+
+	// clientIP resolves the trusted-proxy-aware client IP.
+	// Resolved at Provision via GlobalClientIPFn(); falls
+	// back to RemoteAddrClientIPFn when SetClientIPFn was
+	// never called. Never nil at request time.
+	clientIP ClientIPFunc
 }
 
 // CaddyModule returns the module info. Required by the Caddy module
@@ -83,12 +177,24 @@ func (RouteMetricsHandler) CaddyModule() caddy.ModuleInfo {
 // Provision is called once per handler instance after the JSON
 // config is loaded and before Validate. Resolves the process-wide
 // Registry or returns ErrRegistryNotInstalled.
+//
+// V.1.2 also resolves the optional NormalSubmitter +
+// ClientIPFn here so the ServeHTTP hot path reads from
+// stable handler fields rather than re-walking the
+// globals on every request. A nil normalSink is fine —
+// V.1 is opt-in and the middleware no-ops when unset.
 func (h *RouteMetricsHandler) Provision(_ caddy.Context) error {
 	r := GlobalRegistry()
 	if r == nil {
 		return ErrRegistryNotInstalled
 	}
 	h.registry = r
+	// V.1.2 — optional resolutions. Both fall back safely:
+	//   - normalSink nil → defer's V.1 branch skipped.
+	//   - clientIP is never nil (GlobalClientIPFn falls
+	//     back to RemoteAddrClientIPFn).
+	h.normalSink = GlobalNormalSubmitter()
+	h.clientIP = GlobalClientIPFn()
 	return nil
 }
 
@@ -125,8 +231,61 @@ func (h *RouteMetricsHandler) ServeHTTP(
 	defer func() {
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		h.registry.Inc(h.RouteID, rec.status, durMs)
+
+		// V.1.2 — normal-traffic geo emission. Gates here
+		// are SHORT-CIRCUITS (status / method / path);
+		// the sink owns the sampling / RFC1918 / cooldown
+		// decision (spec §D9). When normalSink is nil
+		// (V.1 disabled), the whole branch is a single
+		// nil-check — no measurable per-request cost.
+		if h.normalSink != nil && h.eligibleForNormal(r, rec.status) {
+			h.normalSink.Submit(rec.status, h.clientIP(r), h.RouteID)
+		}
 	}()
 	return next.ServeHTTP(rec, r)
+}
+
+// eligibleForNormal applies the spec §D1 + §D3 gates that
+// run UPSTREAM of the sink. Pure function (method on
+// handler only for the ExcludePaths field access);
+// testable in isolation.
+//
+// Reject rules (in order):
+//   - status outside [200, 399]                       (D1)
+//   - status == 304                                   (D1)
+//   - status < 200 (1xx — e.g. 101 Switching Protocols WS upgrade) (D1)
+//   - method == HEAD                                  (D1)
+//   - method == OPTIONS                               (D1)
+//   - r.URL.Path has a prefix in hardcodedExcludePaths (D3)
+//   - r.URL.Path has a prefix in h.ExcludePaths        (D3)
+//
+// All other status/method/path combinations are eligible;
+// the sink's gates (D2 LAN, D9 sampling/cooldown) decide
+// whether to emit.
+func (h *RouteMetricsHandler) eligibleForNormal(r *http.Request, status int) bool {
+	// D1 — status class. Reject 1xx, 4xx, 5xx (and the
+	// 304-NotModified asset-cache hit per spec §D1).
+	if status < 200 || status >= 400 || status == http.StatusNotModified {
+		return false
+	}
+	// D1 — method. Reject probes / preflights.
+	if r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return false
+	}
+	// D3 — hardcoded path exclusion (non-overridable).
+	path := r.URL.Path
+	for _, p := range hardcodedExcludePaths {
+		if strings.HasPrefix(path, p) {
+			return false
+		}
+	}
+	// D3 — operator-configured path exclusion (extension).
+	for _, p := range h.ExcludePaths {
+		if strings.HasPrefix(path, p) {
+			return false
+		}
+	}
+	return true
 }
 
 // Interface guards: compile-time assertions of the Caddy interfaces

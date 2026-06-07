@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
@@ -327,5 +328,427 @@ func TestRouteMetrics_StatusRecorder_DefaultIsOK(t *testing.T) {
 	rec := newStatusRecorder(httptest.NewRecorder())
 	if rec.Status() != http.StatusOK {
 		t.Errorf("default Status()=%d want %d", rec.Status(), http.StatusOK)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step V.1.2 — eligibleForNormal gate tests.
+//
+// Pure-function tests that don't need a Caddy module
+// lifecycle. Constructs a bare RouteMetricsHandler with
+// just the ExcludePaths field set as needed.
+
+// recordingNormalSink is the test stub that captures Submit
+// calls. Mirrors the V.1.1 sink tests' countingLANCounter
+// shape. Concurrent-safe via the sync.Mutex on calls.
+type recordingNormalSink struct {
+	mu    sync.Mutex
+	calls []recordingNormalSinkCall
+}
+
+type recordingNormalSinkCall struct {
+	status int
+	srcIP  string
+	route  string
+}
+
+func (s *recordingNormalSink) Submit(status int, srcIP, routeID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, recordingNormalSinkCall{status: status, srcIP: srcIP, route: routeID})
+}
+
+func (s *recordingNormalSink) snapshot() []recordingNormalSinkCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]recordingNormalSinkCall, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
+func newReqForGate(method, path string) *http.Request {
+	r := httptest.NewRequest(method, "http://test.local"+path, nil)
+	r.RemoteAddr = "203.0.113.7:54321"
+	return r
+}
+
+func TestEligibleForNormal_StatusCodes(t *testing.T) {
+	h := &RouteMetricsHandler{RouteID: "r1"}
+	cases := []struct {
+		name   string
+		status int
+		want   bool
+	}{
+		{"100 continue rejected (1xx)", 100, false},
+		{"101 switching protocols rejected (1xx)", 101, false},
+		{"200 OK accepted", 200, true},
+		{"204 No Content accepted", 204, true},
+		{"301 Moved accepted (3xx)", 301, true},
+		{"302 Found accepted (3xx)", 302, true},
+		{"304 Not Modified REJECTED (D1 carve-out)", 304, false},
+		{"307 Temporary Redirect accepted (3xx)", 307, true},
+		{"308 Permanent Redirect accepted (3xx)", 308, true},
+		{"400 Bad Request rejected (4xx)", 400, false},
+		{"401 Unauthorized rejected (4xx)", 401, false},
+		{"403 Forbidden rejected (4xx)", 403, false},
+		{"404 Not Found rejected (4xx)", 404, false},
+		{"429 Too Many Requests rejected (4xx)", 429, false},
+		{"500 ISE rejected (5xx)", 500, false},
+		{"502 Bad Gateway rejected (5xx)", 502, false},
+		{"503 Unavailable rejected (5xx)", 503, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := newReqForGate(http.MethodGet, "/")
+			if got := h.eligibleForNormal(req, c.status); got != c.want {
+				t.Errorf("status=%d → got %v want %v", c.status, got, c.want)
+			}
+		})
+	}
+}
+
+func TestEligibleForNormal_Methods(t *testing.T) {
+	h := &RouteMetricsHandler{RouteID: "r1"}
+	cases := []struct {
+		method string
+		want   bool
+	}{
+		{http.MethodGet, true},
+		{http.MethodPost, true},
+		{http.MethodPut, true},
+		{http.MethodDelete, true},
+		{http.MethodPatch, true},
+		{http.MethodHead, false},    // D1: probe-class, rejected
+		{http.MethodOptions, false}, // D1: preflight, rejected
+		// Trace + Connect are exotic; not explicitly listed in
+		// the spec but accepted by default (anything not in
+		// the reject list passes). Pin both to the current
+		// behavior so a future spec tightening surfaces here.
+		{http.MethodTrace, true},
+		{http.MethodConnect, true},
+	}
+	for _, c := range cases {
+		t.Run(c.method, func(t *testing.T) {
+			req := newReqForGate(c.method, "/api/v1/some-endpoint")
+			if got := h.eligibleForNormal(req, 200); got != c.want {
+				t.Errorf("method=%s → got %v want %v", c.method, got, c.want)
+			}
+		})
+	}
+}
+
+func TestEligibleForNormal_HardcodedExclude(t *testing.T) {
+	h := &RouteMetricsHandler{RouteID: "r1"}
+	// Each hardcoded prefix MUST reject. Subpaths under the
+	// prefix MUST also reject (HasPrefix semantics — pins
+	// the D3 contract that a future regex-based matcher
+	// can't silently change the semantics).
+	for _, prefix := range hardcodedExcludePaths {
+		t.Run("exact "+prefix, func(t *testing.T) {
+			req := newReqForGate(http.MethodGet, prefix)
+			if h.eligibleForNormal(req, 200) {
+				t.Errorf("path=%s should be rejected (hardcoded exclude)", prefix)
+			}
+		})
+		t.Run("subpath under "+prefix, func(t *testing.T) {
+			req := newReqForGate(http.MethodGet, prefix+"/sub/resource")
+			if h.eligibleForNormal(req, 200) {
+				t.Errorf("path=%s/sub/resource should be rejected (HasPrefix)", prefix)
+			}
+		})
+	}
+}
+
+func TestEligibleForNormal_HardcodedExclude_IncludesGeoEventsWSPreempt(t *testing.T) {
+	// Pin the spec-freeze §7 finding: /api/v1/ws/geo-events
+	// MUST be in the hardcoded list to pre-empt the
+	// meta-recursion (opening /map → WS upgrade → emit
+	// normal event for the upgrade → publish back over
+	// the same WS → operator sees own connection arc).
+	// A future regression that drops this entry from the
+	// hardcoded list fails this test immediately.
+	found := false
+	for _, p := range hardcodedExcludePaths {
+		if p == "/api/v1/ws/geo-events" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("/api/v1/ws/geo-events MUST be in hardcodedExcludePaths (spec-freeze §7 meta-recursion pre-empt)")
+	}
+}
+
+func TestEligibleForNormal_ConfiguredExclude(t *testing.T) {
+	h := &RouteMetricsHandler{
+		RouteID:      "r1",
+		ExcludePaths: []string{"/internal/probes", "/v2/heartbeat"},
+	}
+	cases := []struct {
+		path string
+		want bool
+	}{
+		// Configured exclude — direct hit + subpath.
+		{"/internal/probes", false},
+		{"/internal/probes/foo", false},
+		{"/v2/heartbeat", false},
+		{"/v2/heartbeat/check", false},
+		// Adjacent paths NOT excluded (prefix semantics).
+		{"/internal/something-else", true},
+		{"/v2/health", true},
+		// Standard public path — passes.
+		{"/api/v1/widgets", true},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			req := newReqForGate(http.MethodGet, c.path)
+			if got := h.eligibleForNormal(req, 200); got != c.want {
+				t.Errorf("path=%s → got %v want %v", c.path, got, c.want)
+			}
+		})
+	}
+}
+
+func TestEligibleForNormal_ConfiguredExcludeExtends_NotReplaces(t *testing.T) {
+	// Hardcoded list still applies even when ExcludePaths
+	// is non-empty — operator extension never replaces
+	// the floor.
+	h := &RouteMetricsHandler{
+		RouteID:      "r1",
+		ExcludePaths: []string{"/custom"},
+	}
+	req := newReqForGate(http.MethodGet, "/healthz")
+	if h.eligibleForNormal(req, 200) {
+		t.Error("/healthz must remain rejected even with ExcludePaths set (extension semantics)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step V.1.2 — ServeHTTP Submit integration tests.
+
+func TestServeHTTP_NilSink_NoCrash(t *testing.T) {
+	// V.1 disabled path (normalSink=nil). ServeHTTP must
+	// process requests without panicking. The V.1 defer
+	// branch is a single nil-check.
+	t.Cleanup(ResetForTest)
+	ResetForTest()
+
+	reg := NewRegistry()
+	reg.Sync([]string{"r1"})
+	h := newTestHandler(t, reg, "r1")
+	// normalSink intentionally not set.
+
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusOK)
+		return nil
+	})
+	req := newReqForGate(http.MethodGet, "/")
+	rec := httptest.NewRecorder()
+	if err := h.ServeHTTP(rec, req, next); err != nil {
+		t.Fatalf("ServeHTTP returned %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status=%d want 200", rec.Code)
+	}
+}
+
+func TestServeHTTP_CallsSubmit_WhenEligible(t *testing.T) {
+	t.Cleanup(ResetForTest)
+	ResetForTest()
+
+	sink := &recordingNormalSink{}
+	reg := NewRegistry()
+	reg.Sync([]string{"r1"})
+	h := newTestHandler(t, reg, "r1")
+	h.normalSink = sink
+	h.clientIP = func(r *http.Request) string { return "203.0.113.42" }
+
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusOK)
+		return nil
+	})
+	req := newReqForGate(http.MethodGet, "/api/v1/widgets")
+	rec := httptest.NewRecorder()
+	if err := h.ServeHTTP(rec, req, next); err != nil {
+		t.Fatalf("ServeHTTP returned %v", err)
+	}
+	calls := sink.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("Submit calls=%d, want 1", len(calls))
+	}
+	got := calls[0]
+	if got.status != 200 || got.srcIP != "203.0.113.42" || got.route != "r1" {
+		t.Errorf("Submit args = %+v want {status:200 srcIP:203.0.113.42 route:r1}", got)
+	}
+}
+
+func TestServeHTTP_DoesNotCallSubmit_WhenExcluded(t *testing.T) {
+	t.Cleanup(ResetForTest)
+	ResetForTest()
+
+	sink := &recordingNormalSink{}
+	reg := NewRegistry()
+	reg.Sync([]string{"r1"})
+	h := newTestHandler(t, reg, "r1")
+	h.normalSink = sink
+	h.clientIP = RemoteAddrClientIPFn
+
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusOK)
+		return nil
+	})
+	// /healthz is hardcoded-excluded.
+	req := newReqForGate(http.MethodGet, "/healthz")
+	if err := h.ServeHTTP(httptest.NewRecorder(), req, next); err != nil {
+		t.Fatalf("ServeHTTP returned %v", err)
+	}
+	if got := len(sink.snapshot()); got != 0 {
+		t.Errorf("Submit calls on /healthz = %d, want 0", got)
+	}
+}
+
+func TestServeHTTP_DoesNotCallSubmit_WhenStatusRejected(t *testing.T) {
+	t.Cleanup(ResetForTest)
+	ResetForTest()
+
+	sink := &recordingNormalSink{}
+	reg := NewRegistry()
+	reg.Sync([]string{"r1"})
+	h := newTestHandler(t, reg, "r1")
+	h.normalSink = sink
+	h.clientIP = RemoteAddrClientIPFn
+
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusInternalServerError) // 500 — rejected
+		return nil
+	})
+	req := newReqForGate(http.MethodGet, "/api/v1/widgets")
+	if err := h.ServeHTTP(httptest.NewRecorder(), req, next); err != nil {
+		t.Fatalf("ServeHTTP returned %v", err)
+	}
+	if got := len(sink.snapshot()); got != 0 {
+		t.Errorf("Submit calls on 5xx response = %d, want 0", got)
+	}
+}
+
+func TestServeHTTP_Provision_ResolvesNormalSinkAndClientIP(t *testing.T) {
+	// AC #11 path — Provision installs the optional V.1
+	// dependencies from the globals. Pinned so a future
+	// regression (e.g. Provision dropping the V.1 lines)
+	// surfaces without needing a full ServeHTTP round.
+	t.Cleanup(ResetForTest)
+	ResetForTest()
+
+	reg := NewRegistry()
+	SetRegistry(reg)
+	sink := &recordingNormalSink{}
+	SetNormalSubmitter(sink)
+	customIPFn := func(r *http.Request) string { return "custom" }
+	SetClientIPFn(customIPFn)
+
+	h := &RouteMetricsHandler{RouteID: "r1"}
+	if err := h.Provision(caddy.Context{}); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if h.normalSink == nil {
+		t.Error("Provision must resolve normalSink from GlobalNormalSubmitter()")
+	}
+	if h.clientIP == nil {
+		t.Error("Provision must resolve clientIP from GlobalClientIPFn()")
+	}
+}
+
+func TestServeHTTP_Provision_NoNormalSink_StillProvisionsCleanly(t *testing.T) {
+	// V.1 disabled path is the default (SAMPLE_PCT=0 in
+	// production → SetNormalSubmitter never called).
+	// Provision MUST succeed regardless.
+	t.Cleanup(ResetForTest)
+	ResetForTest()
+
+	reg := NewRegistry()
+	SetRegistry(reg)
+	// SetNormalSubmitter intentionally NOT called.
+
+	h := &RouteMetricsHandler{RouteID: "r1"}
+	if err := h.Provision(caddy.Context{}); err != nil {
+		t.Fatalf("Provision: %v (V.1 disabled should not gate Provision)", err)
+	}
+	if h.normalSink != nil {
+		t.Errorf("normalSink=%T want nil (no SetNormalSubmitter call)", h.normalSink)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step V.1.2 — ClientIPFunc fallback + SetClientIPFn.
+
+func TestRemoteAddrClientIPFn_StripsPort(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://test.local/", nil)
+	r.RemoteAddr = "10.0.0.5:54321"
+	if got := RemoteAddrClientIPFn(r); got != "10.0.0.5" {
+		t.Errorf("RemoteAddrClientIPFn=%q want %q", got, "10.0.0.5")
+	}
+}
+
+func TestRemoteAddrClientIPFn_IPv6WithPort(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://test.local/", nil)
+	r.RemoteAddr = "[::1]:54321"
+	// net.SplitHostPort strips the brackets — caller sees "::1".
+	if got := RemoteAddrClientIPFn(r); got != "::1" {
+		t.Errorf("RemoteAddrClientIPFn=%q want %q", got, "::1")
+	}
+}
+
+func TestRemoteAddrClientIPFn_Malformed_ReturnsRawString(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://test.local/", nil)
+	r.RemoteAddr = "garbage-no-port"
+	// Fallback: SplitHostPort errors → return raw string.
+	if got := RemoteAddrClientIPFn(r); got != "garbage-no-port" {
+		t.Errorf("RemoteAddrClientIPFn=%q want %q", got, "garbage-no-port")
+	}
+}
+
+func TestRemoteAddrClientIPFn_NilRequest(t *testing.T) {
+	if got := RemoteAddrClientIPFn(nil); got != "" {
+		t.Errorf("RemoteAddrClientIPFn(nil)=%q want \"\"", got)
+	}
+}
+
+func TestGlobalClientIPFn_FallbackWhenUnset(t *testing.T) {
+	t.Cleanup(ResetForTest)
+	ResetForTest()
+	fn := GlobalClientIPFn()
+	if fn == nil {
+		t.Fatal("GlobalClientIPFn() returned nil; must fall back to RemoteAddrClientIPFn")
+	}
+	r := httptest.NewRequest(http.MethodGet, "http://test.local/", nil)
+	r.RemoteAddr = "9.9.9.9:1234"
+	if got := fn(r); got != "9.9.9.9" {
+		t.Errorf("fallback fn returned %q want 9.9.9.9", got)
+	}
+}
+
+func TestSetGlobalNormalSubmitter_RoundTrip(t *testing.T) {
+	t.Cleanup(ResetForTest)
+	ResetForTest()
+	sink := &recordingNormalSink{}
+	SetNormalSubmitter(sink)
+	got := GlobalNormalSubmitter()
+	if got != sink {
+		t.Errorf("GlobalNormalSubmitter()=%p want %p", got, sink)
+	}
+}
+
+func TestSetGlobalNormalSubmitter_AcceptsReassignment(t *testing.T) {
+	// Unlike SetRegistry's once-only guard, SetNormalSubmitter
+	// allows re-installation (future runtime reload of the
+	// V.1 sink config). Pin the current behavior.
+	t.Cleanup(ResetForTest)
+	ResetForTest()
+	s1 := &recordingNormalSink{}
+	s2 := &recordingNormalSink{}
+	SetNormalSubmitter(s1)
+	SetNormalSubmitter(s2)
+	if GlobalNormalSubmitter() != s2 {
+		t.Errorf("re-installation did not take effect; got %p want %p", GlobalNormalSubmitter(), s2)
 	}
 }
