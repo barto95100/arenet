@@ -1337,3 +1337,92 @@ export interface CertEventsResponse {
 	hasMore: boolean;
 	degraded?: boolean;
 }
+
+/**
+ * Step V — geographic threat map.
+ *
+ * Wire shape of GET /api/v1/observability/server-position
+ * (spec §5.1). Locked to the V.4 backend handler in
+ * internal/api/server_position_handler.go's
+ * serverPositionResponse — camelCase JSON tags map to the
+ * snake_case storage columns 1-to-1.
+ *
+ * `mode` is "auto" when the V.1 ipify-then-GeoIP path
+ * produced the position, "manual" when the operator
+ * persisted an override via PUT.
+ *
+ * `degraded` is true when no GeoIP MMDB is loaded AND no
+ * manual override exists. In that case `lat`, `lon`, `city`,
+ * `country`, `sourceIp`, `detectedAt` collapse to their
+ * zero values per the spec §5.1 degraded shape — the
+ * frontend renders a banner + falls back to a world-
+ * centered Mercator.
+ *
+ * `sourceIp` and `detectedAt` are omitted by the backend
+ * (omitempty) on the manual override path. Declared
+ * optional on the wire so the typecheck doesn't require
+ * the frontend to assert non-emptiness it can never
+ * guarantee.
+ */
+export interface ServerPosition {
+	lat: number;
+	lon: number;
+	city: string;
+	country: string;
+	mode: 'auto' | 'manual';
+	sourceIp?: string;
+	detectedAt?: string;
+	degraded?: boolean;
+}
+
+/**
+ * Step V — GeoEvent wire shape (spec §5.6). Locked enum on
+ * `category`: 5 values, no `cert` — cert events live in the
+ * Activity log via Step U, NOT in the geo map (the V.2
+ * decision honored §5.6 line 515's locked enum over §6
+ * AC #2's mention of cert enrichment).
+ *
+ * `sourceLat` / `sourceLon` are 0 when the GeoIP lookup is
+ * degraded (no MMDB) or when the source IP is RFC1918 (LAN
+ * sources render at the Arenet position with an `(LAN)`
+ * label per spec §3.8). `sourceCountry` is `"UNK"` in the
+ * degraded case.
+ *
+ * `isLan` is true for RFC1918 / loopback / link-local
+ * addresses. The frontend uses this flag to render the
+ * Arenet-centered loop arc instead of a real source-to-
+ * Arenet arc.
+ *
+ * `statusCode` / `routeId` / `details` are operator-facing
+ * tooltip metadata; populated when known, empty otherwise.
+ */
+export type GeoEventCategory = 'normal' | 'throttle' | 'waf' | 'crowdsec' | 'auth';
+
+export interface GeoEvent {
+	timestamp: string;
+	category: GeoEventCategory;
+	sourceIp: string;
+	sourceLat: number;
+	sourceLon: number;
+	sourceCountry: string;
+	sourceCity: string;
+	isLan: boolean;
+	statusCode?: number;
+	routeId?: string;
+	details: string;
+}
+
+/**
+ * Wire shape of GET /api/v1/observability/geo-events (V.3
+ * replay endpoint, spec §5.4). `total` is the ring buffer's
+ * current size — events do NOT persist across restart
+ * (in-memory N=500 per spec §3.5).
+ *
+ * `degraded` is true when the GeoIP lookup is degraded —
+ * events still flow but with empty country/lat/lon.
+ */
+export interface GeoEventsResponse {
+	events: GeoEvent[];
+	total: number;
+	degraded?: boolean;
+}

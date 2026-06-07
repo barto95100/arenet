@@ -14,8 +14,10 @@ import type {
 	CertEventLevel,
 	CertEventsResponse,
 	DecisionsResponse,
+	GeoEventsResponse,
 	MetricWindow,
 	OwaspCategory,
+	ServerPosition,
 	ThrottleEventsResponse,
 	WafEventsByRuleResponse,
 	WafEventsResponse
@@ -228,4 +230,46 @@ export function fetchCertEvents(
 	if (params.search) qs.set('search', params.search);
 	const suffix = qs.toString() ? `?${qs.toString()}` : '';
 	return request<CertEventsResponse>('GET', `/observability/cert-events${suffix}`);
+}
+
+/**
+ * Step V.5 — fetch the Arenet server's current geographic
+ * position for the /map page's Mercator center + central
+ * pin. Backed by the V.4 GET /api/v1/observability/server-
+ * position endpoint.
+ *
+ * AC #13 degraded-mode path: when no GeoIP MMDB is loaded
+ * AND no manual override exists, the response carries
+ * `degraded: true` with zeroed lat/lon. Callers MUST check
+ * the flag and render the "GeoIP not configured" banner
+ * rather than placing a marker at (0, 0).
+ */
+export function fetchServerPosition(): Promise<ServerPosition> {
+	return request<ServerPosition>('GET', '/observability/server-position');
+}
+
+/**
+ * Step V.5 — fetch the in-memory geo events ring buffer
+ * (V.3 spec §5.4). Used by the /map page on mount to
+ * populate the initial paint; the WS stream
+ * /api/v1/ws/geo-events overlays live events on top (V.6).
+ *
+ * `limit` defaults to 100 server-side, clamped at 500.
+ * Callers SHOULD pass an explicit value when they know
+ * what window they want; the default is sized for a
+ * comfortable mount-time paint.
+ *
+ * AC #13 degraded-mode path: the response carries
+ * `degraded: true` when the GeoIP lookup is degraded —
+ * events still flow but with empty country/lat/lon. The
+ * frontend can render a banner alongside the map.
+ *
+ * V.5 EXPORTS this function but does NOT consume it — V.6
+ * wires the replay-then-WS pipeline. Ships now so the wire
+ * contract lands in one commit and V.6 reads the test
+ * harness from this file.
+ */
+export function fetchGeoEventsReplay(limit?: number): Promise<GeoEventsResponse> {
+	const suffix = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : '';
+	return request<GeoEventsResponse>('GET', `/observability/geo-events${suffix}`);
 }
