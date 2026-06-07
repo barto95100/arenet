@@ -16,7 +16,10 @@
 
 package metrics
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // Process-wide Registry singleton (spec §3.4).
 //
@@ -35,30 +38,32 @@ var (
 )
 
 // Step V.1.2 — process-wide NormalSubmitter + ClientIPFn
-// singletons. Same rationale as globalRegistry: the Caddy
-// module is provisioned from JSON config and cannot
-// receive Go pointers through its struct fields. main()
-// installs both before caddymgr.Start so the module's
-// Provision (which runs during Start's config apply)
-// observes non-nil values.
+// singletons. Defaults are nil / fallback so the V.1
+// branch in the middleware no-ops when V.1 is disabled
+// (operator never set ARENET_NORMAL_TRAFFIC_SAMPLE_PCT,
+// or set it to 0).
 //
-// Both default to safe no-op behavior when unset:
-//   - GlobalNormalSubmitter()   → nil → middleware's defer
-//     sees normalSink==nil and
-//     skips the V.1 branch.
-//   - GlobalClientIPFn()        → fallback closure that
-//     strips r.RemoteAddr's
-//     port (no trusted-proxy
-//     awareness; degraded but
-//     safe).
+// V.1.3 install-order constraint: the geoBus + geoEnricher
+// + DefaultNormalSink are constructed in cmd/arenet/main.go
+// AFTER mgr.Start (the Caddy reload path needs an
+// observability store, MMDB lookup, etc. that all live
+// later in the boot sequence). So the Caddy module's
+// Provision (which runs DURING mgr.Start) cannot cache
+// the sink on the handler — at Provision time the global
+// is still nil. To make late installation visible to
+// already-provisioned handlers, the middleware re-reads
+// the global on EVERY request via atomic.Pointer (the
+// only sync primitive that gives lock-free reads on the
+// hot path). SetNormalSubmitter writes through the same
+// atomic; per-request reads are nanoseconds and the
+// branch is short-circuited anyway when the value is nil.
 //
-// V.1.3 installs the real values from cmd/arenet/main.go.
+// ClientIPFn follows the same pattern. main() can call
+// SetClientIPFn at any point during boot; the next
+// request reads the live value.
 var (
-	globalNormalSubmitter NormalSubmitter
-	globalNormalMu        sync.RWMutex
-
-	globalClientIPFn   ClientIPFunc
-	globalClientIPOnce sync.Once
+	globalNormalSubmitter atomic.Pointer[NormalSubmitter]
+	globalClientIPFn      atomic.Pointer[ClientIPFunc]
 )
 
 // SetRegistry installs the process-wide registry. Safe to call from
@@ -88,62 +93,63 @@ func GlobalRegistry() *Registry {
 func ResetForTest() {
 	globalOnce = sync.Once{}
 	globalRegistry = nil
-	globalNormalMu.Lock()
-	globalNormalSubmitter = nil
-	globalNormalMu.Unlock()
-	globalClientIPOnce = sync.Once{}
-	globalClientIPFn = nil
+	globalNormalSubmitter.Store(nil)
+	globalClientIPFn.Store(nil)
 }
 
 // SetNormalSubmitter installs the V.1 normal-traffic sink.
-// Safe to call from any goroutine. Re-callable (unlike
-// SetRegistry) — V.1.3's wiring may swap the sink on a
-// runtime config reload in a future increment, so the
-// once-only guard isn't appropriate.
+// Safe to call from any goroutine. Re-callable (V.1.3 may
+// swap the sink after mgr.Start has provisioned the Caddy
+// modules — atomic.Pointer makes the swap immediately
+// visible to all already-provisioned handlers).
 //
 // Pass nil to disable the V.1 branch in the middleware's
-// defer (the resolver below returns nil → the middleware
-// short-circuits).
+// defer.
 func SetNormalSubmitter(s NormalSubmitter) {
-	globalNormalMu.Lock()
-	globalNormalSubmitter = s
-	globalNormalMu.Unlock()
+	if s == nil {
+		globalNormalSubmitter.Store(nil)
+		return
+	}
+	globalNormalSubmitter.Store(&s)
 }
 
-// GlobalNormalSubmitter returns the installed sink, or nil
-// when V.1 is disabled / unset. The Caddy module's
-// Provision call reads this once and stores the result on
-// the handler; per-request reads from a non-mutable field
-// avoid the lock on the hot path.
+// GlobalNormalSubmitter returns the currently-installed
+// sink, or nil when V.1 is disabled / unset. Lock-free
+// atomic load; safe on the per-request hot path.
 func GlobalNormalSubmitter() NormalSubmitter {
-	globalNormalMu.RLock()
-	defer globalNormalMu.RUnlock()
-	return globalNormalSubmitter
+	p := globalNormalSubmitter.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // SetClientIPFn installs the process-wide client-IP
-// resolver. cmd/arenet wires this once at boot using the
+// resolver. cmd/arenet wires this at boot using the
 // auth.IPExtractor-backed function (trusted-proxy aware
-// per ARENET_TRUSTED_PROXIES). When unset, the middleware
+// per ARENET_TRUSTED_PROXIES). When unset, GlobalClientIPFn
 // falls back to RemoteAddrClientIPFn (port-stripped
 // r.RemoteAddr) — degraded but safe; an operator on a
 // homelab without reverse proxies sees correct IPs.
 //
-// sync.Once: same single-shot guard as SetRegistry, for
-// the same reason (boot wiring is single-shot;
-// re-installing would be a programmer error).
+// Re-callable (same atomic.Pointer pattern as
+// SetNormalSubmitter); installations after mgr.Start
+// take effect on the next request.
 func SetClientIPFn(fn ClientIPFunc) {
-	globalClientIPOnce.Do(func() {
-		globalClientIPFn = fn
-	})
+	if fn == nil {
+		globalClientIPFn.Store(nil)
+		return
+	}
+	globalClientIPFn.Store(&fn)
 }
 
 // GlobalClientIPFn returns the installed resolver, or the
 // RemoteAddr fallback if SetClientIPFn was never called.
 // Never returns nil — callers can invoke without a guard.
 func GlobalClientIPFn() ClientIPFunc {
-	if fn := globalClientIPFn; fn != nil {
-		return fn
+	p := globalClientIPFn.Load()
+	if p == nil {
+		return RemoteAddrClientIPFn
 	}
-	return RemoteAddrClientIPFn
+	return *p
 }

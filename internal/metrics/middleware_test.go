@@ -557,11 +557,11 @@ func TestServeHTTP_CallsSubmit_WhenEligible(t *testing.T) {
 	ResetForTest()
 
 	sink := &recordingNormalSink{}
+	SetNormalSubmitter(sink)
+	SetClientIPFn(func(r *http.Request) string { return "203.0.113.42" })
 	reg := NewRegistry()
 	reg.Sync([]string{"r1"})
 	h := newTestHandler(t, reg, "r1")
-	h.normalSink = sink
-	h.clientIP = func(r *http.Request) string { return "203.0.113.42" }
 
 	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
 		w.WriteHeader(http.StatusOK)
@@ -587,11 +587,10 @@ func TestServeHTTP_DoesNotCallSubmit_WhenExcluded(t *testing.T) {
 	ResetForTest()
 
 	sink := &recordingNormalSink{}
+	SetNormalSubmitter(sink)
 	reg := NewRegistry()
 	reg.Sync([]string{"r1"})
 	h := newTestHandler(t, reg, "r1")
-	h.normalSink = sink
-	h.clientIP = RemoteAddrClientIPFn
 
 	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
 		w.WriteHeader(http.StatusOK)
@@ -612,11 +611,10 @@ func TestServeHTTP_DoesNotCallSubmit_WhenStatusRejected(t *testing.T) {
 	ResetForTest()
 
 	sink := &recordingNormalSink{}
+	SetNormalSubmitter(sink)
 	reg := NewRegistry()
 	reg.Sync([]string{"r1"})
 	h := newTestHandler(t, reg, "r1")
-	h.normalSink = sink
-	h.clientIP = RemoteAddrClientIPFn
 
 	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
 		w.WriteHeader(http.StatusInternalServerError) // 500 — rejected
@@ -631,34 +629,55 @@ func TestServeHTTP_DoesNotCallSubmit_WhenStatusRejected(t *testing.T) {
 	}
 }
 
-func TestServeHTTP_Provision_ResolvesNormalSinkAndClientIP(t *testing.T) {
-	// AC #11 path — Provision installs the optional V.1
-	// dependencies from the globals. Pinned so a future
-	// regression (e.g. Provision dropping the V.1 lines)
-	// surfaces without needing a full ServeHTTP round.
+func TestServeHTTP_LateInstall_AfterProvision_TakesEffect(t *testing.T) {
+	// V.1.3 install-order regression: the geo bus +
+	// enricher + DefaultNormalSink are constructed
+	// AFTER mgr.Start, so when the Caddy module's
+	// Provision runs (DURING mgr.Start) the globals are
+	// still nil. A LATER SetNormalSubmitter call MUST
+	// reach already-provisioned handlers — the
+	// middleware reads the global live on every request
+	// via atomic.Pointer.
 	t.Cleanup(ResetForTest)
 	ResetForTest()
 
 	reg := NewRegistry()
 	SetRegistry(reg)
-	sink := &recordingNormalSink{}
-	SetNormalSubmitter(sink)
-	customIPFn := func(r *http.Request) string { return "custom" }
-	SetClientIPFn(customIPFn)
 
+	// Provision happens here with NO sink installed.
 	h := &RouteMetricsHandler{RouteID: "r1"}
 	if err := h.Provision(caddy.Context{}); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	if h.normalSink == nil {
-		t.Error("Provision must resolve normalSink from GlobalNormalSubmitter()")
+
+	// First request: no sink → no Submit.
+	sink := &recordingNormalSink{}
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusOK)
+		return nil
+	})
+	req := newReqForGate(http.MethodGet, "/api/v1/widgets")
+	if err := h.ServeHTTP(httptest.NewRecorder(), req, next); err != nil {
+		t.Fatalf("ServeHTTP: %v", err)
 	}
-	if h.clientIP == nil {
-		t.Error("Provision must resolve clientIP from GlobalClientIPFn()")
+	if got := len(sink.snapshot()); got != 0 {
+		t.Errorf("pre-install Submit calls = %d, want 0", got)
+	}
+
+	// Late install — V.1.3's runtime swap.
+	SetNormalSubmitter(sink)
+
+	// Second request: sink installed → Submit fires.
+	req2 := newReqForGate(http.MethodGet, "/api/v1/widgets")
+	if err := h.ServeHTTP(httptest.NewRecorder(), req2, next); err != nil {
+		t.Fatalf("ServeHTTP: %v", err)
+	}
+	if got := len(sink.snapshot()); got != 1 {
+		t.Errorf("post-install Submit calls = %d, want 1 (V.1.3 late install must take effect)", got)
 	}
 }
 
-func TestServeHTTP_Provision_NoNormalSink_StillProvisionsCleanly(t *testing.T) {
+func TestServeHTTP_NoNormalSink_StillProvisionsCleanly(t *testing.T) {
 	// V.1 disabled path is the default (SAMPLE_PCT=0 in
 	// production → SetNormalSubmitter never called).
 	// Provision MUST succeed regardless.
@@ -673,8 +692,8 @@ func TestServeHTTP_Provision_NoNormalSink_StillProvisionsCleanly(t *testing.T) {
 	if err := h.Provision(caddy.Context{}); err != nil {
 		t.Fatalf("Provision: %v (V.1 disabled should not gate Provision)", err)
 	}
-	if h.normalSink != nil {
-		t.Errorf("normalSink=%T want nil (no SetNormalSubmitter call)", h.normalSink)
+	if GlobalNormalSubmitter() != nil {
+		t.Errorf("GlobalNormalSubmitter()=%v want nil (no SetNormalSubmitter call)", GlobalNormalSubmitter())
 	}
 }
 

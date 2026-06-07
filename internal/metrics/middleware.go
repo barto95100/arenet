@@ -119,6 +119,17 @@ var hardcodedExcludePaths = []string{
 	"/api/v1/ws/geo-events",
 }
 
+// HardcodedExcludePaths returns a defensive copy of the V.1
+// non-overridable path-prefix list. Exported for the V.1.3
+// boot signal (cmd/arenet logs the count alongside the
+// operator-configured list count) + future docs / admin-
+// UI surfaces. The returned slice is safe to mutate.
+func HardcodedExcludePaths() []string {
+	out := make([]string, len(hardcodedExcludePaths))
+	copy(out, hardcodedExcludePaths)
+	return out
+}
+
 func init() {
 	caddy.RegisterModule(RouteMetricsHandler{})
 }
@@ -149,19 +160,17 @@ type RouteMetricsHandler struct {
 	// (spec §3.4).
 	registry *Registry
 
-	// normalSink is resolved at Provision time from the
-	// process-wide GlobalNormalSubmitter(). Nil when V.1 is
-	// disabled (the operator never set
-	// ARENET_NORMAL_TRAFFIC_SAMPLE_PCT, or set it to 0); in
-	// that case the defer's V.1 branch is a single nil-check
-	// — no measurable per-request cost.
-	normalSink NormalSubmitter
-
-	// clientIP resolves the trusted-proxy-aware client IP.
-	// Resolved at Provision via GlobalClientIPFn(); falls
-	// back to RemoteAddrClientIPFn when SetClientIPFn was
-	// never called. Never nil at request time.
-	clientIP ClientIPFunc
+	// V.1.3 install-order constraint: the geo bus +
+	// enricher + DefaultNormalSink are constructed in
+	// cmd/arenet/main.go AFTER mgr.Start, so at Provision
+	// time the globals are still nil. To make late
+	// installation visible to already-provisioned
+	// handlers, normalSink + clientIP are read LIVE from
+	// the global atomic pointers on every eligible
+	// request (see ServeHTTP defer). Per-request reads
+	// are lock-free atomic.Load — nanoseconds. The branch
+	// is short-circuited anyway when the value is nil,
+	// so the V.1-disabled path stays effectively zero-cost.
 }
 
 // CaddyModule returns the module info. Required by the Caddy module
@@ -178,23 +187,16 @@ func (RouteMetricsHandler) CaddyModule() caddy.ModuleInfo {
 // config is loaded and before Validate. Resolves the process-wide
 // Registry or returns ErrRegistryNotInstalled.
 //
-// V.1.2 also resolves the optional NormalSubmitter +
-// ClientIPFn here so the ServeHTTP hot path reads from
-// stable handler fields rather than re-walking the
-// globals on every request. A nil normalSink is fine —
-// V.1 is opt-in and the middleware no-ops when unset.
+// V.1.2 + V.1.3: the optional NormalSubmitter + ClientIPFn
+// are NOT cached at Provision — they're resolved live on
+// every request via atomic.Pointer reads. See the
+// install-order rationale on the struct comment above.
 func (h *RouteMetricsHandler) Provision(_ caddy.Context) error {
 	r := GlobalRegistry()
 	if r == nil {
 		return ErrRegistryNotInstalled
 	}
 	h.registry = r
-	// V.1.2 — optional resolutions. Both fall back safely:
-	//   - normalSink nil → defer's V.1 branch skipped.
-	//   - clientIP is never nil (GlobalClientIPFn falls
-	//     back to RemoteAddrClientIPFn).
-	h.normalSink = GlobalNormalSubmitter()
-	h.clientIP = GlobalClientIPFn()
 	return nil
 }
 
@@ -232,14 +234,17 @@ func (h *RouteMetricsHandler) ServeHTTP(
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		h.registry.Inc(h.RouteID, rec.status, durMs)
 
-		// V.1.2 — normal-traffic geo emission. Gates here
-		// are SHORT-CIRCUITS (status / method / path);
-		// the sink owns the sampling / RFC1918 / cooldown
-		// decision (spec §D9). When normalSink is nil
-		// (V.1 disabled), the whole branch is a single
-		// nil-check — no measurable per-request cost.
-		if h.normalSink != nil && h.eligibleForNormal(r, rec.status) {
-			h.normalSink.Submit(rec.status, h.clientIP(r), h.RouteID)
+		// V.1.2 / V.1.3 — normal-traffic geo emission. Read
+		// the sink LIVE from the global atomic pointer; a
+		// nil result means V.1 is disabled (operator never
+		// set ARENET_NORMAL_TRAFFIC_SAMPLE_PCT, or set it
+		// to 0). The atomic.Load is lock-free; the
+		// short-circuit on nil keeps the V.1-disabled path
+		// effectively zero-cost. Gates here are SHORT-
+		// CIRCUITS (status / method / path); the sink owns
+		// the D2 LAN + D9 sampling/cooldown decisions.
+		if sink := GlobalNormalSubmitter(); sink != nil && h.eligibleForNormal(r, rec.status) {
+			sink.Submit(rec.status, GlobalClientIPFn()(r), h.RouteID)
 		}
 	}()
 	return next.ServeHTTP(rec, r)

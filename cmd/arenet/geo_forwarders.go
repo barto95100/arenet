@@ -163,6 +163,37 @@ func (g geoForwardingAuthSink) Submit(e observability.AuthEvent) {
 	}
 }
 
+// geoForwardingNormalSink wraps the V.1.1
+// *geo.DefaultNormalSink behind the metrics.NormalSubmitter
+// interface (the V.1.2 seam RouteMetricsHandler.ServeHTTP
+// invokes). Per spec §3.3 this is intentionally a
+// passthrough — the sink already owns the §D9
+// sampling/cooldown decision + the §D2 RFC1918 LAN
+// short-circuit + the §3.5 bus.Publish call. The wrapper
+// exists for API-symmetry with the other 4 forwarders +
+// future-proofing: a V.1.X audit/log/metric hook on the
+// success path lands here without re-plumbing the
+// middleware → sink seam.
+//
+// Satisfies metrics.NormalSubmitter structurally via
+// `Submit(status int, srcIP, routeID string)`.
+type geoForwardingNormalSink struct {
+	inner geo.NormalSink
+}
+
+func (g geoForwardingNormalSink) Submit(status int, srcIP, routeID string) {
+	if g.inner != nil {
+		g.inner.Submit(status, srcIP, routeID)
+	}
+}
+
+func (g geoForwardingNormalSink) Close() error {
+	if g.inner != nil {
+		return g.inner.Close()
+	}
+	return nil
+}
+
 // serverPositionRedetector satisfies api.ServerPositionRedetector
 // for V.4's POST :redetect endpoint. Captures the boot-time
 // *geo.Lookup so the handler can re-run V.1's

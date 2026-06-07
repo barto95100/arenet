@@ -136,6 +136,18 @@ type CaddyManager struct {
 	// handler prepend (AC #13 fail-open at boot).
 	crowdsec crowdsecConfig
 
+	// normalTrafficExcludePaths (Step V.1.3) is the operator-
+	// supplied path-prefix extension to the V.1.2 hardcoded
+	// exclude list, parsed from
+	// ARENET_NORMAL_TRAFFIC_EXCLUDE_PATHS by main.go and
+	// pushed via SetNormalTrafficExcludePaths BEFORE Start.
+	// Threaded into every per-route metricsHandler JSON
+	// emit so a route reload preserves the operator's
+	// exclusions. Empty slice (default) means only the
+	// hardcoded list applies; the JSON field is omitted
+	// via omitempty in that case.
+	normalTrafficExcludePaths []string
+
 	mu      sync.Mutex
 	started bool
 }
@@ -181,6 +193,29 @@ func New(store *storage.Store, logger *slog.Logger, registry *metrics.Registry, 
 		devMode:   devMode,
 		acmeEmail: acmeEmail,
 	}, nil
+}
+
+// SetNormalTrafficExcludePaths (Step V.1.3) installs the
+// operator's path-prefix extension to the hardcoded V.1.2
+// exclude list. Threaded into every per-route metricsHandler
+// JSON emit so subsequent route reloads preserve the
+// exclusions. Empty slice (or nil) means "only the hardcoded
+// list applies" — the per-route emit omits the field
+// entirely via omitempty.
+//
+// MUST be called BEFORE Start so the initial Caddy config
+// emits the exclusions from the first applyLocked. Same
+// invariant as SetCrowdSecConfig.
+func (m *CaddyManager) SetNormalTrafficExcludePaths(paths []string) {
+	m.mu.Lock()
+	// Defensive copy so the caller can't mutate the slice
+	// underneath us across a reload.
+	if len(paths) == 0 {
+		m.normalTrafficExcludePaths = nil
+	} else {
+		m.normalTrafficExcludePaths = append([]string(nil), paths...)
+	}
+	m.mu.Unlock()
 }
 
 // SetCrowdSecConfig (Step N.1) installs the LAPI connection
@@ -349,12 +384,13 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	}
 
 	cfgJSON, err := buildConfigJSON(routes, buildOpts{
-		DevMode:              m.devMode,
-		ACMEEmail:            m.acmeEmail,
-		DNSProvider:          dnsProvider,
-		ForwardAuthProviders: fwdAuthMap,
-		CrowdSec:             m.crowdsec,
-		ManagedDomains:       managedDomains,
+		DevMode:                   m.devMode,
+		ACMEEmail:                 m.acmeEmail,
+		DNSProvider:               dnsProvider,
+		ForwardAuthProviders:      fwdAuthMap,
+		CrowdSec:                  m.crowdsec,
+		ManagedDomains:            managedDomains,
+		NormalTrafficExcludePaths: m.normalTrafficExcludePaths,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -565,6 +601,17 @@ type buildOpts struct {
 	// time. Read from BoltDB on every applyLocked (AC #14:
 	// preserved on every Caddy reload).
 	ManagedDomains []storage.ManagedDomain
+
+	// NormalTrafficExcludePaths (Step V.1.3) is the
+	// operator-supplied path-prefix extension to the V.1.2
+	// hardcoded exclude list inside RouteMetricsHandler.
+	// Threaded into every per-route metricsHandler emit
+	// below as the `exclude_paths` JSON field. Empty (nil
+	// or empty slice) → field omitted via omitempty; the
+	// V.1.2 middleware then only applies its hardcoded
+	// list. Operator changes between reloads take effect
+	// immediately (next applyLocked re-renders the JSON).
+	NormalTrafficExcludePaths []string
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -633,6 +680,14 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		metricsHandler := map[string]any{
 			"handler":  metrics.HandlerName,
 			"route_id": r.ID,
+		}
+		// Step V.1.3 — thread the operator's
+		// NormalTrafficExcludePaths into each per-route
+		// metricsHandler emit. Field is omitted when the
+		// slice is empty so byte-equality with pre-V.1.3
+		// configs is preserved on default installs.
+		if len(opts.NormalTrafficExcludePaths) > 0 {
+			metricsHandler["exclude_paths"] = opts.NormalTrafficExcludePaths
 		}
 		// Step J.1: emit load_balancing.selection_policy unconditionally
 		// when at least one upstream is present. §3.2 explicitly notes

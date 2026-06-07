@@ -310,6 +310,38 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 			"seeded", seeded, "storage", certStorageDir)
 	}
 
+	// Step V.1.3 — parse normal-traffic env vars + push the
+	// operator's path-prefix exclusions into the manager
+	// BEFORE Start so the first applyLocked emits them on
+	// every route's metricsHandler config. Same invariant
+	// as SetCrowdSecConfig above.
+	//
+	// All 3 env vars default to safe values:
+	//   - SAMPLE_PCT default 0 → V.1 disabled (sink never
+	//     installed at all). Boot signal still fires with
+	//     present=false.
+	//   - PER_IP_COOLDOWN default 30s (spec §D9).
+	//   - EXCLUDE_PATHS default empty → only the hardcoded
+	//     V.1.2 list applies (/healthz, /metrics,
+	//     /api/v1/ws/topology, /api/v1/ws/geo-events).
+	//
+	// Validation: invalid SAMPLE_PCT / cooldown values are
+	// FATAL at boot (returned as an error from run()) per
+	// the spec §5 contract — silent fallback would mislead
+	// the operator into thinking V.1 is configured when it
+	// isn't. EXCLUDE_PATHS is a list parse: empty + extra
+	// commas + whitespace are all forgiven.
+	normalSamplePct, err := parseNormalTrafficSamplePct(os.Getenv("ARENET_NORMAL_TRAFFIC_SAMPLE_PCT"))
+	if err != nil {
+		return fmt.Errorf("invalid ARENET_NORMAL_TRAFFIC_SAMPLE_PCT: %w", err)
+	}
+	normalCooldown, err := parseNormalTrafficCooldown(os.Getenv("ARENET_NORMAL_TRAFFIC_PER_IP_COOLDOWN"))
+	if err != nil {
+		return fmt.Errorf("invalid ARENET_NORMAL_TRAFFIC_PER_IP_COOLDOWN: %w", err)
+	}
+	normalExcludePaths := parseNormalTrafficExcludePaths(os.Getenv("ARENET_NORMAL_TRAFFIC_EXCLUDE_PATHS"))
+	mgr.SetNormalTrafficExcludePaths(normalExcludePaths)
+
 	if err := mgr.Start(ctx); err != nil {
 		return err
 	}
@@ -502,6 +534,61 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	geoBus := geo.NewBus(geo.DefaultRingCapacity)
 	logger.Info("geo event bus wired",
 		"ring_capacity", geo.DefaultRingCapacity,
+	)
+
+	// Step V.1.3 — install the normal-traffic sink.
+	//
+	// Install-order: the geoBus + geoEnricher just got
+	// constructed; mgr.Start ran earlier. The V.1.2
+	// middleware reads metrics.GlobalNormalSubmitter()
+	// LIVE on every eligible request via an atomic.Pointer
+	// (see internal/metrics/global.go), so a late
+	// installation is observed by all already-provisioned
+	// RouteMetricsHandler instances on their next
+	// request. No reload needed.
+	//
+	// When SAMPLE_PCT=0 (V.1 disabled — default), we still
+	// emit the boot signal so the operator can grep
+	// "normal traffic sink wired" in journalctl and
+	// confirm V.1 is intentionally off, not silently
+	// broken.
+	//
+	// Option D LAN counter deferment (per V.1.3 brief): we
+	// pass NoopLANCounter for now. The real LAN pill
+	// counter lives in the frontend (V.6 page-bus
+	// subscriber); wiring it through a backend channel
+	// would require a new HTTP endpoint or a WS frame
+	// extension that doesn't fit V.1.3's scope. V.1.4
+	// re-evaluates whether the LAN counter is even
+	// meaningful for normal traffic (operator probably
+	// cares less about LAN normal than LAN auth-failure).
+	// Deviation from spec §3.5 D2 — flagged in the V.1.3
+	// commit body; revisit at V.1.5 smoke.
+	if normalSamplePct > 0 {
+		normalSink := geo.NewDefaultNormalSink(geoBus, geoEnricher, geo.NoopLANCounter{}, geo.NormalSinkConfig{
+			SamplePct: normalSamplePct,
+			Cooldown:  normalCooldown,
+		})
+		metrics.SetNormalSubmitter(geoForwardingNormalSink{inner: normalSink})
+		defer func() {
+			if err := normalSink.Close(); err != nil {
+				logger.Warn("normal traffic sink close error", "err", err)
+			}
+		}()
+	}
+	// The trusted-proxy-aware client-IP resolver is wired
+	// later, AFTER auth.NewIPExtractor is constructed
+	// (search for "Step V.1.3 — install trusted-proxy-aware
+	// client-IP resolver" further down). atomic.Pointer
+	// makes late installation visible to all already-
+	// provisioned middleware handlers on their next
+	// request.
+	logger.Info("normal traffic sink wired",
+		"present", normalSamplePct > 0,
+		"sample_pct", normalSamplePct,
+		"cooldown", normalCooldown.String(),
+		"exclude_paths_count", len(normalExcludePaths),
+		"hardcoded_exclude_paths_count", len(metrics.HardcodedExcludePaths()),
 	)
 
 	obsAggregator := observability.NewAggregator(obsStore, logger, 4096)
@@ -837,6 +924,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	} else {
 		logger.Info("auth: no trusted proxies configured (X-Forwarded-For will be ignored)")
 	}
+
+	// Step V.1.3 — install trusted-proxy-aware client-IP
+	// resolver for the V.1 normal-traffic middleware.
+	// Late install (post-ipExtractor construction) but
+	// before any per-route traffic flows. atomic.Pointer
+	// makes the swap visible to all already-provisioned
+	// RouteMetricsHandler instances on their next
+	// request.
+	metrics.SetClientIPFn(ipExtractor.ClientIP)
 
 	// Generate setup token if the users bucket is empty. The token
 	// is logged at Info so the operator can paste it into /setup.
