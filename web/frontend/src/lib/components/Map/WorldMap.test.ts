@@ -63,6 +63,7 @@ beforeEach(() => {
 function mockTopoJSONFetch() {
 	return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
 		const url = typeof input === 'string' ? input : input.toString();
+		void url;
 		return new Response(JSON.stringify(FIXTURE_TOPOJSON), {
 			status: 200,
 			headers: { 'Content-Type': 'application/json' }
@@ -90,35 +91,35 @@ describe('WorldMap', () => {
 
 	it('honors the topojsonUrl prop override', async () => {
 		const fetchSpy = mockTopoJSONFetch();
-		render(WorldMap, {
+		render(WorldMap, { props: {
 			arenetLat: 0,
 			arenetLon: 0,
 			topojsonUrl: '/test-fixtures/tiny-world.topo.json'
-		});
+		} });
 		await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
 		expect(String(fetchSpy.mock.calls[0][0])).toBe('/test-fixtures/tiny-world.topo.json');
 	});
 
 	it('renders the marker when arenet lat/lon are supplied', async () => {
 		mockTopoJSONFetch();
-		render(WorldMap, {
+		render(WorldMap, { props: {
 			arenetLat: 48.8566,
 			arenetLon: 2.3522,
 			city: 'Paris',
 			country: 'FR'
-		});
+		} });
 		expect(screen.getByTestId('worldmap-marker')).toBeInTheDocument();
 	});
 
 	it('renders the city, country label and the manual badge', async () => {
 		mockTopoJSONFetch();
-		render(WorldMap, {
+		render(WorldMap, { props: {
 			arenetLat: 45.764,
 			arenetLon: 4.8357,
 			city: 'Lyon',
 			country: 'FR',
 			mode: 'manual'
-		});
+		} });
 		const marker = screen.getByTestId('worldmap-marker');
 		expect(marker.textContent ?? '').toContain('Lyon');
 		expect(marker.textContent ?? '').toContain('FR');
@@ -127,13 +128,13 @@ describe('WorldMap', () => {
 
 	it('omits the (manuel) badge when mode is "auto"', async () => {
 		mockTopoJSONFetch();
-		render(WorldMap, {
+		render(WorldMap, { props: {
 			arenetLat: 48.8566,
 			arenetLon: 2.3522,
 			city: 'Paris',
 			country: 'FR',
 			mode: 'auto'
-		});
+		} });
 		const marker = screen.getByTestId('worldmap-marker');
 		expect(marker.textContent ?? '').not.toContain('(manuel)');
 	});
@@ -160,4 +161,146 @@ describe('WorldMap', () => {
 		const svg = screen.getByRole('img') as unknown as SVGSVGElement;
 		expect(svg.getAttribute('viewBox')).toBe('0 0 800 400');
 	});
+});
+
+// -------------------------------------------------------
+// Step V.6 — arc rendering tests.
+//
+// jsdom can't run the d3.timer (it depends on
+// requestAnimationFrame which jsdom shims as setTimeout,
+// but the timer drives a $state mutation that needs Svelte
+// to flush). We assert at the level we CAN: passing
+// `events` triggers an arcs <g> with the right number of
+// children, LAN events skip spawn, and a category color
+// makes it onto the rendered path's data-attribute.
+
+import type { GeoEvent } from '$lib/api/types';
+
+function mkEvent(overrides: Partial<GeoEvent> = {}): GeoEvent {
+	return {
+		timestamp: '2026-06-07T10:00:00.000Z',
+		category: 'waf',
+		sourceIp: '203.0.113.42',
+		sourceLat: 51.5074,
+		sourceLon: -0.1278,
+		sourceCountry: 'GB',
+		sourceCity: 'London',
+		isLan: false,
+		details: 'rule-942100',
+		...overrides
+	};
+}
+
+describe('WorldMap — V.6 arc layer', () => {
+	it('mounts the arcs <g> layer between countries and marker', () => {
+		mockTopoJSONFetch();
+		render(WorldMap, { arenetLat: 48.8566, arenetLon: 2.3522 });
+		expect(screen.getByTestId('worldmap-arcs')).toBeInTheDocument();
+	});
+
+	it('spawns one arc path per non-LAN event with finite source coords', async () => {
+		mockTopoJSONFetch();
+		render(WorldMap, {
+			props: {
+				arenetLat: 48.8566,
+				arenetLon: 2.3522,
+				events: [
+					mkEvent({ category: 'waf', sourceLat: 51.5074, sourceLon: -0.1278 }),
+					mkEvent({ category: 'auth', sourceLat: 35.6762, sourceLon: 139.6503 })
+				]
+			}
+		});
+		await waitFor(() => {
+			const arcs = screen.getByTestId('worldmap-arcs');
+			expect(arcs.querySelectorAll('path').length).toBe(2);
+		});
+	});
+
+	it('skips LAN events (isLan=true)', async () => {
+		mockTopoJSONFetch();
+		render(WorldMap, {
+			props: {
+				arenetLat: 48.8566,
+				arenetLon: 2.3522,
+				events: [
+					mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0, sourceCountry: 'UNK' }),
+					mkEvent({ category: 'waf' })
+				]
+			}
+		});
+		await waitFor(() => {
+			const arcs = screen.getByTestId('worldmap-arcs');
+			expect(arcs.querySelectorAll('path').length).toBe(1);
+		});
+	});
+
+	it('skips events with zero lat/lon (UNK geo)', async () => {
+		mockTopoJSONFetch();
+		render(WorldMap, {
+			props: {
+				arenetLat: 48.8566,
+				arenetLon: 2.3522,
+				events: [
+					mkEvent({ sourceLat: 0, sourceLon: 0, sourceCountry: 'UNK' }),
+					mkEvent({ category: 'auth', sourceLat: 35.6762, sourceLon: 139.6503 })
+				]
+			}
+		});
+		await waitFor(() => {
+			const arcs = screen.getByTestId('worldmap-arcs');
+			expect(arcs.querySelectorAll('path').length).toBe(1);
+		});
+	});
+
+	it('does not spawn arcs when Arenet position is null (degraded)', async () => {
+		mockTopoJSONFetch();
+		render(WorldMap, {
+			props: {
+				arenetLat: null,
+				arenetLon: null,
+				events: [mkEvent(), mkEvent({ category: 'crowdsec' })]
+			}
+		});
+		// Give the $effect a tick to run.
+		await new Promise((r) => setTimeout(r, 10));
+		const arcs = screen.getByTestId('worldmap-arcs');
+		expect(arcs.querySelectorAll('path').length).toBe(0);
+	});
+
+	it('attaches a data-category attribute matching the event category', async () => {
+		mockTopoJSONFetch();
+		render(WorldMap, {
+			props: {
+				arenetLat: 48.8566,
+				arenetLon: 2.3522,
+				events: [mkEvent({ category: 'crowdsec' })]
+			}
+		});
+		await waitFor(() => {
+			const arcs = screen.getByTestId('worldmap-arcs');
+			const path = arcs.querySelector('path');
+			expect(path?.getAttribute('data-category')).toBe('crowdsec');
+		});
+	});
+
+	it.each(['normal', 'throttle', 'waf', 'crowdsec', 'auth'] as const)(
+		'renders an arc with a category-colored stroke for %s',
+		async (category) => {
+			mockTopoJSONFetch();
+			render(WorldMap, {
+				props: {
+					arenetLat: 48.8566,
+					arenetLon: 2.3522,
+					events: [mkEvent({ category })]
+				}
+			});
+			await waitFor(() => {
+				const arcs = screen.getByTestId('worldmap-arcs');
+				const path = arcs.querySelector('path');
+				// Inline stroke attribute carries the CSS var
+				// reference — pinned in categoryColors.test.ts.
+				expect(path?.getAttribute('stroke') ?? '').toMatch(/^var\(--[a-z-]+\)$/);
+			});
+		}
+	);
 });

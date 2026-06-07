@@ -2,31 +2,93 @@
 // Copyright (C) 2026  Ludovic Ramos
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-// Step V.5 — /map page tests.
+// Step V.5 + V.6 — /map page tests.
 //
-// Three states pinned: loading, error, degraded. The
-// happy-path render (position present, not degraded) is
-// covered indirectly by the WorldMap.test.ts suite +
-// LicenseFooter.test.ts — duplicating it here would test
-// the same pixels twice. The interesting page-level
-// behavior is the state machine: fetchServerPosition
-// resolves → bind into the WorldMap; rejects → show
-// error banner; resolves with degraded:true → show
-// degraded banner + null position into the map.
+// V.5 pinned the state machine (loading / error / degraded
+// / happy). V.6 adds:
+//   - replay seeding via fetchGeoEventsReplay (non-fatal
+//     on failure);
+//   - WS lifecycle via openGeoEventStream (status pill
+//     bound to the state callback);
+//   - event-cap behavior under the MAX_EVENTS ceiling.
+//
+// We mock both `$lib/api/security` (for fetchServerPosition
+// + fetchGeoEventsReplay) and `$lib/ws/geo-events-stream`
+// (for openGeoEventStream). The TopoJSON fetch is stubbed
+// globally so WorldMap mounts cleanly without hitting the
+// real CDN.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
-import type { ServerPosition } from '$lib/api/types';
+import type { ServerPosition, GeoEvent, GeoEventsResponse } from '$lib/api/types';
+import type { GeoEventStreamHandle, GeoEventStreamState } from '$lib/ws/geo-events-stream';
 
 const fetchServerPositionMock = vi.fn<() => Promise<ServerPosition>>();
+const fetchGeoEventsReplayMock = vi.fn<(limit?: number) => Promise<GeoEventsResponse>>();
+
 vi.mock('$lib/api/security', () => ({
-	fetchServerPosition: () => fetchServerPositionMock()
+	fetchServerPosition: () => fetchServerPositionMock(),
+	fetchGeoEventsReplay: (limit?: number) => fetchGeoEventsReplayMock(limit)
 }));
 
-// Stub the TopoJSON fetch globally so the WorldMap mount
-// inside the page doesn't try to hit the real CDN.
+// Capture the latest call to openGeoEventStream so tests
+// can simulate WS events + state changes after mount.
+interface StreamCapture {
+	onEvent: ((e: GeoEvent) => void) | null;
+	onStateChange: ((s: GeoEventStreamState) => void) | null;
+	closeCalls: number;
+	handle: GeoEventStreamHandle;
+}
+let streamCapture: StreamCapture;
+
+vi.mock('$lib/ws/geo-events-stream', () => ({
+	openGeoEventStream: (
+		onEvent: (e: GeoEvent) => void,
+		onStateChange?: (s: GeoEventStreamState) => void
+	) => {
+		streamCapture.onEvent = onEvent;
+		streamCapture.onStateChange = onStateChange ?? null;
+		return streamCapture.handle;
+	}
+}));
+
+function makeStreamCapture(): StreamCapture {
+	const cap: StreamCapture = {
+		onEvent: null,
+		onStateChange: null,
+		closeCalls: 0,
+		handle: {
+			close() {
+				cap.closeCalls++;
+			},
+			get state(): GeoEventStreamState {
+				return 'connecting';
+			}
+		}
+	};
+	return cap;
+}
+
+function mkEvent(overrides: Partial<GeoEvent> = {}): GeoEvent {
+	return {
+		timestamp: '2026-06-07T10:00:00.000Z',
+		category: 'waf',
+		sourceIp: '203.0.113.42',
+		sourceLat: 51.5074,
+		sourceLon: -0.1278,
+		sourceCountry: 'GB',
+		sourceCity: 'London',
+		isLan: false,
+		details: 'rule-942100',
+		...overrides
+	};
+}
+
 beforeEach(() => {
 	fetchServerPositionMock.mockReset();
+	fetchGeoEventsReplayMock.mockReset();
+	fetchGeoEventsReplayMock.mockResolvedValue({ events: [], total: 0 });
+	streamCapture = makeStreamCapture();
 	vi.spyOn(globalThis, 'fetch').mockResolvedValue(
 		new Response(
 			JSON.stringify({
@@ -41,9 +103,8 @@ beforeEach(() => {
 
 const { default: MapPage } = await import('./+page.svelte');
 
-describe('/map page', () => {
-	it('shows the loading state before the fetch resolves', async () => {
-		// Hang the promise to lock the loading state visible.
+describe('/map page — V.5 state machine', () => {
+	it('shows the loading state before the fetch resolves', () => {
 		fetchServerPositionMock.mockImplementation(() => new Promise(() => {}));
 		render(MapPage);
 		expect(screen.getByTestId('map-loading')).toBeInTheDocument();
@@ -79,13 +140,7 @@ describe('/map page', () => {
 		await waitFor(() => {
 			expect(screen.getByTestId('map-degraded')).toBeInTheDocument();
 		});
-		// The frame still renders so the operator sees the
-		// world map alongside the banner — better than a
-		// blank page when GeoIP is absent.
 		expect(screen.getByTestId('map-frame')).toBeInTheDocument();
-		// Marker MUST be absent (lat/lon collapsed to null
-		// by the page conditional) so a misleading pin
-		// doesn't appear off the coast of Ghana.
 		expect(screen.queryByTestId('worldmap-marker')).toBeNull();
 	});
 
@@ -99,10 +154,6 @@ describe('/map page', () => {
 	});
 
 	it('mentions ARENET_GEOIP_MMDB in the degraded banner help text', async () => {
-		// Pin the operator-facing path the banner advertises
-		// — a future copy edit that drops the env var name
-		// would silently rob operators of the actionable
-		// hint.
 		fetchServerPositionMock.mockResolvedValue({
 			lat: 0,
 			lon: 0,
@@ -117,5 +168,110 @@ describe('/map page', () => {
 				'ARENET_GEOIP_MMDB'
 			);
 		});
+	});
+});
+
+describe('/map page — V.6 replay + WS', () => {
+	const happyPosition: ServerPosition = {
+		lat: 48.8566,
+		lon: 2.3522,
+		city: 'Paris',
+		country: 'FR',
+		mode: 'auto'
+	};
+
+	it('fetches the replay with REPLAY_LIMIT=500 after position resolves', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		render(MapPage);
+		await waitFor(() => {
+			expect(fetchGeoEventsReplayMock).toHaveBeenCalled();
+		});
+		expect(fetchGeoEventsReplayMock).toHaveBeenCalledWith(500);
+	});
+
+	it('opens the WS stream after replay completes', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		render(MapPage);
+		await waitFor(() => {
+			expect(streamCapture.onEvent).not.toBeNull();
+		});
+	});
+
+	it('does NOT open the WS when position fetch fails (no point streaming into a broken UI)', async () => {
+		fetchServerPositionMock.mockRejectedValue(new Error('HTTP 503'));
+		render(MapPage);
+		await waitFor(() => {
+			expect(screen.getByTestId('map-error')).toBeInTheDocument();
+		});
+		// Give the page a chance to (mistakenly) open the WS.
+		await new Promise((r) => setTimeout(r, 50));
+		expect(streamCapture.onEvent).toBeNull();
+	});
+
+	it('still opens the WS when REPLAY fails (replay is non-fatal)', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		fetchGeoEventsReplayMock.mockRejectedValue(new Error('replay 503'));
+		// Suppress the console.warn the page emits to keep test
+		// output clean.
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		render(MapPage);
+		await waitFor(() => {
+			expect(streamCapture.onEvent).not.toBeNull();
+		});
+		warnSpy.mockRestore();
+	});
+
+	it('renders the WS status pill (initial connecting state)', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		render(MapPage);
+		await waitFor(() => {
+			const pill = screen.getByTestId('map-ws-pill');
+			expect(pill).toBeInTheDocument();
+			expect(pill.getAttribute('data-ws-state')).toBe('connecting');
+		});
+	});
+
+	it('updates the WS pill when openGeoEventStream reports state changes', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		render(MapPage);
+		await waitFor(() => {
+			expect(streamCapture.onStateChange).not.toBeNull();
+		});
+		// Fire a state transition.
+		streamCapture.onStateChange?.('open');
+		await waitFor(() => {
+			const pill = screen.getByTestId('map-ws-pill');
+			expect(pill.getAttribute('data-ws-state')).toBe('open');
+			expect(pill.textContent ?? '').toContain('Live');
+		});
+	});
+
+	it('seeds events from replay then appends live frames', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		const replay = [mkEvent({ details: 'replay-1' }), mkEvent({ details: 'replay-2' })];
+		fetchGeoEventsReplayMock.mockResolvedValue({ events: replay, total: replay.length });
+		render(MapPage);
+		await waitFor(() => {
+			// Two replay arcs spawn on initial render (the
+			// WorldMap mounts after position + replay land).
+			const arcs = screen.getByTestId('worldmap-arcs');
+			expect(arcs.querySelectorAll('path').length).toBe(2);
+		});
+		// Fire a live frame.
+		streamCapture.onEvent?.(mkEvent({ details: 'live-1', category: 'auth' }));
+		await waitFor(() => {
+			const arcs = screen.getByTestId('worldmap-arcs');
+			expect(arcs.querySelectorAll('path').length).toBe(3);
+		});
+	});
+
+	it('closes the WS handle on unmount', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		const { unmount } = render(MapPage);
+		await waitFor(() => {
+			expect(streamCapture.onEvent).not.toBeNull();
+		});
+		unmount();
+		expect(streamCapture.closeCalls).toBe(1);
 	});
 });

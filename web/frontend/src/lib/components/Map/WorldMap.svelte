@@ -46,12 +46,28 @@
   visual ambiguity proves confusing in smoke.
 -->
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import * as d3 from 'd3';
 	import { feature } from 'topojson-client';
 	import type { GeoProjection, GeoPath } from 'd3-geo';
 	import type { Topology } from 'topojson-specification';
 	import type { Feature, FeatureCollection, Geometry } from 'geojson';
+	import type { GeoEvent } from '$lib/api/types';
+	import { CATEGORY_COLORS } from './categoryColors';
+	import {
+		ARC_TOTAL_MS,
+		ARC_TRAVEL_MS,
+		arcControl,
+		arcPathAt,
+		arcProgressAt,
+		bezierAt
+	} from './arcMath';
+	// ARC_TRAVEL_MS is imported for symmetry with the
+	// timing-constant docblock below; suppress the
+	// unused-import lint without removing the explicit
+	// reference (a future caller may grep for the constant
+	// and expect to see it imported alongside).
+	void ARC_TRAVEL_MS;
 
 	interface Props {
 		/** Width of the SVG viewBox in pixels (default 1200). */
@@ -85,6 +101,21 @@
 		 * world-atlas). Tests override to a fixture or mock.
 		 */
 		topojsonUrl?: string;
+		/**
+		 * Step V.6 — geo events to render as animated arcs.
+		 * The component watches this array for appends and
+		 * spawns a new arc per new event, scoping the spawn
+		 * to indices NOT YET seen (so a replay-then-WS flow
+		 * doesn't re-animate the same event on every prop
+		 * update). LAN events (isLan=true) are skipped per
+		 * spec §3.8 — V.7 may add a LAN counter badge.
+		 *
+		 * The page caps the array at 1000 entries; arcs
+		 * self-prune after their travel + fade duration so
+		 * the in-DOM arc count stays bounded by N events /
+		 * second × ARC_TOTAL_MS.
+		 */
+		events?: readonly GeoEvent[];
 	}
 
 	let {
@@ -95,7 +126,8 @@
 		city = '',
 		country = '',
 		mode = 'auto',
-		topojsonUrl = '/world-50m.topo.json'
+		topojsonUrl = '/world-50m.topo.json',
+		events = []
 	}: Props = $props();
 
 	let svg: SVGSVGElement | undefined = $state();
@@ -161,6 +193,165 @@
 			.attr('stroke', 'var(--map-border, var(--border-subtle))')
 			.attr('stroke-width', 0.5);
 	});
+
+	// -------------------------------------------------------
+	// Step V.6 — arc animation.
+	//
+	// Each incoming non-LAN event produces an ArcState whose
+	// lifecycle is:
+	//
+	//   t=0           spawn at `source`; head + line empty
+	//   t=ARC_TRAVEL  arrival at Arenet position; line fully drawn
+	//   t=ARC_TOTAL   fully faded; pruned from the arcs[] array
+	//
+	// Timing constants tuned for the spec §3.5 "operator
+	// sees the threat arriving" gut feel. 2 s travel is
+	// readable without feeling sluggish on a busy attack;
+	// 1.5 s fade is long enough for the eye to register a
+	// just-arrived arc but short enough that overlapping
+	// arcs from the same source don't pile up into a solid
+	// blob. ARC_TOTAL caps the DOM-resident arc count to
+	// roughly (events/sec × 3.5). Constants live in
+	// arcMath.ts so the test suite can pin them without
+	// rendering this component.
+	//
+	// Animation drive: d3.timer (which uses
+	// requestAnimationFrame internally). We mutate a
+	// `clockMs` $state every frame; the arcs[] array
+	// references it inside reactive expressions so Svelte
+	// re-renders the SVG paths at native frame rate.
+	//
+	// LAN events (isLan=true) are skipped per spec §3.8 —
+	// the marker pulse on the Arenet position already
+	// signals "you are here", and rendering LAN sources as
+	// loop arcs would clutter the homelab view (where most
+	// of the traffic is LAN). V.7 may add a counter badge.
+
+	interface ArcState {
+		id: number;
+		event: GeoEvent;
+		startMs: number;
+		source: [number, number];
+		target: [number, number];
+	}
+
+	let arcs: ArcState[] = $state([]);
+	let clockMs = $state(0);
+	let arcIdCounter = 0;
+	let nextEventIdx = 0;
+
+	// Optional override hook for tests: lets a deterministic
+	// time source (vi.fn) replace performance.now() so the
+	// progress / opacity math is unit-testable without
+	// faking the global clock.
+	let nowFn: () => number = () => performance.now();
+	// Test-only escape hatch (Svelte runes don't expose a
+	// straightforward "test seam" prop, so we attach a
+	// global setter the test suite can call before mount).
+	// Production code MUST NOT touch this.
+	export function _setNowForTest(fn: () => number) {
+		nowFn = fn;
+	}
+
+	let timerHandle: ReturnType<typeof d3.timer> | null = null;
+
+	onMount(() => {
+		// d3.timer uses requestAnimationFrame internally;
+		// the callback fires on every browser repaint until
+		// stopped. Stop on destroy to release the rAF chain.
+		timerHandle = d3.timer(() => {
+			const t = nowFn();
+			clockMs = t;
+			// Prune expired arcs. Allocate a fresh array
+			// only when at least one arc is gone; otherwise
+			// keep the same reference so the {#each} block
+			// doesn't trigger a full re-key.
+			let pruned: ArcState[] | null = null;
+			for (let i = 0; i < arcs.length; i++) {
+				if (t - arcs[i].startMs >= ARC_TOTAL_MS) {
+					if (pruned === null) pruned = arcs.slice(0, i);
+				} else if (pruned !== null) {
+					pruned.push(arcs[i]);
+				}
+			}
+			if (pruned !== null) {
+				arcs = pruned;
+			}
+		});
+	});
+
+	onDestroy(() => {
+		timerHandle?.stop();
+		timerHandle = null;
+	});
+
+	// Watch the `events` prop for new entries beyond
+	// nextEventIdx. Run inside an $effect so prop mutations
+	// from the page (replay batch + per-WS-frame appends)
+	// trigger spawn without double-spawning replayed events.
+	$effect(() => {
+		if (arenetLat === null || arenetLon === null) {
+			// Degraded mode — no Arenet target, no arcs.
+			// Skip spawn but DON'T reset nextEventIdx so a
+			// re-enable (operator placed MMDB then PUT
+			// position) catches up cleanly.
+			return;
+		}
+		if (events.length <= nextEventIdx) {
+			// Either the array shrank (page-level cap
+			// trimmed older entries) or no new events.
+			// Realign the cursor against the new length.
+			if (events.length < nextEventIdx) nextEventIdx = events.length;
+			return;
+		}
+		const arenetXY = projection([arenetLon, arenetLat]);
+		if (!arenetXY) return;
+
+		const t = nowFn();
+		const spawned: ArcState[] = [];
+		for (let i = nextEventIdx; i < events.length; i++) {
+			const ev = events[i];
+			if (ev.isLan) continue;
+			// Skip events the GeoIP enricher couldn't place
+			// (UNK country, zero lat/lon). Rendering them
+			// would draw an arc from the Atlantic null-
+			// island — same misleading pin V.5 avoids for
+			// the Arenet marker.
+			if (ev.sourceLat === 0 && ev.sourceLon === 0) continue;
+			const src = projection([ev.sourceLon, ev.sourceLat]);
+			if (!src) continue;
+			spawned.push({
+				id: arcIdCounter++,
+				event: ev,
+				startMs: t,
+				source: src,
+				target: arenetXY
+			});
+		}
+		if (spawned.length > 0) {
+			arcs = [...arcs, ...spawned];
+		}
+		nextEventIdx = events.length;
+	});
+
+	// Reduce-motion: when the operator's OS reports
+	// "prefers-reduced-motion: reduce", static arcs replace
+	// the animated lifecycle. The arc is drawn fully at
+	// spawn, no head dot, no fade. Pruning still runs at
+	// ARC_TOTAL_MS so the SVG doesn't accumulate forever.
+	let reduceMotion = $state(false);
+	onMount(() => {
+		if (typeof window === 'undefined' || !window.matchMedia) return;
+		const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+		reduceMotion = mq.matches;
+		const listener = (e: MediaQueryListEvent) => {
+			reduceMotion = e.matches;
+		};
+		mq.addEventListener('change', listener);
+		return () => mq.removeEventListener('change', listener);
+	});
+
+	// Geometry helpers live in arcMath.ts (imported above).
 </script>
 
 <div class="worldmap" data-testid="worldmap-container">
@@ -188,6 +379,34 @@
 			fill="var(--map-ocean, var(--bg-base))"
 		/>
 		<g class="countries" data-testid="worldmap-countries"></g>
+		<g class="arcs" data-testid="worldmap-arcs">
+			{#each arcs as arc (arc.id)}
+				{@const state = arcProgressAt(arc.startMs, clockMs)}
+				{#if state.opacity > 0}
+					{@const head = bezierAt(arc.source, arcControl(arc.source, arc.target), arc.target, state.progress)}
+					<path
+						class="arc__line"
+						class:arc__line--static={reduceMotion}
+						d={reduceMotion
+							? arcPathAt(arc.source, arc.target, 1)
+							: arcPathAt(arc.source, arc.target, state.progress)}
+						stroke={CATEGORY_COLORS[arc.event.category]}
+						opacity={state.opacity}
+						data-category={arc.event.category}
+					/>
+					{#if !reduceMotion && state.progress < 1}
+						<circle
+							class="arc__head"
+							cx={head[0]}
+							cy={head[1]}
+							r="2.5"
+							fill={CATEGORY_COLORS[arc.event.category]}
+							opacity={state.opacity}
+						/>
+					{/if}
+				{/if}
+			{/each}
+		</g>
 		{#if markerXY}
 			<g class="marker" transform="translate({markerXY[0]}, {markerXY[1]})" data-testid="worldmap-marker">
 				<!-- Pulsing halo — pure CSS animation, no JS. -->
@@ -232,6 +451,27 @@
 		color: var(--text-primary);
 		font-size: 13px;
 		z-index: 1;
+	}
+
+	/* Step V.6 — arc lines. Color comes from the inline
+	   stroke attribute (CATEGORY_COLORS); CSS only owns
+	   stroke-width + linejoin so the per-category color
+	   stays a single source of truth in categoryColors.ts.
+	   The `arc__line--static` variant ships under
+	   prefers-reduced-motion (no width emphasis at the
+	   head, no animation). */
+	.arc__line {
+		fill: none;
+		stroke-width: 1.4;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		pointer-events: none;
+	}
+	.arc__line--static {
+		stroke-width: 1.1;
+	}
+	.arc__head {
+		pointer-events: none;
 	}
 
 	/* Marker — pulsing halo + solid core. */
