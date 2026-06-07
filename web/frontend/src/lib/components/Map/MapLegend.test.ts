@@ -26,16 +26,17 @@ describe('MapLegend', () => {
 		}
 	});
 
-	it('uses the categoryColors.ts CSS var for each row swatch', () => {
+	it('uses the categoryColors.ts CSS var for each row dot-svg', () => {
 		render(MapLegend);
 		for (const cat of CATEGORIES) {
 			const row = screen.getByTestId(`map-legend-item-${cat}`);
-			const swatch = row.querySelector('.map-legend__swatch') as HTMLElement;
-			expect(swatch).not.toBeNull();
-			// Inline style carries the var(--token) reference;
-			// the actual color resolves at browser runtime
+			const dots = row.querySelector('.dots') as SVGElement | null;
+			expect(dots).not.toBeNull();
+			// Inline style sets `color: var(--token)`; the
+			// dot circles paint via fill="currentColor" so
+			// the per-row token resolves at browser runtime
 			// (jsdom doesn't compute CSS custom properties).
-			expect(swatch.getAttribute('style') ?? '').toContain(CATEGORY_COLORS[cat]);
+			expect(dots?.getAttribute('style') ?? '').toContain(CATEGORY_COLORS[cat]);
 		}
 	});
 
@@ -43,7 +44,7 @@ describe('MapLegend', () => {
 		render(MapLegend);
 		// Pin a sample of the operator-meaningful copy.
 		expect(screen.getByTestId('map-legend-item-throttle').textContent ?? '').toContain(
-			'Rate-limit'
+			'rate-limit'
 		);
 		expect(screen.getByTestId('map-legend-item-waf').textContent ?? '').toContain(
 			'Coraza'
@@ -81,5 +82,17 @@ describe('MapLegend', () => {
 		render(MapLegend);
 		const root = screen.getByTestId('map-legend');
 		expect(root.getAttribute('aria-label') ?? '').toMatch(/légende/i);
+	});
+
+	it('mirrors the topology panel visual language (.panel class + dots + legend-note)', () => {
+		// Pins the visual-consistency win: a future
+		// regression that drops the .panel class or the
+		// .dots / .legend-note shape would diverge from
+		// the topology page's TopologySidebar pattern.
+		render(MapLegend);
+		const root = screen.getByTestId('map-legend');
+		expect(root.classList.contains('panel')).toBe(true);
+		expect(root.querySelectorAll('.dots').length).toBe(5);
+		expect(root.querySelector('.legend-note')).not.toBeNull();
 	});
 });
