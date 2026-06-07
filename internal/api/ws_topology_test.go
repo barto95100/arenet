@@ -79,7 +79,7 @@ func newWSTestEnv(t *testing.T) *wsTestEnv {
 	broadcaster := metrics.NewBroadcaster(logger)
 	wsHandler := NewWSTopologyHandler(broadcaster, true /* dev allows empty Origin */, logger)
 
-	router := NewRouter(h, true, ipExtractor, wsHandler, nil, nil)
+	router := NewRouter(h, true, ipExtractor, wsHandler, nil, nil, nil)
 
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
@@ -341,7 +341,7 @@ func TestWS_Topology_ServerShutdown_Code1001(t *testing.T) {
 	// shutdown signal propagates to ServeHTTP via the request
 	// context after we call http.Server.Shutdown.
 	wsHandler := NewWSTopologyHandler(broadcaster, true, logger)
-	router := NewRouter(h, true, ipExtractor, wsHandler, nil, nil)
+	router := NewRouter(h, true, ipExtractor, wsHandler, nil, nil, nil)
 
 	// Bootstrap an admin session.
 	ctx := context.Background()

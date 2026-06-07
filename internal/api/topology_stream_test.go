@@ -82,7 +82,7 @@ func newStreamTestEnv(t *testing.T, tickMs int) *streamTestEnv {
 	// Snapshot handler at /topology/snapshot isn't dialled by these
 	// tests, but keeping it nil keeps NewRouter generic.
 
-	router := NewRouter(h, true, ipExtractor, nil, nil, streamHandler)
+	router := NewRouter(h, true, ipExtractor, nil, nil, streamHandler, nil)
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 

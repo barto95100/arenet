@@ -403,10 +403,47 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	} else {
 		logger.Info("server position auto-detect skipped (geoip database absent)")
 	}
-	// V.2 reads geoLookup, V.4 reads serverPosition. Silence the
-	// "declared and not used" check until those sub-tasks wire the
-	// consumers in.
+	// V.4 reads serverPosition. Silence the "declared and not
+	// used" check until V.4 wires it.
 	_ = serverPosition
+
+	// Step V.2 — Geo event enricher. Pure translation layer
+	// from the per-source event types (waf/throttle/crowdsec/
+	// auth) to the common GeoEvent shape spec §5.6 locks. The
+	// V.3 forwarder sinks read this enricher to translate
+	// per-source events into the wire shape the bus
+	// broadcasts. Nil-tolerant per V.1 contract: a missing
+	// MMDB leaves the Lookup as nil and the enricher returns
+	// UNK-country events instead of panicking.
+	//
+	// MUST be created BEFORE the per-source sinks below so
+	// the geo-forwarding wrappers can capture it at sink-
+	// installation time.
+	geoEnricher := geo.NewEnricher(geoLookup)
+	logger.Info("geo event enricher wired",
+		"lookup_present", geoEnricher.HasLookup(),
+	)
+
+	// Step V.3 — Geo event bus + ring buffer. Capacity locked
+	// at spec §3.5 (N=500). The bus is the single fan-out
+	// point: the four geo-forwarding sink wrappers below
+	// publish into it; the WS handler subscribes for live
+	// push; the GET /observability/geo-events handler reads
+	// SnapshotLimited for the page-mount replay.
+	//
+	// nil-bus is the AC #13 degraded case: every consumer
+	// honors it. The bus itself is allocated unconditionally
+	// (cheap — just a 500-slot slice + a mutex) so the
+	// observability subsystem only degrades when an outer
+	// dependency (the GeoIP Lookup, in practice) is missing.
+	//
+	// MUST be created BEFORE the per-source sinks below so
+	// the geo-forwarding wrappers can capture it at sink-
+	// installation time.
+	geoBus := geo.NewBus(geo.DefaultRingCapacity)
+	logger.Info("geo event bus wired",
+		"ring_capacity", geo.DefaultRingCapacity,
+	)
 
 	obsAggregator := observability.NewAggregator(obsStore, logger, 4096)
 	obsRetention := observability.NewRetentionRunner(obsStore, logger)
@@ -452,7 +489,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// JSON config and cannot inject Go pointers, so a
 	// package-singleton is the only path.
 	wafSink := waf.NewSink(wafInserterAdapter{obsStore}, obsAggregator, logger, waf.SinkConfig{})
-	waf.SetGlobalSink(wafSink)
+	// Step V.3 — wrap the production sink with the
+	// geo-forwarding adapter so every WAF block also lands on
+	// the geo bus. The wrapper's Emit publishes the enriched
+	// event to the bus, then delegates to the wrapped sink for
+	// persistence + counter bump. Both inner sink and bus are
+	// nil-safe at the wrapper; the data plane is unaffected.
+	waf.SetGlobalSink(geoForwardingWafSink{bus: geoBus, enricher: geoEnricher, inner: wafSink})
 	wafCtx, wafCancel := context.WithCancel(ctx)
 	var wafWG sync.WaitGroup
 	wafWG.Add(1)
@@ -485,7 +528,9 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// returns nil from each flush (events drop silently rather
 	// than inflating FlushErrBatches).
 	throttleSink := throttle.NewSink(throttleInserterAdapter{obsStore}, obsAggregator, logger, throttle.SinkConfig{})
-	throttle.SetGlobalSink(throttleSink)
+	// Step V.3 — geo-forwarding wrapper, mirror of the WAF
+	// install above.
+	throttle.SetGlobalSink(geoForwardingThrottleSink{bus: geoBus, enricher: geoEnricher, inner: throttleSink})
 	throttleCtx, throttleCancel := context.WithCancel(ctx)
 	var throttleWG sync.WaitGroup
 	throttleWG.Add(1)
@@ -531,7 +576,9 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	//     anything (e.g. a future test injection) can still
 	//     emit into without crashing.
 	crowdsecSink := crowdsec.NewSink(crowdsecInserterAdapter{obsStore}, obsAggregator, logger, crowdsec.SinkConfig{})
-	crowdsec.SetGlobalSink(crowdsecSink)
+	// Step V.3 — geo-forwarding wrapper, mirror of the WAF /
+	// throttle installs above.
+	crowdsec.SetGlobalSink(geoForwardingCrowdsecSink{bus: geoBus, enricher: geoEnricher, inner: crowdsecSink})
 	crowdsecCtx, crowdsecCancel := context.WithCancel(ctx)
 	var crowdsecWG sync.WaitGroup
 	crowdsecWG.Add(1)
@@ -682,20 +729,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		"degraded", obsStore == nil,
 	)
 
-	// Step V.2 — Geo event enricher. Pure translation layer
-	// from the per-source event types (waf/throttle/crowdsec/
-	// auth) to the common GeoEvent shape spec §5.6 locks. V.3
-	// will read this `geoEnricher` for the bus + WS broadcaster
-	// wire-up. Nil-tolerant per V.1 contract: a missing MMDB
-	// leaves the Lookup as nil and the enricher returns
-	// UNK-country events instead of panicking.
-	geoEnricher := geo.NewEnricher(geoLookup)
-	logger.Info("geo event enricher wired",
-		"lookup_present", geoEnricher.HasLookup(),
-	)
-	// V.3 reads geoEnricher into the geo bus. Silence the
-	// "declared and not used" check until that lands.
-	_ = geoEnricher
+	// (Step V.2 enricher + V.3 bus were moved upward to right
+	// after geoLookup so the per-source sinks above can be
+	// wrapped at construction time. See the §V.2/§V.3 wire-up
+	// block above for the rationale.)
 
 	// Start the metrics ticker AFTER caddymgr.Start so the first
 	// tick sees the registry already populated by the post-Start
@@ -852,9 +889,26 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// 30418ea) — any future regression where SetAuthEventSink
 	// goes missing surfaces here as sink_present=false instead
 	// of silent geo-stream degradation.
-	apiHandler.SetAuthEventSink(authEventSink)
+	// Step V.3 — wrap the auth event sink with the geo-
+	// forwarding adapter so every auth failure also lands on
+	// the geo bus alongside the V.2 audit-helpers fan-out.
+	// Same nil-safety guarantees as the WAF/throttle/crowdsec
+	// wrappers above.
+	apiHandler.SetAuthEventSink(geoForwardingAuthSink{bus: geoBus, enricher: geoEnricher, inner: authEventSink})
 	logger.Info("api handler wired with auth event sink",
 		"sink_present", apiHandler.HasAuthEventSink(),
+	)
+	// Step V.3 — wire the geo bus into the api handler so the
+	// GET /observability/geo-events replay endpoint reads from
+	// it. The WS handler builds on the same bus via the
+	// NewWSGeoEventsHandler constructor below. HF4 boot-log
+	// pattern (commit 30418ea) surfaces any future regression
+	// as bus_present=false in journalctl.
+	apiHandler.SetGeoBus(geoBus)
+	apiHandler.SetGeoIPDegraded(!geoEnricher.HasLookup())
+	logger.Info("api handler wired with geo bus",
+		"bus_present", apiHandler.HasGeoBus(),
+		"geoip_degraded", !geoEnricher.HasLookup(),
 	)
 
 	// Step P.3 — auto-classify trigger engine wiring.
@@ -909,9 +963,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		cfg.TopologyTickMs, cfg.Dev, logger,
 	)
 
+	// Step V.3 — geo events WebSocket handler. Mounted at
+	// /api/v1/ws/geo-events by the router below. Hard-auth
+	// middleware gates the upgrade per spec §5.5.
+	wsGeoEventsHandler := api.NewWSGeoEventsHandler(geoBus, cfg.Dev, logger)
+
 	router := api.NewRouter(
 		apiHandler, cfg.Dev, ipExtractor,
 		wsTopologyHandler, topologySnapshotHandler, topologyStreamHandler,
+		wsGeoEventsHandler,
 	)
 
 	if cfg.Dev {

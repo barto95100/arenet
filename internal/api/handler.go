@@ -278,6 +278,22 @@ type Handler struct {
 	// SetAuthEventSink after construction; cmd/arenet logs
 	// present=<bool> at boot per the HF4 pattern.
 	authSink AuthEventSubmitter
+	// geoBus (Step V.3, 2026-06-06) is the in-memory event
+	// bus + ring buffer (N=500 per spec §3.5) that backs both
+	// the WS /api/v1/ws/geo-events live push and the GET
+	// /api/v1/observability/geo-events replay endpoint.
+	//
+	// Nil-tolerant per the AC #13 degraded contract: a nil
+	// bus collapses the GET endpoint to {events:[], total:0,
+	// degraded:true} and rejects the WS upgrade by returning
+	// the same degraded envelope on a one-shot HTTP response.
+	geoBus GeoEventReader
+	// geoIPDegraded (Step V.3, 2026-06-06) is set at boot
+	// when the GeoIP MMDB is absent (V.1's nil Lookup case).
+	// Surfaces on the geo-events response as the `degraded`
+	// flag so the frontend can render the "GeoIP not
+	// configured" banner even when events are still flowing.
+	geoIPDegraded bool
 }
 
 // AuthEventSubmitter is the seam internal/api/audit_helpers.go
@@ -567,6 +583,32 @@ func (h *Handler) SetAuthEventSink(s AuthEventSubmitter) {
 // regression surfaces in journalctl.
 func (h *Handler) HasAuthEventSink() bool {
 	return h.authSink != nil
+}
+
+// SetGeoBus (Step V.3, 2026-06-06) attaches the geo event
+// bus the WS broadcaster + GET replay handler read from.
+// Pass the *geo.Bus the V.3 wiring constructs in main.go.
+// Nil-tolerant per AC #13: leaving this unset (or passing
+// nil) collapses the GET endpoint to the degraded envelope
+// and disables the WS broadcaster.
+func (h *Handler) SetGeoBus(b GeoEventReader) {
+	h.geoBus = b
+}
+
+// HasGeoBus reports whether the geo-event seam is wired.
+// cmd/arenet calls this after SetGeoBus and logs
+// bus_present=<bool> at boot per the HF4 pattern.
+func (h *Handler) HasGeoBus() bool {
+	return h.geoBus != nil
+}
+
+// SetGeoIPDegraded (Step V.3, 2026-06-06) marks whether the
+// GeoIP MMDB lookup is degraded (V.1's nil Lookup case).
+// Surfaces on the GET /geo-events response so the frontend
+// knows lat/lon/country are sentinel values even when events
+// are flowing. Called once at boot.
+func (h *Handler) SetGeoIPDegraded(degraded bool) {
+	h.geoIPDegraded = degraded
 }
 
 // SetDecisionReader (Step N.3) attaches the CrowdSec

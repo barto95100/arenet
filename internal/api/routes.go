@@ -51,7 +51,7 @@ import (
 // GET /api/v1/topology/stream, both inside the same hard-auth
 // subgroup. Viewer + admin both accepted (read-only endpoints).
 // Tests that do not exercise these endpoints pass nil.
-func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopologyHandler, snapshotHandler *SnapshotHandler, streamHandler *StreamHandler) chi.Router {
+func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopologyHandler, snapshotHandler *SnapshotHandler, streamHandler *StreamHandler, wsGeoEvents *WSGeoEventsHandler) chi.Router {
 	if ipExtractor == nil {
 		panic("api.NewRouter: ipExtractor is nil")
 	}
@@ -201,6 +201,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// widening). Same hard-auth + AC #13 degraded-mode
 			// contract as the security siblings above.
 			r.Get("/observability/cert-events", h.securityCertEvents)
+			// Step V.3 — geo events replay endpoint. Returns
+			// the in-memory ring buffer (capacity 500 per
+			// spec §3.5) for the /map page's initial paint;
+			// the WS /ws/geo-events stream below overlays
+			// live events on top. Same hard-auth + AC #13
+			// degraded-mode contract as cert-events above.
+			r.Get("/observability/geo-events", h.securityGeoEvents)
 			// Step O.3 — managed-domain list (read).
 			// Viewer-accessible per AC #20 (parallel to
 			// the DNS-provider GET — both are config reads
@@ -243,6 +250,15 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			}
 			if streamHandler != nil {
 				r.Get("/topology/stream", streamHandler.ServeHTTP)
+			}
+
+			// Step V.3 — live geo events WebSocket. Mirror of
+			// /ws/topology shape. HardAuthMiddleware rejects
+			// the handshake (401 / 403) BEFORE the upgrade —
+			// spec §5.5. Tests that do not exercise the geo
+			// endpoint pass nil.
+			if wsGeoEvents != nil {
+				r.Get("/ws/geo-events", wsGeoEvents.ServeHTTP)
 			}
 
 			// Admin-only sub-group (Step K.2 §1.3 decision 12).
