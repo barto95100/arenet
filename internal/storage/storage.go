@@ -56,6 +56,12 @@ const (
 	// + the per-category rule set. Single bucket, two keys
 	// ("credentials" + "rules"). See automation_config.go.
 	bucketAutomation = "automation"
+	// Step V.4 — instance-level server geographic position
+	// (where the Mercator is centered + the central pin is
+	// placed on the /map page). Single row, keyed "default" —
+	// same convention as bucketOIDCConfig. See
+	// server_position.go.
+	bucketServerPosition = "server_position"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -98,6 +104,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketOIDCConfig),           // Step K.2
 			[]byte(bucketManagedDomains),       // Step O.1
 			[]byte(bucketAutomation),           // Step P.1
+			[]byte(bucketServerPosition),       // Step V.4
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)

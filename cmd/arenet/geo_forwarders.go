@@ -162,3 +162,19 @@ func (g geoForwardingAuthSink) Submit(e observability.AuthEvent) {
 		g.inner.Submit(e)
 	}
 }
+
+// serverPositionRedetector satisfies api.ServerPositionRedetector
+// for V.4's POST :redetect endpoint. Captures the boot-time
+// *geo.Lookup so the handler can re-run V.1's
+// DetectFromPublicIP path without taking a hard dependency
+// on internal/geo at the api package boundary. The lookup
+// pointer may be nil (degraded GeoIP mode); the underlying
+// DetectFromPublicIP returns an error in that case and the
+// handler renders the degraded shape.
+type serverPositionRedetector struct {
+	lookup *geo.Lookup
+}
+
+func (r serverPositionRedetector) Redetect() (*geo.ServerPosition, error) {
+	return geo.DetectFromPublicIP(r.lookup)
+}

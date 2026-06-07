@@ -106,6 +106,18 @@ const (
 	// JSON (watcher passwords redacted, J.4 pattern).
 	ActionAutomationDecisionPushed = "automation_decision_pushed"
 	ActionAutomationRuleChanged    = "automation_rule_changed"
+
+	// Step V.4 — server geographic position admin actions.
+	// PositionUpdated emitted by PUT /api/v1/observability/
+	// server-position when the operator sets a manual override.
+	// Carries target_id="default" (single-row bucket key) and
+	// before/after JSON with the lat/lon/city/country diff.
+	// PositionRedetected emitted by POST /api/v1/observability/
+	// server-position:redetect — same target_id, after_json
+	// reflects the newly-detected position, before_json
+	// reflects whatever was persisted before the redetect.
+	ActionServerPositionUpdated    = "server_position_updated"
+	ActionServerPositionRedetected = "server_position_redetected"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -144,6 +156,8 @@ var allActions = []string{
 	ActionManagedDomainDeleted,
 	ActionAutomationDecisionPushed,
 	ActionAutomationRuleChanged,
+	ActionServerPositionUpdated,
+	ActionServerPositionRedetected,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

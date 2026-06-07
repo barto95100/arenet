@@ -27,6 +27,7 @@ import (
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/certinfo"
+	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -294,6 +295,25 @@ type Handler struct {
 	// flag so the frontend can render the "GeoIP not
 	// configured" banner even when events are still flowing.
 	geoIPDegraded bool
+	// serverPositionStore (Step V.4, 2026-06-07) is the
+	// persistence seam for GET / PUT / POST :redetect on
+	// /api/v1/observability/server-position. Backed by
+	// *storage.Store in production; tests substitute a stub
+	// via SetServerPositionStore. Nil-tolerant per AC #13.
+	serverPositionStore ServerPositionStore
+	// serverPositionRedetector (Step V.4, 2026-06-07) is
+	// the seam the POST :redetect handler uses to re-run
+	// V.1's ipify-then-GeoIP path without taking a hard
+	// dependency on internal/geo at this package boundary.
+	// Production wires a closure around geo.DetectFromPublicIP
+	// in cmd/arenet/main.go.
+	serverPositionRedetector ServerPositionRedetector
+	// bootDetectedPosition (Step V.4, 2026-06-07) is the
+	// V.1 auto-detect result captured at boot. Used as the
+	// fallback when the persistence store has no row (fresh
+	// install) AND the operator has not landed on a manual
+	// override yet. Read-only after construction.
+	bootDetectedPosition *geo.ServerPosition
 }
 
 // AuthEventSubmitter is the seam internal/api/audit_helpers.go
@@ -609,6 +629,47 @@ func (h *Handler) HasGeoBus() bool {
 // are flowing. Called once at boot.
 func (h *Handler) SetGeoIPDegraded(degraded bool) {
 	h.geoIPDegraded = degraded
+}
+
+// SetServerPositionStore (Step V.4, 2026-06-07) attaches
+// the BoltDB-backed persistence the position GET / PUT
+// handlers read + write. Nil-tolerant: a nil store
+// collapses GET to the boot-auto-detect fallback (or
+// degraded shape) and rejects PUT / POST :redetect with
+// 503.
+func (h *Handler) SetServerPositionStore(s ServerPositionStore) {
+	h.serverPositionStore = s
+}
+
+// SetServerPositionRedetector (Step V.4, 2026-06-07)
+// attaches the redetect seam — typically a closure around
+// geo.DetectFromPublicIP captured in cmd/arenet/main.go.
+// Nil-tolerant: a nil redetector returns 503 for the POST
+// :redetect endpoint while leaving GET / PUT unaffected.
+func (h *Handler) SetServerPositionRedetector(r ServerPositionRedetector) {
+	h.serverPositionRedetector = r
+}
+
+// SetBootDetectedPosition (Step V.4, 2026-06-07) installs
+// the V.1 auto-detect result captured at boot. Used by GET
+// as the second-best source when no persisted row exists.
+// nil is acceptable (fresh install + no network at boot).
+func (h *Handler) SetBootDetectedPosition(p *geo.ServerPosition) {
+	h.bootDetectedPosition = p
+}
+
+// HasServerPositionStore reports whether the position
+// persistence seam is wired. cmd/arenet logs the result at
+// boot per the HF4 pattern (commit 30418ea).
+func (h *Handler) HasServerPositionStore() bool {
+	return h.serverPositionStore != nil
+}
+
+// HasServerPositionRedetector reports whether the redetect
+// seam is wired. cmd/arenet logs this at boot so a missing
+// wire-up surfaces in journalctl.
+func (h *Handler) HasServerPositionRedetector() bool {
+	return h.serverPositionRedetector != nil
 }
 
 // SetDecisionReader (Step N.3) attaches the CrowdSec

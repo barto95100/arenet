@@ -27,6 +27,14 @@ import (
 	"time"
 )
 
+// ServerPositionMode constants — single point of truth for the
+// `mode` field's value space. Spec §5.1 locks {"auto", "manual"};
+// any future extension lands here so the enum cannot drift.
+const (
+	ServerPositionModeAuto   = "auto"
+	ServerPositionModeManual = "manual"
+)
+
 // ServerPosition is the lat/lon of the Arenet server itself. Used by
 // V.4 to anchor the topology map (server-at-center). Mode is "auto"
 // when detected via DetectFromPublicIP, "manual" when V.4's operator
@@ -34,12 +42,18 @@ import (
 //
 // Per Step V spec §3.4 — public-IP auto-detection at boot via
 // ipify, with operator-supplied manual override as the fallback.
+//
+// SourceIP (spec §5.1) carries the public IP ipify returned for an
+// auto-detected position, and is empty for manual overrides. The
+// wire format omits it when empty so the GET response is honest
+// about which mode produced the row.
 type ServerPosition struct {
 	Lat        float64   `json:"lat"`
 	Lon        float64   `json:"lon"`
 	City       string    `json:"city"`
 	Country    string    `json:"country"`
 	Mode       string    `json:"mode"`
+	SourceIP   string    `json:"sourceIp,omitempty"`
 	DetectedAt time.Time `json:"detectedAt"`
 }
 
@@ -114,7 +128,8 @@ func DetectFromPublicIP(lookup *Lookup) (*ServerPosition, error) {
 		Lon:        loc.Lon,
 		City:       loc.City,
 		Country:    loc.Country,
-		Mode:       "auto",
+		Mode:       ServerPositionModeAuto,
+		SourceIP:   ipStr,
 		DetectedAt: time.Now().UTC(),
 	}, nil
 }

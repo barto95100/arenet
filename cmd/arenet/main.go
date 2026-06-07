@@ -382,30 +382,89 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		}()
 	}
 
-	// Public IP auto-detect — non-fatal. Result is stashed in
-	// `serverPosition` for V.4 to expose via GET endpoint; V.2
-	// sinks read `geoLookup` directly for enrichment. Detection
-	// requires both an open MMDB AND a reachable ipify endpoint
-	// (or ARENET_PUBLIC_IP override) — first failure short-
-	// circuits to manual-override territory.
-	var serverPosition *geo.ServerPosition
-	if geoLookup != nil {
-		serverPosition, geoErr = geo.DetectFromPublicIP(geoLookup)
-		if geoErr != nil {
-			logger.Warn("server position auto-detect failed; manual override required (V.4)",
-				"err", geoErr)
-		} else {
-			logger.Info("server position auto-detected",
-				"lat", serverPosition.Lat, "lon", serverPosition.Lon,
-				"city", serverPosition.City, "country", serverPosition.Country,
-				"mode", serverPosition.Mode)
+	// Step V.4 — server position resolution. Order of
+	// precedence (spec §5.1):
+	//
+	//   1. Persisted manual override in arenet.db wins always
+	//      — the operator's choice survives reboots without
+	//      being clobbered by auto-detect.
+	//   2. Persisted auto-detect row (from a previous boot)
+	//      is used when the GeoIP DB is missing OR the ipify
+	//      call is failing on THIS boot — the cached row is
+	//      still a reasonable Mercator center.
+	//   3. Live auto-detect via geo.DetectFromPublicIP when
+	//      a MMDB is available — opportunistically persisted
+	//      so the next boot can skip the ipify call.
+	//   4. Degraded: nil bootPosition, GET endpoint returns
+	//      {degraded:true}, frontend renders the banner.
+	//
+	// Modes:
+	//   bootPositionMode = "manual" → operator-supplied (won path 1)
+	//   bootPositionMode = "auto"   → fresh live detect (path 3)
+	//                              OR persisted auto row (path 2)
+	//   bootPositionMode = "none"   → degraded (path 4)
+	var bootPosition *geo.ServerPosition
+	bootPositionMode := "none"
+
+	if persisted, perr := store.GetServerPosition(ctx); perr == nil {
+		bootPosition = &geo.ServerPosition{
+			Lat:        persisted.Lat,
+			Lon:        persisted.Lon,
+			City:       persisted.City,
+			Country:    persisted.Country,
+			Mode:       persisted.Mode,
+			SourceIP:   persisted.SourceIP,
+			DetectedAt: persisted.DetectedAt,
 		}
-	} else {
-		logger.Info("server position auto-detect skipped (geoip database absent)")
+		bootPositionMode = persisted.Mode
+		logger.Info("server position loaded from store",
+			"mode", persisted.Mode,
+			"lat", persisted.Lat, "lon", persisted.Lon,
+			"city", persisted.City, "country", persisted.Country)
+	} else if !errors.Is(perr, storage.ErrNotFound) {
+		logger.Warn("server position store read failed; falling back to auto-detect",
+			"err", perr)
 	}
-	// V.4 reads serverPosition. Silence the "declared and not
-	// used" check until V.4 wires it.
-	_ = serverPosition
+
+	// Skip live auto-detect when the persisted row is a
+	// manual override — the operator's choice wins. For an
+	// auto row (or no row) we re-detect on every boot so the
+	// position stays fresh when the public IP changes.
+	if bootPositionMode != geo.ServerPositionModeManual {
+		if geoLookup != nil {
+			autoPos, autoErr := geo.DetectFromPublicIP(geoLookup)
+			if autoErr != nil {
+				logger.Warn("server position auto-detect failed; manual override required (V.4)",
+					"err", autoErr)
+			} else {
+				bootPosition = autoPos
+				bootPositionMode = autoPos.Mode
+				logger.Info("server position auto-detected",
+					"lat", autoPos.Lat, "lon", autoPos.Lon,
+					"city", autoPos.City, "country", autoPos.Country,
+					"mode", autoPos.Mode, "source_ip", autoPos.SourceIP)
+				// Opportunistically persist so a next-boot
+				// network hiccup doesn't degrade the map.
+				if perr := store.PutServerPosition(ctx, storage.ServerPositionRecord{
+					Lat:        autoPos.Lat,
+					Lon:        autoPos.Lon,
+					City:       autoPos.City,
+					Country:    autoPos.Country,
+					Mode:       autoPos.Mode,
+					SourceIP:   autoPos.SourceIP,
+					DetectedAt: autoPos.DetectedAt,
+				}); perr != nil {
+					logger.Warn("server position persist failed (non-fatal)",
+						"err", perr)
+				}
+			}
+		} else if bootPosition == nil {
+			logger.Info("server position auto-detect skipped (geoip database absent)")
+		}
+	}
+	logger.Info("boot server position resolved",
+		"mode", bootPositionMode,
+		"position_present", bootPosition != nil)
 
 	// Step V.2 — Geo event enricher. Pure translation layer
 	// from the per-source event types (waf/throttle/crowdsec/
@@ -909,6 +968,26 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	logger.Info("api handler wired with geo bus",
 		"bus_present", apiHandler.HasGeoBus(),
 		"geoip_degraded", !geoEnricher.HasLookup(),
+	)
+
+	// Step V.4 — server position wire-up.
+	//
+	// Store: *storage.Store satisfies api.ServerPositionStore
+	// via the V.4 GetServerPosition / PutServerPosition methods.
+	// Boot-detected position: shipped from the V.4 boot
+	// resolution block above (may be nil in degraded mode).
+	// Redetector: a closure around geo.DetectFromPublicIP
+	// capturing geoLookup at boot, so the POST :redetect
+	// endpoint can re-run the V.1 path without taking a
+	// hard dependency on internal/geo at the api package
+	// boundary.
+	apiHandler.SetServerPositionStore(store)
+	apiHandler.SetBootDetectedPosition(bootPosition)
+	apiHandler.SetServerPositionRedetector(serverPositionRedetector{lookup: geoLookup})
+	logger.Info("api handler wired with server position store",
+		"store_present", apiHandler.HasServerPositionStore(),
+		"redetector_present", apiHandler.HasServerPositionRedetector(),
+		"boot_position_mode", bootPositionMode,
 	)
 
 	// Step P.3 — auto-classify trigger engine wiring.

@@ -21,13 +21,13 @@ import "testing"
 // TestAllActions_Count guards against accidental drift from D7
 // (Step D shipped 15) + Step J.4 (+1 = 16) + Step K.1 (+2 = 18)
 // + Step K.2 (+7 = 25) + Step K.3 (+3 = 28) + Step O.3 (+2 = 30)
-// + Step P.3 (+2 = 32). Adding or removing actions without
-// updating the spec / decisions doc is a process violation; this
-// test forces the conversation.
+// + Step P.3 (+2 = 32) + Step V.4 (+2 = 34). Adding or removing
+// actions without updating the spec / decisions doc is a process
+// violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 32
+	const wantCount = 34
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2)", got, wantCount)
 	}
 }
 
@@ -109,6 +109,12 @@ func TestAllActions_ExactSet(t *testing.T) {
 		// Step P.3 (+2) — auto-classify lifecycle audit events.
 		"automation_decision_pushed": true,
 		"automation_rule_changed":    true,
+		// Step V.4 (+2) — server geographic position admin
+		// events. Updated emitted by PUT (manual override);
+		// Redetected emitted by POST :redetect (re-run V.1
+		// auto-detect).
+		"server_position_updated":    true,
+		"server_position_redetected": true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {

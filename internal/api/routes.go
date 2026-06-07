@@ -208,6 +208,15 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// live events on top. Same hard-auth + AC #13
 			// degraded-mode contract as cert-events above.
 			r.Get("/observability/geo-events", h.securityGeoEvents)
+			// Step V.4 — server geographic position (read).
+			// Returns the current Mercator-center coordinates
+			// + mode (auto|manual) per spec §5.1. Viewer-
+			// accessible — the /map page needs to read this
+			// at mount time to place its central pin. AC #13
+			// degraded shape when no row + no boot
+			// auto-detect: 200 + {degraded:true, lat:0,
+			// lon:0, ...}.
+			r.Get("/observability/server-position", h.getServerPosition)
 			// Step O.3 — managed-domain list (read).
 			// Viewer-accessible per AC #20 (parallel to
 			// the DNS-provider GET — both are config reads
@@ -306,6 +315,16 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// and-swap path).
 				r.Put("/settings/automation/rules", h.putAutomationRules)
 				r.Put("/settings/automation/credentials", h.putAutomationCredentials)
+				// Step V.4 — server geographic position writes.
+				// PUT installs a manual override; POST :redetect
+				// re-runs the V.1 ipify-then-GeoIP path (useful
+				// when the operator's public IP changed). Both
+				// admin-gated per spec §5.2 + §5.3. The chi
+				// router matches the literal `:redetect`
+				// suffix; no path-param interpretation since
+				// chi doesn't reserve `:`.
+				r.Put("/observability/server-position", h.putServerPosition)
+				r.Post("/observability/server-position:redetect", h.redetectServerPosition)
 			})
 		})
 	})
