@@ -41,6 +41,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import WorldMap from '$lib/components/Map/WorldMap.svelte';
 	import LicenseFooter from '$lib/components/Map/LicenseFooter.svelte';
+	import MapLegend from '$lib/components/Map/MapLegend.svelte';
 	import { fetchServerPosition, fetchGeoEventsReplay } from '$lib/api/security';
 	import type { ServerPosition, GeoEvent } from '$lib/api/types';
 	import {
@@ -214,6 +215,7 @@
 			mode={position.mode}
 			{events}
 		/>
+		<MapLegend />
 	</div>
 {/if}
 

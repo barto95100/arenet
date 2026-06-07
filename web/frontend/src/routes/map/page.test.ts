@@ -362,6 +362,18 @@ describe('/map page — V.7 LAN counter', () => {
 		});
 	});
 
+	it('mounts the MapLegend inside the map frame', async () => {
+		// Step V polish — legend explains the 5 arc colors
+		// in-page so new operators don't need to read the
+		// source. Lives in the bottom-right of the frame,
+		// next to the WS / LAN pill stack in the top-right.
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		render(MapPage);
+		await waitFor(() => {
+			expect(screen.getByTestId('map-legend')).toBeInTheDocument();
+		});
+	});
+
 	it('has a tooltip explaining why LAN events do not arc', async () => {
 		fetchServerPositionMock.mockResolvedValue(happyPosition);
 		fetchGeoEventsReplayMock.mockResolvedValue({
