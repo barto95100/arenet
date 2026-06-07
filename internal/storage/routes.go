@@ -28,6 +28,8 @@ import (
 
 	"github.com/google/uuid"
 	bolt "go.etcd.io/bbolt"
+
+	"github.com/barto95100/arenet/internal/countryblock"
 )
 
 // Step J.1 load-balancing policies. Exposed as constants so the API
@@ -262,8 +264,20 @@ type Route struct {
 	// storage.validate() is the last line of defence, strict (e.g.
 	// Passes < 1 rejected) without blank-or-positive branching.
 	HealthCheck HealthCheck `json:"health_check"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	// CountryBlock (Step W) — per-route geo allow/deny gate. Active
+	// when Mode is one of {ModeAllow, ModeDeny}. Empty / ModeOff
+	// means the country-block handler is not even emitted in the
+	// per-route Caddy chain (W.3 caddymgr skip-emission). Pre-W
+	// rows decode with zero-value CountryBlock{Mode: ""} which
+	// validates as "off" — no boot migration needed (the JSON
+	// decoder zero-fills missing keys).
+	//
+	// Wire shape uses snake_case here per the storage convention;
+	// the API layer (W.2 internal/api/routes.go) maps to/from a
+	// camelCase routeRequest.CountryBlock mirror.
+	CountryBlock countryblock.Config `json:"country_block"`
+	CreatedAt    time.Time           `json:"created_at"`
+	UpdatedAt    time.Time           `json:"updated_at"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route
@@ -403,6 +417,14 @@ func (r *Route) validate() error {
 	// per-route cert (useDedicatedCert) but not both.
 	if r.UseDedicatedCert && r.ACMEChallenge == ACMEChallengeInherited {
 		return errors.New(`route: use_dedicated_cert cannot be true while acme_challenge is "inherited" (pick one)`)
+	}
+	// Step W: per-route country-block validation. Delegates to
+	// countryblock.Config.Validate so the §D2 footgun (allow + empty
+	// list) is caught even when a hand-crafted JSON bypasses the
+	// API layer. Pre-W rows decode with zero-value Mode == "" which
+	// is accepted as a synonym for "off" (no migration needed).
+	if err := r.CountryBlock.Validate(); err != nil {
+		return err
 	}
 	// Step J.2: active health-check validation, gated by Enabled.
 	// When Enabled is false the sub-fields are inert; storage does

@@ -29,6 +29,7 @@ import (
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
+	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -618,6 +619,41 @@ func validateWAFMode(mode string) error {
 	return nil
 }
 
+// Step W — country-block helpers.
+
+// materialiseCountryBlock converts a wire-side countryBlockReq to a
+// countryblock.Config ready for storage. Canonicalises the Mode
+// (empty → ModeOff) and uppercases each country code (operators
+// often type "fr" out of habit — uppercase it server-side rather
+// than rejecting at validation). countryblock.Config.Validate then
+// runs the §D2 footgun + enum + duplicate checks.
+//
+// Returns the materialised Config alongside the validation error;
+// the caller surfaces it as a 400.
+func materialiseCountryBlock(req countryBlockReq) (countryblock.Config, error) {
+	mode := req.Mode
+	if mode == "" {
+		mode = string(countryblock.ModeOff)
+	}
+	list := make([]string, 0, len(req.CountryList))
+	for _, code := range req.CountryList {
+		// Trim ASCII whitespace + uppercase. countryblock.Validate
+		// then rejects anything still not matching /^[A-Z]{2}$/.
+		// Done client-side too, but defense in depth.
+		c := strings.ToUpper(strings.TrimSpace(code))
+		list = append(list, c)
+	}
+	cfg := countryblock.Config{
+		Mode:        countryblock.Mode(mode),
+		CountryList: list,
+		StatusCode:  req.StatusCode,
+	}
+	if err := cfg.Validate(); err != nil {
+		return countryblock.Config{}, err
+	}
+	return cfg, nil
+}
+
 // validateHeaders walks a request- or response-header map and runs
 // validateHeaderName + validateHeaderValue on every entry. The
 // direction argument ("request" / "response") is interpolated into
@@ -811,6 +847,27 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		req.RedirectToHTTPS = false
 	}
 
+	// Step W — per-route country-block. nil = "block absent from
+	// JSON" → zero-value Off (no gate). Non-nil → materialise +
+	// validate; the §D2 footgun (allow + empty list) lands here as
+	// a 400 with the countryblock.ErrAllowListEmpty message.
+	var newCountryBlock countryblock.Config
+	if req.CountryBlock != nil {
+		cb, err := materialiseCountryBlock(*req.CountryBlock)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// Spec §D2 deny+empty: legal no-op. Surface a Warn so the
+		// operator notices their list became inert (e.g. typo cleared
+		// the chip input). Not blocking; this is intentional behavior.
+		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 {
+			h.logger.Warn("country-block: deny mode with empty country list — no-op",
+				"host", req.Host)
+		}
+		newCountryBlock = cb
+	}
+
 	// Step K.1 (was Step I.5): hash the plaintext password BEFORE
 	// the uniqueness check + the storage write. Done outside the
 	// bbolt transaction so the ~100 ms argon2id cost doesn't hold
@@ -888,6 +945,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		ACMEChallenge:    req.ACMEChallenge,
 		UseDedicatedCert: req.UseDedicatedCert,
 		HealthCheck:      storeHC,
+		CountryBlock:     newCountryBlock,
 	}
 	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
 	// the corresponding sub-struct (storage trusts the API to
@@ -1163,6 +1221,30 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		req.RedirectToHTTPS = false
 	}
 
+	// Step W — per-route country-block on PUT. Same preserve-or-
+	// replace semantics as HealthCheck above (driven by the
+	// nil-vs-present distinction on the wire pointer):
+	//   - nil ptr   → preserve previous stored CountryBlock verbatim.
+	//                 Operators editing unrelated fields don't need
+	//                 to restate the country list every time.
+	//   - non-nil   → full replacement; materialise + validate.
+	//                 Empty Mode normalises to "off" (clears the gate).
+	var newCountryBlock countryblock.Config
+	if req.CountryBlock == nil {
+		newCountryBlock = previous.CountryBlock
+	} else {
+		cb, err := materialiseCountryBlock(*req.CountryBlock)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 {
+			h.logger.Warn("country-block: deny mode with empty country list — no-op",
+				"host", req.Host, "id", id)
+		}
+		newCountryBlock = cb
+	}
+
 	// Step K.1 password resolution (refactor of the Step I.5 Q5
 	// rule under the new AuthMode enum):
 	//   - AuthMode != "basic"            → no hash stored, fields cleared.
@@ -1241,6 +1323,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		ACMEChallenge:    req.ACMEChallenge,
 		UseDedicatedCert: req.UseDedicatedCert,
 		HealthCheck:      storeHC,
+		CountryBlock:     newCountryBlock,
 	}
 	if newRoute.AuthMode != storage.RouteAuthBasic {
 		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}

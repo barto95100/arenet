@@ -27,6 +27,7 @@ import (
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/certinfo"
+	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
@@ -809,6 +810,49 @@ type routeRequest struct {
 	// rule matches Step I.5 BasicAuth + Step I.4 WAFMode
 	// preserve-on-omission patterns.
 	HealthCheck *healthCheckReq `json:"healthCheck,omitempty"`
+	// Step W — per-route country-block gate. Mode is one of
+	// "" / "off" / "allow" / "deny" (the latter two require a
+	// non-empty CountryList). Pointer so nil distinguishes "block
+	// absent from JSON" (createRoute: zero-value Off; updateRoute:
+	// preserve previous) from "block present" (full replacement).
+	// Same preserve-on-omission semantics as healthCheck above.
+	//
+	// StatusCode is the per-route HTTP status override (one of
+	// 0 / 403 / 451 / 444); 0 means "use the env-default from
+	// ARENET_COUNTRY_BLOCK_STATUS" (W.3 wires the default).
+	//
+	// CountryList must be uppercase ISO 3166-1 alpha-2 codes
+	// (the API canonicalises lowercase inputs to uppercase
+	// before validation — UX nicety mirroring the WAFMode
+	// case-insensitive pattern would be confusing here since
+	// users type country codes by hand).
+	CountryBlock *countryBlockReq `json:"countryBlock,omitempty"`
+}
+
+// countryBlockReq is the wire-side shape of Route.CountryBlock.
+// Mirrors countryblock.Config but with camelCase JSON tags (API
+// convention; storage uses snake_case via countryblock.Config's
+// own tags). createRoute / updateRoute map to/from
+// countryblock.Config via newCountryBlockConfigFromReq.
+//
+// Active iff Mode is one of "allow" / "deny". Empty / "off"
+// disables the gate (the W.3 caddymgr handler-emit skips the
+// handler entirely for those modes; zero per-request cost).
+type countryBlockReq struct {
+	Mode        string   `json:"mode"`
+	CountryList []string `json:"countryList"`
+	StatusCode  int      `json:"statusCode,omitempty"`
+}
+
+// countryBlockResp is the wire-side response shape of
+// Route.CountryBlock. Always non-pointer on the response
+// (storage guarantees the field always exists on a stored
+// Route — zero-value reads back as Off). camelCase tags
+// mirror countryBlockReq.
+type countryBlockResp struct {
+	Mode        string   `json:"mode"`
+	CountryList []string `json:"countryList"`
+	StatusCode  int      `json:"statusCode,omitempty"`
 }
 
 // upstreamResp is the per-element wire shape inside the routeResponse
@@ -955,6 +999,11 @@ type routeResponse struct {
 	// is false the rest of the sub-fields carry zero values and
 	// the generator omits the Caddy `health_checks` block.
 	HealthCheck healthCheckResp `json:"healthCheck"`
+	// Step W — per-route country-block gate state. Always present
+	// on a stored route (zero-value reads back as Mode="off" via
+	// toResponse normalisation). The frontend renders this as the
+	// "Pays bloqués" form section.
+	CountryBlock countryBlockResp `json:"countryBlock"`
 	// Critique 11 Pack A (2026-06-05) — derived per-route
 	// aggregate from the Stage B HC tracker. One of:
 	//   "healthy"   — HC enabled AND every upstream healthy in tracker
@@ -1044,8 +1093,30 @@ func toResponse(r storage.Route) routeResponse {
 			Passes:       r.HealthCheck.Passes,
 			Fails:        r.HealthCheck.Fails,
 		},
-		CreatedAt: r.CreatedAt.UTC().Format(timestampFormat),
-		UpdatedAt: r.UpdatedAt.UTC().Format(timestampFormat),
+		CountryBlock: toCountryBlockResp(r.CountryBlock),
+		CreatedAt:    r.CreatedAt.UTC().Format(timestampFormat),
+		UpdatedAt:    r.UpdatedAt.UTC().Format(timestampFormat),
+	}
+}
+
+// toCountryBlockResp normalises the storage Config for the
+// response side. A stored row with the zero value Mode="" reads
+// back as "off" so the frontend renders a single consistent
+// state. CountryList is normalised to an empty slice (never
+// nil) so the wire JSON never emits `null`.
+func toCountryBlockResp(c countryblock.Config) countryBlockResp {
+	mode := string(c.Mode)
+	if mode == "" {
+		mode = string(countryblock.ModeOff)
+	}
+	list := c.CountryList
+	if list == nil {
+		list = []string{}
+	}
+	return countryBlockResp{
+		Mode:        mode,
+		CountryList: list,
+		StatusCode:  c.StatusCode,
 	}
 }
 
