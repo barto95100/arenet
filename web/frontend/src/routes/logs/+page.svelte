@@ -115,10 +115,23 @@
 			srcIp: e.srcIp
 		};
 	}
-	function mapAuth(e: AuthFailureRecentEvent): UnifiedRow {
+	// Auth + cert mappers take an `idx` disambiguator because
+	// their wire shapes don't carry a per-event id today.
+	// The natural (ts, srcIp, username) tuple collides under
+	// burst login retries — 5 failures from the same IP at
+	// the same username within the same second produce 5
+	// rows that Svelte's keyed each-block rejects with
+	// `each_key_duplicate` (operator-reported regression on
+	// /logs). Appending the source-local array index makes
+	// the key unique by construction; the natural prefix
+	// keeps the key stable across polls when the backend
+	// returns the same rows in the same order. Same shape
+	// fix applied to cert events below (eventType + domain +
+	// timestamp can collide on a fast OBTAIN / FAILED race).
+	function mapAuth(e: AuthFailureRecentEvent, idx: number): UnifiedRow {
 		const isOidc = e.action.startsWith('oidc_');
 		return {
-			key: `auth-${e.ts}-${e.srcIp}-${e.username}`,
+			key: `auth-${e.ts}-${e.srcIp}-${e.username}-${idx}`,
 			ts: e.ts,
 			level: 'warn',
 			code: '401',
@@ -194,9 +207,15 @@
 	//   - srcIp = "(interne)" (system-emitted; the existing
 	//     mono-dim styling on the Source IP column renders this
 	//     unobtrusively).
-	function mapCert(e: CertEvent): UnifiedRow {
+	function mapCert(e: CertEvent, idx: number): UnifiedRow {
 		return {
-			key: `cert-${e.timestamp}-${e.domain}-${e.eventType}`,
+			// idx disambiguates against the (timestamp, domain,
+			// eventType) tuple colliding when certmagic fires
+			// two events for the same domain in the same
+			// second (e.g. an OBTAIN + a FAILED race, or two
+			// ocsp_revoked checks). See mapAuth above for the
+			// full rationale.
+			key: `cert-${e.timestamp}-${e.domain}-${e.eventType}-${idx}`,
 			ts: e.timestamp,
 			level: e.level === 'INFO' ? 'info' : 'warn',
 			code: '—',
@@ -231,10 +250,12 @@
 				for (const e of throttle.value.events ?? []) merged.push(mapThrottle(e));
 			}
 			if (auth.status === 'fulfilled') {
-				for (const e of auth.value.recent ?? []) merged.push(mapAuth(e));
+				const recent = auth.value.recent ?? [];
+				for (let i = 0; i < recent.length; i++) merged.push(mapAuth(recent[i], i));
 			}
 			if (certs.status === 'fulfilled') {
-				for (const e of certs.value.events ?? []) merged.push(mapCert(e));
+				const events = certs.value.events ?? [];
+				for (let i = 0; i < events.length; i++) merged.push(mapCert(events[i], i));
 			}
 
 			merged.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));

@@ -527,3 +527,83 @@ describe('/logs — existing 3-source aggregation still works (regression)', () 
 		expect(screen.getByText(/cert\.obtained/)).toBeInTheDocument();
 	});
 });
+
+describe('/logs — duplicate-tuple regression (Svelte each_key_duplicate)', () => {
+	// Operator-reported regression: the page threw Svelte's
+	// each_key_duplicate when two cert events with the same
+	// (timestamp, domain, eventType) tuple — or two auth
+	// failures with the same (ts, srcIp, username) — landed
+	// in the same fetch. Burst login retries hit this
+	// trivially (5 failures/second from the same IP at the
+	// same username), as do certmagic OBTAIN+FAILED races.
+	// Fix: append a source-local array index to the key so
+	// the natural-tuple prefix stays stable across polls but
+	// uniqueness is guaranteed within a single batch.
+
+	it('renders two cert events sharing (timestamp, domain, eventType) without throwing', async () => {
+		const sharedTs = isoOffset(-1);
+		securityMock.fetchCertEvents.mockResolvedValue({
+			events: [
+				certFixture({
+					timestamp: sharedTs,
+					domain: 'example.com',
+					eventType: 'cert_failed',
+					level: 'ERROR',
+					error: 'first failure'
+				}),
+				certFixture({
+					timestamp: sharedTs,
+					domain: 'example.com',
+					eventType: 'cert_failed',
+					level: 'ERROR',
+					error: 'second failure (same second, same domain)'
+				})
+			],
+			total: 2,
+			hasMore: false
+		});
+
+		render(Page);
+		// Both rows must mount — a duplicate-key throw would
+		// either render nothing (boot crashed) or render only
+		// one row (Svelte silently drops the dup before HMR).
+		await screen.findByText(/first failure/);
+		expect(screen.getByText(/first failure/)).toBeInTheDocument();
+		expect(screen.getByText(/second failure/)).toBeInTheDocument();
+	});
+
+	it('renders two auth failures sharing (ts, srcIp, username) without throwing', async () => {
+		const sharedTs = isoOffset(-1);
+		securityMock.fetchAuthFailures.mockResolvedValue({
+			window: '24h',
+			timeseries: [],
+			recent: [
+				{
+					ts: sharedTs,
+					action: 'login_failure',
+					username: 'admin',
+					srcIp: '203.0.113.42',
+					message: 'wrong password'
+				} satisfies AuthFailureRecentEvent,
+				{
+					ts: sharedTs,
+					action: 'login_failure',
+					username: 'admin',
+					srcIp: '203.0.113.42',
+					message: 'wrong password (retry)'
+				} satisfies AuthFailureRecentEvent
+			]
+		});
+
+		render(Page);
+		// Two distinct rows from the same (ts, srcIp, username)
+		// tuple must both mount. The message column carries
+		// the disambiguator that lets us assert on both.
+		await screen.findByText(/wrong password \(retry\)/);
+		expect(screen.getByText(/wrong password \(retry\)/)).toBeInTheDocument();
+		// The first row's message is "wrong password" — used
+		// as a substring it would match the retry row too,
+		// so use a stricter regex that excludes the suffix.
+		expect(screen.getByText(/wrong password$/)).toBeInTheDocument();
+	});
+});
