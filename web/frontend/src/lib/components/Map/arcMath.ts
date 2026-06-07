@@ -65,9 +65,33 @@ export function bezierAt(
 
 /**
  * SVG path `d` attribute for an arc at `progress` (∈ [0,
- * 1]). During travel (progress < 1), the path truncates at
- * the bezier-interpolated head position. After arrival
- * (progress === 1), the path is the complete bezier.
+ * 1]). During travel (progress < 1), the path renders the
+ * first sub-curve of the full source→target bezier,
+ * obtained via De Casteljau subdivision at parameter t.
+ * After arrival (progress === 1), the path is the complete
+ * bezier.
+ *
+ * V.8.HF3 (#R-MAP-arc-partial-curve-bug): the previous
+ * implementation emitted `M source Q ctrl head` where
+ * `head = bezierAt(source, ctrl, target, t)`. That is
+ * NOT the prefix of the original curve — it's a NEW
+ * quadratic from source to head with the ORIGINAL control
+ * point, which drags the curve's arc-belly across the
+ * canvas and leaves the rendered endpoint visually "stuck"
+ * near the source for most of the travel phase.
+ *
+ * The correct partial curve uses the De Casteljau split:
+ * for a quadratic Bezier P(t) = (1-t)²·s + 2(1-t)t·c +
+ * t²·e, the sub-curve from t=0 to t=T is itself a
+ * quadratic with:
+ *   - sub-source  = s
+ *   - sub-control = (1-T)·s + T·c    (lerp s → c at T)
+ *   - sub-end     = P(T)             (= bezierAt at T)
+ *
+ * This guarantees the rendered partial curve is the
+ * literal prefix of the full curve, so the head visibly
+ * sweeps from source to target along the same arc the
+ * final draw will land on.
  */
 export function arcPathAt(
 	source: [number, number],
@@ -78,8 +102,15 @@ export function arcPathAt(
 	if (progress >= 1) {
 		return `M ${source[0]} ${source[1]} Q ${ctrl[0]} ${ctrl[1]} ${target[0]} ${target[1]}`;
 	}
+	// De Casteljau split at t=progress for the source→ctrl→target
+	// quadratic. The sub-curve from t=0 to t=progress is itself
+	// quadratic with sub-control = lerp(source, ctrl, progress).
+	const subCtrl: [number, number] = [
+		source[0] + (ctrl[0] - source[0]) * progress,
+		source[1] + (ctrl[1] - source[1]) * progress
+	];
 	const head = bezierAt(source, ctrl, target, progress);
-	return `M ${source[0]} ${source[1]} Q ${ctrl[0]} ${ctrl[1]} ${head[0]} ${head[1]}`;
+	return `M ${source[0]} ${source[1]} Q ${subCtrl[0]} ${subCtrl[1]} ${head[0]} ${head[1]}`;
 }
 
 /**

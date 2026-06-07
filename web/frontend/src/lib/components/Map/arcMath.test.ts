@@ -90,6 +90,66 @@ describe('arcPathAt', () => {
 		const d = arcPathAt([0, 0], [100, 0], 1.5);
 		expect(d).toContain('100 0');
 	});
+
+	// V.8.HF3 regression — the partial-curve endpoint MUST
+	// be bezierAt(source, ctrl, target, progress) (i.e. the
+	// point ON the full source→target curve at parameter t),
+	// not stuck at the source. Pin this so a future drop
+	// of the De Casteljau split reverts to the old
+	// "head visually stuck near source" symptom.
+	it('partial-curve endpoint advances along the full curve as progress grows', () => {
+		const source: [number, number] = [0, 0];
+		const target: [number, number] = [100, 0];
+		const ctrl = arcControl(source, target);
+		// Sample the path at three progress values; each
+		// rendered endpoint MUST equal bezierAt at the same t.
+		for (const t of [0.25, 0.5, 0.75]) {
+			const expected = bezierAt(source, ctrl, target, t);
+			const d = arcPathAt(source, target, t);
+			// Path ends with the final `x y` pair after the
+			// last `Q ctrl_x ctrl_y end_x end_y` block.
+			const tokens = d.split(/\s+/);
+			const ey = Number(tokens[tokens.length - 1]);
+			const ex = Number(tokens[tokens.length - 2]);
+			expect(ex).toBeCloseTo(expected[0], 5);
+			expect(ey).toBeCloseTo(expected[1], 5);
+		}
+	});
+
+	it('progress = 0 produces a path collapsed at the source (no curve drag)', () => {
+		// At spawn (progress=0), head === source AND the
+		// De Casteljau sub-control === source, so the path
+		// is literally `M s Q s s`. Crucially, it MUST NOT
+		// extend into the canvas — the operator should see
+		// nothing until the timer starts advancing.
+		const d = arcPathAt([10, 20], [200, 50], 0);
+		// Endpoint is the source.
+		const tokens = d.split(/\s+/);
+		expect(Number(tokens[tokens.length - 2])).toBeCloseTo(10, 5);
+		expect(Number(tokens[tokens.length - 1])).toBeCloseTo(20, 5);
+		// Control point is also at the source (no leftover
+		// drag from the full-curve control).
+		expect(d).toBe('M 10 20 Q 10 20 10 20');
+	});
+
+	it('partial-curve sub-control is the source→ctrl lerp (De Casteljau invariant)', () => {
+		const source: [number, number] = [0, 0];
+		const target: [number, number] = [100, 0];
+		const ctrl = arcControl(source, target); // [50, -15] with V.8.HF2 elevation
+		const t = 0.4;
+		const d = arcPathAt(source, target, t);
+		// Sub-control = lerp(source, ctrl, t).
+		const expectedSubCtrl: [number, number] = [
+			source[0] + (ctrl[0] - source[0]) * t,
+			source[1] + (ctrl[1] - source[1]) * t
+		];
+		const tokens = d.split(/\s+/);
+		// Path shape: "M sx sy Q cx cy ex ey"
+		const cx = Number(tokens[4]);
+		const cy = Number(tokens[5]);
+		expect(cx).toBeCloseTo(expectedSubCtrl[0], 5);
+		expect(cy).toBeCloseTo(expectedSubCtrl[1], 5);
+	});
 });
 
 describe('arcProgressAt', () => {
