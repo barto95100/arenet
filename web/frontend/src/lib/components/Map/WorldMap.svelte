@@ -237,6 +237,20 @@
 
 	let arcs: ArcState[] = $state([]);
 	let clockMs = $state(0);
+	// V.8.HF1 — per-frame tick counter. clockMs alone was
+	// not driving the {#each arcs} body to re-evaluate
+	// between spawn and prune: paths rendered with
+	// progress=0 at spawn and stayed visually stuck at the
+	// source point until the prune at ARC_TOTAL_MS finally
+	// mutated the arcs array. Reading `tick` explicitly
+	// inside the {#each} block via {@const _t = tick}
+	// forces the body to re-evaluate every animation frame
+	// regardless of how Svelte 5's runtime would otherwise
+	// dedupe the clockMs subscription. clockMs stays for
+	// the math (arcProgressAt consumes it); tick is the
+	// reactivity ticket. See v1.4.0-step-v Known
+	// limitations + #R-MAP-arc-spawn-glitch.
+	let tick = $state(0);
 	let arcIdCounter = 0;
 	let nextEventIdx = 0;
 
@@ -262,6 +276,12 @@
 		timerHandle = d3.timer(() => {
 			const t = nowFn();
 			clockMs = t;
+			// V.8.HF1 — bump the per-frame tick so the
+			// template's {#each arcs} body re-evaluates.
+			// Modulo 1e9 guards against the (extremely
+			// theoretical) integer-overflow case for a
+			// tab left open for years at 60 fps.
+			tick = (tick + 1) % 1_000_000_000;
 			// Prune expired arcs. Allocate a fresh array
 			// only when at least one arc is gone; otherwise
 			// keep the same reference so the {#each} block
@@ -381,6 +401,7 @@
 		<g class="countries" data-testid="worldmap-countries"></g>
 		<g class="arcs" data-testid="worldmap-arcs">
 			{#each arcs as arc (arc.id)}
+				{@const _tick = tick}
 				{@const state = arcProgressAt(arc.startMs, clockMs)}
 				{#if state.opacity > 0}
 					{@const head = bezierAt(arc.source, arcControl(arc.source, arc.target), arc.target, state.progress)}

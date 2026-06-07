@@ -20,7 +20,7 @@
 // observe the path elements in the DOM after a topojson
 // fetch resolves.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
 import WorldMap from './WorldMap.svelte';
 
@@ -303,4 +303,73 @@ describe('WorldMap — V.6 arc layer', () => {
 			});
 		}
 	);
+});
+
+// -------------------------------------------------------
+// Step V.8.HF1 — tick-driven re-render regression test.
+//
+// The visible bug v1.4.0-step-v shipped with: arcs spawned
+// with progress=0 and stayed collapsed at the source pixel
+// until the ARC_TOTAL_MS prune finally mutated the arcs
+// array, at which point the path "snapped" to the full
+// Bezier just before the fade-out. Root cause: relying
+// solely on `clockMs = t` to drive the {#each arcs} body
+// to re-evaluate per frame. The fix introduces an explicit
+// `tick` $state bumped per d3.timer firing, read in the
+// template via {@const _tick = tick} so Svelte's per-arc
+// {#each} block subscribes to the tick.
+//
+// Test approach: drive the rAF loop via vitest's fake
+// timers (jsdom shims requestAnimationFrame as setTimeout,
+// so vi.useFakeTimers + vi.advanceTimersByTime advances
+// d3.timer's internal clock). Assert that the path's `d`
+// attribute changes between the initial spawn frame
+// (progress=0 → path collapsed at source) and a later
+// frame (progress>0 → path extends toward the target).
+
+describe('WorldMap — V.8.HF1 tick-driven re-render', () => {
+	beforeEach(() => {
+		vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('updates the path d-attribute as the tick advances (no spawn-snap)', async () => {
+		mockTopoJSONFetch();
+		render(WorldMap, {
+			props: {
+				arenetLat: 48.8566,
+				arenetLon: 2.3522,
+				events: [mkEvent({ sourceLat: 51.5074, sourceLon: -0.1278 })]
+			}
+		});
+
+		// Wait for the TopoJSON fetch + initial spawn.
+		await vi.waitFor(() => {
+			const arcs = screen.getByTestId('worldmap-arcs');
+			expect(arcs.querySelectorAll('path').length).toBe(1);
+		});
+
+		const arcsLayer = screen.getByTestId('worldmap-arcs');
+		const initialPath = arcsLayer.querySelector('path');
+		const initialD = initialPath?.getAttribute('d') ?? '';
+		expect(initialD).toMatch(/^M /);
+
+		// Advance the rAF clock by several frames. Each
+		// frame, d3.timer fires → tick increments → the
+		// {#each arcs} body re-evaluates → the path's `d`
+		// recomputes against the new clockMs. After enough
+		// frames the bezier head should have advanced
+		// (the path string MUST differ from the spawn-time
+		// collapsed shape).
+		for (let i = 0; i < 30; i++) {
+			await vi.advanceTimersByTimeAsync(16);
+		}
+
+		const laterPath = screen.getByTestId('worldmap-arcs').querySelector('path');
+		const laterD = laterPath?.getAttribute('d') ?? '';
+		expect(laterD).not.toBe(initialD);
+	});
 });
