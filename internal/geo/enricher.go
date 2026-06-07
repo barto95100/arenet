@@ -191,6 +191,34 @@ func (e *Enricher) EnrichAuthEvent(ev observability.AuthEvent) GeoEvent {
 	return out
 }
 
+// EnrichNormal builds a GeoEvent for the Step V.1
+// "normal" category — legitimate user traffic that
+// successfully passed through Arenet to an upstream. Called
+// by DefaultNormalSink AFTER the sampling + cooldown gates
+// have passed, so this function is on the hot path only for
+// the surviving 5% (with default sample_pct=5).
+//
+// The caller is responsible for the D2 RFC1918 short-
+// circuit: NormalSink.Submit routes LAN sources to the V.6
+// LAN pill counter and does NOT call EnrichNormal for them.
+// As a defensive belt-and-braces, enrichBase still flips
+// IsLAN=true if the IP happens to be in an RFC1918 range
+// (a future caller might bypass the short-circuit; we
+// don't want a malformed event reaching the bus).
+//
+// statusCode is the final response status (2xx or 3xx per
+// the V.1 spec §D1 gate); the frontend tooltip surfaces it
+// next to the route label. routeID identifies the arenet
+// route (matches the per-route metrics keys); the frontend
+// uses it for the optional "filter by route" UX deferred
+// to a future increment.
+func (e *Enricher) EnrichNormal(srcIP, routeID string, statusCode int) GeoEvent {
+	out := e.enrichBase(srcIP, time.Now().UTC(), CategoryNormal)
+	out.StatusCode = statusCode
+	out.RouteID = routeID
+	return out
+}
+
 // enrichBase is the shared geo-lookup core. Resolves the
 // source IP, fills the SourceLat/Lon/Country/City + IsLAN
 // fields, and stamps the timestamp + category. Empty SourceIP
