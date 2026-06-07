@@ -29,11 +29,20 @@
   new category in the future is a one-file change there
   + a one-line addition to LEGEND_ROWS below.
 
-  "Normal" is included for completeness even though no
-  backend emits it today: the 5-category enum is locked
-  at spec §5.6, and a future Step V sub-task may start
-  emitting normal-traffic arcs. Marked "à venir" so the
-  operator isn't surprised by its absence in the wild.
+  Step V.1 (commits f657a11 / 09ea2c1 / b778424) ships
+  the backend pipeline for the "normal" category: when an
+  operator sets ARENET_NORMAL_TRAFFIC_SAMPLE_PCT > 0, the
+  Caddy routemetrics middleware fans successful traffic
+  through the geo bus → arcs render green on the map.
+  V.1.4 drops the "(à venir)" italic marker on the normal
+  row accordingly. The legend now reflects the full live
+  taxonomy.
+
+  The `comingSoon` flag + the `.legend-coming-soon` CSS
+  class + the {#if entry.comingSoon} conditional stay in
+  place — future categories (or a future V.1.X feature-
+  gate use-case) can re-use them without re-architecting
+  the row shape.
 -->
 <script lang="ts">
 	import { CATEGORY_COLORS } from './categoryColors';
@@ -42,6 +51,10 @@
 	interface LegendRow {
 		category: GeoEventCategory;
 		label: string;
+		// Reserved for future categories that ship the legend
+		// row before the backend emit path lands. V.1.4
+		// cleared this flag from the "normal" row since
+		// V.1.1-V.1.3 made the green-arc emission live.
 		comingSoon?: boolean;
 	}
 
@@ -50,7 +63,7 @@
 	// substitute category + label since the map's color
 	// taxonomy is per-category, not per-traffic-tier.
 	const LEGEND_ROWS: readonly LegendRow[] = [
-		{ category: 'normal', label: 'Trafic légitime — requête réussie', comingSoon: true },
+		{ category: 'normal', label: 'Trafic légitime — requête réussie' },
 		{ category: 'throttle', label: 'Throttle — rate-limit (HTTP 429)' },
 		{ category: 'waf', label: 'WAF — bloqué par Coraza (HTTP 403)' },
 		{ category: 'crowdsec', label: 'CrowdSec — IP en réputation négative (HTTP 403)' },
