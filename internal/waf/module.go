@@ -250,6 +250,25 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 	}
 	ruleID := strconv.Itoa(rule.ID())
 	method, path, payload := requestSnippetFromMatch(mr)
+
+	// W.bugfix Fix #1 — mode-aware Action + StatusCode. Pre-
+	// fix the sink emitted no Action and the frontend
+	// hardcoded "BLOCK 403" labels regardless of mode,
+	// producing the operator-facing false-positive perception
+	// that detect mode blocks. Set the fields at emit time
+	// from the handler's mode (known here; the post-block
+	// response status is NOT known — Coraza's onMatch fires
+	// during phase-1/2, before processResponse). StatusCode
+	// for detect mode is 0 (sentinel for "request reached
+	// upstream; actual status not captured at WAF layer");
+	// the frontend renders "—" for that case.
+	action := ActionDetect
+	statusCode := 0
+	if h.Mode == "block" {
+		action = ActionBlock
+		statusCode = http.StatusForbidden
+	}
+
 	sink.Emit(Event{
 		Ts:            time.Now().UTC(),
 		RouteID:       h.RouteID,
@@ -260,6 +279,8 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 		RequestMethod: method,
 		RequestPath:   Truncate(Redact(path), MaxRequestPathBytes),
 		PayloadSample: Truncate(Redact(payload), MaxPayloadSampleBytes),
+		Action:        action,
+		StatusCode:    statusCode,
 	})
 }
 

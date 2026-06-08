@@ -356,7 +356,9 @@ describe('/logs — multi-source merge + cert source resilience', () => {
 					srcIp: '1.2.3.4',
 					requestMethod: 'GET',
 					requestPath: '/?id=1',
-					payloadSample: 'id=1'
+					payloadSample: 'id=1',
+					action: 'BLOCK',
+					statusCode: 403
 				} satisfies WafEvent
 			]
 		});
@@ -391,7 +393,9 @@ describe('/logs — multi-source merge + cert source resilience', () => {
 					srcIp: '5.6.7.8',
 					requestMethod: 'POST',
 					requestPath: '/search',
-					payloadSample: '<script>'
+					payloadSample: '<script>',
+					action: 'BLOCK',
+					statusCode: 403
 				} satisfies WafEvent
 			]
 		});
@@ -450,7 +454,9 @@ describe('/logs — multi-source merge + cert source resilience', () => {
 					srcIp: '1.2.3.4',
 					requestMethod: 'GET',
 					requestPath: '/abuse',
-					payloadSample: ''
+					payloadSample: '',
+					action: 'BLOCK',
+					statusCode: 403
 				} satisfies WafEvent
 			]
 		});
@@ -468,6 +474,75 @@ describe('/logs — multi-source merge + cert source resilience', () => {
 	});
 });
 
+describe('/logs — W.bugfix Fix #1 mode-aware WAF labels', () => {
+	it('renders a DETECT-mode WAF row with the DETECT level + "—" status', async () => {
+		// Pre-fix every WAF row rendered as level="block" + code="403"
+		// regardless of what the WAF actually did. Operators in detect
+		// mode saw "BLOCK 403" entries while their requests passed
+		// through the upstream unimpeded — the source of the original
+		// false-positive bug report. Post-fix the row renders with
+		// the DETECT pill + "—" for the code (the WAF doesn't capture
+		// the upstream's actual status at callback time).
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 1,
+					ts: isoOffset(0),
+					routeId: 'r-detect',
+					ruleId: '920420',
+					category: 'PROTOCOL',
+					severity: 3,
+					srcIp: '203.0.113.5',
+					requestMethod: 'GET',
+					requestPath: '/auth/login_flow',
+					payloadSample: 'User-Agent: shellshock-probe',
+					action: 'DETECT',
+					statusCode: 0
+				} satisfies WafEvent
+			]
+		});
+
+		render(Page);
+		// Detail still renders the rule + category.
+		await screen.findByText(/WAF rule 920420/);
+		// Level pill says DETECT, not BLOCK.
+		expect(screen.getByText('DETECT')).toBeInTheDocument();
+		expect(screen.queryByText('BLOCK')).not.toBeInTheDocument();
+		// Status column renders "—" instead of "403".
+		expect(screen.getByText('—')).toBeInTheDocument();
+		expect(screen.queryByText('403')).not.toBeInTheDocument();
+	});
+
+	it('renders a BLOCK-mode WAF row with the BLOCK level + 403 status', async () => {
+		// Symmetric to the DETECT case. Pin the post-fix contract
+		// for block-mode rows so a future regression to "always
+		// detect" or "always block" is caught.
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 2,
+					ts: isoOffset(0),
+					routeId: 'r-block',
+					ruleId: '942100',
+					category: 'SQLi',
+					severity: 2,
+					srcIp: '203.0.113.5',
+					requestMethod: 'POST',
+					requestPath: '/api/search',
+					payloadSample: "' OR 1=1 --",
+					action: 'BLOCK',
+					statusCode: 403
+				} satisfies WafEvent
+			]
+		});
+
+		render(Page);
+		await screen.findByText(/WAF rule 942100/);
+		expect(screen.getByText('BLOCK')).toBeInTheDocument();
+		expect(screen.getByText('403')).toBeInTheDocument();
+	});
+});
+
 describe('/logs — existing 3-source aggregation still works (regression)', () => {
 	it('renders a WAF + throttle + auth row alongside cert events', async () => {
 		securityMock.fetchEvents.mockResolvedValue({
@@ -482,7 +557,9 @@ describe('/logs — existing 3-source aggregation still works (regression)', () 
 					srcIp: '1.2.3.4',
 					requestMethod: 'GET',
 					requestPath: '/?id=1',
-					payloadSample: ''
+					payloadSample: '',
+					action: 'BLOCK',
+					statusCode: 403
 				} satisfies WafEvent
 			]
 		});

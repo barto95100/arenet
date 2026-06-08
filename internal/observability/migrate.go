@@ -38,7 +38,7 @@ import (
 //     signal, not lifecycle record).
 //
 // Downgrade is not supported.
-const currentSchemaVersion = 6
+const currentSchemaVersion = 7
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -98,6 +98,7 @@ var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
 	3: migrateV3toV4,
 	4: migrateV4toV5,
 	5: migrateV5toV6,
+	6: migrateV6toV7,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -298,6 +299,36 @@ func migrateV5toV6(ctx context.Context, tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_auth_event_ts        ON auth_event (ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_auth_event_src_ip_ts ON auth_event (src_ip, ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_auth_event_kind_ts   ON auth_event (kind, ts)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV6toV7 — Step W.bugfix Fix #1. Adds the action +
+// status_code columns to waf_event so the sink can record
+// whether a matched rule actually blocked the request
+// (ActionBlock + 403) or merely detected it (ActionDetect +
+// 0). Pre-migration rows are backfilled to ("BLOCK", 403)
+// because every WAF event row in the legacy schema was
+// emitted by a block-mode handler — the frontend's
+// hardcoded "BLOCK 403" label was correct for legacy rows
+// but lied for detect-mode rows that started being emitted
+// once detect-mode existed (the regression that originally
+// produced operator confusion). Backfilling to BLOCK keeps
+// the historical attribution honest: those rows really did
+// correspond to blocked requests.
+//
+// SQLite's ALTER TABLE ADD COLUMN is a metadata-only
+// operation in modern versions — O(1) regardless of row
+// count.
+func migrateV6toV7(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`ALTER TABLE waf_event ADD COLUMN action TEXT NOT NULL DEFAULT 'BLOCK'`,
+		`ALTER TABLE waf_event ADD COLUMN status_code INTEGER NOT NULL DEFAULT 403`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {

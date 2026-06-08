@@ -72,10 +72,10 @@ var AllCategories = []OwaspCategory{
 	CategoryOther,
 }
 
-// Event is one WAF block event. Persisted into the waf_event
-// table by the EventSink; surfaced to the operator via
-// /api/v1/security/events. Path and PayloadSample have been
-// capped + redacted by the time the event reaches Emit
+// Event is one WAF rule-match event. Persisted into the
+// waf_event table by the EventSink; surfaced to the operator
+// via /api/v1/security/events. Path and PayloadSample have
+// been capped + redacted by the time the event reaches Emit
 // (see Truncate + redact.go).
 //
 // SrcIP is captured verbatim from the request's effective
@@ -96,7 +96,45 @@ type Event struct {
 	RequestMethod string
 	RequestPath   string
 	PayloadSample string
+
+	// Action records what the WAF actually did with the
+	// matched request. ActionBlock means the request was
+	// short-circuited at the handler with the StatusCode
+	// below; ActionDetect means the rule fired but the
+	// request was allowed to reach the upstream (the route
+	// is in detect mode — spec §1.4). Pre-W.bugfix rows
+	// decode as "" (zero value); the storage migration
+	// backfills to ActionBlock since that was the implicit
+	// universal value when the field didn't exist.
+	Action string
+
+	// StatusCode is the HTTP status the handler returned
+	// when Action == ActionBlock (always 403 today; spec
+	// §1.4 may extend with operator-configurable status in
+	// a future step). 0 when Action == ActionDetect — the
+	// request passed to the upstream and the actual response
+	// status is not visible at WAF callback time. Frontend
+	// renders "—" for the zero value.
+	StatusCode int
 }
+
+// Action enum (W.bugfix Fix #1 — mode-aware labels).
+//
+// Stored as a string in waf_event.action; the frontend keys
+// off these exact values to colour the row level (block vs
+// detect). Adding a new action MUST be backwards-compatible:
+// existing values cannot be renamed.
+const (
+	// ActionBlock — the WAF interrupted the request with the
+	// configured StatusCode. Set when handler.Mode == "block".
+	ActionBlock = "BLOCK"
+
+	// ActionDetect — the WAF logged the match but allowed the
+	// request to reach the upstream. Set when handler.Mode
+	// == "detect". The dashboard renders these distinctly so
+	// operators see at a glance whether enforcement fired.
+	ActionDetect = "DETECT"
+)
 
 // Truncate caps the byte length of s to maxBytes and appends
 // an ellipsis when it had to cut. Returns s unchanged when

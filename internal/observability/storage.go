@@ -364,6 +364,17 @@ type WafEvent struct {
 	RequestMethod string
 	RequestPath   string
 	PayloadSample string
+
+	// Action ("BLOCK" / "DETECT") and StatusCode are the
+	// W.bugfix Fix #1 mode-aware label fields. Pre-W.bugfix
+	// rows are migrated to ("BLOCK", 403) since that was the
+	// implicit universal behavior when the columns didn't
+	// exist (every WAF event row in the legacy schema was
+	// emitted by a block-mode handler — detect-mode events
+	// were silently mislabeled at the frontend, NOT
+	// suppressed at the sink). See migrateV6toV7.
+	Action     string
+	StatusCode int
 }
 
 // WafEventFilter narrows a QueryWafEvents call. All fields
@@ -402,8 +413,8 @@ func (s *Store) InsertWafEventBatch(ctx context.Context, events []WafEvent) erro
 		return fmt.Errorf("observability: begin waf_event tx: %w", err)
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO waf_event (ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO waf_event (ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample, action, status_code)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `)
 	if err != nil {
 		_ = tx.Rollback()
@@ -411,6 +422,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	}
 	defer stmt.Close()
 	for _, e := range events {
+		action := e.Action
+		if action == "" {
+			// Defense in depth — the sink should always set
+			// this post-W.bugfix, but a bogus internal call
+			// with a zero Event shouldn't break the insert.
+			action = "BLOCK"
+		}
 		if _, err := stmt.ExecContext(ctx,
 			e.Ts.UTC().Unix(),
 			e.RouteID,
@@ -421,6 +439,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			e.RequestMethod,
 			e.RequestPath,
 			e.PayloadSample,
+			action,
+			e.StatusCode,
 		); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("observability: insert waf_event (route=%s rule=%s): %w", e.RouteID, e.RuleID, err)
@@ -449,7 +469,7 @@ func (s *Store) QueryWafEvents(ctx context.Context, filter WafEventFilter) ([]Wa
 	if limit <= 0 || limit > wafEventLimitCap {
 		limit = wafEventLimitCap
 	}
-	q := `SELECT id, ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample
+	q := `SELECT id, ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample, action, status_code
 	      FROM waf_event WHERE 1=1`
 	args := []any{}
 	if filter.RouteID != "" {
@@ -483,6 +503,7 @@ func (s *Store) QueryWafEvents(ctx context.Context, filter WafEventFilter) ([]Wa
 		if err := rows.Scan(
 			&e.ID, &tsUnix, &e.RouteID, &e.RuleID, &e.Category, &e.Severity,
 			&e.SrcIP, &e.RequestMethod, &e.RequestPath, &e.PayloadSample,
+			&e.Action, &e.StatusCode,
 		); err != nil {
 			return nil, fmt.Errorf("observability: scan waf_event: %w", err)
 		}

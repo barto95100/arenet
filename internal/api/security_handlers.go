@@ -47,6 +47,13 @@ type securityEvent struct {
 	RequestMethod string `json:"requestMethod"`
 	RequestPath   string `json:"requestPath"`
 	PayloadSample string `json:"payloadSample"`
+	// Action ("BLOCK" or "DETECT") and StatusCode are the
+	// W.bugfix Fix #1 mode-aware label fields. Frontend keys
+	// off these to render the row level / status pill in
+	// /logs and /security instead of the pre-fix hardcoded
+	// "BLOCK 403" assumption.
+	Action     string `json:"action"`
+	StatusCode int    `json:"statusCode"`
 }
 
 // securityEventsResponse is the wire shape of
@@ -130,6 +137,8 @@ func (h *Handler) securityEvents(w http.ResponseWriter, r *http.Request) {
 			RequestMethod: e.RequestMethod,
 			RequestPath:   e.RequestPath,
 			PayloadSample: e.PayloadSample,
+			Action:        e.Action,
+			StatusCode:    e.StatusCode,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)

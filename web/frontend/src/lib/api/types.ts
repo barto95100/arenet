@@ -1039,6 +1039,13 @@ export interface WafEvent {
 	requestMethod: string;
 	requestPath: string;
 	payloadSample: string;
+	// W.bugfix Fix #1 — mode-aware label fields. "BLOCK" =
+	// the WAF returned statusCode (403 today); "DETECT" =
+	// the rule fired but the request passed to the upstream
+	// (statusCode is 0; UI renders "—"). Pre-fix rows persisted
+	// in the legacy schema are backfilled to ("BLOCK", 403).
+	action: 'BLOCK' | 'DETECT';
+	statusCode: number;
 }
 
 export interface WafEventsResponse {

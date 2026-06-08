@@ -53,7 +53,14 @@
 	} from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 
-	type LevelTag = 'block' | 'warn' | 'info';
+	// W.bugfix Fix #1 — the WAF event source now distinguishes
+	// 'block' (request short-circuited by the WAF, status 403)
+	// from 'detect' (rule fired but request reached upstream
+	// because the route is in detect mode). Pre-fix all WAF
+	// rows rendered as 'block'; the detect rows lied. Detect
+	// rows render with a muted amber accent so operators see
+	// rule-fire signal without thinking enforcement happened.
+	type LevelTag = 'block' | 'detect' | 'warn' | 'info';
 
 	interface UnifiedRow {
 		key: string;
@@ -90,11 +97,23 @@
 	);
 
 	function mapWaf(e: WafEvent): UnifiedRow {
+		// W.bugfix Fix #1 — read action + statusCode from the
+		// wire shape instead of hardcoding "block / 403". A
+		// pre-fix row persisted in the legacy schema has the
+		// backfilled values (BLOCK / 403); a post-fix detect-
+		// mode row has DETECT / 0 — the latter renders the
+		// status column as "—" since the WAF doesn't capture
+		// the upstream's actual response status at callback
+		// time. Defense-in-depth fallback: an action we don't
+		// know renders as 'block' (most conservative — operator
+		// sees the row at the loudest level rather than
+		// silently downgrading an unknown match).
+		const isDetect = e.action === 'DETECT';
 		return {
 			key: `waf-${e.id}`,
 			ts: e.ts,
-			level: 'block',
-			code: '403',
+			level: isDetect ? 'detect' : 'block',
+			code: e.statusCode > 0 ? String(e.statusCode) : '—',
 			source: 'waf',
 			method: e.requestMethod,
 			path: e.requestPath,
@@ -343,6 +362,7 @@
 		<div class="seg" role="group" aria-label="Filter by level">
 			<button class:on={levelFilter === 'all'} onclick={() => (levelFilter = 'all')}>All</button>
 			<button class:on={levelFilter === 'block'} onclick={() => (levelFilter = 'block')}>Block</button>
+			<button class:on={levelFilter === 'detect'} onclick={() => (levelFilter = 'detect')}>Detect</button>
 			<button class:on={levelFilter === 'warn'} onclick={() => (levelFilter = 'warn')}>Warn</button>
 			<button class:on={levelFilter === 'info'} onclick={() => (levelFilter = 'info')}>Info</button>
 		</div>
@@ -536,6 +556,7 @@
 	}
 	.log-row:last-child { border-bottom: none; }
 	.log-row.level-block { background: color-mix(in oklch, var(--status-down) 8%, transparent); }
+	.log-row.level-detect { background: color-mix(in oklch, var(--status-warn) 4%, transparent); }
 	.log-row.level-warn { background: color-mix(in oklch, var(--status-warn) 6%, transparent); }
 
 	.log-time { color: var(--fg-dim); font-size: 11px; }
@@ -549,6 +570,7 @@
 		justify-self: start;
 	}
 	.log-lvl.block { background: color-mix(in oklch, var(--status-down) 18%, transparent); color: var(--status-down); }
+	.log-lvl.detect { background: color-mix(in oklch, var(--status-warn) 14%, transparent); color: var(--status-warn); }
 	.log-lvl.warn { background: color-mix(in oklch, var(--status-warn) 18%, transparent); color: var(--status-warn); }
 	.log-lvl.info { background: color-mix(in oklch, var(--status-info) 18%, transparent); color: var(--status-info); }
 	.log-msg { color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

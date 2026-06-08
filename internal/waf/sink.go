@@ -245,15 +245,24 @@ func (s *Sink) Done() <-chan struct{} {
 // branch (also goroutine-local).
 //
 // Bump-then-suppress: the BlockCounter is incremented on
-// EVERY absorbed event, including those the LRU is about to
-// suppress for event-table persistence. Per spec §1.3 D1
-// implications and AC #3 / AC #5 wording — the dashboard's
-// per-minute counter must reflect attack volume even when
-// the event log only carries one representative row per
-// (route, IP, rule) per ttl. Nil counter is the degraded
-// mode (skipped).
+// EVERY absorbed event of ActionBlock, including those the
+// LRU is about to suppress for event-table persistence. Per
+// spec §1.3 D1 implications and AC #3 / AC #5 wording — the
+// dashboard's per-minute counter must reflect attack volume
+// even when the event log only carries one representative
+// row per (route, IP, rule) per ttl. Nil counter is the
+// degraded mode (skipped).
+//
+// W.bugfix Fix #1: detect-mode events DO NOT bump the
+// block-volume counter. The "WAF blocks per minute"
+// timeseries is the operator's signal for actual
+// enforcement; in detect mode the WAF allowed the request
+// through, so counting it as a "block" would inflate the
+// signal the same way the old labels lied. The event row
+// itself is still persisted (frontend renders DETECT
+// alongside BLOCK rows in the activity log).
 func (s *Sink) absorb(e Event) {
-	if s.counter != nil {
+	if s.counter != nil && e.Action == ActionBlock {
 		s.counter.BumpWafBlocks(e.RouteID)
 	}
 	if !s.lru.shouldEmit(e.RouteID, e.SrcIP, e.RuleID) {

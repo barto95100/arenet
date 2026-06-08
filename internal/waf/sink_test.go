@@ -401,8 +401,15 @@ func TestSink_BlockCounter_BumpedOnEveryAbsorb_IncludingSuppressed(t *testing.T)
 	// 100 identical events on the same triple → LRU lets the
 	// first through, suppresses the other 99. The COUNTER
 	// should record all 100 bumps.
+	//
+	// W.bugfix Fix #1: the counter only bumps when Action ==
+	// ActionBlock (detect-mode events still persist as event-
+	// table rows but DO NOT inflate the block-volume
+	// timeseries). The pre-fix test emitted bare Events with
+	// an implicit "always block" intent — add the Action
+	// explicitly so the assertion is unambiguous.
 	for i := 0; i < 100; i++ {
-		s.Emit(Event{RouteID: "r", SrcIP: "1.2.3.4", RuleID: "942100", Ts: time.Now()})
+		s.Emit(Event{RouteID: "r", SrcIP: "1.2.3.4", RuleID: "942100", Ts: time.Now(), Action: ActionBlock})
 	}
 	time.Sleep(200 * time.Millisecond)
 	cancel()
