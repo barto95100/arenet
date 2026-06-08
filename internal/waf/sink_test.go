@@ -36,9 +36,24 @@ func silentLogger() *slog.Logger {
 // recordingInserter captures every batch the sink flushes.
 // Thread-safe so tests that drive Run + Emit from multiple
 // goroutines can assert post-hoc.
+//
+// Item 3 deflake (#R-WAF-flaky-batch-test): the inserter
+// now signals on a sync.Cond every time a batch lands.
+// Tests that need to wait for the sink's batched-flush
+// goroutine to catch up call waitForEvents(n) — a
+// deterministic synchronization that replaces the prior
+// 2-second polling loop that occasionally lost the race
+// under -race instrumentation.
 type recordingInserter struct {
 	mu      sync.Mutex
+	cond    *sync.Cond
 	batches [][]Event
+}
+
+func newRecordingInserter() *recordingInserter {
+	r := &recordingInserter{}
+	r.cond = sync.NewCond(&r.mu)
+	return r
 }
 
 func (r *recordingInserter) InsertWafEventBatch(_ context.Context, events []Event) error {
@@ -48,12 +63,19 @@ func (r *recordingInserter) InsertWafEventBatch(_ context.Context, events []Even
 	cp := make([]Event, len(events))
 	copy(cp, events)
 	r.batches = append(r.batches, cp)
+	if r.cond != nil {
+		r.cond.Broadcast()
+	}
 	return nil
 }
 
 func (r *recordingInserter) totalEvents() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.totalEventsLocked()
+}
+
+func (r *recordingInserter) totalEventsLocked() int {
 	total := 0
 	for _, b := range r.batches {
 		total += len(b)
@@ -65,6 +87,45 @@ func (r *recordingInserter) batchCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.batches)
+}
+
+// waitForEvents blocks until the inserter has observed at
+// least n total events across all batches, or the deadline
+// passes. Returns true when the count was reached,
+// false on deadline.
+//
+// Backed by sync.Cond.Broadcast in InsertWafEventBatch +
+// a watchdog goroutine that also broadcasts on the deadline
+// so the caller's Wait loop wakes cleanly (no goroutine
+// leak even if the count is never reached). Deterministic
+// under -race — the goroutine scheduler can delay the
+// sink's flush arbitrarily and the test still wakes the
+// instant the Nth event lands.
+func (r *recordingInserter) waitForEvents(t *testing.T, n int, deadline time.Duration) bool {
+	t.Helper()
+	if r.cond == nil {
+		t.Fatal("recordingInserter must be built via newRecordingInserter for waitForEvents — cond is nil")
+	}
+	done := make(chan struct{})
+	timer := time.AfterFunc(deadline, func() {
+		r.mu.Lock()
+		r.cond.Broadcast()
+		r.mu.Unlock()
+		close(done)
+	})
+	defer timer.Stop()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for r.totalEventsLocked() < n {
+		select {
+		case <-done:
+			return false
+		default:
+		}
+		r.cond.Wait()
+	}
+	return true
 }
 
 // failingInserter returns the configured error from every
@@ -120,32 +181,50 @@ func TestSink_LRU_SuppressesRepeats_BatchPersistsOnce(t *testing.T) {
 }
 
 func TestSink_BatchedFlushAt_FlushBatchSize(t *testing.T) {
-	// FlushBatchSize=10 + interval set very high → flush
-	// triggers on batch fill, not on the timer.
-	rec := &recordingInserter{}
+	// FlushBatchSize=10 with a SHORT FlushInterval — the
+	// first 2 batches (events 1..20) land via the size-
+	// trigger; the trailing 5 land via the next timer
+	// tick. That way ALL 25 events have a deterministic
+	// flush path, and waitForEvents wakes the test the
+	// instant all 25 have landed regardless of -race
+	// scheduler pressure.
+	//
+	// Item 3 deflake (#R-WAF-flaky-batch-test): the prior
+	// version polled rec.batchCount() in a 10 ms loop with
+	// FlushInterval=10s, so the trailing 5 events relied
+	// on the ctx-cancel flush. Under -race the cancel
+	// could fire while events were still in s.in (not yet
+	// absorbed into s.pending), and the cancel branch
+	// only flushes s.pending — losing 2-3 events per
+	// run. Replaced with a deterministic short timer +
+	// sync.Cond signal: waitForEvents wakes on the Nth
+	// landing, not on a wall-clock poll.
+	rec := newRecordingInserter()
 	s := NewSink(rec, nil, silentLogger(), SinkConfig{
-		FlushInterval:  10 * time.Second,
+		FlushInterval:  20 * time.Millisecond,
 		FlushBatchSize: 10,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go s.Run(ctx)
 
 	// 25 events with DIFFERENT triples so the LRU lets them
-	// all through. Should produce >= 2 batches (10 + 10),
-	// the trailing 5 wait for the timer-OR-ctx-cancel.
+	// all through. First two batches (events 1..10 and
+	// 11..20) land via the size-trigger; trailing 5
+	// (events 21..25) land via the next timer tick
+	// (~20ms after the 25th Emit).
 	for i := 0; i < 25; i++ {
 		s.Emit(Event{RouteID: "r", SrcIP: "ip-x", RuleID: "rule-" + string(rune('a'+i)), Ts: time.Now()})
 	}
-	// Wait for at least 2 batches to land.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && rec.batchCount() < 2 {
-		time.Sleep(10 * time.Millisecond)
+
+	// Deterministic wait: all 25 events must land.
+	if !rec.waitForEvents(t, 25, 5*time.Second) {
+		t.Fatalf("timed out waiting for 25 events; got %d events across %d batches",
+			rec.totalEvents(), rec.batchCount())
 	}
-	cancel()
-	<-s.Done()
 
 	if got := rec.batchCount(); got < 2 {
-		t.Fatalf("batchCount = %d, want >= 2 (size-triggered flushes + a final cancel flush)", got)
+		t.Fatalf("batchCount = %d, want >= 2 (size-triggered flushes + a final timer flush)", got)
 	}
 	if got := rec.totalEvents(); got != 25 {
 		t.Fatalf("totalEvents = %d, want 25", got)
