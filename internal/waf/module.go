@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -342,6 +343,33 @@ func requestSnippetFromMatch(mr types.MatchedRule) (method, path, payload string
 	return
 }
 
+// isWebSocketUpgrade reports whether r is an HTTP 1.1
+// WebSocket upgrade handshake (RFC 6455 §4.1). Two header
+// invariants — both required, case-insensitive (HTTP headers
+// are case-insensitive per RFC 7230 §3.2):
+//
+//   - Upgrade: websocket
+//   - Connection: upgrade (may carry additional tokens,
+//     e.g. "keep-alive, Upgrade" — the comma-separated list
+//     is RFC 7230 §6.1 compliant and present in some clients;
+//     substring-match the lowercased value rather than
+//     EqualFold the whole header).
+//
+// We intentionally do NOT check Sec-WebSocket-Key /
+// Sec-WebSocket-Version: a client missing those is malformed
+// but still trying to upgrade, and bypassing the WAF is the
+// safest behaviour (Coraza can't handle it either way; the
+// upstream gets the malformed handshake and replies 400).
+//
+// Pure function; called once per request on the hot path.
+// Two map lookups + a strings.Contains; nanoseconds.
+func isWebSocketUpgrade(r *http.Request) bool {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return false
+	}
+	return strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+}
+
 // ServeHTTP wraps the next handler with Coraza's request +
 // response inspection. The shape mirrors coraza-caddy/v2's
 // ServeHTTP exactly — the security path is too risky to
@@ -354,7 +382,45 @@ func requestSnippetFromMatch(mr types.MatchedRule) (method, path, payload string
 //     so Caddy emits the configured status (typically 403);
 //     in DETECT mode we let the request through (the
 //     callback already emitted the event).
+//   - WebSocket upgrade requests bypass the WAF entirely
+//     (see isWebSocketUpgrade doc-comment below). The
+//     bypass runs BEFORE tx.NewTransaction so we don't
+//     allocate Coraza state for a request we're going to
+//     pass through anyway.
 func (h *ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	// WAF bypass for WebSocket upgrades. Coraza wraps the
+	// response writer for phase 4-5 (response body) rule
+	// evaluation, but the wrapper does NOT implement
+	// http.Hijacker — required for HTTP 101 Switching
+	// Protocols. Activating the WAF (even in detect mode)
+	// on a route that proxies a WebSocket app (Home
+	// Assistant /api/websocket, Jellyfin, n8n, TeslaMate,
+	// Outline) breaks the WebSocket handshake. Coraza
+	// maintainer confirmed this is intentional / out of
+	// scope upstream:
+	// https://github.com/corazawaf/coraza/discussions/1399
+	//
+	// The bypass is unconditional: detect + block modes
+	// both pass WebSocket upgrade requests through to the
+	// upstream untouched. Operators wanting per-route WAF
+	// coverage on the HTTP side of a WebSocket app keep
+	// that protection — only the upgrade handshake itself
+	// (one request per session) is exempt.
+	//
+	// DEBUG (not INFO) log because chatty heartbeat-heavy
+	// apps would otherwise spam journalctl: an active
+	// dashboard with 5 routes could emit hundreds of
+	// upgrade attempts per minute under reconnect storms.
+	// Operators flipping arenet to DEBUG see the bypass
+	// signal without paying the steady-state cost.
+	if isWebSocketUpgrade(r) {
+		slog.Default().Debug("waf: bypassing websocket upgrade",
+			"route_id", h.RouteID,
+			"path", r.URL.Path,
+		)
+		return next.ServeHTTP(w, r)
+	}
+
 	tx := h.waf.NewTransaction()
 	defer func() {
 		tx.ProcessLogging()
