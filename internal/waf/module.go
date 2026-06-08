@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -94,6 +95,13 @@ type ArenetWafHandler struct {
 	Mode         string `json:"mode,omitempty"`
 	Directives   string `json:"directives,omitempty"`
 	LoadOWASPCRS bool   `json:"load_owasp_crs,omitempty"`
+	// Host is the primary hostname this handler guards. Used
+	// only for the W.bugfix Fix #2 boot log line so operators
+	// reading journalctl don't have to cross-reference
+	// route_id back to a host. Optional on the wire — a
+	// pre-Fix-#2 emit decodes with Host="" and the log line
+	// just shows the route_id.
+	Host string `json:"host,omitempty"`
 
 	waf     coraza.WAF
 	poolKey string
@@ -133,7 +141,7 @@ func (h *ArenetWafHandler) Validate() error {
 func (h *ArenetWafHandler) Provision(_ caddy.Context) error {
 	h.poolKey = h.computePoolKey()
 
-	val, _, err := wafPool.LoadOrNew(h.poolKey, func() (caddy.Destructor, error) {
+	val, loaded, err := wafPool.LoadOrNew(h.poolKey, func() (caddy.Destructor, error) {
 		waf, err := h.buildWAF()
 		if err != nil {
 			return nil, err
@@ -144,6 +152,28 @@ func (h *ArenetWafHandler) Provision(_ caddy.Context) error {
 		return fmt.Errorf("arenet_waf: build waf: %w", err)
 	}
 	h.waf = val.(*pooledWAF).waf
+
+	// W.bugfix Fix #2 — per-route boot signal. Emits one log
+	// line every time Caddy instantiates a WAF handler (i.e.
+	// once per route-with-WAF-on per reload). The `pooled`
+	// field tells operators whether this provision reused an
+	// existing Coraza WAF instance from wafPool (true == reused
+	// — saves the ~50 ms CRS parse cost) or built a fresh one.
+	// Two routes with identical (mode, directives, crs) share
+	// a pool_key — that's intentional (computePoolKey design)
+	// and visible in the log for verification.
+	//
+	// Pre-Fix-#2 boot logs showed only one sink-level
+	// "waf event sink wired" line, leaving operators blind
+	// to which routes actually had WAF on and at what mode.
+	slog.Default().Info("waf handler provisioned",
+		"route_id", h.RouteID,
+		"host", h.Host,
+		"mode", h.Mode,
+		"pool_key", h.poolKey,
+		"pooled", loaded,
+		"load_owasp_crs", h.LoadOWASPCRS,
+	)
 	return nil
 }
 

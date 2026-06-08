@@ -397,6 +397,29 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	}
 
 	m.logger.Debug("applying caddy config", "routes", len(routes), "bytes", len(cfgJSON))
+
+	// W.bugfix Fix #2 — emit a per-route skip log for every
+	// route whose WAF is off. The provisioned-side log lives
+	// in internal/waf module.Provision (which only fires
+	// when the handler is actually emitted in the chain);
+	// caddymgr is the only place that knows about routes
+	// whose WAF handler was deliberately omitted because
+	// mode is empty / "off". Symmetric coverage so an
+	// operator scanning journalctl after a reload sees every
+	// route's WAF status (on with mode + skipped with
+	// reason). Runs on EVERY applyLocked — same cadence as
+	// the provisioned-side log, so the operator's mental
+	// model stays consistent across hot-reloads.
+	for _, r := range routes {
+		if r.WAFMode == "" || r.WAFMode == "off" {
+			m.logger.Info("waf handler skipped",
+				"route_id", r.ID,
+				"host", r.Host,
+				"reason", "mode_off",
+			)
+		}
+	}
+
 	if err := caddy.Load(cfgJSON, true); err != nil {
 		return fmt.Errorf("caddy.Load: %w", err)
 	}
@@ -916,7 +939,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//     mutations would otherwise confuse the rules);
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
-		if wafHandler := buildWAFHandler(r.ID, r.WAFMode); wafHandler != nil {
+		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode); wafHandler != nil {
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -1753,13 +1776,14 @@ func buildRedirectRoute(hosts []string) httpRoute {
 // The arenet_waf module appends it itself based on its Mode
 // field so the module owns the policy decision (we don't
 // want two sources of truth disagreeing).
-func buildWAFHandler(routeID, mode string) map[string]any {
+func buildWAFHandler(routeID, host, mode string) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
 	}
 	return map[string]any{
 		"handler":        "arenet_waf",
 		"route_id":       routeID,
+		"host":           host,
 		"mode":           mode,
 		"load_owasp_crs": true,
 		"directives": "Include @coraza.conf-recommended\n" +
