@@ -246,6 +246,35 @@
 	let cbActiveIndex = $state(0);
 	let cbInputEl = $state<HTMLInputElement | null>(null);
 
+	// W.7 follow-up — the section's open/closed state is
+	// tracked SEPARATELY from formData.countryBlock.mode.
+	// The W.7 polish initially tied <details open={...}>
+	// to (mode !== 'off'), which made the section collapse
+	// out of view the instant the operator clicked
+	// "Désactivé" — they made a deliberate choice and lost
+	// the UI confirmation of it. The fix: cbSectionOpen
+	// holds the operator's open/close intent (toggled via
+	// the summary click); mode flips never touch it.
+	//
+	// Auto-open shorthand: when the operator picks Allow
+	// or Deny from a closed section, force-open it so the
+	// newly-revealed input + chip list aren't hidden
+	// behind a collapsed details. Going off → on is a
+	// deliberate "I want to configure this" signal; going
+	// on → off is "I want this off but I'm still looking
+	// at the section to confirm". Both should keep the
+	// section visible.
+	let cbSectionOpen = $state(false);
+
+	// Pick mode + force-open helper bundled together so
+	// every mode button calls the same code path. Used by
+	// both the 3-button toggle and any future shortcut
+	// affordance.
+	function cbPickMode(next: 'off' | 'allow' | 'deny'): void {
+		formData.countryBlock.mode = next;
+		cbSectionOpen = true;
+	}
+
 	// Derived autocomplete matches, excluding codes already
 	// in the chip list (no point re-suggesting a code that
 	// is already added). Empty when the input is empty AND
@@ -392,6 +421,13 @@
 		healthCheckTouched = false;
 		requestHeaderRows = [];
 		responseHeaderRows = [];
+		// W.7 follow-up — country-block section starts
+		// closed for a fresh create form (matches the
+		// healthCheck details discipline; mode=off doesn't
+		// auto-expand). The operator can open it via the
+		// summary click whenever they want to see the
+		// three modes.
+		cbSectionOpen = false;
 		resetFormErrors();
 		formOpen = true;
 		// Step J.4: refresh provider status whenever the form opens
@@ -502,6 +538,14 @@
 		healthCheckTouched = false;
 		requestHeaderRows = recordToTuples(r.requestHeaders ?? {});
 		responseHeaderRows = recordToTuples(r.responseHeaders ?? {});
+		// W.7 follow-up — auto-open the country-block
+		// section on edit IF the route already has a mode
+		// set (allow / deny). The operator opening an
+		// existing gated route should see the country list
+		// immediately without a second click on the summary;
+		// the off-state stays collapsed to match the create-
+		// form default.
+		cbSectionOpen = r.countryBlock.mode !== 'off';
 		resetFormErrors();
 		formOpen = true;
 	}
@@ -1833,7 +1877,7 @@
 					     discoverability over the previous bare input. -->
 					<details
 						class="rounded border border-border-subtle cb-section cb-mode-{formData.countryBlock.mode}"
-						open={formData.countryBlock.mode !== 'off'}
+						bind:open={cbSectionOpen}
 						data-testid="country-block-section"
 					>
 						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
@@ -1841,6 +1885,18 @@
 							{#if formData.countryBlock.mode !== 'off'}
 								<span class="ml-1 text-xs text-muted">
 									({formData.countryBlock.mode} · {formData.countryBlock.countryList.length})
+								</span>
+							{:else}
+								<!-- W.7 follow-up: surface the "off" state in
+								     the summary too, so when the operator
+								     manually collapses the section after
+								     picking Désactivé the closed-state
+								     header isn't ambiguous. -->
+								<span
+									class="ml-1 text-xs text-muted"
+									data-testid="country-block-summary-off"
+								>
+									(désactivé)
 								</span>
 							{/if}
 						</summary>
@@ -1866,7 +1922,7 @@
 										class:active={formData.countryBlock.mode === 'off'}
 										data-testid="country-block-mode-off"
 										aria-pressed={formData.countryBlock.mode === 'off'}
-										onclick={() => (formData.countryBlock.mode = 'off')}
+										onclick={() => cbPickMode('off')}
 									>
 										<span class="cb-mode-btn__label">Désactivé</span>
 										<span class="cb-mode-btn__hint">pas de gate</span>
@@ -1877,7 +1933,7 @@
 										class:active={formData.countryBlock.mode === 'allow'}
 										data-testid="country-block-mode-allow"
 										aria-pressed={formData.countryBlock.mode === 'allow'}
-										onclick={() => (formData.countryBlock.mode = 'allow')}
+										onclick={() => cbPickMode('allow')}
 									>
 										<span class="cb-mode-btn__label">Allow-list</span>
 										<span class="cb-mode-btn__hint">refuse le reste</span>
@@ -1888,7 +1944,7 @@
 										class:active={formData.countryBlock.mode === 'deny'}
 										data-testid="country-block-mode-deny"
 										aria-pressed={formData.countryBlock.mode === 'deny'}
-										onclick={() => (formData.countryBlock.mode = 'deny')}
+										onclick={() => cbPickMode('deny')}
 									>
 										<span class="cb-mode-btn__label">Deny-list</span>
 										<span class="cb-mode-btn__hint">autorise le reste</span>

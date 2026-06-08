@@ -1447,3 +1447,131 @@ describe('Routes page — W.7 country-block polish', () => {
 		expect(chips[0].textContent).toContain('FR');
 	});
 });
+
+// W.7 follow-up — pinning the collapse-on-off UX fix.
+// Before the fix, the <details> element's `open`
+// attribute was reactively bound to (mode !== 'off') —
+// so clicking "Désactivé" collapsed the entire section
+// out of view, hiding the muted hint operators needed
+// to confirm their choice. Fix: cbSectionOpen $state
+// holds the open/closed intent independently of mode;
+// switching to off keeps the section open + reveals
+// the muted hint where the input used to live.
+describe('Routes page — W.7 follow-up: section visibility on mode=off', () => {
+	async function openSection(): Promise<void> {
+		// New create-form path: section starts closed
+		// (matches the create-form discipline for other
+		// detail blocks like HealthCheck). Operator opens
+		// it by clicking the summary.
+		await openCreateForm();
+		const summary = screen
+			.getByTestId('country-block-section')
+			.querySelector('summary');
+		expect(summary).not.toBeNull();
+		await fireEvent.click(summary!);
+		await tick();
+	}
+
+	it('section starts closed on a fresh create form', async () => {
+		render(Page);
+		await openCreateForm();
+		const section = screen.getByTestId(
+			'country-block-section'
+		) as HTMLDetailsElement;
+		expect(section.open).toBe(false);
+	});
+
+	it('summary shows "(désactivé)" tag when collapsed in off-state', async () => {
+		render(Page);
+		await openCreateForm();
+		// Summary visible (always rendered in jsdom — the
+		// <summary> element isn't hidden by details.open=false).
+		expect(
+			screen.getByTestId('country-block-summary-off')
+		).toBeInTheDocument();
+	});
+
+	it('clicking Allow opens the section AND reveals the input', async () => {
+		render(Page);
+		await openCreateForm();
+		const section = screen.getByTestId(
+			'country-block-section'
+		) as HTMLDetailsElement;
+		expect(section.open).toBe(false);
+		// Picking Allow auto-opens — operator's "I want to
+		// configure this" intent unmistakable.
+		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
+		await tick();
+		expect(section.open).toBe(true);
+		expect(screen.getByTestId('country-block-input')).toBeInTheDocument();
+	});
+
+	it('clicking Désactivé from an open Allow state KEEPS section open + shows the muted hint', async () => {
+		render(Page);
+		await openSection();
+		// Pick Allow first (configured state).
+		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
+		await tick();
+		const section = screen.getByTestId(
+			'country-block-section'
+		) as HTMLDetailsElement;
+		expect(section.open).toBe(true);
+		expect(screen.getByTestId('country-block-input')).toBeInTheDocument();
+
+		// Now pick Off — the brief's UX-feedback regression.
+		// Before the fix, this collapsed the whole section.
+		// After the fix, section stays open + the muted
+		// hint takes over where the input was.
+		await userEvent.click(screen.getByTestId('country-block-mode-off'));
+		await tick();
+		expect(section.open).toBe(true);
+		expect(screen.getByTestId('country-block-off-hint')).toBeInTheDocument();
+		// Input + chips no longer rendered (the {#if mode
+		// !== 'off'} branch evaporates), but the toggle
+		// + the muted hint stay visible — operator can
+		// see what they just picked.
+		expect(
+			screen.queryByTestId('country-block-input')
+		).not.toBeInTheDocument();
+		// All 3 mode buttons still on screen.
+		expect(
+			screen.getByTestId('country-block-mode-off')
+		).toBeInTheDocument();
+		expect(
+			screen.getByTestId('country-block-mode-allow')
+		).toBeInTheDocument();
+		expect(
+			screen.getByTestId('country-block-mode-deny')
+		).toBeInTheDocument();
+	});
+
+	it('the off-state muted hint message reads the canonical Step W copy', async () => {
+		render(Page);
+		await openSection();
+		// Verbatim string the brief specified — operator-
+		// visible nudge "Choose Allow-list or Deny-list to
+		// activate." Future copy changes should reach this
+		// test before reaching production.
+		const hint = screen.getByTestId('country-block-off-hint');
+		expect(hint.textContent).toContain('Aucun gate par pays');
+		expect(hint.textContent).toContain('Allow-list');
+		expect(hint.textContent).toContain('Deny-list');
+	});
+
+	it('operator can still manually collapse the section via the summary', async () => {
+		render(Page);
+		await openSection();
+		const section = screen.getByTestId(
+			'country-block-section'
+		) as HTMLDetailsElement;
+		expect(section.open).toBe(true);
+		// Manual summary click toggles open/closed — the
+		// fix's "section.open is not mode-reactive" rule
+		// must NOT lock the section into an always-open
+		// state.
+		const summary = section.querySelector('summary');
+		await fireEvent.click(summary!);
+		await tick();
+		expect(section.open).toBe(false);
+	});
+});

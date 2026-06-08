@@ -26,7 +26,7 @@ import type {
 
 // Mocks — same vi.hoisted pattern as the certs page tests so the
 // module imports happen after the mock factories are in place.
-const { toastMock, securityMock } = vi.hoisted(() => ({
+const { toastMock, securityMock, clientMock } = vi.hoisted(() => ({
 	toastMock: { pushToast: vi.fn() },
 	securityMock: {
 		fetchEvents: vi.fn(),
@@ -35,11 +35,20 @@ const { toastMock, securityMock } = vi.hoisted(() => ({
 		fetchCertEvents: vi.fn(),
 		// W.5 — 5th source (country-block events).
 		fetchCountryBlockEvents: vi.fn()
+	},
+	// W.7 follow-up — routes API for routeId → host
+	// resolution. Default returns an empty list so rows
+	// with a routeId fall back to the <RouteHost>
+	// truncated-UUID rendering; individual tests
+	// override to test the happy path.
+	clientMock: {
+		listRoutes: vi.fn()
 	}
 }));
 
 vi.mock('$lib/stores/toast', () => toastMock);
 vi.mock('$lib/api/security', () => securityMock);
+vi.mock('$lib/api/client', () => clientMock);
 
 import Page from './+page.svelte';
 
@@ -80,6 +89,8 @@ beforeEach(() => {
 		total: 0,
 		hasMore: false
 	});
+	clientMock.listRoutes.mockReset();
+	clientMock.listRoutes.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -693,16 +704,18 @@ describe('/logs — duplicate-tuple regression (Svelte each_key_duplicate)', () 
 	});
 });
 
-describe('/logs — W.5 country-block source', () => {
-	it('renders a country-block row with the COUNTRY pill + status + "<country> · <mode>-<reason>" detail', async () => {
-		// W.5 — country-block events surface alongside the
-		// other 4 sources (waf/throttle/auth/cert) in the
-		// activity log. They render at level=block (the
-		// request WAS short-circuited) but with a distinct
-		// "COUNTRY" pill label + slate-gray styling so
-		// operators can distinguish them from WAF blocks
-		// (different semantic: policy enforcement vs threat
-		// signature).
+describe('/logs — W.5 country-block source (W.7 follow-up: humanized + host-resolved)', () => {
+	it('renders a country-block row with COUNTRY pill + status + humanized French detail + host badge', async () => {
+		// W.5 introduced the country-block row; W.7 follow-
+		// up replaced the raw "deny-deny-match" detail with
+		// the humanized "pays interdit" + routes the host
+		// badge through <RouteHost> resolving routeId →
+		// hostname via listRoutes(). Both changes are
+		// asserted here; the W.7-follow-up describe block
+		// below adds the fallback + WAF coverage tests.
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'route-uuid-1', host: 'ha.example.test' }
+		]);
 		securityMock.fetchCountryBlockEvents.mockResolvedValue({
 			events: [
 				{
@@ -721,14 +734,169 @@ describe('/logs — W.5 country-block source', () => {
 		});
 
 		render(Page);
-		await screen.findByText(/route-uuid-1/);
+		// Host badge replaces the raw UUID — operator sees
+		// the friendly hostname.
+		await screen.findByText('ha.example.test');
 		// Pill says COUNTRY (not BLOCK, which is the WAF label).
 		expect(screen.getByText('COUNTRY')).toBeInTheDocument();
 		// Status code from the persisted row, not hardcoded.
 		expect(screen.getByText('451')).toBeInTheDocument();
-		// Detail string: "<country> · <mode>-<reason>".
-		expect(screen.getByText(/RU · deny-deny-match/)).toBeInTheDocument();
+		// Humanized French detail string (W.7 follow-up).
+		expect(screen.getByText(/RU · pays interdit/)).toBeInTheDocument();
+		// Raw "deny-deny-match" must NOT be visible body text.
+		expect(
+			screen.queryByText(/deny-deny-match/)
+		).not.toBeInTheDocument();
 		// Source IP from the persisted row.
 		expect(screen.getByText('203.0.113.5')).toBeInTheDocument();
+	});
+});
+
+describe('/logs — W.7 follow-up: humanize reason + host resolution', () => {
+	it('allow-miss → "pays non autorisé"', async () => {
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'route-uuid-allow', host: 'app.example.test' }
+		]);
+		securityMock.fetchCountryBlockEvents.mockResolvedValue({
+			events: [
+				{
+					id: 8,
+					ts: isoOffset(0),
+					routeId: 'route-uuid-allow',
+					srcIp: '203.0.113.6',
+					country: 'IN',
+					mode: 'allow',
+					statusCode: 403,
+					reason: 'allow-miss'
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		render(Page);
+		await screen.findByText('app.example.test');
+		expect(screen.getByText(/IN · pays non autorisé/)).toBeInTheDocument();
+	});
+
+	it('raw reason stays in title tooltip on the detail span', async () => {
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'route-uuid-1', host: 'ha.example.test' }
+		]);
+		securityMock.fetchCountryBlockEvents.mockResolvedValue({
+			events: [
+				{
+					id: 9,
+					ts: isoOffset(0),
+					routeId: 'route-uuid-1',
+					srcIp: '203.0.113.5',
+					country: 'RU',
+					mode: 'deny',
+					statusCode: 403,
+					reason: 'deny-match'
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		render(Page);
+		const detail = await screen.findByText(/RU · pays interdit/);
+		// title="" carries the raw mode-reason for
+		// forensic ops that grep journalctl by code.
+		expect(detail).toHaveAttribute('title', 'deny-match');
+	});
+
+	it('falls back to truncated UUID when route was deleted', async () => {
+		// listRoutes returns an empty list — the routeId
+		// in the event row is "deleted" from the operator's
+		// perspective. <RouteHost> should render a
+		// truncated UUID + the full UUID as the title.
+		clientMock.listRoutes.mockResolvedValue([]);
+		securityMock.fetchCountryBlockEvents.mockResolvedValue({
+			events: [
+				{
+					id: 10,
+					ts: isoOffset(0),
+					routeId: 'gone-uuid-xxxxxxxx-yyyyyy',
+					srcIp: '203.0.113.7',
+					country: 'BR',
+					mode: 'deny',
+					statusCode: 403,
+					reason: 'deny-match'
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		render(Page);
+		// Truncated UUID renders: first 8 chars + ellipsis.
+		const host = await screen.findByTestId('route-host');
+		expect(host.textContent?.trim()).toBe('gone-uui…');
+		expect(host).toHaveAttribute('title', 'gone-uuid-xxxxxxxx-yyyyyy');
+		// Fallback CSS hook present so styling can pick
+		// up the muted variant.
+		expect(host).toHaveClass('route-host--fallback');
+	});
+
+	it('WAF events also render the host badge (shared component)', async () => {
+		// The same <RouteHost> resolver runs across per-
+		// route log sources. WAF events carry routeId
+		// already; W.7 follow-up wires it through the
+		// mapWaf path so operators see "ha.example.test"
+		// instead of grep'ing the UUID.
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'route-waf-1', host: 'waf.example.test' }
+		]);
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 11,
+					ts: isoOffset(0),
+					routeId: 'route-waf-1',
+					ruleId: '942100',
+					category: 'SQLi',
+					severity: 4,
+					srcIp: '1.2.3.4',
+					requestMethod: 'GET',
+					requestPath: '/?id=1',
+					payloadSample: '',
+					action: 'BLOCK',
+					statusCode: 403
+				}
+			]
+		});
+		render(Page);
+		await screen.findByText('waf.example.test');
+		// The technical request path is still visible — host
+		// badge + path render side-by-side for WAF rows.
+		expect(screen.getByText(/\/\?id=1/)).toBeInTheDocument();
+	});
+
+	it('routeMap refresh failures do not crash the page', async () => {
+		// Routes API hiccup → routeMap stays empty →
+		// rows fall back gracefully. Page must render
+		// without throwing.
+		clientMock.listRoutes.mockRejectedValue(new Error('boom'));
+		securityMock.fetchCountryBlockEvents.mockResolvedValue({
+			events: [
+				{
+					id: 12,
+					ts: isoOffset(0),
+					routeId: 'route-uuid-1',
+					srcIp: '203.0.113.5',
+					country: 'RU',
+					mode: 'deny',
+					statusCode: 403,
+					reason: 'deny-match'
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		render(Page);
+		// Row still mounts via the fallback path.
+		await screen.findByText(/RU · pays interdit/);
+		expect(screen.getByTestId('route-host')).toHaveClass(
+			'route-host--fallback'
+		);
 	});
 });

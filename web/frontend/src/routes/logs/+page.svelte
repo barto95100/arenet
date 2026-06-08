@@ -37,7 +37,9 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import RouteHost from '$lib/components/RouteHost.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import { listRoutes } from '$lib/api/client';
 	import {
 		fetchEvents,
 		fetchThrottleEvents,
@@ -82,6 +84,20 @@
 		path: string;
 		detail: string;
 		srcIp: string;
+		// W.7 follow-up — optional routeId so per-route
+		// sources (waf, country_block) can render a host
+		// badge resolved via routeMap. Sources without a
+		// per-route shape (throttle, auth, cert) leave
+		// this undefined; the template falls back to the
+		// existing path-only rendering for those rows.
+		routeId?: string;
+		// detailTitle is the tooltip shown on hover over
+		// the humanized detail string. For country-block
+		// rows it surfaces the raw matcher reason ("allow-
+		// miss", "deny-match") so forensic ops aren't
+		// hidden behind the humanized French label.
+		// Unset on other sources (no tooltip).
+		detailTitle?: string;
 	}
 
 	const REFRESH_MS = 10_000;
@@ -93,6 +109,32 @@
 	let levelFilter = $state<'all' | LevelTag>('all');
 	let paused = $state(false);
 	let pollId: ReturnType<typeof setInterval> | null = null;
+
+	// W.7 follow-up — routeId → host resolution map.
+	// Built ONCE on page mount (parallel with the first
+	// event-load Promise.allSettled) + refreshed when the
+	// poll loop runs so a newly-created route shows its
+	// host on the next refresh. Routes deleted between
+	// block time and page load fall back to the truncated
+	// UUID in <RouteHost> — defensive, never blank.
+	let routeMap = $state(new Map<string, string>());
+
+	async function refreshRouteMap(): Promise<void> {
+		try {
+			const routes = await listRoutes();
+			const next = new Map<string, string>();
+			for (const r of routes) {
+				next.set(r.id, r.host);
+			}
+			routeMap = next;
+		} catch {
+			// Non-fatal: a routes-API hiccup just keeps the
+			// existing map; subsequent polls retry. Failing
+			// hard would take down the activity log, which
+			// has its own degraded-mode contract for the
+			// event sources.
+		}
+	}
 
 	const filteredRows = $derived(
 		rows.filter((r) => {
@@ -128,7 +170,12 @@
 			method: e.requestMethod,
 			path: e.requestPath,
 			detail: `WAF rule ${e.ruleId} · ${e.category}`,
-			srcIp: e.srcIp
+			srcIp: e.srcIp,
+			// W.7 follow-up — WAF rows carry routeId so the
+			// host badge resolves the operator-visible
+			// hostname (e.g. "ha.worldgeekwide.fr" instead
+			// of grep'ing a UUID).
+			routeId: e.routeId
 		};
 	}
 	function mapThrottle(e: ThrottleEvent): UnifiedRow {
@@ -256,18 +303,39 @@
 		};
 	}
 
-	// Step W.5 — country-block source mapper. Each row
-	// renders as a block-level entry (the request WAS
-	// short-circuited at the Caddy edge); detail shape is
-	// "<country> · <mode>-<reason>" so the operator scans
-	// "RU · deny-match" and instantly understands the route's
-	// deny list matched the source country. RouteID → host
-	// resolution is deferred (W.5 doesn't wire the routes
-	// API in this page); the row shows the raw routeId in
-	// the path column so an operator can grep it against
-	// /routes if curious. A future increment could resolve
-	// it via a route-id cache populated from the existing
-	// fetchRoutes call elsewhere in the app.
+	// W.7 follow-up — humanized French label for the W.1
+	// matcher reason enum. Persisted rows only ever carry
+	// the two block-reaching values (the other 6 enum
+	// values are accept paths or fail-open that don't reach
+	// the sink), but the fallback handles any future
+	// addition by surfacing the raw code so an operator
+	// can still grep journalctl.
+	//
+	// The raw reason stays as a title="" tooltip on the
+	// detail span so forensic ops aren't lost: hover →
+	// "allow-miss" / "deny-match" verbatim.
+	function humanizeCountryBlockReason(reason: string): string {
+		switch (reason) {
+			case 'allow-miss':
+				return 'pays non autorisé';
+			case 'deny-match':
+				return 'pays interdit';
+			default:
+				return reason;
+		}
+	}
+
+	// Step W.5 / W.7 follow-up — country-block source
+	// mapper. Renders as a block-level entry (the request
+	// WAS short-circuited at the Caddy edge). W.5 put the
+	// raw routeId UUID in the path column and used a
+	// "mode-reason" string in the detail; both were
+	// operator-unfriendly. The W.7 follow-up moves the
+	// routeId to its own field (rendered via <RouteHost>
+	// for the visible host badge), keeps the path slot
+	// empty (country-block isn't path-scoped — it gates
+	// every request to the matched routes), and uses the
+	// humanized reason in the detail.
 	function mapCountryBlock(e: CountryBlockEvent): UnifiedRow {
 		const country = e.country || '—';
 		return {
@@ -277,9 +345,17 @@
 			code: String(e.statusCode),
 			source: 'country_block',
 			method: 'GEO',
-			path: e.routeId,
-			detail: `${country} · ${e.mode}-${e.reason}`,
-			srcIp: e.srcIp
+			path: '', // host resolution moves to the routeId / <RouteHost>
+			detail: `${country} · ${humanizeCountryBlockReason(e.reason)}`,
+			// W.7 follow-up — title tooltip surfaces the
+			// raw matcher reason code per the brief: forensic
+			// ops grep by "allow-miss" / "deny-match" without
+			// translation. The mode is implicit in the reason
+			// (allow-* / deny-*) so duplicating it would just
+			// echo W.5's redundancy.
+			detailTitle: e.reason,
+			srcIp: e.srcIp,
+			routeId: e.routeId
 		};
 	}
 
@@ -334,6 +410,13 @@
 			if (paused) return;
 			if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
 			void load();
+			// W.7 follow-up — refresh routeMap on the same
+			// cadence as the event sources. A newly-created
+			// route shows its host on the next refresh
+			// without a hard page reload; a deleted route
+			// falls out of the map and subsequent rows for
+			// that routeId render the UUID fallback.
+			void refreshRouteMap();
 		}, REFRESH_MS);
 	}
 	function stopPolling(): void {
@@ -361,6 +444,12 @@
 	}
 
 	onMount(() => {
+		// W.7 follow-up — fire the routeMap refresh in
+		// parallel with the first event load. Both are
+		// non-blocking; if the routes API hiccups the
+		// rows still render with the truncated-UUID
+		// fallback in <RouteHost>.
+		void refreshRouteMap();
 		void load();
 		startPolling();
 	});
@@ -459,9 +548,29 @@
 					<span class="mono">{r.code}</span>
 					<span class="log-msg">
 						<span class="k">{r.method}</span>
-						{r.path}
+						{#if r.routeId}
+							<!-- W.7 follow-up — per-route sources (waf,
+							     country_block) render a resolved host
+							     badge instead of the raw routeId UUID.
+							     The badge falls back to a truncated UUID
+							     when the route was deleted between block
+							     time and page load (forensic ops still
+							     see the full UUID in the title tooltip).
+							     The technical path follows the badge
+							     when present (waf carries requestPath;
+							     country_block has none, so this branch
+							     short-circuits before the redundant
+							     separator). -->
+							<RouteHost routeId={r.routeId} {routeMap} />
+							{#if r.path}
+								<span class="k">·</span>
+								{r.path}
+							{/if}
+						{:else if r.path}
+							{r.path}
+						{/if}
 						<span class="k">·</span>
-						{r.detail}
+						<span title={r.detailTitle ?? ''}>{r.detail}</span>
 					</span>
 					<span class="right mono dim">{r.srcIp}</span>
 				</div>
