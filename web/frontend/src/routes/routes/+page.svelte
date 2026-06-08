@@ -19,6 +19,7 @@
 		RouteRequest,
 		Upstream
 	} from '$lib/api/types';
+	import { countryName, matchCountries, type CountryMatch } from '$lib/data/countries';
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import Button from '$lib/components/Button.svelte';
@@ -232,6 +233,132 @@
 	// fight with row-targeted interactions.
 	let panelEl = $state<HTMLDivElement | null>(null);
 	let tableEl = $state<HTMLTableElement | null>(null);
+
+	// W.7 — country-block autocomplete state. The input
+	// value is held locally (not bound to formData) so the
+	// dropdown can preview matches without polluting the
+	// committed country list until the operator picks an
+	// entry. activeIndex drives keyboard navigation (Arrow
+	// Up/Down + Enter). cbInputEl is the focus target for
+	// the "+ Ajouter un pays" CTA below.
+	let cbInputValue = $state('');
+	let cbDropdownOpen = $state(false);
+	let cbActiveIndex = $state(0);
+	let cbInputEl = $state<HTMLInputElement | null>(null);
+
+	// Derived autocomplete matches, excluding codes already
+	// in the chip list (no point re-suggesting a code that
+	// is already added). Empty when the input is empty AND
+	// the dropdown isn't explicitly open (clicking the CTA
+	// opens it without text — surfaces the first 8 codes
+	// alphabetically for "I don't know what I want" browsing).
+	const cbSuggestions = $derived<CountryMatch[]>(
+		cbDropdownOpen
+			? matchCountries(cbInputValue, formData.countryBlock.countryList)
+			: []
+	);
+
+	// W.7 — counter label tied to mode. The brief asked
+	// for "{N} pays {bloqué(s)|autorisé(s)}" matching the
+	// active mode; the singular/plural pluralization
+	// matches French agreement.
+	const cbCounterLabel = $derived.by(() => {
+		const n = formData.countryBlock.countryList.length;
+		if (n === 0) return '';
+		if (formData.countryBlock.mode === 'allow') {
+			return `${n} pays autorisé${n > 1 ? 's' : ''}`;
+		}
+		if (formData.countryBlock.mode === 'deny') {
+			return `${n} pays bloqué${n > 1 ? 's' : ''}`;
+		}
+		return `${n} pays`;
+	});
+
+	// W.7 — add a country code to the list if not already
+	// present + close the dropdown. Shared by the keyboard
+	// Enter handler, the click-on-suggestion handler, and
+	// the CTA button's quick-add path. Trim + uppercase
+	// applied at the boundary so the chip list is always
+	// canonical.
+	function cbAddCode(rawCode: string): void {
+		const code = rawCode.trim().toUpperCase();
+		if (!/^[A-Z]{2}$/.test(code)) return;
+		if (formData.countryBlock.countryList.includes(code)) {
+			cbInputValue = '';
+			return;
+		}
+		formData.countryBlock.countryList = [
+			...formData.countryBlock.countryList,
+			code
+		];
+		cbInputValue = '';
+		cbActiveIndex = 0;
+		cbDropdownOpen = false;
+	}
+
+	function cbRemoveCode(code: string): void {
+		formData.countryBlock.countryList =
+			formData.countryBlock.countryList.filter((c) => c !== code);
+	}
+
+	function cbOpenDropdown(): void {
+		cbDropdownOpen = true;
+		cbActiveIndex = 0;
+		// requestAnimationFrame is the canonical way to focus
+		// after Svelte reactive paint; the input may have just
+		// been rendered if the mode toggle revealed the field.
+		requestAnimationFrame(() => cbInputEl?.focus());
+	}
+
+	function cbInputKeydown(e: KeyboardEvent): void {
+		// Operator may pick from the dropdown OR type the
+		// 2-char code raw + Enter. Both paths must add the
+		// code; the dropdown takes precedence (the operator's
+		// arrow-selected match) so an ambiguous "FR" → Enter
+		// with the dropdown active selects the highlighted
+		// suggestion.
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			if (cbDropdownOpen && cbSuggestions.length > 0) {
+				cbAddCode(cbSuggestions[cbActiveIndex]?.code ?? cbInputValue);
+			} else {
+				cbAddCode(cbInputValue);
+			}
+			return;
+		}
+		if (e.key === ',') {
+			// Comma is the secondary delimiter so an operator
+			// pasting "FR,DE,RU" can chain entries quickly. We
+			// add the buffer + clear; the next paste segment
+			// re-triggers the dropdown for visual confirmation.
+			e.preventDefault();
+			cbAddCode(cbInputValue);
+			return;
+		}
+		if (e.key === 'Escape') {
+			cbDropdownOpen = false;
+			return;
+		}
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			if (cbSuggestions.length === 0) return;
+			cbActiveIndex = (cbActiveIndex + 1) % cbSuggestions.length;
+			return;
+		}
+		if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			if (cbSuggestions.length === 0) return;
+			cbActiveIndex =
+				(cbActiveIndex - 1 + cbSuggestions.length) % cbSuggestions.length;
+			return;
+		}
+	}
+
+	function cbInputOnInput(e: Event): void {
+		cbInputValue = (e.currentTarget as HTMLInputElement).value;
+		cbDropdownOpen = true;
+		cbActiveIndex = 0;
+	}
 
 	// Svelte action: bind to the panel root, listens on document
 	// mousedown for the lifetime of the node, calls closePanel
@@ -1693,9 +1820,21 @@
 					     The "Add country" input takes ISO 3166-1
 					     alpha-2 codes (2 uppercase letters); Enter or
 					     comma adds the chip. -->
+					<!-- W.7 polish: pill-style mode toggle (Off / Allow /
+					     Deny) replaces the dropdown so operators see the
+					     three states at a glance; the active button picks
+					     up the mode-colored border (slate / green / red).
+					     Chips recolor to match the active mode. Counter
+					     "{N} pays autorisé(s) / bloqué(s)" surfaces the
+					     count + mode-meaningful pluralization. Autocomplete
+					     dropdown matches by alpha-2 code OR French name
+					     prefix (Intl.DisplayNames) — operator types "russ"
+					     to find RU/Russie. "+ Ajouter un pays" CTA improves
+					     discoverability over the previous bare input. -->
 					<details
-						class="rounded border border-border-subtle"
+						class="rounded border border-border-subtle cb-section cb-mode-{formData.countryBlock.mode}"
 						open={formData.countryBlock.mode !== 'off'}
+						data-testid="country-block-section"
 					>
 						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
 							Pays bloqués
@@ -1706,73 +1845,180 @@
 							{/if}
 						</summary>
 						<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
+							<!-- Mode pill toggle — 3 buttons in a segmented group.
+							     The "Mode" caption is a <span> rather than a
+							     <label> because the toggle has no single control
+							     to bind to (group's aria-label carries the
+							     accessible name). -->
 							<div>
-								<label
-									for="route-country-block-mode"
-									class="text-sm font-medium text-secondary block mb-1"
-								>
+								<span class="text-sm font-medium text-secondary block mb-1">
 									Mode
-								</label>
-								<select
-									id="route-country-block-mode"
-									bind:value={formData.countryBlock.mode}
-									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+								</span>
+								<div
+									class="cb-mode-toggle"
+									role="group"
+									aria-label="Mode du gate pays"
+									data-testid="country-block-mode-toggle"
 								>
-									<option value="off">Désactivé — pas de gate par pays</option>
-									<option value="allow">Autoriser uniquement les pays listés (refuse le reste)</option>
-									<option value="deny">Bloquer les pays listés (autorise le reste)</option>
-								</select>
-							</div>
-							{#if formData.countryBlock.mode !== 'off'}
-								<div>
-									<label
-										for="route-country-block-list-input"
-										class="text-sm font-medium text-secondary block mb-1"
+									<button
+										type="button"
+										class="cb-mode-btn cb-mode-btn--off"
+										class:active={formData.countryBlock.mode === 'off'}
+										data-testid="country-block-mode-off"
+										aria-pressed={formData.countryBlock.mode === 'off'}
+										onclick={() => (formData.countryBlock.mode = 'off')}
 									>
-										Pays (codes ISO 3166-1 alpha-2, ex. FR, DE, RU)
-									</label>
-									<div class="flex flex-wrap gap-2 mb-2" data-testid="country-block-chip-list">
+										<span class="cb-mode-btn__label">Désactivé</span>
+										<span class="cb-mode-btn__hint">pas de gate</span>
+									</button>
+									<button
+										type="button"
+										class="cb-mode-btn cb-mode-btn--allow"
+										class:active={formData.countryBlock.mode === 'allow'}
+										data-testid="country-block-mode-allow"
+										aria-pressed={formData.countryBlock.mode === 'allow'}
+										onclick={() => (formData.countryBlock.mode = 'allow')}
+									>
+										<span class="cb-mode-btn__label">Allow-list</span>
+										<span class="cb-mode-btn__hint">refuse le reste</span>
+									</button>
+									<button
+										type="button"
+										class="cb-mode-btn cb-mode-btn--deny"
+										class:active={formData.countryBlock.mode === 'deny'}
+										data-testid="country-block-mode-deny"
+										aria-pressed={formData.countryBlock.mode === 'deny'}
+										onclick={() => (formData.countryBlock.mode = 'deny')}
+									>
+										<span class="cb-mode-btn__label">Deny-list</span>
+										<span class="cb-mode-btn__hint">autorise le reste</span>
+									</button>
+								</div>
+							</div>
+
+							{#if formData.countryBlock.mode !== 'off'}
+								<!-- Counter + autocomplete combo. The counter
+								     uses mode-meaningful copy + plural agrees
+								     with N; hidden when N=0 so the empty
+								     state stays uncluttered. -->
+								<div>
+									<div class="flex items-baseline justify-between mb-1">
+										<label
+											for="route-country-block-list-input"
+											class="text-sm font-medium text-secondary"
+										>
+											Pays
+											<span class="text-xs text-muted font-normal">
+												(code ISO ou nom)
+											</span>
+										</label>
+										{#if cbCounterLabel}
+											<span
+												class="text-xs text-muted"
+												data-testid="country-block-counter"
+											>
+												{cbCounterLabel}
+											</span>
+										{/if}
+									</div>
+
+									<!-- Chip list — rendered above the input so
+									     the operator's "what's in" is the
+									     primary visual focus, with the
+									     "add more" affordance below. -->
+									<div
+										class="flex flex-wrap gap-2 mb-2"
+										data-testid="country-block-chip-list"
+									>
 										{#each formData.countryBlock.countryList as code, i (code + i)}
-											<span class="cb-chip" data-testid="country-block-chip">
-												{code}
+											<span
+												class="cb-chip"
+												data-testid="country-block-chip"
+												title={countryName(code)}
+											>
+												<span class="cb-chip__code">{code}</span>
+												<span class="cb-chip__name">{countryName(code)}</span>
 												<button
 													type="button"
 													class="cb-chip__remove"
-													aria-label={`Retirer ${code}`}
-													onclick={() => {
-														formData.countryBlock.countryList =
-															formData.countryBlock.countryList.filter((c) => c !== code);
-													}}
+													aria-label={`Retirer ${countryName(code)}`}
+													onclick={() => cbRemoveCode(code)}
 												>
 													×
 												</button>
 											</span>
 										{/each}
 									</div>
-									<input
-										id="route-country-block-list-input"
-										type="text"
-										placeholder="FR — Enter pour ajouter"
-										maxlength="2"
-										data-testid="country-block-input"
-										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary uppercase"
-										onkeydown={(e) => {
-											if (e.key !== 'Enter' && e.key !== ',') return;
-											e.preventDefault();
-											const input = e.currentTarget as HTMLInputElement;
-											const code = input.value.trim().toUpperCase();
-											if (!/^[A-Z]{2}$/.test(code)) return;
-											if (formData.countryBlock.countryList.includes(code)) {
-												input.value = '';
-												return;
-											}
-											formData.countryBlock.countryList = [
-												...formData.countryBlock.countryList,
-												code
-											];
-											input.value = '';
-										}}
-									/>
+
+									<!-- Input + CTA row. The input is wrapped in
+									     a positioned container so the
+									     suggestion dropdown can float below it
+									     without disturbing the form layout. -->
+									<div class="flex gap-2">
+										<div class="cb-input-wrap flex-1">
+											<input
+												id="route-country-block-list-input"
+												type="text"
+												placeholder="Tapez FR, DE, Russie, États-Unis…"
+												data-testid="country-block-input"
+												autocomplete="off"
+												bind:this={cbInputEl}
+												value={cbInputValue}
+												oninput={cbInputOnInput}
+												onfocus={() => (cbDropdownOpen = true)}
+												onblur={() => {
+													// Defer close so a click on a
+													// suggestion fires its onclick
+													// BEFORE the dropdown unmounts.
+													setTimeout(() => (cbDropdownOpen = false), 120);
+												}}
+												onkeydown={cbInputKeydown}
+												class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+											/>
+											{#if cbDropdownOpen && cbSuggestions.length > 0}
+												<ul
+													class="cb-dropdown"
+													role="listbox"
+													data-testid="country-block-dropdown"
+												>
+													{#each cbSuggestions as match, idx (match.code)}
+														<li
+															role="option"
+															class="cb-dropdown__item"
+															class:active={idx === cbActiveIndex}
+															data-testid="country-block-suggestion"
+															aria-selected={idx === cbActiveIndex}
+															onmousedown={(e) => {
+																// onmousedown (not onclick) so it
+																// fires BEFORE the input's onblur
+																// closes the dropdown.
+																e.preventDefault();
+																cbAddCode(match.code);
+															}}
+															onmouseenter={() => (cbActiveIndex = idx)}
+														>
+															<span class="cb-dropdown__code">
+																{match.code}
+															</span>
+															<span class="cb-dropdown__name">
+																{match.name}
+															</span>
+														</li>
+													{/each}
+												</ul>
+											{/if}
+										</div>
+										<button
+											type="button"
+											class="cb-add-btn"
+											data-testid="country-block-add-cta"
+											aria-label="Ajouter un pays"
+											onclick={cbOpenDropdown}
+										>
+											+ Ajouter
+										</button>
+									</div>
+
 									{#if formData.countryBlock.mode === 'allow' && formData.countryBlock.countryList.length === 0}
 										<p
 											class="text-xs text-down mt-1"
@@ -1801,6 +2047,18 @@
 										<option value={444}>444 (nginx — close sans réponse)</option>
 									</select>
 								</div>
+							{:else}
+								<!-- mode=off — muted hint so the operator
+								     understands what happens when they pick
+								     a mode (rather than seeing an empty
+								     section that looks broken). -->
+								<p
+									class="text-xs text-muted"
+									data-testid="country-block-off-hint"
+								>
+									Aucun gate par pays. Choisissez Allow-list ou Deny-list
+									pour activer.
+								</p>
 							{/if}
 						</div>
 					</details>
@@ -2099,15 +2357,97 @@
 		background: color-mix(in oklch, var(--accent) 16%, transparent);
 	}
 
-	/* W.5 — country-block chip styles. Slate-tinted to
-	   match the map legend's --status-meta hue, signaling
-	   "policy enforcement, not threat". Mirror of generic
-	   pill shape used elsewhere. */
+	/* W.5 + W.7 — country-block UI styles.
+	   W.5 introduced the chip; W.7 polishes the surface:
+	   - Mode-colored section border (slate / green / red).
+	   - 3-button pill toggle replaces the mode dropdown.
+	   - Chips recolor to the active mode + show resolved
+	     country name next to the code.
+	   - Autocomplete dropdown styled to match the form's
+	     existing select aesthetic.
+	   Color tokens reused from styles/tokens.css: --status-up
+	   (success green), --status-down (danger red),
+	   --status-meta (neutral slate). Spec brief mentioned
+	   --status-success / --status-danger which don't exist
+	   in the design system — using the canonical *-up / *-down
+	   tokens instead (same hues; the project already maps
+	   them to success/danger semantics via the --badge-*
+	   derived tokens). */
+
+	/* Section border tinted by active mode so the operator's
+	   choice radiates outward from the toggle to the whole
+	   panel. cb-mode-off is the default border-subtle. */
+	.cb-section.cb-mode-allow {
+		border-color: color-mix(in oklch, var(--status-up) 50%, var(--border-subtle));
+	}
+	.cb-section.cb-mode-deny {
+		border-color: color-mix(in oklch, var(--status-down) 50%, var(--border-subtle));
+	}
+
+	/* Mode toggle — 3 segmented buttons. Active button picks
+	   up the mode color; inactive buttons stay neutral. */
+	.cb-mode-toggle {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 6px;
+	}
+	.cb-mode-btn {
+		appearance: none;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 2px;
+		padding: 8px 10px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border-subtle);
+		border-radius: 6px;
+		color: var(--text-secondary);
+		cursor: pointer;
+		font-size: 12px;
+		font-weight: 500;
+		text-align: left;
+		transition: border-color 80ms ease-out, background 80ms ease-out;
+	}
+	.cb-mode-btn:hover {
+		background: color-mix(in oklch, var(--accent) 6%, var(--bg-surface));
+	}
+	.cb-mode-btn__label {
+		font-size: 12.5px;
+		font-weight: 600;
+		color: var(--text-primary);
+	}
+	.cb-mode-btn__hint {
+		font-size: 10.5px;
+		color: var(--text-muted);
+	}
+	.cb-mode-btn.active.cb-mode-btn--off {
+		border-color: var(--status-meta);
+		background: color-mix(in oklch, var(--status-meta) 12%, var(--bg-surface));
+	}
+	.cb-mode-btn.active.cb-mode-btn--allow {
+		border-color: var(--status-up);
+		background: color-mix(in oklch, var(--status-up) 12%, var(--bg-surface));
+	}
+	.cb-mode-btn.active.cb-mode-btn--allow .cb-mode-btn__label {
+		color: var(--status-up);
+	}
+	.cb-mode-btn.active.cb-mode-btn--deny {
+		border-color: var(--status-down);
+		background: color-mix(in oklch, var(--status-down) 12%, var(--bg-surface));
+	}
+	.cb-mode-btn.active.cb-mode-btn--deny .cb-mode-btn__label {
+		color: var(--status-down);
+	}
+
+	/* Chip — recolors based on the section's mode class.
+	   Default (off / no mode) keeps the original slate tint
+	   in case a chip is rendered outside an active section
+	   (shouldn't happen today, but defensive). */
 	.cb-chip {
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
-		padding: 2px 8px;
+		gap: 6px;
+		padding: 3px 4px 3px 8px;
 		font-family: var(--font-mono);
 		font-size: 11px;
 		font-weight: 600;
@@ -2117,17 +2457,128 @@
 		border: 1px solid color-mix(in oklch, var(--status-meta) 40%, var(--border-subtle));
 		border-radius: 999px;
 	}
+	.cb-mode-allow .cb-chip {
+		background: color-mix(in oklch, var(--status-up) 12%, transparent);
+		border-color: color-mix(in oklch, var(--status-up) 45%, var(--border-subtle));
+		color: var(--status-up);
+	}
+	.cb-mode-deny .cb-chip {
+		background: color-mix(in oklch, var(--status-down) 12%, transparent);
+		border-color: color-mix(in oklch, var(--status-down) 45%, var(--border-subtle));
+		color: var(--status-down);
+	}
+	.cb-chip__code {
+		font-weight: 700;
+	}
+	.cb-chip__name {
+		font-family: var(--font-sans);
+		font-weight: 400;
+		letter-spacing: 0;
+		font-size: 11.5px;
+		color: var(--text-secondary);
+		max-width: 140px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	/* In allow/deny modes the chip text picks up the mode
+	   color; let the name follow too (slightly muted via
+	   color-mix so it doesn't compete with the code). */
+	.cb-mode-allow .cb-chip__name {
+		color: color-mix(in oklch, var(--status-up) 75%, var(--text-secondary));
+	}
+	.cb-mode-deny .cb-chip__name {
+		color: color-mix(in oklch, var(--status-down) 75%, var(--text-secondary));
+	}
 	.cb-chip__remove {
 		appearance: none;
 		background: none;
 		border: 0;
-		color: var(--text-muted);
+		color: currentColor;
+		opacity: 0.6;
 		cursor: pointer;
-		font-size: 13px;
+		font-size: 14px;
 		line-height: 1;
-		padding: 0 0 0 2px;
+		padding: 0 4px;
+		border-radius: 999px;
+		transition: opacity 80ms ease-out, background 80ms ease-out;
 	}
 	.cb-chip__remove:hover {
-		color: var(--status-down);
+		opacity: 1;
+		background: color-mix(in oklch, currentColor 15%, transparent);
+	}
+
+	/* Autocomplete dropdown — absolute-positioned under
+	   the input. Uses surface bg + subtle shadow for
+	   focal weight; mirrors the form's existing select
+	   panels. */
+	.cb-input-wrap {
+		position: relative;
+	}
+	.cb-dropdown {
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 0;
+		right: 0;
+		max-height: 240px;
+		overflow-y: auto;
+		background: var(--bg-surface);
+		border: 1px solid var(--border-default);
+		border-radius: 6px;
+		box-shadow: 0 6px 18px color-mix(in oklch, var(--bg-base) 30%, transparent);
+		z-index: 10;
+		list-style: none;
+		margin: 0;
+		padding: 4px 0;
+	}
+	.cb-dropdown__item {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 6px 10px;
+		cursor: pointer;
+		font-size: 12.5px;
+		color: var(--text-secondary);
+	}
+	.cb-dropdown__item.active,
+	.cb-dropdown__item:hover {
+		background: color-mix(in oklch, var(--accent) 12%, transparent);
+		color: var(--text-primary);
+	}
+	.cb-dropdown__code {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		font-weight: 700;
+		padding: 1px 6px;
+		border-radius: 4px;
+		background: color-mix(in oklch, var(--status-meta) 16%, transparent);
+		color: var(--text-primary);
+		min-width: 26px;
+		text-align: center;
+	}
+	.cb-dropdown__name {
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* "+ Ajouter un pays" CTA — pill-shaped accent button
+	   that opens the dropdown + focuses the input. */
+	.cb-add-btn {
+		appearance: none;
+		padding: 6px 12px;
+		background: color-mix(in oklch, var(--accent) 14%, transparent);
+		border: 1px solid color-mix(in oklch, var(--accent) 40%, var(--border-subtle));
+		border-radius: 6px;
+		color: var(--accent);
+		font-size: 12px;
+		font-weight: 600;
+		cursor: pointer;
+		white-space: nowrap;
+		transition: background 80ms ease-out;
+	}
+	.cb-add-btn:hover {
+		background: color-mix(in oklch, var(--accent) 22%, transparent);
 	}
 </style>

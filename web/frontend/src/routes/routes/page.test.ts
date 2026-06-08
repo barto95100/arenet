@@ -1191,8 +1191,8 @@ describe('Routes page — W.5 country-block form section', () => {
 	it('mode=deny reveals the country-list + status-code sub-fields', async () => {
 		render(Page);
 		await openCreateForm();
-		const modeSelect = screen.getByLabelText('Mode') as HTMLSelectElement;
-		await userEvent.selectOptions(modeSelect, 'deny');
+		// W.7 — Mode is now a 3-button toggle, not a dropdown.
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
 		await tick();
 		expect(screen.getByTestId('country-block-input')).toBeInTheDocument();
 		expect(screen.getByLabelText(/Code HTTP/i)).toBeInTheDocument();
@@ -1201,8 +1201,7 @@ describe('Routes page — W.5 country-block form section', () => {
 	it('typing FR + Enter adds a chip to the country list', async () => {
 		render(Page);
 		await openCreateForm();
-		const modeSelect = screen.getByLabelText('Mode') as HTMLSelectElement;
-		await userEvent.selectOptions(modeSelect, 'deny');
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
 		await tick();
 
 		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
@@ -1211,14 +1210,20 @@ describe('Routes page — W.5 country-block form section', () => {
 
 		const chips = screen.getAllByTestId('country-block-chip');
 		expect(chips).toHaveLength(1);
+		// W.7 — chip carries the alpha-2 code in the
+		// .cb-chip__code span; the resolved French name
+		// also renders in .cb-chip__name. Both should be
+		// findable.
 		expect(chips[0].textContent).toContain('FR');
+		// "France" comes from Intl.DisplayNames(fr) which
+		// jsdom + Node ICU both ship.
+		expect(chips[0].textContent).toContain('France');
 	});
 
 	it('mode=allow + empty list shows the footgun error', async () => {
 		render(Page);
 		await openCreateForm();
-		const modeSelect = screen.getByLabelText('Mode') as HTMLSelectElement;
-		await userEvent.selectOptions(modeSelect, 'allow');
+		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
 		await tick();
 
 		// Reactive paragraph with testid country-block-allow-empty-error
@@ -1231,8 +1236,7 @@ describe('Routes page — W.5 country-block form section', () => {
 	it('mode=allow + non-empty list clears the footgun error', async () => {
 		render(Page);
 		await openCreateForm();
-		const modeSelect = screen.getByLabelText('Mode') as HTMLSelectElement;
-		await userEvent.selectOptions(modeSelect, 'allow');
+		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
 		await tick();
 		// Error visible.
 		expect(
@@ -1245,5 +1249,201 @@ describe('Routes page — W.5 country-block form section', () => {
 		expect(
 			screen.queryByTestId('country-block-allow-empty-error')
 		).not.toBeInTheDocument();
+	});
+});
+
+// W.7 polish — autocomplete + mode-color + counter +
+// CTA tests. These layer on top of the W.5 tests above
+// without replacing them; the W.5 contracts (mode → input
+// visibility, footgun error, payload shape) all still hold.
+describe('Routes page — W.7 country-block polish', () => {
+	it('renders the 3-button mode toggle (Off / Allow / Deny)', async () => {
+		render(Page);
+		await openCreateForm();
+		expect(screen.getByTestId('country-block-mode-off')).toBeInTheDocument();
+		expect(screen.getByTestId('country-block-mode-allow')).toBeInTheDocument();
+		expect(screen.getByTestId('country-block-mode-deny')).toBeInTheDocument();
+	});
+
+	it('mode=off shows the muted off-hint instead of the input', async () => {
+		render(Page);
+		await openCreateForm();
+		// Default state is off → hint visible, no input.
+		expect(screen.getByTestId('country-block-off-hint')).toBeInTheDocument();
+		expect(
+			screen.queryByTestId('country-block-input')
+		).not.toBeInTheDocument();
+	});
+
+	it('clicking the Allow button activates it (aria-pressed=true)', async () => {
+		render(Page);
+		await openCreateForm();
+		const allowBtn = screen.getByTestId('country-block-mode-allow');
+		expect(allowBtn).toHaveAttribute('aria-pressed', 'false');
+		await userEvent.click(allowBtn);
+		await tick();
+		expect(allowBtn).toHaveAttribute('aria-pressed', 'true');
+		expect(allowBtn).toHaveClass('active');
+	});
+
+	it('section root gets the mode-allow class when allow is selected', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
+		await tick();
+		// CSS hook for chip + section recoloring.
+		expect(screen.getByTestId('country-block-section')).toHaveClass(
+			'cb-mode-allow'
+		);
+	});
+
+	it('section root gets the mode-deny class when deny is selected', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		expect(screen.getByTestId('country-block-section')).toHaveClass(
+			'cb-mode-deny'
+		);
+	});
+
+	it('typing into the input opens the dropdown with matching suggestions', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
+		await userEvent.type(input, 'ru');
+		await tick();
+		// Suggestion list opens.
+		expect(screen.getByTestId('country-block-dropdown')).toBeInTheDocument();
+		// "RU" is one of the suggestions (prefix-matched on
+		// the alpha-2 code).
+		const suggestions = screen.getAllByTestId('country-block-suggestion');
+		const codes = suggestions.map(
+			(el) => el.querySelector('.cb-dropdown__code')?.textContent
+		);
+		expect(codes).toContain('RU');
+	});
+
+	it('typing a French name prefix matches the country (russie → RU)', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
+		await userEvent.type(input, 'russ');
+		await tick();
+		const suggestions = screen.getAllByTestId('country-block-suggestion');
+		const codes = suggestions.map(
+			(el) => el.querySelector('.cb-dropdown__code')?.textContent
+		);
+		expect(codes).toContain('RU');
+	});
+
+	it('clicking a suggestion adds it as a chip with the French name', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
+		await userEvent.type(input, 'fr');
+		await tick();
+		const suggestion = screen
+			.getAllByTestId('country-block-suggestion')
+			.find((el) => el.querySelector('.cb-dropdown__code')?.textContent === 'FR');
+		expect(suggestion).toBeDefined();
+		// mousedown (not click) because that's what the
+		// onmousedown handler fires on — picked over click
+		// so it runs BEFORE the input's blur closes the
+		// dropdown.
+		await fireEvent.mouseDown(suggestion!);
+		await tick();
+		const chips = screen.getAllByTestId('country-block-chip');
+		expect(chips).toHaveLength(1);
+		expect(chips[0].textContent).toContain('FR');
+		expect(chips[0].textContent).toContain('France');
+	});
+
+	it('counter shows "{N} pays bloqué(s)" in deny mode + agrees with N', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
+		await userEvent.type(input, 'FR{enter}');
+		await tick();
+		expect(screen.getByTestId('country-block-counter')).toHaveTextContent(
+			'1 pays bloqué'
+		);
+		// Second country → plural.
+		await userEvent.type(input, 'DE{enter}');
+		await tick();
+		expect(screen.getByTestId('country-block-counter')).toHaveTextContent(
+			'2 pays bloqués'
+		);
+	});
+
+	it('counter shows "{N} pays autorisé(s)" in allow mode', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
+		await tick();
+		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
+		await userEvent.type(input, 'FR{enter}');
+		await tick();
+		expect(screen.getByTestId('country-block-counter')).toHaveTextContent(
+			'1 pays autorisé'
+		);
+	});
+
+	it('counter is hidden when N=0 (even in allow/deny mode)', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		expect(
+			screen.queryByTestId('country-block-counter')
+		).not.toBeInTheDocument();
+	});
+
+	it('"+ Ajouter" CTA button is present in allow/deny mode', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		expect(screen.getByTestId('country-block-add-cta')).toBeInTheDocument();
+	});
+
+	it('chip removes itself when the × button is clicked', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
+		await userEvent.type(input, 'FR{enter}');
+		await tick();
+		const removeBtn = screen
+			.getByTestId('country-block-chip')
+			.querySelector('.cb-chip__remove');
+		expect(removeBtn).not.toBeNull();
+		await fireEvent.click(removeBtn!);
+		await tick();
+		expect(
+			screen.queryByTestId('country-block-chip')
+		).not.toBeInTheDocument();
+	});
+
+	it('comma separator adds the buffered code (paste-chain UX)', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
+		await userEvent.type(input, 'FR,');
+		await tick();
+		const chips = screen.getAllByTestId('country-block-chip');
+		expect(chips).toHaveLength(1);
+		expect(chips[0].textContent).toContain('FR');
 	});
 });
