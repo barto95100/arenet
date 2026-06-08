@@ -1187,7 +1187,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			// never reached on :80). That's intentional — the
 			// passthrough endpoint is OIDC + must be served over
 			// HTTPS too.
-			httpRoutes = append(httpRoutes, buildRedirectRoute(allHosts))
+			httpRoutes = append(httpRoutes, buildRedirectRoute(r.ID, r.Host, r.CountryBlock, allHosts))
 		} else {
 			if passthroughRoute != nil {
 				httpRoutes = append(httpRoutes, *passthroughRoute)
@@ -1890,18 +1890,46 @@ func httpsPortFor(devMode bool) int {
 // `close: true` is not set: HTTP/1.1 keep-alive is fine for a 301
 // (the client retries on TLS regardless, no connection reuse for
 // the redirected request).
-func buildRedirectRoute(hosts []string) httpRoute {
-	return httpRoute{
-		Match: []matcherSet{{Host: hosts}},
-		Handle: []map[string]any{
-			{
-				"handler":     "static_response",
-				"status_code": 301,
-				"headers": map[string]any{
-					"Location": []string{"https://{http.request.host}{http.request.uri}"},
-				},
-			},
+//
+// Step W follow-up — the route's CountryBlock gate is prepended
+// when active (Mode != "off"), so a non-allowed source country
+// receives 403 directly on port 80 instead of a 301 that would
+// confirm the host exists and let the client retry against the
+// HTTPS chain (where the gate also fires). Without this, the
+// HTTP chain leaks "host present" information to operator-blocked
+// sources — exactly the symptom check-host.net flagged on
+// http://ha.worldgeekwide.fr returning 301 from 58 worldwide
+// probes even with mode=allow countryList=["FR","PT"].
+//
+// The country-block handler runs FIRST in the redirect-route
+// chain. On block it returns the configured status (403/451/444
+// per spec §D3) and stops; on pass-through it falls through to
+// the static_response 301 — same behaviour the operator gets
+// when there's no country gate at all. RFC1918 / loopback /
+// trusted-IP bypass is owned by the W.1 matcher (Layers 1-2)
+// so LAN clients always reach the redirect regardless of mode.
+//
+// The sink emission path is scheme-agnostic — country_block_event
+// rows carry no scheme/protocol column (prescribed by the W-
+// httpgate brief §D: "scheme-agnostic, keep current schema"),
+// so an HTTP-side block and an HTTPS-side block produce
+// identically-shaped rows. The operator sees the block
+// regardless of port.
+func buildRedirectRoute(routeID, host string, cb countryblock.Config, hosts []string) httpRoute {
+	handlers := make([]map[string]any, 0, 2)
+	if cbHandler := buildCountryBlockHandler(routeID, host, cb); cbHandler != nil {
+		handlers = append(handlers, cbHandler)
+	}
+	handlers = append(handlers, map[string]any{
+		"handler":     "static_response",
+		"status_code": 301,
+		"headers": map[string]any{
+			"Location": []string{"https://{http.request.host}{http.request.uri}"},
 		},
+	})
+	return httpRoute{
+		Match:  []matcherSet{{Host: hosts}},
+		Handle: handlers,
 	}
 }
 
