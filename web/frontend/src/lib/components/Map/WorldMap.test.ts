@@ -380,7 +380,29 @@ describe('WorldMap — V.8.HF2 TopoJSON load gating', () => {
 
 describe('WorldMap — V.8.HF1 tick-driven re-render', () => {
 	beforeEach(() => {
-		vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
+		// Fake the rAF chain (the d3.timer callback hook)
+		// AND performance.now() — the latter is what the
+		// d3.timer callback reads via the component's nowFn
+		// to compute clockMs. Without faking performance,
+		// vi.advanceTimersByTimeAsync moves the mock rAF
+		// clock by 480ms across the loop below but
+		// performance.now() returns the real wall-clock
+		// elapsed time (~< 30ms), so the bezier head's
+		// `t` parameter ends up tiny and the SVG `d`
+		// string may or may not differ from the spawn
+		// frame's shape depending on test-runner scheduling.
+		// Faking performance ties the time source the
+		// component reads to the fake-timer clock — 30 × 16ms
+		// of advance produces a deterministic +480ms of
+		// bezier progress every run.
+		//
+		// (A previous attempt at this fix was reverted on
+		// the assumption that the test had self-healed; the
+		// flake came back at the W.bugfix iteration. Pin
+		// the determinism this time.)
+		vi.useFakeTimers({
+			toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'performance']
+		});
 	});
 
 	afterEach(() => {
