@@ -354,7 +354,7 @@ func requestSnippetFromMatch(mr types.MatchedRule) (method, path, payload string
 //     so Caddy emits the configured status (typically 403);
 //     in DETECT mode we let the request through (the
 //     callback already emitted the event).
-func (h ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+func (h *ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	tx := h.waf.NewTransaction()
 	defer func() {
 		tx.ProcessLogging()
