@@ -148,6 +148,16 @@ type CaddyManager struct {
 	// via omitempty in that case.
 	normalTrafficExcludePaths []string
 
+	// previousWAFModes (W.bugfix Fix #3) is the WAF mode per
+	// route observed at the END of the most recent successful
+	// applyLocked. Used to compute a diff against the routes
+	// being applied this pass and emit a "waf config diff
+	// applied" log line summarizing added / removed / mode-
+	// changed counts. Empty at boot — first applyLocked
+	// reports every route-with-WAF as "added". Guarded by mu
+	// like every other applyLocked-touched field.
+	previousWAFModes map[string]string
+
 	mu      sync.Mutex
 	started bool
 }
@@ -397,6 +407,58 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	}
 
 	m.logger.Debug("applying caddy config", "routes", len(routes), "bytes", len(cfgJSON))
+
+	// W.bugfix Fix #3 — emit a "waf config diff applied"
+	// summary when this pass adds / removes / changes the
+	// WAF mode of any route relative to the previous
+	// successful apply. Helps operators verify that a UI
+	// edit to wafMode actually triggered the reload (the
+	// Probe #2 confirmation in the discovery doc was harder
+	// than necessary because no log surfaced the
+	// propagation). Silent when no WAF mode changed, so
+	// routine non-WAF edits don't fill the log.
+	currentWAFModes := make(map[string]string, len(routes))
+	for _, r := range routes {
+		currentWAFModes[r.ID] = r.WAFMode
+	}
+	var (
+		added         []string
+		removed       []string
+		changed       []string
+		changeDetails []string
+	)
+	for id, curMode := range currentWAFModes {
+		prev, existed := m.previousWAFModes[id]
+		switch {
+		case !existed:
+			// New route OR first-ever applyLocked. Only
+			// surface in the diff log if the route has WAF on
+			// — operators care about WAF coverage, not about
+			// every freshly-created off-route.
+			if curMode != "" && curMode != "off" {
+				added = append(added, id)
+			}
+		case prev != curMode:
+			changed = append(changed, id)
+			changeDetails = append(changeDetails, id+":"+prev+"→"+curMode)
+		}
+	}
+	for id, prevMode := range m.previousWAFModes {
+		if _, stillThere := currentWAFModes[id]; !stillThere {
+			if prevMode != "" && prevMode != "off" {
+				removed = append(removed, id)
+			}
+		}
+	}
+	if len(added) > 0 || len(removed) > 0 || len(changed) > 0 {
+		m.logger.Info("waf config diff applied",
+			"added_count", len(added),
+			"removed_count", len(removed),
+			"changed_count", len(changed),
+			"changes", changeDetails,
+		)
+	}
+	m.previousWAFModes = currentWAFModes
 
 	// W.bugfix Fix #2 — emit a per-route skip log for every
 	// route whose WAF is off. The provisioned-side log lives
