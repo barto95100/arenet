@@ -17,6 +17,9 @@
 package main
 
 import (
+	"net"
+
+	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/observability"
@@ -193,6 +196,47 @@ func (g geoForwardingNormalSink) Close() error {
 	}
 	return nil
 }
+
+// countryBlockGeoLookup adapts *geo.Lookup to the
+// countryblock.CountryLookup interface (Step W.3). The
+// adapter wraps the V.1 MMDB-backed lookup so the
+// country-block Caddy module can resolve src IPs to ISO
+// 3166-1 alpha-2 country codes WITHOUT importing
+// internal/geo (which would pull MMDB-reader code into
+// internal/countryblock and break the W.1 "no dependency
+// on internal/geo" design).
+//
+// Contract: returns "" when the lookup degrades (nil
+// *geo.Lookup OR the IP can't be parsed OR the MMDB has no
+// match). The countryblock matcher treats "" as the §D5
+// degraded path and fails open (passes the request through
+// with a once-per-Provision Warn). LAN sentinels from
+// geo.Lookup.LookupIP are also mapped to "" so the
+// countryblock matcher's RFC1918 short-circuit owns the
+// LAN bypass decision (single source of truth — the geo
+// package's "LAN" string would otherwise leak into the
+// matcher's allow/deny comparison and silently never match).
+type countryBlockGeoLookup struct {
+	inner *geo.Lookup
+}
+
+func (a countryBlockGeoLookup) Lookup(srcIP string) string {
+	if a.inner == nil {
+		return ""
+	}
+	ip := net.ParseIP(srcIP)
+	if ip == nil {
+		return ""
+	}
+	loc := a.inner.LookupIP(ip)
+	if loc.Country == "" || loc.Country == "LAN" {
+		return ""
+	}
+	return loc.Country
+}
+
+// Compile-time guard — adapter satisfies the W.1 seam.
+var _ countryblock.CountryLookup = countryBlockGeoLookup{}
 
 // serverPositionRedetector satisfies api.ServerPositionRedetector
 // for V.4's POST :redetect endpoint. Captures the boot-time

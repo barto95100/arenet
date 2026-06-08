@@ -66,6 +66,7 @@ import (
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/certinfo"
 	appconfig "github.com/barto95100/arenet/internal/config"
+	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/metrics"
@@ -342,6 +343,44 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	normalExcludePaths := parseNormalTrafficExcludePaths(os.Getenv("ARENET_NORMAL_TRAFFIC_EXCLUDE_PATHS"))
 	mgr.SetNormalTrafficExcludePaths(normalExcludePaths)
 
+	// Step W.3 — install the country-block globals BEFORE
+	// mgr.Start so the first applyLocked → caddy.Load doesn't
+	// hit countryblock.Handler.Provision's
+	// ErrLookupNotInstalled guard on a fresh boot with at
+	// least one country-block-on route.
+	//
+	// At THIS point in boot, geoLookup hasn't been opened yet
+	// (we open the MMDB later, around line ~400) — so we
+	// install a placeholder lookup adapter pointing at a nil
+	// *geo.Lookup. The adapter's nil-safe Lookup returns ""
+	// for every srcIP (the matcher's §D5 fail-open path
+	// treats "" as degraded GeoIP → passes the request
+	// through). Once the real geoLookup is constructed
+	// (~570 lines below this), we SetGlobalLookup the
+	// promoted adapter — atomic.Pointer makes the swap
+	// visible on the NEXT request to every
+	// already-Provisioned country-block handler.
+	//
+	// The env vars + trusted-IP list are parsed here too,
+	// since they have no boot-order dependencies. Invalid
+	// values WARN + fall back rather than blocking boot per
+	// spec §D3.
+	cbStatusCode, cbStatusErr := parseCountryBlockStatus(os.Getenv("ARENET_COUNTRY_BLOCK_STATUS"))
+	if cbStatusErr != nil {
+		logger.Warn("country block: invalid ARENET_COUNTRY_BLOCK_STATUS, falling back to default",
+			"err", cbStatusErr, "default", defaultCountryBlockStatus)
+	}
+	cbTrustedIPs, cbTrustedErrs := parseCountryBlockTrustedIPs(os.Getenv("ARENET_COUNTRY_BLOCK_TRUSTED_IPS"))
+	for _, perr := range cbTrustedErrs {
+		logger.Warn("country block: dropping invalid trusted-IP entry", "err", perr)
+	}
+	// Early-stage globals — nil-inner adapter (degraded fail-
+	// open path); real lookup + client-IP resolver land later
+	// in boot via the same atomic.Pointer setters.
+	countryblock.SetGlobalLookup(countryBlockGeoLookup{inner: nil})
+	countryblock.SetGlobalTrustedIPs(cbTrustedIPs)
+	countryblock.SetGlobalDefaultStatusCode(cbStatusCode)
+
 	if err := mgr.Start(ctx); err != nil {
 		return err
 	}
@@ -413,6 +452,22 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 			}
 		}()
 	}
+
+	// Step W.3 — upgrade the country-block lookup adapter
+	// from the nil-inner placeholder (installed before
+	// mgr.Start) to the real geoLookup. atomic.Pointer
+	// makes the swap visible to all already-Provisioned
+	// country-block handlers on their next request — same
+	// V.1.3 late-install shape that promotes metrics
+	// .SetNormalSubmitter from "not yet installed" to the
+	// real DefaultNormalSink once the geo bus is up.
+	//
+	// On the degraded path (MMDB missing), geoLookup is nil
+	// and this call re-installs the same nil-inner adapter
+	// the placeholder set — no-op but explicit so future
+	// readers see the parallel with the placeholder install
+	// above.
+	countryblock.SetGlobalLookup(countryBlockGeoLookup{inner: geoLookup})
 
 	// Step V.4 — server position resolution. Order of
 	// precedence (spec §5.1):
@@ -933,6 +988,21 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// RouteMetricsHandler instances on their next
 	// request.
 	metrics.SetClientIPFn(ipExtractor.ClientIP)
+
+	// Step W.3 — late-install the country-block ClientIPFn.
+	// The lookup + trusted-IPs + default-status globals went
+	// in BEFORE mgr.Start (see the country-block install
+	// block right before the mgr.Start call); only the
+	// trusted-proxy-aware ClientIP resolver needs to wait
+	// for ipExtractor to be constructed. Same atomic.Pointer
+	// late-install shape as V.1.3's metrics.SetClientIPFn
+	// above.
+	countryblock.SetGlobalClientIPFn(ipExtractor.ClientIP)
+	logger.Info("country block sink wired",
+		"present", geoLookup != nil,
+		"status_code", cbStatusCode,
+		"trusted_ips_count", len(cbTrustedIPs),
+	)
 
 	// Generate setup token if the users bucket is empty. The token
 	// is logged at Info so the operator can paste it into /setup.

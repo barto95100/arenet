@@ -50,6 +50,17 @@ import (
 	// `waf` handler.
 	_ "github.com/barto95100/arenet/internal/waf"
 
+	// Step W.3 — side-effect import: registers the
+	// arenet_country_block Caddy module (internal/countryblock
+	// module.go init()) so the handler ID buildCountryBlockHandler
+	// emits is resolvable at caddy.Load time. Mirror of the WAF
+	// import pattern above. Globals (lookup, trustedIPs, sink,
+	// defaultStatusCode, clientIPFn) are installed by
+	// cmd/arenet/main.go via the package's atomic.Pointer setters
+	// — caddymgr does NOT touch them, just emits the JSON config
+	// that references the module.
+	"github.com/barto95100/arenet/internal/countryblock"
+
 	// #R-TOPO-real-health-probe (Stage B, 2026-06-04) — side-effect
 	// import: registers the arenet_topology_hc events handler so
 	// the apps.events.subscriptions block buildConfigJSON emits is
@@ -157,6 +168,16 @@ type CaddyManager struct {
 	// reports every route-with-WAF as "added". Guarded by mu
 	// like every other applyLocked-touched field.
 	previousWAFModes map[string]string
+
+	// previousCountryBlockModes (Step W.3) is the per-route
+	// "country-block fingerprint" (mode + sorted country list
+	// + status code) observed at the end of the most recent
+	// successful applyLocked. The diff log mirrors the WAF
+	// pattern: a change between two applies fires the
+	// "country block config diff applied" summary; routine
+	// non-country-block edits stay silent. Empty at boot —
+	// first applyLocked reports every gated route as "added".
+	previousCountryBlockModes map[string]string
 
 	mu      sync.Mutex
 	started bool
@@ -480,6 +501,86 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 				"reason", "mode_off",
 			)
 		}
+	}
+
+	// Step W.3 — country-block diff + per-route provisioned /
+	// skipped logs. Mirror of the WAF Fix #2 + Fix #3 patterns
+	// directly above. The diff log fires when any route
+	// gained / lost / changed country-block config relative
+	// to the previous successful apply; the per-route
+	// provisioned + skipped logs run on every apply so the
+	// operator sees full country-block coverage in journalctl
+	// regardless of whether anything changed.
+	currentCountryBlockModes := make(map[string]string, len(routes))
+	for _, r := range routes {
+		currentCountryBlockModes[r.ID] = countryBlockFingerprint(r.CountryBlock)
+	}
+	{
+		var (
+			cbAdded         []string
+			cbRemoved       []string
+			cbChanged       []string
+			cbChangeDetails []string
+		)
+		offFingerprint := countryBlockFingerprint(countryblock.Config{})
+		for id, curFp := range currentCountryBlockModes {
+			prev, existed := m.previousCountryBlockModes[id]
+			switch {
+			case !existed:
+				// New route OR first-ever applyLocked. Only
+				// surface in the diff log if the route has the
+				// gate ON — operators care about country-block
+				// coverage changes, not about every fresh off-
+				// route. Symmetric to the WAF diff carve-out.
+				if curFp != offFingerprint {
+					cbAdded = append(cbAdded, id)
+				}
+			case prev != curFp:
+				cbChanged = append(cbChanged, id)
+				cbChangeDetails = append(cbChangeDetails, id+":"+prev+"→"+curFp)
+			}
+		}
+		for id, prevFp := range m.previousCountryBlockModes {
+			if _, stillThere := currentCountryBlockModes[id]; !stillThere {
+				if prevFp != offFingerprint {
+					cbRemoved = append(cbRemoved, id)
+				}
+			}
+		}
+		if len(cbAdded) > 0 || len(cbRemoved) > 0 || len(cbChanged) > 0 {
+			m.logger.Info("country block config diff applied",
+				"added_count", len(cbAdded),
+				"removed_count", len(cbRemoved),
+				"changed_count", len(cbChanged),
+				"changes", cbChangeDetails,
+			)
+		}
+	}
+	m.previousCountryBlockModes = currentCountryBlockModes
+
+	// Per-route provisioned + skipped logs (mirror WAF Fix #2).
+	// Operators reading journalctl after a reload see one line
+	// per route's country-block state — gated routes show the
+	// mode + list count + status_code; off routes show the
+	// reason. Together with the diff log above, this gives
+	// full per-reload visibility without flooding the log on
+	// routine non-country-block edits.
+	for _, r := range routes {
+		if r.CountryBlock.Mode == "" || r.CountryBlock.Mode == countryblock.ModeOff {
+			m.logger.Info("country block handler skipped",
+				"route_id", r.ID,
+				"host", r.Host,
+				"reason", "mode_off",
+			)
+			continue
+		}
+		m.logger.Info("country block handler provisioned",
+			"route_id", r.ID,
+			"host", r.Host,
+			"mode", string(r.CountryBlock.Mode),
+			"country_list_count", len(r.CountryBlock.CountryList),
+			"status_code", r.CountryBlock.StatusCode,
+		)
 	}
 
 	if err := caddy.Load(cfgJSON, true); err != nil {
@@ -852,6 +953,22 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// Metrics MUST stay first to observe the final status code
 		// (§11.5 invariant).
 		handlers := []map[string]any{metricsHandler}
+
+		// Step W.3 — country-block gate. Chain position #2 per
+		// spec §D10: AFTER routemetrics (so the V.1.2 defer
+		// observes the 403 status and surfaces the block in
+		// the per-route error-rate tile with no new plumbing)
+		// and BEFORE crowdsec/auth/waf (operator-declared
+		// static policy is cheaper than dynamic LAPI lookups
+		// and more permanent than rate-limit decisions). The
+		// emit is omitted entirely when Mode == "" || "off"
+		// — zero per-request cost for routes that don't use
+		// the feature. Mirror of the WAF cheap-skip at
+		// buildWAFHandler.
+		if cbHandler := buildCountryBlockHandler(r.ID, r.Host, r.CountryBlock); cbHandler != nil {
+			handlers = append(handlers, cbHandler)
+		}
+
 		// Step N.1 — CrowdSec reputation gate. Slot RIGHT AFTER
 		// metrics and BEFORE every other gate (auth, WAF,
 		// headers): the IP-reputation check is the first wall.
@@ -1852,6 +1969,76 @@ func buildWAFHandler(routeID, host, mode string) map[string]any {
 			"Include @crs-setup.conf.example\n" +
 			"Include @owasp_crs/*.conf",
 	}
+}
+
+// buildCountryBlockHandler returns the Caddy JSON for the
+// arenet_country_block per-route handler (Step W.3), or nil
+// when the route's CountryBlock is off / unset. Per spec §D10
+// the handler slots at chain position #2 (between
+// arenet_routemetrics and crowdsec_handler); per spec §3.6
+// the emit is omitted entirely for off-mode routes so the
+// per-request cost stays at zero.
+//
+// Cross-route dependencies (the geo lookup, the operator's
+// trusted-IP allowlist, the env-default status code, the
+// client-IP resolver) are NOT threaded through the per-route
+// JSON. They live as process-wide globals installed by
+// cmd/arenet/main.go via countryblock.SetGlobal* setters —
+// the handler reads them at Provision + ServeHTTP via lock-
+// free atomic.Pointer loads (V.1.3 late-install pattern).
+// This keeps the JSON shape minimal + identical regardless
+// of operator env-var configuration.
+//
+// Symmetric to buildWAFHandler above.
+//
+// The host parameter is consumed by the caller (applyLocked
+// log lines) but NOT threaded into the handler JSON — the
+// W.1 Handler struct intentionally carries only RouteID +
+// Config, so caddymgr's boot/diff log is the single
+// surface where the host is correlated with the route ID.
+func buildCountryBlockHandler(routeID, _ string, cb countryblock.Config) map[string]any {
+	if cb.Mode == "" || cb.Mode == countryblock.ModeOff {
+		return nil
+	}
+	return map[string]any{
+		"handler": countryblock.HandlerName,
+		"routeID": routeID,
+		"config": map[string]any{
+			"mode":        string(cb.Mode),
+			"countryList": cb.CountryList,
+			"statusCode":  cb.StatusCode,
+		},
+	}
+}
+
+// countryBlockFingerprint serialises the operator-meaningful
+// fields of a Route.CountryBlock into a stable string used as
+// the diff key in previousCountryBlockModes. The format is
+// "<mode>|<sorted country list comma-separated>|<statusCode>"
+// — sorting the country list defends against operator UI
+// reorders that don't change the actual gate semantic. Pre-W
+// rows (Mode == "") hash to "off|<empty list>|<0>" same as a
+// fresh off route, so a zero-value decode doesn't get
+// reported as a spurious "added" entry.
+func countryBlockFingerprint(cb countryblock.Config) string {
+	mode := cb.Mode
+	if mode == "" {
+		mode = countryblock.ModeOff
+	}
+	list := make([]string, len(cb.CountryList))
+	copy(list, cb.CountryList)
+	// Stable order so [FR, DE] and [DE, FR] don't generate a
+	// false diff. Operator's input order isn't load-bearing
+	// for the gate decision (containsCountry is a linear
+	// scan), so the canonicalisation is safe here.
+	for i := 0; i < len(list); i++ {
+		for j := i + 1; j < len(list); j++ {
+			if list[j] < list[i] {
+				list[i], list[j] = list[j], list[i]
+			}
+		}
+	}
+	return fmt.Sprintf("%s|%s|%d", string(mode), strings.Join(list, ","), cb.StatusCode)
 }
 
 // buildHeadersHandler returns the Caddy `headers` handler config for
