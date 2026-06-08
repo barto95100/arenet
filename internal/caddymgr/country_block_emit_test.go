@@ -302,11 +302,11 @@ func TestApplyLocked_NoCountryBlockDiff_WhenStable(t *testing.T) {
 // guard for the handler JSON shape. The full Caddy empirical-
 // verification (caddy.Validate against a country-block route)
 // lives in TestBuildConfigJSON_LoadsCleanly_CountryBlock in
-// manager_test.go (placed there because the existing
-// TestSyncRegistry_NotCalledOnReloadFailure test is sensitive
-// to caddy.Validate residual state and the file ordering matters).
-// Here we just assert the JSON keys + types from buildConfigJSON's
-// output WITHOUT invoking the Caddy module Provision pipeline.
+// manager_test.go (added in the W.7 quick-wins follow-up,
+// commit referenced by #R-COUNTRYBLOCK-add-loadscleanly-in-
+// manager_test). Here we just assert the JSON keys + types
+// from buildConfigJSON's output WITHOUT invoking the Caddy
+// module Provision pipeline — cheap fast-loop coverage.
 func TestBuildConfigJSON_CountryBlockJSONShape(t *testing.T) {
 	dir := t.TempDir()
 	store, err := storage.NewStore(filepath.Join(dir, "arenet.db"))

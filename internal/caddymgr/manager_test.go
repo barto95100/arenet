@@ -43,6 +43,7 @@ import (
 	// production binary is correctly wired.
 	_ "github.com/caddy-dns/ovh"
 
+	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -1177,6 +1178,95 @@ func TestBuildConfigJSON_LoadsCleanly_DNS01(t *testing.T) {
 	}
 	if provider["endpoint"] != "ovh-eu" {
 		t.Fatalf("DNS-01 provider.endpoint: got %v, want \"ovh-eu\"", provider["endpoint"])
+	}
+}
+
+// noopLookup satisfies countryblock.CountryLookup for the
+// caddy.Validate-driven test below. Always returns ""
+// (degraded-lookup path); the matcher's §D5 fail-open
+// path is exercised at the unit-test level — here we only
+// care that Provision can construct without panicking.
+type noopLookup struct{}
+
+func (noopLookup) Lookup(_ string) string { return "" }
+
+// TestBuildConfigJSON_LoadsCleanly_CountryBlock is the Step W
+// counterpart to TestBuildConfigJSON_LoadsCleanly: a route
+// configured with a country_block gate, fed through
+// caddy.Validate to confirm the W.1 arenet_country_block
+// module's ID resolves at Provision time AND the JSON shape
+// produced by W.3 buildCountryBlockHandler survives the
+// full module-Provision pipeline.
+//
+// W.3 deviation #3 (commit 60b05d8) deferred this test
+// because file ordering put a draft caddy.Validate test
+// BEFORE TestSyncRegistry_NotCalledOnReloadFailure, and
+// caddy.Validate's residual goroutines (admin endpoint +
+// tls cache maintenance) polluted that test's reload-
+// failure assertion. Adding the test here in manager_test.go
+// puts it AFTER the existing TestBuildConfigJSON_LoadsCleanly
+// pair (line 980 + 1098 in this file) — same canonical
+// location, no ordering risk.
+//
+// Two routes: one allow + one deny (different ports, different
+// hosts so they don't collide in the host-uniqueness check).
+// Both have TLSEnabled=false to keep the test fast (no ACME
+// policy emission). countryblock.SetGlobalLookup installs the
+// stub seam the W.1 handler's Provision asserts is non-nil.
+func TestBuildConfigJSON_LoadsCleanly_CountryBlock(t *testing.T) {
+	// The arenet_routemetrics module's Provision asserts
+	// metrics.GlobalRegistry() is non-nil; the W.1 country-
+	// block module's Provision asserts countryblock.Global-
+	// Lookup() is non-nil. Both are package-globals normally
+	// installed by cmd/arenet/main.go at boot; the test
+	// harness must do the same before caddy.Validate.
+	metrics.SetRegistry(metrics.NewRegistry())
+	prev := countryblock.GlobalLookup()
+	countryblock.SetGlobalLookup(noopLookup{})
+	t.Cleanup(func() { countryblock.SetGlobalLookup(prev) })
+
+	routes := []storage.Route{
+		{
+			ID:        "r-allow",
+			Host:      "fr-only.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			CountryBlock: countryblock.Config{
+				Mode:        countryblock.ModeAllow,
+				CountryList: []string{"FR"},
+				StatusCode:  403,
+			},
+		},
+		{
+			ID:        "r-deny",
+			Host:      "block-ru.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9002", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			CountryBlock: countryblock.Config{
+				Mode:        countryblock.ModeDeny,
+				CountryList: []string{"RU", "KP"},
+				StatusCode:  451,
+			},
+		},
+	}
+
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, raw)
+	}
+
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate failed on country-block config: %v\n"+
+			"This catches any drift between the W.3 buildCountryBlockHandler emit "+
+			"and the W.1 module's Provision-time expectations.\n"+
+			"The config that failed:\n%s", err, raw)
 	}
 }
 
