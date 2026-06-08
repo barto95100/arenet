@@ -28,8 +28,9 @@ import (
 // bus, the WebSocket /api/v1/ws/geo-events broadcast, and
 // the GET /api/v1/observability/geo-events replay endpoint.
 //
-// Category is restricted to the 5-value enum spec §5.6 names:
-// "normal" / "throttle" / "waf" / "crowdsec" / "auth". Cert
+// Category is restricted to the 6-value enum spec §5.6 names:
+// "normal" / "throttle" / "waf" / "crowdsec" / "auth" /
+// "country_block" (the latter added at W.4). Cert
 // events are explicitly NOT included — see the file-level
 // note on EnrichCertEvent's absence below.
 //
@@ -62,11 +63,12 @@ type GeoEvent struct {
 // broadcaster, frontend type union), reference these instead
 // so the enum can only widen through an explicit code change.
 const (
-	CategoryNormal   = "normal"
-	CategoryThrottle = "throttle"
-	CategoryWAF      = "waf"
-	CategoryCrowdSec = "crowdsec"
-	CategoryAuth     = "auth"
+	CategoryNormal       = "normal"
+	CategoryThrottle     = "throttle"
+	CategoryWAF          = "waf"
+	CategoryCrowdSec     = "crowdsec"
+	CategoryAuth         = "auth"
+	CategoryCountryBlock = "country_block" // W.4 — 6th category
 )
 
 // countryUnknown is the spec §5.6 sentinel for "geoip
@@ -216,6 +218,44 @@ func (e *Enricher) EnrichNormal(srcIP, routeID string, statusCode int) GeoEvent 
 	out := e.enrichBase(srcIP, time.Now().UTC(), CategoryNormal)
 	out.StatusCode = statusCode
 	out.RouteID = routeID
+	return out
+}
+
+// EnrichCountryBlock builds a GeoEvent for a country-block
+// hit (W.4 — 6th category). Called by
+// DefaultCountryBlockSink AFTER the sampling + cooldown
+// gates have passed.
+//
+// Country is supplied by the caller (the W.1 matcher
+// already resolved the source country during the block
+// decision — no need to round-trip the MMDB again). When
+// the caller passes a non-empty country, it overrides the
+// enrichBase result so the persisted event row reflects
+// the exact country the matcher saw at decision time.
+//
+// Mode ("allow" or "deny") + Reason ("allow-miss" /
+// "deny-match" / etc., the W.1 matcher kebab-case enum)
+// land in Details with a "mode reason" shape so the
+// frontend tooltip surfaces both signals (e.g.
+// "deny deny-match" reading as "the route is in DENY
+// mode and the country matched the deny list").
+func (e *Enricher) EnrichCountryBlock(
+	srcIP, routeID, country, mode, reason string, statusCode int,
+) GeoEvent {
+	out := e.enrichBase(srcIP, time.Now().UTC(), CategoryCountryBlock)
+	if country != "" {
+		// The W.1 matcher already resolved the country
+		// from the MMDB before the block decision. Trust
+		// it over the enrichBase lookup (which goes
+		// through the same V.1 *geo.Lookup but races a
+		// fresh MMDB read against the matcher's
+		// callback-time value — the matcher's view is
+		// the authoritative one for the persisted row).
+		out.SourceCountry = country
+	}
+	out.RouteID = routeID
+	out.StatusCode = statusCode
+	out.Details = truncateDetails(mode + " " + reason)
 	return out
 }
 

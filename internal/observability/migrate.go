@@ -38,7 +38,7 @@ import (
 //     signal, not lifecycle record).
 //
 // Downgrade is not supported.
-const currentSchemaVersion = 7
+const currentSchemaVersion = 8
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -99,6 +99,7 @@ var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
 	4: migrateV4toV5,
 	5: migrateV5toV6,
 	6: migrateV6toV7,
+	7: migrateV7toV8,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -329,6 +330,53 @@ func migrateV6toV7(ctx context.Context, tx *sql.Tx) error {
 	stmts := []string{
 		`ALTER TABLE waf_event ADD COLUMN action TEXT NOT NULL DEFAULT 'BLOCK'`,
 		`ALTER TABLE waf_event ADD COLUMN status_code INTEGER NOT NULL DEFAULT 403`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV7toV8 — Step W.4. Creates the country_block_event
+// table + its two indexes (ts for time-range scans, route_id
+// + ts for per-route drill-down). Mirrors the v5→v6
+// (auth_event) + v6→v7 (waf_event extension) shape.
+//
+// Pre-W rows are absent (the table doesn't exist), so no
+// backfill is needed — a v7 → v8 upgrade just adds the table.
+// SQLite's CREATE TABLE IF NOT EXISTS makes the migration
+// idempotent under partial-failure replay.
+//
+// Column rationale:
+//   - ts (INTEGER): seconds-since-epoch, indexed for time-range
+//     scans + retention prune. Matches the existing waf /
+//     auth / throttle schemas.
+//   - route_id, src_ip, country, mode, status_code, reason:
+//     verbatim from countryblock.BlockMatch. country is
+//     NULL-tolerable for the §D5 fail-open path that doesn't
+//     currently emit but is reserved by the W.1 contract.
+//   - mode: "allow" / "deny" — the route's enforcement mode
+//     at decision time. Persisted so the W.5 activity log
+//     can filter without a routes-table join.
+//   - reason: W.1's matcher kebab-case enum ("allow-miss",
+//     "deny-match", etc.). Frontend keys off this for
+//     tooltip wording without parsing free text.
+func migrateV7toV8(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS country_block_event (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  ts INTEGER NOT NULL,
+		  route_id TEXT NOT NULL,
+		  src_ip TEXT NOT NULL,
+		  country TEXT NOT NULL DEFAULT '',
+		  mode TEXT NOT NULL,
+		  status_code INTEGER NOT NULL,
+		  reason TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_country_block_event_ts       ON country_block_event (ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_country_block_event_route_ts ON country_block_event (route_id, ts)`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {

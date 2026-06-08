@@ -54,6 +54,14 @@ const (
 	// would create confusing dashboard gaps.
 	RetainDecisionEvents = 30 * 24 * time.Hour
 
+	// RetainCountryBlockEvents is how long per-event
+	// country_block_event rows live before the retention
+	// pruner deletes them. Per W.4 spec §3.5 (30 d at row
+	// granularity — same horizon as the waf / throttle /
+	// decision security tables; country-block blocks are a
+	// real-time signal, not a lifecycle record).
+	RetainCountryBlockEvents = 30 * 24 * time.Hour
+
 	// RetainAuthEvents is how long per-event auth_event rows
 	// are kept at row granularity (Step V.2, spec §3.6). Set
 	// to 30 days — auth failures are operationally
@@ -220,6 +228,13 @@ func (r *RetentionRunner) tick(ctx context.Context) {
 	// record.
 	if _, err := r.store.PruneAuthEventsOlderThan(ctx, now.Add(-RetainAuthEvents)); err != nil {
 		r.logger.Error("observability: prune auth_event failed", slog.String("err", err.Error()))
+	}
+	// Step W.4: prune country_block_event rows older than
+	// RetainCountryBlockEvents (30 d at row granularity —
+	// see W.4 spec §3.5). Same horizon as the other security-
+	// event tables.
+	if _, err := r.store.PruneCountryBlockEventsOlderThan(ctx, now.Add(-RetainCountryBlockEvents)); err != nil {
+		r.logger.Error("observability: prune country_block_event failed", slog.String("err", err.Error()))
 	}
 }
 

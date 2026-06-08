@@ -197,6 +197,37 @@ func (g geoForwardingNormalSink) Close() error {
 	return nil
 }
 
+// geoForwardingCountryBlockSink wraps the W.4
+// *geo.DefaultCountryBlockSink behind the
+// countryblock.BlockSink interface (the W.1
+// Handler.ServeHTTP seam). On every block decision the
+// wrapper unpacks BlockMatch into the sink's
+// SubmitCountryBlock 7-arg method.
+//
+// Same passthrough shape as geoForwardingNormalSink: the
+// inner sink already owns the W.4 sampling/cooldown
+// gates + bus.Publish + persistence enqueue, so this
+// wrapper is just an interface adapter. nil inner is the
+// degraded-mode no-op.
+type geoForwardingCountryBlockSink struct {
+	inner *geo.DefaultCountryBlockSink
+}
+
+func (g geoForwardingCountryBlockSink) Submit(m countryblock.BlockMatch) {
+	if g.inner == nil {
+		return
+	}
+	g.inner.SubmitCountryBlock(
+		m.Timestamp,
+		m.RouteID,
+		m.SourceIP,
+		m.Country,
+		m.Mode,
+		m.Reason,
+		m.StatusCode,
+	)
+}
+
 // countryBlockGeoLookup adapts *geo.Lookup to the
 // countryblock.CountryLookup interface (Step W.3). The
 // adapter wraps the V.1 MMDB-backed lookup so the

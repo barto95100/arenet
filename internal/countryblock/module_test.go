@@ -48,12 +48,18 @@ type mapLookup struct {
 func (m *mapLookup) Lookup(srcIP string) string { return m.m[srcIP] }
 
 // recordingSink captures every Submit invocation. Used to assert
-// that block paths fire the sink and accept paths do not.
+// that block paths fire the sink and accept paths do not. W.4
+// widened the seam to a BlockMatch struct; the test sink
+// captures the BlockMatch verbatim so assertions can read
+// Mode + Reason in addition to the W.1 four-tuple.
 type recordingSink struct {
 	mu     sync.Mutex
-	events []sinkEvent
+	events []BlockMatch
 }
 
+// sinkEvent is the legacy field-by-field shape kept for the
+// W.1 tests' existing assertions. Derived from a BlockMatch
+// via legacyView so the test rows stay readable.
 type sinkEvent struct {
 	SrcIP   string
 	Country string
@@ -61,18 +67,37 @@ type sinkEvent struct {
 	Status  int
 }
 
-func (s *recordingSink) Submit(srcIP, country, route string, statusCode int) {
+func legacyView(m BlockMatch) sinkEvent {
+	return sinkEvent{
+		SrcIP:   m.SourceIP,
+		Country: m.Country,
+		Route:   m.RouteID,
+		Status:  m.StatusCode,
+	}
+}
+
+func (s *recordingSink) Submit(m BlockMatch) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.events = append(s.events, sinkEvent{
-		SrcIP: srcIP, Country: country, Route: route, Status: statusCode,
-	})
+	s.events = append(s.events, m)
 }
 
 func (s *recordingSink) snapshot() []sinkEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]sinkEvent, len(s.events))
+	for i, m := range s.events {
+		out[i] = legacyView(m)
+	}
+	return out
+}
+
+// snapshotFull returns the raw BlockMatch slice for tests
+// that need to assert on the W.4-added fields (Mode, Reason).
+func (s *recordingSink) snapshotFull() []BlockMatch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]BlockMatch, len(s.events))
 	copy(out, s.events)
 	return out
 }

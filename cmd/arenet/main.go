@@ -646,6 +646,56 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		"hardcoded_exclude_paths_count", len(metrics.HardcodedExcludePaths()),
 	)
 
+	// Step W.4 — wire the country-block sink. Per the brief
+	// the sink REUSES the V.1.3 normal-traffic env vars
+	// (ARENET_NORMAL_TRAFFIC_SAMPLE_PCT + COOLDOWN) — env-
+	// var sprawl is the bigger UX hazard at homelab scale
+	// than the loss of per-category tuning. A future split
+	// is trivial if operators ask for it.
+	//
+	// The sink is constructed regardless of SamplePct (so
+	// SubmitCountryBlock can no-op cheaply at SamplePct=0
+	// without crashing); the Run goroutine is started
+	// unconditionally so a runtime PCT toggle (deferred)
+	// would just start emitting once raised above 0.
+	//
+	// W.3 pre-installed nil-receiver-safe globals BEFORE
+	// mgr.Start so the first applyLocked could run; the
+	// sink install here is a TRUE late-install — atomic
+	// .Pointer makes the swap visible to all already-
+	// Provisioned country-block handlers on their next
+	// request. Same V.1.3 pattern.
+	countryBlockSink := geo.NewDefaultCountryBlockSink(
+		geoBus,
+		geoEnricher,
+		obsStore, // nil → degraded-mode persistence (events still publish to bus)
+		logger,
+		geo.CountryBlockSinkConfig{
+			SamplePct: normalSamplePct,
+			Cooldown:  normalCooldown,
+		},
+	)
+	countryBlockCtx, countryBlockCancel := context.WithCancel(ctx)
+	go countryBlockSink.Run(countryBlockCtx)
+	countryblock.SetGlobalBlockSink(geoForwardingCountryBlockSink{inner: countryBlockSink})
+	defer func() {
+		countryBlockCancel()
+		<-countryBlockSink.Done()
+		if err := countryBlockSink.Close(); err != nil {
+			logger.Warn("country block sink close error", "err", err)
+		}
+	}()
+	logger.Info("country block sink wired",
+		"present", geoLookup != nil,
+		"status_code", cbStatusCode,
+		"trusted_ips_count", len(cbTrustedIPs),
+		"sample_pct", normalSamplePct,
+		"cooldown", normalCooldown.String(),
+		"retention_days", int(observability.RetainCountryBlockEvents/(24*time.Hour)),
+		"obs_store_present", obsStore != nil,
+	)
+	logger.Info("geo event enricher: country_block category enabled")
+
 	obsAggregator := observability.NewAggregator(obsStore, logger, 4096)
 	obsRetention := observability.NewRetentionRunner(obsStore, logger)
 	metricsTicker.SetConsumer(obsAggregator)
@@ -996,13 +1046,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// trusted-proxy-aware ClientIP resolver needs to wait
 	// for ipExtractor to be constructed. Same atomic.Pointer
 	// late-install shape as V.1.3's metrics.SetClientIPFn
-	// above.
+	// above. The "country block sink wired" log moved to
+	// the W.4 sink-construction site (richer fields:
+	// sample_pct + cooldown + retention_days + obs_store_present).
 	countryblock.SetGlobalClientIPFn(ipExtractor.ClientIP)
-	logger.Info("country block sink wired",
-		"present", geoLookup != nil,
-		"status_code", cbStatusCode,
-		"trusted_ips_count", len(cbTrustedIPs),
-	)
 
 	// Generate setup token if the users bucket is empty. The token
 	// is logged at Info so the operator can paste it into /setup.

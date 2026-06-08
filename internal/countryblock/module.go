@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -59,6 +60,54 @@ type CountryLookup interface {
 	Lookup(srcIP string) string
 }
 
+// BlockMatch is the value type the Handler passes to the
+// BlockSink on every blocked request. W.1 originally
+// shipped a 4-argument Submit; W.4 widened it to a struct
+// so the sink can persist + enrich the full operator-
+// meaningful context (Mode, Reason) without a 7-argument
+// function call. Fields:
+//
+//   - Timestamp: when the block decision was reached.
+//     Sink defaults to time.Now().UTC() when zero (defense
+//     in depth — Handler stamps it explicitly).
+//   - RouteID: the storage UUID of the route that gated.
+//   - SourceIP: trusted-proxy-resolved client IP (see
+//     GlobalClientIPFn).
+//   - Country: ISO 3166-1 alpha-2 code from the MMDB
+//     lookup. May be "" when the §D5 fail-open path
+//     declined to block (not currently reachable —
+//     fail-open accepts — but the field accommodates a
+//     future ModeStrict).
+//   - Mode: "allow" or "deny" — the route's enforcement
+//     mode at the moment the block fired. Read from
+//     Handler.Config.Mode; persisted so the activity-log
+//     row can render "blocked by ALLOW list (country not
+//     in FR,DE)" vs "blocked by DENY list (country is RU)".
+//   - StatusCode: the HTTP status the Handler returned
+//     (403/451/444 per spec §D3).
+//   - Reason: the W.1 matcher reason enum (kebab-case —
+//     "allow-miss" / "deny-match" / etc.). Surfaced
+//     verbatim in the persisted row so the W.5 activity
+//     log can render a tooltip without parsing free text.
+//
+// Host and ASN are intentionally NOT in this struct:
+//   - Host: the Handler doesn't carry it (W.3 elided it
+//     from the JSON config per its deviation #2). The W.5
+//     frontend cross-references RouteID → host via the
+//     existing routes API.
+//   - ASN: V.1's MMDB is City-only; ASN would require the
+//     separate GeoLite2-ASN.mmdb. Deferred to a future
+//     step if operator feedback requires it.
+type BlockMatch struct {
+	Timestamp  time.Time
+	RouteID    string
+	SourceIP   string
+	Country    string
+	Mode       string
+	StatusCode int
+	Reason     string
+}
+
 // BlockSink is the seam Handler calls on every blocked request.
 // The W.1 module ships only the call site; W.4 wires the real
 // DefaultCountryBlockSink with sampling + cooldown + bus
@@ -72,12 +121,10 @@ type CountryLookup interface {
 type BlockSink interface {
 	// Submit is fire-and-forget: the sink owns sampling +
 	// per-IP cooldown internally so the request goroutine never
-	// stalls on event emission. country may be "" when the
-	// block fired on a degraded-lookup path (not currently
-	// reachable — Layer 4 of Evaluate fails open — but the
-	// signature accommodates a future ModeStrict that would
-	// block on lookup failure).
-	Submit(srcIP, country, route string, statusCode int)
+	// stalls on event emission. The BlockMatch value carries
+	// every field the sink needs for persistence + enrichment;
+	// see the type doc-comment for field semantics.
+	Submit(m BlockMatch)
 }
 
 // ErrLookupNotInstalled is returned by Provision when no
@@ -220,7 +267,15 @@ func (h *Handler) ServeHTTP(
 	}
 
 	if sink := GlobalBlockSink(); sink != nil {
-		sink.Submit(srcIP, decision.Country, h.RouteID, status)
+		sink.Submit(BlockMatch{
+			Timestamp:  time.Now().UTC(),
+			RouteID:    h.RouteID,
+			SourceIP:   srcIP,
+			Country:    decision.Country,
+			Mode:       string(h.Config.Mode),
+			StatusCode: status,
+			Reason:     decision.Reason,
+		})
 	}
 
 	w.WriteHeader(status)
