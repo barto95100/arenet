@@ -268,6 +268,16 @@ type Handler struct {
 	// total: 0, hasMore: false, degraded: true} rather than
 	// returning 5xx.
 	certEvents CertEventReader
+	// countryBlockEvents (Step W.5) is the
+	// country_block_event table read surface. Backs GET
+	// /api/v1/observability/country-block-events — the
+	// Activity log page's country-block source. Backed by
+	// *observability.Store (country_block_event table from
+	// W.4 schema v8); the W.4 sink writes the rows the W.5
+	// handler reads. Nil-tolerant per AC #13: a nil reader
+	// collapses the response to {events:[], degraded:true}
+	// rather than 5xx.
+	countryBlockEvents CountryBlockEventReader
 	// authSink (Step V.2, 2026-06-06) is the parallel fan-out
 	// sink that receives auth-failure events alongside the
 	// existing audit-bucket Append (spec §3.6). The audit log
@@ -581,6 +591,27 @@ func (h *Handler) SetCertEventReader(r CertEventReader) {
 // pattern (commit 30418ea + backlog #R-API-boot-log-audit).
 func (h *Handler) HasCertEventReader() bool {
 	return h.certEvents != nil
+}
+
+// SetCountryBlockEventReader (Step W.5) attaches the
+// country_block_event table reader used by
+// GET /api/v1/observability/country-block-events. Pass
+// the *observability.Store the W.4 sink writes into;
+// same store that backs the WAF / throttle / decision /
+// cert / auth readers.
+//
+// Nil-tolerant per AC #13: leaving this unset makes the
+// endpoint respond with the degraded envelope.
+func (h *Handler) SetCountryBlockEventReader(r CountryBlockEventReader) {
+	h.countryBlockEvents = r
+}
+
+// HasCountryBlockEventReader reports whether the
+// country-block events seam is wired. cmd/arenet calls
+// this at boot so any future wire-up regression surfaces
+// as reader_present=false in journalctl.
+func (h *Handler) HasCountryBlockEventReader() bool {
+	return h.countryBlockEvents != nil
 }
 
 // SetAuthEventSink (Step V.2, 2026-06-06) attaches the auth

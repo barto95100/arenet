@@ -2,7 +2,7 @@
 // Copyright (C) 2026  Ludovic Ramos
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-// Step V.6 — color taxonomy for the 5 GeoEvent categories
+// Step V.6 — color taxonomy for the GeoEvent categories
 // spec §5.6 locks. Each category maps to ONE existing
 // design token from tokens.css so the dark/light theme
 // switch carries the map colors for free.
@@ -11,8 +11,8 @@
 // header comment proposed mapping waf + crowdsec onto the
 // same `--status-down` token (red), with the operator
 // tooltip disambiguating. The V.6 brief explicitly asked
-// for FIVE distinct colors. To satisfy that without
-// inventing new tokens, V.6 maps:
+// for distinct colors. To satisfy that without inventing
+// new tokens, V.6 maps:
 //
 //   - waf      → --status-down  (red — "request blocked
 //                                 by WAF rule")
@@ -24,12 +24,17 @@
 // commit history under R.2 documents the rename in flight).
 // Using the brand accent for crowdsec underlines that it
 // is a NETWORK-LEVEL block, distinct from WAF's
-// REQUEST-LEVEL block. Visually the two reds-on-red
-// confusion the V.5 comment worried about is gone.
+// REQUEST-LEVEL block.
 //
-// No new tokens added in V.6. All five resolve cleanly in
-// both dark and light themes (verified by grep'ing
-// tokens.css for each).
+// Step W.5 — extends the enum to 6 with the
+// `country_block` category mapped to `--status-meta`
+// (slate gray, oklch 62 0.012 250). The gray hue carries
+// the spec §D6 "policy enforcement, not threat" semantic:
+// operators see country-block arcs at-a-glance as
+// "expected enforcement" rather than alarming red, which
+// is reserved for actual threat signals (waf / down /
+// auth-failure). `--status-meta` was already defined in
+// tokens.css for both themes — no new token needed.
 
 import type { GeoEventCategory } from '$lib/api/types';
 
@@ -44,7 +49,8 @@ export const CATEGORY_COLORS: Record<GeoEventCategory, string> = {
 	throttle: 'var(--status-warn)',
 	waf: 'var(--status-down)',
 	crowdsec: 'var(--accent-cyan)',
-	auth: 'var(--status-info)'
+	auth: 'var(--status-info)',
+	country_block: 'var(--status-meta)'
 };
 
 /**
@@ -57,5 +63,6 @@ export const CATEGORY_LABELS_FR: Record<GeoEventCategory, string> = {
 	throttle: 'Throttle (429)',
 	waf: 'WAF (403)',
 	crowdsec: 'CrowdSec (403)',
-	auth: 'Échec d’auth (401/403)'
+	auth: 'Échec d’auth (401/403)',
+	country_block: 'Pays bloqué (403/451/444)'
 };

@@ -9,6 +9,7 @@
 	import { settingsApi } from '$lib/api/settings';
 	import type {
 		ACMEChallenge,
+		CountryBlockRequest,
 		DNSProviderOVH,
 		ForwardAuthProvider,
 		HealthCheck,
@@ -87,8 +88,14 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock'> & {
 		healthCheck: HealthCheck;
+		// W.5 — narrow to the non-optional shape. The form
+		// always carries a CountryBlockRequest (mode="off"
+		// when disabled); the wire optionality lives on
+		// the RouteRequest side for callers that want
+		// preserve-previous semantics.
+		countryBlock: CountryBlockRequest;
 	};
 	let formData = $state<FormData>(emptyFormData());
 	let healthCheckTouched = $state(false);
@@ -109,6 +116,15 @@
 			wafMode: 'detect',
 			acmeChallenge: 'http-01',
 			useDedicatedCert: false,
+			// W.5 — country-block defaults to disabled. The form
+			// surface lives in the country-block details block
+			// further down; operators opting in pick a mode +
+			// type ISO 3166-1 alpha-2 codes (FR / DE / RU / ...).
+			countryBlock: {
+				mode: 'off' as 'off' | 'allow' | 'deny',
+				countryList: [] as string[],
+				statusCode: 0
+			},
 			healthCheck: {
 				enabled: false,
 				uri: '',
@@ -300,6 +316,15 @@
 			requestHeaders: { ...(r.requestHeaders ?? {}) },
 			responseHeaders: { ...(r.responseHeaders ?? {}) },
 			wafMode: r.wafMode,
+			// W.5 — clone the stored country-block config so
+			// the form can mutate locally without touching
+			// the loaded route reference. The list is
+			// shallow-copied (string array; no nested refs).
+			countryBlock: {
+				mode: r.countryBlock.mode,
+				countryList: [...r.countryBlock.countryList],
+				statusCode: r.countryBlock.statusCode
+			},
 			// Step O: "inherited" is a server-derived value the
 			// frontend never sends back. Reload it as "" (empty)
 			// rather than "http-01" so the dropdown doesn't show
@@ -736,7 +761,21 @@
 				requestHeaders: tuplesToRecord(requestHeaderRows),
 				responseHeaders: tuplesToRecord(responseHeaderRows),
 				wafMode: formData.wafMode,
-				acmeChallenge: formData.acmeChallenge
+				acmeChallenge: formData.acmeChallenge,
+				// W.5 — country-block always shipped (POST and
+				// PUT). Unlike healthCheck's preserve-or-replace
+				// pattern, the form always shows the current
+				// state and the operator's intent is explicit:
+				// "off" is the canonical disabled state, NOT
+				// "preserve previous". Mirrors wafMode's
+				// always-shipped semantic (which the API maps
+				// to preserve-on-empty for PUT, full set on
+				// POST). The W.2 API tolerates both modes.
+				countryBlock: {
+					mode: formData.countryBlock.mode,
+					countryList: [...formData.countryBlock.countryList],
+					statusCode: formData.countryBlock.statusCode
+				}
 			};
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
@@ -1642,7 +1681,130 @@
 							Start with Detect to spot false positives before enforcing.
 						</p>
 					</div>
-			
+
+					<!-- W.5 — country-block per-route gate. Operator
+					     picks mode + countries; the W.1 Caddy module
+					     short-circuits at the edge before the request
+					     reaches crowdsec/auth/waf. ALLOW mode + empty
+					     list is rejected by the API (and surfaced here
+					     as a red error) — it would block all
+					     non-RFC1918 traffic. DENY mode + empty list is
+					     accepted (legal no-op; server logs a Warn).
+					     The "Add country" input takes ISO 3166-1
+					     alpha-2 codes (2 uppercase letters); Enter or
+					     comma adds the chip. -->
+					<details
+						class="rounded border border-border-subtle"
+						open={formData.countryBlock.mode !== 'off'}
+					>
+						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+							Pays bloqués
+							{#if formData.countryBlock.mode !== 'off'}
+								<span class="ml-1 text-xs text-muted">
+									({formData.countryBlock.mode} · {formData.countryBlock.countryList.length})
+								</span>
+							{/if}
+						</summary>
+						<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
+							<div>
+								<label
+									for="route-country-block-mode"
+									class="text-sm font-medium text-secondary block mb-1"
+								>
+									Mode
+								</label>
+								<select
+									id="route-country-block-mode"
+									bind:value={formData.countryBlock.mode}
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+								>
+									<option value="off">Désactivé — pas de gate par pays</option>
+									<option value="allow">Autoriser uniquement les pays listés (refuse le reste)</option>
+									<option value="deny">Bloquer les pays listés (autorise le reste)</option>
+								</select>
+							</div>
+							{#if formData.countryBlock.mode !== 'off'}
+								<div>
+									<label
+										for="route-country-block-list-input"
+										class="text-sm font-medium text-secondary block mb-1"
+									>
+										Pays (codes ISO 3166-1 alpha-2, ex. FR, DE, RU)
+									</label>
+									<div class="flex flex-wrap gap-2 mb-2" data-testid="country-block-chip-list">
+										{#each formData.countryBlock.countryList as code, i (code + i)}
+											<span class="cb-chip" data-testid="country-block-chip">
+												{code}
+												<button
+													type="button"
+													class="cb-chip__remove"
+													aria-label={`Retirer ${code}`}
+													onclick={() => {
+														formData.countryBlock.countryList =
+															formData.countryBlock.countryList.filter((c) => c !== code);
+													}}
+												>
+													×
+												</button>
+											</span>
+										{/each}
+									</div>
+									<input
+										id="route-country-block-list-input"
+										type="text"
+										placeholder="FR — Enter pour ajouter"
+										maxlength="2"
+										data-testid="country-block-input"
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary uppercase"
+										onkeydown={(e) => {
+											if (e.key !== 'Enter' && e.key !== ',') return;
+											e.preventDefault();
+											const input = e.currentTarget as HTMLInputElement;
+											const code = input.value.trim().toUpperCase();
+											if (!/^[A-Z]{2}$/.test(code)) return;
+											if (formData.countryBlock.countryList.includes(code)) {
+												input.value = '';
+												return;
+											}
+											formData.countryBlock.countryList = [
+												...formData.countryBlock.countryList,
+												code
+											];
+											input.value = '';
+										}}
+									/>
+									{#if formData.countryBlock.mode === 'allow' && formData.countryBlock.countryList.length === 0}
+										<p
+											class="text-xs text-down mt-1"
+											data-testid="country-block-allow-empty-error"
+										>
+											ALLOW exige au moins un pays — sinon tout le trafic
+											public serait bloqué.
+										</p>
+									{/if}
+								</div>
+								<div>
+									<label
+										for="route-country-block-status"
+										class="text-sm font-medium text-secondary block mb-1"
+									>
+										Code HTTP (0 = défaut env)
+									</label>
+									<select
+										id="route-country-block-status"
+										bind:value={formData.countryBlock.statusCode}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+									>
+										<option value={0}>Défaut (ARENET_COUNTRY_BLOCK_STATUS)</option>
+										<option value={403}>403 Forbidden</option>
+										<option value={451}>451 Unavailable For Legal Reasons</option>
+										<option value={444}>444 (nginx — close sans réponse)</option>
+									</select>
+								</div>
+							{/if}
+						</div>
+					</details>
+
 					<!-- Step J.3: active health-check sub-form. Gated by the
 					     enabled checkbox. Sub-fields disabled when off; their
 					     state is PRESERVED across the toggle so a user who
@@ -1935,5 +2097,37 @@
 	   target still feels "live", not visually frozen. */
 	:global(tr.route-row-selected:hover) {
 		background: color-mix(in oklch, var(--accent) 16%, transparent);
+	}
+
+	/* W.5 — country-block chip styles. Slate-tinted to
+	   match the map legend's --status-meta hue, signaling
+	   "policy enforcement, not threat". Mirror of generic
+	   pill shape used elsewhere. */
+	.cb-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 8px;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		color: var(--text-secondary);
+		background: color-mix(in oklch, var(--status-meta) 14%, transparent);
+		border: 1px solid color-mix(in oklch, var(--status-meta) 40%, var(--border-subtle));
+		border-radius: 999px;
+	}
+	.cb-chip__remove {
+		appearance: none;
+		background: none;
+		border: 0;
+		color: var(--text-muted);
+		cursor: pointer;
+		font-size: 13px;
+		line-height: 1;
+		padding: 0 0 0 2px;
+	}
+	.cb-chip__remove:hover {
+		color: var(--status-down);
 	}
 </style>

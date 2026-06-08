@@ -178,6 +178,15 @@ export interface Route {
 	 */
 	aggregateStatus: 'healthy' | 'degraded' | 'down' | 'unknown';
 	/**
+	 * Step W — per-route country-block gate state.
+	 * Always present (storage zero-value reads back as
+	 * `{mode: 'off', countryList: [], statusCode: 0}` via
+	 * the W.2 toResponse normalisation). Frontend renders
+	 * the "Pays bloqués" form section + shows a badge in
+	 * the route row when mode != 'off'.
+	 */
+	countryBlock: CountryBlock;
+	/**
 	 * Count of upstreams the HC tracker has observed as healthy.
 	 * Zero on routes without HC configured (the C13 gate doesn't
 	 * peek at tracker state). Used by the Routes table to render
@@ -386,6 +395,47 @@ export interface RouteRequest {
 	 * an uncovered route is rejected by the backend with 400.
 	 */
 	useDedicatedCert?: boolean;
+	/**
+	 * Step W — per-route country-block gate. OPTIONAL with
+	 * preserve-or-replace semantics on PUT (same shape as
+	 * healthCheck):
+	 *   - omitted (undefined) → preserve previously stored
+	 *     CountryBlock verbatim. The form uses this when the
+	 *     user did not touch the CountryBlock sub-form.
+	 *   - present → full replacement. The server validates
+	 *     the §D2 footgun (mode=allow + empty list rejected).
+	 *
+	 * On POST omission, the server creates the route with
+	 * `{mode: 'off'}` (the canonical disabled default).
+	 */
+	countryBlock?: CountryBlockRequest;
+}
+
+/**
+ * Step W — per-route country-block configuration on the
+ * response side. Mirrors W.2 `countryBlockResp` shape with
+ * normalised `mode` (zero-value reads back as "off").
+ * `statusCode` 0 means "use the env-default" — the form
+ * surfaces it as such; per-route override is a future
+ * extension W ships preemptively so the schema is stable.
+ */
+export interface CountryBlock {
+	mode: 'off' | 'allow' | 'deny';
+	countryList: string[];
+	statusCode: number;
+}
+
+/**
+ * Step W — per-route country-block configuration on the
+ * request side. Mirrors CountryBlock — only difference is
+ * statusCode=0 sentinel (clients send 0 when they want the
+ * env default, the explicit 403/451/444 when they want a
+ * per-route override).
+ */
+export interface CountryBlockRequest {
+	mode: 'off' | 'allow' | 'deny';
+	countryList: string[];
+	statusCode: number;
 }
 
 /**
@@ -1346,6 +1396,42 @@ export interface CertEventsResponse {
 }
 
 /**
+ * Step W.5 — country-block events.
+ *
+ * Wire shape of GET /api/v1/observability/country-block-events.
+ * Field-for-field mirror of
+ * internal/observability.CountryBlockEvent (W.4 schema v8)
+ * with camelCase JSON tags + RFC 3339 ts.
+ *
+ * Mode is "allow" or "deny" — the route's enforcement mode
+ * at the moment the block fired. Reason is W.1's matcher
+ * kebab-case enum ("allow-miss" / "deny-match" / etc.) so
+ * the activity-log tooltip can render the "why blocked"
+ * hint without parsing free text.
+ *
+ * Host + ASN are NOT in the persisted row (W.4 deferred);
+ * the activity log resolves RouteID → host via the
+ * existing /routes API, and renders ASN as "—".
+ */
+export interface CountryBlockEvent {
+	id: number;
+	ts: string;
+	routeId: string;
+	srcIp: string;
+	country: string;
+	mode: 'allow' | 'deny';
+	statusCode: number;
+	reason: string;
+}
+
+export interface CountryBlockEventsResponse {
+	events: CountryBlockEvent[];
+	total: number;
+	hasMore: boolean;
+	degraded?: boolean;
+}
+
+/**
  * Step V — geographic threat map.
  *
  * Wire shape of GET /api/v1/observability/server-position
@@ -1403,7 +1489,17 @@ export interface ServerPosition {
  * `statusCode` / `routeId` / `details` are operator-facing
  * tooltip metadata; populated when known, empty otherwise.
  */
-export type GeoEventCategory = 'normal' | 'throttle' | 'waf' | 'crowdsec' | 'auth';
+// Step W.5 — country_block is the 6th GeoEvent category
+// (W.4 backend addition). Per-route operator-declared
+// country gate, rendered as gray slate arcs on the map
+// to signal "policy enforcement, not threat" per spec §D6.
+export type GeoEventCategory =
+	| 'normal'
+	| 'throttle'
+	| 'waf'
+	| 'crowdsec'
+	| 'auth'
+	| 'country_block';
 
 export interface GeoEvent {
 	timestamp: string;

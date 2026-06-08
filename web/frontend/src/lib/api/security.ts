@@ -13,6 +13,7 @@ import type {
 	AuthFailuresResponse,
 	CertEventLevel,
 	CertEventsResponse,
+	CountryBlockEventsResponse,
 	DecisionsResponse,
 	GeoEventsResponse,
 	MetricWindow,
@@ -230,6 +231,56 @@ export function fetchCertEvents(
 	if (params.search) qs.set('search', params.search);
 	const suffix = qs.toString() ? `?${qs.toString()}` : '';
 	return request<CertEventsResponse>('GET', `/observability/cert-events${suffix}`);
+}
+
+/**
+ * Step W.5 — typed client wrapper around GET
+ * /api/v1/observability/country-block-events. The endpoint
+ * backs the Activity log page's country-block source (W.4
+ * sink writes the rows the W.5 reader serves).
+ *
+ * Path is /observability/ (lifecycle umbrella) consistent
+ * with cert-events. Filters all optional per the W.5
+ * handler:
+ *   - `limit` clamped server-side at 1000 (silent cap; bad
+ *     value returns 400).
+ *   - `route` filters to a single route UUID.
+ *   - `srcIp` exact-match on src IP.
+ *   - `country` exact-match on ISO 3166-1 alpha-2 code.
+ *   - `mode` exact-match on "allow" / "deny".
+ *   - `since` / `until` RFC 3339, bad parse → 400, until
+ *     <= since → 400.
+ *
+ * AC #13 degraded-mode path: nil reader → `degraded: true`,
+ * empty events, total=0. Callers surface a clean empty
+ * state.
+ */
+export interface FetchCountryBlockEventsParams {
+	limit?: number;
+	route?: string;
+	srcIp?: string;
+	country?: string;
+	mode?: 'allow' | 'deny';
+	since?: string;
+	until?: string;
+}
+
+export function fetchCountryBlockEvents(
+	params: FetchCountryBlockEventsParams = {}
+): Promise<CountryBlockEventsResponse> {
+	const qs = new URLSearchParams();
+	if (params.limit !== undefined) qs.set('limit', String(params.limit));
+	if (params.route) qs.set('route', params.route);
+	if (params.srcIp) qs.set('srcIp', params.srcIp);
+	if (params.country) qs.set('country', params.country);
+	if (params.mode) qs.set('mode', params.mode);
+	if (params.since) qs.set('since', params.since);
+	if (params.until) qs.set('until', params.until);
+	const suffix = qs.toString() ? `?${qs.toString()}` : '';
+	return request<CountryBlockEventsResponse>(
+		'GET',
+		`/observability/country-block-events${suffix}`
+	);
 }
 
 /**

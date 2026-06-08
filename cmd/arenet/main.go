@@ -1107,6 +1107,12 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		// serves). The endpoint at /observability/cert-events
 		// powers the Activity log page's cert source.
 		apiHandler.SetCertEventReader(obsStore)
+		// Step W.5 — country-block event reader. Backed by
+		// the same *observability.Store (country_block_event
+		// table from W.4 schema v8); the W.4 sink writes the
+		// rows this reader serves. Same nil-obsStore degraded
+		// path as the readers above.
+		apiHandler.SetCountryBlockEventReader(obsStore)
 	}
 	// Step Q.2 — auth-failure reader. Backed by the audit
 	// bucket (single source of truth, spec D2.B + D4.B), so

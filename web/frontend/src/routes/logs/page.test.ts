@@ -32,7 +32,9 @@ const { toastMock, securityMock } = vi.hoisted(() => ({
 		fetchEvents: vi.fn(),
 		fetchThrottleEvents: vi.fn(),
 		fetchAuthFailures: vi.fn(),
-		fetchCertEvents: vi.fn()
+		fetchCertEvents: vi.fn(),
+		// W.5 — 5th source (country-block events).
+		fetchCountryBlockEvents: vi.fn()
 	}
 }));
 
@@ -57,6 +59,7 @@ beforeEach(() => {
 	securityMock.fetchThrottleEvents.mockReset();
 	securityMock.fetchAuthFailures.mockReset();
 	securityMock.fetchCertEvents.mockReset();
+	securityMock.fetchCountryBlockEvents.mockReset();
 
 	// Defaults: every source returns empty. Individual tests
 	// override what they need.
@@ -68,6 +71,11 @@ beforeEach(() => {
 		recent: []
 	});
 	securityMock.fetchCertEvents.mockResolvedValue({
+		events: [],
+		total: 0,
+		hasMore: false
+	});
+	securityMock.fetchCountryBlockEvents.mockResolvedValue({
 		events: [],
 		total: 0,
 		hasMore: false
@@ -682,5 +690,45 @@ describe('/logs — duplicate-tuple regression (Svelte each_key_duplicate)', () 
 		// as a substring it would match the retry row too,
 		// so use a stricter regex that excludes the suffix.
 		expect(screen.getByText(/wrong password$/)).toBeInTheDocument();
+	});
+});
+
+describe('/logs — W.5 country-block source', () => {
+	it('renders a country-block row with the COUNTRY pill + status + "<country> · <mode>-<reason>" detail', async () => {
+		// W.5 — country-block events surface alongside the
+		// other 4 sources (waf/throttle/auth/cert) in the
+		// activity log. They render at level=block (the
+		// request WAS short-circuited) but with a distinct
+		// "COUNTRY" pill label + slate-gray styling so
+		// operators can distinguish them from WAF blocks
+		// (different semantic: policy enforcement vs threat
+		// signature).
+		securityMock.fetchCountryBlockEvents.mockResolvedValue({
+			events: [
+				{
+					id: 7,
+					ts: isoOffset(0),
+					routeId: 'route-uuid-1',
+					srcIp: '203.0.113.5',
+					country: 'RU',
+					mode: 'deny',
+					statusCode: 451,
+					reason: 'deny-match'
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+
+		render(Page);
+		await screen.findByText(/route-uuid-1/);
+		// Pill says COUNTRY (not BLOCK, which is the WAF label).
+		expect(screen.getByText('COUNTRY')).toBeInTheDocument();
+		// Status code from the persisted row, not hardcoded.
+		expect(screen.getByText('451')).toBeInTheDocument();
+		// Detail string: "<country> · <mode>-<reason>".
+		expect(screen.getByText(/RU · deny-deny-match/)).toBeInTheDocument();
+		// Source IP from the persisted row.
+		expect(screen.getByText('203.0.113.5')).toBeInTheDocument();
 	});
 });

@@ -16,10 +16,10 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import MapLegend from './MapLegend.svelte';
 import { CATEGORY_COLORS } from './categoryColors';
 
-const CATEGORIES = ['normal', 'throttle', 'waf', 'crowdsec', 'auth'] as const;
+const CATEGORIES = ['normal', 'throttle', 'waf', 'crowdsec', 'auth', 'country_block'] as const;
 
 describe('MapLegend', () => {
-	it('renders all 5 category rows', () => {
+	it('renders all 6 category rows', () => {
 		render(MapLegend);
 		for (const cat of CATEGORIES) {
 			expect(screen.getByTestId(`map-legend-item-${cat}`)).toBeInTheDocument();
@@ -124,7 +124,7 @@ describe('MapLegend', () => {
 		render(MapLegend);
 		const root = screen.getByTestId('map-legend');
 		expect(root.classList.contains('panel')).toBe(true);
-		expect(root.querySelectorAll('.dots').length).toBe(5);
+		expect(root.querySelectorAll('.dots').length).toBe(6);
 		expect(root.querySelector('.legend-note')).not.toBeNull();
 	});
 });

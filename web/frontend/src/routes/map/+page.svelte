@@ -76,6 +76,13 @@
 	// the operator can clear it by reloading the page.
 	let lanCount = $state(0);
 
+	// Step W.5 — country-block counter. Per-session signal
+	// showing how many requests have been short-circuited by
+	// an operator-declared country gate since the page
+	// mounted. Mirrors the V.7 LAN counter shape; resets on
+	// page reload (operator's escape hatch).
+	let countryBlockCount = $state(0);
+
 	onMount(async () => {
 		// Step 1 — load position. A failure here is fatal:
 		// without the Arenet pixel position, the WorldMap
@@ -100,9 +107,12 @@
 			events = replay.events;
 			// V.7 — seed the LAN counter from the replay so a
 			// page reload doesn't reset it to zero when LAN
-			// traffic was already in the ring buffer.
+			// traffic was already in the ring buffer. W.5
+			// seeds the country-block counter the same way
+			// for symmetry.
 			for (const ev of replay.events) {
 				if (ev.isLan) lanCount++;
+				if (ev.category === 'country_block') countryBlockCount++;
 			}
 		} catch (err) {
 			// eslint-disable-next-line no-console
@@ -121,6 +131,16 @@
 				// not, per spec §3.8) so the operator's
 				// internal-traffic signal is preserved.
 				if (event.isLan) lanCount++;
+				// W.5 — bump the country-block counter on
+				// every country_block event. Unlike LAN
+				// events, country-block events ARE rendered
+				// as arcs on the map (gray slate); the
+				// counter doubles as a quick-glance "how
+				// often is my gate firing" signal so the
+				// operator doesn't need to count arcs.
+				if (event.category === 'country_block') {
+					countryBlockCount++;
+				}
 				// Append + cap. Identity churn matters: the
 				// WorldMap $effect watches events.length so
 				// a new tail entry triggers an arc spawn
@@ -187,6 +207,29 @@
 				<span class="lan-pill__icon" aria-hidden="true">⌂</span>
 				<span data-testid="map-lan-pill-count">{lanCount}</span>
 				<span class="lan-pill__label">interne{lanCount > 1 ? 's' : ''} (LAN)</span>
+			</div>
+		{/if}
+		{#if countryBlockCount > 0}
+			<!--
+				W.5 — country-block counter. Same shape as the
+				V.7 LAN pill (.lan-pill class reused for the
+				layout; .lan-pill--country variant colors it
+				slate to match the legend). Visible only when
+				countryBlockCount > 0 so the pill stack stays
+				clean on installs where no route is gated.
+			-->
+			<div
+				class="lan-pill lan-pill--country"
+				data-testid="map-country-block-pill"
+				data-country-block-count={countryBlockCount}
+				role="status"
+				title="Requêtes bloquées par la règle de pays par-route depuis l'ouverture de la page. Le compteur reflète les arcs gris sur la carte (mêmes événements)."
+			>
+				<span class="lan-pill__icon" aria-hidden="true">🛡</span>
+				<span data-testid="map-country-block-pill-count">{countryBlockCount}</span>
+				<span class="lan-pill__label">
+					bloqué{countryBlockCount > 1 ? 's' : ''} (pays)
+				</span>
 			</div>
 		{/if}
 		<div
@@ -319,6 +362,18 @@
 		color: var(--text-muted);
 		text-transform: none;
 		letter-spacing: 0;
+	}
+	/*
+	  W.5 — country-block variant. Border tinted with the
+	  --status-meta token so the pill reads "policy
+	  enforcement" rather than alarming red. Same shape as
+	  the LAN pill so the two pills stack cleanly.
+	*/
+	.lan-pill--country {
+		border-color: color-mix(in oklch, var(--status-meta) 60%, var(--border-subtle));
+	}
+	.lan-pill--country .lan-pill__icon {
+		color: var(--status-meta);
 	}
 	.ws-pill__dot {
 		width: 7px;

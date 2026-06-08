@@ -129,6 +129,12 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		aggregateStatus: 'unknown',
 		healthyUpstreamCount: 0,
 		totalUpstreamCount: 1,
+		// W.5 — country-block default to the disabled state.
+		// toResponse normalises a storage zero-value to
+		// {mode:"off", countryList:[], statusCode:0}; tests
+		// that need the gate active override via the partial
+		// Route overrides.
+		countryBlock: { mode: 'off', countryList: [], statusCode: 0 },
 		...overrides
 	};
 }
@@ -1153,5 +1159,91 @@ describe('Routes page — table row interaction affordance', () => {
 
 		expect(row.classList.contains('route-row-selected')).toBe(false);
 		expect(screen.queryByLabelText('Host')).not.toBeInTheDocument();
+	});
+});
+
+// W.5 — country-block form section. The section lives in
+// the route create/edit modal between WAF mode and the
+// HealthCheck details block. Mode="off" hides the country
+// list + status-code sub-fields; mode="allow" with an
+// empty list surfaces a reactive footgun error (the W.2 API
+// rejects with 400; client-side message is the
+// pre-submit UX nudge).
+describe('Routes page — W.5 country-block form section', () => {
+	it('shows the country-block details block in the create form', async () => {
+		render(Page);
+		await openCreateForm();
+		// The <summary> for the country-block <details> is
+		// the canonical anchor.
+		expect(screen.getByText('Pays bloqués')).toBeInTheDocument();
+	});
+
+	it('mode=off hides the country-list + status-code sub-fields', async () => {
+		render(Page);
+		await openCreateForm();
+		// Default mode is 'off' → the sub-fields don't render.
+		expect(screen.queryByTestId('country-block-input')).not.toBeInTheDocument();
+		expect(
+			screen.queryByLabelText(/Code HTTP/i)
+		).not.toBeInTheDocument();
+	});
+
+	it('mode=deny reveals the country-list + status-code sub-fields', async () => {
+		render(Page);
+		await openCreateForm();
+		const modeSelect = screen.getByLabelText('Mode') as HTMLSelectElement;
+		await userEvent.selectOptions(modeSelect, 'deny');
+		await tick();
+		expect(screen.getByTestId('country-block-input')).toBeInTheDocument();
+		expect(screen.getByLabelText(/Code HTTP/i)).toBeInTheDocument();
+	});
+
+	it('typing FR + Enter adds a chip to the country list', async () => {
+		render(Page);
+		await openCreateForm();
+		const modeSelect = screen.getByLabelText('Mode') as HTMLSelectElement;
+		await userEvent.selectOptions(modeSelect, 'deny');
+		await tick();
+
+		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
+		await userEvent.type(input, 'FR{enter}');
+		await tick();
+
+		const chips = screen.getAllByTestId('country-block-chip');
+		expect(chips).toHaveLength(1);
+		expect(chips[0].textContent).toContain('FR');
+	});
+
+	it('mode=allow + empty list shows the footgun error', async () => {
+		render(Page);
+		await openCreateForm();
+		const modeSelect = screen.getByLabelText('Mode') as HTMLSelectElement;
+		await userEvent.selectOptions(modeSelect, 'allow');
+		await tick();
+
+		// Reactive paragraph with testid country-block-allow-empty-error
+		// renders immediately on mode change while the list is empty.
+		expect(
+			screen.getByTestId('country-block-allow-empty-error')
+		).toBeInTheDocument();
+	});
+
+	it('mode=allow + non-empty list clears the footgun error', async () => {
+		render(Page);
+		await openCreateForm();
+		const modeSelect = screen.getByLabelText('Mode') as HTMLSelectElement;
+		await userEvent.selectOptions(modeSelect, 'allow');
+		await tick();
+		// Error visible.
+		expect(
+			screen.getByTestId('country-block-allow-empty-error')
+		).toBeInTheDocument();
+		// Add a country — error clears.
+		const input = screen.getByTestId('country-block-input') as HTMLInputElement;
+		await userEvent.type(input, 'FR{enter}');
+		await tick();
+		expect(
+			screen.queryByTestId('country-block-allow-empty-error')
+		).not.toBeInTheDocument();
 	});
 });

@@ -67,7 +67,16 @@
 		{ category: 'throttle', label: 'Throttle — rate-limit (HTTP 429)' },
 		{ category: 'waf', label: 'WAF — bloqué par Coraza (HTTP 403)' },
 		{ category: 'crowdsec', label: 'CrowdSec — IP en réputation négative (HTTP 403)' },
-		{ category: 'auth', label: 'Auth — échec d’authentification (HTTP 401/403)' }
+		{ category: 'auth', label: 'Auth — échec d’authentification (HTTP 401/403)' },
+		// Step W.5 — 6th category. Gray slate to signal
+		// "policy enforcement, not threat" per spec §D6.
+		// Status code is operator-configurable (403 default,
+		// 451 / 444 supported) — the label lists the
+		// canonical set rather than picking one.
+		{
+			category: 'country_block',
+			label: 'Pays bloqué — règle opérateur (HTTP 403/451/444)'
+		}
 	];
 
 	// Default expanded so a first-time visitor sees the

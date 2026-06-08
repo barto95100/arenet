@@ -202,6 +202,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// widening). Same hard-auth + AC #13 degraded-mode
 			// contract as the security siblings above.
 			r.Get("/observability/cert-events", h.securityCertEvents)
+			// Step W.5 — country-block event log. Reads from
+			// the W.4 country_block_event table (schema v8).
+			// Mirror of cert-events: pure event-shaped read,
+			// optional route/srcIp/country/mode + since/until
+			// filters, same hard-auth + AC #13 degraded-mode
+			// contract.
+			r.Get("/observability/country-block-events", h.securityCountryBlockEvents)
 			// Step V.3 — geo events replay endpoint. Returns
 			// the in-memory ring buffer (capacity 500 per
 			// spec §3.5) for the /map page's initial paint;

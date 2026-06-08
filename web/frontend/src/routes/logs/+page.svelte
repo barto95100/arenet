@@ -42,12 +42,14 @@
 		fetchEvents,
 		fetchThrottleEvents,
 		fetchAuthFailures,
-		fetchCertEvents
+		fetchCertEvents,
+		fetchCountryBlockEvents
 	} from '$lib/api/security';
 	import { ApiError } from '$lib/api/types';
 	import type {
 		AuthFailureRecentEvent,
 		CertEvent,
+		CountryBlockEvent,
 		ThrottleEvent,
 		WafEvent
 	} from '$lib/api/types';
@@ -60,6 +62,14 @@
 	// rows rendered as 'block'; the detect rows lied. Detect
 	// rows render with a muted amber accent so operators see
 	// rule-fire signal without thinking enforcement happened.
+	//
+	// W.5 — country-block rows render at the 'block' level
+	// (the request WAS short-circuited at the Caddy edge by
+	// an operator-declared country gate). They distinguish
+	// from WAF blocks via source='country_block' on the row
+	// + the slate-gray pill styling — same level-block CSS
+	// hook reused; visual differentiation lives in the
+	// .log-lvl.country variant added in this commit.
 	type LevelTag = 'block' | 'detect' | 'warn' | 'info';
 
 	interface UnifiedRow {
@@ -246,19 +256,47 @@
 		};
 	}
 
+	// Step W.5 — country-block source mapper. Each row
+	// renders as a block-level entry (the request WAS
+	// short-circuited at the Caddy edge); detail shape is
+	// "<country> · <mode>-<reason>" so the operator scans
+	// "RU · deny-match" and instantly understands the route's
+	// deny list matched the source country. RouteID → host
+	// resolution is deferred (W.5 doesn't wire the routes
+	// API in this page); the row shows the raw routeId in
+	// the path column so an operator can grep it against
+	// /routes if curious. A future increment could resolve
+	// it via a route-id cache populated from the existing
+	// fetchRoutes call elsewhere in the app.
+	function mapCountryBlock(e: CountryBlockEvent): UnifiedRow {
+		const country = e.country || '—';
+		return {
+			key: `country-block-${e.id}`,
+			ts: e.ts,
+			level: 'block',
+			code: String(e.statusCode),
+			source: 'country_block',
+			method: 'GEO',
+			path: e.routeId,
+			detail: `${country} · ${e.mode}-${e.reason}`,
+			srcIp: e.srcIp
+		};
+	}
+
 	async function load(): Promise<void> {
 		loadError = null;
 		try {
-			// Step U.5 — 4 parallel sources via Promise.allSettled
-			// so any one source's failure (e.g. cert-events
-			// endpoint in degraded mode or 5xx) doesn't take
-			// down the page. Each fulfilled result is mapped
-			// into UnifiedRow shape and merged.
-			const [waf, throttle, auth, certs] = await Promise.allSettled([
+			// Step U.5 / W.5 — 5 parallel sources via
+			// Promise.allSettled so any one source's failure
+			// (degraded endpoint, 5xx, missed wire-up) doesn't
+			// take down the page. Each fulfilled result is
+			// mapped into UnifiedRow shape and merged.
+			const [waf, throttle, auth, certs, countryBlock] = await Promise.allSettled([
 				fetchEvents({ limit: 100 }),
 				fetchThrottleEvents({ limit: 100 }),
 				fetchAuthFailures('24h'),
-				fetchCertEvents({ limit: 100 })
+				fetchCertEvents({ limit: 100 }),
+				fetchCountryBlockEvents({ limit: 100 })
 			]);
 
 			const merged: UnifiedRow[] = [];
@@ -275,6 +313,9 @@
 			if (certs.status === 'fulfilled') {
 				const events = certs.value.events ?? [];
 				for (let i = 0; i < events.length; i++) merged.push(mapCert(events[i], i));
+			}
+			if (countryBlock.status === 'fulfilled') {
+				for (const e of countryBlock.value.events ?? []) merged.push(mapCountryBlock(e));
 			}
 
 			merged.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
@@ -394,9 +435,27 @@
 	{:else}
 		<div class="logs">
 			{#each filteredRows as r (r.key)}
-				<div class="log-row level-{r.level}">
+				{@const isCountryBlock = r.source === 'country_block'}
+				<div class="log-row level-{r.level}" class:level-country-block={isCountryBlock}>
 					<span class="log-time">{fmtTime(r.ts)}</span>
-					<span class="log-lvl {r.level}">{r.level.toUpperCase()}</span>
+					<!--
+					  W.5 — country-block rows render with a
+					  distinct pill label + slate background so
+					  the operator can distinguish them from
+					  WAF blocks (both share level='block' but
+					  the semantic differs: country-block is
+					  policy enforcement, WAF is threat
+					  signature). Pill label "COUNTRY"
+					  abbreviates "country-block" to keep the
+					  column width stable.
+					-->
+					{#if isCountryBlock}
+						<span class="log-lvl country-block" title="Country-block (operator-declared per-route gate)">
+							COUNTRY
+						</span>
+					{:else}
+						<span class="log-lvl {r.level}">{r.level.toUpperCase()}</span>
+					{/if}
 					<span class="mono">{r.code}</span>
 					<span class="log-msg">
 						<span class="k">{r.method}</span>
@@ -556,6 +615,10 @@
 	}
 	.log-row:last-child { border-bottom: none; }
 	.log-row.level-block { background: color-mix(in oklch, var(--status-down) 8%, transparent); }
+	/* W.5 — country-block rows. Override the level-block
+	   tint with the --status-meta slate so the operator
+	   can distinguish them from WAF blocks at-a-glance. */
+	.log-row.level-country-block { background: color-mix(in oklch, var(--status-meta) 8%, transparent); }
 	.log-row.level-detect { background: color-mix(in oklch, var(--status-warn) 4%, transparent); }
 	.log-row.level-warn { background: color-mix(in oklch, var(--status-warn) 6%, transparent); }
 
@@ -570,6 +633,9 @@
 		justify-self: start;
 	}
 	.log-lvl.block { background: color-mix(in oklch, var(--status-down) 18%, transparent); color: var(--status-down); }
+	/* W.5 — country-block pill. Slate to match the map
+	   legend's gray for "policy enforcement, not threat". */
+	.log-lvl.country-block { background: color-mix(in oklch, var(--status-meta) 24%, transparent); color: var(--status-meta); }
 	.log-lvl.detect { background: color-mix(in oklch, var(--status-warn) 14%, transparent); color: var(--status-warn); }
 	.log-lvl.warn { background: color-mix(in oklch, var(--status-warn) 18%, transparent); color: var(--status-warn); }
 	.log-lvl.info { background: color-mix(in oklch, var(--status-info) 18%, transparent); color: var(--status-info); }
