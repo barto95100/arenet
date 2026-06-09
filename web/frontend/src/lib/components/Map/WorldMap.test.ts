@@ -379,67 +379,80 @@ describe('WorldMap — V.8.HF2 TopoJSON load gating', () => {
 });
 
 describe('WorldMap — V.8.HF1 tick-driven re-render', () => {
-	beforeEach(() => {
-		// Fake the rAF chain (the d3.timer callback hook)
-		// AND performance.now() — the latter is what the
-		// d3.timer callback reads via the component's nowFn
-		// to compute clockMs. Without faking performance,
-		// vi.advanceTimersByTimeAsync moves the mock rAF
-		// clock by 480ms across the loop below but
-		// performance.now() returns the real wall-clock
-		// elapsed time (~< 30ms), so the bezier head's
-		// `t` parameter ends up tiny and the SVG `d`
-		// string may or may not differ from the spawn
-		// frame's shape depending on test-runner scheduling.
-		// Faking performance ties the time source the
-		// component reads to the fake-timer clock — 30 × 16ms
-		// of advance produces a deterministic +480ms of
-		// bezier progress every run.
-		//
-		// (A previous attempt at this fix was reverted on
-		// the assumption that the test had self-healed; the
-		// flake came back at the W.bugfix iteration. Pin
-		// the determinism this time.)
-		vi.useFakeTimers({
-			toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'performance']
-		});
-	});
-
-	afterEach(() => {
-		vi.useRealTimers();
-	});
-
+	// Why this test uses the component's _setNowForTest +
+	// _tickForTest seam instead of vi.useFakeTimers:
+	//
+	// d3-timer captures `clock = performance` (the object,
+	// not the function) and `setFrame = window.requestAnimationFrame.bind(window)`
+	// at MODULE LOAD time (d3-timer/src/timer.js:10-11).
+	// WorldMap.svelte imports d3 at the top of the test
+	// file, BEFORE vi.useFakeTimers runs in beforeEach.
+	// vitest's fake-timers patches the GLOBAL bindings but
+	// d3 already holds the originals, so:
+	//   - d3.now() returns wall-clock time (probe: faked
+	//     performance.now advances 500ms, d3.now advances 0ms)
+	//   - the d3.timer rAF chain runs against the real (or
+	//     jsdom-shimmed-as-setTimeout) loop that vitest's
+	//     mock rAF doesn't see, so the d3.timer callback
+	//     never fires (probe: samples array stays empty)
+	//
+	// Symptoms of the bug we're avoiding: the `d` attribute
+	// observed initial-vs-later was identical because the
+	// d3.timer callback never advanced `clockMs` / `tick`
+	// inside the component. Previous fix b0521e0 added
+	// 'performance' to toFake — necessary but insufficient,
+	// for the reasons above. We can't relocate the d3 import
+	// without forking d3-timer (it caches at module top
+	// level), so the deterministic path is: bypass d3.timer
+	// entirely in the test, drive the frame body directly via
+	// the component's _tickForTest seam. nowFn is a
+	// monotonic counter we own, so `clockMs - arc.startMs`
+	// crosses ARC_TRAVEL_MS predictably and the bezier head
+	// extends past the source.
 	it('updates the path d-attribute as the tick advances (no spawn-snap)', async () => {
 		mockTopoJSONFetch();
-		render(WorldMap, {
+		// Test clock: starts at a non-zero baseline so the
+		// component's startMs (captured during spawn) and our
+		// monotonic counter sit on the same scale. We bump
+		// `testNow` between _tickForTest calls to simulate
+		// time passing — completely independent of d3-timer
+		// and vitest's fake-timer state.
+		let testNow = 1_000_000;
+		const { component } = render(WorldMap, {
 			props: {
 				arenetLat: 48.8566,
 				arenetLon: 2.3522,
 				events: [mkEvent({ sourceLat: 51.5074, sourceLon: -0.1278 })]
 			}
 		});
+		component._setNowForTest(() => testNow);
 
 		// Wait for the TopoJSON fetch + initial spawn.
-		await vi.waitFor(() => {
+		await waitFor(() => {
 			const arcs = screen.getByTestId('worldmap-arcs');
 			expect(arcs.querySelectorAll('path').length).toBe(1);
 		});
 
+		// First frame: capture the spawn-shape `d` (progress
+		// near 0 — the bezier head is collapsed at source).
+		component._tickForTest();
+		// Let Svelte flush the reactive update.
+		await new Promise((r) => setTimeout(r, 0));
 		const arcsLayer = screen.getByTestId('worldmap-arcs');
 		const initialPath = arcsLayer.querySelector('path');
 		const initialD = initialPath?.getAttribute('d') ?? '';
 		expect(initialD).toMatch(/^M /);
 
-		// Advance the rAF clock by several frames. Each
-		// frame, d3.timer fires → tick increments → the
-		// {#each arcs} body re-evaluates → the path's `d`
-		// recomputes against the new clockMs. After enough
-		// frames the bezier head should have advanced
-		// (the path string MUST differ from the spawn-time
-		// collapsed shape).
-		for (let i = 0; i < 30; i++) {
-			await vi.advanceTimersByTimeAsync(16);
-		}
+		// Advance the test clock past half of ARC_TRAVEL_MS
+		// (ARC_TRAVEL_MS = 1800ms; we jump 900ms to land
+		// solidly mid-flight). Then run one more frame so
+		// runFrame() reads the new testNow → clockMs jumps →
+		// arcProgressAt returns progress > 0 → bezierAt
+		// projects the head along the curve → the path's `d`
+		// string changes shape.
+		testNow += 900;
+		component._tickForTest();
+		await new Promise((r) => setTimeout(r, 0));
 
 		const laterPath = screen.getByTestId('worldmap-arcs').querySelector('path');
 		const laterD = laterPath?.getAttribute('d') ?? '';

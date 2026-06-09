@@ -267,37 +267,66 @@
 		nowFn = fn;
 	}
 
+	// V.8.HF1 deflake — d3.timer captures `performance` and
+	// `window.requestAnimationFrame` at MODULE LOAD time (see
+	// d3-timer/src/timer.js lines 10-11). vitest's
+	// `useFakeTimers({ toFake: ['performance', 'requestAnimationFrame'] })`
+	// replaces the GLOBAL bindings but d3 already holds the
+	// original references → `d3.now()` returns wall-clock time
+	// and the d3.timer rAF chain runs against the real loop
+	// (or jsdom's setTimeout-shimmed loop, which vitest's fake
+	// timers don't see either). Net effect: the V.8.HF1 test
+	// could observe 0 progress between "spawn" and "later"
+	// frames depending on real-clock jitter under -race.
+	//
+	// Fix: extract the per-frame body into a named function
+	// the test calls DIRECTLY via _tickForTest. d3.timer
+	// still drives production (where rAF + performance work
+	// natively); the test bypasses the d3 timer entirely.
+	// Reference: previous fix b0521e0 added 'performance' to
+	// toFake — necessary but insufficient because d3 closes
+	// over the original object before vitest can swap it.
+	function runFrame() {
+		const t = nowFn();
+		clockMs = t;
+		// V.8.HF1 — bump the per-frame tick so the
+		// template's {#each arcs} body re-evaluates.
+		// Modulo 1e9 guards against the (extremely
+		// theoretical) integer-overflow case for a
+		// tab left open for years at 60 fps.
+		tick = (tick + 1) % 1_000_000_000;
+		// Prune expired arcs. Allocate a fresh array
+		// only when at least one arc is gone; otherwise
+		// keep the same reference so the {#each} block
+		// doesn't trigger a full re-key.
+		let pruned: ArcState[] | null = null;
+		for (let i = 0; i < arcs.length; i++) {
+			if (t - arcs[i].startMs >= ARC_TOTAL_MS) {
+				if (pruned === null) pruned = arcs.slice(0, i);
+			} else if (pruned !== null) {
+				pruned.push(arcs[i]);
+			}
+		}
+		if (pruned !== null) {
+			arcs = pruned;
+		}
+	}
+
+	// Test-only escape hatch: drive one animation frame
+	// deterministically. Used by WorldMap.test.ts §V.8.HF1
+	// to bypass d3.timer's captured-at-module-load rAF +
+	// performance refs. Production code MUST NOT call this.
+	export function _tickForTest() {
+		runFrame();
+	}
+
 	let timerHandle: ReturnType<typeof d3.timer> | null = null;
 
 	onMount(() => {
 		// d3.timer uses requestAnimationFrame internally;
 		// the callback fires on every browser repaint until
 		// stopped. Stop on destroy to release the rAF chain.
-		timerHandle = d3.timer(() => {
-			const t = nowFn();
-			clockMs = t;
-			// V.8.HF1 — bump the per-frame tick so the
-			// template's {#each arcs} body re-evaluates.
-			// Modulo 1e9 guards against the (extremely
-			// theoretical) integer-overflow case for a
-			// tab left open for years at 60 fps.
-			tick = (tick + 1) % 1_000_000_000;
-			// Prune expired arcs. Allocate a fresh array
-			// only when at least one arc is gone; otherwise
-			// keep the same reference so the {#each} block
-			// doesn't trigger a full re-key.
-			let pruned: ArcState[] | null = null;
-			for (let i = 0; i < arcs.length; i++) {
-				if (t - arcs[i].startMs >= ARC_TOTAL_MS) {
-					if (pruned === null) pruned = arcs.slice(0, i);
-				} else if (pruned !== null) {
-					pruned.push(arcs[i]);
-				}
-			}
-			if (pruned !== null) {
-				arcs = pruned;
-			}
-		});
+		timerHandle = d3.timer(runFrame);
 	});
 
 	onDestroy(() => {
