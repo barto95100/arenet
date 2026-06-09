@@ -62,6 +62,11 @@ const (
 	// same convention as bucketOIDCConfig. See
 	// server_position.go.
 	bucketServerPosition = "server_position"
+	// Step CS.1 — instance-level CrowdSec bouncer config
+	// (LAPI URL + API key + name + timeout). Single row,
+	// keyed "default" — same convention as bucketOIDCConfig.
+	// See crowdsec_config.go.
+	bucketCrowdSecConfig = "crowdsec_config"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -105,6 +110,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketManagedDomains),       // Step O.1
 			[]byte(bucketAutomation),           // Step P.1
 			[]byte(bucketServerPosition),       // Step V.4
+			[]byte(bucketCrowdSecConfig),       // Step CS.1
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)

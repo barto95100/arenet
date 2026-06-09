@@ -53,6 +53,7 @@
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
+	import CrowdSecSettingsSection from '$lib/components/CrowdSecSettingsSection.svelte';
 	import BackupSection from '$lib/components/BackupSection.svelte';
 	import ServerPositionSection from '$lib/components/ServerPositionSection.svelte';
 
@@ -1264,6 +1265,13 @@
 	<!-- ROW 2.85 — OIDC SSO (Step K.2 §5.2). Self-contained
 	     component to keep the settings page tractable. -->
 	<OIDCSettingsSection />
+
+	<!-- ROW 2.87 — CrowdSec bouncer (Step CS.1). Sits next
+	     to OIDC since both are admin-facing secret-config
+	     sections that hot-reload Caddy on save. The chain
+	     position #2 implication (country_block fires first)
+	     is documented in docs/setup/crowdsec.md. -->
+	<CrowdSecSettingsSection />
 
 	<!-- ROW 2.9 — Backup & restore (Step K.3 §5.3). -->
 	<BackupSection />

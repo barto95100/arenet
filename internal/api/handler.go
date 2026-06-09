@@ -242,6 +242,14 @@ type Handler struct {
 	// from N.2 storage). Same nil-tolerance contract as
 	// throttleEvents.
 	decisions DecisionReader
+	// crowdsecApplier (Step CS.1) is the manager-side seam
+	// invoked by PUT /api/v1/settings/crowdsec to swap the
+	// bouncer LAPI creds + hot-reload Caddy without a process
+	// restart. nil → the PUT handler still persists the row
+	// + emits audit, but skips the reload (suitable for unit
+	// tests that don't boot Caddy). *caddymgr.CaddyManager
+	// satisfies CrowdSecApplier via ApplyCrowdSecConfig.
+	crowdsecApplier CrowdSecApplier
 	// hcStatus (Critique 11 Pack A, 2026-06-05) is the per-
 	// upstream live status feed populated by the Stage B
 	// caddyhc tracker. Used by listRoutes / getRoute to attach
@@ -712,6 +720,16 @@ func (h *Handler) HasServerPositionRedetector() bool {
 // SetThrottleEventReader.
 func (h *Handler) SetDecisionReader(r DecisionReader) {
 	h.decisions = r
+}
+
+// SetCrowdSecApplier (Step CS.1) attaches the manager-side
+// hot-reload seam invoked by PUT /api/v1/settings/crowdsec.
+// *caddymgr.CaddyManager satisfies this interface via
+// ApplyCrowdSecConfig. Nil-tolerant: tests that don't exercise
+// the manager leave this unset and the PUT handler skips the
+// reload (the row is still persisted; audit still emits).
+func (h *Handler) SetCrowdSecApplier(a CrowdSecApplier) {
+	h.crowdsecApplier = a
 }
 
 // uiURL returns the URL to redirect to for the given SPA path

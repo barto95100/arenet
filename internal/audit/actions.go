@@ -118,6 +118,15 @@ const (
 	// reflects whatever was persisted before the redetect.
 	ActionServerPositionUpdated    = "server_position_updated"
 	ActionServerPositionRedetected = "server_position_redetected"
+
+	// Step CS.1 — CrowdSec bouncer config admin actions.
+	// CrowdSecConfigured emitted by PUT /api/v1/settings/crowdsec
+	// on the first write (no previous row in storage).
+	// CrowdSecUpdated emitted by subsequent PUTs. Both carry
+	// before/after JSON with APIKey scrubbed (SECRET — same
+	// shape as oidcConfigForAudit / dnsProviderForAudit).
+	ActionCrowdSecConfigured = "crowdsec_configured"
+	ActionCrowdSecUpdated    = "crowdsec_updated"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -158,6 +167,8 @@ var allActions = []string{
 	ActionAutomationRuleChanged,
 	ActionServerPositionUpdated,
 	ActionServerPositionRedetected,
+	ActionCrowdSecConfigured,
+	ActionCrowdSecUpdated,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

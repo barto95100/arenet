@@ -269,6 +269,43 @@ func (m *CaddyManager) SetCrowdSecConfig(apiURL, apiKey string) {
 	m.crowdsec.apiKey = strings.TrimSpace(apiKey)
 }
 
+// ApplyCrowdSecConfig (Step CS.1) atomically swaps the LAPI
+// connection settings AND triggers an applyLocked so the
+// embedded Caddy picks up the new creds. Used by the
+// /api/v1/settings/crowdsec PUT handler: the audit-config
+// admin UI saves a row, then this method ensures the running
+// Caddy reflects the change within the request lifetime (no
+// process restart, no "Restart required" UX).
+//
+// The (Set + applyLocked) pair runs under a SINGLE m.mu.Lock
+// acquisition so a concurrent /routes PUT or another settings
+// PUT can't observe a half-written crowdsec config nor race the
+// apply against a stale read. The cost is that this method
+// holds m.mu across the full Caddy reload (~50-200ms typical);
+// admin-API write contention is low enough that this is the
+// right trade-off vs the alternative of a buildOpts-level
+// snapshot indirection (extra surface, more places to forget
+// to use it).
+//
+// AC #13 fail-open contract preserved: passing an empty apiKey
+// clears the configured state — buildConfigJSON omits the
+// apps.crowdsec block AND the per-route handler prepend,
+// matching the env-driven boot path's degraded mode.
+func (m *CaddyManager) ApplyCrowdSecConfig(ctx context.Context, apiURL, apiKey string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.crowdsec.apiURL = strings.TrimSpace(apiURL)
+	m.crowdsec.apiKey = strings.TrimSpace(apiKey)
+	// If Start hasn't been called yet (e.g. test harness or
+	// boot-time precedence wiring), skip the reload — the
+	// initial applyLocked at Start will pick up the values
+	// we just wrote.
+	if !m.started {
+		return nil
+	}
+	return m.applyLocked(ctx)
+}
+
 // crowdSecEnabled reports whether the manager has the LAPI key
 // configured. Used by buildOpts plumbing + by the boot log
 // line in main.go. Reads under the mutex to stay race-free

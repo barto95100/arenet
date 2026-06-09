@@ -333,6 +333,15 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// chi doesn't reserve `:`.
 				r.Put("/observability/server-position", h.putServerPosition)
 				r.Post("/observability/server-position:redetect", h.redetectServerPosition)
+				// Step CS.1 — CrowdSec bouncer settings.
+				// GET returns the persisted row (secrets
+				// redacted) + fresh-install fallback. PUT
+				// persists + hot-reloads the embedded Caddy
+				// via the CrowdSecApplier seam. POST /test
+				// probes LAPI without mutating state.
+				r.Get("/settings/crowdsec", h.getCrowdSecSettings)
+				r.Put("/settings/crowdsec", h.putCrowdSecSettings)
+				r.Post("/settings/crowdsec/test", h.testCrowdSecConnection)
 			})
 		})
 	})

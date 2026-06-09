@@ -1529,3 +1529,59 @@ export interface GeoEventsResponse {
 	total: number;
 	degraded?: boolean;
 }
+
+/**
+ * Step CS.1 — wire shape returned by GET
+ * /api/v1/settings/crowdsec. `apiKey` is always blanked on
+ * the wire (server-side redaction, mirrors the K.2 OIDC and
+ * J.4 DNS-provider pattern). `configured` is the single
+ * status flag the UI binds to.
+ */
+export interface CrowdSecSettings {
+	lapiUrl: string;
+	apiKey: string; // always "" on the wire (redacted)
+	bouncerName: string;
+	timeoutSeconds: number;
+	configured: boolean;
+	updatedAt?: string;
+}
+
+/**
+ * Step CS.1 — wire shape for PUT /api/v1/settings/crowdsec.
+ * Empty `apiKey` triggers the preserve-on-edit path (stored
+ * value is kept). An all-empty PUT clears the configuration
+ * (operator's explicit "Disable" path).
+ */
+export interface CrowdSecSettingsRequest {
+	lapiUrl: string;
+	apiKey: string;
+	bouncerName: string;
+	timeoutSeconds: number;
+}
+
+/**
+ * Step CS.1 — wire shape for POST /api/v1/settings/crowdsec/
+ * test. The handler probes LAPI /v1/decisions with the
+ * supplied (or stored, when useStored=true) creds.
+ */
+export interface CrowdSecTestRequest {
+	lapiUrl?: string;
+	apiKey?: string;
+	timeoutSeconds?: number;
+	useStored?: boolean;
+}
+
+/**
+ * Step CS.1 — wire shape returned by POST
+ * /api/v1/settings/crowdsec/test. `ok` is the boolean the
+ * UI flips a green / red badge on; the optional fields
+ * carry diagnostic detail for the operator's
+ * troubleshooting flow.
+ */
+export interface CrowdSecTestResponse {
+	ok: boolean;
+	statusCode?: number;
+	version?: string;
+	error?: string;
+	effectiveUrl?: string;
+}

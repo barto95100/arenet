@@ -214,8 +214,16 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		logger.Warn("at least one route has acmeChallenge=dns-01 but the OVH DNS provider is not fully configured — cert renewal will fail until you complete the provider config under Settings")
 	}
 
-	// Step N.1 — CrowdSec bouncer config. Read from env vars
-	// (admin-Settings UI is a future revision; v1.0 is env-only).
+	// Step N.1 + Step CS.1 — CrowdSec bouncer config.
+	//
+	// Precedence: stored row (settings UI) > env vars > unset.
+	// The settings UI (Step CS.1) is the source of truth once
+	// the operator has saved anything. Env vars stay as a
+	// bootstrap default for first-boot + emergency override
+	// only — useful for Docker compose declarations where
+	// the operator wants creds at process-start before any
+	// admin can log in.
+	//
 	// MUST be set BEFORE mgr.Start so the initial Caddy config
 	// includes apps.crowdsec from the first emitted JSON.
 	//
@@ -224,15 +232,32 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// IP-reputation gate. WAF + rate-limiter still active.
 	csURL := os.Getenv("ARENET_CROWDSEC_API_URL")
 	csKey := os.Getenv("ARENET_CROWDSEC_API_KEY")
+	csSource := "env"
+	if storedCS, csErr := store.GetCrowdSecConfig(ctx); csErr == nil {
+		// Stored row exists — settings > env. An all-empty
+		// stored row (operator explicitly cleared the config
+		// via the UI) wins over env too: the intent is "I do
+		// NOT want CrowdSec wired", which env shouldn't
+		// override.
+		csURL = storedCS.LAPIURL
+		csKey = storedCS.APIKey
+		csSource = "settings"
+	} else if !errors.Is(csErr, storage.ErrNotFound) {
+		// Storage read error: log + fall back to env. Don't
+		// fail the boot — the operator can still recover via
+		// env on a re-launch.
+		logger.Warn("crowdsec settings read failed; falling back to env vars",
+			"err", csErr)
+	}
 	mgr.SetCrowdSecConfig(csURL, csKey)
 	if csKey != "" {
 		effURL := csURL
 		if effURL == "" {
 			effURL = "http://127.0.0.1:8080/"
 		}
-		logger.Info("crowdsec bouncer wired", "lapi_url", effURL)
+		logger.Info("crowdsec bouncer wired", "lapi_url", effURL, "source", csSource)
 	} else {
-		logger.Info("crowdsec bouncer not configured (set ARENET_CROWDSEC_API_KEY to enable the IP-reputation gate)")
+		logger.Info("crowdsec bouncer not configured (set the LAPI URL + API key via /settings or ARENET_CROWDSEC_API_KEY env var)")
 	}
 
 	// #R-TOPO-real-health-probe (Stage B) — install the HC status
@@ -1114,6 +1139,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		// path as the readers above.
 		apiHandler.SetCountryBlockEventReader(obsStore)
 	}
+	// Step CS.1 — CrowdSec settings hot-reload seam. Wire
+	// the mgr's ApplyCrowdSecConfig so PUT /api/v1/settings/
+	// crowdsec can swap the bouncer creds + reload Caddy
+	// without a process restart. Independent of obsStore
+	// (the applier writes to Caddy's running config, not
+	// metrics.db) — always wire when mgr is alive.
+	apiHandler.SetCrowdSecApplier(mgr)
 	// Step Q.2 — auth-failure reader. Backed by the audit
 	// bucket (single source of truth, spec D2.B + D4.B), so
 	// it is INDEPENDENT of obsStore: when the metrics DB is

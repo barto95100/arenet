@@ -15,6 +15,10 @@ import type {
 	AutomationResponse,
 	AutomationRulesRequest,
 	AutomationRuleSet,
+	CrowdSecSettings,
+	CrowdSecSettingsRequest,
+	CrowdSecTestRequest,
+	CrowdSecTestResponse,
 	DNSProviderOVH,
 	DNSProviderOVHRequest,
 	ForwardAuthProvider,
@@ -117,6 +121,20 @@ export const settingsApi = {
 	listAdminUsers: (): Promise<AdminUser[]> => request<AdminUser[]>('GET', '/admin/users'),
 	updateUserRole: (id: string, r: UpdateUserRoleRequest): Promise<AdminUser> =>
 		request<AdminUser>('POST', `/admin/users/${encodeURIComponent(id)}/role`, r),
+
+	// Step CS.1 — CrowdSec bouncer settings. GET returns the
+	// stored row (apiKey redacted) + the configured boolean.
+	// PUT persists + hot-reloads Caddy via the manager's
+	// ApplyCrowdSecConfig seam (no process restart needed).
+	// POST /test probes LAPI's /v1/decisions without mutating
+	// state — returns ok=true on 200/204, ok=false with a
+	// friendly error otherwise.
+	getCrowdSecSettings: (): Promise<CrowdSecSettings> =>
+		request<CrowdSecSettings>('GET', '/settings/crowdsec'),
+	putCrowdSecSettings: (r: CrowdSecSettingsRequest): Promise<CrowdSecSettings> =>
+		request<CrowdSecSettings>('PUT', '/settings/crowdsec', r),
+	testCrowdSecConnection: (r: CrowdSecTestRequest): Promise<CrowdSecTestResponse> =>
+		request<CrowdSecTestResponse>('POST', '/settings/crowdsec/test', r),
 
 	// Step K.3 — backup / restore. The export endpoint streams a
 	// JSON file; we don't go through the typed `request` helper

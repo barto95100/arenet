@@ -25,9 +25,9 @@ import "testing"
 // actions without updating the spec / decisions doc is a process
 // violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 34
+	const wantCount = 36
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2)", got, wantCount)
 	}
 }
 
@@ -115,6 +115,11 @@ func TestAllActions_ExactSet(t *testing.T) {
 		// auto-detect).
 		"server_position_updated":    true,
 		"server_position_redetected": true,
+		// Step CS.1 (+2) — CrowdSec bouncer config admin
+		// events. Configured emitted on first PUT;
+		// Updated emitted on subsequent PUTs.
+		"crowdsec_configured": true,
+		"crowdsec_updated":    true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {
