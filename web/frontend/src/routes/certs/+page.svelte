@@ -324,6 +324,22 @@
 	<div class="card" data-testid="domaines-card">
 		<div class="card-h">
 			<h3>Domaines</h3>
+			<!-- NOTE (CS.3 extraction audit): this tablist is
+			     intentionally NOT migrated to lib/components/
+			     Tabs.svelte. The two surfaces share role="tablist"
+			     but serve different UI primitives:
+			       - Tabs.svelte = full-width primary page nav,
+			         underline-accent style, content-switching
+			         (see /security/decisions, /sécurité in CS.3).
+			       - This tablist = in-card filter chips, pill
+			         style, FILTER the same list in place (Tous /
+			         Wildcard / Expirent bientôt). Forcing
+			         convergence would either visually break this
+			         page or pollute Tabs.svelte with a variant
+			         prop that gates two CSS branches. If /certs
+			         ever switches to a different filter UX
+			         (e.g. dropdown, segmented control), revisit
+			         here. -->
 			<div class="tabs" role="tablist" aria-label="Filter certificates">
 				<button
 					type="button"

@@ -44,6 +44,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import Tabs from '$lib/components/Tabs.svelte';
 	import { fetchDecisions, fetchLAPIDecisions, fetchScenarios } from '$lib/api/security';
 	import type {
 		Decision,
@@ -57,6 +58,15 @@
 
 	type Tab = 'snapshot' | 'live' | 'scenarios';
 	let activeTab = $state<Tab>('snapshot');
+
+	// Tab descriptors consumed by the Tabs component (CS.3
+	// extraction). Existing data-testid values preserved so the
+	// /security/decisions tests run untouched.
+	const tabDescriptors: ReadonlyArray<{ id: Tab; label: string; testId: string }> = [
+		{ id: 'snapshot', label: 'Local snapshot', testId: 'tab-snapshot' },
+		{ id: 'live', label: 'Live LAPI', testId: 'tab-live' },
+		{ id: 'scenarios', label: 'Scenarios', testId: 'tab-scenarios' }
+	];
 
 	// --- Tab 1: Local snapshot (Step N.4, unchanged data path) ---
 
@@ -391,41 +401,12 @@
 	subtitle="Drill-down complet : snapshot historique, état live LAPI, scenarios installés"
 />
 
-<div class="tabs" role="tablist" aria-label="CrowdSec decisions tabs">
-	<button
-		type="button"
-		role="tab"
-		class="tab"
-		class:active={activeTab === 'snapshot'}
-		aria-selected={activeTab === 'snapshot'}
-		data-testid="tab-snapshot"
-		onclick={() => onTabChange('snapshot')}
-	>
-		Local snapshot
-	</button>
-	<button
-		type="button"
-		role="tab"
-		class="tab"
-		class:active={activeTab === 'live'}
-		aria-selected={activeTab === 'live'}
-		data-testid="tab-live"
-		onclick={() => onTabChange('live')}
-	>
-		Live LAPI
-	</button>
-	<button
-		type="button"
-		role="tab"
-		class="tab"
-		class:active={activeTab === 'scenarios'}
-		aria-selected={activeTab === 'scenarios'}
-		data-testid="tab-scenarios"
-		onclick={() => onTabChange('scenarios')}
-	>
-		Scenarios
-	</button>
-</div>
+<Tabs
+	bind:value={activeTab}
+	tabs={tabDescriptors}
+	ariaLabel="CrowdSec decisions tabs"
+	onChange={onTabChange}
+/>
 
 {#if activeTab === 'snapshot'}
 	<p class="tab-subtitle">
@@ -903,29 +884,9 @@
 {/if}
 
 <style>
-	.tabs {
-		display: flex;
-		gap: 0.25rem;
-		margin-bottom: 0.5rem;
-		border-bottom: 1px solid var(--border-subtle, var(--bg-hover));
-	}
-	.tab {
-		background: transparent;
-		color: var(--text-secondary);
-		border: none;
-		padding: 0.5rem 1rem;
-		font-size: var(--text-sm);
-		cursor: pointer;
-		border-bottom: 2px solid transparent;
-		margin-bottom: -1px;
-	}
-	.tab:hover {
-		color: var(--text-primary);
-	}
-	.tab.active {
-		color: var(--accent-cyan);
-		border-bottom-color: var(--accent-cyan);
-	}
+	/* Tab styles (.tabs / .tab / .tab.active) moved to
+	   Tabs.svelte during CS.3 extraction. The component is
+	   scoped CSS so consumers don't need to re-declare them. */
 	.tab-subtitle {
 		color: var(--text-secondary);
 		font-size: var(--text-sm);
