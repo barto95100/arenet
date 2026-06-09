@@ -133,6 +133,17 @@ export const settingsApi = {
 		request<CrowdSecSettings>('GET', '/settings/crowdsec'),
 	putCrowdSecSettings: (r: CrowdSecSettingsRequest): Promise<CrowdSecSettings> =>
 		request<CrowdSecSettings>('PUT', '/settings/crowdsec', r),
+	// Step CS.2 follow-up — DELETE wipes the stored row +
+	// hot-reloads Caddy so the bouncer drops out of the data
+	// plane. Distinct from "PUT all blank" (which also clears
+	// the row but emits crowdsec_updated, not crowdsec_reset)
+	// — DELETE is the operator-deliberate "disable" path
+	// surfaced by the Réinitialiser button in the Settings UI.
+	// Response shape is the same as GET on a fresh install
+	// (configured=false + defaults), so the UI can re-render
+	// without a separate GET round-trip.
+	deleteCrowdSecSettings: (): Promise<CrowdSecSettings> =>
+		request<CrowdSecSettings>('DELETE', '/settings/crowdsec'),
 	testCrowdSecConnection: (r: CrowdSecTestRequest): Promise<CrowdSecTestResponse> =>
 		request<CrowdSecTestResponse>('POST', '/settings/crowdsec/test', r),
 

@@ -419,6 +419,38 @@ the Settings UI, click Save & apply. Remove the env vars on the
 next deploy (they'll be ignored as long as a stored row exists,
 but removing avoids accidental future regression).
 
+### Disabling the bouncer
+
+Settings → CrowdSec bouncer has a **Réinitialiser** button at
+the bottom-left of the form (only visible when the bouncer is
+currently configured). It is the operator-recommended way to
+disable the IP-reputation gate cleanly:
+
+- BoltDB row is wiped via `DELETE /api/v1/settings/crowdsec`.
+- Embedded Caddy hot-reloads with `apps.crowdsec` omitted —
+  the bouncer module drops out of the request chain
+  immediately.
+- Audit log emits `crowdsec_reset` (distinct from
+  `crowdsec_updated`) so the deliberate "I want this off"
+  intent is traceable in `/audit`.
+- Confirm dialog warns: "Le bouncer s'arrêtera immédiatement
+  de gater le trafic. Les routes resteront protégées par le
+  WAF + rate-limiter, mais la gate IP-reputation sera
+  désactivée."
+- **Security Automation watcher credentials are NOT touched**
+  — those persist across a bouncer reset so the auto-classify
+  config + the Scenarios tab keep working. If you also want
+  to wipe Security Automation, that's a separate action via
+  Settings → Security Automation submitting all-blank.
+
+To rollback after a Reset, paste the bouncer API key again
+into the UI and click Save & apply — the row + audit
+`crowdsec_configured` event will recreate cleanly.
+
+The legacy "PUT with all fields blank" path still works
+(idempotent) but emits `crowdsec_updated`, which is less
+discoverable in the audit log. Reset is preferred.
+
 ## G — Why the Scenarios tab needs Security Automation
 
 The Scenarios tab in `/security/decisions` queries LAPI's

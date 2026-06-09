@@ -41,6 +41,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
 	let settings = $state<CrowdSecSettings | null>(null);
 	let loading = $state(true);
@@ -140,6 +141,35 @@
 	// values the user has since changed would be misleading.
 	function onFormEdit(): void {
 		testResult = null;
+	}
+
+	// Reset configuration (Step CS.2 follow-up). Confirms via
+	// ConfirmDialog, then DELETEs the row, then refreshes the
+	// section's state so the badge flips back to "Not
+	// configured" and the form returns to its defaults.
+	// Distinct from "Save with all blank" — the operator's
+	// intent (audit row crowdsec_reset) is the deliberate
+	// "disable the bouncer" signal.
+	let resetConfirmOpen = $state(false);
+	function openResetConfirm(): void {
+		resetConfirmOpen = true;
+	}
+	async function confirmReset(): Promise<void> {
+		try {
+			const next = await settingsApi.deleteCrowdSecSettings();
+			settings = next;
+			form.lapiUrl = next.lapiUrl || 'http://127.0.0.1:8080';
+			form.bouncerName = next.bouncerName || 'arenet';
+			form.timeoutSeconds = next.timeoutSeconds || 5;
+			form.apiKey = '';
+			testResult = null;
+			pushToast('CrowdSec bouncer désactivé', 'success');
+			resetConfirmOpen = false;
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : String(err);
+			pushToast(`Échec de la réinitialisation : ${msg}`, 'danger');
+			// Keep the dialog open so the operator can retry.
+		}
 	}
 
 	onMount(() => {
@@ -292,27 +322,60 @@
 				<p class="text-sm text-down md:col-span-2" role="alert">{formError}</p>
 			{/if}
 
-			<div class="md:col-span-2 flex justify-end gap-2">
-				<Button
-					variant="secondary"
-					type="button"
-					disabled={testing || submitting}
-					onclick={testConnection}
-				>
-					{testing ? 'Testing…' : 'Test connection'}
-				</Button>
-				<Button type="submit" disabled={submitting || testing}>
-					{submitting ? 'Saving…' : 'Save & apply'}
-				</Button>
+			<div class="md:col-span-2 flex justify-between gap-2 flex-wrap">
+				<div>
+					{#if settings?.configured}
+						<!-- Reset is visually separated from the
+						     Save / Test pair (left edge instead of
+						     right) so a misclick can't confuse it
+						     with the primary action. Only shown when
+						     a row exists — there's nothing to reset
+						     on a fresh install. -->
+						<Button
+							variant="ghost"
+							type="button"
+							disabled={submitting || testing}
+							onclick={openResetConfirm}
+							data-testid="crowdsec-reset-btn"
+						>
+							Réinitialiser
+						</Button>
+					{/if}
+				</div>
+				<div class="flex gap-2">
+					<Button
+						variant="secondary"
+						type="button"
+						disabled={testing || submitting}
+						onclick={testConnection}
+					>
+						{testing ? 'Testing…' : 'Test connection'}
+					</Button>
+					<Button type="submit" disabled={submitting || testing}>
+						{submitting ? 'Saving…' : 'Save & apply'}
+					</Button>
+				</div>
 			</div>
 		</form>
 
 		<p class="text-xs text-muted mt-4">
 			Save & apply hot-reloads the embedded Caddy without a process
 			restart. Active routes drop the request only after the new bouncer
-			creds are live, so there's no race window. Submit with all fields
-			blank to clear the configuration and disable the bouncer (operator's
-			"Disable" path).
+			creds are live, so there's no race window. Pour désactiver le
+			bouncer proprement, utilise <strong>Réinitialiser</strong>
+			(en bas à gauche) — la configuration BoltDB est wipée + le
+			bouncer drop out du data plane immédiatement (audit row
+			<code>crowdsec_reset</code>).
 		</p>
 	</Card>
 </div>
+
+<ConfirmDialog
+	bind:open={resetConfirmOpen}
+	title="Réinitialiser la configuration CrowdSec ?"
+	message="Le bouncer s'arrêtera immédiatement de gater le trafic. Les routes resteront protégées par le WAF + rate-limiter, mais la gate IP-reputation sera désactivée. Aucun impact sur la configuration Security Automation (watcher credentials)."
+	confirmLabel="Réinitialiser"
+	cancelLabel="Annuler"
+	confirmVariant="danger"
+	onConfirm={confirmReset}
+/>

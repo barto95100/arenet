@@ -341,6 +341,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// probes LAPI without mutating state.
 				r.Get("/settings/crowdsec", h.getCrowdSecSettings)
 				r.Put("/settings/crowdsec", h.putCrowdSecSettings)
+				r.Delete("/settings/crowdsec", h.deleteCrowdSecSettings)
 				r.Post("/settings/crowdsec/test", h.testCrowdSecConnection)
 				// Step CS.2.A — Live LAPI decisions proxy.
 				// Distinct from /security/decisions (which

@@ -474,6 +474,163 @@ func TestTestCrowdSecConnection_UseStored_PullsFromStorage(t *testing.T) {
 	}
 }
 
+// --- DELETE (Step CS.2 follow-up) -----------------------------
+
+func TestDeleteCrowdSecSettings_RemovesRow_AndCallsApplierWithBlanks(t *testing.T) {
+	var logBuf bytes.Buffer
+	appender := &fakeAuditAppender{}
+	h := newTestHandler(t, appender, &logBuf)
+	applier := &fakeCrowdSecApplier{}
+	h.SetCrowdSecApplier(applier)
+
+	// Seed a configured row.
+	if err := h.store.PutCrowdSecConfig(context.Background(), storage.CrowdSecConfig{
+		LAPIURL:        "http://127.0.0.1:8080",
+		APIKey:         "to-be-wiped",
+		BouncerName:    "arenet",
+		TimeoutSeconds: 5,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := reqWithAuth(http.MethodDelete, "/api/v1/settings/crowdsec", "user", "admin", "1.2.3.4", "test")
+	rec := httptest.NewRecorder()
+	h.deleteCrowdSecSettings(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Row gone.
+	if _, err := h.store.GetCrowdSecConfig(context.Background()); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("row not deleted: err = %v", err)
+	}
+
+	// Response shape: configured=false + defaults.
+	var resp crowdSecResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Configured {
+		t.Errorf("response configured=true, want false after delete")
+	}
+	if resp.LAPIURL == "" {
+		t.Errorf("response LAPIURL should fall back to default, got empty")
+	}
+
+	// Applier called with BOTH blank — AC #13 fail-open
+	// signal so buildConfigJSON omits apps.crowdsec.
+	calls := applier.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("applier calls = %d, want 1", len(calls))
+	}
+	if calls[0].apiURL != "" || calls[0].apiKey != "" {
+		t.Errorf("applier called with non-blank creds: %+v", calls[0])
+	}
+
+	// Audit: crowdsec_reset action, BeforeJSON has the
+	// wiped row (APIKey scrubbed), AfterJSON nil.
+	events := appender.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+	evt := events[0]
+	if evt.Action != audit.ActionCrowdSecReset {
+		t.Errorf("audit action = %q, want %q", evt.Action, audit.ActionCrowdSecReset)
+	}
+	if evt.AfterJSON != nil {
+		t.Errorf("AfterJSON should be nil on reset, got %s", evt.AfterJSON)
+	}
+	if strings.Contains(string(evt.BeforeJSON), "to-be-wiped") {
+		t.Errorf("BeforeJSON leaks API key: %s", evt.BeforeJSON)
+	}
+	if !strings.Contains(string(evt.BeforeJSON), "127.0.0.1:8080") {
+		t.Errorf("BeforeJSON should carry the wiped row's URL: %s", evt.BeforeJSON)
+	}
+}
+
+func TestDeleteCrowdSecSettings_FreshInstall_StillCallsApplier_NoAuditNoise(t *testing.T) {
+	var logBuf bytes.Buffer
+	appender := &fakeAuditAppender{}
+	h := newTestHandler(t, appender, &logBuf)
+	applier := &fakeCrowdSecApplier{}
+	h.SetCrowdSecApplier(applier)
+
+	// No seed — fresh install.
+	req := reqWithAuth(http.MethodDelete, "/api/v1/settings/crowdsec", "user", "admin", "1.2.3.4", "test")
+	rec := httptest.NewRecorder()
+	h.deleteCrowdSecSettings(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	// Applier still called — clears any straggler bouncer
+	// state on a hot-reload boundary.
+	if got := len(applier.Calls()); got != 1 {
+		t.Errorf("applier calls = %d, want 1 (even on fresh-install delete)", got)
+	}
+
+	// No audit row — a no-op DELETE shouldn't add noise.
+	if got := len(appender.Events()); got != 0 {
+		t.Errorf("audit events = %d, want 0 on fresh-install delete", got)
+	}
+}
+
+func TestDeleteCrowdSecSettings_RollbackOnReloadFailure(t *testing.T) {
+	var logBuf bytes.Buffer
+	h := newTestHandler(t, &fakeAuditAppender{}, &logBuf)
+
+	previous := storage.CrowdSecConfig{
+		LAPIURL: "http://127.0.0.1:8080", APIKey: "persist-on-rollback", BouncerName: "arenet", TimeoutSeconds: 5,
+	}
+	if err := h.store.PutCrowdSecConfig(context.Background(), previous); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	applier := &fakeCrowdSecApplier{nextErr: errBoom}
+	h.SetCrowdSecApplier(applier)
+
+	req := reqWithAuth(http.MethodDelete, "/api/v1/settings/crowdsec", "user", "admin", "1.2.3.4", "test")
+	rec := httptest.NewRecorder()
+	h.deleteCrowdSecSettings(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+
+	// Row restored.
+	got, err := h.store.GetCrowdSecConfig(context.Background())
+	if err != nil {
+		t.Fatalf("after rollback: %v", err)
+	}
+	if got.APIKey != "persist-on-rollback" {
+		t.Errorf("rollback failed — APIKey = %q, want %q", got.APIKey, "persist-on-rollback")
+	}
+}
+
+func TestDeleteCrowdSecSettings_NilApplier_DeletesRow_NoCrash(t *testing.T) {
+	// Mirror of the put-handler nil-tolerance: tests that
+	// don't wire an applier should still see the row erased.
+	var logBuf bytes.Buffer
+	h := newTestHandler(t, &fakeAuditAppender{}, &logBuf)
+
+	if err := h.store.PutCrowdSecConfig(context.Background(), storage.CrowdSecConfig{
+		LAPIURL: "http://127.0.0.1:8080", APIKey: "k", BouncerName: "arenet", TimeoutSeconds: 5,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := reqWithAuth(http.MethodDelete, "/api/v1/settings/crowdsec", "user", "admin", "1.2.3.4", "test")
+	rec := httptest.NewRecorder()
+	h.deleteCrowdSecSettings(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if _, err := h.store.GetCrowdSecConfig(context.Background()); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("row should be deleted even without an applier: %v", err)
+	}
+}
+
 // --- helpers -------------------------------------------------
 
 // httpBody builds an io.ReadCloser for assignment to http.Request.Body

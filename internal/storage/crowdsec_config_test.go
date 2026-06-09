@@ -276,3 +276,38 @@ func TestCrowdSecConfigDefaults_NonEmpty(t *testing.T) {
 		t.Errorf("defaults look empty: %+v", d)
 	}
 }
+
+// --- Step CS.2 follow-up — Delete -----------------------------
+
+func TestDeleteCrowdSecConfig_RemovesPersistedRow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Seed a row, then delete it.
+	if err := s.PutCrowdSecConfig(ctx, CrowdSecConfig{
+		LAPIURL: "http://127.0.0.1:8080", APIKey: "k", BouncerName: "arenet", TimeoutSeconds: 5,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.DeleteCrowdSecConfig(ctx); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	_, err := s.GetCrowdSecConfig(ctx)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("after delete, get err = %v, want ErrNotFound", err)
+	}
+
+	ever, _ := s.CrowdSecConfigEverConfigured(ctx)
+	if ever {
+		t.Errorf("EverConfigured should be false after delete")
+	}
+}
+
+func TestDeleteCrowdSecConfig_FreshInstall_Idempotent(t *testing.T) {
+	s := newTestStore(t)
+	// Delete on an empty bucket — must return nil, not ErrNotFound.
+	if err := s.DeleteCrowdSecConfig(context.Background()); err != nil {
+		t.Errorf("fresh-install delete should be a no-op, got %v", err)
+	}
+}

@@ -127,6 +127,13 @@ const (
 	// shape as oidcConfigForAudit / dnsProviderForAudit).
 	ActionCrowdSecConfigured = "crowdsec_configured"
 	ActionCrowdSecUpdated    = "crowdsec_updated"
+	// Step CS.2 follow-up — operator-pressed Reset button on
+	// the Settings UI emits this action. Distinct from
+	// crowdsec_updated so the audit log makes the deliberate
+	// "bouncer disabled" intent visible. BeforeJSON carries
+	// the wiped row (APIKey scrubbed); AfterJSON is omitted
+	// (the row no longer exists).
+	ActionCrowdSecReset = "crowdsec_reset"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -169,6 +176,7 @@ var allActions = []string{
 	ActionServerPositionRedetected,
 	ActionCrowdSecConfigured,
 	ActionCrowdSecUpdated,
+	ActionCrowdSecReset,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

@@ -264,6 +264,83 @@ type crowdSecTestResponse struct {
 	EffectiveURL string `json:"effectiveUrl,omitempty"`
 }
 
+// deleteCrowdSecSettings serves DELETE
+// /api/v1/settings/crowdsec — Step CS.2 follow-up.
+//
+// Wipes the persisted CrowdSec config row AND hot-reloads
+// Caddy so the bouncer module drops out of the running data
+// plane within the request lifetime. AC #13 fail-open
+// contract preserved: after the reload, requests no longer
+// pass through the IP-reputation gate; WAF + rate-limiter
+// still active.
+//
+// Idempotent: a fresh-install DELETE (no row to wipe) still
+// runs the applier so any straggler bouncer state on a
+// hot-reload boundary clears cleanly. Returns 200 with the
+// "not configured" response shape so the UI's badge flips to
+// amber without needing a separate GET round-trip.
+//
+// Audit: emits crowdsec_reset (distinct from crowdsec_updated)
+// with BeforeJSON carrying the wiped row (APIKey scrubbed)
+// and AfterJSON omitted (the row no longer exists).
+//
+// Rollback on reload failure: same shape as putCrowdSecSettings
+// — if the Caddy reload fails after the storage delete, the
+// previous row is restored. The audit row is NOT emitted on
+// failure (the reset didn't take effect).
+func (h *Handler) deleteCrowdSecSettings(w http.ResponseWriter, r *http.Request) {
+	previous, prevErr := h.store.GetCrowdSecConfig(r.Context())
+	if prevErr != nil && !errors.Is(prevErr, storage.ErrNotFound) {
+		h.logger.Error("get crowdsec config (delete)", "err", prevErr)
+		writeError(w, http.StatusInternalServerError, "failed to load crowdsec config")
+		return
+	}
+
+	if !errors.Is(prevErr, storage.ErrNotFound) {
+		if err := h.store.DeleteCrowdSecConfig(r.Context()); err != nil {
+			h.logger.Error("delete crowdsec config", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to delete crowdsec config")
+			return
+		}
+	}
+
+	// Hot-reload Caddy with cleared creds. Pass empty URL +
+	// empty key so the manager's buildConfigJSON omits the
+	// apps.crowdsec block entirely (AC #13).
+	if h.crowdsecApplier != nil {
+		if err := h.crowdsecApplier.ApplyCrowdSecConfig(r.Context(), "", ""); err != nil {
+			h.logger.Error("caddy reload after crowdsec delete — rolling back", "err", err)
+			if !errors.Is(prevErr, storage.ErrNotFound) {
+				if rbErr := h.store.PutCrowdSecConfig(r.Context(), previous); rbErr != nil {
+					h.logger.Error("rollback crowdsec config failed", "err", rbErr)
+				}
+			}
+			writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
+			return
+		}
+	}
+
+	// Audit AFTER the reload succeeds. Skip if there was no
+	// row to begin with — a DELETE on a fresh install is a
+	// no-op from the operator's perspective, no need for a
+	// noisy audit row.
+	if !errors.Is(prevErr, storage.ErrNotFound) {
+		h.appendAudit(r, audit.Event{
+			Action:     audit.ActionCrowdSecReset,
+			TargetType: "crowdsec_config",
+			TargetID:   "default",
+			BeforeJSON: mustMarshalForAudit(crowdSecConfigForAudit(previous)),
+			// AfterJSON intentionally nil — the row no longer
+			// exists; the audit diff carries "was X, now gone".
+		})
+	}
+
+	// Return the "not configured" response shape so the UI
+	// can update its badge + form state without a separate
+	// GET. configured=false ⇒ UI re-renders with defaults.
+	writeJSON(w, http.StatusOK, crowdSecResponseFor(storage.CrowdSecConfig{}, false))
+}
+
 // testCrowdSecConnection serves POST
 // /api/v1/settings/crowdsec/test. Probes LAPI's
 // /v1/decisions endpoint with the operator-supplied (or

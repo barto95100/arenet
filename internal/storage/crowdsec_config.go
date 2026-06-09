@@ -283,6 +283,43 @@ func (s *Store) PutCrowdSecConfig(ctx context.Context, c CrowdSecConfig) error {
 	})
 }
 
+// DeleteCrowdSecConfig removes the persisted CrowdSec config
+// row. Returns nil on a fresh install (row already absent) —
+// idempotent so the API "Reset" path is safe to invoke
+// without a prior existence check.
+//
+// Step CS.2 follow-up: clean erasure path distinct from the
+// J.4 "PUT all-blank" convention. Operator-pressed Reset
+// button in the Settings UI calls DELETE /api/v1/settings/
+// crowdsec which lands here. The all-blank PUT path on
+// PutCrowdSecConfig is still accepted (legacy callers, env
+// override) but no longer the operator-recommended way to
+// disable the bouncer — DELETE is.
+//
+// SECURITY note: the bouncer creds being erased here are the
+// READ-side bouncer API key (CS.1). The Security Automation
+// watcher credentials (separate BoltDB row, bucket
+// "automation") are NOT touched — those persist across a
+// bouncer reset so the operator's auto-classify config + the
+// Scenarios tab keep working. If the operator also wants to
+// wipe Security Automation, that's a separate action via
+// Settings → Security Automation submitting all-blank.
+func (s *Store) DeleteCrowdSecConfig(ctx context.Context) error {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(bucketCrowdSecConfig))
+		if b.Get([]byte(crowdSecConfigKey)) == nil {
+			return nil
+		}
+		return b.Delete([]byte(crowdSecConfigKey))
+	})
+}
+
 // CrowdSecConfigEverConfigured reports whether the CrowdSec
 // config bucket has ever held a row. Used by main.go's boot
 // precedence: if true → trust the stored row (settings > env);

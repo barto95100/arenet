@@ -22,11 +22,13 @@ import { ApiError } from '$lib/api/types';
 const getMock = vi.fn<() => Promise<CrowdSecSettings>>();
 const putMock = vi.fn<(r: CrowdSecSettingsRequest) => Promise<CrowdSecSettings>>();
 const testMock = vi.fn<(r: CrowdSecTestRequest) => Promise<CrowdSecTestResponse>>();
+const deleteMock = vi.fn<() => Promise<CrowdSecSettings>>();
 
 vi.mock('$lib/api/settings', () => ({
 	settingsApi: {
 		getCrowdSecSettings: () => getMock(),
 		putCrowdSecSettings: (r: CrowdSecSettingsRequest) => putMock(r),
+		deleteCrowdSecSettings: () => deleteMock(),
 		testCrowdSecConnection: (r: CrowdSecTestRequest) => testMock(r)
 	}
 }));
@@ -40,6 +42,7 @@ beforeEach(() => {
 	getMock.mockReset();
 	putMock.mockReset();
 	testMock.mockReset();
+	deleteMock.mockReset();
 	pushToastMock.mockReset();
 });
 
@@ -264,5 +267,100 @@ describe('CrowdSecSettingsSection — test connection', () => {
 		await waitFor(() => {
 			expect(testMock).toHaveBeenCalledWith({ useStored: true });
 		});
+	});
+});
+
+describe('CrowdSecSettingsSection — Reset (CS.2 follow-up)', () => {
+	it('hides the Réinitialiser button on a fresh install', async () => {
+		getMock.mockResolvedValue(notConfiguredSettings);
+		render(CrowdSecSettingsSection);
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		// configured=false → no Reset button (nothing to reset).
+		expect(screen.queryByTestId('crowdsec-reset-btn')).toBeNull();
+	});
+
+	it('shows the Réinitialiser button when the bouncer is configured', async () => {
+		getMock.mockResolvedValue(configuredSettings);
+		render(CrowdSecSettingsSection);
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		expect(screen.getByTestId('crowdsec-reset-btn')).toBeInTheDocument();
+	});
+
+	it('opens the confirm dialog when Réinitialiser is clicked', async () => {
+		getMock.mockResolvedValue(configuredSettings);
+		render(CrowdSecSettingsSection);
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+
+		await fireEvent.click(screen.getByTestId('crowdsec-reset-btn'));
+		// ConfirmDialog renders the message; check for a stable
+		// substring from the i18n string.
+		await waitFor(() => {
+			expect(screen.getByText(/Aucun impact sur la configuration Security Automation/i)).toBeInTheDocument();
+		});
+		// DELETE is NOT called yet — only on confirm.
+		expect(deleteMock).not.toHaveBeenCalled();
+	});
+
+	it('calls DELETE, refreshes form state, and emits a success toast on confirm', async () => {
+		getMock.mockResolvedValue(configuredSettings);
+		deleteMock.mockResolvedValue(notConfiguredSettings);
+		render(CrowdSecSettingsSection);
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+
+		await fireEvent.click(screen.getByTestId('crowdsec-reset-btn'));
+		await waitFor(() => expect(screen.getByText(/Aucun impact sur la configuration Security Automation/i)).toBeInTheDocument());
+
+		// Click the confirm button — its label is "Réinitialiser"
+		// in the dialog. Need to scope: there are two buttons with
+		// that name now (Section Reset + Dialog Confirm) when the
+		// dialog is open.
+		const confirmButtons = screen.getAllByRole('button', { name: /Réinitialiser/i });
+		// The dialog Confirm button is rendered AFTER the section
+		// Reset button (the dialog mounts at the end of the
+		// component tree). Click the last one.
+		await fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+
+		await waitFor(() => {
+			expect(deleteMock).toHaveBeenCalledTimes(1);
+		});
+		await waitFor(() => {
+			expect(pushToastMock).toHaveBeenCalledWith(
+				expect.stringMatching(/désactivé/i),
+				'success'
+			);
+		});
+		// After reset: badge flips to "Not configured" and the
+		// Réinitialiser button disappears.
+		await waitFor(() => {
+			expect(screen.queryByTestId('crowdsec-reset-btn')).toBeNull();
+			expect(screen.getByText(/Not configured/i)).toBeInTheDocument();
+		});
+	});
+
+	it('keeps the dialog open + emits a danger toast on DELETE failure', async () => {
+		getMock.mockResolvedValue(configuredSettings);
+		deleteMock.mockRejectedValue(
+			new ApiError('caddy reload failed: boom', 500)
+		);
+		render(CrowdSecSettingsSection);
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+
+		await fireEvent.click(screen.getByTestId('crowdsec-reset-btn'));
+		await waitFor(() => expect(screen.getByText(/Aucun impact sur la configuration Security Automation/i)).toBeInTheDocument());
+
+		const confirmButtons = screen.getAllByRole('button', { name: /Réinitialiser/i });
+		await fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+
+		await waitFor(() => {
+			expect(pushToastMock).toHaveBeenCalledWith(
+				expect.stringMatching(/Échec/i),
+				'danger'
+			);
+		});
+		// Dialog still open so operator can retry.
+		expect(screen.getByText(/Aucun impact sur la configuration Security Automation/i)).toBeInTheDocument();
+		// Badge still "Configured" — the row wasn't actually
+		// wiped on the backend (rollback contract).
+		expect(screen.getByText(/^Configured$/i)).toBeInTheDocument();
 	});
 });
