@@ -798,6 +798,16 @@ type securityDecisionsResponse struct {
 }
 
 // securityDecisions handles GET /api/v1/security/decisions.
+//
+// CS.3 note: this endpoint is no longer surfaced by a
+// dedicated /security/decisions page (the route was deleted
+// in Commit A). The CrowdSecDecisionsPanel mounted under
+// /security?tab=crowdsec still calls it for the "Local
+// snapshot" sub-tab. The endpoint is preserved because
+// external operator scripts may rely on it; removal would
+// be a separate decision later (no consumer-tracking has
+// been added, so dropping it would be a silent break).
+//
 // Query parameters (all optional):
 //   - limit:     how many rows to return. Capped at
 //     securityDecisionsLimitCap. Defaults to the

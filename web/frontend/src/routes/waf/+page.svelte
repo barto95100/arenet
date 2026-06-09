@@ -24,8 +24,8 @@
     rate limits in /routes detail.
   - IP allow/deny manual lists card: backend has NO manual
     list storage. The link "Voir toute la timeline →" points
-    to /security/decisions (per D8) which is the CrowdSec
-    decision feed — the closest real surface.
+    to /security?tab=crowdsec (per D8, post-CS.3) which is
+    the CrowdSec drill-down — the closest real surface.
   - Geo-blocking section: zero backend (no MaxMind dep).
     Omitted; tracked in backlog #R-WAF-geo.
 
@@ -140,7 +140,7 @@
 	subtitle="The Coraza engine applies the OWASP Core Rule Set. Event counts shown below reflect blocked requests over the last 24h, per category."
 >
 	{#snippet actions()}
-		<a href="/security/decisions" class="tb-btn">History →</a>
+		<a href="/security?tab=crowdsec" class="tb-btn">History →</a>
 		<button class="tb-btn primary" disabled title="Coming soon — apply staged config">Apply changes</button>
 	{/snippet}
 </PageHeader>
@@ -221,7 +221,7 @@
 				</div>
 				<span class="arrow">→</span>
 			</a>
-			<a href="/security/decisions" class="link-row">
+			<a href="/security?tab=crowdsec" class="link-row">
 				<div>
 					<b>Active CrowdSec decisions</b>
 					<span>The full timeline of blocked IPs (auto + manual). Manual list management is deferred (see backlog).</span>

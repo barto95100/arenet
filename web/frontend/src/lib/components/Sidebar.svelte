@@ -12,20 +12,27 @@
   nav-sections (Aperçu / Trafic / Sécurité / Administration) +
   10 nav items + sidebar-foot (avatar + identity + sign-out).
 
-  Per spec D8 outcome, /security/decisions and /security/[routeId]
-  are NOT exposed in the sidebar — they remain reachable via
-  "Voir tout" links injected from /waf + /routes detail pages
-  in R.4. Same for /admin/users which is still routed but the
-  sidebar entry points to the new /users top-level route.
+  Per spec D8 outcome, /security/[routeId] is NOT exposed in
+  the sidebar — it remains reachable via "Voir tout" links
+  injected from /routes detail pages in R.4. Same for
+  /admin/users which is still routed but the sidebar entry
+  points to the new /users top-level route.
+
+  Step CS.3 update: /security/decisions was deleted; its
+  content moved to /security?tab=crowdsec (a parent tab on
+  /sécurité). Sidebar entry "Security" → /security lands on
+  the Vue d'ensemble tab by default; the CrowdSec drill-down
+  is one click away. The R.4 D8 rationale (don't surface
+  contextual sub-routes in the sidebar) still applies — the
+  parent /security entry covers both surfaces.
 
   Step CS.2 follow-up: /audit IS exposed (Administration
   section, after Settings). Operator-flagged gap
   (#R-AUDIT-not-in-nav from docs/backlog-crowdsec.md): the
   page existed but had no menu link, forcing operators to
-  type the URL by hand. Distinct from /security/decisions
-  which is intentionally hidden — /audit has no equivalent
-  contextual entry point elsewhere in the app, so the sidebar
-  is the right home.
+  type the URL by hand. /audit has no equivalent contextual
+  entry point elsewhere in the app, so the sidebar is the
+  right home.
 
   Admin-only filter: viewer-role users see Aperçu / Trafic /
   Sécurité; the Administration section is hidden in its entirety.
@@ -108,9 +115,12 @@
 
 	const currentPath = $derived(page.url.pathname);
 	function isActive(href: string): boolean {
-		// Exact-match for clean hrefs; for /security we DO want it active
-		// only on the exact /security route, not on /security/decisions
-		// or /security/[routeId] (those have their own context per D8).
+		// Exact-match on pathname. CS.3 moved /security/decisions
+		// into /security?tab=crowdsec, which still matches the
+		// /security pathname — so opening the CrowdSec tab keeps
+		// the Security sidebar item active. /security/[routeId]
+		// keeps its own context per D8 (sidebar item not active
+		// on a per-route drill-down — that has its own breadcrumb).
 		return currentPath === href;
 	}
 

@@ -3,45 +3,19 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  Step N.4 + CS.2 — /security/decisions CrowdSec drill-down.
+  Step CS.3 Commit A — CrowdSec decisions drill-down extracted
+  from the deleted /security/decisions route. Same 3-sub-tab
+  structure (Local snapshot / Live LAPI / Scenarios), same data
+  paths, same testIds. The only structural change is the
+  PageHeader being dropped — the parent /sécurité page owns
+  the page-level header now and this component renders only
+  the inner sub-tabs + content.
 
-  This is the operator's single drill-down for everything
-  CrowdSec-related. Three tabs:
-
-    1. Local snapshot (Step N.4, default tab)
-       - DataTable of the metrics.db decision_event table
-         (populated by the StreamBouncer sink).
-       - Cumulative across restarts (~7d retention per
-         spec D8.A).
-       - Answers: "what has Arenet historically observed?"
-       - "Active only" toggle scopes to expiresAt > now.
-
-    2. Live LAPI (Step CS.2.A)
-       - DataTable of LAPI's /v1/decisions response,
-         live-polled every 30s.
-       - Source of truth for "what is enforced this exact
-         moment?" — distinct from the snapshot above which
-         can lag by the bouncer's pull interval.
-       - Filterable by scope + source (CAPI / crowdsec /
-         cscli / lists:* / etc.).
-       - Distinct empty states + error UX (Configure CTA
-         when bouncer not configured, retry button on
-         transient failure).
-
-    3. Scenarios (Step CS.2.C — pending)
-       - Placeholder. Will surface installed scenarios + 24h
-         alert counts from LAPI's /v1/metrics endpoint.
-
-  Layout decision (post-audit Lesson 1 triangulation): the
-  Security page (Step R.4.3) is now a posture overview; the
-  brief's "add panels next to WAF/throttle/auth" reflected
-  pre-R.4.3 state. So all three CS.2 sub-panels land here as
-  tabs rather than as separate sections on /security.
+  See the deleted /security/decisions/+page.svelte git history
+  for the layered evolution (N.4 → CS.2.A → CS.2.C → CS.3).
 -->
-
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
@@ -61,6 +35,7 @@
 
 	// Tab descriptors consumed by the Tabs component (CS.3
 	// extraction). Existing data-testid values preserved so the
+	// CrowdSecDecisionsPanel tests inherited from the deleted
 	// /security/decisions tests run untouched.
 	const tabDescriptors: ReadonlyArray<{ id: Tab; label: string; testId: string }> = [
 		{ id: 'snapshot', label: 'Local snapshot', testId: 'tab-snapshot' },
@@ -395,11 +370,6 @@
 		stopLivePolling();
 	});
 </script>
-
-<PageHeader
-	title="Decisions CrowdSec"
-	subtitle="Drill-down complet : snapshot historique, état live LAPI, scenarios installés"
-/>
 
 <Tabs
 	bind:value={activeTab}
@@ -884,9 +854,6 @@
 {/if}
 
 <style>
-	/* Tab styles (.tabs / .tab / .tab.active) moved to
-	   Tabs.svelte during CS.3 extraction. The component is
-	   scoped CSS so consumers don't need to re-declare them. */
 	.tab-subtitle {
 		color: var(--text-secondary);
 		font-size: var(--text-sm);

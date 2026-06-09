@@ -2,12 +2,14 @@
 // Copyright (C) 2026  Ludovic Ramos
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-// /security/decisions page tests — Step CS.2.A.
+// CrowdSecDecisionsPanel tests (Step CS.3 — extracted from
+// the deleted /security/decisions route's page.test.ts).
 //
-// Validates the 3-tab refactor:
+// Validates the 3-tab structure mounted under the /sécurité
+// CrowdSec parent tab:
 //   - Tab 1 (Local snapshot) — pre-CS.2 behaviour preserved.
-//   - Tab 2 (Live LAPI) — new live-poll proxy + filter + error states.
-//   - Tab 3 (Scenarios) — placeholder until CS.2.C lands.
+//   - Tab 2 (Live LAPI) — live-poll proxy + filter + error states.
+//   - Tab 3 (Scenarios) — LAPI /v1/alerts aggregation + modal.
 //
 // Polling cadence is not exercised by clock-faking — the
 // initial-fetch + manual-refresh paths cover the same data
@@ -36,7 +38,7 @@ const { toastMock, securityMock } = vi.hoisted(() => ({
 vi.mock('$lib/stores/toast', () => toastMock);
 vi.mock('$lib/api/security', () => securityMock);
 
-import Page from './+page.svelte';
+import Page from './CrowdSecDecisionsPanel.svelte';
 
 beforeEach(() => {
 	toastMock.pushToast.mockReset();
@@ -106,7 +108,7 @@ function sampleLAPI(decisions: number = 3): LAPIDecisionsResponse {
 
 // --- Tab navigation -----------------------------------------
 
-describe('decisions page — tabs', () => {
+describe('CrowdSec decisions panel — tabs', () => {
 	it('renders all three tabs with Local snapshot active by default', async () => {
 		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
 		render(Page);
@@ -156,7 +158,7 @@ describe('decisions page — tabs', () => {
 
 // --- Local snapshot tab -------------------------------------
 
-describe('decisions page — Local snapshot tab', () => {
+describe('CrowdSec decisions panel — Local snapshot tab', () => {
 	it('renders snapshot rows after fetch', async () => {
 		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
 		render(Page);
@@ -176,7 +178,7 @@ describe('decisions page — Local snapshot tab', () => {
 
 // --- Live LAPI tab ------------------------------------------
 
-describe('decisions page — Live LAPI tab', () => {
+describe('CrowdSec decisions panel — Live LAPI tab', () => {
 	async function openLiveTab(): Promise<void> {
 		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
 		render(Page);
@@ -338,7 +340,7 @@ const sampleScenariosOK = {
 	meta: { totalAlerts: 17, windowHours: 24 }
 };
 
-describe('decisions page — Scenarios tab', () => {
+describe('CrowdSec decisions panel — Scenarios tab', () => {
 	async function openScenariosTab(): Promise<void> {
 		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
 		render(Page);

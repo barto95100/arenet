@@ -728,8 +728,9 @@ export const AUTOMATION_SOURCE_LABELS: Record<AutomationSource, string> = {
 /**
  * Step P.4 — provenance helper. Returns true iff a CrowdSec
  * decision's scenario was emitted by Arenet's auto-classify
- * loop (D3.3.A prefix convention). Used by /security/decisions
- * + MixedEventList to render the "auto" badge.
+ * loop (D3.3.A prefix convention). Used by the CrowdSec
+ * drill-down panel (/security?tab=crowdsec, CS.3) and
+ * MixedEventList to render the "auto" badge.
  */
 export function isArenetAutoScenario(scenario: string): boolean {
 	return scenario.startsWith('arenet/');

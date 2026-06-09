@@ -15,9 +15,12 @@
 // (Utilisateurs / Settings / Audit log) — total 11 admin-visible
 // items. The /audit entry closes #R-AUDIT-not-in-nav (operator
 // flagged that the page existed but had no menu link). Note
-// the /security/decisions + /security/[routeId] pages remain
-// intentionally hidden per R.4 D8 design rationale documented
-// in Sidebar.svelte's header comment.
+// CS.3 update: /security/decisions was deleted; its content
+// moved into the CrowdSec parent tab on /security (URL
+// ?tab=crowdsec). The /security entry alone covers both Vue
+// d'ensemble and CrowdSec drill-down. The /security/[routeId]
+// per-route page remains intentionally hidden per R.4 D8
+// design rationale documented in Sidebar.svelte's header.
 //
 // Sidebar depends on:
 //   - $app/state's `page` rune for currentPath → mocked.
@@ -107,13 +110,16 @@ describe('Sidebar', () => {
 		expect(auditLink).toHaveAttribute('href', '/audit');
 	});
 
-	it('keeps /security/decisions and /security/[routeId] OUT of the sidebar (R.4 D8 design)', () => {
-		// Regression guard: the operator confirmed in CS.2
-		// review that /security/decisions stays surfaced
-		// via the /security entry-point cards, NOT via the
-		// sidebar. If a future patch adds it here without
-		// updating the Sidebar.svelte header comment + this
-		// test, the assertion catches the silent regression.
+	it('keeps /security sub-routes OUT of the sidebar (R.4 D8 design)', () => {
+		// CS.3 update: the regression now covers two things:
+		//   1. /security/decisions stays absent (it was deleted
+		//      in CS.3 Commit A; its content moved into the
+		//      CrowdSec parent tab on /security)
+		//   2. /security/[routeId] stays absent (R.4 D8 per-route
+		//      drill-down remains intentionally hidden)
+		// If a future patch adds either to the sidebar without
+		// updating Sidebar.svelte's header rationale, the assertion
+		// catches the silent regression.
 		auth.user = {
 			username: 'admin',
 			displayName: 'Admin',

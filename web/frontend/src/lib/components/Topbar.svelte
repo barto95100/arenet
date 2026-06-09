@@ -33,7 +33,7 @@
 
   - Notifications: HIDDEN in v1.4. With the alerting step deferred
     (see docs/superpowers/specs/_deferred/2026-05-31-step-r-alerting.md),
-    there is no /alerts target; pointing the bell at /security/decisions
+    there is no /alerts target; pointing the bell at /security?tab=crowdsec
     would be semantically wrong (notifications ≠ decisions). Re-
     introduced when the alerting step lands. Tracked in
     docs/backlog-step-r.md #R-3.
@@ -67,7 +67,10 @@
 	const crumbLabel = $derived(
 		pathLabels[currentPath] ??
 			(() => {
-				// Sub-route fallback: /security/decisions → "Security · decisions"
+				// Sub-route fallback: e.g. /admin/users → "Utilisateurs · users".
+				// /security?tab=crowdsec is a query-param tab so falls through to
+				// the root /security label, which is the right thing — the parent
+				// tab label sits in the topbar; the active sub-tab is visible inline.
 				const segs = currentPath.split('/').filter(Boolean);
 				if (segs.length === 0) return 'Arenet';
 				const root = '/' + segs[0];

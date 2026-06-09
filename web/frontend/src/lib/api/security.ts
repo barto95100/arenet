@@ -141,6 +141,16 @@ export function fetchAttackersSummary(window: MetricWindow): Promise<AttackersSu
  * Step N.3 — typed client wrapper around GET
  * /api/v1/security/decisions.
  *
+ * CS.3 note: this endpoint is no longer reachable via a
+ * dedicated /security/decisions page (that route was deleted
+ * in Commit A). The CrowdSecDecisionsPanel mounted under
+ * /security?tab=crowdsec still calls it for the "Local
+ * snapshot" sub-tab, which reads Arenet's local mirror of
+ * LAPI decisions persisted in metrics.db decision_event.
+ * Backend handler intentionally kept — operators may have
+ * external scripts against it; removal would be a separate
+ * decision later.
+ *
  * Filters are optional:
  *   - `limit` is clamped server-side at 100.
  *   - `scope` filters to a single LAPI scope (`ip`, `range`,
