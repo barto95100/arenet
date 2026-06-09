@@ -71,6 +71,20 @@ func (f *fakeLAPI) server(t *testing.T) *httptest.Server {
 			f.alertsHandler(w, r)
 			return
 		}
+		// HF on 0ffc3b6 — emulate LAPI v1.7.8's parser
+		// rejection of non-Go-duration `since` values. Any
+		// handler that doesn't override the default now
+		// enforces the contract: the handler emits 500 if
+		// the wire shape regresses to an RFC3339 timestamp.
+		// crowdsec@v1.6.3/pkg/database/utils.go:72 — LAPI's
+		// ParseDuration delegates to time.ParseDuration for
+		// anything not ending in `d`. Mirror that.
+		if since := r.URL.Query().Get("since"); since != "" {
+			if _, err := parseLAPIDurationLike(since); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(sampleLAPIAlerts))
 	})
@@ -577,4 +591,103 @@ func TestAggregateAlertsByScenario_NilFields_DoesNotPanic(t *testing.T) {
 	if out[0].Alerts24h != 1 {
 		t.Errorf("count = %d, want 1", out[0].Alerts24h)
 	}
+}
+
+// --- HF on 0ffc3b6: since param wire shape -------------------
+//
+// LAPI v1.7.8 rejects RFC3339 timestamps on /v1/alerts?since=
+// with HTTP 500 in ~60µs (parser-side, before SQL). The
+// fakeLAPI default handler now mirrors that constraint, so
+// every existing TestCrowdSecScenarios_* test implicitly
+// catches a regression. This dedicated pin asserts the wire
+// shape directly so a refactor that breaks the contract
+// surfaces a clear failure here, not a misleading "no
+// alerts" elsewhere.
+
+func TestScenariosClient_SinceParam_UsesGoDuration(t *testing.T) {
+	var capturedSince string
+	fake := newFakeLAPI()
+	fake.alertsHandler = func(w http.ResponseWriter, r *http.Request) {
+		capturedSince = r.URL.Query().Get("since")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(sampleLAPIAlerts))
+	}
+	srv := fake.server(t)
+
+	var logBuf bytes.Buffer
+	h := newTestHandler(t, &fakeAuditAppender{}, &logBuf)
+	seedWatcherCreds(t, h, srv.URL)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/security/crowdsec/scenarios", nil)
+	rec := httptest.NewRecorder()
+	h.listCrowdSecScenarios(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if capturedSince == "" {
+		t.Fatal("since param not sent to LAPI")
+	}
+	// Wire shape contract: must be Go-duration-grammar
+	// parseable (see crowdSecScenariosSinceParam doc comment
+	// + crowdsec@v1.6.3/pkg/database/utils.go:72).
+	if _, err := time.ParseDuration(capturedSince); err != nil {
+		t.Errorf("since=%q is not Go-duration-parseable: %v", capturedSince, err)
+	}
+	// Specific value contract: the constant is 24h.
+	if d, _ := time.ParseDuration(capturedSince); d != 24*time.Hour {
+		t.Errorf("since=%q parsed to %v, want 24h", capturedSince, d)
+	}
+	// Negative contract: NEVER an RFC3339 timestamp (the
+	// reason this HF exists).
+	if _, err := time.Parse(time.RFC3339, capturedSince); err == nil {
+		t.Errorf("since=%q parses as RFC3339 — LAPI would 500 on this", capturedSince)
+	}
+}
+
+func TestScenariosClient_RFC3339Since_LAPIRejects_AsRegressionGuard(t *testing.T) {
+	// Demonstrates the bug shape this HF closes: with the
+	// fakeLAPI default's parser-emulation in place, an
+	// alternate handler that mimics the pre-HF code would
+	// emit an RFC3339 timestamp and the LAPI mock would 500.
+	// We don't have a way to "make the prod code regress" in
+	// a unit test, so instead we drive the fakeLAPI's
+	// rejection path directly and pin its shape: the test
+	// will start failing if anyone weakens the mock's
+	// strictness.
+	fake := newFakeLAPI()
+	srv := fake.server(t)
+
+	rfc3339 := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	url := srv.URL + "/v1/alerts?since=" + rfc3339 + "&limit=100"
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("fakeLAPI accepted RFC3339 since — mock weakened; got %d, want 500", resp.StatusCode)
+	}
+}
+
+// parseLAPIDurationLike mirrors crowdsec@v1.6.3/pkg/database/
+// utils.go:72 ParseDuration: handles the `Nd` suffix manually,
+// then delegates to time.ParseDuration. Used by the fakeLAPI
+// default handler to enforce the empirical contract on the
+// wire.
+func parseLAPIDurationLike(s string) (time.Duration, error) {
+	if strings.HasSuffix(s, "d") {
+		days := strings.TrimSuffix(s, "d")
+		if days == "" {
+			return 0, fmt.Errorf("empty days prefix")
+		}
+		// Crude int parse; ParseDuration in the real LAPI
+		// uses strconv.Atoi but the helper only needs to
+		// validate shape for the test.
+		if _, err := time.ParseDuration(days + "h"); err == nil {
+			return time.ParseDuration(days + "h")
+		}
+		return 0, fmt.Errorf("days prefix not numeric: %q", days)
+	}
+	return time.ParseDuration(s)
 }

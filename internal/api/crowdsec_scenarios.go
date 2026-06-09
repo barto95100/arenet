@@ -83,7 +83,35 @@ import (
 // /v1/alerts call. Matches the brief's 24h spec. Hardcoded for
 // now; if operators want longer windows later we can promote
 // it to a query param.
+//
+// IMPORTANT — empirical Day-7 finding (HF on 0ffc3b6): LAPI
+// v1.7.8's /v1/alerts handler rejects an absolute RFC3339
+// timestamp on `?since=` with HTTP 500 in ~60µs (parser-side
+// rejection, before the SQL query). LAPI expects a Go
+// duration string ("24h", "1h30m", "7d") on this endpoint —
+// confirmed by curl in both shapes against AreNET-test:
+//
+//   ?since=2026-06-08T15:48:07Z → 500 (rejected by parser)
+//   ?since=24h                  → 200 + JSON array of alerts
+//
+// Source verification (CLAUDE.md §Empirical verification):
+// crowdsec@v1.6.3/pkg/database/utils.go:72-95 — LAPI's
+// custom ParseDuration first handles a `Nd` suffix (days),
+// then delegates to Go stdlib time.ParseDuration. So any
+// shape Go accepts ("24h", "24h0m0s", "1h30m45s") works on
+// the wire. time.Duration.String() emits "24h0m0s" for
+// 24*time.Hour — that's accepted by Go ParseDuration and
+// therefore by LAPI. The "24h" form is just cosmetically
+// cleaner when an operator types it by hand; both round-
+// trip identically through the LAPI parser.
 const crowdSecScenariosWindow = 24 * time.Hour
+
+// crowdSecScenariosSinceParam returns the value to send on
+// /v1/alerts?since=. See the const above for why this is a
+// duration string and not a timestamp.
+func crowdSecScenariosSinceParam() string {
+	return crowdSecScenariosWindow.String()
+}
 
 // crowdSecJWTSafetyMargin is the slack applied to LAPI's
 // returned `expire` timestamp so we re-login slightly BEFORE
@@ -379,9 +407,8 @@ func (h *Handler) alertsWithJWT(ctx context.Context, creds storage.WatcherCreden
 		return nil, err
 	}
 
-	since := time.Now().Add(-crowdSecScenariosWindow).UTC().Format(time.RFC3339)
 	alertsURL := strings.TrimRight(creds.LAPIURL, "/") + "/v1/alerts?" + url.Values{
-		"since": {since},
+		"since": {crowdSecScenariosSinceParam()},
 		"limit": {"100"},
 	}.Encode()
 
