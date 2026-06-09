@@ -1315,6 +1315,39 @@ export interface DecisionsResponse {
 	events: Decision[];
 }
 
+/**
+ * Step CS.2.A — Live LAPI decision wire shape returned by
+ * GET /api/v1/security/crowdsec/decisions. Distinct from
+ * `Decision` (above) which models the local-mirror schema
+ * stored in metrics.db decision_event. The shapes intentionally
+ * diverge because LAPI exposes more fields per response
+ * (`origin`, raw `duration` string) than the mirror persists
+ * (the mirror was optimized for time-series query, not for
+ * forensic field-richness).
+ */
+export interface LAPIDecision {
+	id: number;
+	duration: string;
+	origin: string;
+	scenario: string;
+	scope: string;
+	type: string;
+	value: string;
+	expiresAt?: string;
+}
+
+export interface LAPIDecisionsMeta {
+	total: number;
+	totalByOrigin: Record<string, number>;
+	limit: number;
+	offset: number;
+}
+
+export interface LAPIDecisionsResponse {
+	decisions: LAPIDecision[];
+	meta: LAPIDecisionsMeta;
+}
+
 // --- Step U cert event types --------------------------------------------------
 
 /**

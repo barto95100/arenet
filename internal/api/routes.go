@@ -342,6 +342,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Get("/settings/crowdsec", h.getCrowdSecSettings)
 				r.Put("/settings/crowdsec", h.putCrowdSecSettings)
 				r.Post("/settings/crowdsec/test", h.testCrowdSecConnection)
+				// Step CS.2.A — Live LAPI decisions proxy.
+				// Distinct from /security/decisions (which
+				// queries the local mirror in metrics.db) —
+				// this one is a real-time pass-through to
+				// LAPI's /v1/decisions endpoint. See
+				// crowdsec_decisions.go for the two-endpoint
+				// rationale.
+				r.Get("/security/crowdsec/decisions", h.listCrowdSecDecisions)
 			})
 		})
 	})

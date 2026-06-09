@@ -16,6 +16,7 @@ import type {
 	CountryBlockEventsResponse,
 	DecisionsResponse,
 	GeoEventsResponse,
+	LAPIDecisionsResponse,
 	MetricWindow,
 	OwaspCategory,
 	ServerPosition,
@@ -177,6 +178,45 @@ export function fetchDecisions(
 	if (params.onlyActive) qs.set('onlyActive', 'true');
 	const suffix = qs.toString() ? `?${qs.toString()}` : '';
 	return request<DecisionsResponse>('GET', `/security/decisions${suffix}`);
+}
+
+/**
+ * Step CS.2.A — Live LAPI decisions proxy. Distinct from
+ * fetchDecisions above (which serves the persistent mirror in
+ * metrics.db). Use this for "what's enforced RIGHT NOW";
+ * use fetchDecisions for "what have we historically seen".
+ *
+ * Failure modes (codes the typed `request` helper re-throws
+ * as ApiError):
+ *   404 → bouncer not configured → caller renders the
+ *         "Configure CrowdSec" CTA linking to /settings
+ *   502 → LAPI unreachable / auth failed — error message
+ *         is operator-friendly (timeout / refused / DNS / TLS /
+ *         "authentication failed (invalid bouncer API key)")
+ *   500 → storage read failed — generic backend error
+ */
+export interface FetchLAPIDecisionsParams {
+	scope?: string;
+	source?: string;
+	type?: string;
+	limit?: number;
+	offset?: number;
+}
+
+export function fetchLAPIDecisions(
+	params: FetchLAPIDecisionsParams = {}
+): Promise<LAPIDecisionsResponse> {
+	const qs = new URLSearchParams();
+	if (params.scope) qs.set('scope', params.scope);
+	if (params.source) qs.set('source', params.source);
+	if (params.type) qs.set('type', params.type);
+	if (params.limit !== undefined) qs.set('limit', String(params.limit));
+	if (params.offset !== undefined) qs.set('offset', String(params.offset));
+	const suffix = qs.toString() ? `?${qs.toString()}` : '';
+	return request<LAPIDecisionsResponse>(
+		'GET',
+		`/security/crowdsec/decisions${suffix}`
+	);
 }
 
 /**
