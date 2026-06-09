@@ -44,11 +44,13 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
-	import { fetchDecisions, fetchLAPIDecisions } from '$lib/api/security';
+	import { fetchDecisions, fetchLAPIDecisions, fetchScenarios } from '$lib/api/security';
 	import type {
 		Decision,
 		LAPIDecision,
-		LAPIDecisionsMeta
+		LAPIDecisionsMeta,
+		ScenarioAggregate,
+		ScenariosMeta
 	} from '$lib/api/types';
 	import { ApiError, isArenetAutoScenario } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
@@ -172,12 +174,101 @@
 		activeTab = next;
 		if (next === 'live') {
 			startLivePolling();
+		} else if (next === 'scenarios' && scenariosLastFetched === null) {
+			void loadScenarios();
 		}
 		// Don't stop polling on a different tab change — the
 		// timer skips ticks when activeTab !== 'live' (see
 		// startLivePolling). This lets the operator hop between
 		// snapshot ↔ live without paying the connect-startup
 		// latency every flip.
+	}
+
+	// --- Tab 3: Scenarios (Step CS.2.C) ---
+
+	type ScenariosErrorKind = 'not_configured' | 'unreachable' | 'other' | null;
+
+	let scenariosLoading = $state(false);
+	let scenariosErrorKind = $state<ScenariosErrorKind>(null);
+	let scenariosErrorMsg = $state<string | null>(null);
+	let scenarios = $state<ScenarioAggregate[]>([]);
+	let scenariosMeta = $state<ScenariosMeta>({ totalAlerts: 0, windowHours: 24 });
+	let scenariosLastFetched = $state<number | null>(null);
+	let modalScenario = $state<ScenarioAggregate | null>(null);
+
+	async function loadScenarios(): Promise<void> {
+		scenariosLoading = true;
+		scenariosErrorMsg = null;
+		try {
+			const resp = await fetchScenarios();
+			scenarios = resp.scenarios;
+			scenariosMeta = resp.meta;
+			scenariosErrorKind = null;
+			scenariosLastFetched = Date.now();
+		} catch (err) {
+			if (err instanceof ApiError) {
+				if (err.status === 412) {
+					scenariosErrorKind = 'not_configured';
+					scenariosErrorMsg = err.message;
+				} else if (err.status === 502) {
+					scenariosErrorKind = 'unreachable';
+					scenariosErrorMsg = err.message;
+				} else {
+					scenariosErrorKind = 'other';
+					scenariosErrorMsg = err.message;
+				}
+			} else {
+				scenariosErrorKind = 'other';
+				scenariosErrorMsg =
+					err instanceof Error ? err.message : 'failed to load scenarios';
+			}
+		} finally {
+			scenariosLoading = false;
+		}
+	}
+
+	function refreshScenarios(): void {
+		void loadScenarios();
+	}
+
+	function openScenarioModal(s: ScenarioAggregate): void {
+		modalScenario = s;
+	}
+	function closeScenarioModal(): void {
+		modalScenario = null;
+	}
+
+	// Hub URL builder. CrowdSec scenarios are named
+	// "<author>/<scenario>" (e.g. "crowdsecurity/http-cve");
+	// the hub URL is https://hub.crowdsec.net/author/<author>/configurations/<scenario>.
+	// For non-org-prefixed scenarios (e.g. "manual" from cscli,
+	// or unknown) the function returns null and the UI hides
+	// the hub link.
+	function hubURL(scenario: string): string | null {
+		const i = scenario.indexOf('/');
+		if (i <= 0 || i === scenario.length - 1) return null;
+		const author = scenario.slice(0, i);
+		const name = scenario.slice(i + 1);
+		return `https://hub.crowdsec.net/author/${encodeURIComponent(author)}/configurations/${encodeURIComponent(name)}`;
+	}
+
+	function cscliCommand(scenario: string): string {
+		return `sudo cscli scenarios inspect ${scenario}`;
+	}
+
+	let copyToast = $state<string | null>(null);
+	let copyToastTimer: ReturnType<typeof setTimeout> | null = null;
+	async function copyToClipboard(text: string): Promise<void> {
+		try {
+			await navigator.clipboard.writeText(text);
+			copyToast = 'Copié ✓';
+		} catch {
+			copyToast = 'Copie indisponible';
+		}
+		if (copyToastTimer !== null) clearTimeout(copyToastTimer);
+		copyToastTimer = setTimeout(() => {
+			copyToast = null;
+		}, 1800);
 	}
 
 	function onLiveFilterChange(): void {
@@ -580,21 +671,220 @@
 	{/if}
 {:else if activeTab === 'scenarios'}
 	<p class="tab-subtitle">
-		Scenarios CrowdSec installés et leur activité 24h. Read-only —
-		utilise <code>cscli</code> sur le host CrowdSec pour install/
-		uninstall.
+		Scenarios CrowdSec ayant fired sur les dernières
+		<strong>{scenariosMeta.windowHours}h</strong>. Lecture LAPI
+		<code>/v1/alerts</code> via les credentials Security Automation
+		(<a href="/settings#security-automation" class="link">Settings → Security Automation</a>).
+		Read-only — utilise <code>cscli</code> sur le host pour
+		install/inspect/disable.
 	</p>
-	<Card>
-		<div class="empty-wrap" data-testid="scenarios-placeholder">
-			<h3>Scenarios — bientôt disponible</h3>
-			<p>
-				Le panneau Scenarios sera livré dans <strong>CS.2.C</strong>
-				(lecture de LAPI <code>/v1/metrics</code> + parsing
-				Prometheus). En attendant, utilise
-				<code>cscli scenarios list</code> sur ton host CrowdSec.
-			</p>
+
+	{#if scenariosLoading && scenarios.length === 0}
+		<div class="loading-wrap">
+			<Spinner />
 		</div>
-	</Card>
+	{:else if scenariosErrorKind === 'not_configured'}
+		<Card>
+			<div class="empty-wrap" data-testid="scenarios-not-configured">
+				<h3>Security Automation non configurée</h3>
+				<p>
+					Le tab Scenarios utilise les credentials du watcher
+					Security Automation (machine_id + password) pour
+					s'authentifier auprès de LAPI <code>/v1/alerts</code>.
+					Va dans
+					<a href="/settings" class="link">Settings → Security Automation</a>
+					et saisis ton watcher (<code>cscli machines add arenet-writer</code>
+					sur le host CrowdSec).
+				</p>
+				<p class="muted">
+					Les autres tabs (Local snapshot, Live LAPI) fonctionnent
+					indépendamment — ce coupling concerne uniquement le tab
+					Scenarios.
+				</p>
+			</div>
+		</Card>
+	{:else}
+		<div class="filter-row">
+			<div class="meta">
+				{#if scenariosLoading}
+					<Spinner size="sm" /> chargement…
+				{:else}
+					{scenariosMeta.totalAlerts} alert{scenariosMeta.totalAlerts > 1 ? 's' : ''}
+					sur {scenarios.length} scenario{scenarios.length > 1 ? 's' : ''}
+					{#if scenariosLastFetched !== null}
+						<span class="muted">· fetched {lastFetchedLabel(scenariosLastFetched)}</span>
+					{/if}
+					<button type="button" class="refresh-btn" onclick={refreshScenarios} aria-label="Refresh">
+						↻
+					</button>
+				{/if}
+			</div>
+		</div>
+
+		{#if scenariosErrorKind === 'unreachable'}
+			<Card>
+				<div class="error-banner" role="alert" data-testid="scenarios-unreachable">
+					<strong>LAPI inaccessible :</strong>
+					{scenariosErrorMsg ?? 'unknown error'}
+					<button type="button" class="retry-btn" onclick={refreshScenarios}>
+						Réessayer
+					</button>
+				</div>
+			</Card>
+		{:else if scenariosErrorKind === 'other' && scenariosErrorMsg}
+			<Card>
+				<div class="error-wrap" role="alert">{scenariosErrorMsg}</div>
+			</Card>
+		{/if}
+
+		<Card>
+			<div class="block">
+				{#if scenarios.length === 0 && !scenariosLoading && !scenariosErrorKind}
+					<div class="empty-inline" data-testid="scenarios-empty">
+						Aucune activité scenario sur {scenariosMeta.windowHours}h.
+						Soit aucune attaque détectée, soit Arenet logs pas encore
+						acquis par CrowdSec (voir
+						<code>docs/setup/crowdsec.md</code> §acquisition).
+					</div>
+				{:else if scenarios.length > 0}
+					<table>
+						<thead>
+							<tr>
+								<th>Scenario</th>
+								<th>Alerts 24h</th>
+								<th>Last seen</th>
+								<th>Sample source</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each scenarios as s (s.name)}
+								<tr
+									class="scenario-row"
+									data-testid="scenario-row"
+									tabindex="0"
+									role="button"
+									aria-label={`Inspect ${s.name}`}
+									onclick={() => openScenarioModal(s)}
+									onkeydown={(e) => {
+										if (e.key === 'Enter' || e.key === ' ') {
+											e.preventDefault();
+											openScenarioModal(s);
+										}
+									}}
+								>
+									<td class="mono">
+										{shortScenario(s.name)}
+										{#if s.name.includes('/')}
+											<span class="muted org">{s.name.split('/')[0]}</span>
+										{/if}
+									</td>
+									<td><strong>{s.alerts24h}</strong></td>
+									<td class="ts" title={s.lastSeen}>
+										{s.lastSeen ? relativeTs(s.lastSeen) : '—'}
+									</td>
+									<td class="mono">
+										{s.sampleValue || '—'}
+										{#if s.sampleScope}
+											<span class="muted">({s.sampleScope})</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				{/if}
+			</div>
+		</Card>
+	{/if}
+
+	{#if modalScenario !== null}
+		{@const ms = modalScenario}
+		<div
+			class="modal-backdrop"
+			role="presentation"
+			onclick={closeScenarioModal}
+			onkeydown={(e) => {
+				if (e.key === 'Escape') closeScenarioModal();
+			}}
+		></div>
+		<div
+			class="modal"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="scenario-modal-title"
+			data-testid="scenario-modal"
+		>
+			<header class="modal-h">
+				<h3 id="scenario-modal-title">{ms.name}</h3>
+				<button type="button" class="modal-close" onclick={closeScenarioModal} aria-label="Close">
+					×
+				</button>
+			</header>
+			<dl class="modal-dl">
+				<dt>Alerts {scenariosMeta.windowHours}h</dt>
+				<dd><strong>{ms.alerts24h}</strong></dd>
+
+				{#if ms.lastSeen}
+					<dt>Last seen</dt>
+					<dd class="ts" title={ms.lastSeen}>
+						{relativeTs(ms.lastSeen)}
+					</dd>
+				{/if}
+
+				{#if ms.sampleScope || ms.sampleValue}
+					<dt>Sample alert source</dt>
+					<dd class="mono">
+						{ms.sampleValue}
+						{#if ms.sampleScope}
+							<span class="muted">({ms.sampleScope})</span>
+						{/if}
+					</dd>
+				{/if}
+			</dl>
+
+			<div class="modal-section">
+				<h4>Documentation</h4>
+				{#if hubURL(ms.name)}
+					<a
+						href={hubURL(ms.name)!}
+						target="_blank"
+						rel="noopener noreferrer"
+						class="link"
+						data-testid="modal-hub-link"
+					>
+						Voir sur le CrowdSec hub ↗
+					</a>
+				{:else}
+					<p class="muted">
+						Scenario non-namespaced (manual ou local) — pas de page hub.
+					</p>
+				{/if}
+			</div>
+
+			<div class="modal-section">
+				<h4>Inspect</h4>
+				<div class="copy-row">
+					<code class="copy-code">{cscliCommand(ms.name)}</code>
+					<button
+						type="button"
+						class="copy-btn"
+						onclick={() => copyToClipboard(cscliCommand(ms.name))}
+					>
+						Copier
+					</button>
+				</div>
+				<p class="muted">
+					Pour install / modify / disable ce scenario, utilise
+					<code>cscli</code> sur le host CrowdSec — pas modifiable
+					depuis l'UI Arenet.
+				</p>
+			</div>
+
+			{#if copyToast !== null}
+				<div class="copy-toast" role="status">{copyToast}</div>
+			{/if}
+		</div>
+	{/if}
 {/if}
 
 <style>
@@ -831,5 +1121,136 @@
 		font-style: italic;
 		color: var(--text-muted);
 		font-size: var(--text-sm, 13px);
+	}
+	/* Step CS.2.C — Scenarios tab */
+	.scenario-row {
+		cursor: pointer;
+	}
+	.scenario-row:hover {
+		background: var(--bg-hover);
+	}
+	.scenario-row:focus-visible {
+		outline: 2px solid var(--accent-cyan);
+		outline-offset: -2px;
+	}
+	.muted {
+		color: var(--text-muted);
+		font-size: var(--text-xs, 11px);
+	}
+	.org {
+		margin-left: 0.4rem;
+		font-family: var(--font-mono, monospace);
+	}
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		z-index: 50;
+	}
+	.modal {
+		position: fixed;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		background: var(--bg-surface);
+		border: 1px solid var(--border-subtle, var(--bg-hover));
+		border-radius: 6px;
+		padding: 1.25rem 1.5rem;
+		min-width: 28rem;
+		max-width: 36rem;
+		z-index: 51;
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+	}
+	.modal-h {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		margin: 0 0 0.75rem 0;
+		padding-bottom: 0.5rem;
+		border-bottom: 1px solid var(--border-subtle, var(--bg-hover));
+	}
+	.modal-h h3 {
+		margin: 0;
+		font-size: var(--text-lg, 16px);
+		font-family: var(--font-mono, monospace);
+		color: var(--text-primary);
+		word-break: break-all;
+	}
+	.modal-close {
+		background: transparent;
+		border: none;
+		color: var(--text-secondary);
+		font-size: 1.5rem;
+		line-height: 1;
+		cursor: pointer;
+		padding: 0 0.25rem;
+	}
+	.modal-close:hover {
+		color: var(--text-primary);
+	}
+	.modal-dl {
+		display: grid;
+		grid-template-columns: 10rem 1fr;
+		gap: 0.4rem 0.75rem;
+		margin: 0 0 1rem 0;
+		font-size: var(--text-sm);
+	}
+	.modal-dl dt {
+		color: var(--text-secondary);
+	}
+	.modal-dl dd {
+		margin: 0;
+		color: var(--text-primary);
+	}
+	.modal-section {
+		margin: 0.75rem 0;
+		padding-top: 0.5rem;
+		border-top: 1px solid var(--border-subtle, var(--bg-hover));
+	}
+	.modal-section h4 {
+		font-size: var(--text-sm);
+		margin: 0 0 0.5rem 0;
+		color: var(--text-secondary);
+		font-weight: 500;
+	}
+	.copy-row {
+		display: flex;
+		gap: 0.5rem;
+		align-items: stretch;
+	}
+	.copy-code {
+		flex: 1;
+		font-family: var(--font-mono, monospace);
+		font-size: var(--text-xs, 11px);
+		background: var(--bg-default, #000);
+		color: var(--text-primary);
+		padding: 0.4rem 0.6rem;
+		border-radius: 4px;
+		overflow-x: auto;
+		white-space: nowrap;
+	}
+	.copy-btn {
+		background: var(--bg-surface);
+		color: var(--text-primary);
+		border: 1px solid var(--border-subtle, var(--bg-hover));
+		padding: 0 0.75rem;
+		border-radius: 4px;
+		font-size: var(--text-sm);
+		cursor: pointer;
+	}
+	.copy-btn:hover {
+		background: var(--bg-hover);
+	}
+	.copy-toast {
+		position: absolute;
+		bottom: 0.75rem;
+		right: 1.5rem;
+		background: var(--accent-cyan);
+		color: var(--text-inverse);
+		padding: 0.3rem 0.7rem;
+		border-radius: 4px;
+		font-size: var(--text-xs, 11px);
+		font-weight: 600;
 	}
 </style>

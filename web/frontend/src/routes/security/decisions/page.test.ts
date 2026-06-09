@@ -28,7 +28,8 @@ const { toastMock, securityMock } = vi.hoisted(() => ({
 	toastMock: { pushToast: vi.fn() },
 	securityMock: {
 		fetchDecisions: vi.fn(),
-		fetchLAPIDecisions: vi.fn()
+		fetchLAPIDecisions: vi.fn(),
+		fetchScenarios: vi.fn()
 	}
 }));
 
@@ -41,6 +42,7 @@ beforeEach(() => {
 	toastMock.pushToast.mockReset();
 	securityMock.fetchDecisions.mockReset();
 	securityMock.fetchLAPIDecisions.mockReset();
+	securityMock.fetchScenarios.mockReset();
 });
 
 // --- Fixtures -----------------------------------------------
@@ -127,14 +129,19 @@ describe('decisions page — tabs', () => {
 		expect(screen.getByTestId('tab-live')).toHaveAttribute('aria-selected', 'true');
 	});
 
-	it('switches to Scenarios tab and shows the CS.2.C placeholder', async () => {
+	it('switches to Scenarios tab and triggers the fetchScenarios call', async () => {
 		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
+		securityMock.fetchScenarios.mockResolvedValue({
+			scenarios: [],
+			meta: { totalAlerts: 0, windowHours: 24 }
+		});
 		render(Page);
 		await waitFor(() => expect(securityMock.fetchDecisions).toHaveBeenCalled());
 
 		await fireEvent.click(screen.getByTestId('tab-scenarios'));
-		expect(screen.getByTestId('scenarios-placeholder')).toBeInTheDocument();
-		expect(screen.getByTestId('scenarios-placeholder').textContent ?? '').toContain('CS.2.C');
+		await waitFor(() => {
+			expect(securityMock.fetchScenarios).toHaveBeenCalled();
+		});
 	});
 
 	it('does not fetch LAPI decisions until the Live tab is opened', async () => {
@@ -299,5 +306,172 @@ describe('decisions page — Live LAPI tab', () => {
 				expect.objectContaining({ scope: 'range' })
 			);
 		});
+	});
+});
+
+// --- Scenarios tab (CS.2.C) ---------------------------------
+
+const sampleScenariosOK = {
+	scenarios: [
+		{
+			name: 'crowdsecurity/http-cve',
+			alerts24h: 12,
+			lastSeen: new Date(Date.now() - 5 * 60_000).toISOString(),
+			sampleScope: 'Ip',
+			sampleValue: '203.0.113.42'
+		},
+		{
+			name: 'crowdsecurity/http-bf',
+			alerts24h: 4,
+			lastSeen: new Date(Date.now() - 30 * 60_000).toISOString(),
+			sampleScope: 'Ip',
+			sampleValue: '198.51.100.7'
+		},
+		{
+			name: 'manual',
+			alerts24h: 1,
+			lastSeen: new Date(Date.now() - 90 * 60_000).toISOString(),
+			sampleScope: 'Ip',
+			sampleValue: '192.0.2.1'
+		}
+	],
+	meta: { totalAlerts: 17, windowHours: 24 }
+};
+
+describe('decisions page — Scenarios tab', () => {
+	async function openScenariosTab(): Promise<void> {
+		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
+		render(Page);
+		await waitFor(() => expect(securityMock.fetchDecisions).toHaveBeenCalled());
+		await fireEvent.click(screen.getByTestId('tab-scenarios'));
+	}
+
+	it('renders the table with aggregated rows on 200', async () => {
+		securityMock.fetchScenarios.mockResolvedValue(sampleScenariosOK);
+		await openScenariosTab();
+
+		await waitFor(() => {
+			expect(screen.getByText('http-cve')).toBeInTheDocument();
+			expect(screen.getByText('http-bf')).toBeInTheDocument();
+			expect(screen.getByText('manual')).toBeInTheDocument();
+		});
+		// Alerts 24h count rendered.
+		expect(screen.getByText('12')).toBeInTheDocument();
+	});
+
+	it('renders the Security-Automation CTA on 412', async () => {
+		securityMock.fetchScenarios.mockRejectedValue(
+			new ApiError('security automation not configured', 412)
+		);
+		await openScenariosTab();
+
+		await waitFor(() => {
+			expect(screen.getByTestId('scenarios-not-configured')).toBeInTheDocument();
+		});
+		// Must link to /settings so the operator has a direct path.
+		const links = screen.getAllByRole('link', { name: /Security Automation/i });
+		expect(links.length).toBeGreaterThan(0);
+	});
+
+	it('renders the unreachable banner + Retry on 502', async () => {
+		securityMock.fetchScenarios.mockRejectedValue(
+			new ApiError('machine credentials rejected by LAPI', 502)
+		);
+		await openScenariosTab();
+
+		await waitFor(() => {
+			const banner = screen.getByTestId('scenarios-unreachable');
+			expect(banner.textContent ?? '').toContain('LAPI inaccessible');
+			expect(banner.textContent ?? '').toContain('machine credentials rejected');
+		});
+		expect(screen.getByRole('button', { name: /Réessayer/i })).toBeInTheDocument();
+	});
+
+	it('retries on Réessayer click after a 502', async () => {
+		securityMock.fetchScenarios
+			.mockRejectedValueOnce(new ApiError('timeout', 502))
+			.mockResolvedValueOnce(sampleScenariosOK);
+		await openScenariosTab();
+
+		await waitFor(() => {
+			expect(screen.getByTestId('scenarios-unreachable')).toBeInTheDocument();
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: /Réessayer/i }));
+
+		await waitFor(() => {
+			expect(screen.getByText('http-cve')).toBeInTheDocument();
+			expect(screen.queryByTestId('scenarios-unreachable')).toBeNull();
+		});
+	});
+
+	it('renders the empty state when LAPI has no recent alerts', async () => {
+		securityMock.fetchScenarios.mockResolvedValue({
+			scenarios: [],
+			meta: { totalAlerts: 0, windowHours: 24 }
+		});
+		await openScenariosTab();
+
+		await waitFor(() => {
+			expect(screen.getByTestId('scenarios-empty')).toBeInTheDocument();
+		});
+	});
+
+	it('opens the inspect modal with hub link + cscli command on row click', async () => {
+		securityMock.fetchScenarios.mockResolvedValue(sampleScenariosOK);
+		await openScenariosTab();
+
+		await waitFor(() => {
+			expect(screen.getByText('http-cve')).toBeInTheDocument();
+		});
+
+		// Click the first row.
+		const rows = screen.getAllByTestId('scenario-row');
+		await fireEvent.click(rows[0]);
+
+		await waitFor(() => {
+			const modal = screen.getByTestId('scenario-modal');
+			expect(modal.textContent ?? '').toContain('crowdsecurity/http-cve');
+			expect(modal.textContent ?? '').toContain('cscli scenarios inspect crowdsecurity/http-cve');
+		});
+
+		// Namespaced scenario → hub link visible.
+		const hubLink = screen.getByTestId('modal-hub-link') as HTMLAnchorElement;
+		expect(hubLink.href).toContain('hub.crowdsec.net');
+		expect(hubLink.href).toContain('crowdsecurity');
+		expect(hubLink.href).toContain('http-cve');
+	});
+
+	it('hides the hub link for non-namespaced scenarios (e.g. manual)', async () => {
+		securityMock.fetchScenarios.mockResolvedValue(sampleScenariosOK);
+		await openScenariosTab();
+
+		await waitFor(() => {
+			expect(screen.getByText('manual')).toBeInTheDocument();
+		});
+
+		// Click the manual row (the 3rd / last).
+		const rows = screen.getAllByTestId('scenario-row');
+		await fireEvent.click(rows[2]);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('scenario-modal')).toBeInTheDocument();
+		});
+		expect(screen.queryByTestId('modal-hub-link')).toBeNull();
+	});
+
+	it('does NOT re-fetch on tab re-open if data already loaded', async () => {
+		securityMock.fetchScenarios.mockResolvedValue(sampleScenariosOK);
+		await openScenariosTab();
+
+		await waitFor(() => expect(securityMock.fetchScenarios).toHaveBeenCalledTimes(1));
+
+		// Hop to snapshot tab, then back to scenarios.
+		await fireEvent.click(screen.getByTestId('tab-snapshot'));
+		await fireEvent.click(screen.getByTestId('tab-scenarios'));
+
+		// Refresh button is the explicit re-fetch path; tab
+		// re-open is NOT supposed to re-fire.
+		expect(securityMock.fetchScenarios).toHaveBeenCalledTimes(1);
 	});
 });

@@ -1348,6 +1348,32 @@ export interface LAPIDecisionsResponse {
 	meta: LAPIDecisionsMeta;
 }
 
+/**
+ * Step CS.2.C — per-scenario aggregate returned by GET
+ * /api/v1/security/crowdsec/scenarios. The backend reads
+ * LAPI /v1/alerts (JWT auth via Security Automation creds)
+ * and aggregates by scenario name. See
+ * docs/setup/crowdsec.md §"Why Scenarios tab needs Security
+ * Automation" for the credential coupling rationale.
+ */
+export interface ScenarioAggregate {
+	name: string;
+	alerts24h: number;
+	lastSeen?: string;
+	sampleScope?: string;
+	sampleValue?: string;
+}
+
+export interface ScenariosMeta {
+	totalAlerts: number;
+	windowHours: number;
+}
+
+export interface ScenariosResponse {
+	scenarios: ScenarioAggregate[];
+	meta: ScenariosMeta;
+}
+
 // --- Step U cert event types --------------------------------------------------
 
 /**

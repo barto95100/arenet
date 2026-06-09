@@ -330,23 +330,72 @@ To confirm the bouncer IS connected even when empty: the
 be green, and clicking **Test connection** will show
 "Connected to LAPI v1.6.x".
 
-### "Scenarios actifs" panel is empty (after CS.2 ships)
+### "Scenarios" tab is empty
 
-The scenarios panel reads LAPI's `/v1/metrics` endpoint. By
-default, LAPI exposes Prometheus metrics; the panel renders an
-empty state if the endpoint is disabled. Check
-`/etc/crowdsec/config.yaml`:
+The Scenarios tab in `/security/decisions` aggregates LAPI's
+`/v1/alerts` response over a 24h window. An empty state means
+**no scenario fired in the last 24h** — which can happen for
+three reasons:
+
+1. **No attacks landed.** The most common case on a quiet
+   homelab. The Live LAPI tab + CAPI consensus blocklist may
+   still be working (the blocklist is loaded; nothing local
+   has triggered a scenario fire).
+2. **Arenet logs aren't acquired by CrowdSec.** Scenarios fire
+   only when CrowdSec sees a log line that matches a parser.
+   By default, CrowdSec doesn't tail Arenet's stdout; you have
+   to wire an acquisition source. See
+   [§Acquisition wiring](#acquisition-wiring) below.
+3. **Security Automation not configured.** The Scenarios tab
+   uses the watcher credentials from Settings → Security
+   Automation. The tab will surface a clear "Security
+   Automation non configurée" card with a direct link rather
+   than the empty state in this case.
+
+### "Scenarios" tab shows "machine credentials rejected"
+
+The Security Automation watcher creds were accepted at write-
+time but LAPI now rejects them. Common causes:
+
+- The watcher was deleted on the LAPI host (`cscli machines
+  delete arenet-writer`) and re-added with a different
+  password.
+- LAPI was restored from a backup that pre-dates the watcher.
+- The password was rotated outside the Arenet UI.
+
+Fix: regenerate the watcher (`cscli machines delete arenet-writer
+&& cscli machines add arenet-writer`) and paste the new
+credentials in Settings → Security Automation. The Scenarios
+tab will auto-recover on the next poll (the JWT cache
+invalidates on the first 401).
+
+### Acquisition wiring
+
+To get scenario fires from Arenet traffic, CrowdSec needs to
+parse Arenet's logs. The minimal setup writes Arenet's HTTP
+logs to a file and points CrowdSec at it. Example
+`/etc/crowdsec/acquis.yaml` entry:
 
 ```yaml
-prometheus:
-  enabled: true
-  level: full       # not "off" / "aggregated"
-  listen_addr: 127.0.0.1
-  listen_port: 6060
+filenames:
+  - /var/log/arenet/access.log
+labels:
+  type: caddy
 ```
 
-The empty state in the UI will hint: "Enable LAPI metrics in
-config.yaml to see scenario activity."
+Then `sudo systemctl reload crowdsec` and tail
+`journalctl -u crowdsec -f` while running curl against your
+routes — you should see `parsing line ...` entries. Once a
+scenario like `crowdsecurity/http-cve` matches enough events
+to overflow its bucket, an alert is created and the
+Scenarios tab populates within 30 minutes (the next poll
+after `since=24h` shifts past it).
+
+Arenet itself does not bundle an acquisition shim — this is a
+**deliberate non-coupling**: CrowdSec's parser ecosystem is
+its own concern, and bundling a parser would pin Arenet to a
+specific log format we'd then have to maintain across format
+revisions.
 
 ## F — Settings precedence (env vs. UI)
 
@@ -370,7 +419,62 @@ the Settings UI, click Save & apply. Remove the env vars on the
 next deploy (they'll be ignored as long as a stored row exists,
 but removing avoids accidental future regression).
 
-## G — Audit trail
+## G — Why the Scenarios tab needs Security Automation
+
+The Scenarios tab in `/security/decisions` queries LAPI's
+`/v1/alerts` endpoint to aggregate per-scenario activity over
+the last 24h. **Important**: that endpoint is part of LAPI's
+`MachineRoutes` group and requires **JWT authentication** —
+the bouncer API key configured in CS.1 does NOT work on
+`/v1/alerts` (empirical: LAPI returns
+`401 cookie token is empty`).
+
+LAPI's `MachineRoutes` are authenticated via a **watcher
+credential** (a `cscli machines add <name>` pair) — exactly
+the credential type already configured by **Security
+Automation** for the auto-write path (POST
+`/v1/alerts` to push decisions back to LAPI).
+
+Rather than ask the operator to register a second watcher
+just for read access, Arenet reuses the Security Automation
+credentials for both:
+
+- **Write path** (auto-classify): POST `/v1/alerts` to LAPI.
+- **Read path** (Scenarios tab): GET `/v1/alerts` from LAPI.
+
+CrowdSec's auth model doesn't distinguish read-machine vs
+write-machine — one login grants both. The coupling has one
+operator-visible consequence: if you want the Scenarios tab
+but NOT the auto-writer, you still have to register a
+watcher and provide its credentials. The auto-writer's
+behaviour is controlled by **per-category rule toggles**
+(Settings → Security Automation → Trigger rules); leave all
+toggles off if you want creds-only-no-writes.
+
+Lifecycle:
+
+- The JWT is **cached in-memory** per Arenet process, valid
+  for ~1 hour per LAPI's expiry.
+- **Singleflight dedupes** concurrent Scenarios polls during
+  a JWT refresh — 5 simultaneous browser tabs → 1 login
+  round-trip, not 5.
+- On a **401 from `/v1/alerts`** (LAPI rotated keys, watcher
+  password changed, etc.), Arenet **automatically refreshes**
+  the JWT once and retries. A second 401 surfaces as a
+  502 with the message "machine credentials rejected by
+  LAPI — re-verify Settings → Security Automation".
+- The Live LAPI tab + Local snapshot tab work
+  **independently** of this coupling — they use the bouncer
+  API key (CS.1), not the watcher credentials.
+
+If you only need bouncer-side decision visibility (Live LAPI
++ Local snapshot tabs) and don't intend to use the Scenarios
+tab, you can leave Security Automation unconfigured. The
+Scenarios tab will surface "Security Automation non
+configurée" with a CTA to Settings, the other two tabs work
+normally.
+
+## H — Audit trail
 
 Every CrowdSec settings change emits an audit event:
 
@@ -382,7 +486,7 @@ Every CrowdSec settings change emits an audit event:
 
 View audit entries at `/audit` or via `GET /api/v1/audit`.
 
-## H — Useful references
+## I — Useful references
 
 - CrowdSec docs: https://docs.crowdsec.net/
 - Scenario hub: https://app.crowdsec.net/hub/

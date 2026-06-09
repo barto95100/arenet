@@ -19,6 +19,7 @@ import type {
 	LAPIDecisionsResponse,
 	MetricWindow,
 	OwaspCategory,
+	ScenariosResponse,
 	ServerPosition,
 	ThrottleEventsResponse,
 	WafEventsByRuleResponse,
@@ -217,6 +218,22 @@ export function fetchLAPIDecisions(
 		'GET',
 		`/security/crowdsec/decisions${suffix}`
 	);
+}
+
+/**
+ * Step CS.2.C — fetch the aggregated 24h scenarios activity
+ * from LAPI's /v1/alerts endpoint (JWT auth via Security
+ * Automation credentials, see backend
+ * internal/api/crowdsec_scenarios.go).
+ *
+ * Status codes the caller should distinguish:
+ *   412 → Security Automation not configured → render
+ *         "Configure Security Automation" CTA
+ *   502 → LAPI unreachable OR machine creds rejected
+ *         after retry → render error + retry button
+ */
+export function fetchScenarios(): Promise<ScenariosResponse> {
+	return request<ScenariosResponse>('GET', '/security/crowdsec/scenarios');
 }
 
 /**

@@ -350,6 +350,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// crowdsec_decisions.go for the two-endpoint
 				// rationale.
 				r.Get("/security/crowdsec/decisions", h.listCrowdSecDecisions)
+				// Step CS.2.C — Scenarios tab via /v1/alerts.
+				// Reuses Security Automation (Feature A)
+				// machine credentials for the JWT login
+				// (LAPI's MachineRoutes require JWT, not
+				// the bouncer API key — empirical day-7
+				// finding). Cached JWT, singleflight-deduped,
+				// retry once on 401. See crowdsec_scenarios.go.
+				r.Get("/security/crowdsec/scenarios", h.listCrowdSecScenarios)
 			})
 		})
 	})

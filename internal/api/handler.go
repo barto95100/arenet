@@ -250,6 +250,12 @@ type Handler struct {
 	// tests that don't boot Caddy). *caddymgr.CaddyManager
 	// satisfies CrowdSecApplier via ApplyCrowdSecConfig.
 	crowdsecApplier CrowdSecApplier
+	// crowdsecJWT (Step CS.2.C) caches the LAPI machine-
+	// auth JWT used by the Scenarios tab's /v1/alerts proxy.
+	// Always non-nil after NewHandler; singleflight-deduped
+	// concurrent logins; lazy-invalidates on 401. See
+	// crowdsec_scenarios.go for the rationale.
+	crowdsecJWT *crowdSecJWTManager
 	// hcStatus (Critique 11 Pack A, 2026-06-05) is the per-
 	// upstream live status feed populated by the Stage B
 	// caddyhc tracker. Used by listRoutes / getRoute to attach
@@ -462,6 +468,11 @@ func NewHandler(
 		devMode:   devMode,
 		logger:    logger,
 		startTime: time.Now(),
+		// Step CS.2.C — always present; the JWT cache
+		// tolerates a "never logged in" state. Cold-start
+		// boot does not touch LAPI; the first Scenarios
+		// poll triggers the initial login.
+		crowdsecJWT: newCrowdSecJWTManager(),
 	}
 }
 
