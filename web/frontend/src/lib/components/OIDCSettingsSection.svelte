@@ -165,6 +165,11 @@
 	}
 </script>
 
+<!-- Wrapper div with mb-6 matches the spacing contract used by
+     ServerPositionSection + CrowdSecSettingsSection so sibling
+     sections in /settings space consistently — without this,
+     OIDC sat flush against CrowdSecSettingsSection. -->
+<div class="mb-6">
 <Card padding="p-6">
 	<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
 		<div>
@@ -426,3 +431,4 @@
 		{/if}
 	</div>
 </Card>
+</div>
