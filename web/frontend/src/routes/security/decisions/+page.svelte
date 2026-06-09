@@ -238,6 +238,24 @@
 		modalScenario = null;
 	}
 
+	// #R-CS2C-modal-esc-key polish: the inline onkeydown on
+	// the modal-backdrop div never fires because a non-
+	// focusable presentation div doesn't receive keyboard
+	// events. Install a window-level keydown listener for
+	// the duration the modal is open — same shape Svelte's
+	// own dialog primitives use. Effect cleanup uninstalls on
+	// close OR component teardown, both via the returned fn.
+	$effect(() => {
+		if (modalScenario === null) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				closeScenarioModal();
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
+
 	// Hub URL builder. CrowdSec scenarios are named
 	// "<author>/<scenario>" (e.g. "crowdsecurity/http-cve");
 	// the hub URL is https://hub.crowdsec.net/author/<author>/configurations/<scenario>.
@@ -799,14 +817,11 @@
 
 	{#if modalScenario !== null}
 		{@const ms = modalScenario}
-		<div
-			class="modal-backdrop"
-			role="presentation"
-			onclick={closeScenarioModal}
-			onkeydown={(e) => {
-				if (e.key === 'Escape') closeScenarioModal();
-			}}
-		></div>
+		<!-- Esc keypress is handled at window level (see the
+		     $effect in the script block) — a non-focusable
+		     presentation div doesn't receive keyboard events,
+		     so an inline onkeydown here would be dead code. -->
+		<div class="modal-backdrop" role="presentation" onclick={closeScenarioModal}></div>
 		<div
 			class="modal"
 			role="dialog"

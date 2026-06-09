@@ -2,7 +2,7 @@
 // Copyright (C) 2026  Ludovic Ramos
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-// Sidebar component tests (Step R.2 refonte).
+// Sidebar component tests (Step R.2 refonte + CS.2 follow-up).
 //
 // The mock at docs/superpowers/mocks/2026-05-31-step-r-aesthetic.html
 // :655-714 specifies 4 nav-sections (Aperçu / Trafic / Sécurité /
@@ -10,6 +10,14 @@
 // identity + sign-out icon. There is no collapsed mode (the prior
 // Step F tests covered collapse+expand; those assertions are
 // dropped because the feature is removed by design).
+//
+// CS.2 follow-up: Administration section now contains 3 items
+// (Utilisateurs / Settings / Audit log) — total 11 admin-visible
+// items. The /audit entry closes #R-AUDIT-not-in-nav (operator
+// flagged that the page existed but had no menu link). Note
+// the /security/decisions + /security/[routeId] pages remain
+// intentionally hidden per R.4 D8 design rationale documented
+// in Sidebar.svelte's header comment.
 //
 // Sidebar depends on:
 //   - $app/state's `page` rune for currentPath → mocked.
@@ -60,9 +68,10 @@ describe('Sidebar', () => {
 		// Admin items absent.
 		expect(screen.queryByText('Utilisateurs')).not.toBeInTheDocument();
 		expect(screen.queryByText('Settings')).not.toBeInTheDocument();
+		expect(screen.queryByText('Audit log')).not.toBeInTheDocument();
 	});
 
-	it('renders all 4 sections + 10 items for an admin user', () => {
+	it('renders all 4 sections + 11 items for an admin user', () => {
 		auth.user = {
 			username: 'admin',
 			displayName: 'Admin',
@@ -76,6 +85,55 @@ describe('Sidebar', () => {
 		expect(screen.getByText('Administration')).toBeInTheDocument();
 		expect(screen.getByText('Utilisateurs')).toBeInTheDocument();
 		expect(screen.getByText('Settings')).toBeInTheDocument();
+		// CS.2 follow-up — Audit log entry closes
+		// #R-AUDIT-not-in-nav. Admin-only.
+		expect(screen.getByText('Audit log')).toBeInTheDocument();
+	});
+
+	it('audit log link points to /audit', () => {
+		auth.user = {
+			username: 'admin',
+			displayName: 'Admin',
+			role: 'admin',
+			mfa: 'none',
+			passwordCompromised: false
+		} as never;
+
+		render(Sidebar);
+		const auditLink = screen
+			.getAllByRole('link', { hidden: false })
+			.find((l) => l.textContent?.includes('Audit log'));
+		expect(auditLink).toBeDefined();
+		expect(auditLink).toHaveAttribute('href', '/audit');
+	});
+
+	it('keeps /security/decisions and /security/[routeId] OUT of the sidebar (R.4 D8 design)', () => {
+		// Regression guard: the operator confirmed in CS.2
+		// review that /security/decisions stays surfaced
+		// via the /security entry-point cards, NOT via the
+		// sidebar. If a future patch adds it here without
+		// updating the Sidebar.svelte header comment + this
+		// test, the assertion catches the silent regression.
+		auth.user = {
+			username: 'admin',
+			displayName: 'Admin',
+			role: 'admin',
+			mfa: 'none',
+			passwordCompromised: false
+		} as never;
+
+		render(Sidebar);
+		const allLinks = screen.getAllByRole('link', { hidden: false });
+		const hrefs = allLinks.map((l) => l.getAttribute('href'));
+		expect(hrefs).not.toContain('/security/decisions');
+		// The catch-all route /security/[routeId] doesn't
+		// resolve to a single static href; just make sure no
+		// link points under /security/ that isn't /security
+		// itself.
+		const securitySubLinks = hrefs.filter(
+			(h) => h !== null && h.startsWith('/security/') && h !== '/security'
+		);
+		expect(securitySubLinks).toEqual([]);
 	});
 
 	it('marks the current-path item with aria-current="page"', () => {

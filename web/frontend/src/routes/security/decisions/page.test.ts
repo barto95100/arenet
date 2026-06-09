@@ -442,6 +442,28 @@ describe('decisions page — Scenarios tab', () => {
 		expect(hubLink.href).toContain('http-cve');
 	});
 
+	it('closes the modal on Escape keypress (#R-CS2C-modal-esc-key)', async () => {
+		securityMock.fetchScenarios.mockResolvedValue(sampleScenariosOK);
+		await openScenariosTab();
+
+		await waitFor(() => {
+			expect(screen.getByText('http-cve')).toBeInTheDocument();
+		});
+
+		// Open the modal.
+		const rows = screen.getAllByTestId('scenario-row');
+		await fireEvent.click(rows[0]);
+		await waitFor(() => {
+			expect(screen.getByTestId('scenario-modal')).toBeInTheDocument();
+		});
+
+		// Esc on the window → modal closes.
+		await fireEvent.keyDown(window, { key: 'Escape' });
+		await waitFor(() => {
+			expect(screen.queryByTestId('scenario-modal')).toBeNull();
+		});
+	});
+
 	it('hides the hub link for non-namespaced scenarios (e.g. manual)', async () => {
 		securityMock.fetchScenarios.mockResolvedValue(sampleScenariosOK);
 		await openScenariosTab();

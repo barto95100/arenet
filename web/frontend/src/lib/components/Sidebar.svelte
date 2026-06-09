@@ -18,6 +18,15 @@
   in R.4. Same for /admin/users which is still routed but the
   sidebar entry points to the new /users top-level route.
 
+  Step CS.2 follow-up: /audit IS exposed (Administration
+  section, after Settings). Operator-flagged gap
+  (#R-AUDIT-not-in-nav from docs/backlog-crowdsec.md): the
+  page existed but had no menu link, forcing operators to
+  type the URL by hand. Distinct from /security/decisions
+  which is intentionally hidden — /audit has no equivalent
+  contextual entry point elsewhere in the app, so the sidebar
+  is the right home.
+
   Admin-only filter: viewer-role users see Aperçu / Trafic /
   Sécurité; the Administration section is hidden in its entirety.
 
@@ -39,7 +48,8 @@
 		| 'security'
 		| 'certs'
 		| 'users'
-		| 'settings';
+		| 'settings'
+		| 'audit';
 
 	type NavItem = {
 		href: string;
@@ -83,7 +93,12 @@
 			adminOnly: true,
 			items: [
 				{ href: '/users', label: 'Utilisateurs', icon: 'users', adminOnly: true },
-				{ href: '/settings', label: 'Settings', icon: 'settings', adminOnly: true }
+				{ href: '/settings', label: 'Settings', icon: 'settings', adminOnly: true },
+				// Step CS.2 follow-up — /audit operator-flagged
+				// nav gap. Page existed but had no sidebar entry,
+				// so operators were forced to type the URL.
+				// Placed after Settings (sibling admin surface).
+				{ href: '/audit', label: 'Audit log', icon: 'audit', adminOnly: true }
 			]
 		}
 	];
@@ -170,6 +185,11 @@
 		{:else if icon === 'settings'}
 			<circle cx="8" cy="8" r="2" />
 			<path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5L13 13M3 13l1.5-1.5M11.5 4.5L13 3" />
+		{:else if icon === 'audit'}
+			<!-- Clipboard / ledger glyph: document outline + clip + 3 horizontal rows. -->
+			<rect x="3.5" y="3" width="9" height="11" rx="1" />
+			<rect x="6" y="1.75" width="4" height="2.5" rx="0.5" fill="currentColor" stroke="none" />
+			<path d="M5.5 7h5M5.5 9.25h5M5.5 11.5h3" />
 		{/if}
 	</svg>
 {/snippet}
