@@ -402,16 +402,30 @@ func buildManualBanAlertPayload(scenario, reason, scope, value, banType, duratio
 	durationPtr := duration
 	originPtr := "manual"
 
+	// HF on 7302a3a — LAPI's swagger Alert schema marks
+	// scenario_hash, scenario_version, simulated as
+	// Required: true (crowdsec@v1.6.3/pkg/models/alert.go).
+	// Without them LAPI parser returns HTTP 500 in ~1ms with
+	// "validation failure list: ... is required". Empirically
+	// confirmed via curl on AreNET-test 2026-06-10. We emit
+	// empty strings for the hash + version (no upstream
+	// scenario backing a manual ban) and `false` for
+	// simulated (a real, enforceable ban). cscli's manual
+	// alerts use the same shape; consumers downstream are
+	// already tolerant of empty hash/version on manual rows.
 	payload := []map[string]any{
 		{
-			"scenario":     scenarioPtr,
-			"message":      messagePtr,
-			"events":       emptyEvents,
-			"events_count": eventsCount,
-			"capacity":     capacity,
-			"leakspeed":    leakspeed,
-			"start_at":     startStr,
-			"stop_at":      stopStr,
+			"scenario":         scenarioPtr,
+			"scenario_hash":    "",
+			"scenario_version": "",
+			"simulated":        false,
+			"message":          messagePtr,
+			"events":           emptyEvents,
+			"events_count":     eventsCount,
+			"capacity":         capacity,
+			"leakspeed":        leakspeed,
+			"start_at":         startStr,
+			"stop_at":          stopStr,
 			"source": map[string]any{
 				"scope": scopePtr,
 				"value": valuePtr,

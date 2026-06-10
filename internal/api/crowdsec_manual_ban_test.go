@@ -221,15 +221,29 @@ func (f *fakeLAPIForBan) server(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/v1/alerts", func(w http.ResponseWriter, r *http.Request) {
 		f.alertsCalls.Add(1)
+		var bodyStr string
 		if r.Method == http.MethodPost {
 			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-			f.lastBody.Store(string(body))
+			bodyStr = string(body)
+			f.lastBody.Store(bodyStr)
 		}
 		if f.alertsHandler != nil {
 			f.alertsHandler(w, r)
 			return
 		}
-		// Default: 201 Created.
+		// HF on 7302a3a — emulate LAPI v1.6.3's swagger
+		// validator: if the POST payload's Alert objects miss
+		// scenario_hash / scenario_version / simulated, LAPI
+		// rejects with 500 "validation failure list: ... is
+		// required" (empirically confirmed against LAPI 1.7.8
+		// on AreNET-test). Any happy-path test now implicitly
+		// catches a regression that drops these fields.
+		// Validated only on POST (GET uses since=duration).
+		if r.Method == http.MethodPost && !alertPayloadHasRequiredFields(bodyStr) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"message":"validation failure list: scenario_hash/scenario_version/simulated is required"}`))
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 	})
 	srv := httptest.NewServer(mux)
@@ -642,5 +656,80 @@ func TestLapiWithJWT_PassesMethodAndBody_ContentTypeOnPostOnly(t *testing.T) {
 	}
 	if capturedCT != "" {
 		t.Errorf("GET shouldn't set Content-Type, got %q", capturedCT)
+	}
+}
+
+// --- HF on 7302a3a: required Alert fields wire-shape pin -----
+//
+// LAPI's swagger Alert schema marks scenario_hash,
+// scenario_version, simulated as Required: true. Empirically
+// LAPI 1.7.8 rejects POSTs missing any with HTTP 500 in ~1ms.
+// The fakeLAPIForBan default handler now mirrors that
+// constraint so every existing happy-path test implicitly
+// catches a regression. This dedicated pin asserts the wire
+// shape directly so a future refactor produces a precise
+// failure message rather than the generic "got 502" of the
+// existing tests.
+
+func alertPayloadHasRequiredFields(body string) bool {
+	// Loose substring check is sufficient — we don't care
+	// about ordering or formatting, only that the keys exist
+	// at the top-level Alert. A more rigorous test would
+	// decode into a struct, but the substring approach is
+	// faster to read and the keys are unique enough.
+	return strings.Contains(body, `"scenario_hash":`) &&
+		strings.Contains(body, `"scenario_version":`) &&
+		strings.Contains(body, `"simulated":`)
+}
+
+func TestManualBan_PayloadContainsRequiredAlertFields(t *testing.T) {
+	fake := newFakeLAPIForBan()
+	srv := fake.server(t)
+
+	var logBuf bytes.Buffer
+	h := newTestHandler(t, &fakeAuditAppender{}, &logBuf)
+	seedWatcherCredsForBan(t, h, srv.URL)
+
+	body := `{"value":"203.0.113.42","duration":"1h","type":"ban","reason":"smoke"}`
+	req := reqWithAuth(http.MethodPost, "/api/v1/security/crowdsec/decisions", "u", "admin", "1.2.3.4", "test")
+	req.Body = httpBody(body)
+	rec := httptest.NewRecorder()
+	h.addManualBan(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+
+	lastBody := fake.lastBody.Load().(string)
+
+	// Required fields present.
+	for _, key := range []string{
+		`"scenario_hash":""`,
+		`"scenario_version":""`,
+		`"simulated":false`,
+	} {
+		if !strings.Contains(lastBody, key) {
+			t.Errorf("payload missing required field %s: %s", key, lastBody)
+		}
+	}
+}
+
+func TestManualBan_FakeLAPIRejectsMissingRequiredFields_AsRegressionGuard(t *testing.T) {
+	// Demonstrates the bug shape this HF closes: fakeLAPI's
+	// default handler now mirrors LAPI's swagger validator.
+	// Direct GET against the alerts endpoint with a manually-
+	// crafted body missing the 3 required fields → 500. If
+	// someone weakens the mock, this test starts failing.
+	fake := newFakeLAPIForBan()
+	srv := fake.server(t)
+
+	missingFields := `[{"scenario":"manual:x|y","message":"y"}]`
+	resp, err := http.Post(srv.URL+"/v1/alerts", "application/json", strings.NewReader(missingFields))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("fakeLAPI accepted incomplete Alert payload — mock weakened; got %d, want 500", resp.StatusCode)
 	}
 }
