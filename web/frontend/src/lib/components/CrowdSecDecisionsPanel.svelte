@@ -86,7 +86,25 @@
 		offset: 0
 	});
 	let liveScope = $state<string>('');
-	let liveSource = $state<string>('');
+	// Step CS.3 Commit B — origin filter tabs replace the
+	// pre-CS.3 free-form Source dropdown. Four buckets:
+	//   - 'all'        no origin filter
+	//   - 'local'      origin ∈ {crowdsec, cscli} BUT excludes
+	//                  origin === 'manual' (which is its own
+	//                  bucket per Commit C payload). Note: cscli
+	//                  decisions that DON'T have origin='manual'
+	//                  set (e.g. `cscli decisions add` without
+	//                  Arenet) DO land in Locales — they were
+	//                  authored on the LAPI host, which matches
+	//                  the operator's mental model.
+	//   - 'capi'       origin === 'CAPI'
+	//   - 'manual'     origin === 'manual'
+	// Backend filter is no longer used: we fetch the full
+	// page once and filter client-side. The breakdown counts
+	// per tab use the FULL response (pre-filter), so toggling
+	// tabs never under-counts.
+	type LiveOriginTab = 'all' | 'local' | 'capi' | 'manual';
+	let liveOriginTab = $state<LiveOriginTab>('all');
 	let liveLastFetched = $state<number | null>(null);
 	// 30s polling tick. Set up when the user opens the Live
 	// tab; torn down when leaving (or on component destroy).
@@ -100,9 +118,13 @@
 		liveLoading = true;
 		liveErrorMsg = null;
 		try {
+			// CS.3 Commit B: do NOT pass `source` to the
+			// backend. Filtering by origin happens client-side
+			// so the 4-tab UI can show accurate counts for
+			// every bucket without re-fetching when the
+			// operator switches tabs.
 			const resp = await fetchLAPIDecisions({
 				scope: liveScope || undefined,
-				source: liveSource || undefined,
 				limit: 100
 			});
 			liveDecisions = resp.decisions;
@@ -346,12 +368,120 @@
 		return `in ${Math.floor(diffSecs / 86400)}d`;
 	}
 
-	// Origin breakdown — sorted by count desc so the
-	// dominant source shows first in the badge row.
-	const liveBreakdown = $derived(
+	// CS.3 Commit B — per-tab counts computed from the FULL
+	// LAPI response (liveMeta.totalByOrigin). Counts stay
+	// stable across tab switches and are NOT affected by the
+	// scope select either, since both filters apply after the
+	// fetch (scope is forwarded to LAPI but the meta.total
+	// already reflects the scope-narrowed set).
+	//
+	// Note on the predicates: "manual" is BOTH a top-level
+	// origin AND a possible value of the legacy scenario field
+	// (e.g. cscli emits scenario:"manual" with origin:"cscli"
+	// for ad-hoc bans without origin set). The brief explicitly
+	// pins origin === "manual" as the Manuelles bucket, so the
+	// Locales bucket excludes ONLY origin === "manual", not
+	// scenarios that start with "manual:". A cscli-issued ban
+	// from the LAPI host that did NOT use Arenet's POST
+	// endpoint lands in Locales by origin, as intended.
+	function isLocalOrigin(o: string): boolean {
+		return o === 'crowdsec' || o === 'cscli';
+	}
+	const liveCountAll = $derived(liveMeta.total);
+	const liveCountLocal = $derived(
 		Object.entries(liveMeta.totalByOrigin)
-			.sort((a, b) => b[1] - a[1])
+			.filter(([o]) => isLocalOrigin(o))
+			.reduce((s, [, n]) => s + n, 0)
 	);
+	const liveCountCAPI = $derived(liveMeta.totalByOrigin['CAPI'] ?? 0);
+	const liveCountManual = $derived(liveMeta.totalByOrigin['manual'] ?? 0);
+
+	// Tabs.svelte expects a static label per tab — we want
+	// the count to flow live, so we build the array as a
+	// $derived. Each label embeds the count; when a tab's
+	// count is zero, the tab still renders (operator can
+	// click to confirm "yes, 0 matches" without thinking
+	// the UI is broken).
+	const liveOriginTabDescriptors = $derived<
+		ReadonlyArray<{ id: LiveOriginTab; label: string; testId: string }>
+	>([
+		{ id: 'all', label: `Toutes (${liveCountAll})`, testId: 'live-tab-all' },
+		{ id: 'local', label: `Locales (${liveCountLocal})`, testId: 'live-tab-local' },
+		{ id: 'capi', label: `CAPI (${liveCountCAPI})`, testId: 'live-tab-capi' },
+		{ id: 'manual', label: `Manuelles (${liveCountManual})`, testId: 'live-tab-manual' }
+	]);
+
+	// Filtered view derived from liveDecisions + active tab.
+	// Visible table rows come from this; the table also
+	// renders the operator-friendly origin badge per row.
+	const liveDecisionsFiltered = $derived(
+		liveDecisions.filter((d) => {
+			switch (liveOriginTab) {
+				case 'all':
+					return true;
+				case 'local':
+					return isLocalOrigin(d.origin);
+				case 'capi':
+					return d.origin === 'CAPI';
+				case 'manual':
+					return d.origin === 'manual';
+			}
+		})
+	);
+
+	// CS.3 Commit B — parse manual:<username>|<reason>
+	// payload format (operator-confirmed Option 1).
+	// Backend Commit C builds this exact string in the
+	// Decision.scenario field. Non-manual scenarios pass
+	// through verbatim.
+	type ParsedManual = {
+		username: string;
+		reason: string;
+	};
+	function parseManualScenario(scenario: string): ParsedManual | null {
+		if (!scenario.startsWith('manual:')) return null;
+		const afterPrefix = scenario.slice('manual:'.length);
+		const pipe = afterPrefix.indexOf('|');
+		if (pipe < 0) {
+			// Legacy / cscli-issued manual ban with no reason
+			// embedded — show the raw value as username, no
+			// line 2.
+			return { username: afterPrefix.trim(), reason: '' };
+		}
+		return {
+			username: afterPrefix.slice(0, pipe).trim(),
+			reason: afterPrefix.slice(pipe + 1).trim()
+		};
+	}
+
+	// Operator-facing origin label — collapses CrowdSec's
+	// raw vocabulary into the 3 buckets the UI surfaces.
+	// "unknown" / empty falls through to "—" so the badge
+	// never shows a blank pill.
+	function originBucket(origin: string): 'local' | 'capi' | 'manual' | 'other' {
+		if (origin === 'manual') return 'manual';
+		if (origin === 'CAPI') return 'capi';
+		if (isLocalOrigin(origin)) return 'local';
+		return 'other';
+	}
+	const ORIGIN_BADGE_COLOR: Record<string, string> = {
+		local: 'var(--status-warn)',
+		capi: 'var(--status-info)',
+		manual: 'var(--accent-cyan)',
+		other: 'var(--text-muted)'
+	};
+	function originBadgeColor(origin: string): string {
+		return ORIGIN_BADGE_COLOR[originBucket(origin)];
+	}
+	function originBadgeLabel(origin: string): string {
+		const b = originBucket(origin);
+		if (b === 'other') return origin || '—';
+		return b;
+	}
+
+	function onLiveOriginTabChange(next: LiveOriginTab): void {
+		liveOriginTab = next;
+	}
 
 	function lastFetchedLabel(ts: number | null): string {
 		if (ts === null) return '';
@@ -505,6 +635,20 @@
 			</div>
 		</Card>
 	{:else}
+		<!-- CS.3 Commit B — origin filter tabs replace the
+		     pre-CS.3 Source dropdown + breakdown chips. Scope
+		     dropdown stays — it filters on a different axis
+		     (ip / range / country / as) and is forwarded
+		     server-side to LAPI. -->
+		<div class="origin-tabs-row" data-testid="live-origin-tabs">
+			<Tabs
+				bind:value={liveOriginTab}
+				tabs={liveOriginTabDescriptors}
+				ariaLabel="Filtrer les décisions actives par origine"
+				onChange={onLiveOriginTabChange}
+			/>
+		</div>
+
 		<div class="filter-row">
 			<div class="live-filters">
 				<label class="filter-label">
@@ -517,21 +661,16 @@
 						<option value="as">as</option>
 					</select>
 				</label>
-				<label class="filter-label">
-					Source
-					<select bind:value={liveSource} onchange={onLiveFilterChange} data-testid="live-source-filter">
-						<option value="">toutes</option>
-						{#each liveBreakdown as [origin, count] (origin)}
-							<option value={origin}>{origin} ({count})</option>
-						{/each}
-					</select>
-				</label>
 			</div>
 			<div class="meta">
 				{#if liveLoading && liveDecisions.length === 0}
 					<Spinner size="sm" /> chargement…
 				{:else}
-					{liveMeta.total} décision{liveMeta.total > 1 ? 's' : ''}
+					{liveDecisionsFiltered.length}
+					{#if liveDecisionsFiltered.length !== liveMeta.total}
+						<span class="muted">/ {liveMeta.total}</span>
+					{/if}
+					décision{liveDecisionsFiltered.length > 1 ? 's' : ''}
 					{#if liveLastFetched !== null}
 						<span class="muted">· fetched {lastFetchedLabel(liveLastFetched)}</span>
 					{/if}
@@ -541,25 +680,6 @@
 				{/if}
 			</div>
 		</div>
-
-		{#if liveBreakdown.length > 0}
-			<div class="breakdown" data-testid="live-breakdown">
-				{#each liveBreakdown as [origin, count] (origin)}
-					<button
-						type="button"
-						class="breakdown-chip"
-						class:selected={liveSource === origin}
-						onclick={() => {
-							liveSource = liveSource === origin ? '' : origin;
-							onLiveFilterChange();
-						}}
-					>
-						<span class="chip-count">{count}</span>
-						<span class="chip-label">{origin}</span>
-					</button>
-				{/each}
-			</div>
-		{/if}
 
 		{#if liveErrorKind === 'unreachable'}
 			<Card>
@@ -584,28 +704,37 @@
 
 		<Card>
 			<div class="block">
-				{#if liveDecisions.length === 0 && !liveLoading && !liveErrorKind}
+				{#if liveDecisionsFiltered.length === 0 && !liveLoading && !liveErrorKind}
 					<div class="empty-inline" data-testid="live-empty">
-						Aucune décision active selon LAPI. Le bouncer surveille
-						mais aucune source n'est actuellement bloquée. (CAPI sync
-						tourne toutes les ~2–15 min ; un bouncer fraîchement
-						démarré peut prendre quelques minutes à recevoir la
-						blocklist communauté.)
+						{#if liveMeta.total === 0}
+							Aucune décision active selon LAPI. Le bouncer surveille
+							mais aucune source n'est actuellement bloquée. (CAPI sync
+							tourne toutes les ~2–15 min ; un bouncer fraîchement
+							démarré peut prendre quelques minutes à recevoir la
+							blocklist communauté.)
+						{:else}
+							<!-- CS.3 Commit B — the LAPI returned data, but the
+							     selected origin tab has zero matches. Distinct
+							     empty state so the operator knows the filter is
+							     the cause, not LAPI emptiness. -->
+							Aucune décision dans cette catégorie ({liveMeta.total} au total — voir l'onglet <strong>Toutes</strong>).
+						{/if}
 					</div>
-				{:else if liveDecisions.length > 0}
+				{:else if liveDecisionsFiltered.length > 0}
 					<table>
 						<thead>
 							<tr>
 								<th>Type</th>
 								<th>Scope</th>
 								<th>Value</th>
-								<th>Source</th>
+								<th>Origin</th>
 								<th>Scenario</th>
 								<th>Expires</th>
 							</tr>
 						</thead>
 						<tbody>
-							{#each liveDecisions as d (d.id)}
+							{#each liveDecisionsFiltered as d (d.id)}
+								{@const parsedManual = parseManualScenario(d.scenario)}
 								<tr>
 									<td>
 										<span class="badge" style:background={typeColor(d.type)}>
@@ -618,13 +747,31 @@
 										</span>
 									</td>
 									<td class="mono">{d.value || '—'}</td>
-									<td class="mono">{d.origin || 'unknown'}</td>
+									<td>
+										<span class="badge" style:background={originBadgeColor(d.origin)}>
+											{originBadgeLabel(d.origin)}
+										</span>
+									</td>
 									<td class="mono">
-										{shortScenario(d.scenario)}
-										{#if isArenetAutoScenario(d.scenario)}
-											<span class="badge auto-badge" title="Auto-classified by Arenet (Step P)">
-												auto
-											</span>
+										{#if parsedManual !== null}
+											<!-- Manual ban — two-line cell. Line 1
+											     "manual / <username>"; line 2 the
+											     reason (italic gray, smaller). -->
+											<div class="manual-line1" data-testid="manual-line1">
+												manual / {parsedManual.username || 'unknown'}
+											</div>
+											{#if parsedManual.reason !== ''}
+												<div class="manual-line2" data-testid="manual-line2">
+													{parsedManual.reason}
+												</div>
+											{/if}
+										{:else}
+											{shortScenario(d.scenario)}
+											{#if isArenetAutoScenario(d.scenario)}
+												<span class="badge auto-badge" title="Auto-classified by Arenet (Step P)">
+													auto
+												</span>
+											{/if}
 										{/if}
 									</td>
 									<td class="ts" title={d.expiresAt ?? ''}>
@@ -982,35 +1129,25 @@
 	.refresh-btn:hover {
 		color: var(--accent-cyan);
 	}
-	.breakdown {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-		margin: 0 0 0.75rem 0;
+	/* CS.3 Commit B — origin tabs row.
+	   .breakdown / .breakdown-chip / .chip-count / .chip-label
+	   styles deleted (chips replaced by Tabs.svelte). */
+	.origin-tabs-row {
+		margin: 0 0 0.5rem 0;
 	}
-	.breakdown-chip {
-		display: inline-flex;
-		gap: 0.4rem;
-		align-items: baseline;
-		background: var(--bg-surface);
-		color: var(--text-primary);
-		border: 1px solid var(--border-subtle, var(--bg-hover));
-		padding: 0.2rem 0.6rem;
-		border-radius: 999px;
-		font-size: var(--text-xs, 11px);
-		cursor: pointer;
-	}
-	.breakdown-chip.selected {
-		background: var(--accent-cyan);
-		color: var(--text-inverse);
-		border-color: var(--accent-cyan);
-	}
-	.chip-count {
-		font-weight: 600;
-		font-variant-numeric: tabular-nums;
-	}
-	.chip-label {
+	/* Manual-ban scenario cell — two lines stacked. Line 1
+	   keeps the table's primary readability; line 2 is the
+	   operator reason in italic gray smaller text. */
+	.manual-line1 {
 		font-family: var(--font-mono, monospace);
+	}
+	.manual-line2 {
+		margin-top: 0.15rem;
+		font-style: italic;
+		color: var(--text-muted);
+		font-size: var(--text-xs, 11px);
+		white-space: normal;
+		word-break: break-word;
 	}
 	.block {
 		padding: 1rem;

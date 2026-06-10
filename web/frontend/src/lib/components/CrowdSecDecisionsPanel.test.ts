@@ -196,40 +196,254 @@ describe('CrowdSec decisions panel — Live LAPI tab', () => {
 		});
 	});
 
-	it('renders the origin breakdown chips from meta.totalByOrigin', async () => {
+	// CS.3 Commit B — the pre-CS.3 breakdown chips were
+	// replaced by 4 origin tabs (Toutes/Locales/CAPI/Manuelles).
+	// The "filter by clicking a chip" test below now exercises
+	// the tab + client-side filter path instead of the
+	// chip-triggered backend re-fetch path.
+
+	it('renders the 4 origin tabs with counts from meta.totalByOrigin', async () => {
 		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleLAPI());
 		await openLiveTab();
 
 		await waitFor(() => {
-			const breakdown = screen.getByTestId('live-breakdown');
-			expect(breakdown.textContent ?? '').toContain('CAPI');
-			expect(breakdown.textContent ?? '').toContain('cscli');
+			// Sample LAPI fixture has 2 CAPI + 1 cscli rows, no
+			// manual. So: all=3, local=1, capi=2, manual=0.
+			expect(screen.getByTestId('live-tab-all').textContent ?? '').toMatch(/Toutes\s*\(3\)/);
+			expect(screen.getByTestId('live-tab-local').textContent ?? '').toMatch(/Locales\s*\(1\)/);
+			expect(screen.getByTestId('live-tab-capi').textContent ?? '').toMatch(/CAPI\s*\(2\)/);
+			expect(screen.getByTestId('live-tab-manual').textContent ?? '').toMatch(/Manuelles\s*\(0\)/);
 		});
 	});
 
-	it('filters by source when a breakdown chip is clicked', async () => {
+	it('filters the table client-side when an origin tab is clicked (no re-fetch)', async () => {
 		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleLAPI());
 		await openLiveTab();
 
-		await waitFor(() => expect(screen.getByTestId('live-breakdown')).toBeInTheDocument());
+		// Wait for the initial fetch + table.
+		await waitFor(() => {
+			expect(screen.getByTestId('live-tab-all')).toBeInTheDocument();
+		});
 
-		// Find a chip for "cscli" and click it.
-		const breakdown = screen.getByTestId('live-breakdown');
-		const cscliChip = Array.from(breakdown.querySelectorAll('button')).find(
-			(b) => (b.textContent ?? '').includes('cscli')
-		);
-		expect(cscliChip).toBeDefined();
+		// Both CAPI and cscli rows present initially.
+		expect(screen.getByText('5.6.7.0/24')).toBeInTheDocument(); // CAPI row
+		expect(screen.getByText('192.0.2.42')).toBeInTheDocument(); // cscli row
 
-		// The next fetchLAPIDecisions call after the click
-		// should carry source=cscli.
-		securityMock.fetchLAPIDecisions.mockClear();
-		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleLAPI(1));
-		await fireEvent.click(cscliChip!);
+		const fetchCountBefore = securityMock.fetchLAPIDecisions.mock.calls.length;
+
+		// Click "Locales" — should hide the CAPI row, keep
+		// the cscli row. Tab change MUST NOT trigger a fetch
+		// (filtering happens client-side post-fetch).
+		await fireEvent.click(screen.getByTestId('live-tab-local'));
 
 		await waitFor(() => {
-			expect(securityMock.fetchLAPIDecisions).toHaveBeenCalledWith(
-				expect.objectContaining({ source: 'cscli' })
-			);
+			expect(screen.queryByText('5.6.7.0/24')).toBeNull(); // CAPI row hidden
+			expect(screen.getByText('192.0.2.42')).toBeInTheDocument(); // cscli row visible
+		});
+
+		// CRITICAL: no re-fetch on tab change.
+		expect(securityMock.fetchLAPIDecisions.mock.calls.length).toBe(fetchCountBefore);
+	});
+
+	it('does NOT send source= to the backend (Commit B drops backend source filter)', async () => {
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleLAPI());
+		await openLiveTab();
+		await waitFor(() => expect(securityMock.fetchLAPIDecisions).toHaveBeenCalled());
+		// Every call so far must omit the source param. The
+		// scope param may or may not be present depending on
+		// initial state (currently absent on initial fetch).
+		for (const call of securityMock.fetchLAPIDecisions.mock.calls) {
+			expect(call[0]).not.toHaveProperty('source');
+		}
+	});
+
+	it('Locales excludes origin=manual (only crowdsec + cscli)', async () => {
+		// Fixture: mix CAPI + cscli + manual. After the
+		// Locales tab is selected, only cscli should remain
+		// in the rendered table.
+		const mixed = {
+			decisions: [
+				{
+					id: 1,
+					duration: '24h',
+					origin: 'CAPI',
+					scenario: 'crowdsecurity/community-blocklist',
+					scope: 'ip',
+					type: 'ban',
+					value: '1.1.1.1',
+					expiresAt: new Date(Date.now() + 86400_000).toISOString()
+				},
+				{
+					id: 2,
+					duration: '4h',
+					origin: 'cscli',
+					scenario: 'crowdsecurity/http-cve',
+					scope: 'ip',
+					type: 'ban',
+					value: '2.2.2.2',
+					expiresAt: new Date(Date.now() + 14400_000).toISOString()
+				},
+				{
+					id: 3,
+					duration: '1h',
+					origin: 'manual',
+					scenario: 'manual:admin|smoke test ban',
+					scope: 'ip',
+					type: 'ban',
+					value: '3.3.3.3',
+					expiresAt: new Date(Date.now() + 3600_000).toISOString()
+				}
+			],
+			meta: {
+				total: 3,
+				totalByOrigin: { CAPI: 1, cscli: 1, manual: 1 },
+				limit: 100,
+				offset: 0
+			}
+		};
+		securityMock.fetchLAPIDecisions.mockResolvedValue(mixed);
+		await openLiveTab();
+
+		await waitFor(() => expect(screen.getByTestId('live-tab-local')).toBeInTheDocument());
+
+		await fireEvent.click(screen.getByTestId('live-tab-local'));
+
+		await waitFor(() => {
+			// cscli row visible, CAPI + manual rows hidden.
+			expect(screen.getByText('2.2.2.2')).toBeInTheDocument();
+			expect(screen.queryByText('1.1.1.1')).toBeNull();
+			expect(screen.queryByText('3.3.3.3')).toBeNull();
+		});
+	});
+
+	it('renders the operator-friendly origin badge per row', async () => {
+		// The Origin column shows "local" / "capi" / "manual"
+		// pills regardless of CrowdSec's raw origin value.
+		// Use the mixed fixture and assert the column text.
+		const mixed = {
+			decisions: [
+				{
+					id: 1, duration: '24h', origin: 'CAPI',
+					scenario: 'x', scope: 'ip', type: 'ban',
+					value: '1.1.1.1',
+					expiresAt: new Date(Date.now() + 86400_000).toISOString()
+				},
+				{
+					id: 2, duration: '4h', origin: 'cscli',
+					scenario: 'x', scope: 'ip', type: 'ban',
+					value: '2.2.2.2',
+					expiresAt: new Date(Date.now() + 14400_000).toISOString()
+				}
+			],
+			meta: {
+				total: 2,
+				totalByOrigin: { CAPI: 1, cscli: 1 },
+				limit: 100, offset: 0
+			}
+		};
+		securityMock.fetchLAPIDecisions.mockResolvedValue(mixed);
+		await openLiveTab();
+
+		await waitFor(() => {
+			expect(screen.getByText('1.1.1.1')).toBeInTheDocument();
+		});
+		// Both badges visible somewhere on the page.
+		const allText = document.body.textContent ?? '';
+		expect(allText).toMatch(/capi/);
+		expect(allText).toMatch(/local/);
+	});
+
+	it('parses scenario "manual:<user>|<reason>" into two-line cell', async () => {
+		const manualFixture = {
+			decisions: [
+				{
+					id: 1, duration: '1h', origin: 'manual',
+					scenario: 'manual:admin|emergency block during smoke',
+					scope: 'ip', type: 'ban',
+					value: '198.51.100.1',
+					expiresAt: new Date(Date.now() + 3600_000).toISOString()
+				}
+			],
+			meta: {
+				total: 1,
+				totalByOrigin: { manual: 1 },
+				limit: 100, offset: 0
+			}
+		};
+		securityMock.fetchLAPIDecisions.mockResolvedValue(manualFixture);
+		await openLiveTab();
+
+		await waitFor(() => {
+			expect(screen.getByText('198.51.100.1')).toBeInTheDocument();
+		});
+
+		const line1 = screen.getByTestId('manual-line1');
+		expect(line1.textContent ?? '').toContain('manual / admin');
+
+		const line2 = screen.getByTestId('manual-line2');
+		expect(line2.textContent ?? '').toContain('emergency block during smoke');
+	});
+
+	it('parses scenario "manual:<user>" with no reason as line 1 only', async () => {
+		// cscli-issued manual ban without Arenet's reason
+		// encoding — username only, no line 2.
+		const noReasonFixture = {
+			decisions: [
+				{
+					id: 1, duration: '1h', origin: 'manual',
+					scenario: 'manual:cscli-user',
+					scope: 'ip', type: 'ban',
+					value: '198.51.100.99',
+					expiresAt: new Date(Date.now() + 3600_000).toISOString()
+				}
+			],
+			meta: {
+				total: 1,
+				totalByOrigin: { manual: 1 },
+				limit: 100, offset: 0
+			}
+		};
+		securityMock.fetchLAPIDecisions.mockResolvedValue(noReasonFixture);
+		await openLiveTab();
+
+		await waitFor(() => {
+			expect(screen.getByText('198.51.100.99')).toBeInTheDocument();
+		});
+
+		expect(screen.getByTestId('manual-line1').textContent ?? '').toContain('manual / cscli-user');
+		// Line 2 is conditionally rendered; with empty reason
+		// the element should be absent.
+		expect(screen.queryByTestId('manual-line2')).toBeNull();
+	});
+
+	it('shows category-empty state when filter has 0 matches but LAPI has data', async () => {
+		// CAPI-only fixture, then click Manuelles → expect
+		// the "Aucune décision dans cette catégorie" empty.
+		const capiOnly = {
+			decisions: [
+				{
+					id: 1, duration: '24h', origin: 'CAPI',
+					scenario: 'x', scope: 'ip', type: 'ban',
+					value: '4.4.4.4',
+					expiresAt: new Date(Date.now() + 86400_000).toISOString()
+				}
+			],
+			meta: {
+				total: 1,
+				totalByOrigin: { CAPI: 1 },
+				limit: 100, offset: 0
+			}
+		};
+		securityMock.fetchLAPIDecisions.mockResolvedValue(capiOnly);
+		await openLiveTab();
+		await waitFor(() => expect(screen.getByTestId('live-tab-manual')).toBeInTheDocument());
+
+		await fireEvent.click(screen.getByTestId('live-tab-manual'));
+
+		await waitFor(() => {
+			const empty = screen.getByTestId('live-empty');
+			expect(empty.textContent ?? '').toMatch(/cette catégorie/);
+			expect(empty.textContent ?? '').toMatch(/1 au total/);
 		});
 	});
 
