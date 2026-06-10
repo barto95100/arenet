@@ -135,6 +135,10 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// that need the gate active override via the partial
 		// Route overrides.
 		countryBlock: { mode: 'off', countryList: [], statusCode: 0 },
+		// Step #R-PROXMOX-HTTPS-LOOP — strict default. Tests
+		// exercising the disclosure / toggle override via the
+		// partial Route overrides.
+		insecureSkipVerify: false,
 		...overrides
 	};
 }
@@ -1573,5 +1577,197 @@ describe('Routes page — W.7 follow-up: section visibility on mode=off', () => 
 		await fireEvent.click(summary!);
 		await tick();
 		expect(section.open).toBe(false);
+	});
+});
+
+// --- 9. #R-PROXMOX-HTTPS-LOOP commit 2 — TLS advanced disclosure +
+// per-row hints + scheme-transition self-heal -----------------------
+
+describe('Routes page — TLS advanced disclosure + UX hints (#R-PROXMOX-HTTPS-LOOP)', () => {
+	// Reaches the first upstream URL input directly via the
+	// placeholder selector (helper from §1 above).
+	function firstURL(): HTMLInputElement {
+		return upstreamURLInputs()[0];
+	}
+
+	it('hides the TLS advanced disclosure on an http-only pool', async () => {
+		render(Page);
+		await openCreateForm();
+		// Initial state: row is empty → poolScheme === "empty" →
+		// disclosure absent.
+		expect(screen.queryByTestId('tls-advanced-disclosure')).toBeNull();
+		// Type http URL — disclosure stays absent.
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'http://10.0.0.10:8123');
+		await tick();
+		expect(screen.queryByTestId('tls-advanced-disclosure')).toBeNull();
+	});
+
+	it('shows the TLS advanced disclosure on an https-only pool', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'https://192.168.1.60:8006');
+		await tick();
+		expect(screen.queryByTestId('tls-advanced-disclosure')).not.toBeNull();
+	});
+
+	it('hides the disclosure AND clears the toggle on https→http scheme transition (self-heal)', async () => {
+		render(Page);
+		await openCreateForm();
+		// 1. Type https — disclosure appears.
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'https://192.168.1.60:8006');
+		await tick();
+		const disclosure = screen.getByTestId('tls-advanced-disclosure');
+		// 2. Tick the toggle — would persist a true on submit.
+		const toggle = screen.getByLabelText(
+			'Ignorer la vérification du certificat upstream'
+		) as HTMLInputElement;
+		await userEvent.click(toggle);
+		await tick();
+		expect(toggle.checked).toBe(true);
+		// 3. Flip the URL to http — disclosure must leave the DOM
+		// AND the $effect must reset insecureSkipVerify to false.
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'http://10.0.0.10:8123');
+		await tick();
+		expect(screen.queryByTestId('tls-advanced-disclosure')).toBeNull();
+		// 4. Re-flip to https — toggle must re-appear UNCHECKED
+		// (the $effect cleared it on the transition, so the
+		// operator's stale intent doesn't leak back).
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'https://192.168.1.60:8006');
+		await tick();
+		const reborn = screen.getByLabelText(
+			'Ignorer la vérification du certificat upstream'
+		) as HTMLInputElement;
+		expect(reborn.checked).toBe(false);
+		// touch the disclosure so the previous binding is held
+		// (no-op assertion to keep TS happy on the reference).
+		expect(disclosure).toBeTruthy();
+	});
+
+	it('shows the path warning when the upstream URL carries a non-root path', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'https://1.2.3.4:8006/api2/json');
+		await tick();
+		const warning = screen.getByTestId('upstream-path-warning');
+		expect(warning.textContent).toContain('/api2/json');
+		expect(warning.textContent).toMatch(/ignoré/i);
+		// And the value is preserved (no auto-strip — the operator
+		// has to decide).
+		expect(firstURL().value).toBe('https://1.2.3.4:8006/api2/json');
+	});
+
+	it('shows the private-IP hint on https + RFC 1918 host', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'https://192.168.1.60:8006');
+		await tick();
+		const hint = screen.getByTestId('upstream-private-ip-hint');
+		expect(hint.textContent).toMatch(/IP privée/i);
+		// Negative case: http + RFC 1918 → hint absent.
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'http://192.168.1.60:8006');
+		await tick();
+		expect(screen.queryByTestId('upstream-private-ip-hint')).toBeNull();
+		// Negative case: https + public IP → hint absent.
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'https://1.1.1.1');
+		await tick();
+		expect(screen.queryByTestId('upstream-private-ip-hint')).toBeNull();
+	});
+
+	it('blocks submit on a mixed-scheme pool with a pool-level error', async () => {
+		render(Page);
+		await openCreateForm();
+		// Fill a usable host so the host validator doesn't shadow
+		// the mixed-scheme error.
+		await userEvent.type(hostInput(), 'mixed.example.com');
+		// Row 0: http. Row 1: https.
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'http://10.0.0.10:8000');
+		const addBtn = screen.getByRole('button', { name: /\+\s*Add upstream/i });
+		await userEvent.click(addBtn);
+		await tick();
+		const row1 = upstreamURLInputs()[1];
+		await userEvent.type(row1, 'https://10.0.0.11:8000');
+		await tick();
+		// Submit — backend should NOT be reached; the form's
+		// validateBeforeSubmit short-circuits with the mixed-pool
+		// error rendered under the pool header. Create-mode button
+		// label is "Create" (Edit-mode would read "Save").
+		const submitBtn = screen.getByRole('button', { name: /^Create$/i });
+		await userEvent.click(submitBtn);
+		await tick();
+		expect(apiMock.createRoute).not.toHaveBeenCalled();
+		// Error copy exact phrase pinned (a future copy change
+		// should reach this test, not production).
+		expect(
+			screen.getByText(/All upstreams must share the same scheme/i)
+		).not.toBeNull();
+	});
+
+	it('serialises insecureSkipVerify=true into the POST payload on an https pool', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({
+			host: 'pve.example.com',
+			upstreams: [{ url: 'https://192.168.1.60:8006', weight: 1 }],
+			insecureSkipVerify: true
+		}));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'pve.example.com');
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'https://192.168.1.60:8006');
+		await tick();
+		const toggle = screen.getByLabelText(
+			'Ignorer la vérification du certificat upstream'
+		) as HTMLInputElement;
+		await userEvent.click(toggle);
+		await tick();
+		const submitBtn = screen.getByRole('button', { name: /^Create$/i });
+		await userEvent.click(submitBtn);
+		await tick();
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
+		const payload = apiMock.createRoute.mock.calls[0][0] as Record<string, unknown>;
+		expect(payload.insecureSkipVerify).toBe(true);
+	});
+
+	it('OMITS insecureSkipVerify from the PUT payload on an http-only pool (preserve-on-omit)', async () => {
+		// openEdit a route that's currently http+true (a stale
+		// row from before a manual scheme switch). The form's
+		// scheme-transition $effect already self-healed
+		// formData.insecureSkipVerify to false in the
+		// openEdit→render path; the submit pipeline OMITS the
+		// field on an http pool so the backend's preserve-
+		// previous path runs (the backend will then itself
+		// self-heal the stored true → false with a warn-log on
+		// the next PUT that DOES touch the flag).
+		const fixture = makeRoute({
+			id: 'route-http-stale',
+			host: 'ha.example.com',
+			upstreams: [{ url: 'http://10.0.0.10:8123', weight: 1 }],
+			insecureSkipVerify: false
+		});
+		apiMock.listRoutes.mockResolvedValue([fixture]);
+		apiMock.updateRoute.mockResolvedValue(fixture);
+		render(Page);
+		// Wait for the route row, then click it to enter edit.
+		const row = await screen.findByText('ha.example.com');
+		await userEvent.click(row);
+		await tick();
+		// Submit unchanged.
+		const saveBtn = screen.getByRole('button', { name: /^Save$/i });
+		await userEvent.click(saveBtn);
+		await tick();
+		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
+		const payload = apiMock.updateRoute.mock.calls[0][1] as Record<string, unknown>;
+		// Pin the OMISSION — preserve-on-omit path. The backend
+		// will preserve whatever was stored (false here).
+		expect('insecureSkipVerify' in payload).toBe(false);
 	});
 });

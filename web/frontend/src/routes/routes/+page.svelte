@@ -89,7 +89,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify'> & {
 		healthCheck: HealthCheck;
 		// W.5 — narrow to the non-optional shape. The form
 		// always carries a CountryBlockRequest (mode="off"
@@ -97,6 +97,12 @@
 		// the RouteRequest side for callers that want
 		// preserve-previous semantics.
 		countryBlock: CountryBlockRequest;
+		// Step #R-PROXMOX-HTTPS-LOOP — narrowed to a non-
+		// optional boolean. The form always carries a
+		// definite value; the on-wire optionality
+		// (preserve-on-omit semantic) is reapplied at
+		// payload-assembly time below.
+		insecureSkipVerify: boolean;
 	};
 	let formData = $state<FormData>(emptyFormData());
 	let healthCheckTouched = $state(false);
@@ -117,6 +123,16 @@
 			wafMode: 'detect',
 			acmeChallenge: 'http-01',
 			useDedicatedCert: false,
+			// Step #R-PROXMOX-HTTPS-LOOP — strict default on
+			// create. The disclosure that exposes this toggle
+			// is itself hidden until the upstream pool uses
+			// `https://`, so an operator must (1) type https://
+			// in at least one upstream and (2) explicitly tick
+			// the toggle to flip this true. Self-heal $effect
+			// below also resets it to false on every https→http
+			// scheme transition so the on-screen + storage
+			// states stay aligned.
+			insecureSkipVerify: false,
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
 			// further down; operators opting in pick a mode +
@@ -507,6 +523,14 @@
 			acmeChallenge:
 				r.acmeChallenge === 'inherited' ? '' : r.acmeChallenge,
 			useDedicatedCert: r.useDedicatedCert ?? false,
+			// Step #R-PROXMOX-HTTPS-LOOP — load the persisted
+			// value so the disclosure toggle reflects what the
+			// route actually carries. Backend always emits a
+			// definite bool (no omitempty on Route.insecure-
+			// SkipVerify in the response), so the fallback to
+			// false here is a safety net rather than the
+			// expected path.
+			insecureSkipVerify: r.insecureSkipVerify ?? false,
 			// Step J.2: the server's HealthCheck is always present
 			// on the wire (no omitempty). The form holds it as-is;
 			// edit-mode shows explicit values (server materialised
@@ -752,6 +776,121 @@
 	// touched when we hide the column).
 	const weightVisible = $derived(formData.lbPolicy === 'weighted_round_robin');
 
+	// Step #R-PROXMOX-HTTPS-LOOP — derived helpers for the
+	// upstream-pool scheme + per-row UX hints. Mirror of the
+	// storage `Route.PoolUsesHTTPS` predicate and the
+	// `validateSameSchemePool` invariant, surfaced at form
+	// time so the operator gets fast feedback instead of a
+	// 400 on submit.
+	//
+	// poolScheme one of:
+	//   - 'empty'  — no rows have a URL yet (form just opened)
+	//   - 'http'   — every parseable row is http://
+	//   - 'https'  — every parseable row is https://
+	//   - 'mixed'  — at least one http and at least one https row
+	//
+	// Unparseable rows are ignored by the predicate (their own
+	// per-row error already blocks submit). The "mixed" state
+	// triggers a row-level error AND suppresses the TLS
+	// advanced disclosure (the storage validator would reject
+	// the submit anyway).
+	type PoolScheme = 'empty' | 'http' | 'https' | 'mixed';
+	function schemeOf(u: { url: string }): 'http' | 'https' | null {
+		const s = u.url.trim().toLowerCase();
+		if (s.startsWith('http://')) return 'http';
+		if (s.startsWith('https://')) return 'https';
+		return null;
+	}
+	const poolScheme = $derived.by<PoolScheme>(() => {
+		let sawHTTP = false;
+		let sawHTTPS = false;
+		for (const u of formData.upstreams) {
+			const sc = schemeOf(u);
+			if (sc === 'http') sawHTTP = true;
+			else if (sc === 'https') sawHTTPS = true;
+		}
+		if (sawHTTP && sawHTTPS) return 'mixed';
+		if (sawHTTPS) return 'https';
+		if (sawHTTP) return 'http';
+		return 'empty';
+	});
+
+	// Disclosure visibility for the "Options avancées TLS"
+	// block — visible ONLY on a clean all-https pool. When
+	// the pool is mixed, the row error suppresses the
+	// disclosure too (the operator can't make a meaningful
+	// choice until the pool is consistent).
+	const tlsAdvancedVisible = $derived(poolScheme === 'https');
+
+	// Self-heal on https→http transition: reset the toggle
+	// to false so the on-screen state and the storage state
+	// stay aligned. Mirror of the backend self-heal at
+	// internal/api/routes.go createRoute / updateRoute
+	// (silent normalisation + warn-log). Without this
+	// $effect the form would hide a still-true value when
+	// the operator switched a Proxmox route's pool to an
+	// http upstream, then re-expose it (checked) on a
+	// re-flip — exactly the surprise the operator flagged
+	// during plan review.
+	$effect(() => {
+		if (poolScheme !== 'https' && formData.insecureSkipVerify) {
+			formData.insecureSkipVerify = false;
+		}
+	});
+
+	// Per-row "private IP + https" hint. Recognises RFC 1918
+	// (10/8, 172.16/12, 192.168/16), 127/8 loopback, and the
+	// IPv6 ULA range fc00::/7 plus ::1. Hostnames are NOT
+	// flagged (a homelab might use mDNS or a private DNS
+	// suffix that the operator already trusts). The hint is
+	// advisory only — it never blocks submit; the operator
+	// might intentionally use a public-CA cert behind a
+	// private network (split-horizon DNS), in which case
+	// the hint is benign.
+	const RFC1918_RE = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.)/;
+	const IPV6_PRIVATE_RE = /^(::1|f[cd][0-9a-f]{2}:)/i;
+	function hasPrivateUpstreamHost(rawURL: string): boolean {
+		const url = rawURL.trim();
+		if (url === '') return false;
+		let parsed: URL;
+		try {
+			parsed = new URL(url);
+		} catch {
+			return false;
+		}
+		// new URL() wraps bracketed IPv6 hostnames in [...]; strip
+		// before matching the regex. IPv4 + hostnames are
+		// untouched.
+		const host = parsed.hostname.replace(/^\[|\]$/g, '');
+		return RFC1918_RE.test(host) || IPV6_PRIVATE_RE.test(host);
+	}
+	function showPrivateIPHint(rawURL: string): boolean {
+		return schemeOf({ url: rawURL }) === 'https' && hasPrivateUpstreamHost(rawURL);
+	}
+
+	// Per-row path warning. Caddy reverse_proxy targets the
+	// upstream at host:port; any path component on the upstream
+	// URL is silently dropped (the dial field never carries a
+	// path). Operators routinely paste full URLs from a browser
+	// address bar (e.g. https://pve.local:8006/api2/json) and
+	// expect the path to be honoured — the warning surfaces the
+	// truth without rejecting the value (they may want to keep
+	// the input as a reminder of where the API root sits, then
+	// configure path forwarding via request headers in a future
+	// commit).
+	function nonRootPath(rawURL: string): string | null {
+		const url = rawURL.trim();
+		if (url === '') return null;
+		let parsed: URL;
+		try {
+			parsed = new URL(url);
+		} catch {
+			return null;
+		}
+		if (parsed.pathname === '' || parsed.pathname === '/') return null;
+		return parsed.pathname;
+	}
+
 	// --- Client-side validation (Step J.3) -----------------------------------
 
 	function parseDuration(s: string): number | null {
@@ -795,6 +934,16 @@
 				next[`upstreams[${i}].weight`] = 'Weight must be >= 1';
 			}
 		});
+		// Step #R-PROXMOX-HTTPS-LOOP — same-scheme pool
+		// invariant. Mirror of storage.validateSameSchemePool;
+		// surfacing it at the form's submit boundary spares the
+		// operator a 400 round-trip. Pool-level error rendered
+		// under the pool header; individual rows keep their own
+		// per-URL errors.
+		if (poolScheme === 'mixed') {
+			next['upstreams'] =
+				'All upstreams must share the same scheme (http:// or https://) — mixed pools are not supported.';
+		}
 
 		// Step J.2: health-check sub-form validation, gated on enabled.
 		if (formData.healthCheck.enabled) {
@@ -948,6 +1097,19 @@
 					statusCode: formData.countryBlock.statusCode
 				}
 			};
+			// Step #R-PROXMOX-HTTPS-LOOP — only ship
+			// insecureSkipVerify when the pool is https. On an
+			// http-only pool the field is meaningless (the
+			// backend self-heals to false either way), and
+			// omitting it on PUT triggers the preserve-previous
+			// path which is the right shape for an unrelated
+			// edit. On https pools ship the explicit boolean so
+			// the operator's intent (true or freshly-unchecked
+			// false) is full-replacement, mirroring the wafMode
+			// always-ship pattern.
+			if (poolScheme === 'https') {
+				payload.insecureSkipVerify = formData.insecureSkipVerify;
+			}
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
 			// server preserve the previously stored value (on PUT)
@@ -1536,12 +1698,42 @@
 						{/if}
 						{#each formData.upstreams as _, i (i)}
 							<div class="flex items-start gap-2">
-								<div class="flex-1">
+								<div class="flex-1 flex flex-col gap-1">
 									<Input
 										bind:value={formData.upstreams[i].url}
 										placeholder="http://127.0.0.1:8080"
 										error={errors[`upstreams[${i}].url`] ?? undefined}
 									/>
+									<!--
+										Step #R-PROXMOX-HTTPS-LOOP — per-row UX
+										advisories. Path warning + private-IP
+										hint are non-blocking; the URL value is
+										preserved (operator may want to fix the
+										URL themselves rather than have the form
+										strip it).
+									-->
+									{#if nonRootPath(formData.upstreams[i].url)}
+										<p
+											class="text-xs text-amber-700 dark:text-amber-300"
+											data-testid="upstream-path-warning"
+										>
+											Le chemin <code class="font-mono"
+												>{nonRootPath(formData.upstreams[i].url)}</code
+											> sera ignoré — Caddy proxyfie uniquement vers <code class="font-mono"
+												>host:port</code
+											>.
+										</p>
+									{/if}
+									{#if showPrivateIPHint(formData.upstreams[i].url)}
+										<p
+											class="text-xs text-amber-700 dark:text-amber-300"
+											data-testid="upstream-private-ip-hint"
+										>
+											IP privée + <code class="font-mono">https</code> détectés — le
+											certificat upstream est probablement auto-signé. Pensez à
+											« Options avancées TLS » si la connexion échoue.
+										</p>
+									{/if}
 								</div>
 								{#if weightVisible}
 									<div class="w-24 flex flex-col gap-1.5">
@@ -1569,6 +1761,40 @@
 							</div>
 						{/each}
 					</div>
+
+					<!--
+						Step #R-PROXMOX-HTTPS-LOOP — advanced TLS options
+						disclosure. Mounted ONLY when the pool is a clean
+						all-https; the entire block leaves the DOM on http
+						/ mixed / empty pools so the operator can't set a
+						meaningless flag. The scheme-transition $effect
+						resets formData.insecureSkipVerify to false on
+						https→http so the toggle state stays aligned with
+						both the on-screen disclosure visibility and the
+						storage row.
+					-->
+					{#if tlsAdvancedVisible}
+						<details
+							class="rounded-md border border-border-default bg-surface px-3 py-2"
+							data-testid="tls-advanced-disclosure"
+						>
+							<summary class="text-sm font-medium text-secondary cursor-pointer">
+								Options avancées TLS upstream
+							</summary>
+							<div class="mt-2 flex flex-col gap-1">
+								<Checkbox
+									label="Ignorer la vérification du certificat upstream"
+									bind:checked={formData.insecureSkipVerify}
+								/>
+								<p class="text-xs text-muted ml-6">
+									À cocher uniquement si l'upstream présente un certificat
+									auto-signé (homelab Proxmox, Synology DSM, ESXi, UniFi).
+									En production, préférez ajouter le CA à la trust store de
+									l'hôte Arenet.
+								</p>
+							</div>
+						</details>
+					{/if}
 			
 					<!-- Step J.3: LB policy selector. Hidden when the pool has
 					     one upstream (selection is moot). formData.lbPolicy is

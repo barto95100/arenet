@@ -187,6 +187,19 @@ export interface Route {
 	 */
 	countryBlock: CountryBlock;
 	/**
+	 * Step #R-PROXMOX-HTTPS-LOOP — when true and the upstream
+	 * pool uses `https://`, the embedded Caddy emits
+	 * `transport.tls.insecure_skip_verify=true` so it accepts
+	 * self-signed / IP-SAN-mismatched upstream certs (Proxmox,
+	 * Synology DSM, ESXi, UniFi). Always present on a stored
+	 * route (zero-value false = strict cert validation against
+	 * the host trust store). On HTTP-only pools the field is
+	 * meaningless — the backend silently normalises it to false
+	 * on create/update with a warn-log (no `transport.tls`
+	 * block ever emitted for an http pool).
+	 */
+	insecureSkipVerify: boolean;
+	/**
 	 * Count of upstreams the HC tracker has observed as healthy.
 	 * Zero on routes without HC configured (the C13 gate doesn't
 	 * peek at tracker state). Used by the Routes table to render
@@ -409,6 +422,22 @@ export interface RouteRequest {
 	 * `{mode: 'off'}` (the canonical disabled default).
 	 */
 	countryBlock?: CountryBlockRequest;
+	/**
+	 * Step #R-PROXMOX-HTTPS-LOOP — opt-out from upstream TLS
+	 * cert verification on https pools. OPTIONAL with the same
+	 * preserve-on-omit semantic as `healthCheck` / `countryBlock`:
+	 *   - omitted (undefined) on POST → strict default (false).
+	 *   - omitted (undefined) on PUT  → preserve previously
+	 *                                   stored value.
+	 *   - present (true | false)      → full replacement.
+	 *
+	 * HTTP-only pools silently normalise to false on the backend
+	 * (with a warn-log). The form mirrors this by resetting
+	 * formData.insecureSkipVerify=false on a https→http scheme
+	 * transition, so the on-screen state and the storage state
+	 * never diverge.
+	 */
+	insecureSkipVerify?: boolean;
 }
 
 /**
