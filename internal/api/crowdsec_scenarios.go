@@ -398,52 +398,23 @@ func (h *Handler) fetchScenariosFromLAPI(ctx context.Context, creds storage.Watc
 // alertsWithJWT is a single attempt at the login+alerts pair.
 // `forceLogin=true` means invalidate the cache before login —
 // used on the retry path.
+//
+// Thin GET wrapper around lapiWithJWT (CS.3 Commit C
+// refactor). The Scenarios tab reads /v1/alerts; the manual
+// ban POST endpoint hits the SAME endpoint with a body, and
+// both share the JWT cache + 401-retry contract.
 func (h *Handler) alertsWithJWT(ctx context.Context, creds storage.WatcherCredentials, timeout time.Duration, forceLogin bool) ([]rawAlert, error) {
-	if forceLogin {
-		h.crowdsecJWT.invalidate()
-	}
-	jwt, err := h.crowdsecJWT.getOrLogin(ctx, creds.LAPIURL, creds.MachineID, creds.Password, timeout)
-	if err != nil {
-		return nil, err
-	}
-
-	alertsURL := strings.TrimRight(creds.LAPIURL, "/") + "/v1/alerts?" + url.Values{
+	alertsPath := "/v1/alerts?" + url.Values{
 		"since": {crowdSecScenariosSinceParam()},
 		"limit": {"100"},
 	}.Encode()
 
-	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	req, _ := http.NewRequestWithContext(fetchCtx, http.MethodGet, alertsURL, nil)
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("User-Agent", "arenet/crowdsec-scenarios")
-
-	resp, doErr := http.DefaultClient.Do(req)
-	if doErr != nil {
-		return nil, doErr
+	body, status, err := h.lapiWithJWT(ctx, creds, timeout, http.MethodGet, alertsPath, nil, forceLogin)
+	if err != nil {
+		return nil, err
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}()
-
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusNoContent:
-		// happy paths
-	case http.StatusUnauthorized, http.StatusForbidden:
-		return nil, errLAPIAuthRejected
-	default:
-		return nil, fmt.Errorf("lapi /v1/alerts: unexpected status %d", resp.StatusCode)
-	}
-
-	if resp.StatusCode == http.StatusNoContent {
+	if status == http.StatusNoContent {
 		return nil, nil
-	}
-
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	if readErr != nil {
-		return nil, fmt.Errorf("lapi /v1/alerts: read body: %w", readErr)
 	}
 	if len(body) == 0 || string(body) == "null" {
 		return nil, nil
@@ -453,6 +424,78 @@ func (h *Handler) alertsWithJWT(ctx context.Context, creds storage.WatcherCreden
 		return nil, fmt.Errorf("lapi /v1/alerts: decode: %w", err)
 	}
 	return alerts, nil
+}
+
+// lapiWithJWT (Step CS.3 Commit C refactor — extracted from
+// alertsWithJWT) is the shared method+path+body LAPI client
+// used by both the Scenarios tab (GET /v1/alerts read) and
+// the Bannir une IP endpoint (POST /v1/alerts write). One
+// JWT cache, one 401-retry contract, one place to fix bugs.
+//
+// Contract:
+//   - `forceLogin=true` invalidates the cache before login
+//     (used by the higher-level retry path in
+//     fetchScenariosFromLAPI / addManualBan).
+//   - 401/403 on the LAPI request surfaces as
+//     errLAPIAuthRejected. The caller decides whether to
+//     retry once with forceLogin=true or surface 502.
+//   - Login transport / decode errors bubble unwrapped — the
+//     handler classifies them via classifyProbeError.
+//   - 2xx success returns (body, status, nil). Body is
+//     capped at 16 MiB to bound runaway responses.
+//
+// Path must start with "/" (e.g. "/v1/alerts"). Body is
+// nil for GET and a JSON-marshalled struct for POST/PUT.
+func (h *Handler) lapiWithJWT(ctx context.Context, creds storage.WatcherCredentials, timeout time.Duration, method, path string, body []byte, forceLogin bool) ([]byte, int, error) {
+	if forceLogin {
+		h.crowdsecJWT.invalidate()
+	}
+	jwt, err := h.crowdsecJWT.getOrLogin(ctx, creds.LAPIURL, creds.MachineID, creds.Password, timeout)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	fullURL := strings.TrimRight(creds.LAPIURL, "/") + path
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+	req, _ := http.NewRequestWithContext(reqCtx, method, fullURL, reqBody)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("User-Agent", "arenet/crowdsec-scenarios")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, doErr := http.DefaultClient.Do(req)
+	if doErr != nil {
+		return nil, 0, doErr
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated, http.StatusNoContent:
+		// happy paths
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return nil, resp.StatusCode, errLAPIAuthRejected
+	default:
+		return nil, resp.StatusCode, fmt.Errorf("lapi %s %s: unexpected status %d", method, path, resp.StatusCode)
+	}
+
+	if resp.StatusCode == http.StatusNoContent {
+		return nil, resp.StatusCode, nil
+	}
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if readErr != nil {
+		return nil, resp.StatusCode, fmt.Errorf("lapi %s %s: read body: %w", method, path, readErr)
+	}
+	return respBody, resp.StatusCode, nil
 }
 
 // rawAlert is the subset of models.Alert the aggregator

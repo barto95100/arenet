@@ -134,6 +134,15 @@ const (
 	// the wiped row (APIKey scrubbed); AfterJSON is omitted
 	// (the row no longer exists).
 	ActionCrowdSecReset = "crowdsec_reset"
+	// Step CS.3 Commit C — operator-pressed "Bannir une IP"
+	// button on the Décisions actives tab. POST creates a
+	// single LAPI alert+decision via the Security Automation
+	// machine credentials. Scenario carries "manual:<user>|
+	// <reason>". TargetID is the IP/CIDR value;
+	// ActorUsernameSnapshot (auto-set by appendAudit)
+	// duplicates the username so the audit log is searchable
+	// by operator independently of the encoded scenario.
+	ActionCrowdSecDecisionCreate = "crowdsec_decision_create"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -177,6 +186,7 @@ var allActions = []string{
 	ActionCrowdSecConfigured,
 	ActionCrowdSecUpdated,
 	ActionCrowdSecReset,
+	ActionCrowdSecDecisionCreate,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

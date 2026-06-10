@@ -359,6 +359,17 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// finding). Cached JWT, singleflight-deduped,
 				// retry once on 401. See crowdsec_scenarios.go.
 				r.Get("/security/crowdsec/scenarios", h.listCrowdSecScenarios)
+				// Step CS.3 Commit C — Bannir une IP.
+				// Admin-only manual ban via Security
+				// Automation machine creds + JWT (shared
+				// lapiWithJWT helper). Encodes
+				// scenario = "manual:<username>|<reason>"
+				// so the Live LAPI tab's two-line cell can
+				// surface the operator's reason inline (per
+				// CS.3 Commit B parser). See
+				// crowdsec_manual_ban.go for the LAPI Alert
+				// payload shape + validation rules.
+				r.Post("/security/crowdsec/decisions", h.addManualBan)
 			})
 		})
 	})
