@@ -28,6 +28,7 @@ add it here. See [§Contributing new lessons](#contributing-new-lessons).
 | 5 | Observability is a deliverable | When writing a spec |
 | 6 | Mislabeled state = security bug | When error labels look "off" |
 | 7 | Module-level imports cache refs | When test mocks don't take |
+| 8 | Schema extensions need dual-axis check | When adding a field to a data model |
 
 ---
 
@@ -454,6 +455,131 @@ dependencies* gives the project policy for this.
 
 ---
 
+## Lesson 8 — Schema extensions require a dual-axis check (wire ↔ storage)
+
+**Principle**: When extending a data model with a new
+field, the change must propagate through **two axes**: the
+storage struct (BoltDB JSON shape) **and** the wire structs
+(`*Request` for decode + `*Response` for encode). The two
+families are deliberately distinct — the wire side uses
+camelCase JSON tags, pointer semantics for preserve-on-omit,
+and excludes computed/server-derived fields. The JSON
+decoder reads the WIRE struct, never the storage struct.
+Forgetting the wire side is invisible at compile time and,
+under `DisallowUnknownFields()`, manifests as a generic 400
+that masks the cause.
+
+**Example**: `#R-PROXMOX-HTTPS-LOOP` Day 8 (2026-06-10),
+gap between original commit `de44838` and the squashed-in
+fix that became commit `a69880d` (commit 1b in the
+workstream cadence).
+
+Commit 1 added `InsecureSkipVerify` to `storage.Route` and
+shipped storage + Caddy-config + tests, all green. The
+post-commit narrative claimed:
+
+> "JSON unmarshal will accept the new field via the storage
+> struct"
+
+That was wrong. The smoke caught it immediately:
+
+```text
+$ curl -X PUT -H 'Content-Type: application/json' \
+       -d @route.json \
+       https://arenet.worldgeekwide.fr/api/v1/routes/<id>
+HTTP/1.1 400 Bad Request
+{"error":"invalid JSON body"}
+```
+
+Even a pure `GET → strip computed fields → PUT` roundtrip
+failed. Root cause: the decoder in `updateRoute`
+(`internal/api/routes.go:1086`) targets `var req
+routeRequest`, not `storage.Route`. With
+`dec.DisallowUnknownFields()` (`routes.go:1086`), any field
+unknown to `routeRequest` produces
+`json: unknown field "insecureSkipVerify"` — flattened by
+the handler to the generic 400. The wire struct
+`routeRequest` lives in `handler.go:798`; an inline
+doc-comment already noted "pattern Step I established for
+`routeRequest` vs `storage.Route`" but commit 1 only
+updated one of the two families.
+
+Commit 1b closed the gap with the full mapping:
+- `routeRequest.InsecureSkipVerify *bool` —
+  preserve-on-omit pointer semantic, matching `HealthCheck`
+  and `CountryBlock`
+- `routeResponse.InsecureSkipVerify bool` — non-pointer,
+  always emitted (no `omitempty`) so GET→PUT roundtrips
+  survive
+- Handler `toResponse` + `createRoute` + `updateRoute`
+  mappings, with an HTTP-only self-heal that warn-logs and
+  coerces to false on http pools
+
+**Antipattern**: Trusting that "the decoder sees the new
+field" when a distinct wire struct sits in front of the
+storage struct. The decoder target is whatever the handler
+declares; the storage struct never receives the raw HTTP
+body in this codebase.
+
+**How to apply going forward**: Before claiming a schema
+extension complete, walk the dual-axis checklist:
+
+1. **Storage struct** (`internal/storage/<thing>.go`) —
+   field added with the right Go type, sane zero-value
+   default, validation rule in the struct's `validate()`
+2. **Wire request struct** (typically
+   `internal/api/handler.go`) — field added with the
+   camelCase JSON tag, **pointer vs non-pointer decision
+   made deliberately**: `*T` with `omitempty` for
+   preserve-on-omit on PUT (the operator can edit unrelated
+   fields without restating this one), `T` for
+   full-replacement-every-time
+3. **Wire response struct** — field added (typically
+   non-pointer because storage guarantees presence; no
+   `omitempty` if the frontend GET→PUT roundtrip must echo
+   it back)
+4. **Handler mappings** — `createRoute`, `updateRoute`, AND
+   `toResponse`. The createRoute side handles "nil pointer
+   → server default"; the updateRoute side handles "nil
+   pointer → preserve previous"; the toResponse side
+   handles "storage → wire"
+5. **Decoder posture** — search for `DisallowUnknownFields`
+   in the handler. If it's enabled, any wire-side gap
+   produces a 400 with a generic message. Either widen the
+   wire struct or relax the decoder (almost always the
+   former)
+6. **Empirical smoke** (cf [Lesson 4](#lesson-4--empirical-probes-beat-speculative-fixes)):
+   a `curl` `PUT` with the new field in the body MUST
+   return 200, not 400. A `GET` followed by a `PUT` of the
+   response body MUST roundtrip cleanly. Both gates BEFORE
+   declaring complete.
+
+**Detection in audit**:
+
+```bash
+# Find every JSON decoder + its decode target in the api
+# package. If the target is a distinct wire struct
+# (typically *Request / *Req), the new schema field must
+# be added there too.
+grep -rn 'json\.NewDecoder.*Decode\|var req ' internal/api/ | head
+```
+
+If a wire struct distinct from the storage struct shows up
+at the decode site, it must be extended too. Cross-reference
+with the corresponding response struct + `toResponse`-style
+mapper.
+
+**Companion ticket**: `#R-API-PUT-ROUTE-GENERIC-400` —
+partial fix landed in commit `a69880d` (only `createRoute`
++ `updateRoute` now surface the decoder reason in the 400
+body). Sweep across the other ~16 sites in `internal/api/`
+is OPEN. That sweep is the operational counter-measure to
+this lesson: when the wire-side gap inevitably recurs, the
+error message will name the missing field instead of
+"invalid JSON body".
+
+---
+
 ## Antipatterns (cheat sheet)
 
 Quick negative reference for fast scan. If you catch
@@ -474,6 +600,8 @@ relevant lesson.
   ([Lesson 6](#lesson-6--mislabeled-state-is-a-security-bug-not-a-typo))
 - Trusting global mocks without verifying library imports
   ([Lesson 7](#lesson-7--module-level-imports-cache-references))
+- Adding a storage field without extending the wire struct
+  ([Lesson 8](#lesson-8--schema-extensions-require-a-dual-axis-check-wire--storage))
 
 ## When to revisit this doc
 
