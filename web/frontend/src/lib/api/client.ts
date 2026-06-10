@@ -14,7 +14,12 @@
 // The signature request(method, path, body?) is unchanged from Step C
 // so existing call sites in lib/api/client.ts and beyond keep working.
 
-import type { Route, RouteRequest } from './types';
+import type {
+	Route,
+	RouteRequest,
+	TestUpstreamRequest,
+	TestUpstreamResponse
+} from './types';
 import { ApiError } from './types';
 import { beginRequest, endRequest } from '$lib/stores/loading';
 import { auth } from '$lib/stores/auth.svelte';
@@ -134,3 +139,10 @@ export const createRoute = (r: RouteRequest): Promise<Route> =>
 export const updateRoute = (id: string, r: RouteRequest): Promise<Route> =>
 	request<Route>('PUT', `/routes/${id}`, r);
 export const deleteRoute = (id: string): Promise<void> => request<void>('DELETE', `/routes/${id}`);
+
+// Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-triggered
+// upstream probe. Backend is per-URL; the route-form UI
+// parallelises pool > 1 via Promise.all so the operator
+// sees all rows update concurrently.
+export const testUpstream = (req: TestUpstreamRequest): Promise<TestUpstreamResponse> =>
+	request<TestUpstreamResponse>('POST', '/routes/test-upstream', req);

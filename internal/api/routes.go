@@ -285,6 +285,15 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Post("/routes", h.createRoute)
 				r.Put("/routes/{id}", h.updateRoute)
 				r.Delete("/routes/{id}", h.deleteRoute)
+				// Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-
+				// triggered upstream probe (UI button). Per-URL
+				// invocation; frontend parallelises pool > 1 via
+				// Promise.all. Admin-only via this sub-group's
+				// RequireAdminMiddleware (same trust posture as
+				// createRoute / updateRoute — see
+				// routes_test_upstream.go for the SSRF posture
+				// rationale).
+				r.Post("/routes/test-upstream", h.testUpstream)
 				// Step J.4 — DNS provider config.
 				r.Get("/settings/dns-providers/ovh", h.getDNSProviderOVH)
 				r.Put("/settings/dns-providers/ovh", h.putDNSProviderOVH)

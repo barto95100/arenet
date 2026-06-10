@@ -49,7 +49,11 @@ const { toastMock, apiMock, settingsMock } = vi.hoisted(() => ({
 		listRoutes: vi.fn(),
 		createRoute: vi.fn(),
 		updateRoute: vi.fn(),
-		deleteRoute: vi.fn()
+		deleteRoute: vi.fn(),
+		// Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-
+		// triggered upstream probe. Per-test rebinds the
+		// resolve / reject to drive the result chip states.
+		testUpstream: vi.fn()
 	},
 	settingsMock: {
 		getDNSProviderOVH: vi.fn()
@@ -76,7 +80,8 @@ vi.mock('$lib/api/client', () => ({
 	listRoutes: (...args: unknown[]) => apiMock.listRoutes(...args),
 	createRoute: (...args: unknown[]) => apiMock.createRoute(...args),
 	updateRoute: (...args: unknown[]) => apiMock.updateRoute(...args),
-	deleteRoute: (...args: unknown[]) => apiMock.deleteRoute(...args)
+	deleteRoute: (...args: unknown[]) => apiMock.deleteRoute(...args),
+	testUpstream: (...args: unknown[]) => apiMock.testUpstream(...args)
 }));
 
 // $lib/api/settings: getDNSProviderOVH is called in openCreate /
@@ -149,6 +154,7 @@ beforeEach(() => {
 	apiMock.createRoute.mockReset();
 	apiMock.updateRoute.mockReset();
 	apiMock.deleteRoute.mockReset();
+	apiMock.testUpstream.mockReset();
 	settingsMock.getDNSProviderOVH.mockReset();
 
 	// Sensible defaults so tests that don't override see an empty
@@ -1769,5 +1775,179 @@ describe('Routes page — TLS advanced disclosure + UX hints (#R-PROXMOX-HTTPS-L
 		// Pin the OMISSION — preserve-on-omit path. The backend
 		// will preserve whatever was stored (false here).
 		expect('insecureSkipVerify' in payload).toBe(false);
+	});
+});
+
+// --- 10. #R-PROXMOX-HTTPS-LOOP commit 3 — Test-upstream UI ---------
+
+describe('Routes page — Test upstream button + chip (#R-PROXMOX-HTTPS-LOOP commit 3)', () => {
+	function firstURL(): HTMLInputElement {
+		return upstreamURLInputs()[0];
+	}
+
+	it('renders one "Tester" button per upstream row, disabled while URL empty', async () => {
+		render(Page);
+		await openCreateForm();
+		const btn0 = screen.getByTestId('test-upstream-0') as HTMLButtonElement;
+		expect(btn0.disabled).toBe(true);
+		// Type a URL, disabled flips off.
+		await userEvent.type(firstURL(), 'http://10.0.0.10:8080');
+		await tick();
+		expect(btn0.disabled).toBe(false);
+	});
+
+	it('sends the URL to the API and renders the reachable chip on success', async () => {
+		apiMock.testUpstream.mockResolvedValue({
+			reachable: true,
+			statusCode: 200,
+			latencyMs: 42,
+			serverHeader: 'nginx/1.24.0'
+		});
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(firstURL(), 'http://10.0.0.10:8080');
+		await tick();
+		const btn = screen.getByTestId('test-upstream-0');
+		await userEvent.click(btn);
+		await tick();
+		expect(apiMock.testUpstream).toHaveBeenCalledTimes(1);
+		const args = apiMock.testUpstream.mock.calls[0][0] as {
+			url: string;
+			insecureSkipVerify?: boolean;
+		};
+		expect(args.url).toBe('http://10.0.0.10:8080');
+		// http pool → insecureSkipVerify must be false on
+		// the wire, never the form's stale state.
+		expect(args.insecureSkipVerify).toBe(false);
+		const chip = screen.getByTestId('upstream-test-chip-0');
+		expect(chip.textContent).toMatch(/HTTP 200/);
+		expect(chip.textContent).toMatch(/42ms/);
+		expect(chip.textContent).toContain('nginx/1.24.0');
+	});
+
+	it('renders the error chip on a backend error result', async () => {
+		apiMock.testUpstream.mockResolvedValue({
+			reachable: false,
+			error: 'connection refused'
+		});
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(firstURL(), 'http://10.0.0.10:8080');
+		await tick();
+		await userEvent.click(screen.getByTestId('test-upstream-0'));
+		await tick();
+		const chip = screen.getByTestId('upstream-test-chip-0');
+		expect(chip.textContent).toMatch(/✗/);
+		expect(chip.textContent).toMatch(/connection refused/i);
+	});
+
+	it('renders an error chip when the request itself throws (network down)', async () => {
+		apiMock.testUpstream.mockRejectedValue(new Error('network down'));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(firstURL(), 'http://10.0.0.10:8080');
+		await tick();
+		await userEvent.click(screen.getByTestId('test-upstream-0'));
+		await tick();
+		const chip = screen.getByTestId('upstream-test-chip-0');
+		expect(chip.textContent).toContain('network down');
+	});
+
+	it('forwards insecureSkipVerify on an https pool with the toggle checked', async () => {
+		apiMock.testUpstream.mockResolvedValue({
+			reachable: true,
+			statusCode: 200,
+			latencyMs: 50,
+			cert: { commonName: 'pve.local', issuer: 'CN=pve.local', selfSigned: true }
+		});
+		render(Page);
+		await openCreateForm();
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'https://192.168.1.60:8006');
+		await tick();
+		// Tick the toggle so the request carries true.
+		const toggle = screen.getByLabelText(
+			'Ignorer la vérification du certificat upstream'
+		) as HTMLInputElement;
+		await userEvent.click(toggle);
+		await tick();
+		await userEvent.click(screen.getByTestId('test-upstream-0'));
+		await tick();
+		expect(apiMock.testUpstream).toHaveBeenCalledTimes(1);
+		const args = apiMock.testUpstream.mock.calls[0][0] as {
+			insecureSkipVerify?: boolean;
+		};
+		expect(args.insecureSkipVerify).toBe(true);
+		const chip = screen.getByTestId('upstream-test-chip-0');
+		// self-signed warning rendered on the chip.
+		expect(chip.textContent).toMatch(/self-signed/i);
+	});
+
+	it('"Tester tous" parallelises the probe across every non-empty row', async () => {
+		apiMock.testUpstream.mockImplementation(async (req: { url: string }) => ({
+			reachable: true,
+			statusCode: 200,
+			latencyMs: 10,
+			serverHeader: `fake-for-${req.url}`
+		}));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(firstURL(), 'http://10.0.0.10:8080');
+		const addBtn = screen.getByRole('button', { name: /\+\s*Add upstream/i });
+		await userEvent.click(addBtn);
+		await tick();
+		await userEvent.click(addBtn);
+		await tick();
+		await userEvent.type(upstreamURLInputs()[1], 'http://10.0.0.11:8080');
+		// Leave row 2 empty — "Tester tous" should skip it.
+		const testAllBtn = screen.getByTestId('test-all-upstreams');
+		await userEvent.click(testAllBtn);
+		await tick();
+		await tick();
+		// Two probes fired: rows 0 and 1 (row 2 skipped).
+		expect(apiMock.testUpstream).toHaveBeenCalledTimes(2);
+		// Both chips rendered.
+		expect(screen.getByTestId('upstream-test-chip-0').textContent).toMatch(
+			/10\.0\.0\.10/
+		);
+		expect(screen.getByTestId('upstream-test-chip-1').textContent).toMatch(
+			/10\.0\.0\.11/
+		);
+		expect(screen.queryByTestId('upstream-test-chip-2')).toBeNull();
+	});
+
+	it('removing a tested row shifts the surviving chip indices', async () => {
+		// Pin the splice cleanup in removeUpstream — without
+		// it, removing row 0 would leave chip-0 attached to
+		// the old result, and the row that was at index 1
+		// (now at 0) would have no chip.
+		apiMock.testUpstream.mockResolvedValue({
+			reachable: true,
+			statusCode: 200,
+			latencyMs: 7,
+			serverHeader: 'row-1'
+		});
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(firstURL(), 'http://10.0.0.10:8080');
+		const addBtn = screen.getByRole('button', { name: /\+\s*Add upstream/i });
+		await userEvent.click(addBtn);
+		await tick();
+		await userEvent.type(upstreamURLInputs()[1], 'http://10.0.0.11:8080');
+		// Test row 1 only.
+		await userEvent.click(screen.getByTestId('test-upstream-1'));
+		await tick();
+		expect(screen.getByTestId('upstream-test-chip-1').textContent).toContain('row-1');
+		expect(screen.queryByTestId('upstream-test-chip-0')).toBeNull();
+		// Remove row 0 — the tested row should now be at
+		// index 0; chip-1 should be gone, chip-0 should
+		// carry the old row-1 result.
+		const removeButtons = screen
+			.getAllByRole('button')
+			.filter((b) => b.textContent?.trim() === '×');
+		await userEvent.click(removeButtons[0]);
+		await tick();
+		expect(screen.queryByTestId('upstream-test-chip-1')).toBeNull();
+		expect(screen.getByTestId('upstream-test-chip-0').textContent).toContain('row-1');
 	});
 });

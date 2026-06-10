@@ -5,7 +5,13 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listRoutes, createRoute, updateRoute, deleteRoute } from '$lib/api/client';
+	import {
+		listRoutes,
+		createRoute,
+		updateRoute,
+		deleteRoute,
+		testUpstream
+	} from '$lib/api/client';
 	import { settingsApi } from '$lib/api/settings';
 	import type {
 		ACMEChallenge,
@@ -17,6 +23,7 @@
 		ManagedDomain,
 		Route,
 		RouteRequest,
+		TestUpstreamResponse,
 		Upstream
 	} from '$lib/api/types';
 	import { countryName, matchCountries, type CountryMatch } from '$lib/data/countries';
@@ -211,6 +218,73 @@
 		// row if we are ever called with len == 1.
 		if (formData.upstreams.length <= 1) return;
 		formData.upstreams = formData.upstreams.filter((_, idx) => idx !== i);
+		// Step #R-PROXMOX-HTTPS-LOOP commit 3 — drop the
+		// matching test-state entry so the chip doesn't
+		// orphan a now-removed row's result. Indices shift
+		// after the splice; rebuild the map cleanly.
+		const shifted: Record<number, UpstreamTestState> = {};
+		for (const [k, v] of Object.entries(upstreamTests)) {
+			const idx = Number(k);
+			if (idx < i) shifted[idx] = v;
+			else if (idx > i) shifted[idx - 1] = v;
+		}
+		upstreamTests = shifted;
+	}
+
+	// Step #R-PROXMOX-HTTPS-LOOP commit 3 — per-row probe
+	// state. Indexed by upstream-row index (0-based). The
+	// shape mirrors a state machine:
+	//   undefined → never tested (chip hidden)
+	//   { running: true }                  → spinner
+	//   { running: false, result, error? } → outcome chip
+	//
+	// Cleared on form close (closePanel) so a stale result
+	// from a previous edit doesn't bleed into the next.
+	type UpstreamTestState =
+		| { running: true }
+		| { running: false; result?: TestUpstreamResponse; error?: string };
+	let upstreamTests = $state<Record<number, UpstreamTestState>>({});
+
+	async function runUpstreamTest(i: number) {
+		const url = formData.upstreams[i]?.url?.trim() ?? '';
+		if (url === '') return;
+		upstreamTests = { ...upstreamTests, [i]: { running: true } };
+		try {
+			const result = await testUpstream({
+				url,
+				// Mirror the route-level toggle ONLY when the
+				// pool is https — on http pools the backend
+				// would self-heal anyway, and sending true on
+				// an http URL would be a misleading user
+				// signal. Storage-layer alignment with the
+				// route's saved posture.
+				insecureSkipVerify:
+					poolScheme === 'https' ? formData.insecureSkipVerify : false
+			});
+			upstreamTests = {
+				...upstreamTests,
+				[i]: { running: false, result }
+			};
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : String(err);
+			upstreamTests = {
+				...upstreamTests,
+				[i]: { running: false, error: msg }
+			};
+		}
+	}
+
+	// "Tester tous" — parallelise pool > 1 via Promise.all
+	// so the operator sees every chip update concurrently
+	// (wall-clock bounded by the slowest dial). Skips empty
+	// URL rows (no probe to run).
+	async function runAllUpstreamTests() {
+		const targets: number[] = [];
+		formData.upstreams.forEach((u, i) => {
+			if (u.url.trim() !== '') targets.push(i);
+		});
+		if (targets.length === 0) return;
+		await Promise.all(targets.map((i) => runUpstreamTest(i)));
 	}
 
 	let confirmTarget = $state<Route | null>(null);
@@ -238,6 +312,10 @@
 		editingId = null;
 		formError = null;
 		errors = {};
+		// Step #R-PROXMOX-HTTPS-LOOP commit 3 — clear per-row
+		// probe state so a stale result from a previous edit
+		// session doesn't bleed into the next form open.
+		upstreamTests = {};
 	}
 
 	// DOM refs for the click-outside action (C11 Pack A polish
@@ -1689,9 +1767,26 @@
 					<div class="flex flex-col gap-2">
 						<div class="flex items-center justify-between">
 							<span class="text-sm font-medium text-secondary">Upstreams</span>
-							<Button variant="ghost" size="sm" onclick={addUpstream} type="button"
-								>+ Add upstream</Button
-							>
+							<div class="flex items-center gap-2">
+								<!--
+									Step #R-PROXMOX-HTTPS-LOOP commit 3 — pool-level
+									"Tester tous". Promise.all parallelise pool > 1.
+									Disabled when every row's URL is empty.
+								-->
+								<Button
+									variant="ghost"
+									size="sm"
+									onclick={runAllUpstreamTests}
+									type="button"
+									disabled={formData.upstreams.every((u) => u.url.trim() === '')}
+									data-testid="test-all-upstreams"
+								>
+									Tester tous
+								</Button>
+								<Button variant="ghost" size="sm" onclick={addUpstream} type="button"
+									>+ Add upstream</Button
+								>
+							</div>
 						</div>
 						{#if errors['upstreams']}
 							<p class="text-xs text-down">{errors['upstreams']}</p>
@@ -1734,7 +1829,73 @@
 											« Options avancées TLS » si la connexion échoue.
 										</p>
 									{/if}
+									<!--
+										Step #R-PROXMOX-HTTPS-LOOP commit 3 — per-row
+										probe result chip. Three states: hidden
+										(undefined), spinner (running), outcome
+										(reachable✓ or error✗). Outcome chip shows
+										status code + latency for reachable, error
+										text otherwise.
+									-->
+									{#if upstreamTests[i]}
+										{@const ts = upstreamTests[i]}
+										<div
+											class="text-xs flex items-center gap-2 flex-wrap"
+											data-testid="upstream-test-chip-{i}"
+										>
+											{#if ts.running}
+												<span class="text-secondary">⏳ Test en cours…</span>
+											{:else if ts.error}
+												<span class="text-down">✗ {ts.error}</span>
+											{:else if ts.result}
+												{#if ts.result.reachable}
+													<span class="text-up">
+														✓ HTTP {ts.result.statusCode} ({ts.result.latencyMs}ms)
+													</span>
+													{#if ts.result.serverHeader}
+														<span class="text-muted font-mono">
+															{ts.result.serverHeader}
+														</span>
+													{/if}
+													{#if ts.result.cert?.selfSigned}
+														<span
+															class="text-amber-700 dark:text-amber-300"
+															title="Certificat auto-signé"
+														>
+															⚠ self-signed
+														</span>
+													{/if}
+												{:else}
+													<span class="text-down">
+														✗ {ts.result.error || 'connexion échouée'}
+													</span>
+													{#if ts.result.cert?.commonName}
+														<span class="text-muted font-mono">
+															cert CN={ts.result.cert.commonName}
+														</span>
+													{/if}
+												{/if}
+											{/if}
+										</div>
+									{/if}
 								</div>
+								<!--
+									Step #R-PROXMOX-HTTPS-LOOP commit 3 — per-row
+									"Tester" button. Disabled when the URL is
+									empty (no probe target) or while the row is
+									already running. Spinner is in the chip below.
+								-->
+								<Button
+									variant="ghost"
+									size="sm"
+									onclick={() => runUpstreamTest(i)}
+									type="button"
+									disabled={formData.upstreams[i].url.trim() === '' ||
+										!!(upstreamTests[i] && (upstreamTests[i] as { running?: boolean }).running)}
+									data-testid="test-upstream-{i}"
+								>
+									Tester
+								</Button>
 								{#if weightVisible}
 									<div class="w-24 flex flex-col gap-1.5">
 										<input

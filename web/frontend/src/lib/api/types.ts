@@ -441,6 +441,58 @@ export interface RouteRequest {
 }
 
 /**
+ * Step #R-PROXMOX-HTTPS-LOOP commit 3 — POST
+ * /api/v1/routes/test-upstream request shape. One URL per
+ * call; the frontend parallelises pool > 1 via Promise.all.
+ * `insecureSkipVerify` mirrors the route-level toggle so
+ * the probe runs with the same TLS posture the saved route
+ * will use.
+ */
+export interface TestUpstreamRequest {
+	url: string;
+	insecureSkipVerify?: boolean;
+}
+
+/**
+ * Step #R-PROXMOX-HTTPS-LOOP commit 3 — leaf TLS cert
+ * summary returned for every https probe (success AND
+ * cert-error). Empty on http probes.
+ */
+export interface TestUpstreamCertInfo {
+	commonName?: string;
+	issuer?: string;
+	/**
+	 * `selfSigned` is the clearer-than-DN-comparison flag —
+	 * true when the cert's subject == issuer (canonical
+	 * x509 self-signed shape, e.g. homelab Proxmox).
+	 */
+	selfSigned: boolean;
+}
+
+/**
+ * Step #R-PROXMOX-HTTPS-LOOP commit 3 — response shape
+ * rendered by the per-row result chip.
+ *
+ *   reachable=true  → handshake + status code returned
+ *                     (any code, including 401/403/404 —
+ *                     "the service answered").
+ *   reachable=false → DNS / TCP / TLS / timeout failure.
+ *                     `error` carries operator-readable
+ *                     text; `cert` may still be populated
+ *                     on TLS verification errors.
+ */
+export interface TestUpstreamResponse {
+	reachable: boolean;
+	statusCode?: number;
+	latencyMs?: number;
+	tlsHandshakeMs?: number;
+	cert?: TestUpstreamCertInfo;
+	serverHeader?: string;
+	bodyPreview?: string;
+	error?: string;
+}
+
+/**
  * Step W — per-route country-block configuration on the
  * response side. Mirrors W.2 `countryBlockResp` shape with
  * normalised `mode` (zero-value reads back as "off").
