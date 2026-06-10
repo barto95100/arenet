@@ -17,6 +17,8 @@ import type {
 	DecisionsResponse,
 	GeoEventsResponse,
 	LAPIDecisionsResponse,
+	ManualBanRequest,
+	ManualBanResponse,
 	MetricWindow,
 	OwaspCategory,
 	ScenariosResponse,
@@ -244,6 +246,30 @@ export function fetchLAPIDecisions(
  */
 export function fetchScenarios(): Promise<ScenariosResponse> {
 	return request<ScenariosResponse>('GET', '/security/crowdsec/scenarios');
+}
+
+/**
+ * Step CS.3 Commit D — POST /api/v1/security/crowdsec/decisions.
+ *
+ * Manual ban entry point invoked by the "Bannir une IP" modal
+ * on the Live LAPI sub-tab. Builds a single LAPI Alert via
+ * Security Automation machine creds; on success the response
+ * echoes the canonical scenario string (with the
+ * "manual:<username>|<reason>" format) and the computed
+ * ExpiresAt so the UI can refresh without waiting for the
+ * 30s polling tick.
+ *
+ * Failure modes the caller should distinguish (ApiError
+ * statuses thrown by request<T>):
+ *   400 → validation failure (bad IP/CIDR, bad duration,
+ *         bad type, reason length). Inline form error.
+ *   412 → Security Automation not configured. CTA linking
+ *         to /settings.
+ *   502 → LAPI unreachable OR machine creds rejected after
+ *         retry. Inline retry affordance.
+ */
+export function createManualBan(req: ManualBanRequest): Promise<ManualBanResponse> {
+	return request<ManualBanResponse>('POST', '/security/crowdsec/decisions', req);
 }
 
 /**

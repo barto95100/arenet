@@ -19,6 +19,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
+	import BanIPModal from '$lib/components/BanIPModal.svelte';
 	import { fetchDecisions, fetchLAPIDecisions, fetchScenarios } from '$lib/api/security';
 	import type {
 		Decision,
@@ -28,7 +29,29 @@
 		ScenariosMeta
 	} from '$lib/api/types';
 	import { ApiError, isArenetAutoScenario } from '$lib/api/types';
+	import { auth } from '$lib/stores/auth.svelte';
 	import { pushToast } from '$lib/stores/toast';
+
+	// Step CS.3 Commit D — admin gate for the "Bannir une IP"
+	// button. Mirrors the backend RequireAdminMiddleware on
+	// POST /api/v1/security/crowdsec/decisions. Viewer-role
+	// users see neither the button nor the modal mount; the
+	// backend remains the authoritative gate even if a
+	// determined operator bypassed the UI check.
+	const isAdmin = $derived(auth.user?.role === 'admin');
+	let banModalOpen = $state(false);
+	function openBanModal(): void {
+		banModalOpen = true;
+	}
+	function closeBanModal(): void {
+		banModalOpen = false;
+	}
+	function onBanSuccess(): void {
+		// Optimistic refresh: re-fetch the live LAPI list
+		// IMMEDIATELY after a successful ban so the operator
+		// sees their new row without waiting for the 30s poll.
+		void loadLive();
+	}
 
 	type Tab = 'snapshot' | 'live' | 'scenarios';
 	let activeTab = $state<Tab>('snapshot');
@@ -677,6 +700,22 @@
 					<button type="button" class="refresh-btn" onclick={refreshLive} aria-label="Refresh">
 						↻
 					</button>
+					{#if isAdmin}
+						<!-- Step CS.3 Commit D — admin-only "Bannir
+						     une IP" entry point. Modal mount lives at
+						     the bottom of the template. The button
+						     groups with the refresh affordance because
+						     both are "operator actions on the current
+						     LAPI snapshot". -->
+						<button
+							type="button"
+							class="ban-btn"
+							onclick={openBanModal}
+							data-testid="ban-open-btn"
+						>
+							+ Bannir une IP
+						</button>
+					{/if}
 				{/if}
 			</div>
 		</div>
@@ -1000,6 +1039,21 @@
 	{/if}
 {/if}
 
+<!-- Step CS.3 Commit D — modal mount. Lives OUTSIDE the
+     activeTab branches so closing it doesn't depend on a
+     specific sub-tab being active. Admin gate: viewer-role
+     users never trigger openBanModal (button is hidden) +
+     even if they somehow do, the backend rejects with 403.
+     We still guard the mount with isAdmin so the modal
+     isn't even in the DOM for non-admins. -->
+{#if isAdmin}
+	<BanIPModal
+		bind:open={banModalOpen}
+		onClose={closeBanModal}
+		onSuccess={onBanSuccess}
+	/>
+{/if}
+
 <style>
 	.tab-subtitle {
 		color: var(--text-secondary);
@@ -1128,6 +1182,27 @@
 	}
 	.refresh-btn:hover {
 		color: var(--accent-cyan);
+	}
+	/* CS.3 Commit D — Bannir une IP button. Distinct visual
+	   from the refresh chevron because it triggers a
+	   destructive action (admin-only ban modal). */
+	.ban-btn {
+		background: var(--accent-cyan);
+		color: var(--text-inverse);
+		border: 1px solid var(--accent-cyan);
+		padding: 0.2rem 0.6rem;
+		border-radius: 4px;
+		font-size: var(--text-xs, 11px);
+		font-weight: 600;
+		cursor: pointer;
+		margin-left: 0.5rem;
+	}
+	.ban-btn:hover {
+		filter: brightness(1.05);
+	}
+	.ban-btn:focus-visible {
+		outline: 2px solid var(--text-primary);
+		outline-offset: 1px;
 	}
 	/* CS.3 Commit B — origin tabs row.
 	   .breakdown / .breakdown-chip / .chip-count / .chip-label

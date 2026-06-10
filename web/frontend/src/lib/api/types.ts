@@ -1645,3 +1645,33 @@ export interface CrowdSecTestResponse {
 	error?: string;
 	effectiveUrl?: string;
 }
+
+/**
+ * Step CS.3 Commit D — POST /api/v1/security/crowdsec/decisions
+ * request body. Mirrors the backend manualBanRequest struct
+ * verbatim. Validation duplicates the backend rules so the
+ * UI surfaces friendly errors before the network round-trip;
+ * the backend remains the authoritative validator.
+ */
+export interface ManualBanRequest {
+	value: string;
+	duration: string;
+	type: 'ban' | 'captcha' | 'throttle';
+	reason: string;
+}
+
+/**
+ * Step CS.3 Commit D — 201 response from the manual ban
+ * endpoint. Echoes the canonical scenario string so the UI
+ * can optimistically prepend the new row to the table
+ * without waiting for the 30s LAPI polling tick.
+ */
+export interface ManualBanResponse {
+	scenario: string;
+	scope: 'Ip' | 'Range';
+	value: string;
+	type: string;
+	duration: string;
+	origin: 'manual';
+	expiresAt: string;
+}

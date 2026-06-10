@@ -39,12 +39,17 @@ vi.mock('$lib/stores/toast', () => toastMock);
 vi.mock('$lib/api/security', () => securityMock);
 
 import Page from './CrowdSecDecisionsPanel.svelte';
+import { auth } from '$lib/stores/auth.svelte';
 
 beforeEach(() => {
 	toastMock.pushToast.mockReset();
 	securityMock.fetchDecisions.mockReset();
 	securityMock.fetchLAPIDecisions.mockReset();
 	securityMock.fetchScenarios.mockReset();
+	// Default: anonymous (auth.user = null). Tests that need
+	// the admin-gated "+ Bannir une IP" button set
+	// auth.user = { role: 'admin', ... } explicitly.
+	auth.user = null;
 });
 
 // --- Fixtures -----------------------------------------------
@@ -521,6 +526,53 @@ describe('CrowdSec decisions panel — Live LAPI tab', () => {
 			expect(securityMock.fetchLAPIDecisions).toHaveBeenCalledWith(
 				expect.objectContaining({ scope: 'range' })
 			);
+		});
+	});
+
+	// CS.3 Commit D — admin-only "+ Bannir une IP" entry point.
+	// Visibility-only assertions here; the modal's submit flow
+	// is covered by BanIPModal.test.ts.
+
+	it('does NOT render the "+ Bannir une IP" button for viewer users', async () => {
+		// auth.user stays null (default beforeEach) → isAdmin=false.
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleLAPI());
+		await openLiveTab();
+		await waitFor(() => expect(securityMock.fetchLAPIDecisions).toHaveBeenCalled());
+		expect(screen.queryByTestId('ban-open-btn')).toBeNull();
+	});
+
+	it('renders the "+ Bannir une IP" button for admin users', async () => {
+		auth.user = {
+			username: 'admin',
+			displayName: 'Admin',
+			role: 'admin',
+			mfa: 'none',
+			passwordCompromised: false
+		} as never;
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleLAPI());
+		await openLiveTab();
+		await waitFor(() => {
+			expect(screen.getByTestId('ban-open-btn')).toBeInTheDocument();
+		});
+	});
+
+	it('opens the BanIPModal when an admin clicks the button', async () => {
+		auth.user = {
+			username: 'admin',
+			displayName: 'Admin',
+			role: 'admin',
+			mfa: 'none',
+			passwordCompromised: false
+		} as never;
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleLAPI());
+		await openLiveTab();
+		await waitFor(() => expect(screen.getByTestId('ban-open-btn')).toBeInTheDocument());
+
+		await fireEvent.click(screen.getByTestId('ban-open-btn'));
+		await waitFor(() => {
+			// Modal mount surfaces a dialog with the "Bannir
+			// une IP" title.
+			expect(screen.getByRole('dialog', { name: /Bannir une IP/i })).toBeInTheDocument();
 		});
 	});
 });
