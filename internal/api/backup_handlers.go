@@ -134,7 +134,7 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 			Action:  audit.ActionConfigRestoredRejected,
 			Message: fmt.Sprintf("reason=invalid_json source_sha256=%s err=%s", sha, truncate(err.Error(), 200)),
 		})
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 

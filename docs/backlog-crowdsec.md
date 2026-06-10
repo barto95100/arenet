@@ -304,7 +304,7 @@ proxmox.worldgeekwide.fr : page login Proxmox visible,
 plus de 502 ni de boucle 301. Régression check 
 ha.worldgeekwide.fr OK depuis Mac + via loopback SNI forcé.
 
-## #R-API-PUT-ROUTE-GENERIC-400 (low) — OPEN 2026-06-10
+## #R-API-PUT-ROUTE-GENERIC-400 — RESOLVED 2026-06-10
 
 Découvert pendant le smoke commit 1 du fix 
 #R-PROXMOX-HTTPS-LOOP. PUT /api/v1/routes/{id} retournait 
@@ -317,40 +317,48 @@ Le smoke aurait diagnostiqué la cause en une seule curl
 si le message d'erreur avait surfacé la raison du décodeur 
 dès le départ.
 
-Fix partiel landed en commit `a69880d` : createRoute + 
-updateRoute surfacent maintenant l'erreur du décodeur 
-("invalid JSON body: json: unknown field \"xyz\"" ou 
-"invalid JSON body: invalid character..."). C'est la 
-forme correcte pour ces deux sites.
+Fix complet shipped en deux temps :
 
-Sweep restant (~16 autres handlers utilisent le même 
-pattern `writeError(w, http.StatusBadRequest, "invalid 
-JSON body")` à grain sec dans :
-  - internal/api/automation_handlers.go (2 sites)
-  - internal/api/auth_handlers.go (5 sites)
-  - internal/api/crowdsec_manual_ban.go
-  - internal/api/crowdsec_settings.go (2 sites)
-  - internal/api/forward_auth_provider.go (2 sites)
-  - internal/api/dns_provider.go
-  - internal/api/managed_domain.go
-  - internal/api/server_position_handler.go
-  - internal/api/oidc.go (2 sites)
+1. Partiel — commit `a69880d` (workstream #R-PROXMOX-HTTPS-LOOP) :
+   createRoute + updateRoute concaténaient l'erreur brute du 
+   décodeur dans le message ("invalid JSON body: json: unknown 
+   field \"xyz\""). Suffisant pour débloquer le smoke en cours 
+   mais brut côté UX (le `json:` prefix, les guillemets 
+   échappés, le numéro d'offset noyé dans la chaîne).
 
-À traiter en un seul commit de balayage : remplacer 
-chaque appel par `writeError(w, http.StatusBadRequest, 
-"invalid JSON body: "+err.Error())`. Trivial mais 
-ennuyeux à faire ligne par ligne — peut être scripté 
-en `sed -i` avec relecture.
+2. Complet — commit ci-après : helper `translateDecodeError` 
+   dans `internal/api/decode_errors.go` qui classifie 
+   l'erreur par type Go (`io.EOF`, `*json.SyntaxError`, 
+   `*json.UnmarshalTypeError`, unknown-field via substring 
+   match parce que stdlib < 1.21 n'a pas de type dédié) et 
+   émet un message structuré :
 
-Impact bas : seuls les opérateurs faisant du curl 
-manuel souffrent du masquage; le frontend n'envoie 
-jamais de JSON malformé. Mais c'est un signal de 
-debug perdu pour les futures sessions.
+   | Type Go                       | Message émis                                |
+   |-------------------------------|---------------------------------------------|
+   | `io.EOF` / `ErrUnexpectedEOF` | `JSON body is required`                     |
+   | `*json.SyntaxError`           | `malformed JSON at offset N`                |
+   | `*json.UnmarshalTypeError`    | `field "X": expected T, got U`              |
+   | unknown field strict-mode     | `unknown field "X"`                         |
+   | default                       | `invalid JSON body: <raw>`                  |
 
-Lesson capturée : storage struct ≠ wire struct. Quand 
-on étend un schema (Route, ProviderConfig, etc.), 
-vérifier les DEUX axes (storage + routeRequest/Response). 
-`DisallowUnknownFields` transforme un champ wire 
-oublié en générique 400 qui masque la cause. À ajouter 
-à ENGINEERING-PRACTICES.md comme Lesson 5 (operator 
-request).
+   Sweep des 22 sites d'appel (les 2 partiels routes.go + 
+   le partiel routes_test_upstream.go + les 18 sites bruts 
+   dans 12 fichiers) via le helper. Tests unit sur le helper 
+   (6 cas, dont 1 nil-safety défensif) — couvrent les 22 
+   call sites par transitivité car ils sont tous 
+   byte-identical (`writeError(w, http.StatusBadRequest, 
+   translateDecodeError(err))`).
+
+Anti-régression : un seul test du package pinait 
+`strings.Contains(body, "invalid JSON")` 
+(auth_handlers_test.go:310, sur le path POST /api/v1/auth
+/setup). Mis à jour pour pinner `"malformed JSON"` à la 
+place, ce qui matche le nouveau classifier du 
+*json.SyntaxError. Aucun autre test ne dépendait du 
+literal.
+
+Lesson capturée : storage struct ≠ wire struct → 
+ENGINEERING-PRACTICES.md Lesson 8 (commit `2eaaf94`).
+Ce sweep est l'opérationnel counter-measure : quand un 
+futur dev oublie d'étendre la wire struct, l'erreur 
+nommera le champ manquant au lieu de masquer.

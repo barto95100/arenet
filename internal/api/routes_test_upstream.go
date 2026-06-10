@@ -183,7 +183,7 @@ func (h *Handler) testUpstream(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 

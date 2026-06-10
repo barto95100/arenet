@@ -120,7 +120,7 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 
@@ -255,7 +255,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 	if req.Username == "" || req.Password == "" {
@@ -507,7 +507,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 	if req.Password == "" {
@@ -729,7 +729,7 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 	if req.CurrentPassword == "" || req.NewPassword == "" {
@@ -859,7 +859,7 @@ func (h *Handler) updateTheme(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 	if req.Theme != auth.ThemeDark && req.Theme != auth.ThemeLight {

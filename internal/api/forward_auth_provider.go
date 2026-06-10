@@ -233,7 +233,7 @@ func (h *Handler) createForwardAuthProvider(w http.ResponseWriter, r *http.Reque
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 	if err := validateForwardAuthProviderRequest(req); err != nil {
@@ -289,7 +289,7 @@ func (h *Handler) updateForwardAuthProvider(w http.ResponseWriter, r *http.Reque
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 	// The path name is authoritative; ignore Name in the body if

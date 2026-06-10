@@ -755,7 +755,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		// flattened to "invalid JSON body"). #R-API-PUT-ROUTE-
 		// GENERIC-400 tracks the broader sweep across the other
 		// ~16 handlers in this package.
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 	if err := validateHost(req.Host); err != nil {
@@ -1105,7 +1105,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Decode(&req); err != nil {
 		// Surface the decoder's reason (see createRoute for
 		// rationale; #R-API-PUT-ROUTE-GENERIC-400 sweep).
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
 	if err := validateHost(req.Host); err != nil {

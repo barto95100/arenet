@@ -307,7 +307,12 @@ func TestSetup_400OnInvalidJSON(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "invalid JSON") {
+	// #R-API-PUT-ROUTE-GENERIC-400 — handler now goes through
+	// translateDecodeError which classifies "not-json" as a
+	// *json.SyntaxError and surfaces an offset-tagged message.
+	// Pin the structural shape (malformed + offset) rather than
+	// the old generic "invalid JSON" literal.
+	if !strings.Contains(rec.Body.String(), "malformed JSON") {
 		t.Errorf("body = %s", rec.Body.String())
 	}
 }
