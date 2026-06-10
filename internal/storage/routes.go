@@ -276,8 +276,39 @@ type Route struct {
 	// the API layer (W.2 internal/api/routes.go) maps to/from a
 	// camelCase routeRequest.CountryBlock mirror.
 	CountryBlock countryblock.Config `json:"country_block"`
-	CreatedAt    time.Time           `json:"created_at"`
-	UpdatedAt    time.Time           `json:"updated_at"`
+	// InsecureSkipVerify (Step #R-PROXMOX-HTTPS-LOOP, 2026-06-10)
+	// opts the route's upstream pool out of TLS certificate
+	// verification when at least one Upstream URL uses the
+	// `https://` scheme. Default false (strict: validate the
+	// upstream's cert against the system trust store).
+	//
+	// Route-level not per-upstream because Caddy's reverse_proxy
+	// `transport.tls` block is per-handler, not per-upstream
+	// (verified against caddyserver/caddy@v2/modules/caddyhttp/
+	// reverseproxy/httptransport.go). Per-upstream TLS configs
+	// would require a different proxy plugin; deferred as a
+	// future enhancement if a real need surfaces.
+	//
+	// Storage validate enforces a same-scheme pool: if any
+	// Upstream is `https://`, ALL must be `https://`. Mixed
+	// pools are rejected at create/update time with a clear
+	// error so an operator can't accidentally point an
+	// http-only Caddy transport at an https upstream.
+	//
+	// Pre-#R-PROXMOX rows decode with zero-value
+	// InsecureSkipVerify=false — strict by default, matches
+	// the operator-safer "verify everything" baseline. No
+	// boot migration needed (the JSON decoder zero-fills
+	// missing keys). See docs/superpowers/decisions/
+	// 2026-06-10-https-upstream-tls-transport.md.
+	//
+	// JSON omitempty so the field is silently absent on
+	// http-only routes — keeps the on-wire / on-disk shape
+	// byte-equal with pre-fix snapshots for HTTP routes,
+	// minimising diff noise during backup/restore.
+	InsecureSkipVerify bool      `json:"insecure_skip_verify,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route
@@ -307,6 +338,65 @@ func ValidateRoute(r Route) error {
 	return r.validate()
 }
 
+// upstreamScheme returns the lowercased scheme of an
+// Upstream URL, or "" when the URL doesn't parse cleanly /
+// has no scheme. Used by validateSameSchemePool to enforce
+// the same-scheme invariant across a route's pool.
+func upstreamScheme(raw string) string {
+	// Lightweight prefix check first — most URLs are
+	// well-formed and parsing them via net/url adds a real
+	// allocation per check. Fast path: catch the two valid
+	// forms; fall through to net/url only on edge cases.
+	switch {
+	case len(raw) >= 7 && (raw[:7] == "http://" || raw[:7] == "HTTP://"):
+		return "http"
+	case len(raw) >= 8 && (raw[:8] == "https://" || raw[:8] == "HTTPS://"):
+		return "https"
+	}
+	return ""
+}
+
+// validateSameSchemePool enforces that all Upstreams in a
+// pool share the same scheme. See the call-site comment in
+// Route.validate for the rationale.
+func validateSameSchemePool(pool []Upstream) error {
+	var first string
+	for i, u := range pool {
+		s := upstreamScheme(u.URL)
+		if i == 0 {
+			first = s
+			continue
+		}
+		if s != first {
+			return fmt.Errorf(
+				"route: upstreams must share the same scheme "+
+					"(upstreams[0]=%q, upstreams[%d]=%q) — mixed http/https pools are not supported",
+				first, i, s,
+			)
+		}
+	}
+	return nil
+}
+
+// PoolUsesHTTPS reports whether the route's upstream pool
+// requires Caddy to negotiate TLS toward the upstreams.
+// Returns true iff every Upstream URL uses the https://
+// scheme. Used by:
+//   - The caddymgr config builder to decide whether to
+//     emit transport.tls in the reverse_proxy block.
+//   - The API + frontend to decide whether to surface the
+//     InsecureSkipVerify toggle.
+//
+// Same-scheme invariant means we only need to inspect
+// upstreams[0] for the answer — the storage validator
+// guarantees the rest agree.
+func (r Route) PoolUsesHTTPS() bool {
+	if len(r.Upstreams) == 0 {
+		return false
+	}
+	return upstreamScheme(r.Upstreams[0].URL) == "https"
+}
+
 // validate checks the user-supplied fields of a Route.
 func (r *Route) validate() error {
 	if r.Host == "" {
@@ -327,6 +417,26 @@ func (r *Route) validate() error {
 		if u.Weight < 1 {
 			return fmt.Errorf("route: upstreams[%d].weight must be >= 1", i)
 		}
+	}
+	// Step #R-PROXMOX-HTTPS-LOOP (2026-06-10): same-scheme pool
+	// invariant. All Upstreams in the pool must share the same
+	// scheme (all http:// or all https://). Mixed pools are
+	// rejected because Caddy's reverse_proxy `transport.tls` is
+	// per-handler — a pool of [http://a, https://b] would force
+	// b's TLS context to apply to a's connection too, and
+	// although Caddy ignores it for a (it only negotiates TLS
+	// when the upstream is actually HTTPS-shaped), the
+	// configuration intent is incoherent: an operator banning a
+	// mixed pool is signalling something they probably didn't
+	// mean.
+	//
+	// Empty-scheme tolerated for forward-compat (a pre-fix row
+	// that somehow ended up with a scheme-less URL won't fail
+	// boot; the upstreamDial path defaults to http). The API
+	// layer validates scheme presence at create/update time
+	// with a friendlier error.
+	if err := validateSameSchemePool(r.Upstreams); err != nil {
+		return err
 	}
 	// Step J.1: LBPolicy must be one of the six enum values. Empty is
 	// rejected here because the API layer is responsible for

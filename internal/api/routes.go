@@ -737,7 +737,16 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		// Surface the decoder's reason — typically either a
+		// json.SyntaxError ("invalid character 'x' looking for…")
+		// or DisallowUnknownFields' "json: unknown field "xyz"".
+		// The latter is the exact symptom that masked the Step
+		// #R-PROXMOX-HTTPS-LOOP commit 1 wire-gap (smoke caught
+		// "json: unknown field \"insecureSkipVerify\"" silently
+		// flattened to "invalid JSON body"). #R-API-PUT-ROUTE-
+		// GENERIC-400 tracks the broader sweep across the other
+		// ~16 handlers in this package.
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
 	if err := validateHost(req.Host); err != nil {
@@ -977,6 +986,26 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 			Fails:        req.HealthCheck.Fails,
 		}
 	}
+	// Step #R-PROXMOX-HTTPS-LOOP commit 1b — InsecureSkipVerify
+	// on POST: nil pointer means "use the strict default
+	// (false)"; non-nil dereferences the operator's choice.
+	// Self-heal: if the operator passes true but the upstream
+	// pool is http-only, the flag is meaningless and would
+	// silently persist as dead config — coerce to false and
+	// warn-log (same shape as RedirectToHTTPS self-heal at
+	// routes.go:1273-1275). The PoolUsesHTTPS predicate is
+	// the single source of truth (validator guarantees the
+	// same-scheme invariant; checking upstreams[0] is enough).
+	skipVerify := false
+	if req.InsecureSkipVerify != nil {
+		skipVerify = *req.InsecureSkipVerify
+	}
+	tempForSchemeCheck := storage.Route{Upstreams: storeUpstreams}
+	if skipVerify && !tempForSchemeCheck.PoolUsesHTTPS() {
+		h.logger.Warn("insecure_skip_verify ignored on http-only upstream pool; normalising to false",
+			"host", req.Host)
+		skipVerify = false
+	}
 	newRoute := storage.Route{
 		Host:            req.Host,
 		Upstreams:       storeUpstreams,
@@ -992,13 +1021,14 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		ForwardAuth: storage.ForwardAuthRouteConfig{
 			ProviderName: req.ForwardAuth.ProviderName,
 		},
-		RequestHeaders:   req.RequestHeaders,
-		ResponseHeaders:  req.ResponseHeaders,
-		WAFMode:          req.WAFMode,
-		ACMEChallenge:    req.ACMEChallenge,
-		UseDedicatedCert: req.UseDedicatedCert,
-		HealthCheck:      storeHC,
-		CountryBlock:     newCountryBlock,
+		RequestHeaders:     req.RequestHeaders,
+		ResponseHeaders:    req.ResponseHeaders,
+		WAFMode:            req.WAFMode,
+		ACMEChallenge:      req.ACMEChallenge,
+		UseDedicatedCert:   req.UseDedicatedCert,
+		HealthCheck:        storeHC,
+		CountryBlock:       newCountryBlock,
+		InsecureSkipVerify: skipVerify,
 	}
 	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
 	// the corresponding sub-struct (storage trusts the API to
@@ -1064,7 +1094,9 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		// Surface the decoder's reason (see createRoute for
+		// rationale; #R-API-PUT-ROUTE-GENERIC-400 sweep).
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
 	if err := validateHost(req.Host); err != nil {
@@ -1354,6 +1386,21 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 			Fails:        req.HealthCheck.Fails,
 		}
 	}
+	// Step #R-PROXMOX-HTTPS-LOOP commit 1b — InsecureSkipVerify
+	// on PUT: nil pointer preserves the previously stored
+	// value (same UX as HealthCheck / CountryBlock above);
+	// non-nil pointer is a full replacement.
+	// Self-heal on http-only pools (mirror of createRoute).
+	skipVerify := previous.InsecureSkipVerify
+	if req.InsecureSkipVerify != nil {
+		skipVerify = *req.InsecureSkipVerify
+	}
+	tempForSchemeCheck := storage.Route{Upstreams: storeUpstreams}
+	if skipVerify && !tempForSchemeCheck.PoolUsesHTTPS() {
+		h.logger.Warn("insecure_skip_verify ignored on http-only upstream pool; normalising to false",
+			"id", id, "host", req.Host)
+		skipVerify = false
+	}
 	newRoute := storage.Route{
 		ID:              id,
 		Host:            req.Host,
@@ -1370,13 +1417,14 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		ForwardAuth: storage.ForwardAuthRouteConfig{
 			ProviderName: req.ForwardAuth.ProviderName,
 		},
-		RequestHeaders:   req.RequestHeaders,
-		ResponseHeaders:  req.ResponseHeaders,
-		WAFMode:          req.WAFMode,
-		ACMEChallenge:    req.ACMEChallenge,
-		UseDedicatedCert: req.UseDedicatedCert,
-		HealthCheck:      storeHC,
-		CountryBlock:     newCountryBlock,
+		RequestHeaders:     req.RequestHeaders,
+		ResponseHeaders:    req.ResponseHeaders,
+		WAFMode:            req.WAFMode,
+		ACMEChallenge:      req.ACMEChallenge,
+		UseDedicatedCert:   req.UseDedicatedCert,
+		HealthCheck:        storeHC,
+		CountryBlock:       newCountryBlock,
+		InsecureSkipVerify: skipVerify,
 	}
 	if newRoute.AuthMode != storage.RouteAuthBasic {
 		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}

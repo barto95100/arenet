@@ -934,6 +934,44 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			},
 		}
 
+		// Step #R-PROXMOX-HTTPS-LOOP (2026-06-10) — emit
+		// transport.tls when the upstream pool is HTTPS.
+		// Caddy's reverse_proxy transport is per-handler,
+		// not per-upstream, so the route-level
+		// PoolUsesHTTPS predicate is the right discriminant
+		// (the storage validator guarantees a same-scheme
+		// pool, so checking one upstream is enough).
+		//
+		// Shape mirrors the forward_auth precedent at
+		// manager.go:2298-2302 — same {"protocol":"http",
+		// "tls":{...}} block, just driven by the route's
+		// upstream pool instead of the forward_auth
+		// VerifyURL.
+		//
+		// When r.InsecureSkipVerify is true, the tls block
+		// carries "insecure_skip_verify": true. Empty {}
+		// (the default) uses Caddy's strict cert
+		// validation against the system trust store.
+		//
+		// Pre-fix behaviour for an HTTPS upstream: no
+		// transport block, Caddy proxied plain HTTP to a
+		// TLS-only port, the upstream (e.g. Proxmox)
+		// returned a 301 to https://, Caddy faithfully
+		// re-proxied the redirect back to itself, and the
+		// browser saw a redirect loop. The transport.tls
+		// emission flips Caddy into "speak TLS to the
+		// upstream", breaking the loop.
+		if r.PoolUsesHTTPS() {
+			tlsCfg := map[string]any{}
+			if r.InsecureSkipVerify {
+				tlsCfg["insecure_skip_verify"] = true
+			}
+			proxyHandler["transport"] = map[string]any{
+				"protocol": "http",
+				"tls":      tlsCfg,
+			}
+		}
+
 		// Step J.2: active health checks. When the route has them
 		// enabled, emit `health_checks.active` as a sibling of
 		// upstreams and load_balancing inside the reverse_proxy

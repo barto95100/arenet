@@ -887,6 +887,26 @@ type routeRequest struct {
 	// case-insensitive pattern would be confusing here since
 	// users type country codes by hand).
 	CountryBlock *countryBlockReq `json:"countryBlock,omitempty"`
+	// Step #R-PROXMOX-HTTPS-LOOP (commit 1b) — route-level
+	// opt-out from upstream TLS cert verification, applies when
+	// the route's upstream pool uses `https://`. Pointer so nil
+	// distinguishes "field absent from JSON" (createRoute:
+	// zero-value false strict; updateRoute: preserve previously
+	// stored value) from "field present" (full replacement
+	// with either true or false).
+	//
+	// Same preserve-on-omission UX as HealthCheck and
+	// CountryBlock above so operators editing unrelated fields
+	// don't have to restate the toggle every time.
+	//
+	// On HTTP-only routes the flag is meaningless (no
+	// transport.tls block emitted by the Caddy builder). The
+	// API normalises it to false on PUT when the upstream pool
+	// is http-only — same self-heal shape as RedirectToHTTPS
+	// auto-clearing when TLSEnabled flips false (routes.go:
+	// 1273-1275). A warn-log surfaces the normalisation so an
+	// operator typo doesn't silently persist.
+	InsecureSkipVerify *bool `json:"insecureSkipVerify,omitempty"`
 }
 
 // countryBlockReq is the wire-side shape of Route.CountryBlock.
@@ -1064,6 +1084,15 @@ type routeResponse struct {
 	// toResponse normalisation). The frontend renders this as the
 	// "Pays bloqués" form section.
 	CountryBlock countryBlockResp `json:"countryBlock"`
+	// Step #R-PROXMOX-HTTPS-LOOP (commit 1b) — surfaced as a
+	// non-pointer bool because storage always carries a
+	// definite value (zero default is false). Always emitted
+	// on the wire (no omitempty) so a GET→PUT roundtrip can
+	// echo it back without dropping the field. The frontend
+	// renders this as the "Ignorer la vérification du
+	// certificat upstream" toggle in the advanced TLS
+	// disclosure (commit 2).
+	InsecureSkipVerify bool `json:"insecureSkipVerify"`
 	// Critique 11 Pack A (2026-06-05) — derived per-route
 	// aggregate from the Stage B HC tracker. One of:
 	//   "healthy"   — HC enabled AND every upstream healthy in tracker
@@ -1153,9 +1182,10 @@ func toResponse(r storage.Route) routeResponse {
 			Passes:       r.HealthCheck.Passes,
 			Fails:        r.HealthCheck.Fails,
 		},
-		CountryBlock: toCountryBlockResp(r.CountryBlock),
-		CreatedAt:    r.CreatedAt.UTC().Format(timestampFormat),
-		UpdatedAt:    r.UpdatedAt.UTC().Format(timestampFormat),
+		CountryBlock:       toCountryBlockResp(r.CountryBlock),
+		InsecureSkipVerify: r.InsecureSkipVerify,
+		CreatedAt:          r.CreatedAt.UTC().Format(timestampFormat),
+		UpdatedAt:          r.UpdatedAt.UTC().Format(timestampFormat),
 	}
 }
 
