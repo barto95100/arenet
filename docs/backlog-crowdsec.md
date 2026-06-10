@@ -143,3 +143,214 @@ crowdsec_reset. CS.1 Gate 1 ambiguity now resolvable cleanly.
 CrowdSec 1.7.8 doesn't emit X-Crowdsec-Version HTTP header. Version 
 exposed via cs_info Prometheus metric only. Couplage prometheus.enabled 
 pas worth pour un badge cosmétique. May revisit si upstream re-adds.
+
+## #R-WAF-EVENT-LABEL-BLOCK-VS-200 (low) — OPEN 2026-06-10
+
+Découvert pendant le smoke Day 8 (Gate 4 du fix #R-WAF-BLOCKS-MUTATING-METHODS).
+
+Symptôme :
+  Sur admin path /api/v1/routes avec payload SQLi → HTTP 200 retourné (admin trust 
+  via exclusion), MAIS l'event /observability/logs est tagué "BLOCK 403" pour 
+  WAF rule 942100. Le label de l'event ne reflète pas l'action réelle.
+
+Hypothèses :
+  - Cosmétique : l'event log montre l'action "intended" du rule, pas celle 
+    effectivement appliquée après l'admin exclusion → tag devrait être DETECT 
+    ou LOG_ONLY
+  - Anomaly scoring : rule 942100 seul n'atteint pas le threshold global (949110 
+    n'a pas firé), donc même hors admin path ça n'aurait pas bloqué → label 
+    BLOCK 403 viendrait du rule individual severity
+  - Bug de labelling dans event sink
+
+Impact : confusion forensique. Un opérateur scrutant `/observability/logs` 
+pourrait croire qu'un attaquant a été bloqué alors que la requête a passé.
+
+Fix à scoper : auditer internal/waf/event.go (ou équivalent) — voir si on label 
+"action_intended" vs "action_applied", clarifier la sémantique.
+
+## #R-DASHBOARD-WAF-COUNTERS-ZERO (medium) — OPEN 2026-06-10
+
+Découvert pendant smoke Day 8 post-WAF fix.
+
+Symptôme :
+  - Dashboard /apercu — card "WAF BLOCKS / H" = 0
+  - Dashboard — Top routes col "WAF BLOCKS" = 0 toutes routes
+  - Page /sécurité/waf — toutes catégories CRS = 0 blocks/24h
+  - Page /sécurité/waf — counter "BLOCKED" = 0
+  - MAIS feed dashboard "WAF events — recent" affiche les 5 events 
+    récents (smoke Gates 3+4 Day 8)
+
+Hypothèse :
+  Aggregator metrics lit pas la même source que l'events feed, ou 
+  filtre uniquement les events de routes en wafMode=block (ignore 
+  les detect events). Pipeline incohérent.
+
+À investiguer :
+  - internal/observability/waf_sink.go : counter increment dépendant 
+    du wafMode ou du action de l'event ?
+  - SQL query peuplant les categories /sécurité/waf : SELECT count(*) 
+    GROUP BY rule_family WHERE time > now-24h sur metrics.db, comparer 
+    avec l'UI
+
+Impact : perte de signal observabilité WAF agrégé.
+
+## #R-WAF-EVENT-LABEL-INCONSISTENT (low) — OPEN 2026-06-10
+
+Découvert pendant smoke Day 8.
+
+Symptôme :
+  Même event WAF labellé différemment selon la vue :
+  - /observability/logs → "DETECT" (route wafMode=detect) ✅
+  - Dashboard feed "WAF events — recent" → "BLOCK 403" ❌
+
+Hypothèse :
+  Le composant dashboard feed lit uniquement le HTTP status code (403) 
+  sans considérer le wafMode de la route ou le champ action de l'event.
+
+À investiguer :
+  - Frontend : <WafEventRow> dashboard vs page logs
+  - Backend : /api/v1/observability/events vs /api/v1/observability/logs
+
+Note : à consolider avec #R-WAF-EVENT-LABEL-BLOCK-VS-200 — même 
+famille de bug (label semantics mal gérés à différents endroits).
+
+## #F-UPSTREAM-TEST-ENDPOINT (medium) — RESOLVED 2026-06-10 (commit f119116)
+
+Endpoint POST /api/v1/routes/test-upstream + bouton UI "Tester la 
+connexion" différé hors du bundle initial #R-PROXMOX-HTTPS-LOOP 
+(scope-cut pour réduire blast radius du fix critique).
+
+Shipped in commit `f119116` after smoke green on commits 1+1b+2. 
+Final spec landed slightly enriched vs the deferred draft:
+  - POST /api/v1/routes/test-upstream — admin-only
+  - Body : {"url": "https://...", "insecureSkipVerify": false}
+  - Probe : GET / (not HEAD — many homelab upstreams return 405 
+    on HEAD even when healthy)
+  - Redirects NOT followed (301 is a legit datapoint)
+  - Response shape (enriched vs draft) :
+      reachable, statusCode, latencyMs, tlsHandshakeMs,
+      cert{commonName, issuer, selfSigned},
+      serverHeader, bodyPreview (4KB → 200 chars sanitised),
+      error
+  - Timeout strict 5s, max URL length 2048, scheme allowlist 
+    http/https only
+  - Frontend : per-row "Tester" button + chip, "Tester tous" 
+    pool-level button parallélisant via Promise.all
+  - 16 backend tests + 7 frontend tests
+
+SSRF posture explicit-non-decision : pas de RFC 1918 blocking. 
+Trust model "admin = root-equiv for proxy targets" — un admin 
+peut déjà CONFIGURE une route vers n'importe quelle IP interne 
+via createRoute; ce endpoint n'ajoute aucune capacité, juste 
+une boucle de diagnostic plus rapide. Documenté en détail dans 
+docs/superpowers/decisions/2026-06-10-https-upstream-tls-
+transport.md §SSRF posture.
+
+## #R-PROXMOX-HTTPS-LOOP — RESOLVED 2026-06-10 (commits a69880d + 37f38a5 + f119116)
+
+Operator-reproduced Day-8 review : routes avec upstreams 
+`https://` (Proxmox, Synology DSM, ESXi, UniFi) produisaient 
+des boucles de redirect 301 infinies car Caddy proxyfiait en 
+plain HTTP vers l'upstream.
+
+Root cause : `caddymgr/manager.go` upstreamDial parsait le 
+scheme pour calculer le port par défaut (`:443`/`:80`) mais 
+le DROPPAIT ensuite — le champ `dial` ne portait que 
+`host:port`, aucun `transport.tls` block émis, Caddy 
+basculait sur le transport HTTP par défaut.
+
+Fix shipping en 3 commits scope-distincts :
+
+- `a69880d` (commit 1+1b squash) :
+    Storage `Route.InsecureSkipVerify bool` + 
+    `PoolUsesHTTPS()` + `validateSameSchemePool`. 
+    Caddymgr buildConfigJSON émet le transport.tls block 
+    quand `r.PoolUsesHTTPS()`. Wire layer : 
+    `routeRequest.InsecureSkipVerify *bool` (preserve-on-
+    omit) + `routeResponse.InsecureSkipVerify bool` 
+    (always emitted). HTTP-only self-heal silencieux 
+    + warn-log côté backend, mirror du `RedirectToHTTPS` 
+    self-heal à routes.go:1273-1275. Surface l'erreur du 
+    décodeur dans le 400 ("invalid JSON body: <reason>") 
+    pour createRoute + updateRoute uniquement — sweep 
+    des ~16 autres sites trackée séparément 
+    (#R-API-PUT-ROUTE-GENERIC-400). 21 tests (13 storage 
+    + caddymgr + 8 wire layer) verts.
+
+- `37f38a5` (commit 2) :
+    Frontend — validation inline scheme http/https avec 
+    rejet pool mixte, disclosure conditionnel "Options 
+    avancées TLS upstream" visible uniquement sur pool 
+    all-https, toggle "Ignorer la vérification du 
+    certificat upstream" avec helper text pédagogique, 
+    hint IP privée (RFC 1918 + 4193 + loopback), 
+    warning chemin non-root non-bloquant (valeur 
+    préservée). Self-heal frontend en `$effect` reset 
+    le toggle false sur transition https→http 
+    (alignement avec backend self-heal). Payload 
+    submit ship insecureSkipVerify UNIQUEMENT sur 
+    poolScheme === 'https'; OMIS sur http (preserve-
+    on-omit). 8 tests vitest verts.
+
+- `f119116` (commit 3) :
+    Test-upstream endpoint + UI button — voir 
+    #F-UPSTREAM-TEST-ENDPOINT.
+
+Decision doc complet : docs/superpowers/decisions/
+2026-06-10-https-upstream-tls-transport.md.
+
+Smoke browser confirmé Day-8 sur Proxmox à 
+proxmox.worldgeekwide.fr : page login Proxmox visible, 
+plus de 502 ni de boucle 301. Régression check 
+ha.worldgeekwide.fr OK depuis Mac + via loopback SNI forcé.
+
+## #R-API-PUT-ROUTE-GENERIC-400 (low) — OPEN 2026-06-10
+
+Découvert pendant le smoke commit 1 du fix 
+#R-PROXMOX-HTTPS-LOOP. PUT /api/v1/routes/{id} retournait 
+400 "invalid JSON body" en générique, masquant la cause 
+réelle (le wire layer manquait `InsecureSkipVerify` côté 
+`routeRequest`, et `dec.DisallowUnknownFields()` rejetait 
+le champ silencieusement).
+
+Le smoke aurait diagnostiqué la cause en une seule curl 
+si le message d'erreur avait surfacé la raison du décodeur 
+dès le départ.
+
+Fix partiel landed en commit `a69880d` : createRoute + 
+updateRoute surfacent maintenant l'erreur du décodeur 
+("invalid JSON body: json: unknown field \"xyz\"" ou 
+"invalid JSON body: invalid character..."). C'est la 
+forme correcte pour ces deux sites.
+
+Sweep restant (~16 autres handlers utilisent le même 
+pattern `writeError(w, http.StatusBadRequest, "invalid 
+JSON body")` à grain sec dans :
+  - internal/api/automation_handlers.go (2 sites)
+  - internal/api/auth_handlers.go (5 sites)
+  - internal/api/crowdsec_manual_ban.go
+  - internal/api/crowdsec_settings.go (2 sites)
+  - internal/api/forward_auth_provider.go (2 sites)
+  - internal/api/dns_provider.go
+  - internal/api/managed_domain.go
+  - internal/api/server_position_handler.go
+  - internal/api/oidc.go (2 sites)
+
+À traiter en un seul commit de balayage : remplacer 
+chaque appel par `writeError(w, http.StatusBadRequest, 
+"invalid JSON body: "+err.Error())`. Trivial mais 
+ennuyeux à faire ligne par ligne — peut être scripté 
+en `sed -i` avec relecture.
+
+Impact bas : seuls les opérateurs faisant du curl 
+manuel souffrent du masquage; le frontend n'envoie 
+jamais de JSON malformé. Mais c'est un signal de 
+debug perdu pour les futures sessions.
+
+Lesson capturée : storage struct ≠ wire struct. Quand 
+on étend un schema (Route, ProviderConfig, etc.), 
+vérifier les DEUX axes (storage + routeRequest/Response). 
+`DisallowUnknownFields` transforme un champ wire 
+oublié en générique 400 qui masque la cause. À ajouter 
+à ENGINEERING-PRACTICES.md comme Lesson 5 (operator 
+request).
