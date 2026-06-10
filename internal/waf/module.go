@@ -204,7 +204,7 @@ func (h *ArenetWafHandler) buildWAF() (coraza.WAF, error) {
 	//
 	// SecRuleEngine still appends (terminal directive
 	// wins) so block/detect mode behaviour is unchanged.
-	directives := adminAPIUUIDExclusionDirective + h.Directives + "\nSecRuleEngine " + mode
+	directives := adminAPIExclusionDirective + h.Directives + "\nSecRuleEngine " + mode
 
 	cfg := coraza.NewWAFConfig().
 		WithErrorCallback(h.onMatch).
@@ -215,91 +215,107 @@ func (h *ArenetWafHandler) buildWAF() (coraza.WAF, error) {
 	return coraza.NewWAF(cfg)
 }
 
-// adminAPIUUIDExclusionDirective is a CRS false-positive
-// guard for the Arenet admin API paths that embed a UUID
-// (route ID / setting ID). DETECT-mode observation on
-// 2026-06-08 caught rules 930120 (LFI restricted file
-// access), 931100 (RFI), 949110 (anomaly threshold), and
-// 911100 (PROTOCOL_ENFORCEMENT method-not-allowed)
-// triggering on the literal UUID hex string in PUT/DELETE
-// requests to /api/v1/routes/<uuid> and
-// /api/v1/settings/<uuid>. The UUID happens to contain
-// hyphen-separated hex runs the CRS LFI rules flag as
-// path-traversal-shaped; that's a textbook false positive.
+// adminAPIExclusionDirective is a CRS false-positive guard
+// for the Arenet management plane.
 //
-// Switching the route's mode to "block" without this
-// guard would 403 every legitimate operator PUT/DELETE
-// on routes/settings — exactly the wrong outcome.
+// History:
+//   - Item 1 (#R-WAF-FP-uuid-paths, commit a6276a8, 2026-06-08):
+//     guard added with a narrow regex covering ONLY UUID-shaped
+//     paths /api/v1/(routes|settings)/<UUID> after DETECT-mode
+//     observation caught rules 930120 (LFI), 931100 (RFI),
+//     949110 (anomaly), 911100 (PROTOCOL method) triggering on
+//     the hex+hyphen UUID string.
+//   - #R-WAF-BLOCKS-MUTATING-METHODS (this change, 2026-06-10):
+//     widened to cover the WHOLE `/api/v1/` subtree. Operator-
+//     reproduced bug: a self-route admin (host=arenet.* →
+//     127.0.0.1:adminPort) with WAFMode=block + OWASP CRS
+//     loaded was returning 403 on every PUT/DELETE/PATCH to
+//     literal-named admin paths (e.g. /api/v1/settings/crowdsec,
+//     /api/v1/settings/automation/credentials). The UUID-only
+//     regex didn't cover the literal-named subtree.
+//     CRS 911100 (PROTOCOL_ENFORCEMENT method check) fires on
+//     PUT/DELETE/PATCH because the default tx.allowed_methods
+//     is "GET HEAD POST OPTIONS". See
+//     docs/superpowers/decisions/2026-06-10-waf-excludes-
+//     management-plane.md for the architecture rationale.
 //
-// Mechanism: SecRule on REQUEST_URI at phase:1 (request
-// headers, runs BEFORE the CRS phase:2 evaluation rules).
-// When the URI matches the admin API UUID pattern, the
-// ctl:ruleRemoveById action removes the LFI / PROTOCOL /
-// anomaly rule families from this transaction's scope.
-// The rule itself uses pass + nolog so it neither blocks
-// nor emits an event — the legitimate request reaches
-// the inner handlers unchanged.
+// Mechanism (unchanged from Item 1):
+// SecRule on REQUEST_FILENAME at phase:1 (request headers,
+// runs BEFORE the CRS phase:2 evaluation rules). When the
+// path matches the admin API pattern, ctl:ruleRemoveById
+// removes the four FP-prone rule families from this
+// transaction's scope. The rule itself uses pass + nolog so
+// it neither blocks nor emits an event — the legitimate
+// request reaches the inner handlers unchanged.
 //
-// Pattern: ^/api/v1/(routes|settings)/[a-f0-9-]{36}(/.*)?$
-//   - Anchored start/end so it can't be tricked by query
-//     params or fragment-like suffixes.
-//   - The UUID character class is hex + hyphen, exactly
-//     36 chars (8-4-4-4-12 canonical UUID v4 form +
-//     hyphens). Matches the format the Go uuid package
-//     emits in storage.
+// Pattern: ^/api/v1(/.*)?$
+//   - Anchored start so it can't be widened by leading
+//     path components.
+//   - Optional trailing path captures every endpoint
+//     (settings/<uuid>, settings/crowdsec, security/*,
+//     audit, routes, observability/*, automation/*, etc.).
+//   - No trailing $ so query strings + fragments still match
+//     (REQUEST_FILENAME is path-only per Coraza's
+//     transaction.go:864, so this is effectively anchored
+//     end-of-path anyway).
 //
-// Variable choice: REQUEST_FILENAME (path-only) rather
-// than REQUEST_URI. Coraza's ProcessURI populates
+// Variable choice (unchanged): REQUEST_FILENAME (path-only)
+// rather than REQUEST_URI. Coraza's ProcessURI populates
 // REQUEST_URI with the full input string passed by the
-// caller — in arenet's case `req.URL.String()` which
-// retains the scheme+host when present (e.g.
-// "http://localhost/api/v1/routes/..."). REQUEST_FILENAME
-// is set to `parsedURL.Path` (line 864 in transaction.go),
-// always starting at "/" regardless of how the caller
-// composed the URL. Matching against the path-only
-// variable means the regex stays compact and works
-// identically under all test + production code paths.
+// caller — in arenet's case `req.URL.String()` which retains
+// scheme+host when present (e.g.
+// "http://localhost/api/v1/settings/crowdsec"). REQUEST_FILENAME
+// is set to `parsedURL.Path`, always starting at "/"
+// regardless of caller URL composition. Matching the
+// path-only variable keeps the regex compact and works
+// identically across test + production code paths.
 //
-// Rule IDs chosen for the guard:
-//   - 100001..100002: arenet-reserved ID block
-//     (CRS reserves 900000..999999 for OWASP, leaves
-//     100000+ free for custom rules). Two rules in
-//     case a future operator override needs a second
-//     exclusion path.
-//
-// Rule families removed (`ctl:ruleRemoveByTag=...` would
-// be terser but Coraza tags-based exclusion is incomplete
-// for some CRS tags; explicit ID ranges are reliable):
+// Rule families removed (unchanged from Item 1):
 //   - 911100-911199: PROTOCOL_ENFORCEMENT method checks
-//     (PUT/DELETE not in default allowed_methods list —
-//     would 403 every legitimate operator API write)
-//   - 930000-930999: LFI rules (the UUID hex+hyphen
-//     pattern triggers 930120 restricted-file-access)
-//   - 931000-931999: RFI rules (same FP shape as LFI)
-//   - 949000-949999: anomaly score aggregator (CRS's
-//     "block when total anomaly score exceeds threshold"
-//     rule). Removing this means OTHER families (e.g.
-//     942xxx SQLi) still EMIT events but won't trigger
-//     blocking on this admin URI — they only contribute
-//     to the anomaly score, and without 949* nothing
-//     reads that score to make the block decision.
+//     (PUT/DELETE/PATCH not in default allowed_methods —
+//     would 403 every legitimate operator API write).
+//     THIS IS THE PRIMARY DRIVER of the widening.
+//   - 930000-930999: LFI rules (UUID hex+hyphen pattern
+//     triggers 930120 restricted-file-access; widening
+//     keeps the original Item 1 coverage for UUID paths
+//     as a strict superset).
+//   - 931000-931999: RFI rules (same FP shape as LFI).
+//   - 949000-949999: anomaly score aggregator. Removing
+//     this means OTHER families (942xxx SQLi, 941xxx XSS,
+//     etc.) still EMIT events but don't trigger blocking
+//     on management plane URIs — they only contribute to
+//     the anomaly score, and without 949* nothing reads
+//     that score to make the block decision.
 //
-// Trade-off accepted: the admin API IS the operator's
-// own infrastructure surface. Auth + RBAC further down
-// the chain are the real gates; the WAF was producing
-// false positives here without protecting against real
-// threats the operator-only-authenticated path could
-// face. Individual rule events still emit so the
-// activity log records attempted attack shapes for
+// Rule ID 100001: arenet-reserved ID block (CRS reserves
+// 900000..999999 for OWASP, leaves 100000+ free for custom).
+//
+// Trade-off (unchanged shape, wider scope):
+// The management plane IS the operator's own authenticated
+// admin surface. Every /api/v1/ endpoint is HardAuth-gated
+// (chi middleware at routes.go:143) and admin writes have a
+// further RequireAdminMiddleware (routes.go:284). Auth +
+// RBAC are the real gates; the WAF was producing false
+// positives here without protecting against real threats
+// the operator-only-authenticated path could face. Non-FP
+// rule families (SQLi, XSS, scanner) still EMIT events so
+// the activity log records attempted attack shapes for
 // forensic review.
-const adminAPIUUIDExclusionDirective = `
+//
+// User proxy routes are UNAFFECTED — the pattern is path-
+// based, not host-based, and user routes proxy to upstreams
+// whose path space is entirely operator-controlled. A user
+// app that happens to expose its API under "/api/v1/" (e.g.
+// a Home Assistant instance) WOULD have these CRS families
+// stripped on that path; this collision is narrow, accepted,
+// and documented in the decision doc as a known limitation.
+const adminAPIExclusionDirective = `
 
-# Arenet — CRS false-positive guard for admin API UUID paths.
+# Arenet — CRS false-positive guard for the management plane.
 # Skip CRS rule families 911*, 930*, 931*, 949* when the
-# request URI matches the admin API UUID pattern.
-# Documented in internal/waf/module.go's
-# adminAPIUUIDExclusionDirective.
-SecRule REQUEST_FILENAME "@rx ^/api/v1/(routes|settings)/[a-f0-9-]{36}(/.*)?$" \
+# request URI is under /api/v1/. Documented in
+# internal/waf/module.go's adminAPIExclusionDirective.
+SecRule REQUEST_FILENAME "@rx ^/api/v1(/.*)?$" \
     "id:100001,phase:1,nolog,pass,\
     ctl:ruleRemoveById=911100-911199,\
     ctl:ruleRemoveById=930000-930999,\

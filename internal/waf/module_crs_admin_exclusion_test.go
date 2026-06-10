@@ -25,23 +25,41 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 )
 
-// Item 1 (#R-WAF-FP-uuid-paths) — CRS false-positive guard
-// for admin API UUID paths.
+// Item 1 (#R-WAF-FP-uuid-paths) + #R-WAF-BLOCKS-MUTATING-METHODS
+// — CRS false-positive guard for the Arenet management plane.
 //
-// DETECT-mode smoke on 2026-06-08 caught CRS LFI / PROTOCOL
-// / anomaly rules triggering on PUT /api/v1/routes/<UUID>
-// (the hex-with-hyphens UUID happens to look like
-// path-traversal-shaped input to rules 930120 / 931100 /
-// 949110 / 911100). Switching the admin-side WAF to
-// block mode without an exclusion would 403 every
-// legitimate operator PUT/DELETE.
+// History:
+//   - Item 1 (commit a6276a8, 2026-06-08): exclusion guard
+//     added with a narrow regex covering ONLY UUID-shaped
+//     paths /api/v1/(routes|settings)/<UUID> after DETECT-
+//     mode smoke caught rules 930120 (LFI), 931100 (RFI),
+//     949110 (anomaly), 911100 (PROTOCOL) triggering on the
+//     hex+hyphen UUID string.
+//   - #R-WAF-BLOCKS-MUTATING-METHODS (2026-06-10): operator
+//     reproduced 403 on PUT /api/v1/settings/crowdsec via a
+//     self-route admin (host=arenet.* → 127.0.0.1:adminPort)
+//     with WAFMode=block + OWASP CRS. CRS 911100 rejected
+//     PUT/DELETE/PATCH on literal-named admin paths NOT
+//     covered by the narrow UUID regex. The exclusion was
+//     widened to ^/api/v1(/.*)?$ — the whole management
+//     plane is now covered, not just UUID-shaped paths.
 //
-// adminAPIUUIDExclusionDirective injects a SecRule at
-// phase:1 that removes those rule families on UUID-shaped
-// admin API paths via ctl:ruleRemoveById. These tests
-// pin (a) the exclusion fires on the admin API UUID
-// pattern, (b) non-admin or non-UUID paths still face the
-// full rule set.
+// adminAPIExclusionDirective injects a SecRule at phase:1
+// that removes the four false-positive-prone rule families
+// (911*, 930*, 931*, 949*) on every path under /api/v1/. The
+// trade-off shape is unchanged from Item 1, only the URL
+// space is wider. See module.go's adminAPIExclusionDirective
+// doc + docs/superpowers/decisions/2026-06-10-waf-excludes-
+// management-plane.md for the architecture rationale.
+//
+// These tests pin:
+//   (a) the exclusion fires on UUID-shaped admin paths
+//       (legacy Item 1 coverage, strict superset);
+//   (b) the exclusion fires on literal-named admin paths
+//       (#R-WAF-BLOCKS-MUTATING-METHODS regression guard
+//       — PUT /api/v1/settings/crowdsec, DELETE etc.);
+//   (c) user-route proxy paths (outside /api/v1/) still
+//       face the full rule set including LFI / PROTOCOL.
 
 // adminAPIDirectives composes the production directive
 // chain the caddymgr emits at runtime (mirror of
@@ -151,30 +169,40 @@ func TestAdminAPISettingsUUIDPath_BypassesCRS(t *testing.T) {
 	}
 }
 
-// TestAdminAPI_NoUUIDPath_FullCRSStillApplies — pin the
-// exclusion's narrowness: paths NOT matching the UUID
-// pattern still get the full CRS treatment. Without this
-// guard, a future tightening of the exclusion regex
-// could silently widen the bypass to legitimate attack
-// targets.
+// TestUserRoutePath_FullCRSStillApplies — pin the
+// exclusion's scope boundary: paths OUTSIDE /api/v1/ (i.e.
+// user-defined proxy routes whose upstream is an end-user
+// app, NOT Arenet's admin chi handler) still get the full
+// CRS treatment. Without this guard, a future tightening
+// of the exclusion regex could silently widen the bypass
+// to legitimate attack targets.
 //
 // We hit the WAF with a textbook LFI probe (../../../etc/
-// passwd) against a path that does NOT match the admin-
-// UUID pattern. Rule 930120 (LFI restricted file access)
-// should fire and the WAF should block.
-func TestAdminAPI_NoUUIDPath_FullCRSStillApplies(t *testing.T) {
+// passwd) against a path that does NOT live under
+// /api/v1/. Rule 930120 (LFI restricted-file-access) or a
+// sibling LFI rule should fire and the WAF should block.
+//
+// Renamed from TestAdminAPI_NoUUIDPath_FullCRSStillApplies
+// (pre-#R-WAF-BLOCKS-MUTATING-METHODS). The previous test
+// pinned a path /api/v1/routes (no UUID) which is now
+// inside the widened exclusion; the *intent* (LFI probes
+// block on user routes) is preserved, just exercised
+// against a more realistic shape.
+func TestUserRoutePath_FullCRSStillApplies(t *testing.T) {
 	cap := newCaptureSink()
 	setGlobalSinkFor(t, cap)
 
 	h := newCRSProvisionedHandler(t, "block")
 	next := &passthroughHandler{}
 
-	// Path is /api/v1/routes (no UUID) — does NOT match
-	// the exclusion. Query string carries an LFI payload
-	// that CRS rule 930120 (or similar) should catch.
+	// Path is /app/static (a user-route shape, e.g. an
+	// operator proxying home-assistant.example.com) —
+	// outside /api/v1/, NOT covered by the exclusion. Query
+	// string carries an LFI payload that CRS rule 930120
+	// (or sibling) should catch.
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"http://localhost/api/v1/routes?file=../../../etc/passwd",
+		"http://localhost/app/static?file=../../../etc/passwd",
 		nil,
 	)
 	rec := httptest.NewRecorder()
@@ -187,10 +215,10 @@ func TestAdminAPI_NoUUIDPath_FullCRSStillApplies(t *testing.T) {
 	// one event AND the upstream was NOT reached", proving
 	// the exclusion didn't silently widen.
 	if next.called {
-		t.Error("upstream was reached on non-admin-UUID LFI probe; the exclusion widened beyond the intended scope")
+		t.Error("upstream was reached on non-admin LFI probe; the exclusion widened beyond /api/v1/")
 	}
 	if cap.eventCount() == 0 {
-		t.Error("expected at least one WAF event on the LFI probe against a non-UUID path; got 0 (CRS rules not applying outside the exclusion?)")
+		t.Error("expected at least one WAF event on the LFI probe against a user-route path; got 0 (CRS rules not applying outside the exclusion?)")
 	}
 }
 
@@ -243,5 +271,152 @@ func TestAdminAPI_UUIDPath_SQLiStillObserved_ButDoesNotBlock(t *testing.T) {
 	// visibility preserved.
 	if cap.eventCount() == 0 {
 		t.Error("expected at least one SQLi-family event for forensic visibility; got 0")
+	}
+}
+
+// --- #R-WAF-BLOCKS-MUTATING-METHODS regression guards --------
+//
+// These tests pin the widened exclusion's coverage of the
+// literal-named admin paths that the original Item 1 narrow
+// regex didn't catch.
+
+// TestLiteralAdminPath_PUTCrowdSec_BypassesCRS911 is the
+// direct regression: PUT /api/v1/settings/crowdsec was the
+// exact operator-reproduced 403 case. With the widened
+// exclusion the request must now pass through.
+func TestLiteralAdminPath_PUTCrowdSec_BypassesCRS911(t *testing.T) {
+	cap := newCaptureSink()
+	setGlobalSinkFor(t, cap)
+
+	h := newCRSProvisionedHandler(t, "block")
+	next := &passthroughHandler{}
+
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"http://localhost/api/v1/settings/crowdsec",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	if err := h.ServeHTTP(rec, req, caddyhttp.HandlerFunc(next.ServeHTTP)); err != nil {
+		t.Fatalf("ServeHTTP returned err: %v", err)
+	}
+	if !next.called {
+		t.Error("next handler was NOT called — PUT on /api/v1/settings/crowdsec is still blocked by the WAF")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d; want 200 (the operator-reproduced 403 should now be fixed)", rec.Code)
+	}
+}
+
+// TestLiteralAdminPath_DELETEAutomation_BypassesCRS911 is
+// the sibling regression. The "Reset Security Automation"
+// button (CS.3 follow-up commit 73157c9) hits DELETE on
+// this path; the same WAF block was preventing it from
+// landing through Caddy.
+func TestLiteralAdminPath_DELETEAutomation_BypassesCRS911(t *testing.T) {
+	cap := newCaptureSink()
+	setGlobalSinkFor(t, cap)
+
+	h := newCRSProvisionedHandler(t, "block")
+	next := &passthroughHandler{}
+
+	req := httptest.NewRequest(
+		http.MethodDelete,
+		"http://localhost/api/v1/settings/automation/credentials",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	if err := h.ServeHTTP(rec, req, caddyhttp.HandlerFunc(next.ServeHTTP)); err != nil {
+		t.Fatalf("ServeHTTP returned err: %v", err)
+	}
+	if !next.called {
+		t.Error("next handler was NOT called — DELETE on /api/v1/settings/automation/credentials is still blocked")
+	}
+}
+
+// TestLiteralAdminPath_PATCHGeneric_BypassesCRS911 is the
+// belt-and-suspenders test: PATCH isn't yet used by any
+// shipped Arenet endpoint (2026-06-10), but the exclusion
+// widening was justified by "all mutating methods" so we
+// pin the contract for forward compatibility. A future
+// PATCH-on-/api/v1/* endpoint must not regress to 403.
+func TestLiteralAdminPath_PATCHGeneric_BypassesCRS911(t *testing.T) {
+	cap := newCaptureSink()
+	setGlobalSinkFor(t, cap)
+
+	h := newCRSProvisionedHandler(t, "block")
+	next := &passthroughHandler{}
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"http://localhost/api/v1/routes/whatever",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	if err := h.ServeHTTP(rec, req, caddyhttp.HandlerFunc(next.ServeHTTP)); err != nil {
+		t.Fatalf("ServeHTTP returned err: %v", err)
+	}
+	if !next.called {
+		t.Error("PATCH on /api/v1/routes/* was blocked — forward-compat regression")
+	}
+}
+
+// TestLiteralAdminPath_DeepNested_BypassesCRS — pin the
+// optional-trailing-path arm of the regex. A nested admin
+// path like /api/v1/security/crowdsec/scenarios must also
+// be covered.
+func TestLiteralAdminPath_DeepNested_BypassesCRS(t *testing.T) {
+	cap := newCaptureSink()
+	setGlobalSinkFor(t, cap)
+
+	h := newCRSProvisionedHandler(t, "block")
+	next := &passthroughHandler{}
+
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"http://localhost/api/v1/security/crowdsec/scenarios",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	if err := h.ServeHTTP(rec, req, caddyhttp.HandlerFunc(next.ServeHTTP)); err != nil {
+		t.Fatalf("ServeHTTP: %v", err)
+	}
+	if !next.called {
+		t.Error("PUT on /api/v1/security/crowdsec/scenarios was blocked — deep-nested path regression")
+	}
+}
+
+// TestUserRoute_911_BlocksMutatingMethods is the
+// counterpart to the management-plane regressions: pin
+// that user routes (outside /api/v1/) STILL face CRS
+// 911100 on mutating methods. The brief explicitly accepts
+// the trade-off that user apps which happen to expose
+// their own /api/v1/ would be excluded, but apps with
+// other path structures must still be protected.
+func TestUserRoute_911_BlocksMutatingMethods(t *testing.T) {
+	cap := newCaptureSink()
+	setGlobalSinkFor(t, cap)
+
+	h := newCRSProvisionedHandler(t, "block")
+	next := &passthroughHandler{}
+
+	// A user-route path that's NOT under /api/v1/. PUT
+	// hits CRS 911100 because the default allowed_methods
+	// list is "GET HEAD POST OPTIONS".
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"http://localhost/app/users/123",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	_ = h.ServeHTTP(rec, req, caddyhttp.HandlerFunc(next.ServeHTTP))
+
+	// Upstream must NOT be reached — 911100 catches it.
+	if next.called {
+		t.Error("PUT on a user-route path was NOT blocked by CRS 911100 — the exclusion silently widened beyond /api/v1/")
+	}
+	// At least one event recorded.
+	if cap.eventCount() == 0 {
+		t.Error("expected at least one CRS event on user-route PUT; got 0")
 	}
 }
