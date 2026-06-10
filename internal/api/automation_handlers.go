@@ -333,6 +333,79 @@ func (h *Handler) putAutomationCredentials(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// deleteAutomationCredentials serves DELETE
+// /api/v1/settings/automation/credentials — Step CS.3
+// follow-up.
+//
+// Wipes the persisted Security Automation watcher row AND
+// tells the in-memory automation.Manager to ClearCredentials
+// so the auto-classify pipeline drops out of LAPI write
+// immediately. Trigger rules are NOT touched — the operator
+// may want to keep them for a later re-enable; mirrors the
+// CS.2.C `crowdsec_reset` shape that explicitly preserves
+// orthogonal config (Security Automation watcher creds
+// during a CrowdSec bouncer reset, here trigger rules
+// during a watcher reset).
+//
+// Idempotent: a fresh-install DELETE (no row to wipe) still
+// runs the manager.ClearCredentials() so any straggler
+// in-memory state clears cleanly. Returns 200 with the
+// "not configured" response shape so the UI's badge flips
+// without needing a separate GET round-trip.
+//
+// Audit: emits ActionAutomationReset (distinct from
+// automation_rule_changed). BeforeJSON carries the wiped
+// row (Password scrubbed). AfterJSON omitted (the row no
+// longer exists). Skipped on fresh-install DELETE — a no-op
+// shouldn't add audit noise. Same convention as
+// deleteCrowdSecSettings.
+//
+// Unlike the CrowdSec reset, there's no rollback path here:
+// the automation.Manager swap is in-process state, not a
+// hot-reloadable Caddy config. If a future architecture
+// makes ClearCredentials fallible, rollback semantics will
+// need revisiting; today the call is infallible (idempotent
+// pointer swap to nil).
+func (h *Handler) deleteAutomationCredentials(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	previous, prevErr := h.store.GetWatcherCredentials(ctx)
+	if prevErr != nil && !errors.Is(prevErr, storage.ErrNotFound) {
+		h.logger.Error("automation: load credentials (reset)", "err", prevErr)
+		writeError(w, http.StatusInternalServerError, "failed to load credentials")
+		return
+	}
+
+	if !errors.Is(prevErr, storage.ErrNotFound) {
+		if err := h.store.DeleteWatcherCredentials(ctx); err != nil {
+			h.logger.Error("automation: delete credentials", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to delete credentials")
+			return
+		}
+	}
+
+	// Clear the in-memory writer regardless of storage state
+	// so any straggler manager binding is dropped.
+	if mgr := automation.GetManager(); mgr != nil {
+		mgr.ClearCredentials()
+	}
+
+	// Audit AFTER storage + manager state are aligned.
+	// Skip on fresh-install — no row existed, nothing to log.
+	if !errors.Is(prevErr, storage.ErrNotFound) {
+		h.appendAudit(r, audit.Event{
+			Action:     audit.ActionAutomationReset,
+			TargetType: "automation_credentials",
+			TargetID:   "default",
+			BeforeJSON: mustMarshalForAudit(watcherCredsForAudit(previous)),
+			// AfterJSON intentionally nil — the row no longer
+			// exists; the audit diff carries "was X, now gone".
+		})
+	}
+
+	writeJSON(w, http.StatusOK, credentialsResponse{})
+}
+
 // watcherCredsForAudit returns a copy of c with the Password
 // blanked. Mirrors dnsProviderForAudit (J.4). Apply to every
 // storage.WatcherCredentials passed into mustMarshalForAudit's

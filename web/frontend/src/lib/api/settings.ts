@@ -97,6 +97,16 @@ export const settingsApi = {
 		r: AutomationCredentialsRequest
 	): Promise<AutomationCredentialsView> =>
 		request<AutomationCredentialsView>('PUT', '/settings/automation/credentials', r),
+	// Step CS.3 follow-up — DELETE wipes the stored watcher
+	// row + tells the in-memory automation.Manager to drop
+	// the writer. Distinct from "PUT all blank" (which emits
+	// automation_rule_changed in the audit log) — DELETE
+	// emits automation_reset so the deliberate "auto-writer
+	// disabled" intent is traceable. Response shape mirrors
+	// a fresh-install GET (configured=false + defaults).
+	// Mirror of settingsApi.deleteCrowdSecSettings (CS.2.C).
+	deleteAutomationCredentials: (): Promise<AutomationCredentialsView> =>
+		request<AutomationCredentialsView>('DELETE', '/settings/automation/credentials'),
 
 	// Step K.2 — OIDC config (single row, "default" key on the
 	// backend). PUT preserves the clientSecret when empty (J.4

@@ -19,6 +19,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -361,5 +362,117 @@ func mustSeedWatcherCreds(t *testing.T, env *testEnv, password string) automatio
 	}
 	return automation.WatcherConfig{
 		LAPIURL: creds.LAPIURL, MachineID: creds.MachineID, Password: creds.Password,
+	}
+}
+
+// --- DELETE /settings/automation/credentials (CS.3 follow-up) ---
+
+func TestAutomation_DELETECredentials_WipesRow_ClearsManager_EmitsResetAudit(t *testing.T) {
+	env := newTestEnv(t, false)
+	mgr := withFakeManager(t)
+	mustSeedWatcherCreds(t, env, "must-not-leak-in-audit")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/settings/automation/credentials", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	// Row gone.
+	if _, err := env.store.GetWatcherCredentials(t.Context()); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("row not deleted: err=%v", err)
+	}
+
+	// Manager cleared.
+	if mgr.clearN != 1 {
+		t.Errorf("Manager.ClearCredentials calls = %d, want 1", mgr.clearN)
+	}
+	if mgr.configured {
+		t.Error("manager still reports configured=true after Reset")
+	}
+
+	// Response shape: configured=false, no LAPI URL echo.
+	var resp credentialsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Configured {
+		t.Errorf("response configured=true, want false after Reset")
+	}
+
+	// Audit: one event with the new automation_reset action.
+	events := env.audit.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+	evt := events[0]
+	if evt.Action != audit.ActionAutomationReset {
+		t.Errorf("action = %q, want %q", evt.Action, audit.ActionAutomationReset)
+	}
+	if evt.TargetType != "automation_credentials" {
+		t.Errorf("target_type = %q, want automation_credentials", evt.TargetType)
+	}
+	if evt.TargetID != "default" {
+		t.Errorf("target_id = %q, want default", evt.TargetID)
+	}
+	if evt.AfterJSON != nil {
+		t.Errorf("AfterJSON should be nil on reset, got %s", evt.AfterJSON)
+	}
+	// BeforeJSON carries the wiped row WITH password scrubbed.
+	if strings.Contains(string(evt.BeforeJSON), "must-not-leak-in-audit") {
+		t.Errorf("password leaked in BeforeJSON: %s", evt.BeforeJSON)
+	}
+	if !strings.Contains(string(evt.BeforeJSON), "127.0.0.1:8080") {
+		t.Errorf("BeforeJSON should carry the wiped row's LAPI URL: %s", evt.BeforeJSON)
+	}
+}
+
+func TestAutomation_DELETECredentials_FreshInstall_NoAuditNoise_StillClearsManager(t *testing.T) {
+	env := newTestEnv(t, false)
+	mgr := withFakeManager(t)
+	// No seed — fresh install.
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/settings/automation/credentials", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	// Manager still cleared — defensive sweep of any straggler.
+	if mgr.clearN != 1 {
+		t.Errorf("Manager.ClearCredentials calls = %d, want 1 (even on fresh-install delete)", mgr.clearN)
+	}
+
+	// NO audit row — a no-op DELETE shouldn't add noise (same
+	// convention as deleteCrowdSecSettings on a fresh install).
+	if got := len(env.audit.Events()); got != 0 {
+		t.Errorf("audit events = %d, want 0 on fresh-install DELETE", got)
+	}
+}
+
+func TestAutomation_DELETECredentials_NoManager_StillWipesRow(t *testing.T) {
+	// Mirror of the CrowdSec reset nil-applier tolerance.
+	// Tests that don't wire the automation manager should
+	// still see the storage row erased (and a request that
+	// hits this state in production would still log the
+	// audit row).
+	env := newTestEnv(t, false)
+	// Intentionally no withFakeManager call — the global
+	// stays nil.
+	mustSeedWatcherCreds(t, env, "password")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/settings/automation/credentials", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if _, err := env.store.GetWatcherCredentials(t.Context()); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("row should be deleted even without a manager: %v", err)
 	}
 }

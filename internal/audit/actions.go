@@ -143,6 +143,18 @@ const (
 	// duplicates the username so the audit log is searchable
 	// by operator independently of the encoded scenario.
 	ActionCrowdSecDecisionCreate = "crowdsec_decision_create"
+	// Step CS.3 follow-up — operator-pressed "Reset Security
+	// Automation" button on the Settings UI. DELETE wipes
+	// the persisted watcher credentials AND clears the
+	// in-memory automation.Manager's writer so the
+	// auto-classify pipeline stops emitting decisions to
+	// LAPI immediately (no Arenet restart required). Mirror
+	// of ActionCrowdSecReset (CS.2.C f1fe919): distinct from
+	// automation_rule_changed so the audit log makes the
+	// deliberate "auto-writer disabled" intent visible.
+	// BeforeJSON carries the wiped row (Password scrubbed);
+	// AfterJSON is omitted (the row no longer exists).
+	ActionAutomationReset = "automation_reset"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -187,6 +199,7 @@ var allActions = []string{
 	ActionCrowdSecUpdated,
 	ActionCrowdSecReset,
 	ActionCrowdSecDecisionCreate,
+	ActionAutomationReset,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

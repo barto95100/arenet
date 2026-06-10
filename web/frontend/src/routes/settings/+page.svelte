@@ -339,6 +339,36 @@
 		}
 	}
 
+	// Step CS.3 follow-up — Reset Security Automation. Mirror
+	// of the CrowdSec Reset button (CS.2.C f1fe919): wipes
+	// the watcher row + the in-memory writer via DELETE,
+	// emits the audit row automation_reset (distinct from
+	// automation_rule_changed). ConfirmDialog gates the
+	// destructive intent. Operator-recommended path to
+	// disable the auto-classifier cleanly; the legacy
+	// "PUT all blank" still works but is less discoverable
+	// in /audit.
+	let automationResetConfirmOpen = $state(false);
+	function openAutomationResetConfirm(): void {
+		automationResetConfirmOpen = true;
+	}
+	async function confirmAutomationReset(): Promise<void> {
+		try {
+			const next = await settingsApi.deleteAutomationCredentials();
+			automationCreds = next;
+			credsForm.lapiUrl = next.lapiUrl;
+			credsForm.machineId = next.machineId;
+			credsForm.password = '';
+			credsFormError = null;
+			pushToast('Security Automation désactivée', 'success');
+			automationResetConfirmOpen = false;
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : String(err);
+			pushToast(`Échec de la réinitialisation : ${msg}`, 'danger');
+			// Keep the dialog open so the operator can retry.
+		}
+	}
+
 	// Helper: ns ↔ "60s" / "4h" / "7d" round-trip. Keep the
 	// UI numbers operator-friendly without abandoning the
 	// wire's nanosecond format.
@@ -910,14 +940,39 @@
 					{#if credsFormError}
 						<p class="text-sm text-down md:col-span-2" role="alert">{credsFormError}</p>
 					{/if}
-					<div class="md:col-span-2 flex justify-end">
+					<div class="md:col-span-2 flex justify-between gap-2 flex-wrap">
+						<div>
+							{#if automationCreds.configured}
+								<!-- CS.3 follow-up — Reset Security
+								     Automation. Mirror of the CrowdSec
+								     bouncer Reset button (CS.2.C
+								     f1fe919): left edge, ghost variant
+								     so a misclick can't confuse it with
+								     Save. Only shown when configured —
+								     nothing to reset on a fresh install. -->
+								<Button
+									variant="ghost"
+									type="button"
+									disabled={credsSubmitting}
+									onclick={openAutomationResetConfirm}
+									data-testid="automation-reset-btn"
+								>
+									Réinitialiser
+								</Button>
+							{/if}
+						</div>
 						<Button type="submit" disabled={credsSubmitting}>
 							{credsSubmitting ? 'Saving…' : 'Save credentials'}
 						</Button>
 					</div>
 				</form>
 				<p class="text-xs text-muted mt-2">
-					Submit with all three fields blank to erase the stored credentials and disable the auto-classify writer (operator may keep rules configured for a future re-enable).
+					Pour désactiver l'auto-classifier proprement, utilise
+					<strong>Réinitialiser</strong> (en bas à gauche) — la configuration
+					BoltDB est wipée + l'écrivain LAPI est détaché immédiatement
+					(audit row <code>automation_reset</code>). Les <em>trigger rules</em>
+					ci-dessous ne sont pas touchées : tu peux garder ta config pour
+					une re-activation future.
 				</p>
 			</section>
 
@@ -1334,6 +1389,19 @@
 		confirmLabel="Revoke"
 		confirmVariant="danger"
 		onConfirm={confirmRevoke}
+	/>
+
+	<!-- Step CS.3 follow-up — Reset Security Automation
+	     confirmation. Mirror of CrowdSecSettingsSection's
+	     Réinitialiser dialog. -->
+	<ConfirmDialog
+		bind:open={automationResetConfirmOpen}
+		title="Réinitialiser Security Automation ?"
+		message="L'auto-classifier s'arrêtera immédiatement de pousser des decisions vers LAPI. Les trigger rules ne sont pas touchées — tu peux les garder pour une re-activation future. Aucun impact sur la configuration CrowdSec bouncer (lecture-side)."
+		confirmLabel="Réinitialiser"
+		cancelLabel="Annuler"
+		confirmVariant="danger"
+		onConfirm={confirmAutomationReset}
 	/>
 
 	<!-- Step O.4 delete-managed-domain dialog migrated to /certs

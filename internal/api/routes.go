@@ -323,6 +323,15 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// and-swap path).
 				r.Put("/settings/automation/rules", h.putAutomationRules)
 				r.Put("/settings/automation/credentials", h.putAutomationCredentials)
+				// Step CS.3 follow-up — operator-pressed
+				// "Reset Security Automation" button. DELETE
+				// wipes the watcher row + clears the in-
+				// memory writer. Distinct from PUT-all-blank
+				// erasure (which emits automation_rule_changed)
+				// so /audit traces the deliberate intent via
+				// the new automation_reset action. Mirror of
+				// CS.2.C f1fe919 (crowdsec_reset).
+				r.Delete("/settings/automation/credentials", h.deleteAutomationCredentials)
 				// Step V.4 — server geographic position writes.
 				// PUT installs a manual override; POST :redetect
 				// re-runs the V.1 ipify-then-GeoIP path (useful
