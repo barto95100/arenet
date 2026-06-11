@@ -178,7 +178,7 @@ CrowdSec 1.7.8 doesn't emit X-Crowdsec-Version HTTP header. Version
 exposed via cs_info Prometheus metric only. Couplage prometheus.enabled 
 pas worth pour un badge cosmétique. May revisit si upstream re-adds.
 
-## #R-WAF-EVENT-LABEL-BLOCK-VS-200 (low) — OPEN 2026-06-10
+## #R-WAF-EVENT-LABEL-BLOCK-VS-200 (medium) — OPEN 2026-06-10 (re-classified low→medium 2026-06-11)
 
 Découvert pendant le smoke Day 8 (Gate 4 du fix #R-WAF-BLOCKS-MUTATING-METHODS).
 
@@ -187,20 +187,108 @@ Symptôme :
   via exclusion), MAIS l'event /observability/logs est tagué "BLOCK 403" pour 
   WAF rule 942100. Le label de l'event ne reflète pas l'action réelle.
 
-Hypothèses :
-  - Cosmétique : l'event log montre l'action "intended" du rule, pas celle 
-    effectivement appliquée après l'admin exclusion → tag devrait être DETECT 
-    ou LOG_ONLY
-  - Anomaly scoring : rule 942100 seul n'atteint pas le threshold global (949110 
-    n'a pas firé), donc même hors admin path ça n'aurait pas bloqué → label 
-    BLOCK 403 viendrait du rule individual severity
-  - Bug de labelling dans event sink
-
 Impact : confusion forensique. Un opérateur scrutant `/observability/logs` 
 pourrait croire qu'un attaquant a été bloqué alors que la requête a passé.
 
-Fix à scoper : auditer internal/waf/event.go (ou équivalent) — voir si on label 
-"action_intended" vs "action_applied", clarifier la sémantique.
+═══════════════════════════════════════════════════
+EMPIRICAL FINDINGS — probe Day 9 (2026-06-11)
+═══════════════════════════════════════════════════
+
+Lesson 3 (read library source) probe on the proposed fix
+shape revealed that the initial 1-line "use Disruptive()
+instead of h.Mode" approach was WRONG. The probe saved us
+from shipping incorrect code.
+
+Coraza MatchedRule.Disruptive() semantic, verified at
+vendor `coraza/v3@v3.7.0/internal/corazawaf/transaction.go:584-591`:
+
+```go
+for _, a := range r.actions {
+    if a.Function.Type() == plugintypes.ActionTypeDisruptive {
+        mr.DisruptiveAction_ = corazarules.DisruptiveActionMap[a.Name]
+        mr.Disruptive_ = tx.RuleEngine == types.RuleEngineOn
+        break
+    }
+}
+```
+
+`Disruptive_ = true` means:
+  - The rule HAS a disruptive action declared (block / pass / allow / redirect)
+  - AND the engine is in RuleEngineOn (not DetectionOnly)
+
+It does NOT mean "this transaction will actually interrupt".
+At `onMatch` callback time (phase 1/2), `tx.Interruption()`
+is NOT yet decided — finalized later in phase processing.
+
+Concrete reproduction trace :
+  1. Route in block mode → handler instantiates Coraza
+     with `SecRuleEngine On`
+  2. Admin path → ctl:ruleRemoveById strips 911/930/931/949
+     (anomaly aggregator + LFI/PE families), but NOT 942 (SQLi)
+  3. 942100 fires on the payload, onMatch callback runs
+  4. `mr.Disruptive() = true` (rule has block action + engine on)
+  5. Existing filter at `internal/waf/module.go:386`:
+     ```go
+     case "block":
+         if !mr.Disruptive() { return }
+     ```
+     → 942100 passes the filter, event emitted with
+     `Action=BLOCK, StatusCode=403`
+  6. Phase 2 continues. 949* aggregator is excluded →
+     no `tx.Interrupt()` called
+  7. Handler at `module.go:560` reads `it == nil`,
+     falls through to `next.ServeHTTP(w, r)` (chi router)
+  8. Response = HTTP 200, but the event log says BLOCK/403
+
+═══════════════════════════════════════════════════
+CORRECT FIX SHAPE (design before code)
+═══════════════════════════════════════════════════
+
+Per-transaction event buffering + post-verdict flush:
+
+  1. Each handler invocation creates a per-tx event buffer
+     (slice of pending Events).
+  2. `onMatch` callback pushes to the buffer instead of
+     calling sink.Emit directly.
+  3. At handler exit (deferred, after `processRequest`
+     returns + interruption decision is made), read
+     `tx.Interruption()`:
+       - != nil + mode=block → flush buffer with Action=BLOCK
+         + actual StatusCode from interruption
+       - otherwise → flush buffer with Action=DETECT,
+         StatusCode=0
+  4. Mechanism for passing per-tx state to the callback:
+     Coraza's `WithErrorCallback(fn)` is a fixed signature
+     (no context arg) → can't pass tx state directly. Two
+     options:
+       (a) `sync.Map[*tx → *buffer]` keyed by tx pointer,
+           callback looks up its buffer
+       (b) install a per-tx closure callback at NewTransaction
+           time that captures the buffer reference. Verify
+           Coraza supports rebinding the callback per-tx
+           (probe needed) — most likely WAF-level so we'd
+           need (a).
+
+Test surface (non-trivial):
+  - Block-mode route + non-interrupting match (admin path
+    SQLi) → event Action=DETECT (the bug repro)
+  - Block-mode route + actually-interrupting match (any
+    full match path) → event Action=BLOCK + status
+  - Detect-mode route → unchanged (Action=DETECT)
+  - LRU dedup interaction with buffer flush (sink already
+    dedupes at Emit; buffer flush sends N Emits — should
+    work transparently but worth a regression test)
+  - Concurrent transactions on the same handler instance —
+    no buffer cross-contamination (the sync.Map keying
+    must be correct)
+
+Estimated effort: medium-substantial (refactor onMatch +
+add per-tx state + sync mechanism + ~4-5 new tests).
+Standalone workstream; do NOT bundle.
+
+═══════════════════════════════════════════════════
+Status: OPEN — design doc needed before code.
+═══════════════════════════════════════════════════
 
 ## #R-DASHBOARD-WAF-COUNTERS-ZERO — RESOLVED 2026-06-10
 
