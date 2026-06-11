@@ -354,9 +354,9 @@ func TestMetricsSummary_4xxAnd5xxAreIndependent(t *testing.T) {
 	// 4xx (no 5xx). The summary response MUST report the 4xx
 	// total non-zero and the 5xx total exactly zero — proving
 	// the two are independent fields (AC #6).
-	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
-		{RouteID: m.routeID, Ts: prevMinute, ReqCount: 50, FourxxCount: 7, FivexxCount: 0, LatencyP95Ms: 12},
+	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: prevHour, ReqCount: 50, FourxxCount: 7, FivexxCount: 0, LatencyP95Ms: 12},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -371,14 +371,14 @@ func TestMetricsSummary_4xxAnd5xxAreIndependent(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.TotalFourXxPerMin != 7 {
-		t.Errorf("TotalFourXxPerMin = %d, want 7", resp.TotalFourXxPerMin)
+	if resp.TotalFourXx != 7 {
+		t.Errorf("TotalFourXx = %d, want 7", resp.TotalFourXx)
 	}
-	if resp.TotalFiveXxPerMin != 0 {
-		t.Errorf("TotalFiveXxPerMin = %d, want 0 — 4xx must NOT contaminate 5xx field (AC #6)", resp.TotalFiveXxPerMin)
+	if resp.TotalFiveXx != 0 {
+		t.Errorf("TotalFiveXx = %d, want 0 — 4xx must NOT contaminate 5xx field (AC #6)", resp.TotalFiveXx)
 	}
-	if resp.TotalReqPerMin != 50 {
-		t.Errorf("TotalReqPerMin = %d, want 50", resp.TotalReqPerMin)
+	if resp.TotalReq != 50 {
+		t.Errorf("TotalReq = %d, want 50", resp.TotalReq)
 	}
 	// Reciprocal coverage in TestMetricsSummary_5xxOnly below.
 }
@@ -392,9 +392,9 @@ func TestMetricsSummary_5xxOnly_4xxStaysZero(t *testing.T) {
 	t.Cleanup(func() { _ = obsStore.Close() })
 	m.env.handler.SetMetricsReader(obsStore)
 
-	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
-		{RouteID: m.routeID, Ts: prevMinute, ReqCount: 20, FourxxCount: 0, FivexxCount: 3, LatencyP95Ms: 12},
+	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: prevHour, ReqCount: 20, FourxxCount: 0, FivexxCount: 3, LatencyP95Ms: 12},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -409,11 +409,11 @@ func TestMetricsSummary_5xxOnly_4xxStaysZero(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.TotalFiveXxPerMin != 3 {
-		t.Errorf("TotalFiveXxPerMin = %d, want 3", resp.TotalFiveXxPerMin)
+	if resp.TotalFiveXx != 3 {
+		t.Errorf("TotalFiveXx = %d, want 3", resp.TotalFiveXx)
 	}
-	if resp.TotalFourXxPerMin != 0 {
-		t.Errorf("TotalFourXxPerMin = %d, want 0 — 5xx must NOT contaminate 4xx field (AC #6)", resp.TotalFourXxPerMin)
+	if resp.TotalFourXx != 0 {
+		t.Errorf("TotalFourXx = %d, want 0 — 5xx must NOT contaminate 4xx field (AC #6)", resp.TotalFourXx)
 	}
 }
 
@@ -852,7 +852,7 @@ func TestMetricsTimeseries_NewMetrics_AcceptedByValidator(t *testing.T) {
 
 // --- Step Q.3: metricsSummary new fields ------------------------------------
 
-func TestMetricsSummary_TotalThrottlePerMin_FromSentinelRow(t *testing.T) {
+func TestMetricsSummary_TotalThrottle_FromSentinelRow(t *testing.T) {
 	m := newMetricsTestEnv(t)
 	obsStore, err := observability.Open(context.Background(), ":memory:")
 	if err != nil {
@@ -864,10 +864,10 @@ func TestMetricsSummary_TotalThrottlePerMin_FromSentinelRow(t *testing.T) {
 	now := time.Now().UTC()
 	// The summary reads the just-closed minute. Seed at that
 	// bucket under the sentinel route id.
-	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m,
+	prevHour := now.Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h,
 		[]observability.MetricBucket{
-			{RouteID: observability.ThrottleSentinelRouteID, Ts: prevMin, ThrottleBlockCount: 7},
+			{RouteID: observability.ThrottleSentinelRouteID, Ts: prevHour, ThrottleBlockCount: 7},
 		}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -880,12 +880,12 @@ func TestMetricsSummary_TotalThrottlePerMin_FromSentinelRow(t *testing.T) {
 	}
 	var resp summaryResponse
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.TotalThrottlePerMin != 7 {
-		t.Errorf("totalThrottlePerMin = %d, want 7", resp.TotalThrottlePerMin)
+	if resp.TotalThrottle != 7 {
+		t.Errorf("totalThrottlePerMin = %d, want 7", resp.TotalThrottle)
 	}
 }
 
-func TestMetricsSummary_TotalAuthFailuresPerMin_FromAuditScan(t *testing.T) {
+func TestMetricsSummary_TotalAuthFailures_FromAuditScan(t *testing.T) {
 	m := newMetricsTestEnv(t)
 	obsStore, err := observability.Open(context.Background(), ":memory:")
 	if err != nil {
@@ -895,21 +895,25 @@ func TestMetricsSummary_TotalAuthFailuresPerMin_FromAuditScan(t *testing.T) {
 	m.env.handler.SetMetricsReader(obsStore)
 
 	now := time.Now().UTC()
-	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
-	// Reader returns 3 events within the just-closed-minute window.
+	hourTs := now.Truncate(time.Hour)
+	wantFrom := hourTs.Add(-24 * time.Hour)
+	wantTo := hourTs
+	// Reader returns 3 events within the 24h window.
 	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{
 		queryFn: func(_ context.Context, _ []string, from, to time.Time, _ int) ([]audit.Event, bool, error) {
-			// Verify the handler asked for the just-closed minute.
-			if from != prevMin {
-				t.Errorf("audit scan from = %v, want %v", from, prevMin)
+			// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — verify
+			// the handler asked for the 24h window ending at
+			// the previous hour boundary.
+			if !from.Equal(wantFrom) {
+				t.Errorf("audit scan from = %v, want %v (24h window)", from, wantFrom)
 			}
-			if to != prevMin.Add(time.Minute) {
-				t.Errorf("audit scan to = %v, want %v", to, prevMin.Add(time.Minute))
+			if !to.Equal(wantTo) {
+				t.Errorf("audit scan to = %v, want %v (24h window)", to, wantTo)
 			}
 			return []audit.Event{
-				{Action: audit.ActionLoginFailure, IP: "1.1.1.1", Timestamp: prevMin.Add(10 * time.Second)},
-				{Action: audit.ActionLoginFailure, IP: "1.1.1.1", Timestamp: prevMin.Add(20 * time.Second)},
-				{Action: audit.ActionOIDCLoginRejected, IP: "2.2.2.2", Timestamp: prevMin.Add(30 * time.Second)},
+				{Action: audit.ActionLoginFailure, IP: "1.1.1.1", Timestamp: hourTs.Add(-30 * time.Minute)},
+				{Action: audit.ActionLoginFailure, IP: "1.1.1.1", Timestamp: hourTs.Add(-20 * time.Minute)},
+				{Action: audit.ActionOIDCLoginRejected, IP: "2.2.2.2", Timestamp: hourTs.Add(-10 * time.Minute)},
 			}, false, nil
 		},
 	})
@@ -922,8 +926,8 @@ func TestMetricsSummary_TotalAuthFailuresPerMin_FromAuditScan(t *testing.T) {
 	}
 	var resp summaryResponse
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.TotalAuthFailuresPerMin != 3 {
-		t.Errorf("totalAuthFailuresPerMin = %d, want 3", resp.TotalAuthFailuresPerMin)
+	if resp.TotalAuthFailures != 3 {
+		t.Errorf("totalAuthFailuresPerMin = %d, want 3", resp.TotalAuthFailures)
 	}
 	// 2 distinct IPs from audit alone.
 	if resp.AttackerIpsUnique != 2 {
@@ -978,7 +982,7 @@ func TestMetricsSummary_AttackerIpsUnique_UnionAcrossSources(t *testing.T) {
 func TestMetricsSummary_QFieldsIndependentFromM(t *testing.T) {
 	// AC #15 anti-regression: Q-side fields (throttle, auth,
 	// attacker IPs) MUST NOT inflate the M field
-	// (TotalWafBlockedPerMin) or vice versa. Confirm by
+	// (TotalWafBlocked) or vice versa. Confirm by
 	// seeding throttle events but no WAF events → WAF total
 	// stays 0, throttle total > 0.
 	m := newMetricsTestEnv(t)
@@ -990,10 +994,10 @@ func TestMetricsSummary_QFieldsIndependentFromM(t *testing.T) {
 	m.env.handler.SetMetricsReader(obsStore)
 
 	now := time.Now().UTC()
-	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m,
+	prevHour := now.Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h,
 		[]observability.MetricBucket{
-			{RouteID: observability.ThrottleSentinelRouteID, Ts: prevMin, ThrottleBlockCount: 9},
+			{RouteID: observability.ThrottleSentinelRouteID, Ts: prevHour, ThrottleBlockCount: 9},
 		}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -1004,14 +1008,14 @@ func TestMetricsSummary_QFieldsIndependentFromM(t *testing.T) {
 	var resp summaryResponse
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
 
-	if resp.TotalThrottlePerMin != 9 {
-		t.Errorf("totalThrottlePerMin = %d, want 9", resp.TotalThrottlePerMin)
+	if resp.TotalThrottle != 9 {
+		t.Errorf("totalThrottlePerMin = %d, want 9", resp.TotalThrottle)
 	}
-	if resp.TotalWafBlockedPerMin != 0 {
-		t.Errorf("AC #15 violation: TotalWafBlockedPerMin = %d after throttle-only seed; want 0", resp.TotalWafBlockedPerMin)
+	if resp.TotalWafBlocked != 0 {
+		t.Errorf("AC #15 violation: TotalWafBlocked = %d after throttle-only seed; want 0", resp.TotalWafBlocked)
 	}
-	if resp.TotalFourXxPerMin != 0 || resp.TotalFiveXxPerMin != 0 {
-		t.Errorf("throttle bumps leaked into L counters: 4xx=%d 5xx=%d", resp.TotalFourXxPerMin, resp.TotalFiveXxPerMin)
+	if resp.TotalFourXx != 0 || resp.TotalFiveXx != 0 {
+		t.Errorf("throttle bumps leaked into L counters: 4xx=%d 5xx=%d", resp.TotalFourXx, resp.TotalFiveXx)
 	}
 }
 
@@ -1037,9 +1041,9 @@ func TestMetricsSummary_NilReadersForQFields_FieldsStayZero(t *testing.T) {
 	}
 	var resp summaryResponse
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.TotalAuthFailuresPerMin != 0 || resp.AttackerIpsUnique != 0 {
+	if resp.TotalAuthFailures != 0 || resp.AttackerIpsUnique != 0 {
 		t.Errorf("Q fields not zero with nil readers: throttle=%d auth=%d attackers=%d",
-			resp.TotalThrottlePerMin, resp.TotalAuthFailuresPerMin, resp.AttackerIpsUnique)
+			resp.TotalThrottle, resp.TotalAuthFailures, resp.AttackerIpsUnique)
 	}
 }
 
@@ -1102,8 +1106,8 @@ func TestMetricsTimeseries_NewMetric_AcceptedByValidator(t *testing.T) {
 	}
 }
 
-func TestMetricsSummary_TotalCrowdSecDecisionsPerMin_FromSentinelRow(t *testing.T) {
-	// Mirror of TestMetricsSummary_TotalThrottlePerMin_FromSentinelRow.
+func TestMetricsSummary_TotalCrowdSecDecisions_FromSentinelRow(t *testing.T) {
+	// Mirror of TestMetricsSummary_TotalThrottle_FromSentinelRow.
 	m := newMetricsTestEnv(t)
 	obsStore, err := observability.Open(context.Background(), ":memory:")
 	if err != nil {
@@ -1113,10 +1117,10 @@ func TestMetricsSummary_TotalCrowdSecDecisionsPerMin_FromSentinelRow(t *testing.
 	m.env.handler.SetMetricsReader(obsStore)
 
 	now := time.Now().UTC()
-	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m,
+	prevHour := now.Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h,
 		[]observability.MetricBucket{
-			{RouteID: observability.CrowdSecSentinelRouteID, Ts: prevMin, CrowdSecDecisionCount: 23},
+			{RouteID: observability.CrowdSecSentinelRouteID, Ts: prevHour, CrowdSecDecisionCount: 23},
 		}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -1129,8 +1133,8 @@ func TestMetricsSummary_TotalCrowdSecDecisionsPerMin_FromSentinelRow(t *testing.
 	}
 	var resp summaryResponse
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.TotalCrowdSecDecisionsPerMin != 23 {
-		t.Errorf("totalCrowdSecDecisionsPerMin = %d, want 23", resp.TotalCrowdSecDecisionsPerMin)
+	if resp.TotalCrowdSecDecisions != 23 {
+		t.Errorf("totalCrowdSecDecisionsPerMin = %d, want 23", resp.TotalCrowdSecDecisions)
 	}
 }
 
@@ -1237,10 +1241,10 @@ func TestMetricsSummary_NFieldsIndependentFromMQ(t *testing.T) {
 	m.env.handler.SetMetricsReader(obsStore)
 
 	now := time.Now().UTC()
-	prevMin := now.Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m,
+	prevHour := now.Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h,
 		[]observability.MetricBucket{
-			{RouteID: observability.CrowdSecSentinelRouteID, Ts: prevMin, CrowdSecDecisionCount: 12},
+			{RouteID: observability.CrowdSecSentinelRouteID, Ts: prevHour, CrowdSecDecisionCount: 12},
 		}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -1251,28 +1255,28 @@ func TestMetricsSummary_NFieldsIndependentFromMQ(t *testing.T) {
 	var resp summaryResponse
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
 
-	if resp.TotalCrowdSecDecisionsPerMin != 12 {
-		t.Errorf("totalCrowdSecDecisionsPerMin = %d, want 12", resp.TotalCrowdSecDecisionsPerMin)
+	if resp.TotalCrowdSecDecisions != 12 {
+		t.Errorf("totalCrowdSecDecisionsPerMin = %d, want 12", resp.TotalCrowdSecDecisions)
 	}
-	if resp.TotalWafBlockedPerMin != 0 {
-		t.Errorf("AC #N.24 violation: TotalWafBlockedPerMin = %d after crowdsec-only seed; want 0", resp.TotalWafBlockedPerMin)
+	if resp.TotalWafBlocked != 0 {
+		t.Errorf("AC #N.24 violation: TotalWafBlocked = %d after crowdsec-only seed; want 0", resp.TotalWafBlocked)
 	}
-	if resp.TotalThrottlePerMin != 0 {
-		t.Errorf("AC #N.24 violation: TotalThrottlePerMin = %d after crowdsec-only seed; want 0", resp.TotalThrottlePerMin)
+	if resp.TotalThrottle != 0 {
+		t.Errorf("AC #N.24 violation: TotalThrottle = %d after crowdsec-only seed; want 0", resp.TotalThrottle)
 	}
-	if resp.TotalFourXxPerMin != 0 || resp.TotalFiveXxPerMin != 0 {
-		t.Errorf("CrowdSec bump leaked into L counters: 4xx=%d 5xx=%d", resp.TotalFourXxPerMin, resp.TotalFiveXxPerMin)
+	if resp.TotalFourXx != 0 || resp.TotalFiveXx != 0 {
+		t.Errorf("CrowdSec bump leaked into L counters: 4xx=%d 5xx=%d", resp.TotalFourXx, resp.TotalFiveXx)
 	}
 }
 
 // --- #R-DASHBOARD-WAF-COUNTERS-ZERO summary fields -------------------
 
-// TestMetricsSummary_WafDetectedPerMin_FromBucketColumn pins the
+// TestMetricsSummary_WafDetected_FromBucketColumn pins the
 // new aggregated counter. Seed a bucket row with a non-zero
 // waf_detect_count (and a sibling non-zero waf_block_count to
 // confirm the two stay independent), assert both surface on the
 // response.
-func TestMetricsSummary_WafDetectedPerMin_FromBucketColumn(t *testing.T) {
+func TestMetricsSummary_WafDetected_FromBucketColumn(t *testing.T) {
 	m := newMetricsTestEnv(t)
 	obsStore, err := observability.Open(context.Background(), ":memory:")
 	if err != nil {
@@ -1281,11 +1285,11 @@ func TestMetricsSummary_WafDetectedPerMin_FromBucketColumn(t *testing.T) {
 	t.Cleanup(func() { _ = obsStore.Close() })
 	m.env.handler.SetMetricsReader(obsStore)
 
-	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
+	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
 		{
 			RouteID:        m.routeID,
-			Ts:             prevMinute,
+			Ts:             prevHour,
 			ReqCount:       30,
 			WafBlockCount:  4,
 			WafDetectCount: 11,
@@ -1305,18 +1309,18 @@ func TestMetricsSummary_WafDetectedPerMin_FromBucketColumn(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.TotalWafBlockedPerMin != 4 {
-		t.Errorf("TotalWafBlockedPerMin = %d; want 4", resp.TotalWafBlockedPerMin)
+	if resp.TotalWafBlocked != 4 {
+		t.Errorf("TotalWafBlocked = %d; want 4", resp.TotalWafBlocked)
 	}
-	if resp.TotalWafDetectedPerMin != 11 {
-		t.Errorf("TotalWafDetectedPerMin = %d; want 11 (#R-DASHBOARD-WAF-COUNTERS-ZERO — detect-mode events now surface in the dashboard counter)", resp.TotalWafDetectedPerMin)
+	if resp.TotalWafDetected != 11 {
+		t.Errorf("TotalWafDetected = %d; want 11 (#R-DASHBOARD-WAF-COUNTERS-ZERO — detect-mode events now surface in the dashboard counter)", resp.TotalWafDetected)
 	}
 	if len(resp.TopRoutes) != 1 {
 		t.Fatalf("TopRoutes len = %d; want 1", len(resp.TopRoutes))
 	}
-	if resp.TopRoutes[0].WafBlockedPerMin != 4 || resp.TopRoutes[0].WafDetectedPerMin != 11 {
+	if resp.TopRoutes[0].WafBlocked != 4 || resp.TopRoutes[0].WafDetected != 11 {
 		t.Errorf("topRoutes[0] = {block=%d, detect=%d}; want {4, 11}",
-			resp.TopRoutes[0].WafBlockedPerMin, resp.TopRoutes[0].WafDetectedPerMin)
+			resp.TopRoutes[0].WafBlocked, resp.TopRoutes[0].WafDetected)
 	}
 }
 
@@ -1344,11 +1348,11 @@ func TestMetricsSummary_WafBlockAndDetectStayIndependent(t *testing.T) {
 			t.Cleanup(func() { _ = obsStore.Close() })
 			m.env.handler.SetMetricsReader(obsStore)
 
-			prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
-			if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
+			prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+			if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
 				{
 					RouteID:        m.routeID,
-					Ts:             prevMinute,
+					Ts:             prevHour,
 					ReqCount:       10,
 					WafBlockCount:  tc.blockSeed,
 					WafDetectCount: tc.detSeed,
@@ -1362,11 +1366,11 @@ func TestMetricsSummary_WafBlockAndDetectStayIndependent(t *testing.T) {
 			m.router.ServeHTTP(rec, req)
 			var resp summaryResponse
 			_ = json.NewDecoder(rec.Body).Decode(&resp)
-			if resp.TotalWafBlockedPerMin != tc.wantBlock {
-				t.Errorf("TotalWafBlockedPerMin = %d; want %d", resp.TotalWafBlockedPerMin, tc.wantBlock)
+			if resp.TotalWafBlocked != tc.wantBlock {
+				t.Errorf("TotalWafBlocked = %d; want %d", resp.TotalWafBlocked, tc.wantBlock)
 			}
-			if resp.TotalWafDetectedPerMin != tc.wantDet {
-				t.Errorf("TotalWafDetectedPerMin = %d; want %d", resp.TotalWafDetectedPerMin, tc.wantDet)
+			if resp.TotalWafDetected != tc.wantDet {
+				t.Errorf("TotalWafDetected = %d; want %d", resp.TotalWafDetected, tc.wantDet)
 			}
 		})
 	}
@@ -1387,12 +1391,12 @@ func TestMetricsSummary_CategoryMaps_SplitByAction(t *testing.T) {
 	m.env.handler.SetMetricsReader(obsStore)
 	m.env.handler.SetWafEventReader(obsStore)
 
-	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
 	// One BLOCK on SQLi, two DETECT on LFI in the same minute.
 	if err := obsStore.InsertWafEventBatch(context.Background(), []observability.WafEvent{
-		{Ts: prevMinute.Add(5 * time.Second), RouteID: m.routeID, RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
-		{Ts: prevMinute.Add(10 * time.Second), RouteID: m.routeID, RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.2", Action: "DETECT", StatusCode: 0},
-		{Ts: prevMinute.Add(15 * time.Second), RouteID: m.routeID, RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.3", Action: "DETECT", StatusCode: 0},
+		{Ts: prevHour.Add(5 * time.Second), RouteID: m.routeID, RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
+		{Ts: prevHour.Add(10 * time.Second), RouteID: m.routeID, RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.2", Action: "DETECT", StatusCode: 0},
+		{Ts: prevHour.Add(15 * time.Second), RouteID: m.routeID, RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.3", Action: "DETECT", StatusCode: 0},
 	}); err != nil {
 		t.Fatalf("seed waf_event: %v", err)
 	}

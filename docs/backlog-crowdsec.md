@@ -283,41 +283,113 @@ Note : à consolider avec #R-WAF-EVENT-LABEL-BLOCK-VS-200 — même
 famille de bug (label semantics mal gérés à différents endroits 
 côté backend cette fois ; le frontend est maintenant clean).
 
-## #R-WAF-METRICS-WINDOW-1MIN-PROJECTION (medium) — OPEN 2026-06-10
+## #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — RESOLVED 2026-06-11
 
 Découvert pendant l'investigation #R-DASHBOARD-WAF-COUNTERS-ZERO 
-(Day 8). Cause B de la triangulation.
+(Day 8). Cause B de la triangulation : la window 1-min côté 
+summary endpoint était une cause structurelle de la confusion 
+opérateur. Le ticket a été reframed pendant l'implémentation : 
+le scope élargi à TOUS les fields du summary (pas seulement WAF) 
+parce que le mensonge "rate-projection-from-1-minute" était 
+identique pour totalReq, totalThrottle, totalCrowdSecDecisions, 
+etc. — pas spécifique au WAF.
 
-Symptôme :
-  Summary endpoint GET /api/v1/metrics/summary ne retourne que 
-  la "dernière minute fermée" (metrics_handlers.go:368-372). Le 
-  frontend projette cette valeur ×60 ("/H") ou ×60×24 ("/24h"). 
-  Casse en homelab bursty où les events arrivent par lots puis 
-  silence — la card lit 0 dès que > 60s écoulés depuis le 
-  dernier event.
+Fix shipped (Option 2a — widen window) :
 
-Cause :
-  Design "rate rendering" optimisé pour trafic continu high-
-  traffic. Inadapté à un homelab à trafic discontinu.
+Backend (internal/api/metrics_handlers.go) :
+  - Window : just-closed-minute → 24h rolling, ancré au début 
+    de l'heure courante (hourTs := now.Truncate(time.Hour) ; 
+    from := hourTs.Add(-24h) ; to := hourTs).
+  - Per-route loop : Granularity1m → Granularity1h. Lit 24 
+    rows par route via metrics.Query, SUM in-handler. Coût 
+    typique homelab ≤ 2400 indexed SELECTs.
+  - Sentinel routes (throttle, crowdsec) : même switch 
+    Granularity1m → Granularity1h, SUM over the 24 rows.
+  - Categories : nouveau aggregator server-side 
+    observability.AggregateWafEventsByCategory(action, route, 
+    from, to). Remplace l'iteration row-by-row sous 
+    wafEventLimitCap=100 (qui ne pouvait pas servir un 24h 
+    window sur un jour chargé). Deux queries par summary 
+    (BLOCK + DETECT) au lieu d'une iteration.
+  - Auth scan cap : summary-spécifique 10000 (le 
+    /security/auth-failures recent-feed cap=200 reste 
+    inchangé). Hit-cap log Debug pour signal de growth.
+  - GlobalP95LatencyMs : weighted avg req_count × p95 across 
+    all hourly rows, all routes (preserve la sémantique).
 
-Fix shape (à scoper dans workstream observability post-Step T) :
-  Option 2a : widen window 1min → 1h ou 24h. Query bucket SUM 
-              sur la fenêtre. Pas de projection × 60 côté 
-              frontend.
-  Option 2b : query waf_event direct sur la fenêtre (sans cap 
-              L=100). Plus de surface, garde la précision 
-              per-event.
+Wire contract — rename additif → rename total (drop PerMin 
+suffix) :
+  - summary.totalReqPerMin            → totalReq
+  - summary.totalFourXxPerMin         → totalFourXx
+  - summary.totalFiveXxPerMin         → totalFiveXx
+  - summary.totalWafBlockedPerMin     → totalWafBlocked
+  - summary.totalWafDetectedPerMin    → totalWafDetected
+  - summary.totalThrottlePerMin       → totalThrottle
+  - summary.totalAuthFailuresPerMin   → totalAuthFailures
+  - summary.totalCrowdSecDecisionsPerMin → totalCrowdSecDecisions
+  - summary.topRoutes[].reqsPerMin    → reqs
+  - summary.topRoutes[].fourxxPerMin  → fourxx
+  - summary.topRoutes[].fivexxPerMin  → fivexx
+  - summary.topRoutes[].wafBlockedPerMin → wafBlocked
+  - summary.topRoutes[].wafDetectedPerMin → wafDetected
+  - summary.windowSeconds : 60 → 86400 (le wire signal 
+    documenté pour les consumers)
+  - wafBlocksByCategory, wafDetectsByCategory, 
+    activeCrowdSecIpsUnique, attackerIpsUnique, 
+    globalP95LatencyMs : inchangés (déjà window-agnostic)
 
-Blast radius : wire contract — toutes les keys du summary 
-response sont à reviewer (renames potentiels 
-totalWafBlockedPerMin → totalWafBlockedPerHour/Day/Window).
+Pattern industrie : Prometheus / Datadog / Grafana ne mettent 
+jamais la fenêtre dans le nom de métrique. Le nom dit QUOI, 
+la fenêtre est une dimension de requête (lue via 
+windowSeconds). Convention propre + future-proof si on ajoute 
+un user selector (1h/24h/7d). Pré-1.0 + 2 consumers internes 
+uniques (dashboard/+page.svelte + waf/+page.svelte) = coût 
+rename négligeable, TypeScript a attrappé chaque référence 
+orpheline à compile-time.
 
-Dépend de : rien
-Bloque : amélioration UX dashboard en homelab
-Cross-ref : #R-DASHBOARD-WAF-COUNTERS-ZERO RESOLVED a 
-partiellement mitigé le symptôme (split detect/block visible 
-pendant la fenêtre 1min) mais la window 1-min reste la cause 
-structurelle.
+Frontend :
+  - Dashboard tiles WAF bloqué / WAF détecté : label "/ 24h" 
+    (était "/ h"), valeurs raw (pas de × 60).
+  - Top Routes columns "Req / 4xx / 5xx / WAF block / 
+    WAF detect" (était "Req/min / ..."), valeurs raw.
+  - Page sécurité/waf KPI Blocked + Detected : valeurs raw 
+    (pas de × 60 × 24).
+  - Catégories CRS : chaque row lit block24h + detect24h 
+    raw depuis les maps.
+  - Footer "summed over rolling 24h window" remplace 
+    "projected from current rate".
+
+Tests (Go + TS, tous verts -race) :
+  - 4 nouveaux observability tests (AggregateWafEventsByCategory : 
+    grouping, action filter, empty window, route filter)
+  - Tous les TestMetricsSummary_* + TestSecurity_*Summary_* tests 
+    migrés : Granularity1m → Granularity1h, prevMinute/prevMin → 
+    prevHour, field renames complets
+  - Test TotalAuthFailures_FromAuditScan adapté pour vérifier 
+    la 24h window au lieu du 1min window
+  - Frontend dashboard + waf tests adaptés : assertions sur 
+    raw values (pas projetées)
+
+Verification :
+  - go test ./... -race : 20 packages verts (~210s sur api)
+  - go vet ./... : clean
+  - npm run check : 0 errors 0 warnings sur 733 files
+  - npx vitest run : 521/521 across 38 files, exit 0
+  - Smoke historique : les 287 events sur 8 jours sur 
+    AreNET-test seront immédiatement visibles après deploy 
+    sur les cards et catégories, validation empirique sans 
+    fresh smoke
+
+Lessons :
+  - Cause B était structurelle, pas WAF-spécifique. 
+    L'investigation Cause A (split detect/block) a 
+    initialement caché la cause root car le symptôme 
+    s'affichait sur les fields WAF. Réviser le scope 
+    pendant l'implémentation a évité de laisser un fix 
+    incomplet.
+  - Le rename total a été le bon move plutôt qu'additif : 
+    mixed windows dans la même réponse aurait été 
+    exactement la mendacité qu'on est en train de fixer.
 
 ## #F-UPSTREAM-TEST-ENDPOINT (medium) — RESOLVED 2026-06-10 (commit f119116)
 

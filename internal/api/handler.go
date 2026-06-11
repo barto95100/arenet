@@ -84,6 +84,13 @@ type MetricsReader interface {
 type WafEventReader interface {
 	QueryWafEvents(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
 	AggregateWafEventsByRule(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
+	// AggregateWafEventsByCategory — #R-WAF-METRICS-WINDOW-
+	// 1MIN-PROJECTION. Server-side GROUP BY for the per-
+	// category counts on /metrics/summary. Action filter
+	// lets the handler run BLOCK / DETECT as separate
+	// queries so the two response maps stay independent
+	// without iterating the event log.
+	AggregateWafEventsByCategory(ctx context.Context, filter observability.WafEventCategoryFilter) ([]observability.WafEventCategoryAggregate, error)
 	// DistinctWafEventSrcIPs is Q.3-only — powers the WAF
 	// arm of /security/attackers-summary's per-source union.
 	// Returns ALL distinct src IPs in [from, to), unbounded

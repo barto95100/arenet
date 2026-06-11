@@ -395,3 +395,132 @@ func TestDistinctThrottleEventSrcIPs_DedupesAndRespectsWindow(t *testing.T) {
 		t.Errorf("out-of-window IP leaked: %v", ips)
 	}
 }
+
+// --- #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — AggregateWafEventsByCategory tests
+
+func TestAggregateWafEventsByCategory_GroupsByCategory(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Unix(1700000000, 0).UTC()
+	if err := s.InsertWafEventBatch(ctx, []WafEvent{
+		{Ts: t0, RouteID: "r1", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
+		{Ts: t0.Add(1 * time.Second), RouteID: "r1", RuleID: "942110", Category: "SQLi", SrcIP: "1.1.1.2", Action: "BLOCK", StatusCode: 403},
+		{Ts: t0.Add(2 * time.Second), RouteID: "r1", RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.3", Action: "DETECT", StatusCode: 0},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := s.AggregateWafEventsByCategory(ctx, WafEventCategoryFilter{
+		From: t0.Add(-time.Hour),
+		To:   t0.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("AggregateWafEventsByCategory: %v", err)
+	}
+	// Expect SQLi=2, LFI=1, ordered by cnt DESC.
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want 2: %+v", len(got), got)
+	}
+	if got[0].Category != "SQLi" || got[0].Count != 2 {
+		t.Errorf("row[0] = %+v, want {SQLi, 2}", got[0])
+	}
+	if got[1].Category != "LFI" || got[1].Count != 1 {
+		t.Errorf("row[1] = %+v, want {LFI, 1}", got[1])
+	}
+}
+
+func TestAggregateWafEventsByCategory_ActionFilter(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Unix(1700000000, 0).UTC()
+	if err := s.InsertWafEventBatch(ctx, []WafEvent{
+		{Ts: t0, RouteID: "r1", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
+		{Ts: t0.Add(1 * time.Second), RouteID: "r1", RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.3", Action: "DETECT", StatusCode: 0},
+		{Ts: t0.Add(2 * time.Second), RouteID: "r1", RuleID: "930200", Category: "LFI", SrcIP: "1.1.1.4", Action: "DETECT", StatusCode: 0},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	blocks, err := s.AggregateWafEventsByCategory(ctx, WafEventCategoryFilter{
+		Action: "BLOCK",
+		From:   t0.Add(-time.Hour),
+		To:     t0.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("AggregateWafEventsByCategory BLOCK: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0].Category != "SQLi" || blocks[0].Count != 1 {
+		t.Errorf("BLOCK rows = %+v; want SQLi=1 only", blocks)
+	}
+
+	detects, err := s.AggregateWafEventsByCategory(ctx, WafEventCategoryFilter{
+		Action: "DETECT",
+		From:   t0.Add(-time.Hour),
+		To:     t0.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("AggregateWafEventsByCategory DETECT: %v", err)
+	}
+	if len(detects) != 1 || detects[0].Category != "LFI" || detects[0].Count != 2 {
+		t.Errorf("DETECT rows = %+v; want LFI=2 only", detects)
+	}
+}
+
+func TestAggregateWafEventsByCategory_EmptyWindow(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	got, err := s.AggregateWafEventsByCategory(ctx, WafEventCategoryFilter{
+		From: time.Unix(1700000000, 0).UTC(),
+		To:   time.Unix(1700003600, 0).UTC(),
+	})
+	if err != nil {
+		t.Fatalf("AggregateWafEventsByCategory empty: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("empty window returned %d rows; want 0", len(got))
+	}
+}
+
+func TestAggregateWafEventsByCategory_RouteFilter(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Unix(1700000000, 0).UTC()
+	if err := s.InsertWafEventBatch(ctx, []WafEvent{
+		{Ts: t0, RouteID: "r1", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
+		{Ts: t0.Add(1 * time.Second), RouteID: "r2", RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.3", Action: "BLOCK", StatusCode: 403},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := s.AggregateWafEventsByCategory(ctx, WafEventCategoryFilter{
+		RouteID: "r1",
+		From:    t0.Add(-time.Hour),
+		To:      t0.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("AggregateWafEventsByCategory route-filter: %v", err)
+	}
+	if len(got) != 1 || got[0].Category != "SQLi" {
+		t.Errorf("route-filtered rows = %+v; want only SQLi (route r1)", got)
+	}
+}

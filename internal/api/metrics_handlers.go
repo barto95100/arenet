@@ -92,96 +92,95 @@ type timeseriesResponse struct {
 	Points            []timeseriesPoint `json:"points"`
 }
 
-// summaryRoute is the per-route entry of the summary response.
+// summaryRoute is the per-route entry of the summary
+// response. Counters are sums over the configured window
+// (see summaryResponse.WindowSeconds — currently 86400 /
+// 24 h).
+//
+// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — the historic
+// PerMin suffix was dropped when the window widened from
+// just-closed-minute to 24h. The fields name what they
+// count (Reqs, WafBlocked, …); the window comes from the
+// envelope WindowSeconds. Future window selectors don't
+// force another rename.
 type summaryRoute struct {
-	RouteID          string `json:"routeId"`
-	Host             string `json:"host"`
-	ReqsPerMin       uint64 `json:"reqsPerMin"`
-	FourxxPerMin     uint64 `json:"fourxxPerMin"`
-	FivexxPerMin     uint64 `json:"fivexxPerMin"`
-	WafBlockedPerMin uint64 `json:"wafBlockedPerMin"`
-	// #R-DASHBOARD-WAF-COUNTERS-ZERO — sibling of
-	// WafBlockedPerMin populated from the new
-	// waf_detect_count bucket column. Dashboard Top
-	// Routes renders this in a parallel column so an
-	// operator on the recommended detect-mode default
-	// sees real per-route attack volume instead of a
-	// row of zeros.
-	WafDetectedPerMin uint64 `json:"wafDetectedPerMin"`
+	RouteID     string `json:"routeId"`
+	Host        string `json:"host"`
+	Reqs        uint64 `json:"reqs"`
+	Fourxx      uint64 `json:"fourxx"`
+	Fivexx      uint64 `json:"fivexx"`
+	WafBlocked  uint64 `json:"wafBlocked"`
+	WafDetected uint64 `json:"wafDetected"`
 }
 
 // summaryResponse is the wire shape of GET /metrics/summary.
 // AC #6: 4xx and 5xx are EXPOSED SEPARATELY. The fields below
 // are independent counters; no aggregate "errors" field exists.
 //
+// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — every Total* field
+// (and every field on summaryRoute) is a SUM over the
+// configured window (WindowSeconds). Pre-fix the window was
+// the just-closed minute and the frontend projected ×60 or
+// ×60×24 to display "/h" / "/24h" — bursty homelab traffic
+// surfaced as zeros between bursts. Post-fix the window is
+// 24h, sourced from bucket_1h (per-route SUM over 24 rows)
+// and waf_event aggregator (GROUP BY category over the
+// window). The frontend consumes the values raw.
+//
+// The PerMin suffix on every count field was dropped in the
+// same commit — the rate semantics no longer apply, and the
+// envelope WindowSeconds tells the consumer the window
+// without contaminating each field's name. A future window
+// selector (1h / 24h / 7d) is the natural follow-on and
+// won't force another rename.
+//
 // Step M.2 (spec §3.4):
-//   - TotalWafBlockedPerMin: sum of waf_block_count across all
-//     routes for the just-closed minute. Independent from the
-//     L counters — a WAF block increments THIS field, not
-//     TotalFourXxPerMin / TotalFiveXxPerMin (AC #3 / #4).
-//   - WafBlocksByCategory: per-OWASP-category breakdown of the
-//     events emitted during the same window. Populated by
-//     querying waf_event grouped by category client-side; the
-//     dashboard's category distribution strip reads this map
-//     directly. Empty when the WAF event reader is unavailable
-//     (degraded mode) OR when no events landed in the window.
+//   - TotalWafBlocked: sum of waf_block_count across all
+//     routes over the window. Independent from the L
+//     counters — a WAF block increments THIS field, not
+//     TotalFourXx / TotalFiveXx (AC #3 / #4).
+//   - WafBlocksByCategory: per-OWASP-category breakdown of
+//     the BLOCK events over the same window. Server-side
+//     GROUP BY in observability.AggregateWafEventsByCategory
+//     (was a row-iteration with a 100-row cap pre-fix —
+//     incompatible with a 24h window on a busy day).
 //
 // Step M.2 Spec-1 amendment:
 //   - TopAttackedRoute: the single route with the highest
 //     WAF block count over the window, computed across ALL
-//     routes (NOT filtered to TopRoutes' traffic-ranked set).
-//     Critical for the M.3 dashboard's "top route blocks/min"
-//     headline: a targeted attack on a low-traffic admin /
-//     auth surface — exactly the case that matters on an
-//     internet-exposed proxy — would otherwise be invisible
-//     because the route never reaches the traffic top-5.
-//     Nullable: null when no WAF activity in the window
-//     (operator sees an honest zero rather than an arbitrary
-//     route forced into the slot).
+//     routes (NOT filtered to TopRoutes' traffic-ranked
+//     set). Critical for the M.3 dashboard headline: a
+//     targeted attack on a low-traffic admin / auth surface
+//     would otherwise be invisible because the route never
+//     reaches the traffic top-5. Nullable when no WAF
+//     activity (operator sees an honest zero).
 type summaryResponse struct {
-	GeneratedAt           string `json:"generatedAt"`
-	WindowSeconds         int    `json:"windowSeconds"`
-	Disabled              bool   `json:"disabled,omitempty"`
-	TotalReqPerMin        uint64 `json:"totalReqPerMin"`
-	TotalFourXxPerMin     uint64 `json:"totalFourXxPerMin"`
-	TotalFiveXxPerMin     uint64 `json:"totalFiveXxPerMin"`
-	TotalWafBlockedPerMin uint64 `json:"totalWafBlockedPerMin"`
+	GeneratedAt    string `json:"generatedAt"`
+	WindowSeconds  int    `json:"windowSeconds"`
+	Disabled       bool   `json:"disabled,omitempty"`
+	TotalReq       uint64 `json:"totalReq"`
+	TotalFourXx    uint64 `json:"totalFourXx"`
+	TotalFiveXx    uint64 `json:"totalFiveXx"`
+	TotalWafBlocked uint64 `json:"totalWafBlocked"`
 	// #R-DASHBOARD-WAF-COUNTERS-ZERO — sibling counter
-	// sourced from waf_detect_count bucket column. Lets
-	// the dashboard show two cards (BLOQUÉ red /
-	// DÉTECTÉ amber) so a homelab operator on
-	// wafMode=detect (the recommended I.4 default) sees
-	// real attack volume even when no requests were
-	// actually blocked.
-	TotalWafDetectedPerMin uint64 `json:"totalWafDetectedPerMin"`
-	// Step Q.3 new fields per AC #11. Independent counters,
-	// same shape contract as TotalWafBlockedPerMin (a throttle
-	// block does NOT inflate the 4xx / 5xx fields, AC #15
-	// anti-regression).
-	TotalThrottlePerMin     uint64 `json:"totalThrottlePerMin"`
-	TotalAuthFailuresPerMin uint64 `json:"totalAuthFailuresPerMin"`
-	AttackerIpsUnique       int    `json:"attackerIpsUnique"` // union over WAF + throttle + audit + crowdsec, just-closed minute
-	// Step N.3 new fields. Same independence contract as the
-	// Q.3 trio above: a CrowdSec decision arriving in the
-	// minute does NOT inflate 4xx / 5xx / waf_block_count /
-	// throttle_block_count (AC #N.24 declared-divergence note:
-	// the data-plane 403 emitted BY a CrowdSec block IS
-	// counted in fourxx_count because hslatman's bouncer has
-	// no callback to flag the request, but the BUCKET counter
-	// `crowdsec_decision_count` populated here is the pure
-	// CrowdSec signal — operator dashboard reads from this).
-	TotalCrowdSecDecisionsPerMin uint64 `json:"totalCrowdSecDecisionsPerMin"`
-	// ActiveCrowdSecIpsUnique counts distinct decision `value`
-	// strings (IP / CIDR / country / AS) in the
-	// decision_event table over the just-closed minute. Same
-	// caveat as attackersByBucketSource.CrowdSec: includes
-	// non-IP scopes intentionally.
+	// sourced from waf_detect_count bucket column.
+	TotalWafDetected uint64 `json:"totalWafDetected"`
+	// Step Q.3 / N.3 — independent counters. AC #15: a
+	// throttle / crowdsec event does NOT inflate the 4xx /
+	// 5xx / waf fields.
+	TotalThrottle           uint64 `json:"totalThrottle"`
+	TotalAuthFailures       uint64 `json:"totalAuthFailures"`
+	AttackerIpsUnique       int    `json:"attackerIpsUnique"` // union over WAF + throttle + audit + crowdsec
+	TotalCrowdSecDecisions  uint64 `json:"totalCrowdSecDecisions"`
+	// ActiveCrowdSecIpsUnique counts distinct decision
+	// `value` strings (IP / CIDR / country / AS). No time
+	// projection involved — name unchanged.
 	ActiveCrowdSecIpsUnique int               `json:"activeCrowdSecIpsUnique"`
-	GlobalP95LatencyMs      *float64          `json:"globalP95LatencyMs"` // null when no traffic
+	GlobalP95LatencyMs      *float64          `json:"globalP95LatencyMs"` // null when no traffic; weighted avg over the window
 	ActiveRouteCount        int               `json:"activeRouteCount"`
-	TopRoutes               []summaryRoute    `json:"topRoutes"`           // top 5 by reqsPerMin
-	TopAttackedRoute        *summaryRoute     `json:"topAttackedRoute"`    // single highest WAF count, all routes; null if none
-	WafBlocksByCategory     map[string]uint64 `json:"wafBlocksByCategory"` // category → count of action=BLOCK events; empty when no events
+	TopRoutes               []summaryRoute    `json:"topRoutes"`           // top 5 by reqs over the window
+	TopAttackedRoute        *summaryRoute     `json:"topAttackedRoute"`    // single highest WafBlocked, all routes; null if none
+	WafBlocksByCategory     map[string]uint64 `json:"wafBlocksByCategory"` // category → count of action=BLOCK events over the window
 	// #R-DASHBOARD-WAF-COUNTERS-ZERO — sibling map for
 	// action=DETECT events. Semantically distinct from
 	// WafBlocksByCategory: the two report DIFFERENT
@@ -346,18 +345,55 @@ func (h *Handler) metricsTimeseries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// metricsSummary handles GET /api/v1/metrics/summary. Aggregates
-// the most recent minute across all routes, surfaces top-5 by
-// traffic + global p95. AC #6: 4xx and 5xx fields are
-// independent in the JSON (no collapse into "errors").
+// summaryWindow is the wall-clock width of the
+// /metrics/summary response: a fixed 24-hour rolling
+// window ending at "now truncated to the previous hour"
+// (the boundary the bucket_1h aggregator writes).
+//
+// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — pre-fix the
+// window was the just-closed minute and the frontend
+// projected the 1-min counters to "/h" or "/24h" by
+// multiplying. Bursty homelab traffic surfaced as zeros
+// between bursts. Post-fix the window is 24h sourced from
+// bucket_1h (per-route SUM over 24 rows) so the dashboard
+// reflects real activity over the entire day. A future
+// user-selectable window is the natural follow-on.
+const summaryWindow = 24 * time.Hour
+
+// summaryAuthFailuresScanCap bounds the audit scan inside
+// metricsSummary so a 24h window can return correct
+// counts even on a noisy day. The /security/auth-failures
+// endpoint has its own (smaller) cap for recent-feed
+// rendering; this one is summary-specific. Sized large
+// enough for a brute-force-storm day on a homelab proxy
+// (~10 attempts/sec sustained = 864k/day, way past the
+// rate-limiter's hard ceiling). If we ever hit the cap
+// the metric undercounts — logged at Debug so an
+// operator monitoring growth sees it before users do.
+const summaryAuthFailuresScanCap = 10000
+
+// metricsSummary handles GET /api/v1/metrics/summary.
+// Aggregates traffic, error, and security counters across
+// all routes over a 24h rolling window, surfaces top-5 by
+// traffic + global p95.
+//
+// AC #6: 4xx and 5xx fields stay independent in the JSON
+// (no collapse into "errors").
 func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
-	bucketTs := now.Truncate(time.Minute).Add(-time.Minute) // the just-closed minute
+	// The window's high boundary is the start of the
+	// current hour (bucket_1h is written one row per hour
+	// at the top of each hour, so the currently-in-flight
+	// hour has no row yet). The low boundary is exactly
+	// 24h earlier.
+	hourTs := now.Truncate(time.Hour)
+	from := hourTs.Add(-summaryWindow)
+	to := hourTs
 	resp := summaryResponse{
-		GeneratedAt:          now.Format(time.RFC3339),
-		WindowSeconds:        60,
-		TopRoutes:            []summaryRoute{},
-		WafBlocksByCategory:  map[string]uint64{},
+		GeneratedAt:         now.Format(time.RFC3339),
+		WindowSeconds:       int(summaryWindow / time.Second),
+		TopRoutes:           []summaryRoute{},
+		WafBlocksByCategory: map[string]uint64{},
 		WafDetectsByCategory: map[string]uint64{},
 	}
 
@@ -391,16 +427,21 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		byID[rt.ID] = &rowAgg{Host: rt.Host}
 	}
 
-	// One Query per route over the just-closed minute window.
-	// On a homelab with <100 routes this is cheap (SQLite
-	// indexed lookup per route). For larger deployments a
-	// future endpoint could do one aggregate Query — out of
-	// scope for L.2.
-	from := bucketTs
-	to := bucketTs.Add(time.Minute)
+	// One Query per route over the 24h window, reading
+	// bucket_1h (up to 24 rows per route). Per-route SUM
+	// happens in-handler because we want both the per-
+	// route aggregates (TopRoutes / TopAttackedRoute) AND
+	// the global totals. On a homelab with <100 routes
+	// this is ≤ 2400 indexed SELECTs total, well within
+	// SQLite's per-request budget.
+	//
+	// LatencyP95 is req-weighted across the 24 hourly
+	// samples per route (within-route) and then across
+	// every route's contribution to the global average
+	// (cross-route). Both weightings use req_count.
 	var latencyWeightedSum, latencyWeightDen uint64
 	for id := range byID {
-		rows, qerr := h.metrics.Query(r.Context(), observability.Granularity1m, id, from, to)
+		rows, qerr := h.metrics.Query(r.Context(), observability.Granularity1h, id, from, to)
 		if qerr != nil {
 			h.logger.Error("metrics: summary query failed", "err", qerr, "route", id)
 			writeError(w, http.StatusServiceUnavailable, "metrics history unavailable")
@@ -409,24 +450,34 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		if len(rows) == 0 {
 			continue
 		}
-		// Each route × minute has exactly 1 row (PRIMARY KEY).
-		row := rows[0]
 		agg := byID[id]
-		agg.Req = uint64(row.ReqCount)
-		agg.Fourxx = uint64(row.FourxxCount)
-		agg.Fivexx = uint64(row.FivexxCount)
-		agg.WafBlocked = uint64(row.WafBlockCount)
-		agg.WafDetected = uint64(row.WafDetectCount)
-		agg.LatencyP95Ms = row.LatencyP95Ms
-		resp.TotalReqPerMin += agg.Req
-		resp.TotalFourXxPerMin += agg.Fourxx
-		resp.TotalFiveXxPerMin += agg.Fivexx
-		resp.TotalWafBlockedPerMin += agg.WafBlocked
-		resp.TotalWafDetectedPerMin += agg.WafDetected
-		if row.LatencyP95Ms > 0 && row.ReqCount > 0 {
-			latencyWeightedSum += uint64(row.LatencyP95Ms) * uint64(row.ReqCount)
-			latencyWeightDen += uint64(row.ReqCount)
+		for _, row := range rows {
+			agg.Req += uint64(row.ReqCount)
+			agg.Fourxx += uint64(row.FourxxCount)
+			agg.Fivexx += uint64(row.FivexxCount)
+			agg.WafBlocked += uint64(row.WafBlockCount)
+			agg.WafDetected += uint64(row.WafDetectCount)
+			if row.LatencyP95Ms > 0 && row.ReqCount > 0 {
+				latencyWeightedSum += uint64(row.LatencyP95Ms) * uint64(row.ReqCount)
+				latencyWeightDen += uint64(row.ReqCount)
+			}
 		}
+		// LatencyP95Ms surfaces the route's max hourly p95
+		// for now (the per-route value isn't reported on
+		// the wire; only the global weighted avg below is
+		// used downstream — same shape as before the
+		// widening). Kept on rowAgg for future per-route
+		// surfaces.
+		for _, row := range rows {
+			if row.LatencyP95Ms > agg.LatencyP95Ms {
+				agg.LatencyP95Ms = row.LatencyP95Ms
+			}
+		}
+		resp.TotalReq += agg.Req
+		resp.TotalFourXx += agg.Fourxx
+		resp.TotalFiveXx += agg.Fivexx
+		resp.TotalWafBlocked += agg.WafBlocked
+		resp.TotalWafDetected += agg.WafDetected
 	}
 
 	if latencyWeightDen > 0 {
@@ -436,54 +487,37 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	// resp.GlobalP95LatencyMs stays nil → JSON null per AC #5
 	// when no traffic landed in the window.
 
-	// Step M.2 — WafBlocksByCategory. Pulled from the per-event
-	// log, NOT the bucket counter, because the bucket only knows
-	// the total (waf_block_count) — categories live on each
-	// event row. Single query over the just-closed minute,
-	// grouped client-side. The reader may be nil (degraded
-	// mode); in that case the map stays empty and the dashboard
-	// renders its category strip as all zeros, which is the
-	// honest "no data" answer.
+	// Step M.2 / #R-WAF-METRICS-WINDOW-1MIN-PROJECTION —
+	// Waf{Blocks,Detects}ByCategory. Sourced from the
+	// per-event log because the bucket only carries the
+	// total. Pre-fix this iterated waf_event row-by-row
+	// under wafEventLimitCap=100, which couldn't service a
+	// 24h window on a busy day. Post-fix uses the server-
+	// side GROUP BY aggregator
+	// (AggregateWafEventsByCategory) — two queries
+	// (BLOCK + DETECT) per summary call, no row-count
+	// ceiling, indexed scan over the window.
 	if h.wafEvents != nil {
-		events, qerr := h.wafEvents.QueryWafEvents(r.Context(), observability.WafEventFilter{
-			From:  from,
-			To:    to,
-			Limit: 100, // cap per spec §1.4 / handler-layer convention
-		})
-		if qerr != nil {
-			h.logger.Error("metrics: summary waf_event query failed", "err", qerr)
-			// Don't fail the whole summary on a WAF-event read
-			// error: the bucket-side numbers are already
-			// populated and useful. Leave the category map
-			// empty + log; the operator can correlate via the
-			// /security/events endpoint directly.
-		} else {
-			// #R-DASHBOARD-WAF-COUNTERS-ZERO — dispatch by
-			// action. Pre-fix this loop incremented
-			// WafBlocksByCategory unconditionally, which made
-			// the map a misleading aggregate (block + detect
-			// rows under a name claiming blocks-only). Post-
-			// fix the two populations are reported on
-			// separate maps; operators wanting the combined
-			// view sum them client-side. Event rows with an
-			// unexpected Action ("", future enum value) are
-			// dropped silently — the W.bugfix v6→v7
-			// migration backfilled every legacy row to
-			// "BLOCK", so an empty Action would indicate a
-			// data-layer bug we'd rather surface as a
-			// missing category count than mis-categorise.
-			for _, e := range events {
-				switch e.Action {
-				case "BLOCK":
-					resp.WafBlocksByCategory[e.Category]++
-				case "DETECT":
-					resp.WafDetectsByCategory[e.Category]++
-				}
+		fillCategory := func(action string, dest map[string]uint64) {
+			rows, qerr := h.wafEvents.AggregateWafEventsByCategory(r.Context(), observability.WafEventCategoryFilter{
+				Action: action,
+				From:   from,
+				To:     to,
+			})
+			if qerr != nil {
+				h.logger.Error("metrics: summary waf category aggregate failed",
+					"err", qerr, "action", action)
+				return
+			}
+			for _, agg := range rows {
+				dest[agg.Category] = uint64(agg.Count)
 			}
 		}
+		fillCategory("BLOCK", resp.WafBlocksByCategory)
+		fillCategory("DETECT", resp.WafDetectsByCategory)
 	}
 
-	// Build top-5 by reqsPerMin.
+	// Build top-5 by reqs (over the 24h window).
 	top := make([]summaryRoute, 0, len(byID))
 	for id, agg := range byID {
 		if agg.Req == 0 {
@@ -491,13 +525,13 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.ActiveRouteCount++
 		top = append(top, summaryRoute{
-			RouteID:           id,
-			Host:              agg.Host,
-			ReqsPerMin:        agg.Req,
-			FourxxPerMin:      agg.Fourxx,
-			FivexxPerMin:      agg.Fivexx,
-			WafBlockedPerMin:  agg.WafBlocked,
-			WafDetectedPerMin: agg.WafDetected,
+			RouteID:     id,
+			Host:        agg.Host,
+			Reqs:        agg.Req,
+			Fourxx:      agg.Fourxx,
+			Fivexx:      agg.Fivexx,
+			WafBlocked:  agg.WafBlocked,
+			WafDetected: agg.WafDetected,
 		})
 	}
 	sortTopByReqs(top)
@@ -506,92 +540,88 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.TopRoutes = top
 
-	// Step M.2 amendment — TopAttackedRoute: the single route
-	// with the highest WAF block count over the window,
-	// computed across ALL routes (NOT filtered to the
-	// traffic-ranked top-5). This is the headline for the M.3
-	// dashboard's "top route blocks/min" card; the spec
-	// §1.3 D8 wording is explicit ("top-attacked-route
-	// blocks/min"). A targeted attack on a low-traffic admin
-	// or auth surface — exactly the case that matters on an
-	// internet-exposed proxy — would be invisible if we
-	// constrained the ranking to TopRoutes. Walks byID once;
-	// O(N) over the route catalog. Stays nil when no WAF
-	// activity in the window (operator sees an honest zero).
+	// Step M.2 amendment — TopAttackedRoute: the single
+	// route with the highest WAF block count over the
+	// window, computed across ALL routes (NOT filtered to
+	// the traffic-ranked top-5). Stays nil when no WAF
+	// activity (operator sees an honest zero).
 	var topAttacked *summaryRoute
 	for id, agg := range byID {
 		if agg.WafBlocked == 0 {
 			continue
 		}
-		if topAttacked == nil || agg.WafBlocked > topAttacked.WafBlockedPerMin {
+		if topAttacked == nil || agg.WafBlocked > topAttacked.WafBlocked {
 			topAttacked = &summaryRoute{
-				RouteID:           id,
-				Host:              agg.Host,
-				ReqsPerMin:        agg.Req,
-				FourxxPerMin:      agg.Fourxx,
-				FivexxPerMin:      agg.Fivexx,
-				WafBlockedPerMin:  agg.WafBlocked,
-				WafDetectedPerMin: agg.WafDetected,
+				RouteID:     id,
+				Host:        agg.Host,
+				Reqs:        agg.Req,
+				Fourxx:      agg.Fourxx,
+				Fivexx:      agg.Fivexx,
+				WafBlocked:  agg.WafBlocked,
+				WafDetected: agg.WafDetected,
 			}
 		}
 	}
 	resp.TopAttackedRoute = topAttacked
 
-	// Step Q.3 — TotalThrottlePerMin: read the sentinel
-	// route's bucket row for the just-closed minute. The
-	// observability aggregator stores throttle blocks under
-	// route_id = "_throttle" (spec §3.5); the per-route loop
-	// above doesn't iterate this sentinel because it's not in
-	// the storage.Route catalog. A targeted Query keeps the
-	// summary cheap (1 SQLite indexed lookup).
-	throttleRows, qerr := h.metrics.Query(r.Context(), observability.Granularity1m,
+	// Step Q.3 — TotalThrottle: SUM the sentinel route's
+	// bucket_1h rows over the window. The observability
+	// aggregator stores throttle blocks under route_id =
+	// "_throttle" (spec §3.5); the per-route loop above
+	// doesn't iterate this sentinel because it's not in
+	// the storage.Route catalog.
+	throttleRows, qerr := h.metrics.Query(r.Context(), observability.Granularity1h,
 		observability.ThrottleSentinelRouteID, from, to)
 	if qerr != nil {
 		h.logger.Error("metrics: summary throttle sentinel query failed", "err", qerr)
-		// Same trade-off as WafBlocksByCategory: don't fail
-		// the whole summary; the L counters + WAF total are
-		// useful on their own. Leave TotalThrottlePerMin=0.
-	} else if len(throttleRows) > 0 {
-		resp.TotalThrottlePerMin = uint64(throttleRows[0].ThrottleBlockCount)
-	}
-
-	// Step N.3 — TotalCrowdSecDecisionsPerMin: read the
-	// CrowdSec sentinel row (spec N §3.5: "_crowdsec"). Same
-	// pattern as TotalThrottlePerMin above. Independent of
-	// the throttle counter; AC #N.24 anti-regression: a
-	// CrowdSec decision does NOT inflate
-	// totalThrottlePerMin and vice versa.
-	crowdsecRows, qerr := h.metrics.Query(r.Context(), observability.Granularity1m,
-		observability.CrowdSecSentinelRouteID, from, to)
-	if qerr != nil {
-		h.logger.Error("metrics: summary crowdsec sentinel query failed", "err", qerr)
-		// Leave TotalCrowdSecDecisionsPerMin=0 — same
-		// trade-off as the throttle sentinel above.
-	} else if len(crowdsecRows) > 0 {
-		resp.TotalCrowdSecDecisionsPerMin = uint64(crowdsecRows[0].CrowdSecDecisionCount)
-	}
-
-	// Step Q.3 — TotalAuthFailuresPerMin: audit-scan over the
-	// just-closed minute (D4.B single source of truth — no
-	// bucket counter for this metric). Same scan-cap discipline
-	// as /security/auth-failures (200) but a 1-minute window
-	// is tiny in practice; the cap is only the safety net.
-	if h.authFailures != nil {
-		events, _, aerr := h.authFailures.QueryByActionRange(r.Context(),
-			audit.AuthFailureActions(), from, to, authFailuresScanCap)
-		if aerr != nil {
-			h.logger.Error("metrics: summary audit auth-failure scan failed", "err", aerr)
-		} else {
-			resp.TotalAuthFailuresPerMin = uint64(len(events))
+		// Don't fail the whole summary; leave at zero.
+	} else {
+		for _, row := range throttleRows {
+			resp.TotalThrottle += uint64(row.ThrottleBlockCount)
 		}
 	}
 
-	// Step Q.3 — AttackerIpsUnique: server-side union of WAF
-	// + throttle + audit source IPs over the just-closed
-	// minute. Same shape as /security/attackers-summary minus
-	// the per-source breakdown (the summary endpoint only
-	// surfaces the union count). Empty IPs filtered the same
-	// way (defence-in-depth on the spec §8.5 case).
+	// Step N.3 — TotalCrowdSecDecisions: SUM the CrowdSec
+	// sentinel row(s) over the window (spec N §3.5:
+	// "_crowdsec"). Independent of the throttle counter;
+	// AC #N.24 anti-regression: a CrowdSec decision does
+	// NOT inflate totalThrottle and vice versa.
+	crowdsecRows, qerr := h.metrics.Query(r.Context(), observability.Granularity1h,
+		observability.CrowdSecSentinelRouteID, from, to)
+	if qerr != nil {
+		h.logger.Error("metrics: summary crowdsec sentinel query failed", "err", qerr)
+	} else {
+		for _, row := range crowdsecRows {
+			resp.TotalCrowdSecDecisions += uint64(row.CrowdSecDecisionCount)
+		}
+	}
+
+	// Step Q.3 — TotalAuthFailures: audit-scan over the 24h
+	// window (D4.B single source of truth — no bucket
+	// counter for this metric). The summary uses a wider
+	// scan cap than the recent-feed endpoint because a 24h
+	// window legitimately contains more rows.
+	if h.authFailures != nil {
+		events, _, aerr := h.authFailures.QueryByActionRange(r.Context(),
+			audit.AuthFailureActions(), from, to, summaryAuthFailuresScanCap)
+		if aerr != nil {
+			h.logger.Error("metrics: summary audit auth-failure scan failed", "err", aerr)
+		} else {
+			resp.TotalAuthFailures = uint64(len(events))
+			if len(events) == summaryAuthFailuresScanCap {
+				// Hitting the cap means undercount: log
+				// once at Debug so operators monitoring
+				// growth see it before the dashboard does.
+				h.logger.Debug("metrics: summary auth-failure scan hit cap; metric undercounted",
+					"cap", summaryAuthFailuresScanCap, "window_hours", int(summaryWindow/time.Hour))
+			}
+		}
+	}
+
+	// Step Q.3 — AttackerIpsUnique: server-side union of
+	// WAF + throttle + audit source IPs over the 24h
+	// window. Empty IPs filtered (defence-in-depth on the
+	// spec §8.5 case).
 	attackers := make(map[string]struct{})
 	if h.wafEvents != nil {
 		ips, werr := h.wafEvents.DistinctWafEventSrcIPs(r.Context(), from, to)
@@ -621,9 +651,9 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.authFailures != nil {
 		events, _, aerr := h.authFailures.QueryByActionRange(r.Context(),
-			audit.AuthFailureActions(), from, to, authFailuresScanCap)
+			audit.AuthFailureActions(), from, to, summaryAuthFailuresScanCap)
 		if aerr != nil {
-			// Already logged above for TotalAuthFailuresPerMin.
+			// Already logged above for TotalAuthFailures.
 		} else {
 			for _, e := range events {
 				if e.IP == "" {
@@ -829,13 +859,13 @@ func pickMetricValue(row observability.MetricBucket, hit bool, metric metricName
 	return nil
 }
 
-// sortTopByReqs sorts the slice in-place by ReqsPerMin descending.
-// Inline insertion sort — the slice is bounded by the number of
-// active routes (typically <100 on a homelab); avoids importing
-// sort just for one site.
+// sortTopByReqs sorts the slice in-place by Reqs
+// descending. Inline insertion sort — bounded by the
+// number of active routes (typically <100 on a homelab);
+// avoids importing sort just for one site.
 func sortTopByReqs(s []summaryRoute) {
 	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j].ReqsPerMin > s[j-1].ReqsPerMin; j-- {
+		for j := i; j > 0 && s[j].Reqs > s[j-1].Reqs; j-- {
 			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}

@@ -49,23 +49,18 @@
 
 	const disabled = $derived(summary?.disabled === true);
 
-	const totalInspectedPerDay = $derived(
-		Math.round((summary?.totalReqPerMin ?? 0) * 60 * 24)
-	);
-	const totalBlockedPerDay = $derived(
-		Math.round((summary?.totalWafBlockedPerMin ?? 0) * 60 * 24)
-	);
-	// #R-DASHBOARD-WAF-COUNTERS-ZERO — sibling counter
-	// projected to a 24h window. Visible as a separate
-	// amber DETECTED card next to the red BLOCKED one.
-	const totalDetectedPerDay = $derived(
-		Math.round((summary?.totalWafDetectedPerMin ?? 0) * 60 * 24)
-	);
+	// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — pre-fix these
+	// were per-minute values multiplied by 60×24 to project
+	// "/ 24h". Post-fix the summary endpoint returns 24h
+	// totals natively; the frontend reads them raw.
+	const totalInspected24h = $derived(summary?.totalReq ?? 0);
+	const totalBlocked24h = $derived(summary?.totalWafBlocked ?? 0);
+	const totalDetected24h = $derived(summary?.totalWafDetected ?? 0);
 	const blockRatioPct = $derived(
 		(() => {
-			if (totalInspectedPerDay <= 0) return 0;
+			if (totalInspected24h <= 0) return 0;
 			return (
-				Math.round((totalBlockedPerDay / totalInspectedPerDay) * 10000) / 100
+				Math.round((totalBlocked24h / totalInspected24h) * 10000) / 100
 			);
 		})()
 	);
@@ -83,10 +78,8 @@
 			cat,
 			label: catLabel(cat),
 			description: catDescription(cat),
-			blockPerMin: blocks[cat] ?? 0,
-			block24h: Math.round((blocks[cat] ?? 0) * 60 * 24),
-			detectPerMin: detects[cat] ?? 0,
-			detect24h: Math.round((detects[cat] ?? 0) * 60 * 24)
+			block24h: blocks[cat] ?? 0,
+			detect24h: detects[cat] ?? 0
 		}));
 	});
 
@@ -170,8 +163,8 @@
 	<div class="kpis">
 		<div class="kpi">
 			<div class="kpi-label">Requests inspected</div>
-			<div class="kpi-val">{totalInspectedPerDay.toLocaleString()}<span class="unit">/ 24h</span></div>
-			<div class="kpi-foot">projected from current rate</div>
+			<div class="kpi-val">{totalInspected24h.toLocaleString()}<span class="unit">/ 24h</span></div>
+			<div class="kpi-foot">summed over rolling 24h window</div>
 		</div>
 		<!--
 			#R-DASHBOARD-WAF-COUNTERS-ZERO — Blocked and
@@ -183,12 +176,12 @@
 		-->
 		<div class="kpi" data-testid="kpi-blocked">
 			<div class="kpi-label">Blocked</div>
-			<div class="kpi-val">{totalBlockedPerDay.toLocaleString()}</div>
+			<div class="kpi-val">{totalBlocked24h.toLocaleString()}</div>
 			<div class="kpi-foot">ratio {blockRatioPct}%</div>
 		</div>
 		<div class="kpi" data-testid="kpi-detected">
 			<div class="kpi-label">Detected</div>
-			<div class="kpi-val">{totalDetectedPerDay.toLocaleString()}</div>
+			<div class="kpi-val">{totalDetected24h.toLocaleString()}</div>
 			<div class="kpi-foot">detect-mode (request passed through)</div>
 		</div>
 		<div class="kpi">

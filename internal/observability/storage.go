@@ -926,6 +926,92 @@ func (s *Store) AggregateWafEventsByRule(ctx context.Context, filter WafEventAgg
 	return out, nil
 }
 
+// WafEventCategoryAggregate is one row of the by-category
+// breakdown surfaced by AggregateWafEventsByCategory.
+// Mirrors WafEventRuleAggregate but groups by category
+// only — used by the /metrics/summary handler to populate
+// WafBlocksByCategory + WafDetectsByCategory over a
+// non-trivial window (24h+) where row-by-row iteration of
+// waf_event would hit the wafEventLimitCap=100.
+type WafEventCategoryAggregate struct {
+	Category string
+	Count    int64
+}
+
+// WafEventCategoryFilter narrows AggregateWafEventsByCategory.
+// Action is the discriminator that lets the summary endpoint
+// run two queries — one for action="BLOCK" populating
+// WafBlocksByCategory, one for action="DETECT" populating
+// WafDetectsByCategory. Empty action = both populations
+// (operator-rare; reserved for future combined views).
+type WafEventCategoryFilter struct {
+	Action  string    // "BLOCK", "DETECT", or "" for all
+	RouteID string    // optional per-route filter
+	From    time.Time // inclusive
+	To      time.Time // exclusive; zero = open-ended (now)
+}
+
+// AggregateWafEventsByCategory returns one row per category
+// for events matching filter, with the count of matching
+// events. Ordered by count DESC.
+//
+// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — the missing
+// server-side aggregator that lets /metrics/summary cover
+// a 24h window without iterating the per-event log under
+// the wafEventLimitCap=100 ceiling. Mirror of the
+// AggregateWafEventsByRule shape; smaller result set
+// (handful of OWASP categories rather than ~dozens of
+// rules) so no Limit param needed.
+//
+// SQLite uses the (category, ts) index when the filter
+// touches category or ts; the GROUP BY happens in-memory
+// on the small post-filter set — cheap for typical homelab
+// volumes and bounded by the COUNT(DISTINCT category)
+// arithmetic ceiling even on storms.
+func (s *Store) AggregateWafEventsByCategory(ctx context.Context, filter WafEventCategoryFilter) ([]WafEventCategoryAggregate, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	q := `SELECT category, COUNT(*) AS cnt
+	      FROM waf_event WHERE 1=1`
+	args := []any{}
+	if filter.Action != "" {
+		q += ` AND action = ?`
+		args = append(args, filter.Action)
+	}
+	if filter.RouteID != "" {
+		q += ` AND route_id = ?`
+		args = append(args, filter.RouteID)
+	}
+	if !filter.From.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, filter.From.UTC().Unix())
+	}
+	if !filter.To.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, filter.To.UTC().Unix())
+	}
+	q += ` GROUP BY category ORDER BY cnt DESC`
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: aggregate waf_event by category: %w", err)
+	}
+	defer rows.Close()
+	var out []WafEventCategoryAggregate
+	for rows.Next() {
+		var agg WafEventCategoryAggregate
+		if err := rows.Scan(&agg.Category, &agg.Count); err != nil {
+			return nil, fmt.Errorf("observability: scan waf_event category aggregate: %w", err)
+		}
+		out = append(out, agg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate waf_event category aggregate: %w", err)
+	}
+	return out, nil
+}
+
 // --- Step N: decision_event store ------------------------------------------
 
 // DecisionEvent is the observability-layer mirror of

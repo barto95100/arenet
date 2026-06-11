@@ -63,34 +63,41 @@
 	const noRoutes = $derived(!disabled && routes.length === 0);
 
 	// 4 KPI derivations from the summary response.
-	const kpiReqPerSec = $derived(
-		Math.round(((summary?.totalReqPerMin ?? 0) / 60) * 10) / 10
-	);
+	// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — pre-fix the
+	// summary endpoint returned just-closed-minute counters
+	// and the frontend multiplied by 60 (for "/h") or
+	// 60×24 (for "/24h") to project rates. On bursty
+	// homelab traffic the just-closed minute was often
+	// empty, surfacing as zero everywhere. Post-fix the
+	// summary returns 24h totals directly; the frontend
+	// reads them raw (no projection).
+	//
+	// req/s is derived by dividing the 24h total by the
+	// window length in seconds (windowSeconds = 86400).
+	// The displayed average isn't instantaneous traffic
+	// but a 24h-average rate, which is what an operator
+	// reading the card actually wants to know about
+	// sustained activity.
+	const kpiReqPerSec = $derived.by(() => {
+		const total = summary?.totalReq ?? 0;
+		const win = summary?.windowSeconds ?? 86400;
+		if (win <= 0) return 0;
+		return Math.round((total / win) * 10) / 10;
+	});
 	const kpiP95 = $derived(summary?.globalP95LatencyMs ?? null);
 	const kpi5xxPct = $derived(
 		(() => {
-			const req = summary?.totalReqPerMin ?? 0;
-			const fivexx = summary?.totalFiveXxPerMin ?? 0;
+			const req = summary?.totalReq ?? 0;
+			const fivexx = summary?.totalFiveXx ?? 0;
 			if (req <= 0) return 0;
 			return Math.round((fivexx / req) * 10000) / 100;
 		})()
 	);
-	// #R-DASHBOARD-WAF-COUNTERS-ZERO — two parallel KPI
-	// cards. Pre-fix the dashboard had a single "WAF BLOCKS
-	// / H" tile sourced from totalWafBlockedPerMin, which
-	// stayed at zero on homelab routes in wafMode=detect
-	// (the recommended I.4 default) — the bug the
-	// workstream fixes. Post-fix the dashboard splits the
-	// signal into two tiles so detect-mode activity is
-	// visible:
-	//   BLOQUÉ  — red, sourced from totalWafBlockedPerMin
-	//   DÉTECTÉ — amber, sourced from totalWafDetectedPerMin
-	const kpiWafBlockedPerHour = $derived(
-		Math.round((summary?.totalWafBlockedPerMin ?? 0) * 60)
-	);
-	const kpiWafDetectedPerHour = $derived(
-		Math.round((summary?.totalWafDetectedPerMin ?? 0) * 60)
-	);
+	// Two parallel WAF tiles. Values are 24h absolute
+	// counts (no rate projection); the labels read
+	// "/ 24h" to match the wire semantics.
+	const kpiWafBlocked24h = $derived(summary?.totalWafBlocked ?? 0);
+	const kpiWafDetected24h = $derived(summary?.totalWafDetected ?? 0);
 
 	// Distinct upstream URLs across all routes — the v1.4 stand-in
 	// for the mock's per-service-name aggregation.
@@ -248,7 +255,7 @@
 			<div class="kpi-label">Requests / s</div>
 			<div class="kpi-val">{kpiReqPerSec}<span class="unit">req/s</span></div>
 			<div class="kpi-foot">
-				{summary?.totalReqPerMin ?? 0} req/min · {summary?.activeRouteCount ?? 0} active routes
+				{summary?.totalReq ?? 0} req / 24h · {summary?.activeRouteCount ?? 0} active routes
 			</div>
 		</div>
 		<div class="kpi">
@@ -262,26 +269,28 @@
 			<div class="kpi-label">5xx error rate</div>
 			<div class="kpi-val">{kpi5xxPct}<span class="unit">%</span></div>
 			<div class="kpi-foot">
-				{summary?.totalFiveXxPerMin ?? 0} 5xx/min · {summary?.totalFourXxPerMin ?? 0} 4xx/min
+				{summary?.totalFiveXx ?? 0} 5xx / 24h · {summary?.totalFourXx ?? 0} 4xx / 24h
 			</div>
 		</div>
 		<!--
-			#R-DASHBOARD-WAF-COUNTERS-ZERO — two parallel
-			tiles. BLOQUÉ (red) reads the canonical block
-			counter; DÉTECTÉ (amber) reads the new detect
-			counter so detect-mode activity is visible on
-			homelab routes using the wafMode=detect default.
+			#R-DASHBOARD-WAF-COUNTERS-ZERO + #R-WAF-METRICS-
+			WINDOW-1MIN-PROJECTION — two parallel tiles
+			showing 24h absolute counts. BLOQUÉ (red) reads
+			the canonical block counter; DÉTECTÉ (amber)
+			reads the new detect counter so detect-mode
+			activity is visible on homelab routes using the
+			wafMode=detect default.
 		-->
 		<div class="kpi" data-testid="kpi-waf-blocked">
-			<div class="kpi-label">WAF bloqué / h</div>
-			<div class="kpi-val">{kpiWafBlockedPerHour}</div>
+			<div class="kpi-label">WAF bloqué / 24h</div>
+			<div class="kpi-val">{kpiWafBlocked24h}</div>
 			<div class="kpi-foot">
-				{summary?.attackerIpsUnique ?? 0} unique IPs · {summary?.totalThrottlePerMin ?? 0} throttle/min
+				{summary?.attackerIpsUnique ?? 0} unique IPs · {summary?.totalThrottle ?? 0} throttle / 24h
 			</div>
 		</div>
 		<div class="kpi" data-testid="kpi-waf-detected">
-			<div class="kpi-label">WAF détecté / h</div>
-			<div class="kpi-val">{kpiWafDetectedPerHour}</div>
+			<div class="kpi-label">WAF détecté / 24h</div>
+			<div class="kpi-val">{kpiWafDetected24h}</div>
 			<div class="kpi-foot">
 				detect-mode (request passed through)
 			</div>
@@ -361,15 +370,15 @@
 		<div class="card">
 			<div class="card-h">
 				<h3>Top routes</h3>
-				<div class="meta">sorted by RPS</div>
+				<div class="meta">sorted by traffic, 24h window</div>
 			</div>
 			<table>
 				<thead>
 					<tr>
 						<th>Route</th>
-						<th class="right">Req/min</th>
-						<th class="right">4xx/min</th>
-						<th class="right">5xx/min</th>
+						<th class="right">Req</th>
+						<th class="right">4xx</th>
+						<th class="right">5xx</th>
 						<th class="right">WAF block</th>
 						<th class="right">WAF detect</th>
 					</tr>
@@ -380,11 +389,11 @@
 							<td class="mono">
 								<a href={`/observability/${r.routeId}`} class="host-link">{r.host}</a>
 							</td>
-							<td class="mono right">{r.reqsPerMin}</td>
-							<td class="mono right warn-text">{r.fourxxPerMin}</td>
-							<td class="mono right bad-text">{r.fivexxPerMin}</td>
-							<td class="mono right bad-text">{r.wafBlockedPerMin}</td>
-							<td class="mono right warn-text">{r.wafDetectedPerMin}</td>
+							<td class="mono right">{r.reqs}</td>
+							<td class="mono right warn-text">{r.fourxx}</td>
+							<td class="mono right bad-text">{r.fivexx}</td>
+							<td class="mono right bad-text">{r.wafBlocked}</td>
+							<td class="mono right warn-text">{r.wafDetected}</td>
 						</tr>
 					{:else}
 						<tr><td colspan="6" class="empty-row">No data in the window.</td></tr>

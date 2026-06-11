@@ -39,9 +39,10 @@ import (
 // via aggregateFn. Defaults to no rows + no error so callers
 // that don't exercise the aggregate path don't have to set it.
 type fakeWafEventReader struct {
-	queryFn      func(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
-	aggregateFn  func(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
-	distinctIPFn func(ctx context.Context, from, to time.Time) ([]string, error)
+	queryFn          func(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
+	aggregateFn      func(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
+	aggregateCatFn   func(ctx context.Context, filter observability.WafEventCategoryFilter) ([]observability.WafEventCategoryAggregate, error)
+	distinctIPFn     func(ctx context.Context, from, to time.Time) ([]string, error)
 }
 
 func (f *fakeWafEventReader) QueryWafEvents(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error) {
@@ -54,6 +55,13 @@ func (f *fakeWafEventReader) QueryWafEvents(ctx context.Context, filter observab
 func (f *fakeWafEventReader) AggregateWafEventsByRule(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error) {
 	if f.aggregateFn != nil {
 		return f.aggregateFn(ctx, filter)
+	}
+	return nil, nil
+}
+
+func (f *fakeWafEventReader) AggregateWafEventsByCategory(ctx context.Context, filter observability.WafEventCategoryFilter) ([]observability.WafEventCategoryAggregate, error) {
+	if f.aggregateCatFn != nil {
+		return f.aggregateCatFn(ctx, filter)
 	}
 	return nil, nil
 }
@@ -343,9 +351,9 @@ func TestMetricsTimeseries_WafBlockRate_BadMetric_StillRejected(t *testing.T) {
 
 func TestMetricsSummary_WafFields_IndependentFrom4xx5xx(t *testing.T) {
 	// AC #3 anti-regression on the summary endpoint: a
-	// WAF-only burst must leave TotalFourXxPerMin /
-	// TotalFiveXxPerMin at 0, and the symmetric case
-	// (4xx-only / 5xx-only) must leave TotalWafBlockedPerMin
+	// WAF-only burst must leave TotalFourXx /
+	// TotalFiveXx at 0, and the symmetric case
+	// (4xx-only / 5xx-only) must leave TotalWafBlocked
 	// at 0.
 	m := newMetricsTestEnv(t)
 	obsStore, err := observability.Open(context.Background(), ":memory:")
@@ -359,9 +367,9 @@ func TestMetricsSummary_WafFields_IndependentFrom4xx5xx(t *testing.T) {
 	// Seed the just-closed minute with WAF-only activity.
 	// req_count IS incremented per AC #3 (a WAF block
 	// counts as a request). 4xx/5xx stay 0.
-	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
-		{RouteID: m.routeID, Ts: prevMinute, ReqCount: 30, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 30, LatencyP95Ms: 8},
+	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: prevHour, ReqCount: 30, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 30, LatencyP95Ms: 8},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -376,25 +384,25 @@ func TestMetricsSummary_WafFields_IndependentFrom4xx5xx(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.TotalWafBlockedPerMin != 30 {
-		t.Errorf("TotalWafBlockedPerMin = %d, want 30", resp.TotalWafBlockedPerMin)
+	if resp.TotalWafBlocked != 30 {
+		t.Errorf("TotalWafBlocked = %d, want 30", resp.TotalWafBlocked)
 	}
-	if resp.TotalFourXxPerMin != 0 {
-		t.Errorf("TotalFourXxPerMin = %d, want 0 — WAF-only burst must NOT inflate 4xx (AC #3)", resp.TotalFourXxPerMin)
+	if resp.TotalFourXx != 0 {
+		t.Errorf("TotalFourXx = %d, want 0 — WAF-only burst must NOT inflate 4xx (AC #3)", resp.TotalFourXx)
 	}
-	if resp.TotalFiveXxPerMin != 0 {
-		t.Errorf("TotalFiveXxPerMin = %d, want 0 — WAF-only burst must NOT inflate 5xx (AC #3)", resp.TotalFiveXxPerMin)
+	if resp.TotalFiveXx != 0 {
+		t.Errorf("TotalFiveXx = %d, want 0 — WAF-only burst must NOT inflate 5xx (AC #3)", resp.TotalFiveXx)
 	}
 	// AC #3 verified at the top-5 row level too.
-	if len(resp.TopRoutes) != 1 || resp.TopRoutes[0].WafBlockedPerMin != 30 ||
-		resp.TopRoutes[0].FourxxPerMin != 0 || resp.TopRoutes[0].FivexxPerMin != 0 {
+	if len(resp.TopRoutes) != 1 || resp.TopRoutes[0].WafBlocked != 30 ||
+		resp.TopRoutes[0].Fourxx != 0 || resp.TopRoutes[0].Fivexx != 0 {
 		t.Errorf("top-route row leaked counters: %+v", resp.TopRoutes)
 	}
 }
 
 func TestMetricsSummary_4xx5xxBurst_DoesNotInflateWaf(t *testing.T) {
 	// Reciprocal AC #3 check on the summary: 4xx/5xx burst
-	// → TotalWafBlockedPerMin stays at 0.
+	// → TotalWafBlocked stays at 0.
 	m := newMetricsTestEnv(t)
 	obsStore, err := observability.Open(context.Background(), ":memory:")
 	if err != nil {
@@ -404,9 +412,9 @@ func TestMetricsSummary_4xx5xxBurst_DoesNotInflateWaf(t *testing.T) {
 	m.env.handler.SetMetricsReader(obsStore)
 	m.env.handler.SetWafEventReader(obsStore)
 
-	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
-		{RouteID: m.routeID, Ts: prevMinute, ReqCount: 50, FourxxCount: 10, FivexxCount: 5, WafBlockCount: 0, LatencyP95Ms: 16},
+	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: prevHour, ReqCount: 50, FourxxCount: 10, FivexxCount: 5, WafBlockCount: 0, LatencyP95Ms: 16},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -419,8 +427,8 @@ func TestMetricsSummary_4xx5xxBurst_DoesNotInflateWaf(t *testing.T) {
 	}
 	var resp summaryResponse
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.TotalWafBlockedPerMin != 0 {
-		t.Errorf("TotalWafBlockedPerMin = %d, want 0 — L counters must NOT inflate WAF total (AC #3 reciprocal)", resp.TotalWafBlockedPerMin)
+	if resp.TotalWafBlocked != 0 {
+		t.Errorf("TotalWafBlocked = %d, want 0 — L counters must NOT inflate WAF total (AC #3 reciprocal)", resp.TotalWafBlocked)
 	}
 }
 
@@ -445,9 +453,9 @@ func TestMetricsSummary_WafBlocksByCategory(t *testing.T) {
 	// loop, but the response still surfaces categories even
 	// when bucket counts are zero — operator wants the
 	// signal as long as events exist).
-	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
-		{RouteID: m.routeID, Ts: prevMinute, ReqCount: 5, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 5, LatencyP95Ms: 8},
+	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: prevHour, ReqCount: 5, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 5, LatencyP95Ms: 8},
 	}); err != nil {
 		t.Fatalf("seed bucket: %v", err)
 	}
@@ -455,11 +463,11 @@ func TestMetricsSummary_WafBlocksByCategory(t *testing.T) {
 	// Seed waf_events in the just-closed minute spanning 3
 	// categories.
 	if err := obsStore.InsertWafEventBatch(context.Background(), []observability.WafEvent{
-		{Ts: prevMinute.Add(15 * time.Second), RouteID: m.routeID, RuleID: "942100", Category: "SQLi", Severity: 2, SrcIP: "1.1.1.1", RequestMethod: "GET", RequestPath: "/", PayloadSample: ""},
-		{Ts: prevMinute.Add(20 * time.Second), RouteID: m.routeID, RuleID: "942200", Category: "SQLi", Severity: 2, SrcIP: "1.1.1.2", RequestMethod: "GET", RequestPath: "/", PayloadSample: ""},
-		{Ts: prevMinute.Add(25 * time.Second), RouteID: m.routeID, RuleID: "941100", Category: "XSS", Severity: 3, SrcIP: "2.2.2.1", RequestMethod: "GET", RequestPath: "/", PayloadSample: ""},
-		{Ts: prevMinute.Add(30 * time.Second), RouteID: m.routeID, RuleID: "932100", Category: "RCE", Severity: 2, SrcIP: "3.3.3.1", RequestMethod: "POST", RequestPath: "/", PayloadSample: ""},
-		{Ts: prevMinute.Add(35 * time.Second), RouteID: m.routeID, RuleID: "932200", Category: "RCE", Severity: 2, SrcIP: "3.3.3.2", RequestMethod: "POST", RequestPath: "/", PayloadSample: ""},
+		{Ts: prevHour.Add(15 * time.Second), RouteID: m.routeID, RuleID: "942100", Category: "SQLi", Severity: 2, SrcIP: "1.1.1.1", RequestMethod: "GET", RequestPath: "/", PayloadSample: ""},
+		{Ts: prevHour.Add(20 * time.Second), RouteID: m.routeID, RuleID: "942200", Category: "SQLi", Severity: 2, SrcIP: "1.1.1.2", RequestMethod: "GET", RequestPath: "/", PayloadSample: ""},
+		{Ts: prevHour.Add(25 * time.Second), RouteID: m.routeID, RuleID: "941100", Category: "XSS", Severity: 3, SrcIP: "2.2.2.1", RequestMethod: "GET", RequestPath: "/", PayloadSample: ""},
+		{Ts: prevHour.Add(30 * time.Second), RouteID: m.routeID, RuleID: "932100", Category: "RCE", Severity: 2, SrcIP: "3.3.3.1", RequestMethod: "POST", RequestPath: "/", PayloadSample: ""},
+		{Ts: prevHour.Add(35 * time.Second), RouteID: m.routeID, RuleID: "932200", Category: "RCE", Severity: 2, SrcIP: "3.3.3.2", RequestMethod: "POST", RequestPath: "/", PayloadSample: ""},
 	}); err != nil {
 		t.Fatalf("seed events: %v", err)
 	}
@@ -555,16 +563,16 @@ func TestMetricsSummary_TopAttackedRoute_SortsAcrossAllRoutesByWafBlocks(t *test
 		t.Fatalf("seed admin route: %v", err)
 	}
 
-	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
+	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
 		// High-traffic "main" route — 10000 req, zero WAF.
 		// Would dominate TopRoutes (sorted by traffic).
-		{RouteID: m.routeID, Ts: prevMinute, ReqCount: 10000, FourxxCount: 5, FivexxCount: 0, WafBlockCount: 0, LatencyP95Ms: 8},
+		{RouteID: m.routeID, Ts: prevHour, ReqCount: 10000, FourxxCount: 5, FivexxCount: 0, WafBlockCount: 0, LatencyP95Ms: 8},
 		// Low-traffic "admin" route — 50 req, but 50 WAF
 		// blocks (every request was an attack). MUST become
 		// TopAttackedRoute despite being way down the
 		// traffic ranking.
-		{RouteID: adminRoute.ID, Ts: prevMinute, ReqCount: 50, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 50, LatencyP95Ms: 4},
+		{RouteID: adminRoute.ID, Ts: prevHour, ReqCount: 50, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 50, LatencyP95Ms: 4},
 	}); err != nil {
 		t.Fatalf("seed bucket: %v", err)
 	}
@@ -594,8 +602,8 @@ func TestMetricsSummary_TopAttackedRoute_SortsAcrossAllRoutesByWafBlocks(t *test
 		t.Errorf("TopAttackedRoute.RouteID = %q (host=%q), want admin route %q (50 WAF blocks > main route's 0) — sorting must be across ALL routes, not constrained to TopRoutes",
 			resp.TopAttackedRoute.RouteID, resp.TopAttackedRoute.Host, adminRoute.ID)
 	}
-	if resp.TopAttackedRoute.WafBlockedPerMin != 50 {
-		t.Errorf("TopAttackedRoute.WafBlockedPerMin = %d, want 50", resp.TopAttackedRoute.WafBlockedPerMin)
+	if resp.TopAttackedRoute.WafBlocked != 50 {
+		t.Errorf("TopAttackedRoute.WafBlocked = %d, want 50", resp.TopAttackedRoute.WafBlocked)
 	}
 }
 
@@ -612,9 +620,9 @@ func TestMetricsSummary_TopAttackedRoute_NilWhenNoWafActivity(t *testing.T) {
 	m.env.handler.SetMetricsReader(obsStore)
 	m.env.handler.SetWafEventReader(obsStore)
 
-	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
-	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
-		{RouteID: m.routeID, Ts: prevMinute, ReqCount: 100, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 0, LatencyP95Ms: 8},
+	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
+		{RouteID: m.routeID, Ts: prevHour, ReqCount: 100, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 0, LatencyP95Ms: 8},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

@@ -1064,78 +1064,85 @@ export interface TimeseriesResponse {
 export interface SummaryRoute {
 	routeId: string;
 	host: string;
-	reqsPerMin: number;
-	fourxxPerMin: number;
-	fivexxPerMin: number;
-	// Step M.2 — per-route WAF blocks over the just-closed
-	// minute. Independent of fourxxPerMin/fivexxPerMin (AC
-	// #3): a WAF-blocked 403 does NOT inflate the 4xx count.
-	wafBlockedPerMin: number;
-	// #R-DASHBOARD-WAF-COUNTERS-ZERO — per-route WAF
-	// detect-mode events over the just-closed minute.
-	// Independent of wafBlockedPerMin: a detect-mode rule
-	// fire bumps THIS, the request is still passed through
-	// to the upstream (no 4xx classification). Dashboard
-	// Top-Routes table renders this in a parallel column so
-	// an operator on the recommended wafMode=detect default
-	// sees real attack volume instead of a row of zeros.
-	wafDetectedPerMin: number;
+	// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — the PerMin
+	// suffix was dropped when the window widened to 24h.
+	// The fields name what they count over the configured
+	// window (see SummaryResponse.windowSeconds — currently
+	// 86400). The frontend reads the values raw; the
+	// historic ×60 / ×60×24 projections were removed in the
+	// same commit because they no longer apply (the values
+	// are absolute counts, not rates).
+	//
+	// Independence (AC #3): a WAF block does NOT inflate
+	// the 4xx count; detect / block counters are
+	// independent of each other AND of the 4xx / 5xx
+	// fields.
+	reqs: number;
+	fourxx: number;
+	fivexx: number;
+	wafBlocked: number;
+	wafDetected: number;
 }
 
 export interface SummaryResponse {
 	generatedAt: string;
+	/**
+	 * Width of the window every Total* field aggregates over,
+	 * in seconds. Post-#R-WAF-METRICS-WINDOW-1MIN-PROJECTION
+	 * = 86400 (24h). Consumers that want a different window
+	 * length should read this rather than assume — a future
+	 * user-selectable window is the natural follow-on.
+	 */
 	windowSeconds: number;
 	disabled?: boolean;
-	totalReqPerMin: number;
-	totalFourXxPerMin: number;
-	totalFiveXxPerMin: number;
-	// Step M.2 — system-wide WAF blocks counter + per-OWASP-
-	// category breakdown. Independent of the L 4xx/5xx
-	// totals (AC #3 reciprocal). wafBlocksByCategory is
-	// always a (possibly empty) map; an empty map means
-	// either no events landed in the window, or the WAF
-	// event reader is unavailable (degraded mode).
-	totalWafBlockedPerMin: number;
-	// #R-DASHBOARD-WAF-COUNTERS-ZERO — system-wide WAF
-	// detect-mode events counter. Sibling to
-	// totalWafBlockedPerMin: the two are populated from
-	// distinct bucket columns (waf_block_count vs
-	// waf_detect_count). On a homelab with every route in
-	// the recommended wafMode=detect default, this is the
-	// counter that has activity — the BLOCK counter stays
-	// at zero. Dashboard renders the two as separate cards
-	// (BLOQUÉ red / DÉTECTÉ amber) so the operator never
-	// reads "0" while real WAF activity is happening.
-	totalWafDetectedPerMin: number;
-	// Step Q.3 — rate-limit (throttle) blocks counted by the
-	// auth handler over the just-closed minute, system-wide.
-	// AC #15: independent of totalWafBlockedPerMin and the
-	// L 4xx/5xx totals — a Tier-1 / Tier-2 block does NOT
-	// inflate any of those fields.
-	totalThrottlePerMin: number;
-	// Step Q.3 — count of authentication-failure audit events
-	// over the just-closed minute. Source: server-side audit-
-	// scan (D2.B/D4.B). Same independence contract as
-	// totalThrottlePerMin.
-	totalAuthFailuresPerMin: number;
-	// Step Q.3 — server-side union of distinct source IPs
-	// across WAF + throttle + audit auth-failure events over
-	// the just-closed minute. An IP that hit multiple
-	// sources counts ONCE. The dashboard renders this as
-	// the "ATTACKER IPs unique" headline card.
-	//
-	// Step N.3 extension: the union now spans 4 sources
-	// (waf + throttle + audit + crowdsec). The number can
-	// be larger than pre-N if a CrowdSec community
-	// blocklist contributes IPs not seen by the other gates.
+	/**
+	 * Total requests across all routes over the configured
+	 * window. Sourced from bucket_1h SUM over 24 rows
+	 * (post-fix). Pre-fix this was a per-minute value the
+	 * frontend multiplied by 60; post-fix it's the absolute
+	 * count and the consumer reads it raw.
+	 */
+	totalReq: number;
+	totalFourXx: number;
+	totalFiveXx: number;
+	/**
+	 * Step M.2 — system-wide WAF blocks counter. Independent
+	 * of the L 4xx/5xx totals (AC #3 reciprocal). Sourced
+	 * from waf_block_count summed over the window.
+	 */
+	totalWafBlocked: number;
+	/**
+	 * #R-DASHBOARD-WAF-COUNTERS-ZERO — system-wide WAF
+	 * detect-mode events counter. Sibling to totalWafBlocked:
+	 * the two are populated from distinct bucket columns
+	 * (waf_block_count vs waf_detect_count). On a homelab
+	 * with every route in the recommended wafMode=detect
+	 * default, this is the counter that has activity — the
+	 * BLOCK counter stays at zero.
+	 */
+	totalWafDetected: number;
+	/**
+	 * Step Q.3 — rate-limit (throttle) blocks counted by
+	 * the auth handler over the window. AC #15: independent
+	 * of totalWafBlocked and the L 4xx/5xx totals.
+	 */
+	totalThrottle: number;
+	/** Step Q.3 — authentication-failure audit events count. */
+	totalAuthFailures: number;
+	/**
+	 * Step Q.3 / N.3 — server-side union of distinct source
+	 * IPs across WAF + throttle + audit auth-failure +
+	 * crowdsec events over the window. An IP that hit
+	 * multiple sources counts ONCE.
+	 */
 	attackerIpsUnique: number;
-	// Step N.3 — total CrowdSec decisions captured by the
-	// parallel StreamBouncer consumer over the just-closed
-	// minute (dedupe-before-bump per N spec D4.A — counts
-	// NEW decisions, not re-polled active ones). Read from
-	// the sentinel "_crowdsec" bucket row. AC #N.24:
-	// independent of every other counter.
-	totalCrowdSecDecisionsPerMin: number;
+	/**
+	 * Step N.3 — total CrowdSec decisions captured by the
+	 * parallel StreamBouncer consumer over the window
+	 * (dedupe-before-bump per N spec D4.A). AC #N.24:
+	 * independent of every other counter.
+	 */
+	totalCrowdSecDecisions: number;
 	// Step N.3 — count of distinct decision `value` strings
 	// (IP / CIDR / country / AS) in the just-closed minute.
 	// Includes non-IP scopes intentionally; the dashboard's

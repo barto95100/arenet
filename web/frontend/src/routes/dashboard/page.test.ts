@@ -7,7 +7,7 @@
 //
 // Pre-fix the dashboard had:
 //   (a) one "WAF BLOCKS / H" KPI sourced from
-//       totalWafBlockedPerMin which stayed at zero on
+//       totalWafBlocked which stayed at zero on
 //       wafMode=detect routes (the homelab default).
 //   (b) hardcoded "block" / "BLOCK 403" labels in the WAF
 //       events feed, ignoring the per-event ev.action.
@@ -60,15 +60,15 @@ function makeSummary(overrides: Partial<SummaryResponse> = {}): SummaryResponse 
 	return {
 		generatedAt: '2026-06-10T22:00:00Z',
 		windowSeconds: 60,
-		totalReqPerMin: 60,
-		totalFourXxPerMin: 2,
-		totalFiveXxPerMin: 1,
-		totalWafBlockedPerMin: 0,
-		totalWafDetectedPerMin: 0,
-		totalThrottlePerMin: 0,
-		totalAuthFailuresPerMin: 0,
+		totalReq: 60,
+		totalFourXx: 2,
+		totalFiveXx: 1,
+		totalWafBlocked: 0,
+		totalWafDetected: 0,
+		totalThrottle: 0,
+		totalAuthFailures: 0,
 		attackerIpsUnique: 0,
-		totalCrowdSecDecisionsPerMin: 0,
+		totalCrowdSecDecisions: 0,
 		activeCrowdSecIpsUnique: 0,
 		wafBlocksByCategory: {},
 		wafDetectsByCategory: {},
@@ -98,8 +98,8 @@ describe('Dashboard — WAF KPI split (#R-DASHBOARD-WAF-COUNTERS-ZERO)', () => {
 	it('renders both BLOQUÉ and DÉTECTÉ tiles independently from the summary', async () => {
 		metricsMock.fetchSummary.mockResolvedValue(
 			makeSummary({
-				totalWafBlockedPerMin: 4,
-				totalWafDetectedPerMin: 11
+				totalWafBlocked: 4,
+				totalWafDetected: 11
 			})
 		);
 		render(Page);
@@ -110,12 +110,11 @@ describe('Dashboard — WAF KPI split (#R-DASHBOARD-WAF-COUNTERS-ZERO)', () => {
 
 		const blocked = screen.getByTestId('kpi-waf-blocked');
 		const detected = screen.getByTestId('kpi-waf-detected');
-		// 4 / min × 60 = 240; 11 / min × 60 = 660. The dashboard
-		// projects the just-closed-minute rate to "/h" as part of
-		// the existing rate-rendering trade-off (cf the Cause B
-		// ticket #R-WAF-METRICS-WINDOW-1MIN-PROJECTION).
-		expect(blocked.textContent).toContain('240');
-		expect(detected.textContent).toContain('660');
+		// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — post-fix the
+		// dashboard reads the 24h total directly (no ×60
+		// projection). The tiles show raw 4 / 11.
+		expect(blocked.textContent).toContain('4');
+		expect(detected.textContent).toContain('11');
 	});
 
 	it('reads zero for the detect tile when the wire field is absent (graceful default)', async () => {
@@ -123,9 +122,9 @@ describe('Dashboard — WAF KPI split (#R-DASHBOARD-WAF-COUNTERS-ZERO)', () => {
 		// field is missing: the tile must render 0, not NaN.
 		metricsMock.fetchSummary.mockResolvedValue(
 			makeSummary({
-				totalWafBlockedPerMin: 6,
-				// totalWafDetectedPerMin intentionally omitted
-				totalWafDetectedPerMin: undefined as unknown as number
+				totalWafBlocked: 6,
+				// totalWafDetected intentionally omitted
+				totalWafDetected: undefined as unknown as number
 			})
 		);
 		render(Page);
@@ -224,18 +223,18 @@ describe('Dashboard — WAF event label fix (#R-WAF-EVENT-LABEL-INCONSISTENT)', 
 });
 
 describe('Dashboard — Top Routes WAF detect column (#R-DASHBOARD-WAF-COUNTERS-ZERO)', () => {
-	it('renders the new wafDetectedPerMin column with per-route values', async () => {
+	it('renders the new wafDetected column with per-route values', async () => {
 		metricsMock.fetchSummary.mockResolvedValue(
 			makeSummary({
 				topRoutes: [
 					{
 						routeId: 'r1',
 						host: 'ha.example.com',
-						reqsPerMin: 60,
-						fourxxPerMin: 0,
-						fivexxPerMin: 0,
-						wafBlockedPerMin: 1,
-						wafDetectedPerMin: 7
+						reqs: 60,
+						fourxx: 0,
+						fivexx: 0,
+						wafBlocked: 1,
+						wafDetected: 7
 					}
 				],
 				activeRouteCount: 1
