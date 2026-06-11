@@ -391,6 +391,64 @@ Lessons :
     mixed windows dans la même réponse aurait été 
     exactement la mendacité qu'on est en train de fixer.
 
+Follow-up patch shipped après smoke 579f695 sur AreNET-test :
+
+Smoke diff détecté : totalWafDetected (26) ne matchait pas 
+wafDetectsByCategory.sum (51). Root cause : BumpWafDetects 
+a été ajouté en e7e2905, donc les events DETECT antérieurs 
+n'ont jamais bumped bucket_1h.waf_detect_count. Asymétrie 
+historique avec BumpWafBlocks (qui existait depuis Step M.1 
+en 9032b6f).
+
+Décision opérateur : source unique = waf_event pour TOUS 
+les compteurs WAF. Pas de moitié-fix asymétrique — switch 
+les block reads aussi pour zéro chance de drift futur.
+
+Implementation :
+  - Nouvelle storage method AggregateWafEventsByRoute(from, to) 
+    → map[routeID]{Block, Detect}. SQL : 
+    `SELECT route_id, action, COUNT(*) FROM waf_event 
+    WHERE ts BETWEEN ? AND ? GROUP BY route_id, action`. 
+    Index existant `idx_waf_event_route_ts` couvre.
+  - metricsSummary : ajout d'un overlay step après le 
+    bucket_1h per-route loop. La per-route loop ne lit 
+    plus row.WafBlockCount / row.WafDetectCount ; les 
+    counters sont chargés en un seul GROUP BY query 
+    depuis waf_event et overlay-ed sur byID. Grand totals 
+    sommés sur le map complet (pas seulement les routes 
+    présentes dans byID — events sur routes supprimées 
+    contribuent au système-wide total comme dans 
+    wafBlocksByCategory).
+  - Bucket columns bucket_1h.waf_{block,detect}_count 
+    restent (additive deprecation). Sink continue à 
+    bumper les counters via BumpWafBlocks / BumpWafDetects 
+    — colonnes maintenues côté write pour rollback safety. 
+    Suppression éventuelle dans un workstream futur.
+  - 4 nouveaux storage tests (BlocksAndDetects, 
+    EmptyWindow, WindowFilter, UnknownActionsDropped).
+  - 3 tests existants migrés du seed bucket counter au 
+    seed waf_event row (TestMetricsSummary_WafDetected_
+    FromBucketColumn renommé en FromWafEvent, 
+    TestMetricsSummary_WafBlockAndDetectStayIndependent, 
+    TestMetricsSummary_WafFields_IndependentFrom4xx5xx, 
+    TestMetricsSummary_TopAttackedRoute_SortsAcrossAll
+    RoutesByWafBlocks).
+  - fakeWafEventReader gained aggregateRouteFn.
+
+Smoke post-fix attendu sur AreNET-test :
+  - totalWafBlocked == sum(wafBlocksByCategory) ✓
+  - totalWafDetected == sum(wafDetectsByCategory) ✓
+  - sum(topRoutes[].wafBlocked) == totalWafBlocked
+  - sum(topRoutes[].wafDetected) == totalWafDetected
+  - 26 → 51 sur totalWafDetected (match du wire smoke)
+
+Verification :
+  - go test ./... -race : 20 packages verts (api: 234s)
+  - go vet : clean
+  - npm run check : 0/0 sur 733 files
+  - npx vitest run : 521/521 across 38 files (frontend 
+    inchangé — même wire shape, même field names)
+
 ## #F-UPSTREAM-TEST-ENDPOINT (medium) — RESOLVED 2026-06-10 (commit f119116)
 
 Endpoint POST /api/v1/routes/test-upstream + bouton UI "Tester la 

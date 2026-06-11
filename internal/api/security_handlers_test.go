@@ -42,6 +42,7 @@ type fakeWafEventReader struct {
 	queryFn          func(ctx context.Context, filter observability.WafEventFilter) ([]observability.WafEvent, error)
 	aggregateFn      func(ctx context.Context, filter observability.WafEventAggregateFilter) ([]observability.WafEventRuleAggregate, error)
 	aggregateCatFn   func(ctx context.Context, filter observability.WafEventCategoryFilter) ([]observability.WafEventCategoryAggregate, error)
+	aggregateRouteFn func(ctx context.Context, from, to time.Time) (map[string]observability.WafEventRouteCounts, error)
 	distinctIPFn     func(ctx context.Context, from, to time.Time) ([]string, error)
 }
 
@@ -62,6 +63,13 @@ func (f *fakeWafEventReader) AggregateWafEventsByRule(ctx context.Context, filte
 func (f *fakeWafEventReader) AggregateWafEventsByCategory(ctx context.Context, filter observability.WafEventCategoryFilter) ([]observability.WafEventCategoryAggregate, error) {
 	if f.aggregateCatFn != nil {
 		return f.aggregateCatFn(ctx, filter)
+	}
+	return nil, nil
+}
+
+func (f *fakeWafEventReader) AggregateWafEventsByRoute(ctx context.Context, from, to time.Time) (map[string]observability.WafEventRouteCounts, error) {
+	if f.aggregateRouteFn != nil {
+		return f.aggregateRouteFn(ctx, from, to)
 	}
 	return nil, nil
 }
@@ -364,14 +372,27 @@ func TestMetricsSummary_WafFields_IndependentFrom4xx5xx(t *testing.T) {
 	m.env.handler.SetMetricsReader(obsStore)
 	m.env.handler.SetWafEventReader(obsStore)
 
-	// Seed the just-closed minute with WAF-only activity.
+	// Seed the 24h window with WAF-only activity.
 	// req_count IS incremented per AC #3 (a WAF block
-	// counts as a request). 4xx/5xx stay 0.
+	// counts as a request). 4xx/5xx stay 0. Follow-up to
+	// 579f695: WAF counts come from waf_event rows, not
+	// the bucket WafBlockCount column.
 	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
 	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
-		{RouteID: m.routeID, Ts: prevHour, ReqCount: 30, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 30, LatencyP95Ms: 8},
+		{RouteID: m.routeID, Ts: prevHour, ReqCount: 30, FourxxCount: 0, FivexxCount: 0, LatencyP95Ms: 8},
 	}); err != nil {
-		t.Fatalf("seed: %v", err)
+		t.Fatalf("seed bucket: %v", err)
+	}
+	events := []observability.WafEvent{}
+	for i := 0; i < 30; i++ {
+		events = append(events, observability.WafEvent{
+			Ts: prevHour.Add(time.Duration(i) * time.Second), RouteID: m.routeID,
+			RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1",
+			Action: "BLOCK", StatusCode: 403,
+		})
+	}
+	if err := obsStore.InsertWafEventBatch(context.Background(), events); err != nil {
+		t.Fatalf("seed waf_event: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
@@ -567,14 +588,29 @@ func TestMetricsSummary_TopAttackedRoute_SortsAcrossAllRoutesByWafBlocks(t *test
 	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
 		// High-traffic "main" route — 10000 req, zero WAF.
 		// Would dominate TopRoutes (sorted by traffic).
-		{RouteID: m.routeID, Ts: prevHour, ReqCount: 10000, FourxxCount: 5, FivexxCount: 0, WafBlockCount: 0, LatencyP95Ms: 8},
-		// Low-traffic "admin" route — 50 req, but 50 WAF
-		// blocks (every request was an attack). MUST become
-		// TopAttackedRoute despite being way down the
-		// traffic ranking.
-		{RouteID: adminRoute.ID, Ts: prevHour, ReqCount: 50, FourxxCount: 0, FivexxCount: 0, WafBlockCount: 50, LatencyP95Ms: 4},
+		{RouteID: m.routeID, Ts: prevHour, ReqCount: 10000, FourxxCount: 5, FivexxCount: 0, LatencyP95Ms: 8},
+		// Low-traffic "admin" route — 50 req. WAF blocks
+		// seeded as waf_event rows below (follow-up to
+		// 579f695: bucket WafBlockCount is no longer read
+		// by the summary handler).
+		{RouteID: adminRoute.ID, Ts: prevHour, ReqCount: 50, FourxxCount: 0, FivexxCount: 0, LatencyP95Ms: 4},
 	}); err != nil {
 		t.Fatalf("seed bucket: %v", err)
+	}
+	// 50 WAF blocks on the admin route (every request was
+	// an attack). The handler reads these via
+	// AggregateWafEventsByRoute so the admin route becomes
+	// TopAttackedRoute despite low traffic.
+	events := []observability.WafEvent{}
+	for i := 0; i < 50; i++ {
+		events = append(events, observability.WafEvent{
+			Ts: prevHour.Add(time.Duration(i) * time.Second), RouteID: adminRoute.ID,
+			RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1",
+			Action: "BLOCK", StatusCode: 403,
+		})
+	}
+	if err := obsStore.InsertWafEventBatch(context.Background(), events); err != nil {
+		t.Fatalf("seed waf_event: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)

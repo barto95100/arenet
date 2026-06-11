@@ -91,6 +91,16 @@ type WafEventReader interface {
 	// queries so the two response maps stay independent
 	// without iterating the event log.
 	AggregateWafEventsByCategory(ctx context.Context, filter observability.WafEventCategoryFilter) ([]observability.WafEventCategoryAggregate, error)
+	// AggregateWafEventsByRoute — follow-up to commit 579f695.
+	// Server-side per-route BLOCK / DETECT counts for the
+	// summary endpoint's per-route loop + grand totals.
+	// Single source of truth for WAF counts (waf_event row
+	// table) — bucket_1h.waf_{block,detect}_count are still
+	// written by the sink but the read path bypasses them
+	// to avoid the historical asymmetry where BumpWafDetects
+	// was added later than BumpWafBlocks (the bucket counter
+	// undercounted DETECT events before e7e2905).
+	AggregateWafEventsByRoute(ctx context.Context, from, to time.Time) (map[string]observability.WafEventRouteCounts, error)
 	// DistinctWafEventSrcIPs is Q.3-only — powers the WAF
 	// arm of /security/attackers-summary's per-source union.
 	// Returns ALL distinct src IPs in [from, to), unbounded

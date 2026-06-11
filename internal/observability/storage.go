@@ -1012,6 +1012,99 @@ func (s *Store) AggregateWafEventsByCategory(ctx context.Context, filter WafEven
 	return out, nil
 }
 
+// WafEventRouteCounts holds the per-action event counts
+// for one route over a window. Used as the value type of
+// AggregateWafEventsByRoute's result map.
+type WafEventRouteCounts struct {
+	Block  uint64
+	Detect uint64
+}
+
+// AggregateWafEventsByRoute returns the per-route Block /
+// Detect event counts in the time range [from, to). The
+// keys of the result map are route IDs that had at least
+// one event in the window; routes with zero events are
+// absent (callers should treat absent keys as zero on
+// both fields).
+//
+// Follow-up to commit 579f695 — the summary endpoint
+// previously sourced per-route WAF counters from
+// bucket_1h.waf_{block,detect}_count, which created a
+// historical asymmetry: BumpWafDetects shipped in
+// e7e2905 (yesterday), so DETECT events older than that
+// commit never reached the bucket counter and the
+// summary's totalWafDetected was a strict undercount
+// versus the same window's wafDetectsByCategory map
+// (sourced from waf_event GROUP BY). Switching every
+// WAF read to waf_event gives a single source of truth
+// across the response — the row table is the
+// authoritative inventory of every event the sink ever
+// absorbed regardless of the bucket-counter migration
+// history.
+//
+// SQL: SELECT route_id, action, COUNT(*) FROM waf_event
+//      WHERE ts BETWEEN ? AND ?
+//      GROUP BY route_id, action
+//
+// Covered by idx_waf_event_route_ts (route_id, ts).
+// Empty window → empty map (graceful, no error).
+//
+// The action filter is intentionally absent on the
+// receiving side — callers want both populations in a
+// single round-trip; SQL groups by (route_id, action)
+// so the same scan delivers both. Rows with unexpected
+// Action ("" or future enum values) are silently
+// dropped, mirroring the same dispatch shape as
+// metrics_handlers.go's category loop.
+func (s *Store) AggregateWafEventsByRoute(ctx context.Context, from, to time.Time) (map[string]WafEventRouteCounts, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	q := `SELECT route_id, action, COUNT(*) AS cnt
+	      FROM waf_event WHERE 1=1`
+	args := []any{}
+	if !from.IsZero() {
+		q += ` AND ts >= ?`
+		args = append(args, from.UTC().Unix())
+	}
+	if !to.IsZero() {
+		q += ` AND ts < ?`
+		args = append(args, to.UTC().Unix())
+	}
+	q += ` GROUP BY route_id, action`
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: aggregate waf_event by route: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]WafEventRouteCounts{}
+	for rows.Next() {
+		var routeID, action string
+		var cnt int64
+		if err := rows.Scan(&routeID, &action, &cnt); err != nil {
+			return nil, fmt.Errorf("observability: scan waf_event route aggregate: %w", err)
+		}
+		entry := out[routeID]
+		switch action {
+		case "BLOCK":
+			entry.Block += uint64(cnt)
+		case "DETECT":
+			entry.Detect += uint64(cnt)
+			// Other actions ("" / future) silently dropped — the
+			// W.bugfix v6→v7 migration backfilled every legacy
+			// row to "BLOCK", so an empty action would indicate a
+			// data-layer bug we'd rather surface as a missing
+			// count than mis-categorise.
+		}
+		out[routeID] = entry
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate waf_event route aggregate: %w", err)
+	}
+	return out, nil
+}
+
 // --- Step N: decision_event store ------------------------------------------
 
 // DecisionEvent is the observability-layer mirror of

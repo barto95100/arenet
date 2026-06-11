@@ -439,6 +439,20 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	// samples per route (within-route) and then across
 	// every route's contribution to the global average
 	// (cross-route). Both weightings use req_count.
+	//
+	// Follow-up to commit 579f695: WAF counters (block /
+	// detect) are NOT read from the bucket here. They're
+	// loaded once below from waf_event via
+	// AggregateWafEventsByRoute so the summary's per-route
+	// values match wafBlocksByCategory / wafDetectsByCategory
+	// exactly. Pre-fix the bucket sums diverged from the
+	// category maps because BumpWafDetects only shipped in
+	// e7e2905 — every DETECT event before that commit was
+	// silently dropped from waf_detect_count while still
+	// landing in waf_event. Switching to waf_event for the
+	// read path papers over that historical asymmetry
+	// (and any future bucket/event drift) at the cost of
+	// one extra GROUP BY query per summary call.
 	var latencyWeightedSum, latencyWeightDen uint64
 	for id := range byID {
 		rows, qerr := h.metrics.Query(r.Context(), observability.Granularity1h, id, from, to)
@@ -455,20 +469,10 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 			agg.Req += uint64(row.ReqCount)
 			agg.Fourxx += uint64(row.FourxxCount)
 			agg.Fivexx += uint64(row.FivexxCount)
-			agg.WafBlocked += uint64(row.WafBlockCount)
-			agg.WafDetected += uint64(row.WafDetectCount)
 			if row.LatencyP95Ms > 0 && row.ReqCount > 0 {
 				latencyWeightedSum += uint64(row.LatencyP95Ms) * uint64(row.ReqCount)
 				latencyWeightDen += uint64(row.ReqCount)
 			}
-		}
-		// LatencyP95Ms surfaces the route's max hourly p95
-		// for now (the per-route value isn't reported on
-		// the wire; only the global weighted avg below is
-		// used downstream — same shape as before the
-		// widening). Kept on rowAgg for future per-route
-		// surfaces.
-		for _, row := range rows {
 			if row.LatencyP95Ms > agg.LatencyP95Ms {
 				agg.LatencyP95Ms = row.LatencyP95Ms
 			}
@@ -476,8 +480,39 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		resp.TotalReq += agg.Req
 		resp.TotalFourXx += agg.Fourxx
 		resp.TotalFiveXx += agg.Fivexx
-		resp.TotalWafBlocked += agg.WafBlocked
-		resp.TotalWafDetected += agg.WafDetected
+	}
+
+	// Single-source WAF counter read (follow-up to 579f695).
+	// One server-side GROUP BY query yields per-route
+	// {Block, Detect} counts for the window.
+	//
+	// Grand totals sum the ENTIRE map (every route_id with
+	// activity in the window), not just routes still present
+	// in byID — events emitted under a route_id whose route
+	// has since been deleted still count toward the system-
+	// wide total, and the resulting sum matches the
+	// wafBlocksByCategory / wafDetectsByCategory totals
+	// exactly (both maps are derived from the same waf_event
+	// scan). Per-route overlay only updates routes that are
+	// still in the catalog — the TopRoutes / TopAttackedRoute
+	// tables are explicitly per-current-route surfaces.
+	if h.wafEvents != nil {
+		routeCounts, qerr := h.wafEvents.AggregateWafEventsByRoute(r.Context(), from, to)
+		if qerr != nil {
+			h.logger.Error("metrics: summary waf route aggregate failed", "err", qerr)
+			// Don't fail the whole summary — leave WAF
+			// counters at zero. Same AC #13 trade-off as the
+			// category aggregator below.
+		} else {
+			for routeID, counts := range routeCounts {
+				resp.TotalWafBlocked += counts.Block
+				resp.TotalWafDetected += counts.Detect
+				if agg, ok := byID[routeID]; ok {
+					agg.WafBlocked = counts.Block
+					agg.WafDetected = counts.Detect
+				}
+			}
+		}
 	}
 
 	if latencyWeightDen > 0 {

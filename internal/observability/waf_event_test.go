@@ -524,3 +524,134 @@ func TestAggregateWafEventsByCategory_RouteFilter(t *testing.T) {
 		t.Errorf("route-filtered rows = %+v; want only SQLi (route r1)", got)
 	}
 }
+
+// --- AggregateWafEventsByRoute tests --------------------------------------
+
+// Follow-up to 579f695 — unifies WAF counter reads on the
+// waf_event table for cross-source-of-truth consistency.
+
+func TestAggregateWafEventsByRoute_BlocksAndDetects(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Unix(1700000000, 0).UTC()
+	if err := s.InsertWafEventBatch(ctx, []WafEvent{
+		// route r1: 3 BLOCK + 1 DETECT
+		{Ts: t0, RouteID: "r1", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
+		{Ts: t0.Add(1 * time.Second), RouteID: "r1", RuleID: "942110", Category: "SQLi", SrcIP: "1.1.1.2", Action: "BLOCK", StatusCode: 403},
+		{Ts: t0.Add(2 * time.Second), RouteID: "r1", RuleID: "942120", Category: "SQLi", SrcIP: "1.1.1.3", Action: "BLOCK", StatusCode: 403},
+		{Ts: t0.Add(3 * time.Second), RouteID: "r1", RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.4", Action: "DETECT", StatusCode: 0},
+		// route r2: 0 BLOCK + 5 DETECT
+		{Ts: t0.Add(4 * time.Second), RouteID: "r2", RuleID: "930100", Category: "LFI", SrcIP: "2.2.2.1", Action: "DETECT", StatusCode: 0},
+		{Ts: t0.Add(5 * time.Second), RouteID: "r2", RuleID: "930100", Category: "LFI", SrcIP: "2.2.2.2", Action: "DETECT", StatusCode: 0},
+		{Ts: t0.Add(6 * time.Second), RouteID: "r2", RuleID: "930100", Category: "LFI", SrcIP: "2.2.2.3", Action: "DETECT", StatusCode: 0},
+		{Ts: t0.Add(7 * time.Second), RouteID: "r2", RuleID: "930100", Category: "LFI", SrcIP: "2.2.2.4", Action: "DETECT", StatusCode: 0},
+		{Ts: t0.Add(8 * time.Second), RouteID: "r2", RuleID: "930100", Category: "LFI", SrcIP: "2.2.2.5", Action: "DETECT", StatusCode: 0},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := s.AggregateWafEventsByRoute(ctx, t0.Add(-time.Hour), t0.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("AggregateWafEventsByRoute: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d routes; want 2: %+v", len(got), got)
+	}
+	r1 := got["r1"]
+	if r1.Block != 3 || r1.Detect != 1 {
+		t.Errorf("r1 = %+v; want {Block:3 Detect:1}", r1)
+	}
+	r2 := got["r2"]
+	if r2.Block != 0 || r2.Detect != 5 {
+		t.Errorf("r2 = %+v; want {Block:0 Detect:5}", r2)
+	}
+}
+
+func TestAggregateWafEventsByRoute_EmptyWindow(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	got, err := s.AggregateWafEventsByRoute(ctx,
+		time.Unix(1700000000, 0).UTC(),
+		time.Unix(1700003600, 0).UTC())
+	if err != nil {
+		t.Fatalf("AggregateWafEventsByRoute: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("empty window returned %d entries; want 0: %+v", len(got), got)
+	}
+}
+
+func TestAggregateWafEventsByRoute_WindowFilter(t *testing.T) {
+	// Pin the time-range filter — events outside the
+	// window must NOT contribute to the result.
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Unix(1700000000, 0).UTC()
+	if err := s.InsertWafEventBatch(ctx, []WafEvent{
+		{Ts: t0.Add(-24 * time.Hour), RouteID: "old", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
+		{Ts: t0, RouteID: "in-window", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
+		{Ts: t0.Add(24 * time.Hour), RouteID: "future", RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := s.AggregateWafEventsByRoute(ctx, t0.Add(-time.Hour), t0.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("AggregateWafEventsByRoute: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d routes; want 1 (window filter dropped old+future): %+v", len(got), got)
+	}
+	if _, ok := got["in-window"]; !ok {
+		t.Errorf("in-window route missing from result: %+v", got)
+	}
+}
+
+func TestAggregateWafEventsByRoute_UnknownActionsDropped(t *testing.T) {
+	// Pin the defence-in-depth: an unexpected action ("",
+	// "WARN", future enum) must not show up under Block or
+	// Detect. The W.bugfix v6→v7 migration backfilled all
+	// legacy rows to "BLOCK", so an empty action would
+	// indicate a data-layer bug we'd rather surface as a
+	// missing count than mis-categorise.
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	t0 := time.Unix(1700000000, 0).UTC()
+	// Two real DETECT events + one unknown-action event.
+	if err := s.InsertWafEventBatch(ctx, []WafEvent{
+		{Ts: t0, RouteID: "r", RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.1", Action: "DETECT", StatusCode: 0},
+		{Ts: t0.Add(1 * time.Second), RouteID: "r", RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.2", Action: "DETECT", StatusCode: 0},
+		{Ts: t0.Add(2 * time.Second), RouteID: "r", RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.3", Action: "WARN", StatusCode: 0},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := s.AggregateWafEventsByRoute(ctx, t0.Add(-time.Hour), t0.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("AggregateWafEventsByRoute: %v", err)
+	}
+	r := got["r"]
+	if r.Block != 0 || r.Detect != 2 {
+		t.Errorf("route counts = %+v; want {Block:0 Detect:2} (WARN dropped)", r)
+	}
+}

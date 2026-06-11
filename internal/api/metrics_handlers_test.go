@@ -1276,7 +1276,12 @@ func TestMetricsSummary_NFieldsIndependentFromMQ(t *testing.T) {
 // waf_detect_count (and a sibling non-zero waf_block_count to
 // confirm the two stay independent), assert both surface on the
 // response.
-func TestMetricsSummary_WafDetected_FromBucketColumn(t *testing.T) {
+func TestMetricsSummary_WafDetected_FromWafEvent(t *testing.T) {
+	// Follow-up to commit 579f695: WAF counts read from
+	// waf_event (single source of truth). The bucket
+	// row still carries ReqCount + LatencyP95Ms — those
+	// fields are bucket-sourced. Only the WAF columns
+	// moved to the event table.
 	m := newMetricsTestEnv(t)
 	obsStore, err := observability.Open(context.Background(), ":memory:")
 	if err != nil {
@@ -1284,19 +1289,38 @@ func TestMetricsSummary_WafDetected_FromBucketColumn(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = obsStore.Close() })
 	m.env.handler.SetMetricsReader(obsStore)
+	m.env.handler.SetWafEventReader(obsStore)
 
 	prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
 	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
 		{
-			RouteID:        m.routeID,
-			Ts:             prevHour,
-			ReqCount:       30,
-			WafBlockCount:  4,
-			WafDetectCount: 11,
-			LatencyP95Ms:   8,
+			RouteID:      m.routeID,
+			Ts:           prevHour,
+			ReqCount:     30,
+			LatencyP95Ms: 8,
 		},
 	}); err != nil {
-		t.Fatalf("seed: %v", err)
+		t.Fatalf("seed bucket: %v", err)
+	}
+	// Seed waf_event: 4 BLOCK + 11 DETECT rows on this
+	// route within the 24h window.
+	events := []observability.WafEvent{}
+	for i := 0; i < 4; i++ {
+		events = append(events, observability.WafEvent{
+			Ts: prevHour.Add(time.Duration(i) * time.Second), RouteID: m.routeID,
+			RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1",
+			Action: "BLOCK", StatusCode: 403,
+		})
+	}
+	for i := 0; i < 11; i++ {
+		events = append(events, observability.WafEvent{
+			Ts: prevHour.Add(time.Duration(10+i) * time.Second), RouteID: m.routeID,
+			RuleID: "930100", Category: "LFI", SrcIP: "2.2.2.2",
+			Action: "DETECT", StatusCode: 0,
+		})
+	}
+	if err := obsStore.InsertWafEventBatch(context.Background(), events); err != nil {
+		t.Fatalf("seed waf_event: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
@@ -1347,19 +1371,41 @@ func TestMetricsSummary_WafBlockAndDetectStayIndependent(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = obsStore.Close() })
 			m.env.handler.SetMetricsReader(obsStore)
+			m.env.handler.SetWafEventReader(obsStore)
 
 			prevHour := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
 			if err := obsStore.InsertBatch(context.Background(), observability.Granularity1h, []observability.MetricBucket{
 				{
-					RouteID:        m.routeID,
-					Ts:             prevHour,
-					ReqCount:       10,
-					WafBlockCount:  tc.blockSeed,
-					WafDetectCount: tc.detSeed,
-					LatencyP95Ms:   1,
+					RouteID:      m.routeID,
+					Ts:           prevHour,
+					ReqCount:     10,
+					LatencyP95Ms: 1,
 				},
 			}); err != nil {
-				t.Fatalf("seed: %v", err)
+				t.Fatalf("seed bucket: %v", err)
+			}
+			// Follow-up to 579f695: WAF counts read from
+			// waf_event. Seed the events corresponding to
+			// the block/detect counts under test.
+			events := []observability.WafEvent{}
+			for i := int64(0); i < tc.blockSeed; i++ {
+				events = append(events, observability.WafEvent{
+					Ts: prevHour.Add(time.Duration(i) * time.Second), RouteID: m.routeID,
+					RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1",
+					Action: "BLOCK", StatusCode: 403,
+				})
+			}
+			for i := int64(0); i < tc.detSeed; i++ {
+				events = append(events, observability.WafEvent{
+					Ts: prevHour.Add(time.Duration(20+i) * time.Second), RouteID: m.routeID,
+					RuleID: "930100", Category: "LFI", SrcIP: "2.2.2.2",
+					Action: "DETECT", StatusCode: 0,
+				})
+			}
+			if len(events) > 0 {
+				if err := obsStore.InsertWafEventBatch(context.Background(), events); err != nil {
+					t.Fatalf("seed waf_event: %v", err)
+				}
 			}
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
 			rec := httptest.NewRecorder()
