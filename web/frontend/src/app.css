@@ -86,6 +86,20 @@ body {
 		color var(--motion-base);
 }
 
+/* #R-CS2C-anchor-link (part 3/3) — scroll-padding-top so any
+ * hash-anchor scroll (browser-native fragment nav or our
+ * settings/+page.svelte afterNavigate handler from commit
+ * d703754) clears the sticky Topbar instead of landing the
+ * target's top edge underneath it. --tb-height is 56px
+ * (tokens.css); the +16px adds breathing room so the
+ * section title sits comfortably below the topbar instead
+ * of butting against its border. Applied at <html> so every
+ * future anchor target in the app benefits without per-site
+ * scroll-mt-* duplication. */
+html {
+	scroll-padding-top: calc(var(--tb-height) + 16px);
+}
+
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,
