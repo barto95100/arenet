@@ -847,7 +847,7 @@
 					Security Automation (machine_id + password) pour
 					s'authentifier auprès de LAPI <code>/v1/alerts</code>.
 					Va dans
-					<a href="/settings" class="link">Settings → Security Automation</a>
+					<a href="/settings#security-automation" class="link">Settings → Security Automation</a>
 					et saisis ton watcher (<code>cscli machines add arenet-writer</code>
 					sur le host CrowdSec).
 				</p>

@@ -860,8 +860,14 @@
 	     rule toggles (top) + watcher credentials (bottom).
 	     The two persist via independent PUTs so an
 	     operator who edits only rules doesn't re-enter
-	     their watcher password. -->
-	<div class="mb-6">
+	     their watcher password.
+
+	     #R-CS2C-anchor-link — id is the scroll-anchor
+	     target for /settings#security-automation links
+	     from the CrowdSec Decisions 412 state +
+	     BanIPModal CTA. Without it the operator landed
+	     at the top of /settings and had to scroll. -->
+	<div id="security-automation" class="mb-6">
 		<Card padding="p-6">
 			<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
 				<div>

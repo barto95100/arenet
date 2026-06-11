@@ -286,7 +286,7 @@
 				<div class="error-block cta" role="alert" data-testid="ban-not-configured">
 					<strong>Security Automation non configurée.</strong>
 					Le ban manuel utilise les credentials watcher de Security
-					Automation. Va dans <a href="/settings" class="link">Settings → Security Automation</a>
+					Automation. Va dans <a href="/settings#security-automation" class="link">Settings → Security Automation</a>
 					et saisis ton watcher (<code>cscli machines add arenet-writer</code> sur le host CrowdSec).
 				</div>
 			{:else if errorKind === 'unreachable'}

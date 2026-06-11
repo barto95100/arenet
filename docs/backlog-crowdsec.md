@@ -29,20 +29,27 @@ Fix options :
 
 Painful avec multiple redeploys (vu pendant CS.3 smoke).
 
-## #R-CS2C-anchor-link (low) — OPEN
+## #R-CS2C-anchor-link — RESOLVED 2026-06-11
 Le link "Settings → Security Automation" depuis le 412 state du 
-tab Scenarios ramène en haut de /settings au lieu de scroller à la 
-section.
+tab Scenarios + le BanIPModal 412 CTA ramenait en haut de /settings 
+au lieu de scroller à la section.
 
-Fix : ajouter id="security-automation" sur la section + href modifié 
-/settings#security-automation. ~5 min frontend.
+Fix shipped : ajout `id="security-automation"` sur le wrapper de la 
+section (Settings/+page.svelte:864) + href modifié en 
+`/settings#security-automation` dans les 2 sites :
+  - lib/components/CrowdSecDecisionsPanel.svelte:850
+  - lib/components/BanIPModal.svelte:289
+Test BanIPModal mis à jour pour pin le nouveau target.
 
-## #R-CSS-settings-section-spacing (low) — OPEN
-Section "CrowdSec bouncer" (CS.1) manque margin-top pour séparation 
-visuelle d'avec OIDC SSO précédent. Cohérence visuelle.
+## #R-CSS-settings-section-spacing — RESOLVED 2026-06-11 (commit 4b2d1ed)
+Section "CrowdSec bouncer" (CS.1) manquait margin-top pour 
+séparation visuelle d'avec OIDC SSO précédent.
 
-Fix : ajouter margin-top dans le parent flex/grid de /settings 
-+page.svelte. ~5 min frontend.
+Déjà fixé par commit `4b2d1ed` (2026-06-09) qui a ajouté le 
+wrapper `<div class="mb-6">` autour de `OIDCSettingsSection`. 
+L'entry backlog n'avait juste pas été flippée. Confirmed 
+visually post-deploy 2026-06-11 — no code change needed in 
+current bundle.
 
 ═══════════════════════════════════════════════════════
 RESOLVED — fixed during CS.2 / CS.3 / Day-8 follow-ups

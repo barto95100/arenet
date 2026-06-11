@@ -287,9 +287,11 @@ describe('BanIPModal — error UX', () => {
 			const cta = screen.getByTestId('ban-not-configured');
 			expect(cta.textContent ?? '').toMatch(/Security Automation/i);
 		});
-		// CTA links to /settings.
+		// CTA scrolls directly to the Security Automation
+		// section (#R-CS2C-anchor-link — pre-fix landed at
+		// top-of-page and forced the operator to scroll).
 		const link = screen.getByRole('link', { name: /Security Automation/i });
-		expect(link).toHaveAttribute('href', '/settings');
+		expect(link).toHaveAttribute('href', '/settings#security-automation');
 		expect(onClose).not.toHaveBeenCalled();
 	});
 
