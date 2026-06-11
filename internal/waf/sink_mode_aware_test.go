@@ -118,10 +118,18 @@ func TestSinkEmit_BlockMode_PersistsActionBlock(t *testing.T) {
 
 // TestSink_BlockCounter_DetectModeDoesNotBump — the dashboard's
 // per-minute WAF block timeseries is the operator's signal for
-// actual enforcement. Pre-fix every absorbed event bumped the
-// counter, so detect-mode rule fires inflated the "blocks per
-// minute" tile the same way the labels lied. Post-fix, only
-// ActionBlock events bump.
+// actual enforcement. Pre-W.bugfix every absorbed event bumped
+// the counter, so detect-mode rule fires inflated the "blocks
+// per minute" tile the same way the labels lied. Post-W.bugfix,
+// only ActionBlock events bump the BLOCK counter.
+//
+// #R-DASHBOARD-WAF-COUNTERS-ZERO — the test now ALSO asserts
+// that detect-mode events bump the parallel DETECT counter
+// (BumpWafDetects), so the dashboard "WAF DÉTECTÉ / H" card
+// has real volume on detect-mode routes. The two counters
+// stay independent: a route in detect mode produces detect
+// counter activity AND zero block counter activity; the
+// reverse for block mode.
 func TestSink_BlockCounter_DetectModeDoesNotBump(t *testing.T) {
 	rec := &recordingInserter{}
 	counter := newRecordingCounter()
@@ -153,7 +161,13 @@ func TestSink_BlockCounter_DetectModeDoesNotBump(t *testing.T) {
 	<-s.Done()
 
 	if got := counter.total(); got != 50 {
-		t.Errorf("BumpWafBlocks total = %d; want 50 (only ActionBlock events bump; detect-mode events do not inflate the block-volume timeseries)", got)
+		t.Errorf("BumpWafBlocks total = %d; want 50 (only ActionBlock events bump the block counter; detect-mode events do not inflate the block-volume timeseries)", got)
+	}
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — parallel pin: the 50
+	// ActionDetect events MUST land on the DETECT counter so
+	// the dashboard's detect card shows real volume.
+	if got := counter.totalDetects(); got != 50 {
+		t.Errorf("BumpWafDetects total = %d; want 50 (every ActionDetect event must bump the detect counter, symmetric to the block counter contract)", got)
 	}
 }
 

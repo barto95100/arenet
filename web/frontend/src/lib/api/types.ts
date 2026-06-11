@@ -1071,6 +1071,15 @@ export interface SummaryRoute {
 	// minute. Independent of fourxxPerMin/fivexxPerMin (AC
 	// #3): a WAF-blocked 403 does NOT inflate the 4xx count.
 	wafBlockedPerMin: number;
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — per-route WAF
+	// detect-mode events over the just-closed minute.
+	// Independent of wafBlockedPerMin: a detect-mode rule
+	// fire bumps THIS, the request is still passed through
+	// to the upstream (no 4xx classification). Dashboard
+	// Top-Routes table renders this in a parallel column so
+	// an operator on the recommended wafMode=detect default
+	// sees real attack volume instead of a row of zeros.
+	wafDetectedPerMin: number;
 }
 
 export interface SummaryResponse {
@@ -1087,6 +1096,17 @@ export interface SummaryResponse {
 	// either no events landed in the window, or the WAF
 	// event reader is unavailable (degraded mode).
 	totalWafBlockedPerMin: number;
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — system-wide WAF
+	// detect-mode events counter. Sibling to
+	// totalWafBlockedPerMin: the two are populated from
+	// distinct bucket columns (waf_block_count vs
+	// waf_detect_count). On a homelab with every route in
+	// the recommended wafMode=detect default, this is the
+	// counter that has activity — the BLOCK counter stays
+	// at zero. Dashboard renders the two as separate cards
+	// (BLOQUÉ red / DÉTECTÉ amber) so the operator never
+	// reads "0" while real WAF activity is happening.
+	totalWafDetectedPerMin: number;
 	// Step Q.3 — rate-limit (throttle) blocks counted by the
 	// auth handler over the just-closed minute, system-wide.
 	// AC #15: independent of totalWafBlockedPerMin and the
@@ -1121,7 +1141,20 @@ export interface SummaryResponse {
 	// Includes non-IP scopes intentionally; the dashboard's
 	// "Active CrowdSec attackers" card surfaces this number.
 	activeCrowdSecIpsUnique: number;
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — semantics tightened:
+	// this map now only counts events with action=BLOCK
+	// over the just-closed minute. Pre-fix it silently
+	// aggregated both BLOCK and DETECT populations under a
+	// name that claimed blocks-only — the immediate bug
+	// the workstream resolves. The sibling
+	// `wafDetectsByCategory` carries the DETECT population.
 	wafBlocksByCategory: Record<string, number>;
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — sibling of
+	// wafBlocksByCategory; the action=DETECT population
+	// per OWASP CRS category over the just-closed minute.
+	// Operators wanting a combined attack-volume view sum
+	// the two maps client-side.
+	wafDetectsByCategory: Record<string, number>;
 	// Null when no traffic landed in the window — same
 	// no-fake-dip rule as TimeseriesPoint.value.
 	globalP95LatencyMs: number | null;

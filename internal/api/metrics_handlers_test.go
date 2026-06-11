@@ -1264,3 +1264,161 @@ func TestMetricsSummary_NFieldsIndependentFromMQ(t *testing.T) {
 		t.Errorf("CrowdSec bump leaked into L counters: 4xx=%d 5xx=%d", resp.TotalFourXxPerMin, resp.TotalFiveXxPerMin)
 	}
 }
+
+// --- #R-DASHBOARD-WAF-COUNTERS-ZERO summary fields -------------------
+
+// TestMetricsSummary_WafDetectedPerMin_FromBucketColumn pins the
+// new aggregated counter. Seed a bucket row with a non-zero
+// waf_detect_count (and a sibling non-zero waf_block_count to
+// confirm the two stay independent), assert both surface on the
+// response.
+func TestMetricsSummary_WafDetectedPerMin_FromBucketColumn(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+	if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
+		{
+			RouteID:        m.routeID,
+			Ts:             prevMinute,
+			ReqCount:       30,
+			WafBlockCount:  4,
+			WafDetectCount: 11,
+			LatencyP95Ms:   8,
+		},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp summaryResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.TotalWafBlockedPerMin != 4 {
+		t.Errorf("TotalWafBlockedPerMin = %d; want 4", resp.TotalWafBlockedPerMin)
+	}
+	if resp.TotalWafDetectedPerMin != 11 {
+		t.Errorf("TotalWafDetectedPerMin = %d; want 11 (#R-DASHBOARD-WAF-COUNTERS-ZERO — detect-mode events now surface in the dashboard counter)", resp.TotalWafDetectedPerMin)
+	}
+	if len(resp.TopRoutes) != 1 {
+		t.Fatalf("TopRoutes len = %d; want 1", len(resp.TopRoutes))
+	}
+	if resp.TopRoutes[0].WafBlockedPerMin != 4 || resp.TopRoutes[0].WafDetectedPerMin != 11 {
+		t.Errorf("topRoutes[0] = {block=%d, detect=%d}; want {4, 11}",
+			resp.TopRoutes[0].WafBlockedPerMin, resp.TopRoutes[0].WafDetectedPerMin)
+	}
+}
+
+// TestMetricsSummary_WafBlockAndDetectStayIndependent — sibling
+// independence assertion: a detect-only minute MUST leave the
+// block field at zero, and vice versa. Same shape as the
+// existing 4xx/5xx independence pair.
+func TestMetricsSummary_WafBlockAndDetectStayIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		blockSeed int64
+		detSeed   int64
+		wantBlock uint64
+		wantDet   uint64
+	}{
+		{"detect-only", 0, 9, 0, 9},
+		{"block-only", 7, 0, 7, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMetricsTestEnv(t)
+			obsStore, err := observability.Open(context.Background(), ":memory:")
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			t.Cleanup(func() { _ = obsStore.Close() })
+			m.env.handler.SetMetricsReader(obsStore)
+
+			prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+			if err := obsStore.InsertBatch(context.Background(), observability.Granularity1m, []observability.MetricBucket{
+				{
+					RouteID:        m.routeID,
+					Ts:             prevMinute,
+					ReqCount:       10,
+					WafBlockCount:  tc.blockSeed,
+					WafDetectCount: tc.detSeed,
+					LatencyP95Ms:   1,
+				},
+			}); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+			rec := httptest.NewRecorder()
+			m.router.ServeHTTP(rec, req)
+			var resp summaryResponse
+			_ = json.NewDecoder(rec.Body).Decode(&resp)
+			if resp.TotalWafBlockedPerMin != tc.wantBlock {
+				t.Errorf("TotalWafBlockedPerMin = %d; want %d", resp.TotalWafBlockedPerMin, tc.wantBlock)
+			}
+			if resp.TotalWafDetectedPerMin != tc.wantDet {
+				t.Errorf("TotalWafDetectedPerMin = %d; want %d", resp.TotalWafDetectedPerMin, tc.wantDet)
+			}
+		})
+	}
+}
+
+// TestMetricsSummary_CategoryMaps_SplitByAction — seed two
+// waf_event rows (one BLOCK + one DETECT in the just-closed
+// minute) and assert the two maps report the right population
+// separately. Pre-fix WafBlocksByCategory aggregated both
+// silently; this test pins the resserement.
+func TestMetricsSummary_CategoryMaps_SplitByAction(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+	m.env.handler.SetWafEventReader(obsStore)
+
+	prevMinute := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+	// One BLOCK on SQLi, two DETECT on LFI in the same minute.
+	if err := obsStore.InsertWafEventBatch(context.Background(), []observability.WafEvent{
+		{Ts: prevMinute.Add(5 * time.Second), RouteID: m.routeID, RuleID: "942100", Category: "SQLi", SrcIP: "1.1.1.1", Action: "BLOCK", StatusCode: 403},
+		{Ts: prevMinute.Add(10 * time.Second), RouteID: m.routeID, RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.2", Action: "DETECT", StatusCode: 0},
+		{Ts: prevMinute.Add(15 * time.Second), RouteID: m.routeID, RuleID: "930100", Category: "LFI", SrcIP: "1.1.1.3", Action: "DETECT", StatusCode: 0},
+	}); err != nil {
+		t.Fatalf("seed waf_event: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp summaryResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// BLOCK map: only the SQLi row.
+	if got := resp.WafBlocksByCategory["SQLi"]; got != 1 {
+		t.Errorf("WafBlocksByCategory[SQLi] = %d; want 1", got)
+	}
+	if got, has := resp.WafBlocksByCategory["LFI"]; has && got != 0 {
+		t.Errorf("WafBlocksByCategory[LFI] = %d; want absent or 0 (LFI events were DETECT, not BLOCK)", got)
+	}
+	// DETECT map: the two LFI rows.
+	if got := resp.WafDetectsByCategory["LFI"]; got != 2 {
+		t.Errorf("WafDetectsByCategory[LFI] = %d; want 2", got)
+	}
+	if got, has := resp.WafDetectsByCategory["SQLi"]; has && got != 0 {
+		t.Errorf("WafDetectsByCategory[SQLi] = %d; want absent or 0", got)
+	}
+}

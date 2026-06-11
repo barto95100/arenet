@@ -34,6 +34,13 @@ type MetricBucket struct {
 	FourxxCount           int64
 	FivexxCount           int64
 	WafBlockCount         int64 // Step M: count of WAF blocks captured this window.
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — count of detect-mode
+	// WAF events captured this window. Sibling to WafBlock-
+	// Count; populated by the v9 column waf_detect_count.
+	// Pre-v9 rows decode to 0 (the SQLite ADD COLUMN default
+	// the migration sets), which is the operator-honest
+	// "no data" answer for historical buckets.
+	WafDetectCount        int64
 	ThrottleBlockCount    int64 // Step Q: count of rate-limit blocks (Tier 1 + Tier 2) captured this window. Per-IP rows live under routeID="_throttle" (Q spec §3.5).
 	CrowdSecDecisionCount int64 // Step N: count of NEW CrowdSec decisions seen this window (dedupe-before-bump per N spec D4.A). Per-IP rows live under routeID="_crowdsec" (N spec §3.5).
 	LatencyP95Ms          int32

@@ -53,6 +53,18 @@ type TickDelta struct {
 	// path never sets this field.
 	WafBlocks uint64
 
+	// WafDetects is the count of detect-mode WAF events to
+	// add to the current minute's accumulator. Sibling to
+	// WafBlocks; same observation point (waf.Sink.absorb
+	// routes ActionBlock to BumpWafBlocks and ActionDetect
+	// to BumpWafDetects). #R-DASHBOARD-WAF-COUNTERS-ZERO —
+	// before this field, detect-mode events landed in the
+	// waf_event table but never reached the bucket counter,
+	// so the dashboard "WAF blocks / H" card and Top-Routes
+	// column read 0 even when the operator had visible
+	// events in /observability/logs.
+	WafDetects uint64
+
 	// ThrottleBlocks is the count of rate-limit block events
 	// to add to the current minute's accumulator. Same shape
 	// as WafBlocks but flows from a different observation
@@ -117,6 +129,7 @@ type routeState struct {
 	fourxx            int64
 	fivexx            int64
 	wafBlocks         int64
+	wafDetects        int64
 	throttleBlocks    int64
 	crowdsecDecisions int64
 	p95MaxMs          int32 // max across all 1-second samples this minute
@@ -253,6 +266,29 @@ func (a *Aggregator) Ingest(d TickDelta) {
 // Consume.
 func (a *Aggregator) BumpWafBlocks(routeID string) {
 	a.Ingest(TickDelta{RouteID: routeID, WafBlocks: 1})
+}
+
+// BumpWafDetects increments the WAF detect-mode counter
+// for routeID in the current minute. Sibling to
+// BumpWafBlocks; called by waf.Sink.absorb on every
+// ActionDetect event (BEFORE the LRU dedup, AC #3
+// invariant: the per-minute counter reflects attack
+// volume, not the de-duplicated event-log count).
+//
+// #R-DASHBOARD-WAF-COUNTERS-ZERO — closes the bucket-
+// counter gap. Pre-fix, detect-mode events landed in the
+// waf_event table but never reached the bucket, so the
+// /apercu "WAF blocks / H" and the Top-Routes column
+// read 0 on detect-mode routes (the dominant case for
+// homelab operators using the recommended I.4 default).
+//
+// Non-blocking by construction: pushes onto the existing
+// ingress channel as a synthetic TickDelta with only the
+// WafDetects field set. Drops on full channel (counted
+// via the existing Dropped counter). Same AC #13
+// discipline as Consume.
+func (a *Aggregator) BumpWafDetects(routeID string) {
+	a.Ingest(TickDelta{RouteID: routeID, WafDetects: 1})
 }
 
 // BumpThrottleBlocks increments the per-minute throttle block
@@ -412,6 +448,7 @@ func (a *Aggregator) absorb(d TickDelta) {
 	rs.fourxx += int64(d.Fourxx)
 	rs.fivexx += int64(d.Fivexx)
 	rs.wafBlocks += int64(d.WafBlocks)
+	rs.wafDetects += int64(d.WafDetects)
 	rs.throttleBlocks += int64(d.ThrottleBlocks)
 	rs.crowdsecDecisions += int64(d.CrowdSecDecisions)
 	if d.LatencyP95Ms > rs.p95MaxMs {
@@ -456,6 +493,7 @@ func (a *Aggregator) flush(ctx context.Context) {
 			FourxxCount:           rs.fourxx,
 			FivexxCount:           rs.fivexx,
 			WafBlockCount:         rs.wafBlocks,
+			WafDetectCount:        rs.wafDetects,
 			ThrottleBlockCount:    rs.throttleBlocks,
 			CrowdSecDecisionCount: rs.crowdsecDecisions,
 			LatencyP95Ms:          rs.p95MaxMs,

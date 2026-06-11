@@ -168,7 +168,7 @@ pourrait croire qu'un attaquant a été bloqué alors que la requête a passé.
 Fix à scoper : auditer internal/waf/event.go (ou équivalent) — voir si on label 
 "action_intended" vs "action_applied", clarifier la sémantique.
 
-## #R-DASHBOARD-WAF-COUNTERS-ZERO (medium) — OPEN 2026-06-10
+## #R-DASHBOARD-WAF-COUNTERS-ZERO — RESOLVED 2026-06-10
 
 Découvert pendant smoke Day 8 post-WAF fix.
 
@@ -180,21 +180,71 @@ Symptôme :
   - MAIS feed dashboard "WAF events — recent" affiche les 5 events 
     récents (smoke Gates 3+4 Day 8)
 
-Hypothèse :
-  Aggregator metrics lit pas la même source que l'events feed, ou 
-  filtre uniquement les events de routes en wafMode=block (ignore 
-  les detect events). Pipeline incohérent.
+Investigation (triangulation Lesson 1 + audit empirique 287 events 
+sur AreNET-test) :
 
-À investiguer :
-  - internal/observability/waf_sink.go : counter increment dépendant 
-    du wafMode ou du action de l'event ?
-  - SQL query peuplant les categories /sécurité/waf : SELECT count(*) 
-    GROUP BY rule_family WHERE time > now-24h sur metrics.db, comparer 
-    avec l'UI
+CAUSE A — sink filter intentionnel :
+  internal/waf/sink.go absorb() bumpe BumpWafBlocks UNIQUEMENT sur 
+  events ActionBlock (commit W.bugfix Fix #1). Détect events restent 
+  dans waf_event mais n'incrémentent jamais le bucket counter.
 
-Impact : perte de signal observabilité WAF agrégé.
+CAUSE B — fenêtre summary 1 minute :
+  metrics_handlers.go metricsSummary lit le bucket "just-closed 
+  minute" et la frontend projette × 60 ("/H") ou × 60×24 ("/24h"). 
+  Sur trafic discontinu homelab, > 60s après l'event = 0 partout 
+  même pour les BLOCK. Tracking séparé : 
+  `#R-WAF-METRICS-WINDOW-1MIN-PROJECTION` (deferred post-Step T 
+  car blast radius wire-contract).
 
-## #R-WAF-EVENT-LABEL-INCONSISTENT (low) — OPEN 2026-06-10
+Fix CAUSE A — split detect/block counters (Option 1) :
+
+Backend :
+  - Migration v8→v9 : ALTER TABLE bucket_1m/bucket_1h ADD COLUMN 
+    waf_detect_count INTEGER NOT NULL DEFAULT 0
+  - WafEvent.WafDetects (TickDelta) + Aggregator.BumpWafDetects 
+    symmétrique à BumpWafBlocks
+  - waf.Sink.absorb dispatche par e.Action : ActionBlock → 
+    BumpWafBlocks (preserved), ActionDetect → BumpWafDetects 
+    (new). Bump-then-suppress AVANT LRU dedup (AC #3 — volume 
+    d'attaque, pas dedupliqué)
+  - 4 sites SQL bucket (Insert / Query / QueryAggregated / 
+    retention) lisent la nouvelle colonne
+  - summary endpoint expose TotalWafDetectedPerMin + 
+    WafDetectsByCategory parallel aux block fields ; 
+    summaryRoute.WafDetectedPerMin parallel à WafBlockedPerMin
+  - Sémantique resserrée : WafBlocksByCategory désormais filtre 
+    action=BLOCK strict (était silently aggregated pre-fix — c'est 
+    le bug que ce fix corrige). WafDetectsByCategory pour DETECT.
+
+Frontend :
+  - Dashboard /apercu : 2 cards parallèles BLOQUÉ (rouge) + 
+    DÉTECTÉ (amber), data-testid="kpi-waf-blocked|detected"
+  - Top routes table : nouvelle colonne "WAF detect"
+  - Page /sécurité/waf : 2 tiles Blocked + Detected, et chaque 
+    row catégorie CRS rend 2 chiffres (block24h rouge + 
+    detect24h amber)
+
+Bundle : fix #R-WAF-EVENT-LABEL-INCONSISTENT inclus dans le même 
+commit (même thème detect ≠ block, mêmes composants frontend).
+
+Tests :
+  - Backend : 5 nouveaux (3 storage migration + 4 API summary + 
+    1 sink AC#3-detect)
+  - Frontend : 9 nouveaux vitest (6 dashboard + 3 waf page)
+  - go test ./... : 20 packages green
+  - npm run test : 521/521 (was 512 → +9)
+  - npm run check : 0 errors 0 warnings sur 733 fichiers
+
+Smoke à valider sur AreNET-test post-deploy :
+  1. Régression Block route arenet (140 events historiques 
+     mode=block) : "WAF bloqué / h" non-zero après nouveau block
+  2. Smoke detect route ha (mode=detect) : "WAF détecté / h" 
+     non-zero après LFI/SQLi
+  3. Catégories CRS : 2 chiffres par row (block / detect)
+  4. Label fix : feed dashboard sur event detect → "detect" 
+     amber + statusCode rendered as "—", pas "BLOCK 403"
+
+## #R-WAF-EVENT-LABEL-INCONSISTENT — RESOLVED 2026-06-10
 
 Découvert pendant smoke Day 8.
 
@@ -203,16 +253,71 @@ Symptôme :
   - /observability/logs → "DETECT" (route wafMode=detect) ✅
   - Dashboard feed "WAF events — recent" → "BLOCK 403" ❌
 
-Hypothèse :
-  Le composant dashboard feed lit uniquement le HTTP status code (403) 
-  sans considérer le wafMode de la route ou le champ action de l'event.
+Cause confirmée par audit (Lesson 3 — read source) :
+  web/frontend/src/routes/dashboard/+page.svelte hardcodait 
+  "block" + "BLOCK" + "403" littéralement à 2 sites (lignes 305 
+  + 384-385 pre-fix), ignorant le champ ev.action déjà présent 
+  sur le wire (cf types.ts:1175). WafEventList.svelte 
+  (composant logs) n'avait pas le bug — la sémantique action 
+  était déjà respectée là.
 
-À investiguer :
-  - Frontend : <WafEventRow> dashboard vs page logs
-  - Backend : /api/v1/observability/events vs /api/v1/observability/logs
+Fix bundlé dans le commit #R-DASHBOARD-WAF-COUNTERS-ZERO 
+(même thème detect ≠ block, mêmes composants frontend) :
+
+  - Site 1 (recentEvents card) : pill bad rouge si BLOCK, 
+    pill warn amber si DETECT. Lit ev.action.
+  - Site 2 (live tail feed) : log-lvl class block/detect 
+    selon ev.action. Status code rendu ev.statusCode || '—' 
+    pour que detect events (status=0) affichent "—" — 
+    operator-honest "no value" answer.
+  - CSS : ajout .pill.warn + .log-lvl.detect (palette 
+    status-warn amber, parallèle aux .pill.bad + .log-lvl
+    .block existantes status-down rouge)
+
+Tests pinnés (web/frontend/src/routes/dashboard/page.test.ts) :
+  - renders BLOCK label + statusCode on action=BLOCK events
+  - renders DETECT label + "—" on action=DETECT events  
+  - mixed events both labels correct in same feed
 
 Note : à consolider avec #R-WAF-EVENT-LABEL-BLOCK-VS-200 — même 
-famille de bug (label semantics mal gérés à différents endroits).
+famille de bug (label semantics mal gérés à différents endroits 
+côté backend cette fois ; le frontend est maintenant clean).
+
+## #R-WAF-METRICS-WINDOW-1MIN-PROJECTION (medium) — OPEN 2026-06-10
+
+Découvert pendant l'investigation #R-DASHBOARD-WAF-COUNTERS-ZERO 
+(Day 8). Cause B de la triangulation.
+
+Symptôme :
+  Summary endpoint GET /api/v1/metrics/summary ne retourne que 
+  la "dernière minute fermée" (metrics_handlers.go:368-372). Le 
+  frontend projette cette valeur ×60 ("/H") ou ×60×24 ("/24h"). 
+  Casse en homelab bursty où les events arrivent par lots puis 
+  silence — la card lit 0 dès que > 60s écoulés depuis le 
+  dernier event.
+
+Cause :
+  Design "rate rendering" optimisé pour trafic continu high-
+  traffic. Inadapté à un homelab à trafic discontinu.
+
+Fix shape (à scoper dans workstream observability post-Step T) :
+  Option 2a : widen window 1min → 1h ou 24h. Query bucket SUM 
+              sur la fenêtre. Pas de projection × 60 côté 
+              frontend.
+  Option 2b : query waf_event direct sur la fenêtre (sans cap 
+              L=100). Plus de surface, garde la précision 
+              per-event.
+
+Blast radius : wire contract — toutes les keys du summary 
+response sont à reviewer (renames potentiels 
+totalWafBlockedPerMin → totalWafBlockedPerHour/Day/Window).
+
+Dépend de : rien
+Bloque : amélioration UX dashboard en homelab
+Cross-ref : #R-DASHBOARD-WAF-COUNTERS-ZERO RESOLVED a 
+partiellement mitigé le symptôme (split detect/block visible 
+pendant la fenêtre 1min) mais la window 1-min reste la cause 
+structurelle.
 
 ## #F-UPSTREAM-TEST-ENDPOINT (medium) — RESOLVED 2026-06-10 (commit f119116)
 

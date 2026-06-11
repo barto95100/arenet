@@ -100,6 +100,14 @@ type summaryRoute struct {
 	FourxxPerMin     uint64 `json:"fourxxPerMin"`
 	FivexxPerMin     uint64 `json:"fivexxPerMin"`
 	WafBlockedPerMin uint64 `json:"wafBlockedPerMin"`
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — sibling of
+	// WafBlockedPerMin populated from the new
+	// waf_detect_count bucket column. Dashboard Top
+	// Routes renders this in a parallel column so an
+	// operator on the recommended detect-mode default
+	// sees real per-route attack volume instead of a
+	// row of zeros.
+	WafDetectedPerMin uint64 `json:"wafDetectedPerMin"`
 }
 
 // summaryResponse is the wire shape of GET /metrics/summary.
@@ -138,6 +146,14 @@ type summaryResponse struct {
 	TotalFourXxPerMin     uint64 `json:"totalFourXxPerMin"`
 	TotalFiveXxPerMin     uint64 `json:"totalFiveXxPerMin"`
 	TotalWafBlockedPerMin uint64 `json:"totalWafBlockedPerMin"`
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — sibling counter
+	// sourced from waf_detect_count bucket column. Lets
+	// the dashboard show two cards (BLOQUÉ red /
+	// DÉTECTÉ amber) so a homelab operator on
+	// wafMode=detect (the recommended I.4 default) sees
+	// real attack volume even when no requests were
+	// actually blocked.
+	TotalWafDetectedPerMin uint64 `json:"totalWafDetectedPerMin"`
 	// Step Q.3 new fields per AC #11. Independent counters,
 	// same shape contract as TotalWafBlockedPerMin (a throttle
 	// block does NOT inflate the 4xx / 5xx fields, AC #15
@@ -165,7 +181,17 @@ type summaryResponse struct {
 	ActiveRouteCount        int               `json:"activeRouteCount"`
 	TopRoutes               []summaryRoute    `json:"topRoutes"`           // top 5 by reqsPerMin
 	TopAttackedRoute        *summaryRoute     `json:"topAttackedRoute"`    // single highest WAF count, all routes; null if none
-	WafBlocksByCategory     map[string]uint64 `json:"wafBlocksByCategory"` // category → count; empty when no events
+	WafBlocksByCategory     map[string]uint64 `json:"wafBlocksByCategory"` // category → count of action=BLOCK events; empty when no events
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — sibling map for
+	// action=DETECT events. Semantically distinct from
+	// WafBlocksByCategory: the two report DIFFERENT
+	// populations (block-mode vs detect-mode rule
+	// fires). Operators wanting a combined attack-
+	// volume view sum the two maps client-side. Pre-fix
+	// WafBlocksByCategory silently aggregated both
+	// populations under a misleading name; this commit
+	// tightens its semantics to BLOCK-only.
+	WafDetectsByCategory map[string]uint64 `json:"wafDetectsByCategory"` // category → count of action=DETECT events; empty when no events
 }
 
 // routeAllSentinel selects the global aggregated timeseries (per
@@ -328,10 +354,11 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	bucketTs := now.Truncate(time.Minute).Add(-time.Minute) // the just-closed minute
 	resp := summaryResponse{
-		GeneratedAt:         now.Format(time.RFC3339),
-		WindowSeconds:       60,
-		TopRoutes:           []summaryRoute{},
-		WafBlocksByCategory: map[string]uint64{},
+		GeneratedAt:          now.Format(time.RFC3339),
+		WindowSeconds:        60,
+		TopRoutes:            []summaryRoute{},
+		WafBlocksByCategory:  map[string]uint64{},
+		WafDetectsByCategory: map[string]uint64{},
 	}
 
 	if h.metrics == nil {
@@ -356,6 +383,7 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		Fourxx       uint64
 		Fivexx       uint64
 		WafBlocked   uint64
+		WafDetected  uint64
 		LatencyP95Ms int32
 	}
 	byID := make(map[string]*rowAgg, len(routes))
@@ -388,11 +416,13 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		agg.Fourxx = uint64(row.FourxxCount)
 		agg.Fivexx = uint64(row.FivexxCount)
 		agg.WafBlocked = uint64(row.WafBlockCount)
+		agg.WafDetected = uint64(row.WafDetectCount)
 		agg.LatencyP95Ms = row.LatencyP95Ms
 		resp.TotalReqPerMin += agg.Req
 		resp.TotalFourXxPerMin += agg.Fourxx
 		resp.TotalFiveXxPerMin += agg.Fivexx
 		resp.TotalWafBlockedPerMin += agg.WafBlocked
+		resp.TotalWafDetectedPerMin += agg.WafDetected
 		if row.LatencyP95Ms > 0 && row.ReqCount > 0 {
 			latencyWeightedSum += uint64(row.LatencyP95Ms) * uint64(row.ReqCount)
 			latencyWeightDen += uint64(row.ReqCount)
@@ -428,8 +458,27 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 			// empty + log; the operator can correlate via the
 			// /security/events endpoint directly.
 		} else {
+			// #R-DASHBOARD-WAF-COUNTERS-ZERO — dispatch by
+			// action. Pre-fix this loop incremented
+			// WafBlocksByCategory unconditionally, which made
+			// the map a misleading aggregate (block + detect
+			// rows under a name claiming blocks-only). Post-
+			// fix the two populations are reported on
+			// separate maps; operators wanting the combined
+			// view sum them client-side. Event rows with an
+			// unexpected Action ("", future enum value) are
+			// dropped silently — the W.bugfix v6→v7
+			// migration backfilled every legacy row to
+			// "BLOCK", so an empty Action would indicate a
+			// data-layer bug we'd rather surface as a
+			// missing category count than mis-categorise.
 			for _, e := range events {
-				resp.WafBlocksByCategory[e.Category]++
+				switch e.Action {
+				case "BLOCK":
+					resp.WafBlocksByCategory[e.Category]++
+				case "DETECT":
+					resp.WafDetectsByCategory[e.Category]++
+				}
 			}
 		}
 	}
@@ -442,12 +491,13 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.ActiveRouteCount++
 		top = append(top, summaryRoute{
-			RouteID:          id,
-			Host:             agg.Host,
-			ReqsPerMin:       agg.Req,
-			FourxxPerMin:     agg.Fourxx,
-			FivexxPerMin:     agg.Fivexx,
-			WafBlockedPerMin: agg.WafBlocked,
+			RouteID:           id,
+			Host:              agg.Host,
+			ReqsPerMin:        agg.Req,
+			FourxxPerMin:      agg.Fourxx,
+			FivexxPerMin:      agg.Fivexx,
+			WafBlockedPerMin:  agg.WafBlocked,
+			WafDetectedPerMin: agg.WafDetected,
 		})
 	}
 	sortTopByReqs(top)
@@ -475,12 +525,13 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		}
 		if topAttacked == nil || agg.WafBlocked > topAttacked.WafBlockedPerMin {
 			topAttacked = &summaryRoute{
-				RouteID:          id,
-				Host:             agg.Host,
-				ReqsPerMin:       agg.Req,
-				FourxxPerMin:     agg.Fourxx,
-				FivexxPerMin:     agg.Fivexx,
-				WafBlockedPerMin: agg.WafBlocked,
+				RouteID:           id,
+				Host:              agg.Host,
+				ReqsPerMin:        agg.Req,
+				FourxxPerMin:      agg.Fourxx,
+				FivexxPerMin:      agg.Fivexx,
+				WafBlockedPerMin:  agg.WafBlocked,
+				WafDetectedPerMin: agg.WafDetected,
 			}
 		}
 	}

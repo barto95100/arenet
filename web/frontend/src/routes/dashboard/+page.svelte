@@ -75,8 +75,21 @@
 			return Math.round((fivexx / req) * 10000) / 100;
 		})()
 	);
-	const kpiWafPerHour = $derived(
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — two parallel KPI
+	// cards. Pre-fix the dashboard had a single "WAF BLOCKS
+	// / H" tile sourced from totalWafBlockedPerMin, which
+	// stayed at zero on homelab routes in wafMode=detect
+	// (the recommended I.4 default) — the bug the
+	// workstream fixes. Post-fix the dashboard splits the
+	// signal into two tiles so detect-mode activity is
+	// visible:
+	//   BLOQUÉ  — red, sourced from totalWafBlockedPerMin
+	//   DÉTECTÉ — amber, sourced from totalWafDetectedPerMin
+	const kpiWafBlockedPerHour = $derived(
 		Math.round((summary?.totalWafBlockedPerMin ?? 0) * 60)
+	);
+	const kpiWafDetectedPerHour = $derived(
+		Math.round((summary?.totalWafDetectedPerMin ?? 0) * 60)
 	);
 
 	// Distinct upstream URLs across all routes — the v1.4 stand-in
@@ -252,11 +265,25 @@
 				{summary?.totalFiveXxPerMin ?? 0} 5xx/min · {summary?.totalFourXxPerMin ?? 0} 4xx/min
 			</div>
 		</div>
-		<div class="kpi">
-			<div class="kpi-label">WAF blocks / h</div>
-			<div class="kpi-val">{kpiWafPerHour}</div>
+		<!--
+			#R-DASHBOARD-WAF-COUNTERS-ZERO — two parallel
+			tiles. BLOQUÉ (red) reads the canonical block
+			counter; DÉTECTÉ (amber) reads the new detect
+			counter so detect-mode activity is visible on
+			homelab routes using the wafMode=detect default.
+		-->
+		<div class="kpi" data-testid="kpi-waf-blocked">
+			<div class="kpi-label">WAF bloqué / h</div>
+			<div class="kpi-val">{kpiWafBlockedPerHour}</div>
 			<div class="kpi-foot">
 				{summary?.attackerIpsUnique ?? 0} unique IPs · {summary?.totalThrottlePerMin ?? 0} throttle/min
+			</div>
+		</div>
+		<div class="kpi" data-testid="kpi-waf-detected">
+			<div class="kpi-label">WAF détecté / h</div>
+			<div class="kpi-val">{kpiWafDetectedPerHour}</div>
+			<div class="kpi-foot">
+				detect-mode (request passed through)
 			</div>
 		</div>
 	</div>
@@ -301,8 +328,21 @@
 			</div>
 			<div class="stack">
 				{#each recentEvents as ev (ev.id)}
-					<div class="event">
-						<span class="pill bad">block</span>
+					<!--
+						#R-WAF-EVENT-LABEL-INCONSISTENT — read
+						ev.action instead of hardcoding "block".
+						Pre-fix every event surfaced as a "block"
+						pill regardless of whether the WAF actually
+						rejected the request (BLOCK) or merely
+						matched the rule and let it pass (DETECT).
+						The Step W.bugfix migration backfilled
+						legacy rows to "BLOCK" so old data still
+						renders correctly.
+					-->
+					<div class="event" data-testid="recent-event-{ev.id}">
+						<span class="pill {ev.action === 'DETECT' ? 'warn' : 'bad'}">
+							{ev.action === 'DETECT' ? 'detect' : 'block'}
+						</span>
 						<div class="what">
 							<b>{ev.category} · {ev.ruleId}</b>
 							<span>{ev.requestMethod} {ev.requestPath} — from {ev.srcIp}</span>
@@ -330,7 +370,8 @@
 						<th class="right">Req/min</th>
 						<th class="right">4xx/min</th>
 						<th class="right">5xx/min</th>
-						<th class="right">WAF blocks</th>
+						<th class="right">WAF block</th>
+						<th class="right">WAF detect</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -342,10 +383,11 @@
 							<td class="mono right">{r.reqsPerMin}</td>
 							<td class="mono right warn-text">{r.fourxxPerMin}</td>
 							<td class="mono right bad-text">{r.fivexxPerMin}</td>
-							<td class="mono right">{r.wafBlockedPerMin}</td>
+							<td class="mono right bad-text">{r.wafBlockedPerMin}</td>
+							<td class="mono right warn-text">{r.wafDetectedPerMin}</td>
 						</tr>
 					{:else}
-						<tr><td colspan="5" class="empty-row">No data in the window.</td></tr>
+						<tr><td colspan="6" class="empty-row">No data in the window.</td></tr>
 					{/each}
 				</tbody>
 			</table>
@@ -379,10 +421,23 @@
 		</div>
 		<div class="logs">
 			{#each recentEvents as ev (`tail-${ev.id}`)}
-				<div class="log-row">
+				<!--
+					#R-WAF-EVENT-LABEL-INCONSISTENT — second
+					hardcoded site. Same fix as the Recent WAF
+					events card above: read ev.action +
+					ev.statusCode rather than fabricating
+					"BLOCK 403" on every row. Status code on
+					detect events is 0 (the upstream's response
+					was unknown at WAF-decision time); render as
+					"—" to make the operator-honest "no value"
+					answer obvious.
+				-->
+				<div class="log-row" data-testid="tail-event-{ev.id}">
 					<span class="log-time">{new Date(ev.ts).toISOString().substring(11, 19)}</span>
-					<span class="log-lvl block">BLOCK</span>
-					<span class="mono">403</span>
+					<span class="log-lvl {ev.action === 'DETECT' ? 'detect' : 'block'}">
+						{ev.action}
+					</span>
+					<span class="mono">{ev.statusCode || '—'}</span>
 					<span class="log-msg">
 						<span class="k">{ev.requestMethod}</span>
 						{ev.requestPath}
@@ -509,6 +564,8 @@
 		flex: none;
 	}
 	.pill.bad { background: color-mix(in oklch, var(--status-down) 18%, transparent); color: var(--status-down); }
+	/* #R-WAF-EVENT-LABEL-INCONSISTENT — amber detect badge, parallel to the .bad red block badge. */
+	.pill.warn { background: color-mix(in oklch, var(--status-warn) 18%, transparent); color: var(--status-warn); }
 
 	table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 	th, td { padding: 7px 8px; text-align: left; }
@@ -559,6 +616,8 @@
 		text-align: center;
 	}
 	.log-lvl.block { background: color-mix(in oklch, var(--status-down) 18%, transparent); color: var(--status-down); }
+	/* #R-WAF-EVENT-LABEL-INCONSISTENT — amber detect log level, parallel to the .block red. */
+	.log-lvl.detect { background: color-mix(in oklch, var(--status-warn) 18%, transparent); color: var(--status-warn); }
 	.log-msg { color: var(--fg); }
 	.log-msg .k { color: var(--fg-dim); }
 </style>

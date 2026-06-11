@@ -84,8 +84,22 @@ type Inserter interface {
 // observability.Aggregator.BumpWafBlocks; the bump-or-not is
 // internal to the aggregator (it folds into the next minute's
 // flush). A nil BlockCounter is tolerated (degraded mode).
+// BlockCounter is the abstract per-minute counter the sink
+// bumps on every absorbed event (BEFORE LRU dedup, AC #3:
+// per-minute counter reflects attack volume, not the de-
+// duplicated event-log count).
+//
+// #R-DASHBOARD-WAF-COUNTERS-ZERO — the interface gained
+// BumpWafDetects so detect-mode events get a sibling
+// counter. The interface name is preserved for source
+// stability; semantically it's now a "WAF event counter"
+// rather than a "block counter" but a rename would
+// churn every test that implements it. Tracked as a low-
+// priority cleanup for a future commit that touches this
+// area.
 type BlockCounter interface {
 	BumpWafBlocks(routeID string)
+	BumpWafDetects(routeID string)
 }
 
 // EventSink is the package-level abstraction the Caddy
@@ -253,17 +267,31 @@ func (s *Sink) Done() <-chan struct{} {
 // row per (route, IP, rule) per ttl. Nil counter is the
 // degraded mode (skipped).
 //
-// W.bugfix Fix #1: detect-mode events DO NOT bump the
+// W.bugfix Fix #1: detect-mode events do NOT bump the
 // block-volume counter. The "WAF blocks per minute"
 // timeseries is the operator's signal for actual
 // enforcement; in detect mode the WAF allowed the request
 // through, so counting it as a "block" would inflate the
-// signal the same way the old labels lied. The event row
-// itself is still persisted (frontend renders DETECT
-// alongside BLOCK rows in the activity log).
+// signal the same way the old labels lied.
+//
+// #R-DASHBOARD-WAF-COUNTERS-ZERO: detect events now bump
+// a SEPARATE counter (BumpWafDetects), symmetric to the
+// W.bugfix block path. The dashboard renders the two as
+// distinct cards (BLOQUÉ red / DÉTECTÉ amber) so an
+// operator on the recommended detect-mode default sees
+// real volume instead of a misleading 0. The bump-then-
+// suppress invariant is preserved: both Block and Detect
+// counters are incremented BEFORE the LRU dedup so the
+// per-minute signal reflects attack volume rather than
+// the de-duplicated event-log count.
 func (s *Sink) absorb(e Event) {
-	if s.counter != nil && e.Action == ActionBlock {
-		s.counter.BumpWafBlocks(e.RouteID)
+	if s.counter != nil {
+		switch e.Action {
+		case ActionBlock:
+			s.counter.BumpWafBlocks(e.RouteID)
+		case ActionDetect:
+			s.counter.BumpWafDetects(e.RouteID)
+		}
 	}
 	if !s.lru.shouldEmit(e.RouteID, e.SrcIP, e.RuleID) {
 		atomic.AddUint64(&s.suppressedByLRU, 1)

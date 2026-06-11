@@ -36,9 +36,17 @@ import (
 //   - v6: Step V.2 (auth_event table + indexes). 30 d
 //     retention per spec §3.6 (short-window security
 //     signal, not lifecycle record).
+//   - v7: Step W.bugfix Fix #1 (action + status_code
+//     columns on waf_event so the sink can distinguish
+//     block-mode from detect-mode events).
+//   - v8: Step W.4 (country_block_event table + indexes).
+//   - v9: #R-DASHBOARD-WAF-COUNTERS-ZERO (waf_detect_count
+//     column on both bucket tables so detect-mode events
+//     surface in the dashboard counters as a sibling to
+//     waf_block_count).
 //
 // Downgrade is not supported.
-const currentSchemaVersion = 8
+const currentSchemaVersion = 9
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -100,6 +108,7 @@ var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
 	5: migrateV5toV6,
 	6: migrateV6toV7,
 	7: migrateV7toV8,
+	8: migrateV8toV9,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -377,6 +386,40 @@ func migrateV7toV8(ctx context.Context, tx *sql.Tx) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_country_block_event_ts       ON country_block_event (ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_country_block_event_route_ts ON country_block_event (route_id, ts)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV8toV9 — #R-DASHBOARD-WAF-COUNTERS-ZERO. Adds the
+// waf_detect_count column to both bucket_1m and bucket_1h
+// so detect-mode WAF events surface in the dashboard
+// counters as a sibling to the existing waf_block_count
+// (block-mode events only). Default 0 on pre-fix rows: the
+// column didn't exist when those buckets were written, so
+// "no data" is the operator-honest answer rather than
+// fabricating a value.
+//
+// SQLite's ALTER TABLE ADD COLUMN is a metadata-only
+// operation in modern versions — O(1) regardless of row
+// count, so this migration runs in constant time on the
+// production AreNET-test database (~287 WAF events / 8
+// days of trafic).
+//
+// Companion: the waf.Sink switch (sink.go absorb) is
+// extended to BumpWafDetects on ActionDetect events,
+// symmetric to the existing BumpWafBlocks on ActionBlock.
+// Bumps happen BEFORE LRU dedup so the counter reflects
+// attack volume (AC #3), not the deduplicated event-log
+// count.
+func migrateV8toV9(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`ALTER TABLE bucket_1m ADD COLUMN waf_detect_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE bucket_1h ADD COLUMN waf_detect_count INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {

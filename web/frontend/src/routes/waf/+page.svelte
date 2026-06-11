@@ -55,6 +55,12 @@
 	const totalBlockedPerDay = $derived(
 		Math.round((summary?.totalWafBlockedPerMin ?? 0) * 60 * 24)
 	);
+	// #R-DASHBOARD-WAF-COUNTERS-ZERO — sibling counter
+	// projected to a 24h window. Visible as a separate
+	// amber DETECTED card next to the red BLOCKED one.
+	const totalDetectedPerDay = $derived(
+		Math.round((summary?.totalWafDetectedPerMin ?? 0) * 60 * 24)
+	);
 	const blockRatioPct = $derived(
 		(() => {
 			if (totalInspectedPerDay <= 0) return 0;
@@ -64,18 +70,23 @@
 		})()
 	);
 
-	// Per-category counts. The mock displays in absolute event
-	// counts; we normalise wafBlocksByCategory which is the just-
-	// closed-minute count, scaled to a 24h projection so the tile
-	// numbers are comparable to the mock's narrative.
+	// Per-category counts. Pre-#R-DASHBOARD-WAF-COUNTERS-
+	// ZERO the rows read from a single wafBlocksByCategory
+	// map that silently aggregated BLOCK and DETECT
+	// populations; post-fix each row reports the two
+	// separately so the operator sees real attack volume
+	// on detect-mode routes.
 	const categoryRows = $derived.by(() => {
-		const map = summary?.wafBlocksByCategory ?? {};
+		const blocks = summary?.wafBlocksByCategory ?? {};
+		const detects = summary?.wafDetectsByCategory ?? {};
 		return ALL_OWASP_CATEGORIES.map((cat) => ({
 			cat,
 			label: catLabel(cat),
 			description: catDescription(cat),
-			perMin: map[cat] ?? 0,
-			per24h: Math.round((map[cat] ?? 0) * 60 * 24)
+			blockPerMin: blocks[cat] ?? 0,
+			block24h: Math.round((blocks[cat] ?? 0) * 60 * 24),
+			detectPerMin: detects[cat] ?? 0,
+			detect24h: Math.round((detects[cat] ?? 0) * 60 * 24)
 		}));
 	});
 
@@ -162,10 +173,23 @@
 			<div class="kpi-val">{totalInspectedPerDay.toLocaleString()}<span class="unit">/ 24h</span></div>
 			<div class="kpi-foot">projected from current rate</div>
 		</div>
-		<div class="kpi">
+		<!--
+			#R-DASHBOARD-WAF-COUNTERS-ZERO — Blocked and
+			Detected reported as parallel tiles. On a homelab
+			with every route in wafMode=detect (the
+			recommended I.4 default), the Blocked tile stays
+			at zero while Detected carries the real attack
+			volume.
+		-->
+		<div class="kpi" data-testid="kpi-blocked">
 			<div class="kpi-label">Blocked</div>
 			<div class="kpi-val">{totalBlockedPerDay.toLocaleString()}</div>
 			<div class="kpi-foot">ratio {blockRatioPct}%</div>
+		</div>
+		<div class="kpi" data-testid="kpi-detected">
+			<div class="kpi-label">Detected</div>
+			<div class="kpi-val">{totalDetectedPerDay.toLocaleString()}</div>
+			<div class="kpi-foot">detect-mode (request passed through)</div>
 		</div>
 		<div class="kpi">
 			<div class="kpi-label">Mode</div>
@@ -192,16 +216,30 @@
 			</svg>
 			<span>Granular category control (enable/disable per category) is deferred to a future step. Counts shown below are read-only.</span>
 		</div>
+		<!--
+			#R-DASHBOARD-WAF-COUNTERS-ZERO — each category
+			row now reports BLOCK and DETECT counts
+			separately, matching the split on the KPI tiles
+			above. Pre-fix the single `blocks / 24h` cell
+			silently aggregated both populations under a
+			misleading "blocks" label; this resserement
+			makes the operator-visible numbers honest about
+			what the WAF actually did with the request.
+		-->
 		<div class="cat-grid">
 			{#each categoryRows as row (row.cat)}
-				<div class="cat-row">
+				<div class="cat-row" data-testid="cat-row-{row.cat}">
 					<div class="cat-info">
 						<div class="cat-name">{row.label}</div>
 						<div class="cat-desc">{row.description}</div>
 					</div>
 					<div class="cat-meta">
-						<div class="cat-meta-val">{row.per24h.toLocaleString()}</div>
+						<div class="cat-meta-val cat-meta-block">{row.block24h.toLocaleString()}</div>
 						<div class="cat-meta-foot">blocks / 24h</div>
+					</div>
+					<div class="cat-meta">
+						<div class="cat-meta-val cat-meta-detect">{row.detect24h.toLocaleString()}</div>
+						<div class="cat-meta-foot">detects / 24h</div>
 					</div>
 				</div>
 			{/each}
@@ -307,8 +345,11 @@
 	.cat-info { flex: 1; min-width: 0; }
 	.cat-name { color: var(--fg); font-size: 13px; font-weight: 500; margin-bottom: 2px; }
 	.cat-desc { color: var(--fg-muted); font-size: 11.5px; line-height: 1.5; }
-	.cat-meta { text-align: right; flex: none; font-family: var(--font-mono); }
+	.cat-meta { text-align: right; flex: none; font-family: var(--font-mono); margin-left: 18px; min-width: 80px; }
 	.cat-meta-val { color: var(--fg); font-size: 16px; font-weight: 500; }
+	/* #R-DASHBOARD-WAF-COUNTERS-ZERO — colour-code BLOCK red and DETECT amber so the split is recognisable at a glance. */
+	.cat-meta-val.cat-meta-block { color: var(--status-down); }
+	.cat-meta-val.cat-meta-detect { color: var(--status-warn); }
 	.cat-meta-foot { color: var(--fg-dim); font-size: 10.5px; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
 
 	.link-list {

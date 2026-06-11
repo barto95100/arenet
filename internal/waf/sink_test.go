@@ -435,14 +435,23 @@ func (p *panickingInserter) InsertWafEventBatch(_ context.Context, _ []Event) er
 	return nil
 }
 
-// recordingCounter captures BumpWafBlocks calls per route.
+// recordingCounter captures BumpWafBlocks AND BumpWafDetects
+// calls per route. The two maps are kept separate so the
+// existing total() helper retains its block-count meaning
+// (caller tests assert against block-only behaviour); the
+// new totalDetects() helper exposes the parallel detect
+// counter for #R-DASHBOARD-WAF-COUNTERS-ZERO assertions.
 type recordingCounter struct {
-	mu     sync.Mutex
-	counts map[string]int
+	mu      sync.Mutex
+	counts  map[string]int
+	detects map[string]int
 }
 
 func newRecordingCounter() *recordingCounter {
-	return &recordingCounter{counts: map[string]int{}}
+	return &recordingCounter{
+		counts:  map[string]int{},
+		detects: map[string]int{},
+	}
 }
 
 func (c *recordingCounter) BumpWafBlocks(routeID string) {
@@ -451,11 +460,27 @@ func (c *recordingCounter) BumpWafBlocks(routeID string) {
 	c.counts[routeID]++
 }
 
+func (c *recordingCounter) BumpWafDetects(routeID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.detects[routeID]++
+}
+
 func (c *recordingCounter) total() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	t := 0
 	for _, v := range c.counts {
+		t += v
+	}
+	return t
+}
+
+func (c *recordingCounter) totalDetects() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t := 0
+	for _, v := range c.detects {
 		t += v
 	}
 	return t
@@ -499,6 +524,43 @@ func TestSink_BlockCounter_BumpedOnEveryAbsorb_IncludingSuppressed(t *testing.T)
 	}
 	if got := counter.total(); got != 100 {
 		t.Fatalf("BumpWafBlocks total = %d, want 100 (every absorbed event, incl. suppressed)", got)
+	}
+}
+
+// TestSink_DetectCounter_BumpedOnEveryAbsorb_IncludingSuppressed
+// — #R-DASHBOARD-WAF-COUNTERS-ZERO. Sibling to the BLOCK
+// counter AC #3 invariant: the per-minute DETECT counter must
+// also increment on every absorbed detect-mode event, even
+// ones the LRU suppresses. Without this, a sustained scan in
+// detect mode would show 1 row in the log and ZERO on the
+// dashboard "WAF DÉTECTÉ" tile — recreating the exact bug
+// the workstream resolves.
+func TestSink_DetectCounter_BumpedOnEveryAbsorb_IncludingSuppressed(t *testing.T) {
+	rec := &recordingInserter{}
+	counter := newRecordingCounter()
+	s := NewSink(rec, counter, silentLogger(), SinkConfig{
+		FlushInterval:  20 * time.Millisecond,
+		FlushBatchSize: 1000,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.Run(ctx)
+
+	for i := 0; i < 100; i++ {
+		s.Emit(Event{RouteID: "r", SrcIP: "1.2.3.4", RuleID: "942100", Ts: time.Now(), Action: ActionDetect})
+	}
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	<-s.Done()
+
+	if got := rec.totalEvents(); got != 1 {
+		t.Fatalf("event table rows = %d, want 1 (LRU suppressed the rest)", got)
+	}
+	if got := counter.totalDetects(); got != 100 {
+		t.Fatalf("BumpWafDetects total = %d, want 100 (every absorbed event, incl. suppressed)", got)
+	}
+	// Cross-check: no block-counter pollution.
+	if got := counter.total(); got != 0 {
+		t.Fatalf("BumpWafBlocks total = %d, want 0 (detect events must not pollute the block counter)", got)
 	}
 }
 

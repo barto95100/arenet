@@ -251,7 +251,7 @@ func (r *RetentionRunner) tick(ctx context.Context) {
 func (r *RetentionRunner) rollupHour(ctx context.Context, hourStart time.Time) error {
 	// One query for the whole hour, all routes.
 	rows, err := r.store.db.QueryContext(ctx, `
-SELECT route_id, req_count, fourxx_count, fivexx_count, waf_block_count, throttle_block_count, crowdsec_decision_count, latency_p95_ms
+SELECT route_id, req_count, fourxx_count, fivexx_count, waf_block_count, waf_detect_count, throttle_block_count, crowdsec_decision_count, latency_p95_ms
 FROM bucket_1m
 WHERE ts >= ? AND ts < ?
 `, hourStart.UTC().Unix(), hourStart.Add(time.Hour).UTC().Unix())
@@ -261,22 +261,23 @@ WHERE ts >= ? AND ts < ?
 	defer rows.Close()
 
 	type acc struct {
-		req      int64
-		fourxx   int64
-		fivexx   int64
-		wafBlock int64
-		throttle int64
-		crowdsec int64
-		p95w     int64 // sum of (req_count * latency_p95_ms)
-		p95wDen  int64 // sum of req_count for samples that had latency
-		p95plain int64 // unweighted max as fallback when no traffic
+		req       int64
+		fourxx    int64
+		fivexx    int64
+		wafBlock  int64
+		wafDetect int64
+		throttle  int64
+		crowdsec  int64
+		p95w      int64 // sum of (req_count * latency_p95_ms)
+		p95wDen   int64 // sum of req_count for samples that had latency
+		p95plain  int64 // unweighted max as fallback when no traffic
 	}
 	byRoute := make(map[string]*acc)
 	for rows.Next() {
 		var routeID string
-		var req, fourxx, fivexx, wafBlock, throttle, crowdsec int64
+		var req, fourxx, fivexx, wafBlock, wafDetect, throttle, crowdsec int64
 		var p95 int32
-		if err := rows.Scan(&routeID, &req, &fourxx, &fivexx, &wafBlock, &throttle, &crowdsec, &p95); err != nil {
+		if err := rows.Scan(&routeID, &req, &fourxx, &fivexx, &wafBlock, &wafDetect, &throttle, &crowdsec, &p95); err != nil {
 			return fmt.Errorf("rollup scan: %w", err)
 		}
 		a, ok := byRoute[routeID]
@@ -288,6 +289,7 @@ WHERE ts >= ? AND ts < ?
 		a.fourxx += fourxx
 		a.fivexx += fivexx
 		a.wafBlock += wafBlock
+		a.wafDetect += wafDetect
 		a.throttle += throttle
 		a.crowdsec += crowdsec
 		if req > 0 && p95 > 0 {
@@ -323,6 +325,7 @@ WHERE ts >= ? AND ts < ?
 			FourxxCount:           a.fourxx,
 			FivexxCount:           a.fivexx,
 			WafBlockCount:         a.wafBlock,
+			WafDetectCount:        a.wafDetect,
 			ThrottleBlockCount:    a.throttle,
 			CrowdSecDecisionCount: a.crowdsec,
 			LatencyP95Ms:          p95,
