@@ -6,14 +6,31 @@
 OPEN — non-bloquant, à traiter dans futurs steps polish
 ═══════════════════════════════════════════════════════
 
-## #R-CROWDSEC-audit-updated-at-zero (low) — OPEN
-Audit log "After" snapshot pour crowdsec_updated AND crowdsec_configured 
-capture updated_at=0001-01-01T00:00:00Z (Go zero time). Le snapshot 
-devrait être pris APRÈS que le storage layer assigne 
-updated_at = time.Now(), ou capturer le résultat persisté plutôt que 
-le request payload.
+## #R-CROWDSEC-audit-updated-at-zero — RESOLVED 2026-06-11
+Audit log "After" snapshot pour crowdsec_updated AND 
+crowdsec_configured capturait updated_at=0001-01-01T00:00:00Z 
+(Go zero time) parce que le snapshot était pris depuis la 
+struct `merged` côté handler — alors que 
+`PutCrowdSecConfig` assigne `UpdatedAt = time.Now()` 
+dedans (storage/crowdsec_config.go:262).
 
-Cosmétique — n'affecte pas le runtime bouncer behavior.
+Fix shipped : ajout d'un re-fetch via `GetCrowdSecConfig` 
+juste après `PutCrowdSecConfig` succeed, et utilisation du 
+`persisted` résultat pour le hot-reload, l'audit AfterJSON, 
+ET le response wire. La réponse à l'opérateur surface 
+désormais l'état canonique persisté plutôt qu'un merge 
+côté handler.
+
+Test `TestPutCrowdSecSettings_Audit_CapturesPersistedUpdatedAt` 
+verifies absent de `0001-01-01` dans l'audit AfterJSON ET 
+présence du prefix RFC 3339 de la valeur réellement stockée 
+(via Format au lieu de comparaison exacte pour éviter le 
+coupling à la précision time.Time MarshalJSON).
+
+Si le re-fetch échoue (impossible en pratique vu que le Put 
+vient de réussir), fallback sur `merged` + warn-log plutôt 
+que d'aborter — graceful degradation, l'écriture est de 
+toute façon persistée.
 
 ## #R-CADDY-graceful-shutdown-too-long — RESOLVED 2026-06-11
 Arenet's embedded Caddy uses "eternal grace period" pour les 

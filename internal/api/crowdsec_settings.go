@@ -182,6 +182,29 @@ func (h *Handler) putCrowdSecSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #R-CROWDSEC-audit-updated-at-zero — re-fetch the row
+	// from storage so the audit AfterJSON snapshot carries
+	// the storage-assigned UpdatedAt (PutCrowdSecConfig at
+	// internal/storage/crowdsec_config.go:262 sets it to
+	// time.Now() during the bbolt Update). Pre-fix the
+	// audit captured `merged` directly, which left UpdatedAt
+	// at the Go zero time (0001-01-01T00:00:00Z) in the
+	// audit log — operator-confusing for a "just-updated"
+	// event. Re-fetching is the cheap way to surface the
+	// canonical persisted state without changing the
+	// storage API. The response below also uses the
+	// re-fetched value so the wire response reflects
+	// what was actually persisted.
+	persisted, refetchErr := h.store.GetCrowdSecConfig(r.Context())
+	if refetchErr != nil {
+		// The Put just succeeded so this should not happen
+		// in practice; degrade gracefully by falling back to
+		// `merged` rather than aborting the operation.
+		h.logger.Warn("re-fetch crowdsec config after put failed; audit + response will report client-side merge state",
+			"err", refetchErr)
+		persisted = merged
+	}
+
 	// Hot-reload Caddy. The applier is nil-tolerant: tests
 	// that don't exercise the manager leave SetCrowdSecApplier
 	// unset, and we treat that as "no live bouncer to swap"
@@ -189,7 +212,7 @@ func (h *Handler) putCrowdSecSettings(w http.ResponseWriter, r *http.Request) {
 	// emits). Same pattern as the optional sink readers on
 	// the Handler struct.
 	if h.crowdsecApplier != nil {
-		if err := h.crowdsecApplier.ApplyCrowdSecConfig(r.Context(), merged.LAPIURL, merged.APIKey); err != nil {
+		if err := h.crowdsecApplier.ApplyCrowdSecConfig(r.Context(), persisted.LAPIURL, persisted.APIKey); err != nil {
 			h.logger.Error("caddy reload after crowdsec settings update — rolling back", "err", err)
 			if errors.Is(prevErr, storage.ErrNotFound) {
 				// No previous row to restore — leave the new
@@ -215,14 +238,14 @@ func (h *Handler) putCrowdSecSettings(w http.ResponseWriter, r *http.Request) {
 		Action:     action,
 		TargetType: "crowdsec_config",
 		TargetID:   "default",
-		AfterJSON:  mustMarshalForAudit(crowdSecConfigForAudit(merged)),
+		AfterJSON:  mustMarshalForAudit(crowdSecConfigForAudit(persisted)),
 	}
 	if !errors.Is(prevErr, storage.ErrNotFound) {
 		evt.BeforeJSON = mustMarshalForAudit(crowdSecConfigForAudit(previous))
 	}
 	h.appendAudit(r, evt)
 
-	writeJSON(w, http.StatusOK, crowdSecResponseFor(merged, merged.APIKey != ""))
+	writeJSON(w, http.StatusOK, crowdSecResponseFor(persisted, persisted.APIKey != ""))
 }
 
 // crowdSecTestRequest is the wire shape accepted by POST

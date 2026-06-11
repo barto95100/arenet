@@ -648,3 +648,66 @@ type nopCloser struct {
 }
 
 func (n *nopCloser) Close() error { return nil }
+
+// TestPutCrowdSecSettings_Audit_CapturesPersistedUpdatedAt —
+// #R-CROWDSEC-audit-updated-at-zero. Pre-fix the audit
+// AfterJSON snapshot captured the client-side merge struct,
+// which left UpdatedAt at the Go zero time
+// (0001-01-01T00:00:00Z) because the storage layer assigns
+// UpdatedAt = time.Now() inside PutCrowdSecConfig. Post-fix
+// the handler re-fetches the row before snapshotting, so the
+// audit log shows the actual persisted timestamp. Verify
+// directly against the stored row to avoid coupling to a
+// specific time format on the wire.
+func TestPutCrowdSecSettings_Audit_CapturesPersistedUpdatedAt(t *testing.T) {
+	var logBuf bytes.Buffer
+	appender := &fakeAuditAppender{}
+	h := newTestHandler(t, appender, &logBuf)
+	h.SetCrowdSecApplier(&fakeCrowdSecApplier{})
+
+	body := `{
+		"lapiUrl":"http://crowdsec:8080",
+		"apiKey":"key-abc",
+		"bouncerName":"arenet",
+		"timeoutSeconds":5
+	}`
+	req := reqWithAuth(http.MethodPut, "/api/v1/settings/crowdsec", "user-uuid", "admin", "203.0.113.5", "test")
+	req.Body = httpBody(body)
+	rec := httptest.NewRecorder()
+	h.putCrowdSecSettings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Pull the stored row — its UpdatedAt is what the audit
+	// snapshot SHOULD have captured.
+	stored, err := h.store.GetCrowdSecConfig(context.Background())
+	if err != nil {
+		t.Fatalf("stored read: %v", err)
+	}
+	if stored.UpdatedAt.IsZero() {
+		t.Fatal("stored UpdatedAt is zero; storage didn't set time.Now() — refusing to assert on audit")
+	}
+
+	events := appender.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+	// The AfterJSON must serialise the canonical
+	// updated_at value (RFC 3339 form via Go's default
+	// time.Time marshaller). Pin both the absence of the
+	// Go zero time and the presence of the storage-
+	// assigned value.
+	afterJSON := string(events[0].AfterJSON)
+	if strings.Contains(afterJSON, "0001-01-01") {
+		t.Errorf("audit AfterJSON still carries Go zero-time updated_at: %s", afterJSON)
+	}
+	// Storage UpdatedAt is what we expect to find serialised
+	// in the audit row. time.Time.MarshalJSON emits an RFC
+	// 3339 string trimmed of trailing zeros; pin a prefix
+	// that's stable across truncation.
+	wantPrefix := stored.UpdatedAt.UTC().Format("2006-01-02T15:04:05")
+	if !strings.Contains(afterJSON, wantPrefix) {
+		t.Errorf("audit AfterJSON does not contain stored UpdatedAt prefix %q: %s", wantPrefix, afterJSON)
+	}
+}
