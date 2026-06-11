@@ -15,19 +15,29 @@ le request payload.
 
 Cosmétique — n'affecte pas le runtime bouncer behavior.
 
-## #R-CADDY-graceful-shutdown-too-long (low) — OPEN 2026-06-10
+## #R-CADDY-graceful-shutdown-too-long — RESOLVED 2026-06-11
 Arenet's embedded Caddy uses "eternal grace period" pour les 
 HTTP/2 streaming connections during shutdown. Combiné avec les 
 browser tabs actifs (polling /security?tab=crowdsec every 30s, 
 metrics websocket), le shutdown peut hang jusqu'à 90s timeout 
 systemd avant SIGKILL.
 
-Fix options :
-  - Configure Caddy avec graceful_shutdown timeout court (~5s)
-  - OR systemd unit : TimeoutStopSec=10 + KillMode=mixed
-  - OR cancel context properly avant Caddy.Stop()
+Fix shipped : ajout `"grace_period": "5s"` dans la map 
+`apps.http` émise par `caddymgr/manager.go buildConfigJSON`. 
+Caddy's default (0 = eternal, modules/caddyhttp/app.go:132) 
+remplacé par un cap opérateur-friendly. Test 
+`TestBuildConfigJSON_GracePeriod_Bounded` pin la valeur dans 
+le JSON émis ; le pipeline existant 
+`TestBuildConfigJSON_LoadsCleanly` confirme que Caddy 
+Validate accepte le champ. 5s est :
+  - assez large pour drainer une requête HTTP/1.1 normale
+  - assez court pour qu'une connexion long-poll idle ne 
+    bloque qu'un seul cycle avant l'exit du process
+  - bien sous le timeout systemd 90s (plus de SIGKILL forcé)
 
-Painful avec multiple redeploys (vu pendant CS.3 smoke).
+Alternative options du brief original (systemd 
+TimeoutStopSec, cancel context plus tôt) non nécessaires — 
+le fix Caddy-side suffit.
 
 ## #R-CS2C-anchor-link — RESOLVED 2026-06-11
 Le link "Settings → Security Automation" depuis le 412 state du 

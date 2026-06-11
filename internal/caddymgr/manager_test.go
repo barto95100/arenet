@@ -3163,3 +3163,36 @@ func findRouteByHost(t *testing.T, routes []any, host string) map[string]any {
 	t.Fatalf("route for host %q not found in config", host)
 	return nil
 }
+
+// TestBuildConfigJSON_GracePeriod_Bounded — #R-CADDY-graceful-
+// shutdown-too-long. Caddy's apps.http.grace_period defaults
+// to 0 (eternal) in modules/caddyhttp/app.go:132, which made
+// SIGTERM hang the embedded Caddy for ~90 s waiting on long-
+// poll dashboard tabs before systemd SIGKILL'd it. Pin the
+// emitted JSON to the operator-friendly bounded value so the
+// next config rewrite can't silently regress.
+func TestBuildConfigJSON_GracePeriod_Bounded(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "r1", Host: "x.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var top map[string]any
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	httpApp, ok := top["apps"].(map[string]any)["http"].(map[string]any)
+	if !ok {
+		t.Fatal("apps.http missing in emitted config")
+	}
+	got, ok := httpApp["grace_period"].(string)
+	if !ok {
+		t.Fatalf("apps.http.grace_period missing or not a string; got %T: %v\n%s",
+			httpApp["grace_period"], httpApp["grace_period"], raw)
+	}
+	if got != "5s" {
+		t.Errorf("apps.http.grace_period = %q; want %q", got, "5s")
+	}
+}

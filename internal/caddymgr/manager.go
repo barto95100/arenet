@@ -1441,7 +1441,22 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		"http": map[string]any{
 			"http_port":  httpPortFor(opts.DevMode),
 			"https_port": httpsPortFor(opts.DevMode),
-			"servers":    cfg.Apps.HTTP.Servers,
+			// #R-CADDY-graceful-shutdown-too-long — bound the
+			// grace period so SIGTERM doesn't hang for the
+			// systemd 90s timeout when there's a long-poll or
+			// WebSocket open (dashboard tabs polling
+			// /security?tab=crowdsec every 30s, metrics WS, etc).
+			// Caddy's default is 0 = eternal grace period
+			// (modules/caddyhttp/app.go:132); reading "servers
+			// shutting down with eternal grace period" in the
+			// logs and then watching the process linger was the
+			// operator-visible symptom during CS.3 smoke
+			// redeploys. 5s is large enough to drain a normal
+			// HTTP/1.1 request but small enough that idle
+			// long-poll connections lose at most one tick before
+			// the process exits.
+			"grace_period": "5s",
+			"servers":      cfg.Apps.HTTP.Servers,
 		},
 		"tls": buildTLSApp(acme, opts),
 	}
