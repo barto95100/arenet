@@ -49,6 +49,28 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
 // glue can proceed: finished promise resolves immediately (no
 // animation actually plays), and cancel/finish are no-ops. Tests
 // assert on rendered DOM, not on animation frames.
+// jsdom doesn't ship ResizeObserver. TimelineChart (and any
+// future chart component that relies on the WHATWG resize-
+// observer-pattern for responsive sizing) instantiates one
+// on mount via `new ResizeObserver(...)` — without this shim
+// the dashboard test would surface a ReferenceError as an
+// unhandled exception, failing CI even though the test
+// assertions themselves passed.
+//
+// The shim is a no-op factory: observe / unobserve /
+// disconnect are stubs, no callback is ever invoked. Tests
+// don't measure layout, so a "size never changes" answer is
+// honest. Matches the pattern used by Vitest / Jest jsdom
+// projects across the ecosystem (e.g. testing-library docs'
+// `ResizeObserver mock` recipe).
+if (typeof globalThis.ResizeObserver === 'undefined') {
+	globalThis.ResizeObserver = class ResizeObserver {
+		observe() {}
+		unobserve() {}
+		disconnect() {}
+	} as unknown as typeof ResizeObserver;
+}
+
 if (
 	typeof Element !== 'undefined' &&
 	typeof Element.prototype.animate === 'undefined'
