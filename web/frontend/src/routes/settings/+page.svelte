@@ -20,7 +20,8 @@
   better than full-bleed.
 -->
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { prefersReducedMotion } from 'svelte/motion';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { theme, type Theme } from '$lib/stores/theme.svelte';
@@ -550,6 +551,34 @@
 		void loadForwardAuthProviders();
 		// loadManagedDomains() moved to /certs in #R-6 Pack A.
 		void loadAutomation();
+	});
+
+	// #R-CS2C-anchor-link follow-up — SPA hash scroll.
+	// On initial /settings#security-automation hard-load the
+	// browser tries the fragment BEFORE Svelte hydrates the
+	// route, so the anchor isn't in the DOM yet and the
+	// browser silently gives up. By the time the section
+	// renders, no scroll happens and the operator lands at
+	// the top of the page. afterNavigate fires after the
+	// route is mounted (covers both hard-load and SPA-nav
+	// from the CrowdSec Decisions panel + BanIPModal CTAs).
+	// We await tick() to let Svelte commit the first render
+	// pass, then scrollIntoView the target if it exists.
+	//
+	// Loading branches inside the section render their
+	// spinner first; the anchor wrapper itself is
+	// unconditional so the target IS in the DOM after the
+	// first tick. When the data lands and the spinner
+	// swaps for the form, the viewport position adjusts
+	// naturally to follow the now-grown section.
+	afterNavigate(async () => {
+		await tick();
+		const hash = window.location.hash;
+		if (!hash || hash.length <= 1) return;
+		const target = document.querySelector(hash);
+		if (target instanceof Element) {
+			target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		}
 	});
 </script>
 
