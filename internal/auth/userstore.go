@@ -79,9 +79,10 @@ func ValidateUserForRestore(u User, allowEmptyPasswordHash bool) error {
 		return fmt.Errorf("auth: user with empty ID")
 	}
 	switch u.AuthSource {
-	case UserAuthSourceLocal, UserAuthSourceOIDC:
+	case UserAuthSourceLocal, UserAuthSourceOIDC, UserAuthSourceService:
 	default:
-		return fmt.Errorf("auth: user %q: auth_source %q must be %q or %q", u.ID, u.AuthSource, UserAuthSourceLocal, UserAuthSourceOIDC)
+		return fmt.Errorf("auth: user %q: auth_source %q must be %q, %q, or %q",
+			u.ID, u.AuthSource, UserAuthSourceLocal, UserAuthSourceOIDC, UserAuthSourceService)
 	}
 	switch u.Role {
 	case UserRoleViewer, UserRoleAdmin:
@@ -207,6 +208,86 @@ func (s *UserStore) Create(ctx context.Context, username, displayName, email, pa
 		value, err := json.Marshal(user)
 		if err != nil {
 			return fmt.Errorf("auth: marshal user: %w", err)
+		}
+		return b.Put([]byte(user.ID), value)
+	})
+	if err != nil {
+		return User{}, err
+	}
+	return user, nil
+}
+
+// CreateServiceAccount persists a new service-account user
+// (machine identity, Phase 4). The name is validated against
+// the same regex as human usernames (D5) so display in the
+// /utilisateurs table is consistent. Service accounts have NO
+// PasswordHash and NO OIDCSub by construction; they
+// authenticate exclusively via APIToken (see APITokenStore).
+//
+// Role is the caller's choice (admin OR viewer). Service
+// admins are excluded from the break-glass last-admin guard
+// (only AuthSource=local && Role=admin humans count), so a
+// service-admin can never be the "last admin standing".
+//
+// Returns ErrUsernameTaken if name collides with any
+// existing user (human or service).
+func (s *UserStore) CreateServiceAccount(ctx context.Context, name, role string) (User, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	name = strings.TrimSpace(name)
+	if !usernameRegex.MatchString(name) || len(name) < UsernameMinLen || len(name) > UsernameMaxLen {
+		return User{}, ErrUsernameInvalid
+	}
+	switch role {
+	case UserRoleViewer, UserRoleAdmin:
+	default:
+		return User{}, fmt.Errorf("auth: service account role %q must be %q or %q",
+			role, UserRoleViewer, UserRoleAdmin)
+	}
+
+	now := time.Now().UTC()
+	user := User{
+		ID:              uuid.NewString(),
+		Username:        name,
+		DisplayName:     name,
+		AuthSource:      UserAuthSourceService,
+		Role:            role,
+		HIBPCheckStatus: HIBPStatusSkipped,
+		HIBPCheckedAt:   now,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(usersBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
+		}
+		var taken bool
+		_ = b.ForEach(func(k, v []byte) error {
+			var existing User
+			if err := json.Unmarshal(v, &existing); err != nil {
+				slog.Default().Warn("auth: corrupted user row in bucket, skipping",
+					slog.String("key", string(k)),
+					slog.String("err", err.Error()),
+				)
+				return nil
+			}
+			if existing.Username == name {
+				taken = true
+			}
+			return nil
+		})
+		if taken {
+			return ErrUsernameTaken
+		}
+		value, err := json.Marshal(user)
+		if err != nil {
+			return fmt.Errorf("auth: marshal service-account user: %w", err)
 		}
 		return b.Put([]byte(user.ID), value)
 	})

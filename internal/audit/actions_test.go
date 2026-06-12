@@ -25,9 +25,9 @@ import "testing"
 // actions without updating the spec / decisions doc is a process
 // violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 40
+	const wantCount = 43
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3)", got, wantCount)
 	}
 }
 
@@ -141,6 +141,14 @@ func TestAllActions_ExactSet(t *testing.T) {
 		// /api/v1/admin/users/{id} emits this on success.
 		// Last-admin guard rejects before the audit fires.
 		"user_deleted": true,
+		// Phase 4 (+3) — service-account lifecycle audit
+		// events. The plain token is NEVER stored in the
+		// audit row; only the metadata (name, role, expiry
+		// presence) and the human admin who pressed the
+		// button.
+		"service_account_created":       true,
+		"service_account_token_rotated": true,
+		"service_account_deleted":       true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {

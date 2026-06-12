@@ -78,10 +78,18 @@ type User struct {
 	Role string `json:"role"`
 }
 
-// AuthSource constants (Step K.2).
+// AuthSource constants (Step K.2 + Phase 4).
 const (
 	UserAuthSourceLocal = "local" // username + PasswordHash, Step D
 	UserAuthSourceOIDC  = "oidc"  // OIDC sub mapped to this user
+	// UserAuthSourceService (Phase 4) is a machine-only
+	// identity. No PasswordHash, no OIDCSub. Authenticates
+	// exclusively via an Authorization: Bearer header carrying
+	// an APIToken (see APITokenStore). Service users are
+	// EXCLUDED from the break-glass last-admin guard — only
+	// human local admins count, so a service-admin can never
+	// lock out humans by being the last admin in the system.
+	UserAuthSourceService = "service"
 )
 
 // Role constants (Step K.2 — §1.3 decision 12).

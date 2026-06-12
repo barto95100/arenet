@@ -84,6 +84,18 @@ const (
 	// admin before this audit ever fires.
 	ActionUserDeleted               = "user_deleted"
 
+	// Phase 4 — service-account lifecycle (3 actions). The plain
+	// token is NEVER recorded in BeforeJSON / AfterJSON; only the
+	// service-account user identity + token metadata (id, name,
+	// expiry presence) lands in the audit row. Token issuance
+	// events are NOT per-request — only create / rotate / delete
+	// land here; the LastUsedAt timestamp on the token row
+	// covers the "was this token used recently?" question without
+	// flooding audit on every Bearer call.
+	ActionServiceAccountCreated      = "service_account_created"
+	ActionServiceAccountTokenRotated = "service_account_token_rotated"
+	ActionServiceAccountDeleted      = "service_account_deleted"
+
 	// Step K.3 — backup / restore (3). The restore is significantly
 	// more destructive than the export; both must be audited and the
 	// failure path emits its own dedicated event so a rejected
@@ -194,6 +206,9 @@ var allActions = []string{
 	ActionLocalAdminPasswordRotated,
 	ActionUserRoleChanged,
 	ActionUserDeleted,
+	ActionServiceAccountCreated,
+	ActionServiceAccountTokenRotated,
+	ActionServiceAccountDeleted,
 	ActionConfigExported,
 	ActionConfigRestored,
 	ActionConfigRestoredRejected,

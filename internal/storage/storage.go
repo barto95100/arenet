@@ -31,9 +31,10 @@ import (
 // Bucket names used inside the BoltDB file.
 const (
 	bucketRoutes   = "routes"
-	bucketUsers    = "users"
-	bucketSessions = "sessions"
-	bucketAudit    = "audit"
+	bucketUsers     = "users"
+	bucketSessions  = "sessions"
+	bucketAudit     = "audit"
+	bucketAPITokens = "api_tokens" // Phase 4 — service-account bearer tokens
 	// Step J.4 — instance-level DNS provider configurations, keyed
 	// by provider name (v1.0: only "ovh"). Parallel to the existing
 	// settings storage rather than mixed in, so the secret scan is
@@ -104,6 +105,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketUsers),                // Step D
 			[]byte(bucketSessions),             // Step D
 			[]byte(bucketAudit),                // Step D
+			[]byte(bucketAPITokens),            // Phase 4 — service-account tokens
 			[]byte(bucketDNSProviders),         // Step J.4
 			[]byte(bucketForwardAuthProviders), // Step K.1
 			[]byte(bucketOIDCConfig),           // Step K.2
