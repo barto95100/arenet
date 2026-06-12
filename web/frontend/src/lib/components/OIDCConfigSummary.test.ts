@@ -31,6 +31,11 @@ vi.mock('$lib/stores/toast', () => ({
 	pushToast: (message: string, variant?: string) => pushToastMock(message, variant)
 }));
 
+const gotoMock = vi.fn<(url: string) => Promise<void>>();
+vi.mock('$app/navigation', () => ({
+	goto: (url: string) => gotoMock(url)
+}));
+
 const configuredEnabled: OIDCConfig = {
 	enabled: true,
 	configured: true,
@@ -49,6 +54,8 @@ beforeEach(() => {
 	getOIDCConfigMock.mockReset();
 	testOIDCConnectionMock.mockReset();
 	pushToastMock.mockReset();
+	gotoMock.mockReset();
+	gotoMock.mockResolvedValue();
 });
 
 describe('OIDCConfigSummary — Phase 2 polish', () => {
@@ -146,5 +153,46 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 
 		await waitFor(() => expect(screen.getByText('Configurer')).toBeTruthy());
 		expect(screen.queryByText('Tester la connexion')).toBeNull();
+	});
+
+	it('navigates via SvelteKit goto when "Modifier la config" is clicked', async () => {
+		getOIDCConfigMock.mockResolvedValue(configuredEnabled);
+		const Component = (await import('./OIDCConfigSummary.svelte')).default;
+		render(Component);
+		await waitFor(() => screen.getByTestId('oidc-edit-button'));
+
+		await fireEvent.click(screen.getByTestId('oidc-edit-button'));
+
+		expect(gotoMock).toHaveBeenCalledWith('/settings#oidc-config');
+	});
+
+	it('renders the Client secret + Email non vérifié rows aligned with the storage struct', async () => {
+		getOIDCConfigMock.mockResolvedValue({
+			...configuredEnabled,
+			clientSecretSet: true,
+			acceptUnverifiedEmail: true
+		});
+
+		const Component = (await import('./OIDCConfigSummary.svelte')).default;
+		render(Component);
+
+		await waitFor(() => expect(screen.getByText('Client secret')).toBeTruthy());
+		expect(screen.getByText('défini')).toBeTruthy();
+		expect(screen.getByText('Email non vérifié')).toBeTruthy();
+		expect(screen.getByText('accepté')).toBeTruthy();
+	});
+
+	it('renders "manquant" + "refusé" badges when client secret missing and email verified strictly required', async () => {
+		getOIDCConfigMock.mockResolvedValue({
+			...configuredEnabled,
+			clientSecretSet: false,
+			acceptUnverifiedEmail: false
+		});
+
+		const Component = (await import('./OIDCConfigSummary.svelte')).default;
+		render(Component);
+
+		await waitFor(() => expect(screen.getByText('manquant')).toBeTruthy());
+		expect(screen.getByText('refusé')).toBeTruthy();
 	});
 });

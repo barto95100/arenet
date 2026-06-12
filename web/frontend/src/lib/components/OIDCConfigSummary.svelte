@@ -25,6 +25,7 @@
 	import { pushToast } from '$lib/stores/toast';
 	import { oidcProviderLabel, hostnameOf } from '$lib/utils/oidc-labels';
 	import type { OIDCConfig } from '$lib/api/types';
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
 	let config = $state<OIDCConfig | null>(null);
@@ -106,7 +107,12 @@
 			dans Settings.
 		</p>
 		<div class="mt-4 flex justify-end">
-			<Button variant="primary" size="sm" onclick={() => (window.location.href = '/settings#oidc-config')}>
+			<Button
+				variant="primary"
+				size="sm"
+				onclick={() => goto('/settings#oidc-config')}
+				data-testid="oidc-configure-button"
+			>
 				Configurer
 			</Button>
 		</div>
@@ -153,6 +159,26 @@
 				<dt class="text-secondary">Redirect</dt>
 				<dd class="font-mono break-all">{config.redirectUrl}</dd>
 			</div>
+			<div class="grid grid-cols-[7rem_1fr] gap-x-3 py-2">
+				<dt class="text-secondary">Client secret</dt>
+				<dd>
+					{#if config.clientSecretSet}
+						<Badge variant="status-up">défini</Badge>
+					{:else}
+						<Badge variant="status-warn">manquant</Badge>
+					{/if}
+				</dd>
+			</div>
+			<div class="grid grid-cols-[7rem_1fr] gap-x-3 py-2">
+				<dt class="text-secondary">Email non vérifié</dt>
+				<dd>
+					{#if config.acceptUnverifiedEmail}
+						<Badge variant="status-warn">accepté</Badge>
+					{:else}
+						<Badge variant="neutral">refusé</Badge>
+					{/if}
+				</dd>
+			</div>
 		</dl>
 
 		<footer class="mt-4 flex items-center justify-between gap-2">
@@ -168,7 +194,7 @@
 			<Button
 				variant="primary"
 				size="sm"
-				onclick={() => (window.location.href = '/settings#oidc-config')}
+				onclick={() => goto('/settings#oidc-config')}
 				data-testid="oidc-edit-button"
 			>
 				Modifier la config
