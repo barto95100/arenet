@@ -32,6 +32,7 @@ import type {
 	OIDCAllowlistAddRequest,
 	OIDCConfig,
 	OIDCConfigRequest,
+	OIDCTestResult,
 	UpdateUserRoleRequest
 } from './types';
 
@@ -115,6 +116,10 @@ export const settingsApi = {
 	getOIDCConfig: (): Promise<OIDCConfig> => request<OIDCConfig>('GET', '/settings/oidc'),
 	putOIDCConfig: (r: OIDCConfigRequest): Promise<OIDCConfig> =>
 		request<OIDCConfig>('PUT', '/settings/oidc', r),
+	// Phase 2 Users-page refactor — operator-triggered discovery
+	// probe. No request body (backend reads the saved config).
+	testOIDCConnection: (): Promise<OIDCTestResult> =>
+		request<OIDCTestResult>('POST', '/settings/oidc/test'),
 
 	// Step K.2 — OIDC allowlist. add lower-cases the email; delete
 	// is keyed by the same lower-cased email. The Sub canonicalises

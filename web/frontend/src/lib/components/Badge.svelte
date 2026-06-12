@@ -10,6 +10,7 @@
 		| 'tls'
 		| 'waf'
 		| 'status-up'
+		| 'status-up-outline'
 		| 'status-warn'
 		| 'status-down'
 		| 'status-info'
@@ -58,6 +59,15 @@
 	}
 	.badge[data-variant='status-up'] {
 		background: var(--badge-success-bg);
+		border-color: var(--badge-success-border);
+		color: var(--status-up);
+	}
+	/* Phase 2 OIDC sidebar — transparent-fill variant for the
+	 * "CONNECTÉ" status pill in the OIDCConfigSummary sidebar.
+	 * Same border + color as status-up but no background fill,
+	 * matching the mockup's outline-only badge treatment. */
+	.badge[data-variant='status-up-outline'] {
+		background: transparent;
 		border-color: var(--badge-success-border);
 		color: var(--status-up);
 	}

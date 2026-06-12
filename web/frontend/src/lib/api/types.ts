@@ -884,6 +884,24 @@ export interface OIDCConfigRequest {
 }
 
 /**
+ * Phase 2 Users-page refactor — response shape of POST /settings
+ * /oidc/test. The "Tester la connexion" button in the
+ * OIDCConfigSummary sidebar drives this. Always HTTP 200; the
+ * `reachable` flag distinguishes success from probe failure.
+ * `missingScopes` is populated only when `scopesMatch` is false,
+ * giving the toast an actionable "missing: groups, email" message.
+ */
+export interface OIDCTestResult {
+	reachable: boolean;
+	issuer?: string;
+	supportedScopes?: string[];
+	scopesMatch: boolean;
+	missingScopes?: string[];
+	latencyMs: number;
+	error?: string;
+}
+
+/**
  * Step K.2 — one allowlisted identity. Sub is empty until the
  * user's first successful login canonicalises the entry (§5.2);
  * firstLoginAt is the timestamp of that canonicalisation. The UI

@@ -1353,8 +1353,13 @@
 	</div>
 
 	<!-- ROW 2.85 — OIDC SSO (Step K.2 §5.2). Self-contained
-	     component to keep the settings page tractable. -->
-	<OIDCSettingsSection />
+	     component to keep the settings page tractable.
+	     Phase 2 Users-page refactor — id anchor target for
+	     the "Modifier la config" button in the
+	     OIDCConfigSummary sidebar on /utilisateurs. -->
+	<div id="oidc-config">
+		<OIDCSettingsSection />
+	</div>
 
 	<!-- ROW 2.87 — CrowdSec bouncer (Step CS.1). Sits next
 	     to OIDC since both are admin-facing secret-config
