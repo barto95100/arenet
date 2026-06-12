@@ -357,6 +357,69 @@ func (s *SessionStore) ListForUser(ctx context.Context, userID string) ([]Sessio
 	return out, nil
 }
 
+// UserActivity is one entry of ListAllActive's result map.
+// LastActivity is the timestamp of the most-recent live
+// session for the user (the freshest Touch); ActiveCount is
+// how many non-expired sessions exist (multi-device aware).
+type UserActivity struct {
+	LastActivity time.Time
+	ActiveCount  int
+}
+
+// ListAllActive returns one entry per user with at least one
+// non-expired session, keyed by user ID. The map's
+// LastActivity is the most-recent activity across the user's
+// sessions; ActiveCount is the number of non-expired sessions
+// (multi-device sign-in surfaces). Expired sessions are
+// silently skipped — the lazy cleanup goroutine will purge
+// them on its own schedule.
+//
+// Used by the /utilisateurs page (users-page Phase 1
+// refactor) to render the per-row "online / active / offline"
+// indicator: threshold buckets are computed client-side from
+// LastActivity (≤5min = online, ≤1h = active, else offline).
+//
+// Single-pass bucket scan; runs in O(N) where N is the total
+// session count. On a homelab with at most a few admin users
+// this is trivially cheap; defensive 5s timeout matches the
+// rest of the SessionStore API.
+func (s *SessionStore) ListAllActive(ctx context.Context) (map[string]UserActivity, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	now := time.Now().UTC()
+	out := map[string]UserActivity{}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(sessionsBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", sessionsBucketName)
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var sess Session
+			if err := json.Unmarshal(v, &sess); err != nil {
+				return nil // skip malformed
+			}
+			if !sess.ExpiresAt.After(now) {
+				return nil // expired — lazy cleanup will purge
+			}
+			entry := out[sess.UserID]
+			entry.ActiveCount++
+			if sess.LastActivity.After(entry.LastActivity) {
+				entry.LastActivity = sess.LastActivity
+			}
+			out[sess.UserID] = entry
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CleanupExpired deletes all sessions with ExpiresAt < now. Called by
 // the background cleanup goroutine every 6 hours (wired in Chunk 4).
 // Returns the number of sessions deleted.

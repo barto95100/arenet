@@ -35,6 +35,13 @@ type User struct {
 	ID                  string    `json:"id"`                // UUID v4
 	Username            string    `json:"username"`          // lowercase, 3..32
 	DisplayName         string    `json:"display_name"`      // free text, ≤64
+	// Email is the user's primary contact address. Required on
+	// new local accounts (setup flow + future invites — Phase 1
+	// of the users-page refactor) and populated best-effort from
+	// the OIDC `email` claim on every login. Pre-fix rows decode
+	// to "" — omitempty keeps the on-disk JSON tight for
+	// legacy users. Frontend displays "—" when empty.
+	Email               string    `json:"email,omitempty"`
 	PasswordHash        string    `json:"password_hash"`     // argon2id PHC string — never expose via HTTP
 	HIBPCheckStatus     string    `json:"hibp_check_status"` // "pending" | "clean" | "compromised" | "skipped"
 	HIBPCheckedAt       time.Time `json:"hibp_checked_at,omitempty"`

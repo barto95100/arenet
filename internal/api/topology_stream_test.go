@@ -88,7 +88,7 @@ func newStreamTestEnv(t *testing.T, tickMs int) *streamTestEnv {
 
 	// Bootstrap an admin user + session for hard-auth.
 	ctx := context.Background()
-	user, err := userStore.Create(ctx, "tester", "Tester", "test-password-15c-xx")
+	user, err := userStore.Create(ctx, "tester", "Tester", "", "test-password-15c-xx")
 	if err != nil {
 		t.Fatalf("bootstrap user: %v", err)
 	}

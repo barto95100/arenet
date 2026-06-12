@@ -76,6 +76,13 @@ const (
 	ActionLoginBreakGlass           = "login_break_glass"
 	ActionLocalAdminPasswordRotated = "local_admin_password_rotated"
 	ActionUserRoleChanged           = "user_role_changed"
+	// User deletion (users-page Phase 1 refactor).
+	// Mirrors ActionRouteDeleted shape: emitted AFTER the
+	// bbolt delete succeeds, with BeforeJSON capturing the
+	// deleted user's wire response and AfterJSON empty. The
+	// last-admin guard rejects deletes of the only local
+	// admin before this audit ever fires.
+	ActionUserDeleted               = "user_deleted"
 
 	// Step K.3 — backup / restore (3). The restore is significantly
 	// more destructive than the export; both must be audited and the
@@ -186,6 +193,7 @@ var allActions = []string{
 	ActionLoginBreakGlass,
 	ActionLocalAdminPasswordRotated,
 	ActionUserRoleChanged,
+	ActionUserDeleted,
 	ActionConfigExported,
 	ActionConfigRestored,
 	ActionConfigRestoredRejected,

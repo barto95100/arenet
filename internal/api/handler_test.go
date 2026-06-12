@@ -212,7 +212,7 @@ func newAutoAuthRouter(t *testing.T, raw http.Handler, store *storage.Store, ss 
 		mu.Lock()
 		if !ready {
 			ctx := context.Background()
-			u, err := us.Create(ctx, "tester", "Tester", "test-password-15c-xx")
+			u, err := us.Create(ctx, "tester", "Tester", "", "test-password-15c-xx")
 			if err != nil {
 				mu.Unlock()
 				t.Fatalf("autoAuth: bootstrap user: %v", err)

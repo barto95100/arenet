@@ -312,6 +312,11 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Delete("/settings/oidc/allowlist/{email}", h.deleteOIDCAllowlist)
 				r.Get("/admin/users", h.listAdminUsers)
 				r.Post("/admin/users/{id}/role", h.updateUserRole)
+				// Users-page Phase 1 refactor — delete an
+				// admin user. Last-admin guard fires inside
+				// UserStore.Delete; sessions are cascaded
+				// inside the handler.
+				r.Delete("/admin/users/{id}", h.deleteAdminUser)
 				// Step K.3 — backup / restore.
 				r.Get("/admin/backup", h.getBackup)
 				r.Post("/admin/restore", h.postRestore)

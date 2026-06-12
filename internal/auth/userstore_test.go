@@ -69,7 +69,7 @@ func TestUserStore_Create_HappyPath(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	u, err := s.Create(ctx, "admin", "Site Admin", "correct horse battery staple")
+	u, err := s.Create(ctx, "admin", "Site Admin", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestUserStore_Create_HappyPath(t *testing.T) {
 // (m=64MiB, t=3, p=4).
 func TestUserStore_Create_Argon2idParams(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
-	u, err := s.Create(context.Background(), "admin", "", "correct horse battery staple")
+	u, err := s.Create(context.Background(), "admin", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestUserStore_Create_UsernameValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewUserStore(newTestDB(t))
-			_, err := s.Create(context.Background(), tc.username, "", "correct horse battery staple")
+			_, err := s.Create(context.Background(), tc.username, "", "", "correct horse battery staple")
 			if tc.want == nil {
 				if err != nil {
 					t.Errorf("want nil, got %v", err)
@@ -165,22 +165,22 @@ func TestUserStore_Create_PasswordLength(t *testing.T) {
 	ctx := context.Background()
 
 	// 14 chars: too short.
-	_, err := s.Create(ctx, "admin1", "", strings.Repeat("a", 14))
+	_, err := s.Create(ctx, "admin1", "", "", strings.Repeat("a", 14))
 	if !errors.Is(err, ErrPasswordTooShort) {
 		t.Errorf("14 chars: want ErrPasswordTooShort, got %v", err)
 	}
 	// 129 chars: too long.
-	_, err = s.Create(ctx, "admin2", "", strings.Repeat("a", 129))
+	_, err = s.Create(ctx, "admin2", "", "", strings.Repeat("a", 129))
 	if !errors.Is(err, ErrPasswordTooLong) {
 		t.Errorf("129 chars: want ErrPasswordTooLong, got %v", err)
 	}
 	// 15 chars: OK boundary.
-	_, err = s.Create(ctx, "admin3", "", strings.Repeat("a", 15))
+	_, err = s.Create(ctx, "admin3", "", "", strings.Repeat("a", 15))
 	if err != nil {
 		t.Errorf("15 chars: want nil, got %v", err)
 	}
 	// 128 chars: OK boundary.
-	_, err = s.Create(ctx, "admin4", "", strings.Repeat("a", 128))
+	_, err = s.Create(ctx, "admin4", "", "", strings.Repeat("a", 128))
 	if err != nil {
 		t.Errorf("128 chars: want nil, got %v", err)
 	}
@@ -188,7 +188,7 @@ func TestUserStore_Create_PasswordLength(t *testing.T) {
 
 func TestUserStore_Create_DisplayNameTooLong(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
-	_, err := s.Create(context.Background(), "admin", strings.Repeat("a", 65), "correct horse battery staple")
+	_, err := s.Create(context.Background(), "admin", strings.Repeat("a", 65), "", "correct horse battery staple")
 	if !errors.Is(err, ErrDisplayNameTooLong) {
 		t.Errorf("want ErrDisplayNameTooLong, got %v", err)
 	}
@@ -198,10 +198,10 @@ func TestUserStore_Create_UsernameTaken(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	if _, err := s.Create(ctx, "admin", "", "correct horse battery staple"); err != nil {
+	if _, err := s.Create(ctx, "admin", "", "", "correct horse battery staple"); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	_, err := s.Create(ctx, "admin", "", "another correct password long")
+	_, err := s.Create(ctx, "admin", "", "", "another correct password long")
 	if !errors.Is(err, ErrUsernameTaken) {
 		t.Errorf("want ErrUsernameTaken, got %v", err)
 	}
@@ -209,7 +209,7 @@ func TestUserStore_Create_UsernameTaken(t *testing.T) {
 
 func TestUserStore_Create_UsernameTrimmed(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
-	u, err := s.Create(context.Background(), "  admin  ", "", "correct horse battery staple")
+	u, err := s.Create(context.Background(), "  admin  ", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestUserStore_GetByID(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestUserStore_GetByUsername(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestUserStore_Count(t *testing.T) {
 		t.Errorf("want 0, got %d", n)
 	}
 
-	if _, err := s.Create(ctx, "admin", "", "correct horse battery staple"); err != nil {
+	if _, err := s.Create(ctx, "admin", "", "", "correct horse battery staple"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	n, err = s.Count(ctx)
@@ -305,7 +305,7 @@ func TestUserStore_UpdatePassword(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	created, err := s.Create(ctx, "admin", "", "first password 15 chars")
+	created, err := s.Create(ctx, "admin", "", "", "first password 15 chars")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestUserStore_UpdatePassword_Errors(t *testing.T) {
 		t.Errorf("ghost id: want ErrUserNotFound, got %v", err)
 	}
 
-	created, _ := s.Create(ctx, "admin", "", "correct horse battery staple")
+	created, _ := s.Create(ctx, "admin", "", "", "correct horse battery staple")
 	if err := s.UpdatePassword(ctx, created.ID, "short"); !errors.Is(err, ErrPasswordTooShort) {
 		t.Errorf("short: want ErrPasswordTooShort, got %v", err)
 	}
@@ -373,7 +373,7 @@ func TestUserStore_UpdateHIBPStatus(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestUpdateThemePreference_ValidDark(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestUpdateThemePreference_ValidLight(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestUpdateThemePreference_InvalidRejected(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -506,7 +506,7 @@ func TestUpdateThemePreference_PersistenceRoundtrip(t *testing.T) {
 	s := NewUserStore(db)
 	ctx := context.Background()
 
-	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestUserStore_RecordLogin(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()
 
-	created, err := s.Create(ctx, "admin", "", "correct horse battery staple")
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -554,5 +554,155 @@ func TestUserStore_RecordLogin(t *testing.T) {
 
 	if err := s.RecordLogin(ctx, ""); !errors.Is(err, ErrUserNotFound) {
 		t.Errorf("empty id: want ErrUserNotFound, got %v", err)
+	}
+}
+
+// --- Users-page Phase 1 refactor: Email + Delete + UpdateEmail tests
+
+func TestUserStore_Email_RoundTrip(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+	u, err := s.Create(ctx, "alice", "Alice", "alice@example.test", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if u.Email != "alice@example.test" {
+		t.Errorf("returned Email = %q; want %q", u.Email, "alice@example.test")
+	}
+	got, err := s.GetByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Email != "alice@example.test" {
+		t.Errorf("persisted Email = %q; want %q", got.Email, "alice@example.test")
+	}
+}
+
+func TestUserStore_Email_EmptyStringPersists(t *testing.T) {
+	// Empty email is a legitimate Phase-1 state (pre-fix
+	// local users that haven't gone through a future email-
+	// edit flow; OIDC users whose IdP didn't emit the claim).
+	// The omitempty JSON tag means the stored row may not
+	// have an "email" key at all — both Create("") and
+	// GetByID must surface Email="" without surprises.
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+	u, err := s.Create(ctx, "alice", "Alice", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, _ := s.GetByID(ctx, u.ID)
+	if got.Email != "" {
+		t.Errorf("Email = %q; want empty", got.Email)
+	}
+}
+
+func TestUserStore_Delete_HappyPath(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+	// Two local admins so the last-admin guard doesn't fire
+	// when we delete one.
+	a, err := s.Create(ctx, "alice", "Alice", "alice@example.test", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("Create alice: %v", err)
+	}
+	if _, err := s.Create(ctx, "bob", "Bob", "bob@example.test", "another correct password 15"); err != nil {
+		t.Fatalf("Create bob: %v", err)
+	}
+	if err := s.Delete(ctx, a.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.GetByID(ctx, a.ID); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("post-delete GetByID = %v; want ErrUserNotFound", err)
+	}
+}
+
+func TestUserStore_Delete_LastLocalAdmin_Blocked(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+	a, err := s.Create(ctx, "alice", "Alice", "alice@example.test", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("Create alice: %v", err)
+	}
+	err = s.Delete(ctx, a.ID)
+	if err == nil {
+		t.Fatal("Delete of last local admin succeeded; want guard-error")
+	}
+	if !strings.Contains(err.Error(), "break-glass") {
+		t.Errorf("error = %v; want message mentioning break-glass", err)
+	}
+	// And the user must still exist.
+	if _, err := s.GetByID(ctx, a.ID); err != nil {
+		t.Errorf("user evaporated despite blocked delete: %v", err)
+	}
+}
+
+func TestUserStore_Delete_OIDCAdmin_DoesNotTriggerGuard(t *testing.T) {
+	// OIDC-source admins don't count for the break-glass
+	// channel. Deleting the only OIDC admin while a local
+	// admin exists is fine; deleting the only LOCAL admin
+	// while OIDC admins exist would still be blocked
+	// (covered by the LastLocalAdmin_Blocked test).
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+	if _, err := s.Create(ctx, "alice", "Alice", "alice@example.test", "correct horse battery staple"); err != nil {
+		t.Fatalf("Create alice: %v", err)
+	}
+	oidc, err := s.CreateOIDCUser(ctx, "carol", "Carol", "carol@example.test", "oidc-sub-carol")
+	if err != nil {
+		t.Fatalf("CreateOIDCUser: %v", err)
+	}
+	// Elevate Carol to admin so the guard would fire if she
+	// counted toward the break-glass quota.
+	if err := s.UpdateRole(ctx, oidc.ID, UserRoleAdmin); err != nil {
+		t.Fatalf("UpdateRole: %v", err)
+	}
+	if err := s.Delete(ctx, oidc.ID); err != nil {
+		t.Fatalf("Delete OIDC admin: %v", err)
+	}
+}
+
+func TestUserStore_Delete_NotFound(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+	if err := s.Delete(ctx, "no-such-user"); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("Delete unknown id = %v; want ErrUserNotFound", err)
+	}
+}
+
+func TestUserStore_UpdateEmail_RoundTrip(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+	u, err := s.Create(ctx, "alice", "Alice", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.UpdateEmail(ctx, u.ID, "alice@new.test"); err != nil {
+		t.Fatalf("UpdateEmail: %v", err)
+	}
+	got, _ := s.GetByID(ctx, u.ID)
+	if got.Email != "alice@new.test" {
+		t.Errorf("Email = %q; want %q", got.Email, "alice@new.test")
+	}
+}
+
+func TestUserStore_UpdateEmail_NoChange_NoOp(t *testing.T) {
+	// Calling UpdateEmail with the already-stored value
+	// must not touch UpdatedAt — the OIDC callback hits
+	// this path on every login.
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+	u, err := s.Create(ctx, "alice", "Alice", "alice@example.test", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	originalUpdatedAt := u.UpdatedAt
+	time.Sleep(10 * time.Millisecond) // make sure now() differs
+	if err := s.UpdateEmail(ctx, u.ID, "alice@example.test"); err != nil {
+		t.Fatalf("UpdateEmail: %v", err)
+	}
+	got, _ := s.GetByID(ctx, u.ID)
+	if !got.UpdatedAt.Equal(originalUpdatedAt) {
+		t.Errorf("UpdatedAt drifted on no-op UpdateEmail: %v vs %v", got.UpdatedAt, originalUpdatedAt)
 	}
 }

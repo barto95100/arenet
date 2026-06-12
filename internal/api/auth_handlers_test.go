@@ -114,6 +114,7 @@ func TestSetup_HappyPath(t *testing.T) {
 		"setupToken":  token,
 		"username":    "admin",
 		"displayName": "Site Admin",
+		"email":       "admin@example.test",
 		"password":    "correct horse battery staple",
 	})
 
@@ -196,6 +197,7 @@ func TestSetup_DevMode_OmitsSecure(t *testing.T) {
 	rec := postJSON(t, router, "/api/v1/auth/setup", map[string]string{
 		"setupToken": token,
 		"username":   "admin",
+		"email":      "admin@example.test",
 		"password":   "correct horse battery staple",
 	})
 	if rec.Code != http.StatusCreated {
@@ -214,6 +216,7 @@ func TestSetup_404WhenAdminExists(t *testing.T) {
 	rec := postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
 		"setupToken": token,
 		"username":   "admin",
+		"email":      "admin@example.test",
 		"password":   "correct horse battery staple",
 	})
 	if rec.Code != http.StatusCreated {
@@ -224,6 +227,7 @@ func TestSetup_404WhenAdminExists(t *testing.T) {
 	rec = postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
 		"setupToken": token, // even with a valid token, must 404
 		"username":   "admin2",
+		"email":      "admin@example.test",
 		"password":   "another correct passphrase",
 	})
 	if rec.Code != http.StatusNotFound {
@@ -239,6 +243,7 @@ func TestSetup_403WhenTokenInvalid(t *testing.T) {
 	rec := postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
 		"setupToken": "wrong-token",
 		"username":   "admin",
+		"email":      "admin@example.test",
 		"password":   "correct horse battery staple",
 	})
 	if rec.Code != http.StatusForbidden {
@@ -254,6 +259,7 @@ func TestSetup_400OnPasswordTooShort(t *testing.T) {
 	rec := postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
 		"setupToken": token,
 		"username":   "admin",
+		"email":      "admin@example.test",
 		"password":   "short",
 	})
 	if rec.Code != http.StatusBadRequest {
@@ -269,6 +275,7 @@ func TestSetup_400OnUsernameInvalid(t *testing.T) {
 	rec := postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
 		"setupToken": token,
 		"username":   "Admin", // uppercase rejected
+		"email":      "admin@example.test",
 		"password":   "correct horse battery staple",
 	})
 	if rec.Code != http.StatusBadRequest {
@@ -286,6 +293,7 @@ func TestSetup_400OnCommonPassword(t *testing.T) {
 	rec := postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
 		"setupToken": token,
 		"username":   "admin",
+		"email":      "admin@example.test",
 		"password":   "Mailcreated5240",
 	})
 	if rec.Code != http.StatusBadRequest {
@@ -323,6 +331,7 @@ func TestSetup_400OnDisplayNameTooLong(t *testing.T) {
 	rec := postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
 		"setupToken":  token,
 		"username":    "admin",
+		"email":      "admin@example.test",
 		"displayName": long,
 		"password":    "correct horse battery staple",
 	})
@@ -354,6 +363,7 @@ func TestSetup_TokenInvalidatedAfterSuccess(t *testing.T) {
 	rec := postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
 		"setupToken": token,
 		"username":   "admin",
+		"email":      "admin@example.test",
 		"password":   "correct horse battery staple",
 	})
 	if rec.Code != http.StatusCreated {
@@ -484,6 +494,7 @@ func TestSetup_ClientIPCapturedInSession(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{
 		"setupToken": token,
 		"username":   "admin",
+		"email":      "admin@example.test",
 		"password":   "correct horse battery staple",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/setup", strings.NewReader(string(body)))
@@ -534,6 +545,7 @@ func adminBootstrap(t *testing.T, env *testEnv, token, username, password string
 		"setupToken":  token,
 		"username":    username,
 		"displayName": "Admin",
+		"email":       "admin@example.test",
 		"password":    password,
 	})
 	if rec.Code != http.StatusCreated {
@@ -1567,7 +1579,7 @@ func TestPatchTheme_RefreshesThemeCookie(t *testing.T) {
 func TestSetup_SetsThemeCookieAsDark(t *testing.T) {
 	env, token := setupTestEnv(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/setup",
-		strings.NewReader(`{"setupToken":"`+token+`","username":"admin","displayName":"","password":"`+testAdminPassword+`"}`))
+		strings.NewReader(`{"setupToken":"`+token+`","username":"admin","displayName":"","email":"admin@example.test","password":"`+testAdminPassword+`"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)

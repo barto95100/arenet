@@ -86,7 +86,7 @@ func TestCertEvents_Viewer200(t *testing.T) {
 	m.env.handler.SetCertEventReader(&fakeCertEventReader{})
 
 	ctx := context.Background()
-	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "cert-events-viewer", "Cert Events Viewer", "sub-cert-events-viewer")
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "cert-events-viewer", "Cert Events Viewer", "", "sub-cert-events-viewer")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}

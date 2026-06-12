@@ -126,7 +126,13 @@ func NewUserStore(db *bolt.DB) *UserStore {
 // theoretical race where two concurrent Create calls both pass the
 // pre-transaction validation is resolved inside the transaction: the
 // second caller observes the first's insertion and gets ErrUsernameTaken.
-func (s *UserStore) Create(ctx context.Context, username, displayName, password string) (User, error) {
+// Create persists a new local user. `email` is the user's
+// contact address (now required for new local accounts —
+// users-page Phase 1 refactor; callers validate the wire-
+// level shape before calling). Pre-fix call sites that pass
+// "" will produce a user with Email="" — bbolt JSON tolerates
+// the absent field on read; the wire response renders "—".
+func (s *UserStore) Create(ctx context.Context, username, displayName, email, password string) (User, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
@@ -157,6 +163,7 @@ func (s *UserStore) Create(ctx context.Context, username, displayName, password 
 		ID:              uuid.NewString(),
 		Username:        username,
 		DisplayName:     displayName,
+		Email:           strings.TrimSpace(email),
 		PasswordHash:    hash,
 		HIBPCheckStatus: HIBPStatusPending,
 		HIBPCheckedAt:   now,
@@ -499,7 +506,11 @@ func (s *UserStore) RecordLogin(ctx context.Context, id string) error {
 //   - Re-check uniqueness — the in-transaction check below
 //     defends against concurrent Create races but the caller's
 //     pre-check produces a friendlier error.
-func (s *UserStore) CreateOIDCUser(ctx context.Context, username, displayName, oidcSub string) (User, error) {
+// `email` is the OIDC `email` claim — best-effort capture
+// so the users-page can display contact info. Empty when
+// the IdP didn't emit the claim; UpdateEmail can backfill on
+// a subsequent login.
+func (s *UserStore) CreateOIDCUser(ctx context.Context, username, displayName, email, oidcSub string) (User, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
@@ -522,6 +533,7 @@ func (s *UserStore) CreateOIDCUser(ctx context.Context, username, displayName, o
 		ID:              uuid.NewString(),
 		Username:        username,
 		DisplayName:     displayName,
+		Email:           strings.TrimSpace(email),
 		PasswordHash:    "", // OIDC user — no local password
 		HIBPCheckStatus: HIBPStatusSkipped,
 		CreatedAt:       now,
@@ -760,4 +772,107 @@ func (s *UserStore) List(ctx context.Context) ([]User, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
+}
+
+// Delete removes the user identified by id. Returns
+// ErrUserNotFound if no such user exists.
+//
+// Last-admin guard (same shape as UpdateRole): refuses to
+// delete a user that is a local admin if no other local
+// admin remains — the break-glass channel must always have
+// at least one local admin (§1.3 decisions 4-6).
+//
+// Session cleanup is performed by the API handler that
+// wraps this call (SessionStore.DeleteAllForUser), not
+// here — the storage layer stays single-bucket.
+func (s *UserStore) Delete(ctx context.Context, id string) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+	if id == "" {
+		return ErrUserNotFound
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(usersBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
+		}
+		raw := b.Get([]byte(id))
+		if raw == nil {
+			return ErrUserNotFound
+		}
+		var target User
+		if err := json.Unmarshal(raw, &target); err != nil {
+			return fmt.Errorf("auth: unmarshal user: %w", err)
+		}
+
+		// Last-admin guard. Same logic as UpdateRole's demote
+		// path — refactored out into an inline scan rather than
+		// reusing CountLocalAdmins to avoid a second bbolt
+		// transaction inside this Update.
+		if target.AuthSource == UserAuthSourceLocal && target.Role == UserRoleAdmin {
+			otherLocalAdmins := 0
+			_ = b.ForEach(func(k, v []byte) error {
+				if string(k) == id {
+					return nil
+				}
+				var other User
+				if err := json.Unmarshal(v, &other); err != nil {
+					return nil
+				}
+				if other.AuthSource == UserAuthSourceLocal && other.Role == UserRoleAdmin {
+					otherLocalAdmins++
+				}
+				return nil
+			})
+			if otherLocalAdmins == 0 {
+				return fmt.Errorf("auth: cannot delete the last local admin — break-glass channel must remain")
+			}
+		}
+
+		return b.Delete([]byte(id))
+	})
+}
+
+// UpdateEmail sets the user's Email field. Used by the OIDC
+// callback to keep an existing user's email in sync with
+// the IdP's `email` claim on every login (best-effort:
+// callers ignore the error to avoid breaking the login
+// path). A no-op when the stored email already matches
+// — skips touching UpdatedAt.
+func (s *UserStore) UpdateEmail(ctx context.Context, id, email string) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+	if id == "" {
+		return ErrUserNotFound
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(usersBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
+		}
+		raw := b.Get([]byte(id))
+		if raw == nil {
+			return ErrUserNotFound
+		}
+		var user User
+		if err := json.Unmarshal(raw, &user); err != nil {
+			return fmt.Errorf("auth: unmarshal user: %w", err)
+		}
+		if user.Email == email {
+			return nil
+		}
+		user.Email = email
+		user.UpdatedAt = time.Now().UTC()
+		value, err := json.Marshal(user)
+		if err != nil {
+			return fmt.Errorf("auth: marshal user: %w", err)
+		}
+		return b.Put([]byte(id), value)
+	})
 }

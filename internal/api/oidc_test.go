@@ -107,7 +107,7 @@ func TestLocalLogin_BreakGlass_OIDCConfigured_StillWorks(t *testing.T) {
 	env := newTestEnv(t, false)
 	ctx := context.Background()
 	password := "break-glass-pw-15c"
-	if _, err := newTestUserStore(t, env).Create(ctx, "breakuser", "Break User", password); err != nil {
+	if _, err := newTestUserStore(t, env).Create(ctx, "breakuser", "Break User", "", password); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestLocalLogin_BreakGlassAuditEmitted_WhenOIDCConfigured(t *testing.T) {
 	env := newTestEnv(t, false)
 	ctx := context.Background()
 
-	if _, err := newTestUserStore(t, env).Create(ctx, "alice", "Alice", "break-glass-pw-15c"); err != nil {
+	if _, err := newTestUserStore(t, env).Create(ctx, "alice", "Alice", "", "break-glass-pw-15c"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// Mark OIDC as "ever configured" by writing a complete row.
@@ -222,7 +222,7 @@ func TestLocalLogin_NoBreakGlassAudit_WhenOIDCNeverConfigured(t *testing.T) {
 	env := newTestEnv(t, false)
 	ctx := context.Background()
 
-	if _, err := newTestUserStore(t, env).Create(ctx, "alice", "Alice", "break-glass-pw-15c"); err != nil {
+	if _, err := newTestUserStore(t, env).Create(ctx, "alice", "Alice", "", "break-glass-pw-15c"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// NO PutOIDCConfig call — fresh state.
@@ -285,7 +285,7 @@ func TestRequireAdmin_ViewerRejectedOnRouteCreate(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a viewer user + bootstrap a session for them.
-	viewer, err := newTestUserStore(t, env).CreateOIDCUser(ctx, "viewer1", "Viewer One", "sub-viewer-001")
+	viewer, err := newTestUserStore(t, env).CreateOIDCUser(ctx, "viewer1", "Viewer One", "", "sub-viewer-001")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestRequireAdmin_ViewerCanReadRoutes(t *testing.T) {
 	env := newTestEnv(t, false)
 	ctx := context.Background()
 
-	viewer, err := newTestUserStore(t, env).CreateOIDCUser(ctx, "viewer2", "Viewer Two", "sub-viewer-002")
+	viewer, err := newTestUserStore(t, env).CreateOIDCUser(ctx, "viewer2", "Viewer Two", "", "sub-viewer-002")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestUpdateRole_LastLocalAdminDemoteRejected(t *testing.T) {
 	ctx := context.Background()
 
 	us := newTestUserStore(t, env)
-	admin, err := us.Create(ctx, "soleadmin", "Sole Admin", "admin-password-15c")
+	admin, err := us.Create(ctx, "soleadmin", "Sole Admin", "", "admin-password-15c")
 	if err != nil {
 		t.Fatalf("seed admin: %v", err)
 	}
@@ -366,11 +366,11 @@ func TestUpdateRole_DemoteAllowedWhenAnotherLocalAdminExists(t *testing.T) {
 	ctx := context.Background()
 
 	us := newTestUserStore(t, env)
-	a1, err := us.Create(ctx, "admin1", "Admin One", "admin-password-15c")
+	a1, err := us.Create(ctx, "admin1", "Admin One", "", "admin-password-15c")
 	if err != nil {
 		t.Fatalf("seed a1: %v", err)
 	}
-	_, err = us.Create(ctx, "admin2", "Admin Two", "admin-password-15c")
+	_, err = us.Create(ctx, "admin2", "Admin Two", "", "admin-password-15c")
 	if err != nil {
 		t.Fatalf("seed a2: %v", err)
 	}
@@ -397,7 +397,7 @@ func newTestUserStore(t *testing.T, env *testEnv) *auth.UserStore {
 func TestRequireAdmin_ViewerRejectedOnOIDCConfigGET(t *testing.T) {
 	env := newTestEnv(t, false)
 	ctx := context.Background()
-	viewer, err := newTestUserStore(t, env).CreateOIDCUser(ctx, "viewer3", "Viewer Three", "sub-viewer-003")
+	viewer, err := newTestUserStore(t, env).CreateOIDCUser(ctx, "viewer3", "Viewer Three", "", "sub-viewer-003")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestLocalAdminPasswordRotated_AuditEmitted(t *testing.T) {
 	// /api/v1/auth/* is excluded from auto-auth — seed a real
 	// admin session and attach its cookie explicitly.
 	us := newTestUserStore(t, env)
-	admin, err := us.Create(ctx, "rotater", "Rotater", "old-password-15c-xx")
+	admin, err := us.Create(ctx, "rotater", "Rotater", "", "old-password-15c-xx")
 	if err != nil {
 		t.Fatalf("seed admin: %v", err)
 	}

@@ -70,7 +70,7 @@ func TestGeoEvents_Viewer200(t *testing.T) {
 	m.env.handler.SetGeoBus(&stubGeoBus{})
 
 	ctx := context.Background()
-	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "geo-events-viewer", "Geo Events Viewer", "sub-geo-events-viewer")
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "geo-events-viewer", "Geo Events Viewer", "", "sub-geo-events-viewer")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}

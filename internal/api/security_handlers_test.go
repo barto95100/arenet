@@ -105,7 +105,7 @@ func TestSecurityEvents_Viewer200(t *testing.T) {
 	m.env.handler.SetWafEventReader(&fakeWafEventReader{})
 
 	ctx := context.Background()
-	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "security-viewer", "Security Viewer", "sub-security-viewer")
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "security-viewer", "Security Viewer", "", "sub-security-viewer")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}
@@ -944,7 +944,7 @@ func TestSecurityAuthFailures_Viewer200(t *testing.T) {
 	m.env.handler.SetAuthFailureReader(&fakeAuthFailureReader{})
 
 	ctx := context.Background()
-	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "authfail-viewer", "Auth Failures Viewer", "sub-authfail-viewer")
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "authfail-viewer", "Auth Failures Viewer", "", "sub-authfail-viewer")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}
@@ -1242,7 +1242,7 @@ func TestSecurityThrottleEvents_Viewer200(t *testing.T) {
 	m.env.handler.SetThrottleEventReader(&fakeThrottleEventReader{})
 
 	ctx := context.Background()
-	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "throttle-viewer", "Throttle Viewer", "sub-throttle-viewer")
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "throttle-viewer", "Throttle Viewer", "", "sub-throttle-viewer")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}
@@ -1826,7 +1826,7 @@ func TestSecurityDecisions_Viewer200(t *testing.T) {
 	m.env.handler.SetDecisionReader(&fakeDecisionReader{})
 
 	ctx := context.Background()
-	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "decisions-viewer", "Decisions Viewer", "sub-decisions-viewer")
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "decisions-viewer", "Decisions Viewer", "", "sub-decisions-viewer")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}

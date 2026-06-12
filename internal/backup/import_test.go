@@ -84,7 +84,7 @@ func seedLiveRoute(t *testing.T, store *storage.Store, host string) storage.Rout
 // argon2id hashing). Returns the persisted User.
 func seedLiveUser(t *testing.T, us *auth.UserStore, username, password string) auth.User {
 	t.Helper()
-	u, err := us.Create(context.Background(), username, username, password)
+	u, err := us.Create(context.Background(), username, username, "", password)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

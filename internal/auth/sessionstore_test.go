@@ -469,3 +469,82 @@ func TestGenerateSessionID_Entropy(t *testing.T) {
 		}
 	}
 }
+
+// --- Users-page Phase 1: ListAllActive ----------------------------
+
+func TestSessionStore_ListAllActive_SkipsExpired(t *testing.T) {
+	s := NewSessionStore(newTestDB(t))
+	ctx := context.Background()
+
+	// User A: 2 live sessions (different "devices").
+	s1, _ := s.Create(ctx, "user-a", false, "1.1.1.1", "ua-1")
+	s2, _ := s.Create(ctx, "user-a", false, "1.1.1.2", "ua-2")
+	_ = s1
+	_ = s2
+
+	// User B: 1 live session.
+	_, _ = s.Create(ctx, "user-b", false, "2.2.2.2", "ub-1")
+
+	// User C: 1 session, but we'll expire it via direct write.
+	sc, _ := s.Create(ctx, "user-c", false, "3.3.3.3", "uc-1")
+
+	// Hand-expire user-c's session.
+	if err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(sessionsBucketName))
+		raw := b.Get([]byte(sc.ID))
+		var sess Session
+		_ = json.Unmarshal(raw, &sess)
+		sess.ExpiresAt = time.Now().UTC().Add(-time.Hour)
+		v, _ := json.Marshal(sess)
+		return b.Put([]byte(sc.ID), v)
+	}); err != nil {
+		t.Fatalf("hand-expire: %v", err)
+	}
+
+	got, err := s.ListAllActive(ctx)
+	if err != nil {
+		t.Fatalf("ListAllActive: %v", err)
+	}
+	// Expect 2 entries (user-a + user-b); user-c is expired.
+	if len(got) != 2 {
+		t.Fatalf("len = %d; want 2: %+v", len(got), got)
+	}
+	if got["user-a"].ActiveCount != 2 {
+		t.Errorf("user-a ActiveCount = %d; want 2", got["user-a"].ActiveCount)
+	}
+	if got["user-b"].ActiveCount != 1 {
+		t.Errorf("user-b ActiveCount = %d; want 1", got["user-b"].ActiveCount)
+	}
+	if _, ok := got["user-c"]; ok {
+		t.Errorf("user-c surfaced despite expired session: %+v", got["user-c"])
+	}
+}
+
+func TestSessionStore_ListAllActive_LastActivityIsLatest(t *testing.T) {
+	s := NewSessionStore(newTestDB(t))
+	ctx := context.Background()
+
+	// Two sessions for the same user.
+	a, _ := s.Create(ctx, "user-a", false, "1.1.1.1", "ua-1")
+	b, _ := s.Create(ctx, "user-a", false, "1.1.1.2", "ua-2")
+
+	// Touch session b explicitly so it has the later
+	// LastActivity. Touch updates LastActivity to now.
+	time.Sleep(10 * time.Millisecond)
+	if err := s.Touch(ctx, b.ID); err != nil {
+		t.Fatalf("Touch b: %v", err)
+	}
+
+	got, _ := s.ListAllActive(ctx)
+	// Read b's current LastActivity to compare.
+	bSess, _ := s.Get(ctx, b.ID)
+	aSess, _ := s.Get(ctx, a.ID)
+	if !got["user-a"].LastActivity.Equal(bSess.LastActivity) {
+		t.Errorf("LastActivity = %v; want %v (the freshly-touched session)",
+			got["user-a"].LastActivity, bSess.LastActivity)
+	}
+	// Sanity: a's activity is older.
+	if !aSess.LastActivity.Before(bSess.LastActivity) {
+		t.Errorf("aSess.LastActivity (%v) not before bSess (%v)", aSess.LastActivity, bSess.LastActivity)
+	}
+}

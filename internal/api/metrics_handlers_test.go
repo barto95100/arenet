@@ -106,7 +106,7 @@ func TestMetricsEndpoints_Viewer200(t *testing.T) {
 	m.env.handler.SetMetricsReader(obsStore)
 
 	ctx := context.Background()
-	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "metrics-viewer", "Metrics Viewer", "sub-metrics-viewer")
+	viewer, err := newTestUserStore(t, m.env).CreateOIDCUser(ctx, "metrics-viewer", "Metrics Viewer", "", "sub-metrics-viewer")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}

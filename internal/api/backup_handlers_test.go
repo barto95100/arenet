@@ -90,7 +90,7 @@ func TestBackup_Export_IncludeSecretsSetsHeader(t *testing.T) {
 func TestBackup_RequireAdmin_ViewerRejectedOnExport(t *testing.T) {
 	env := newTestEnv(t, false)
 	ctx := context.Background()
-	viewer, err := auth.NewUserStore(env.store.DB()).CreateOIDCUser(ctx, "viewer-backup-one", "Viewer One", "sub-viewer-backup-one")
+	viewer, err := auth.NewUserStore(env.store.DB()).CreateOIDCUser(ctx, "viewer-backup-one", "Viewer One", "", "sub-viewer-backup-one")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestBackup_RequireAdmin_ViewerRejectedOnExport(t *testing.T) {
 func TestBackup_RequireAdmin_ViewerRejectedOnRestore(t *testing.T) {
 	env := newTestEnv(t, false)
 	ctx := context.Background()
-	viewer, err := auth.NewUserStore(env.store.DB()).CreateOIDCUser(ctx, "viewer-backup-two", "Viewer Two", "sub-viewer-backup-two")
+	viewer, err := auth.NewUserStore(env.store.DB()).CreateOIDCUser(ctx, "viewer-backup-two", "Viewer Two", "", "sub-viewer-backup-two")
 	if err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestBackup_Restore_CaddyReloadFailure_RollsBackBoltDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed original route: %v", err)
 	}
-	originalUser, err := us.Create(ctx, "rollback-admin", "Rollback Admin", "rollback-pw-15c-xx")
+	originalUser, err := us.Create(ctx, "rollback-admin", "Rollback Admin", "", "rollback-pw-15c-xx")
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

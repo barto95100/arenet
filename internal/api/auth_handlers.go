@@ -51,7 +51,13 @@ type setupRequest struct {
 	SetupToken  string `json:"setupToken"`
 	Username    string `json:"username"`
 	DisplayName string `json:"displayName"`
-	Password    string `json:"password"`
+	// Email is now required on the setup flow (users-page
+	// Phase 1 refactor — contact field surfaced in the
+	// /utilisateurs table). Format validated below (basic
+	// `@` + max-length check; same envelope as the OIDC
+	// allowlist email validator at oidc.go:425+).
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 // setupResponse is the wire shape returned on success. Notably omits
@@ -130,6 +136,24 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step 2.5: email validation (users-page Phase 1 — required
+	// on new local accounts so the /utilisateurs table surfaces
+	// contact info). Same envelope as the OIDC allowlist email
+	// path: non-empty, ≤320 chars (RFC 5321), contains "@".
+	email := strings.TrimSpace(req.Email)
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "email must not be empty")
+		return
+	}
+	if len(email) > oidcEmailMaxLen {
+		writeError(w, http.StatusBadRequest, "email exceeds 320 characters")
+		return
+	}
+	if !strings.Contains(email, "@") {
+		writeError(w, http.StatusBadRequest, "email must contain @")
+		return
+	}
+
 	// Step 3: password validation (length + top-10k + HIBP).
 	// Returns the HIBP status to persist on the user (clean/pending/skipped).
 	hibpStatus, err := auth.ValidatePasswordSync(r.Context(), h.hibp, req.Password)
@@ -150,7 +174,7 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 4: create the user.
-	user, err := h.users.Create(r.Context(), req.Username, req.DisplayName, req.Password)
+	user, err := h.users.Create(r.Context(), req.Username, req.DisplayName, email, req.Password)
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrUsernameInvalid):

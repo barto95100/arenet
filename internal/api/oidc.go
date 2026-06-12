@@ -816,7 +816,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		if existing, _ := h.users.GetByUsername(r.Context(), username); existing.ID != "" {
 			username = uniqueSuffix(username, claims.Sub)
 		}
-		user, err = h.users.CreateOIDCUser(r.Context(), username, displayName, claims.Sub)
+		user, err = h.users.CreateOIDCUser(r.Context(), username, displayName, claims.Email, claims.Sub)
 		if err != nil {
 			h.logger.Error("oidc: auto-create user failed", "err", err)
 			http.Redirect(w, r, h.uiURL("/login?error=internal"), http.StatusFound)
@@ -835,12 +835,21 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	setSessionCookie(w, r, sess.ID, false)
 	setThemeCookie(w, r, normalizeThemeForCookie(user.ThemePreference))
 
-	// Best-effort LastLoginAt.
-	go func(uid string) {
+	// Best-effort LastLoginAt + Email sync. Email-sync mirrors
+	// the LastLoginAt pattern: if the IdP's email_verified=true
+	// claim drifts (operator changes their primary email on the
+	// IdP), the next login refreshes the local row so the users-
+	// page reflects current state. UpdateEmail is a no-op when
+	// the stored value already matches.
+	emailClaim := claims.Email
+	go func(uid, email string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = h.users.RecordLogin(ctx, uid)
-	}(user.ID)
+		if email != "" {
+			_ = h.users.UpdateEmail(ctx, uid, email)
+		}
+	}(user.ID, emailClaim)
 
 	h.appendAudit(r, audit.Event{
 		Action:                audit.ActionLoginSuccess,

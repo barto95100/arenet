@@ -87,7 +87,7 @@ func newWSTestEnv(t *testing.T) *wsTestEnv {
 	// Bootstrap a real admin user + session so HardAuthMiddleware can
 	// authenticate dials that present the cookie.
 	ctx := context.Background()
-	user, err := userStore.Create(ctx, "tester", "Tester", "test-password-15c-xx")
+	user, err := userStore.Create(ctx, "tester", "Tester", "", "test-password-15c-xx")
 	if err != nil {
 		t.Fatalf("bootstrap user: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestWS_Topology_ServerShutdown_Code1001(t *testing.T) {
 
 	// Bootstrap an admin session.
 	ctx := context.Background()
-	user, err := userStore.Create(ctx, "tester", "Tester", "test-password-15c-xx")
+	user, err := userStore.Create(ctx, "tester", "Tester", "", "test-password-15c-xx")
 	if err != nil {
 		t.Fatalf("bootstrap user: %v", err)
 	}

@@ -82,7 +82,7 @@ func newWSGeoEventsTestEnv(t *testing.T) *wsGeoEventsTestEnv {
 	t.Cleanup(srv.Close)
 
 	ctx := context.Background()
-	user, err := userStore.Create(ctx, "tester-geo", "Tester Geo", "test-password-15c-xx")
+	user, err := userStore.Create(ctx, "tester-geo", "Tester Geo", "", "test-password-15c-xx")
 	if err != nil {
 		t.Fatalf("bootstrap user: %v", err)
 	}
