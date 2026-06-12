@@ -941,12 +941,34 @@ export interface AdminUser {
 	id: string;
 	username: string;
 	displayName: string;
+	/**
+	 * Email — required on new local accounts (setup flow);
+	 * captured best-effort from the OIDC `email` claim on
+	 * every login for OIDC users. Empty for legacy local
+	 * users that pre-date the users-page Phase 1 refactor.
+	 * Frontend renders "—" in the empty case.
+	 */
+	email?: string;
 	authSource: 'local' | 'oidc';
 	oidcLinked: boolean;
 	role: UserRole;
 	createdAt: string;
 	updatedAt: string;
 	lastLoginAt?: string;
+	/**
+	 * RFC3339 timestamp of the user's most-recent session
+	 * activity (the freshest `Touch` across their live
+	 * sessions). Absent when the user has no live session
+	 * (the frontend then renders the row as "offline").
+	 */
+	lastActivityAt?: string;
+	/**
+	 * Count of non-expired sessions for the user. Zero
+	 * means "no live session"; > 0 powers the
+	 * online/active indicator together with
+	 * lastActivityAt's recency.
+	 */
+	activeSessionCount: number;
 }
 
 /**

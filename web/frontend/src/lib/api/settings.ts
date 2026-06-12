@@ -131,6 +131,11 @@ export const settingsApi = {
 	listAdminUsers: (): Promise<AdminUser[]> => request<AdminUser[]>('GET', '/admin/users'),
 	updateUserRole: (id: string, r: UpdateUserRoleRequest): Promise<AdminUser> =>
 		request<AdminUser>('POST', `/admin/users/${encodeURIComponent(id)}/role`, r),
+	// Users-page Phase 1 refactor — hard delete with last-admin
+	// guard + session cascade (backend handler at
+	// internal/api/users_admin.go:deleteAdminUser).
+	deleteAdminUser: (id: string): Promise<void> =>
+		request<void>('DELETE', `/admin/users/${encodeURIComponent(id)}`),
 
 	// Step CS.1 — CrowdSec bouncer settings. GET returns the
 	// stored row (apiKey redacted) + the configured boolean.

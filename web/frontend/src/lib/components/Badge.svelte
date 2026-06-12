@@ -12,6 +12,7 @@
 		| 'status-up'
 		| 'status-warn'
 		| 'status-down'
+		| 'status-info'
 		| 'neutral'
 		| 'current';
 
@@ -74,6 +75,13 @@
 		background: var(--bg-elevated);
 		border-color: var(--border-default);
 		color: var(--text-secondary);
+	}
+	/* Users-page Phase 1 refactor — blue info palette for OIDC /
+	 * Authentik source tags and similar informational markers. */
+	.badge[data-variant='status-info'] {
+		background: var(--badge-info-bg, color-mix(in oklch, var(--status-info) 14%, transparent));
+		border-color: color-mix(in oklch, var(--status-info) 28%, transparent);
+		color: var(--status-info);
 	}
 	/* "current" reuses the cyan info palette but exists as its own
 	 * variant name for caller-side semantics. Sessions table marks

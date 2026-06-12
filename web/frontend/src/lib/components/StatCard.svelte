@@ -14,9 +14,16 @@
 		 * status-down color, zero => muted dot.
 		 */
 		trend?: number;
+		/**
+		 * Users-page Phase 1 — optional secondary line rendered
+		 * below the value. Used by the /utilisateurs KPI cards to
+		 * surface the breakdown sub-label (e.g.
+		 * "4 admins · 10 viewers"). Empty → not rendered.
+		 */
+		hint?: string;
 	}
 
-	let { label, value, trend = 0 }: Props = $props();
+	let { label, value, trend = 0, hint = '' }: Props = $props();
 
 	const trendClass = $derived(
 		trend > 0 ? 'text-up' : trend < 0 ? 'text-down' : 'text-muted'
@@ -33,4 +40,7 @@
 			<span class="text-sm {trendClass}">{trendArrow} {trendAbs}</span>
 		{/if}
 	</div>
+	{#if hint}
+		<p class="mt-1 text-xs text-muted">{hint}</p>
+	{/if}
 </Card>
