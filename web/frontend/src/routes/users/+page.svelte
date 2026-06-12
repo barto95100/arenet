@@ -394,7 +394,27 @@
 											style:color={colors.badgeText}
 											data-testid="source-badge-{u.id}"
 										>
-											{oidcProviderLabel(oidcKind)}
+											<!-- Globe glyph = "external identity provider"
+											     affordance. Reuses the meridian+equator
+											     stroke shape used by Sidebar's map icon.
+											     Inherits currentColor so the glyph
+											     follows the provider's badgeText hue. -->
+											<svg
+												width="12"
+												height="12"
+												viewBox="0 0 16 16"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="1.4"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												aria-hidden="true"
+												data-testid="source-globe-{u.id}"
+											>
+												<circle cx="8" cy="8" r="6" />
+												<path d="M2 8h12M8 2c2 1.8 2 10.2 0 12M8 2c-2 1.8-2 10.2 0 12" />
+											</svg>
+											<span>{oidcProviderLabel(oidcKind)}</span>
 										</span>
 									{:else}
 										<Badge variant="neutral">Local</Badge>
@@ -436,13 +456,6 @@
 								</td>
 								<td class="px-4 py-3 text-sm text-right">
 									<div class="flex justify-end gap-1">
-										<Button
-											variant="ghost"
-											size="sm"
-											onclick={() => onRoleClick(u)}
-										>
-											{u.role === 'admin' ? 'Rétrograder' : 'Promouvoir'}
-										</Button>
 										{#if !isSelf}
 											<Button
 												variant="ghost"
@@ -453,6 +466,14 @@
 												Supprimer
 											</Button>
 										{/if}
+										<Button
+											variant="ghost"
+											size="sm"
+											onclick={() => onRoleClick(u)}
+											data-testid="role-btn-{u.id}"
+										>
+											{u.role === 'admin' ? 'Rétrograder' : 'Promouvoir'}
+										</Button>
 									</div>
 								</td>
 							</tr>
@@ -503,6 +524,7 @@
 	.provider-badge {
 		display: inline-flex;
 		align-items: center;
+		gap: var(--space-1);
 		padding: 2px var(--space-2);
 		font-size: var(--text-xs);
 		font-weight: 500;

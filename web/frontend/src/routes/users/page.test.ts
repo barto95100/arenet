@@ -422,6 +422,56 @@ describe('/utilisateurs — Phase 2 visual polish', () => {
 		expect(screen.queryByTestId('promoted-label-u2')).toBeNull();
 	});
 
+	it('renders the globe glyph alongside the OIDC provider label', async () => {
+		authMock.oidcStatus.mockResolvedValue({ enabled: true, kind: 'authentik' });
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1', authSource: 'oidc' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.getByTestId('source-globe-u1')).toBeTruthy();
+		// Local rows must NOT carry the globe — it's the "external
+		// identity" affordance, meaningless for local accounts.
+	});
+
+	it('does NOT render the globe glyph on local accounts', async () => {
+		authMock.oidcStatus.mockResolvedValue({ enabled: true, kind: 'authentik' });
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1', authSource: 'local' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.queryByTestId('source-globe-u1')).toBeNull();
+	});
+
+	it('renders action buttons in order: Supprimer then Rétrograder/Promouvoir', async () => {
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1', username: 'other', role: 'admin' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		const row = screen.getByTestId('user-row-u1');
+		const deleteBtn = screen.getByTestId('delete-btn-u1');
+		const roleBtn = screen.getByTestId('role-btn-u1');
+
+		// Both buttons live in the same actions cell; we assert
+		// document-order: delete first (left), role second (right).
+		// Node.compareDocumentPosition returns FOLLOWING (4) when
+		// roleBtn comes after deleteBtn in the DOM.
+		expect(row.contains(deleteBtn)).toBe(true);
+		expect(row.contains(roleBtn)).toBe(true);
+		expect(deleteBtn.compareDocumentPosition(roleBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it('renders the activity state with a StatusDot + label (not a Badge)', async () => {
 		settingsMock.listAdminUsers.mockResolvedValue([
 			user({ id: 'u1', activeSessionCount: 1, lastActivityAt: isoMinutesAgo(2) })

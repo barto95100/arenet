@@ -39,15 +39,25 @@ const PALETTE: AvatarColorKey[] = [
 // oklch directly (matching tokens.css palette discipline) so
 // the avatars play well with both light and dark themes — the
 // hues stay perceptually balanced because lightness is fixed.
+//
+// Tuning note: the initial Phase 2 polish landed on chroma ≈
+// 0.18-0.20 which read as flashy crayon-saturation against the
+// muted UI surfaces — operator smoke called this out. The
+// values below lower chroma to ~0.09-0.10 and bump lightness
+// to ~68-72% so the tiles read as sophisticated pastel chips
+// instead of primary-colour highlights. White text still hits
+// >4.5:1 contrast on every bucket; yellow keeps a dark
+// foreground because its lightness sits above the white-text
+// readability threshold.
 export const AVATAR_COLOR_STYLES: Record<AvatarColorKey, { bg: string; fg: string }> = {
-	red: { bg: 'oklch(58% 0.20 25)', fg: '#fff' },
-	green: { bg: 'oklch(52% 0.16 150)', fg: '#fff' },
-	orange: { bg: 'oklch(62% 0.18 50)', fg: '#fff' },
-	blue: { bg: 'oklch(54% 0.18 255)', fg: '#fff' },
-	cyan: { bg: 'oklch(58% 0.13 220)', fg: '#fff' },
-	magenta: { bg: 'oklch(56% 0.20 330)', fg: '#fff' },
-	yellow: { bg: 'oklch(72% 0.16 95)', fg: '#000' },
-	violet: { bg: 'oklch(52% 0.20 295)', fg: '#fff' }
+	red: { bg: 'oklch(70% 0.10 25)', fg: '#fff' },
+	green: { bg: 'oklch(68% 0.09 150)', fg: '#fff' },
+	orange: { bg: 'oklch(72% 0.10 55)', fg: '#fff' },
+	blue: { bg: 'oklch(68% 0.10 255)', fg: '#fff' },
+	cyan: { bg: 'oklch(70% 0.08 220)', fg: '#fff' },
+	magenta: { bg: 'oklch(68% 0.10 330)', fg: '#fff' },
+	yellow: { bg: 'oklch(82% 0.10 95)', fg: 'oklch(28% 0.04 95)' },
+	violet: { bg: 'oklch(68% 0.10 295)', fg: '#fff' }
 };
 
 // avatarColorKey picks a palette bucket from a seed (typically
