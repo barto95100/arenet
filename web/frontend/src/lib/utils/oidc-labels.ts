@@ -41,3 +41,66 @@ export function hostnameOf(issuerUrl: string): string {
 		return issuerUrl;
 	}
 }
+
+// Phase 2 follow-up — provider-kind → brand-aligned colour
+// pair. Single source of truth shared by:
+//   - SSOProviderLogo.svelte (sidebar header tile gradient)
+//   - the SOURCE column badge on /utilisateurs
+// so the carre "G" rouge dans le sidebar et le badge
+// "GoAuthentik" dans la table parlent le meme langage visuel.
+//
+// Each entry returns oklch colour strings:
+//   gradFrom / gradTo — used by SSOProviderLogo to keep the
+//     subtle 2-stop gradient on the brand tile (chunkier than a
+//     flat colour, matches the depth in the mockup).
+//   badgeBg / badgeBorder / badgeText — used by Badge in
+//     table cells (transparent-fill, saturated border + text).
+export interface OIDCProviderColors {
+	gradFrom: string;
+	gradTo: string;
+	badgeBg: string;
+	badgeBorder: string;
+	badgeText: string;
+}
+
+const PROVIDER_COLORS: Record<string, OIDCProviderColors> = {
+	// authentik = red/orange (their goauthentik logo).
+	authentik: {
+		gradFrom: 'oklch(70% 0.20 35)',
+		gradTo: 'oklch(58% 0.18 30)',
+		badgeBg: 'color-mix(in oklch, oklch(62% 0.20 30) 14%, transparent)',
+		badgeBorder: 'color-mix(in oklch, oklch(62% 0.20 30) 38%, transparent)',
+		badgeText: 'oklch(70% 0.20 35)'
+	},
+	// keycloak = blue (their brand SSO key glyph).
+	keycloak: {
+		gradFrom: 'oklch(62% 0.18 250)',
+		gradTo: 'oklch(50% 0.20 255)',
+		badgeBg: 'color-mix(in oklch, oklch(58% 0.18 255) 14%, transparent)',
+		badgeBorder: 'color-mix(in oklch, oklch(58% 0.18 255) 38%, transparent)',
+		badgeText: 'oklch(68% 0.18 250)'
+	},
+	// authelia = purple/violet (their brand palette).
+	authelia: {
+		gradFrom: 'oklch(60% 0.22 295)',
+		gradTo: 'oklch(48% 0.22 300)',
+		badgeBg: 'color-mix(in oklch, oklch(58% 0.20 295) 14%, transparent)',
+		badgeBorder: 'color-mix(in oklch, oklch(58% 0.20 295) 38%, transparent)',
+		badgeText: 'oklch(66% 0.20 295)'
+	},
+	// generic = neutral cyan (matches arenet's accent).
+	generic: {
+		gradFrom: 'oklch(60% 0.14 220)',
+		gradTo: 'oklch(50% 0.14 230)',
+		badgeBg: 'color-mix(in oklch, oklch(58% 0.13 220) 14%, transparent)',
+		badgeBorder: 'color-mix(in oklch, oklch(58% 0.13 220) 38%, transparent)',
+		badgeText: 'oklch(68% 0.13 220)'
+	}
+};
+
+export function oidcProviderColors(
+	kind: OIDCProviderKind | string | undefined
+): OIDCProviderColors {
+	const k = (kind || '').toLowerCase();
+	return PROVIDER_COLORS[k] || PROVIDER_COLORS.generic;
+}

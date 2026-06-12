@@ -38,11 +38,16 @@
 	import Spinner from '$lib/components/Spinner.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import OIDCConfigSummary from '$lib/components/OIDCConfigSummary.svelte';
+	import UserAvatar from '$lib/components/UserAvatar.svelte';
+	import StatusDot from '$lib/components/StatusDot.svelte';
+	import { oidcProviderLabel, oidcProviderColors } from '$lib/utils/oidc-labels';
+	import type { OIDCProviderKind } from '$lib/api/types';
 
 	let users = $state<AdminUser[]>([]);
 	let loading = $state(true);
 	let loadError = $state('');
 	let oidcEnabled = $state(false);
+	let oidcKind = $state<OIDCProviderKind | ''>('');
 
 	let confirmRoleOpen = $state(false);
 	let pendingRole = $state<{ user: AdminUser; nextRole: UserRole } | null>(null);
@@ -80,9 +85,10 @@
 				// "OIDC currently active". If OIDC is disabled, no
 				// admin is in break-glass mode anymore (no SSO
 				// channel to be the alternative to).
-				authApi.oidcStatus().catch(() => ({ enabled: false }))
+				authApi.oidcStatus().catch(() => ({ enabled: false, kind: '' as const }))
 			]);
 			users = list;
+			oidcKind = oidcStatus.kind ?? '';
 			oidcEnabled = oidcStatus.enabled ?? false;
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : 'Failed to load users';
@@ -154,16 +160,20 @@
 		}
 	}
 
-	function activityVariant(
+	// Map activity state to the StatusDot variant. Online users
+	// pulse green, idle-but-recent users pulse amber, fully-
+	// offline users render a flat muted dot (no pulse, see
+	// StatusDot.svelte — only non-idle statuses pulse).
+	function activityDotStatus(
 		state: ActivityState
-	): 'status-up' | 'status-warn' | 'neutral' {
+	): 'up' | 'warn' | 'idle' {
 		switch (state) {
 			case 'online':
-				return 'status-up';
+				return 'up';
 			case 'active':
-				return 'status-warn';
+				return 'warn';
 			case 'offline':
-				return 'neutral';
+				return 'idle';
 		}
 	}
 
@@ -358,7 +368,7 @@
 							<tr data-testid="user-row-{u.id}">
 								<td class="px-4 py-3 text-sm">
 									<div class="flex items-center gap-3">
-										<div class="avatar" aria-hidden="true">{initials(u)}</div>
+										<UserAvatar seed={u.username} initials={initials(u)} />
 										<div>
 											<div class="font-medium text-primary flex items-center gap-2">
 												<span>{u.displayName || u.username}</span>
@@ -376,7 +386,16 @@
 								</td>
 								<td class="px-4 py-3 text-sm">
 									{#if u.authSource === 'oidc'}
-										<Badge variant="status-info">OIDC</Badge>
+										{@const colors = oidcProviderColors(oidcKind)}
+										<span
+											class="provider-badge"
+											style:background-color={colors.badgeBg}
+											style:border-color={colors.badgeBorder}
+											style:color={colors.badgeText}
+											data-testid="source-badge-{u.id}"
+										>
+											{oidcProviderLabel(oidcKind)}
+										</span>
 									{:else}
 										<Badge variant="neutral">Local</Badge>
 									{/if}
@@ -388,7 +407,17 @@
 								</td>
 								<td class="px-4 py-3 text-sm">
 									{#if u.role === 'admin'}
-										<Badge variant="status-up">Admin</Badge>
+										<span class="inline-flex items-center gap-2">
+											<Badge variant="status-up">Admin</Badge>
+											{#if u.authSource === 'oidc'}
+												<span
+													class="text-xs text-muted"
+													data-testid="promoted-label-{u.id}"
+												>
+													promu
+												</span>
+											{/if}
+										</span>
 									{:else}
 										<Badge variant="neutral">Viewer</Badge>
 									{/if}
@@ -397,9 +426,13 @@
 									{relativeFromNow(u.lastActivityAt ?? u.lastLoginAt)}
 								</td>
 								<td class="px-4 py-3 text-sm">
-									<Badge variant={activityVariant(state)}>
-										{activityLabel(state)}
-									</Badge>
+									<span
+										class="inline-flex items-center gap-2"
+										data-testid="activity-state-{u.id}"
+									>
+										<StatusDot status={activityDotStatus(state)} />
+										<span class="text-secondary">{activityLabel(state)}</span>
+									</span>
 								</td>
 								<td class="px-4 py-3 text-sm text-right">
 									<div class="flex justify-end gap-1">
@@ -461,20 +494,34 @@
 />
 
 <style>
-	.avatar {
-		width: 32px;
-		height: 32px;
-		border-radius: 50%;
+	/* Phase 2 follow-up — provider-coloured pill rendered in the
+	 * SOURCE column. Colours come from oidcProviderColors() so
+	 * the badge and the sidebar SSOProviderLogo tile share a
+	 * single source of truth. Inline style overrides the
+	 * background/border/colour per-render; this block just sets
+	 * the shared shape. */
+	.provider-badge {
 		display: inline-flex;
 		align-items: center;
-		justify-content: center;
-		background: color-mix(in oklch, var(--accent-cyan) 18%, transparent);
-		color: var(--accent-cyan);
-		font-size: 11px;
-		font-weight: 600;
-		font-family: var(--font-mono);
-		flex: none;
+		padding: 2px var(--space-2);
+		font-size: var(--text-xs);
+		font-weight: 500;
+		border-radius: var(--radius-full);
+		border: 1px solid;
+		line-height: 1.5;
 	}
+
+	/* Phase 2 follow-up — subtle row hover to match the mockup's
+	 * blue-tinted row affordance. zebra striping kept off; the
+	 * divide-y on tbody already separates rows visually, and
+	 * stacking another shade on top read as noisy in the smoke. */
+	tbody tr {
+		transition: background-color 120ms;
+	}
+	tbody tr:hover {
+		background: color-mix(in oklch, var(--accent-cyan) 5%, transparent);
+	}
+
 	.filter-chip {
 		font-size: 12px;
 		padding: 4px 10px;

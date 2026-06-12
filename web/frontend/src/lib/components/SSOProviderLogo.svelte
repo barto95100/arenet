@@ -27,6 +27,7 @@
 -->
 <script lang="ts">
 	import type { OIDCProviderKind } from '$lib/api/types';
+	import { oidcProviderColors } from '$lib/utils/oidc-labels';
 
 	interface Props {
 		/**
@@ -52,12 +53,19 @@
 	const useAsset = $derived(KNOWN_KINDS.has(String(kind)));
 	const assetUrl = $derived(useAsset ? `/sso-providers/${kind}.svg` : '');
 	const altText = $derived(useAsset ? `Logo ${kind}` : '');
+
+	// Phase 2 follow-up — kind-specific gradient pulled from
+	// the shared oidc-labels mapping, so the sidebar tile and
+	// the /utilisateurs SOURCE badge stay in sync.
+	const colors = $derived(oidcProviderColors(kind));
+	const gradient = $derived(`linear-gradient(140deg, ${colors.gradFrom} 0%, ${colors.gradTo} 100%)`);
 </script>
 
 <span
 	class="sso-provider-logo"
 	style:width="{size}px"
 	style:height="{size}px"
+	style:background={gradient}
 	aria-hidden="true"
 >
 	{#if useAsset}
@@ -86,9 +94,8 @@
 		display: grid;
 		place-items: center;
 		border-radius: 5px;
-		background: linear-gradient(140deg, oklch(70% 0.20 35) 0%, oklch(58% 0.18 30) 100%);
 		color: #fff;
-		box-shadow: inset 0 1px 0 oklch(82% 0.16 50 / 0.4);
+		box-shadow: inset 0 1px 0 oklch(82% 0.12 250 / 0.35);
 		overflow: hidden;
 	}
 	.sso-provider-logo img {

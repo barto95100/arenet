@@ -361,3 +361,81 @@ describe('/utilisateurs — delete flow', () => {
 		expect(screen.getByTestId('user-row-u2')).toBeTruthy();
 	});
 });
+
+describe('/utilisateurs — Phase 2 visual polish', () => {
+	it('renders the friendly provider label on the SOURCE column instead of "OIDC"', async () => {
+		authMock.oidcStatus.mockResolvedValue({ enabled: true, kind: 'authentik' });
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1', authSource: 'oidc' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		const sourceBadge = screen.getByTestId('source-badge-u1');
+		expect(sourceBadge.textContent).toContain('GoAuthentik');
+		// Bare "OIDC" must NOT be the badge text — that was the
+		// pre-polish placeholder the operator called out.
+		expect(sourceBadge.textContent?.trim()).not.toBe('OIDC');
+	});
+
+	it('renders "Local" badge unchanged for local accounts', async () => {
+		authMock.oidcStatus.mockResolvedValue({ enabled: true, kind: 'authentik' });
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1', authSource: 'local' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.getByTestId('user-row-u1').textContent).toContain('Local');
+		expect(screen.queryByTestId('source-badge-u1')).toBeNull();
+	});
+
+	it('renders "promu" label next to Admin badge when role=admin && source=oidc', async () => {
+		authMock.oidcStatus.mockResolvedValue({ enabled: true, kind: 'authentik' });
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1', role: 'admin', authSource: 'oidc' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.getByTestId('promoted-label-u1').textContent?.trim()).toBe('promu');
+	});
+
+	it('does NOT render "promu" on local admins (break-glass) or OIDC viewers', async () => {
+		authMock.oidcStatus.mockResolvedValue({ enabled: true, kind: 'authentik' });
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1', role: 'admin', authSource: 'local' }),
+			user({ id: 'u2', role: 'viewer', authSource: 'oidc' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.queryByTestId('promoted-label-u1')).toBeNull();
+		expect(screen.queryByTestId('promoted-label-u2')).toBeNull();
+	});
+
+	it('renders the activity state with a StatusDot + label (not a Badge)', async () => {
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1', activeSessionCount: 1, lastActivityAt: isoMinutesAgo(2) })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		const cell = screen.getByTestId('activity-state-u1');
+		expect(cell.textContent).toContain('En ligne');
+		// StatusDot renders a span with aria-label="Status: up" for
+		// the online state — assert the dot is there.
+		const dot = cell.querySelector('[aria-label^="Status:"]');
+		expect(dot).not.toBeNull();
+	});
+});
