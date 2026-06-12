@@ -360,8 +360,13 @@
 									<div class="flex items-center gap-3">
 										<div class="avatar" aria-hidden="true">{initials(u)}</div>
 										<div>
-											<div class="font-medium text-primary">
-												{u.displayName || u.username}
+											<div class="font-medium text-primary flex items-center gap-2">
+												<span>{u.displayName || u.username}</span>
+												{#if isSelf}
+													<span data-testid="self-badge-{u.id}">
+														<Badge variant="status-info">VOUS</Badge>
+													</span>
+												{/if}
 											</div>
 											<div class="text-xs text-muted">
 												{u.email || '—'}

@@ -296,6 +296,28 @@ describe('/utilisateurs — break-glass badge', () => {
 	});
 });
 
+describe('/utilisateurs — self-row VOUS badge', () => {
+	// Follow-up to 8a1b459 — operator smoke surfaced that
+	// without a "VOUS" marker on the acting user's row,
+	// admins lose track of which row is theirs when scanning
+	// the list. The badge is inline next to the name and
+	// uses the same status-info variant as the OIDC source
+	// badge so the palette stays consistent.
+	it('renders VOUS badge only on the row matching the current user id', async () => {
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'self-id', username: 'me', displayName: 'Me' }),
+			user({ id: 'other-id', username: 'other', displayName: 'Other' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.getByTestId('self-badge-self-id')).toBeTruthy();
+		expect(screen.queryByTestId('self-badge-other-id')).toBeNull();
+	});
+});
+
 describe('/utilisateurs — delete flow', () => {
 	it('hides Delete button on self row', async () => {
 		settingsMock.listAdminUsers.mockResolvedValue([
