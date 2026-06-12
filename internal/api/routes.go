@@ -307,6 +307,11 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// users management.
 				r.Get("/settings/oidc", h.getOIDCConfig)
 				r.Put("/settings/oidc", h.putOIDCConfig)
+				// Phase 2 Users-page refactor — operator-triggered
+				// discovery probe ({issuer}/.well-known/openid-
+				// configuration). Mirrors the routes/test-upstream
+				// admin trust posture; uses saved config, no body.
+				r.Post("/settings/oidc/test", h.testOIDCConnection)
 				r.Get("/settings/oidc/allowlist", h.listOIDCAllowlist)
 				r.Post("/settings/oidc/allowlist", h.addOIDCAllowlist)
 				r.Delete("/settings/oidc/allowlist/{email}", h.deleteOIDCAllowlist)
