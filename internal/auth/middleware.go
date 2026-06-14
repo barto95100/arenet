@@ -22,6 +22,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -35,10 +36,29 @@ const sessionCookieName = "arenet_session"
 // the 15-min window) so that the lock screen flow can function
 // (/me, /unlock).
 //
+// Phase 4 — Bearer fallback. When the cookie is absent OR the
+// cookie lookup fails (no session row, expired session row, deleted
+// underlying user), the middleware then tries to authenticate via
+// an Authorization: Bearer <token> header. The Bearer path is
+// strictly a FALLBACK:
+//   - Cookie present + session valid → use cookie. Bearer ignored
+//     even if simultaneously sent (avoids "who am I?" confusion
+//     when a human in DevTools sends a Bearer for a script test).
+//   - Cookie absent OR cookie invalid → try Bearer.
+//   - Bearer valid → attach the service-account user to the ctx;
+//     SessionIDKey is empty and IsLockedKey is false (no
+//     session, no idle window).
+//   - Bearer absent / invalid in the fallback path → 401 (same as
+//     pre-Phase-4 behaviour for cookie-less requests).
+//
+// The tokens parameter is OPTIONAL — pass nil to disable the
+// Bearer path entirely (preserves the pre-Phase-4 surface for
+// callers that don't wire APITokenStore).
+//
 // On failure, responds with HTTP 401 and clears the session cookie
 // (Set-Cookie with Max-Age=0). On success, calls the next handler
 // with the context enriched with UserIDKey, UsernameKey,
-// SessionIDKey, and IsLockedKey.
+// SessionIDKey, IsLockedKey, RoleKey, and AuthSourceKey.
 //
 // The middleware does NOT call sessionStore.Touch() — that would
 // reset the idle timer on every /me call and make the lock screen
@@ -47,7 +67,7 @@ const sessionCookieName = "arenet_session"
 //
 // devMode controls whether the Set-Cookie attributes include Secure
 // (omitted in --dev for HTTP local). Spec §4.11.
-func SoftAuthMiddleware(sessions sessionStore, users userStore, devMode bool) func(http.Handler) http.Handler {
+func SoftAuthMiddleware(sessions sessionStore, users userStore, tokens APITokenLookup, devMode bool) func(http.Handler) http.Handler {
 	if sessions == nil {
 		panic("auth.SoftAuthMiddleware: sessions is nil")
 	}
@@ -56,58 +76,143 @@ func SoftAuthMiddleware(sessions sessionStore, users userStore, devMode bool) fu
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			cookie, err := r.Cookie(sessionCookieName)
-			if err != nil {
-				writeAuthError(w, "no active session")
-				return
-			}
-
-			session, err := sessions.Get(r.Context(), cookie.Value)
-			if err != nil {
-				// Both ErrSessionNotFound and ErrSessionExpired map to 401.
-				// Distinguishing them is preserved at the storage layer
-				// for observability (spec §3.3), but the user-visible
-				// outcome is identical: drop the stale cookie and 401.
-				clearSessionCookie(w, r)
-				writeAuthError(w, "no active session")
-				return
-			}
-
-			user, err := users.GetByID(r.Context(), session.UserID)
-			if err != nil {
-				if errors.Is(err, ErrUserNotFound) {
-					// Session references a deleted user. Clean up and 401.
-					_ = sessions.Delete(r.Context(), session.ID)
-					clearSessionCookie(w, r)
-					writeAuthError(w, "no active session")
+			// 1. Cookie path — try first. If the cookie produces a
+			// valid (user, session) pair, that wins; Bearer is
+			// IGNORED on this request even if present.
+			if cookie, err := r.Cookie(sessionCookieName); err == nil {
+				if user, session, ok := resolveSessionCookie(w, r, sessions, users, cookie.Value); ok {
+					isLocked := time.Since(session.LastActivity) > SessionIdleTimeout
+					ctx := withAuthIdentity(r.Context(), user, session.ID, isLocked)
+					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
-				// Storage error (decision D11): 503.
-				writeServiceUnavailable(w, "authentication service temporarily unavailable")
-				return
+				// Cookie was present but invalid; fall through to
+				// Bearer. resolveSessionCookie already cleared the
+				// stale cookie via Set-Cookie.
 			}
 
-			// Compute is_locked once here for downstream consumers.
-			// time.Since reads the wall clock; the session's
-			// LastActivity is UTC (set by SessionStore.Create and
-			// SessionStore.Touch).
-			isLocked := time.Since(session.LastActivity) > SessionIdleTimeout
+			// 2. Bearer fallback — only when tokens store is wired
+			// AND an Authorization header is present.
+			if tokens != nil {
+				if user, tok, ok := resolveBearerToken(r, tokens, users); ok {
+					// Best-effort LastUsedAt update; never block
+					// the request on a write contention.
+					go func(id string) {
+						_ = tokens.TouchLastUsed(context.Background(), id)
+					}(tok.ID)
+					ctx := withAuthIdentity(r.Context(), user, "", false)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
 
-			ctx := r.Context()
-			ctx = context.WithValue(ctx, UserIDKey, user.ID)
-			ctx = context.WithValue(ctx, UsernameKey, user.Username)
-			ctx = context.WithValue(ctx, SessionIDKey, session.ID)
-			ctx = context.WithValue(ctx, IsLockedKey, isLocked)
-			// Step K.2: surface Role + AuthSource for the
-			// RequireAdminMiddleware (role gate on business
-			// endpoints) + the audit hooks (break-glass
-			// emission, local-admin password rotation flag).
-			ctx = context.WithValue(ctx, RoleKey, user.Role)
-			ctx = context.WithValue(ctx, AuthSourceKey, user.AuthSource)
-
-			next.ServeHTTP(w, r.WithContext(ctx))
+			// 3. Neither path produced an identity. 401 with the
+			// same generic message — never leaks which path
+			// failed (cookie miss vs Bearer miss).
+			writeAuthError(w, "no active session")
 		})
 	}
+}
+
+// resolveSessionCookie looks up the cookie value, fetches the
+// session + user, and returns them on success. On failure, the
+// stale cookie is cleared on the response. The ok flag is false
+// when either the session is gone/expired or the user is missing.
+//
+// Storage-level 503 errors short-circuit by returning ok=false
+// AND writing the 503 directly; the caller treats that as a
+// terminal failure and must not also try the Bearer fallback (the
+// underlying bbolt is the same — Bearer would 503 too).
+func resolveSessionCookie(
+	w http.ResponseWriter,
+	r *http.Request,
+	sessions sessionStore,
+	users userStore,
+	cookieValue string,
+) (User, Session, bool) {
+	session, err := sessions.Get(r.Context(), cookieValue)
+	if err != nil {
+		// Both ErrSessionNotFound and ErrSessionExpired surface
+		// as a cleared cookie and "fall through to Bearer". The
+		// distinction is preserved at the storage layer for
+		// observability (spec §3.3).
+		clearSessionCookie(w, r)
+		return User{}, Session{}, false
+	}
+
+	user, err := users.GetByID(r.Context(), session.UserID)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			// Session references a deleted user. Clean up and
+			// fall through.
+			_ = sessions.Delete(r.Context(), session.ID)
+			clearSessionCookie(w, r)
+			return User{}, Session{}, false
+		}
+		// Storage error (decision D11): 503 terminally — no
+		// point trying Bearer since it would hit the same
+		// bbolt.
+		writeServiceUnavailable(w, "authentication service temporarily unavailable")
+		return User{}, Session{}, false
+	}
+
+	return user, session, true
+}
+
+// resolveBearerToken parses Authorization: Bearer, validates the
+// token, and resolves the owning user. Returns ok=false silently
+// (no response written) so the caller can write the unified 401.
+//
+// Revoked / expired tokens come back as ok=false: leaking the
+// reason via a distinct status would let an attacker probe whether
+// a token ever existed.
+func resolveBearerToken(
+	r *http.Request,
+	tokens APITokenLookup,
+	users userStore,
+) (User, APIToken, bool) {
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		return User{}, APIToken{}, false
+	}
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) {
+		return User{}, APIToken{}, false
+	}
+	plain := strings.TrimSpace(header[len(prefix):])
+	if plain == "" {
+		return User{}, APIToken{}, false
+	}
+	tok, err := tokens.LookupToken(r.Context(), plain)
+	if err != nil {
+		return User{}, APIToken{}, false
+	}
+	if tok.RevokedAt != nil {
+		return User{}, APIToken{}, false
+	}
+	now := time.Now().UTC()
+	if tok.ExpiresAt != nil && !tok.ExpiresAt.After(now) {
+		return User{}, APIToken{}, false
+	}
+	user, err := users.GetByID(r.Context(), tok.UserID)
+	if err != nil {
+		return User{}, APIToken{}, false
+	}
+	return user, tok, true
+}
+
+// withAuthIdentity populates the ctx keys downstream middleware /
+// handlers read. sessionID is "" for Bearer-authenticated
+// requests; isLocked is always false on the Bearer path (no idle
+// timer applies to service accounts).
+func withAuthIdentity(ctx context.Context, user User, sessionID string, isLocked bool) context.Context {
+	ctx = context.WithValue(ctx, UserIDKey, user.ID)
+	ctx = context.WithValue(ctx, UsernameKey, user.Username)
+	ctx = context.WithValue(ctx, SessionIDKey, sessionID)
+	ctx = context.WithValue(ctx, IsLockedKey, isLocked)
+	ctx = context.WithValue(ctx, RoleKey, user.Role)
+	ctx = context.WithValue(ctx, AuthSourceKey, user.AuthSource)
+	return ctx
 }
 
 // HardAuthMiddleware returns a chi-compatible middleware that
@@ -126,8 +231,8 @@ func SoftAuthMiddleware(sessions sessionStore, users userStore, devMode bool) fu
 //
 // devMode is propagated to the wrapped SoftAuthMiddleware for
 // clearSessionCookie attribute consistency.
-func HardAuthMiddleware(sessions sessionStore, users userStore, devMode bool) func(http.Handler) http.Handler {
-	soft := SoftAuthMiddleware(sessions, users, devMode)
+func HardAuthMiddleware(sessions sessionStore, users userStore, tokens APITokenLookup, devMode bool) func(http.Handler) http.Handler {
+	soft := SoftAuthMiddleware(sessions, users, tokens, devMode)
 	return func(next http.Handler) http.Handler {
 		// The chained handler runs AFTER soft-auth has populated the
 		// context. We read IsLockedKey to decide whether to 403 or
@@ -140,14 +245,21 @@ func HardAuthMiddleware(sessions sessionStore, users userStore, devMode bool) fu
 				return
 			}
 
+			// Bearer-authenticated requests carry an empty SessionID
+			// (no session to touch). Skip the Touch call rather than
+			// calling sessions.Touch("") which would either error or
+			// silently no-op depending on the store implementation —
+			// either way it's misleading in logs.
 			sessionID, _ := r.Context().Value(SessionIDKey).(string)
-			if err := sessions.Touch(r.Context(), sessionID); err != nil {
-				// Touch is best-effort. Log a warning but do not fail
-				// the request: the user has already passed auth.
-				slog.Default().Warn("auth: session touch failed",
-					slog.String("err", err.Error()),
-					slog.String("session_id", sessionID),
-				)
+			if sessionID != "" {
+				if err := sessions.Touch(r.Context(), sessionID); err != nil {
+					// Touch is best-effort. Log a warning but do not fail
+					// the request: the user has already passed auth.
+					slog.Default().Warn("auth: session touch failed",
+						slog.String("err", err.Error()),
+						slog.String("session_id", sessionID),
+					)
+				}
 			}
 
 			next.ServeHTTP(w, r)

@@ -141,7 +141,7 @@ func TestSoftAuthMiddleware_NilSessionStorePanics(t *testing.T) {
 			t.Fatal("expected panic")
 		}
 	}()
-	_ = SoftAuthMiddleware(nil, &mockUserStore{}, false)
+	_ = SoftAuthMiddleware(nil, &mockUserStore{}, nil, false)
 }
 
 func TestSoftAuthMiddleware_NilUserStorePanics(t *testing.T) {
@@ -150,11 +150,11 @@ func TestSoftAuthMiddleware_NilUserStorePanics(t *testing.T) {
 			t.Fatal("expected panic")
 		}
 	}()
-	_ = SoftAuthMiddleware(&mockSessionStore{}, nil, false)
+	_ = SoftAuthMiddleware(&mockSessionStore{}, nil, nil, false)
 }
 
 func TestSoftAuthMiddleware_NoCookie_401(t *testing.T) {
-	mw := SoftAuthMiddleware(&mockSessionStore{sessions: map[string]Session{}}, &mockUserStore{users: map[string]User{}}, false)
+	mw := SoftAuthMiddleware(&mockSessionStore{sessions: map[string]Session{}}, &mockUserStore{users: map[string]User{}}, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -175,7 +175,7 @@ func TestSoftAuthMiddleware_NoCookie_401(t *testing.T) {
 
 func TestSoftAuthMiddleware_SessionNotFound_401AndClearsCookie(t *testing.T) {
 	store := &mockSessionStore{sessions: map[string]Session{}}
-	mw := SoftAuthMiddleware(store, &mockUserStore{}, false)
+	mw := SoftAuthMiddleware(store, &mockUserStore{}, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -205,7 +205,7 @@ func TestSoftAuthMiddleware_SessionExpired_401AndClearsCookie(t *testing.T) {
 		sessions: map[string]Session{},
 		getErr:   ErrSessionExpired,
 	}
-	mw := SoftAuthMiddleware(store, &mockUserStore{}, false)
+	mw := SoftAuthMiddleware(store, &mockUserStore{}, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -229,7 +229,7 @@ func TestSoftAuthMiddleware_UserDeleted_401AndCleansUpSession(t *testing.T) {
 		},
 	}
 	users := &mockUserStore{users: map[string]User{}} // user "ghost" doesn't exist
-	mw := SoftAuthMiddleware(store, users, false)
+	mw := SoftAuthMiddleware(store, users, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -254,7 +254,7 @@ func TestSoftAuthMiddleware_StorageError_503(t *testing.T) {
 		sessions: map[string]Session{"sid": freshSession("sid", "uid")},
 	}
 	users := &mockUserStore{getErr: errors.New("simulated db failure")}
-	mw := SoftAuthMiddleware(store, users, false)
+	mw := SoftAuthMiddleware(store, users, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -278,7 +278,7 @@ func TestSoftAuthMiddleware_ValidSession_PopulatesContext(t *testing.T) {
 	users := &mockUserStore{
 		users: map[string]User{"uid": {ID: "uid", Username: "admin"}},
 	}
-	mw := SoftAuthMiddleware(store, users, false)
+	mw := SoftAuthMiddleware(store, users, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -317,7 +317,7 @@ func TestSoftAuthMiddleware_IdleSession_PassesWithIsLockedTrue(t *testing.T) {
 	users := &mockUserStore{
 		users: map[string]User{"uid": {ID: "uid", Username: "admin"}},
 	}
-	mw := SoftAuthMiddleware(store, users, false)
+	mw := SoftAuthMiddleware(store, users, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -347,7 +347,7 @@ func TestSoftAuthMiddleware_DoesNotCallTouch(t *testing.T) {
 	users := &mockUserStore{
 		users: map[string]User{"uid": {ID: "uid", Username: "admin"}},
 	}
-	mw := SoftAuthMiddleware(store, users, false)
+	mw := SoftAuthMiddleware(store, users, nil, false)
 	h := mw(&passthroughHandler{})
 
 	for i := 0; i < 5; i++ {
@@ -387,7 +387,7 @@ func TestHardAuthMiddleware_TouchAfterCheck(t *testing.T) {
 	users := &mockUserStore{
 		users: map[string]User{"uid": {ID: "uid", Username: "admin"}},
 	}
-	mw := HardAuthMiddleware(store, users, false)
+	mw := HardAuthMiddleware(store, users, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -424,7 +424,7 @@ func TestHardAuthMiddleware_FreshSession_TouchCalledAfterCheck(t *testing.T) {
 	users := &mockUserStore{
 		users: map[string]User{"uid": {ID: "uid", Username: "admin"}},
 	}
-	mw := HardAuthMiddleware(store, users, false)
+	mw := HardAuthMiddleware(store, users, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -457,7 +457,7 @@ func TestHardAuthMiddleware_TouchFailure_NonFatal(t *testing.T) {
 	users := &mockUserStore{
 		users: map[string]User{"uid": {ID: "uid", Username: "admin"}},
 	}
-	mw := HardAuthMiddleware(store, users, false)
+	mw := HardAuthMiddleware(store, users, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 
@@ -476,7 +476,7 @@ func TestHardAuthMiddleware_TouchFailure_NonFatal(t *testing.T) {
 
 func TestHardAuthMiddleware_NoCookie_DelegatesToSoftAuth401(t *testing.T) {
 	// Hard-auth wraps soft-auth. A missing cookie returns 401, not 403.
-	mw := HardAuthMiddleware(&mockSessionStore{sessions: map[string]Session{}}, &mockUserStore{}, false)
+	mw := HardAuthMiddleware(&mockSessionStore{sessions: map[string]Session{}}, &mockUserStore{}, nil, false)
 	inner := &passthroughHandler{}
 	h := mw(inner)
 

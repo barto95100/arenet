@@ -274,30 +274,26 @@ func (s *APITokenStore) FindActiveByUser(ctx context.Context, userID string) (AP
 	return APIToken{}, ErrAPITokenNotFound
 }
 
-// ValidateToken hashes the supplied plain string, walks the
-// bucket looking for a matching token row, and returns the
-// active token + its owner user. Errors are distinct so the
-// caller can return a precise 401 message:
-//   - ErrAPITokenInvalid : token format wrong OR no hash match
-//   - ErrAPITokenRevoked : matched but RevokedAt != nil
-//   - ErrAPITokenExpired : matched but past ExpiresAt
+// LookupToken hashes the plain token, walks the bucket, and
+// returns the matching token row (active OR not — caller
+// inspects RevokedAt / ExpiresAt). ErrAPITokenInvalid signals
+// either a wrong-prefix string or a hash miss; this lets the
+// API layer return a 401 without leaking whether the token
+// existed-but-was-revoked vs never-existed for unauthenticated
+// callers.
 //
-// The user is loaded via the supplied UserStore reference;
-// validate refuses to attach an identity if the user row is
-// missing (rare — only after a corrupted manual edit of the
-// users bucket).
-func (s *APITokenStore) ValidateToken(
-	ctx context.Context,
-	users *UserStore,
-	plain string,
-) (APIToken, User, error) {
+// Splitting Lookup from full validation keeps the
+// apiTokenStore interface free of any *UserStore dependency,
+// so the middleware can mock token validation independently of
+// user lookups.
+func (s *APITokenStore) LookupToken(ctx context.Context, plain string) (APIToken, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 	}
 	if !strings.HasPrefix(plain, APITokenPrefix) {
-		return APIToken{}, User{}, ErrAPITokenInvalid
+		return APIToken{}, ErrAPITokenInvalid
 	}
 
 	sum := sha256.Sum256([]byte(plain))
@@ -326,10 +322,27 @@ func (s *APITokenStore) ValidateToken(
 		})
 	})
 	if err != nil {
-		return APIToken{}, User{}, err
+		return APIToken{}, err
 	}
 	if !found {
-		return APIToken{}, User{}, ErrAPITokenInvalid
+		return APIToken{}, ErrAPITokenInvalid
+	}
+	return matched, nil
+}
+
+// ValidateAuthToken is the high-level convenience that calls
+// LookupToken + applies the revoked/expired checks + resolves
+// the owning user. The API layer / handler tests call this;
+// the middleware calls LookupToken directly so it can keep the
+// apiTokenStore interface free of UserStore.
+func (s *APITokenStore) ValidateAuthToken(
+	ctx context.Context,
+	users *UserStore,
+	plain string,
+) (APIToken, User, error) {
+	matched, err := s.LookupToken(ctx, plain)
+	if err != nil {
+		return APIToken{}, User{}, err
 	}
 	if matched.RevokedAt != nil {
 		return matched, User{}, ErrAPITokenRevoked
@@ -338,7 +351,6 @@ func (s *APITokenStore) ValidateToken(
 	if matched.ExpiresAt != nil && !matched.ExpiresAt.After(now) {
 		return matched, User{}, ErrAPITokenExpired
 	}
-
 	user, err := users.GetByID(ctx, matched.UserID)
 	if err != nil {
 		return matched, User{}, fmt.Errorf("auth: token references missing user %q: %w", matched.UserID, err)

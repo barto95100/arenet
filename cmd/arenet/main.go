@@ -1040,6 +1040,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	auditStore := audit.NewStore(store.DB())
 	userStore := auth.NewUserStore(store.DB())
 	sessionStore := auth.NewSessionStore(store.DB())
+	apiTokenStore := auth.NewAPITokenStore(store.DB())
 	hibpClient := auth.NewHIBPClient()
 	rateLimiter := auth.NewRateLimiter(logger)
 	rateLimiter.Start(ctx)
@@ -1096,6 +1097,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		apiHandler.SetUIOrigin(cfg.UIOrigin)
 		logger.Info("OIDC callback redirects will target SPA origin", "ui_origin", cfg.UIOrigin)
 	}
+	// Phase 4 — wire the API-token store so SoftAuth's Bearer
+	// fallback path is active. Without this, service-account
+	// tokens cannot authenticate (cookie-only mode).
+	apiHandler.SetAPITokenStore(apiTokenStore)
 	// Step L L.2 — attach the observability store to the API
 	// handler so /api/v1/metrics/* can serve history.
 	//

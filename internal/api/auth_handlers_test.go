@@ -60,6 +60,10 @@ func setupTestEnv(t *testing.T) (*testEnv, string) {
 	ipExtractor, _ := auth.NewIPExtractor("")
 
 	h := NewHandler(store, caddy, auditAppender, userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder, false, logger)
+	// Phase 4 — wire the API-token store so the service-account
+	// endpoints and the SoftAuth Bearer fallback are exercised
+	// in the shared test env.
+	h.SetAPITokenStore(auth.NewAPITokenStore(store.DB()))
 	router := NewRouter(h, false, ipExtractor, nil, nil, nil, nil)
 
 	return &testEnv{

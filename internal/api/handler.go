@@ -200,6 +200,16 @@ type Handler struct {
 	audit       AuditAppender
 	users       *auth.UserStore
 	sessions    *auth.SessionStore
+	// apiTokens (Phase 4) is the read+validate surface for
+	// service-account bearer tokens. nil-tolerant: when nil, the
+	// SoftAuth middleware skips the Bearer fallback entirely
+	// (matches the pre-Phase-4 surface, preserves existing
+	// tests that don't wire a token store). Set via
+	// SetAPITokenStore after construction. The concrete pointer
+	// is kept here so the service-account endpoints (rotate,
+	// revoke) can mutate the store; the middleware receives the
+	// nil-safe interface view via tokenLookup().
+	apiTokens *auth.APITokenStore
 	hibp        *auth.HIBPClient
 	rateLimiter *auth.RateLimiter
 	setupToken  *SetupTokenHolder
@@ -506,6 +516,27 @@ func NewHandler(
 // test scaffolding stays signature-compatible.
 func (h *Handler) SetUIOrigin(origin string) {
 	h.uiOrigin = strings.TrimRight(strings.TrimSpace(origin), "/")
+}
+
+// SetAPITokenStore (Phase 4) attaches the service-account API
+// token store. nil-tolerant: when not called or called with nil,
+// SoftAuth's Bearer fallback path is skipped (matches the
+// pre-Phase-4 surface for tests that don't wire tokens).
+func (h *Handler) SetAPITokenStore(t *auth.APITokenStore) {
+	h.apiTokens = t
+}
+
+// tokenLookup returns the SoftAuth-facing interface view of the
+// API-token store, or a typed-nil-safe interface nil when no
+// store has been attached. The explicit nil-return prevents the
+// classic Go pitfall where assigning a nil *T to an interface
+// variable produces a non-nil interface that compares != nil
+// even though the underlying value is nil.
+func (h *Handler) tokenLookup() auth.APITokenLookup {
+	if h.apiTokens == nil {
+		return nil
+	}
+	return h.apiTokens
 }
 
 // SetMetricsReader (Step L L.2) attaches the per-route metrics

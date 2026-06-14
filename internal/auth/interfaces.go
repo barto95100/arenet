@@ -53,6 +53,33 @@ type userStore interface {
 	GetByID(ctx context.Context, id string) (User, error)
 }
 
+// APITokenLookup is the subset of *APITokenStore that SoftAuth
+// depends on for the Bearer fallback (Phase 4). Defined as an
+// exported interface so middleware tests can inject a fake without
+// a real bbolt-backed token store.
+//
+// nil-injection is supported: SoftAuthMiddleware accepts a nil
+// APITokenLookup when the caller wants cookie-only behaviour
+// (existing tests, --no-api-tokens builds). When nil, Bearer headers
+// are silently ignored and the cookie path runs unchanged.
+//
+// The interface is exported (capitalised) so the api.Handler can
+// declare a field of this type and pass plain nil to the
+// middleware without typed-nil-interface pitfalls — the api
+// package never sees the concrete *APITokenStore type behind the
+// interface, so `h.tokens == nil` works as expected.
+type APITokenLookup interface {
+	// LookupToken hashes the plain string and returns the matching
+	// row (active OR not — caller inspects RevokedAt/ExpiresAt).
+	// ErrAPITokenInvalid covers both wrong-prefix strings and hash
+	// misses so the middleware can return a uniform 401 without
+	// leaking whether a token ever existed.
+	LookupToken(ctx context.Context, plain string) (APIToken, error)
+	// TouchLastUsed updates the LastUsedAt timestamp. Best-effort —
+	// the middleware fires it from a goroutine and ignores errors.
+	TouchLastUsed(ctx context.Context, id string) error
+}
+
 // Compile-time assertions: the concrete stores from sessionstore.go
 // and userstore.go satisfy the consumer-side interfaces above.
 //
@@ -62,6 +89,7 @@ type userStore interface {
 // *SessionStore). They are the "single source of truth" for the
 // auth middleware's dependency contract.
 var (
-	_ sessionStore = (*SessionStore)(nil)
-	_ userStore    = (*UserStore)(nil)
+	_ sessionStore   = (*SessionStore)(nil)
+	_ userStore      = (*UserStore)(nil)
+	_ APITokenLookup = (*APITokenStore)(nil)
 )

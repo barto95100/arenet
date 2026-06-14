@@ -115,7 +115,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 
 			// Soft-auth subgroup: /logout, /me, /unlock.
 			r.Group(func(r chi.Router) {
-				r.Use(auth.SoftAuthMiddleware(h.sessions, h.users, h.devMode))
+				r.Use(auth.SoftAuthMiddleware(h.sessions, h.users, h.tokenLookup(), h.devMode))
 				r.Post("/logout", h.logout)
 				r.Get("/me", h.me)
 				r.Post("/unlock", h.unlock)
@@ -125,7 +125,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// /me/password, /me/theme. All viewer-accessible (the user
 			// rotates their OWN password / theme, not someone else's).
 			r.Group(func(r chi.Router) {
-				r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.devMode))
+				r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.tokenLookup(), h.devMode))
 				r.Post("/heartbeat", h.heartbeat)
 				r.Get("/sessions", h.listSessions)
 				r.Delete("/sessions/{id}", h.deleteSession)
@@ -140,7 +140,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 		// at this level. The admin-only sub-group below adds the
 		// role gate for write endpoints + settings + admin users.
 		r.Group(func(r chi.Router) {
-			r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.devMode))
+			r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.tokenLookup(), h.devMode))
 			r.Get("/routes", h.listRoutes)
 			r.Get("/routes/{id}", h.getRoute)
 			r.Get("/audit", h.listAudit)
@@ -322,6 +322,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// UserStore.Delete; sessions are cascaded
 				// inside the handler.
 				r.Delete("/admin/users/{id}", h.deleteAdminUser)
+				// Phase 4 — service-account lifecycle. Same
+				// admin trust posture as the human-user
+				// endpoints above; the service account itself
+				// authenticates via Bearer token, not via the
+				// session cookie that gates THIS request.
+				r.Post("/admin/users/service-accounts", h.createServiceAccount)
+				r.Post("/admin/users/service-accounts/{id}/rotate-token", h.rotateServiceAccountToken)
+				r.Delete("/admin/users/service-accounts/{id}", h.deleteServiceAccount)
 				// Step K.3 — backup / restore.
 				r.Get("/admin/backup", h.getBackup)
 				r.Post("/admin/restore", h.postRestore)

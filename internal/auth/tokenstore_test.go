@@ -103,7 +103,7 @@ func TestAPITokenStore_CreateAndValidate_HappyPath(t *testing.T) {
 		t.Errorf("plain has no prefix: %q", plain)
 	}
 
-	tok, validatedUser, err := ts.ValidateToken(context.Background(), us, plain)
+	tok, validatedUser, err := ts.ValidateAuthToken(context.Background(), us, plain)
 	if err != nil {
 		t.Fatalf("ValidateToken: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestAPITokenStore_CreateAndValidate_HappyPath(t *testing.T) {
 
 func TestAPITokenStore_Validate_RejectsInvalidPrefix(t *testing.T) {
 	_, us, ts := newTokenTestDB(t)
-	_, _, err := ts.ValidateToken(context.Background(), us, "not-our-prefix-abc")
+	_, _, err := ts.ValidateAuthToken(context.Background(), us, "not-our-prefix-abc")
 	if !errors.Is(err, ErrAPITokenInvalid) {
 		t.Errorf("want ErrAPITokenInvalid, got %v", err)
 	}
@@ -129,7 +129,7 @@ func TestAPITokenStore_Validate_RejectsInvalidPrefix(t *testing.T) {
 func TestAPITokenStore_Validate_RejectsUnknownToken(t *testing.T) {
 	_, us, ts := newTokenTestDB(t)
 	// Pretend-token with the right prefix but never persisted.
-	_, _, err := ts.ValidateToken(context.Background(), us, APITokenPrefix+"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	_, _, err := ts.ValidateAuthToken(context.Background(), us, APITokenPrefix+"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	if !errors.Is(err, ErrAPITokenInvalid) {
 		t.Errorf("want ErrAPITokenInvalid, got %v", err)
 	}
@@ -147,7 +147,7 @@ func TestAPITokenStore_Validate_RejectsRevokedToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = ts.ValidateToken(context.Background(), us, plain)
+	_, _, err = ts.ValidateAuthToken(context.Background(), us, plain)
 	if !errors.Is(err, ErrAPITokenRevoked) {
 		t.Errorf("want ErrAPITokenRevoked, got %v", err)
 	}
@@ -163,7 +163,7 @@ func TestAPITokenStore_Validate_RejectsExpiredToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = ts.ValidateToken(context.Background(), us, plain)
+	_, _, err = ts.ValidateAuthToken(context.Background(), us, plain)
 	if !errors.Is(err, ErrAPITokenExpired) {
 		t.Errorf("want ErrAPITokenExpired, got %v", err)
 	}
@@ -179,7 +179,7 @@ func TestAPITokenStore_Validate_AcceptsFutureExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := ts.ValidateToken(context.Background(), us, plain); err != nil {
+	if _, _, err := ts.ValidateAuthToken(context.Background(), us, plain); err != nil {
 		t.Errorf("want valid future-expiry token, got %v", err)
 	}
 }
