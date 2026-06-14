@@ -472,6 +472,49 @@ describe('/utilisateurs — Phase 2 visual polish', () => {
 		expect(deleteBtn.compareDocumentPosition(roleBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	it('renders the SERVICE suffix on service-account source cell', async () => {
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'svc-1', username: 'ci-deploy', authSource: 'service', role: 'viewer' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.getByTestId('service-suffix-svc-1')).toBeTruthy();
+		expect(screen.getByTestId('service-suffix-svc-1').textContent?.trim()).toBe('SERVICE');
+		// And NO globe (that's the OIDC marker, not service).
+		expect(screen.queryByTestId('source-globe-svc-1')).toBeNull();
+	});
+
+	it('renders Rotation + Supprimer actions on service-account rows', async () => {
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'svc-1', username: 'ci-deploy', authSource: 'service', role: 'viewer' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.getByTestId('rotate-btn-svc-1')).toBeTruthy();
+		expect(screen.getByTestId('delete-btn-svc-1')).toBeTruthy();
+		// Service accounts can't be promoted/demoted — no role
+		// button on these rows.
+		expect(screen.queryByTestId('role-btn-svc-1')).toBeNull();
+	});
+
+	it('renders the "+ Créer un service account" CTA above the table', async () => {
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.getByTestId('create-svc-button')).toBeTruthy();
+	});
+
 	it('renders the activity state with a StatusDot + label (not a Badge)', async () => {
 		settingsMock.listAdminUsers.mockResolvedValue([
 			user({ id: 'u1', activeSessionCount: 1, lastActivityAt: isoMinutesAgo(2) })

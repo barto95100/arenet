@@ -40,6 +40,7 @@
 	import OIDCConfigSummary from '$lib/components/OIDCConfigSummary.svelte';
 	import UserAvatar from '$lib/components/UserAvatar.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
+	import CreateServiceAccountModal from '$lib/components/CreateServiceAccountModal.svelte';
 	import { oidcProviderLabel, oidcProviderColors } from '$lib/utils/oidc-labels';
 	import type { OIDCProviderKind } from '$lib/api/types';
 
@@ -54,6 +55,13 @@
 
 	let confirmDeleteOpen = $state(false);
 	let pendingDelete = $state<AdminUser | null>(null);
+
+	// Phase 4 — service-account modals.
+	let createSvcOpen = $state(false);
+	let confirmRotateOpen = $state(false);
+	let pendingRotate = $state<AdminUser | null>(null);
+	let revealedRotateToken = $state<string | null>(null);
+	let rotateCopied = $state(false);
 
 	// Search + filter state — pure frontend filtering over the
 	// full users[] (admin volumes < 50 — no API surface needed).
@@ -240,11 +248,55 @@
 		confirmDeleteOpen = true;
 	}
 
+	function onRotateClick(u: AdminUser): void {
+		pendingRotate = u;
+		revealedRotateToken = null;
+		rotateCopied = false;
+		confirmRotateOpen = true;
+	}
+
+	async function confirmRotate(): Promise<void> {
+		if (!pendingRotate) return;
+		const u = pendingRotate;
+		try {
+			const result = await settingsApi.rotateServiceAccountToken(u.id);
+			revealedRotateToken = result.token;
+			rotateCopied = false;
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : 'Failed to rotate token');
+			pushToast(msg, 'danger');
+			confirmRotateOpen = false;
+			pendingRotate = null;
+		}
+	}
+
+	async function copyRotateToken(): Promise<void> {
+		if (!revealedRotateToken) return;
+		try {
+			await navigator.clipboard.writeText(revealedRotateToken);
+			rotateCopied = true;
+			pushToast('Nouveau token copié', 'success');
+		} catch {
+			pushToast('Copie échouée — sélectionne le texte manuellement', 'danger');
+		}
+	}
+
+	function closeRotateModal(): void {
+		confirmRotateOpen = false;
+		pendingRotate = null;
+		revealedRotateToken = null;
+		rotateCopied = false;
+	}
+
 	async function confirmDelete(): Promise<void> {
 		if (!pendingDelete) return;
 		const u = pendingDelete;
 		try {
-			await settingsApi.deleteAdminUser(u.id);
+			if (u.authSource === 'service') {
+				await settingsApi.deleteServiceAccount(u.id);
+			} else {
+				await settingsApi.deleteAdminUser(u.id);
+			}
 			users = users.filter((x) => x.id !== u.id);
 			pushToast(`${u.username} supprimé`, 'success');
 		} catch (err) {
@@ -300,6 +352,19 @@
 				? `${counts.localAdmins} en break-glass`
 				: 'gérés manuellement'}
 		/>
+	</div>
+
+	<!-- Phase 4 — Service account create CTA. Above the grid so
+	     it stays visible regardless of sidebar collapse state. -->
+	<div class="mb-4 flex justify-end">
+		<Button
+			variant="primary"
+			size="sm"
+			onclick={() => (createSvcOpen = true)}
+			data-testid="create-svc-button"
+		>
+			+ Créer un service account
+		</Button>
 	</div>
 
 	<div class="grid grid-cols-1 xl:grid-cols-[1.3fr_1fr] gap-4 items-start">
@@ -365,10 +430,14 @@
 							{@const isSelf = auth.user?.id === u.id}
 							{@const breakGlass = isBreakGlass(u)}
 							{@const state = activityFor(u)}
-							<tr data-testid="user-row-{u.id}">
+							<tr data-testid="user-row-{u.id}" data-source={u.authSource}>
 								<td class="px-4 py-3 text-sm">
 									<div class="flex items-center gap-3">
-										<UserAvatar seed={u.username} initials={initials(u)} />
+										<UserAvatar
+											seed={u.username}
+											initials={initials(u)}
+											service={u.authSource === 'service'}
+										/>
 										<div>
 											<div class="font-medium text-primary flex items-center gap-2">
 												<span>{u.displayName || u.username}</span>
@@ -416,6 +485,16 @@
 											</svg>
 											<span>{oidcProviderLabel(oidcKind)}</span>
 										</span>
+									{:else if u.authSource === 'service'}
+										<span class="inline-flex items-center gap-1">
+											<Badge variant="neutral">Local</Badge>
+											<span
+												class="text-[10px] uppercase tracking-wider text-muted font-semibold"
+												data-testid="service-suffix-{u.id}"
+											>
+												SERVICE
+											</span>
+										</span>
 									{:else}
 										<Badge variant="neutral">Local</Badge>
 									{/if}
@@ -456,7 +535,7 @@
 								</td>
 								<td class="px-4 py-3 text-sm text-right">
 									<div class="flex justify-end gap-1">
-										{#if !isSelf}
+										{#if u.authSource === 'service'}
 											<Button
 												variant="ghost"
 												size="sm"
@@ -465,15 +544,34 @@
 											>
 												Supprimer
 											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												onclick={() => onRotateClick(u)}
+												data-testid="rotate-btn-{u.id}"
+											>
+												Rotation
+											</Button>
+										{:else}
+											{#if !isSelf}
+												<Button
+													variant="ghost"
+													size="sm"
+													onclick={() => onDeleteClick(u)}
+													data-testid="delete-btn-{u.id}"
+												>
+													Supprimer
+												</Button>
+											{/if}
+											<Button
+												variant="ghost"
+												size="sm"
+												onclick={() => onRoleClick(u)}
+												data-testid="role-btn-{u.id}"
+											>
+												{u.role === 'admin' ? 'Rétrograder' : 'Promouvoir'}
+											</Button>
 										{/if}
-										<Button
-											variant="ghost"
-											size="sm"
-											onclick={() => onRoleClick(u)}
-											data-testid="role-btn-{u.id}"
-										>
-											{u.role === 'admin' ? 'Rétrograder' : 'Promouvoir'}
-										</Button>
 									</div>
 								</td>
 							</tr>
@@ -507,12 +605,93 @@
 	bind:open={confirmDeleteOpen}
 	title={pendingDelete ? `Supprimer ${pendingDelete.username} ?` : ''}
 	message={pendingDelete
-		? `${pendingDelete.username} sera supprimé définitivement et toutes ses sessions invalidées. La suppression du dernier admin local est bloquée (invariant break-glass).`
+		? pendingDelete.authSource === 'service'
+			? `${pendingDelete.username} et son token API seront révoqués immédiatement. Cette action est irréversible.`
+			: `${pendingDelete.username} sera supprimé définitivement et toutes ses sessions invalidées. La suppression du dernier admin local est bloquée (invariant break-glass).`
 		: ''}
 	confirmLabel="Supprimer"
 	confirmVariant="danger"
 	onConfirm={confirmDelete}
 />
+
+<!-- Phase 4 — Create service account modal -->
+<CreateServiceAccountModal
+	open={createSvcOpen}
+	onClose={() => (createSvcOpen = false)}
+	onCreated={load}
+/>
+
+<!-- Phase 4 — Token rotation modal (custom because we need
+     the show-once token reveal flow, not a yes/no confirm). -->
+{#if confirmRotateOpen && pendingRotate}
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		style:background="var(--overlay-modal, rgba(0,0,0,0.8))"
+		role="presentation"
+		onclick={(e) => {
+			if (e.target === e.currentTarget && (revealedRotateToken === null || rotateCopied)) closeRotateModal();
+		}}
+		onkeydown={(e) => {
+			if (e.key === 'Escape' && (revealedRotateToken === null || rotateCopied)) closeRotateModal();
+		}}
+		data-testid="rotate-modal"
+	>
+		<div
+			class="bg-elevated border border-border-default rounded-lg shadow-lg w-full max-w-md"
+			role="dialog"
+			aria-modal="true"
+		>
+			<header class="px-5 py-4 border-b border-border-subtle">
+				<h2 class="text-lg font-semibold">
+					{revealedRotateToken ? 'Nouveau token API' : `Rotation du token de ${pendingRotate.username} ?`}
+				</h2>
+			</header>
+			<div class="px-5 py-4 text-sm flex flex-col gap-3">
+				{#if !revealedRotateToken}
+					<p>
+						L'ancien token sera révoqué immédiatement. Tous les clients
+						(n8n, monitoring, scripts) qui l'utilisent recevront 401
+						jusqu'à mise à jour avec le nouveau token.
+					</p>
+				{:else}
+					<p>
+						Nouveau token <strong class="text-down">affiché une seule fois</strong>.
+						Copie-le maintenant.
+					</p>
+					<pre
+						class="px-3 py-2 rounded-md bg-surface border border-border-default font-mono text-xs break-all whitespace-pre-wrap select-all"
+						data-testid="rotate-revealed-token">{revealedRotateToken}</pre>
+				{/if}
+			</div>
+			<footer class="px-5 py-3 border-t border-border-subtle flex justify-end gap-2">
+				{#if !revealedRotateToken}
+					<Button variant="ghost" size="sm" onclick={closeRotateModal}>Annuler</Button>
+					<Button variant="primary" size="sm" onclick={confirmRotate} data-testid="rotate-confirm-btn">
+						Faire tourner
+					</Button>
+				{:else}
+					<Button
+						variant="secondary"
+						size="sm"
+						onclick={copyRotateToken}
+						data-testid="rotate-copy-btn"
+					>
+						{rotateCopied ? '✓ Copié' : 'Copier'}
+					</Button>
+					<Button
+						variant="primary"
+						size="sm"
+						disabled={!rotateCopied}
+						onclick={closeRotateModal}
+						data-testid="rotate-close-btn"
+					>
+						Fermer
+					</Button>
+				{/if}
+			</footer>
+		</div>
+	</div>
+{/if}
 
 <style>
 	/* Phase 2 follow-up — provider-coloured pill rendered in the

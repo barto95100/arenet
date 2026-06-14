@@ -967,7 +967,7 @@ export interface AdminUser {
 	 * Frontend renders "—" in the empty case.
 	 */
 	email?: string;
-	authSource: 'local' | 'oidc';
+	authSource: 'local' | 'oidc' | 'service';
 	oidcLinked: boolean;
 	role: UserRole;
 	createdAt: string;
@@ -996,6 +996,46 @@ export interface AdminUser {
  * guard against demoting the only break-glass channel.
  */
 export type UserRole = 'viewer' | 'admin';
+
+/**
+ * Phase 4 — POST /admin/users/service-accounts body. ExpiresAt
+ * is optional: omitted → no-expiry (homelab set-and-forget).
+ */
+export interface CreateServiceAccountRequest {
+	name: string;
+	role: UserRole;
+	expiresAt?: string; // ISO timestamp, must be in the future
+}
+
+/**
+ * Phase 4 — response shape for POST
+ * /admin/users/service-accounts. The `token` field carries the
+ * plain Bearer string — shown ONCE by the create modal and
+ * never recoverable. Storing it client-side past the modal
+ * lifecycle is a deliberate non-feature (an operator wanting
+ * a fresh copy rotates).
+ */
+export interface CreateServiceAccountResponse {
+	user: AdminUser;
+	token: string;
+	tokenId: string;
+	expiresAt?: string;
+}
+
+/**
+ * Phase 4 — POST .../rotate-token body. Optional expiry
+ * override for the new token (the old one is revoked
+ * atomically).
+ */
+export interface RotateServiceAccountTokenRequest {
+	expiresAt?: string;
+}
+
+export interface RotateServiceAccountTokenResponse {
+	token: string;
+	tokenId: string;
+	expiresAt?: string;
+}
 
 /**
  * Step K.2 — POST /api/v1/admin/users/{id}/role body. Empty role

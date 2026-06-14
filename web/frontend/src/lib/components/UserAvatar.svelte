@@ -21,17 +21,27 @@
 		seed: string;
 		initials: string;
 		size?: number;
+		/**
+		 * Phase 4 — when true, render a machine glyph
+		 * (terminal/bot) instead of initials. Background stays
+		 * deterministic per seed so service accounts get the
+		 * same per-name colour family as humans — visual
+		 * grouping affordance.
+		 */
+		service?: boolean;
 	}
 
-	let { seed, initials, size = 32 }: Props = $props();
+	let { seed, initials, size = 32, service = false }: Props = $props();
 
 	const colorKey = $derived(avatarColorKey(seed));
 	const palette = $derived(AVATAR_COLOR_STYLES[colorKey]);
+	const glyphSize = $derived(Math.round(size * 0.52));
 </script>
 
 <span
 	class="user-avatar"
 	data-color={colorKey}
+	data-service={service ? 'true' : 'false'}
 	style:width="{size}px"
 	style:height="{size}px"
 	style:background-color={palette.bg}
@@ -39,7 +49,25 @@
 	style:font-size="{Math.round(size * 0.4)}px"
 	aria-hidden="true"
 >
-	{initials}
+	{#if service}
+		<!-- Lucide-style terminal glyph — recognised "machine
+		     account" affordance, matches the "$_" prompt look. -->
+		<svg
+			width={glyphSize}
+			height={glyphSize}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+		>
+			<polyline points="4 17 10 11 4 5" />
+			<line x1="12" y1="19" x2="20" y2="19" />
+		</svg>
+	{:else}
+		{initials}
+	{/if}
 </span>
 
 <style>

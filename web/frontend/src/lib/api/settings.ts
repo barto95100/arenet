@@ -15,6 +15,8 @@ import type {
 	AutomationResponse,
 	AutomationRulesRequest,
 	AutomationRuleSet,
+	CreateServiceAccountRequest,
+	CreateServiceAccountResponse,
 	CrowdSecSettings,
 	CrowdSecSettingsRequest,
 	CrowdSecTestRequest,
@@ -33,6 +35,8 @@ import type {
 	OIDCConfig,
 	OIDCConfigRequest,
 	OIDCTestResult,
+	RotateServiceAccountTokenRequest,
+	RotateServiceAccountTokenResponse,
 	UpdateUserRoleRequest
 } from './types';
 
@@ -141,6 +145,23 @@ export const settingsApi = {
 	// internal/api/users_admin.go:deleteAdminUser).
 	deleteAdminUser: (id: string): Promise<void> =>
 		request<void>('DELETE', `/admin/users/${encodeURIComponent(id)}`),
+
+	// Phase 4 — service-account lifecycle. The create response
+	// carries the plain Bearer token — shown ONCE by the modal,
+	// not stored beyond its lifecycle.
+	createServiceAccount: (r: CreateServiceAccountRequest): Promise<CreateServiceAccountResponse> =>
+		request<CreateServiceAccountResponse>('POST', '/admin/users/service-accounts', r),
+	rotateServiceAccountToken: (
+		id: string,
+		r: RotateServiceAccountTokenRequest = {}
+	): Promise<RotateServiceAccountTokenResponse> =>
+		request<RotateServiceAccountTokenResponse>(
+			'POST',
+			`/admin/users/service-accounts/${encodeURIComponent(id)}/rotate-token`,
+			r
+		),
+	deleteServiceAccount: (id: string): Promise<void> =>
+		request<void>('DELETE', `/admin/users/service-accounts/${encodeURIComponent(id)}`),
 
 	// Step CS.1 — CrowdSec bouncer settings. GET returns the
 	// stored row (apiKey redacted) + the configured boolean.
