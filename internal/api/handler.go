@@ -955,6 +955,15 @@ type routeRequest struct {
 	// 1273-1275). A warn-log surfaces the normalisation so an
 	// operator typo doesn't silently persist.
 	InsecureSkipVerify *bool `json:"insecureSkipVerify,omitempty"`
+	// UploadStreamingMode (Phase 4.5) flips the route into
+	// streaming-upload mode: WAF body inspection is skipped
+	// AND Caddy emits flush_interval:-1 so neither layer
+	// buffers the request body in RAM. Optional on the wire;
+	// nil-pointer preserves the previously stored value
+	// (preserve-on-omit, like InsecureSkipVerify). The two
+	// effects are coupled in one toggle on purpose — operators
+	// flipping one without the other always wanted both.
+	UploadStreamingMode *bool `json:"uploadStreamingMode,omitempty"`
 }
 
 // countryBlockReq is the wire-side shape of Route.CountryBlock.
@@ -1141,6 +1150,12 @@ type routeResponse struct {
 	// certificat upstream" toggle in the advanced TLS
 	// disclosure (commit 2).
 	InsecureSkipVerify bool `json:"insecureSkipVerify"`
+	// UploadStreamingMode (Phase 4.5) — echoed on every GET so
+	// the frontend toggle starts from the persisted value. No
+	// omitempty: the GET→PUT echo must carry the field even
+	// when false (preserve-on-omit at PUT relies on nil to
+	// detect omission, false to detect explicit-off).
+	UploadStreamingMode bool `json:"uploadStreamingMode"`
 	// Critique 11 Pack A (2026-06-05) — derived per-route
 	// aggregate from the Stage B HC tracker. One of:
 	//   "healthy"   — HC enabled AND every upstream healthy in tracker
@@ -1231,9 +1246,10 @@ func toResponse(r storage.Route) routeResponse {
 			Fails:        r.HealthCheck.Fails,
 		},
 		CountryBlock:       toCountryBlockResp(r.CountryBlock),
-		InsecureSkipVerify: r.InsecureSkipVerify,
-		CreatedAt:          r.CreatedAt.UTC().Format(timestampFormat),
-		UpdatedAt:          r.UpdatedAt.UTC().Format(timestampFormat),
+		InsecureSkipVerify:  r.InsecureSkipVerify,
+		UploadStreamingMode: r.UploadStreamingMode,
+		CreatedAt:           r.CreatedAt.UTC().Format(timestampFormat),
+		UpdatedAt:           r.UpdatedAt.UTC().Format(timestampFormat),
 	}
 }
 

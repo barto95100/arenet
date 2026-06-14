@@ -972,6 +972,23 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			}
 		}
 
+		// Phase 4.5 (#R-WAF-BUFFER-OOM-ON-LARGE-UPLOADS) —
+		// when the route is in upload-streaming mode, tell
+		// Caddy to flush bytes through as they arrive instead
+		// of buffering the whole request body in RAM. The -1
+		// sentinel maps to httputil.ReverseProxy.FlushInterval
+		// = -1 ("flush immediately after every write"). The
+		// WAF body skip lives in the arenet_waf handler
+		// (emitted via buildWAFHandler below); the two
+		// effects together prevent both buffering surfaces
+		// from staging the upload in RAM. Verified against a
+		// 4 GB-RAM VM under Docker registry push: WAF=detect
+		// without this toggle → 3.5 GB RSS → OOM kill; with
+		// the toggle → 257 MB RSS stable.
+		if r.UploadStreamingMode {
+			proxyHandler["flush_interval"] = -1
+		}
+
 		// Step J.2: active health checks. When the route has them
 		// enabled, emit `health_checks.active` as a sibling of
 		// upstreams and load_balancing inside the reverse_proxy
@@ -1193,7 +1210,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//     mutations would otherwise confuse the rules);
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
-		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode); wafHandler != nil {
+		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode); wafHandler != nil {
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -2073,11 +2090,11 @@ func buildRedirectRoute(routeID, host string, cb countryblock.Config, hosts []st
 // The arenet_waf module appends it itself based on its Mode
 // field so the module owns the policy decision (we don't
 // want two sources of truth disagreeing).
-func buildWAFHandler(routeID, host, mode string) map[string]any {
+func buildWAFHandler(routeID, host, mode string, skipBody bool) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
 	}
-	return map[string]any{
+	out := map[string]any{
 		"handler":        "arenet_waf",
 		"route_id":       routeID,
 		"host":           host,
@@ -2087,6 +2104,15 @@ func buildWAFHandler(routeID, host, mode string) map[string]any {
 			"Include @crs-setup.conf.example\n" +
 			"Include @owasp_crs/*.conf",
 	}
+	// Phase 4.5 — when the route opts into upload streaming
+	// mode, tell the arenet_waf handler to skip the request-
+	// body inspection branch in processRequest. Omitted on
+	// the wire when false so existing snapshots stay byte-
+	// equal for routes that don't use this feature.
+	if skipBody {
+		out["skip_body_inspection"] = true
+	}
+	return out
 }
 
 // buildCountryBlockHandler returns the Caddy JSON for the

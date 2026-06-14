@@ -307,8 +307,49 @@ type Route struct {
 	// byte-equal with pre-fix snapshots for HTTP routes,
 	// minimising diff noise during backup/restore.
 	InsecureSkipVerify bool      `json:"insecure_skip_verify,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	// UploadStreamingMode (Phase 4.5, #R-WAF-BUFFER-OOM-ON-
+	// LARGE-UPLOADS, 2026-06-14) is a per-route toggle that
+	// neutralises the two RAM-buffering surfaces hit by big
+	// request bodies (Docker registry pushes, file servers,
+	// backups):
+	//
+	//   1. WAF body inspection — when this flag is true, the
+	//      Coraza transaction skips ReadRequestBodyFrom so
+	//      the upload is not staged in memory for rule
+	//      scanning. Headers, URI, method, and the upstream
+	//      response are still inspected; only the request
+	//      body is left unscanned.
+	//
+	//   2. Caddy reverse_proxy buffering — when true,
+	//      caddymgr emits `flush_interval: -1` on the
+	//      reverse_proxy handler, which sets
+	//      httputil.ReverseProxy.FlushInterval to -1 and
+	//      tells Caddy to forward bytes as they arrive
+	//      instead of staging them.
+	//
+	// Empirical evidence: VM 4 GB RAM, WAF=detect on a
+	// registry route + Docker push → 3.5 GB RSS → OOM kill.
+	// Same VM, WAF=off → 257 MB RSS, push succeeds. The 14x
+	// gap is the Coraza body buffer combined with Caddy's
+	// default buffered proxy. UploadStreamingMode neutralises
+	// both without forcing the operator to disable the WAF
+	// entirely — headers/URI rules still fire.
+	//
+	// Default false. WAFMode and UploadStreamingMode are
+	// independent: any combination is valid. The combo
+	// {WAFMode=block, UploadStreamingMode=true} keeps the
+	// header/URI block surface live while leaving body bytes
+	// alone — exactly the right posture for routes that
+	// proxy large opaque payloads (binary uploads, encrypted
+	// archives) where body inspection has near-zero security
+	// signal and a high OOM cost.
+	//
+	// JSON omitempty so HTTP/non-streaming routes stay
+	// byte-equal with pre-fix snapshots on disk and in
+	// backup/restore exports.
+	UploadStreamingMode bool      `json:"upload_streaming_mode,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route

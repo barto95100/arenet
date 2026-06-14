@@ -1033,6 +1033,13 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 			"host", req.Host)
 		skipVerify = false
 	}
+	// Phase 4.5 — UploadStreamingMode on POST: default false,
+	// nil-pointer accepted (no preserve-on-omit semantics on
+	// create — there's no previous value), non-nil overrides.
+	streamingMode := false
+	if req.UploadStreamingMode != nil {
+		streamingMode = *req.UploadStreamingMode
+	}
 	newRoute := storage.Route{
 		Host:            req.Host,
 		Upstreams:       storeUpstreams,
@@ -1048,14 +1055,15 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		ForwardAuth: storage.ForwardAuthRouteConfig{
 			ProviderName: req.ForwardAuth.ProviderName,
 		},
-		RequestHeaders:     req.RequestHeaders,
-		ResponseHeaders:    req.ResponseHeaders,
-		WAFMode:            req.WAFMode,
-		ACMEChallenge:      req.ACMEChallenge,
-		UseDedicatedCert:   req.UseDedicatedCert,
-		HealthCheck:        storeHC,
-		CountryBlock:       newCountryBlock,
-		InsecureSkipVerify: skipVerify,
+		RequestHeaders:      req.RequestHeaders,
+		ResponseHeaders:     req.ResponseHeaders,
+		WAFMode:             req.WAFMode,
+		ACMEChallenge:       req.ACMEChallenge,
+		UseDedicatedCert:    req.UseDedicatedCert,
+		HealthCheck:         storeHC,
+		CountryBlock:        newCountryBlock,
+		InsecureSkipVerify:  skipVerify,
+		UploadStreamingMode: streamingMode,
 	}
 	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
 	// the corresponding sub-struct (storage trusts the API to
@@ -1428,6 +1436,14 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 			"id", id, "host", req.Host)
 		skipVerify = false
 	}
+	// Phase 4.5 — UploadStreamingMode on PUT: nil pointer
+	// preserves the previously stored value (same shape as
+	// InsecureSkipVerify above); non-nil pointer is a full
+	// replacement.
+	streamingMode := previous.UploadStreamingMode
+	if req.UploadStreamingMode != nil {
+		streamingMode = *req.UploadStreamingMode
+	}
 	newRoute := storage.Route{
 		ID:              id,
 		Host:            req.Host,
@@ -1444,14 +1460,15 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		ForwardAuth: storage.ForwardAuthRouteConfig{
 			ProviderName: req.ForwardAuth.ProviderName,
 		},
-		RequestHeaders:     req.RequestHeaders,
-		ResponseHeaders:    req.ResponseHeaders,
-		WAFMode:            req.WAFMode,
-		ACMEChallenge:      req.ACMEChallenge,
-		UseDedicatedCert:   req.UseDedicatedCert,
-		HealthCheck:        storeHC,
-		CountryBlock:       newCountryBlock,
-		InsecureSkipVerify: skipVerify,
+		RequestHeaders:      req.RequestHeaders,
+		ResponseHeaders:     req.ResponseHeaders,
+		WAFMode:             req.WAFMode,
+		ACMEChallenge:       req.ACMEChallenge,
+		UseDedicatedCert:    req.UseDedicatedCert,
+		HealthCheck:         storeHC,
+		CountryBlock:        newCountryBlock,
+		InsecureSkipVerify:  skipVerify,
+		UploadStreamingMode: streamingMode,
 	}
 	if newRoute.AuthMode != storage.RouteAuthBasic {
 		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}

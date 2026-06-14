@@ -44,7 +44,20 @@ var errInterruptionTriggered = errors.New("waf rule interruption triggered")
 // transaction phases: connection → URI → request headers →
 // optional body. Returns the first interruption observed (or
 // nil) and a transport error if Coraza itself failed.
-func processRequest(tx types.Transaction, req *http.Request) (*types.Interruption, error) {
+//
+// skipBody (Phase 4.5) controls whether the request body is
+// fed to Coraza for inspection. When true, the body-read +
+// rule-evaluation branch is skipped entirely, but
+// ProcessRequestBody is still called so the transaction
+// state machine reaches phase 2 cleanly — any rules that
+// match on phase-2 variables OTHER than the body (URL,
+// args, header-derived state) still fire. The body itself
+// is not staged in RAM: req.Body is left untouched, so the
+// downstream reverse_proxy streams the bytes directly. This
+// is the surgical fix for the WAF buffer OOM observed at
+// 4 GB RAM during Docker registry pushes (#R-WAF-BUFFER-OOM-
+// ON-LARGE-UPLOADS).
+func processRequest(tx types.Transaction, req *http.Request, skipBody bool) (*types.Interruption, error) {
 	client, cport := getClientAddress(req)
 
 	tx.ProcessConnection(client, cport, "", 0)
@@ -71,7 +84,7 @@ func processRequest(tx types.Transaction, req *http.Request) (*types.Interruptio
 		return it, nil
 	}
 
-	if tx.IsRequestBodyAccessible() && req.Body != nil && req.Body != http.NoBody {
+	if !skipBody && tx.IsRequestBodyAccessible() && req.Body != nil && req.Body != http.NoBody {
 		it, _, err := tx.ReadRequestBodyFrom(req.Body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to append request body: %w", err)
@@ -101,6 +114,14 @@ func processRequest(tx types.Transaction, req *http.Request) (*types.Interruptio
 			}{body, req.Body}
 		}
 	}
+	// ProcessRequestBody is called even on the skipBody path so
+	// the Coraza transaction state machine reaches phase 2
+	// cleanly — rules that match on URL / args / header-derived
+	// state still evaluate. Coraza tolerates an empty phase-2
+	// body (no bytes were fed via ReadRequestBodyFrom): the
+	// call resolves without scanning content but still
+	// triggers phase-2 rule matching against the non-body
+	// variables already populated.
 	return tx.ProcessRequestBody()
 }
 

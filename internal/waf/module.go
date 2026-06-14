@@ -103,6 +103,20 @@ type ArenetWafHandler struct {
 	// pre-Fix-#2 emit decodes with Host="" and the log line
 	// just shows the route_id.
 	Host string `json:"host,omitempty"`
+	// SkipBodyInspection (Phase 4.5, #R-WAF-BUFFER-OOM-ON-
+	// LARGE-UPLOADS) tells processRequest to skip the
+	// ReadRequestBodyFrom path so the upload is not staged in
+	// RAM for rule scanning. Headers / URI / response phases
+	// stay live; only the request body bytes are not fed to
+	// Coraza. Paired in the route config with Caddy's
+	// flush_interval=-1 — the two effects together preserve
+	// the per-route WAF posture (headers blocked, URL rules
+	// active) while making bulk uploads safe on small-RAM
+	// homelab hosts. NOT included in computePoolKey: it's a
+	// per-call decision that doesn't change the underlying
+	// WAF instance, so routes with matching directives+mode
+	// can still share a pooled Coraza WAF.
+	SkipBodyInspection bool `json:"skip_body_inspection,omitempty"`
 
 	waf     coraza.WAF
 	poolKey string
@@ -551,7 +565,19 @@ func (h *ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 		return next.ServeHTTP(w, r)
 	}
 
-	if it, err := processRequest(tx, r); err != nil {
+	if h.SkipBodyInspection {
+		// Phase 4.5 — surfaced at DEBUG so operators tracing
+		// a large-upload route can verify the skip is in
+		// effect without a per-request INFO line at steady
+		// state. The route_id ties the skip back to storage
+		// so cross-referencing with the /utilisateurs view
+		// stays trivial.
+		slog.Default().Debug("waf: skipping request body inspection per route config",
+			"route_id", h.RouteID,
+			"path", r.URL.Path,
+		)
+	}
+	if it, err := processRequest(tx, r, h.SkipBodyInspection); err != nil {
 		return caddyhttp.HandlerError{
 			StatusCode: http.StatusInternalServerError,
 			ID:         tx.ID(),
