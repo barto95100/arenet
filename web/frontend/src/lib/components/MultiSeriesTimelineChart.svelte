@@ -256,7 +256,7 @@ baseline.
 					y={PAD_T + innerHeight / 2}
 					class="empty-state-text"
 					text-anchor="middle"
-					dominant-baseline="middle">no events in this window</text
+					dominant-baseline="middle">Aucun événement sur cette période</text
 				>
 			{/if}
 

@@ -129,9 +129,9 @@
 	// status-up / accent-cyan / status-down map respectively
 	// to the green/blue/red triad the operator brief asked for.
 	const certChartSeries = [
-		{ key: 'issued' as const, label: 'Issued', color: 'var(--status-up)' },
-		{ key: 'renewed' as const, label: 'Renewed', color: 'var(--accent-cyan)' },
-		{ key: 'failed' as const, label: 'Failed', color: 'var(--status-down)' }
+		{ key: 'issued' as const, label: 'Émis', color: 'var(--status-up)' },
+		{ key: 'renewed' as const, label: 'Renouvelés', color: 'var(--accent-cyan)' },
+		{ key: 'failed' as const, label: 'Échecs', color: 'var(--status-down)' }
 	];
 
 	// Distinct upstream URLs across all routes — the v1.4 stand-in
@@ -370,7 +370,7 @@
 			</div>
 		</div>
 		<div class="kpi" data-testid="kpi-cert-failed-7d">
-			<div class="kpi-label">Failed last 7d</div>
+			<div class="kpi-label">Échecs sur 7 jours</div>
 			<div class="kpi-val">{kpiCertFailed7d}</div>
 			<div class="kpi-foot">
 				{kpiCertFailed7d === 0 ? "aucune erreur d'émission" : 'investiguer'}
@@ -461,7 +461,7 @@
 			<MultiSeriesTimelineChart
 				data={certBuckets}
 				series={certChartSeries}
-				label="Cert lifecycle events over 30 days"
+				label="Cycle de vie des certificats sur 30 jours"
 				height={180}
 			/>
 		</div>
