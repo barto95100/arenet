@@ -1675,7 +1675,7 @@
 		<div
 			bind:this={panelEl}
 			use:clickOutsideToClose
-			class="rounded-lg border border-border-subtle bg-elevated xl:sticky xl:top-[calc(var(--tb-height)+14px)] xl:max-h-[calc(100vh-var(--tb-height)-40px)] overflow-auto"
+			class="relative rounded-lg border border-border-subtle bg-elevated xl:sticky xl:top-[calc(var(--tb-height)+14px)] xl:max-h-[calc(100vh-var(--tb-height)-40px)] overflow-auto"
 		>
 			{#if !formOpen}
 				<!-- Empty state: nothing selected, not in create mode. -->
@@ -2812,6 +2812,34 @@
 					>
 						{formMode === 'create' ? 'Create' : 'Save'}
 					</Button>
+				</div>
+			{/if}
+
+			<!--
+				Phase 5 follow-up — Caddy-reload overlay (T2). Sits
+				on top of the form/footer while submitForm() is
+				awaiting the PUT/POST. Mirrors the spinner on the
+				Save button but at panel-scale so the operator
+				perceives the ~5s wait as "Caddy is being reloaded",
+				not as "the UI is frozen". The veil also blocks
+				accidental input edits during the in-flight save —
+				clicks pass through to the veil, not to the form
+				underneath.
+			-->
+			{#if submitting}
+				<div
+					class="absolute inset-0 z-10 flex items-center justify-center bg-elevated/85 backdrop-blur-sm rounded-lg"
+					role="status"
+					aria-live="polite"
+					aria-busy="true"
+					data-testid="route-save-overlay"
+				>
+					<div class="flex flex-col items-center gap-3 px-4 py-3 rounded-md">
+						<Spinner size="md" />
+						<p class="text-sm text-secondary">
+							Application des modifications Caddy…
+						</p>
+					</div>
 				</div>
 			{/if}
 		</div>

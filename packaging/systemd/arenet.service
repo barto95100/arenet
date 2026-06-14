@@ -79,6 +79,24 @@ MemoryDenyWriteExecute=false
 Restart=on-failure
 RestartSec=5s
 
+# Stop timeout (defensive — Phase 5 follow-up batch).
+# 15s = 10s admin server graceful Shutdown timeout
+# (cmd/arenet/main.go:1366) + 5s Caddy grace_period
+# (internal/caddymgr/manager.go:1475). systemd's default
+# TimeoutStopSec is 90s; without an explicit cap an operator
+# would wait 90s for a stuck shutdown before SIGKILL — long
+# enough to feel broken even though the actual graceful path
+# is well under 15s.
+#
+# Observed on Day 12: `arenet.service: State 'stop-sigterm'
+# timed out. Killing.` at the 90s default. Root-cause
+# investigation (likely candidates: obsRetention SQLite WAL
+# flush, wafSink drain, WebSocket long-poll connections not
+# closing on ctx cancel) deferred — the defensive cap here
+# bounds the operator-visible delay while the root cause
+# stays in the backlog.
+TimeoutStopSec=15s
+
 # Log routing — journald captures stdout/stderr by default. Set
 # ARENET_LOG_FORMAT=json in the env file to get structured logs.
 StandardOutput=journal
