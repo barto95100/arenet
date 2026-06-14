@@ -17,6 +17,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -211,6 +212,162 @@ func (h *Handler) securityCertEvents(w http.ResponseWriter, r *http.Request) {
 			Renewal:   e.Renewal,
 			Error:     e.Error,
 			Details:   e.Details,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// Phase 5 — GET /api/v1/observability/cert-events/aggregate.
+//
+// Query parameters (all optional):
+//   - window: duration string (e.g. "30d", "168h"). Clamped to
+//     [certEventsAggregateMinWindow, certEventsAggregateMaxWindow]
+//     silently. Default: 30d.
+//   - interval: duration string for bucket size. Clamped to
+//     [certEventsAggregateMinInterval, certEventsAggregateMaxInterval]
+//     silently. Default: 24h.
+//
+// Response: { buckets: [{bucketStart, issued, renewed, failed}, ...],
+// degraded? }. The buckets array is always emitted with one
+// entry per interval within the window (empty buckets carry
+// zero counts) so the frontend can render a continuous timeline
+// without client-side gap-fill.
+//
+// Auth: same hard-auth gate as securityCertEvents — viewer-
+// accessible. AC #13 degraded mode preserved: h.certEvents
+// nil returns 200 with degraded=true and an empty buckets array.
+
+const (
+	// certEventsAggregateDefaultWindow matches the dashboard's
+	// 30d view requested by the Phase 5 brief.
+	certEventsAggregateDefaultWindow = 30 * 24 * time.Hour
+	// certEventsAggregateMinWindow guards against zero-width
+	// windows that would emit a single bucket with no content.
+	certEventsAggregateMinWindow = time.Hour
+	// certEventsAggregateMaxWindow matches the cert_event
+	// retention horizon (90d, spec §3.2) — querying beyond is
+	// a pointless DB scan over rows that were already pruned.
+	certEventsAggregateMaxWindow = 90 * 24 * time.Hour
+	// certEventsAggregateDefaultInterval matches Phase 5's
+	// per-day bucket cadence for the 30d view.
+	certEventsAggregateDefaultInterval = 24 * time.Hour
+	// certEventsAggregateMinInterval prevents pathological
+	// thousand-bucket payloads. 1h is the natural floor — finer
+	// granularity has no operator signal.
+	certEventsAggregateMinInterval = time.Hour
+	// certEventsAggregateMaxInterval is purely defensive — a
+	// week-wide bucket is meaningless on a 30d window. Capping
+	// here keeps the response payload bounded.
+	certEventsAggregateMaxInterval = 7 * 24 * time.Hour
+)
+
+type certEventsAggregateBucketResp struct {
+	BucketStart string `json:"bucketStart"`
+	Issued      int64  `json:"issued"`
+	Renewed     int64  `json:"renewed"`
+	Failed      int64  `json:"failed"`
+}
+
+type certEventsAggregateResponse struct {
+	Buckets  []certEventsAggregateBucketResp `json:"buckets"`
+	Degraded bool                            `json:"degraded,omitempty"`
+}
+
+func parseDurationParam(raw string, defaultVal, minVal, maxVal time.Duration) (time.Duration, error) {
+	if raw == "" {
+		return defaultVal, nil
+	}
+	// time.ParseDuration doesn't accept the "d" suffix; accept
+	// it manually because the brief and the frontend speak in
+	// days. Any non-numeric prefix is an error.
+	if strings.HasSuffix(raw, "d") {
+		nStr := strings.TrimSuffix(raw, "d")
+		n, err := strconv.Atoi(nStr)
+		if err != nil || n <= 0 {
+			return 0, err
+		}
+		return clampDuration(time.Duration(n)*24*time.Hour, minVal, maxVal), nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("must be positive")
+	}
+	return clampDuration(d, minVal, maxVal), nil
+}
+
+func clampDuration(d, lo, hi time.Duration) time.Duration {
+	if d < lo {
+		return lo
+	}
+	if d > hi {
+		return hi
+	}
+	return d
+}
+
+func (h *Handler) aggregateCertEvents(w http.ResponseWriter, r *http.Request) {
+	resp := certEventsAggregateResponse{Buckets: []certEventsAggregateBucketResp{}}
+
+	if h.certEvents == nil {
+		resp.Degraded = true
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	window, err := parseDurationParam(
+		r.URL.Query().Get("window"),
+		certEventsAggregateDefaultWindow,
+		certEventsAggregateMinWindow,
+		certEventsAggregateMaxWindow,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "window must be a positive duration (e.g. \"30d\", \"168h\")")
+		return
+	}
+
+	interval, err := parseDurationParam(
+		r.URL.Query().Get("interval"),
+		certEventsAggregateDefaultInterval,
+		certEventsAggregateMinInterval,
+		certEventsAggregateMaxInterval,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "interval must be a positive duration (e.g. \"1d\", \"1h\")")
+		return
+	}
+
+	// Anchor the window's "to" boundary at the floor of the
+	// current interval so consecutive calls within the same
+	// bucket return identical aggregations — important for the
+	// frontend's expected idempotent loading behaviour.
+	now := time.Now().UTC()
+	intervalSecs := int64(interval / time.Second)
+	floored := time.Unix((now.Unix()/intervalSecs+1)*intervalSecs, 0).UTC()
+	to := floored
+	from := to.Add(-window)
+
+	filter := observability.CertEventAggregateFilter{
+		From:     from,
+		To:       to,
+		Interval: interval,
+	}
+	buckets, err := h.certEvents.AggregateCertEvents(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("cert events aggregate: query failed", "err", err)
+		writeError(w, http.StatusServiceUnavailable, "cert events aggregate unavailable")
+		return
+	}
+
+	resp.Buckets = make([]certEventsAggregateBucketResp, 0, len(buckets))
+	for _, b := range buckets {
+		resp.Buckets = append(resp.Buckets, certEventsAggregateBucketResp{
+			BucketStart: b.BucketStart.UTC().Format(timestampFormat),
+			Issued:      b.Issued,
+			Renewed:     b.Renewed,
+			Failed:      b.Failed,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)

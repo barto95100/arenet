@@ -202,6 +202,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// widening). Same hard-auth + AC #13 degraded-mode
 			// contract as the security siblings above.
 			r.Get("/observability/cert-events", h.securityCertEvents)
+			// Phase 5 — cert event aggregation. Bucketed counts
+			// (issued / renewed / failed) for the dashboard
+			// lifecycle panel + future Phase 6 alerting rule
+			// evaluator. Same hard-auth + AC #13 degraded-mode
+			// contract as cert-events above.
+			r.Get("/observability/cert-events/aggregate", h.aggregateCertEvents)
 			// Step W.5 — country-block event log. Reads from
 			// the W.4 country_block_event table (schema v8).
 			// Mirror of cert-events: pure event-shaped read,

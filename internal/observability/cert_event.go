@@ -406,3 +406,132 @@ func (s *Store) PruneCertEventsOlderThan(ctx context.Context, cutoff time.Time) 
 	}
 	return n, nil
 }
+
+// CertEventAggregateFilter narrows AggregateCertEvents. From
+// and To bound the window; Interval is the bucket size. Empty
+// Interval defaults to 24h on the store side so the calling
+// API handler can ship a zero-value filter for the common
+// "30d, daily" shape.
+type CertEventAggregateFilter struct {
+	From     time.Time     // inclusive
+	To       time.Time     // exclusive; zero = open-ended (now)
+	Interval time.Duration // bucket size; zero defaults to 24h
+}
+
+// CertEventBucket is one row of the cert-event aggregation
+// shipped to the dashboard. BucketStart is the inclusive Unix
+// timestamp at the start of the bucket window; the three
+// counters split the cert_obtained rows by Renewal (Issued =
+// fresh, Renewed = post-first-issuance) and fold the
+// cert_failed rows into Failed. cert_ocsp_revoked is excluded
+// from this aggregate by design — the Phase 5 dashboard panel
+// targets the three common lifecycle outcomes; OCSP
+// revocations are vanishingly rare and surface in the Activity
+// log when they happen.
+type CertEventBucket struct {
+	BucketStart time.Time
+	Issued      int64
+	Renewed     int64
+	Failed      int64
+}
+
+// AggregateCertEvents groups cert_event rows by time bucket
+// within the [From, To) window. Returns one CertEventBucket
+// per Interval, ordered ascending by BucketStart.
+//
+// Bucketing uses integer division of (ts - From) by Interval
+// in SQL — portable across SQLite versions, no dependency on
+// strftime() format strings, and the boundary alignment is
+// stable across calls with the same From.
+//
+// Empty buckets (no events in that interval) are emitted as
+// zero-valued rows so the frontend can render a continuous
+// line without gap-filling client-side. Phase 6 alerting will
+// likely reuse this same shape for rule evaluation.
+func (s *Store) AggregateCertEvents(ctx context.Context, filter CertEventAggregateFilter) ([]CertEventBucket, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	from := filter.From.UTC()
+	to := filter.To.UTC()
+	if to.IsZero() {
+		to = time.Now().UTC()
+	}
+	interval := filter.Interval
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	if !from.Before(to) {
+		return []CertEventBucket{}, nil
+	}
+
+	fromUnix := from.Unix()
+	toUnix := to.Unix()
+	intervalSecs := int64(interval / time.Second)
+	if intervalSecs <= 0 {
+		intervalSecs = 1
+	}
+
+	// Group every cert_event row in the window by
+	// (ts - from) / interval. The three CASE-WHEN columns split
+	// the bucket count by event_type + renewal so a single
+	// query returns the three series the dashboard wants.
+	q := `SELECT
+	          ((ts - ?) / ?) AS bucket_idx,
+	          SUM(CASE WHEN event_type = ? AND renewal = 0 THEN 1 ELSE 0 END) AS issued,
+	          SUM(CASE WHEN event_type = ? AND renewal = 1 THEN 1 ELSE 0 END) AS renewed,
+	          SUM(CASE WHEN event_type = ? THEN 1 ELSE 0 END) AS failed
+	      FROM cert_event
+	      WHERE ts >= ? AND ts < ?
+	      GROUP BY bucket_idx
+	      ORDER BY bucket_idx ASC`
+	args := []any{
+		fromUnix, intervalSecs,
+		CertEventTypeObtained.String(),
+		CertEventTypeObtained.String(),
+		CertEventTypeFailed.String(),
+		fromUnix, toUnix,
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: aggregate cert_event: %w", err)
+	}
+	defer rows.Close()
+
+	// First pass: gather observed buckets into an index → row map.
+	observed := map[int64]CertEventBucket{}
+	for rows.Next() {
+		var bucketIdx, issued, renewed, failed int64
+		if err := rows.Scan(&bucketIdx, &issued, &renewed, &failed); err != nil {
+			return nil, fmt.Errorf("observability: scan cert_event aggregate: %w", err)
+		}
+		bucketStart := time.Unix(fromUnix+(bucketIdx*intervalSecs), 0).UTC()
+		observed[bucketIdx] = CertEventBucket{
+			BucketStart: bucketStart,
+			Issued:      issued,
+			Renewed:     renewed,
+			Failed:      failed,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate cert_event aggregate: %w", err)
+	}
+
+	// Second pass: emit ALL buckets in the window, including
+	// empty ones, so the frontend can render a continuous
+	// timeline without client-side gap-fill. Compute the bucket
+	// count from the window/interval ratio (ceil to include the
+	// partial trailing bucket if any).
+	bucketCount := (toUnix - fromUnix + intervalSecs - 1) / intervalSecs
+	out := make([]CertEventBucket, 0, bucketCount)
+	for i := int64(0); i < bucketCount; i++ {
+		if b, ok := observed[i]; ok {
+			out = append(out, b)
+			continue
+		}
+		out = append(out, CertEventBucket{
+			BucketStart: time.Unix(fromUnix+(i*intervalSecs), 0).UTC(),
+		})
+	}
+	return out, nil
+}

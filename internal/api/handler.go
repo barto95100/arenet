@@ -442,6 +442,12 @@ type CertInfoReader interface {
 type CertEventReader interface {
 	QueryCertEvents(ctx context.Context, filter observability.CertEventFilter) ([]observability.CertEvent, error)
 	CountCertEvents(ctx context.Context, filter observability.CertEventFilter) (int64, error)
+	// AggregateCertEvents (Phase 5) groups cert_event rows by
+	// time bucket within a window. Powers the dashboard's cert
+	// lifecycle panel + the Phase 6 alerting rule evaluator.
+	// Same nil-tolerance contract — handlers detect nil and
+	// return degraded mode rather than 5xx.
+	AggregateCertEvents(ctx context.Context, filter observability.CertEventAggregateFilter) ([]observability.CertEventBucket, error)
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.

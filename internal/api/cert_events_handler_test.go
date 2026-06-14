@@ -41,6 +41,12 @@ type fakeCertEventReader struct {
 	queryFn        func(ctx context.Context, filter observability.CertEventFilter) ([]observability.CertEvent, error)
 	countFn        func(ctx context.Context, filter observability.CertEventFilter) (int64, error)
 	capturedFilter observability.CertEventFilter
+	// Phase 5 — aggregate fake. aggregateFn returns the slice the
+	// handler is supposed to ship; capturedAggregateFilter records
+	// the filter the handler computed from the query string for
+	// parameter-mapping assertions.
+	aggregateFn              func(ctx context.Context, filter observability.CertEventAggregateFilter) ([]observability.CertEventBucket, error)
+	capturedAggregateFilter  observability.CertEventAggregateFilter
 }
 
 func (f *fakeCertEventReader) QueryCertEvents(ctx context.Context, filter observability.CertEventFilter) ([]observability.CertEvent, error) {
@@ -61,6 +67,14 @@ func (f *fakeCertEventReader) CountCertEvents(ctx context.Context, filter observ
 		return int64(len(evts)), nil
 	}
 	return 0, nil
+}
+
+func (f *fakeCertEventReader) AggregateCertEvents(ctx context.Context, filter observability.CertEventAggregateFilter) ([]observability.CertEventBucket, error) {
+	f.capturedAggregateFilter = filter
+	if f.aggregateFn != nil {
+		return f.aggregateFn(ctx, filter)
+	}
+	return nil, nil
 }
 
 // --- /api/v1/observability/cert-events: auth gate --------------------------
@@ -457,5 +471,185 @@ func TestHasCertEventReader_TrueAfterSetter(t *testing.T) {
 	env.handler.SetCertEventReader(&fakeCertEventReader{})
 	if !env.handler.HasCertEventReader() {
 		t.Errorf("HasCertEventReader = false after setter, want true")
+	}
+}
+
+// --- Phase 5 — /observability/cert-events/aggregate ----------------------
+
+func TestCertEventsAggregate_NilReader_Degraded(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	// reader intentionally not wired → AC #13 degraded mode.
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/observability/cert-events/aggregate", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (degraded, not 5xx)", rec.Code)
+	}
+	var resp certEventsAggregateResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Degraded {
+		t.Errorf("Degraded = false, want true (reader is nil)")
+	}
+	if len(resp.Buckets) != 0 {
+		t.Errorf("Buckets len = %d, want 0", len(resp.Buckets))
+	}
+}
+
+func TestCertEventsAggregate_HappyPath_DefaultWindow30dInterval1d(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	bucketStart := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Hour)
+	fake := &fakeCertEventReader{
+		aggregateFn: func(_ context.Context, _ observability.CertEventAggregateFilter) ([]observability.CertEventBucket, error) {
+			return []observability.CertEventBucket{
+				{BucketStart: bucketStart, Issued: 3, Renewed: 1, Failed: 2},
+			}, nil
+		},
+	}
+	m.env.handler.SetCertEventReader(fake)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/observability/cert-events/aggregate", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body)
+	}
+	var resp certEventsAggregateResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Degraded {
+		t.Errorf("Degraded = true, want false (reader is wired)")
+	}
+	if len(resp.Buckets) != 1 {
+		t.Fatalf("Buckets len = %d, want 1", len(resp.Buckets))
+	}
+	if got := resp.Buckets[0]; got.Issued != 3 || got.Renewed != 1 || got.Failed != 2 {
+		t.Errorf("bucket counts mismatch: got issued=%d renewed=%d failed=%d, want 3/1/2",
+			got.Issued, got.Renewed, got.Failed)
+	}
+
+	// Default-window assertion: handler must have asked for 30d
+	// at 1d granularity per the brief defaults.
+	gotFilter := fake.capturedAggregateFilter
+	gotWindow := gotFilter.To.Sub(gotFilter.From)
+	if gotWindow != 30*24*time.Hour {
+		t.Errorf("default window = %s, want 720h (30d)", gotWindow)
+	}
+	if gotFilter.Interval != 24*time.Hour {
+		t.Errorf("default interval = %s, want 24h", gotFilter.Interval)
+	}
+}
+
+func TestCertEventsAggregate_CustomWindowAndInterval(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	fake := &fakeCertEventReader{
+		aggregateFn: func(_ context.Context, _ observability.CertEventAggregateFilter) ([]observability.CertEventBucket, error) {
+			return []observability.CertEventBucket{}, nil
+		},
+	}
+	m.env.handler.SetCertEventReader(fake)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events/aggregate?window=7d&interval=1h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body)
+	}
+	gotFilter := fake.capturedAggregateFilter
+	gotWindow := gotFilter.To.Sub(gotFilter.From)
+	if gotWindow != 7*24*time.Hour {
+		t.Errorf("window = %s, want 168h (7d)", gotWindow)
+	}
+	if gotFilter.Interval != time.Hour {
+		t.Errorf("interval = %s, want 1h", gotFilter.Interval)
+	}
+}
+
+func TestCertEventsAggregate_ClampsExcessiveWindow(t *testing.T) {
+	// 365d > 90d cap → handler must silently clamp to 90d.
+	m := newMetricsTestEnv(t)
+	fake := &fakeCertEventReader{
+		aggregateFn: func(_ context.Context, _ observability.CertEventAggregateFilter) ([]observability.CertEventBucket, error) {
+			return []observability.CertEventBucket{}, nil
+		},
+	}
+	m.env.handler.SetCertEventReader(fake)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events/aggregate?window=365d", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body)
+	}
+	gotWindow := fake.capturedAggregateFilter.To.Sub(fake.capturedAggregateFilter.From)
+	if gotWindow != 90*24*time.Hour {
+		t.Errorf("window = %s, want clamped to 90d (2160h)", gotWindow)
+	}
+}
+
+func TestCertEventsAggregate_RejectsBadWindow(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetCertEventReader(&fakeCertEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events/aggregate?window=not-a-duration", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (bad window format)", rec.Code)
+	}
+}
+
+func TestCertEventsAggregate_RejectsBadInterval(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetCertEventReader(&fakeCertEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events/aggregate?interval=garbage", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (bad interval format)", rec.Code)
+	}
+}
+
+func TestCertEventsAggregate_StoreError_503(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetCertEventReader(&fakeCertEventReader{
+		aggregateFn: func(_ context.Context, _ observability.CertEventAggregateFilter) ([]observability.CertEventBucket, error) {
+			return nil, errors.New("sqlite EBUSY")
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/observability/cert-events/aggregate", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestCertEventsAggregate_AnonReturns401(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	raw := m.rawHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/observability/cert-events/aggregate", nil)
+	rec := httptest.NewRecorder()
+	raw.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("anon status = %d, want 401", rec.Code)
 	}
 }
