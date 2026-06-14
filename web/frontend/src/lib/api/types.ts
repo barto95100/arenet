@@ -1692,6 +1692,48 @@ export interface CertEventsResponse {
 }
 
 /**
+ * Phase 5 — one row of the cert event aggregation. Mirrors
+ * the internal/api/cert_events_handler.go certEventsAggregateBucketResp
+ * wire shape. bucketStart is the inclusive RFC 3339 timestamp at
+ * the start of the interval; the three counters split
+ * cert_obtained rows by the renewal boolean (issued = fresh,
+ * renewed = post-first-issuance) and fold cert_failed rows into
+ * failed. cert_ocsp_revoked is excluded from this aggregate by
+ * design — Phase 5 ships the three common lifecycle outcomes.
+ */
+export interface CertEventBucket {
+	bucketStart: string;
+	issued: number;
+	renewed: number;
+	failed: number;
+	// Index signature so the MultiSeriesTimelineChart's
+	// DataRow shape (`[key: string]: unknown`) accepts this
+	// type directly. Counter fields are typed concretely
+	// above; the indexer is the structural slot the chart
+	// reads via row[seriesKey]. Adding new bucket fields in
+	// future migrations stays type-safe because the explicit
+	// field declarations take precedence over the indexer.
+	[key: string]: string | number;
+}
+
+/**
+ * Phase 5 — wire shape of
+ * GET /api/v1/observability/cert-events/aggregate.
+ *
+ * Buckets is always present and always has one entry per
+ * interval in the window (empty buckets carry zero counts) —
+ * the frontend chart renders a continuous timeline without
+ * gap-fill.
+ *
+ * `degraded` follows the same AC #13 contract as
+ * CertEventsResponse.
+ */
+export interface CertEventsAggregateResponse {
+	buckets: CertEventBucket[];
+	degraded?: boolean;
+}
+
+/**
  * Step W.5 — country-block events.
  *
  * Wire shape of GET /api/v1/observability/country-block-events.

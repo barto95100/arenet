@@ -33,13 +33,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { fetchSummary, fetchTimeseries } from '$lib/api/metrics';
-	import { fetchEvents as fetchWafEvents } from '$lib/api/security';
+	import { fetchEvents as fetchWafEvents, fetchCertEventsAggregate } from '$lib/api/security';
+	import { certificatesApi } from '$lib/api/certificates';
 	import { listRoutes } from '$lib/api/client';
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import TimelineChart from '$lib/components/TimelineChart.svelte';
+	import MultiSeriesTimelineChart from '$lib/components/MultiSeriesTimelineChart.svelte';
 	import type {
+		Certificate,
+		CertEventBucket,
 		SummaryResponse,
 		TimeseriesPoint,
 		WafEvent,
@@ -58,6 +62,16 @@
 	let chartPoints = $state<TimeseriesPoint[]>([]);
 	let chartLoading = $state(false);
 	const window: MetricWindow = '24h';
+
+	// Phase 5 — cert lifecycle data. certificates feeds the
+	// total + "expiring in 30d" KPI cards; certBuckets feeds
+	// the chart; certFailed7d feeds the third KPI card. All
+	// three are best-effort — degraded mode + fetch error
+	// both collapse to zero counts / empty chart rather than
+	// breaking the dashboard.
+	let certificates = $state<Certificate[]>([]);
+	let certBuckets = $state<CertEventBucket[]>([]);
+	let certFailed7d = $state(0);
 
 	const disabled = $derived(summary?.disabled === true);
 	const noRoutes = $derived(!disabled && routes.length === 0);
@@ -99,6 +113,27 @@
 	const kpiWafBlocked24h = $derived(summary?.totalWafBlocked ?? 0);
 	const kpiWafDetected24h = $derived(summary?.totalWafDetected ?? 0);
 
+	// Phase 5 — cert KPI derivations.
+	const kpiCertTotal = $derived(certificates.length);
+	const kpiCertExpiringSoon = $derived.by(() => {
+		const horizon = Date.now() + 30 * 24 * 60 * 60 * 1000;
+		return certificates.filter((c) => {
+			const t = new Date(c.notAfter).getTime();
+			return !isNaN(t) && t < horizon;
+		}).length;
+	});
+	const kpiCertFailed7d = $derived(certFailed7d);
+
+	// The chart's series definition lives at module scope
+	// so the operator's theme-token references stay readable.
+	// status-up / accent-cyan / status-down map respectively
+	// to the green/blue/red triad the operator brief asked for.
+	const certChartSeries = [
+		{ key: 'issued' as const, label: 'Issued', color: 'var(--status-up)' },
+		{ key: 'renewed' as const, label: 'Renewed', color: 'var(--accent-cyan)' },
+		{ key: 'failed' as const, label: 'Failed', color: 'var(--status-down)' }
+	];
+
 	// Distinct upstream URLs across all routes — the v1.4 stand-in
 	// for the mock's per-service-name aggregation.
 	const upstreams = $derived(
@@ -124,14 +159,32 @@
 		loading = true;
 		loadError = null;
 		try {
-			const [rs, sum, evs] = await Promise.all([
+			// Phase 5 — cert calls are best-effort: a failure
+			// must NOT take down the dashboard, the existing
+			// KPIs / chart / WAF panel stay valuable on a fresh
+			// install with zero certificates. .catch returns
+			// the empty-shape default so the destructure stays
+			// safe.
+			const [rs, sum, evs, certs, certAgg, failed7d] = await Promise.all([
 				listRoutes(),
 				fetchSummary(),
-				fetchWafEvents({ limit: 5 }).catch(() => ({ events: [] }))
+				fetchWafEvents({ limit: 5 }).catch(() => ({ events: [] })),
+				certificatesApi.list().catch(() => [] as Certificate[]),
+				fetchCertEventsAggregate({ windowDays: 30, intervalHours: 24 }).catch(() => ({
+					buckets: [] as CertEventBucket[]
+				})),
+				fetchCertEventsAggregate({ windowDays: 7, intervalHours: 24 }).catch(() => ({
+					buckets: [] as CertEventBucket[]
+				}))
 			]);
 			routes = rs;
 			summary = sum;
 			recentEvents = evs.events ?? [];
+			certificates = certs;
+			certBuckets = certAgg.buckets ?? [];
+			// Sum failed across the 7d window — one round-trip
+			// to the same aggregate endpoint, no extra surface.
+			certFailed7d = (failed7d.buckets ?? []).reduce((acc, b) => acc + (b.failed ?? 0), 0);
 			if (!sum.disabled) {
 				void loadChart();
 			}
@@ -295,6 +348,34 @@
 				detect-mode (request passed through)
 			</div>
 		</div>
+
+		<!--
+			Phase 5 — cert KPIs. The three tiles split the cert
+			lifecycle into a "what's deployed", "what's expiring",
+			"what's failing" triad — matches the operator brief.
+			Markup mirrors the bespoke .kpi shape of the existing
+			tiles for visual consistency (dashboard hasn't
+			migrated to StatCard yet).
+		-->
+		<div class="kpi" data-testid="kpi-cert-total">
+			<div class="kpi-label">Total certs</div>
+			<div class="kpi-val">{kpiCertTotal}</div>
+			<div class="kpi-foot">déployés par certmagic</div>
+		</div>
+		<div class="kpi" data-testid="kpi-cert-expiring">
+			<div class="kpi-label">Expirent dans 30j</div>
+			<div class="kpi-val">{kpiCertExpiringSoon}</div>
+			<div class="kpi-foot">
+				{kpiCertExpiringSoon === 0 ? 'aucun renouvellement imminent' : 'à surveiller'}
+			</div>
+		</div>
+		<div class="kpi" data-testid="kpi-cert-failed-7d">
+			<div class="kpi-label">Failed last 7d</div>
+			<div class="kpi-val">{kpiCertFailed7d}</div>
+			<div class="kpi-foot">
+				{kpiCertFailed7d === 0 ? "aucune erreur d'émission" : 'investiguer'}
+			</div>
+		</div>
 	</div>
 
 	<!-- Main row: traffic chart + WAF events recent -->
@@ -362,6 +443,27 @@
 					<div class="empty-row">No recent WAF events in the window.</div>
 				{/each}
 			</div>
+		</div>
+	</div>
+
+	<!--
+		Phase 5 — cert lifecycle panel. Sits between the main
+		traffic / WAF row and the bottom routes / upstreams row.
+		Three series: issued (fresh certs), renewed (renewals),
+		failed. Legend is click-to-toggle; tooltip on hover.
+	-->
+	<div class="card" data-testid="cert-lifecycle-panel">
+		<div class="card-h">
+			<h3>Cycle de vie des certificats</h3>
+			<div class="meta">30 derniers jours · 1 bucket / jour</div>
+		</div>
+		<div class="chart-wrap">
+			<MultiSeriesTimelineChart
+				data={certBuckets}
+				series={certChartSeries}
+				label="Cert lifecycle events over 30 days"
+				height={180}
+			/>
 		</div>
 	</div>
 

@@ -12,6 +12,7 @@ import type {
 	AttackersSummaryResponse,
 	AuthFailuresResponse,
 	CertEventLevel,
+	CertEventsAggregateResponse,
 	CertEventsResponse,
 	CountryBlockEventsResponse,
 	DecisionsResponse,
@@ -324,6 +325,38 @@ export function fetchCertEvents(
 	if (params.search) qs.set('search', params.search);
 	const suffix = qs.toString() ? `?${qs.toString()}` : '';
 	return request<CertEventsResponse>('GET', `/observability/cert-events${suffix}`);
+}
+
+/**
+ * Phase 5 — typed client wrapper around GET
+ * /api/v1/observability/cert-events/aggregate. Backs the
+ * dashboard's cert lifecycle panel + the "Failed last 7d"
+ * KPI.
+ *
+ * Params (both optional):
+ *   - `windowDays`: clamped server-side at 1h..90d. Default 30d.
+ *   - `intervalHours`: clamped server-side at 1h..7d. Default 24h.
+ *
+ * The server emits a continuous timeline (empty buckets carry
+ * zero counts) so callers can pass the response straight into
+ * a chart without client-side gap-fill.
+ *
+ * AC #13 degraded-mode path: when the cert-event reader was
+ * never wired, the response carries `degraded: true` and an
+ * empty `buckets` array. Callers should surface a clean empty
+ * state.
+ */
+export function fetchCertEventsAggregate(
+	params: { windowDays?: number; intervalHours?: number } = {}
+): Promise<CertEventsAggregateResponse> {
+	const qs = new URLSearchParams();
+	if (params.windowDays !== undefined) qs.set('window', `${params.windowDays}d`);
+	if (params.intervalHours !== undefined) qs.set('interval', `${params.intervalHours}h`);
+	const suffix = qs.toString() ? `?${qs.toString()}` : '';
+	return request<CertEventsAggregateResponse>(
+		'GET',
+		`/observability/cert-events/aggregate${suffix}`
+	);
 }
 
 /**

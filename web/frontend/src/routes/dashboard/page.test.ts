@@ -26,16 +26,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen } from '@testing-library/svelte';
 
-const { metricsMock, securityMock, clientMock, toastMock } = vi.hoisted(() => ({
+const { metricsMock, securityMock, clientMock, certificatesMock, toastMock } = vi.hoisted(() => ({
 	metricsMock: {
 		fetchSummary: vi.fn(),
 		fetchTimeseries: vi.fn()
 	},
 	securityMock: {
-		fetchEvents: vi.fn()
+		fetchEvents: vi.fn(),
+		// Phase 5 — dashboard loader calls fetchCertEventsAggregate
+		// twice (30d window for the chart, 7d window for the
+		// failed-7d KPI). Default stub returns the empty-buckets
+		// shape so tests that don't care about cert data just
+		// get a clean empty render.
+		fetchCertEventsAggregate: vi.fn()
 	},
 	clientMock: {
 		listRoutes: vi.fn()
+	},
+	certificatesMock: {
+		list: vi.fn()
 	},
 	toastMock: { pushToast: vi.fn() }
 }));
@@ -47,10 +56,16 @@ vi.mock('$lib/api/metrics', () => ({
 	fetchTimeseries: (...a: unknown[]) => metricsMock.fetchTimeseries(...a)
 }));
 vi.mock('$lib/api/security', () => ({
-	fetchEvents: (...a: unknown[]) => securityMock.fetchEvents(...a)
+	fetchEvents: (...a: unknown[]) => securityMock.fetchEvents(...a),
+	fetchCertEventsAggregate: (...a: unknown[]) => securityMock.fetchCertEventsAggregate(...a)
 }));
 vi.mock('$lib/api/client', () => ({
 	listRoutes: (...a: unknown[]) => clientMock.listRoutes(...a)
+}));
+vi.mock('$lib/api/certificates', () => ({
+	certificatesApi: {
+		list: (...a: unknown[]) => certificatesMock.list(...a)
+	}
 }));
 
 import Page from './+page.svelte';
@@ -84,11 +99,19 @@ beforeEach(() => {
 	metricsMock.fetchSummary.mockReset();
 	metricsMock.fetchTimeseries.mockReset();
 	securityMock.fetchEvents.mockReset();
+	securityMock.fetchCertEventsAggregate.mockReset();
 	clientMock.listRoutes.mockReset();
+	certificatesMock.list.mockReset();
 	toastMock.pushToast.mockReset();
 
 	metricsMock.fetchTimeseries.mockResolvedValue({ points: [] });
 	securityMock.fetchEvents.mockResolvedValue({ events: [] });
+	// Phase 5 — default to empty cert state so existing tests
+	// (WAF KPIs / Top routes / Recent events) stay focused on
+	// the surfaces they care about. Individual cert-KPI tests
+	// override below.
+	securityMock.fetchCertEventsAggregate.mockResolvedValue({ buckets: [] });
+	certificatesMock.list.mockResolvedValue([]);
 	clientMock.listRoutes.mockResolvedValue([{
 		id: 'r1', host: 'ha.example.com', upstreams: [{ url: 'http://10.0.0.10', weight: 1 }]
 	}]);
@@ -256,5 +279,103 @@ describe('Dashboard — Top Routes WAF detect column (#R-DASHBOARD-WAF-COUNTERS-
 		// Order: Req/min, 4xx/min, 5xx/min, block, detect.
 		expect(cells[3].textContent?.trim()).toBe('1');
 		expect(cells[4].textContent?.trim()).toBe('7');
+	});
+});
+
+// --- Phase 5 — cert KPI tiles + lifecycle panel ----------------------------
+//
+// Three KPI tiles (total / expiring-30d / failed-7d) + a chart
+// panel ("Cycle de vie des certificats") that mounts the
+// MultiSeriesTimelineChart component. These tests pin the
+// loader's wiring: each tile reads its derived value from a
+// distinct source (certificatesApi.list for total + expiring,
+// fetchCertEventsAggregate window=7d for failed-7d), and the
+// chart panel renders even on an empty buckets payload.
+
+describe('Dashboard — Phase 5 cert KPI tiles', () => {
+	function inHorizonISO(daysAhead: number): string {
+		return new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000).toISOString();
+	}
+
+	it('"Total certs" tile counts the certificates list length', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		certificatesMock.list.mockResolvedValue([
+			{ domain: 'a.example', notAfter: inHorizonISO(60) },
+			{ domain: 'b.example', notAfter: inHorizonISO(45) },
+			{ domain: 'c.example', notAfter: inHorizonISO(80) }
+		]);
+
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		const tile = screen.getByTestId('kpi-cert-total');
+		expect(tile.textContent).toContain('3');
+	});
+
+	it('"Expirent dans 30j" tile counts only certs with notAfter inside the 30d horizon', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		certificatesMock.list.mockResolvedValue([
+			{ domain: 'soon-a.example', notAfter: inHorizonISO(10) }, // counts
+			{ domain: 'soon-b.example', notAfter: inHorizonISO(28) }, // counts
+			{ domain: 'far.example', notAfter: inHorizonISO(60) } // doesn't count
+		]);
+
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		const tile = screen.getByTestId('kpi-cert-expiring');
+		expect(tile.textContent).toContain('2');
+	});
+
+	it('"Failed last 7d" tile sums failed counts across the 7d aggregate', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		// First call (30d for chart) → empty buckets.
+		// Second call (7d for failed-7d KPI) → buckets that sum to 5.
+		securityMock.fetchCertEventsAggregate
+			.mockResolvedValueOnce({ buckets: [] })
+			.mockResolvedValueOnce({
+				buckets: [
+					{ bucketStart: '2026-06-08T00:00:00Z', issued: 0, renewed: 0, failed: 2 },
+					{ bucketStart: '2026-06-09T00:00:00Z', issued: 0, renewed: 0, failed: 3 }
+				]
+			});
+
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		const tile = screen.getByTestId('kpi-cert-failed-7d');
+		expect(tile.textContent).toContain('5');
+	});
+
+	it('renders the cert lifecycle panel on every dashboard load', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(screen.getByTestId('cert-lifecycle-panel')).toBeTruthy();
+	});
+
+	it('cert KPI tiles default to zero when /certificates fails (best-effort)', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		certificatesMock.list.mockRejectedValue(new Error('boot failure'));
+
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+
+		// .catch fallback → empty list → zero counts. Dashboard
+		// stays renderable instead of toasting an error.
+		expect(screen.getByTestId('kpi-cert-total').textContent).toContain('0');
+		expect(screen.getByTestId('kpi-cert-expiring').textContent).toContain('0');
 	});
 });
