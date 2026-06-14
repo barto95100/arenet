@@ -200,6 +200,33 @@ export interface Route {
 	 */
 	insecureSkipVerify: boolean;
 	/**
+	 * Phase 4.5 (#R-WAF-BUFFER-OOM-ON-LARGE-UPLOADS) — when
+	 * true, the route bypasses the two RAM-buffering surfaces
+	 * that explode on big request bodies (Docker registry
+	 * pushes, file servers, backups):
+	 *
+	 *   1. WAF body inspection — the arenet_waf handler skips
+	 *      ReadRequestBodyFrom so Coraza never stages the
+	 *      upload in memory. Headers, URI, and response phases
+	 *      stay live; only the body is unscanned.
+	 *   2. Caddy reverse_proxy buffering — caddymgr emits
+	 *      `flush_interval: -1` so bytes stream through
+	 *      end-to-end.
+	 *
+	 * Always present (storage zero-value reads back as false
+	 * via the API response normalisation). The frontend toggle
+	 * lives in the route's WAF settings block — coupling the
+	 * affordance with the security knob it modulates is the
+	 * clearer mental model than burying it under "advanced TLS".
+	 *
+	 * Independent of wafMode: any combination is operator-valid.
+	 * The common shape is {wafMode: 'block', uploadStreamingMode:
+	 * true} for binary-upload routes (headers blocked, body
+	 * left alone — body inspection on opaque streams is high
+	 * false-positive and zero security signal).
+	 */
+	uploadStreamingMode: boolean;
+	/**
 	 * Count of upstreams the HC tracker has observed as healthy.
 	 * Zero on routes without HC configured (the C13 gate doesn't
 	 * peek at tracker state). Used by the Routes table to render
@@ -438,6 +465,14 @@ export interface RouteRequest {
 	 * never diverge.
 	 */
 	insecureSkipVerify?: boolean;
+	/**
+	 * Phase 4.5 — uploadStreamingMode toggle on the wire.
+	 * Same preserve-on-omit semantic as insecureSkipVerify:
+	 *   - omitted on POST → strict default (false)
+	 *   - omitted on PUT  → preserve previously stored value
+	 *   - present (true | false) → full replacement
+	 */
+	uploadStreamingMode?: boolean;
 }
 
 /**

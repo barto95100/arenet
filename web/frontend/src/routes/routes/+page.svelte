@@ -96,7 +96,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode'> & {
 		healthCheck: HealthCheck;
 		// W.5 — narrow to the non-optional shape. The form
 		// always carries a CountryBlockRequest (mode="off"
@@ -110,6 +110,11 @@
 		// (preserve-on-omit semantic) is reapplied at
 		// payload-assembly time below.
 		insecureSkipVerify: boolean;
+		// Phase 4.5 — same narrowing pattern as
+		// insecureSkipVerify: form holds a definite bool,
+		// payload re-introduces undefined for preserve-on-
+		// omit semantics on PUT.
+		uploadStreamingMode: boolean;
 	};
 	let formData = $state<FormData>(emptyFormData());
 	let healthCheckTouched = $state(false);
@@ -140,6 +145,12 @@
 			// scheme transition so the on-screen + storage
 			// states stay aligned.
 			insecureSkipVerify: false,
+			// Phase 4.5 — strict default. Opt-in only: the
+			// toggle is visible in the WAF settings block and
+			// the operator must tick it explicitly to skip
+			// body inspection + Caddy buffering. Independent
+			// from wafMode (any combination is valid).
+			uploadStreamingMode: false,
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
 			// further down; operators opting in pick a mode +
@@ -609,6 +620,13 @@
 			// false here is a safety net rather than the
 			// expected path.
 			insecureSkipVerify: r.insecureSkipVerify ?? false,
+			// Phase 4.5 — load the persisted streaming-mode
+			// state so the toggle on the form reflects what's
+			// actually saved. The API response is non-omitempty
+			// (false echoed explicitly), so the ?? false here is
+			// purely defensive for very old pre-4.5 snapshots
+			// that might have been restored without the field.
+			uploadStreamingMode: r.uploadStreamingMode ?? false,
 			// Step J.2: the server's HealthCheck is always present
 			// on the wire (no omitempty). The form holds it as-is;
 			// edit-mode shows explicit values (server materialised
@@ -1188,6 +1206,14 @@
 			if (poolScheme === 'https') {
 				payload.insecureSkipVerify = formData.insecureSkipVerify;
 			}
+			// Phase 4.5 — always ship uploadStreamingMode. No
+			// scheme-dependent self-heal applies (the toggle
+			// affects WAF body inspection + Caddy buffering on
+			// any pool), so the form's explicit value is the
+			// authoritative one. On POST this captures the
+			// strict-false default cleanly; on PUT it's a full
+			// replacement aligned with the visible toggle state.
+			payload.uploadStreamingMode = formData.uploadStreamingMode;
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
 			// server preserve the previously stored value (on PUT)
@@ -2237,6 +2263,40 @@
 						</select>
 						<p class="text-xs text-muted mt-1">
 							Start with Detect to spot false positives before enforcing.
+						</p>
+
+						<!-- Phase 4.5 (#R-WAF-BUFFER-OOM-ON-LARGE-UPLOADS)
+						     — upload-streaming toggle. Sits inside the
+						     WAF block on purpose: it modulates the WAF
+						     body-inspection behaviour, so the operator
+						     reads it as a WAF-adjacent knob, not as an
+						     advanced-TLS bolt-on. Independent of
+						     wafMode — even with WAF=off the toggle
+						     still controls Caddy's flush_interval. -->
+						<label
+							class="inline-flex items-start gap-2 text-sm text-secondary mt-3 cursor-pointer"
+							data-testid="upload-streaming-toggle-label"
+						>
+							<input
+								type="checkbox"
+								bind:checked={formData.uploadStreamingMode}
+								class="mt-0.5"
+								data-testid="upload-streaming-toggle"
+							/>
+							<span>
+								Mode upload streaming
+								<span class="text-muted">(registry, file servers)</span>
+							</span>
+						</label>
+						<p class="text-xs text-muted mt-1 max-w-prose">
+							Désactive l'inspection WAF du <strong>request body</strong>
+							<strong>ET</strong> le buffering Caddy en RAM. À activer pour
+							les routes qui transitent des uploads volumineux (registry
+							Docker, file servers, backups). Le WAF reste actif sur les
+							<strong>headers</strong>, l'<strong>URL</strong> et la
+							<strong>response</strong> — seul le body request n'est pas
+							scanné. Garde ce toggle désactivé pour les routes API/web où
+							l'analyse SQL/XSS du body est utile.
 						</p>
 					</div>
 

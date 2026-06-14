@@ -144,6 +144,10 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// exercising the disclosure / toggle override via the
 		// partial Route overrides.
 		insecureSkipVerify: false,
+		// Phase 4.5 — strict default; tests that exercise the
+		// streaming toggle override via the partial Route
+		// overrides parameter.
+		uploadStreamingMode: false,
 		...overrides
 	};
 }
@@ -1949,5 +1953,132 @@ describe('Routes page — Test upstream button + chip (#R-PROXMOX-HTTPS-LOOP com
 		await tick();
 		expect(screen.queryByTestId('upstream-test-chip-1')).toBeNull();
 		expect(screen.getByTestId('upstream-test-chip-0').textContent).toContain('row-1');
+	});
+});
+
+// --- Phase 4.5 — uploadStreamingMode toggle ----------------------------
+//
+// The toggle lives inside the WAF settings block (modulates WAF body
+// inspection + Caddy buffering — coupling it with the WAF knob it
+// affects is the clearer mental model than burying it under
+// "advanced TLS"). These tests pin:
+//   1. Toggle is rendered + defaults to unchecked on create
+//   2. Helper text is present and surfaces the operative invariants
+//      (body skipped, headers still scanned)
+//   3. Form ships uploadStreamingMode=false by default on POST
+//   4. Form ships uploadStreamingMode=true when operator ticks the
+//      toggle
+//   5. openEdit loads the persisted value (true) onto the toggle
+//   6. The toggle works independently of wafMode (no constraint
+//      between the two)
+
+describe('Routes page — Phase 4.5 uploadStreamingMode toggle', () => {
+	it('renders the toggle unchecked by default on create', async () => {
+		render(Page);
+		await openCreateForm();
+
+		const toggle = screen.getByTestId('upload-streaming-toggle') as HTMLInputElement;
+		expect(toggle).toBeInTheDocument();
+		expect(toggle.checked).toBe(false);
+	});
+
+	it('renders helper text describing the body-skip / header-still-scanned invariants', async () => {
+		render(Page);
+		await openCreateForm();
+
+		const label = screen.getByTestId('upload-streaming-toggle-label');
+		expect(label.textContent).toMatch(/Mode upload streaming/);
+
+		// The helper paragraph follows the label. Walk the parent
+		// to find it without coupling to exact DOM structure.
+		const wafSection = label.closest('div')!;
+		const helperText = wafSection.textContent ?? '';
+		expect(helperText).toMatch(/headers/);
+		expect(helperText).toMatch(/URL/);
+		expect(helperText).toMatch(/response/);
+		expect(helperText).toMatch(/registry/i);
+	});
+
+	it('ships uploadStreamingMode=false by default in the create payload', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute());
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'plain.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.uploadStreamingMode).toBe(false);
+	});
+
+	it('ships uploadStreamingMode=true when operator ticks the toggle', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({ uploadStreamingMode: true }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'registry.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:5000');
+
+		const toggle = screen.getByTestId('upload-streaming-toggle') as HTMLInputElement;
+		await userEvent.click(toggle);
+		expect(toggle.checked).toBe(true);
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.uploadStreamingMode).toBe(true);
+	});
+
+	it('loads the persisted uploadStreamingMode=true value into the toggle on edit', async () => {
+		const seeded = makeRoute({
+			id: 'edit-streaming',
+			host: 'registry.edit.example.com',
+			uploadStreamingMode: true
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+
+		render(Page);
+		const hostCell = await screen.findByText('registry.edit.example.com');
+		const row = hostCell.closest('tr')!;
+		await userEvent.click(row);
+		await tick();
+
+		const toggle = screen.getByTestId('upload-streaming-toggle') as HTMLInputElement;
+		expect(toggle.checked).toBe(true);
+	});
+
+	it('persists toggle state across wafMode changes (no cross-coupling)', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({ uploadStreamingMode: true }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'files.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:8081');
+
+		// Operator ticks the toggle FIRST, then sets WAF=block.
+		// Streaming-mode state must survive the wafMode change —
+		// no coupling between the two.
+		const toggle = screen.getByTestId('upload-streaming-toggle') as HTMLInputElement;
+		await userEvent.click(toggle);
+		expect(toggle.checked).toBe(true);
+
+		const wafSelect = document.getElementById('route-waf-mode') as HTMLSelectElement;
+		await userEvent.selectOptions(wafSelect, 'block');
+		// Toggle still checked after WAF dropdown interaction.
+		expect(toggle.checked).toBe(true);
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.uploadStreamingMode).toBe(true);
+		expect(payload.wafMode).toBe('block');
 	});
 });
