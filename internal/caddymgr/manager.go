@@ -26,9 +26,11 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/certmagic"
@@ -181,6 +183,16 @@ type CaddyManager struct {
 
 	mu      sync.Mutex
 	started bool
+
+	// applyFn is the seam ReloadFromStore invokes inside its
+	// goroutine + timeout wrapper. Default points to
+	// applyLocked (the real Caddy reload path); tests override
+	// to a stub that blocks indefinitely or returns a chosen
+	// error so the wrapper's timeout / error-propagation paths
+	// can be exercised without spinning up an embedded Caddy.
+	// Set in New(); kept as a field so the timeout-wrapper
+	// test seam stays type-safe (no global function pointer).
+	applyFn func(context.Context) error
 }
 
 // crowdsecConfig is the manager-side mirror of the bouncer's
@@ -217,13 +229,15 @@ func New(store *storage.Store, logger *slog.Logger, registry *metrics.Registry, 
 	if logger == nil {
 		return nil, errors.New("caddymgr: logger must not be nil")
 	}
-	return &CaddyManager{
+	m := &CaddyManager{
 		store:     store,
 		logger:    logger,
 		registry:  registry,
 		devMode:   devMode,
 		acmeEmail: acmeEmail,
-	}, nil
+	}
+	m.applyFn = m.applyLocked
+	return m, nil
 }
 
 // SetNormalTrafficExcludePaths (Step V.1.3) installs the
@@ -382,12 +396,84 @@ func (m *CaddyManager) Stop() error {
 	return nil
 }
 
+// reloadFromStoreTimeout bounds the wait inside ReloadFromStore so a
+// stuck Caddy applyLocked (typically caddy.Load → unsyncedDecodeAndRun
+// hanging on ACME / DNS provisioning while Caddy's internal rawCfgMu
+// is held) does not stall the calling handler indefinitely. 25s sits
+// between the frontend timeout (30s via client.ts REQUEST_TIMEOUT_MS,
+// commit a234dbc) so the backend can return its 500 BEFORE the
+// frontend AbortController fires — operators see a clean "caddy
+// reload failed" message instead of a generic client-side
+// "request timed out".
+//
+// Caveat (#R-CADDY-ADMIN-DEADLOCK): when this timeout fires the
+// applyLocked goroutine continues running with Caddy's rawCfgMu
+// still held. The current ReloadFromStore call returns promptly,
+// but subsequent calls will each re-incur the 25s wait until
+// the upstream ACME / DNS call eventually times out OR the
+// operator restarts arenet. V1 trades "hang silently forever"
+// for "fail fast in 25s with degraded throughput". The root
+// cause (no arenet-controllable timeout on the certmagic /
+// Caddy TLS app provisioning path) is upstream, out of V1
+// scope.
+const reloadFromStoreTimeout = 25 * time.Second
+
+// reloadFromStoreTimeoutForTest is the runtime knob the timeout
+// wrapper reads. Defaults to the package-level const above;
+// tests override via withShortTimeout to a sub-second budget so
+// the suite stays fast. NEVER mutate outside tests — the
+// production code path takes its value once per call and a
+// concurrent write here would race with running reloads.
+var reloadFromStoreTimeoutForTest = reloadFromStoreTimeout
+
 // ReloadFromStore rebuilds the Caddy config from the persisted routes and
 // hot-reloads the running server.
+//
+// Bounded by reloadFromStoreTimeout. On expiry the function returns a
+// wrapped context.DeadlineExceeded and dumps every goroutine stack to
+// stderr via runtime/pprof so the operator (or post-mortem analyst)
+// can identify the blocked goroutine without waiting for a SIGTERM
+// timeout dump. The dump is the actionable signal — the timeout error
+// alone tells the operator "Caddy is stuck" but not "where".
 func (m *CaddyManager) ReloadFromStore(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.applyLocked(ctx)
+
+	reloadCtx, cancel := context.WithTimeout(ctx, reloadFromStoreTimeoutForTest)
+	defer cancel()
+
+	// Run the actual reload in a goroutine so the select below
+	// can preempt it on timeout. applyFn defaults to
+	// applyLocked; tests override to drive the timeout branch
+	// without booting Caddy. The goroutine continues running
+	// after a timeout — see reloadFromStoreTimeout caveat — so
+	// caddy.Load eventually completes (or fails) in the
+	// background even though we've returned to the caller.
+	done := make(chan error, 1)
+	go func() { done <- m.applyFn(reloadCtx) }()
+
+	select {
+	case err := <-done:
+		return err
+	case <-reloadCtx.Done():
+		// Dump goroutines BEFORE returning so the operator
+		// reading the log sees the stack snapshot adjacent to
+		// the error line. pprof.Lookup("goroutine").WriteTo
+		// with debug=2 emits human-readable stacks (same shape
+		// as a SIGQUIT dump). Best-effort: the WriteTo error
+		// is logged but does not change the returned error
+		// semantics — the caller's recourse is identical.
+		m.logger.Error("caddy reload timeout — goroutine dump emitted to stderr",
+			"timeout", reloadFromStoreTimeoutForTest,
+		)
+		if dumpErr := pprof.Lookup("goroutine").WriteTo(os.Stderr, 2); dumpErr != nil {
+			m.logger.Warn("caddy reload timeout — goroutine dump write failed",
+				"err", dumpErr,
+			)
+		}
+		return fmt.Errorf("caddy reload timed out after %s: %w",
+			reloadFromStoreTimeoutForTest, reloadCtx.Err())
+	}
 }
 
 // applyLocked must be called with m.mu held. It reads routes from the store,

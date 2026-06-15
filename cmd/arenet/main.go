@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"syscall"
@@ -1367,6 +1368,22 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	defer cancel()
 	if err := adminSrv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("admin server shutdown error", "err", err)
+		// #R-CADDY-ADMIN-DEADLOCK — when the admin server
+		// shutdown times out (typically context deadline
+		// exceeded at 10s) it means at least one in-flight
+		// handler did not return on ctx cancel. Dump every
+		// goroutine stack to stderr so the operator (or
+		// post-mortem analyst) can identify the blocked
+		// handler without re-running with manual SIGQUIT.
+		// Mirror of the dump on caddymgr.ReloadFromStore
+		// timeout — same actionable signal at a different
+		// observation point.
+		logger.Error("admin server shutdown timeout — goroutine dump emitted to stderr")
+		if dumpErr := pprof.Lookup("goroutine").WriteTo(os.Stderr, 2); dumpErr != nil {
+			logger.Warn("admin server shutdown timeout — goroutine dump write failed",
+				"err", dumpErr,
+			)
+		}
 	}
 	if err, ok := <-serverErr; ok && err != nil {
 		logger.Error("admin server post-shutdown error", "err", err)
