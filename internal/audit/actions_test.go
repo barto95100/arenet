@@ -25,9 +25,9 @@ import "testing"
 // actions without updating the spec / decisions doc is a process
 // violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 43
+	const wantCount = 46
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3)", got, wantCount)
 	}
 }
 
@@ -149,6 +149,14 @@ func TestAllActions_ExactSet(t *testing.T) {
 		"service_account_created":       true,
 		"service_account_token_rotated": true,
 		"service_account_deleted":       true,
+		// Step AL.1.a (+3) — alerting channel lifecycle.
+		// Wired in AL.1.c when the CRUD HTTP handlers
+		// land; constants ship now so the audit count
+		// test stays stable across the AL.1.b → AL.1.c
+		// gap.
+		"alert_channel_created": true,
+		"alert_channel_updated": true,
+		"alert_channel_deleted": true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {

@@ -68,6 +68,13 @@ const (
 	// keyed "default" — same convention as bucketOIDCConfig.
 	// See crowdsec_config.go.
 	bucketCrowdSecConfig = "crowdsec_config"
+	// Step AL.1.a — instance-level alerting channel
+	// registry (webhook + email V1; slack + discord
+	// deferred V2). One row per Channel, keyed by
+	// Channel.ID (UUID v4). Stable across renames so
+	// rule → channel references survive operator-facing
+	// relabels. See alerting_channel.go.
+	bucketAlertingChannels = "alerting_channels"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -113,6 +120,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketAutomation),           // Step P.1
 			[]byte(bucketServerPosition),       // Step V.4
 			[]byte(bucketCrowdSecConfig),       // Step CS.1
+			[]byte(bucketAlertingChannels),     // Step AL.1.a
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)

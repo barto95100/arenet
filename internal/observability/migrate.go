@@ -46,7 +46,7 @@ import (
 //     waf_block_count).
 //
 // Downgrade is not supported.
-const currentSchemaVersion = 9
+const currentSchemaVersion = 10
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -109,6 +109,7 @@ var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
 	6: migrateV6toV7,
 	7: migrateV7toV8,
 	8: migrateV8toV9,
+	9: migrateV9toV10,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -420,6 +421,66 @@ func migrateV8toV9(ctx context.Context, tx *sql.Tx) error {
 	stmts := []string{
 		`ALTER TABLE bucket_1m ADD COLUMN waf_detect_count INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE bucket_1h ADD COLUMN waf_detect_count INTEGER NOT NULL DEFAULT 0`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV9toV10 — Step AL.1.a. Creates the alert_event
+// table + its three indexes (ts for time-range scans,
+// rule_id+ts for per-rule drill-down, severity+ts for
+// the activity log's severity filter).
+//
+// Schema rationale:
+//   - event_id is the application-generated UUID v4 (the
+//     AlertEvent.ID field); UNIQUE so a re-fire from a
+//     watcher restart can't double-insert.
+//   - ts is Unix seconds — cohérent with waf_event,
+//     throttle_event, decision_event, cert_event.
+//   - rule_id is a snapshot (the rule may be deleted
+//     later; the FK is intentionally weak).
+//   - rule_name is also a snapshot so a future rename
+//     doesn't retroactively relabel old events.
+//   - severity is the 0-3 int form of alerting.Severity.
+//   - category is free-form taxonomy (waf / crowdsec /
+//     cert / system / ...).
+//   - context_json + labels_json hold the structured
+//     payload; SQLite reads them as TEXT so the
+//     activity log can render them without a schema
+//     change when a new context key shows up.
+//   - channels_fired_json + channels_failed_json are
+//     JSON arrays of channel IDs (post-send state from
+//     the dispatch layer, AL.1.d). Empty arrays on rows
+//     written before the dispatch fan-out completes.
+//
+// Retention: 30 days, mirrors the other event tables.
+// Pruning lands in AL.3b alongside the read endpoint
+// (PruneAlertEventsOlderThan, called by the existing
+// retention runner).
+func migrateV9toV10(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS alert_event (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  event_id TEXT NOT NULL UNIQUE,
+		  ts INTEGER NOT NULL,
+		  rule_id TEXT NOT NULL,
+		  rule_name TEXT NOT NULL,
+		  severity INTEGER NOT NULL,
+		  category TEXT NOT NULL,
+		  subject TEXT NOT NULL,
+		  body TEXT NOT NULL DEFAULT '',
+		  context_json TEXT NOT NULL DEFAULT '',
+		  labels_json TEXT NOT NULL DEFAULT '',
+		  channels_fired_json TEXT NOT NULL DEFAULT '',
+		  channels_failed_json TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_alert_event_ts          ON alert_event (ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_alert_event_rule_ts     ON alert_event (rule_id, ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_alert_event_severity_ts ON alert_event (severity, ts)`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {

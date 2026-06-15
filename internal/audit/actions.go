@@ -96,6 +96,22 @@ const (
 	ActionServiceAccountTokenRotated = "service_account_token_rotated"
 	ActionServiceAccountDeleted      = "service_account_deleted"
 
+	// Step AL.1.a — alerting channel lifecycle (3). Wired
+	// in AL.1.c when the CRUD HTTP handlers ship; this
+	// file ships the action constants now so a future
+	// audit pass against the channel CRUD doesn't have to
+	// touch the count test in this same commit.
+	//
+	// Secret discipline (mirrors J.4 / CrowdSec / OIDC):
+	// audit BeforeJSON + AfterJSON MUST be redacted by a
+	// channel-specific adapter at emission time. The
+	// SMTP password + webhook auth tokens never reach
+	// the audit row. AL.1.c documents the redaction
+	// contract per kind.
+	ActionAlertChannelCreated = "alert_channel_created"
+	ActionAlertChannelUpdated = "alert_channel_updated"
+	ActionAlertChannelDeleted = "alert_channel_deleted"
+
 	// Step K.3 — backup / restore (3). The restore is significantly
 	// more destructive than the export; both must be audited and the
 	// failure path emits its own dedicated event so a rejected
@@ -209,6 +225,9 @@ var allActions = []string{
 	ActionServiceAccountCreated,
 	ActionServiceAccountTokenRotated,
 	ActionServiceAccountDeleted,
+	ActionAlertChannelCreated,
+	ActionAlertChannelUpdated,
+	ActionAlertChannelDeleted,
 	ActionConfigExported,
 	ActionConfigRestored,
 	ActionConfigRestoredRejected,
