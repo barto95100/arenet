@@ -75,6 +75,14 @@ const (
 	// rule → channel references survive operator-facing
 	// relabels. See alerting_channel.go.
 	bucketAlertingChannels = "alerting_channels"
+	// Step AL.2.a — instance-level alert rule registry.
+	// One row per AlertRule, keyed by Rule.ID (UUID v4).
+	// The AL.2.b watcher reads this bucket per polling
+	// tick + writes the LastFiredAt / LastEvalAt /
+	// LastError fields back via MarkAlertRuleEval. The
+	// AL.3b CRUD layer wires the operator-facing
+	// endpoints. See alert_rule.go.
+	bucketAlertRules = "alert_rules"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -121,6 +129,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketServerPosition),       // Step V.4
 			[]byte(bucketCrowdSecConfig),       // Step CS.1
 			[]byte(bucketAlertingChannels),     // Step AL.1.a
+			[]byte(bucketAlertRules),           // Step AL.2.a
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)
