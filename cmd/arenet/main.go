@@ -1133,10 +1133,11 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// interface via its GetAlertChannel +
 	// MarkAlertChannelSendResult methods.
 	//
-	// Initial producer: the /test endpoint in
-	// internal/api/alerting_channels.go. AL.2 adds the
-	// rule-engine watcher as the second producer when the
-	// trigger engine ships.
+	// AL.1.b producer: the /test endpoint in
+	// internal/api/alerting_channels.go.
+	// AL.2.b producer: the watcher wired below (single
+	// shared Dispatcher instance — stateless, so the two
+	// producers can safely share it).
 	//
 	// No Start/Stop lifecycle hooks — the dispatcher is a
 	// pure value with no goroutines or pooled connections
@@ -1144,7 +1145,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// pool, SMTP dial seam) is encapsulated inside
 	// WebhookSender / EmailSender constructors and managed
 	// per-send.
-	apiHandler.SetAlertingDispatcher(alerting.NewDispatcher(store, logger))
+	alertingDispatcher := alerting.NewDispatcher(store, logger)
+	apiHandler.SetAlertingDispatcher(alertingDispatcher)
 
 	// Step L L.2 — attach the observability store to the API
 	// handler so /api/v1/metrics/* can serve history.
@@ -1314,6 +1316,72 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 			crowdsecSink.SetTombstoneListener(nil)
 		}
 		logger.Info("automation engine stopped")
+	}()
+
+	// Step AL.2.b — alerting watcher. Polls AlertRule rows
+	// every PollingInterval (30s default per ADR D10),
+	// dispatches via the AL.1.b Dispatcher on rule fire,
+	// honours per-(rule, channel) cooldown LRU (ADR D4).
+	//
+	// Sources registered:
+	//   - waf_event_rate: counts waf_event rows on
+	//     *observability.Store. Skipped from registration
+	//     when obsStore is nil (boot-degraded observability
+	//     per AC #13) — the watcher then surfaces the
+	//     "source not registered" error on any rule that
+	//     references it.
+	//   - cert_expiry: reads *certinfo.Tracker. Always
+	//     registered (the tracker is constructed
+	//     unconditionally at boot, even when no certs are
+	//     yet tracked).
+	//   - system_health: reads *systemhealth.HealthChecker
+	//     (built above). Always registered.
+	//
+	// Lifecycle mirrors the automation engine just above:
+	// dedicated context + WaitGroup, defer cancel + Wait
+	// at shutdown so the watcher goroutine drains before
+	// Arenet's main shutdown sequence.
+	alertingRegistry := alerting.NewSourceRegistry()
+	if obsStore != nil {
+		if err := alertingRegistry.Register(alerting.NewWafEventRateSource(obsStore)); err != nil {
+			logger.Warn("alerting: register waf_event_rate source failed", "err", err)
+		}
+	} else {
+		logger.Info("alerting: waf_event_rate source skipped (observability store unavailable)")
+	}
+	if err := alertingRegistry.Register(alerting.NewCertExpirySource(certTracker)); err != nil {
+		logger.Warn("alerting: register cert_expiry source failed", "err", err)
+	}
+	if err := alertingRegistry.Register(alerting.NewSystemHealthSource(healthChecker)); err != nil {
+		logger.Warn("alerting: register system_health source failed", "err", err)
+	}
+	alertingWatcherCooldown := alerting.NewCooldownLRU(nil)
+	alertingWatcher, alertingWatcherErr := alerting.NewWatcher(alerting.WatcherConfig{
+		Store:      store,
+		Sources:    alertingRegistry,
+		Dispatcher: alertingDispatcher,
+		Cooldown:   alertingWatcherCooldown,
+		Logger:     logger,
+	})
+	if alertingWatcherErr != nil {
+		logger.Warn("alerting watcher: disabled", "err", alertingWatcherErr)
+	}
+	alertingWatcherCtx, alertingWatcherCancel := context.WithCancel(ctx)
+	var alertingWatcherWG sync.WaitGroup
+	if alertingWatcher != nil {
+		alertingWatcherWG.Add(1)
+		go func() {
+			defer alertingWatcherWG.Done()
+			alertingWatcher.Run(alertingWatcherCtx)
+		}()
+		logger.Info("alerting watcher started",
+			"interval", alertingWatcher.PollingInterval().String(),
+			"sources", alertingRegistry.Names())
+	}
+	defer func() {
+		alertingWatcherCancel()
+		alertingWatcherWG.Wait()
+		logger.Info("alerting watcher stopped")
 	}()
 
 	wsTopologyHandler := api.NewWSTopologyHandler(metricsBroadcaster, cfg.Dev, logger)

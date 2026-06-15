@@ -58,16 +58,20 @@ func compileBodyTemplate(tmpl string) (*template.Template, error) {
 }
 
 // renderTemplate executes a pre-compiled template against
-// an AlertEvent. The Option("missingkey=zero") flag set
+// a data context. The Option("missingkey=zero") flag set
 // at compile time means a `{{.NoSuchField}}` reference
 // renders as the zero value (empty string for strings)
 // instead of an error — operator-friendly default for
 // the live data plane (a stale template against a
 // V2-renamed AlertEvent field doesn't error the send,
 // just renders a placeholder).
-func renderTemplate(t *template.Template, evt AlertEvent) (string, error) {
+//
+// Data is `any` so callers pass AlertEvent (AL.1.b
+// senders) or alertEventTemplateContext (AL.2.b watcher
+// fire-path) without separate helpers.
+func renderTemplate(t *template.Template, data any) (string, error) {
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, evt); err != nil {
+	if err := t.Execute(&buf, data); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

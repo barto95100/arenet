@@ -311,6 +311,93 @@ func (s *Store) DeleteAlertRule(ctx context.Context, id string) error {
 	})
 }
 
+// UpdateAlertRuleEvalState updates the heartbeat fields
+// the AL.2.b watcher writes BEFORE deciding whether to
+// dispatch. LastEvalAt is always bumped (heartbeat);
+// LastError + LastErrorAt are set from evalErr (nil
+// clears them).
+//
+// Splitting eval-state and fired-state writes lets the
+// watcher persist "I evaluated this rule cleanly" on
+// every tick without waiting for the dispatch phase —
+// operators reading the rule UI see "last evaluated 8s
+// ago" even when the condition is currently not met.
+// UpdateAlertRuleFiredState lands the fire timestamp
+// AFTER the dispatcher has run.
+func (s *Store) UpdateAlertRuleEvalState(ctx context.Context, id string, evalAt time.Time, evalErr error) error {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	if id == "" {
+		return errors.New("alert_rule: id must not be empty")
+	}
+	at := evalAt.UTC()
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(bucketAlertRules))
+		raw := b.Get([]byte(id))
+		if raw == nil {
+			return ErrNotFound
+		}
+		var r AlertRule
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return fmt.Errorf("unmarshal alert_rule: %w", err)
+		}
+		r.LastEvalAt = &at
+		if evalErr != nil {
+			r.LastError = evalErr.Error()
+			r.LastErrorAt = &at
+		} else {
+			r.LastError = ""
+			r.LastErrorAt = nil
+		}
+		r.UpdatedAt = at
+		buf, err := json.Marshal(r)
+		if err != nil {
+			return fmt.Errorf("marshal alert_rule: %w", err)
+		}
+		return b.Put([]byte(id), buf)
+	})
+}
+
+// UpdateAlertRuleFiredState bumps LastFiredAt after the
+// watcher dispatched the AlertEvent to ≥1 channel.
+// Separate from UpdateAlertRuleEvalState so the watcher
+// can record "evaluated cleanly but condition not met"
+// without spuriously bumping the fire timestamp.
+func (s *Store) UpdateAlertRuleFiredState(ctx context.Context, id string, firedAt time.Time) error {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	if id == "" {
+		return errors.New("alert_rule: id must not be empty")
+	}
+	at := firedAt.UTC()
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(bucketAlertRules))
+		raw := b.Get([]byte(id))
+		if raw == nil {
+			return ErrNotFound
+		}
+		var r AlertRule
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return fmt.Errorf("unmarshal alert_rule: %w", err)
+		}
+		r.LastFiredAt = &at
+		r.UpdatedAt = at
+		buf, err := json.Marshal(r)
+		if err != nil {
+			return fmt.Errorf("marshal alert_rule: %w", err)
+		}
+		return b.Put([]byte(id), buf)
+	})
+}
+
 // MarkAlertRuleEval updates the watcher-owned telemetry
 // fields after a polling tick. fired=true bumps
 // LastFiredAt; evalErr != nil records LastError +
@@ -319,9 +406,11 @@ func (s *Store) DeleteAlertRule(ctx context.Context, id string) error {
 // ago" — meaningful even when the rule didn't fire and
 // has no error).
 //
-// Called by AL.2.b's watcher; AL.2.a ships it now so the
-// watcher commit lands as a pure additive without
-// reaching back into storage.
+// Legacy single-shot API kept for tests + future
+// non-watcher callers; the AL.2.b watcher uses
+// UpdateAlertRuleEvalState + UpdateAlertRuleFiredState
+// instead so eval-vs-fire phases are persisted
+// independently.
 func (s *Store) MarkAlertRuleEval(ctx context.Context, id string, fired bool, evalErr error) error {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
