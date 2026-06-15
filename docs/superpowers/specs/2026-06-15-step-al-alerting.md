@@ -1,27 +1,33 @@
-# Step R — Alerting Phase 3 (DEFERRED)
+# Step AL — Alerting (un-deferred from 2026-05-31)
 
-> **Status: DEFERRED 2026-05-31.** Originally drafted as Step R
-> right after Step P (auto-classify) shipped. Deferred before
-> arbitrage / freeze because the OKLCH visual migration + IA
-> reorg took the Step R slot as a higher-priority operator-
-> visible improvement. The alerting work remains valuable and
-> well-scoped — the OPEN decisions section below already
-> captured the design surface; reopening this spec later means
-> re-running the D1-D10 arbitrage and moving the file back to
-> `../` (the active specs directory). Step letter for the
-> reopened spec is TBD — likely the next free letter after
-> the visual-migration + production-deploy work lands.
+> **Status: ACTIVE 2026-06-15** (un-deferred from
+> 2026-05-31). Originally drafted as "Step R" right after Step
+> P (auto-classify) shipped. Deferred before arbitrage because
+> the OKLCH visual migration + IA reorg took the Step R slot
+> as a higher-priority operator-visible improvement (that work
+> shipped in May 2026 and now lives at
+> `docs/superpowers/specs/2026-05-31-step-r-oklch-migration.md`).
+> Un-deferred today as Phase 6 of the post-1.0 stabilisation
+> roadmap, renamed **Step AL** to avoid the historical "Step
+> R" collision — `git log --grep "Step R"` would otherwise
+> return both the visual migration and this alerting work.
+>
+> All eight D-arbitrage decisions (D1..D10 less the
+> UI-cosmetic D8/D9) have been validated by the operator and
+> captured in
+> `docs/superpowers/decisions/2026-06-15-step-al-decisions.md`.
+> The "OPEN decisions" section below is preserved verbatim
+> as historical context — the active reference for what V1
+> ships is the ADR.
 
 ---
 
-**Original status line (pre-defer):**
-**Status**: DRAFT — decisions open for arbitration.
 **Author**: Ludo + Claude.
 **Predecessors**:
 - Step M (WAF event rate), Step Q (throttle event rate + auth failures), Step N (CrowdSec decision rate), Step P (automation push / drop counters) — the metric sources alerting subscribes to.
-- Step J.4 (DNS provider) / Step P.3 (watcher credentials) — the J.4 secret discipline pattern Step R applies to SMTP credentials + webhook tokens.
+- Step J.4 (DNS provider) / Step P.3 (watcher credentials) — the J.4 secret discipline pattern Step AL applies to SMTP credentials + webhook tokens.
 
-Why "Step R": Q is Step Q (throttle / rate-limit signals). Step S is the next free letter after R; we use R for "rules / reactions" matching the alerting domain. No formal convention forces it; the letter is just the next free slot.
+Why "Step AL": original "Step R" letter is permanently retired for alerting because of the May 2026 collision with the OKLCH visual migration (also named Step R). "AL" is the next available two-letter slot that reads unambiguously as "alerting" in `git log --grep`. No formal letter-naming convention forces this; the rename is purely a discoverability + audit-trail decision.
 
 ---
 
@@ -29,7 +35,7 @@ Why "Step R": Q is Step Q (throttle / rate-limit signals). Step S is the next fr
 
 ### 1.1 Goal
 
-Close the **observation → notification** loop. Today Arenet surfaces WAF / throttle / CrowdSec / auth-failure signals in `/security/*` dashboards and the auto-classify loop (Step P) acts on them by pushing to LAPI. An operator who's NOT watching the dashboard or LAPI has no proactive signal — they have to be looking to see something is wrong. Step R adds **proactive notifications**: an operator-configured rule set fires alerts to channels (webhook / email / Discord / Slack) when interesting things happen.
+Close the **observation → notification** loop. Today Arenet surfaces WAF / throttle / CrowdSec / auth-failure signals in `/security/*` dashboards and the auto-classify loop (Step P) acts on them by pushing to LAPI. An operator who's NOT watching the dashboard or LAPI has no proactive signal — they have to be looking to see something is wrong. Step AL adds **proactive notifications**: an operator-configured rule set fires alerts to channels (webhook + email in V1; Slack + Discord deferred V2) when interesting things happen.
 
 **Three signal classes** alerting subscribes to:
 
@@ -43,11 +49,11 @@ Alerting is **opt-in per rule + per channel** — fresh-install Arenet sends no 
 
 | Sub | Surface | What it produces |
 |-----|---------|------------------|
-| R.1 | Channel storage + sender clients | `Channel` BoltDB type + per-kind sender (webhook / email / Discord / Slack). Each sender is a small HTTP client (or SMTP for email) with J.4 secret discipline on tokens / passwords. AC #13 buffered-channel + drop-on-full per channel. |
-| R.2 | Rule engine + watcher | Polling watcher (~30s tick) over the 3 signal classes. RuleSet + dedupe / cooldown LRU to suppress notification spam on persistent conditions. Emits `Alert` intents to the channel sender pipeline. |
-| R.3 | REST API + storage + audit | `/settings/alerts/channels` CRUD + `/settings/alerts/rules` CRUD + `GET /alerts/recent`. Audit actions `alert_channel_changed`, `alert_rule_changed`, `alert_fired`. New `alert_event` table for the recent-feed + replay history. |
-| R.4 | Frontend | New "Alerting" Card in Settings (Row 2.8 between Automation and OIDC). Channel list + rule list editors. `/security` dashboard widget showing the N most-recent alerts. |
-| R.5 | Smoke + tag | Live smoke against a real webhook endpoint (httptest server on localhost). Trigger a threshold crossing, verify the alert lands. Tag `v1.4.0-step-r`. |
+| AL.1 | Channel storage + sender clients | `Channel` BoltDB type + per-kind sender (**webhook + email V1**; Slack + Discord deferred V2 per D1 ADR). Webhook is a small HTTP client; email is an SMTP client with from-address + auth (slightly bigger surface but the operator-monitoring lingua franca). Both use the J.4 secret discipline pattern for tokens / passwords. AC #13 buffered-channel + drop-on-full per channel. **Effort delta vs original D1.C (webhook + Slack + Discord): +5-6h email SMTP wiring, -3-4h Slack/Discord wrappers, net +2h on AL.1.** |
+| AL.2 | Rule engine + watcher | Polling watcher (~30s tick) over the 3 signal classes. RuleSet + dedupe / cooldown LRU to suppress notification spam on persistent conditions. Emits `Alert` intents to the channel sender pipeline. |
+| AL.3 | REST API + storage + audit | `/settings/alerts/channels` CRUD + `/settings/alerts/rules` CRUD + `GET /alerts/recent`. Audit actions `alert_channel_changed`, `alert_rule_changed`, `alert_fired`. New `alert_event` table for the recent-feed + replay history. |
+| AL.4 | Frontend | New "Alerting" Card in Settings (Row 2.8 between Automation and OIDC). Channel list + rule list editors. `/security` dashboard widget showing the N most-recent alerts. |
+| AL.5 | Smoke + tag | Live smoke against a real webhook endpoint (httptest server on localhost) + an SMTP smoke harness (maildev or equivalent). Trigger a threshold crossing, verify the alert lands on both channel kinds. Tag `v1.7.0-step-al` (next minor after the Day 13 stabilisation cycle). |
 
 ### 1.3 OPEN decisions (to arbitrate at draft review)
 
@@ -283,14 +289,17 @@ web/frontend/src/routes/security/+page.svelte
 
 ---
 
-## 5. Out of scope (for v1.4)
+## 5. Out of scope (for V1 — Step AL un-deferred 2026-06-15)
 
-- Email (SMTP) channel — D1.C defers to v1.5.
-- Event-based trigger class (D2.3) — defers to v1.5; v1.4 ships threshold + state.
-- Resolution detection (D4.B paged alerting) — defers to v1.5.
-- Per-route alert filtering (D9.B) — defers indefinitely (YAGNI until operator asks).
-- Sub-second event-driven alerts (D10.C) — defers indefinitely.
-- Cross-instance correlation (e.g. "fire only if both Arenet instances see the spike") — not on the homelab roadmap.
+Per the operator-validated ADR
+(`docs/superpowers/decisions/2026-06-15-step-al-decisions.md`):
+
+- **Slack + Discord channels** — D1 modulé defers to V2. Webhook covers operators wanting custom destinations (AlertManager fan-out pattern); email covers the monitoring-infrastructure baseline. Slack/Discord ship V2 as opportunistic add-ons.
+- **Event-based trigger class** (D2.3) — defers to V2. Needs dedicated design for event correlation + dedupe, beyond V1 threshold + state shape.
+- **Resolution detection** (D4.B paged alerting) — defers to V2. Cooldown LRU is the V1 spam guard; "auto-resolved" notifications add an incident-state surface deferred until operator feedback requests it.
+- **Per-route alert filtering** (D9.B) — defers indefinitely (YAGNI until operator asks). Metric sources roll up across routes today.
+- **Sub-second event-driven alerts** (D10.C) — defers indefinitely. 30s polling is the V1 cadence.
+- **Cross-instance correlation** (e.g. "fire only if both Arenet instances see the spike") — not on the homelab roadmap.
 
 ---
 
@@ -301,5 +310,6 @@ web/frontend/src/routes/security/+page.svelte
 - Writer with backoff: `internal/automation/trigger.go:598-703`.
 - J.4 secret discipline: `internal/storage/dns_provider.go` + `internal/storage/automation_config.go` (P.3).
 - Settings card insertion point: `web/frontend/src/routes/settings/+page.svelte:1248-1249` (between Automation Card and OIDC Card).
-- Audit action enum + count test: `internal/audit/actions.go:27-109` + `actions_test.go:27` (32 today; R adds 3 → 35).
-- Health endpoint: `internal/api/health.go:44-50` (liveness only; R adds the new detailed `/api/v1/system/health` per D3.A).
+- Audit action enum + count test: `internal/audit/actions.go` + `actions_test.go` (current count verified at AL.3 implementation time; AL adds 3 new actions per the D6 ADR).
+- Health endpoint: `internal/api/health.go:44-50` (liveness only; AL adds the new detailed `/api/v1/system/health` per D3.A).
+- Step AL ADR: `docs/superpowers/decisions/2026-06-15-step-al-decisions.md` — active reference for the eight V1 decisions (D1 modulé through D10).
