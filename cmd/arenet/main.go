@@ -73,6 +73,7 @@ import (
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
+	"github.com/barto95100/arenet/internal/systemhealth"
 	"github.com/barto95100/arenet/internal/throttle"
 	"github.com/barto95100/arenet/internal/waf"
 	"github.com/barto95100/arenet/web"
@@ -1102,6 +1103,28 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// fallback path is active. Without this, service-account
 	// tokens cannot authenticate (cookie-only mode).
 	apiHandler.SetAPITokenStore(apiTokenStore)
+
+	// Step AL.3a — wire the /system/health endpoint with the
+	// 5 component checks. Each check has its own adapter in
+	// system_health_adapters.go that bridges the
+	// systemhealth package's narrow interfaces to the
+	// production singletons. The MetricsProber adapter is
+	// only constructed when obsStore is non-nil (boot-
+	// degraded observability surfaces as nil Prober →
+	// systemhealth's degraded message).
+	var metricsProber systemhealth.MetricsProber
+	if obsStore != nil {
+		metricsProber = &metricsProberAdapter{store: obsStore}
+	}
+	healthChecker := systemhealth.New(version,
+		&systemhealth.CaddyCheck{},
+		&systemhealth.BoltDBCheck{Counter: &boltdbRoutesCounter{store: store}},
+		&systemhealth.MetricsCheck{Prober: metricsProber},
+		&systemhealth.CrowdSecCheck{Config: &crowdsecConfigAdapter{store: store}},
+		&systemhealth.CertmagicCheck{Lister: &certInfoListerAdapter{tracker: certTracker}},
+	)
+	apiHandler.SetSystemHealthChecker(healthChecker)
+
 	// Step L L.2 — attach the observability store to the API
 	// handler so /api/v1/metrics/* can serve history.
 	//

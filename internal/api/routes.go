@@ -76,6 +76,16 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 	// trade-off for the homelab single-instance deployment target.
 	r.Get("/healthz", h.healthz)
 
+	// Step AL.3a — /system/health for external monitoring
+	// stacks (Uptime Kuma, blackbox_exporter, k8s readiness
+	// probes). INTENTIONALLY mounted outside the /api/v1
+	// auth subtree so a scraper without cookies / Bearer
+	// tokens can read it. Response carries zero secrets
+	// (status + counts + latency only). See
+	// docs/superpowers/decisions/2026-06-15-step-al-
+	// decisions.md (D3) for the design context.
+	r.Get("/system/health", h.systemHealth)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Route("/auth", func(r chi.Router) {
 			// S.5 smoke finding #5 — rate-limit scoped back to

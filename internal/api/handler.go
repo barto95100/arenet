@@ -200,6 +200,13 @@ type Handler struct {
 	audit       AuditAppender
 	users       *auth.UserStore
 	sessions    *auth.SessionStore
+	// systemHealthChecker (Step AL.3a) runs the 5-component
+	// /system/health probe. nil-tolerant: when nil, the
+	// handler returns a coherent degraded response so the
+	// external monitoring scrape never sees a 500. Set via
+	// SetSystemHealthChecker at boot.
+	systemHealthChecker SystemHealthChecker
+
 	// apiTokens (Phase 4) is the read+validate surface for
 	// service-account bearer tokens. nil-tolerant: when nil, the
 	// SoftAuth middleware skips the Bearer fallback entirely
@@ -522,6 +529,14 @@ func NewHandler(
 // test scaffolding stays signature-compatible.
 func (h *Handler) SetUIOrigin(origin string) {
 	h.uiOrigin = strings.TrimRight(strings.TrimSpace(origin), "/")
+}
+
+// SetSystemHealthChecker (Step AL.3a) attaches the
+// /system/health probe runner. Pass nil to leave the
+// endpoint wired but degraded — the handler returns a
+// coherent JSON shape regardless.
+func (h *Handler) SetSystemHealthChecker(s SystemHealthChecker) {
+	h.systemHealthChecker = s
 }
 
 // SetAPITokenStore (Phase 4) attaches the service-account API
