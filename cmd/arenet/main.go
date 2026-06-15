@@ -58,6 +58,7 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 
+	"github.com/barto95100/arenet/internal/alerting"
 	"github.com/barto95100/arenet/internal/api"
 	"github.com/barto95100/arenet/internal/api/topology"
 	"github.com/barto95100/arenet/internal/audit"
@@ -1124,6 +1125,26 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		&systemhealth.CertmagicCheck{Lister: &certInfoListerAdapter{tracker: certTracker}},
 	)
 	apiHandler.SetSystemHealthChecker(healthChecker)
+
+	// Step AL.1.b — wire the alerting Dispatcher. Stateless
+	// fan-out engine that owns the channel.Kind → Sender
+	// dispatch + the per-channel MinSeverity / Enabled
+	// gates. *storage.Store satisfies the ChannelLoader
+	// interface via its GetAlertChannel +
+	// MarkAlertChannelSendResult methods.
+	//
+	// Initial producer: the /test endpoint in
+	// internal/api/alerting_channels.go. AL.2 adds the
+	// rule-engine watcher as the second producer when the
+	// trigger engine ships.
+	//
+	// No Start/Stop lifecycle hooks — the dispatcher is a
+	// pure value with no goroutines or pooled connections
+	// at this layer. Per-sender state (http.Client.Transport
+	// pool, SMTP dial seam) is encapsulated inside
+	// WebhookSender / EmailSender constructors and managed
+	// per-send.
+	apiHandler.SetAlertingDispatcher(alerting.NewDispatcher(store, logger))
 
 	// Step L L.2 — attach the observability store to the API
 	// handler so /api/v1/metrics/* can serve history.

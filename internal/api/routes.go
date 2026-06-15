@@ -422,6 +422,19 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// crowdsec_manual_ban.go for the LAPI Alert
 				// payload shape + validation rules.
 				r.Post("/security/crowdsec/decisions", h.addManualBan)
+				// Step AL.1.b — alerting channel CRUD + /test.
+				// Admin-only (channel config carries SMTP
+				// passwords + webhook auth headers — secret
+				// surface, not viewer-readable). The /test
+				// endpoint fires a synthetic event so the
+				// operator can verify the channel wires end-
+				// to-end without writing a rule first.
+				r.Get("/settings/alerting/channels", h.listAlertChannels)
+				r.Post("/settings/alerting/channels", h.createAlertChannel)
+				r.Get("/settings/alerting/channels/{id}", h.getAlertChannel)
+				r.Put("/settings/alerting/channels/{id}", h.updateAlertChannel)
+				r.Delete("/settings/alerting/channels/{id}", h.deleteAlertChannel)
+				r.Post("/settings/alerting/channels/{id}/test", h.testAlertChannel)
 			})
 		})
 	})

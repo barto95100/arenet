@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/barto95100/arenet/internal/alerting"
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/caddymgr"
@@ -32,6 +33,16 @@ import (
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 )
+
+// AlertingDispatcher (Step AL.1.b) is the seam the /test
+// endpoint + the future AL.2 rule engine use to fan an
+// AlertEvent out to channels. Implemented by
+// *alerting.Dispatcher; declared on the API side so the
+// handler tests can inject a stub without booting the
+// production dispatcher wiring.
+type AlertingDispatcher interface {
+	Dispatch(ctx context.Context, evt alerting.AlertEvent, channelIDs []string) alerting.DispatchResult
+}
 
 // timestampFormat is RFC 3339 with millisecond precision, trailing zeros
 // stripped. Matches the wire shape defined in spec §5.2.
@@ -206,6 +217,19 @@ type Handler struct {
 	// external monitoring scrape never sees a 500. Set via
 	// SetSystemHealthChecker at boot.
 	systemHealthChecker SystemHealthChecker
+
+	// alertingDispatcher (Step AL.1.b) fans an AlertEvent
+	// out to a list of channel IDs, owns the per-channel
+	// MinSeverity / Enabled gates, and writes the per-send
+	// outcome back via MarkAlertChannelSendResult. The
+	// /test endpoint uses it as its initial producer; the
+	// AL.2 rule engine will add a second producer
+	// (watcher → Dispatch on rule fire). nil-tolerant: a
+	// handler built without the dispatcher (tests) falls
+	// back to a direct SenderFor + Send in the /test
+	// endpoint so the existing handler tests don't have to
+	// wire a real Dispatcher.
+	alertingDispatcher AlertingDispatcher
 
 	// apiTokens (Phase 4) is the read+validate surface for
 	// service-account bearer tokens. nil-tolerant: when nil, the
@@ -537,6 +561,15 @@ func (h *Handler) SetUIOrigin(origin string) {
 // coherent JSON shape regardless.
 func (h *Handler) SetSystemHealthChecker(s SystemHealthChecker) {
 	h.systemHealthChecker = s
+}
+
+// SetAlertingDispatcher (Step AL.1.b) attaches the
+// per-channel fan-out dispatcher used by the /test
+// endpoint. Pass nil to fall back to the legacy direct-
+// SenderFor path (used by handler tests that don't wire
+// a real dispatcher).
+func (h *Handler) SetAlertingDispatcher(d AlertingDispatcher) {
+	h.alertingDispatcher = d
 }
 
 // SetAPITokenStore (Phase 4) attaches the service-account API
