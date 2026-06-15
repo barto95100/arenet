@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -120,6 +121,48 @@ type ArenetWafHandler struct {
 
 	waf     coraza.WAF
 	poolKey string
+
+	// txBuffers (#R-WAF-EVENT-LABEL-BLOCK-VS-200) stages
+	// onMatch-fired Events between match time and handler
+	// exit. Keyed by tx.ID() string (NOT tx pointer — Coraza
+	// v3 recycles *Transaction via sync.Pool at internal/
+	// corazawaf/waf.go:53, so a pointer key could collide
+	// silently with a recycled allocation; tx.ID() is a
+	// per-NewTransaction 19-char random string,
+	// collision-safe at homelab scale).
+	//
+	// Lifecycle (per request):
+	//   1. ServeHTTP creates a buffer and Stores it under
+	//      tx.ID() before calling processRequest.
+	//   2. onMatch looks up the buffer via mr.TransactionID()
+	//      and appends the Event with placeholder Action /
+	//      StatusCode — the real values are computed at
+	//      handler exit when the transaction's final verdict
+	//      is known.
+	//   3. The flush defer (LIFO before tx.Close, see
+	//      ServeHTTP) walks the buffer, sets the correct
+	//      (Action, StatusCode) tuple based on mode +
+	//      tx.Interruption(), and sink.Emits each event.
+	//   4. A nested defer Deletes the entry from the map even
+	//      if the flush body panics — guarantees no buffer
+	//      leak across the tx pool recycle window.
+	//
+	// Pointer-typed so the embedding ArenetWafHandler value
+	// stays trivially copyable for Caddy's value-receiver
+	// CaddyModule() convention (`func (ArenetWafHandler)
+	// CaddyModule()`). A bare sync.Map embedded by value
+	// would trigger go vet's "passes lock by value" warning
+	// at the CaddyModule receiver and at JSON
+	// unmarshal/copy paths. Allocated in Provision.
+	txBuffers *sync.Map
+}
+
+// txEventBuffer collects events fired by onMatch during a
+// single transaction. No mutex: the Coraza error callback runs
+// synchronously on the request goroutine, so onMatch and the
+// flush defer are the only writers and they're sequential.
+type txEventBuffer struct {
+	events []Event
 }
 
 // CaddyModule satisfies caddy.Module.
@@ -155,6 +198,13 @@ func (h *ArenetWafHandler) Validate() error {
 // matched rule, we translate each call into a sink.Emit.
 func (h *ArenetWafHandler) Provision(_ caddy.Context) error {
 	h.poolKey = h.computePoolKey()
+	// #R-WAF-EVENT-LABEL — per-handler tx event buffer map.
+	// Allocated here (not at zero-value time) so the
+	// ArenetWafHandler struct itself stays trivially
+	// copyable for Caddy's value-receiver CaddyModule()
+	// convention without triggering go vet's "passes lock
+	// by value" warning on the embedded sync.Map.
+	h.txBuffers = &sync.Map{}
 
 	val, loaded, err := wafPool.LoadOrNew(h.poolKey, func() (caddy.Destructor, error) {
 		waf, err := h.buildWAF()
@@ -409,34 +459,81 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 		// belt-and-braces.
 		return
 	}
+
+	// #R-WAF-EVENT-LABEL-BLOCK-VS-200 — Action + StatusCode
+	// are now decided at handler exit, NOT here. Pre-fix the
+	// W.bugfix Fix #1 set Action=ActionBlock+StatusCode=403
+	// unconditionally when h.Mode==block AND mr.Disruptive()
+	// — but Disruptive_ at this point only means "this rule
+	// has a disruptive action declared AND SecRuleEngine is
+	// On". On admin paths the 949* aggregator is excluded
+	// (manager-plane FP guard), so a disruptive 942 match
+	// FIRES onMatch with Disruptive=true but never actually
+	// interrupts the transaction — the request reaches the
+	// upstream and returns 200. Emitting BLOCK/403 here
+	// produced waf_event rows that contradicted the real
+	// HTTP status.
+	//
+	// New shape: append the event to the per-tx buffer with
+	// Action=ActionDetect + StatusCode=0 as placeholder. The
+	// flush defer at ServeHTTP exit walks the buffer and
+	// rewrites (Action, StatusCode) to the correct pair
+	// based on (h.Mode, tx.Interruption()).
+	bufRaw, ok := h.txBuffers.Load(mr.TransactionID())
+	if !ok {
+		// No buffer for this tx — happens on the rule-engine-
+		// off short-circuit path (ServeHTTP returns before
+		// Store fires) and on tests that hand-roll a tx
+		// without going through ServeHTTP. Fall back to the
+		// pre-fix emit shape (best-effort: the operator
+		// still sees the event in the activity log) so we
+		// don't silently drop the match.
+		fallbackEmit(h.RouteID, h.Mode, mr, rule)
+		return
+	}
+	buf := bufRaw.(*txEventBuffer)
+
+	ruleID := strconv.Itoa(rule.ID())
+	method, path, payload := requestSnippetFromMatch(mr)
+	buf.events = append(buf.events, Event{
+		Ts:            time.Now().UTC(),
+		RouteID:       h.RouteID,
+		RuleID:        ruleID,
+		Category:      CategoryForRule(ruleID),
+		Severity:      int(rule.Severity()),
+		SrcIP:         mr.ClientIPAddress(),
+		RequestMethod: method,
+		RequestPath:   Truncate(Redact(path), MaxRequestPathBytes),
+		PayloadSample: Truncate(Redact(payload), MaxPayloadSampleBytes),
+		// Action + StatusCode left as zero values — set by
+		// flushTxBuffer based on the final tx verdict.
+	})
+}
+
+// fallbackEmit is the pre-#R-WAF-EVENT-LABEL emit path,
+// preserved for the rule-engine-off short-circuit branch and
+// for hand-rolled-tx test paths that don't set up the per-tx
+// buffer. Block-mode emits BLOCK/403, detect-mode emits
+// DETECT/0 — the original (slightly buggy on admin paths)
+// label policy. Production traffic always goes through the
+// buffered path because ServeHTTP unconditionally Stores a
+// buffer post-NewTransaction.
+func fallbackEmit(routeID, mode string, mr types.MatchedRule, rule types.RuleMetadata) {
 	sink := getGlobalSink()
 	if sink == nil {
 		return
 	}
 	ruleID := strconv.Itoa(rule.ID())
 	method, path, payload := requestSnippetFromMatch(mr)
-
-	// W.bugfix Fix #1 — mode-aware Action + StatusCode. Pre-
-	// fix the sink emitted no Action and the frontend
-	// hardcoded "BLOCK 403" labels regardless of mode,
-	// producing the operator-facing false-positive perception
-	// that detect mode blocks. Set the fields at emit time
-	// from the handler's mode (known here; the post-block
-	// response status is NOT known — Coraza's onMatch fires
-	// during phase-1/2, before processResponse). StatusCode
-	// for detect mode is 0 (sentinel for "request reached
-	// upstream; actual status not captured at WAF layer");
-	// the frontend renders "—" for that case.
 	action := ActionDetect
 	statusCode := 0
-	if h.Mode == "block" {
+	if mode == "block" {
 		action = ActionBlock
 		statusCode = http.StatusForbidden
 	}
-
 	sink.Emit(Event{
 		Ts:            time.Now().UTC(),
-		RouteID:       h.RouteID,
+		RouteID:       routeID,
 		RuleID:        ruleID,
 		Category:      CategoryForRule(ruleID),
 		Severity:      int(rule.Severity()),
@@ -447,6 +544,60 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 		Action:        action,
 		StatusCode:    statusCode,
 	})
+}
+
+// flushTxBuffer walks the buffered events for a transaction
+// and Emits each with the correct (Action, StatusCode) tuple
+// computed from the handler mode + the transaction's final
+// interruption state. Called from ServeHTTP's defer chain
+// BEFORE tx.Close (which would recycle the *Transaction into
+// Coraza's sync.Pool).
+//
+// Decision matrix:
+//   block mode + interrupted → BLOCK + interruption.Status
+//                              (typically 403 from CRS 949110)
+//   block mode + NOT interrupted → DETECT + 200 (event fired
+//                                   but transaction continued;
+//                                   the admin-path FP guard
+//                                   scenario)
+//   detect mode → DETECT + 0 (sentinel: "request reached
+//                              upstream; status not captured
+//                              at WAF layer" — frontend
+//                              renders "—" for that case)
+func (h *ArenetWafHandler) flushTxBuffer(buf *txEventBuffer, interruption *types.Interruption) {
+	if len(buf.events) == 0 {
+		return
+	}
+	sink := getGlobalSink()
+	if sink == nil {
+		return
+	}
+
+	action := ActionDetect
+	statusCode := 0
+	if h.Mode == "block" {
+		if interruption != nil {
+			action = ActionBlock
+			statusCode = interruption.Status
+			if statusCode == 0 {
+				statusCode = http.StatusForbidden
+			}
+		} else {
+			// Block-mode + no actual interruption: this is
+			// the admin-path FP scenario. Operator sees the
+			// match in the activity log but the row
+			// truthfully says DETECT + 200 to match the
+			// HTTP outcome.
+			action = ActionDetect
+			statusCode = http.StatusOK
+		}
+	}
+
+	for i := range buf.events {
+		buf.events[i].Action = action
+		buf.events[i].StatusCode = statusCode
+		sink.Emit(buf.events[i])
+	}
 }
 
 // requestSnippetFromMatch extracts the method, path, and a
@@ -564,6 +715,31 @@ func (h *ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 	if tx.IsRuleEngineOff() {
 		return next.ServeHTTP(w, r)
 	}
+
+	// #R-WAF-EVENT-LABEL-BLOCK-VS-200 — stage per-tx event
+	// buffer BEFORE any rule evaluation so onMatch can find
+	// it via mr.TransactionID() lookup. Flush defer runs
+	// FIRST in LIFO order (added AFTER the tx.Close defer
+	// above) — critical so tx.Interruption() is still
+	// readable when flushTxBuffer fires; tx.Close pools the
+	// transaction and would clear the interruption state
+	// underneath us.
+	//
+	// Nested defer for Delete (D5 defensive): guarantees
+	// the buffer entry is removed from txBuffers even if
+	// flushTxBuffer panics. Without this, a panic would
+	// leak the entry; Coraza's tx.ID() generator
+	// (RandomString(19)) makes collision practically
+	// impossible, but a stale entry still costs memory and
+	// triggers a never-cleared sink Emit retry on the
+	// next eviction.
+	txID := tx.ID()
+	buf := &txEventBuffer{}
+	h.txBuffers.Store(txID, buf)
+	defer func() {
+		defer h.txBuffers.Delete(txID)
+		h.flushTxBuffer(buf, tx.Interruption())
+	}()
 
 	if h.SkipBodyInspection {
 		// Phase 4.5 — surfaced at DEBUG so operators tracing
