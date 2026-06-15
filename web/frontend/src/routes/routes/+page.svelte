@@ -29,6 +29,7 @@
 	import { countryName, matchCountries, type CountryMatch } from '$lib/data/countries';
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
+	import { auth } from '$lib/stores/auth.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
@@ -1256,6 +1257,17 @@
 				} else {
 					formError = err.message;
 				}
+			} else if (auth.state === 'locked') {
+				// Day 13 — #R-FRONTEND-PUT-NO-TIMEOUT layer B.
+				// If the session lock fired while the save was in
+				// flight (heartbeat 403 OR this very request's
+				// 403), the LockScreen overlay already mounted on
+				// top of the route panel. Suppress the toast — a
+				// second alert on top of the unlock dialog is
+				// noise + steals operator focus from the password
+				// prompt. The 403 is still logged at info level
+				// via the client interceptor; nothing is hidden,
+				// just deduplicated for the operator.
 			} else {
 				const msg = err instanceof ApiError ? err.message : String(err);
 				pushToast(msg, 'danger');

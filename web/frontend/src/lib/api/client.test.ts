@@ -200,3 +200,82 @@ describe('request: 204 No Content', () => {
 		expect(out).toBeUndefined();
 	});
 });
+
+// Day 13 — #R-FRONTEND-PUT-NO-TIMEOUT regression pins. The
+// request() helper now wraps every fetch in an AbortController
+// with a 30 s ceiling. These tests verify (a) that ceiling fires
+// when fetch stalls indefinitely, (b) the signature stays
+// backward-compatible for already-aborted-style native errors,
+// and (c) the AbortController properly cancels the underlying
+// fetch on timeout (signal.aborted state).
+
+describe('request: timeout aborts a stalled fetch', () => {
+	it('throws ApiError(kind=system) when fetch never resolves within the ceiling', async () => {
+		vi.useFakeTimers();
+		// Stalled fetch: returns a promise that rejects with
+		// AbortError only when the controller's signal aborts.
+		// This is what native fetch does when the AbortController
+		// it was given fires.
+		(globalThis as { fetch?: unknown }).fetch = vi.fn(
+			(_input: RequestInfo | URL, init?: RequestInit) =>
+				new Promise((_resolve, reject) => {
+					init?.signal?.addEventListener('abort', () => {
+						const err = new DOMException('Aborted', 'AbortError');
+						reject(err);
+					});
+				})
+		);
+
+		const pending = request<void>('PUT', '/routes/some-id', { foo: 1 }).catch(
+			(e: unknown) => e
+		);
+		// Advance the fake timer past REQUEST_TIMEOUT_MS (30 s).
+		await vi.advanceTimersByTimeAsync(30_001);
+		const err = (await pending) as ApiErrorType;
+		expect(err).toBeInstanceOf(ApiError);
+		expect(err.status).toBe(0);
+		expect(err.kind).toBe('system');
+		expect(err.message).toMatch(/timed out/);
+
+		vi.useRealTimers();
+	});
+});
+
+describe('request: passes a non-aborted AbortSignal on the happy path', () => {
+	it('signal.aborted stays false when the fetch resolves before the ceiling', async () => {
+		const fetchSpy = vi.fn(
+			async (_input: RequestInfo | URL, init?: RequestInit) => {
+				expect(init?.signal).toBeDefined();
+				expect((init?.signal as AbortSignal).aborted).toBe(false);
+				return new Response(JSON.stringify({}), {
+					status: 200,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+		);
+		(globalThis as { fetch?: unknown }).fetch = fetchSpy;
+		await request('GET', '/routes');
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('request: signature stays backward-compatible', () => {
+	it('keeps the (method, path, body?) shape — body=undefined skips Content-Type', async () => {
+		const fetchSpy = vi.fn(
+			async (_input: RequestInfo | URL, _init?: RequestInit) =>
+				new Response(JSON.stringify({}), {
+					status: 200,
+					headers: { 'Content-Type': 'application/json' }
+				})
+		);
+		(globalThis as { fetch?: unknown }).fetch = fetchSpy;
+		await request('GET', '/routes');
+		const init = fetchSpy.mock.calls[0][1];
+		// Body-less call: no Content-Type header, no body.
+		expect(init?.headers).toBeUndefined();
+		expect(init?.body).toBeUndefined();
+		// AbortController machinery is invisible to the caller —
+		// no change to the public shape.
+		expect((init?.signal as AbortSignal).aborted).toBe(false);
+	});
+});

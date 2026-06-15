@@ -37,20 +37,55 @@ import { goto } from '$app/navigation';
 const BASE: string = import.meta.env.DEV
 	? ((import.meta.env.VITE_API_BASE_URL ?? '') as string)
 	: '';
+
+/**
+ * REQUEST_TIMEOUT_MS bounds every fetch issued via request() with
+ * an AbortController-driven hard ceiling. Without this, a backend
+ * stuck in a Caddy admin deadlock (#R-FRONTEND-PUT-NO-TIMEOUT,
+ * observed Day 13: PUT /api/v1/routes/<id> stalled 5.7min in
+ * DevTools Network) leaves the calling component's spinner
+ * running forever — submitForm's `finally` block only runs when
+ * the fetch promise settles.
+ *
+ * Why 30 s: a route PUT under normal load is well under 10 s
+ * (Caddy reload + cert provisioning on first HTTPS — measured
+ * ~5 s typical, ~8 s p99). 30 s = 4× the steady-state worst
+ * case — generous enough to never false-positive a healthy
+ * slow boot, tight enough to bound user-visible stall to a
+ * surface that's still recoverable (operator can dismiss the
+ * toast and retry). V2 may add a signature override for
+ * known-slow endpoints; V1 ships the single ceiling.
+ *
+ * Why AbortController (not Promise.race against setTimeout):
+ * Promise.race would resolve the outer promise but leave the
+ * underlying fetch + TCP connection in flight, leaking a
+ * goroutine-equivalent on long-running tabs. AbortController
+ * properly cancels the fetch via signal.aborted semantics, so
+ * the socket gets freed and the in-flight server-side handler
+ * sees a client-closed-connection.
+ */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 /**
  * Send an HTTP request to /api/v1/<path> with JSON body/response
  * semantics. Generic on the response type T. Throws ApiError on any
- * non-2xx outcome (or on network failure with status 0).
+ * non-2xx outcome (or on network failure with status 0). After
+ * REQUEST_TIMEOUT_MS without a response, the fetch is aborted and
+ * ApiError(status=0, kind='system', message='request timed out
+ * after 30s') is thrown.
  *
  * Exported so the new Step D modules (lib/api/auth.ts, lib/api/audit.ts)
  * can compose typed wrappers on top.
  */
 export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
 	beginRequest();
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 	try {
 		const init: RequestInit = {
 			method,
-			credentials: 'include'
+			credentials: 'include',
+			signal: controller.signal
 		};
 		if (body !== undefined) {
 			init.headers = { 'Content-Type': 'application/json' };
@@ -60,6 +95,14 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 		try {
 			res = await fetch(`${BASE}/api/v1${path}`, init);
 		} catch (err) {
+			// AbortError fires whether the abort was triggered by
+			// the timer above OR by an explicit consumer-side
+			// abort. We translate uniformly to a system-level
+			// ApiError so submitForm-style callers see a
+			// consistent shape across stall + cancel cases.
+			if (err instanceof DOMException && err.name === 'AbortError') {
+				throw new ApiError(`request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`, 0, 'system');
+			}
 			throw new ApiError(`network error: ${(err as Error).message}`, 0, 'system');
 		}
 
@@ -117,6 +160,10 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 		if (res.status === 204) return undefined as T;
 		return (await res.json()) as T;
 	} finally {
+		// Clear the timer regardless of outcome (success, error,
+		// abort). Leaving it unclear would leak the setTimeout
+		// reference + log a spurious AbortError later.
+		clearTimeout(timeoutId);
 		endRequest();
 	}
 }

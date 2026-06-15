@@ -43,7 +43,7 @@ import userEvent from '@testing-library/user-event';
 // vi.hoisted form so we can keep the static `import Page from`
 // at the top of this file).
 
-const { toastMock, apiMock, settingsMock } = vi.hoisted(() => ({
+const { toastMock, apiMock, settingsMock, authMock } = vi.hoisted(() => ({
 	toastMock: { pushToast: vi.fn() },
 	apiMock: {
 		listRoutes: vi.fn(),
@@ -57,6 +57,16 @@ const { toastMock, apiMock, settingsMock } = vi.hoisted(() => ({
 	},
 	settingsMock: {
 		getDNSProviderOVH: vi.fn()
+	},
+	// Day 13 — #R-FRONTEND-PUT-NO-TIMEOUT layer B. submitForm
+	// reads auth.state to decide whether to suppress the
+	// danger toast on lock-screen overlap; tests flip
+	// authMock.state to drive the branch.
+	authMock: {
+		user: null as null | { id: string; role: 'admin' | 'viewer' },
+		state: 'authenticated' as 'authenticated' | 'anonymous' | 'locked' | 'unknown',
+		clear: vi.fn(),
+		setLocked: vi.fn()
 	}
 }));
 
@@ -92,6 +102,14 @@ vi.mock('$lib/api/settings', () => ({
 	settingsApi: {
 		getDNSProviderOVH: () => settingsMock.getDNSProviderOVH()
 	}
+}));
+
+// Day 13 — #R-FRONTEND-PUT-NO-TIMEOUT layer B. The page now
+// reads auth.state to decide whether to suppress the danger
+// toast on session-locked-during-save. Mock the store so tests
+// can flip the state.
+vi.mock('$lib/stores/auth.svelte', () => ({
+	auth: authMock
 }));
 
 import { ApiError } from '$lib/api/types';
@@ -160,6 +178,13 @@ beforeEach(() => {
 	apiMock.deleteRoute.mockReset();
 	apiMock.testUpstream.mockReset();
 	settingsMock.getDNSProviderOVH.mockReset();
+	// Day 13 — auth store defaults: every test starts in
+	// authenticated state. Tests exercising the lock-screen-
+	// during-save branch flip authMock.state = 'locked' before
+	// the submit fires.
+	authMock.state = 'authenticated';
+	authMock.clear.mockReset();
+	authMock.setLocked.mockReset();
 
 	// Sensible defaults so tests that don't override see an empty
 	// page (no routes) and a not-configured DNS provider.
@@ -2080,5 +2105,86 @@ describe('Routes page — Phase 4.5 uploadStreamingMode toggle', () => {
 		const payload = apiMock.createRoute.mock.calls[0][0];
 		expect(payload.uploadStreamingMode).toBe(true);
 		expect(payload.wafMode).toBe('block');
+	});
+});
+
+// --- Day 13 #R-FRONTEND-PUT-NO-TIMEOUT — submitForm error
+// handling. Two pins:
+//   1. Timeout (system-kind ApiError) → spinner clears + danger
+//      toast surfaces the actionable message.
+//   2. Locked state after the await → spinner clears + NO
+//      toast (LockScreen overlay already informs the operator).
+//
+// Both branches go through the same try/catch/finally —
+// regressions would either leave the spinner running (worst
+// case, the operator-reported symptom) or double-notify on
+// lock (LockScreen + danger toast competing for focus).
+
+describe('Routes page — submitForm error handling (#R-FRONTEND-PUT-NO-TIMEOUT)', () => {
+	it('shows danger toast + closes spinner when backend stalls past the timeout', async () => {
+		// updateRoute rejects with the exact ApiError shape the
+		// request() helper throws on AbortController timeout.
+		apiMock.updateRoute.mockRejectedValue(
+			new ApiError('request timed out after 30s', 0, 'system')
+		);
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-timeout', host: 'timeout.example.com' })
+		]);
+
+		render(Page);
+		const hostCell = await screen.findByText('timeout.example.com');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		// Toast surfaces the timeout message verbatim — operator
+		// reads "request timed out after 30s" and knows the
+		// backend was unresponsive, not that they did something
+		// wrong.
+		expect(toastMock.pushToast).toHaveBeenCalledWith(
+			'request timed out after 30s',
+			'danger'
+		);
+		// Spinner gone: the Save button is no longer in its
+		// loading state. We assert via the overlay test-id
+		// which only mounts while submitting=true.
+		expect(screen.queryByTestId('route-save-overlay')).toBeNull();
+	});
+
+	it('suppresses the danger toast when auth.state is "locked" after the await', async () => {
+		// The PUT returned a 403 session-locked; the client
+		// interceptor called auth.setLocked() (which flipped the
+		// store to 'locked') and threw ApiError(403, forbidden).
+		// submitForm must see auth.state==='locked' in its catch
+		// and skip the toast — the LockScreen overlay is the
+		// authoritative operator signal.
+		authMock.state = 'locked';
+		apiMock.updateRoute.mockRejectedValue(
+			new ApiError('session locked', 403, 'forbidden')
+		);
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-lock', host: 'lock.example.com' })
+		]);
+
+		render(Page);
+		const hostCell = await screen.findByText('lock.example.com');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		// No double-notify: pushToast not called for the lock
+		// case. (The LockScreen overlay is layout-level, not
+		// asserted here — its mounting is covered by
+		// auth.test.ts + layout tests.)
+		expect(toastMock.pushToast).not.toHaveBeenCalled();
+		// Spinner still cleared — finally ran even on the
+		// suppressed-toast branch.
+		expect(screen.queryByTestId('route-save-overlay')).toBeNull();
 	});
 });
