@@ -56,7 +56,8 @@
 		| 'certs'
 		| 'users'
 		| 'settings'
-		| 'audit';
+		| 'audit'
+		| 'alerting';
 
 	type NavItem = {
 		href: string;
@@ -92,7 +93,13 @@
 			items: [
 				{ href: '/waf', label: 'WAF', icon: 'waf' },
 				{ href: '/security', label: 'Security', icon: 'security' },
-				{ href: '/certs', label: 'Certificates', icon: 'certs' }
+				{ href: '/certs', label: 'Certificates', icon: 'certs' },
+				// AL.4.b.1 — alerting subsystem entry. Sits
+				// next to Security/Certificates since rules
+				// typically fire on security/cert signals.
+				// Page handles its own admin/viewer gating
+				// (admin-only writes, viewer-readable history).
+				{ href: '/alerting', label: 'Alerting', icon: 'alerting' }
 			]
 		},
 		{
@@ -200,6 +207,10 @@
 			<rect x="3.5" y="3" width="9" height="11" rx="1" />
 			<rect x="6" y="1.75" width="4" height="2.5" rx="0.5" fill="currentColor" stroke="none" />
 			<path d="M5.5 7h5M5.5 9.25h5M5.5 11.5h3" />
+		{:else if icon === 'alerting'}
+			<!-- Bell glyph: dome + base + clapper. AL.4.b.1. -->
+			<path d="M8 2c-2.5 0-4 1.7-4 4v3l-1.5 2h11L12 9V6c0-2.3-1.5-4-4-4z" />
+			<path d="M6.5 13.5a1.5 1.5 0 003 0" />
 		{/if}
 	</svg>
 {/snippet}
