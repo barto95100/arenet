@@ -231,6 +231,17 @@ type Handler struct {
 	// wire a real Dispatcher.
 	alertingDispatcher AlertingDispatcher
 
+	// alertingSources (Step AL.3b) is the Source registry
+	// the rule CRUD validator reaches into to verify
+	// AlertRule.Source is registered + the rule's
+	// SourceParams shape is valid for that source.
+	// nil-tolerant: when nil, the validator skips the
+	// source-registry check (intrinsic + channel + template
+	// checks still run). cmd/arenet/main.go wires the
+	// production registry via SetAlertingSourceLookup; the
+	// handler test env leaves it nil.
+	alertingSources alerting.SourceLookup
+
 	// apiTokens (Phase 4) is the read+validate surface for
 	// service-account bearer tokens. nil-tolerant: when nil, the
 	// SoftAuth middleware skips the Bearer fallback entirely
@@ -570,6 +581,16 @@ func (h *Handler) SetSystemHealthChecker(s SystemHealthChecker) {
 // a real dispatcher).
 func (h *Handler) SetAlertingDispatcher(d AlertingDispatcher) {
 	h.alertingDispatcher = d
+}
+
+// SetAlertingSourceLookup (Step AL.3b) attaches the
+// Source registry the rule CRUD validator uses to
+// confirm a rule's Source name is registered + the
+// rule's SourceParams shape is accepted by that source.
+// Pass nil to skip the source-side check (handler tests
+// that don't wire a registry).
+func (h *Handler) SetAlertingSourceLookup(s alerting.SourceLookup) {
+	h.alertingSources = s
 }
 
 // SetAPITokenStore (Phase 4) attaches the service-account API

@@ -112,6 +112,20 @@ const (
 	ActionAlertChannelUpdated = "alert_channel_updated"
 	ActionAlertChannelDeleted = "alert_channel_deleted"
 
+	// Step AL.3b — alerting rule lifecycle (3). Emitted
+	// by the operator-facing CRUD handlers in
+	// internal/api/alerting_rules.go on successful
+	// create / update / delete. The /test endpoint does
+	// NOT emit an audit event (operator-pressed test is
+	// a transient probe, not a state mutation).
+	//
+	// Templates are operator-supplied text/template
+	// strings; they're not expected to carry secrets, so
+	// full diff cleartext in BeforeJSON / AfterJSON.
+	ActionAlertRuleCreated = "alert_rule_created"
+	ActionAlertRuleUpdated = "alert_rule_updated"
+	ActionAlertRuleDeleted = "alert_rule_deleted"
+
 	// Step K.3 — backup / restore (3). The restore is significantly
 	// more destructive than the export; both must be audited and the
 	// failure path emits its own dedicated event so a rejected
@@ -228,6 +242,9 @@ var allActions = []string{
 	ActionAlertChannelCreated,
 	ActionAlertChannelUpdated,
 	ActionAlertChannelDeleted,
+	ActionAlertRuleCreated,
+	ActionAlertRuleUpdated,
+	ActionAlertRuleDeleted,
 	ActionConfigExported,
 	ActionConfigRestored,
 	ActionConfigRestoredRejected,

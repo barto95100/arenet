@@ -1355,6 +1355,12 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	if err := alertingRegistry.Register(alerting.NewSystemHealthSource(healthChecker)); err != nil {
 		logger.Warn("alerting: register system_health source failed", "err", err)
 	}
+	// Step AL.3b — expose the source registry to the
+	// rule CRUD validator. nil-tolerant on the handler
+	// side, but in production every wired source must
+	// resolve so the operator's "create rule with source
+	// = waf_event_rate" path doesn't 400 spuriously.
+	apiHandler.SetAlertingSourceLookup(alertingRegistry)
 	alertingWatcherCooldown := alerting.NewCooldownLRU(nil)
 	alertingWatcher, alertingWatcherErr := alerting.NewWatcher(alerting.WatcherConfig{
 		Store:      store,

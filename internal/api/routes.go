@@ -435,6 +435,21 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Put("/settings/alerting/channels/{id}", h.updateAlertChannel)
 				r.Delete("/settings/alerting/channels/{id}", h.deleteAlertChannel)
 				r.Post("/settings/alerting/channels/{id}/test", h.testAlertChannel)
+				// Step AL.3b — alerting rule CRUD + /test.
+				// Admin-only (same trust posture as
+				// channels: rules pick severity + channels
+				// + templates; viewer must not mutate). The
+				// /test endpoint force-evaluates the rule
+				// via the dispatcher, bypassing the
+				// cooldown LRU so the operator can re-test
+				// a recently-fired rule without waiting
+				// out the silence window.
+				r.Get("/settings/alerting/rules", h.listAlertRules)
+				r.Post("/settings/alerting/rules", h.createAlertRule)
+				r.Get("/settings/alerting/rules/{id}", h.getAlertRule)
+				r.Put("/settings/alerting/rules/{id}", h.updateAlertRule)
+				r.Delete("/settings/alerting/rules/{id}", h.deleteAlertRule)
+				r.Post("/settings/alerting/rules/{id}/test", h.testAlertRule)
 			})
 		})
 	})

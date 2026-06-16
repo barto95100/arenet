@@ -25,9 +25,9 @@ import "testing"
 // actions without updating the spec / decisions doc is a process
 // violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 46
+	const wantCount = 49
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3)", got, wantCount)
 	}
 }
 
@@ -157,6 +157,14 @@ func TestAllActions_ExactSet(t *testing.T) {
 		"alert_channel_created": true,
 		"alert_channel_updated": true,
 		"alert_channel_deleted": true,
+		// Step AL.3b (+3) — alerting rule lifecycle.
+		// Wired by internal/api/alerting_rules.go CRUD
+		// handlers; templates are operator-supplied
+		// text/template strings (not secret-bearing) so
+		// audit before/after carries the full diff.
+		"alert_rule_created": true,
+		"alert_rule_updated": true,
+		"alert_rule_deleted": true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {
