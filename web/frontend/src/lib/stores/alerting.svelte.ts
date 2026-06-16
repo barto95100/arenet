@@ -166,7 +166,14 @@ function createChannelsStore() {
 
 export const channelsStore = createChannelsStore();
 
-// --- rulesStore (stub for AL.4.b.3) ------------------------
+// --- rulesStore --------------------------------------------
+//
+// Full CRUD wired in AL.4.b.3 (mirrors the AL.4.b.2
+// channelsStore). create/update/delete update the local
+// list immediately so the table doesn't blink during the
+// round-trip; the RulesTab also reloads after each
+// successful mutation to pick up server-side timestamps
+// (LastEvalAt, LastFiredAt) that the watcher writes.
 
 interface RulesState {
 	rules: AlertRule[];
@@ -194,11 +201,43 @@ function createRulesStore() {
 		}
 	}
 
+	async function create(req: Parameters<typeof alertingApi.createRule>[0]): Promise<AlertRule> {
+		const created = await alertingApi.createRule(req);
+		state.rules = [...state.rules, created];
+		return created;
+	}
+
+	async function update(
+		id: string,
+		req: Parameters<typeof alertingApi.updateRule>[1]
+	): Promise<AlertRule> {
+		const updated = await alertingApi.updateRule(id, req);
+		state.rules = state.rules.map((r) => (r.id === id ? updated : r));
+		return updated;
+	}
+
+	async function remove(id: string): Promise<void> {
+		await alertingApi.deleteRule(id);
+		state.rules = state.rules.filter((r) => r.id !== id);
+	}
+
+	async function test(id: string) {
+		// Pass-through; LastFiredAt updates server-side
+		// (the dispatcher + watcher write back), picked up
+		// on next load(). Returns the per-channel
+		// fired/skipped/errors result for the toast.
+		return alertingApi.testRule(id);
+	}
+
 	return {
 		get state() {
 			return state;
 		},
-		load
+		load,
+		create,
+		update,
+		remove,
+		test
 	};
 }
 
