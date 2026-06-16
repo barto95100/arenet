@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"runtime/pprof"
@@ -997,6 +998,19 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// configs is preserved on default installs.
 		if len(opts.NormalTrafficExcludePaths) > 0 {
 			metricsHandler["exclude_paths"] = opts.NormalTrafficExcludePaths
+		}
+		// Topology Plan B Phase 2.1 — thread the route's
+		// lowercased + port-stripped + deduped known-host set
+		// into the per-route metricsHandler emit. The Phase 1
+		// middleware (commit af48ad6) consumes this via
+		// RouteMetricsHandler.KnownHosts to gate the per-host
+		// counter bump. Field is omitted when the set is
+		// empty (storage-layer impossible since validate()
+		// rejects empty Host, but defensively kept omitempty
+		// so any future degraded path stays wire-compatible
+		// with pre-Phase-2.1 configs).
+		if known := buildKnownHosts(r); len(known) > 0 {
+			metricsHandler["known_hosts"] = known
 		}
 		// Step J.1: emit load_balancing.selection_policy unconditionally
 		// when at least one upstream is present. §3.2 explicitly notes
@@ -2176,6 +2190,75 @@ func buildRedirectRoute(routeID, host string, cb countryblock.Config, hosts []st
 // The arenet_waf module appends it itself based on its Mode
 // field so the module owns the policy decision (we don't
 // want two sources of truth disagreeing).
+// buildKnownHosts assembles the lowercased + port-stripped +
+// deduplicated host set the per-route arenet_routemetrics handler
+// uses to validate r.Host before bumping its per-host counter
+// (Topology Plan B Phase 2.1).
+//
+// Input: storage.Route.AllHosts() → [Host, ...Aliases] in
+// declared order. The primary host is always first.
+//
+// Output rules:
+//   - lowercase every entry (case-insensitive DNS matching, RFC
+//     1035; the Phase 1 middleware does ToLower on r.Host before
+//     the map lookup, so the cached set must be lowercase too).
+//   - strip a :port suffix if present (defensive — storage's
+//     validate() doesn't reject port-bearing hostnames today, so
+//     an operator who typed "example.com:443" in the API would
+//     otherwise produce a hostname the middleware's
+//     net.SplitHostPort path strips at request time, causing a
+//     silent miss).
+//   - drop empty entries (post-normalisation).
+//   - preserve first-seen order (primary first, then aliases in
+//     declared order) so a future API surface that echoes
+//     known_hosts back has a stable shape.
+//   - de-duplicate (e.g., "Example.com" + "example.com" reduce
+//     to one entry; the deterministic-order test pins this).
+//
+// Returns nil when every entry normalises to empty — keeps the
+// metricsHandler emit byte-equal to the pre-Phase-2.1 shape when
+// the storage layer has a degraded row (Host == "" can only
+// happen via direct BoltDB write bypass; validate() rejects it).
+func buildKnownHosts(r storage.Route) []string {
+	hosts := r.AllHosts()
+	if len(hosts) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(hosts))
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		norm := normalizeKnownHost(h)
+		if norm == "" {
+			continue
+		}
+		if _, dup := seen[norm]; dup {
+			continue
+		}
+		seen[norm] = struct{}{}
+		out = append(out, norm)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// normalizeKnownHost lowercases + strips :port from one entry.
+// Split out so the per-entry semantics are unit-testable
+// independently of the dedupe / order logic.
+func normalizeKnownHost(h string) string {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return ""
+	}
+	// Strip port if present. net.SplitHostPort errors when there's
+	// no colon, so fall through to the raw value on error.
+	if hostOnly, _, err := net.SplitHostPort(h); err == nil {
+		h = hostOnly
+	}
+	return strings.ToLower(h)
+}
+
 func buildWAFHandler(routeID, host, mode string, skipBody bool) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
