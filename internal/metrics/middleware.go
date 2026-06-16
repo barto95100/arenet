@@ -155,10 +155,38 @@ type RouteMetricsHandler struct {
 	// Empty (default) means only the hardcoded list applies.
 	ExcludePaths []string `json:"exclude_paths,omitempty"`
 
+	// KnownHosts is the lowercase set of hostnames this route
+	// authoritatively serves (primary Host + every alias).
+	// Topology Plan B Phase 1 addition.
+	//
+	// Used by ServeHTTP to gate the per-host counter bump in
+	// Registry.IncByHost — a request whose r.Host (lowercased,
+	// port-stripped) is NOT in this set still bumps the route
+	// counter but is dropped from the host counter, defending
+	// against DNS-rebinding probes / direct-IP requests / bad
+	// routing configs from polluting the per-alias histogram
+	// with garbage hostnames.
+	//
+	// Empty / absent (pre-Plan-B Caddy config) makes the
+	// middleware fall back to the legacy Inc path (route counter
+	// only, no host bump). This preserves byte-equality with
+	// pre-Plan-B configs for routes the caller hasn't yet
+	// extended.
+	//
+	// Caddymgr is responsible for lowercasing every entry at
+	// emit time; the middleware does NOT re-normalise to keep
+	// the hot path lookup O(1) via a map cached in Provision.
+	KnownHosts []string `json:"known_hosts,omitempty"`
+
 	// registry is resolved at Provision time. Not serialized: Caddy
 	// instantiates modules from JSON and cannot inject Go pointers
 	// (spec §3.4).
 	registry *Registry
+
+	// knownHostSet is the O(1) lookup view of KnownHosts, built
+	// once at Provision. nil when KnownHosts is empty / absent
+	// (legacy path: no per-host bump). Topology Plan B Phase 1.
+	knownHostSet map[string]struct{}
 
 	// V.1.3 install-order constraint: the geo bus +
 	// enricher + DefaultNormalSink are constructed in
@@ -197,6 +225,17 @@ func (h *RouteMetricsHandler) Provision(_ caddy.Context) error {
 		return ErrRegistryNotInstalled
 	}
 	h.registry = r
+	// Phase 1 — build the O(1) host lookup. Caddymgr is
+	// expected to emit lowercased entries; we tolerate mixed
+	// case defensively (strings.ToLower is a no-op on already-
+	// lowercase input, so the cost is negligible). nil-keep
+	// when no entries so ServeHTTP can short-circuit cheaply.
+	if len(h.KnownHosts) > 0 {
+		h.knownHostSet = make(map[string]struct{}, len(h.KnownHosts))
+		for _, k := range h.KnownHosts {
+			h.knownHostSet[strings.ToLower(k)] = struct{}{}
+		}
+	}
 	return nil
 }
 
@@ -230,9 +269,22 @@ func (h *RouteMetricsHandler) ServeHTTP(
 ) error {
 	rec := newStatusRecorder(w)
 	start := time.Now()
+	// Phase 1 — capture r.Host now (before next.ServeHTTP
+	// runs). Some downstream handlers may mutate the request
+	// header set; reading at entry pins the value the matcher
+	// originally dispatched on. The host is also resolved
+	// against the route's KnownHosts BEFORE the defer fires so
+	// the per-host bump only happens for recognised hosts.
+	matchedHost := h.resolveHost(r)
 	defer func() {
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
-		h.registry.Inc(h.RouteID, rec.status, durMs)
+		// Phase 1 — IncByHost replaces Inc. When matchedHost
+		// is "" (legacy KnownHosts-empty path OR host header
+		// failed membership check), IncByHost bumps the route
+		// counter only — identical to the pre-Phase-1 Inc
+		// behavior. So this swap is wire-compatible for every
+		// route that doesn't yet have KnownHosts emitted.
+		h.registry.IncByHost(h.RouteID, matchedHost, rec.status, durMs)
 
 		// V.1.2 / V.1.3 — normal-traffic geo emission. Read
 		// the sink LIVE from the global atomic pointer; a
@@ -291,6 +343,43 @@ func (h *RouteMetricsHandler) eligibleForNormal(r *http.Request, status int) boo
 		}
 	}
 	return true
+}
+
+// resolveHost extracts the lowercased + port-stripped host from
+// r.Host and validates it against the route's KnownHosts set.
+// Returns the canonical host on a successful match, or "" when:
+//   - the route has no KnownHosts emitted (legacy / pre-Phase-1
+//     Caddy config — the middleware then bumps the route counter
+//     only via IncByHost("", ...))
+//   - r.Host is empty (HTTP/0.9 or malformed request)
+//   - the lowercased host is not in the KnownHosts set
+//     (DNS-rebinding probe, direct-IP request, bad routing config)
+//
+// Topology Plan B Phase 1. Pure function on the handler's cached
+// knownHostSet; no allocation in the steady state when the host
+// is already lowercase and has no port suffix (the strings.Index
+// + ToLower compare are cheap fast-path checks).
+func (h *RouteMetricsHandler) resolveHost(r *http.Request) string {
+	if h.knownHostSet == nil || r.Host == "" {
+		return ""
+	}
+	raw := r.Host
+	// Strip port if present. net.SplitHostPort errors when the
+	// input has no colon (the common case for HTTPS where Caddy
+	// strips the port before the handler), so fall through to
+	// the raw value when split fails.
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		raw = host
+	}
+	// IPv6 literals arrive as "[::1]:443" which SplitHostPort
+	// returns as "::1" with no brackets — already correct.
+	// Bare IPv6 in r.Host (rare, but RFC-permitted) like "[::1]"
+	// stays bracketed; we lowercase + lookup as-is.
+	host := strings.ToLower(raw)
+	if _, ok := h.knownHostSet[host]; !ok {
+		return ""
+	}
+	return host
 }
 
 // Interface guards: compile-time assertions of the Caddy interfaces

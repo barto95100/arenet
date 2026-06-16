@@ -56,6 +56,30 @@ type Delta struct {
 	LatencyP95Ms int32  `json:"latencyP95Ms,omitempty"`
 }
 
+// HostDelta is the per-(routeID, host) counter difference produced
+// by one SnapshotHosts call. Topology Plan B Phase 1 addition.
+//
+// Same counter semantics as Delta (per-tick reset, non-atomic
+// (Reqs, Errs) pair). The RouteID + Host pair is the natural key
+// the Phase 2 sliding window will index by; bundling them inside
+// the value keeps the API symmetric with the per-route Snapshot
+// (which uses the map key for routeID).
+//
+// HostDelta is emitted only for (routeID, host) pairs that received
+// at least one IncByHost call with non-empty host since the cell
+// was created. The Phase 1 middleware ensures host is non-empty
+// only after a successful membership check against the route's
+// KnownHosts set — so HostDelta entries are necessarily
+// well-formed hostnames known to the storage layer.
+type HostDelta struct {
+	RouteID      string `json:"routeId"`
+	Host         string `json:"host"`
+	Reqs         uint64 `json:"reqs"`
+	Errs         uint64 `json:"errs"` // 5xx
+	Errs4xx      uint64 `json:"errs4xx,omitempty"`
+	LatencyP95Ms int32  `json:"latencyP95Ms,omitempty"`
+}
+
 // RouteSnapshot is one route's entry in the per-tick Snapshot. It
 // joins the Registry's per-route Delta with the route's metadata
 // from storage (host, upstream) so the WebSocket frame is

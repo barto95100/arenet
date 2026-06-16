@@ -45,6 +45,29 @@ import (
 type Registry struct {
 	mu    sync.RWMutex
 	cells map[string]*counterCell
+
+	// hostCells holds per-(routeID, host) counters introduced by
+	// Topology Plan B Phase 1. Outer key = routeID, inner key =
+	// lowercased + port-stripped host (matched against the route's
+	// known-hosts set by the middleware before bumping).
+	//
+	// Lifecycle:
+	//   - Outer key created lazily by IncByHost on the first valid
+	//     hit for a (routeID, host) pair the middleware accepts.
+	//   - Outer key dropped by Sync when the routeID disappears
+	//     (same as the route-level cells map). The inner map is
+	//     released with the outer.
+	//   - Inner cells are not individually pruned: a route may
+	//     stop receiving traffic for one of its aliases without
+	//     the operator removing the alias. The host-set is bounded
+	//     by storage.Route.Aliases length (max ~tens per route on
+	//     a homelab), so unbounded growth is not a risk.
+	//
+	// Snapshot drains the inner cells alongside the route cells.
+	// The per-host counter is ADDITIONAL — the route cell is
+	// ALWAYS bumped on every request, the host cell only when
+	// the middleware passes a non-empty host argument.
+	hostCells map[string]map[string]*counterCell
 }
 
 // counterCell holds the atomic counters for a single route. Counter
@@ -148,7 +171,8 @@ func (h *latencyHist) drainP95() int32 {
 // NewRegistry directly except in tests and in cmd/arenet's main.
 func NewRegistry() *Registry {
 	return &Registry{
-		cells: make(map[string]*counterCell),
+		cells:     make(map[string]*counterCell),
+		hostCells: make(map[string]map[string]*counterCell),
 	}
 }
 
@@ -184,6 +208,95 @@ func (r *Registry) Inc(routeID string, status int, durMs float64) {
 	cell.latency.observe(durMs)
 }
 
+// IncByHost records a single request against routeID AND, when host
+// is non-empty, against the (routeID, host) pair. Topology Plan B
+// Phase 1.
+//
+// Semantics:
+//   - The route-level cell is ALWAYS bumped (same as Inc), so a
+//     request whose Host header doesn't match any known host still
+//     counts at the route level. The route counter remains the
+//     authoritative request total.
+//   - The host-level cell is bumped ONLY when host is non-empty.
+//     The middleware passes "" when r.Host fails the membership
+//     check against the route's known-hosts set, so the host cell
+//     is never created for unrecognised values.
+//   - Host string must already be normalised (lowercased,
+//     port-stripped). Defensive normalisation here would mask
+//     middleware bugs; the contract is that the caller has done
+//     the work.
+//
+// If routeID is unknown to the Registry, the entire call is a
+// silent no-op (same semantics as Inc).
+//
+// Hot path. No allocation in the steady-state (the hostCells inner
+// map is created lazily on the first hit for a host; subsequent
+// hits use the cached cell pointer via the RLock + atomic add
+// pattern).
+func (r *Registry) IncByHost(routeID, host string, status int, durMs float64) {
+	r.mu.RLock()
+	routeCell, ok := r.cells[routeID]
+	if !ok {
+		r.mu.RUnlock()
+		return
+	}
+	var hostCell *counterCell
+	if host != "" {
+		if inner, hasInner := r.hostCells[routeID]; hasInner {
+			hostCell = inner[host]
+		}
+	}
+	r.mu.RUnlock()
+
+	// Route-level bump (always).
+	atomic.AddUint64(&routeCell.reqs, 1)
+	switch {
+	case status >= 500:
+		atomic.AddUint64(&routeCell.errs, 1)
+	case status >= 400:
+		atomic.AddUint64(&routeCell.errs4xx, 1)
+	}
+	routeCell.latency.observe(durMs)
+
+	if host == "" {
+		return
+	}
+
+	// Lazy creation of the host cell on first hit. The double-check
+	// pattern under the write lock is necessary because two
+	// concurrent first-hits for the same (routeID, host) would
+	// otherwise race on map insertion.
+	if hostCell == nil {
+		r.mu.Lock()
+		// Re-check the route cell exists in case Sync ran between
+		// the RUnlock above and the Lock here.
+		if _, stillOK := r.cells[routeID]; !stillOK {
+			r.mu.Unlock()
+			return
+		}
+		inner, hasInner := r.hostCells[routeID]
+		if !hasInner {
+			inner = make(map[string]*counterCell, 1)
+			r.hostCells[routeID] = inner
+		}
+		hostCell = inner[host]
+		if hostCell == nil {
+			hostCell = &counterCell{}
+			inner[host] = hostCell
+		}
+		r.mu.Unlock()
+	}
+
+	atomic.AddUint64(&hostCell.reqs, 1)
+	switch {
+	case status >= 500:
+		atomic.AddUint64(&hostCell.errs, 1)
+	case status >= 400:
+		atomic.AddUint64(&hostCell.errs4xx, 1)
+	}
+	hostCell.latency.observe(durMs)
+}
+
 // Sync reconciles the Registry's cells with the canonical list of
 // current route IDs. Called by caddymgr after each successful Caddy
 // reload (spec §4.1). One write-lock acquisition per reload,
@@ -215,6 +328,16 @@ func (r *Registry) Sync(routeIDs []string) {
 	for id := range r.cells {
 		if _, keep := wanted[id]; !keep {
 			delete(r.cells, id)
+		}
+	}
+	// Phase 1 — Topology Plan B: drop the per-host counters
+	// belonging to routes that just disappeared. Inner maps are
+	// released wholesale (no per-host pruning required — the host
+	// set is bounded by the route's alias list, which the
+	// middleware enforces via the KnownHosts membership check).
+	for id := range r.hostCells {
+		if _, keep := wanted[id]; !keep {
+			delete(r.hostCells, id)
 		}
 	}
 }
@@ -252,6 +375,54 @@ func (r *Registry) Snapshot() map[string]Delta {
 		errs4xx := atomic.SwapUint64(&cell.errs4xx, 0)
 		p95 := cell.latency.drainP95()
 		out[id] = Delta{Reqs: reqs, Errs: errs, Errs4xx: errs4xx, LatencyP95Ms: p95}
+	}
+	return out
+}
+
+// SnapshotHosts returns the per-(routeID, host) deltas drained
+// since the previous SnapshotHosts call. Topology Plan B Phase 1
+// addition.
+//
+// Semantics mirror Snapshot exactly:
+//   - One entry per (routeID, host) pair that has a cell. A cell
+//     with zero counts is still returned — the consumer
+//     (Phase 2 sliding window) decides whether to surface zero
+//     rows or drop them.
+//   - Atomic.Swap drain: a concurrent IncByHost either lands in
+//     this drain or the next, no count is lost.
+//   - The (Reqs, Errs) pair is not atomic together (same caveat as
+//     route-level Snapshot, spec §11.8). Consumers apply the same
+//     errRate clamp.
+//
+// Returns a fresh, non-nil slice. An empty Registry returns an
+// empty (non-nil) slice. Iteration order is unspecified.
+//
+// SnapshotHosts and Snapshot are independent — each maintains its
+// own drain state on its own cells. Calling them in either order
+// at the same tick is correct; the route counter and the sum of
+// its host counters will not strictly agree (the host-counter sum
+// is ≤ route-counter, since requests with unrecognised Host
+// headers still bump the route but not any host).
+func (r *Registry) SnapshotHosts() []HostDelta {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]HostDelta, 0)
+	for routeID, inner := range r.hostCells {
+		for host, cell := range inner {
+			reqs := atomic.SwapUint64(&cell.reqs, 0)
+			errs := atomic.SwapUint64(&cell.errs, 0)
+			errs4xx := atomic.SwapUint64(&cell.errs4xx, 0)
+			p95 := cell.latency.drainP95()
+			out = append(out, HostDelta{
+				RouteID:      routeID,
+				Host:         host,
+				Reqs:         reqs,
+				Errs:         errs,
+				Errs4xx:      errs4xx,
+				LatencyP95Ms: p95,
+			})
+		}
 	}
 	return out
 }
