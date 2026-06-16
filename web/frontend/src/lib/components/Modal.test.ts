@@ -90,4 +90,40 @@ describe('Modal', () => {
 		await user.click(backdrop);
 		expect(onClose).toHaveBeenCalledTimes(1);
 	});
+
+	// AL.4.b.2 — backward-compat pin: default width = 'md'
+	// must keep the pre-extension max-w-md class. If a future
+	// refactor changes the default token, every existing
+	// caller (ConfirmDialog, ChangePasswordModal, ...) would
+	// silently get a different width — this test catches
+	// that regression.
+	it('renders with max-w-md by default (backward-compat for unmodified callers)', () => {
+		render(Modal, {
+			open: true,
+			title: 'Default width',
+			onClose: vi.fn(),
+			children: textSnippet('Body')
+		});
+		const dialog = screen.getByRole('dialog');
+		expect(dialog.className).toContain('max-w-md');
+		expect(dialog.className).not.toContain('max-w-2xl');
+		expect(dialog.className).not.toContain('max-w-4xl');
+	});
+
+	// AL.4.b.2 — width="lg" maps to max-w-2xl. Pins the
+	// token → class mapping so AL.4.b.2 ChannelModal +
+	// AL.4.b.3 RuleModal render at the wider layout they
+	// were designed against.
+	it('renders with max-w-2xl when width="lg"', () => {
+		render(Modal, {
+			open: true,
+			title: 'Wide modal',
+			onClose: vi.fn(),
+			children: textSnippet('Body'),
+			width: 'lg'
+		});
+		const dialog = screen.getByRole('dialog');
+		expect(dialog.className).toContain('max-w-2xl');
+		expect(dialog.className).not.toContain('max-w-md');
+	});
 });

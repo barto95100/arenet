@@ -8,15 +8,44 @@
 	import { fade, fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 
+	// AL.4.b.2 — `width` is a new additive prop. Default
+	// 'md' preserves the pre-extension layout exactly so
+	// every existing caller (ConfirmDialog, ChangePassword,
+	// CreateServiceAccount, BanIP, WildcardApexWizard,
+	// certs/routes inline modals) renders unchanged. Larger
+	// values are for forms with many fields (AL.4.b.2
+	// ChannelModal, AL.4.b.3 RuleModal).
+	type Width = 'sm' | 'md' | 'lg' | 'xl';
+
 	interface Props {
 		open?: boolean;
 		title: string;
 		onClose: () => void;
 		children?: Snippet;
 		footer?: Snippet;
+		width?: Width;
 	}
 
-	let { open = false, title, onClose, children, footer }: Props = $props();
+	let {
+		open = false,
+		title,
+		onClose,
+		children,
+		footer,
+		width = 'md'
+	}: Props = $props();
+
+	// Tailwind class per width token. Kept as a static map
+	// so the Tailwind purger sees every literal at build
+	// time (a dynamic interpolation `max-w-${width}` would
+	// be purged unless every variant is also listed in the
+	// safelist).
+	const widthClass: Record<Width, string> = {
+		sm: 'max-w-sm',
+		md: 'max-w-md',
+		lg: 'max-w-2xl',
+		xl: 'max-w-4xl'
+	};
 
 	let dialog: HTMLDivElement | undefined = $state(undefined);
 	const titleId = `modal-title-${Math.random().toString(36).slice(2, 9)}`;
@@ -97,7 +126,7 @@
 			aria-modal="true"
 			aria-labelledby={titleId}
 			tabindex="-1"
-			class="bg-elevated border border-border-default rounded-lg shadow-lg w-full max-w-md focus:outline-none"
+			class="bg-elevated border border-border-default rounded-lg shadow-lg w-full {widthClass[width]} focus:outline-none"
 			transition:fly={{ y: 20, duration: 400, easing: cubicOut }}
 		>
 			<header class="px-5 py-4 border-b border-border-subtle">

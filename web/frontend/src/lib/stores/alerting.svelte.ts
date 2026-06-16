@@ -80,7 +80,18 @@ function createAlertEventsStore() {
 
 export const alertEventsStore = createAlertEventsStore();
 
-// --- channelsStore (stub for AL.4.b.2) ---------------------
+// --- channelsStore -----------------------------------------
+//
+// Full CRUD wired in AL.4.b.2. Each mutation hits the
+// backend then re-loads the list — simpler than tracking
+// optimistic state for the modest channel counts a homelab
+// runs (operator typically has 1-3 channels). The /test
+// endpoint returns immediately with the per-channel
+// outcome; channelsStore does not refresh after a test
+// because the LastSentAt/LastError fields on the channel
+// row update server-side via MarkAlertChannelSendResult,
+// so a follow-up load() picks them up the next time the
+// table refreshes.
 
 interface ChannelsState {
 	channels: AlertChannel[];
@@ -108,11 +119,48 @@ function createChannelsStore() {
 		}
 	}
 
+	async function create(req: Parameters<typeof alertingApi.createChannel>[0]): Promise<AlertChannel> {
+		const created = await alertingApi.createChannel(req);
+		// Append optimistically so the new row appears
+		// immediately; a subsequent load() refresh would
+		// also include it. The list is small enough that
+		// either path is correct — append avoids the
+		// round-trip blink.
+		state.channels = [...state.channels, created];
+		return created;
+	}
+
+	async function update(
+		id: string,
+		req: Parameters<typeof alertingApi.updateChannel>[1]
+	): Promise<AlertChannel> {
+		const updated = await alertingApi.updateChannel(id, req);
+		state.channels = state.channels.map((c) => (c.id === id ? updated : c));
+		return updated;
+	}
+
+	async function remove(id: string): Promise<void> {
+		await alertingApi.deleteChannel(id);
+		state.channels = state.channels.filter((c) => c.id !== id);
+	}
+
+	async function test(id: string) {
+		// Surfaces the per-call outcome to the caller (the
+		// ChannelsTab toast + inline status); does NOT
+		// mutate the store. A subsequent load() picks up the
+		// updated LastSentAt/LastError on the row.
+		return alertingApi.testChannel(id);
+	}
+
 	return {
 		get state() {
 			return state;
 		},
-		load
+		load,
+		create,
+		update,
+		remove,
+		test
 	};
 }
 
