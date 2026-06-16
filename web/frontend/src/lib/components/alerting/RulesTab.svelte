@@ -15,6 +15,7 @@
 	import {
 		severityBadgeVariant,
 		severityLabelFR,
+		severityTooltip,
 		type AlertRule,
 		type AlertRuleTestResponse
 	} from '$lib/api/alerting';
@@ -171,9 +172,25 @@
 		return relativeTime(r.lastEvalAt);
 	}
 
+	function lastEvalTooltip(r: AlertRule): string {
+		if (!r.lastEvalAt) {
+			return r.enabled
+				? "Pas encore évaluée — le watcher polle toutes les 30 secondes ; patientez ou attendez le prochain tick."
+				: 'Règle désactivée — le watcher l’ignore.';
+		}
+		return r.lastEvalAt;
+	}
+
 	function lastFireLabel(r: AlertRule): string {
 		if (!r.lastFiredAt) return 'Jamais';
 		return relativeTime(r.lastFiredAt);
+	}
+
+	function lastFireTooltip(r: AlertRule): string {
+		if (!r.lastFiredAt) {
+			return "Jamais déclenchée. La condition n’a pas été satisfaite depuis la création, ou la règle est encore en cooldown. Utilisez le bouton Test pour forcer un envoi sans attendre.";
+		}
+		return r.lastFiredAt;
 	}
 </script>
 
@@ -204,8 +221,10 @@
 		<div class="rounded-lg border border-border-subtle bg-elevated p-8 text-center">
 			<div class="text-4xl text-muted mb-3">⚙️</div>
 			<p class="text-primary font-medium mb-1">Aucune règle configurée</p>
-			<p class="text-secondary text-sm">
-				Ajoutez une première règle pour déclencher des notifications automatiques.
+			<p class="text-secondary text-sm max-w-md mx-auto">
+				Ajoutez une première règle (seuil sur les blocages WAF, expiration des certificats,
+				ou état système) pour déclencher des notifications automatiques toutes les 30 secondes.
+				Au moins un canal doit être créé au préalable dans l'onglet Canaux.
 			</p>
 		</div>
 	{:else if rules.length > 0}
@@ -253,16 +272,18 @@
 		</Badge>
 	</td>
 	<td class="px-4 py-3 text-sm">
-		<Badge variant={severityBadgeVariant(r.severity)}>
-			{#snippet children()}{severityLabelFR(r.severity)}{/snippet}
-		</Badge>
+		<span title={severityTooltip(r.severity)}>
+			<Badge variant={severityBadgeVariant(r.severity)}>
+				{#snippet children()}{severityLabelFR(r.severity)}{/snippet}
+			</Badge>
+		</span>
 	</td>
 	<td class="px-4 py-3 text-sm text-primary" title={channelsTooltip(r)}>
 		{r.channels.length}
 	</td>
 	<td class="px-4 py-3 text-sm text-secondary">{cooldownLabel(r.cooldownSecs)}</td>
 	<td class="px-4 py-3 text-sm">
-		<span title={r.lastEvalAt ?? 'Jamais'}>{lastEvalLabel(r)}</span>
+		<span title={lastEvalTooltip(r)}>{lastEvalLabel(r)}</span>
 		{#if r.lastError}
 			<span title={`${r.lastError}\n(${r.lastErrorAt ?? ''})`} class="ml-2">
 				<Badge variant="status-down">
@@ -271,7 +292,7 @@
 			</span>
 		{/if}
 	</td>
-	<td class="px-4 py-3 text-sm text-secondary" title={r.lastFiredAt ?? 'Jamais'}>
+	<td class="px-4 py-3 text-sm text-secondary" title={lastFireTooltip(r)}>
 		{lastFireLabel(r)}
 	</td>
 	<td class="px-4 py-3 text-sm">

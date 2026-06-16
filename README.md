@@ -20,12 +20,14 @@ Two install paths, both ≤5 minutes:
 - 📊 Per-route metrics, advanced health checks
 - 🏠 Single-binary deployment, homelab-friendly UI
 - 🎨 OKLCH visual system (Step R, v1.4)
+- 🔔 Native alerting subsystem (webhook + email channels, threshold + state rules, 30s watcher, history) — Step AL, v1.7
 
 ## Documentation
 
 - [`docs/install/`](docs/install/) — Docker + systemd install paths.
 - [`docs/operations/`](docs/operations/) — backup, hardening, config, troubleshooting (post-S.4).
-- [`docs/superpowers/specs/`](docs/superpowers/specs/) — per-step specs (M / N / O / P / R / S).
+- [`docs/alerting.md`](docs/alerting.md) — alerting subsystem (channels, rules, watcher, history) — Step AL.
+- [`docs/superpowers/specs/`](docs/superpowers/specs/) — per-step specs (M / N / O / P / R / S / AL).
 
 ## License
 

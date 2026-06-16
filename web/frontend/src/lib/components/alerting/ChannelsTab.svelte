@@ -14,6 +14,7 @@
 	import {
 		severityBadgeVariant,
 		severityLabelFR,
+		severityTooltip,
 		type AlertChannel
 	} from '$lib/api/alerting';
 	import { ApiError } from '$lib/api/types';
@@ -177,8 +178,10 @@
 		<div class="rounded-lg border border-border-subtle bg-elevated p-8 text-center">
 			<div class="text-4xl text-muted mb-3">🔔</div>
 			<p class="text-primary font-medium mb-1">Aucun canal configuré</p>
-			<p class="text-secondary text-sm">
-				Ajoutez un premier canal pour commencer à recevoir des notifications.
+			<p class="text-secondary text-sm max-w-md mx-auto">
+				Ajoutez un premier canal (webhook ou email) pour commencer à recevoir des
+				notifications. Les canaux sont ensuite ciblés par les règles dans l'onglet
+				Règles.
 			</p>
 		</div>
 	{:else if channels.length > 0}
@@ -209,9 +212,11 @@
 		{/if}
 	</td>
 	<td class="px-4 py-3 text-sm">
-		<Badge variant={severityBadgeVariant(c.minSeverity)}>
-			{#snippet children()}{severityLabelFR(c.minSeverity)}{/snippet}
-		</Badge>
+		<span title={`Sévérité minimum filtrée par ce canal. ${severityTooltip(c.minSeverity)}`}>
+			<Badge variant={severityBadgeVariant(c.minSeverity)}>
+				{#snippet children()}{severityLabelFR(c.minSeverity)}{/snippet}
+			</Badge>
+		</span>
 	</td>
 	<td class="px-4 py-3 text-sm text-secondary" title={c.lastSentAt ?? 'Jamais'}>
 		{lastSentLabel(c)}

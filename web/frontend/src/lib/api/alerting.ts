@@ -202,6 +202,29 @@ export function severityBadgeVariant(
 	}
 }
 
+/**
+ * severityTooltip returns the long-form description used on
+ * hover. AL.5 — surfaces the int → token mapping so the
+ * operator doesn't have to memorise that "Critique" is 2 and
+ * "Urgence" is 3 (it matters when reading the API directly
+ * or matching with the audit log). Same wording across the
+ * 3 tabs.
+ */
+export function severityTooltip(n: number): string {
+	switch (n) {
+		case 0:
+			return 'Info (niveau 0) — informationnel, aucune action requise.';
+		case 1:
+			return 'Avertissement (niveau 1) — condition dégradée à surveiller.';
+		case 2:
+			return 'Critique (niveau 2) — action opérateur requise sous peu.';
+		case 3:
+			return 'Urgence (niveau 3) — Arenet en difficulté, plan de données impacté possible.';
+		default:
+			return 'Inconnu — valeur de sévérité hors plage [0..3].';
+	}
+}
+
 // -- API client ---------------------------------------------
 
 export const alertingApi = {

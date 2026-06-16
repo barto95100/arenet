@@ -20,6 +20,7 @@
 	import {
 		severityBadgeVariant,
 		severityLabelFR,
+		severityTooltip,
 		SEVERITY_TOKENS,
 		type AlertEvent
 	} from '$lib/api/alerting';
@@ -119,7 +120,7 @@
 	const emptyStateMessage = $derived(
 		hasAnyFilter
 			? 'Aucun événement ne correspond aux filtres actuels.'
-			: 'Aucun événement enregistré pour le moment.'
+			: 'Aucun événement enregistré pour le moment. Créez un canal puis une règle dans les onglets ci-dessus, puis cliquez sur Test pour générer un premier événement.'
 	);
 
 	const a11yStatus = $derived.by(() => {
@@ -256,9 +257,11 @@
 	</td>
 	<td class="px-4 py-3 text-sm text-primary truncate">{ev.ruleName}</td>
 	<td class="px-4 py-3 text-sm">
-		<Badge variant={severityBadgeVariant(ev.severity)}>
-			{#snippet children()}{severityLabelFR(ev.severity)}{/snippet}
-		</Badge>
+		<span title={severityTooltip(ev.severity)}>
+			<Badge variant={severityBadgeVariant(ev.severity)}>
+				{#snippet children()}{severityLabelFR(ev.severity)}{/snippet}
+			</Badge>
+		</span>
 	</td>
 	<td class="px-4 py-3 text-sm text-secondary">{ev.category}</td>
 	<td class="px-4 py-3 text-sm text-primary truncate" title={ev.subject}>{ev.subject}</td>

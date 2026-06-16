@@ -12,6 +12,7 @@ const {
 	severityToken,
 	severityLabelFR,
 	severityBadgeVariant,
+	severityTooltip,
 	SEVERITY_TOKENS
 } = await import('./alerting');
 
@@ -110,5 +111,20 @@ describe('severity helpers', () => {
 
 	it('exposes SEVERITY_TOKENS in the correct order', () => {
 		expect(SEVERITY_TOKENS).toEqual(['info', 'warning', 'critical', 'emergency']);
+	});
+
+	// AL.5 — tooltip mapping pinned so the operator-facing
+	// hover always surfaces the correct level + int + role
+	// description (matters when reading the API directly).
+	it('returns a level-prefixed tooltip for each valid severity', () => {
+		expect(severityTooltip(0)).toMatch(/Info \(niveau 0\)/);
+		expect(severityTooltip(1)).toMatch(/Avertissement \(niveau 1\)/);
+		expect(severityTooltip(2)).toMatch(/Critique \(niveau 2\)/);
+		expect(severityTooltip(3)).toMatch(/Urgence \(niveau 3\)/);
+	});
+
+	it('returns an out-of-range tooltip for unknown severities', () => {
+		expect(severityTooltip(-1)).toMatch(/Inconnu/);
+		expect(severityTooltip(99)).toMatch(/Inconnu/);
 	});
 });
