@@ -1146,7 +1146,24 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// WebhookSender / EmailSender constructors and managed
 	// per-send.
 	alertingDispatcher := alerting.NewDispatcher(store, logger)
+	// AL.4.a — wire the dispatcher's history sink so
+	// every Dispatch call persists one alert_event row.
+	// nil-tolerant: when observability is boot-degraded
+	// (obsStore == nil), the sink stays unwired and
+	// Dispatch silently skips the InsertAlertEvent path.
+	// The live notification delivery is unaffected
+	// regardless.
+	if obsStore != nil {
+		alertingDispatcher.SetAlertEventSink(&alertEventInserterAdapter{store: obsStore})
+	}
 	apiHandler.SetAlertingDispatcher(alertingDispatcher)
+	if obsStore != nil {
+		// AL.4.a — wire the History tab read seam. Same
+		// nil-tolerance contract as the cert-events reader
+		// above. obsStore == nil → endpoint returns
+		// degraded envelope instead of 5xx.
+		apiHandler.SetAlertEventReader(obsStore)
+	}
 
 	// Step L L.2 — attach the observability store to the API
 	// handler so /api/v1/metrics/* can serve history.

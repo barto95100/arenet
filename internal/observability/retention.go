@@ -81,6 +81,15 @@ const (
 	// far lower volume (tens per day per domain max) and a
 	// renewal cycle is naturally 90d.
 	RetainCertEvents = 90 * 24 * time.Hour
+
+	// RetainAlertEvents is how long alert_event rows live
+	// (Step AL.4.a). 30 d at row granularity — operator
+	// investigation horizon for "what fired in the last
+	// month". Matches the WAF / throttle / decision /
+	// country_block horizons; explicitly NOT the 90 d cert
+	// horizon (alert lifecycle is operationally short, not
+	// tied to LE renewal cycles).
+	RetainAlertEvents = 30 * 24 * time.Hour
 )
 
 // RetentionRunner runs the hourly rollup + prune loop. Like the
@@ -235,6 +244,12 @@ func (r *RetentionRunner) tick(ctx context.Context) {
 	// event tables.
 	if _, err := r.store.PruneCountryBlockEventsOlderThan(ctx, now.Add(-RetainCountryBlockEvents)); err != nil {
 		r.logger.Error("observability: prune country_block_event failed", slog.String("err", err.Error()))
+	}
+	// Step AL.4.a: prune alert_event rows older than
+	// RetainAlertEvents (30 d). Mirror of the other
+	// security-event prunes.
+	if _, err := r.store.PruneAlertEventsOlderThan(ctx, now.Add(-RetainAlertEvents)); err != nil {
+		r.logger.Error("observability: prune alert_event failed", slog.String("err", err.Error()))
 	}
 }
 

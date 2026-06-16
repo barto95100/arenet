@@ -22,6 +22,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/barto95100/arenet/internal/storage"
@@ -214,6 +215,137 @@ func TestDispatcher_OneBadChannelDoesNotBlockOthers(t *testing.T) {
 	}
 }
 
+// --- AL.4.a — sink tests ---------------------------------
+
+// fakeAlertEventInserter records every AlertEventRecord
+// the dispatcher persists. Tests inspect it after
+// Dispatch to confirm the sink wrote the expected shape.
+type fakeAlertEventInserter struct {
+	records []AlertEventRecord
+	wantErr error
+}
+
+func (f *fakeAlertEventInserter) InsertAlertEvent(_ context.Context, rec AlertEventRecord) error {
+	if f.wantErr != nil {
+		return f.wantErr
+	}
+	f.records = append(f.records, rec)
+	return nil
+}
+
+func TestDispatcher_Sink_WritesOneRecordPerDispatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	loader := &fakeChannelLoader{
+		channels: map[string]storage.Channel{
+			"ch-1": webhookChannel(t, "ch-1", "primary", true, 0, srv.URL),
+		},
+	}
+	sink := &fakeAlertEventInserter{}
+	d := NewDispatcher(loader, nil)
+	d.SetAlertEventSink(sink)
+
+	res := d.Dispatch(context.Background(), sampleEvent(), []string{"ch-1"})
+
+	if len(res.Fired) != 1 {
+		t.Fatalf("Fired len=%d want 1", len(res.Fired))
+	}
+	if len(sink.records) != 1 {
+		t.Fatalf("sink records=%d want 1", len(sink.records))
+	}
+	rec := sink.records[0]
+	if rec.EventID != "evt-1234" {
+		t.Errorf("EventID=%q want evt-1234", rec.EventID)
+	}
+	if rec.RuleID != "rule-abc" {
+		t.Errorf("RuleID=%q want rule-abc", rec.RuleID)
+	}
+	if rec.ChannelsFiredJSON != `["ch-1"]` {
+		t.Errorf("ChannelsFiredJSON=%q want JSON array containing ch-1", rec.ChannelsFiredJSON)
+	}
+	// Failed map is empty → ChannelsFailedJSON should be ""
+	// (empty-map encoding contract).
+	if rec.ChannelsFailedJSON != "" {
+		t.Errorf("ChannelsFailedJSON=%q want empty for no failures", rec.ChannelsFailedJSON)
+	}
+}
+
+func TestDispatcher_Sink_CapturesFailedChannels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	loader := &fakeChannelLoader{
+		channels: map[string]storage.Channel{
+			"ch-bad": webhookChannel(t, "ch-bad", "bad", true, 0, srv.URL),
+		},
+	}
+	sink := &fakeAlertEventInserter{}
+	d := NewDispatcher(loader, nil)
+	d.SetAlertEventSink(sink)
+
+	d.Dispatch(context.Background(), sampleEvent(), []string{"ch-bad"})
+
+	if len(sink.records) != 1 {
+		t.Fatalf("sink records=%d want 1 (failure still persists a row)", len(sink.records))
+	}
+	rec := sink.records[0]
+	if rec.ChannelsFailedJSON == "" {
+		t.Errorf("ChannelsFailedJSON empty; want failure detail")
+	}
+	// Failed map JSON should contain the channel id key.
+	if !strings.Contains(rec.ChannelsFailedJSON, "ch-bad") {
+		t.Errorf("ChannelsFailedJSON=%q missing channel id", rec.ChannelsFailedJSON)
+	}
+}
+
+func TestDispatcher_Sink_NilInserterIsNoOp(t *testing.T) {
+	// Default Dispatcher (no SetAlertEventSink call) must
+	// not panic on the sink path.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	loader := &fakeChannelLoader{
+		channels: map[string]storage.Channel{
+			"ch-1": webhookChannel(t, "ch-1", "ok", true, 0, srv.URL),
+		},
+	}
+	d := NewDispatcher(loader, nil)
+	// Explicitly NOT setting the sink.
+	res := d.Dispatch(context.Background(), sampleEvent(), []string{"ch-1"})
+	if len(res.Fired) != 1 {
+		t.Errorf("Fired=%v; want [ch-1] (nil sink must not affect dispatch outcome)", res.Fired)
+	}
+}
+
+func TestDispatcher_Sink_InserterErrorDoesNotBreakDispatch(t *testing.T) {
+	// An InsertAlertEvent failure must NOT bubble up to
+	// the caller — the live notification already
+	// happened; losing the History row is acceptable
+	// degradation per AC #13.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	loader := &fakeChannelLoader{
+		channels: map[string]storage.Channel{
+			"ch-1": webhookChannel(t, "ch-1", "ok", true, 0, srv.URL),
+		},
+	}
+	d := NewDispatcher(loader, nil)
+	d.SetAlertEventSink(&fakeAlertEventInserter{wantErr: errors.New("disk full")})
+	res := d.Dispatch(context.Background(), sampleEvent(), []string{"ch-1"})
+	if len(res.Fired) != 1 || res.Fired[0] != "ch-1" {
+		t.Errorf("Fired=%v; want [ch-1] (sink error must not affect dispatch)", res.Fired)
+	}
+}
+
 // Sentinel to silence unused linter if SenderFor is the only
 // public-only seam used by future tests.
 var _ = errors.New
+var _ = strings.Contains

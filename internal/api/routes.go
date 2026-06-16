@@ -212,6 +212,16 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// widening). Same hard-auth + AC #13 degraded-mode
 			// contract as the security siblings above.
 			r.Get("/observability/cert-events", h.securityCertEvents)
+			// Step AL.4.a — alerting event history (read-
+			// only). Reads the alert_event table populated
+			// by the AL.4.a dispatcher sink (one row per
+			// Dispatch call, regardless of success/failure
+			// per-channel). Mirrors the cert-events
+			// degraded contract: nil reader → 200 with
+			// {events:[], degraded:true}, never 5xx so
+			// the History tab renders an empty state.
+			// Cursor-based pagination same shape as /audit.
+			r.Get("/observability/alert-events", h.listAlertEvents)
 			// Phase 5 — cert event aggregation. Bucketed counts
 			// (issued / renewed / failed) for the dashboard
 			// lifecycle panel + future Phase 6 alerting rule

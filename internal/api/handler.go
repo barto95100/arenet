@@ -351,6 +351,16 @@ type Handler struct {
 	// total: 0, hasMore: false, degraded: true} rather than
 	// returning 5xx.
 	certEvents CertEventReader
+	// alertEvents (Step AL.4.a) is the alert_event table
+	// read surface. Backs GET /api/v1/observability/
+	// alert-events — the AL.4 Alerting page History tab.
+	// Backed by *observability.Store; the AL.4.a
+	// dispatcher sink writes the rows this handler reads.
+	// Nil-tolerant per AC #13: a nil reader collapses the
+	// response to {events:[], nextCursor:"", degraded:true}
+	// rather than 5xx so the History tab renders the
+	// "observability unavailable" empty state.
+	alertEvents AlertEventReader
 	// countryBlockEvents (Step W.5) is the
 	// country_block_event table read surface. Backs GET
 	// /api/v1/observability/country-block-events — the
@@ -490,6 +500,16 @@ type CertEventReader interface {
 	// Same nil-tolerance contract — handlers detect nil and
 	// return degraded mode rather than 5xx.
 	AggregateCertEvents(ctx context.Context, filter observability.CertEventAggregateFilter) ([]observability.CertEventBucket, error)
+}
+
+// AlertEventReader is the read surface the Step AL.4.a
+// History tab endpoint depends on. *observability.Store
+// satisfies it via QueryAlertEvents (alert_event table
+// from the AL.1.a v9→v10 schema; the AL.4.a dispatcher
+// sink writes the rows). Same minimal-interface +
+// nil-tolerance contract as CertEventReader.
+type AlertEventReader interface {
+	QueryAlertEvents(ctx context.Context, filter observability.AlertEventFilter) ([]observability.AlertEvent, string, error)
 }
 
 // NewHandler constructs a Handler. All non-bool arguments must be non-nil.
@@ -723,6 +743,19 @@ func (h *Handler) HasCertInfoPurger() bool {
 // reader honors.
 func (h *Handler) SetCertEventReader(r CertEventReader) {
 	h.certEvents = r
+}
+
+// SetAlertEventReader (Step AL.4.a) attaches the
+// alert_event table reader used by GET /api/v1/
+// observability/alert-events. Pass the *observability.
+// Store the AL.4.a dispatcher sink writes into.
+//
+// nil-tolerant per AC #13: leaving this unset (or
+// passing nil) makes the endpoint respond with the
+// degraded envelope ({events:[], nextCursor:"",
+// degraded:true}) rather than 500ing.
+func (h *Handler) SetAlertEventReader(r AlertEventReader) {
+	h.alertEvents = r
 }
 
 // HasCertEventReader reports whether the cert-event seam is
