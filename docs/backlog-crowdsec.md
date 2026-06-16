@@ -56,17 +56,34 @@ Alternative options du brief original (systemd
 TimeoutStopSec, cancel context plus tôt) non nécessaires — 
 le fix Caddy-side suffit.
 
-## #R-CS2C-anchor-link — RESOLVED 2026-06-11
+## #R-CS2C-anchor-link — CLOSED 2026-06-16 (Day 14 EOD)
 Le link "Settings → Security Automation" depuis le 412 state du 
 tab Scenarios + le BanIPModal 412 CTA ramenait en haut de /settings 
 au lieu de scroller à la section.
 
-Fix shipped : ajout `id="security-automation"` sur le wrapper de la 
-section (Settings/+page.svelte:864) + href modifié en 
-`/settings#security-automation` dans les 2 sites :
-  - lib/components/CrowdSecDecisionsPanel.svelte:850
-  - lib/components/BanIPModal.svelte:289
-Test BanIPModal mis à jour pour pin le nouveau target.
+Fix shipped en 3 parties (Day 9-10) :
+  - Part 1 (commit 1f84d07) : ajout `id="security-automation"` sur 
+    le wrapper de la section + href modifié en 
+    `/settings#security-automation` dans les 2 sites 
+    (CrowdSecDecisionsPanel.svelte:850, BanIPModal.svelte:289).
+    Test BanIPModal mis à jour pour pin le nouveau target.
+  - Part 2 (commit d703754) : afterNavigate handler dans 
+    routes/settings/+page.svelte qui scrollIntoView le target 
+    une tick après hydration (le browser hard-load le hash AVANT 
+    le premier render Svelte, donc le anchor n'existait pas 
+    encore — scroll silently abandonné). 
+  - Part 3 (commit 14b4159) : scroll-padding-top sur <html> dans 
+    app.css = calc(var(--tb-height) + 16px) pour clearer le 
+    Topbar sticky qui couvrait le titre de section post-scroll.
+
+Closed empirically Day 14 EOD :
+  - id="security-automation" présent sur le wrapper 
+    (routes/settings/+page.svelte:899)
+  - Les 2 href cibles utilisent /settings#security-automation 
+    (CrowdSecDecisionsPanel:832,850 + BanIPModal:289)
+  - afterNavigate + scrollIntoView présents (settings/+page.svelte:574-580)
+  - app.css scroll-padding-top calc(--tb-height + 16px) présent (line 100)
+Les 3 layers de fix sont intactes dans le bundle actuel.
 
 ## #R-CSS-settings-section-spacing — RESOLVED 2026-06-11 (commit 4b2d1ed)
 Section "CrowdSec bouncer" (CS.1) manquait margin-top pour 
@@ -128,7 +145,7 @@ PUT /api/v1/settings/crowdsec pre-fix (upstream NOT reached,
 2 WAF events) → post-fix (upstream reached, 200, 0 events). 
 Probe deleted after confirmation; replaced by 4 regression guards.
 
-## #R-AUTOMATION-CREDS-403 — RESOLVED 2026-06-10
+## #R-AUTOMATION-CREDS-403 — CLOSED 2026-06-16 (Day 14 EOD)
 Découvert pendant CS.3 Gate 5 attempt. Initial symptom: PUT 
 /api/v1/settings/automation/credentials → 403 Server:Caddy 
 content-length:0 + no slog line.
@@ -138,12 +155,21 @@ were all WRONG. Root cause empirically pinned: same as
 #R-WAF-BLOCKS-MUTATING-METHODS — CRS 911100 blocked the PUT on 
 the self-route admin Caddy chain.
 
-Resolution: fixed transitively by the WAF exclusion widening 
-(commit 00c93dd). The Reset Security Automation button (commit 
-73157c9, separate ship) provides the operator-facing DELETE 
-path with audit row automation_reset; combined with the WAF 
-fix, the full "clear watcher creds via UI through Caddy" flow 
-now works end-to-end.
+Resolution (Day 10): fixed transitively by the WAF exclusion 
+widening (commit 00c93dd). The Reset Security Automation button 
+(commit 73157c9, separate ship) provides the operator-facing 
+DELETE path with audit row automation_reset; combined with the 
+WAF fix, the full "clear watcher creds via UI through Caddy" 
+flow worked end-to-end.
+
+Re-tested empirically 2026-06-16 (Day 14 EOD) via curl avec 
+cookies admin valides :
+  - PUT /api/v1/settings/automation/credentials → 200 OK
+  - PUT /api/v1/settings/crowdsec → 200 OK
+Bug fixé entre Day 9 et Day 14, probablement collatéralement 
+à un commit de refactor middleware non spécifiquement identifié 
+(la WAF exclusion widening de Day 10 reste la résolution 
+canonique du root cause).
 
 See #R-WAF-BLOCKS-MUTATING-METHODS above for the full root-
 cause analysis + decision doc reference.
