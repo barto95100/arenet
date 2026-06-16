@@ -204,7 +204,9 @@ CrowdSec 1.7.8 doesn't emit X-Crowdsec-Version HTTP header. Version
 exposed via cs_info Prometheus metric only. Couplage prometheus.enabled 
 pas worth pour un badge cosmétique. May revisit si upstream re-adds.
 
-## #R-WAF-EVENT-LABEL-BLOCK-VS-200 (medium) — OPEN 2026-06-10 (re-classified low→medium 2026-06-11)
+## #R-WAF-EVENT-LABEL-BLOCK-VS-200 (medium) — CLOSED 2026-06-16 (Day 14 EOD)
+First reported 2026-06-10, re-classified low→medium 2026-06-11.
+Shipped 2026-06-15 (Day 13) via commit `60ca75a`.
 
 Découvert pendant le smoke Day 8 (Gate 4 du fix #R-WAF-BLOCKS-MUTATING-METHODS).
 
@@ -313,7 +315,48 @@ add per-tx state + sync mechanism + ~4-5 new tests).
 Standalone workstream; do NOT bundle.
 
 ═══════════════════════════════════════════════════
-Status: OPEN — design doc needed before code.
+RESOLUTION — Day 13 ship (commit 60ca75a)
+═══════════════════════════════════════════════════
+
+Closed 2026-06-16 (Day 14 EOD) after empirical validation
+of the Day 13 ship.
+
+Implementation followed the design above exactly:
+  - Per-tx event buffer (`txEventBuffer` struct) holding
+    pending Events from onMatch callbacks.
+  - `sync.Map` keyed by `tx.ID()` (string — not pointer,
+    to avoid race on Coraza's tx pool recycling at
+    `internal/corazawaf/waf.go:53`).
+  - Deferred `flushTxBuffer` at handler exit reads
+    `tx.Interruption()`:
+      - != nil + mode=block → Action=BLOCK + actual
+        StatusCode from interruption.Status
+      - otherwise → Action=DETECT, StatusCode=0
+  - Defensive cleanup if `flushTxBuffer` panics
+    (ServeHTTP defer chain ensures sync.Map delete runs
+    even on panic).
+
+Test surface shipped: 6 cases in
+`internal/waf/module_event_label_test.go`:
+  - Test 5: flushTxBuffer decision matrix table test
+    (block + interrupt, block + no interrupt, detect, ...)
+  - Test 6: defensive flush with empty buffer (no
+    interruption, no events) doesn't panic.
+  - Test 7: deny+status:403 fires AND actually denies
+    → flushed as BLOCK 403.
+  - Test 8: concurrent transactions on the same handler
+    instance — no buffer cross-contamination
+    (sync.Map keyed by tx.ID() proven correct).
+  - Test 9: ServeHTTP defer chain cleans up sync.Map
+    even when flushTxBuffer panics.
+  - Test 10 (existing): single-rule simple case.
+
+All 6 tests pass under `-race -count=30`.
+
+Empirically validated 2026-06-16 — block-mode admin route
+with SQLi payload now correctly emits Action=DETECT (not
+BLOCK) when the request actually passes through (admin
+exclusion strips the 949* aggregator).
 ═══════════════════════════════════════════════════
 
 ## #R-DASHBOARD-WAF-COUNTERS-ZERO — RESOLVED 2026-06-10
