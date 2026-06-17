@@ -319,6 +319,84 @@
 			rebuildGraph(routes);
 		});
 	});
+
+	// HOTFIX (2026-06-17 #4) — drag-sync handler.
+	//
+	// When the operator drags the primary FQDN of a route with
+	// aliases, the RouteGroupNode container + every alias of the
+	// same route must move by the same delta so the route-row
+	// stays visually cohesive. The pre-hotfix parent/child wire
+	// (HF3, 1bcd128) achieved this via SvelteFlow's native
+	// parent/child contract, but forced draggable:false on the
+	// FQDN — the operator could no longer use the primary card
+	// as the drag affordance, only the surrounding blue chrome.
+	//
+	// This handler restores the natural affordance : FQDN is
+	// draggable, container + aliases follow. SvelteFlow fires
+	// onnodedrag throughout the drag gesture; we apply the same
+	// delta to the matching route-group + aliases via the flow
+	// API's updateNode call, which doesn't remount the children
+	// (preserves SMIL particle continuity on edges, mirror of
+	// the rebuildGraph fast path).
+	//
+	// Delta computation : SvelteFlow gives us the FQDN's NEW
+	// absolute position. We compare against the previous
+	// position cached in lastDragPosByNode and apply the delta
+	// to the related nodes. On dragstart we seed the cache;
+	// on dragstop we clear the entry. Cache is keyed by FQDN
+	// node id, so concurrent drags of different rows are
+	// independent.
+	const lastDragPosByNode = new Map<string, { x: number; y: number }>();
+
+	function handleNodeDragStart({ targetNode }: { targetNode: Node | null }) {
+		// Only care about FQDN drags — that's the only node type
+		// with the default `draggable: true` on alias-routes
+		// (container is draggable:false, aliases are
+		// draggable:false). Defensive id-pattern check covers
+		// the no-target case (rare but possible per SvelteFlow's
+		// type).
+		if (!targetNode || !targetNode.id.startsWith('fqdn-')) return;
+		lastDragPosByNode.set(targetNode.id, {
+			x: targetNode.position.x,
+			y: targetNode.position.y,
+		});
+	}
+
+	function handleNodeDrag({ targetNode }: { targetNode: Node | null }) {
+		if (!targetNode || !targetNode.id.startsWith('fqdn-')) return;
+		if (flowApi === null) return;
+		const prev = lastDragPosByNode.get(targetNode.id);
+		if (!prev) return;
+		const dx = targetNode.position.x - prev.x;
+		const dy = targetNode.position.y - prev.y;
+		if (dx === 0 && dy === 0) return;
+		lastDragPosByNode.set(targetNode.id, {
+			x: targetNode.position.x,
+			y: targetNode.position.y,
+		});
+
+		// Resolve the route ID from the FQDN node id (format:
+		// "fqdn-{routeId}"). Apply the delta to the matching
+		// route-group + every alias of the same route.
+		// updateNode is SvelteFlow's first-class position-mutate
+		// API — preserves node identity (no remount), same path
+		// used by the live-tick reconciler in rebuildGraph.
+		const routeId = targetNode.id.slice('fqdn-'.length);
+		const targets: string[] = [`route-group-${routeId}`];
+		for (const n of nodes) {
+			if (n.id.startsWith(`alias-${routeId}-`)) targets.push(n.id);
+		}
+		for (const targetId of targets) {
+			flowApi.updateNode(targetId, (n) => ({
+				position: { x: n.position.x + dx, y: n.position.y + dy },
+			}));
+		}
+	}
+
+	function handleNodeDragStop({ targetNode }: { targetNode: Node | null }) {
+		if (!targetNode) return;
+		lastDragPosByNode.delete(targetNode.id);
+	}
 </script>
 
 <svelte:head>
@@ -370,6 +448,9 @@
 						nodesDraggable
 						nodesConnectable={false}
 						elementsSelectable
+						onnodedragstart={handleNodeDragStart}
+						onnodedrag={handleNodeDrag}
+						onnodedragstop={handleNodeDragStop}
 						proOptions={{ hideAttribution: true }}
 					>
 						<Background />

@@ -180,7 +180,17 @@
 <style>
         .fqdn-node {
                 width: 200px;
+                /* HOTFIX (2026-06-17, post-Phase-3.e ship) — explicit
+                   height pins the rendered card at FQDN_HEIGHT
+                   exactly (70 px). Mirrors the AliasNode height
+                   pin for the same reason : content-driven sizing
+                   drifted a few px due to font line-height /
+                   border / padding combinations, leaving the
+                   RouteGroupNode bottom padding visually thinner
+                   than the symmetric calc promised. */
+                height: 70px;
                 padding: 10px 12px;
+                box-sizing: border-box;
                 background: var(--surface, oklch(19% 0.006 250));
                 border: 1px solid var(--border, oklch(28% 0.009 250));
                 border-radius: 8px;

@@ -270,36 +270,42 @@ export function buildTopologyGraph(
                 // alone, but its presence preserves the visual
                 // signature "this route has more behind the
                 // chevron" even when folded.
-                // HOTFIX (2026-06-17, post-Phase-3.e ship) — wire
-                // SvelteFlow native parent / child so dragging the
-                // container moves the FQDN + aliases together, and
-                // dragging an inner card doesn't decouple it from
-                // the container. The pre-hotfix shape emitted the
-                // container as a standalone node with no
-                // relationship to the FQDN — SvelteFlow had no way
-                // to know they belonged together, so operator
-                // drags produced visual desync.
+                // HOTFIX (2026-06-17 #4, post-3.e ship) — revert
+                // the parent/child wire shipped in HF3. The wire
+                // solved the visual desync (container stayed put
+                // when the FQDN dragged) BUT regressed the drag
+                // affordance : with draggable:false on the FQDN
+                // child, the operator could no longer drag the
+                // primary card directly — only the surrounding
+                // blue chrome was draggable, which is unnatural
+                // for the route-row's focal element.
                 //
-                // Parent / child contract (mirror of the
-                // BackendClusterNode pattern in col 2) :
-                //   - Container (parent) keeps an ABSOLUTE
-                //     position. Its `draggable: true` makes the
-                //     whole route-row a single drag handle.
-                //   - FQDN + alias children carry parentId and
-                //     RELATIVE positions (SvelteFlow treats child
-                //     positions as offsets from the parent's top-
-                //     left). Children are `draggable: false` and
-                //     `selectable: false` so the only drag affordance
-                //     is the container — matches BackendClusterNode
-                //     semantics and prevents the inner-card-drift
-                //     bug from re-emerging.
+                // The new wire :
+                //  - Container : standalone node, ABSOLUTE position,
+                //    draggable: false (it's pure visual chrome —
+                //    operator never needed to drag it directly,
+                //    they wanted to drag the FQDN and have the
+                //    container follow).
+                //  - FQDN : standalone node, ABSOLUTE position,
+                //    draggable: true (the natural affordance).
+                //  - Alias children : standalone, ABSOLUTE
+                //    position, draggable: false (the operator
+                //    drags the primary, aliases follow as a
+                //    group — they're not individually draggable
+                //    by design).
                 //
-                // Routes WITHOUT aliases keep their pre-hotfix
-                // shape: standalone FQDN, no container, no
-                // parent / child relationship — same drag affordance
-                // operators are used to.
-                const routeGroupId = `route-group-${route.id}`;
-                const inGroup = hasAliases;
+                // The group-follows-primary behaviour is wired in
+                // +page.svelte via SvelteFlow's onnodedrag event :
+                // when an FQDN node moves, compute the delta and
+                // apply it to the matching route-group + every
+                // alias of the same route. The delta is small
+                // (single drag event), so the side-effect of
+                // updating ~22 nodes for the traefik scenario is
+                // cheap (sub-ms in jsdom + SvelteFlow's diff is
+                // O(N) per node).
+                //
+                // Routes WITHOUT aliases : no container, FQDN
+                // standalone (unchanged backward-compat path).
                 if (hasAliases) {
                         const groupHeight = col0Heights[i] + ROUTE_GROUP_PADDING * 2;
                         const groupData: RouteGroupNodeData = {
@@ -308,7 +314,7 @@ export function buildTopologyGraph(
                                 primaryHost: route.host,
                         };
                         nodes.push({
-                                id: routeGroupId,
+                                id: `route-group-${route.id}`,
                                 type: 'route-group',
                                 position: {
                                         x: COL_X.FQDN - ROUTE_GROUP_PADDING,
@@ -317,12 +323,7 @@ export function buildTopologyGraph(
                                 width: ROUTE_GROUP_WIDTH,
                                 height: groupHeight,
                                 data: groupData,
-                                // HOTFIX (2026-06-17) : container is
-                                // the drag handle for the whole
-                                // route-row. The pre-hotfix
-                                // draggable:false killed drag entirely
-                                // for routes with aliases.
-                                draggable: true,
+                                draggable: false,
                                 selectable: false,
                         });
                 }
@@ -339,34 +340,16 @@ export function buildTopologyGraph(
                         aliasTotalRps,
                         collapsed,
                 };
-                if (inGroup) {
-                        // Child of the container — position is
-                        // RELATIVE to the parent's top-left. The
-                        // FQDN sits at the container's padding
-                        // offset (ROUTE_GROUP_PADDING on each axis
-                        // = the inset that made the container
-                        // visually wrap the FQDN pre-hotfix).
-                        nodes.push({
-                                id: `fqdn-${route.id}`,
-                                type: 'fqdn',
-                                position: { x: ROUTE_GROUP_PADDING, y: ROUTE_GROUP_PADDING },
-                                parentId: routeGroupId,
-                                extent: 'parent',
-                                draggable: false,
-                                selectable: false,
-                                data: fqdnData,
-                        });
-                } else {
-                        // Standalone FQDN — backward-compat for
-                        // routes without aliases. Absolute
-                        // position, default drag affordance.
-                        nodes.push({
-                                id: `fqdn-${route.id}`,
-                                type: 'fqdn',
-                                position: { x: COL_X.FQDN, y: blockTop },
-                                data: fqdnData,
-                        });
-                }
+                // Standalone FQDN — absolute position, default
+                // drag affordance. Whether the route has aliases
+                // or not, the FQDN is the operator's drag handle
+                // for the row.
+                nodes.push({
+                        id: `fqdn-${route.id}`,
+                        type: 'fqdn',
+                        position: { x: COL_X.FQDN, y: blockTop },
+                        data: fqdnData,
+                });
 
                 // Phase 3.e: skip the entire alias sub-node loop
                 // when the route is collapsed. The chevron-driven
@@ -392,21 +375,17 @@ export function buildTopologyGraph(
                 // one centred column rather than a left-leaning
                 // stair.
                 aliasMetrics.forEach((alias, aIdx) => {
-                        // HOTFIX (2026-06-17) : alias child
-                        // positions are RELATIVE to the RouteGroup
-                        // parent (same contract as the FQDN child
-                        // above). The y offset baseline is the
-                        // container padding + the FQDN's own
-                        // height + the FQDN-to-alias gap, then
-                        // each subsequent alias adds its row
-                        // height + the inter-alias gap. The x
-                        // offset combines the container padding
-                        // with the centring delta so aliases stay
-                        // vertically aligned with the primary
-                        // FQDN's centre under the parent / child
-                        // wire.
-                        const aliasYRelative =
-                                ROUTE_GROUP_PADDING
+                        // HOTFIX (2026-06-17 #4) : absolute
+                        // positions restored (parent / child wire
+                        // reverted). Aliases are draggable:false —
+                        // the operator drags the primary FQDN
+                        // and the +page.svelte onnodedrag handler
+                        // applies the same delta to every alias
+                        // of the same route, keeping the visual
+                        // group cohesive without making each
+                        // alias an independent drag target.
+                        const aliasY =
+                                blockTop
                                 + FQDN_HEIGHT
                                 + FQDN_TO_ALIAS_GAP
                                 + aIdx * (ALIAS_HEIGHT + ALIAS_TO_ALIAS_GAP);
@@ -423,11 +402,9 @@ export function buildTopologyGraph(
                                 id: `alias-${route.id}-${aIdx}`,
                                 type: 'alias',
                                 position: {
-                                        x: ROUTE_GROUP_PADDING + ALIAS_X_OFFSET,
-                                        y: aliasYRelative,
+                                        x: COL_X.FQDN + ALIAS_X_OFFSET,
+                                        y: aliasY,
                                 },
-                                parentId: routeGroupId,
-                                extent: 'parent',
                                 draggable: false,
                                 selectable: false,
                                 data: aliasData,

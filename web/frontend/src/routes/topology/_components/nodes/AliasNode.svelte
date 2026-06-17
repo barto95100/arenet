@@ -86,7 +86,17 @@
 <style>
         .alias-node {
                 width: 170px;
+                /* HOTFIX (2026-06-17, post-Phase-3.e ship) — explicit
+                   height pins the rendered card at ALIAS_HEIGHT
+                   exactly (44 px). Content-driven sizing drifted a
+                   couple of px due to font line-height / border /
+                   padding combinations, which made the
+                   _layout.ts's assumed ALIAS_HEIGHT smaller than
+                   reality and pushed the last alias past the
+                   RouteGroupNode container's bottom padding. */
+                height: 44px;
                 padding: 6px 10px;
+                box-sizing: border-box;
                 background: var(--surface, oklch(19% 0.006 250));
                 border: 1px solid var(--border, oklch(28% 0.009 250));
                 border-radius: 6px;
