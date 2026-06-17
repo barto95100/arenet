@@ -32,6 +32,7 @@
 	import '@xyflow/svelte/dist/style.css';
 
 	import { buildTopologyGraph } from './_layout';
+	import { collapsedRoutes } from './_collapsed.svelte';
 	import type { TopologyRoute } from './_types';
 	import { fetchSnapshot, connectLiveStream, TopologyFetchError } from './_api';
 
@@ -136,7 +137,11 @@
 	// distinguishes "first build" (full reassignment, no prior
 	// state) from "tick" (in-place data updates via the flow API).
 	function rebuildGraph(routesIn: TopologyRoute[]): void {
-		const graph = buildTopologyGraph(routesIn);
+		// Phase 3.e — thread the page-local collapsed set into
+		// the layout builder. The builder is pure; the set
+		// arrives as a read-only snapshot of the store's current
+		// value.
+		const graph = buildTopologyGraph(routesIn, collapsedRoutes.collapsed);
 
 		// First call: reassign the full arrays. No existing state
 		// to reconcile against. The builder's positions are the
@@ -275,6 +280,23 @@
 				closeStream = null;
 			}
 		};
+	});
+
+	// Phase 3.e — collapsed-set reactivity. When the operator
+	// clicks a chevron, collapsedRoutes.collapsed updates and
+	// this effect re-runs rebuildGraph against the current
+	// routes snapshot. The guard on pageStatus avoids rebuilding
+	// during the initial 'loading' state (the first build comes
+	// from loadInitial); after that, every toggle re-emits the
+	// graph through the same reconcile path used by live ticks,
+	// so drag positions for unaffected nodes are preserved.
+	$effect(() => {
+		// Read the store so Svelte tracks the dependency. We
+		// don't use the value directly — it's already read by
+		// rebuildGraph through the import.
+		void collapsedRoutes.collapsed;
+		if (pageStatus !== 'connected') return;
+		rebuildGraph(routes);
 	});
 </script>
 

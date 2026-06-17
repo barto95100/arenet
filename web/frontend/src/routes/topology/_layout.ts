@@ -81,8 +81,20 @@ const ALIAS_TO_ALIAS_GAP = 8;
 // (Phase 3.c) wraps both with a small lateral inset so it
 // frames the cards without crowding them.
 const FQDN_WIDTH = 200;
+const ALIAS_WIDTH = 170;
 const ROUTE_GROUP_PADDING = 10;
 const ROUTE_GROUP_WIDTH = FQDN_WIDTH + ROUTE_GROUP_PADDING * 2;
+
+// Sujet 1 Phase 3.e (2026-06-17). Alias x-offset is the
+// horizontal centring delta so each AliasNode shares the same
+// vertical axis of symmetry as the primary FQDN above. With
+// FQDN 200 px and Alias 170 px the half-delta is 15 px; the
+// pre-3.e layout pushed aliases 30 px right (left-leaning
+// indent) which the operator read as "broken alignment". The
+// symmetric offset makes the col-0 stack read as one centred
+// column, container-bound, with the primary as the visual
+// anchor at the top.
+const ALIAS_X_OFFSET = (FQDN_WIDTH - ALIAS_WIDTH) / 2;
 
 // Active-alias threshold (Phase 3.c). reqPerSec strictly > 0
 // is "active" — the alias gets its own AnimatedFlowEdge to
@@ -164,8 +176,26 @@ function routeCol0Height(aliasCount: number): number {
  *   col 2 (backends)    one BackendCluster group per route with N
  *                       UpstreamNode children inside (sub-flow);
  *                       caddy-hub fans out to one edge per upstream
+ *
+ * Sujet 1 Phase 3.e (2026-06-17). `collapsedRouteIds` is the set
+ * of routes whose alias sub-stack is currently FOLDED. A route in
+ * this set:
+ *   - still emits its primary FQDN node + its container (so the
+ *     visual signature "this route is one of the ones with aliases"
+ *     persists even when folded);
+ *   - skips every AliasNode + per-alias AnimatedFlowEdge;
+ *   - keeps its FQDN→Caddy edge at the FULL route.reqPerSec (no
+ *     primary-vs-alias rebalance, since aliases aren't drawing
+ *     any particles of their own).
+ *
+ * Default behaviour (empty set, omitted parameter) is full
+ * expansion — matches the pre-3.e shape so callers that don't pass
+ * the set get the Phase 3.d layout byte-equal.
  */
-export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
+export function buildTopologyGraph(
+        routes: TopologyRoute[],
+        collapsedRouteIds: ReadonlySet<string> = new Set<string>(),
+): TopologyGraph {
         const nodes: TopologyNode[] = [];
         const edges: TopologyEdge[] = [];
 
@@ -199,12 +229,31 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
         // applies the sort). The layout preserves that order
         // verbatim — top consumer first, idle aliases at the
         // bottom.
-        const col0Heights = routes.map((r) => routeCol0Height(r.aliasMetrics?.length ?? 0));
+        // Phase 3.e: col-0 block height depends on whether the
+        // route is collapsed. A collapsed route always sizes its
+        // block to bare FQDN_HEIGHT — the alias sub-stack is
+        // hidden so the block must shrink, otherwise neighbours
+        // would stay artificially pushed apart and the canvas
+        // would look like the aliases are still there but
+        // invisible.
+        const col0Heights = routes.map((r) => {
+                if (collapsedRouteIds.has(r.id)) return FQDN_HEIGHT;
+                return routeCol0Height(r.aliasMetrics?.length ?? 0);
+        });
         const col0BlockTops = computeStackYsForHeights(col0Heights);
         routes.forEach((route, i) => {
                 const blockTop = col0BlockTops[i];
                 const aliasMetrics = route.aliasMetrics ?? [];
                 const hasAliases = aliasMetrics.length > 0;
+                const collapsed = collapsedRouteIds.has(route.id);
+                // Sum every alias rate — active + idle. Idle
+                // aliases contribute zero so the result equals
+                // sum(active aliases) but the policy "sum all
+                // aliases" is stable as aliases cross the active
+                // threshold; the number doesn't twitch when an
+                // alias flips between idle and low-traffic in the
+                // collapsed-meta display.
+                const aliasTotalRps = aliasMetrics.reduce((sum, a) => sum + a.reqPerSec, 0);
 
                 // Phase 3.c: emit the RouteGroupNode FIRST (when the
                 // route has aliases) so SvelteFlow paints it BEHIND
@@ -214,6 +263,13 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                 // one route". A route without aliases gets no
                 // container; the bare FQDN card stands on its own
                 // exactly as it did pre-3.c (backward compat).
+                //
+                // Phase 3.e: still emit the container when the
+                // route is collapsed AND has aliases. The
+                // container's height shrinks to fit the FQDN
+                // alone, but its presence preserves the visual
+                // signature "this route has more behind the
+                // chevron" even when folded.
                 if (hasAliases) {
                         const groupHeight = col0Heights[i] + ROUTE_GROUP_PADDING * 2;
                         const groupData: RouteGroupNodeData = {
@@ -243,6 +299,10 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                         meta: formatFQDNMeta(route),
                         aliases: route.aliases,
                         wafLevel: route.wafLevel ?? 'off',
+                        routeId: route.id,
+                        aliasCount: aliasMetrics.length,
+                        aliasTotalRps,
+                        collapsed,
                 };
                 nodes.push({
                         id: `fqdn-${route.id}`,
@@ -251,21 +311,29 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                         data: fqdnData,
                 });
 
+                // Phase 3.e: skip the entire alias sub-node loop
+                // when the route is collapsed. The chevron-driven
+                // collapsed state means the operator wants the row
+                // condensed; emitting the cards anyway would
+                // either render them hidden (wasted SvelteFlow
+                // bookkeeping) or render them visible (defeats
+                // the toggle).
+                if (collapsed) return;
+
                 // Alias sub-nodes (Phase 3.b shape preserved). The
                 // aliasMetrics slice from the backend is already
                 // sorted desc by reqPerSec with alphabetical tie-
                 // break for idles; render in that order so the top
                 // consumer sits directly under the primary FQDN.
                 //
-                // Phase 3.c (2026-06-17): the AliasOfEdge dashed
-                // link from each alias back to its primary FQDN is
-                // GONE — the RouteGroupNode container above does
-                // the visual binding job better, and removing the
-                // edge cuts ~21 SVG paths on the operator's busiest
-                // traefik route without losing any signal. Aliases
-                // with traffic (reqPerSec > 0) instead get their
-                // own AnimatedFlowEdge straight to the Caddy hub —
-                // emitted below alongside the primary's edge.
+                // Phase 3.e (2026-06-17): x-offset switched from
+                // the indent-leaning +30 px to a true horizontal
+                // centring (+15 px = (FQDN_WIDTH - ALIAS_WIDTH) / 2)
+                // so aliases share the same vertical axis of
+                // symmetry as the primary FQDN. The container's
+                // background hugs both — the eye reads col 0 as
+                // one centred column rather than a left-leaning
+                // stair.
                 aliasMetrics.forEach((alias, aIdx) => {
                         const aliasY =
                                 blockTop
@@ -281,17 +349,10 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                                 parentRouteId: route.id,
                                 isIdle: alias.reqPerSec === 0,
                         };
-                        // x-offset: indent aliases slightly so the
-                        // visual hierarchy reads "primary on the left
-                        // edge of col 0, aliases nested under it" —
-                        // matches the 70%-width AliasNode
-                        // (140 vs 200). 30 px ≈ half the width
-                        // delta, splits the difference between flush-
-                        // left and centred under the primary.
                         nodes.push({
                                 id: `alias-${route.id}-${aIdx}`,
                                 type: 'alias',
-                                position: { x: COL_X.FQDN + 30, y: aliasY },
+                                position: { x: COL_X.FQDN + ALIAS_X_OFFSET, y: aliasY },
                                 data: aliasData,
                         });
                 });
@@ -405,6 +466,28 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
         //    through.
         routes.forEach((route) => {
                 const aliasMetrics = route.aliasMetrics ?? [];
+                const collapsed = collapsedRouteIds.has(route.id);
+
+                // Phase 3.e: when the route is collapsed, the
+                // alias sub-nodes are NOT in the graph, so they
+                // can't be edge sources. The primary FQDN edge
+                // absorbs the FULL route.reqPerSec — no rebalance
+                // — so the operator still sees the total flow on
+                // the canvas (just consolidated on one edge
+                // instead of fanning out). Expand the route and
+                // the rebalance + per-alias edges kick back in.
+                if (collapsed) {
+                        edges.push(
+                                makeFlowEdge(`e-fqdn-${route.id}-caddy`, `fqdn-${route.id}`, 'caddy-hub', {
+                                        kind: 'flow',
+                                        reqPerSec: route.reqPerSec,
+                                        p99LatencyMs: route.p99LatencyMs,
+                                        errorRate5xx: route.errorRate5xx,
+                                }),
+                        );
+                        return;
+                }
+
                 const activeAliasRpsSum = aliasMetrics.reduce(
                         (sum, a) => (a.reqPerSec > ALIAS_ACTIVE_THRESHOLD_RPS ? sum + a.reqPerSec : sum),
                         0,

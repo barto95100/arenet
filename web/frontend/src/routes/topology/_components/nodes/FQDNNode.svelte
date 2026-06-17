@@ -34,10 +34,21 @@
   layout. The leftover orphan handle from earlier views was
   visually confusing, same problem as Critique 6 on the cluster
   parent.
+
+  Phase 3.e (2026-06-17): collapse/expand toggle. When the route
+  has aliases (data.aliasCount > 0), a chevron glyph appears in
+  the host row — clicking it flips the route's entry in the
+  page-local collapsedRoutes store. The meta line also branches:
+  collapsed routes display "N aliases · X r/s total" instead of
+  the per-route "Y req/s" formatted by _layout.ts. The store is
+  imported directly because the alternative — threading a
+  callback through NodeProps.data, which must be a plain object —
+  would force a serialisable shape on a UI concern.
 -->
 <script lang="ts">
         import { Handle, Position, type NodeProps } from '@xyflow/svelte';
         import type { FQDNNodeData } from '../../_types';
+        import { collapsedRoutes } from '../../_collapsed.svelte';
 
         let { data }: NodeProps & { data: FQDNNodeData } = $props();
 
@@ -49,11 +60,63 @@
                 if (!data.aliases || data.aliases.length === 0) return '';
                 return [data.host, ...data.aliases].join(', ');
         });
+
+        // Phase 3.e — chevron click handler. Stops propagation so
+        // SvelteFlow doesn't also trigger its node-selection
+        // outline on the same click.
+        function onChevronClick(ev: MouseEvent) {
+                ev.stopPropagation();
+                collapsedRoutes.toggle(data.routeId);
+        }
+
+        // Phase 3.e — collapsed meta line. When folded, the
+        // operator can't see the per-alias breakdown, so we
+        // surface the aggregate as a hint of what's behind the
+        // chevron. Format mirrors the FQDNNode meta line shape
+        // (mono font, fg-dim colour, see CSS).
+        let collapsedMeta = $derived.by(() => {
+                const count = data.aliasCount ?? 0;
+                if (count === 0) return data.meta;
+                const noun = count === 1 ? 'alias' : 'aliases';
+                const total = formatRate(data.aliasTotalRps ?? 0);
+                return `${count} ${noun} · ${total} total`;
+        });
+
+        function formatRate(rps: number): string {
+                if (rps === 0) return '0 req/s';
+                if (rps < 10) return `${rps.toFixed(2)} req/s`;
+                return `${Math.round(rps)} req/s`;
+        }
 </script>
 
 <div class="fqdn-node">
         <div class="host-row">
                 <span class="host">{data.host}</span>
+                {#if (data.aliasCount ?? 0) > 0}
+                        <button
+                                type="button"
+                                class="chevron"
+                                class:expanded={!data.collapsed}
+                                onclick={onChevronClick}
+                                aria-label={data.collapsed
+                                        ? `Déplier les ${data.aliasCount} alias`
+                                        : `Replier les ${data.aliasCount} alias`}
+                                aria-expanded={!data.collapsed}
+                        >
+                                <!-- Lucide ChevronRight; CSS rotates 90° when expanded -->
+                                <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        aria-hidden="true"
+                                >
+                                        <path d="m9 18 6-6-6-6" />
+                                </svg>
+                        </button>
+                {/if}
                 {#if data.wafLevel === 'detect'}
                         <svg
                                 class="ico ico-waf ico-waf-detect"
@@ -86,7 +149,13 @@
                 {/if}
         </div>
         <div class="protocols">{data.protocols}</div>
-        <div class="meta" title={hostsTooltip}>{data.meta}</div>
+        <div class="meta" title={hostsTooltip}>
+                {#if data.collapsed && (data.aliasCount ?? 0) > 0}
+                        {collapsedMeta}
+                {:else}
+                        {data.meta}
+                {/if}
+        </div>
 
         <Handle type="source" position={Position.Right} />
 </div>
@@ -147,6 +216,47 @@
                 font-family: var(--font-mono, ui-monospace, monospace);
                 font-size: 10.5px;
                 color: var(--fg-dim, oklch(54% 0.011 250));
+        }
+
+        /* Phase 3.e — chevron toggle. Sits between the host name
+           and the WAF glyph; muted by default, brightens on hover
+           so the operator gets a visible affordance without
+           competing with the host label. The rotation is the
+           collapsed↔expanded indicator (▶ vs ▼ in glyph terms,
+           but rendered as a 90° rotation of a single chevron-
+           right so the chevron-down case is one source of
+           truth). */
+        .chevron {
+                flex: 0 0 auto;
+                width: 16px;
+                height: 16px;
+                padding: 0;
+                margin: 0;
+                background: transparent;
+                border: none;
+                color: var(--fg-muted, oklch(68% 0.012 250));
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 3px;
+                transition: transform 180ms ease, color 120ms ease, background 120ms ease;
+        }
+
+        .chevron:hover,
+        .chevron:focus-visible {
+                color: var(--fg, oklch(96% 0.005 250));
+                background: var(--surface-2, oklch(22% 0.007 250));
+                outline: none;
+        }
+
+        .chevron.expanded {
+                transform: rotate(90deg);
+        }
+
+        .chevron svg {
+                width: 12px;
+                height: 12px;
         }
 
         :global(.svelte-flow__node-fqdn) {

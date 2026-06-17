@@ -312,6 +312,168 @@ describe('buildTopologyGraph — alias integration', () => {
 		expect((primaryEdge.data as FlowEdgeData).reqPerSec).toBe(42);
 	});
 
+	// -------------------------------------------------------
+	// Phase 3.e — centering + collapse / expand toggle
+	// -------------------------------------------------------
+
+	it('aliases are horizontally centred relative to the primary FQDN (15 px offset)', () => {
+		// FQDN width is 200 px, AliasNode width 170 px (Phase 3.d
+		// bump). The horizontal centring delta is therefore
+		// (200 - 170) / 2 = 15 px. Aliases must position at
+		// COL_X.FQDN + 15 so the col-0 stack reads as one
+		// vertical column of symmetry, not a left-leaning stair.
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r-1',
+				aliasMetrics: [alias('a.example.com', 1), alias('b.example.com', 0.5)]
+			})
+		]);
+		const fqdn = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
+		const aliases = graph.nodes.filter((n) => n.type === 'alias');
+		expect(aliases.length).toBe(2);
+		for (const a of aliases) {
+			// Each alias sits 15 px to the right of the primary's
+			// left edge — symmetric centring under the 200 px
+			// FQDN.
+			expect(a.position.x - fqdn.position.x).toBe(15);
+		}
+	});
+
+	it('collapsed route: container + FQDN only, no alias nodes, no per-alias edges', () => {
+		const collapsed = new Set(['r-1']);
+		const graph = buildTopologyGraph(
+			[
+				makeRoute({
+					id: 'r-1',
+					reqPerSec: 8,
+					aliasMetrics: [alias('a.example.com', 5), alias('b.example.com', 3)]
+				})
+			],
+			collapsed
+		);
+		// Container still present — the visual signature for
+		// "this route has aliases hiding behind the chevron"
+		// must persist even when collapsed.
+		expect(graph.nodes.filter((n) => n.type === 'route-group')).toHaveLength(1);
+		// FQDN still present.
+		expect(graph.nodes.filter((n) => n.id === 'fqdn-r-1')).toHaveLength(1);
+		// No alias nodes when collapsed.
+		expect(graph.nodes.filter((n) => n.type === 'alias')).toHaveLength(0);
+		// No per-alias edges either.
+		expect(graph.edges.filter((e) => e.source.startsWith('alias-'))).toHaveLength(0);
+	});
+
+	it('collapsed route: primary FQDN edge carries FULL route.reqPerSec (no rebalance)', () => {
+		// When collapsed the aliases aren't drawing their own
+		// edges, so the primary FQDN edge absorbs the full
+		// route.reqPerSec — operator still sees the total flow
+		// on the canvas, just consolidated on one edge instead
+		// of fanning out. Expanded mode would subtract the alias
+		// sum (Phase 3.c rebalance); collapsed mode skips that
+		// subtraction.
+		const collapsed = new Set(['r-1']);
+		const graph = buildTopologyGraph(
+			[
+				makeRoute({
+					id: 'r-1',
+					reqPerSec: 8,
+					aliasMetrics: [alias('a.example.com', 5), alias('b.example.com', 3)]
+				})
+			],
+			collapsed
+		);
+		const primaryEdge = graph.edges.find((e) => e.id === 'e-fqdn-r-1-caddy')!;
+		expect((primaryEdge.data as FlowEdgeData).reqPerSec).toBe(8);
+	});
+
+	it('FQDNNodeData carries routeId + aliasCount + aliasTotalRps + collapsed', () => {
+		// FQDN data must thread the route ID back (for the
+		// chevron's toggle call), the alias count (drives
+		// chevron visibility), the aliasTotalRps aggregate (for
+		// the collapsed meta line "N aliases · X r/s total"),
+		// and the current collapsed boolean.
+		const collapsed = new Set(['r-1']);
+		const graph = buildTopologyGraph(
+			[
+				makeRoute({
+					id: 'r-1',
+					reqPerSec: 8,
+					aliasMetrics: [alias('a.example.com', 5), alias('b.example.com', 3), alias('idle.example.com', 0)]
+				})
+			],
+			collapsed
+		);
+		const fqdn = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
+		const data = fqdn.data as FQDNNodeData;
+		expect(data.routeId).toBe('r-1');
+		expect(data.aliasCount).toBe(3);
+		// Sum every alias — active + idle. Idle aliases
+		// contribute zero so the total equals sum(active) but
+		// the policy is "all aliases" so the number is stable
+		// when an alias crosses the active threshold.
+		expect(data.aliasTotalRps).toBe(8);
+		expect(data.collapsed).toBe(true);
+	});
+
+	it('expanded route (default — empty Set or omitted arg): full alias rendering', () => {
+		// Backward-compat: when the collapsed set is empty (or
+		// the argument is omitted entirely), every route renders
+		// in expanded mode. Same shape as Phase 3.d.
+		const graphOmitted = buildTopologyGraph([
+			makeRoute({
+				id: 'r-1',
+				reqPerSec: 5,
+				aliasMetrics: [alias('a.example.com', 3), alias('b.example.com', 2)]
+			})
+		]);
+		const graphEmptySet = buildTopologyGraph(
+			[
+				makeRoute({
+					id: 'r-1',
+					reqPerSec: 5,
+					aliasMetrics: [alias('a.example.com', 3), alias('b.example.com', 2)]
+				})
+			],
+			new Set<string>()
+		);
+		// Both shapes must be identical: 2 alias nodes, 2
+		// alias edges + 1 primary edge.
+		for (const graph of [graphOmitted, graphEmptySet]) {
+			expect(graph.nodes.filter((n) => n.type === 'alias')).toHaveLength(2);
+			expect(graph.edges.filter((e) => e.source.startsWith('alias-'))).toHaveLength(2);
+			const fqdn = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
+			expect((fqdn.data as FQDNNodeData).collapsed).toBe(false);
+		}
+	});
+
+	it('collapsed route shrinks col-0 height so neighbours close the gap', () => {
+		// When a route with 5 aliases is collapsed, its col-0
+		// block shrinks to bare FQDN height; the neighbouring
+		// routes must close the visual gap (they were pushed
+		// apart by the expanded alias stack).
+		const heavyAliases = Array.from({ length: 5 }, (_, i) => alias(`a${i}.local`, 0));
+		const expanded = buildTopologyGraph([
+			makeRoute({ id: 'top', host: 'top.local' }),
+			makeRoute({ id: 'mid', host: 'mid.local', aliasMetrics: heavyAliases }),
+			makeRoute({ id: 'bot', host: 'bot.local' })
+		]);
+		const collapsed = buildTopologyGraph(
+			[
+				makeRoute({ id: 'top', host: 'top.local' }),
+				makeRoute({ id: 'mid', host: 'mid.local', aliasMetrics: heavyAliases }),
+				makeRoute({ id: 'bot', host: 'bot.local' })
+			],
+			new Set(['mid'])
+		);
+		const expandedTopBot =
+			expanded.nodes.find((n) => n.id === 'fqdn-bot')!.position.y -
+			expanded.nodes.find((n) => n.id === 'fqdn-top')!.position.y;
+		const collapsedTopBot =
+			collapsed.nodes.find((n) => n.id === 'fqdn-bot')!.position.y -
+			collapsed.nodes.find((n) => n.id === 'fqdn-top')!.position.y;
+		expect(collapsedTopBot).toBeLessThan(expandedTopBot);
+	});
+
 	it('21-alias realistic-load case (operator traefik scenario) layouts cleanly', () => {
 		// Mirrors the operator's empirically-validated case from
 		// the Phase 2.2 smoke: 21 aliases on a single route, top

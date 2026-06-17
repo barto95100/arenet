@@ -142,6 +142,29 @@ export type FQDNNodeData = {
         meta: string;
         aliases?: string[];
         wafLevel: 'off' | 'detect' | 'block';
+        /** Sujet 1 Phase 3.e (2026-06-17). Carry the route ID
+         *  back to the FQDN node so its chevron click handler
+         *  can call collapsedRoutes.toggle(routeId) without
+         *  duplicating the layout's routing. */
+        routeId: string;
+        /** Total alias count for this route. Drives chevron
+         *  visibility on the FQDN card: zero ⇒ no chevron, no
+         *  collapse / expand toggle. Counts ALL aliases (active
+         *  + idle), not just the ones currently rendering — the
+         *  toggle exists regardless of traffic. */
+        aliasCount: number;
+        /** Sum of every alias's reqPerSec. Surfaced on the FQDN
+         *  meta line ONLY when the route is collapsed (replaces
+         *  the per-alias breakdown that's now hidden). Includes
+         *  idle aliases which contribute zero — keeping the
+         *  policy "sum all aliases" identical regardless of
+         *  active / idle bucket so the number doesn't jump as
+         *  aliases cross the threshold. */
+        aliasTotalRps: number;
+        /** True when this route is currently collapsed in the
+         *  topology view. Drives the chevron glyph (▶ collapsed,
+         *  ▼ expanded) and which meta line variant renders. */
+        collapsed: boolean;
 } & Record<string, unknown>;
 
 /** The single central Caddy hub.

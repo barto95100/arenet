@@ -1,0 +1,182 @@
+// Arenet - Homelab-friendly reverse proxy with integrated security
+// Copyright (C) 2026  Ludovic Ramos
+// Licensed under the GNU AGPL v3 or later. See LICENSE.
+
+// Sujet 1 Phase 3.e — FQDNNode chevron toggle contract pin.
+//
+// Tests the operator-visible contract added in Phase 3.e :
+//   - chevron appears ONLY when the route has at least one alias
+//     (data.aliasCount > 0) — routes without aliases stay
+//     visually unchanged.
+//   - chevron rotation : default (no .expanded class) when the
+//     route is collapsed, rotated 90° (.expanded class) when
+//     expanded — both rendered from the same chevron-right SVG.
+//   - chevron click toggles the page-local collapsedRoutes store
+//     for the right route ID, propagation stopped so SvelteFlow
+//     doesn't also select the node.
+//   - collapsed routes render the aggregate meta "N aliases · X
+//     req/s total" instead of the per-route req/s line, expanded
+//     routes render the layout's data.meta verbatim.
+//
+// The collapsedRoutes store import is the real module — the test
+// resets it between cases via the store's own reset() helper.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/svelte';
+import type { FQDNNodeData } from '../../_types';
+import { collapsedRoutes } from '../../_collapsed.svelte';
+
+vi.mock('@xyflow/svelte', async () => {
+	const actual = await vi.importActual<typeof import('@xyflow/svelte')>('@xyflow/svelte');
+	const HandleStub = (await import('./HandleStub.test.svelte')).default;
+	return {
+		...actual,
+		Handle: HandleStub
+	};
+});
+
+const FQDNNode = (await import('./FQDNNode.svelte')).default;
+
+function makeData(overrides: Partial<FQDNNodeData> = {}): FQDNNodeData {
+	return {
+		kind: 'fqdn',
+		host: 'primary.example.com',
+		protocols: 'HTTPS',
+		meta: '5 req/s',
+		aliases: [],
+		wafLevel: 'off',
+		routeId: 'r-1',
+		aliasCount: 0,
+		aliasTotalRps: 0,
+		collapsed: false,
+		...overrides
+	};
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function nodeProps(data: FQDNNodeData): any {
+	return {
+		id: 'fqdn-r-1',
+		type: 'fqdn',
+		data,
+		dragging: false,
+		selected: false,
+		isConnectable: false,
+		positionAbsoluteX: 0,
+		positionAbsoluteY: 0,
+		width: 200,
+		height: 70,
+		zIndex: 0
+	};
+}
+
+describe('FQDNNode chevron toggle', () => {
+	beforeEach(() => {
+		collapsedRoutes.reset();
+	});
+
+	it('no chevron when the route has zero aliases', () => {
+		const { container } = render(FQDNNode, {
+			props: nodeProps(makeData({ aliasCount: 0 }))
+		});
+		expect(container.querySelector('.chevron')).toBeNull();
+	});
+
+	it('renders chevron when the route has at least one alias', () => {
+		const { container } = render(FQDNNode, {
+			props: nodeProps(makeData({ aliasCount: 3 }))
+		});
+		expect(container.querySelector('.chevron')).not.toBeNull();
+	});
+
+	it('chevron carries .expanded class when the route is expanded', () => {
+		const { container } = render(FQDNNode, {
+			props: nodeProps(makeData({ aliasCount: 3, collapsed: false }))
+		});
+		const chevron = container.querySelector('.chevron');
+		expect(chevron?.classList.contains('expanded')).toBe(true);
+	});
+
+	it('chevron drops .expanded class when the route is collapsed', () => {
+		const { container } = render(FQDNNode, {
+			props: nodeProps(makeData({ aliasCount: 3, collapsed: true }))
+		});
+		const chevron = container.querySelector('.chevron');
+		expect(chevron?.classList.contains('expanded')).toBe(false);
+	});
+
+	it('click on chevron toggles the collapsedRoutes store for the right route ID', async () => {
+		const { container } = render(FQDNNode, {
+			props: nodeProps(makeData({ routeId: 'r-1', aliasCount: 3, collapsed: false }))
+		});
+		const chevron = container.querySelector('.chevron') as HTMLButtonElement;
+		expect(collapsedRoutes.isCollapsed('r-1')).toBe(false);
+		await fireEvent.click(chevron);
+		expect(collapsedRoutes.isCollapsed('r-1')).toBe(true);
+		await fireEvent.click(chevron);
+		expect(collapsedRoutes.isCollapsed('r-1')).toBe(false);
+	});
+
+	it('chevron click invokes stopPropagation so SvelteFlow does not also select the node', async () => {
+		// Pin the call to stopPropagation on the synthesised
+		// click event. Without this the chevron's click would
+		// bubble up to SvelteFlow's node-selection handler and
+		// the operator would see the FQDN node get a selection
+		// outline on every toggle — visually distracting.
+		//
+		// Spying on the event itself is the cleanest signal
+		// because Svelte 5's event delegation makes the actual
+		// bubbling path harder to assert from outside.
+		const { container } = render(FQDNNode, {
+			props: nodeProps(makeData({ aliasCount: 3 }))
+		});
+		const chevron = container.querySelector('.chevron') as HTMLButtonElement;
+		const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+		const stopSpy = vi.spyOn(ev, 'stopPropagation');
+		chevron.dispatchEvent(ev);
+		expect(stopSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it('collapsed routes render aggregate meta "N aliases · X req/s total"', () => {
+		render(FQDNNode, {
+			props: nodeProps(
+				makeData({
+					aliasCount: 21,
+					aliasTotalRps: 5.34,
+					collapsed: true,
+					meta: 'should-not-appear-when-collapsed'
+				})
+			)
+		});
+		// "21 aliases · 5.34 req/s total" with formatRate's
+		// 2-decimal at < 10 r/s policy.
+		expect(screen.getByText('21 aliases · 5.34 req/s total')).toBeInTheDocument();
+		expect(screen.queryByText('should-not-appear-when-collapsed')).toBeNull();
+	});
+
+	it('expanded routes render layout-provided data.meta verbatim', () => {
+		render(FQDNNode, {
+			props: nodeProps(
+				makeData({
+					aliasCount: 3,
+					aliasTotalRps: 2,
+					collapsed: false,
+					meta: '8 req/s · 3 aliases'
+				})
+			)
+		});
+		expect(screen.getByText('8 req/s · 3 aliases')).toBeInTheDocument();
+	});
+
+	it('singular "alias" vs plural "aliases" in the collapsed meta', () => {
+		const { unmount } = render(FQDNNode, {
+			props: nodeProps(makeData({ aliasCount: 1, aliasTotalRps: 0.5, collapsed: true }))
+		});
+		expect(screen.getByText('1 alias · 0.50 req/s total')).toBeInTheDocument();
+		unmount();
+		render(FQDNNode, {
+			props: nodeProps(makeData({ aliasCount: 2, aliasTotalRps: 0, collapsed: true }))
+		});
+		expect(screen.getByText('2 aliases · 0 req/s total')).toBeInTheDocument();
+	});
+});
