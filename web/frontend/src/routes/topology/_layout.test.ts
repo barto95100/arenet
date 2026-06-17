@@ -446,6 +446,91 @@ describe('buildTopologyGraph — alias integration', () => {
 		}
 	});
 
+	// HOTFIX (2026-06-17) — effect_update_depth_exceeded.
+	// Shipped Phase 3.e had a runtime infinite-loop bug : the
+	// page-level $effect that called rebuildGraph on
+	// collapsedRoutes.collapsed change was implicitly tracking
+	// `nodes` / `edges` (read inside rebuildGraph for the diff
+	// path) AND mutating them (written for the first-build /
+	// mixed-id-set paths). The write retriggered the effect →
+	// loop → Svelte's effect_update_depth_exceeded guard fired
+	// after a few hundred iterations and the canvas froze.
+	//
+	// The runtime fix wraps the rebuildGraph call inside
+	// untrack() (+page.svelte). The architectural guarantee that
+	// makes the fix sound is THIS : buildTopologyGraph must be
+	// deterministic AND pure on its inputs (no mutation of the
+	// routes array nor the collapsedRouteIds Set). If a future
+	// change mutated either, the untrack-wrapped effect would
+	// still be correct but other consumers (currently none) would
+	// observe a different invariant. The tests below pin the
+	// purity contract so an accidental mutation surfaces as a
+	// test failure rather than a runtime loop.
+
+	it('buildTopologyGraph is deterministic — same inputs yield identical output', () => {
+		// Pure-function contract : two successive calls with the
+		// same arguments produce shape-equivalent output. The
+		// effect path relies on this so that a "no-op" rebuild
+		// (effect re-fires but inputs haven't changed) doesn't
+		// observe spurious differences and re-trigger downstream
+		// state writes.
+		const routesIn = [
+			makeRoute({
+				id: 'r-1',
+				reqPerSec: 5,
+				aliasMetrics: [alias('a.example.com', 3), alias('b.example.com', 0)]
+			})
+		];
+		const collapsed = new Set(['r-1']);
+		const a = buildTopologyGraph(routesIn, collapsed);
+		const b = buildTopologyGraph(routesIn, collapsed);
+		expect(a.nodes.map((n) => n.id)).toEqual(b.nodes.map((n) => n.id));
+		expect(a.edges.map((e) => e.id)).toEqual(b.edges.map((e) => e.id));
+		expect(a.nodes.length).toBe(b.nodes.length);
+		expect(a.edges.length).toBe(b.edges.length);
+	});
+
+	it('buildTopologyGraph does NOT mutate the collapsedRouteIds Set', () => {
+		// HOTFIX regression : the effect passes its tracked
+		// collapsedRoutes.collapsed Set straight in. A mutation
+		// inside the layout would change the store's Set in
+		// place, which Svelte 5 cannot observe (mutation doesn't
+		// fire $state notifications) AND would corrupt the next
+		// rebuild's input. Pin no-mutation.
+		const collapsed = new Set(['r-1', 'r-2']);
+		const snapshot = new Set(collapsed);
+		buildTopologyGraph(
+			[
+				makeRoute({ id: 'r-1', aliasMetrics: [alias('a.example.com', 1)] }),
+				makeRoute({ id: 'r-2', aliasMetrics: [alias('b.example.com', 0)] }),
+				makeRoute({ id: 'r-3' })
+			],
+			collapsed
+		);
+		expect(collapsed.size).toBe(snapshot.size);
+		for (const id of snapshot) {
+			expect(collapsed.has(id)).toBe(true);
+		}
+	});
+
+	it('buildTopologyGraph does NOT mutate the routes array nor per-route alias arrays', () => {
+		// HOTFIX regression : a mutation of the input routes
+		// array (or any of its nested aliasMetrics) would corrupt
+		// the next live-tick rebuild's input snapshot. Pin no-
+		// mutation on the input boundary.
+		const aliasMetrics = [alias('a.example.com', 2), alias('b.example.com', 0)];
+		const routesIn = [
+			makeRoute({ id: 'r-1', reqPerSec: 3, aliasMetrics }),
+			makeRoute({ id: 'r-2' })
+		];
+		const routesSnapshot = JSON.stringify(routesIn);
+		const aliasSnapshot = JSON.stringify(aliasMetrics);
+		buildTopologyGraph(routesIn, new Set(['r-1']));
+		buildTopologyGraph(routesIn, new Set());
+		expect(JSON.stringify(routesIn)).toBe(routesSnapshot);
+		expect(JSON.stringify(aliasMetrics)).toBe(aliasSnapshot);
+	});
+
 	it('collapsed route shrinks col-0 height so neighbours close the gap', () => {
 		// When a route with 5 aliases is collapsed, its col-0
 		// block shrinks to bare FQDN height; the neighbouring

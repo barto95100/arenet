@@ -27,7 +27,7 @@
   toolbar surfaces the disconnected state.
 -->
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { SvelteFlow, Background, Controls, useSvelteFlow, type NodeTypes, type EdgeTypes, type Node, type Edge } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 
@@ -285,18 +285,39 @@
 	// Phase 3.e — collapsed-set reactivity. When the operator
 	// clicks a chevron, collapsedRoutes.collapsed updates and
 	// this effect re-runs rebuildGraph against the current
-	// routes snapshot. The guard on pageStatus avoids rebuilding
-	// during the initial 'loading' state (the first build comes
-	// from loadInitial); after that, every toggle re-emits the
-	// graph through the same reconcile path used by live ticks,
-	// so drag positions for unaffected nodes are preserved.
+	// routes snapshot.
+	//
+	// HOTFIX (2026-06-17, post-3.e ship) :
+	// effect_update_depth_exceeded — the initial implementation
+	// invoked rebuildGraph inline, which Svelte traced as part of
+	// this effect's reactive graph. rebuildGraph both READS
+	// `nodes` / `edges` (for diffing) and WRITES them (for first-
+	// build + mixed-id-set paths). The write triggers the same
+	// effect to re-run, which writes again, infinite loop.
+	//
+	// Fix : isolate the rebuildGraph call inside untrack() so its
+	// internal $state reads and writes are NOT registered as
+	// dependencies of THIS effect. The effect's dependency surface
+	// is now exactly what we intend :
+	//   - collapsedRoutes.collapsed (the only trigger)
+	//   - pageStatus (the gate)
+	// Everything else (routes, nodes, edges) is touched only
+	// inside the untracked region.
+	//
+	// `routes` is still read INSIDE untrack so we pin the
+	// snapshot at effect-fire time — if the operator clicks the
+	// chevron mid-WS-tick, we rebuild against the freshest
+	// routes the WS handler has assigned.
 	$effect(() => {
-		// Read the store so Svelte tracks the dependency. We
-		// don't use the value directly — it's already read by
-		// rebuildGraph through the import.
+		// Tracked deps : the trigger and the gate.
 		void collapsedRoutes.collapsed;
 		if (pageStatus !== 'connected') return;
-		rebuildGraph(routes);
+		// Untracked body : rebuildGraph reads and writes nodes /
+		// edges / routes; isolating it here keeps those out of
+		// the effect's reactive graph.
+		untrack(() => {
+			rebuildGraph(routes);
+		});
 	});
 </script>
 
