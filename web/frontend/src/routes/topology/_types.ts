@@ -267,12 +267,42 @@ export type AliasNodeData = {
         isIdle: boolean;
 } & Record<string, unknown>;
 
+/** Col 0 visual container wrapping [primary FQDN + its aliases]
+ *  (Sujet 1 Phase 3.c).
+ *
+ *  Pure visual binding — carries no metrics, has no handles. The
+ *  container's only job is to make the route↔aliases relationship
+ *  read at a glance: a subtle background rectangle behind the
+ *  primary FQDN and all its alias nodes, with a slight border, so
+ *  the operator's eye groups them as one logical entity instead
+ *  of N floating cards.
+ *
+ *  Why a node rather than a Background pattern? Background is
+ *  global (the canvas grid). A per-route container has variable
+ *  bounds that follow the route's alias count — easier to emit
+ *  as a node whose width/height we already compute server-side
+ *  via routeCol0Height().
+ *
+ *  z-order: the route-group node must be emitted FIRST in the
+ *  nodes array so it renders BEHIND the FQDN + alias cards
+ *  (SvelteFlow paints nodes in array order). The layout enforces
+ *  this. */
+export type RouteGroupNodeData = {
+        kind: 'route-group';
+        routeId: string;
+        /** Operator-facing host name of the primary FQDN inside
+         *  the group. Used by accessibility tooling only — the
+         *  node renders no visible label. */
+        primaryHost: string;
+} & Record<string, unknown>;
+
 export type TopologyNodeData =
         | FQDNNodeData
         | CaddyHubNodeData
         | BackendClusterNodeData
         | UpstreamNodeData
-        | AliasNodeData;
+        | AliasNodeData
+        | RouteGroupNodeData;
 
 // ---------------------------------------------------------------------------
 // Edge data
@@ -285,28 +315,17 @@ export type FlowEdgeData = {
         errorRate5xx: number;
 } & Record<string, unknown>;
 
-/** Semantic-only edge linking an alias node to its primary
- *  FQDN node (Sujet 1 Phase 3.a).
- *
- *  Unlike FlowEdgeData (which drives the AnimatedFlowEdge
- *  particles), AliasOfEdgeData carries NO traffic shape —
- *  particles on alias edges would double-count the route's
- *  Caddy→Backend traffic visually (the real flow already
- *  fans out from Caddy through the shared cluster).
- *  AliasOfEdge instead surfaces a dashed, muted, particle-
- *  less line that reads as "this alias resolves to the same
- *  chain as the primary host".
- *
- *  `aliasOf` is the route ID the parent FQDN node belongs to.
- *  Mirrors AliasNodeData.parentRouteId; both are kept so the
- *  edge can resolve its target without consulting node data
- *  (cheaper than a map lookup in the renderer). */
-export type AliasOfEdgeData = {
-        kind: 'alias-of';
-        aliasOf: string;
-} & Record<string, unknown>;
+/** Phase 3.c (2026-06-17): AliasOfEdgeData removed. The Phase
+ *  3.a dashed semantic edge between alias and primary FQDN became
+ *  visually redundant once Phase 3.c shipped the RouteGroupNode
+ *  container background — the operator now reads "this alias
+ *  belongs to this route" from the shared container, not from a
+ *  line. Aliases that carry traffic get their own
+ *  AnimatedFlowEdge straight to the Caddy hub instead, mirroring
+ *  the primary FQDN's edge so the visual sum of particles on
+ *  col-1 equals the route's total flow. */
 
-export type TopologyEdgeData = FlowEdgeData | AliasOfEdgeData;
+export type TopologyEdgeData = FlowEdgeData;
 
 // ---------------------------------------------------------------------------
 // Output shape

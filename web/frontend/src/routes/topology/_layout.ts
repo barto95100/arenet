@@ -25,11 +25,11 @@
 
 import type {
         AliasNodeData,
-        AliasOfEdgeData,
         BackendClusterNodeData,
         CaddyHubNodeData,
         FlowEdgeData,
         FQDNNodeData,
+        RouteGroupNodeData,
         TopologyEdge,
         TopologyGraph,
         TopologyNode,
@@ -73,6 +73,23 @@ const FQDN_HEIGHT = 70;
 const ALIAS_HEIGHT = 44;
 const FQDN_TO_ALIAS_GAP = 16;
 const ALIAS_TO_ALIAS_GAP = 8;
+
+// FQDN node renders at ~200 px wide (mock-derived; see
+// FQDNNode.svelte). AliasNode is 140 px wide, indented +30 px
+// from the col-0 left edge — so its right edge sits at 30 + 140
+// = 170 px (4 px shy of the FQDN right edge). The container
+// (Phase 3.c) wraps both with a small lateral inset so it
+// frames the cards without crowding them.
+const FQDN_WIDTH = 200;
+const ROUTE_GROUP_PADDING = 10;
+const ROUTE_GROUP_WIDTH = FQDN_WIDTH + ROUTE_GROUP_PADDING * 2;
+
+// Active-alias threshold (Phase 3.c). reqPerSec strictly > 0
+// is "active" — the alias gets its own AnimatedFlowEdge to
+// Caddy. Strictly === 0 is "idle" — the alias renders in the
+// container but no edge is emitted (keeps idle routes
+// visually quiet on a 21-alias canvas).
+const ALIAS_ACTIVE_THRESHOLD_RPS = 0;
 
 /** Sub-flow cluster geometry (Vue B col 3). Children are positioned
  *  relative to the cluster group node — so x/y here is local. The
@@ -186,6 +203,39 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
         const col0BlockTops = computeStackYsForHeights(col0Heights);
         routes.forEach((route, i) => {
                 const blockTop = col0BlockTops[i];
+                const aliasMetrics = route.aliasMetrics ?? [];
+                const hasAliases = aliasMetrics.length > 0;
+
+                // Phase 3.c: emit the RouteGroupNode FIRST (when the
+                // route has aliases) so SvelteFlow paints it BEHIND
+                // the FQDN + alias cards. The container is pure
+                // visual chrome (no handles, no metrics) — it binds
+                // the operator's eye to "primary + its aliases =
+                // one route". A route without aliases gets no
+                // container; the bare FQDN card stands on its own
+                // exactly as it did pre-3.c (backward compat).
+                if (hasAliases) {
+                        const groupHeight = col0Heights[i] + ROUTE_GROUP_PADDING * 2;
+                        const groupData: RouteGroupNodeData = {
+                                kind: 'route-group',
+                                routeId: route.id,
+                                primaryHost: route.host,
+                        };
+                        nodes.push({
+                                id: `route-group-${route.id}`,
+                                type: 'route-group',
+                                position: {
+                                        x: COL_X.FQDN - ROUTE_GROUP_PADDING,
+                                        y: blockTop - ROUTE_GROUP_PADDING,
+                                },
+                                width: ROUTE_GROUP_WIDTH,
+                                height: groupHeight,
+                                data: groupData,
+                                draggable: false,
+                                selectable: false,
+                        });
+                }
+
                 const fqdnData: FQDNNodeData = {
                         kind: 'fqdn',
                         host: route.host,
@@ -201,13 +251,21 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                         data: fqdnData,
                 });
 
-                // Alias sub-nodes (Phase 3.b). The aliasMetrics
-                // slice from the backend is already sorted desc by
-                // reqPerSec with alphabetical tie-break for idles;
-                // we render in that exact order so the top
-                // consumer sits directly under the primary FQDN
-                // and idle aliases sink to the bottom of the stack.
-                const aliasMetrics = route.aliasMetrics ?? [];
+                // Alias sub-nodes (Phase 3.b shape preserved). The
+                // aliasMetrics slice from the backend is already
+                // sorted desc by reqPerSec with alphabetical tie-
+                // break for idles; render in that order so the top
+                // consumer sits directly under the primary FQDN.
+                //
+                // Phase 3.c (2026-06-17): the AliasOfEdge dashed
+                // link from each alias back to its primary FQDN is
+                // GONE — the RouteGroupNode container above does
+                // the visual binding job better, and removing the
+                // edge cuts ~21 SVG paths on the operator's busiest
+                // traefik route without losing any signal. Aliases
+                // with traffic (reqPerSec > 0) instead get their
+                // own AnimatedFlowEdge straight to the Caddy hub —
+                // emitted below alongside the primary's edge.
                 aliasMetrics.forEach((alias, aIdx) => {
                         const aliasY =
                                 blockTop
@@ -235,26 +293,6 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                                 type: 'alias',
                                 position: { x: COL_X.FQDN + 30, y: aliasY },
                                 data: aliasData,
-                        });
-
-                        // AliasOfEdge connects the alias back to the
-                        // primary FQDN — semantic only, dashed line,
-                        // no particles (see AliasOfEdge.svelte
-                        // docstring). The alias source handle
-                        // (Position.Right on AliasNode) lights up
-                        // when the operator drags the alias around,
-                        // but the visual contract on the canvas is
-                        // the line itself reading "alias-of".
-                        const edgeData: AliasOfEdgeData = {
-                                kind: 'alias-of',
-                                aliasOf: route.id,
-                        };
-                        edges.push({
-                                id: `e-alias-${route.id}-${aIdx}`,
-                                source: `alias-${route.id}-${aIdx}`,
-                                target: `fqdn-${route.id}`,
-                                type: 'alias-of',
-                                data: edgeData,
                         });
                 });
         });
@@ -336,14 +374,67 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                 });
         });
 
-        // Edges: FQDN -> caddy, caddy -> upstream (fan-out per cluster)
+        // Edges: FQDN -> caddy + (per active alias) alias -> caddy,
+        // then caddy -> upstream (fan-out per cluster).
+        //
+        // Phase 3.c (2026-06-17): two interleaved changes.
+        //
+        // 1. Per-active-alias edge to Caddy. For each alias with
+        //    reqPerSec > ALIAS_ACTIVE_THRESHOLD_RPS, emit an
+        //    AnimatedFlowEdge sourced from the alias node, target
+        //    Caddy hub, carrying the alias's own reqPerSec / p99 /
+        //    5xx. Idle aliases (reqPerSec === 0) skip — keeps a
+        //    21-alias canvas with 3 active aliases visually quiet
+        //    on col 1.
+        //
+        // 2. Primary FQDN edge intensity rebalanced. The route's
+        //    total reqPerSec is split between the primary host and
+        //    the aliases; the primary edge now carries ONLY the
+        //    primary's own traffic (route.reqPerSec minus the sum
+        //    of the active aliases' rates). The visual sum of all
+        //    edges entering Caddy from a route still equals
+        //    route.reqPerSec — the operator reads "this column of
+        //    particles totals my route's load" intuitively.
+        //
+        //    Clamped at zero: rounding error in the windowed
+        //    aggregator can produce a slightly-negative residue
+        //    (sum of alias rates over a 60 s window can drift a
+        //    fraction higher than the route's own rate over the
+        //    same window). Clamping protects the AnimatedFlowEdge
+        //    tier resolver from a negative reqPerSec sneaking
+        //    through.
         routes.forEach((route) => {
-                edges.push(makeFlowEdge(
-                        `e-fqdn-${route.id}-caddy`,
-                        `fqdn-${route.id}`,
-                        'caddy-hub',
-                        routeFlowData(route),
-                ));
+                const aliasMetrics = route.aliasMetrics ?? [];
+                const activeAliasRpsSum = aliasMetrics.reduce(
+                        (sum, a) => (a.reqPerSec > ALIAS_ACTIVE_THRESHOLD_RPS ? sum + a.reqPerSec : sum),
+                        0,
+                );
+                const primaryRps = Math.max(0, route.reqPerSec - activeAliasRpsSum);
+                edges.push(
+                        makeFlowEdge(`e-fqdn-${route.id}-caddy`, `fqdn-${route.id}`, 'caddy-hub', {
+                                kind: 'flow',
+                                reqPerSec: primaryRps,
+                                p99LatencyMs: route.p99LatencyMs,
+                                errorRate5xx: route.errorRate5xx,
+                        }),
+                );
+
+                aliasMetrics.forEach((alias, aIdx) => {
+                        if (alias.reqPerSec <= ALIAS_ACTIVE_THRESHOLD_RPS) return;
+                        edges.push(
+                                makeFlowEdge(
+                                        `e-alias-${route.id}-${aIdx}-caddy`,
+                                        `alias-${route.id}-${aIdx}`,
+                                        'caddy-hub',
+                                        {
+                                                kind: 'flow',
+                                                reqPerSec: alias.reqPerSec,
+                                                p99LatencyMs: alias.p99LatencyMs,
+                                                errorRate5xx: alias.errorRate5xx,
+                                        },
+                                ),
+                        );
+                });
         });
 
         // Caddy hub -> each upstream child (N edges per cluster).

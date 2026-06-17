@@ -38,11 +38,11 @@
 	// Custom node components — one per `kind` emitted by the layout builder.
 	import FQDNNode from './_components/nodes/FQDNNode.svelte';
 	import AliasNode from './_components/nodes/AliasNode.svelte';
+	import RouteGroupNode from './_components/nodes/RouteGroupNode.svelte';
 	import CaddyHubNode from './_components/nodes/CaddyHubNode.svelte';
 	import BackendClusterNode from './_components/nodes/BackendClusterNode.svelte';
 	import UpstreamNode from './_components/nodes/UpstreamNode.svelte';
 	import AnimatedFlowEdge from './_components/edges/AnimatedFlowEdge.svelte';
-	import AliasOfEdge from './_components/edges/AliasOfEdge.svelte';
 	import FlowApiBridge from './_components/FlowApiBridge.svelte';
 
 	// Page-level UI
@@ -51,7 +51,13 @@
 
 	type FlowApi = ReturnType<typeof useSvelteFlow<Node, Edge>>;
 
+	// Phase 3.c: 'route-group' must come FIRST so SvelteFlow's
+	// component lookup matches the order we emit nodes in. The
+	// container needs to render BEHIND the FQDN + alias cards;
+	// _layout.ts enforces array order (route-group emitted first
+	// per route).
 	const nodeTypes: NodeTypes = {
+		'route-group': RouteGroupNode,
 		fqdn: FQDNNode,
 		alias: AliasNode,
 		caddy: CaddyHubNode,
@@ -61,7 +67,6 @@
 
 	const edgeTypes: EdgeTypes = {
 		'animated-flow': AnimatedFlowEdge,
-		'alias-of': AliasOfEdge,
 	};
 
 	// Graph state. routes is the live data; nodes/edges are the
@@ -501,5 +506,23 @@
 
 	.live-indicator.reconnecting .dot {
 		box-shadow: none;
+	}
+
+	/* Phase 3.c (2026-06-17): override SvelteFlow Controls palette.
+	   Defaults are white-on-white in light themes — invisible on our
+	   dark canvas background. The package exposes per-component CSS
+	   vars; scoping them to .canvas-frame keeps the override local
+	   and lets a future light-theme toggle reset without touching
+	   this rule. Foreground/border use the design-token palette so
+	   the buttons match the rest of the canvas chrome. */
+	.canvas-frame :global(.svelte-flow__controls) {
+		--xy-controls-button-background-color: var(--surface, oklch(19% 0.006 250));
+		--xy-controls-button-background-color-hover: var(--surface-2, oklch(22% 0.007 250));
+		--xy-controls-button-color: var(--fg, oklch(96% 0.005 250));
+		--xy-controls-button-color-hover: var(--accent, oklch(68% 0.21 255));
+		--xy-controls-button-border-color: var(--border, oklch(28% 0.009 250));
+		--xy-controls-box-shadow: 0 2px 6px rgb(0 0 0 / 0.4);
+		border-radius: 6px;
+		overflow: hidden;
 	}
 </style>
