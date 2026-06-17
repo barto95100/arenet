@@ -30,6 +30,11 @@ import (
 type stubMetrics struct {
 	id  string
 	agg Aggregate
+	// Phase 2.2 — optional per-host overrides for tests that
+	// exercise the AliasMetrics path. Keyed by "routeID|host".
+	// When nil or the key is absent, AggregateByHost returns
+	// the zero Aggregate (idle alias case).
+	hosts map[string]Aggregate
 }
 
 func (s stubMetrics) Aggregate(id string) Aggregate {
@@ -37,6 +42,13 @@ func (s stubMetrics) Aggregate(id string) Aggregate {
 		return s.agg
 	}
 	return Aggregate{}
+}
+
+func (s stubMetrics) AggregateByHost(routeID, host string) Aggregate {
+	if s.hosts == nil {
+		return Aggregate{}
+	}
+	return s.hosts[routeID+"|"+host]
 }
 
 // stubStatus returns the same canned status for any URL it

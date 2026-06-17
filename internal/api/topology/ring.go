@@ -55,6 +55,16 @@ const WindowSlots = 60
 type SlidingWindow struct {
 	mu     sync.RWMutex
 	routes map[string]*ringState
+	// hosts is the per-(routeID, host) state introduced by
+	// Topology Plan B Phase 2.2. Outer key = routeID, inner
+	// key = lowercased host. Independent of the route-level
+	// state above (per-host bumps come from the parallel
+	// Snapshot.Hosts slice the ticker produces).
+	//
+	// Memory budget (worst case): 50 routes × 30 aliases ×
+	// (60 slots × ~32 bytes/slot + ~48 bytes/map-entry) ≈
+	// ~100 KB total. Negligible at homelab cardinality.
+	hosts map[string]map[string]*ringState
 }
 
 // ringState is one route's per-tick history. Slots are stored in
@@ -77,6 +87,7 @@ type metricSlot struct {
 func NewSlidingWindow() *SlidingWindow {
 	return &SlidingWindow{
 		routes: make(map[string]*ringState),
+		hosts:  make(map[string]map[string]*ringState),
 	}
 }
 
@@ -97,6 +108,14 @@ func (w *SlidingWindow) Push(routeID string, reqs, errs uint64, p95Ms int32) {
 		rs = &ringState{slots: make([]metricSlot, 0, WindowSlots)}
 		w.routes[routeID] = rs
 	}
+	appendSlot(rs, reqs, errs, p95Ms)
+}
+
+// appendSlot is the shared slot-rotate helper used by both Push
+// (per-route) and PushHost (per-host). Splitting it out keeps the
+// rotation semantics in one place — if the WindowSlots / append
+// model changes, both call sites move together.
+func appendSlot(rs *ringState, reqs, errs uint64, p95Ms int32) {
 	slot := metricSlot{
 		Reqs:         reqs,
 		Errs:         errs,
@@ -104,10 +123,45 @@ func (w *SlidingWindow) Push(routeID string, reqs, errs uint64, p95Ms int32) {
 	}
 	if len(rs.slots) < WindowSlots {
 		rs.slots = append(rs.slots, slot)
-	} else {
-		copy(rs.slots, rs.slots[1:])
-		rs.slots[WindowSlots-1] = slot
+		return
 	}
+	copy(rs.slots, rs.slots[1:])
+	rs.slots[WindowSlots-1] = slot
+}
+
+// PushHost records one tick's metrics for a (routeID, host)
+// pair. Mirror of Push but for the per-host ring buffers.
+// Topology Plan B Phase 2.2 addition.
+//
+// Pushes for absent (routeID, host) pairs implicitly create the
+// outer + inner maps on first touch. The host string must
+// already be the canonical (lowercased + port-stripped) form —
+// the producer (Ticker.makeSnapshot consuming Registry.
+// SnapshotHosts()) preserves the canonical form chosen by the
+// Phase 1 middleware's resolveHost.
+//
+// Routes are NOT pruned here. See Prune.
+func (w *SlidingWindow) PushHost(routeID, host string, reqs, errs uint64, p95Ms int32) {
+	if host == "" {
+		// Empty host is not a valid key — defensive guard against a
+		// future producer that forgets to validate. Without this the
+		// inner map would acquire an "" entry that AggregateByHost
+		// would never query but Prune would never clear.
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	inner, ok := w.hosts[routeID]
+	if !ok {
+		inner = make(map[string]*ringState)
+		w.hosts[routeID] = inner
+	}
+	rs, ok := inner[host]
+	if !ok {
+		rs = &ringState{slots: make([]metricSlot, 0, WindowSlots)}
+		inner[host] = rs
+	}
+	appendSlot(rs, reqs, errs, p95Ms)
 }
 
 // Aggregate is the windowed view of one route, ready for the
@@ -125,8 +179,35 @@ type Aggregate struct {
 func (w *SlidingWindow) Aggregate(routeID string) Aggregate {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	rs, ok := w.routes[routeID]
-	if !ok || len(rs.slots) == 0 {
+	return aggregateRing(w.routes[routeID])
+}
+
+// AggregateByHost is the per-(routeID, host) windowed view.
+// Topology Plan B Phase 2.2 addition. Same semantics as
+// Aggregate but indexed on the (routeID, host) pair instead of
+// routeID alone. Unknown pairs (route exists but no traffic
+// yet on this alias) return zero — the topology builder
+// renders this as an idle alias entry sorted to the bottom of
+// the per-route alias list.
+func (w *SlidingWindow) AggregateByHost(routeID, host string) Aggregate {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	inner, ok := w.hosts[routeID]
+	if !ok {
+		return Aggregate{}
+	}
+	return aggregateRing(inner[host])
+}
+
+// aggregateRing is the shared aggregation kernel used by both
+// Aggregate and AggregateByHost. Pure on its input; safe to
+// call under either RLock or no lock as long as the ring isn't
+// mutated concurrently.
+//
+// Returns the zero Aggregate when rs is nil or empty — the
+// "idle entry" case the builder relies on.
+func aggregateRing(rs *ringState) Aggregate {
+	if rs == nil || len(rs.slots) == 0 {
 		return Aggregate{}
 	}
 	var (
@@ -138,16 +219,16 @@ func (w *SlidingWindow) Aggregate(routeID string) Aggregate {
 		totalErrs += s.Errs
 	}
 	out := Aggregate{
-		// Per-tick is per-second (metrics.TickInterval == 1s), so
-		// mean of slot Reqs IS the mean req/s — no extra division
-		// by tick width.
+		// Per-tick is per-second (metrics.TickInterval == 1s),
+		// so the mean of slot Reqs IS the mean req/s — no
+		// extra division by tick width.
 		ReqPerSec:    float64(totalReqs) / float64(len(rs.slots)),
 		P95LatencyMs: rs.slots[len(rs.slots)-1].LatencyP95Ms,
 	}
 	if totalReqs > 0 {
-		// Count-weighted error rate, expressed as a percentage to
-		// match the frontend TopologyRoute.errorRate5xx contract
-		// (0..100, not 0..1).
+		// Count-weighted error rate, expressed as a percentage
+		// to match the frontend TopologyRoute.errorRate5xx
+		// contract (0..100, not 0..1).
 		out.ErrorRate5xx = (float64(totalErrs) / float64(totalReqs)) * 100.0
 	}
 	return out
@@ -157,12 +238,21 @@ func (w *SlidingWindow) Aggregate(routeID string) Aggregate {
 // Called by the stream handler whenever the storage route list
 // changes (route deletion) to avoid an unbounded map for routes
 // that no longer exist.
+//
+// Phase 2.2 — also drops the corresponding per-host entries.
+// Inner maps are released wholesale so a renamed / deleted
+// route doesn't leak per-alias ring state.
 func (w *SlidingWindow) Prune(keep map[string]struct{}) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for id := range w.routes {
 		if _, ok := keep[id]; !ok {
 			delete(w.routes, id)
+		}
+	}
+	for id := range w.hosts {
+		if _, ok := keep[id]; !ok {
+			delete(w.hosts, id)
 		}
 	}
 }

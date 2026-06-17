@@ -18,6 +18,7 @@ package topology
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +45,12 @@ func (noopStatusLookup) Status(string) string { return StatusUnknown }
 // in tests without standing up a full window.
 type MetricsView interface {
 	Aggregate(routeID string) Aggregate
+	// AggregateByHost is the per-(routeID, host) windowed view.
+	// Topology Plan B Phase 2.2 addition. Unknown pairs return
+	// the zero Aggregate (idle alias case). *SlidingWindow
+	// satisfies this directly; the noopMetricsView fallback
+	// satisfies it via the zero return.
+	AggregateByHost(routeID, host string) Aggregate
 }
 
 // BuildSnapshot joins the storage route list with the windowed
@@ -124,10 +131,12 @@ func BuildSnapshot(
 // path-through transparently — wire shape stays well-typed.
 func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Route {
 	agg := metrics.Aggregate(r.ID)
+	aliasMetrics := buildAliasMetrics(r.ID, r.Aliases, metrics)
 	out := Route{
 		ID:           r.ID,
 		Host:         r.Host,
 		Aliases:      cloneStrings(r.Aliases),
+		AliasMetrics: aliasMetrics,
 		LBPolicy:     r.LBPolicy,
 		ReqPerSec:    agg.ReqPerSec,
 		P99LatencyMs: agg.P95LatencyMs, // p95 substitute, see types doc
@@ -210,7 +219,55 @@ func cloneStrings(in []string) []string {
 // Every route looks idle.
 type noopMetricsView struct{}
 
-func (noopMetricsView) Aggregate(string) Aggregate { return Aggregate{} }
+func (noopMetricsView) Aggregate(string) Aggregate                  { return Aggregate{} }
+func (noopMetricsView) AggregateByHost(string, string) Aggregate    { return Aggregate{} }
+
+// buildAliasMetrics assembles the per-alias breakdown for a
+// single route. Topology Plan B Phase 2.2.
+//
+// Returns a non-nil, possibly-empty slice so the wire shape is
+// always `aliasMetrics: []` rather than `aliasMetrics: null`
+// (the Route.AliasMetrics field is intentionally NOT
+// omitempty — see types.go docstring on the empty-vs-absent
+// distinction).
+//
+// Sort order: ReqPerSec descending so the operator-visible
+// "top consumers" appear first. Idle aliases (0 req/s — either
+// no traffic yet OR a configured-but-never-hit alias) sort to
+// the end. A stable secondary sort on the alias hostname
+// alphabetically gives the list a deterministic order across
+// ticks for aliases that share the same req/s (very common at
+// the 0-rate idle case).
+//
+// Host lookup uses the canonical lowercased form to match the
+// Phase 1 middleware's resolveHost — caddymgr emits lowercased
+// known_hosts (Phase 2.1) and the middleware bumps cells under
+// the lowercased key, so the AggregateByHost lookup MUST
+// lowercase the alias too. storage.Route.Aliases may carry
+// mixed-case operator input that we lowercase at lookup time.
+func buildAliasMetrics(routeID string, aliases []string, metrics MetricsView) []Alias {
+	out := make([]Alias, 0, len(aliases))
+	for _, a := range aliases {
+		key := strings.ToLower(strings.TrimSpace(a))
+		if key == "" {
+			continue
+		}
+		agg := metrics.AggregateByHost(routeID, key)
+		out = append(out, Alias{
+			Host:         a, // preserve the operator's original casing on the wire
+			ReqPerSec:    agg.ReqPerSec,
+			P99LatencyMs: agg.P95LatencyMs,
+			ErrorRate5xx: agg.ErrorRate5xx,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ReqPerSec != out[j].ReqPerSec {
+			return out[i].ReqPerSec > out[j].ReqPerSec
+		}
+		return out[i].Host < out[j].Host
+	})
+	return out
+}
 
 // HostBasename returns the part of host before the first dot.
 // Used by callers that want a short cluster label (e.g.

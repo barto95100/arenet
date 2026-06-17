@@ -253,6 +253,17 @@ func (h *StreamHandler) pushSnap(snap metrics.Snapshot) {
 	for _, r := range snap.Routes {
 		h.window.Push(r.ID, r.Reqs, r.Errs, 0)
 	}
+	// Topology Plan B Phase 2.2 — fan the per-host deltas into
+	// the SlidingWindow's per-host ring buffers. The producer
+	// (Ticker.makeSnapshot) populates snap.Hosts from the
+	// Registry's parallel SnapshotHosts() drain on the same
+	// 1Hz tick, so this loop preserves the per-route invariant
+	// (Reqs == ReqPerSec since TickInterval == 1s). Stage A
+	// limitation on p95 carries through unchanged — we push 0
+	// for per-host p95 too.
+	for _, hs := range snap.Hosts {
+		h.window.PushHost(hs.RouteID, hs.Host, hs.Reqs, hs.Errs, 0)
+	}
 }
 
 // emitOnce builds the snapshot from the current window + storage

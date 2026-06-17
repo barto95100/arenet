@@ -154,10 +154,29 @@ func (t *Ticker) Run(ctx context.Context) {
 // implementation owns its own error logging.
 func (t *Ticker) makeSnapshot(ctx context.Context, now time.Time) Snapshot {
 	deltas := t.registry.Snapshot()
+	// Topology Plan B Phase 2.2 — drain the per-host deltas
+	// alongside the per-route ones. The two drains are
+	// independent (each touches its own cells map), so calling
+	// them sequentially is correct. Translation to the wire-
+	// internal HostSnapshot shape happens here so subscribers
+	// see a fully-assembled slice rather than the registry's
+	// HostDelta primitive.
+	hostDeltas := t.registry.SnapshotHosts()
+	hosts := make([]HostSnapshot, 0, len(hostDeltas))
+	for _, hd := range hostDeltas {
+		hosts = append(hosts, HostSnapshot{
+			RouteID:      hd.RouteID,
+			Host:         hd.Host,
+			Reqs:         hd.Reqs,
+			Errs:         hd.Errs,
+			Errs4xx:      hd.Errs4xx,
+			LatencyP95Ms: hd.LatencyP95Ms,
+		})
+	}
 
 	routes, err := t.lister.ListRoutesForMetrics(ctx)
 	if err != nil {
-		return Snapshot{T: now.UTC(), Routes: []RouteSnapshot{}}
+		return Snapshot{T: now.UTC(), Routes: []RouteSnapshot{}, Hosts: hosts}
 	}
 
 	out := make([]RouteSnapshot, 0, len(routes))
@@ -187,5 +206,5 @@ func (t *Ticker) makeSnapshot(ctx context.Context, now time.Time) Snapshot {
 			t.consumer.Consume(rt.ID, d.Reqs, d.Errs4xx, d.Errs, d.LatencyP95Ms)
 		}
 	}
-	return Snapshot{T: now.UTC(), Routes: out}
+	return Snapshot{T: now.UTC(), Routes: out, Hosts: hosts}
 }

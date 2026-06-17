@@ -56,6 +56,27 @@ type Route struct {
 	ID      string   `json:"id"`
 	Host    string   `json:"host"`
 	Aliases []string `json:"aliases,omitempty"`
+	// AliasMetrics is the per-alias breakdown introduced by
+	// Topology Plan B Phase 2.2. One entry per route alias
+	// (NOT including the primary host — its metrics live at
+	// the route level via ReqPerSec / P99LatencyMs /
+	// ErrorRate5xx above). Sorted by ReqPerSec descending so
+	// the frontend can lay aliases out as first-class nodes
+	// with the top consumers at the top of the column.
+	//
+	// V1 wire-shape policy: additive (Aliases []string
+	// preserved so the legacy frontend keeps rendering
+	// host badges without crashing during the phased rollout
+	// — see Phase 3 frontend AliasNode component which
+	// switches to consuming AliasMetrics). A future cleanup
+	// can drop Aliases []string once every consumer has
+	// migrated.
+	//
+	// Always emitted (omitempty omitted intentionally): even
+	// when len == 0 the field renders as `[]` so the frontend
+	// can distinguish "no aliases configured" from "field
+	// not present". JSON-shape-stable contract.
+	AliasMetrics []Alias `json:"aliasMetrics"`
 
 	Upstreams []Upstream `json:"upstreams"`
 	LBPolicy  string     `json:"lbPolicy"`
@@ -129,6 +150,33 @@ type Upstream struct {
 	ReqPerSec             float64 `json:"reqPerSec"`
 	P99LatencyMs          int32   `json:"p99LatencyMs"`
 	FairnessRatio         float64 `json:"fairnessRatio"`
+}
+
+// Alias is one entry in Route.AliasMetrics. Topology Plan B
+// Phase 2.2 addition. Surfaces a route alias as a first-class
+// data point with its own windowed metrics, so the frontend
+// (Phase 3) can render aliases as their own nodes in the
+// topology graph rather than collapsing them into the primary
+// host's tooltip.
+//
+// The metrics fields mirror the per-route subset of Route:
+//   - ReqPerSec: mean req/s across the 60s sliding window
+//     (same definition as Route.ReqPerSec, just scoped to one
+//     alias host instead of the whole route).
+//   - P99LatencyMs: per-tick p95 substitute (Stage A
+//     limitation carried from Route).
+//   - ErrorRate5xx: percentage 0..100 (same scale as Route).
+//
+// Reqs is the raw per-second request count (mean across the
+// window), surfaced as float64 instead of uint64 to keep the
+// frontend math consistent with ReqPerSec — the operator-
+// visible "top consumer" sort is computed off ReqPerSec
+// directly.
+type Alias struct {
+	Host         string  `json:"host"`
+	ReqPerSec    float64 `json:"reqPerSec"`
+	P99LatencyMs int32   `json:"p99LatencyMs"`
+	ErrorRate5xx float64 `json:"errorRate5xx"`
 }
 
 // HealthStatus enum values mirroring the frontend `HealthStatus`

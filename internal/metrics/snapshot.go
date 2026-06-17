@@ -115,4 +115,37 @@ type RouteSnapshot struct {
 type Snapshot struct {
 	T      time.Time       `json:"t"`
 	Routes []RouteSnapshot `json:"routes"`
+	// Hosts is the per-(routeID, host) breakdown drained
+	// alongside the per-route Routes slice on every tick.
+	// Topology Plan B Phase 2.2 addition — populated by
+	// Ticker.makeSnapshot from Registry.SnapshotHosts() and
+	// consumed by topology_stream.go's pushSnap to feed the
+	// SlidingWindow's per-host ring buffers.
+	//
+	// json:"-" is intentional: the WS broadcast wire shape
+	// (spec §5.2) is Routes-only; surfacing per-host data on
+	// the WebSocket would break the existing
+	// /api/v1/ws/topology and /api/v1/topology/stream
+	// consumers. The per-host data is delivered exclusively
+	// in-process to subscribers that decode the Snapshot
+	// struct field directly. The HTTP /topology/snapshot
+	// endpoint surfaces a different per-host shape (Alias
+	// objects) via the SlidingWindow's AggregateByHost.
+	Hosts []HostSnapshot `json:"-"`
+}
+
+// HostSnapshot is one (routeID, host) entry in the per-tick
+// Snapshot.Hosts slice. Topology Plan B Phase 2.2 addition.
+//
+// Fields mirror the per-route RouteSnapshot shape — Reqs / Errs
+// / per-tick latency — so the SlidingWindow's per-host ring
+// state can reuse the same metricSlot layout. Reqs == ReqPerSec
+// here too since TickInterval == 1s.
+type HostSnapshot struct {
+	RouteID      string
+	Host         string
+	Reqs         uint64
+	Errs         uint64
+	Errs4xx      uint64
+	LatencyP95Ms int32
 }
