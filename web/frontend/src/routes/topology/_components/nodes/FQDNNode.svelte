@@ -74,18 +74,35 @@
         // surface the aggregate as a hint of what's behind the
         // chevron. Format mirrors the FQDNNode meta line shape
         // (mono font, fg-dim colour, see CSS).
+        //
+        // HOTFIX (2026-06-17, post-Phase-3.e ship) — overflow
+        // bug : the original format "N aliases · X.XX req/s
+        // total" wrapped to a 3rd line on the 21-alias traefik
+        // route ("21 aliases · 0.10 req/s total" = 32 chars,
+        // content width 176 px at the 10.5 px mono font is
+        // ~28 chars), pushing the primary FQDN card past the
+        // RouteGroupNode container bounds at the top.
+        //
+        // Fix : tighter format ":
+        //  - drop " total" (redundant — "21 aliases" already
+        //    implies an aggregate).
+        //  - " req/s" → " r/s" (matches AliasNode's rate label
+        //    convention so the two surfaces read consistently).
+        // Result : "21 aliases · 0.10 r/s" = 21 chars, fits in
+        // ~134 px — comfortably under the 176 px budget even at
+        // 1000-alias pathological cardinality.
         let collapsedMeta = $derived.by(() => {
                 const count = data.aliasCount ?? 0;
                 if (count === 0) return data.meta;
                 const noun = count === 1 ? 'alias' : 'aliases';
                 const total = formatRate(data.aliasTotalRps ?? 0);
-                return `${count} ${noun} · ${total} total`;
+                return `${count} ${noun} · ${total}`;
         });
 
         function formatRate(rps: number): string {
-                if (rps === 0) return '0 req/s';
-                if (rps < 10) return `${rps.toFixed(2)} req/s`;
-                return `${Math.round(rps)} req/s`;
+                if (rps === 0) return '0 r/s';
+                if (rps < 10) return `${rps.toFixed(2)} r/s`;
+                return `${Math.round(rps)} r/s`;
         }
 </script>
 
@@ -216,6 +233,18 @@
                 font-family: var(--font-mono, ui-monospace, monospace);
                 font-size: 10.5px;
                 color: var(--fg-dim, oklch(54% 0.011 250));
+                /* HOTFIX (2026-06-17) — single-line guarantee.
+                   The collapsed meta "N aliases · X r/s" is tight
+                   on the 176 px content budget already; an
+                   unforeseen growth path (e.g. a 4-digit alias
+                   count with a 3-digit rate) must NOT wrap and
+                   push the card past the RouteGroupNode container
+                   bounds. Truncate with an ellipsis instead — the
+                   tooltip on the meta div carries the full text
+                   for the curious operator. */
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
         }
 
         /* Phase 3.e — chevron toggle. Sits between the host name

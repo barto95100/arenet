@@ -15,8 +15,11 @@
 //     for the right route ID, propagation stopped so SvelteFlow
 //     doesn't also select the node.
 //   - collapsed routes render the aggregate meta "N aliases · X
-//     req/s total" instead of the per-route req/s line, expanded
-//     routes render the layout's data.meta verbatim.
+//     r/s" instead of the per-route req/s line, expanded routes
+//     render the layout's data.meta verbatim. The compact "r/s"
+//     suffix (vs the verbose "req/s total") is the HOTFIX from
+//     the post-Phase-3.e ship — see the format comment block in
+//     FQDNNode.svelte for the overflow rationale.
 //
 // The collapsedRoutes store import is the real module — the test
 // resets it between cases via the store's own reset() helper.
@@ -137,7 +140,7 @@ describe('FQDNNode chevron toggle', () => {
 		expect(stopSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it('collapsed routes render aggregate meta "N aliases · X req/s total"', () => {
+	it('collapsed routes render aggregate meta "N aliases · X r/s" (compact, single-line)', () => {
 		render(FQDNNode, {
 			props: nodeProps(
 				makeData({
@@ -148,10 +151,16 @@ describe('FQDNNode chevron toggle', () => {
 				})
 			)
 		});
-		// "21 aliases · 5.34 req/s total" with formatRate's
-		// 2-decimal at < 10 r/s policy.
-		expect(screen.getByText('21 aliases · 5.34 req/s total')).toBeInTheDocument();
+		// HOTFIX (2026-06-17) — the format is "N aliases · X r/s"
+		// (no " total" suffix, "r/s" not "req/s"). Verbose
+		// "21 aliases · 5.34 req/s total" wrapped to 3 lines in
+		// the 176 px content budget and pushed the FQDN past its
+		// RouteGroupNode container.
+		expect(screen.getByText('21 aliases · 5.34 r/s')).toBeInTheDocument();
 		expect(screen.queryByText('should-not-appear-when-collapsed')).toBeNull();
+		// Defensive : the literal string "total" must not appear
+		// anywhere in the rendered meta.
+		expect(screen.queryByText(/total/)).toBeNull();
 	});
 
 	it('expanded routes render layout-provided data.meta verbatim', () => {
@@ -172,11 +181,46 @@ describe('FQDNNode chevron toggle', () => {
 		const { unmount } = render(FQDNNode, {
 			props: nodeProps(makeData({ aliasCount: 1, aliasTotalRps: 0.5, collapsed: true }))
 		});
-		expect(screen.getByText('1 alias · 0.50 req/s total')).toBeInTheDocument();
+		expect(screen.getByText('1 alias · 0.50 r/s')).toBeInTheDocument();
 		unmount();
 		render(FQDNNode, {
 			props: nodeProps(makeData({ aliasCount: 2, aliasTotalRps: 0, collapsed: true }))
 		});
-		expect(screen.getByText('2 aliases · 0 req/s total')).toBeInTheDocument();
+		expect(screen.getByText('2 aliases · 0 r/s')).toBeInTheDocument();
+	});
+
+	it('collapsed meta string stays under the FQDN content-width budget at pathological counts', () => {
+		// Empirical bound : the FQDN card is 200 px wide with
+		// 12 px lateral padding, leaving 176 px of content width.
+		// The meta uses a 10.5 px mono font (≈6.3 px / char in
+		// most mono faces), so ~28 chars is the practical wrap
+		// threshold. The format change cuts the meta to ~21
+		// chars at 21 aliases; this test pins the upper bound
+		// for the worst plausible homelab scale (1000 aliases,
+		// 1 r/s aggregate = "1000 aliases · 1 r/s" = 20 chars).
+		const MAX_CHARS = 26; // headroom over the 28-char wrap line
+		const cases = [
+			{ aliasCount: 1, aliasTotalRps: 0 },
+			{ aliasCount: 21, aliasTotalRps: 0.1 },
+			{ aliasCount: 21, aliasTotalRps: 5.34 },
+			{ aliasCount: 21, aliasTotalRps: 999 },
+			{ aliasCount: 1000, aliasTotalRps: 0.1 },
+			{ aliasCount: 1000, aliasTotalRps: 999 }
+		];
+		for (const c of cases) {
+			const { container, unmount } = render(FQDNNode, {
+				props: nodeProps(makeData({ ...c, collapsed: true }))
+			});
+			const meta = container.querySelector('.meta') as HTMLElement;
+			const text = (meta.textContent ?? '').trim();
+			if (text.length > MAX_CHARS) {
+				throw new Error(
+					`collapsed meta too long for aliasCount=${c.aliasCount} ` +
+						`aliasTotalRps=${c.aliasTotalRps}: ` +
+						`"${text}" (${text.length} chars, max ${MAX_CHARS})`
+				);
+			}
+			unmount();
+		}
 	});
 });
