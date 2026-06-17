@@ -306,7 +306,7 @@ type Route struct {
 	// http-only routes — keeps the on-wire / on-disk shape
 	// byte-equal with pre-fix snapshots for HTTP routes,
 	// minimising diff noise during backup/restore.
-	InsecureSkipVerify bool      `json:"insecure_skip_verify,omitempty"`
+	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
 	// UploadStreamingMode (Phase 4.5, #R-WAF-BUFFER-OOM-ON-
 	// LARGE-UPLOADS, 2026-06-14) is a per-route toggle that
 	// neutralises the two RAM-buffering surfaces hit by big
@@ -347,9 +347,48 @@ type Route struct {
 	// JSON omitempty so HTTP/non-streaming routes stay
 	// byte-equal with pre-fix snapshots on disk and in
 	// backup/restore exports.
-	UploadStreamingMode bool      `json:"upload_streaming_mode,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	UploadStreamingMode bool `json:"upload_streaming_mode,omitempty"`
+	// WAFDisableCRS (Step X.1, 2026-06-17) is the per-route opt-
+	// out from the OWASP Core Rule Set load. When true, the
+	// route's arenet_waf handler runs with @coraza.conf-recommended
+	// only — the WAF engine is wired (events still emit if a rule
+	// happens to fire) but NO CRS rule families are loaded, so
+	// the per-request cost drops to a Coraza dispatch with zero
+	// rules to evaluate. When false (the default for every
+	// pre-X.1 route + every fresh-create route), the handler
+	// keeps the pre-X.1 directives chain
+	// (`Include @coraza.conf-recommended` + `@crs-setup.conf.example`
+	// + `@owasp_crs/*.conf`) and loads the full CRS via the
+	// embedded FS.
+	//
+	// Polarity rationale: the inverted shape ("disable" defaults
+	// to false ⇒ CRS loaded) means pre-X.1 stored routes decode
+	// with WAFDisableCRS=false ⇒ byte-equivalent runtime to the
+	// pre-X.1 behaviour. No boot migration needed (the
+	// migrateWAFEnabledToWAFMode / migrate.go pattern is reserved
+	// for shape changes where the zero-value would mean something
+	// wrong; here zero ⇒ "current behaviour", so the JSON decoder's
+	// zero-fill is the migration). See ADR D2 + D5 in
+	// docs/superpowers/decisions/2026-06-17-step-owasp-per-route-
+	// decisions.md.
+	//
+	// Use case: trusted internal API ("nas.lan", "prometheus.local")
+	// where the operator wants the WAF infrastructure wired
+	// (mode-aware sink, event audit, dashboard counter all still
+	// fire if a rule were loaded) but doesn't want the ~10 ms
+	// per-request cost or the ~50 MB warm-pool RAM of the full
+	// CRS load. WAFMode and WAFDisableCRS are independent: any
+	// combination is valid. The natural combo
+	// {WAFMode=detect, WAFDisableCRS=true} keeps the handler
+	// observing but loads zero rules, so the operator can flip
+	// the disable bit off when they want to actually inspect.
+	//
+	// JSON omitempty so pre-X.1 routes (and routes that keep
+	// the default) stay byte-equal with pre-X.1 snapshots on disk
+	// + in backup/restore exports.
+	WAFDisableCRS bool      `json:"waf_disable_crs,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route

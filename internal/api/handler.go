@@ -206,11 +206,11 @@ type AuditAppender interface {
 // reload, audit, auth stores, HIBP, rate limiter, setup token) and
 // exposes the HTTP handlers.
 type Handler struct {
-	store       *storage.Store
-	caddy       CaddyReloader
-	audit       AuditAppender
-	users       *auth.UserStore
-	sessions    *auth.SessionStore
+	store    *storage.Store
+	caddy    CaddyReloader
+	audit    AuditAppender
+	users    *auth.UserStore
+	sessions *auth.SessionStore
 	// systemHealthChecker (Step AL.3a) runs the 5-component
 	// /system/health probe. nil-tolerant: when nil, the
 	// handler returns a coherent degraded response so the
@@ -251,7 +251,7 @@ type Handler struct {
 	// is kept here so the service-account endpoints (rotate,
 	// revoke) can mutate the store; the middleware receives the
 	// nil-safe interface view via tokenLookup().
-	apiTokens *auth.APITokenStore
+	apiTokens   *auth.APITokenStore
 	hibp        *auth.HIBPClient
 	rateLimiter *auth.RateLimiter
 	setupToken  *SetupTokenHolder
@@ -1072,6 +1072,17 @@ type routeRequest struct {
 	// effects are coupled in one toggle on purpose — operators
 	// flipping one without the other always wanted both.
 	UploadStreamingMode *bool `json:"uploadStreamingMode,omitempty"`
+	// WAFDisableCRS (Step X.1, 2026-06-17) opts the route out
+	// of the OWASP CRS load. nil pointer = preserve-on-omit
+	// (PUT) / default false (POST) — mirror of the
+	// UploadStreamingMode shape. See storage.Route.WAFDisableCRS
+	// for the runtime semantics + ADR D2 for the polarity
+	// rationale. The field stays valid for any WAFMode
+	// (off / detect / block) ; for off-mode routes the
+	// caddymgr emit short-circuits before WAFDisableCRS is
+	// consulted, so the flag is silent until the operator
+	// turns the mode on.
+	WAFDisableCRS *bool `json:"wafDisableCRS,omitempty"`
 }
 
 // countryBlockReq is the wire-side shape of Route.CountryBlock.
@@ -1264,6 +1275,12 @@ type routeResponse struct {
 	// when false (preserve-on-omit at PUT relies on nil to
 	// detect omission, false to detect explicit-off).
 	UploadStreamingMode bool `json:"uploadStreamingMode"`
+	// WAFDisableCRS (Step X.1) — same echo-on-every-GET shape
+	// as UploadStreamingMode. The frontend toggle starts from
+	// the persisted value; the GET→PUT round-trip echoes the
+	// field even when false so the preserve-on-omit semantic
+	// (nil = omission, false = explicit off) stays sound.
+	WAFDisableCRS bool `json:"wafDisableCRS"`
 	// Critique 11 Pack A (2026-06-05) — derived per-route
 	// aggregate from the Stage B HC tracker. One of:
 	//   "healthy"   — HC enabled AND every upstream healthy in tracker
@@ -1353,9 +1370,10 @@ func toResponse(r storage.Route) routeResponse {
 			Passes:       r.HealthCheck.Passes,
 			Fails:        r.HealthCheck.Fails,
 		},
-		CountryBlock:       toCountryBlockResp(r.CountryBlock),
+		CountryBlock:        toCountryBlockResp(r.CountryBlock),
 		InsecureSkipVerify:  r.InsecureSkipVerify,
 		UploadStreamingMode: r.UploadStreamingMode,
+		WAFDisableCRS:       r.WAFDisableCRS,
 		CreatedAt:           r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:           r.UpdatedAt.UTC().Format(timestampFormat),
 	}

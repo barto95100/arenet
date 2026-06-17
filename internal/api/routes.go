@@ -1094,6 +1094,12 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	if req.UploadStreamingMode != nil {
 		streamingMode = *req.UploadStreamingMode
 	}
+	// Step X.1 — WAFDisableCRS on POST: same default-false +
+	// non-nil-overrides shape as UploadStreamingMode above.
+	disableCRS := false
+	if req.WAFDisableCRS != nil {
+		disableCRS = *req.WAFDisableCRS
+	}
 	newRoute := storage.Route{
 		Host:            req.Host,
 		Upstreams:       storeUpstreams,
@@ -1118,6 +1124,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		CountryBlock:        newCountryBlock,
 		InsecureSkipVerify:  skipVerify,
 		UploadStreamingMode: streamingMode,
+		WAFDisableCRS:       disableCRS,
 	}
 	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
 	// the corresponding sub-struct (storage trusts the API to
@@ -1498,6 +1505,12 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	if req.UploadStreamingMode != nil {
 		streamingMode = *req.UploadStreamingMode
 	}
+	// Step X.1 — WAFDisableCRS on PUT: same preserve-on-nil +
+	// replace-on-non-nil shape as UploadStreamingMode above.
+	disableCRS := previous.WAFDisableCRS
+	if req.WAFDisableCRS != nil {
+		disableCRS = *req.WAFDisableCRS
+	}
 	newRoute := storage.Route{
 		ID:              id,
 		Host:            req.Host,
@@ -1523,6 +1536,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		CountryBlock:        newCountryBlock,
 		InsecureSkipVerify:  skipVerify,
 		UploadStreamingMode: streamingMode,
+		WAFDisableCRS:       disableCRS,
 	}
 	if newRoute.AuthMode != storage.RouteAuthBasic {
 		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}

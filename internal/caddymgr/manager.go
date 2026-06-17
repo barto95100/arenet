@@ -1310,7 +1310,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//     mutations would otherwise confuse the rules);
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
-		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode); wafHandler != nil {
+		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS); wafHandler != nil {
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -2259,19 +2259,50 @@ func normalizeKnownHost(h string) string {
 	return strings.ToLower(h)
 }
 
-func buildWAFHandler(routeID, host, mode string, skipBody bool) map[string]any {
+func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
+	}
+	// Step X.1 (2026-06-17) — per-route CRS load opt-out. When
+	// disableCRS is true, the handler is wired but :
+	//   - the embedded coreruleset FS is NOT mounted by the
+	//     arenet_waf module at Provision time
+	//     (load_owasp_crs:false).
+	//   - EVERY `@`-Include directive is stripped from the
+	//     directives string. The Coraza-style `@<name>` Include
+	//     aliases (including @coraza.conf-recommended,
+	//     @crs-setup.conf.example, @owasp_crs/*.conf) are ALL
+	//     served by the same coreruleset FS — empirically
+	//     verified at /Users/.../coraza-coreruleset/rules/
+	//     contains the three of them. So if the FS isn't
+	//     mounted, NONE of the @-Includes can resolve, and
+	//     Coraza fails at Provision time with "failed to
+	//     readfile: open @coraza.conf-recommended: no such
+	//     file or directory" (smoke-caught regression while
+	//     drafting X.1).
+	//
+	// The "WAF wired, loads nothing" posture is exactly what
+	// the operator wants for a trusted internal API : the
+	// arenet_waf handler still slots into the chain, the
+	// mode-aware event sink + audit log + dashboard counter
+	// remain wired (no rule trips because no rules loaded, but
+	// the surface is in place if the operator ever flips the
+	// disable bit off). Coraza's engine constructs cleanly with
+	// zero directives beyond SecRuleEngine itself.
+	loadCRS := !disableCRS
+	directives := ""
+	if loadCRS {
+		directives = "Include @coraza.conf-recommended\n" +
+			"Include @crs-setup.conf.example\n" +
+			"Include @owasp_crs/*.conf"
 	}
 	out := map[string]any{
 		"handler":        "arenet_waf",
 		"route_id":       routeID,
 		"host":           host,
 		"mode":           mode,
-		"load_owasp_crs": true,
-		"directives": "Include @coraza.conf-recommended\n" +
-			"Include @crs-setup.conf.example\n" +
-			"Include @owasp_crs/*.conf",
+		"load_owasp_crs": loadCRS,
+		"directives":     directives,
 	}
 	// Phase 4.5 — when the route opts into upload streaming
 	// mode, tell the arenet_waf handler to skip the request-
