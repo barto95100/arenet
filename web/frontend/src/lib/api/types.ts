@@ -227,6 +227,30 @@ export interface Route {
 	 */
 	uploadStreamingMode: boolean;
 	/**
+	 * Step X.1 — per-route opt-out from the OWASP CRS load. When
+	 * true, the route's arenet_waf handler runs with NO @-Includes
+	 * (no @coraza.conf-recommended, no @crs-setup, no
+	 * @owasp_crs/*.conf), so Coraza loads zero rules even when the
+	 * mode is detect or block. The handler is still wired — the
+	 * event sink + audit log + dashboard counter all stay alive —
+	 * so flipping the flag back to false re-engages the full CRS
+	 * without any storage migration.
+	 *
+	 * Use case : trusted internal API on the LAN where the operator
+	 * wants the WAF infrastructure observable + cheap (per-request
+	 * cost ~ Coraza dispatch, no rule evaluation) but doesn't need
+	 * the ~10 ms latency + ~50 MB RAM of the full CRS rule set.
+	 *
+	 * Default false (CRS loaded). Always present (storage
+	 * zero-value reads back as false via the response shape). The
+	 * frontend toggle lives in the WAF settings block alongside
+	 * uploadStreamingMode + wafMode. ADR D2 (inverted polarity)
+	 * explains why the field defaults to "not disabled" rather
+	 * than the positive "loaded": zero-value alignment with
+	 * pre-X.1 stored rows.
+	 */
+	wafDisableCRS: boolean;
+	/**
 	 * Count of upstreams the HC tracker has observed as healthy.
 	 * Zero on routes without HC configured (the C13 gate doesn't
 	 * peek at tracker state). Used by the Routes table to render
@@ -473,6 +497,16 @@ export interface RouteRequest {
 	 *   - present (true | false) → full replacement
 	 */
 	uploadStreamingMode?: boolean;
+	/**
+	 * Step X.1 — wafDisableCRS toggle on the wire. Mirror of
+	 * uploadStreamingMode's preserve-on-omit shape (the backend
+	 * routeRequest uses *bool with the exact same semantic).
+	 *   - omitted on POST → default false (CRS loaded — pre-X.1
+	 *                       byte-equivalent runtime).
+	 *   - omitted on PUT  → preserve previously stored value.
+	 *   - present (true | false) → full replacement.
+	 */
+	wafDisableCRS?: boolean;
 }
 
 /**

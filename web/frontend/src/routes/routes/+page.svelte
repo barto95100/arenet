@@ -36,6 +36,7 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import CertSourceBadge from '$lib/components/CertSourceBadge.svelte';
 	import Modal from '$lib/components/Modal.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Checkbox from '$lib/components/Checkbox.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -98,7 +99,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS'> & {
 		healthCheck: HealthCheck;
 		// W.5 — narrow to the non-optional shape. The form
 		// always carries a CountryBlockRequest (mode="off"
@@ -117,6 +118,10 @@
 		// payload re-introduces undefined for preserve-on-
 		// omit semantics on PUT.
 		uploadStreamingMode: boolean;
+		// Step X.2 — same narrowing as uploadStreamingMode :
+		// form holds a definite bool ; payload reintroduces
+		// undefined for preserve-on-omit on PUT.
+		wafDisableCRS: boolean;
 	};
 	let formData = $state<FormData>(emptyFormData());
 	let healthCheckTouched = $state(false);
@@ -153,6 +158,12 @@
 			// body inspection + Caddy buffering. Independent
 			// from wafMode (any combination is valid).
 			uploadStreamingMode: false,
+			// Step X.2 — CRS is loaded by default. Opt-in only
+			// (security-reducing) — the toggle in the WAF
+			// settings block triggers the ADR-D4 confirm
+			// dialog before this can flip true. Independent
+			// from wafMode (any combination is valid).
+			wafDisableCRS: false,
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
 			// further down; operators opting in pick a mode +
@@ -303,6 +314,13 @@
 	let confirmTarget = $state<Route | null>(null);
 	let deleting = $state(false);
 
+	// Step X.2 — confirm dialog state for the security-reducing
+	// wafDisableCRS toggle (ADR D4). Opened ONLY when the operator
+	// flips the toggle from false → true ; the reverse flip
+	// (re-enabling CRS) is always safe so it bypasses the dialog.
+	let confirmDisableCRSOpen = $state(false);
+
+
 	// Step J.3: errors map keyed by formData field path. Replaces
 	// the per-field $state<string> pattern from Step I (hostError,
 	// upstreamError) — that pattern doesn't scale to the ~13 new
@@ -319,6 +337,49 @@
 	// return to the empty state. Used by the "Cancel" button in
 	// the panel footer. The route stays in the list; only the
 	// selection + form state are dropped.
+	// Step X.2 — change handler for the wafDisableCRS checkbox.
+	// The checkbox is BOUND to formData.wafDisableCRS via the
+	// `checked` prop (one-way), and `onchange` is mediated here so
+	// the false → true transition can be guarded behind the
+	// ADR-D4 confirm dialog without losing the operator's click.
+	//
+	// Logic :
+	//   - intent true (operator just ticked the box) while
+	//     formData.wafDisableCRS is still false : open the
+	//     dialog. We DO NOT mutate ev.target.checked manually —
+	//     instead we leave formData unchanged ; Svelte's next
+	//     render pass synchronises ev.target.checked back to the
+	//     formData value (false) automatically. The
+	//     dialog's onConfirm commits the true ; cancel is a no-op
+	//     by construction (formData stays false ⇒ visual stays
+	//     false on next render).
+	//   - intent false (operator unticked an already-checked box):
+	//     flip immediately, no dialog. Re-enabling CRS is a
+	//     security-improving action ; the ADR only gates the
+	//     security-reducing direction.
+	function onWAFDisableCRSChange(ev: Event): void {
+		const target = ev.target as HTMLInputElement;
+		const next = target.checked;
+		if (next && !formData.wafDisableCRS) {
+			// false → true requested. Roll the visual tick back
+			// immediately so the checkbox shows unchecked while
+			// the dialog awaits confirmation. Svelte's reactive
+			// `checked={formData.wafDisableCRS}` would normally do
+			// this on next render, but the browser-set property
+			// can race the render in jsdom — explicit reset keeps
+			// the test + the live UX deterministic.
+			target.checked = false;
+			confirmDisableCRSOpen = true;
+			return;
+		}
+		formData.wafDisableCRS = next;
+	}
+
+	function onConfirmDisableCRS(): void {
+		formData.wafDisableCRS = true;
+		confirmDisableCRSOpen = false;
+	}
+
 	function closePanel() {
 		formOpen = false;
 		formMode = 'create';
@@ -506,6 +567,18 @@
 	function clickOutsideToClose(node: HTMLElement) {
 		function handle(event: MouseEvent) {
 			if (!formOpen) return;
+			// Step X.2 — when a child confirm dialog (ConfirmDialog
+			// for the wafDisableCRS toggle) is open, clicks on
+			// its buttons land OUTSIDE the form panel (the dialog
+			// is portalled to body via <Modal>) and would
+			// otherwise trigger closePanel here, unmounting the
+			// route form while the operator is still interacting
+			// with the dialog. Suppressing the outside-close while
+			// any guarded dialog is open keeps the form alive
+			// across the dialog round-trip. Same guard the wider
+			// Modal pattern would benefit from if more dialogs
+			// are wired in the future.
+			if (confirmDisableCRSOpen) return;
 			const target = event.target;
 			if (!(target instanceof Node)) return;
 			if (node.contains(target)) return;
@@ -629,6 +702,12 @@
 			// purely defensive for very old pre-4.5 snapshots
 			// that might have been restored without the field.
 			uploadStreamingMode: r.uploadStreamingMode ?? false,
+			// Step X.2 — load the persisted CRS-disable state
+			// so the toggle reflects what's actually saved.
+			// Pre-X.1 snapshots decode as undefined → defaults
+			// to false (CRS loaded — byte-equivalent to the
+			// pre-X.1 runtime, per ADR D2).
+			wafDisableCRS: r.wafDisableCRS ?? false,
 			// Step J.2: the server's HealthCheck is always present
 			// on the wire (no omitempty). The form holds it as-is;
 			// edit-mode shows explicit values (server materialised
@@ -1216,6 +1295,12 @@
 			// strict-false default cleanly; on PUT it's a full
 			// replacement aligned with the visible toggle state.
 			payload.uploadStreamingMode = formData.uploadStreamingMode;
+			// Step X.2 — always ship wafDisableCRS. Same shape
+			// as uploadStreamingMode : POST captures the
+			// strict-false default ; PUT is full replacement
+			// aligned with the toggle state the operator
+			// confirmed via the ADR-D4 dialog.
+			payload.wafDisableCRS = formData.wafDisableCRS;
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
 			// server preserve the previously stored value (on PUT)
@@ -2309,6 +2394,47 @@
 							scanné. Garde ce toggle désactivé pour les routes API/web où
 							l'analyse SQL/XSS du body est utile.
 						</p>
+
+						<!-- Step X.2 — wafDisableCRS toggle. Sits in
+						     the same WAF block as wafMode +
+						     uploadStreamingMode so the three knobs
+						     read as one consolidated WAF surface. The
+						     change is mediated by onWAFDisableCRSChange
+						     instead of a direct bind so the false →
+						     true direction can be gated behind the
+						     ADR-D4 confirm dialog ; the visual checked
+						     state still reflects formData.wafDisableCRS
+						     so an operator who cancels the dialog
+						     sees the box flip back to its previous
+						     unchecked state. -->
+						<label
+							class="inline-flex items-start gap-2 text-sm text-secondary mt-3 cursor-pointer"
+							data-testid="waf-disable-crs-toggle-label"
+						>
+							<input
+								type="checkbox"
+								checked={formData.wafDisableCRS}
+								onchange={onWAFDisableCRSChange}
+								class="mt-0.5"
+								data-testid="waf-disable-crs-toggle"
+							/>
+							<span>
+								Désactiver les règles OWASP CRS
+								<span class="text-muted">(API internes de confiance)</span>
+							</span>
+						</label>
+						<p class="text-xs text-muted mt-1 max-w-prose">
+							Coupe le chargement de l'OWASP Core Rule Set sur cette route :
+							plus de règles <strong>SQLi</strong> / <strong>XSS</strong> /
+							<strong>RCE</strong> / <strong>LFI</strong> / Protocol. Le
+							handler WAF reste branché (compteur dashboard + audit log
+							intacts) mais Coraza ne charge plus aucune règle, donc aucune
+							ne peut déclencher. À utiliser uniquement pour les APIs
+							internes de confiance (LAN) ou les routes legacy où le CRS
+							génère des false-positives récurrents. Le mode WAF
+							(Detect/Block) reste actif structurellement — il deviendrait
+							effectif dès le réactivation du CRS.
+						</p>
 					</div>
 
 					<!-- W.5 — country-block per-route gate. Operator
@@ -2876,6 +3002,25 @@
 		<Button variant="danger" loading={deleting} onclick={confirmDelete}>Delete</Button>
 	{/snippet}
 </Modal>
+
+<!-- Step X.2 — ADR-D4 confirm dialog. Gates the wafDisableCRS
+     false → true transition so the operator can't accidentally
+     disable the OWASP CRS by a stray click. The dialog is bound
+     to `confirmDisableCRSOpen` ; the toggle's onchange handler
+     opens it before any state mutation, and onConfirm commits
+     the formData flip. Cancel (or any other close path) leaves
+     formData.wafDisableCRS at false ; the checkbox's visual
+     state reflects formData via the `checked` prop so the tick
+     reverts automatically. -->
+<ConfirmDialog
+	bind:open={confirmDisableCRSOpen}
+	title="Désactiver les règles OWASP CRS ?"
+	message="Vous vous apprêtez à couper le chargement de l'OWASP Core Rule Set sur cette route. La protection contre les attaques SQLi, XSS, RCE, LFI et Protocol ne sera plus active. À n'utiliser que pour les APIs internes de confiance (LAN) ou les routes legacy générant des false-positives récurrents. Cette action peut être annulée en décochant la case à tout moment."
+	confirmLabel="Désactiver le CRS"
+	cancelLabel="Annuler"
+	confirmVariant="danger"
+	onConfirm={onConfirmDisableCRS}
+/>
 
 <style>
 	/* Selected-row visual state for the Routes table (C11 Pack A

@@ -166,6 +166,10 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// streaming toggle override via the partial Route
 		// overrides parameter.
 		uploadStreamingMode: false,
+		// Step X.2 — strict default ; tests exercising the
+		// disable-CRS toggle override via the partial Route
+		// overrides parameter (zero-value false = CRS loaded).
+		wafDisableCRS: false,
 		...overrides
 	};
 }
@@ -2186,5 +2190,171 @@ describe('Routes page — submitForm error handling (#R-FRONTEND-PUT-NO-TIMEOUT)
 		// Spinner still cleared — finally ran even on the
 		// suppressed-toast branch.
 		expect(screen.queryByTestId('route-save-overlay')).toBeNull();
+	});
+});
+
+// --- Step X.2 — wafDisableCRS toggle + confirm dialog ----------------
+//
+// The toggle lives in the WAF settings block alongside wafMode +
+// uploadStreamingMode. Two operator-visible contracts :
+//   1. Enabling the toggle (false → true) opens an ADR-D4 confirm
+//      dialog before the form state mutates. Cancelling leaves
+//      the toggle unticked and the formData at false ; confirming
+//      commits the true.
+//   2. Disabling the toggle (true → false) flips immediately. No
+//      dialog : re-enabling CRS is a security-improving action,
+//      always safe.
+//
+// Wire contract :
+//   3. Payload ships wafDisableCRS=false by default on POST
+//      (zero-value byte-equivalent to pre-X.1 routes).
+//   4. Payload ships wafDisableCRS=true after the operator
+//      confirms via the dialog.
+//   5. Edit loads the persisted value (true) so the toggle
+//      reflects the stored state on re-open.
+//   6. Toggle is independent of wafMode (same independence as
+//      uploadStreamingMode, mirror of the Phase 4.5 invariant).
+
+describe('Routes page — Step X.2 wafDisableCRS toggle + confirm dialog', () => {
+	it('renders the toggle unchecked by default on create', async () => {
+		render(Page);
+		await openCreateForm();
+		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
+		expect(toggle).toBeInTheDocument();
+		expect(toggle.checked).toBe(false);
+	});
+
+	it('ticking the toggle opens the ADR-D4 confirm dialog and DOES NOT mutate the toggle state', async () => {
+		render(Page);
+		await openCreateForm();
+		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
+		await userEvent.click(toggle);
+		// Dialog opens — title in the document.
+		expect(screen.getByText('Désactiver les règles OWASP CRS ?')).toBeInTheDocument();
+		// Toggle visual state stays at false until the operator
+		// confirms via the dialog.
+		expect(toggle.checked).toBe(false);
+	});
+
+	it('cancelling the dialog keeps the toggle unchecked and the form value at false', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute());
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'cancel.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
+		await userEvent.click(toggle);
+		// Cancel via the ConfirmDialog "Annuler" button.
+		const cancelBtn = screen.getByText('Annuler');
+		await userEvent.click(cancelBtn);
+		await tick();
+
+		expect(toggle.checked).toBe(false);
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.wafDisableCRS).toBe(false);
+	});
+
+	it('confirming the dialog flips formData true and ships wafDisableCRS=true in the create payload', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({ wafDisableCRS: true }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'nas.lan');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:8080');
+
+		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
+		await userEvent.click(toggle);
+		// Confirm the dialog — the affirmative button reads
+		// "Désactiver le CRS" per the message copy.
+		const confirmBtn = screen.getByText('Désactiver le CRS');
+		await userEvent.click(confirmBtn);
+		await tick();
+		expect(toggle.checked).toBe(true);
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.wafDisableCRS).toBe(true);
+	});
+
+	it('unticking an already-true toggle DOES NOT open the dialog (re-enable CRS is always safe)', async () => {
+		// Seed a stored route with wafDisableCRS=true so the
+		// edit form opens with the toggle checked. The operator
+		// then unticks ; no dialog should appear, the formData
+		// flips immediately, and the next save ships false.
+		const seeded = makeRoute({
+			id: 'edit-disable-crs',
+			host: 'edit.nas.lan',
+			wafDisableCRS: true
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue({ ...seeded, wafDisableCRS: false });
+
+		render(Page);
+		const hostCell = await screen.findByText('edit.nas.lan');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
+		expect(toggle.checked).toBe(true);
+
+		await userEvent.click(toggle);
+		// NO dialog — the "Désactiver les règles OWASP CRS ?"
+		// title must NOT appear on the un-tick path.
+		expect(screen.queryByText('Désactiver les règles OWASP CRS ?')).toBeNull();
+		expect(toggle.checked).toBe(false);
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.updateRoute.mock.calls[0][1];
+		expect(payload.wafDisableCRS).toBe(false);
+	});
+
+	it('loads the persisted wafDisableCRS=true value into the toggle on edit', async () => {
+		const seeded = makeRoute({
+			id: 'edit-disable-crs-load',
+			host: 'load.nas.lan',
+			wafDisableCRS: true
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		const hostCell = await screen.findByText('load.nas.lan');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
+		expect(toggle.checked).toBe(true);
+	});
+
+	it('toggle is independent of wafMode (no cross-coupling, mirror of streaming-mode invariant)', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({ wafDisableCRS: true }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'independent.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:8000');
+
+		// Tick + confirm BEFORE changing wafMode.
+		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
+		await userEvent.click(toggle);
+		await userEvent.click(screen.getByText('Désactiver le CRS'));
+		await tick();
+		expect(toggle.checked).toBe(true);
+
+		const wafSelect = document.getElementById('route-waf-mode') as HTMLSelectElement;
+		await userEvent.selectOptions(wafSelect, 'block');
+		// Toggle survives the dropdown change.
+		expect(toggle.checked).toBe(true);
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.wafDisableCRS).toBe(true);
+		expect(payload.wafMode).toBe('block');
 	});
 });
