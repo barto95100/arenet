@@ -34,6 +34,7 @@
 	import Spinner from '$lib/components/Spinner.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import Badge from '$lib/components/Badge.svelte';
+	import CertSourceBadge from '$lib/components/CertSourceBadge.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Checkbox from '$lib/components/Checkbox.svelte';
@@ -1618,23 +1619,21 @@
 								</td>
 								<td class="px-4 py-3">
 									{#if r.tlsEnabled}
+										<!-- Sujet 2 (2026-06-17) — CertSourceBadge
+										     surfaces the covering apex on the badge
+										     label ("Couvert par *.example.com")
+										     instead of hiding it in a tooltip the
+										     operator had to discover. Single source
+										     of truth for the cert-source copy
+										     (lib/utils/effective-cert-source.ts);
+										     all variants (managed-domain / per-
+										     route-acme dns-01 / per-route-acme
+										     http-01 / per-route-internal) handled
+										     in one component, so a future variant
+										     lands here too. -->
 										<div class="flex flex-wrap items-center gap-1">
 											<Badge variant="tls">TLS</Badge>
-											{#if r.effectiveCertSource?.startsWith('managed-domain:')}
-												<span
-													title={`Inherits wildcard from *.${r.effectiveCertSource.slice('managed-domain:'.length)}`}
-												>
-													<Badge variant="current">wildcard</Badge>
-												</span>
-											{:else if r.effectiveCertSource === 'per-route-acme:dns-01'}
-												<span title="Per-route DNS-01 ACME">
-													<Badge variant="neutral">DNS-01</Badge>
-												</span>
-											{:else if r.effectiveCertSource === 'per-route-internal'}
-												<span title="Internal CA (self-signed)">
-													<Badge variant="neutral">internal</Badge>
-												</span>
-											{/if}
+											<CertSourceBadge source={r.effectiveCertSource} />
 										</div>
 									{:else}
 										<span class="text-muted">—</span>
