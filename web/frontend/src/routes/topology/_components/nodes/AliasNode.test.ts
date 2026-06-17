@@ -74,12 +74,22 @@ function nodeProps(data: AliasNodeData): any {
 }
 
 describe('AliasNode', () => {
-	it('renders the alias host string and the "alias" tag', () => {
-		render(AliasNode, {
+	it('renders the alias host string (no badge — Phase 3.d removed it)', () => {
+		// Phase 3.d (2026-06-17): the "ALIAS" badge in front of
+		// the hostname was removed. RouteGroupNode container
+		// already binds the card to its route visually; the
+		// badge was redundant and crowded the host label on the
+		// new narrower 170 px width.
+		const { container } = render(AliasNode, {
 			props: nodeProps(makeData({ host: 'sonarr.worldgeekwide.fr', reqPerSec: 0.94, isIdle: false }))
 		});
 		expect(screen.getByText('sonarr.worldgeekwide.fr')).toBeInTheDocument();
-		expect(screen.getByText('alias')).toBeInTheDocument();
+		expect(container.querySelector('.kind-tag')).toBeNull();
+		// The literal string "alias" must not appear as a
+		// standalone label anywhere on the card. (We allow it
+		// to appear *within* a hostname like "alias.foo.com",
+		// hence the exact match via byText.)
+		expect(screen.queryByText('alias')).toBeNull();
 	});
 
 	it('formats reqPerSec with two decimals when < 10 r/s', () => {

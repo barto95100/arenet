@@ -6,7 +6,18 @@
   AliasNode — Sub-node of the col-0 stack representing one alias of
   a route. Sujet 1 Phase 3.a (Topology Plan B frontend).
 
-  Visual hierarchy: ~70% of the FQDNNode footprint (width 140 vs
+  Phase 3.d (2026-06-17) polish:
+    - The "ALIAS" badge in front of the hostname was removed.
+      The RouteGroupNode container (Phase 3.c) already carries
+      the visual binding "this card belongs to a route"; the
+      redundant badge crowded the host label on narrow cards.
+    - Width bumped 140 → 170 px (85% of FQDN 200 px). Still
+      clearly smaller than the parent so the visual hierarchy
+      reads "primary host first, aliases nested" — but readable
+      enough that long subdomains don't truncate at the third
+      character.
+
+  Visual hierarchy: ~85% of the FQDNNode footprint (width 170 vs
   200), accent-muted palette (--fg-muted instead of --fg) so the
   primary FQDN remains the focal "row label" while aliases read as
   ancillary entries underneath. The size delta is intentional — at
@@ -65,7 +76,6 @@
 
 <div class="alias-node" class:idle={data.isIdle}>
         <div class="host-row">
-                <span class="kind-tag">alias</span>
                 <span class="host" title={data.host}>{data.host}</span>
         </div>
         <div class="meta" title={metaTooltip}>{rateLabel}</div>
@@ -75,7 +85,7 @@
 
 <style>
         .alias-node {
-                width: 140px;
+                width: 170px;
                 padding: 6px 10px;
                 background: var(--surface, oklch(19% 0.006 250));
                 border: 1px solid var(--border, oklch(28% 0.009 250));
@@ -100,19 +110,6 @@
                 align-items: center;
                 gap: 5px;
                 margin-bottom: 2px;
-        }
-
-        .kind-tag {
-                flex: 0 0 auto;
-                padding: 0 4px;
-                font-size: 9px;
-                font-weight: 600;
-                text-transform: uppercase;
-                letter-spacing: 0.04em;
-                color: var(--fg-muted, oklch(68% 0.012 250));
-                background: var(--surface-tag, oklch(24% 0.006 250));
-                border-radius: 3px;
-                line-height: 14px;
         }
 
         .host {

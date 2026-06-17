@@ -161,3 +161,97 @@ func TestSlidingWindow_PushHost_ConcurrentSafe(t *testing.T) {
 		t.Errorf("h2.ReqPerSec=%v want 1 (slot mean)", got2.ReqPerSec)
 	}
 }
+
+// Phase 3.d denominator-parity regression. Pins the invariant
+// that an alias's reported reqPerSec must match what the route
+// reports for the same physical traffic, regardless of when
+// the host's first hit arrived relative to the route's
+// creation.
+//
+// Pre-Phase-3.d shape (the bug the operator screenshotted on
+// 2026-06-17): a route alive for ~20 minutes, alias receives
+// its first traffic at minute 19. Route ring has 60 slots
+// (most zeros + recent ones); host ring has only ~K slots
+// (post-first-hit). aggregateRing dividing by `len(slots)`
+// yielded route.reqPerSec = totalReqs/60 and host.reqPerSec
+// = totalReqs/K, so the host appeared (60/K)× higher even
+// though both rings tracked the same physical requests.
+//
+// AggregateByHost now pins the host's denominator to the
+// route ring's slot count so the same traffic produces the
+// same numbers on both sides.
+func TestPhase3d_AggregateByHost_DenominatorParity(t *testing.T) {
+	w := NewSlidingWindow()
+	routeID := "r-traefik"
+
+	// Phase A — 60 ticks of idle. Route ring fills with zero
+	// slots; host ring is never touched (no PushHost call
+	// without traffic; the production pipeline drops cells
+	// that don't exist yet from SnapshotHosts).
+	for i := 0; i < 60; i++ {
+		w.Push(routeID, 0, 0, 0)
+	}
+	// Phase B — 10 ticks of 1 r/s on sonarr. Both counters
+	// bump.
+	for i := 0; i < 10; i++ {
+		w.Push(routeID, 1, 0, 0)
+		w.PushHost(routeID, "sonarr.local", 1, 0, 0)
+	}
+	route := w.Aggregate(routeID)
+	sonarr := w.AggregateByHost(routeID, "sonarr.local")
+
+	// Invariant: the host's reported rate must not exceed the
+	// route's reported rate for the same physical traffic.
+	// Without the parity fix, sonarr.ReqPerSec was 1.0 vs
+	// route.ReqPerSec 10/60 = 0.167 (a 6x inflation).
+	if sonarr.ReqPerSec > route.ReqPerSec+0.001 {
+		t.Errorf(
+			"host ReqPerSec %v exceeds route ReqPerSec %v "+
+				"(pre-Phase-3.d denominator-parity bug)",
+			sonarr.ReqPerSec, route.ReqPerSec,
+		)
+	}
+}
+
+// Companion invariant: the sum of every active alias's
+// reqPerSec must be ≤ the route's reqPerSec, for any traffic
+// pattern that distributes ALL hits across the known hosts
+// (the homelab norm — every request lands on some alias).
+//
+// Mirrors what the topology builder asserts visually: the
+// primary FQDN edge intensity is computed as
+// route.reqPerSec - sum(active aliases), so a sum that
+// overshoots would force the primary edge to clamp at zero
+// even when the primary host genuinely carries traffic.
+func TestPhase3d_AliasSumLeqRoute_AfterAsymmetricStart(t *testing.T) {
+	w := NewSlidingWindow()
+	routeID := "r-mix"
+
+	// 30 idle ticks for the route only.
+	for i := 0; i < 30; i++ {
+		w.Push(routeID, 0, 0, 0)
+	}
+	// 30 ticks of mixed alias traffic: 1 r/s on sonarr, 0.5
+	// r/s on radarr (alternating ticks). Route gets the sum:
+	// 1.5 r/s averaged, alternates 1 and 2 per tick.
+	for i := 0; i < 30; i++ {
+		var sonarrR, radarrR uint64 = 1, 0
+		if i%2 == 0 {
+			radarrR = 1
+		}
+		w.Push(routeID, sonarrR+radarrR, 0, 0)
+		w.PushHost(routeID, "sonarr.local", sonarrR, 0, 0)
+		w.PushHost(routeID, "radarr.local", radarrR, 0, 0)
+	}
+	rt := w.Aggregate(routeID)
+	sonarr := w.AggregateByHost(routeID, "sonarr.local")
+	radarr := w.AggregateByHost(routeID, "radarr.local")
+	sum := sonarr.ReqPerSec + radarr.ReqPerSec
+	if sum > rt.ReqPerSec+0.001 {
+		t.Errorf(
+			"sum(aliases)=%v exceeds route=%v "+
+				"(sonarr=%v radarr=%v)",
+			sum, rt.ReqPerSec, sonarr.ReqPerSec, radarr.ReqPerSec,
+		)
+	}
+}

@@ -189,6 +189,35 @@ func (w *SlidingWindow) Aggregate(routeID string) Aggregate {
 // yet on this alias) return zero — the topology builder
 // renders this as an idle alias entry sorted to the bottom of
 // the per-route alias list.
+//
+// Phase 3.d (2026-06-17) denominator-parity fix. The per-route
+// ring (Push) accumulates a slot every source tick because
+// pushSnap iterates snap.Routes which always carries every
+// route from ListRoutesForMetrics. The per-host ring (PushHost)
+// only accumulates slots on ticks where the host actually
+// emitted a HostDelta — which only happens AFTER the lazy
+// host cell exists in the Registry (created on first hit).
+// As a result, a long-running route with an alias whose first
+// traffic arrived recently produces:
+//
+//   route ring: 60 slots (most pre-traffic zeros + recent 1s)
+//   host ring: K slots (only the post-first-hit ones)
+//
+// aggregateRing divides by `len(slots)` so the host ring
+// reports rate / K while the route ring reports rate / 60.
+// Same underlying traffic, wildly different denominators —
+// host appears (60/K)× higher than reality. The operator's
+// screenshot (sonarr 3.33 r/s, radarr 1.67 r/s, logs 0.16 r/s
+// for a route reporting 1 r/s aggregate) was this inflation
+// at K ≈ 18 / 36 / 6 respectively.
+//
+// Fix: align the host ring's denominator to the route ring's
+// slot count. Slots missing from the host ring (because no
+// cell existed yet) are equivalent to zero-Reqs slots — the
+// host received no traffic during those ticks, by
+// construction. Computing host's rate as
+// host.totalReqs / route.slotCount gives the SAME number of
+// requests over the SAME window as the route's denominator.
 func (w *SlidingWindow) AggregateByHost(routeID, host string) Aggregate {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -196,18 +225,52 @@ func (w *SlidingWindow) AggregateByHost(routeID, host string) Aggregate {
 	if !ok {
 		return Aggregate{}
 	}
-	return aggregateRing(inner[host])
+	hostRing := inner[host]
+	if hostRing == nil || len(hostRing.slots) == 0 {
+		return Aggregate{}
+	}
+	// Use the route ring's slot count as the denominator —
+	// see the docstring above for the parity rationale. If
+	// the route ring doesn't exist (e.g., the host ring has
+	// been pushed before the route ring, which can happen
+	// at startup before the first storage.ListRoutes
+	// resolves) fall back to the host ring's own length —
+	// preserves the pre-Phase-3.d behaviour for that
+	// degenerate transient.
+	denom := len(hostRing.slots)
+	if routeRing := w.routes[routeID]; routeRing != nil && len(routeRing.slots) > denom {
+		denom = len(routeRing.slots)
+	}
+	return aggregateRingWithDenom(hostRing, denom)
 }
 
-// aggregateRing is the shared aggregation kernel used by both
-// Aggregate and AggregateByHost. Pure on its input; safe to
-// call under either RLock or no lock as long as the ring isn't
-// mutated concurrently.
+// aggregateRing is the shared aggregation kernel used by
+// Aggregate. The denominator IS the ring's own slot count —
+// freshly-created routes report their real rate immediately
+// rather than a divided-by-WindowSlots underestimate.
+//
+// AggregateByHost uses aggregateRingWithDenom instead so it
+// can pin the denominator to the route ring's slot count
+// (see AggregateByHost docstring on the Phase 3.d parity fix).
 //
 // Returns the zero Aggregate when rs is nil or empty — the
 // "idle entry" case the builder relies on.
 func aggregateRing(rs *ringState) Aggregate {
 	if rs == nil || len(rs.slots) == 0 {
+		return Aggregate{}
+	}
+	return aggregateRingWithDenom(rs, len(rs.slots))
+}
+
+// aggregateRingWithDenom is the parametrised aggregation
+// kernel. Denominator MUST be ≥ 1 and SHOULD be ≥ len(rs.slots);
+// callers wanting the legacy "divide by own length" semantics
+// should use aggregateRing.
+//
+// Pure on its input; safe to call under either RLock or no
+// lock as long as the ring isn't mutated concurrently.
+func aggregateRingWithDenom(rs *ringState, denom int) Aggregate {
+	if rs == nil || len(rs.slots) == 0 || denom <= 0 {
 		return Aggregate{}
 	}
 	var (
@@ -222,7 +285,7 @@ func aggregateRing(rs *ringState) Aggregate {
 		// Per-tick is per-second (metrics.TickInterval == 1s),
 		// so the mean of slot Reqs IS the mean req/s — no
 		// extra division by tick width.
-		ReqPerSec:    float64(totalReqs) / float64(len(rs.slots)),
+		ReqPerSec:    float64(totalReqs) / float64(denom),
 		P95LatencyMs: rs.slots[len(rs.slots)-1].LatencyP95Ms,
 	}
 	if totalReqs > 0 {

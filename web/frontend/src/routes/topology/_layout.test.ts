@@ -212,9 +212,10 @@ describe('buildTopologyGraph — alias integration', () => {
 		for (const a of aliases) {
 			expect(a.position.x).toBeGreaterThanOrEqual(cx);
 			expect(a.position.y).toBeGreaterThanOrEqual(cy);
-			// Right edge of alias card ≈ position.x + 140 (alias
-			// width). Bottom edge ≈ position.y + 44 (alias height).
-			expect(a.position.x + 140).toBeLessThanOrEqual(cx + cw);
+			// Right edge of alias card ≈ position.x + 170 (alias
+			// width, Phase 3.d bump). Bottom edge ≈ position.y +
+			// 44 (alias height).
+			expect(a.position.x + 170).toBeLessThanOrEqual(cx + cw);
 			expect(a.position.y + 44).toBeLessThanOrEqual(cy + ch);
 		}
 	});
