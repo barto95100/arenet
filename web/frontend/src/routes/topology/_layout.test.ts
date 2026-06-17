@@ -143,19 +143,37 @@ describe('buildTopologyGraph — alias integration', () => {
 				aliasMetrics: [alias('a.big.local', 1), alias('b.big.local', 0), alias('c.big.local', 0)]
 			})
 		]);
-		const fqdn1 = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
-		const fqdn2 = graph.nodes.find((n) => n.id === 'fqdn-r-2')!;
-		expect(fqdn1.position.y).not.toBe(fqdn2.position.y);
-		const top = fqdn1.position.y < fqdn2.position.y ? fqdn1 : fqdn2;
-		const bot = fqdn1.position.y < fqdn2.position.y ? fqdn2 : fqdn1;
-		const topRouteAliases = graph.nodes.filter(
-			(n) => n.type === 'alias' && (n.data as AliasNodeData).parentRouteId === top.id
-		);
+
+		// HOTFIX (2026-06-17) — parent/child wire means alias-
+		// route FQDNs carry parentId + RELATIVE positions
+		// (offset = ROUTE_GROUP_PADDING from the container's
+		// top-left), while alias-less route FQDNs stay
+		// standalone with ABSOLUTE positions. The overlap check
+		// must compare in the same coord space, so we resolve
+		// every node's position to its SCREEN position
+		// (parent.position + child.position) before comparing.
+		function screenY(nodeId: string): number {
+			const n = graph.nodes.find((x) => x.id === nodeId)!;
+			if (n.parentId === undefined) return n.position.y;
+			const p = graph.nodes.find((x) => x.id === n.parentId)!;
+			return p.position.y + n.position.y;
+		}
+		const fqdn1Y = screenY('fqdn-r-1');
+		const fqdn2Y = screenY('fqdn-r-2');
+		expect(fqdn1Y).not.toBe(fqdn2Y);
+		const topId = fqdn1Y < fqdn2Y ? 'r-1' : 'r-2';
+		const botId = fqdn1Y < fqdn2Y ? 'r-2' : 'r-1';
+		const topY = Math.min(fqdn1Y, fqdn2Y);
+		const botY = Math.max(fqdn1Y, fqdn2Y);
+		const topRouteAliasesY = graph.nodes
+			.filter((n) => n.type === 'alias' && (n.data as AliasNodeData).parentRouteId === topId)
+			.map((n) => screenY(n.id));
 		const topBlockBottom =
-			topRouteAliases.length > 0
-				? Math.max(...topRouteAliases.map((a) => a.position.y)) + 44 // ALIAS_HEIGHT
-				: top.position.y + 70; // FQDN_HEIGHT
-		expect(bot.position.y).toBeGreaterThan(topBlockBottom);
+			topRouteAliasesY.length > 0
+				? Math.max(...topRouteAliasesY) + 44 // ALIAS_HEIGHT
+				: topY + 70; // FQDN_HEIGHT
+		expect(botY).toBeGreaterThan(topBlockBottom);
+		expect(botId).toBeDefined();
 	});
 
 	it('FQDNNodeData still carries the legacy aliases string array for backward-compat', () => {
@@ -192,31 +210,34 @@ describe('buildTopologyGraph — alias integration', () => {
 		expect((container.data as RouteGroupNodeData).routeId).toBe('r-1');
 		expect((container.data as RouteGroupNodeData).primaryHost).toBe('primary.local');
 
-		// Container bounds must enclose the FQDN + every alias.
-		// SvelteFlow's Node.width/height land directly on the
-		// node — read them as the canonical bounds.
-		const cx = container.position.x;
-		const cy = container.position.y;
+		// Container bounds : SvelteFlow's Node.width/height land
+		// directly on the node — read them as the canonical
+		// width/height of the parent's coordinate space.
 		const cw = (container.width as number) ?? 0;
 		const ch = (container.height as number) ?? 0;
 		expect(cw).toBeGreaterThan(0);
 		expect(ch).toBeGreaterThan(0);
 
+		// HOTFIX (2026-06-17) : FQDN + alias children are now
+		// SvelteFlow children of the RouteGroup parent (carry
+		// parentId, position is RELATIVE to parent's top-left).
+		// Bounds check happens in the relative space : every
+		// child must sit within (0, 0)..(cw, ch).
 		const fqdn = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
-		expect(fqdn.position.x).toBeGreaterThanOrEqual(cx);
-		expect(fqdn.position.y).toBeGreaterThanOrEqual(cy);
-		expect(fqdn.position.x).toBeLessThanOrEqual(cx + cw);
-		expect(fqdn.position.y).toBeLessThanOrEqual(cy + ch);
+		expect(fqdn.parentId).toBe('route-group-r-1');
+		expect(fqdn.position.x).toBeGreaterThanOrEqual(0);
+		expect(fqdn.position.y).toBeGreaterThanOrEqual(0);
+		// FQDN right edge in relative space.
+		expect(fqdn.position.x + 200).toBeLessThanOrEqual(cw);
+		expect(fqdn.position.y + 70).toBeLessThanOrEqual(ch);
 
 		const aliases = graph.nodes.filter((n) => n.type === 'alias');
 		for (const a of aliases) {
-			expect(a.position.x).toBeGreaterThanOrEqual(cx);
-			expect(a.position.y).toBeGreaterThanOrEqual(cy);
-			// Right edge of alias card ≈ position.x + 170 (alias
-			// width, Phase 3.d bump). Bottom edge ≈ position.y +
-			// 44 (alias height).
-			expect(a.position.x + 170).toBeLessThanOrEqual(cx + cw);
-			expect(a.position.y + 44).toBeLessThanOrEqual(cy + ch);
+			expect(a.parentId).toBe('route-group-r-1');
+			expect(a.position.x).toBeGreaterThanOrEqual(0);
+			expect(a.position.y).toBeGreaterThanOrEqual(0);
+			expect(a.position.x + 170).toBeLessThanOrEqual(cw);
+			expect(a.position.y + 44).toBeLessThanOrEqual(ch);
 		}
 	});
 
@@ -444,6 +465,153 @@ describe('buildTopologyGraph — alias integration', () => {
 			const fqdn = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
 			expect((fqdn.data as FQDNNodeData).collapsed).toBe(false);
 		}
+	});
+
+	// -------------------------------------------------------
+	// Phase 3.e HOTFIX (2026-06-17 #3) — parent/child drag sync.
+	//
+	// The pre-hotfix layout emitted the RouteGroupNode container
+	// as a standalone SvelteFlow node WITHOUT a parent / child
+	// relationship to the FQDN + alias cards. SvelteFlow had no
+	// way to know they belonged together, so dragging the
+	// primary FQDN left the container in place (visual desync).
+	//
+	// Fix : wire SvelteFlow's native parent/child :
+	//   - Container : draggable, no parentId. Acts as the drag
+	//     handle for the whole route-row.
+	//   - FQDN + alias children : carry parentId = container's
+	//     id, extent: 'parent' (bounded within container),
+	//     draggable: false (the container is the affordance).
+	//   - Child positions are RELATIVE to the parent's top-left
+	//     (SvelteFlow contract). Operators see absolute screen
+	//     positions = parent.position + child.position.
+	//
+	// Routes WITHOUT aliases : no container, FQDN stays
+	// standalone with absolute position + default drag — pre-
+	// hotfix behaviour preserved.
+	// -------------------------------------------------------
+
+	it('parent/child wire: FQDN of an alias-route carries parentId pointing to its RouteGroup', () => {
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r-1',
+				aliasMetrics: [alias('a.example.com', 1)]
+			})
+		]);
+		const container = graph.nodes.find((n) => n.id === 'route-group-r-1')!;
+		const fqdn = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
+		expect(container).toBeDefined();
+		expect(fqdn.parentId).toBe('route-group-r-1');
+		// extent: 'parent' keeps the operator from accidentally
+		// dragging the FQDN outside the container if a future
+		// change enables child drag.
+		expect(fqdn.extent).toBe('parent');
+		// FQDN position is RELATIVE (= padding from container's
+		// top-left). Absolute position must NOT be re-encoded
+		// on the child.
+		expect(fqdn.position.x).toBe(10); // ROUTE_GROUP_PADDING
+		expect(fqdn.position.y).toBe(10);
+	});
+
+	it('parent/child wire: all alias children carry parentId pointing to the RouteGroup', () => {
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r-1',
+				aliasMetrics: [
+					alias('a.example.com', 1),
+					alias('b.example.com', 0.5),
+					alias('c.example.com', 0)
+				]
+			})
+		]);
+		const aliases = graph.nodes.filter((n) => n.type === 'alias');
+		expect(aliases).toHaveLength(3);
+		for (const a of aliases) {
+			expect(a.parentId).toBe('route-group-r-1');
+			expect(a.extent).toBe('parent');
+			expect(a.draggable).toBe(false);
+			expect(a.selectable).toBe(false);
+		}
+	});
+
+	it('parent/child wire: RouteGroup container is the drag handle (draggable: true)', () => {
+		// Pre-hotfix the container was draggable:false, which
+		// killed drag entirely for routes with aliases (children
+		// were also draggable:false so nothing was). The fix
+		// makes the container the single drag affordance for
+		// the whole route-row.
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r-1',
+				aliasMetrics: [alias('a.example.com', 1)]
+			})
+		]);
+		const container = graph.nodes.find((n) => n.id === 'route-group-r-1')!;
+		expect(container.draggable).toBe(true);
+	});
+
+	it('parent/child wire: standalone FQDN (route without aliases) has NO parentId', () => {
+		// Backward compat : a route without aliases keeps the
+		// pre-3.c shape — no container, no parent / child wire,
+		// FQDN draggable as before.
+		const graph = buildTopologyGraph([makeRoute({ id: 'r-1' })]);
+		const fqdn = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
+		expect(fqdn.parentId).toBeUndefined();
+		expect(fqdn.extent).toBeUndefined();
+		// `draggable` undefined means SvelteFlow's default
+		// (which is `true` per the SvelteFlow API) — we don't
+		// explicitly set it on standalone FQDN cards because
+		// the default is already what we want.
+		expect(fqdn.draggable).toBeUndefined();
+	});
+
+	it('parent/child wire: alias child y in RELATIVE space sits below the FQDN child y', () => {
+		// Both FQDN and aliases now live in the parent's
+		// relative coord space (offsets from container top-left).
+		// The vertical order "FQDN at top, aliases stacked
+		// below" must hold in that space.
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r-1',
+				aliasMetrics: [
+					alias('top.example.com', 5),
+					alias('bot.example.com', 0)
+				]
+			})
+		]);
+		const fqdn = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
+		const aliases = graph.nodes.filter((n) => n.type === 'alias');
+		for (const a of aliases) {
+			// Same parent → same coord space → direct compare
+			// is meaningful.
+			expect(a.position.y).toBeGreaterThan(fqdn.position.y);
+		}
+	});
+
+	it('parent/child wire: collapsed route keeps the parent/child link for the FQDN child', () => {
+		// Collapse removes alias children but keeps the FQDN
+		// inside the container, so the container is STILL the
+		// drag handle for the row and the FQDN stays bound to
+		// it. A future change that accidentally re-emitted the
+		// FQDN as standalone in collapsed mode would silently
+		// regress drag-sync for collapsed rows.
+		const collapsed = new Set(['r-1']);
+		const graph = buildTopologyGraph(
+			[
+				makeRoute({
+					id: 'r-1',
+					aliasMetrics: [alias('a.example.com', 1), alias('b.example.com', 0)]
+				})
+			],
+			collapsed
+		);
+		const container = graph.nodes.find((n) => n.id === 'route-group-r-1')!;
+		const fqdn = graph.nodes.find((n) => n.id === 'fqdn-r-1')!;
+		expect(container).toBeDefined();
+		expect(container.draggable).toBe(true);
+		expect(fqdn.parentId).toBe('route-group-r-1');
+		// No alias children when collapsed.
+		expect(graph.nodes.filter((n) => n.type === 'alias')).toHaveLength(0);
 	});
 
 	// HOTFIX (2026-06-17) — effect_update_depth_exceeded.

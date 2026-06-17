@@ -270,6 +270,36 @@ export function buildTopologyGraph(
                 // alone, but its presence preserves the visual
                 // signature "this route has more behind the
                 // chevron" even when folded.
+                // HOTFIX (2026-06-17, post-Phase-3.e ship) — wire
+                // SvelteFlow native parent / child so dragging the
+                // container moves the FQDN + aliases together, and
+                // dragging an inner card doesn't decouple it from
+                // the container. The pre-hotfix shape emitted the
+                // container as a standalone node with no
+                // relationship to the FQDN — SvelteFlow had no way
+                // to know they belonged together, so operator
+                // drags produced visual desync.
+                //
+                // Parent / child contract (mirror of the
+                // BackendClusterNode pattern in col 2) :
+                //   - Container (parent) keeps an ABSOLUTE
+                //     position. Its `draggable: true` makes the
+                //     whole route-row a single drag handle.
+                //   - FQDN + alias children carry parentId and
+                //     RELATIVE positions (SvelteFlow treats child
+                //     positions as offsets from the parent's top-
+                //     left). Children are `draggable: false` and
+                //     `selectable: false` so the only drag affordance
+                //     is the container — matches BackendClusterNode
+                //     semantics and prevents the inner-card-drift
+                //     bug from re-emerging.
+                //
+                // Routes WITHOUT aliases keep their pre-hotfix
+                // shape: standalone FQDN, no container, no
+                // parent / child relationship — same drag affordance
+                // operators are used to.
+                const routeGroupId = `route-group-${route.id}`;
+                const inGroup = hasAliases;
                 if (hasAliases) {
                         const groupHeight = col0Heights[i] + ROUTE_GROUP_PADDING * 2;
                         const groupData: RouteGroupNodeData = {
@@ -278,7 +308,7 @@ export function buildTopologyGraph(
                                 primaryHost: route.host,
                         };
                         nodes.push({
-                                id: `route-group-${route.id}`,
+                                id: routeGroupId,
                                 type: 'route-group',
                                 position: {
                                         x: COL_X.FQDN - ROUTE_GROUP_PADDING,
@@ -287,7 +317,12 @@ export function buildTopologyGraph(
                                 width: ROUTE_GROUP_WIDTH,
                                 height: groupHeight,
                                 data: groupData,
-                                draggable: false,
+                                // HOTFIX (2026-06-17) : container is
+                                // the drag handle for the whole
+                                // route-row. The pre-hotfix
+                                // draggable:false killed drag entirely
+                                // for routes with aliases.
+                                draggable: true,
                                 selectable: false,
                         });
                 }
@@ -304,12 +339,34 @@ export function buildTopologyGraph(
                         aliasTotalRps,
                         collapsed,
                 };
-                nodes.push({
-                        id: `fqdn-${route.id}`,
-                        type: 'fqdn',
-                        position: { x: COL_X.FQDN, y: blockTop },
-                        data: fqdnData,
-                });
+                if (inGroup) {
+                        // Child of the container — position is
+                        // RELATIVE to the parent's top-left. The
+                        // FQDN sits at the container's padding
+                        // offset (ROUTE_GROUP_PADDING on each axis
+                        // = the inset that made the container
+                        // visually wrap the FQDN pre-hotfix).
+                        nodes.push({
+                                id: `fqdn-${route.id}`,
+                                type: 'fqdn',
+                                position: { x: ROUTE_GROUP_PADDING, y: ROUTE_GROUP_PADDING },
+                                parentId: routeGroupId,
+                                extent: 'parent',
+                                draggable: false,
+                                selectable: false,
+                                data: fqdnData,
+                        });
+                } else {
+                        // Standalone FQDN — backward-compat for
+                        // routes without aliases. Absolute
+                        // position, default drag affordance.
+                        nodes.push({
+                                id: `fqdn-${route.id}`,
+                                type: 'fqdn',
+                                position: { x: COL_X.FQDN, y: blockTop },
+                                data: fqdnData,
+                        });
+                }
 
                 // Phase 3.e: skip the entire alias sub-node loop
                 // when the route is collapsed. The chevron-driven
@@ -335,8 +392,21 @@ export function buildTopologyGraph(
                 // one centred column rather than a left-leaning
                 // stair.
                 aliasMetrics.forEach((alias, aIdx) => {
-                        const aliasY =
-                                blockTop
+                        // HOTFIX (2026-06-17) : alias child
+                        // positions are RELATIVE to the RouteGroup
+                        // parent (same contract as the FQDN child
+                        // above). The y offset baseline is the
+                        // container padding + the FQDN's own
+                        // height + the FQDN-to-alias gap, then
+                        // each subsequent alias adds its row
+                        // height + the inter-alias gap. The x
+                        // offset combines the container padding
+                        // with the centring delta so aliases stay
+                        // vertically aligned with the primary
+                        // FQDN's centre under the parent / child
+                        // wire.
+                        const aliasYRelative =
+                                ROUTE_GROUP_PADDING
                                 + FQDN_HEIGHT
                                 + FQDN_TO_ALIAS_GAP
                                 + aIdx * (ALIAS_HEIGHT + ALIAS_TO_ALIAS_GAP);
@@ -352,7 +422,14 @@ export function buildTopologyGraph(
                         nodes.push({
                                 id: `alias-${route.id}-${aIdx}`,
                                 type: 'alias',
-                                position: { x: COL_X.FQDN + ALIAS_X_OFFSET, y: aliasY },
+                                position: {
+                                        x: ROUTE_GROUP_PADDING + ALIAS_X_OFFSET,
+                                        y: aliasYRelative,
+                                },
+                                parentId: routeGroupId,
+                                extent: 'parent',
+                                draggable: false,
+                                selectable: false,
                                 data: aliasData,
                         });
                 });
