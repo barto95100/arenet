@@ -24,6 +24,8 @@
  */
 
 import type {
+        AliasNodeData,
+        AliasOfEdgeData,
         BackendClusterNodeData,
         CaddyHubNodeData,
         FlowEdgeData,
@@ -51,6 +53,26 @@ const COL_X = {
 } as const;
 
 const ROW_SPACING_Y = 150;
+
+// Col-0 height model (Sujet 1 Phase 3.b). The FQDN node height
+// is empirically ~70 px (3 text rows at 12-13 px font + 10 px
+// padding × 2 + ~6 px line-spacing); the AliasNode is ~44 px
+// (2 text rows at 10-11 px + 6 px padding × 2). Both numbers are
+// approximate measurements of the rendered card, not exact —
+// Svelte Flow uses these only for layout positioning (not for
+// SVG clipping), so a few px of slack at the bottom of the
+// route's col-0 block is invisible to the operator.
+//
+// The gap between primary FQDN and the first AliasNode is
+// generous (16 px) so the visual hierarchy "this is the primary
+// host; these are its aliases" reads at a glance. Gaps between
+// successive AliasNodes are tighter (8 px) so a long stack
+// (the operator's 21-alias traefik route) packs vertically
+// without dominating the canvas.
+const FQDN_HEIGHT = 70;
+const ALIAS_HEIGHT = 44;
+const FQDN_TO_ALIAS_GAP = 16;
+const ALIAS_TO_ALIAS_GAP = 8;
 
 /** Sub-flow cluster geometry (Vue B col 3). Children are positioned
  *  relative to the cluster group node — so x/y here is local. The
@@ -88,6 +110,30 @@ function clusterTotalHeight(n: number, hasWarning: boolean): number {
         return hasWarning ? base + CLUSTER_WARNING_FOOTER_HEIGHT : base;
 }
 
+/** Total vertical height of a route's col-0 block, accounting
+ *  for the primary FQDN + N alias sub-nodes (Sujet 1 Phase
+ *  3.b). When the route has zero aliases this returns the
+ *  bare FQDN_HEIGHT so the layout for non-alias routes stays
+ *  byte-equal to the pre-Phase-3.b shape (modulo the per-route
+ *  stacker migration, which is symmetric for the zero-alias
+ *  case).
+ *
+ *  Formula:
+ *    FQDN_HEIGHT
+ *    + (aliasCount > 0 ? FQDN_TO_ALIAS_GAP : 0)
+ *    + aliasCount × ALIAS_HEIGHT
+ *    + (aliasCount > 0 ? (aliasCount - 1) × ALIAS_TO_ALIAS_GAP : 0)
+ */
+function routeCol0Height(aliasCount: number): number {
+        if (aliasCount === 0) return FQDN_HEIGHT;
+        return (
+                FQDN_HEIGHT
+                + FQDN_TO_ALIAS_GAP
+                + aliasCount * ALIAS_HEIGHT
+                + (aliasCount - 1) * ALIAS_TO_ALIAS_GAP
+        );
+}
+
 // ===========================================================================
 // Public API — buildTopologyGraph
 // ===========================================================================
@@ -119,10 +165,28 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                 }
         }
 
-        // Col 0 — FQDN
-        const fqdnYs = computeStackYs(routes.length);
+        // Col 0 — FQDN + per-route AliasNodes (Sujet 1 Phase 3.b).
+        //
+        // Pre-3.b shape: one FQDN per route, evenly spaced via
+        // computeStackYs(routes.length). With aliases shipping
+        // as first-class sub-nodes underneath the primary FQDN,
+        // each route's col-0 block can grow vertically to fit
+        // N alias cards. We migrate to computeStackYsForHeights
+        // (already proven on backend clusters) so a route with
+        // 21 aliases doesn't overlap its neighbours' FQDN cards
+        // while a route without aliases keeps the same
+        // single-card footprint as before.
+        //
+        // Sort: aliasMetrics arrives pre-sorted desc by
+        // reqPerSec from the backend (Phase 2.2 buildAliasMetrics
+        // applies the sort). The layout preserves that order
+        // verbatim — top consumer first, idle aliases at the
+        // bottom.
+        const col0Heights = routes.map((r) => routeCol0Height(r.aliasMetrics?.length ?? 0));
+        const col0BlockTops = computeStackYsForHeights(col0Heights);
         routes.forEach((route, i) => {
-                const data: FQDNNodeData = {
+                const blockTop = col0BlockTops[i];
+                const fqdnData: FQDNNodeData = {
                         kind: 'fqdn',
                         host: route.host,
                         protocols: formatProtocols(route),
@@ -133,8 +197,65 @@ export function buildTopologyGraph(routes: TopologyRoute[]): TopologyGraph {
                 nodes.push({
                         id: `fqdn-${route.id}`,
                         type: 'fqdn',
-                        position: { x: COL_X.FQDN, y: fqdnYs[i] },
-                        data,
+                        position: { x: COL_X.FQDN, y: blockTop },
+                        data: fqdnData,
+                });
+
+                // Alias sub-nodes (Phase 3.b). The aliasMetrics
+                // slice from the backend is already sorted desc by
+                // reqPerSec with alphabetical tie-break for idles;
+                // we render in that exact order so the top
+                // consumer sits directly under the primary FQDN
+                // and idle aliases sink to the bottom of the stack.
+                const aliasMetrics = route.aliasMetrics ?? [];
+                aliasMetrics.forEach((alias, aIdx) => {
+                        const aliasY =
+                                blockTop
+                                + FQDN_HEIGHT
+                                + FQDN_TO_ALIAS_GAP
+                                + aIdx * (ALIAS_HEIGHT + ALIAS_TO_ALIAS_GAP);
+                        const aliasData: AliasNodeData = {
+                                kind: 'alias',
+                                host: alias.host,
+                                reqPerSec: alias.reqPerSec,
+                                p99LatencyMs: alias.p99LatencyMs,
+                                errorRate5xx: alias.errorRate5xx,
+                                parentRouteId: route.id,
+                                isIdle: alias.reqPerSec === 0,
+                        };
+                        // x-offset: indent aliases slightly so the
+                        // visual hierarchy reads "primary on the left
+                        // edge of col 0, aliases nested under it" —
+                        // matches the 70%-width AliasNode
+                        // (140 vs 200). 30 px ≈ half the width
+                        // delta, splits the difference between flush-
+                        // left and centred under the primary.
+                        nodes.push({
+                                id: `alias-${route.id}-${aIdx}`,
+                                type: 'alias',
+                                position: { x: COL_X.FQDN + 30, y: aliasY },
+                                data: aliasData,
+                        });
+
+                        // AliasOfEdge connects the alias back to the
+                        // primary FQDN — semantic only, dashed line,
+                        // no particles (see AliasOfEdge.svelte
+                        // docstring). The alias source handle
+                        // (Position.Right on AliasNode) lights up
+                        // when the operator drags the alias around,
+                        // but the visual contract on the canvas is
+                        // the line itself reading "alias-of".
+                        const edgeData: AliasOfEdgeData = {
+                                kind: 'alias-of',
+                                aliasOf: route.id,
+                        };
+                        edges.push({
+                                id: `e-alias-${route.id}-${aIdx}`,
+                                source: `alias-${route.id}-${aIdx}`,
+                                target: `fqdn-${route.id}`,
+                                type: 'alias-of',
+                                data: edgeData,
+                        });
                 });
         });
 
@@ -308,13 +429,6 @@ function makeFlowEdge(
         data: FlowEdgeData,
 ): TopologyEdge {
         return { id, source, target, type: 'animated-flow', data };
-}
-
-function computeStackYs(count: number): number[] {
-        if (count === 0) return [];
-        const totalHeight = (count - 1) * ROW_SPACING_Y;
-        const startY = -totalHeight / 2;
-        return Array.from({ length: count }, (_, i) => startY + i * ROW_SPACING_Y);
 }
 
 /** Stack variable-height blocks vertically with a constant gap

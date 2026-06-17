@@ -37,10 +37,12 @@
 
 	// Custom node components — one per `kind` emitted by the layout builder.
 	import FQDNNode from './_components/nodes/FQDNNode.svelte';
+	import AliasNode from './_components/nodes/AliasNode.svelte';
 	import CaddyHubNode from './_components/nodes/CaddyHubNode.svelte';
 	import BackendClusterNode from './_components/nodes/BackendClusterNode.svelte';
 	import UpstreamNode from './_components/nodes/UpstreamNode.svelte';
 	import AnimatedFlowEdge from './_components/edges/AnimatedFlowEdge.svelte';
+	import AliasOfEdge from './_components/edges/AliasOfEdge.svelte';
 	import FlowApiBridge from './_components/FlowApiBridge.svelte';
 
 	// Page-level UI
@@ -51,6 +53,7 @@
 
 	const nodeTypes: NodeTypes = {
 		fqdn: FQDNNode,
+		alias: AliasNode,
 		caddy: CaddyHubNode,
 		'backend-cluster': BackendClusterNode,
 		upstream: UpstreamNode,
@@ -58,6 +61,7 @@
 
 	const edgeTypes: EdgeTypes = {
 		'animated-flow': AnimatedFlowEdge,
+		'alias-of': AliasOfEdge,
 	};
 
 	// Graph state. routes is the live data; nodes/edges are the
