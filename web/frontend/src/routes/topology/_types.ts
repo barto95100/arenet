@@ -44,6 +44,21 @@ export interface TopologyRoute {
         id: string;
         host: string;
         aliases?: string[];
+        /** Per-alias windowed metrics, populated by the backend's
+         *  Phase 2.2 builder. Sorted descending by `reqPerSec`
+         *  server-side (operator-visible "top consumers" first);
+         *  the frontend preserves order so the layout doesn't need
+         *  to re-sort.
+         *
+         *  ALWAYS present (non-omitempty server-side, see
+         *  `internal/api/topology/types.go` Route docstring) — when
+         *  the route has zero aliases the field is `[]`, NOT
+         *  absent. Optional in the type definition so legacy
+         *  snapshots (pre-Phase-2.2) deserialise cleanly during
+         *  the rolling redeploy window. Once every running arenet
+         *  emits the field, the optional `?` can be dropped.
+         */
+        aliasMetrics?: TopologyAlias[];
 
         upstreams: TopologyUpstream[];
         lbPolicy: LBPolicy;
@@ -70,6 +85,21 @@ export interface TopologyRoute {
         hasHealthCheck: boolean;
 
         clusterLabel?: string;
+}
+
+/** One alias of a route — the wire shape of backend
+ *  `internal/api/topology/types.go` `Alias` (Phase 2.2).
+ *
+ *  `host` preserves the operator's original casing as
+ *  declared in storage (lowercase normalisation only
+ *  happens at the registry/lookup layer). `reqPerSec` is
+ *  the windowed mean over the 60s sliding window
+ *  populated by the per-host Snapshot drain. */
+export interface TopologyAlias {
+        host: string;
+        reqPerSec: number;
+        p99LatencyMs: number;
+        errorRate5xx: number;            // 0-100
 }
 
 export interface TopologyUpstream {
@@ -203,11 +233,46 @@ export type UpstreamNodeData = {
         loadRatio: number;               // 0-1
 } & Record<string, unknown>;
 
+/** Col 0 sub-node — one alias of a route (Sujet 1 Phase 3.a).
+ *
+ *  Rendered below the primary FQDN node in the col-0 stack,
+ *  visually scaled to ~70% of the FQDN width so the hierarchy
+ *  reads correctly. Carries only what the AliasNode component
+ *  surfaces:
+ *    - `host`: the operator-declared hostname (original casing
+ *      preserved).
+ *    - `reqPerSec`: windowed mean from the per-host SlidingWindow.
+ *      Drives the meta line + the idle-state visual when zero.
+ *    - `p99LatencyMs`: surfaced on hover only (no header
+ *      slot — col 0's compact size doesn't accommodate a
+ *      latency badge).
+ *    - `errorRate5xx`: same hover-only treatment.
+ *    - `parentRouteId`: backref to the FQDN node's route id.
+ *      Used by the layout to position the alias under its
+ *      primary FQDN (Phase 3.b) and by the AliasOfEdge to
+ *      target the right FQDN node.
+ *    - `isIdle`: pre-computed at layout time (`reqPerSec === 0`)
+ *      so the component renders a grayed state without re-
+ *      computing the threshold. The future "idle" tier could
+ *      be extended to "very low traffic" with a different
+ *      threshold; keeping the boolean here gives the layout
+ *      that policy hook. */
+export type AliasNodeData = {
+        kind: 'alias';
+        host: string;
+        reqPerSec: number;
+        p99LatencyMs: number;
+        errorRate5xx: number;
+        parentRouteId: string;
+        isIdle: boolean;
+} & Record<string, unknown>;
+
 export type TopologyNodeData =
         | FQDNNodeData
         | CaddyHubNodeData
         | BackendClusterNodeData
-        | UpstreamNodeData;
+        | UpstreamNodeData
+        | AliasNodeData;
 
 // ---------------------------------------------------------------------------
 // Edge data
@@ -220,12 +285,35 @@ export type FlowEdgeData = {
         errorRate5xx: number;
 } & Record<string, unknown>;
 
+/** Semantic-only edge linking an alias node to its primary
+ *  FQDN node (Sujet 1 Phase 3.a).
+ *
+ *  Unlike FlowEdgeData (which drives the AnimatedFlowEdge
+ *  particles), AliasOfEdgeData carries NO traffic shape —
+ *  particles on alias edges would double-count the route's
+ *  Caddy→Backend traffic visually (the real flow already
+ *  fans out from Caddy through the shared cluster).
+ *  AliasOfEdge instead surfaces a dashed, muted, particle-
+ *  less line that reads as "this alias resolves to the same
+ *  chain as the primary host".
+ *
+ *  `aliasOf` is the route ID the parent FQDN node belongs to.
+ *  Mirrors AliasNodeData.parentRouteId; both are kept so the
+ *  edge can resolve its target without consulting node data
+ *  (cheaper than a map lookup in the renderer). */
+export type AliasOfEdgeData = {
+        kind: 'alias-of';
+        aliasOf: string;
+} & Record<string, unknown>;
+
+export type TopologyEdgeData = FlowEdgeData | AliasOfEdgeData;
+
 // ---------------------------------------------------------------------------
 // Output shape
 // ---------------------------------------------------------------------------
 
 export type TopologyNode = Node<TopologyNodeData>;
-export type TopologyEdge = Edge<FlowEdgeData>;
+export type TopologyEdge = Edge<TopologyEdgeData>;
 
 export interface TopologyGraph {
         nodes: TopologyNode[];
