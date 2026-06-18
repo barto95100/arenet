@@ -170,6 +170,10 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// disable-CRS toggle override via the partial Route
 		// overrides parameter (zero-value false = CRS loaded).
 		wafDisableCRS: false,
+		// Step X Option (c) — strict default empty exclusion
+		// list ; tests exercising the per-rule exclusion input
+		// override via the partial Route overrides parameter.
+		wafExcludeRules: [],
 		...overrides
 	};
 }
@@ -2356,5 +2360,163 @@ describe('Routes page — Step X.2 wafDisableCRS toggle + confirm dialog', () =>
 		const payload = apiMock.createRoute.mock.calls[0][0];
 		expect(payload.wafDisableCRS).toBe(true);
 		expect(payload.wafMode).toBe('block');
+	});
+});
+
+// --- Step X Option (c) — wafExcludeRules textarea ----------------
+//
+// The textarea lives below the wafDisableCRS toggle in the WAF block.
+// Operator types a comma-separated list of 6-digit CRS rule IDs ;
+// frontend parses, validates (range + reserved-Arenet check),
+// dedupes + sorts, and ships the canonical number[] in the payload.
+//
+// Operator-visible contracts pinned :
+//   1. Empty input on create ships [] (no exclusions).
+//   2. Valid 6-digit IDs parse into number[] payload.
+//   3. Non-numeric input surfaces a frontend error and blocks
+//      submit.
+//   4. Out-of-range IDs (< 100000, > 999999) surface a frontend
+//      error.
+//   5. Arenet-reserved range [100000, 199999] surfaces a
+//      frontend error.
+//   6. Edit loads the persisted list back into the textarea.
+//   7. Textarea is disabled when wafDisableCRS is true (the
+//      stored list is preserved, just gated).
+//   8. /security/{routeId} link is present in edit mode for rule
+//      ID discovery.
+
+describe('Routes page — Step X Option (c) wafExcludeRules textarea', () => {
+	it('ships empty wafExcludeRules in the create payload when textarea is empty', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute());
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'empty.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.wafExcludeRules).toEqual([]);
+	});
+
+	it('parses comma-separated 6-digit IDs into the create payload', async () => {
+		apiMock.createRoute.mockResolvedValue(
+			makeRoute({ wafExcludeRules: [920280, 941390, 942100] })
+		);
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'parse.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+		const textarea = screen.getByTestId('waf-exclude-rules-input') as HTMLTextAreaElement;
+		// Type out of order to verify the frontend canonicalises
+		// (ascending sort + dedup) before sending.
+		await userEvent.type(textarea, '942100, 941390, 920280');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.wafExcludeRules).toEqual([920280, 941390, 942100]);
+	});
+
+	it('surfaces a frontend error on non-numeric input and blocks submit', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute());
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'bad.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		const textarea = screen.getByTestId('waf-exclude-rules-input') as HTMLTextAreaElement;
+		await userEvent.type(textarea, 'abc, 942100');
+
+		const errorNode = screen.getByTestId('waf-exclude-rules-error');
+		expect(errorNode.textContent ?? '').toContain('abc');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		expect(apiMock.createRoute).not.toHaveBeenCalled();
+	});
+
+	it('rejects IDs in the Arenet-reserved range [100000, 199999]', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'reserved.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		const textarea = screen.getByTestId('waf-exclude-rules-input') as HTMLTextAreaElement;
+		await userEvent.type(textarea, '150000');
+
+		const errorNode = screen.getByTestId('waf-exclude-rules-error');
+		expect(errorNode.textContent ?? '').toMatch(/réservée|reserved/i);
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		expect(apiMock.createRoute).not.toHaveBeenCalled();
+	});
+
+	it('rejects IDs out of the 6-digit range', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'oor.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		const textarea = screen.getByTestId('waf-exclude-rules-input') as HTMLTextAreaElement;
+		await userEvent.type(textarea, '99999');
+
+		const errorNode = screen.getByTestId('waf-exclude-rules-error');
+		expect(errorNode.textContent ?? '').toMatch(/6 chiffres|range/i);
+	});
+
+	it('loads the persisted exclusion list into the textarea on edit', async () => {
+		const seeded = makeRoute({
+			id: 'edit-exclude',
+			host: 'edit.exclude.local',
+			wafExcludeRules: [920280, 941390, 942100]
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		const hostCell = await screen.findByText('edit.exclude.local');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const textarea = screen.getByTestId('waf-exclude-rules-input') as HTMLTextAreaElement;
+		// Canonical comma-separated form ; openEdit calls
+		// formatExcludeRulesInput on the stored slice.
+		expect(textarea.value).toBe('920280, 941390, 942100');
+	});
+
+	it('disables the textarea when wafDisableCRS is true', async () => {
+		const seeded = makeRoute({
+			id: 'edit-disable',
+			host: 'edit.disable.local',
+			wafDisableCRS: true,
+			wafExcludeRules: [942100]
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		const hostCell = await screen.findByText('edit.disable.local');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const textarea = screen.getByTestId('waf-exclude-rules-input') as HTMLTextAreaElement;
+		// Disabled but NOT cleared — the operator may toggle CRS
+		// back on later and expect the list to still apply.
+		expect(textarea.disabled).toBe(true);
+		expect(textarea.value).toBe('942100');
+	});
+
+	it('surfaces the /security/{routeId} discovery link in edit mode', async () => {
+		const seeded = makeRoute({
+			id: 'discover-link',
+			host: 'discover.local'
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		const hostCell = await screen.findByText('discover.local');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const link = screen.getByTestId('waf-exclude-rules-security-link') as HTMLAnchorElement;
+		expect(link.getAttribute('href')).toBe('/security/discover-link');
 	});
 });

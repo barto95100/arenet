@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"runtime/pprof"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1310,7 +1311,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//     mutations would otherwise confuse the rules);
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
-		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS); wafHandler != nil {
+		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules); wafHandler != nil {
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -2259,7 +2260,7 @@ func normalizeKnownHost(h string) string {
 	return strings.ToLower(h)
 }
 
-func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool) map[string]any {
+func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excludeRules []int) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
 	}
@@ -2296,6 +2297,68 @@ func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool) map[
 			"Include @crs-setup.conf.example\n" +
 			"Include @owasp_crs/*.conf"
 	}
+
+	// Step X Option (c) (2026-06-18) — per-route per-rule
+	// exclusion list. Emits a SecAction directive that fires
+	// unconditionally at phase:1 and chains a
+	// ctl:ruleRemoveById=<id> action per excluded rule. The
+	// SecAction primitive is preferred over a SecRule with
+	// REQUEST_URI "@rx ^.*$" because it carries no operator
+	// (Coraza nilOperator path, /coraza/v3/internal/corazawaf/
+	// rule.go:212) — zero matcher work per request.
+	//
+	// Canonical sort (ADR D3) : ascending int order is the
+	// canonical form so two routes with the same exclusion set
+	// in different operator-input order ([942100, 920280] vs
+	// [920280, 942100]) produce the same directives string ⇒
+	// the same WAF pool key ⇒ pool dedup.
+	//
+	// SecAction ID space — empirical findings :
+	//  - The design spec §2 nominated the 200000-range as
+	//    "Arenet-reserved". Empirical smoke caught a
+	//    collision : @coraza.conf-recommended itself ships a
+	//    SecAction with id:200001 (the JSON requestBodyProcessor
+	//    setup). Coraza errors at WAF construction with
+	//    "duplicated rule id 200001".
+	//  - Bumped to id:999001. The 999xxx range is the
+	//    operator-convention high-end-user space ; the CRS
+	//    project ID space stays under 999000 by convention,
+	//    Coraza's built-in directives use ≤ 900000. 999001
+	//    is collision-free against everything bundled with
+	//    Arenet today.
+	//  - The Arenet-reserved validation range stays
+	//    [100000, 199999] on the API side (mirror of
+	//    adminAPIExclusionDirective's id:100001 + future
+	//    growth headroom) — the 999001 ID is for OUR own
+	//    generated SecAction, not for operator-supplied
+	//    exclusions.
+	//
+	// Interaction with disableCRS : when disableCRS is true the
+	// CRS Includes are stripped, so there are no rules to
+	// ctl-remove. We STILL emit the SecAction (it's a no-op
+	// against an empty rule set) so flipping disableCRS back
+	// to false re-engages BOTH the CRS AND the operator's
+	// exclusion list in one step, with no pool-key churn caused
+	// by the directives string changing shape on toggle.
+	//
+	// Skip when len(excludeRules) == 0 so routes that don't
+	// opt-in stay byte-equal with the pre-Y directives string
+	// (pool dedup with pre-Y routes preserved).
+	if len(excludeRules) > 0 {
+		directives += "\nSecAction \"id:999001,phase:1,pass,nolog,"
+		// Canonical sort the slice locally to keep the public
+		// argument untouched (callers may rely on their slice
+		// order elsewhere).
+		sorted := make([]int, len(excludeRules))
+		copy(sorted, excludeRules)
+		sort.Ints(sorted)
+		parts := make([]string, len(sorted))
+		for i, id := range sorted {
+			parts[i] = fmt.Sprintf("ctl:ruleRemoveById=%d", id)
+		}
+		directives += strings.Join(parts, ",") + "\""
+	}
+
 	out := map[string]any{
 		"handler":        "arenet_waf",
 		"route_id":       routeID,

@@ -38,7 +38,7 @@ func TestBuildWAFHandler_DisableCRS_False_KeepsLegacyShape(t *testing.T) {
 	// Pre-X.1 behaviour : disableCRS=false ⇒ full CRS chain.
 	// Pins the byte-equality of the pre-X.1 emit for any route
 	// that doesn't opt out.
-	got := buildWAFHandler("r-1", "example.com", "block", false, false)
+	got := buildWAFHandler("r-1", "example.com", "block", false, false, nil)
 	if got == nil {
 		t.Fatalf("buildWAFHandler returned nil for block mode")
 	}
@@ -77,7 +77,7 @@ func TestBuildWAFHandler_DisableCRS_True_DropsEveryAtInclude(t *testing.T) {
 	// handler is wired, the WAF instance exists, events still
 	// fire if a hypothetical rule did trip, and the
 	// per-request cost is the bare Coraza dispatch overhead.
-	got := buildWAFHandler("r-1", "example.com", "block", false, true)
+	got := buildWAFHandler("r-1", "example.com", "block", false, true, nil)
 	if got == nil {
 		t.Fatalf("buildWAFHandler returned nil for block mode")
 	}
@@ -102,7 +102,7 @@ func TestBuildWAFHandler_OffMode_ShortCircuits_Regardless(t *testing.T) {
 	// emitted, the route's chain skips the arenet_waf slot
 	// entirely. WAFDisableCRS is silent when WAFMode is off.
 	for _, disable := range []bool{false, true} {
-		got := buildWAFHandler("r-1", "example.com", "off", false, disable)
+		got := buildWAFHandler("r-1", "example.com", "off", false, disable, nil)
 		if got != nil {
 			t.Errorf("disableCRS=%v: off mode emitted a handler %+v; want nil", disable, got)
 		}
@@ -115,7 +115,7 @@ func TestBuildWAFHandler_DisableCRS_PreservesSkipBodyInteraction(t *testing.T) {
 	// (e.g. a binary upload route on a trusted internal host) and
 	// must emit BOTH the load_owasp_crs:false AND the
 	// skip_body_inspection:true flags.
-	got := buildWAFHandler("r-1", "example.com", "detect", true, true)
+	got := buildWAFHandler("r-1", "example.com", "detect", true, true, nil)
 	if got == nil {
 		t.Fatalf("buildWAFHandler returned nil for detect mode")
 	}
@@ -127,10 +127,112 @@ func TestBuildWAFHandler_DisableCRS_PreservesSkipBodyInteraction(t *testing.T) {
 	}
 }
 
+// Step X Option (c) — WAFExcludeRules emit shape.
+
+func TestBuildWAFHandler_ExcludeRules_Empty_OmitsSecAction(t *testing.T) {
+	// Empty exclusion list MUST produce the byte-equivalent
+	// pre-Y directives string ; pool dedup with pre-Y routes
+	// depends on this invariant.
+	got := buildWAFHandler("r-1", "example.com", "block", false, false, nil)
+	dirs, _ := got["directives"].(string)
+	if strings.Contains(dirs, "SecAction") {
+		t.Errorf("empty excludeRules emitted a SecAction; directives = %q", dirs)
+	}
+	got = buildWAFHandler("r-1", "example.com", "block", false, false, []int{})
+	dirs, _ = got["directives"].(string)
+	if strings.Contains(dirs, "SecAction") {
+		t.Errorf("zero-length excludeRules emitted a SecAction; directives = %q", dirs)
+	}
+}
+
+func TestBuildWAFHandler_ExcludeRules_SingleRule_EmitsCtl(t *testing.T) {
+	got := buildWAFHandler("r-1", "example.com", "block", false, false, []int{942100})
+	dirs, _ := got["directives"].(string)
+	if !strings.Contains(dirs, "SecAction") {
+		t.Errorf("single excludeRule didn't emit SecAction; directives = %q", dirs)
+	}
+	if !strings.Contains(dirs, "ctl:ruleRemoveById=942100") {
+		t.Errorf("missing ctl:ruleRemoveById=942100; directives = %q", dirs)
+	}
+	if !strings.Contains(dirs, "id:999001") {
+		t.Errorf("missing Arenet-reserved SecAction id:999001; directives = %q", dirs)
+	}
+}
+
+func TestBuildWAFHandler_ExcludeRules_CanonicalSort(t *testing.T) {
+	// Two routes supplying the same exclusion set in different
+	// orders MUST produce the byte-identical directives string
+	// (operator-input order is canonicalised at emit time). This
+	// is the ADR D3 invariant that enables pool dedup.
+	a := buildWAFHandler("r-a", "a.example.com", "block", false, false, []int{942100, 941390, 920280})
+	b := buildWAFHandler("r-b", "b.example.com", "block", false, false, []int{941390, 920280, 942100})
+	dirsA, _ := a["directives"].(string)
+	dirsB, _ := b["directives"].(string)
+	if dirsA != dirsB {
+		t.Errorf("canonical-sort invariant broken\n  A = %q\n  B = %q", dirsA, dirsB)
+	}
+	// Pin the actual canonical order : ascending integer order.
+	want := "ctl:ruleRemoveById=920280,ctl:ruleRemoveById=941390,ctl:ruleRemoveById=942100"
+	if !strings.Contains(dirsA, want) {
+		t.Errorf("canonical order mismatch ; directives = %q ; want substring = %q", dirsA, want)
+	}
+}
+
+func TestBuildWAFHandler_ExcludeRules_DistinctSets_DistinctDirectives(t *testing.T) {
+	// Different exclusion sets MUST produce different directives
+	// strings so the WAF pool key picks up the diff and the
+	// routes get distinct Coraza instances.
+	a := buildWAFHandler("r-a", "a.example.com", "block", false, false, []int{942100})
+	b := buildWAFHandler("r-b", "b.example.com", "block", false, false, []int{941390})
+	if a["directives"].(string) == b["directives"].(string) {
+		t.Errorf("distinct exclusion sets produced same directives string")
+	}
+}
+
+func TestBuildWAFHandler_ExcludeRules_PreservesInputSlice(t *testing.T) {
+	// The emit MUST NOT mutate the caller's slice — caddymgr is
+	// called from buildConfig at reload time and the route slice
+	// gets reused for the audit log + downstream callers.
+	in := []int{942100, 941390, 920280}
+	original := make([]int, len(in))
+	copy(original, in)
+	_ = buildWAFHandler("r-1", "example.com", "block", false, false, in)
+	for i := range in {
+		if in[i] != original[i] {
+			t.Errorf("caller's slice mutated at index %d : got %d want %d", i, in[i], original[i])
+		}
+	}
+}
+
+func TestBuildWAFHandler_ExcludeRules_DetectMode_SameShape(t *testing.T) {
+	// Pin mode independence : detect-mode + exclusions has the
+	// same SecAction emit as block-mode + exclusions.
+	got := buildWAFHandler("r-1", "example.com", "detect", false, false, []int{942100})
+	dirs, _ := got["directives"].(string)
+	if !strings.Contains(dirs, "ctl:ruleRemoveById=942100") {
+		t.Errorf("detect mode dropped the exclusion directive ; directives = %q", dirs)
+	}
+}
+
+func TestBuildWAFHandler_ExcludeRules_DisableCRS_StillEmitsSecAction(t *testing.T) {
+	// When the operator disables CRS AND has exclusions
+	// configured, the SecAction stays in the directives string
+	// (no-op against an empty rule set). This keeps the
+	// directives shape stable across the disableCRS toggle so
+	// flipping CRS back on re-engages the exclusions without
+	// pool-key churn from the directives string changing
+	// structure. Documented in the caddymgr emit code comment.
+	got := buildWAFHandler("r-1", "example.com", "block", false, true, []int{942100})
+	dirs, _ := got["directives"].(string)
+	if !strings.Contains(dirs, "ctl:ruleRemoveById=942100") {
+		t.Errorf("disableCRS=true dropped the exclusion directive ; directives = %q", dirs)
+	}
+}
+
 func TestBuildWAFHandler_DisableCRS_DetectMode_LegacyDirectivesPreserved(t *testing.T) {
 	// Detect mode + disable CRS : same shape as block mode + disable
 	// CRS. Pins the mode-independence of the disableCRS branch.
-	got := buildWAFHandler("r-1", "example.com", "detect", false, true)
+	got := buildWAFHandler("r-1", "example.com", "detect", false, true, nil)
 	if got == nil {
 		t.Fatalf("buildWAFHandler returned nil for detect mode")
 	}

@@ -99,7 +99,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules'> & {
 		healthCheck: HealthCheck;
 		// W.5 — narrow to the non-optional shape. The form
 		// always carries a CountryBlockRequest (mode="off"
@@ -122,6 +122,15 @@
 		// form holds a definite bool ; payload reintroduces
 		// undefined for preserve-on-omit on PUT.
 		wafDisableCRS: boolean;
+		// Step X Option (c) — form holds a definite number[]
+		// (always non-nil, empty array when no exclusions
+		// configured). The on-wire optionality (nil to preserve,
+		// [] to clear) is reapplied at payload assembly time.
+		// Storing the array on formData rather than the raw
+		// input string means the dedupe / parse logic lives in
+		// one place (the change handler) and the rest of the
+		// form code reads a clean typed array.
+		wafExcludeRules: number[];
 	};
 	let formData = $state<FormData>(emptyFormData());
 	let healthCheckTouched = $state(false);
@@ -164,6 +173,16 @@
 			// dialog before this can flip true. Independent
 			// from wafMode (any combination is valid).
 			wafDisableCRS: false,
+			// Step X Option (c) — empty exclusion list by
+			// default. The textarea binds to a derived string
+			// view via wafExcludeRulesInput ; the parsed
+			// number[] lives here for type-clean payload
+			// assembly. The frontend doesn't apply the server's
+			// dedupe / sort policy ; we ship the raw operator
+			// list, the server canonicalises on write and the
+			// next GET → openEdit reload picks up the canonical
+			// form.
+			wafExcludeRules: [] as number[],
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
 			// further down; operators opting in pick a mode +
@@ -378,6 +397,83 @@
 	function onConfirmDisableCRS(): void {
 		formData.wafDisableCRS = true;
 		confirmDisableCRSOpen = false;
+	}
+
+	// Step X Option (c) — exclude-rules input parsing.
+	//
+	// The operator types a comma- / whitespace-separated list of
+	// 6-digit rule IDs into the textarea. Two-way binding via a
+	// derived getter/setter pair would entangle the parse with
+	// the input event ; instead we keep formData.wafExcludeRules
+	// as the source of truth (typed number[]) and expose a
+	// derived string for the textarea's `value` binding. The
+	// onchange handler parses + validates + writes back.
+	//
+	// Validation is mirror-of-backend : per-ID 6-digit positive
+	// integer, range [200000, 999999] (the [100000, 199999]
+	// Arenet-reserved range is rejected client-side too so the
+	// operator gets an immediate visual signal rather than a
+	// 400 round-trip surprise). Frontend errors land in
+	// `errors.wafExcludeRules` ; the form-level submit guard
+	// already blocks the PUT/POST when `errors` has any key.
+	//
+	// The textarea is GATED (disabled) when wafDisableCRS is
+	// true : exclusions against a CRS that isn't loaded are a
+	// no-op, surfacing the input as editable would be
+	// misleading. We don't CLEAR the stored list in that case —
+	// the operator may toggle CRS back on later and want the
+	// exclusions to still apply.
+	let wafExcludeRulesInput = $state('');
+
+	function parseExcludeRulesInput(raw: string): { ids: number[]; error: string | null } {
+		const trimmed = raw.trim();
+		if (trimmed === '') return { ids: [], error: null };
+		const tokens = trimmed
+			.split(/[,\s]+/)
+			.map((t) => t.trim())
+			.filter((t) => t.length > 0);
+		const ids: number[] = [];
+		for (const token of tokens) {
+			if (!/^\d+$/.test(token)) {
+				return { ids: [], error: `"${token}" n'est pas un entier valide` };
+			}
+			const n = parseInt(token, 10);
+			if (n < 100000 || n > 999999) {
+				return { ids: [], error: `${n} n'est pas un ID CRS valide (doit être un entier 6 chiffres 100000..999999)` };
+			}
+			if (n <= 199999) {
+				return { ids: [], error: `${n} est dans la plage réservée Arenet (100000..199999), choisissez un ID >= 200000` };
+			}
+			ids.push(n);
+		}
+		// Dedup + ascending sort to mirror the server's
+		// canonical form. Cuts noise round-trips when the
+		// operator re-edits.
+		const unique = Array.from(new Set(ids));
+		unique.sort((a, b) => a - b);
+		return { ids: unique, error: null };
+	}
+
+	function onExcludeRulesInputChange(ev: Event): void {
+		const raw = (ev.target as HTMLTextAreaElement).value;
+		wafExcludeRulesInput = raw;
+		const { ids, error } = parseExcludeRulesInput(raw);
+		if (error) {
+			errors = { ...errors, wafExcludeRules: error };
+			// Keep the previous parsed value on formData ; the
+			// submit guard blocks PUT/POST while the error is
+			// surfaced, so a transient typo doesn't lose the
+			// previously-valid list.
+			return;
+		}
+		const next = { ...errors };
+		delete next.wafExcludeRules;
+		errors = next;
+		formData.wafExcludeRules = ids;
+	}
+
+	function formatExcludeRulesInput(ids: number[]): string {
+		return ids.join(', ');
 	}
 
 	function closePanel() {
@@ -601,6 +697,11 @@
 		healthCheckTouched = false;
 		requestHeaderRows = [];
 		responseHeaderRows = [];
+		// Step X Option (c) — clear the exclude-rules textarea
+		// view alongside the formData reset. The string state
+		// lives outside formData (it's a UX projection, not a
+		// payload field) so it needs an explicit reset.
+		wafExcludeRulesInput = '';
 		// W.7 follow-up — country-block section starts
 		// closed for a fresh create form (matches the
 		// healthCheck details discipline; mode=off doesn't
@@ -708,6 +809,13 @@
 			// to false (CRS loaded — byte-equivalent to the
 			// pre-X.1 runtime, per ADR D2).
 			wafDisableCRS: r.wafDisableCRS ?? false,
+			// Step X Option (c) — load the persisted exclusion
+			// list. The server normalises to ascending sort +
+			// dedup on write, so what the form receives is
+			// already the canonical form ; just clone it so
+			// future formData mutations don't ripple back into
+			// the source route object.
+			wafExcludeRules: [...(r.wafExcludeRules ?? [])],
 			// Step J.2: the server's HealthCheck is always present
 			// on the wire (no omitempty). The form holds it as-is;
 			// edit-mode shows explicit values (server materialised
@@ -726,6 +834,10 @@
 			}
 		};
 		basicAuthPasswordSet = r.basicAuth?.passwordSet ?? false;
+		// Step X Option (c) — seed the textarea string view from
+		// the loaded canonical list so the operator sees what's
+		// stored.
+		wafExcludeRulesInput = formatExcludeRulesInput(r.wafExcludeRules ?? []);
 		void loadDNSProvider();
 		void loadForwardAuthProviders();
 		// Step O.4: refresh managed-domains snapshot — see comment
@@ -1177,6 +1289,16 @@
 			}
 		}
 
+		// Step X Option (c) — re-parse the exclusion-rules
+		// textarea at submit time so a stale invalid input
+		// surfaces here even if the operator never blurred /
+		// triggered an oninput event after the typo (paste +
+		// submit). Mirror of the openEdit-time canonicalisation.
+		const reparsed = parseExcludeRulesInput(wafExcludeRulesInput);
+		if (reparsed.error) {
+			next.wafExcludeRules = reparsed.error;
+		}
+
 		errors = next;
 		return Object.keys(next).length === 0;
 	}
@@ -1301,6 +1423,12 @@
 			// aligned with the toggle state the operator
 			// confirmed via the ADR-D4 dialog.
 			payload.wafDisableCRS = formData.wafDisableCRS;
+			// Step X Option (c) — always ship the exclusion
+			// list (full-replace semantic). POST captures the
+			// empty-default cleanly ; PUT replaces with the
+			// operator's current list. The server canonicalises
+			// (sort + dedup) before persist.
+			payload.wafExcludeRules = formData.wafExcludeRules;
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
 			// server preserve the previously stored value (on PUT)
@@ -2435,6 +2563,74 @@
 							(Detect/Block) reste actif structurellement — il deviendrait
 							effectif dès le réactivation du CRS.
 						</p>
+
+						<!-- Step X Option (c) — granular per-rule
+						     exclusion list. Sits under the WAFDisableCRS
+						     toggle on purpose : the operator's natural
+						     reading order is "disable everything → just
+						     these → just these rules". Disabled when
+						     wafDisableCRS is true (the entire CRS is
+						     unloaded, so per-rule exclusions are no-ops),
+						     but the stored values are NOT cleared — the
+						     operator may toggle CRS back on later. -->
+						<div class="mt-4">
+							<label
+								for="route-waf-exclude-rules"
+								class="text-sm font-medium text-secondary block mb-1"
+							>
+								Règles OWASP à exclure
+								<span class="text-muted text-xs">(IDs CRS séparés par virgule)</span>
+							</label>
+							<textarea
+								id="route-waf-exclude-rules"
+								data-testid="waf-exclude-rules-input"
+								value={wafExcludeRulesInput}
+								onchange={onExcludeRulesInputChange}
+								oninput={onExcludeRulesInputChange}
+								disabled={formData.wafDisableCRS}
+								placeholder="942100, 941390, 920280"
+								rows="2"
+								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+							></textarea>
+							{#if errors.wafExcludeRules}
+								<p
+									class="text-xs text-status-down mt-1"
+									data-testid="waf-exclude-rules-error"
+								>
+									{errors.wafExcludeRules}
+								</p>
+							{/if}
+							<p class="text-xs text-muted mt-1 max-w-prose">
+								Désactive uniquement les règles CRS listées sur cette route,
+								le reste du Core Rule Set reste actif. À utiliser quand une
+								règle précise génère un false-positive sur du trafic légitime.
+								Format : entier 6 chiffres (e.g. <code>942100</code>),
+								séparateurs virgule ou espace.
+								{#if formMode === 'edit' && editingId}
+									Pour identifier les règles qui ont déclenché sur cette
+									route récemment, consultez
+									<a
+										href="/security/{editingId}"
+										class="text-cyan hover:underline"
+										data-testid="waf-exclude-rules-security-link"
+										>l'historique WAF</a
+									>.
+								{:else}
+									Pour identifier les règles qui ont déclenché récemment,
+									consultez la section
+									<a href="/security" class="text-cyan hover:underline"
+										>Sécurité</a
+									>.
+								{/if}
+								{#if formData.wafDisableCRS}
+									<br />
+									<span class="text-status-warn"
+										>⚠️ Le CRS est désactivé via le toggle ci-dessus — les
+										exclusions sont silencieuses jusqu'à réactivation.</span
+									>
+								{/if}
+							</p>
+						</div>
 					</div>
 
 					<!-- W.5 — country-block per-route gate. Operator

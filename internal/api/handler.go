@@ -1083,6 +1083,21 @@ type routeRequest struct {
 	// consulted, so the flag is silent until the operator
 	// turns the mode on.
 	WAFDisableCRS *bool `json:"wafDisableCRS,omitempty"`
+	// WAFExcludeRules (Step X Option (c), 2026-06-18) is the
+	// per-route CRS rule-ID exclusion list. nil pointer =
+	// preserve-on-omit (PUT) / default empty (POST). A
+	// non-nil pointer is a full replacement of the stored
+	// slice — to clear all exclusions the operator sends
+	// `"wafExcludeRules": []` (a non-nil empty slice).
+	//
+	// Validation : each element MUST be a positive integer
+	// in the CRS rule-id range [100000, 999999], NOT in the
+	// Arenet-reserved sub-range [100000, 199999]. Duplicates
+	// are deduped server-side at write time so the canonical
+	// form on disk has no redundant entries (cuts pool blast
+	// per ADR D3 since two routes with the same effective
+	// exclusion set share a WAF pool).
+	WAFExcludeRules *[]int `json:"wafExcludeRules,omitempty"`
 }
 
 // countryBlockReq is the wire-side shape of Route.CountryBlock.
@@ -1281,6 +1296,13 @@ type routeResponse struct {
 	// field even when false so the preserve-on-omit semantic
 	// (nil = omission, false = explicit off) stays sound.
 	WAFDisableCRS bool `json:"wafDisableCRS"`
+	// WAFExcludeRules (Step X Option (c)) — per-route CRS
+	// rule-ID exclusion list. Always present (zero-length
+	// slice when the operator has no exclusions configured)
+	// so a downstream GET→PUT round-trip carrying the field
+	// verbatim doesn't accidentally trigger preserve-on-
+	// omit semantics on the put side.
+	WAFExcludeRules []int `json:"wafExcludeRules"`
 	// Critique 11 Pack A (2026-06-05) — derived per-route
 	// aggregate from the Stage B HC tracker. One of:
 	//   "healthy"   — HC enabled AND every upstream healthy in tracker
@@ -1374,9 +1396,22 @@ func toResponse(r storage.Route) routeResponse {
 		InsecureSkipVerify:  r.InsecureSkipVerify,
 		UploadStreamingMode: r.UploadStreamingMode,
 		WAFDisableCRS:       r.WAFDisableCRS,
+		WAFExcludeRules:     emptyIntSliceIfNil(r.WAFExcludeRules),
 		CreatedAt:           r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:           r.UpdatedAt.UTC().Format(timestampFormat),
 	}
+}
+
+// emptyIntSliceIfNil returns []int{} when the input is nil so
+// the response JSON never carries `null` for WAFExcludeRules.
+// The frontend treats the field as always-present (operator
+// edits a list, never queries "is this null vs missing"), so
+// the nil → [] normalisation here keeps the contract clean.
+func emptyIntSliceIfNil(s []int) []int {
+	if s == nil {
+		return []int{}
+	}
+	return s
 }
 
 // toCountryBlockResp normalises the storage Config for the

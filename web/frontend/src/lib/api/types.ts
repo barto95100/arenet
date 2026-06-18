@@ -251,6 +251,22 @@ export interface Route {
 	 */
 	wafDisableCRS: boolean;
 	/**
+	 * Step X Option (c) — per-route OWASP CRS rule-ID
+	 * exclusion list. Always present (zero-length [] when
+	 * the operator has configured no exclusions) so a
+	 * GET → PUT round-trip echoes the field verbatim
+	 * without triggering the preserve-on-omit semantic on
+	 * the put side. Server-side canonical : ascending
+	 * sort + dedup.
+	 *
+	 * Use case : surgical false-positive fix. Operator sees
+	 * rule 942100 trip on a legitimate POST in
+	 * /security/<routeId>, copies the ID into this list,
+	 * the route stops blocking that specific rule while
+	 * the rest of the CRS stays active.
+	 */
+	wafExcludeRules: number[];
+	/**
 	 * Count of upstreams the HC tracker has observed as healthy.
 	 * Zero on routes without HC configured (the C13 gate doesn't
 	 * peek at tracker state). Used by the Routes table to render
@@ -507,6 +523,16 @@ export interface RouteRequest {
 	 *   - present (true | false) → full replacement.
 	 */
 	wafDisableCRS?: boolean;
+	/**
+	 * Step X Option (c) — wafExcludeRules on the wire. Preserve-
+	 * on-omit on PUT (matching the *[]int backend shape), full-
+	 * replace on supply. Sending [] explicitly clears every
+	 * previously-stored exclusion. Server-side : each ID is
+	 * validated 6-digit (range 100000..999999), Arenet-reserved
+	 * range 100000..199999 rejected ; the stored slice is the
+	 * canonical sorted + deduped form.
+	 */
+	wafExcludeRules?: number[];
 }
 
 /**

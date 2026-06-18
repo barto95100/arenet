@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -753,6 +754,66 @@ func validateWAFMode(mode string) error {
 	return nil
 }
 
+// Step X Option (c) — WAF exclude-rules constants.
+//
+// The CRS rule-id space is 6-digit per upstream convention
+// (every CRS rule file uses a 6-digit `id:` action). Arenet
+// reserves the [100000, 199999] sub-range for its own
+// internally-generated directives (admin-API exclusion uses
+// id:100001, the per-route Option (c) SecAction uses id:200001
+// — wait, that's in the 200000 range, NOT reserved). The
+// validation here rejects IDs in the reserved sub-range so an
+// operator can't accidentally remove an Arenet-internal rule
+// that the runtime depends on, OR pile redundant
+// ctl:ruleRemoveById entries against IDs that already exist
+// in Arenet's own emit.
+const (
+	wafExcludeRuleMinID            = 100000 // 6-digit lower bound
+	wafExcludeRuleMaxID            = 999999 // 6-digit upper bound
+	wafExcludeRuleArenetReservedHi = 199999 // [100000, 199999] is Arenet-reserved
+)
+
+// normalizeExcludeRules validates each rule ID in the input
+// slice, returns the deduped + ascending-sorted canonical
+// form for storage. Returns a 400-ready error on the first
+// invalid ID found ; the caller surfaces it verbatim with
+// the WAF_EXCLUDE_RULES_INVALID code.
+//
+// Returns ([], nil) for an explicit empty input — the
+// caller wants to clear all exclusions, and the empty slice
+// is the correct stored shape (the omitempty json tag on
+// storage.Route.WAFExcludeRules drops it from the on-disk
+// representation, so an explicit-empty PUT is byte-equal
+// to a never-set route after persist + reload).
+func normalizeExcludeRules(in []int) ([]int, error) {
+	if len(in) == 0 {
+		return []int{}, nil
+	}
+	seen := make(map[int]struct{}, len(in))
+	out := make([]int, 0, len(in))
+	for _, id := range in {
+		if id < wafExcludeRuleMinID || id > wafExcludeRuleMaxID {
+			return nil, fmt.Errorf(
+				"wafExcludeRules: rule ID %d is out of range (must be 6-digit, %d..%d)",
+				id, wafExcludeRuleMinID, wafExcludeRuleMaxID,
+			)
+		}
+		if id <= wafExcludeRuleArenetReservedHi {
+			return nil, fmt.Errorf(
+				"wafExcludeRules: rule ID %d is in the Arenet-reserved range (must be > %d)",
+				id, wafExcludeRuleArenetReservedHi,
+			)
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Ints(out)
+	return out, nil
+}
+
 // Step W — country-block helpers.
 
 // materialiseCountryBlock converts a wire-side countryBlockReq to a
@@ -1100,6 +1161,21 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	if req.WAFDisableCRS != nil {
 		disableCRS = *req.WAFDisableCRS
 	}
+	// Step X Option (c) — WAFExcludeRules on POST: nil pointer
+	// defaults to no exclusions ; a supplied slice is sanitised
+	// (validated, deduped, sorted) by normalizeExcludeRules.
+	// Validation errors surface as 400 here so the create
+	// rejects malformed rule IDs before the route lands in
+	// storage. Same shape as the countryBlock validation path.
+	var excludeRules []int
+	if req.WAFExcludeRules != nil {
+		normalised, validationErr := normalizeExcludeRules(*req.WAFExcludeRules)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		excludeRules = normalised
+	}
 	newRoute := storage.Route{
 		Host:            req.Host,
 		Upstreams:       storeUpstreams,
@@ -1125,6 +1201,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		InsecureSkipVerify:  skipVerify,
 		UploadStreamingMode: streamingMode,
 		WAFDisableCRS:       disableCRS,
+		WAFExcludeRules:     excludeRules,
 	}
 	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
 	// the corresponding sub-struct (storage trusts the API to
@@ -1511,6 +1588,21 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	if req.WAFDisableCRS != nil {
 		disableCRS = *req.WAFDisableCRS
 	}
+	// Step X Option (c) — WAFExcludeRules on PUT: nil pointer
+	// preserves the previously stored slice ; a non-nil
+	// pointer (including an empty slice) is a full
+	// replacement. Empty slice clears every exclusion. The
+	// supplied slice is sanitised via normalizeExcludeRules
+	// just like the POST path.
+	excludeRules := previous.WAFExcludeRules
+	if req.WAFExcludeRules != nil {
+		normalised, validationErr := normalizeExcludeRules(*req.WAFExcludeRules)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		excludeRules = normalised
+	}
 	newRoute := storage.Route{
 		ID:              id,
 		Host:            req.Host,
@@ -1537,6 +1629,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		InsecureSkipVerify:  skipVerify,
 		UploadStreamingMode: streamingMode,
 		WAFDisableCRS:       disableCRS,
+		WAFExcludeRules:     excludeRules,
 	}
 	if newRoute.AuthMode != storage.RouteAuthBasic {
 		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}

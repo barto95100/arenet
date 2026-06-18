@@ -96,3 +96,33 @@ func TestComputePoolKey_ModeDistinguishes(t *testing.T) {
 		t.Errorf("expected distinct pool keys for detect vs block; got both = %q", a.computePoolKey())
 	}
 }
+
+// Step X Option (c) pool dedup invariants — by-construction
+// once the directives string carries the canonical-sorted
+// SecAction (caddymgr does the sort at emit time per ADR D3).
+
+func TestComputePoolKey_ExcludeRules_SameSet_SameKey(t *testing.T) {
+	// Two routes with the same exclusion set (post-canonical-
+	// sort in the directives string) MUST share a pool key so
+	// they reuse the same Coraza instance. This is the runtime
+	// payoff of the ADR D3 canonical-normalisation invariant.
+	dirs := `Include @owasp_crs/*.conf
+SecAction "id:999001,phase:1,pass,nolog,ctl:ruleRemoveById=920280,ctl:ruleRemoveById=942100"`
+	a := &ArenetWafHandler{Mode: "block", Directives: dirs, LoadOWASPCRS: true}
+	b := &ArenetWafHandler{Mode: "block", Directives: dirs, LoadOWASPCRS: true}
+	if a.computePoolKey() != b.computePoolKey() {
+		t.Errorf("expected shared pool key for identical exclusion directives ; got %q vs %q",
+			a.computePoolKey(), b.computePoolKey())
+	}
+}
+
+func TestComputePoolKey_ExcludeRules_DistinctSets_DistinctKeys(t *testing.T) {
+	dirsA := `SecAction "id:999001,phase:1,pass,nolog,ctl:ruleRemoveById=942100"`
+	dirsB := `SecAction "id:999001,phase:1,pass,nolog,ctl:ruleRemoveById=941390"`
+	a := &ArenetWafHandler{Mode: "block", Directives: dirsA, LoadOWASPCRS: true}
+	b := &ArenetWafHandler{Mode: "block", Directives: dirsB, LoadOWASPCRS: true}
+	if a.computePoolKey() == b.computePoolKey() {
+		t.Errorf("expected distinct pool keys for distinct exclusion sets ; got both = %q",
+			a.computePoolKey())
+	}
+}

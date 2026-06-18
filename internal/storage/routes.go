@@ -386,9 +386,44 @@ type Route struct {
 	// JSON omitempty so pre-X.1 routes (and routes that keep
 	// the default) stay byte-equal with pre-X.1 snapshots on disk
 	// + in backup/restore exports.
-	WAFDisableCRS bool      `json:"waf_disable_crs,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	WAFDisableCRS bool `json:"waf_disable_crs,omitempty"`
+	// WAFExcludeRules (Step X Option (c), 2026-06-18) is the
+	// per-route list of CRS rule IDs the operator wants
+	// SILENCED on this route while keeping the rest of the CRS
+	// active. Empty (nil or zero-length) = no exclusions = the
+	// arenet_waf handler runs with the full CRS chain (or
+	// whatever WAFDisableCRS / WAFMode let through), so pre-
+	// Y stored routes decode to byte-equivalent runtime
+	// behaviour. No boot migration needed.
+	//
+	// Use case : the operator hits a false-positive on a
+	// single rule (e.g. CRS 942100 triggering on a legitimate
+	// SQL-heavy POST). Adding the rule ID to this list disables
+	// it on this route ONLY, without nuking the whole SQLi
+	// family (Option (b)) or the entire CRS (Option (a)).
+	// Surgical fix.
+	//
+	// Interaction with WAFDisableCRS : when WAFDisableCRS is
+	// true the entire CRS isn't loaded, so per-rule exclusions
+	// are meaningless. The frontend greys the input ; the
+	// caddymgr emit still ships the SecAction directive (it's
+	// a no-op when there are no CRS rules to ctl-remove) so
+	// flipping WAFDisableCRS back to false re-engages the
+	// rules + the operator's exclusion list in one step.
+	//
+	// Validation : every ID must be a positive integer. The
+	// CRS rule-id space is 100000-999999 (6-digit), with
+	// Arenet reserving 100000-199999 for its own internal
+	// directives (admin-API exclusion, future generated
+	// SecRules). The API layer rejects IDs in the reserved
+	// range with a 400.
+	//
+	// JSON omitempty so pre-Y routes (and routes that keep the
+	// default empty list) stay byte-equal with pre-Y snapshots
+	// on disk + in backup/restore exports.
+	WAFExcludeRules []int     `json:"waf_exclude_rules,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route
