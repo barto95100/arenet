@@ -81,6 +81,15 @@ import (
 	// mgr.Start, the handler module's Provision pulls it.
 	_ "github.com/barto95100/arenet/internal/certinfo"
 
+	// Step Z.1 (2026-06-18) — side-effect import: registers the
+	// arenet_ratelimit_sink events handler so the
+	// apps.events.subscriptions entry buildConfigJSON emits for
+	// "rate_limit_exceeded" events (origin: http.handlers.
+	// rate_limit) is resolvable at caddy.Load time. Same singleton
+	// pattern: cmd/arenet installs the global sink before
+	// mgr.Start, the handler module pulls it on every Handle.
+	_ "github.com/barto95100/arenet/internal/ratelimit"
+
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -1690,6 +1699,25 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				"handlers": []map[string]any{
 					{
 						"handler": "arenet_cert_info",
+					},
+				},
+			},
+			{
+				// Step Z.1 — rate_limit_exceeded ingestion.
+				// Emit site verified empirically against
+				// mholt/caddy-ratelimit@v0.1.0 handler.go:232
+				// (h.events.Emit(h.ctx, "rate_limit_exceeded",
+				// map[string]any{"zone", "wait", "remote_ip"})).
+				// The handler's module origin is
+				// http.handlers.rate_limit — the events app
+				// walks UP the module tree, so the modules
+				// filter accepts the parent http.handlers.
+				// rate_limit module ID.
+				"events":  []string{"rate_limit_exceeded"},
+				"modules": []string{"http.handlers.rate_limit"},
+				"handlers": []map[string]any{
+					{
+						"handler": "arenet_ratelimit_sink",
 					},
 				},
 			},

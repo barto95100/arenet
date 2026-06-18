@@ -177,8 +177,8 @@ func (s *Store) InsertBatch(ctx context.Context, gran Granularity, rows []Metric
 		return fmt.Errorf("observability: begin tx: %w", err)
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO `+gran.tableName()+` (route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, waf_detect_count, throttle_block_count, crowdsec_decision_count, latency_p95_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO `+gran.tableName()+` (route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, waf_detect_count, throttle_block_count, crowdsec_decision_count, rate_limit_count, latency_p95_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(route_id, ts) DO UPDATE SET
   req_count               = excluded.req_count,
   fourxx_count            = excluded.fourxx_count,
@@ -187,6 +187,7 @@ ON CONFLICT(route_id, ts) DO UPDATE SET
   waf_detect_count        = excluded.waf_detect_count,
   throttle_block_count    = excluded.throttle_block_count,
   crowdsec_decision_count = excluded.crowdsec_decision_count,
+  rate_limit_count        = excluded.rate_limit_count,
   latency_p95_ms          = excluded.latency_p95_ms
 `)
 	if err != nil {
@@ -205,6 +206,7 @@ ON CONFLICT(route_id, ts) DO UPDATE SET
 			r.WafDetectCount,
 			r.ThrottleBlockCount,
 			r.CrowdSecDecisionCount,
+			r.RateLimitCount,
 			r.LatencyP95Ms,
 		); err != nil {
 			_ = tx.Rollback()
@@ -232,7 +234,7 @@ func (s *Store) Query(ctx context.Context, gran Granularity, routeID string, fro
 		return nil, fmt.Errorf("observability: store closed")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, waf_detect_count, throttle_block_count, crowdsec_decision_count, latency_p95_ms
+SELECT route_id, ts, req_count, fourxx_count, fivexx_count, waf_block_count, waf_detect_count, throttle_block_count, crowdsec_decision_count, rate_limit_count, latency_p95_ms
 FROM `+gran.tableName()+`
 WHERE route_id = ? AND ts >= ? AND ts < ?
 ORDER BY ts ASC
@@ -245,7 +247,7 @@ ORDER BY ts ASC
 	for rows.Next() {
 		var b MetricBucket
 		var tsUnix int64
-		if err := rows.Scan(&b.RouteID, &tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.WafDetectCount, &b.ThrottleBlockCount, &b.CrowdSecDecisionCount, &b.LatencyP95Ms); err != nil {
+		if err := rows.Scan(&b.RouteID, &tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.WafDetectCount, &b.ThrottleBlockCount, &b.CrowdSecDecisionCount, &b.RateLimitCount, &b.LatencyP95Ms); err != nil {
 			return nil, fmt.Errorf("observability: scan: %w", err)
 		}
 		b.Ts = time.Unix(tsUnix, 0).UTC()
@@ -294,6 +296,7 @@ SELECT
   SUM(waf_detect_count)       AS waf_detect_total,
   SUM(throttle_block_count)   AS throttle_total,
   SUM(crowdsec_decision_count) AS crowdsec_total,
+  SUM(rate_limit_count)       AS rate_limit_total,
   CASE
     WHEN SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END) > 0
     THEN SUM(latency_p95_ms * CASE WHEN req_count > 0 THEN req_count ELSE 0 END) / SUM(CASE WHEN req_count > 0 THEN req_count ELSE 0 END)
@@ -313,7 +316,7 @@ ORDER BY ts ASC
 		var b MetricBucket
 		var tsUnix int64
 		var p95 int64 // SQLite SUM/CASE returns INTEGER; scan as int64 then narrow
-		if err := rows.Scan(&tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.WafDetectCount, &b.ThrottleBlockCount, &b.CrowdSecDecisionCount, &p95); err != nil {
+		if err := rows.Scan(&tsUnix, &b.ReqCount, &b.FourxxCount, &b.FivexxCount, &b.WafBlockCount, &b.WafDetectCount, &b.ThrottleBlockCount, &b.CrowdSecDecisionCount, &b.RateLimitCount, &p95); err != nil {
 			return nil, fmt.Errorf("observability: scan aggregated: %w", err)
 		}
 		b.Ts = time.Unix(tsUnix, 0).UTC()

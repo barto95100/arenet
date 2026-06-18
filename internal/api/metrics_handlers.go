@@ -67,6 +67,14 @@ const (
 	// route=<uuid> returns all zeros (no per-route concept
 	// for CrowdSec decisions, mirror of AC #10 for throttle).
 	metricCrowdSecDecisionRate metricName = "crowdsec_decision_rate"
+	// Step Z.3 — HTTP rate-limit (429) rate. Reads
+	// bucket.RateLimitCount, gap-filled with 0. Unlike
+	// throttle_block_rate which keys under "_throttle",
+	// THIS metric is per-route — the Z.1 sink resolves the
+	// upstream caddy-ratelimit zone "route-<UUID>" to the
+	// route UUID and bumps the bucket under that real ID.
+	// Powers the /security/[routeId] chart panel.
+	metricRateLimitRate metricName = "rate_limit_rate"
 )
 
 // timeseriesPoint is one point on the timeline. Value is *float64
@@ -169,6 +177,14 @@ type summaryResponse struct {
 	// throttle / crowdsec event does NOT inflate the 4xx /
 	// 5xx / waf fields.
 	TotalThrottle           uint64 `json:"totalThrottle"`
+	// Step Z.2 — rate-limit (429) counter over the window.
+	// Sourced from a window-scoped COUNT(*) on the
+	// rate_limit_event table (NOT a bucket — the per-route
+	// bucket counter from Z.3 powers timeseries chart, not
+	// this dashboard total). Independent of the other counters
+	// per the same AC #15 principle : a 429 must NOT inflate
+	// totalFourXx or totalThrottle.
+	TotalRateLimitExceeded  uint64 `json:"totalRateLimitExceeded"`
 	TotalAuthFailures       uint64 `json:"totalAuthFailures"`
 	AttackerIpsUnique       int    `json:"attackerIpsUnique"` // union over WAF + throttle + audit + crowdsec
 	TotalCrowdSecDecisions  uint64 `json:"totalCrowdSecDecisions"`
@@ -616,6 +632,25 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Step Z.2 — TotalRateLimitExceeded: COUNT the
+	// rate_limit_event rows over the window. Unlike the
+	// throttle / crowdsec sentinels which feed bucket_1h, the
+	// rate-limit counter is an event-table COUNT(*) because
+	// (i) the Z.3 per-route bucket column lands later for
+	// timeseries, and (ii) the 24h retention on the event
+	// table matches the dashboard window so a COUNT is
+	// O(table-scan-of-24h) — cheap enough for the summary
+	// path that runs every 1s on the dashboard. Independent of
+	// the other counters per AC #15.
+	if h.rateLimitEvents != nil {
+		n, rerr := h.rateLimitEvents.CountRateLimitEventsByWindow(r.Context(), from, to)
+		if rerr != nil {
+			h.logger.Error("metrics: summary rate_limit_event count failed", "err", rerr)
+		} else {
+			resp.TotalRateLimitExceeded = uint64(n)
+		}
+	}
+
 	// Step N.3 — TotalCrowdSecDecisions: SUM the CrowdSec
 	// sentinel row(s) over the window (spec N §3.5:
 	// "_crowdsec"). Independent of the throttle counter;
@@ -731,7 +766,7 @@ func isValidMetric(m metricName) bool {
 	switch m {
 	case metricReqPerSec, metricFourXxRate, metricFiveXxRate, metricP95LatencyMs,
 		metricWafBlockRate, metricThrottleBlockRate, metricAuthFailureRate,
-		metricCrowdSecDecisionRate:
+		metricCrowdSecDecisionRate, metricRateLimitRate:
 		return true
 	}
 	return false
@@ -883,6 +918,9 @@ func pickMetricValue(row observability.MetricBucket, hit bool, metric metricName
 		return &v
 	case metricCrowdSecDecisionRate:
 		v := float64(row.CrowdSecDecisionCount)
+		return &v
+	case metricRateLimitRate:
+		v := float64(row.RateLimitCount)
 		return &v
 	case metricP95LatencyMs:
 		if row.LatencyP95Ms <= 0 {

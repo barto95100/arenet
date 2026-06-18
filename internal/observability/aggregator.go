@@ -91,6 +91,19 @@ type TickDelta struct {
 	// layer (per-IP detail lives in the decision_event table).
 	// N spec §3.5.
 	CrowdSecDecisions uint64
+
+	// RateLimitExceeded (Step Z.3) is the count of HTTP
+	// rate-limit (429) events emitted by mholt/caddy-ratelimit
+	// for THIS specific route in the current minute. Unlike
+	// ThrottleBlocks which lives under the "_throttle"
+	// sentinel, this counter is per-route — the ratelimit.Sink
+	// resolves the route via the "route-<UUID>" zone naming
+	// convention before bumping. Powers the Z.3 per-route
+	// timeseries chart on /security/[routeId]. The Z.1
+	// ratelimit.Sink calls BumpRateLimitExceeded(routeID) on
+	// every absorbed event ; events with empty routeID (zone
+	// not following the convention) are skipped by the sink.
+	RateLimitExceeded uint64
 }
 
 // ThrottleSentinelRouteID is the load-bearing convention from
@@ -132,6 +145,11 @@ type routeState struct {
 	wafDetects        int64
 	throttleBlocks    int64
 	crowdsecDecisions int64
+	// Step Z.3 — per-route 429 counter. Bumped by the
+	// ratelimit.Sink.absorb path (only when routeID != "" ;
+	// zones not following the "route-<UUID>" convention
+	// don't reach this counter).
+	rateLimits        int64
 	p95MaxMs          int32 // max across all 1-second samples this minute
 	samples           int   // number of non-empty 1-second samples
 }
@@ -336,6 +354,28 @@ func (a *Aggregator) BumpCrowdSecDecisions(srcIP string) {
 	a.Ingest(TickDelta{RouteID: CrowdSecSentinelRouteID, CrowdSecDecisions: 1})
 }
 
+// BumpRateLimitExceeded (Step Z.3) increments the per-route
+// HTTP rate-limit counter under the real route UUID. Unlike
+// BumpThrottleBlocks / BumpCrowdSecDecisions which key under
+// a "_throttle" / "_crowdsec" sentinel, this counter uses
+// the actual route UUID — the Z.1 ratelimit.Sink resolves
+// the route from the upstream caddy-ratelimit zone name
+// ("route-<UUID>" convention) BEFORE calling this method,
+// and skips the call when routeID == "" (operator-hand-
+// crafted Caddy zones that bypass the Arenet emit path).
+//
+// Implements ratelimit.BucketCounter ; called by
+// ratelimit.Sink.absorb on every absorbed event.
+//
+// Non-blocking by construction. Same AC #13 discipline as
+// BumpThrottleBlocks / BumpWafBlocks / Consume.
+func (a *Aggregator) BumpRateLimitExceeded(routeID string) {
+	if routeID == "" {
+		return
+	}
+	a.Ingest(TickDelta{RouteID: routeID, RateLimitExceeded: 1})
+}
+
 // Consume implements metrics.TickConsumer. Adapter so the Step E
 // ticker can fan its per-route deltas out to the observability
 // pipeline without an import-direction reversal (internal/metrics
@@ -451,6 +491,7 @@ func (a *Aggregator) absorb(d TickDelta) {
 	rs.wafDetects += int64(d.WafDetects)
 	rs.throttleBlocks += int64(d.ThrottleBlocks)
 	rs.crowdsecDecisions += int64(d.CrowdSecDecisions)
+	rs.rateLimits += int64(d.RateLimitExceeded)
 	if d.LatencyP95Ms > rs.p95MaxMs {
 		rs.p95MaxMs = d.LatencyP95Ms
 	}
@@ -496,6 +537,7 @@ func (a *Aggregator) flush(ctx context.Context) {
 			WafDetectCount:        rs.wafDetects,
 			ThrottleBlockCount:    rs.throttleBlocks,
 			CrowdSecDecisionCount: rs.crowdsecDecisions,
+			RateLimitCount:        rs.rateLimits,
 			LatencyP95Ms:          rs.p95MaxMs,
 		})
 	}

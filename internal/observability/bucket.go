@@ -43,6 +43,15 @@ type MetricBucket struct {
 	WafDetectCount        int64
 	ThrottleBlockCount    int64 // Step Q: count of rate-limit blocks (Tier 1 + Tier 2) captured this window. Per-IP rows live under routeID="_throttle" (Q spec §3.5).
 	CrowdSecDecisionCount int64 // Step N: count of NEW CrowdSec decisions seen this window (dedupe-before-bump per N spec D4.A). Per-IP rows live under routeID="_crowdsec" (N spec §3.5).
+	// RateLimitCount (Step Z.3) is the count of per-route
+	// HTTP rate-limit (429) events captured this window. Unlike
+	// ThrottleBlockCount which lives under the "_throttle"
+	// sentinel, this column is per-route — the zone naming
+	// convention "route-<UUID>" lets the Z.1 sink resolve the
+	// route, and the bucket flushes under the real route UUID.
+	// Powers the Step Z.3 per-route timeseries chart on
+	// /security/[routeId]. Pre-v12 rows decode to 0.
+	RateLimitCount        int64
 	LatencyP95Ms          int32
 }
 

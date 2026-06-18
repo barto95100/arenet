@@ -22,6 +22,7 @@ import type {
 	ManualBanResponse,
 	MetricWindow,
 	OwaspCategory,
+	RateLimitEventsResponse,
 	ScenariosResponse,
 	ServerPosition,
 	ThrottleEventsResponse,
@@ -429,6 +430,40 @@ export function fetchCountryBlockEvents(
 	return request<CountryBlockEventsResponse>(
 		'GET',
 		`/observability/country-block-events${suffix}`
+	);
+}
+
+/**
+ * Step Z.1 — fetch rate-limit (429) events from the
+ * rate_limit_event table. Mirror of fetchCountryBlockEvents
+ * (same wire envelope, same AC #13 degraded-mode contract).
+ *
+ * Backed by GET /api/v1/security/rate-limit-events
+ * (hard-auth viewer-accessible). Operator-facing surfaces :
+ * the dashboard /logs Activity merge + future per-route
+ * timeseries page (Z.3).
+ */
+export interface FetchRateLimitEventsParams {
+	limit?: number;
+	route?: string;
+	remoteIp?: string;
+	since?: string;
+	until?: string;
+}
+
+export function fetchRateLimitEvents(
+	params: FetchRateLimitEventsParams = {}
+): Promise<RateLimitEventsResponse> {
+	const qs = new URLSearchParams();
+	if (params.limit !== undefined) qs.set('limit', String(params.limit));
+	if (params.route) qs.set('route', params.route);
+	if (params.remoteIp) qs.set('remoteIp', params.remoteIp);
+	if (params.since) qs.set('since', params.since);
+	if (params.until) qs.set('until', params.until);
+	const suffix = qs.toString() ? `?${qs.toString()}` : '';
+	return request<RateLimitEventsResponse>(
+		'GET',
+		`/security/rate-limit-events${suffix}`
 	);
 }
 

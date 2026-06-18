@@ -190,6 +190,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// table, mirror of /security/events. Optional
 			// srcIp / tier filters. Same AC #14 contract.
 			r.Get("/security/throttle-events", h.securityThrottleEvents)
+			// Step Z.1 — rate-limit (429) event log. Pure
+			// event-shaped read of the rate_limit_event
+			// table populated by the Z.1 ratelimit.Sink.
+			// Optional route / remoteIp / since / until
+			// filters. Same hard-auth + AC #13 degraded-
+			// mode contract as the security siblings above.
+			r.Get("/security/rate-limit-events", h.securityRateLimitEvents)
 			// Step Q.3 — attackers summary. Server-side
 			// union over WAF + throttle + audit source-IP
 			// sets (D6.A). One headline `uniqueIps` stat +

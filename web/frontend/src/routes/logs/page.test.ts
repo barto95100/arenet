@@ -34,7 +34,9 @@ const { toastMock, securityMock, clientMock } = vi.hoisted(() => ({
 		fetchAuthFailures: vi.fn(),
 		fetchCertEvents: vi.fn(),
 		// W.5 — 5th source (country-block events).
-		fetchCountryBlockEvents: vi.fn()
+		fetchCountryBlockEvents: vi.fn(),
+		// Z.2 — 6th source (rate-limit 429 events).
+		fetchRateLimitEvents: vi.fn()
 	},
 	// W.7 follow-up — routes API for routeId → host
 	// resolution. Default returns an empty list so rows
@@ -69,6 +71,7 @@ beforeEach(() => {
 	securityMock.fetchAuthFailures.mockReset();
 	securityMock.fetchCertEvents.mockReset();
 	securityMock.fetchCountryBlockEvents.mockReset();
+	securityMock.fetchRateLimitEvents.mockReset();
 
 	// Defaults: every source returns empty. Individual tests
 	// override what they need.
@@ -85,6 +88,11 @@ beforeEach(() => {
 		hasMore: false
 	});
 	securityMock.fetchCountryBlockEvents.mockResolvedValue({
+		events: [],
+		total: 0,
+		hasMore: false
+	});
+	securityMock.fetchRateLimitEvents.mockResolvedValue({
 		events: [],
 		total: 0,
 		hasMore: false

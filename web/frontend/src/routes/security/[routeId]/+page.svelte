@@ -85,6 +85,12 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	let fourxxSeries = $state<TimeseriesPoint[]>([]);
 	let fivexxSeries = $state<TimeseriesPoint[]>([]);
 	let wafSeries = $state<TimeseriesPoint[]>([]);
+	// Step Z.3 — per-route 429 timeseries from the
+	// rate_limit_count bucket column. Populated by the Z.1
+	// ratelimit.Sink's BumpRateLimitExceeded path (real
+	// route UUID, not the throttle sentinel — distinct
+	// signal from auth-throttle).
+	let rateLimitSeries = $state<TimeseriesPoint[]>([]);
 	let recentEvents = $state<WafEvent[]>([]);
 
 	// Per-rule breakdown over the SELECTED window. Populated
@@ -130,11 +136,12 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 			//   - by-rule:     full GROUP BY over the window
 			//     so the breakdown table reflects "over the
 			//     window" semantics (spec §5.4).
-			const [req, fourxx, fivexx, waf, events, byRule] = await Promise.all([
+			const [req, fourxx, fivexx, waf, rateLimit, events, byRule] = await Promise.all([
 				fetchTimeseries(routeId, 'req_per_sec', window),
 				fetchTimeseries(routeId, 'four_xx_rate', window),
 				fetchTimeseries(routeId, 'five_xx_rate', window),
 				fetchTimeseries(routeId, 'waf_block_rate', window),
+				fetchTimeseries(routeId, 'rate_limit_rate', window),
 				fetchEvents({ route: routeId, limit: 20 }),
 				fetchEventsByRule(routeId, window)
 			]);
@@ -143,6 +150,7 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 			fourxxSeries = trimTrailing(fourxx);
 			fivexxSeries = trimTrailing(fivexx);
 			wafSeries = trimTrailing(waf);
+			rateLimitSeries = trimTrailing(rateLimit);
 			recentEvents = events.events;
 			ruleBreakdown = byRule.rows;
 		} catch (err) {
@@ -309,6 +317,23 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 					color="var(--accent-cyan)"
 					formatValue={fmtCount}
 					label="Requests per minute for this route"
+				/>
+			</div>
+		</Card>
+		<!-- Step Z.3 — per-route 429 timeseries. Captured by
+		     the ratelimit.Sink off the mholt/caddy-ratelimit
+		     "rate_limit_exceeded" event. Drawn in amber : 429
+		     is a recoverable throttle signal (level=warn on the
+		     activity log), distinct from the red WAF/4xx/5xx
+		     enforcement signals above. -->
+		<Card>
+			<div class="chart-block">
+				<h3>Rate-limit (429) / minute</h3>
+				<TimelineChart
+					points={rateLimitSeries}
+					color="var(--status-warn)"
+					formatValue={fmtCount}
+					label="HTTP 429 rate-limit responses per minute for this route"
 				/>
 			</div>
 		</Card>

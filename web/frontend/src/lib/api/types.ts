@@ -1243,7 +1243,14 @@ export type MetricName =
 	// SUM path on route="all" (which includes the sentinel
 	// "_crowdsec" row — same trick as throttle). route=<uuid>
 	// returns all-zero (mirror of throttle).
-	| 'crowdsec_decision_rate';
+	| 'crowdsec_decision_rate'
+	// Step Z.3 — HTTP rate-limit (429) rate. Reads
+	// bucket.RateLimitCount. Unlike throttle_block_rate,
+	// THIS metric is per-route (the Z.1 sink resolves the
+	// upstream zone "route-<UUID>" to the route UUID and
+	// bumps the bucket under that real ID). Powers the
+	// /security/[routeId] chart panel.
+	| 'rate_limit_rate';
 
 export type MetricWindow = '24h' | '30d';
 
@@ -1339,6 +1346,14 @@ export interface SummaryResponse {
 	 * of totalWafBlocked and the L 4xx/5xx totals.
 	 */
 	totalThrottle: number;
+	/**
+	 * Step Z.2 — per-route HTTP rate-limit (429) events over
+	 * the window, sourced from the rate_limit_event table.
+	 * Distinct from totalThrottle (auth-failure throttle is a
+	 * different signal). AC #15 carries forward : independent
+	 * of every other counter.
+	 */
+	totalRateLimitExceeded: number;
 	/** Step Q.3 — authentication-failure audit events count. */
 	totalAuthFailures: number;
 	/**
@@ -1931,6 +1946,40 @@ export interface CountryBlockEvent {
 
 export interface CountryBlockEventsResponse {
 	events: CountryBlockEvent[];
+	total: number;
+	hasMore: boolean;
+	degraded?: boolean;
+}
+
+/**
+ * Step Z.1 — rate-limit (429) events.
+ *
+ * Wire shape of GET /api/v1/security/rate-limit-events.
+ * Field-for-field mirror of
+ * internal/observability.RateLimitEvent (Z.1 schema v11)
+ * with camelCase JSON tags + RFC 3339 ts.
+ *
+ * Captured by the Z.1 events.handlers.arenet_ratelimit_sink
+ * Caddy module subscribed to upstream mholt/caddy-ratelimit's
+ * "rate_limit_exceeded" emit. RouteID extracted from the
+ * "route-<UUID>" zone convention ; operator-hand-crafted
+ * Caddy configs that bypass Arenet's emit path land with
+ * RouteID="" and the raw zone preserved for forensic value.
+ *
+ * WaitMs is the milliseconds the upstream handler told the
+ * client to wait before retrying (Retry-After).
+ */
+export interface RateLimitEvent {
+	id: number;
+	ts: string;
+	routeId: string;
+	zone: string;
+	remoteIp: string;
+	waitMs: number;
+}
+
+export interface RateLimitEventsResponse {
+	events: RateLimitEvent[];
 	total: number;
 	hasMore: boolean;
 	degraded?: boolean;

@@ -338,7 +338,7 @@
 			<div class="kpi-label">WAF bloqué / 24h</div>
 			<div class="kpi-val">{kpiWafBlocked24h}</div>
 			<div class="kpi-foot">
-				{summary?.attackerIpsUnique ?? 0} unique IPs · {summary?.totalThrottle ?? 0} throttle / 24h
+				{summary?.attackerIpsUnique ?? 0} unique IPs · {summary?.totalThrottle ?? 0} throttle · {summary?.totalRateLimitExceeded ?? 0} rate-limit (429) / 24h
 			</div>
 		</div>
 		<div class="kpi" data-testid="kpi-waf-detected">

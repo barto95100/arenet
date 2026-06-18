@@ -62,6 +62,17 @@ const (
 	// real-time signal, not a lifecycle record).
 	RetainCountryBlockEvents = 30 * 24 * time.Hour
 
+	// RetainRateLimitEvents is how long per-event
+	// rate_limit_event rows live before the retention pruner
+	// deletes them. Per Step Z spec (24h at row granularity).
+	// Deliberately shorter than the 30 d horizon shared by
+	// the other security tables : (i) 429s can be very
+	// high-volume during a sustained DoS (tens of thousands /
+	// minute), and (ii) the burst-shape forensic value
+	// decays fast — once the burst is over the operator
+	// looks at aggregate counters, not individual rows.
+	RetainRateLimitEvents = 24 * time.Hour
+
 	// RetainAuthEvents is how long per-event auth_event rows
 	// are kept at row granularity (Step V.2, spec §3.6). Set
 	// to 30 days — auth failures are operationally
@@ -245,6 +256,13 @@ func (r *RetentionRunner) tick(ctx context.Context) {
 	if _, err := r.store.PruneCountryBlockEventsOlderThan(ctx, now.Add(-RetainCountryBlockEvents)); err != nil {
 		r.logger.Error("observability: prune country_block_event failed", slog.String("err", err.Error()))
 	}
+	// Step Z.1: prune rate_limit_event rows older than
+	// RetainRateLimitEvents (24h — much shorter than the
+	// other security tables; 429s are high-volume during
+	// DoS and burst-shape forensic value decays fast).
+	if _, err := r.store.PruneRateLimitEventsOlderThan(ctx, now.Add(-RetainRateLimitEvents)); err != nil {
+		r.logger.Error("observability: prune rate_limit_event failed", slog.String("err", err.Error()))
+	}
 	// Step AL.4.a: prune alert_event rows older than
 	// RetainAlertEvents (30 d). Mirror of the other
 	// security-event prunes.
@@ -266,7 +284,7 @@ func (r *RetentionRunner) tick(ctx context.Context) {
 func (r *RetentionRunner) rollupHour(ctx context.Context, hourStart time.Time) error {
 	// One query for the whole hour, all routes.
 	rows, err := r.store.db.QueryContext(ctx, `
-SELECT route_id, req_count, fourxx_count, fivexx_count, waf_block_count, waf_detect_count, throttle_block_count, crowdsec_decision_count, latency_p95_ms
+SELECT route_id, req_count, fourxx_count, fivexx_count, waf_block_count, waf_detect_count, throttle_block_count, crowdsec_decision_count, rate_limit_count, latency_p95_ms
 FROM bucket_1m
 WHERE ts >= ? AND ts < ?
 `, hourStart.UTC().Unix(), hourStart.Add(time.Hour).UTC().Unix())
@@ -283,6 +301,7 @@ WHERE ts >= ? AND ts < ?
 		wafDetect int64
 		throttle  int64
 		crowdsec  int64
+		rateLimit int64
 		p95w      int64 // sum of (req_count * latency_p95_ms)
 		p95wDen   int64 // sum of req_count for samples that had latency
 		p95plain  int64 // unweighted max as fallback when no traffic
@@ -290,9 +309,9 @@ WHERE ts >= ? AND ts < ?
 	byRoute := make(map[string]*acc)
 	for rows.Next() {
 		var routeID string
-		var req, fourxx, fivexx, wafBlock, wafDetect, throttle, crowdsec int64
+		var req, fourxx, fivexx, wafBlock, wafDetect, throttle, crowdsec, rateLimit int64
 		var p95 int32
-		if err := rows.Scan(&routeID, &req, &fourxx, &fivexx, &wafBlock, &wafDetect, &throttle, &crowdsec, &p95); err != nil {
+		if err := rows.Scan(&routeID, &req, &fourxx, &fivexx, &wafBlock, &wafDetect, &throttle, &crowdsec, &rateLimit, &p95); err != nil {
 			return fmt.Errorf("rollup scan: %w", err)
 		}
 		a, ok := byRoute[routeID]
@@ -307,6 +326,7 @@ WHERE ts >= ? AND ts < ?
 		a.wafDetect += wafDetect
 		a.throttle += throttle
 		a.crowdsec += crowdsec
+		a.rateLimit += rateLimit
 		if req > 0 && p95 > 0 {
 			a.p95w += int64(p95) * req
 			a.p95wDen += req
@@ -343,6 +363,7 @@ WHERE ts >= ? AND ts < ?
 			WafDetectCount:        a.wafDetect,
 			ThrottleBlockCount:    a.throttle,
 			CrowdSecDecisionCount: a.crowdsec,
+			RateLimitCount:        a.rateLimit,
 			LatencyP95Ms:          p95,
 		})
 	}

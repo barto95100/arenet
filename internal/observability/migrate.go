@@ -46,7 +46,7 @@ import (
 //     waf_block_count).
 //
 // Downgrade is not supported.
-const currentSchemaVersion = 10
+const currentSchemaVersion = 12
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -101,15 +101,17 @@ func migrate(ctx context.Context, db *sql.DB, currentVersion int) error {
 // shape produced by schemaSQL — a fresh DB never starts at
 // v0. The first real step is index 1 (v1→v2) for Step M.
 var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
-	1: migrateV1toV2,
-	2: migrateV2toV3,
-	3: migrateV3toV4,
-	4: migrateV4toV5,
-	5: migrateV5toV6,
-	6: migrateV6toV7,
-	7: migrateV7toV8,
-	8: migrateV8toV9,
-	9: migrateV9toV10,
+	1:  migrateV1toV2,
+	2:  migrateV2toV3,
+	3:  migrateV3toV4,
+	4:  migrateV4toV5,
+	5:  migrateV5toV6,
+	6:  migrateV6toV7,
+	7:  migrateV7toV8,
+	8:  migrateV8toV9,
+	9:  migrateV9toV10,
+	10: migrateV10toV11,
+	11: migrateV11toV12,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -481,6 +483,81 @@ func migrateV9toV10(ctx context.Context, tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_alert_event_ts          ON alert_event (ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_alert_event_rule_ts     ON alert_event (rule_id, ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_alert_event_severity_ts ON alert_event (severity, ts)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV10toV11 — Step Z.1 (2026-06-18). Creates the
+// rate_limit_event table for the per-route 429 capture
+// pipeline. Mirrors the country_block_event shape
+// (v7→v8) — same retention contract, same per-route +
+// per-IP drill-down indexes.
+//
+// Column rationale :
+//   - ts (INTEGER) : seconds-since-epoch, indexed for
+//     time-range scans + retention prune.
+//   - route_id : extracted from the Caddy event's "zone"
+//     field via the Step Q "route-<UUID>" convention.
+//     Empty string when the operator hand-crafted a
+//     custom rate-limit zone bypassing Arenet's emit
+//     path — the row still persists for forensic value
+//     with the full zone string in the zone column.
+//   - zone : the upstream caddy-ratelimit zone name
+//     ("route-<UUID>" for routes managed via Arenet).
+//     Kept alongside route_id so the operator can
+//     correlate with Caddy's own zap log lines if needed.
+//   - remote_ip : the {http.request.remote.host}
+//     resolution captured at the 429 emit time.
+//   - wait_ms : the Retry-After milliseconds the
+//     upstream handler told the client to wait. 0 when
+//     the wait field wasn't present in the event.
+func migrateV10toV11(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS rate_limit_event (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  ts INTEGER NOT NULL,
+		  route_id TEXT NOT NULL DEFAULT '',
+		  zone TEXT NOT NULL DEFAULT '',
+		  remote_ip TEXT NOT NULL DEFAULT '',
+		  wait_ms INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_rate_limit_event_ts        ON rate_limit_event (ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_rate_limit_event_route_ts  ON rate_limit_event (route_id, ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_rate_limit_event_remote_ts ON rate_limit_event (remote_ip, ts)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(s), err)
+		}
+	}
+	return nil
+}
+
+// migrateV11toV12 — Step Z.3 (2026-06-18). Adds the
+// rate_limit_count column to both bucket_1m and bucket_1h
+// so the per-route 429 rate gets its own dashboard
+// timeseries (mirror of the waf_block_count + the v8→v9
+// waf_detect_count additions). Default 0 on pre-fix rows
+// — the column didn't exist when those buckets were
+// written, so "no data" is the operator-honest answer
+// rather than fabricating a value.
+//
+// Companion : the ratelimit.Sink.absorb path bumps the
+// per-route bucket counter on every event (mirror of
+// waf.Sink.absorb BumpWafBlocks). Bumps happen BEFORE
+// SQLite persistence so a flush failure doesn't
+// suppress the per-minute timeseries point — the
+// dashboard tile reflects attack volume, not just
+// successfully-persisted event count.
+func migrateV11toV12(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`ALTER TABLE bucket_1m ADD COLUMN rate_limit_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE bucket_1h ADD COLUMN rate_limit_count INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {

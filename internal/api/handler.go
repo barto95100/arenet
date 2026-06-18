@@ -371,6 +371,15 @@ type Handler struct {
 	// collapses the response to {events:[], degraded:true}
 	// rather than 5xx.
 	countryBlockEvents CountryBlockEventReader
+	// rateLimitEvents (Step Z.1) is the rate_limit_event
+	// table read surface. Backs GET /api/v1/security/
+	// rate-limit-events — the Activity log + dashboard 429
+	// counter. Backed by *observability.Store
+	// (rate_limit_event table from Z.1 schema v11); the Z.1
+	// sink writes the rows this handler reads. Nil-tolerant
+	// per AC #13: a nil reader collapses the response to
+	// {events:[], degraded:true} rather than 5xx.
+	rateLimitEvents RateLimitEventReader
 	// authSink (Step V.2, 2026-06-06) is the parallel fan-out
 	// sink that receives auth-failure events alongside the
 	// existing audit-bucket Append (spec §3.6). The audit log
@@ -787,6 +796,27 @@ func (h *Handler) SetCountryBlockEventReader(r CountryBlockEventReader) {
 // as reader_present=false in journalctl.
 func (h *Handler) HasCountryBlockEventReader() bool {
 	return h.countryBlockEvents != nil
+}
+
+// SetRateLimitEventReader (Step Z.1) attaches the
+// rate_limit_event table reader used by GET
+// /api/v1/security/rate-limit-events. Pass the
+// *observability.Store the Z.1 sink writes into ; same
+// store that backs the WAF / throttle / decision / cert /
+// auth / country-block readers.
+//
+// Nil-tolerant per AC #13 : leaving this unset makes the
+// endpoint respond with the degraded envelope.
+func (h *Handler) SetRateLimitEventReader(r RateLimitEventReader) {
+	h.rateLimitEvents = r
+}
+
+// HasRateLimitEventReader reports whether the rate-limit
+// events seam is wired. cmd/arenet calls this at boot so
+// any future wire-up regression surfaces as
+// reader_present=false in journalctl.
+func (h *Handler) HasRateLimitEventReader() bool {
+	return h.rateLimitEvents != nil
 }
 
 // SetAuthEventSink (Step V.2, 2026-06-06) attaches the auth

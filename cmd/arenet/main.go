@@ -85,6 +85,7 @@ import (
 	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
+	"github.com/barto95100/arenet/internal/ratelimit"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/internal/systemhealth"
 	"github.com/barto95100/arenet/internal/throttle"
@@ -841,6 +842,48 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		logger.Info("throttle event sink running in degraded mode (no persistence)")
 	}
 
+	// Step Z.1 — rate-limit event sink. Mirror of the
+	// throttle wiring above. The Caddy events.handler module
+	// registered by internal/ratelimit/handler.go's init()
+	// reads the global sink on every event Handle ; we install
+	// it BEFORE caddymgr.Start applies the apps.events
+	// subscription that points at events.handlers.
+	// arenet_ratelimit_sink (manager.go § Step Z.1).
+	//
+	// No geo-forwarding wrapper here (unlike throttle) ;
+	// rate-limit 429s are application-layer recoverable
+	// (client just waits) and don't carry the same forensic
+	// weight as auth bruteforce or WAF blocks. Operators that
+	// want per-IP attribution can still filter the
+	// /api/v1/security/rate-limit-events endpoint by
+	// remote_ip.
+	//
+	// Z.3 wires the per-route bucket counter via
+	// obsAggregator.BumpRateLimitExceeded — every absorbed
+	// event bumps the route's rate_limit_count column in
+	// bucket_1m. Sink skips the bump when routeID == ""
+	// (zone not matching the "route-<UUID>" convention).
+	rateLimitSink := ratelimit.NewSink(rateLimitInserterAdapter{obsStore}, obsAggregator, logger, ratelimit.SinkConfig{})
+	ratelimit.SetGlobalSink(rateLimitSink)
+	rateLimitCtx, rateLimitCancel := context.WithCancel(ctx)
+	var rateLimitWG sync.WaitGroup
+	rateLimitWG.Add(1)
+	go func() {
+		defer rateLimitWG.Done()
+		rateLimitSink.Run(rateLimitCtx)
+	}()
+	defer func() {
+		rateLimitCancel()
+		rateLimitWG.Wait()
+		ratelimit.SetGlobalSink(nil)
+		logger.Info("ratelimit sink stopped")
+	}()
+	if obsStore != nil {
+		logger.Info("ratelimit event sink wired", "store", obsPath)
+	} else {
+		logger.Info("ratelimit event sink running in degraded mode (no persistence)")
+	}
+
 	// Step N.2 — CrowdSec decision event sink. Mirror of the
 	// throttle wiring above, with TWO structural twists per N
 	// spec:
@@ -1219,6 +1262,12 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		// rows this reader serves. Same nil-obsStore degraded
 		// path as the readers above.
 		apiHandler.SetCountryBlockEventReader(obsStore)
+		// Step Z.1 — rate-limit event reader. Backed by the
+		// same *observability.Store (rate_limit_event table
+		// from Z.1 schema v11); the Z.1 ratelimit.Sink writes
+		// the rows this reader serves. Same nil-obsStore
+		// degraded path.
+		apiHandler.SetRateLimitEventReader(obsStore)
 	}
 	// Step CS.1 — CrowdSec settings hot-reload seam. Wire
 	// the mgr's ApplyCrowdSecConfig so PUT /api/v1/settings/
@@ -1272,6 +1321,14 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// cert-events endpoint degradation.
 	logger.Info("api handler wired with cert event reader",
 		"reader_present", apiHandler.HasCertEventReader(),
+	)
+	// Step Z.1 — log the rate-limit event reader wire-up
+	// state. Same HF4 boot-log pattern : a future regression
+	// where SetRateLimitEventReader goes missing surfaces as
+	// reader_present=false in journalctl instead of silent
+	// /security/rate-limit-events endpoint degradation.
+	logger.Info("api handler wired with rate-limit event reader",
+		"reader_present", apiHandler.HasRateLimitEventReader(),
 	)
 	// Step V.2 — wire the auth_event sink fan-out into the
 	// appendAudit helper. Per spec §3.6 the audit log keeps
@@ -1760,6 +1817,36 @@ func (a throttleInserterAdapter) InsertThrottleEventBatch(ctx context.Context, e
 		}
 	}
 	return a.store.InsertThrottleEventBatch(ctx, rows)
+}
+
+// rateLimitInserterAdapter satisfies ratelimit.Inserter by
+// translating ratelimit.Event → observability.RateLimitEvent
+// and delegating to the store. Same shape as
+// throttleInserterAdapter and wafInserterAdapter — keeps
+// internal/ratelimit and internal/observability decoupled.
+// Tolerates a nil store (AC #13 degraded mode) by returning
+// nil so the sink does not record the boot failure as a
+// runtime flush error.
+type rateLimitInserterAdapter struct {
+	store *observability.Store
+}
+
+// InsertRateLimitEventBatch implements ratelimit.Inserter.
+func (a rateLimitInserterAdapter) InsertRateLimitEventBatch(ctx context.Context, events []ratelimit.Event) error {
+	if a.store == nil {
+		return nil
+	}
+	rows := make([]observability.RateLimitEvent, len(events))
+	for i, e := range events {
+		rows[i] = observability.RateLimitEvent{
+			Ts:       e.Ts,
+			RouteID:  e.RouteID,
+			Zone:     e.Zone,
+			RemoteIP: e.RemoteIP,
+			WaitMs:   e.WaitMs,
+		}
+	}
+	return a.store.InsertRateLimitEventBatch(ctx, rows)
 }
 
 // crowdsecInserterAdapter satisfies crowdsec.Inserter by

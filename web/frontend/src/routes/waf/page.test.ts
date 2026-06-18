@@ -51,6 +51,7 @@ function makeSummary(overrides: Partial<SummaryResponse> = {}): SummaryResponse 
 		totalWafBlocked: 0,
 		totalWafDetected: 0,
 		totalThrottle: 0,
+		totalRateLimitExceeded: 0,
 		totalAuthFailures: 0,
 		attackerIpsUnique: 0,
 		totalCrowdSecDecisions: 0,

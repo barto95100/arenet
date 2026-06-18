@@ -45,13 +45,15 @@
 		fetchThrottleEvents,
 		fetchAuthFailures,
 		fetchCertEvents,
-		fetchCountryBlockEvents
+		fetchCountryBlockEvents,
+		fetchRateLimitEvents
 	} from '$lib/api/security';
 	import { ApiError } from '$lib/api/types';
 	import type {
 		AuthFailureRecentEvent,
 		CertEvent,
 		CountryBlockEvent,
+		RateLimitEvent,
 		ThrottleEvent,
 		WafEvent
 	} from '$lib/api/types';
@@ -359,6 +361,29 @@
 		};
 	}
 
+	// Step Z.2 — rate-limit (429) row mapper. Level is 'warn'
+	// (not 'block') : 429 is recoverable by retrying after
+	// waitMs, distinct from WAF/country-block enforcement.
+	// The detail surfaces the wait hint so the operator can
+	// gauge sustained pressure ("wait 1.5s" vs "wait 30ms"
+	// changes the operational story).
+	function mapRateLimit(e: RateLimitEvent): UnifiedRow {
+		const waitLabel = e.waitMs > 0 ? `${e.waitMs}ms` : '—';
+		return {
+			key: `rate-limit-${e.id}`,
+			ts: e.ts,
+			level: 'warn',
+			code: '429',
+			source: 'rate_limit',
+			method: 'RL',
+			path: '',
+			detail: `wait ${waitLabel}`,
+			detailTitle: e.zone,
+			srcIp: e.remoteIp,
+			routeId: e.routeId
+		};
+	}
+
 	async function load(): Promise<void> {
 		loadError = null;
 		try {
@@ -367,12 +392,13 @@
 			// (degraded endpoint, 5xx, missed wire-up) doesn't
 			// take down the page. Each fulfilled result is
 			// mapped into UnifiedRow shape and merged.
-			const [waf, throttle, auth, certs, countryBlock] = await Promise.allSettled([
+			const [waf, throttle, auth, certs, countryBlock, rateLimit] = await Promise.allSettled([
 				fetchEvents({ limit: 100 }),
 				fetchThrottleEvents({ limit: 100 }),
 				fetchAuthFailures('24h'),
 				fetchCertEvents({ limit: 100 }),
-				fetchCountryBlockEvents({ limit: 100 })
+				fetchCountryBlockEvents({ limit: 100 }),
+				fetchRateLimitEvents({ limit: 100 })
 			]);
 
 			const merged: UnifiedRow[] = [];
@@ -392,6 +418,9 @@
 			}
 			if (countryBlock.status === 'fulfilled') {
 				for (const e of countryBlock.value.events ?? []) merged.push(mapCountryBlock(e));
+			}
+			if (rateLimit.status === 'fulfilled') {
+				for (const e of rateLimit.value.events ?? []) merged.push(mapRateLimit(e));
 			}
 
 			merged.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
