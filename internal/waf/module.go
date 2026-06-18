@@ -121,48 +121,74 @@ type ArenetWafHandler struct {
 
 	waf     coraza.WAF
 	poolKey string
-
-	// txBuffers (#R-WAF-EVENT-LABEL-BLOCK-VS-200) stages
-	// onMatch-fired Events between match time and handler
-	// exit. Keyed by tx.ID() string (NOT tx pointer — Coraza
-	// v3 recycles *Transaction via sync.Pool at internal/
-	// corazawaf/waf.go:53, so a pointer key could collide
-	// silently with a recycled allocation; tx.ID() is a
-	// per-NewTransaction 19-char random string,
-	// collision-safe at homelab scale).
-	//
-	// Lifecycle (per request):
-	//   1. ServeHTTP creates a buffer and Stores it under
-	//      tx.ID() before calling processRequest.
-	//   2. onMatch looks up the buffer via mr.TransactionID()
-	//      and appends the Event with placeholder Action /
-	//      StatusCode — the real values are computed at
-	//      handler exit when the transaction's final verdict
-	//      is known.
-	//   3. The flush defer (LIFO before tx.Close, see
-	//      ServeHTTP) walks the buffer, sets the correct
-	//      (Action, StatusCode) tuple based on mode +
-	//      tx.Interruption(), and sink.Emits each event.
-	//   4. A nested defer Deletes the entry from the map even
-	//      if the flush body panics — guarantees no buffer
-	//      leak across the tx pool recycle window.
-	//
-	// Pointer-typed so the embedding ArenetWafHandler value
-	// stays trivially copyable for Caddy's value-receiver
-	// CaddyModule() convention (`func (ArenetWafHandler)
-	// CaddyModule()`). A bare sync.Map embedded by value
-	// would trigger go vet's "passes lock by value" warning
-	// at the CaddyModule receiver and at JSON
-	// unmarshal/copy paths. Allocated in Provision.
-	txBuffers *sync.Map
 }
 
+// wafTxBuffers stages onMatch-fired Events between match time
+// and handler exit. Keyed by tx.ID() string (NOT tx pointer —
+// Coraza v3 recycles *Transaction via sync.Pool at internal/
+// corazawaf/waf.go:53, so a pointer key could collide
+// silently with a recycled allocation; tx.ID() is a
+// per-NewTransaction 19-char random string, collision-safe at
+// homelab scale).
+//
+// Step Z (2026-06-18) — PROMOTED to package-level.
+//
+// Pre-Z this map was per-ArenetWafHandler (h.txBuffers).
+// With Step I.4 pool dedup, several handlers share the
+// underlying coraza.WAF instance ; the error callback closure
+// captured by buildWAF (line 274) bound to whichever handler
+// won the LoadOrNew race. Subsequent handlers' transactions
+// fired through the first handler's closure, which then
+// looked up the buffer in its OWN h.txBuffers — miss — and
+// fell through to fallbackEmit(h.RouteID = first-handler-
+// route, ...). Every other route's events were attributed to
+// the first-provisioned route. Audit recorded the empirical
+// repro and the design pivot.
+//
+// Promoting wafTxBuffers to package scope solves it : every
+// handler stages its tx buffer in the SAME map ; the callback-
+// owner handler finds buffers staged by pool-shared peers ;
+// the per-buffer RouteID field (txEventBuffer.RouteID below)
+// carries the runtime-correct attribution.
+//
+// Lifecycle (per request) :
+//  1. ServeHTTP creates a buffer with h.RouteID and stores
+//     it under tx.ID() in wafTxBuffers BEFORE calling
+//     processRequest.
+//  2. onMatch looks up the buffer via mr.TransactionID() in
+//     wafTxBuffers and appends the Event with the buffer's
+//     RouteID (NOT the closure-captured h.RouteID) +
+//     placeholder Action / StatusCode.
+//  3. The flush defer walks the buffer, sets the correct
+//     (Action, StatusCode) tuple based on mode +
+//     tx.Interruption(), and sink.Emits each event.
+//  4. A nested defer Deletes the entry from the map even
+//     if the flush body panics — guarantees no buffer
+//     leak across the tx pool recycle window.
+//
+// Memory : entry count is bounded by the number of in-flight
+// transactions. Coraza closes the tx synchronously in
+// ServeHTTP's defer chain, so the steady-state count is the
+// concurrent request count on routes with WAF on. No
+// long-lived accumulation.
+var wafTxBuffers sync.Map
+
 // txEventBuffer collects events fired by onMatch during a
-// single transaction. No mutex: the Coraza error callback runs
-// synchronously on the request goroutine, so onMatch and the
-// flush defer are the only writers and they're sequential.
+// single transaction. No mutex : the Coraza error callback
+// runs synchronously on the request goroutine, so onMatch
+// and the flush defer are the only writers and they're
+// sequential.
+//
+// Step Z : RouteID carries the runtime-correct route
+// attribution across the pool-dedup boundary. Populated by
+// the handler in ServeHTTP from its OWN h.RouteID at buffer
+// staging time. onMatch reads buf.RouteID instead of the
+// (potentially-wrong) closure-captured h.RouteID so events
+// land on the right route regardless of which handler owns
+// the Coraza WAF instance.
 type txEventBuffer struct {
-	events []Event
+	RouteID string
+	events  []Event
 }
 
 // CaddyModule satisfies caddy.Module.
@@ -198,13 +224,11 @@ func (h *ArenetWafHandler) Validate() error {
 // matched rule, we translate each call into a sink.Emit.
 func (h *ArenetWafHandler) Provision(_ caddy.Context) error {
 	h.poolKey = h.computePoolKey()
-	// #R-WAF-EVENT-LABEL — per-handler tx event buffer map.
-	// Allocated here (not at zero-value time) so the
-	// ArenetWafHandler struct itself stays trivially
-	// copyable for Caddy's value-receiver CaddyModule()
-	// convention without triggering go vet's "passes lock
-	// by value" warning on the embedded sync.Map.
-	h.txBuffers = &sync.Map{}
+	// Step Z (2026-06-18) — tx event buffer map moved to
+	// package level (wafTxBuffers). Pre-Z this was per-
+	// handler ; the audit caught the cross-handler
+	// misattribution that move fixes (see wafTxBuffers
+	// docstring).
 
 	val, loaded, err := wafPool.LoadOrNew(h.poolKey, func() (caddy.Destructor, error) {
 		waf, err := h.buildWAF()
@@ -479,7 +503,7 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 	// flush defer at ServeHTTP exit walks the buffer and
 	// rewrites (Action, StatusCode) to the correct pair
 	// based on (h.Mode, tx.Interruption()).
-	bufRaw, ok := h.txBuffers.Load(mr.TransactionID())
+	bufRaw, ok := wafTxBuffers.Load(mr.TransactionID())
 	if !ok {
 		// No buffer for this tx — happens on the rule-engine-
 		// off short-circuit path (ServeHTTP returns before
@@ -488,6 +512,16 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 		// pre-fix emit shape (best-effort: the operator
 		// still sees the event in the activity log) so we
 		// don't silently drop the match.
+		//
+		// Step Z caveat : the closure-captured h.RouteID may
+		// be the wrong route when pool dedup is active (the
+		// first-provisioned handler owns the closure). This
+		// fallback path is reachable in production only for
+		// rule-engine-off requests, which by construction
+		// don't produce rule matches ; the path is therefore
+		// effectively unreachable in steady-state and the
+		// h.RouteID staleness is a documented best-effort
+		// degradation for the hand-rolled-tx test edge case.
 		fallbackEmit(h.RouteID, h.Mode, mr, rule)
 		return
 	}
@@ -496,8 +530,13 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 	ruleID := strconv.Itoa(rule.ID())
 	method, path, payload := requestSnippetFromMatch(mr)
 	buf.events = append(buf.events, Event{
-		Ts:            time.Now().UTC(),
-		RouteID:       h.RouteID,
+		Ts: time.Now().UTC(),
+		// Step Z — read the buffer's RouteID (runtime-correct,
+		// staged by the handler that actually owns this
+		// request) instead of h.RouteID (closure-captured at
+		// buildWAF time, attributes to the first-provisioned
+		// route when pool dedup is active).
+		RouteID:       buf.RouteID,
 		RuleID:        ruleID,
 		Category:      CategoryForRule(ruleID),
 		Severity:      int(rule.Severity()),
@@ -554,16 +593,17 @@ func fallbackEmit(routeID, mode string, mr types.MatchedRule, rule types.RuleMet
 // Coraza's sync.Pool).
 //
 // Decision matrix:
-//   block mode + interrupted → BLOCK + interruption.Status
-//                              (typically 403 from CRS 949110)
-//   block mode + NOT interrupted → DETECT + 200 (event fired
-//                                   but transaction continued;
-//                                   the admin-path FP guard
-//                                   scenario)
-//   detect mode → DETECT + 0 (sentinel: "request reached
-//                              upstream; status not captured
-//                              at WAF layer" — frontend
-//                              renders "—" for that case)
+//
+//	block mode + interrupted → BLOCK + interruption.Status
+//	                           (typically 403 from CRS 949110)
+//	block mode + NOT interrupted → DETECT + 200 (event fired
+//	                                but transaction continued;
+//	                                the admin-path FP guard
+//	                                scenario)
+//	detect mode → DETECT + 0 (sentinel: "request reached
+//	                           upstream; status not captured
+//	                           at WAF layer" — frontend
+//	                           renders "—" for that case)
 func (h *ArenetWafHandler) flushTxBuffer(buf *txEventBuffer, interruption *types.Interruption) {
 	if len(buf.events) == 0 {
 		return
@@ -734,10 +774,14 @@ func (h *ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 	// triggers a never-cleared sink Emit retry on the
 	// next eviction.
 	txID := tx.ID()
-	buf := &txEventBuffer{}
-	h.txBuffers.Store(txID, buf)
+	// Step Z — RouteID seeded from THIS handler's RouteID at
+	// staging time so the runtime route attribution survives
+	// the pool-shared callback closure. See wafTxBuffers
+	// docstring for the full audit trail.
+	buf := &txEventBuffer{RouteID: h.RouteID}
+	wafTxBuffers.Store(txID, buf)
 	defer func() {
-		defer h.txBuffers.Delete(txID)
+		defer wafTxBuffers.Delete(txID)
 		h.flushTxBuffer(buf, tx.Interruption())
 	}()
 
