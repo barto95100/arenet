@@ -23,8 +23,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen } from '@testing-library/svelte';
 
-const { metricsMock, toastMock } = vi.hoisted(() => ({
+const { metricsMock, securityMock, toastMock } = vi.hoisted(() => ({
 	metricsMock: { fetchSummary: vi.fn() },
+	securityMock: { fetchEventsByRule: vi.fn() },
 	toastMock: { pushToast: vi.fn() }
 }));
 
@@ -32,6 +33,9 @@ vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 vi.mock('$lib/stores/toast', () => ({ pushToast: toastMock.pushToast }));
 vi.mock('$lib/api/metrics', () => ({
 	fetchSummary: (...a: unknown[]) => metricsMock.fetchSummary(...a)
+}));
+vi.mock('$lib/api/security', () => ({
+	fetchEventsByRule: (...a: unknown[]) => securityMock.fetchEventsByRule(...a)
 }));
 
 import Page from './+page.svelte';
@@ -63,6 +67,7 @@ function makeSummary(overrides: Partial<SummaryResponse> = {}): SummaryResponse 
 
 beforeEach(() => {
 	metricsMock.fetchSummary.mockReset();
+	securityMock.fetchEventsByRule.mockReset();
 	toastMock.pushToast.mockReset();
 });
 
@@ -128,5 +133,151 @@ describe('WAF page — Per-category block + detect split (#R-DASHBOARD-WAF-COUNT
 		const detect = xss.querySelector('.cat-meta-detect');
 		expect(block?.textContent?.trim()).toBe('0');
 		expect(detect?.textContent?.trim()).toBe('0');
+	});
+});
+
+// --- Phase Y — 25-category taxonomy + family grouping +
+// drill-down + cleanup tests ------------------------------
+
+import { userEvent } from '@testing-library/user-event';
+
+describe('WAF page — Phase Y taxonomy + drill-down', () => {
+	it('renders the 5 family sections', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		render(Page);
+		await tick();
+		await tick();
+		expect(screen.getByTestId('fam-request-attack')).toBeInTheDocument();
+		expect(screen.getByTestId('fam-protocol-behaviour')).toBeInTheDocument();
+		expect(screen.getByTestId('fam-aggregator')).toBeInTheDocument();
+		expect(screen.getByTestId('fam-data-leak')).toBeInTheDocument();
+		expect(screen.getByTestId('fam-infrastructure')).toBeInTheDocument();
+	});
+
+	it('renders the Phase Y category cards (split RCE/PHP/Java, split LFI/RFI, split Protocol family)', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		render(Page);
+		await tick();
+		await tick();
+		// Pre-Y had RCE alone aggregating 932+933+934+944.
+		// Phase Y splits them — verify each is its own card.
+		expect(screen.getByTestId('cat-row-RCE')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-PHP')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-JAVA')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-GENERIC')).toBeInTheDocument();
+		// LFI / RFI split.
+		expect(screen.getByTestId('cat-row-LFI')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-RFI')).toBeInTheDocument();
+		// Protocol split into METHOD / PROTOCOL / PROTOCOL_ATK /
+		// MULTIPART (+ SCANNER, SESSION in behaviour family).
+		expect(screen.getByTestId('cat-row-METHOD')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-PROTOCOL')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-PROTOCOL_ATK')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-MULTIPART')).toBeInTheDocument();
+		// OTHER previously hid SCANNER + SESSION + data-leak +
+		// anomaly aggregators ; Phase Y promotes each.
+		expect(screen.getByTestId('cat-row-SCANNER')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-SESSION')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-ANOMALY_REQ')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-DATA_LEAK_SQL')).toBeInTheDocument();
+		expect(screen.getByTestId('cat-row-WEBSHELL')).toBeInTheDocument();
+	});
+
+	it('removes the misleading "Per-route rate limits" link (no per-route rate limit feature exists)', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		render(Page);
+		await tick();
+		await tick();
+		// The "/routes" link with the "Per-route rate limits"
+		// blurb is GONE in Phase Y. The CrowdSec link stays.
+		expect(screen.queryByText(/Per-route rate limits/)).toBeNull();
+		expect(screen.getByText(/Active CrowdSec decisions/)).toBeInTheDocument();
+	});
+
+	it('clicking a category card opens the drill-down and calls fetchEventsByRule with category + window', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		securityMock.fetchEventsByRule.mockResolvedValue({
+			rows: [
+				{
+					ruleId: '942100',
+					category: 'SQLi',
+					count: 12,
+					lastSeen: '2026-06-18T10:00:00Z'
+				},
+				{
+					ruleId: '942130',
+					category: 'SQLi',
+					count: 5,
+					lastSeen: '2026-06-18T09:30:00Z'
+				}
+			]
+		});
+		const user = userEvent.setup();
+		render(Page);
+		await tick();
+		await tick();
+
+		const toggle = screen.getByTestId('cat-toggle-SQLi');
+		await user.click(toggle);
+		await tick();
+		await tick();
+		await tick();
+
+		expect(securityMock.fetchEventsByRule).toHaveBeenCalledTimes(1);
+		const callArg = securityMock.fetchEventsByRule.mock.calls[0][0];
+		expect(callArg).toMatchObject({ category: 'SQLi', window: '24h' });
+
+		// Drill table contains the rule IDs.
+		const drill = screen.getByTestId('cat-drill-SQLi');
+		expect(drill.textContent ?? '').toContain('942100');
+		expect(drill.textContent ?? '').toContain('942130');
+	});
+
+	it('clicking the same category twice toggles closed without a second fetch', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		securityMock.fetchEventsByRule.mockResolvedValue({ rows: [] });
+		const user = userEvent.setup();
+		render(Page);
+		await tick();
+		await tick();
+
+		const toggle = screen.getByTestId('cat-toggle-XSS');
+		await user.click(toggle);
+		await tick();
+		await tick();
+		expect(screen.getByTestId('cat-drill-XSS')).toBeInTheDocument();
+		await user.click(toggle);
+		await tick();
+		expect(screen.queryByTestId('cat-drill-XSS')).toBeNull();
+		// Single fetch — the close path uses the cached result.
+		expect(securityMock.fetchEventsByRule).toHaveBeenCalledTimes(1);
+	});
+
+	it('shows a friendly empty-state when the API returns no rules for the category', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		securityMock.fetchEventsByRule.mockResolvedValue({ rows: [] });
+		const user = userEvent.setup();
+		render(Page);
+		await tick();
+		await tick();
+		await user.click(screen.getByTestId('cat-toggle-CORRELATION'));
+		await tick();
+		await tick();
+		const drill = screen.getByTestId('cat-drill-CORRELATION');
+		expect(drill.textContent ?? '').toMatch(/aucune règle/i);
+	});
+
+	it('shows an error state when fetchEventsByRule rejects', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		securityMock.fetchEventsByRule.mockRejectedValue(new Error('boom'));
+		const user = userEvent.setup();
+		render(Page);
+		await tick();
+		await tick();
+		await user.click(screen.getByTestId('cat-toggle-WEBSHELL'));
+		await tick();
+		await tick();
+		const drill = screen.getByTestId('cat-drill-WEBSHELL');
+		expect(drill.textContent ?? '').toContain('failed to load rules');
 	});
 });

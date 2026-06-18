@@ -49,26 +49,113 @@ const MaxPayloadSampleBytes = 256
 // table; changing a value name is a backward-incompatible
 // schema migration (existing rows would point at the old
 // name). New categories are append-only.
+//
+// Phase Y (2026-06-18) — refactored from 6 broad categories
+// to 25 precise categories matching the upstream CRS file
+// structure (OWASP_CRS/4.0.0-rc2, packaged in coraza-
+// coreruleset@v0.0.0-20240226094324). Empirical mapping
+// verified at audit time : every CRS conf file maps to
+// exactly one Arenet category 1:1. Pre-Y mapping was
+// over-aggregating (RCE counted PHP+Java+Generic together)
+// AND under-counting (LFI missed RFI ; Protocol missed
+// method/proto-attack/multipart ; OTHER hid scanner-
+// detection / session-fixation / anomaly / data-leak /
+// correlation).
+//
+// Storage migration : NONE (append-only enum policy). Pre-Y
+// rows keep their historical category string ("RCE" covering
+// 933+934+944, "OTHER" covering 913+943+95x+98x). The 24-h
+// rolling-window dashboard flushes the mismatch naturally
+// within a day. The historical strings remain valid
+// OwaspCategory values for the existing SQLite rows so a
+// frontend that doesn't recognise the old name simply
+// surfaces them as raw — no crash.
+//
+// Forward enum members (added Phase Y) :
 type OwaspCategory string
 
 const (
+	// Pre-Y categories (kept for storage compat) — the
+	// CategoryForRule mapping no longer emits the over-
+	// aggregating CategoryRCE for 933/934/944 or
+	// CategoryLFI for 931 etc. ; new events emit the
+	// precise category below. The constants below remain
+	// because pre-Y stored rows still reference them as
+	// strings.
 	CategorySQLi     OwaspCategory = "SQLi"
 	CategoryXSS      OwaspCategory = "XSS"
 	CategoryRCE      OwaspCategory = "RCE"
 	CategoryLFI      OwaspCategory = "LFI"
 	CategoryProtocol OwaspCategory = "PROTOCOL"
 	CategoryOther    OwaspCategory = "OTHER"
+
+	// Phase Y new categories (one per CRS file). Mapped by
+	// CategoryForRule in category.go ; pinned to ranges
+	// captured empirically from the coreruleset embedded FS
+	// at audit time.
+	CategoryInit          OwaspCategory = "INIT"           // 901xxx
+	CategoryCommonExcept  OwaspCategory = "COMMON_EXCEPT"  // 905xxx
+	CategoryMethod        OwaspCategory = "METHOD"         // 911xxx
+	CategoryScanner       OwaspCategory = "SCANNER"        // 913xxx
+	CategoryProtocolAttack OwaspCategory = "PROTOCOL_ATK" // 921xxx
+	CategoryMultipart     OwaspCategory = "MULTIPART"     // 922xxx
+	CategoryRFI           OwaspCategory = "RFI"           // 931xxx
+	CategoryPHP           OwaspCategory = "PHP"           // 933xxx
+	CategoryGeneric       OwaspCategory = "GENERIC"       // 934xxx
+	CategorySession       OwaspCategory = "SESSION"       // 943xxx
+	CategoryJava          OwaspCategory = "JAVA"          // 944xxx
+	CategoryAnomalyReq    OwaspCategory = "ANOMALY_REQ"   // 949xxx (inbound aggregator)
+	CategoryDataLeak      OwaspCategory = "DATA_LEAK"     // 950xxx (generic)
+	CategoryDataLeakSQL   OwaspCategory = "DATA_LEAK_SQL" // 951xxx
+	CategoryDataLeakJava  OwaspCategory = "DATA_LEAK_JAVA" // 952xxx
+	CategoryDataLeakPHP   OwaspCategory = "DATA_LEAK_PHP" // 953xxx
+	CategoryDataLeakIIS   OwaspCategory = "DATA_LEAK_IIS" // 954xxx
+	CategoryWebShell      OwaspCategory = "WEBSHELL"      // 955xxx
+	CategoryAnomalyResp   OwaspCategory = "ANOMALY_RESP"  // 959xxx
+	CategoryCorrelation   OwaspCategory = "CORRELATION"   // 980xxx
 )
 
 // AllCategories lists the categories in dashboard-display order.
 // Used by the frontend type generator and by the category
 // distribution strip on the /security dashboard.
+//
+// Phase Y order : focal request-attack families first (the
+// ones the operator cares about most), then aggregators,
+// then response-side / data-leak family, then infrastructure
+// (init / common-exceptions / scanner). The frontend may
+// group these into operator-meaningful families on display
+// (cf. /waf page Phase Y refactor).
 var AllCategories = []OwaspCategory{
+	// Request attacks
 	CategorySQLi,
 	CategoryXSS,
 	CategoryRCE,
+	CategoryPHP,
+	CategoryJava,
+	CategoryGeneric,
 	CategoryLFI,
+	CategoryRFI,
+	// Protocol / behaviour
+	CategoryMethod,
 	CategoryProtocol,
+	CategoryProtocolAttack,
+	CategoryMultipart,
+	CategoryScanner,
+	CategorySession,
+	// Aggregators
+	CategoryAnomalyReq,
+	CategoryAnomalyResp,
+	CategoryCorrelation,
+	// Response-side / data leak
+	CategoryDataLeak,
+	CategoryDataLeakSQL,
+	CategoryDataLeakJava,
+	CategoryDataLeakPHP,
+	CategoryDataLeakIIS,
+	CategoryWebShell,
+	// Infrastructure / catch-all
+	CategoryInit,
+	CategoryCommonExcept,
 	CategoryOther,
 }
 

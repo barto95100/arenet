@@ -37,18 +37,14 @@ beyond the Step F palette.
 	}
 	let { counts }: Props = $props();
 
-	// Map each category to a CSS var for its bar fill. Hard-
-	// coded mapping; if a future category lands in
-	// ALL_OWASP_CATEGORIES, the fallback colour for unknown
-	// keys is `--text-muted`.
-	const CATEGORY_COLOR: Record<OwaspCategory, string> = {
-		SQLi: 'var(--status-down)',
-		XSS: 'var(--status-warn)',
-		RCE: 'var(--status-down)',
-		LFI: 'var(--status-warn)',
-		PROTOCOL: 'var(--status-info)',
-		OTHER: 'var(--text-muted)'
-	};
+	// Phase Y — colour mapping moved to lib/utils/waf-category
+	// (single source of truth across CategoryDistribution +
+	// WafEventList + MixedEventList + /waf + /security/[routeId]).
+	// Reads via the safe accessor so unknown categories
+	// (post-Y rows referencing a string the frontend hasn't
+	// been taught yet) degrade to --text-muted instead of
+	// crashing.
+	import { categoryMeta } from '$lib/utils/waf-category';
 
 	// Total across all categories for the strip's width
 	// computation. Derived so any prop change reflows
@@ -64,7 +60,7 @@ beyond the Step F palette.
 			category: c,
 			count: counts[c] ?? 0,
 			ratio: total > 0 ? (counts[c] ?? 0) / total : 0,
-			color: CATEGORY_COLOR[c]
+			color: categoryMeta(c).color
 		}))
 	);
 </script>

@@ -554,15 +554,28 @@ type WafEventRuleAggregate struct {
 }
 
 // WafEventAggregateFilter narrows AggregateWafEventsByRule.
-// Same shape as WafEventFilter minus Category (the aggregation
-// is BY category; filtering by it would defeat the purpose) and
-// minus Limit (an aggregated result is bounded by the number of
-// distinct rules tripped in the window — typically << 100 — so
-// no client-driven cap is needed).
+//
+// Phase Y (2026-06-18) — added Category for the cross-route
+// drill-down on /waf. The pre-Y "filtering by category defeats
+// the purpose" docstring was about the per-ROUTE drill-down
+// (where the user has already picked a route and wants the
+// rule breakdown ; filtering by category there is redundant
+// because each row already carries its category). For the
+// /waf page's category-focused drill-down the opposite is
+// true : the operator clicks one category card and wants the
+// rule breakdown for THAT category across all routes. RouteID
+// stays optional ; Category is the new optional filter ;
+// both empty = unfiltered aggregate (every (rule, category)
+// pair the SQLite window holds).
+//
+// Limit stays absent — an aggregated result is bounded by the
+// number of distinct rules tripped in the window (typically
+// << 100), so no client-driven cap is needed.
 type WafEventAggregateFilter struct {
-	RouteID string
-	From    time.Time // inclusive
-	To      time.Time // exclusive; zero = open-ended (now)
+	RouteID  string
+	Category string // Phase Y — cross-route per-category drill-down filter
+	From     time.Time // inclusive
+	To       time.Time // exclusive; zero = open-ended (now)
 }
 
 // --- Step Q: throttle_event store -------------------------------------------
@@ -894,6 +907,12 @@ func (s *Store) AggregateWafEventsByRule(ctx context.Context, filter WafEventAgg
 	if filter.RouteID != "" {
 		q += ` AND route_id = ?`
 		args = append(args, filter.RouteID)
+	}
+	// Phase Y — optional category filter for the /waf
+	// per-category drill-down.
+	if filter.Category != "" {
+		q += ` AND category = ?`
+		args = append(args, filter.Category)
 	}
 	if !filter.From.IsZero() {
 		q += ` AND ts >= ?`

@@ -49,17 +49,10 @@ selected route.
 	let { events, hostByRouteId = {}, compact = false }: Props = $props();
 
 	// Category badge colours mirror CategoryDistribution.
-	// Kept in sync manually for now; if these palettes
-	// diverge in a future step they should both pull from a
-	// shared lib/security/category-colors.ts helper.
-	const CATEGORY_COLOR: Record<OwaspCategory, string> = {
-		SQLi: 'var(--status-down)',
-		XSS: 'var(--status-warn)',
-		RCE: 'var(--status-down)',
-		LFI: 'var(--status-warn)',
-		PROTOCOL: 'var(--status-info)',
-		OTHER: 'var(--text-muted)'
-	};
+	// Phase Y — colour mapping moved to lib/utils/waf-category
+	// (single source of truth across CategoryDistribution +
+	// WafEventList + MixedEventList + /waf + /security/[routeId]).
+	import { categoryMeta } from '$lib/utils/waf-category';
 
 	// Relative time formatting: "Ns ago" up to a minute, "Nm
 	// ago" up to an hour, then HH:MM. Pure function — no
@@ -118,7 +111,7 @@ selected route.
 						</td>
 					{/if}
 					<td>
-						<span class="badge" style:background={CATEGORY_COLOR[e.category]}>
+						<span class="badge" style:background={categoryMeta(e.category).color}>
 							{e.category}
 						</span>
 					</td>

@@ -52,6 +52,7 @@ Color discipline (Step F design tokens):
 		ThrottleEvent,
 		WafEvent
 	} from '$lib/api/types';
+	import { categoryMeta } from '$lib/utils/waf-category';
 
 	interface Props {
 		wafEvents: WafEvent[];
@@ -116,14 +117,8 @@ Color discipline (Step F design tokens):
 		CROWDSEC: 'var(--status-down)'
 	};
 
-	const CATEGORY_COLOR: Record<OwaspCategory, string> = {
-		SQLi: 'var(--status-down)',
-		XSS: 'var(--status-warn)',
-		RCE: 'var(--status-down)',
-		LFI: 'var(--status-warn)',
-		PROTOCOL: 'var(--status-info)',
-		OTHER: 'var(--text-muted)'
-	};
+	// Phase Y — single source of truth via lib/utils/waf-category.
+	// CATEGORY_COLOR removed in favour of categoryMeta(c).color.
 
 	function hostFor(routeId: string): string {
 		return hostByRouteId[routeId] ?? routeId.slice(0, 8) + '…';
@@ -179,7 +174,7 @@ Color discipline (Step F design tokens):
 				tsEpochMs: new Date(e.ts).getTime(),
 				kind: 'WAF',
 				detail: e.category,
-				detailColor: CATEGORY_COLOR[e.category],
+				detailColor: categoryMeta(e.category).color,
 				target: hostFor(e.routeId),
 				srcIp: e.srcIp,
 				extra: payloadPreview(e.payloadSample)

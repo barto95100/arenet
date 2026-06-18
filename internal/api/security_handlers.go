@@ -180,12 +180,20 @@ func securityWindowParams(window string) (from, to time.Time, ok bool) {
 
 // securityEventsByRule handles GET /api/v1/security/events/by-rule.
 // Query parameters:
-//   - route   (required): filter aggregation to a single route
-//     UUID. Empty route would aggregate across all routes,
-//     which the dashboard's per-route view never wants — the
-//     handler requires it explicitly to surface 400 on
-//     missing route rather than silently returning a
-//     system-wide aggregate.
+//   - route   (optional): filter aggregation to a single route
+//     UUID. Powers the /security/[routeId] per-route drill-
+//     down (Step M.4).
+//   - category (optional, Phase Y): filter aggregation to one
+//     OwaspCategory string (e.g. "SQLi", "PHP"). Powers the
+//     /waf page's per-category cross-route drill-down (Phase
+//     Y).
+//   - At LEAST ONE of route / category must be supplied. An
+//     unfiltered call would aggregate across every route and
+//     every category — operator-meaningful only on a tiny
+//     test instance, and a real homelab would surface
+//     hundreds of rows. The 400 protects against an
+//     accidentally-broad request without taking either of
+//     the two intended drill-down paths off the table.
 //   - window  (required): 24h or 30d. Same wording as the
 //     metrics timeseries endpoint to keep operator mental
 //     model consistent.
@@ -212,8 +220,18 @@ func (h *Handler) securityEventsByRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	routeID := r.URL.Query().Get("route")
-	if routeID == "" {
-		writeError(w, http.StatusBadRequest, "route is required")
+	category := r.URL.Query().Get("category")
+	// Phase Y — route and category are BOTH optional, but at
+	// least one must be supplied. An unfiltered call would
+	// return every (rule_id, category) tuple ever inserted in
+	// the window — operator-meaningful only on a tiny test
+	// instance, and a real homelab would surface hundreds of
+	// rows. Refusing the unfiltered call protects against an
+	// accidentally-broad request (e.g. dashboard widget bug)
+	// without removing the cross-route per-category drill-
+	// down the /waf page needs.
+	if routeID == "" && category == "" {
+		writeError(w, http.StatusBadRequest, "route or category is required")
 		return
 	}
 	from, to, ok := securityWindowParams(r.URL.Query().Get("window"))
@@ -223,9 +241,10 @@ func (h *Handler) securityEventsByRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.wafEvents.AggregateWafEventsByRule(r.Context(), observability.WafEventAggregateFilter{
-		RouteID: routeID,
-		From:    from,
-		To:      to,
+		RouteID:  routeID,
+		Category: category,
+		From:     from,
+		To:       to,
 	})
 	if err != nil {
 		h.logger.Error("security: aggregate waf_events by rule failed", "err", err, "route", routeID)

@@ -85,16 +85,44 @@ func TestAllCategories_NoDuplicates(t *testing.T) {
 }
 
 func TestAllCategories_DashboardDisplayOrder(t *testing.T) {
-	// Anti-regression on the dashboard's expected order
-	// (SQLi → XSS → RCE → LFI → PROTOCOL → OTHER). A
-	// reorder would visually shuffle the distribution
-	// strip; pin it.
+	// Phase Y (2026-06-18) — updated order. The dashboard's
+	// /waf page groups categories into families on render
+	// (request attacks → protocol/behaviour → aggregators →
+	// data-leak → infrastructure) so this slice is the
+	// source-of-truth ordering the frontend's type generator
+	// flattens. A reorder would shuffle the distribution
+	// strip ; pin it explicitly.
 	want := []OwaspCategory{
+		// Request attacks
 		CategorySQLi,
 		CategoryXSS,
 		CategoryRCE,
+		CategoryPHP,
+		CategoryJava,
+		CategoryGeneric,
 		CategoryLFI,
+		CategoryRFI,
+		// Protocol / behaviour
+		CategoryMethod,
 		CategoryProtocol,
+		CategoryProtocolAttack,
+		CategoryMultipart,
+		CategoryScanner,
+		CategorySession,
+		// Aggregators
+		CategoryAnomalyReq,
+		CategoryAnomalyResp,
+		CategoryCorrelation,
+		// Response-side / data leak
+		CategoryDataLeak,
+		CategoryDataLeakSQL,
+		CategoryDataLeakJava,
+		CategoryDataLeakPHP,
+		CategoryDataLeakIIS,
+		CategoryWebShell,
+		// Infrastructure / catch-all
+		CategoryInit,
+		CategoryCommonExcept,
 		CategoryOther,
 	}
 	if len(AllCategories) != len(want) {

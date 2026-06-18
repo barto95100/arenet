@@ -38,16 +38,76 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { fetchSummary } from '$lib/api/metrics';
+	import { fetchEventsByRule } from '$lib/api/security';
 	import { ApiError } from '$lib/api/types';
-	import type { SummaryResponse, OwaspCategory } from '$lib/api/types';
+	import type {
+		SummaryResponse,
+		OwaspCategory,
+		WafEventRuleAggregate
+	} from '$lib/api/types';
 	import { ALL_OWASP_CATEGORIES } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
+	import {
+		categoryMeta,
+		categoriesByFamily,
+		FAMILY_LABEL,
+		type CategoryFamily
+	} from '$lib/utils/waf-category';
 
 	let loading = $state(true);
 	let loadError = $state<string | null>(null);
 	let summary = $state<SummaryResponse | null>(null);
 
 	const disabled = $derived(summary?.disabled === true);
+
+	// Phase Y — drill-down state. Per category : whether the
+	// card is expanded + the loaded rule rows + a per-card
+	// loading flag. Map shape keeps the page reactive ;
+	// flipping a key replaces the whole map so $derived
+	// pickups don't miss.
+	type CategoryDrill = {
+		open: boolean;
+		loading: boolean;
+		error: string | null;
+		rows: WafEventRuleAggregate[];
+	};
+	let drill = $state<Record<string, CategoryDrill>>({});
+
+	async function toggleDrill(cat: OwaspCategory): Promise<void> {
+		const current = drill[cat] ?? {
+			open: false,
+			loading: false,
+			error: null,
+			rows: []
+		};
+		// Close immediately if already open ; on first open
+		// fetch the data before flipping the flag so the
+		// expand surface doesn't flicker through a "loading
+		// empty" state.
+		if (current.open) {
+			drill = { ...drill, [cat]: { ...current, open: false } };
+			return;
+		}
+		// Already loaded once — just re-open.
+		if (current.rows.length > 0 || current.error) {
+			drill = { ...drill, [cat]: { ...current, open: true } };
+			return;
+		}
+		drill = { ...drill, [cat]: { ...current, open: true, loading: true } };
+		try {
+			const resp = await fetchEventsByRule({ category: cat, window: '24h' });
+			drill = {
+				...drill,
+				[cat]: { open: true, loading: false, error: null, rows: resp.rows ?? [] }
+			};
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : 'failed to load rules';
+			drill = {
+				...drill,
+				[cat]: { open: true, loading: false, error: msg, rows: [] }
+			};
+		}
+	}
 
 	// #R-WAF-METRICS-WINDOW-1MIN-PROJECTION — pre-fix these
 	// were per-minute values multiplied by 60×24 to project
@@ -71,50 +131,48 @@
 	// populations; post-fix each row reports the two
 	// separately so the operator sees real attack volume
 	// on detect-mode routes.
-	const categoryRows = $derived.by(() => {
+	//
+	// Phase Y — labels + descriptions read from the shared
+	// lib/utils/waf-category helper (single source of truth
+	// across CategoryDistribution + WafEventList + this page +
+	// /security/[routeId]). Categories grouped by operator-
+	// meaningful family for the new collapsible-section render.
+	type CategoryRow = {
+		cat: OwaspCategory;
+		label: string;
+		description: string;
+		block24h: number;
+		detect24h: number;
+	};
+	type FamilyGroup = {
+		family: CategoryFamily;
+		familyLabel: string;
+		rows: CategoryRow[];
+		totalEvents: number;
+	};
+	const families = $derived.by<FamilyGroup[]>(() => {
 		const blocks = summary?.wafBlocksByCategory ?? {};
 		const detects = summary?.wafDetectsByCategory ?? {};
-		return ALL_OWASP_CATEGORIES.map((cat) => ({
-			cat,
-			label: catLabel(cat),
-			description: catDescription(cat),
-			block24h: blocks[cat] ?? 0,
-			detect24h: detects[cat] ?? 0
-		}));
+		return categoriesByFamily(ALL_OWASP_CATEGORIES).map((g) => {
+			const rows = g.categories.map<CategoryRow>((cat) => {
+				const meta = categoryMeta(cat);
+				return {
+					cat,
+					label: meta.label,
+					description: meta.description,
+					block24h: blocks[cat] ?? 0,
+					detect24h: detects[cat] ?? 0
+				};
+			});
+			const totalEvents = rows.reduce((s, r) => s + r.block24h + r.detect24h, 0);
+			return {
+				family: g.family,
+				familyLabel: FAMILY_LABEL[g.family],
+				rows,
+				totalEvents
+			};
+		});
 	});
-
-	function catLabel(c: OwaspCategory): string {
-		switch (c) {
-			case 'SQLi':
-				return 'SQL Injection';
-			case 'XSS':
-				return 'Cross-site scripting';
-			case 'RCE':
-				return 'Remote Code Execution';
-			case 'LFI':
-				return 'Local File Inclusion';
-			case 'PROTOCOL':
-				return 'HTTP protocol violations';
-			case 'OTHER':
-				return 'Other Coraza rules';
-		}
-	}
-	function catDescription(c: OwaspCategory): string {
-		switch (c) {
-			case 'SQLi':
-				return 'CRS 942xxx — UNION SELECT, blind SQLi, malicious comments.';
-			case 'XSS':
-				return 'CRS 941xxx — JS payloads, HTML vectors, encoding evasion.';
-			case 'RCE':
-				return 'CRS 932xxx — shell command injection, eval, deserialization.';
-			case 'LFI':
-				return 'CRS 930xxx — path traversal, /etc/passwd, config exfil.';
-			case 'PROTOCOL':
-				return 'CRS 920xxx — malformed requests, header smuggling.';
-			case 'OTHER':
-				return 'Uncategorised rules (catch-all for unknown CRS ranges).';
-		}
-	}
 
 	async function load(): Promise<void> {
 		loading = true;
@@ -219,39 +277,124 @@
 			makes the operator-visible numbers honest about
 			what the WAF actually did with the request.
 		-->
-		<div class="cat-grid">
-			{#each categoryRows as row (row.cat)}
-				<div class="cat-row" data-testid="cat-row-{row.cat}">
-					<div class="cat-info">
-						<div class="cat-name">{row.label}</div>
-						<div class="cat-desc">{row.description}</div>
-					</div>
-					<div class="cat-meta">
-						<div class="cat-meta-val cat-meta-block">{row.block24h.toLocaleString()}</div>
-						<div class="cat-meta-foot">blocks / 24h</div>
-					</div>
-					<div class="cat-meta">
-						<div class="cat-meta-val cat-meta-detect">{row.detect24h.toLocaleString()}</div>
-						<div class="cat-meta-foot">detects / 24h</div>
-					</div>
+		<!-- Phase Y — 25-category taxonomy grouped in operator-
+		     meaningful families. Each category row is clickable
+		     and drills down to the rule-id breakdown for that
+		     category (across all routes, 24 h window). The
+		     expand uses GET /security/events/by-rule?category=
+		     which is server-side aggregated, so the row count
+		     is not bound by the 100-event filter the /security/
+		     events endpoint applies. -->
+		{#each families as fam (fam.family)}
+			<div class="fam-block" data-testid="fam-{fam.family}">
+				<div class="fam-h">
+					<h4>{fam.familyLabel}</h4>
+					<span class="fam-meta">{fam.totalEvents.toLocaleString()} événements / 24h</span>
 				</div>
-			{/each}
-		</div>
+				<div class="cat-grid">
+					{#each fam.rows as row (row.cat)}
+						{@const d = drill[row.cat] ?? {
+							open: false,
+							loading: false,
+							error: null,
+							rows: []
+						}}
+						<div class="cat-row" data-testid="cat-row-{row.cat}">
+							<button
+								type="button"
+								class="cat-row-head"
+								onclick={() => toggleDrill(row.cat)}
+								data-testid="cat-toggle-{row.cat}"
+								aria-expanded={d.open}
+							>
+								<div class="cat-info">
+									<div class="cat-name">
+										<svg
+											class="chev"
+											class:open={d.open}
+											viewBox="0 0 16 16"
+											width="10"
+											height="10"
+											aria-hidden="true"
+										>
+											<path
+												d="M5 3l5 5-5 5"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											/>
+										</svg>
+										{row.label}
+									</div>
+									<div class="cat-desc">{row.description}</div>
+								</div>
+								<div class="cat-meta">
+									<div class="cat-meta-val cat-meta-block">
+										{row.block24h.toLocaleString()}
+									</div>
+									<div class="cat-meta-foot">blocks / 24h</div>
+								</div>
+								<div class="cat-meta">
+									<div class="cat-meta-val cat-meta-detect">
+										{row.detect24h.toLocaleString()}
+									</div>
+									<div class="cat-meta-foot">detects / 24h</div>
+								</div>
+							</button>
+							{#if d.open}
+								<div class="cat-drill" data-testid="cat-drill-{row.cat}">
+									{#if d.loading}
+										<div class="cat-drill-state">Chargement des règles…</div>
+									{:else if d.error}
+										<div class="cat-drill-state error">{d.error}</div>
+									{:else if d.rows.length === 0}
+										<div class="cat-drill-state muted">
+											Aucune règle déclenchée dans cette catégorie sur les
+											dernières 24h.
+										</div>
+									{:else}
+										<table class="rule-table">
+											<thead>
+												<tr>
+													<th>Rule ID</th>
+													<th>Catégorie</th>
+													<th class="num">Count</th>
+													<th>Last seen</th>
+												</tr>
+											</thead>
+											<tbody>
+												{#each d.rows as rule (rule.ruleId)}
+													<tr>
+														<td class="mono">{rule.ruleId}</td>
+														<td class="mono">{rule.category}</td>
+														<td class="num">{rule.count.toLocaleString()}</td>
+														<td class="mono">{new Date(rule.lastSeen).toLocaleString()}</td>
+													</tr>
+												{/each}
+											</tbody>
+										</table>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/each}
 	</div>
 
-	<!-- Per-route rate limits + IP lists redirect -->
+	<!-- Phase Y — removed the misleading "Per-route rate
+	     limits" link (no per-route rate-limit feature exists
+	     in current storage ; Step Q's planned per-route rate
+	     limiting is V3 backlog). Kept the CrowdSec link, which
+	     correctly deep-links to /security?tab=crowdsec. -->
 	<div class="card">
 		<div class="card-h">
-			<h3>Rate limits &amp; IP enforcement</h3>
+			<h3>IP enforcement</h3>
 		</div>
 		<div class="link-list">
-			<a href="/routes" class="link-row">
-				<div>
-					<b>Per-route rate limits</b>
-					<span>Configured on each route's detail panel. Step Q ships per-route tier-1 / tier-2 limits.</span>
-				</div>
-				<span class="arrow">→</span>
-			</a>
 			<a href="/security?tab=crowdsec" class="link-row">
 				<div>
 					<b>Active CrowdSec decisions</b>
@@ -321,6 +464,38 @@
 	}
 	.ro-notice svg { flex: none; color: var(--status-warn); margin-top: 2px; }
 
+	/* Phase Y — family block grouping. Each fam-block wraps a
+	   list of category rows in the same operator family
+	   (request attacks, protocol/behaviour, etc.) with a
+	   small header showing the family label + a 24h event
+	   tally for the family. */
+	.fam-block {
+		margin-top: 14px;
+	}
+	.fam-block:first-of-type {
+		margin-top: 0;
+	}
+	.fam-h {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 12px;
+		margin-bottom: 6px;
+	}
+	.fam-h h4 {
+		color: var(--fg);
+		font-size: 12px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		margin: 0;
+	}
+	.fam-meta {
+		color: var(--fg-dim);
+		font-size: 11px;
+		font-family: var(--font-mono);
+	}
+
 	.cat-grid {
 		display: flex;
 		flex-direction: column;
@@ -328,15 +503,50 @@
 	}
 	.cat-row {
 		display: flex;
-		align-items: flex-start;
-		gap: 12px;
-		padding: 10px 12px;
+		flex-direction: column;
 		background: var(--surface-2);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
+		overflow: hidden;
+	}
+	/* Phase Y — .cat-row-head is the clickable button that
+	   toggles the drill-down. Was a plain div pre-Y. Reset
+	   button defaults so it visually integrates with the
+	   surrounding card. */
+	.cat-row-head {
+		display: flex;
+		align-items: flex-start;
+		gap: 12px;
+		padding: 10px 12px;
+		background: transparent;
+		border: 0;
+		text-align: left;
+		cursor: pointer;
+		color: inherit;
+		font: inherit;
+		width: 100%;
+	}
+	.cat-row-head:hover {
+		background: var(--bg-hover, rgba(255, 255, 255, 0.02));
 	}
 	.cat-info { flex: 1; min-width: 0; }
-	.cat-name { color: var(--fg); font-size: 13px; font-weight: 500; margin-bottom: 2px; }
+	.cat-name {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--fg);
+		font-size: 13px;
+		font-weight: 500;
+		margin-bottom: 2px;
+	}
+	.chev {
+		flex: none;
+		color: var(--fg-dim);
+		transition: transform 120ms ease;
+	}
+	.chev.open {
+		transform: rotate(90deg);
+	}
 	.cat-desc { color: var(--fg-muted); font-size: 11.5px; line-height: 1.5; }
 	.cat-meta { text-align: right; flex: none; font-family: var(--font-mono); margin-left: 18px; min-width: 80px; }
 	.cat-meta-val { color: var(--fg); font-size: 16px; font-weight: 500; }
@@ -344,6 +554,52 @@
 	.cat-meta-val.cat-meta-block { color: var(--status-down); }
 	.cat-meta-val.cat-meta-detect { color: var(--status-warn); }
 	.cat-meta-foot { color: var(--fg-dim); font-size: 10.5px; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+	/* Phase Y — drill-down expand-below-the-head pane. Same
+	   visual language as /security/[routeId] rule table for
+	   consistency. */
+	.cat-drill {
+		border-top: 1px solid var(--border);
+		background: var(--surface);
+		padding: 10px 12px;
+	}
+	.cat-drill-state {
+		color: var(--fg-muted);
+		font-size: 12px;
+		padding: 6px 0;
+	}
+	.cat-drill-state.error {
+		color: var(--status-down);
+	}
+	.cat-drill-state.muted {
+		font-style: italic;
+	}
+	.rule-table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 12px;
+	}
+	.rule-table th,
+	.rule-table td {
+		padding: 6px 8px;
+		text-align: left;
+		border-bottom: 1px solid var(--border);
+	}
+	.rule-table th {
+		color: var(--fg-muted);
+		font-weight: 500;
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	.rule-table td.num,
+	.rule-table th.num {
+		text-align: right;
+		font-family: var(--font-mono);
+	}
+	.rule-table td.mono {
+		font-family: var(--font-mono);
+	}
 
 	.link-list {
 		display: flex;

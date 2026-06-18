@@ -18,58 +18,168 @@ package waf
 
 import "testing"
 
-// TestCategoryForRule_RepresentativePerRange covers one rule
-// ID per known CRS range. Sourced from the OWASP CRS v4.25.0
-// rule filenames (REQUEST-942-APPLICATION-ATTACK-SQLI.conf,
-// REQUEST-941-APPLICATION-ATTACK-XSS.conf, etc.). Adding a
-// new range to category.go MUST add a row here.
-func TestCategoryForRule_RepresentativePerRange(t *testing.T) {
+// Phase Y (2026-06-18) — empirically-verified per-file CRS
+// category mapping.
+//
+// Source of truth : the coraza-coreruleset embedded FS, file
+// inventory captured by the Phase Y audit. Each REQUEST-NNN-
+// NAME.conf / RESPONSE-NNN-NAME.conf file maps 1:1 to one
+// Arenet OwaspCategory ; the test cases below pin a
+// representative sample per file (first / mid / last id, with
+// the first id taken from the empirical "first id observed"
+// for that file).
+//
+// Adding a new range to category.go MUST add a row here AND
+// confirm the upstream CRS conf file has shipped (otherwise
+// the range is dead).
+
+func TestCategoryForRule_PerCRSFile(t *testing.T) {
 	cases := []struct {
 		name string
 		id   string
 		want OwaspCategory
 	}{
-		// 942xxx — SQLI rules.
-		{"crs_942_sqli_first", "942100", CategorySQLi},
-		{"crs_942_sqli_mid", "942500", CategorySQLi},
-		{"crs_942_sqli_last", "942999", CategorySQLi},
+		// --- Request attacks ---
+		{"942 sqli first", "942011", CategorySQLi},
+		{"942 sqli mid", "942300", CategorySQLi},
+		{"942 sqli last", "942560", CategorySQLi},
 
-		// 941xxx — XSS rules.
-		{"crs_941_xss_first", "941000", CategoryXSS},
-		{"crs_941_xss_mid", "941300", CategoryXSS},
+		{"941 xss first", "941010", CategoryXSS},
+		{"941 xss mid", "941200", CategoryXSS},
+		{"941 xss last", "941400", CategoryXSS},
 
-		// 932xxx — RCE (command injection).
-		{"crs_932_rce", "932100", CategoryRCE},
-		// 933xxx — PHP injection (RCE-class).
-		{"crs_933_php_rce", "933100", CategoryRCE},
-		// 934xxx — generic / Node / SSRF (RCE-class).
-		{"crs_934_generic_rce", "934100", CategoryRCE},
-		// 944xxx — Java RCE (deserialisation, JNDI).
-		{"crs_944_java_rce", "944100", CategoryRCE},
+		{"932 rce shell", "932011", CategoryRCE},
+		{"932 rce mid", "932200", CategoryRCE},
 
-		// 930xxx — LFI.
-		{"crs_930_lfi", "930100", CategoryLFI},
-		// 931xxx — RFI (bucketed with LFI).
-		{"crs_931_rfi", "931100", CategoryLFI},
+		{"933 php first", "933011", CategoryPHP},
+		{"933 php mid", "933150", CategoryPHP},
 
-		// Protocol: 911 method enforcement, 920 protocol
-		// enforcement, 921 protocol attacks, 922 multipart.
-		{"crs_911_method", "911100", CategoryProtocol},
-		{"crs_920_proto", "920100", CategoryProtocol},
-		{"crs_921_proto", "921100", CategoryProtocol},
-		{"crs_922_multipart", "922100", CategoryProtocol},
+		{"934 generic first", "934011", CategoryGeneric},
+		{"934 generic mid", "934100", CategoryGeneric},
 
-		// 943xxx — session fixation, currently OTHER.
-		{"crs_943_session", "943100", CategoryOther},
-		// 949 blocking evaluation.
-		{"crs_949_blocking", "949100", CategoryOther},
-		// 913 scanner detection.
-		{"crs_913_scanner", "913100", CategoryOther},
+		{"930 lfi first", "930011", CategoryLFI},
+		{"930 lfi mid", "930100", CategoryLFI},
+
+		{"931 rfi first", "931011", CategoryRFI},
+		{"931 rfi mid", "931100", CategoryRFI},
+
+		{"944 java first", "944011", CategoryJava},
+		{"944 java mid", "944150", CategoryJava},
+		{"944 java log4shell range", "944210", CategoryJava},
+
+		{"943 session first", "943011", CategorySession},
+		{"943 session mid", "943100", CategorySession},
+
+		// --- Protocol / behaviour ---
+		{"911 method first", "911011", CategoryMethod},
+		{"911 method last", "911100", CategoryMethod},
+
+		{"920 protocol first", "920011", CategoryProtocol},
+		{"920 protocol mid", "920300", CategoryProtocol},
+		{"920 protocol last", "920620", CategoryProtocol},
+
+		{"921 proto attack first", "921011", CategoryProtocolAttack},
+		{"921 proto attack mid", "921200", CategoryProtocolAttack},
+
+		{"922 multipart first", "922100", CategoryMultipart},
+		{"922 multipart last", "922120", CategoryMultipart},
+
+		{"913 scanner first", "913011", CategoryScanner},
+		{"913 scanner mid", "913050", CategoryScanner},
+
+		// --- Aggregators ---
+		{"949 anomaly req first", "949011", CategoryAnomalyReq},
+		{"949 anomaly req mid", "949100", CategoryAnomalyReq},
+
+		{"959 anomaly resp first", "959011", CategoryAnomalyResp},
+		{"959 anomaly resp mid", "959100", CategoryAnomalyResp},
+
+		{"980 correlation first", "980011", CategoryCorrelation},
+		{"980 correlation mid", "980100", CategoryCorrelation},
+
+		// --- Response-side / data leak ---
+		{"950 data leak first", "950011", CategoryDataLeak},
+		{"950 data leak mid", "950100", CategoryDataLeak},
+
+		{"951 data leak sql first", "951011", CategoryDataLeakSQL},
+		{"951 data leak sql mid", "951100", CategoryDataLeakSQL},
+
+		{"952 data leak java first", "952011", CategoryDataLeakJava},
+
+		{"953 data leak php first", "953011", CategoryDataLeakPHP},
+
+		{"954 data leak iis first", "954011", CategoryDataLeakIIS},
+
+		{"955 webshell first", "955011", CategoryWebShell},
+		{"955 webshell mid", "955200", CategoryWebShell},
+
+		// --- Infrastructure ---
+		{"901 init first", "901001", CategoryInit},
+		{"901 init mid", "901250", CategoryInit},
+
+		{"905 common except first", "905100", CategoryCommonExcept},
+		{"905 common except last", "905110", CategoryCommonExcept},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := CategoryForRule(tc.id); got != tc.want {
 				t.Errorf("CategoryForRule(%q) = %q, want %q", tc.id, got, tc.want)
+			}
+		})
+	}
+}
+
+// Phase Y boundary conditions — the upper / lower bounds of
+// each [NN000, NN+1 000) range. Pre-Y a single off-by-one
+// (e.g. 933000 → CategoryRCE) would have collapsed PHP back
+// into RCE silently ; pinning the boundaries forces a
+// deliberate decision on any future range change.
+func TestCategoryForRule_BoundaryConditions(t *testing.T) {
+	boundary := []struct {
+		id   string
+		want OwaspCategory
+		note string
+	}{
+		// SQLi ↔ session-fixation boundary.
+		{"942999", CategorySQLi, "upper of 942"},
+		{"943000", CategorySession, "lower of 943 (not SQLi, not Other)"},
+		// XSS ↔ SQLi.
+		{"941999", CategoryXSS, "upper of 941"},
+		{"942000", CategorySQLi, "lower of 942"},
+		// RCE ↔ PHP ↔ Generic ↔ XSS gap.
+		{"932999", CategoryRCE, "upper of 932"},
+		{"933000", CategoryPHP, "lower of 933 (NOT RCE — Phase Y split)"},
+		{"933999", CategoryPHP, "upper of 933"},
+		{"934000", CategoryGeneric, "lower of 934 (NOT RCE — Phase Y split)"},
+		{"934999", CategoryGeneric, "upper of 934"},
+		// LFI ↔ RFI split (Phase Y).
+		{"930999", CategoryLFI, "upper of 930"},
+		{"931000", CategoryRFI, "lower of 931 (NOT LFI — Phase Y split)"},
+		// 944 Java is its own bucket (Phase Y).
+		{"944000", CategoryJava, "lower of 944 (NOT RCE)"},
+		// Protocol family split.
+		{"911999", CategoryMethod, "upper of 911"},
+		{"912000", CategoryOther, "gap 912 — not classified"},
+		{"920000", CategoryProtocol, "lower of 920"},
+		{"920999", CategoryProtocol, "upper of 920"},
+		{"921000", CategoryProtocolAttack, "lower of 921 (split from Protocol)"},
+		{"922000", CategoryMultipart, "lower of 922 (split from Protocol)"},
+		// Aggregators.
+		{"949000", CategoryAnomalyReq, "lower of 949 (NOT Other)"},
+		{"949999", CategoryAnomalyReq, "upper of 949"},
+		// Data-leak family.
+		{"950000", CategoryDataLeak, "lower of 950 (NOT Other — Phase Y)"},
+		{"951000", CategoryDataLeakSQL, "lower of 951"},
+		{"955000", CategoryWebShell, "lower of 955"},
+		// Infrastructure.
+		{"901000", CategoryInit, "lower of 901 (NOT Other — Phase Y)"},
+		{"905000", CategoryCommonExcept, "lower of 905"},
+	}
+	for _, tc := range boundary {
+		t.Run(tc.id, func(t *testing.T) {
+			if got := CategoryForRule(tc.id); got != tc.want {
+				t.Errorf("CategoryForRule(%q) = %q ; want %q (%s)",
+					tc.id, got, tc.want, tc.note)
 			}
 		})
 	}
@@ -82,31 +192,50 @@ func TestCategoryForRule_UnknownAndMalformed_FallBackToOther(t *testing.T) {
 		"-1",          // negative
 		"99999999999", // huge, falls through ranges
 		"500",         // too small for any range
-		"800000",      // between ranges
+		"800000",      // between known ranges
+		"906000",      // gap between 905 (CommonExcept) and 911 (Method)
+		"912000",      // gap between 911 and 913
+		"914000",      // gap between 913 and 920
+		"923000",      // gap between 922 and 930
+		"935000",      // gap between 934 and 941
+		"945000",      // gap between 944 and 949
+		"956000",      // gap between 955 and 959
+		"960000",      // gap between 959 and 980
+		"990000",      // above 980, below 1M
 	}
 	for _, id := range cases {
 		t.Run("input="+id, func(t *testing.T) {
 			if got := CategoryForRule(id); got != CategoryOther {
-				t.Errorf("CategoryForRule(%q) = %q, want OTHER (fallback)", id, got)
+				t.Errorf("CategoryForRule(%q) = %q, want OTHER (fallback)",
+					id, got)
 			}
 		})
 	}
 }
 
-func TestCategoryForRule_BoundaryConditions(t *testing.T) {
-	// The exclusive upper bounds matter: 942999 is SQLi,
-	// 943000 should NOT be SQLi (it's session fixation →
-	// OTHER in this build).
-	if got := CategoryForRule("942999"); got != CategorySQLi {
-		t.Errorf("942999 = %q, want SQLi (upper bound inclusive)", got)
+// Phase Y — AllCategories sanity. The slice is the source of
+// truth the frontend consumes via the type generator ; every
+// category constant the SQLite layer may persist MUST appear
+// in the slice so the frontend's switch / map covers it.
+func TestAllCategories_ContainsEveryPhaseYCategory(t *testing.T) {
+	want := []OwaspCategory{
+		// Pre-Y (kept for storage compat).
+		CategorySQLi, CategoryXSS, CategoryRCE, CategoryLFI, CategoryProtocol, CategoryOther,
+		// Phase Y new.
+		CategoryInit, CategoryCommonExcept, CategoryMethod, CategoryScanner,
+		CategoryProtocolAttack, CategoryMultipart, CategoryRFI, CategoryPHP,
+		CategoryGeneric, CategorySession, CategoryJava,
+		CategoryAnomalyReq, CategoryAnomalyResp, CategoryCorrelation,
+		CategoryDataLeak, CategoryDataLeakSQL, CategoryDataLeakJava,
+		CategoryDataLeakPHP, CategoryDataLeakIIS, CategoryWebShell,
 	}
-	if got := CategoryForRule("943000"); got != CategoryOther {
-		t.Errorf("943000 = %q, want OTHER (session fixation, NOT SQLi)", got)
+	got := map[OwaspCategory]struct{}{}
+	for _, c := range AllCategories {
+		got[c] = struct{}{}
 	}
-	if got := CategoryForRule("941999"); got != CategoryXSS {
-		t.Errorf("941999 = %q, want XSS", got)
-	}
-	if got := CategoryForRule("942000"); got != CategorySQLi {
-		t.Errorf("942000 = %q, want SQLi (lower bound)", got)
+	for _, c := range want {
+		if _, ok := got[c]; !ok {
+			t.Errorf("AllCategories missing %q (every storage-emittable category MUST appear)", c)
+		}
 	}
 }

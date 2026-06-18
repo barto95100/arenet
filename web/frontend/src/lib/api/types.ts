@@ -1357,17 +1357,87 @@ export interface SummaryResponse {
 // Mirrors internal/waf/event.go OwaspCategory enum.
 // `OTHER` is the catch-all for rules that don't match any
 // known CRS range.
-export type OwaspCategory = 'SQLi' | 'XSS' | 'RCE' | 'LFI' | 'PROTOCOL' | 'OTHER';
+// Phase Y (2026-06-18) — 25-category taxonomy mirror of
+// internal/waf/event.go OwaspCategory const block. Each value
+// here MUST exist in the Go enum for the SQLite waf_event
+// table to deserialize correctly (the frontend ingests
+// category strings verbatim from the wire).
+//
+// Pre-Y categories (kept for storage backward compat — old
+// rows reference them as strings) : SQLi, XSS, RCE, LFI,
+// PROTOCOL, OTHER. The Phase Y CategoryForRule refactor no
+// longer EMITS the over-aggregating RCE/LFI/PROTOCOL strings
+// for new events, but the union must include them so the
+// frontend can render historical rows without crashing.
+export type OwaspCategory =
+	// Pre-Y (kept for storage compat)
+	| 'SQLi'
+	| 'XSS'
+	| 'RCE'
+	| 'LFI'
+	| 'PROTOCOL'
+	| 'OTHER'
+	// Phase Y precise per-file categories
+	| 'INIT'
+	| 'COMMON_EXCEPT'
+	| 'METHOD'
+	| 'SCANNER'
+	| 'PROTOCOL_ATK'
+	| 'MULTIPART'
+	| 'RFI'
+	| 'PHP'
+	| 'GENERIC'
+	| 'SESSION'
+	| 'JAVA'
+	| 'ANOMALY_REQ'
+	| 'ANOMALY_RESP'
+	| 'CORRELATION'
+	| 'DATA_LEAK'
+	| 'DATA_LEAK_SQL'
+	| 'DATA_LEAK_JAVA'
+	| 'DATA_LEAK_PHP'
+	| 'DATA_LEAK_IIS'
+	| 'WEBSHELL';
 
 // All categories in dashboard-display order. Frontend uses
 // this to render the CategoryDistribution strip with stable
 // left-to-right ordering even when a category has 0 events.
+//
+// Phase Y — grouped in operator-meaningful families (request
+// attacks first, then protocol/behaviour, aggregators, data-
+// leak, infrastructure). The /waf page may further group
+// into collapsible sections on render.
 export const ALL_OWASP_CATEGORIES: readonly OwaspCategory[] = [
+	// Request attacks
 	'SQLi',
 	'XSS',
 	'RCE',
+	'PHP',
+	'JAVA',
+	'GENERIC',
 	'LFI',
+	'RFI',
+	// Protocol / behaviour
+	'METHOD',
 	'PROTOCOL',
+	'PROTOCOL_ATK',
+	'MULTIPART',
+	'SCANNER',
+	'SESSION',
+	// Aggregators
+	'ANOMALY_REQ',
+	'ANOMALY_RESP',
+	'CORRELATION',
+	// Response-side / data leak
+	'DATA_LEAK',
+	'DATA_LEAK_SQL',
+	'DATA_LEAK_JAVA',
+	'DATA_LEAK_PHP',
+	'DATA_LEAK_IIS',
+	'WEBSHELL',
+	// Infrastructure / catch-all
+	'INIT',
+	'COMMON_EXCEPT',
 	'OTHER'
 ];
 

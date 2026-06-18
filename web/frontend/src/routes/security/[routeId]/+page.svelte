@@ -187,17 +187,11 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 		return `${hh}:${mm}`;
 	}
 
-	// Category colour mapping mirrors the dashboard widgets
-	// so a category visually identified on /security stays
-	// the same colour here.
-	const CATEGORY_COLOR: Record<OwaspCategory, string> = {
-		SQLi: 'var(--status-down)',
-		XSS: 'var(--status-warn)',
-		RCE: 'var(--status-down)',
-		LFI: 'var(--status-warn)',
-		PROTOCOL: 'var(--status-info)',
-		OTHER: 'var(--text-muted)'
-	};
+	// Phase Y — single source of truth via lib/utils/waf-category.
+	// Category colour mapping mirrors the dashboard widgets so a
+	// category visually identified on /security stays the same
+	// colour here.
+	import { categoryMeta } from '$lib/utils/waf-category';
 </script>
 
 <PageHeader title="Security" subtitle={route?.host ?? routeId} />
@@ -346,7 +340,7 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 								<td>
 									<span
 										class="badge"
-										style:background={CATEGORY_COLOR[row.category]}
+										style:background={categoryMeta(row.category).color}
 									>
 										{row.category}
 									</span>

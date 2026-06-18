@@ -59,20 +59,43 @@ export function fetchEvents(params: FetchEventsParams = {}): Promise<WafEventsRe
 }
 
 /**
- * Per-(rule, category) aggregate over the window. Used by
- * the M.4 drill-down's per-rule breakdown table; server-
- * side aggregation avoids the most-recent-100 truncation
- * that client-side group-by would silently produce on a 30d
- * window.
+ * Per-(rule, category) aggregate over the window.
  *
- * Both parameters are REQUIRED — the backend returns 400 if
- * either is missing.
+ * Two usage modes :
+ *  - `fetchEventsByRule({route, window})` : the M.4 drill-
+ *    down's per-rule breakdown table for ONE route. Server-
+ *    side aggregation avoids the most-recent-100 truncation
+ *    that client-side group-by would silently produce on a
+ *    30d window.
+ *  - `fetchEventsByRule({category, window})` : Phase Y /waf
+ *    page cross-route per-category drill-down. Returns every
+ *    rule in that category across all routes for the window.
+ *  - Both supplied : rules in that category ON that route.
+ *
+ * The backend requires AT LEAST ONE of route / category — an
+ * unfiltered call returns 400. Window is always required.
  */
+export interface FetchEventsByRuleParams {
+	route?: string;
+	category?: string;
+	window: MetricWindow;
+}
+
 export function fetchEventsByRule(
-	route: string,
-	window: MetricWindow
+	params: FetchEventsByRuleParams | string,
+	windowArg?: MetricWindow
 ): Promise<WafEventsByRuleResponse> {
-	const qs = new URLSearchParams({ route, window });
+	// Backward compat : legacy (route, window) positional
+	// callers still work. New callers pass the object form.
+	let qs: URLSearchParams;
+	if (typeof params === 'string') {
+		// Legacy two-arg call : (route, window).
+		qs = new URLSearchParams({ route: params, window: windowArg ?? '24h' });
+	} else {
+		qs = new URLSearchParams({ window: params.window });
+		if (params.route) qs.set('route', params.route);
+		if (params.category) qs.set('category', params.category);
+	}
 	return request<WafEventsByRuleResponse>('GET', `/security/events/by-rule?${qs.toString()}`);
 }
 

@@ -756,7 +756,10 @@ func TestSecurityEventsByRule_QueryError_503(t *testing.T) {
 	}
 }
 
-func TestSecurityEventsByRule_MissingRoute_400(t *testing.T) {
+func TestSecurityEventsByRule_MissingRouteAndCategory_400(t *testing.T) {
+	// Phase Y — by-rule now accepts EITHER route OR category
+	// (or both). Neither → 400 (operator-meaningful guard
+	// against an accidentally-broad request).
 	m := newMetricsTestEnv(t)
 	m.env.handler.SetWafEventReader(&fakeWafEventReader{})
 	req := httptest.NewRequest(http.MethodGet,
@@ -764,7 +767,37 @@ func TestSecurityEventsByRule_MissingRoute_400(t *testing.T) {
 	rec := httptest.NewRecorder()
 	m.router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (missing route)", rec.Code)
+		t.Fatalf("status = %d, want 400 (missing route AND category)", rec.Code)
+	}
+}
+
+// Phase Y — by-rule accepts a category-only filter for the
+// /waf page's cross-route drill-down.
+func TestSecurityEventsByRule_CategoryOnly_200(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{})
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/security/events/by-rule?category=SQLi&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s ; want 200 (category-only filter)",
+			rec.Code, rec.Body)
+	}
+}
+
+func TestSecurityEventsByRule_BothRouteAndCategory_200(t *testing.T) {
+	// Phase Y — both filters supplied is operator-valid
+	// (e.g. drill down to SQLi rules ON one specific route).
+	m := newMetricsTestEnv(t)
+	m.env.handler.SetWafEventReader(&fakeWafEventReader{})
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/security/events/by-rule?route="+m.routeID+"&category=SQLi&window=24h", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s ; want 200 (route + category combo)",
+			rec.Code, rec.Body)
 	}
 }
 
