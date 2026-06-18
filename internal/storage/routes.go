@@ -421,9 +421,66 @@ type Route struct {
 	// JSON omitempty so pre-Y routes (and routes that keep the
 	// default empty list) stay byte-equal with pre-Y snapshots
 	// on disk + in backup/restore exports.
-	WAFExcludeRules []int     `json:"waf_exclude_rules,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	WAFExcludeRules []int `json:"waf_exclude_rules,omitempty"`
+	// RateLimit (Step Q, 2026-06-18) is the per-route rate
+	// limiting configuration that gates inbound requests
+	// BEFORE the WAF / country-block / CrowdSec chain runs.
+	// Nil pointer = no rate limit on this route ; non-nil
+	// = mholt/caddy-ratelimit zone with the operator-
+	// supplied (Events, Window, Key) tuple.
+	//
+	// Polarity rationale : positive opt-in (nil = no limit
+	// = pre-Q byte-equivalent runtime). No boot migration
+	// needed ; pre-Q stored rows decode WAFExcludeRules
+	// fine alongside a nil RateLimit and Caddy emits no
+	// rate_limit handler for them — chain shape unchanged.
+	//
+	// Use cases :
+	//  - login routes : 5 / 1 m on {http.request.remote.host}
+	//    blunts credential-stuffing without locking out a
+	//    NAT'd household.
+	//  - public API routes : 100 / 1 m caps a single client
+	//    from monopolising the upstream.
+	//  - trusted internal API : leave nil ; full throttle
+	//    only happens via the global system throttle.
+	//
+	// Key field accepts any Caddy placeholder. Defaults to
+	// {http.request.remote.host} (raw socket peer IP, no
+	// X-Forwarded-For trust). Operators on a trusted-proxy
+	// deployment can override to {http.request.header.X-
+	// Forwarded-For} or similar.
+	RateLimit *RouteRateLimit `json:"rate_limit,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+// RouteRateLimit (Step Q, 2026-06-18) — per-route rate limit
+// config emitted as an mholt/caddy-ratelimit zone.
+//
+// Validation contract (applied at the API layer + a
+// belt-and-suspenders boot-time decode check) :
+//  - Events >= 1 (zero would block every request and is
+//    almost certainly a typo).
+//  - Window parses cleanly via time.ParseDuration.
+//  - Key default-initialised to "{http.request.remote.host}"
+//    when empty at decode/emit time so the operator can
+//    leave it blank in the UI for the common case.
+type RouteRateLimit struct {
+	// Events is the maximum number of requests allowed
+	// within Window. mholt/caddy-ratelimit uses a sliding-
+	// window algorithm so the limit is rolling, not a hard
+	// per-minute reset.
+	Events int `json:"events"`
+	// Window is the sliding window duration. Stored as a
+	// Go-time-parseable string ("30s", "1m", "5m", "1h").
+	// caddy.Duration accepts the same shape so the wire
+	// format passes through without parse work.
+	Window string `json:"window"`
+	// Key is the Caddy placeholder string the rate-limit
+	// zone uses to partition counters. Empty at decode
+	// time → defaulted to "{http.request.remote.host}" by
+	// the caddymgr emit.
+	Key string `json:"key,omitempty"`
 }
 
 // AllHosts returns the full ordered list of hostnames this route

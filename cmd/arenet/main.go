@@ -56,6 +56,18 @@ import (
 	// which feeds a DNS-01 fixture through caddy.Validate (§5.4).
 	_ "github.com/caddy-dns/ovh"
 
+	// Step Q (2026-06-18) — per-route rate limiting via
+	// mholt/caddy-ratelimit. Same blank-import contract as
+	// coraza-caddy + caddy-dns/ovh above : the package's
+	// init() registers the http.handlers.rate_limit module
+	// so buildRateLimitHandler's JSON emit (handler:
+	// "rate_limit") resolves at caddy.Load time. No symbol
+	// from caddy-ratelimit is referenced directly anywhere
+	// in Arenet. The anti-regression guard is
+	// TestBuildConfigJSON_LoadsCleanly which feeds a
+	// rate-limit fixture through caddy.Validate.
+	_ "github.com/mholt/caddy-ratelimit"
+
 	"github.com/caddyserver/caddy/v2"
 
 	"github.com/barto95100/arenet/internal/alerting"

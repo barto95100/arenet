@@ -1147,6 +1147,21 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// (§11.5 invariant).
 		handlers := []map[string]any{metricsHandler}
 
+		// Step Q (2026-06-18) — per-route rate limit gate.
+		// Slot RIGHT AFTER metrics (so the routemetrics defer
+		// observes the 429 status and surfaces the throttling
+		// in the per-route counter tile) and BEFORE every other
+		// gate (country-block, CrowdSec, auth, WAF). Counter
+		// comparison is the cheapest wall : a brute-force IP
+		// hits the rate limiter and bounces with 429 without
+		// ever exercising the CIDR / LAPI / Coraza checks
+		// downstream. The emit is omitted entirely when the
+		// route has no RateLimit configured — pre-Q routes
+		// stay byte-equal to their pre-Q handler chain.
+		if rlHandler := buildRateLimitHandler(r.ID, r.RateLimit); rlHandler != nil {
+			handlers = append(handlers, rlHandler)
+		}
+
 		// Step W.3 — country-block gate. Chain position #2 per
 		// spec §D10: AFTER routemetrics (so the V.1.2 defer
 		// observes the 403 status and surfaces the block in
@@ -2414,6 +2429,69 @@ func buildCountryBlockHandler(routeID, _ string, cb countryblock.Config) map[str
 			"mode":        string(cb.Mode),
 			"countryList": cb.CountryList,
 			"statusCode":  cb.StatusCode,
+		},
+	}
+}
+
+// Default Caddy placeholder for the rate-limit zone key when
+// the operator leaves the Key field empty. {http.request.
+// remote.host} resolves to the raw socket peer IP — no
+// X-Forwarded-For trust by default, which is the safe choice
+// for routes facing the public internet without a verified
+// trusted-proxy chain. Operators on a tested reverse-proxy
+// deployment can override to a header-derived placeholder
+// via the form's "custom key" path (Phase Q.2 UI).
+const defaultRateLimitKey = "{http.request.remote.host}"
+
+// buildRateLimitHandler returns the Caddy mholt/caddy-
+// ratelimit handler config for the given route's RateLimit
+// declaration, or nil when the route has no rate-limit
+// configured (rl == nil OR validation fails).
+//
+// JSON shape ships ONE zone per route, keyed by the route's
+// UUID so two routes can have orthogonal limits without
+// counter-bleed even when their config bytes are otherwise
+// identical (the upstream README's "MUST be globally
+// unique" warning applies here). The zone name is
+// "route-<routeID>" — operator-readable for the
+// {http.rate_limit.exceeded.name} placeholder if a future
+// custom-429-page feature wants to surface it.
+//
+// Validation : operator-supplied (Events, Window) are
+// gated at the API layer (storage.RouteRateLimit
+// validation contract). The handler here defends in depth :
+// invalid window parse OR Events <= 0 returns nil + a
+// warn-level log so a corrupt stored row doesn't crash the
+// reload — the route just runs without the rate limit
+// instead of failing the whole config build.
+func buildRateLimitHandler(routeID string, rl *storage.RouteRateLimit) map[string]any {
+	if rl == nil {
+		return nil
+	}
+	if rl.Events <= 0 {
+		slog.Warn("rate-limit emit: skipping route with non-positive Events",
+			"route_id", routeID, "events", rl.Events)
+		return nil
+	}
+	dur, err := time.ParseDuration(rl.Window)
+	if err != nil || dur <= 0 {
+		slog.Warn("rate-limit emit: skipping route with invalid Window",
+			"route_id", routeID, "window", rl.Window, "err", err)
+		return nil
+	}
+	key := rl.Key
+	if key == "" {
+		key = defaultRateLimitKey
+	}
+	zoneName := "route-" + routeID
+	return map[string]any{
+		"handler": "rate_limit",
+		"rate_limits": map[string]any{
+			zoneName: map[string]any{
+				"key":        key,
+				"window":     dur, // caddy.Duration marshalled as nanoseconds
+				"max_events": rl.Events,
+			},
 		},
 	}
 }

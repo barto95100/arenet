@@ -174,6 +174,11 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// list ; tests exercising the per-rule exclusion input
 		// override via the partial Route overrides parameter.
 		wafExcludeRules: [],
+		// Step Q — strict default no rate limit ; tests
+		// exercising the rate-limit section override via the
+		// partial Route overrides parameter set a non-null
+		// value to populate the form.
+		rateLimit: null,
 		...overrides
 	};
 }
@@ -2518,5 +2523,89 @@ describe('Routes page — Step X Option (c) wafExcludeRules textarea', () => {
 
 		const link = screen.getByTestId('waf-exclude-rules-security-link') as HTMLAnchorElement;
 		expect(link.getAttribute('href')).toBe('/security/discover-link');
+	});
+});
+
+// --- Step Q — rate-limit section -------------------------------
+
+describe('Routes page — Step Q rate-limit toggle + payload', () => {
+	it('renders the toggle unchecked on create + hides the inputs when off', async () => {
+		render(Page);
+		await openCreateForm();
+		const toggle = screen.getByTestId('rate-limit-toggle') as HTMLInputElement;
+		expect(toggle.checked).toBe(false);
+		// Inputs only render when the toggle is on.
+		expect(screen.queryByTestId('rate-limit-events-input')).toBeNull();
+		expect(screen.queryByTestId('rate-limit-window-input')).toBeNull();
+		expect(screen.queryByTestId('rate-limit-key-input')).toBeNull();
+	});
+
+	it('toggling on seeds the inputs with operator-meaningful defaults', async () => {
+		render(Page);
+		await openCreateForm();
+		const toggle = screen.getByTestId('rate-limit-toggle') as HTMLInputElement;
+		await userEvent.click(toggle);
+		await tick();
+		const events = screen.getByTestId('rate-limit-events-input') as HTMLInputElement;
+		const window = screen.getByTestId('rate-limit-window-input') as HTMLInputElement;
+		const key = screen.getByTestId('rate-limit-key-input') as HTMLInputElement;
+		expect(events.value).toBe('60');
+		expect(window.value).toBe('1m');
+		expect(key.value).toBe('{http.request.remote.host}');
+	});
+
+	it('ships rateLimit object in the create payload when the toggle is on', async () => {
+		apiMock.createRoute.mockResolvedValue(
+			makeRoute({ rateLimit: { events: 5, window: '10s', key: '{http.request.remote.host}' } })
+		);
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'rate.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+		await userEvent.click(screen.getByTestId('rate-limit-toggle'));
+		const events = screen.getByTestId('rate-limit-events-input') as HTMLInputElement;
+		const window = screen.getByTestId('rate-limit-window-input') as HTMLInputElement;
+		await userEvent.clear(events);
+		await userEvent.type(events, '5');
+		await userEvent.clear(window);
+		await userEvent.type(window, '10s');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.rateLimit).toMatchObject({ events: 5, window: '10s' });
+	});
+
+	it('omits rateLimit from the payload when the toggle is off', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute());
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'noRate.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.rateLimit).toBeUndefined();
+	});
+
+	it('loads the persisted rateLimit into the toggle + inputs on edit', async () => {
+		const seeded = makeRoute({
+			id: 'edit-rate',
+			host: 'edit.rate.example.com',
+			rateLimit: { events: 100, window: '5m', key: '{http.request.remote.host}' }
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		const hostCell = await screen.findByText('edit.rate.example.com');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+		const toggle = screen.getByTestId('rate-limit-toggle') as HTMLInputElement;
+		expect(toggle.checked).toBe(true);
+		const events = screen.getByTestId('rate-limit-events-input') as HTMLInputElement;
+		expect(events.value).toBe('100');
 	});
 });

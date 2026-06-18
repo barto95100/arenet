@@ -22,6 +22,7 @@
 		LBPolicy,
 		ManagedDomain,
 		Route,
+		RouteRateLimit,
 		RouteRequest,
 		TestUpstreamResponse,
 		Upstream
@@ -99,7 +100,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'rateLimit'> & {
 		healthCheck: HealthCheck;
 		// W.5 — narrow to the non-optional shape. The form
 		// always carries a CountryBlockRequest (mode="off"
@@ -131,6 +132,13 @@
 		// one place (the change handler) and the rest of the
 		// form code reads a clean typed array.
 		wafExcludeRules: number[];
+		// Step Q — rate-limit holds the object when the
+		// toggle is on, null when off. Distinct from the
+		// wire shape's optional (undefined) because the
+		// form always carries a definite "on or off" state ;
+		// the payload assembler converts null → omitted +
+		// object → present.
+		rateLimit: RouteRateLimit | null;
 	};
 	let formData = $state<FormData>(emptyFormData());
 	let healthCheckTouched = $state(false);
@@ -183,6 +191,13 @@
 			// next GET → openEdit reload picks up the canonical
 			// form.
 			wafExcludeRules: [] as number[],
+			// Step Q — rate limit OFF by default. Toggle in
+			// the form's "Limitation de débit" section flips
+			// to a default-seeded RouteRateLimit on. Operator
+			// keeps the toggle off for routes that don't need
+			// protection (the global throttle still applies
+			// system-wide).
+			rateLimit: null as RouteRateLimit | null,
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
 			// further down; operators opting in pick a mode +
@@ -397,6 +412,28 @@
 	function onConfirmDisableCRS(): void {
 		formData.wafDisableCRS = true;
 		confirmDisableCRSOpen = false;
+	}
+
+	// Step Q — rate-limit toggle handler.
+	// Off → on : seed with operator-meaningful defaults
+	//   (60 requests / 1 minute, key {http.request.remote.host}).
+	// On → off : clear formData.rateLimit to null. The submit
+	//   path omits the field when null so PUT preserves the
+	//   stored value — operator who wants to genuinely CLEAR
+	//   a stored rate limit needs to recreate the route or
+	//   use the API directly (frontend V2 backlog : explicit-
+	//   null PUT support).
+	function onRateLimitToggle(ev: Event): void {
+		const next = (ev.target as HTMLInputElement).checked;
+		if (next) {
+			formData.rateLimit = {
+				events: 60,
+				window: '1m',
+				key: '{http.request.remote.host}'
+			};
+		} else {
+			formData.rateLimit = null;
+		}
 	}
 
 	// Step X Option (c) — exclude-rules input parsing.
@@ -816,6 +853,13 @@
 			// future formData mutations don't ripple back into
 			// the source route object.
 			wafExcludeRules: [...(r.wafExcludeRules ?? [])],
+			// Step Q — load the persisted rate-limit. Clone
+			// to break the formData ↔ source route reference
+			// so toggling the form section doesn't ripple
+			// back into the list view's Route object.
+			rateLimit: r.rateLimit
+				? { events: r.rateLimit.events, window: r.rateLimit.window, key: r.rateLimit.key ?? '' }
+				: null,
 			// Step J.2: the server's HealthCheck is always present
 			// on the wire (no omitempty). The form holds it as-is;
 			// edit-mode shows explicit values (server materialised
@@ -1429,6 +1473,16 @@
 			// operator's current list. The server canonicalises
 			// (sort + dedup) before persist.
 			payload.wafExcludeRules = formData.wafExcludeRules;
+			// Step Q — rate limit. When the toggle is ON ship
+			// the object (POST = new value, PUT = replace) ;
+			// when OFF leave the field absent so PUT preserves
+			// the previously stored value. Operator clears a
+			// stored rate-limit via "delete + recreate the
+			// route" (see V2 backlog : explicit-null PUT
+			// semantic).
+			if (formData.rateLimit !== null) {
+				payload.rateLimit = formData.rateLimit;
+			}
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
 			// server preserve the previously stored value (on PUT)
@@ -2631,6 +2685,109 @@
 								{/if}
 							</p>
 						</div>
+					</div>
+
+					<!-- Step Q (2026-06-18) — per-route rate limit
+					     section. Lives in its own block (not inside
+					     the WAF section) because rate limiting is
+					     orthogonal to the WAF posture : a route can
+					     have WAF=off + rate limit on (trusted internal
+					     LAN with brute-force protection on /login),
+					     or WAF=block + no rate limit (public API
+					     where the WAF is the only gate). The
+					     "Limitation de débit" framing matches the
+					     operator's mental model better than burying
+					     it under WAF. -->
+					<div>
+						<label
+							class="text-sm font-medium text-secondary block mb-1"
+							for="route-rate-limit-toggle"
+						>
+							Limitation de débit
+						</label>
+						<label
+							class="inline-flex items-start gap-2 text-sm text-secondary mt-1 cursor-pointer"
+							data-testid="rate-limit-toggle-label"
+						>
+							<input
+								id="route-rate-limit-toggle"
+								type="checkbox"
+								checked={formData.rateLimit !== null}
+								onchange={onRateLimitToggle}
+								class="mt-0.5"
+								data-testid="rate-limit-toggle"
+							/>
+							<span>
+								Activer la limitation de débit
+								<span class="text-muted">(protection brute-force, abus API)</span>
+							</span>
+						</label>
+
+						{#if formData.rateLimit !== null}
+							<div class="mt-3 grid gap-3 sm:grid-cols-2">
+								<div>
+									<label
+										for="route-rl-events"
+										class="text-xs font-medium text-secondary block mb-1"
+									>
+										Nombre maximum de requêtes
+									</label>
+									<input
+										id="route-rl-events"
+										data-testid="rate-limit-events-input"
+										type="number"
+										min="1"
+										step="1"
+										bind:value={formData.rateLimit.events}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+									/>
+								</div>
+								<div>
+									<label
+										for="route-rl-window"
+										class="text-xs font-medium text-secondary block mb-1"
+									>
+										Période <span class="text-muted">(durée Go : 30s, 1m, 5m, 1h)</span>
+									</label>
+									<input
+										id="route-rl-window"
+										data-testid="rate-limit-window-input"
+										type="text"
+										placeholder="1m"
+										bind:value={formData.rateLimit.window}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+									/>
+								</div>
+								<div class="sm:col-span-2">
+									<label
+										for="route-rl-key"
+										class="text-xs font-medium text-secondary block mb-1"
+									>
+										Clé de limitation
+										<span class="text-muted">(placeholder Caddy ; vide = par IP client raw)</span>
+									</label>
+									<input
+										id="route-rl-key"
+										data-testid="rate-limit-key-input"
+										type="text"
+										placeholder="{'{http.request.remote.host}'}"
+										bind:value={formData.rateLimit.key}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+									/>
+								</div>
+							</div>
+							<p class="text-xs text-muted mt-2 max-w-prose">
+								Au-delà du nombre maximum de requêtes par période, les
+								requêtes sont rejetées avec <strong>HTTP 429</strong>. Algorithme
+								<strong>sliding window</strong> (pas de reset brutal en fin de
+								période). La clé par défaut <code>{'{http.request.remote.host}'}</code>
+								partitionne le compteur par IP socket — pas de confiance
+								<code>X-Forwarded-For</code> (anti-spoof). Sur déploiement
+								derrière proxy de confiance, basculer sur
+								<code>{'{http.request.header.X-Forwarded-For}'}</code> ou
+								similaire.
+							</p>
+						{/if}
 					</div>
 
 					<!-- W.5 — country-block per-route gate. Operator

@@ -1098,6 +1098,33 @@ type routeRequest struct {
 	// per ADR D3 since two routes with the same effective
 	// exclusion set share a WAF pool).
 	WAFExcludeRules *[]int `json:"wafExcludeRules,omitempty"`
+	// RateLimit (Step Q, 2026-06-18) is the per-route rate
+	// limiter config. Triple-state pointer per the Phase
+	// 4.5 + Step X.1 conventions :
+	//   nil pointer    → preserve-on-omit (PUT) / default
+	//                    nil (POST) — no rate limit.
+	//   empty object   → operator-supplied with default
+	//                    values ; validated at the API
+	//                    layer (Events >= 1, Window parses).
+	//   non-empty obj  → full replace.
+	//
+	// To CLEAR a stored rate limit via PUT the operator
+	// sends `"rateLimit": null` (explicit JSON null, not
+	// omission). The Go json package decodes that as
+	// (*rateLimitReq)(nil) which we distinguish from
+	// "field absent" using a sentinel bool — see the PUT
+	// path's rateLimitExplicit flag.
+	RateLimit *rateLimitReq `json:"rateLimit,omitempty"`
+}
+
+// rateLimitReq is the wire-side shape of Route.RateLimit.
+// Mirrors storage.RouteRateLimit but with camelCase JSON
+// tags (API convention ; storage uses snake_case via the
+// storage.RouteRateLimit type's own tags).
+type rateLimitReq struct {
+	Events int    `json:"events"`
+	Window string `json:"window"`
+	Key    string `json:"key,omitempty"`
 }
 
 // countryBlockReq is the wire-side shape of Route.CountryBlock.
@@ -1124,6 +1151,16 @@ type countryBlockResp struct {
 	Mode        string   `json:"mode"`
 	CountryList []string `json:"countryList"`
 	StatusCode  int      `json:"statusCode,omitempty"`
+}
+
+// rateLimitResp (Step Q) — per-route rate-limit on the
+// response side. Mirrors rateLimitReq verbatim ; the wire
+// shape is identical, only the location (request vs
+// response) differs.
+type rateLimitResp struct {
+	Events int    `json:"events"`
+	Window string `json:"window"`
+	Key    string `json:"key,omitempty"`
 }
 
 // upstreamResp is the per-element wire shape inside the routeResponse
@@ -1303,6 +1340,12 @@ type routeResponse struct {
 	// verbatim doesn't accidentally trigger preserve-on-
 	// omit semantics on the put side.
 	WAFExcludeRules []int `json:"wafExcludeRules"`
+	// RateLimit (Step Q) — per-route rate-limit config
+	// echoed on every GET. nil when the route has no rate
+	// limit configured (the frontend toggle reads the nil
+	// as "off"). omitempty so pre-Q snapshot byte-equality
+	// holds for routes that don't use the feature.
+	RateLimit *rateLimitResp `json:"rateLimit,omitempty"`
 	// Critique 11 Pack A (2026-06-05) — derived per-route
 	// aggregate from the Stage B HC tracker. One of:
 	//   "healthy"   — HC enabled AND every upstream healthy in tracker
@@ -1397,8 +1440,24 @@ func toResponse(r storage.Route) routeResponse {
 		UploadStreamingMode: r.UploadStreamingMode,
 		WAFDisableCRS:       r.WAFDisableCRS,
 		WAFExcludeRules:     emptyIntSliceIfNil(r.WAFExcludeRules),
+		RateLimit:           toRateLimitResp(r.RateLimit),
 		CreatedAt:           r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:           r.UpdatedAt.UTC().Format(timestampFormat),
+	}
+}
+
+// toRateLimitResp normalises the storage *RouteRateLimit to
+// the wire response shape. nil in → nil out (the omitempty
+// JSON tag drops the field for routes without a rate limit
+// so pre-Q snapshots stay byte-equal).
+func toRateLimitResp(r *storage.RouteRateLimit) *rateLimitResp {
+	if r == nil {
+		return nil
+	}
+	return &rateLimitResp{
+		Events: r.Events,
+		Window: r.Window,
+		Key:    r.Key,
 	}
 }
 

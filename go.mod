@@ -121,6 +121,7 @@ require (
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
 	github.com/mholt/acmez/v3 v3.1.6 // indirect
 	github.com/mholt/caddy-l4 v0.0.0-20231016112149-a362a1fbf652 // indirect
+	github.com/mholt/caddy-ratelimit v0.1.0 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect

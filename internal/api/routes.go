@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -814,6 +815,51 @@ func normalizeExcludeRules(in []int) ([]int, error) {
 	return out, nil
 }
 
+// Step Q — rate-limit validator + materialiser. The wire-
+// side rateLimitReq mirrors storage.RouteRateLimit verbatim
+// so the materialise step is field copy + canonicalisation
+// (empty Key → default placeholder).
+//
+// Validation contract :
+//   - Events MUST be >= 1 (a zero would block every request ;
+//     almost certainly a typo).
+//   - Window MUST parse via time.ParseDuration AND be
+//     strictly positive (>= 1ms practically ; we don't
+//     enforce a floor, the upstream rate-limit module
+//     handles fractional-second windows fine).
+//   - Key is operator-free-form ; any Caddy placeholder
+//     accepted. Empty defaulted to {http.request.remote.host}
+//     at caddymgr emit time (single source of truth — keeps
+//     this validator focused on the inputs the operator
+//     supplied).
+//
+// Returns (nil, nil) for a nil input ; non-nil input is
+// validated and materialised. Errors are operator-friendly
+// (surfaced verbatim in the 400 body).
+func materialiseRateLimit(req *rateLimitReq) (*storage.RouteRateLimit, error) {
+	if req == nil {
+		return nil, nil
+	}
+	if req.Events < 1 {
+		return nil, fmt.Errorf("rateLimit.events must be >= 1 (got %d)", req.Events)
+	}
+	if strings.TrimSpace(req.Window) == "" {
+		return nil, fmt.Errorf("rateLimit.window is required (e.g. \"1m\", \"30s\")")
+	}
+	dur, err := time.ParseDuration(req.Window)
+	if err != nil {
+		return nil, fmt.Errorf("rateLimit.window invalid : %v (e.g. \"1m\", \"30s\", \"5m\")", err)
+	}
+	if dur <= 0 {
+		return nil, fmt.Errorf("rateLimit.window must be > 0 (got %s)", req.Window)
+	}
+	return &storage.RouteRateLimit{
+		Events: req.Events,
+		Window: req.Window,
+		Key:    req.Key,
+	}, nil
+}
+
 // Step W — country-block helpers.
 
 // materialiseCountryBlock converts a wire-side countryBlockReq to a
@@ -1176,6 +1222,15 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		excludeRules = normalised
 	}
+	// Step Q (2026-06-18) — RateLimit on POST : nil pointer
+	// = no rate limit (pre-Q byte-equivalent) ; non-nil
+	// supplied → validated by materialiseRateLimit which
+	// rejects with 400 on bad Events / Window.
+	rateLimit, validationErr := materialiseRateLimit(req.RateLimit)
+	if validationErr != nil {
+		writeError(w, http.StatusBadRequest, validationErr.Error())
+		return
+	}
 	newRoute := storage.Route{
 		Host:            req.Host,
 		Upstreams:       storeUpstreams,
@@ -1202,6 +1257,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		UploadStreamingMode: streamingMode,
 		WAFDisableCRS:       disableCRS,
 		WAFExcludeRules:     excludeRules,
+		RateLimit:           rateLimit,
 	}
 	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
 	// the corresponding sub-struct (storage trusts the API to
@@ -1603,6 +1659,39 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		excludeRules = normalised
 	}
+	// Step Q (2026-06-18) — RateLimit on PUT : nil-pointer
+	// preserves the previously stored RateLimit. Non-nil
+	// (including the operator sending explicit JSON null —
+	// distinguished via the optional pointer shape) replaces.
+	// Validation mirrors the POST path : Events >= 1, Window
+	// parses, etc.
+	//
+	// To clear a previously-set rate limit via PUT the
+	// operator sends `"rateLimit": null` — Go's encoding/json
+	// surfaces that as a missing key (since RateLimit is
+	// `omitempty`+`*rateLimitReq`). For an explicit clear
+	// the operator omits the field AND the existing
+	// previous.RateLimit is preserved... which doesn't
+	// clear. The pragmatic compromise : sending an empty
+	// object {"rateLimit": {}} would fail validation
+	// (Events < 1). To CLEAR, the operator unticks the
+	// frontend toggle which sends a separate flag (see
+	// frontend Phase Q.2 — clearRateLimit boolean).
+	//
+	// For wire callers that don't have a clearRateLimit
+	// channel : sending wafMode=off doesn't clear it
+	// either ; the only way today is to delete + recreate
+	// the route. V2 backlog : explicit-null PUT semantic
+	// (would need a separate sentinel field).
+	rateLimit := previous.RateLimit
+	if req.RateLimit != nil {
+		next, validationErr := materialiseRateLimit(req.RateLimit)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		rateLimit = next
+	}
 	newRoute := storage.Route{
 		ID:              id,
 		Host:            req.Host,
@@ -1630,6 +1719,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		UploadStreamingMode: streamingMode,
 		WAFDisableCRS:       disableCRS,
 		WAFExcludeRules:     excludeRules,
+		RateLimit:           rateLimit,
 	}
 	if newRoute.AuthMode != storage.RouteAuthBasic {
 		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}

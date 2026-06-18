@@ -267,6 +267,14 @@ export interface Route {
 	 */
 	wafExcludeRules: number[];
 	/**
+	 * Step Q (2026-06-18) — per-route rate-limit config.
+	 * null when no rate limit configured ; non-null
+	 * carries the operator-supplied (events, window, key)
+	 * tuple. Default null. The /routes form's toggle reads
+	 * the null as "off" and seeds defaults when flipped on.
+	 */
+	rateLimit: RouteRateLimit | null;
+	/**
 	 * Count of upstreams the HC tracker has observed as healthy.
 	 * Zero on routes without HC configured (the C13 gate doesn't
 	 * peek at tracker state). Used by the Routes table to render
@@ -533,6 +541,35 @@ export interface RouteRequest {
 	 * canonical sorted + deduped form.
 	 */
 	wafExcludeRules?: number[];
+	/**
+	 * Step Q (2026-06-18) — per-route rate limit on the wire.
+	 * Preserve-on-omit on PUT (omit → keep stored value),
+	 * full-replace when supplied. Server-side validation :
+	 * events >= 1, window parses via time.ParseDuration AND
+	 * is strictly positive ; key defaults to {http.request.
+	 * remote.host} at emit time when empty.
+	 */
+	rateLimit?: RouteRateLimit;
+}
+
+/**
+ * Step Q — per-route rate limit shape, shared by request +
+ * response sides. Wire convention :
+ *   - events : maximum requests per window (>= 1).
+ *   - window : Go-time-parseable duration string ("30s",
+ *     "1m", "5m", "1h"). Stored verbatim ; the caddymgr
+ *     emit parses via time.ParseDuration.
+ *   - key    : Caddy placeholder string used as the
+ *     rate-limit zone key. Default at emit time :
+ *     "{http.request.remote.host}" (raw socket peer IP,
+ *     no X-Forwarded-For trust). Operator can override
+ *     to "{http.request.header.X-Forwarded-For}" or
+ *     similar when behind a trusted reverse proxy.
+ */
+export interface RouteRateLimit {
+	events: number;
+	window: string;
+	key?: string;
 }
 
 /**
