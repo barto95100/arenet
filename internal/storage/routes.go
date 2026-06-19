@@ -450,8 +450,28 @@ type Route struct {
 	// deployment can override to {http.request.header.X-
 	// Forwarded-For} or similar.
 	RateLimit *RouteRateLimit `json:"rate_limit,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	// ErrorPageTemplateID (Step R) is the UUID of an
+	// ErrorPageTemplate this route applies for the supported
+	// 4xx/5xx status codes. Empty string means "fall back to the
+	// built-in Arenet default templates". A dangling reference
+	// (template deleted after the route was created) also falls
+	// back to the default — the caddymgr emit logs a warning
+	// when it can't resolve the ID.
+	ErrorPageTemplateID string `json:"error_page_template_id,omitempty"`
+	// ErrorPageOverrides (Step R) layers per-route HTML body
+	// overrides on top of the chosen template. Keys MUST be in
+	// SupportedErrorStatusCodes ; values are raw HTML expanded
+	// at Caddy serve time via the standard runtime placeholders
+	// ({http.error.status_code}, {http.request.uri}, ...).
+	//
+	// Resolution order at emit time :
+	//   1. Route.ErrorPageOverrides[code]  (per-route override)
+	//   2. Template.Pages[code]            (template the route opted into)
+	//   3. arenetDefaultErrorPages[code]   (built-in caddymgr default)
+	// The first non-empty hit wins.
+	ErrorPageOverrides map[int]string `json:"error_page_overrides,omitempty"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
 }
 
 // RouteRateLimit (Step Q, 2026-06-18) — per-route rate limit
@@ -719,6 +739,23 @@ func (r *Route) validate() error {
 	if r.HealthCheck.Enabled {
 		if err := r.HealthCheck.validate(); err != nil {
 			return err
+		}
+	}
+	// Step R: per-route ErrorPageOverrides must only target the
+	// supported status codes ; an out-of-set key would silently
+	// never render, which is operator-confusing. The template ref
+	// is NOT validated for existence here — storage stays a pure
+	// grid and the dangling-ref path falls back to the built-in
+	// default cleanly at caddymgr emit time. Body size cap mirrors
+	// the template-side validator (1 MiB) so a hand-crafted JSON
+	// bypassing the API layer can't bloat the bolt value past sane.
+	for code, body := range r.ErrorPageOverrides {
+		if !IsSupportedErrorStatusCode(code) {
+			return fmt.Errorf("route: error_page_overrides has unsupported status code %d (allowed: %v)",
+				code, SupportedErrorStatusCodes)
+		}
+		if len(body) > 1<<20 {
+			return fmt.Errorf("route: error_page_overrides[%d] exceeds 1 MiB (%d bytes)", code, len(body))
 		}
 	}
 	return nil

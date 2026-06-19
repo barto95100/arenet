@@ -1054,6 +1054,26 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 			WAFMode:  "off",
 		})
 	}
+	// Step R — fold ErrorPages coverage into THIS canonical
+	// fixture so caddy.Validate provisions the static_response
+	// handler + http.matchers.expression module against a real
+	// emitted shape. A dedicated TestBuildConfigJSON_LoadsCleanly_
+	// WithErrorPages was tried first and dropped : a second
+	// caddy.Validate call in this package poisons the alphabetically-
+	// next TestSyncRegistry_NotCalledOnReloadFailure via leftover
+	// admin-endpoint state (same precedent as the HTTPS upstream
+	// test, see manager_https_upstream_test.go:210).
+	routes = append(routes, storage.Route{
+		ID:        "r-errpages",
+		Host:      "errpages.example.com",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+		WAFMode:   "off",
+		ErrorPageOverrides: map[int]string{
+			403: "<h1>403 — branded</h1>",
+			502: `<!doctype html><h1>502 — branded</h1><p>id: {http.request.uuid}</p>`,
+		},
+	})
 	// The arenet_routemetrics Caddy module's Provision asserts
 	// metrics.GlobalRegistry() is non-nil (see internal/metrics).
 	// cmd/arenet/main.go installs the registry at boot via

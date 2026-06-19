@@ -1180,6 +1180,18 @@ type routeRequest struct {
 	// "field absent" using a sentinel bool — see the PUT
 	// path's rateLimitExplicit flag.
 	RateLimit *rateLimitReq `json:"rateLimit,omitempty"`
+	// ErrorPageTemplateID (Step R) is the UUID of an
+	// ErrorPageTemplate this route opts into. Empty string
+	// or absent field → built-in Arenet default applies.
+	// The reference is NOT validated for existence here ;
+	// caddymgr falls back to default cleanly when the ref
+	// dangles (operator sees a warning in journalctl).
+	ErrorPageTemplateID string `json:"errorPageTemplateId,omitempty"`
+	// ErrorPageOverrides (Step R) layers per-route HTML body
+	// overrides on top of the chosen template. Keys must lie
+	// in storage.SupportedErrorStatusCodes ; storage validation
+	// rejects out-of-set codes.
+	ErrorPageOverrides map[int]string `json:"errorPageOverrides,omitempty"`
 }
 
 // rateLimitReq is the wire-side shape of Route.RateLimit.
@@ -1411,6 +1423,14 @@ type routeResponse struct {
 	// as "off"). omitempty so pre-Q snapshot byte-equality
 	// holds for routes that don't use the feature.
 	RateLimit *rateLimitResp `json:"rateLimit,omitempty"`
+	// Step R — error-page wiring exposed to the frontend so
+	// the RouteForm can pre-populate the template dropdown
+	// + the per-code override sub-form on edit. Same
+	// camelCase JSON convention as RateLimit above ;
+	// omitempty preserves byte-identical responses for pre-R
+	// routes that haven't opted in.
+	ErrorPageTemplateID string         `json:"errorPageTemplateId,omitempty"`
+	ErrorPageOverrides  map[int]string `json:"errorPageOverrides,omitempty"`
 	// Critique 11 Pack A (2026-06-05) — derived per-route
 	// aggregate from the Stage B HC tracker. One of:
 	//   "healthy"   — HC enabled AND every upstream healthy in tracker
@@ -1506,6 +1526,11 @@ func toResponse(r storage.Route) routeResponse {
 		WAFDisableCRS:       r.WAFDisableCRS,
 		WAFExcludeRules:     emptyIntSliceIfNil(r.WAFExcludeRules),
 		RateLimit:           toRateLimitResp(r.RateLimit),
+		// Step R — error-page wiring pass-through (omitempty
+		// on the response struct so pre-R routes still emit
+		// byte-identical JSON).
+		ErrorPageTemplateID: r.ErrorPageTemplateID,
+		ErrorPageOverrides:  r.ErrorPageOverrides,
 		CreatedAt:           r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:           r.UpdatedAt.UTC().Format(timestampFormat),
 	}

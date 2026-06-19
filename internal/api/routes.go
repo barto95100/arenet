@@ -155,6 +155,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.tokenLookup(), h.devMode))
 			r.Get("/routes", h.listRoutes)
 			r.Get("/routes/{id}", h.getRoute)
+			// Step R — custom error pages read-side (viewer-
+			// accessible so the RouteForm dropdown can list
+			// templates without admin scope ; the preview pane
+			// in the /settings/error-pages editor also reads here).
+			r.Get("/error-templates", h.listErrorTemplates)
+			r.Get("/error-templates/{id}", h.getErrorTemplate)
+			r.Get("/error-templates/{id}/preview", h.previewErrorTemplate)
 			r.Get("/audit", h.listAudit)
 			// Step L L.2 — per-route metrics history.
 			// Read-only; viewer-accessible per AC #17. No
@@ -326,6 +333,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Post("/routes", h.createRoute)
 				r.Put("/routes/{id}", h.updateRoute)
 				r.Delete("/routes/{id}", h.deleteRoute)
+				// Step R — custom error pages CRUD (admin-only).
+				// GET endpoints are mounted in the viewer-accessible
+				// section above so the RouteForm dropdown can list
+				// templates without admin scope.
+				r.Post("/error-templates", h.createErrorTemplate)
+				r.Put("/error-templates/{id}", h.updateErrorTemplate)
+				r.Delete("/error-templates/{id}", h.deleteErrorTemplate)
 				// Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-
 				// triggered upstream probe (UI button). Per-URL
 				// invocation; frontend parallelises pool > 1 via
@@ -1271,6 +1285,11 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		WAFDisableCRS:       disableCRS,
 		WAFExcludeRules:     excludeRules,
 		RateLimit:           rateLimit,
+		// Step R — error-page wiring. Both fields are
+		// pass-through ; storage.validate() enforces the
+		// supported-code allowlist + 1 MiB body cap.
+		ErrorPageTemplateID: req.ErrorPageTemplateID,
+		ErrorPageOverrides:  req.ErrorPageOverrides,
 	}
 	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
 	// the corresponding sub-struct (storage trusts the API to
@@ -1733,6 +1752,11 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		WAFDisableCRS:       disableCRS,
 		WAFExcludeRules:     excludeRules,
 		RateLimit:           rateLimit,
+		// Step R — error-page wiring (update path mirrors
+		// create). Pass-through both fields ; storage.validate()
+		// rejects unsupported codes + oversized bodies.
+		ErrorPageTemplateID: req.ErrorPageTemplateID,
+		ErrorPageOverrides:  req.ErrorPageOverrides,
 	}
 	if newRoute.AuthMode != storage.RouteAuthBasic {
 		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}

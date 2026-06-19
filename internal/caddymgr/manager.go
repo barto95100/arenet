@@ -548,6 +548,21 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		return fmt.Errorf("list managed domains: %w", err)
 	}
 
+	// Step R — read every ErrorPageTemplate before each apply
+	// so dangling refs (template deleted between two reloads)
+	// resolve cleanly to nil in the lookup map and the
+	// caddymgr emit falls back to the built-in default. Empty
+	// bucket → empty map → operators on a fresh install get
+	// the built-in default for every route automatically.
+	errorTemplates, err := m.store.ListErrorPageTemplates(ctx)
+	if err != nil {
+		return fmt.Errorf("list error templates: %w", err)
+	}
+	errorTemplatesMap := make(map[string]storage.ErrorPageTemplate, len(errorTemplates))
+	for _, t := range errorTemplates {
+		errorTemplatesMap[t.ID] = t
+	}
+
 	cfgJSON, err := buildConfigJSON(routes, buildOpts{
 		DevMode:                   m.devMode,
 		ACMEEmail:                 m.acmeEmail,
@@ -556,6 +571,7 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		CrowdSec:                  m.crowdsec,
 		ManagedDomains:            managedDomains,
 		NormalTrafficExcludePaths: m.normalTrafficExcludePaths,
+		ErrorTemplates:            errorTemplatesMap,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -793,8 +809,20 @@ type httpApp struct {
 type httpServer struct {
 	Listen          []string              `json:"listen"`
 	Routes          []httpRoute           `json:"routes,omitempty"`
+	Errors          *httpErrors           `json:"errors,omitempty"`
 	AutomaticHTTPS  *automaticHTTPSConfig `json:"automatic_https,omitempty"`
 	TLSConnPolicies []tlsConnectionPolicy `json:"tls_connection_policies,omitempty"`
+}
+
+// Step R — mirror of caddy modules/caddyhttp/server.go:745
+// HTTPErrorConfig { Routes RouteList }. The "errors" subroute
+// runs whenever a primary-route handler returns a HandlerError
+// (server.go:421-423). Caddy does NOT auto-dispatch by status
+// code — each route under Errors.Routes carries its own matcher
+// (we use the CEL `expression` matcher on
+// {http.error.status_code}).
+type httpErrors struct {
+	Routes []httpRoute `json:"routes,omitempty"`
 }
 
 type automaticHTTPSConfig struct {
@@ -835,6 +863,15 @@ type matcherSet struct {
 	// Omitempty so the legacy host-only routes stay byte-
 	// identical in the emitted JSON.
 	Path []string `json:"path,omitempty"`
+	// Step R — CEL expression matcher. Single string
+	// evaluated as a CEL expression with access to all
+	// request/error placeholders (verified caddy v2.11.3
+	// modules/caddyhttp/celmatcher.go:82, module ID
+	// http.matchers.expression). Used by the per-server
+	// errors block to dispatch by {http.error.status_code}.
+	// omitempty preserves byte-identical JSON for the
+	// pre-R routes.
+	Expression string `json:"expression,omitempty"`
 }
 
 // wrapInSubroute (Step K.4 parity fix) packages a flat handler
@@ -932,6 +969,17 @@ type buildOpts struct {
 	// list. Operator changes between reloads take effect
 	// immediately (next applyLocked re-renders the JSON).
 	NormalTrafficExcludePaths []string
+
+	// ErrorTemplates (Step R) is the map of operator-defined
+	// ErrorPageTemplate rows keyed by template ID, read by
+	// the manager from BoltDB before each applyLocked.
+	// Routes opt into a template via
+	// Route.ErrorPageTemplateID ; per-route overrides layer
+	// on top via Route.ErrorPageOverrides. A nil map (no
+	// templates configured) is the common case — the
+	// caddymgr emit falls back to the built-in Arenet
+	// default for every route.
+	ErrorTemplates map[string]storage.ErrorPageTemplate
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -1523,6 +1571,32 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	// active and consumes the tls.automation.policies we emit
 	// (public hosts → ACME, private hosts → internal CA via the
 	// catch-all policy added in Finding #6).
+	// Step R — error-page routes per server. Routes WITHOUT TLS
+	// land on arenet_http, routes WITH TLS land on arenet_https.
+	// The split mirrors how primary routes are dispatched. A nil
+	// result means no route on that server has any error config
+	// — we omit the Errors field entirely to keep the JSON tight
+	// for the no-feature case (byte-identical to pre-R for routes
+	// that don't touch error pages, since the built-in default
+	// only renders when the operator opts in).
+	//
+	// Actually : every route gets the Arenet built-in default
+	// applied automatically — operators always see a branded
+	// error page even with zero config. To preserve byte-identical
+	// JSON for pre-R routes during the rollout window, the emit
+	// only fires if the operator has touched ANY error config
+	// (template ref OR overrides on ANY route). Once any route
+	// opts in, every route on the same server gets the default
+	// (so a single template-using route doesn't leave its
+	// siblings with Caddy's bare status response).
+	emitErrors := false
+	for _, r := range routes {
+		if r.ErrorPageTemplateID != "" || len(r.ErrorPageOverrides) > 0 {
+			emitErrors = true
+			break
+		}
+	}
+
 	servers := map[string]httpServer{
 		"arenet_http": {
 			Listen: []string{httpListen},
@@ -1532,10 +1606,17 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			Routes: httpRoutes,
 		},
 	}
+	if emitErrors {
+		if errRoutes := buildErrorRoutesForServer(routes, opts.ErrorTemplates, false, nil); len(errRoutes) > 0 {
+			srv := servers["arenet_http"]
+			srv.Errors = &httpErrors{Routes: errRoutes}
+			servers["arenet_http"] = srv
+		}
+	}
 
 	if len(httpsRoutes) > 0 {
 		httpsRoutes = append(httpsRoutes, catchAllRoute())
-		servers["arenet_https"] = httpServer{
+		httpsServer := httpServer{
 			Listen: []string{httpsListen},
 			AutomaticHTTPS: &automaticHTTPSConfig{
 				DisableRedirects: true,
@@ -1551,6 +1632,12 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			TLSConnPolicies: []tlsConnectionPolicy{{}},
 			Routes:          httpsRoutes,
 		}
+		if emitErrors {
+			if errRoutes := buildErrorRoutesForServer(routes, opts.ErrorTemplates, true, nil); len(errRoutes) > 0 {
+				httpsServer.Errors = &httpErrors{Routes: errRoutes}
+			}
+		}
+		servers["arenet_https"] = httpsServer
 	}
 
 	cfg := caddyConfig{

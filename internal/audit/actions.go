@@ -126,6 +126,14 @@ const (
 	ActionAlertRuleUpdated = "alert_rule_updated"
 	ActionAlertRuleDeleted = "alert_rule_deleted"
 
+	// Step R — operator-defined HTML error page templates (3).
+	// Body content is operator-typed HTML, no secrets ; full
+	// diff in BeforeJSON / AfterJSON. Same admin-only gating
+	// as the alert rules.
+	ActionErrorTemplateCreated = "error_template_created"
+	ActionErrorTemplateUpdated = "error_template_updated"
+	ActionErrorTemplateDeleted = "error_template_deleted"
+
 	// Step K.3 — backup / restore (3). The restore is significantly
 	// more destructive than the export; both must be audited and the
 	// failure path emits its own dedicated event so a rejected
@@ -245,6 +253,9 @@ var allActions = []string{
 	ActionAlertRuleCreated,
 	ActionAlertRuleUpdated,
 	ActionAlertRuleDeleted,
+	ActionErrorTemplateCreated,
+	ActionErrorTemplateUpdated,
+	ActionErrorTemplateDeleted,
 	ActionConfigExported,
 	ActionConfigRestored,
 	ActionConfigRestoredRejected,

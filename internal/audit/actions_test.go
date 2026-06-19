@@ -25,9 +25,9 @@ import "testing"
 // actions without updating the spec / decisions doc is a process
 // violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 49
+	const wantCount = 52
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3 + R=3)", got, wantCount)
 	}
 }
 
@@ -165,6 +165,14 @@ func TestAllActions_ExactSet(t *testing.T) {
 		"alert_rule_created": true,
 		"alert_rule_updated": true,
 		"alert_rule_deleted": true,
+		// Step R (+3) — operator-defined HTML error page
+		// templates. Body content is operator-typed HTML
+		// (not secret-bearing) so audit before/after carries
+		// the full diff. Wired by internal/api/error_templates.go
+		// CRUD handlers.
+		"error_template_created": true,
+		"error_template_updated": true,
+		"error_template_deleted": true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {

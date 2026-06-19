@@ -83,6 +83,14 @@ const (
 	// AL.3b CRUD layer wires the operator-facing
 	// endpoints. See alert_rule.go.
 	bucketAlertRules = "alert_rules"
+	// Step R — operator-defined HTML error pages keyed by
+	// status code. One row per ErrorPageTemplate, keyed by
+	// Template.ID (UUID v4). Routes reference a template
+	// via Route.ErrorPageTemplateID ; if the reference is
+	// dangling (template deleted) the caddymgr emit falls
+	// back to the built-in arenetDefaultErrorPages map.
+	// See error_template.go.
+	bucketErrorTemplates = "error_templates"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -130,6 +138,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketCrowdSecConfig),       // Step CS.1
 			[]byte(bucketAlertingChannels),     // Step AL.1.a
 			[]byte(bucketAlertRules),           // Step AL.2.a
+			[]byte(bucketErrorTemplates),       // Step R
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)
