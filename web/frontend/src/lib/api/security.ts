@@ -561,3 +561,29 @@ export function fetchGeoEventsReplay(limit?: number): Promise<GeoEventsResponse>
 	const suffix = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : '';
 	return request<GeoEventsResponse>('GET', `/observability/geo-events${suffix}`);
 }
+
+/**
+ * Phase Z.5.3 — batch GeoIP lookup.
+ *
+ * Posts a list of IPs and receives a map of ip → country
+ * code (ISO 3166-1 alpha-2, "LAN" for RFC1918, "" for
+ * MMDB miss / degraded). Used by /logs to enrich the
+ * SOURCE IP column with a "· FR" suffix without one
+ * round-trip per row.
+ *
+ * Cap : 256 IPs per request (server-enforced ; the
+ * frontend de-duplicates before sending).
+ *
+ * AC #13 degraded path : the response carries
+ * `degraded: true` when the backend has no MMDB ; every
+ * `results` entry is "" in that case so the frontend
+ * keeps rendering raw IPs without the country suffix.
+ */
+export interface GeoLookupBatchResponse {
+	results: Record<string, string>;
+	degraded?: boolean;
+}
+
+export function geoLookupBatch(ips: string[]): Promise<GeoLookupBatchResponse> {
+	return request<GeoLookupBatchResponse>('POST', '/geo/lookup-batch', { ips });
+}

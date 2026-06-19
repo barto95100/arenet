@@ -36,7 +36,11 @@ const { toastMock, securityMock, clientMock } = vi.hoisted(() => ({
 		// W.5 — 5th source (country-block events).
 		fetchCountryBlockEvents: vi.fn(),
 		// Z.2 — 6th source (rate-limit 429 events).
-		fetchRateLimitEvents: vi.fn()
+		fetchRateLimitEvents: vi.fn(),
+		// Z.5.3 — batch GeoIP lookup. Default: degraded
+		// shape (every IP returns empty country) so tests
+		// don't need to opt-in to enrichment.
+		geoLookupBatch: vi.fn()
 	},
 	// W.7 follow-up — routes API for routeId → host
 	// resolution. Default returns an empty list so rows
@@ -72,6 +76,11 @@ beforeEach(() => {
 	securityMock.fetchCertEvents.mockReset();
 	securityMock.fetchCountryBlockEvents.mockReset();
 	securityMock.fetchRateLimitEvents.mockReset();
+	securityMock.geoLookupBatch.mockReset();
+	securityMock.geoLookupBatch.mockResolvedValue({
+		results: {},
+		degraded: true
+	});
 
 	// Defaults: every source returns empty. Individual tests
 	// override what they need.
@@ -749,7 +758,12 @@ describe('/logs — W.5 country-block source (W.7 follow-up: humanized + host-re
 		// level (BLOCK) consistently across every source. The
 		// SOURCE column carries the "COUNTRY" badge.
 		expect(screen.getByText('BLOCK')).toBeInTheDocument();
-		expect(screen.getByText('COUNTRY')).toBeInTheDocument();
+		// Phase Z.5.4 — "COUNTRY" now also appears in the
+		// histogram legend below the table, so scope the
+		// match to the .log-src pill on the row.
+		const matches = screen.getAllByText('COUNTRY');
+		const rowBadge = matches.find((el) => el.classList.contains('log-src'));
+		expect(rowBadge).toBeDefined();
 		// Status code from the persisted row, not hardcoded.
 		expect(screen.getByText('451')).toBeInTheDocument();
 		// Humanized French detail string (W.7 follow-up).
@@ -758,8 +772,13 @@ describe('/logs — W.5 country-block source (W.7 follow-up: humanized + host-re
 		expect(
 			screen.queryByText(/deny-deny-match/)
 		).not.toBeInTheDocument();
-		// Source IP from the persisted row.
-		expect(screen.getByText('203.0.113.5')).toBeInTheDocument();
+		// Phase Z.5.3 — SOURCE IP is now octet-masked. Both
+		// the masked label and the full-IP title tooltip are
+		// pinned : the visible label keeps shoulder-surfing
+		// hygiene, the title preserves forensic copy-paste.
+		expect(screen.getByText('203.0.113.x')).toBeInTheDocument();
+		const ipCell = screen.getByText('203.0.113.x');
+		expect(ipCell).toHaveAttribute('title', '203.0.113.5');
 	});
 });
 
@@ -927,6 +946,23 @@ describe('/logs — W.7 follow-up: humanize reason + host resolution', () => {
 //     method-tag prefix in the REQUEST column (the source
 //     badge replaces it cleanly)
 describe('/logs — Phase Z.4 SOURCE column rendering', () => {
+	// Phase Z.5.4 — the histogram legend below the table
+	// renders the same source labels (WAF / RATE-LIMIT /
+	// ...) so findByText collides. These tests filter
+	// matches to the SOURCE pill in the activity table by
+	// requiring the .log-src CSS class hook.
+	async function findRowBadge(label: string): Promise<HTMLElement> {
+		// Wait for at least one match to appear, then narrow
+		// to the .log-src pill.
+		await screen.findAllByText(label);
+		const matches = screen.getAllByText(label);
+		const badge = matches.find((el) => el.classList.contains('log-src'));
+		if (!badge) {
+			throw new Error(`no .log-src badge with text ${JSON.stringify(label)} found`);
+		}
+		return badge;
+	}
+
 	it('renders a SOURCE column header', async () => {
 		render(Page);
 		await screen.findByText('Timestamp');
@@ -950,7 +986,7 @@ describe('/logs — Phase Z.4 SOURCE column rendering', () => {
 		});
 		render(Page);
 		// Badge label.
-		const badge = await screen.findByText('RATE-LIMIT');
+		const badge = await findRowBadge('RATE-LIMIT');
 		expect(badge).toBeInTheDocument();
 		expect(badge).toHaveClass('log-src');
 		expect(badge).toHaveClass('rate-limit');
@@ -981,7 +1017,7 @@ describe('/logs — Phase Z.4 SOURCE column rendering', () => {
 			]
 		});
 		render(Page);
-		const badge = await screen.findByText('WAF');
+		const badge = await findRowBadge('WAF');
 		expect(badge).toHaveClass('log-src');
 		expect(badge).toHaveClass('waf');
 	});
@@ -1001,7 +1037,7 @@ describe('/logs — Phase Z.4 SOURCE column rendering', () => {
 			]
 		});
 		render(Page);
-		const badge = await screen.findByText('THROTTLE');
+		const badge = await findRowBadge('THROTTLE');
 		expect(badge).toHaveClass('log-src');
 		expect(badge).toHaveClass('throttle');
 	});
@@ -1024,7 +1060,7 @@ describe('/logs — Phase Z.4 SOURCE column rendering', () => {
 			hasMore: false
 		});
 		render(Page);
-		const badge = await screen.findByText('COUNTRY');
+		const badge = await findRowBadge('COUNTRY');
 		expect(badge).toHaveClass('log-src');
 		expect(badge).toHaveClass('country-block');
 		// Phase Z.4 cleanup — the level pill renders BLOCK
@@ -1051,7 +1087,7 @@ describe('/logs — Phase Z.4 SOURCE column rendering', () => {
 			hasMore: false
 		});
 		render(Page);
-		const badge = await screen.findByText('CERT');
+		const badge = await findRowBadge('CERT');
 		expect(badge).toHaveClass('log-src');
 		expect(badge).toHaveClass('cert');
 	});
@@ -1070,8 +1106,378 @@ describe('/logs — Phase Z.4 SOURCE column rendering', () => {
 			]
 		});
 		render(Page);
-		const badge = await screen.findByText('AUTH');
+		const badge = await findRowBadge('AUTH');
 		expect(badge).toHaveClass('log-src');
 		expect(badge).toHaveClass('auth');
+	});
+});
+
+// --- Phase Z.5.2 : route + HTTP code filters + educational placeholder ----
+
+describe('/logs — Phase Z.5.2 filters', () => {
+	it('renders the educational search placeholder (V2 syntax foreshadowed)', async () => {
+		render(Page);
+		const input = await screen.findByLabelText('Filter events');
+		// Pre-Z.5.2 placeholder was "Filter by path, IP, detail…"
+		// Z.5.2 surfaces the literal-substring V1 examples
+		// (429 / auth / 185.142.*) and parenthetically hints
+		// at the V2 structured syntax.
+		expect(input).toHaveAttribute(
+			'placeholder',
+			expect.stringContaining('429')
+		);
+		expect(input).toHaveAttribute(
+			'placeholder',
+			expect.stringContaining('V2')
+		);
+	});
+
+	it('renders a route dropdown populated from listRoutes()', async () => {
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'route-a', host: 'api.example.test' },
+			{ id: 'route-b', host: 'admin.example.test' }
+		]);
+		render(Page);
+		const select = await screen.findByLabelText('Filter by route');
+		// Both routes present + the "Toutes routes" default.
+		expect(select).toHaveTextContent('Toutes routes');
+		expect(select).toHaveTextContent('api.example.test');
+		expect(select).toHaveTextContent('admin.example.test');
+	});
+
+	it('routes dropdown options are sorted by host', async () => {
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'r-z', host: 'zeta.example.test' },
+			{ id: 'r-a', host: 'alpha.example.test' },
+			{ id: 'r-m', host: 'mu.example.test' }
+		]);
+		render(Page);
+		const select = (await screen.findByLabelText(
+			'Filter by route'
+		)) as HTMLSelectElement;
+		// The first option after "Toutes routes" should be
+		// alpha (lexicographic ascending). One Phase Z.5.2
+		// invariant.
+		await screen.findByText('alpha.example.test');
+		const optionHosts = Array.from(select.options)
+			.map((o) => o.textContent ?? '')
+			.filter((t) => t !== 'Toutes routes');
+		expect(optionHosts).toEqual([
+			'alpha.example.test',
+			'mu.example.test',
+			'zeta.example.test'
+		]);
+	});
+
+	it('selecting a route filter hides rows from other routes', async () => {
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'route-keep', host: 'keep.test' },
+			{ id: 'route-drop', host: 'drop.test' }
+		]);
+		// Seed two WAF events on different routes.
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 1,
+					ts: isoOffset(0),
+					routeId: 'route-keep',
+					action: 'BLOCK',
+					statusCode: 403,
+					ruleId: '942100',
+					category: 'SQLi',
+					message: 'kept',
+					requestMethod: 'POST',
+					requestPath: '/keep',
+					srcIp: '1.1.1.1'
+				},
+				{
+					id: 2,
+					ts: isoOffset(-60),
+					routeId: 'route-drop',
+					action: 'BLOCK',
+					statusCode: 403,
+					ruleId: '942100',
+					category: 'SQLi',
+					message: 'dropped',
+					requestMethod: 'POST',
+					requestPath: '/drop',
+					srcIp: '2.2.2.2'
+				}
+			]
+		});
+		render(Page);
+		// Both rows visible before filter.
+		await screen.findByText('/keep');
+		expect(screen.getByText('/drop')).toBeInTheDocument();
+		// Select route-keep ; only the keep row remains.
+		const user = userEvent.setup();
+		await user.selectOptions(
+			screen.getByLabelText('Filter by route'),
+			'route-keep'
+		);
+		expect(screen.getByText('/keep')).toBeInTheDocument();
+		expect(screen.queryByText('/drop')).not.toBeInTheDocument();
+	});
+
+	it('renders an HTTP code dropdown with operator-triage order (5xx first)', async () => {
+		render(Page);
+		const select = (await screen.findByLabelText(
+			'Filter by HTTP code'
+		)) as HTMLSelectElement;
+		const values = Array.from(select.options).map((o) => o.value);
+		// First option is the default ("").
+		expect(values[0]).toBe('');
+		// Then 5xx codes (500/502/503/504) come before 4xx.
+		const fiveHundredIdx = values.indexOf('500');
+		const fourXxIdx = values.indexOf('403');
+		expect(fiveHundredIdx).toBeLessThan(fourXxIdx);
+		// Then 4xx-attack codes (403/429/451) come before 2xx.
+		const twoHundredIdx = values.indexOf('200');
+		expect(fourXxIdx).toBeLessThan(twoHundredIdx);
+	});
+
+	it('selecting code=429 keeps only rate-limit rows', async () => {
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 11,
+					ts: isoOffset(0),
+					routeId: 'r',
+					action: 'BLOCK',
+					statusCode: 403,
+					ruleId: '942100',
+					category: 'SQLi',
+					message: 'waf hit',
+					requestMethod: 'POST',
+					requestPath: '/waf-path',
+					srcIp: '1.1.1.1'
+				}
+			]
+		});
+		securityMock.fetchRateLimitEvents.mockResolvedValue({
+			events: [
+				{
+					id: 22,
+					ts: isoOffset(-30),
+					routeId: 'r',
+					zone: 'route-r',
+					remoteIp: '2.2.2.2',
+					waitMs: 1500
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		render(Page);
+		// Both rows visible before filter.
+		await screen.findByText('/waf-path');
+		expect(screen.getByText(/wait 1500ms/)).toBeInTheDocument();
+		// Select code 429 ; WAF row disappears.
+		const user = userEvent.setup();
+		await user.selectOptions(
+			screen.getByLabelText('Filter by HTTP code'),
+			'429'
+		);
+		expect(screen.queryByText('/waf-path')).not.toBeInTheDocument();
+		expect(screen.getByText(/wait 1500ms/)).toBeInTheDocument();
+	});
+
+	it('search input now indexes source + method + code (Z.5.2 wider hay)', async () => {
+		// Pre-Z.5.2 typing "RATE-LIMIT" or "429" in the
+		// search did not match because the haystack only
+		// covered path/IP/detail. Z.5.2 extends hay to
+		// source/method/code so literal-substring lookups
+		// work as the educational placeholder advertises.
+		securityMock.fetchRateLimitEvents.mockResolvedValue({
+			events: [
+				{
+					id: 1,
+					ts: isoOffset(0),
+					routeId: 'r',
+					zone: 'route-r',
+					remoteIp: '198.51.100.7',
+					waitMs: 1500
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		render(Page);
+		await screen.findByText(/wait 1500ms/);
+		const user = userEvent.setup();
+		// Type 429 → row remains (matches the code field).
+		await user.type(screen.getByLabelText('Filter events'), '429');
+		expect(screen.getByText(/wait 1500ms/)).toBeInTheDocument();
+	});
+
+	it('route filter + code filter combine (AND semantics)', async () => {
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'r-a', host: 'a.test' },
+			{ id: 'r-b', host: 'b.test' }
+		]);
+		securityMock.fetchRateLimitEvents.mockResolvedValue({
+			events: [
+				{
+					id: 1,
+					ts: isoOffset(0),
+					routeId: 'r-a',
+					zone: 'route-r-a',
+					remoteIp: '1.1.1.1',
+					waitMs: 100
+				},
+				{
+					id: 2,
+					ts: isoOffset(-30),
+					routeId: 'r-b',
+					zone: 'route-r-b',
+					remoteIp: '2.2.2.2',
+					waitMs: 200
+				}
+			],
+			total: 2,
+			hasMore: false
+		});
+		render(Page);
+		await screen.findByText(/wait 100ms/);
+		expect(screen.getByText(/wait 200ms/)).toBeInTheDocument();
+		const user = userEvent.setup();
+		// Filter to route r-a + code 429 → only the r-a row.
+		await user.selectOptions(screen.getByLabelText('Filter by route'), 'r-a');
+		await user.selectOptions(
+			screen.getByLabelText('Filter by HTTP code'),
+			'429'
+		);
+		expect(screen.getByText(/wait 100ms/)).toBeInTheDocument();
+		expect(screen.queryByText(/wait 200ms/)).not.toBeInTheDocument();
+	});
+});
+
+// --- Phase Z.5.3 : SOURCE IP enrichment with country code -----------------
+
+describe('/logs — Phase Z.5.3 SOURCE IP country enrichment', () => {
+	it('octet-masks the IP and shows raw IP in the title tooltip', async () => {
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 1,
+					ts: isoOffset(0),
+					routeId: 'r',
+					action: 'BLOCK',
+					statusCode: 403,
+					ruleId: '942100',
+					category: 'SQLi',
+					message: 'm',
+					requestMethod: 'POST',
+					requestPath: '/p',
+					srcIp: '82.65.1.2'
+				}
+			]
+		});
+		render(Page);
+		const cell = await screen.findByText('82.65.1.x');
+		expect(cell).toHaveAttribute('title', '82.65.1.2');
+	});
+
+	it('appends " · <country>" once geoLookupBatch resolves', async () => {
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 2,
+					ts: isoOffset(0),
+					routeId: 'r',
+					action: 'BLOCK',
+					statusCode: 403,
+					ruleId: '942100',
+					category: 'SQLi',
+					message: 'm',
+					requestMethod: 'POST',
+					requestPath: '/p',
+					srcIp: '203.0.113.7'
+				}
+			]
+		});
+		securityMock.geoLookupBatch.mockResolvedValue({
+			results: { '203.0.113.7': 'US' }
+		});
+		render(Page);
+		await screen.findByText(/203\.0\.113\.x · US/);
+	});
+
+	it('renders "· LAN" for RFC1918 sentinel', async () => {
+		securityMock.fetchRateLimitEvents.mockResolvedValue({
+			events: [
+				{
+					id: 3,
+					ts: isoOffset(0),
+					routeId: 'r',
+					zone: 'route-r',
+					remoteIp: '192.168.1.5',
+					waitMs: 100
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		securityMock.geoLookupBatch.mockResolvedValue({
+			results: { '192.168.1.5': 'LAN' }
+		});
+		render(Page);
+		await screen.findByText(/192\.168\.1\.x · LAN/);
+	});
+
+	it('renders "· ?" when the backend answered with empty country (MMDB miss)', async () => {
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 4,
+					ts: isoOffset(0),
+					routeId: 'r',
+					action: 'BLOCK',
+					statusCode: 403,
+					ruleId: '942100',
+					category: 'SQLi',
+					message: 'm',
+					requestMethod: 'POST',
+					requestPath: '/p',
+					srcIp: '203.0.113.99'
+				}
+			]
+		});
+		securityMock.geoLookupBatch.mockResolvedValue({
+			results: { '203.0.113.99': '' }
+		});
+		render(Page);
+		await screen.findByText(/203\.0\.113\.x · \?/);
+	});
+
+	it('renders the masked IP alone when lookup throws (silent degraded)', async () => {
+		// Backend wired but the call fails — operator should
+		// still see the activity log, just without the country
+		// suffix. No toast, no error state.
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 5,
+					ts: isoOffset(0),
+					routeId: 'r',
+					action: 'BLOCK',
+					statusCode: 403,
+					ruleId: '942100',
+					category: 'SQLi',
+					message: 'm',
+					requestMethod: 'POST',
+					requestPath: '/p',
+					srcIp: '198.51.100.10'
+				}
+			]
+		});
+		securityMock.geoLookupBatch.mockRejectedValue(new Error('boom'));
+		render(Page);
+		await screen.findByText('198.51.100.x');
+		// No "· ?" suffix because countryMap never received a
+		// resolution — the row renders raw masked.
+		expect(screen.queryByText(/198\.51\.100\.x · \?/)).not.toBeInTheDocument();
+		// And no toast (silent degraded).
+		expect(toastMock.pushToast).not.toHaveBeenCalled();
 	});
 });

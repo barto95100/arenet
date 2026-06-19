@@ -46,7 +46,8 @@
 		fetchAuthFailures,
 		fetchCertEvents,
 		fetchCountryBlockEvents,
-		fetchRateLimitEvents
+		fetchRateLimitEvents,
+		geoLookupBatch
 	} from '$lib/api/security';
 	import { ApiError } from '$lib/api/types';
 	import type {
@@ -58,6 +59,10 @@
 		WafEvent
 	} from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
+	import { sourceMeta } from '$lib/utils/sourceMeta';
+	import { levelMeta } from '$lib/utils/levelMeta';
+	import { formatSourceIP } from '$lib/utils/ipClass';
+	import ActivityHistogram from '$lib/components/ActivityHistogram.svelte';
 
 	// W.bugfix Fix #1 — the WAF event source now distinguishes
 	// 'block' (request short-circuited by the WAF, status 403)
@@ -109,6 +114,32 @@
 	let rows = $state<UnifiedRow[]>([]);
 	let search = $state('');
 	let levelFilter = $state<'all' | LevelTag>('all');
+	// Phase Z.5.2 — route + HTTP status code filters. Both
+	// single-select V1 ('' = no filter). Multi-select is V2
+	// backlog (needs a Dropdown.svelte primitive that doesn't
+	// exist in the codebase yet).
+	let routeFilter = $state('');
+	let codeFilter = $state('');
+	// Phase Z.5.2 — static HTTP status code enum surfaced as
+	// the codeFilter dropdown options. Order is operator-
+	// triage descending (5xx errors first, 4xx attacks
+	// second, 2xx healthy last) so the most-investigated
+	// codes are nearest the dropdown opener.
+	const httpCodeOptions = [
+		{ value: '500', label: '500 · Internal Server Error' },
+		{ value: '502', label: '502 · Bad Gateway' },
+		{ value: '503', label: '503 · Service Unavailable' },
+		{ value: '504', label: '504 · Gateway Timeout' },
+		{ value: '403', label: '403 · Forbidden (WAF / auth)' },
+		{ value: '429', label: '429 · Too Many Requests (rate limit)' },
+		{ value: '451', label: '451 · Unavailable for Legal Reasons (country block)' },
+		{ value: '404', label: '404 · Not Found' },
+		{ value: '401', label: '401 · Unauthorized' },
+		{ value: '301', label: '301 · Moved Permanently' },
+		{ value: '304', label: '304 · Not Modified' },
+		{ value: '204', label: '204 · No Content' },
+		{ value: '200', label: '200 · OK' }
+	];
 	let paused = $state(false);
 	let pollId: ReturnType<typeof setInterval> | null = null;
 
@@ -120,6 +151,19 @@
 	// block time and page load fall back to the truncated
 	// UUID in <RouteHost> — defensive, never blank.
 	let routeMap = $state(new Map<string, string>());
+
+	// Phase Z.5.3 — IP → country code cache, populated by
+	// the lookup-batch endpoint after each event load. A
+	// missing key means "not yet resolved" ; an empty
+	// string means "backend answered, no MMDB record" ;
+	// "LAN" means RFC1918 sentinel. formatSourceIP folds
+	// the three cases into the SOURCE IP column label.
+	//
+	// Persistence : cumulative across polls so a known IP
+	// keeps its country suffix when a new event arrives,
+	// without re-hitting the backend. Bounded implicitly
+	// by the row cap (200) + retention horizons.
+	let countryMap = $state(new Map<string, string>());
 
 	async function refreshRouteMap(): Promise<void> {
 		try {
@@ -138,43 +182,80 @@
 		}
 	}
 
+	// Phase Z.5.4 — per-source colors for the activity
+	// histogram below the table. The SOURCE badge column is
+	// neutral grey (Z.5.1 decision) ; the per-source color
+	// taxonomy lives here, on the chart, where it carries
+	// the temporal-distribution story for each signal kind.
+	// Stack order is descending by how often the operator
+	// scans for that source (WAF first, then HTTP rate-
+	// limit, then auth-throttle, then country block, then
+	// auth, then cert).
+	const histogramSeries = [
+		{ key: 'waf', label: 'WAF', color: 'var(--status-down)' },
+		{ key: 'rate_limit', label: 'RATE-LIMIT', color: 'var(--status-warn)' },
+		{ key: 'throttle', label: 'THROTTLE', color: 'oklch(70% 0.18 300)' },
+		{ key: 'country_block', label: 'COUNTRY', color: 'var(--status-meta)' },
+		{ key: 'auth', label: 'AUTH', color: 'var(--accent-cyan)' },
+		{ key: 'cert', label: 'CERT', color: 'var(--status-up)' }
+	];
+
+	// Phase Z.5.2 — flatten routeMap to a sorted [id, host]
+	// array for the dropdown <option> emission. Sorted by
+	// host (operator scans alphabetically) ; routes deleted
+	// between page load and refresh drop out cleanly on the
+	// next routeMap refresh.
+	const routeOptions = $derived(
+		Array.from(routeMap.entries())
+			.map(([id, host]) => ({ id, host }))
+			.sort((a, b) => a.host.localeCompare(b.host))
+	);
+
 	const filteredRows = $derived(
 		rows.filter((r) => {
 			if (levelFilter !== 'all' && r.level !== levelFilter) return false;
+			// Phase Z.5.2 — route filter applies to per-route
+			// sources only (waf, country_block, rate_limit).
+			// Non-per-route sources (throttle, auth, cert)
+			// have no routeId — selecting a route filter
+			// hides them, which is the operator-intended
+			// behavior when drilling down on one hostname.
+			if (routeFilter && r.routeId !== routeFilter) return false;
+			// Phase Z.5.2 — exact-match HTTP code filter. The
+			// code column carries the string form ("429",
+			// "403", ...) on every source ; cert rows carry
+			// the cert level code ("INFO" / "WARN" / etc.)
+			// which won't match a numeric filter and so will
+			// be hidden when the operator picks a numeric
+			// code — intended.
+			if (codeFilter && r.code !== codeFilter) return false;
 			if (search.trim()) {
 				const q = search.trim().toLowerCase();
-				const hay = `${r.path} ${r.srcIp} ${r.detail}`.toLowerCase();
+				// Phase Z.5.2 — search now covers source,
+				// method, code too. Pre-Z.5.2 only path/IP/
+				// detail were indexed, which made the
+				// educational placeholder ("ex: status:5xx
+				// route:/auth/* ip:185.142.*") misleading
+				// because typing "5xx" did not match the
+				// row's code field. V1 keeps plain substring
+				// match across more fields ; the structured
+				// `status:` / `route:` / `ip:` syntax is
+				// V2 backlog.
+				const hay = `${r.source} ${r.method} ${r.code} ${r.path} ${r.srcIp} ${r.detail}`.toLowerCase();
 				if (!hay.includes(q)) return false;
 			}
 			return true;
 		})
 	);
 
-	// Phase Z.4 polish — SOURCE badge. Returns the visible
-	// label + a CSS class slug so the table column renders a
-	// consistent colored pill per source. The slug maps 1-to-1
-	// with .log-src.* style rules below. Centralised here so
-	// future sources (e.g. a Step AA OIDC error stream) land
-	// by adding one row + one CSS line, not by sprinkling
-	// inline switches through the template.
-	function sourceMeta(source: string): { label: string; slug: string } {
-		switch (source) {
-			case 'waf':
-				return { label: 'WAF', slug: 'waf' };
-			case 'rate_limit':
-				return { label: 'RATE-LIMIT', slug: 'rate-limit' };
-			case 'throttle':
-				return { label: 'THROTTLE', slug: 'throttle' };
-			case 'auth':
-				return { label: 'AUTH', slug: 'auth' };
-			case 'country_block':
-				return { label: 'COUNTRY', slug: 'country-block' };
-			case 'cert':
-				return { label: 'CERT', slug: 'cert' };
-			default:
-				return { label: source.toUpperCase(), slug: 'unknown' };
-		}
-	}
+	// Phase Z.5.4 — feed the histogram with the SAME
+	// filteredRows the table consumes so the chart reflects
+	// every dropdown / search filter the operator applies.
+	// {ts, source} projection — the histogram doesn't need
+	// the rest of the row shape.
+	const histogramCells = $derived(
+		filteredRows.map((r) => ({ ts: r.ts, source: r.source }))
+	);
 
 	function mapWaf(e: WafEvent): UnifiedRow {
 		// W.bugfix Fix #1 — read action + statusCode from the
@@ -456,6 +537,32 @@
 
 			merged.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
 			rows = merged.slice(0, 200);
+
+			// Phase Z.5.3 — enrich SOURCE IP column with
+			// country codes. Collect every distinct IP NOT
+			// already in the countryMap cache, batch them in
+			// one POST. Cap at the server-side limit (256).
+			// Failure is silent : the lookup is non-essential
+			// to the activity log itself, and a 5xx here would
+			// otherwise inflate loadError and trigger the toast
+			// — operator-noisy for a cosmetic enrichment.
+			const toResolve = new Set<string>();
+			for (const r of rows) {
+				if (r.srcIp && !countryMap.has(r.srcIp)) toResolve.add(r.srcIp);
+			}
+			if (toResolve.size > 0) {
+				const ips = Array.from(toResolve).slice(0, 256);
+				try {
+					const resp = await geoLookupBatch(ips);
+					const next = new Map(countryMap);
+					for (const [ip, country] of Object.entries(resp.results)) {
+						next.set(ip, country);
+					}
+					countryMap = next;
+				} catch {
+					// Silent — activity log keeps rendering raw IPs.
+				}
+			}
 		} catch (err) {
 			loadError = err instanceof ApiError ? err.message : 'failed to load events';
 			pushToast(loadError, 'danger');
@@ -542,13 +649,45 @@
 				<circle cx="7" cy="7" r="5" />
 				<path d="M11 11l3 3" />
 			</svg>
+			<!-- Phase Z.5.2 — educational placeholder. The
+			     `status:5xx route:/auth/* ip:185.142.*`
+			     syntax is V2 backlog ; V1 plain substring
+			     match indexes source/method/code/path/IP/
+			     detail so a literal "5xx" or "429" lookup
+			     works today. -->
 			<input
 				type="search"
 				bind:value={search}
-				placeholder="Filter by path, IP, detail…"
+				placeholder="ex: 429 · auth · 185.142.* (V2: status:5xx route:/auth/*)"
 				aria-label="Filter events"
 			/>
 		</div>
+		<!-- Phase Z.5.2 — route dropdown. Native <select>
+		     styled to match the seg-button row. Single-select
+		     V1 ; multi-select V2 backlog. -->
+		<select
+			class="filter-select"
+			bind:value={routeFilter}
+			aria-label="Filter by route"
+		>
+			<option value="">Toutes routes</option>
+			{#each routeOptions as r (r.id)}
+				<option value={r.id}>{r.host}</option>
+			{/each}
+		</select>
+		<!-- Phase Z.5.2 — HTTP code dropdown. Static enum
+		     ordered by operator-triage priority (5xx first,
+		     attacks second, healthy last). -->
+		<select
+			class="filter-select"
+			bind:value={codeFilter}
+			aria-label="Filter by HTTP code"
+		>
+			<option value="">Tous codes HTTP</option>
+			{#each httpCodeOptions as opt (opt.value)}
+				<option value={opt.value}>{opt.label}</option>
+			{/each}
+		</select>
 		<div class="seg" role="group" aria-label="Filter by level">
 			<button class:on={levelFilter === 'all'} onclick={() => (levelFilter = 'all')}>All</button>
 			<button class:on={levelFilter === 'block'} onclick={() => (levelFilter = 'block')}>Block</button>
@@ -637,11 +776,47 @@
 						<span class="k">·</span>
 						<span title={r.detailTitle ?? ''}>{r.detail}</span>
 					</span>
-					<span class="right mono dim">{r.srcIp}</span>
+					<!--
+					  Phase Z.5.3 — SOURCE IP enriched with the
+					  country code resolved by the batch lookup.
+					  The title carries the FULL unmasked IP so
+					  forensic ops can still copy-paste the
+					  exact source ; the visible label is
+					  octet-masked for compactness + shoulder-
+					  surfing hygiene.
+					-->
+					<span class="right mono dim" title={r.srcIp}>
+						{formatSourceIP(r.srcIp, countryMap.get(r.srcIp))}
+					</span>
 				</div>
 			{/each}
 		</div>
 	{/if}
+</div>
+
+<!--
+  Phase Z.5.4 — activity histogram. Stacked bars per
+  5-minute bucket, segmented by source. Reflects every
+  filter the operator applies via the shared filteredRows
+  → histogramCells derived.
+-->
+<div class="card histogram-card">
+	<div class="histogram-header">
+		<span>Activity timeline · 24h · 5m buckets</span>
+		<div class="histogram-legend">
+			{#each histogramSeries as s (s.key)}
+				<span class="legend-item">
+					<span class="legend-dot" style:background={s.color}></span>
+					{s.label}
+				</span>
+			{/each}
+		</div>
+	</div>
+	<ActivityHistogram
+		cells={histogramCells}
+		series={histogramSeries}
+		label="Activity timeline histogram (24h, 5-minute buckets)"
+	/>
 </div>
 
 <style>
@@ -681,6 +856,37 @@
 		color: var(--fg);
 		font-size: 13px;
 	}
+	/* Phase Z.5.2 — native <select> filters styled to sit in
+	   the same filter-row as .seg without screaming. Browser-
+	   native popup keeps a11y + keyboard nav free ; the
+	   styling only touches the closed-state appearance. */
+	.filter-select {
+		appearance: none;
+		-webkit-appearance: none;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		color: var(--fg);
+		font-family: var(--font-mono);
+		font-size: 11px;
+		letter-spacing: 0.04em;
+		padding: 5px 28px 5px 14px;
+		cursor: pointer;
+		/* Inline chevron SVG. Lives in the background so the
+		   native option popup keeps its system-default look. */
+		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%238a8e96' stroke-width='1.6'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+		background-repeat: no-repeat;
+		background-position: right 10px center;
+		max-width: 220px;
+	}
+	.filter-select:hover {
+		border-color: var(--border-hi);
+	}
+	.filter-select:focus-visible {
+		outline: none;
+		border-color: var(--accent-cyan);
+	}
+
 	.seg {
 		display: inline-flex;
 		gap: 2px;
@@ -757,6 +963,41 @@
 
 	.log-card { padding: 0; overflow: hidden; }
 
+	/* Phase Z.5.4 — histogram card sits below the table. */
+	.histogram-card {
+		margin-top: 12px;
+		padding: 12px 16px 8px;
+	}
+	.histogram-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--fg-dim);
+		margin-bottom: 4px;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+	.histogram-legend {
+		display: inline-flex;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+	.legend-item {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.legend-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 2px;
+		display: inline-block;
+	}
+
 	.log-header {
 		display: grid;
 		grid-template-columns: 120px 78px 100px 60px 1fr 140px;
@@ -788,13 +1029,22 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.log-row:last-child { border-bottom: none; }
-	.log-row.level-block { background: color-mix(in oklch, var(--status-down) 8%, transparent); }
+	/* Phase Z.5.1 — row tints dialed down to ~5%
+	   (rgba 0.05 mock target). The Z.4 tints at 8% were
+	   too punchy on long scrolls — the operator's eye
+	   needed a quieter anchor that still preserved the
+	   at-a-glance "this row stopped a request" signal. */
+	.log-row.level-block { background: color-mix(in oklch, var(--status-down) 5%, transparent); }
 	/* W.5 — country-block rows. Override the level-block
 	   tint with the --status-meta slate so the operator
 	   can distinguish them from WAF blocks at-a-glance. */
-	.log-row.level-country-block { background: color-mix(in oklch, var(--status-meta) 8%, transparent); }
-	.log-row.level-detect { background: color-mix(in oklch, var(--status-warn) 4%, transparent); }
-	.log-row.level-warn { background: color-mix(in oklch, var(--status-warn) 6%, transparent); }
+	.log-row.level-country-block { background: color-mix(in oklch, var(--status-meta) 5%, transparent); }
+	.log-row.level-detect { background: color-mix(in oklch, var(--status-warn) 3%, transparent); }
+	/* warn rows (rate-limit 429s, recoverable signals) get
+	   NO row tint per Z.5.1 brief — the level pill carries
+	   the amber accent ; tinting the whole row was visual
+	   over-claim ("something was stopped") on a recoverable
+	   throttle. */
 
 	.log-time { color: var(--fg-dim); font-size: 11px; }
 	.log-lvl {
@@ -814,11 +1064,17 @@
 	.log-lvl.warn { background: color-mix(in oklch, var(--status-warn) 18%, transparent); color: var(--status-warn); }
 	.log-lvl.info { background: color-mix(in oklch, var(--status-info) 18%, transparent); color: var(--status-info); }
 
-	/* Phase Z.4 — SOURCE badge column. Shares pill shape
-	   with .log-lvl but the color enum is per-source, NOT
-	   per-level. Operators can scan a single column to find
-	   every WAF block, every rate-limit hit, every cert event
-	   without parsing the request text. */
+	/* Phase Z.5.1 — SOURCE badge. NEUTRAL grey across every
+	   source : Z.4 had per-source colors (red WAF, amber
+	   rate-limit, purple throttle, ...) which duplicated the
+	   severity carried by the LEVEL pill. Two color enums
+	   fighting for operator attention on the same row. Z.5
+	   promotes LEVEL as the carrier of severity color ;
+	   SOURCE stays neutral and only IDs the signal kind.
+	   The .log-src.<slug> hooks survive even though every
+	   rule is currently the same — keeps the door open for
+	   a future per-source icon or border-stripe without
+	   re-plumbing. */
 	.log-src {
 		font-size: 10px;
 		padding: 1px 6px;
@@ -828,17 +1084,9 @@
 		text-align: center;
 		justify-self: start;
 		font-family: var(--font-mono);
+		background: color-mix(in oklch, var(--fg-dim) 18%, transparent);
+		color: var(--fg-dim);
 	}
-	.log-src.waf           { background: color-mix(in oklch, var(--status-down) 18%, transparent); color: var(--status-down); }
-	.log-src.rate-limit    { background: color-mix(in oklch, var(--status-warn) 22%, transparent); color: var(--status-warn); }
-	/* throttle = auth-tier rate limit (distinct signal from
-	   the HTTP rate_limit Z.1 source). Purple tint pulls it
-	   apart visually from the amber rate-limit pill above. */
-	.log-src.throttle      { background: color-mix(in oklch, oklch(70% 0.18 300) 22%, transparent); color: oklch(70% 0.18 300); }
-	.log-src.auth          { background: color-mix(in oklch, var(--accent-cyan) 20%, transparent); color: var(--accent-cyan); }
-	.log-src.country-block { background: color-mix(in oklch, var(--status-meta) 24%, transparent); color: var(--status-meta); }
-	.log-src.cert          { background: color-mix(in oklch, var(--status-up) 20%, transparent); color: var(--status-up); }
-	.log-src.unknown       { background: color-mix(in oklch, var(--fg-dim) 20%, transparent); color: var(--fg-dim); }
 	.log-msg { color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.log-msg .k { color: var(--fg-dim); }
 	.right { text-align: right; }

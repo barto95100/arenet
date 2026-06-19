@@ -408,6 +408,19 @@ type Handler struct {
 	// flag so the frontend can render the "GeoIP not
 	// configured" banner even when events are still flowing.
 	geoIPDegraded bool
+	// geoLookup (Step Z.5.3) is the on-demand MMDB lookup
+	// surface used by the /api/v1/geo/lookup-batch endpoint
+	// to enrich /logs SOURCE IP rendering with a country
+	// code suffix ("82.65.x.x · FR"). Distinct from geoBus
+	// (event stream) and serverPosition (single-IP self
+	// lookup) — this one is per-request enrichment for the
+	// activity log.
+	//
+	// Nil-tolerant per AC #13 : a nil lookup collapses the
+	// endpoint to {results: {ip: ""}} for every IP so the
+	// frontend keeps rendering the raw IP without country
+	// suffix instead of crashing.
+	geoLookup GeoIPLookup
 	// serverPositionStore (Step V.4, 2026-06-07) is the
 	// persistence seam for GET / PUT / POST :redetect on
 	// /api/v1/observability/server-position. Backed by
@@ -866,6 +879,28 @@ func (h *Handler) HasGeoBus() bool {
 // are flowing. Called once at boot.
 func (h *Handler) SetGeoIPDegraded(degraded bool) {
 	h.geoIPDegraded = degraded
+}
+
+// SetGeoLookup (Step Z.5.3) attaches the on-demand MMDB
+// lookup used by POST /api/v1/geo/lookup-batch to enrich
+// /logs SOURCE IP rendering with country codes. The
+// production type is *geo.Lookup ; tests can substitute a
+// fake by implementing the narrow GeoIPLookup interface.
+//
+// Nil-tolerant per AC #13 : leaving this unset makes the
+// endpoint return {results:{ip:""}} for every IP so the
+// frontend keeps rendering the raw IP cleanly.
+func (h *Handler) SetGeoLookup(l GeoIPLookup) {
+	h.geoLookup = l
+}
+
+// HasGeoLookup reports whether the geo-lookup seam is
+// wired. cmd/arenet calls this at boot so any future wire-
+// up regression surfaces as lookup_present=false in
+// journalctl rather than silent country-suffix degradation
+// on the /logs page.
+func (h *Handler) HasGeoLookup() bool {
+	return h.geoLookup != nil
 }
 
 // SetServerPositionStore (Step V.4, 2026-06-07) attaches

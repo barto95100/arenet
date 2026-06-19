@@ -251,6 +251,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// live events on top. Same hard-auth + AC #13
 			// degraded-mode contract as cert-events above.
 			r.Get("/observability/geo-events", h.securityGeoEvents)
+			// Phase Z.5.3 — batch GeoIP lookup. Powers the
+			// /logs SOURCE IP column's "82.65.x.x · FR"
+			// enrichment without a per-IP round-trip. Cap
+			// 256 IPs / request. AC #13 degraded path :
+			// empty country codes when MMDB absent.
+			r.Post("/geo/lookup-batch", h.geoLookupBatch)
 			// Step V.4 — server geographic position (read).
 			// Returns the current Mercator-center coordinates
 			// + mode (auto|manual) per spec §5.1. Viewer-

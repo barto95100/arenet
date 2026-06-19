@@ -1358,6 +1358,19 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		"bus_present", apiHandler.HasGeoBus(),
 		"geoip_degraded", !geoEnricher.HasLookup(),
 	)
+	// Phase Z.5.3 — geo lookup wire-up. The /logs SOURCE
+	// IP enrichment endpoint (POST /api/v1/geo/lookup-batch)
+	// uses this seam. Nil-tolerant : a nil geoLookup
+	// (degraded MMDB) makes the endpoint return empty
+	// country codes so the frontend renders raw IPs cleanly.
+	// Same HF4 boot-log pattern : any future regression
+	// surfaces as lookup_present=false in journalctl.
+	if geoLookup != nil {
+		apiHandler.SetGeoLookup(geoLookup)
+	}
+	logger.Info("api handler wired with geo lookup",
+		"lookup_present", apiHandler.HasGeoLookup(),
+	)
 
 	// Step V.4 — server position wire-up.
 	//
