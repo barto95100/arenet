@@ -1472,3 +1472,97 @@ func TestMetricsSummary_CategoryMaps_SplitByAction(t *testing.T) {
 		t.Errorf("WafDetectsByCategory[SQLi] = %d; want absent or 0", got)
 	}
 }
+
+// --- Phase Z.4 hotfix : rate-limit counter window regression -----------------
+
+// TestMetricsSummary_TotalRateLimitExceeded_RollingWindowIncludesCurrentHour
+// pins the Phase Z.4 hotfix : the counter must use a rolling
+// [now-24h, now) window, NOT the hour-aligned [hourTs-24h,
+// hourTs) window the bucket-fed counters share. Pre-fix the
+// counter excluded every event in the current in-flight hour
+// — a burst at HH:MM followed by a dashboard refresh in the
+// same hour surfaced "0 / 24h" while the events were visible
+// on /logs and queryable via /api/v1/security/rate-limit-
+// events. Operator-visible regression caught at Z.4 smoke.
+func TestMetricsSummary_TotalRateLimitExceeded_RollingWindowIncludesCurrentHour(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	// metricsSummary asserts h.metrics != nil before any
+	// counter populate runs; satisfy that with the in-memory
+	// store regardless of which counter the test targets.
+	obsStore, err := observability.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = obsStore.Close() })
+	m.env.handler.SetMetricsReader(obsStore)
+
+	var (
+		capturedFrom, capturedTo time.Time
+		callTime                 time.Time
+	)
+	m.env.handler.SetRateLimitEventReader(&fakeRateLimitEventReader{
+		countFn: func(_ context.Context, from, to time.Time) (int64, error) {
+			capturedFrom = from
+			capturedTo = to
+			callTime = time.Now().UTC()
+			return 5, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/summary", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp summaryResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// (1) counter populated from the fake.
+	if resp.TotalRateLimitExceeded != 5 {
+		t.Errorf("TotalRateLimitExceeded = %d; want 5", resp.TotalRateLimitExceeded)
+	}
+
+	// (2) `to` is clock-now (NOT truncated to the hour). The
+	// captured `to` must be within a small window of when the
+	// handler ran — pre-fix `to` was `now.Truncate(Hour)`,
+	// which on any minute-mark would be strictly BEFORE
+	// callTime by up to 59 minutes.
+	if capturedTo.IsZero() {
+		t.Fatal("countFn was not called")
+	}
+	delta := callTime.Sub(capturedTo)
+	if delta < 0 {
+		delta = -delta
+	}
+	if delta > 5*time.Second {
+		t.Errorf("captured `to` (%v) too far from callTime (%v) — pre-fix hour-truncation regression",
+			capturedTo, callTime)
+	}
+
+	// (3) window width is exactly summaryWindow (24h).
+	width := capturedTo.Sub(capturedFrom)
+	if width != summaryWindow {
+		t.Errorf("window width = %v; want %v (rolling 24h)", width, summaryWindow)
+	}
+
+	// (4) explicit guard against the pre-fix hour-aligned shape :
+	// `to` must NOT equal now.Truncate(Hour). The chance of a
+	// false negative (test run happens exactly on a minute=00
+	// second=00 instant) is negligible ; sanity-skip rather
+	// than racing the clock.
+	hourTs := callTime.Truncate(time.Hour)
+	if capturedTo.Equal(hourTs) {
+		// Either we hit the boundary (incredibly rare) OR the
+		// fix has regressed. The captured `to` should be
+		// clock-now, which is hourTs + (callTime - hourTs).
+		// Only error if we have evidence of regression : a
+		// non-zero distance from hourTs would prove `to` was
+		// the unaligned clock-now.
+		if callTime.Sub(hourTs) > time.Second {
+			t.Errorf("captured `to` (%v) equals hour-truncated boundary — hour-alignment regression", capturedTo)
+		}
+	}
+}

@@ -633,17 +633,35 @@ func (h *Handler) metricsSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step Z.2 — TotalRateLimitExceeded: COUNT the
-	// rate_limit_event rows over the window. Unlike the
-	// throttle / crowdsec sentinels which feed bucket_1h, the
-	// rate-limit counter is an event-table COUNT(*) because
-	// (i) the Z.3 per-route bucket column lands later for
-	// timeseries, and (ii) the 24h retention on the event
-	// table matches the dashboard window so a COUNT is
-	// O(table-scan-of-24h) — cheap enough for the summary
-	// path that runs every 1s on the dashboard. Independent of
-	// the other counters per AC #15.
+	// rate_limit_event rows over the window.
+	//
+	// Phase Z.4 hotfix : the window here is `[now-24h, now)`
+	// — rolling clock-now, NOT the hour-aligned `[hourTs-24h,
+	// hourTs)` shared by the bucket-fed counters above. The
+	// hour-alignment is load-bearing for bucket_1h reads
+	// (rollupHour writes one row per route at the top of each
+	// hour, so reading past hourTs would scan rows that don't
+	// exist yet), but a raw event table has no aggregation
+	// lag — rows land within milliseconds of the 429 emit.
+	//
+	// Pre-fix the call passed (from, to) and excluded every
+	// event in the current in-flight hour : a burst at HH:MM
+	// followed by a /dashboard refresh in the same hour
+	// surfaced as "0 / 24h" while the events were visible on
+	// /logs and queryable via /api/v1/security/rate-limit-
+	// events. Operator-confusing — the dashboard summary's job
+	// is to surface fresh signal, and this counter is the
+	// freshness story for HTTP rate-limit pressure.
+	//
+	// Other event-table totals (TotalAuthFailures) keep the
+	// hour-aligned window because they're sized by a per-
+	// query scan cap (summaryAuthFailuresScanCap=...) and the
+	// 1-hour alignment naturally caps the worst-case scan
+	// shape ; rate-limit's COUNT is unaffected by row
+	// position so no such cap applies.
 	if h.rateLimitEvents != nil {
-		n, rerr := h.rateLimitEvents.CountRateLimitEventsByWindow(r.Context(), from, to)
+		rlFrom := now.Add(-summaryWindow)
+		n, rerr := h.rateLimitEvents.CountRateLimitEventsByWindow(r.Context(), rlFrom, now)
 		if rerr != nil {
 			h.logger.Error("metrics: summary rate_limit_event count failed", "err", rerr)
 		} else {

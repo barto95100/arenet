@@ -150,6 +150,32 @@
 		})
 	);
 
+	// Phase Z.4 polish — SOURCE badge. Returns the visible
+	// label + a CSS class slug so the table column renders a
+	// consistent colored pill per source. The slug maps 1-to-1
+	// with .log-src.* style rules below. Centralised here so
+	// future sources (e.g. a Step AA OIDC error stream) land
+	// by adding one row + one CSS line, not by sprinkling
+	// inline switches through the template.
+	function sourceMeta(source: string): { label: string; slug: string } {
+		switch (source) {
+			case 'waf':
+				return { label: 'WAF', slug: 'waf' };
+			case 'rate_limit':
+				return { label: 'RATE-LIMIT', slug: 'rate-limit' };
+			case 'throttle':
+				return { label: 'THROTTLE', slug: 'throttle' };
+			case 'auth':
+				return { label: 'AUTH', slug: 'auth' };
+			case 'country_block':
+				return { label: 'COUNTRY', slug: 'country-block' };
+			case 'cert':
+				return { label: 'CERT', slug: 'cert' };
+			default:
+				return { label: source.toUpperCase(), slug: 'unknown' };
+		}
+	}
+
 	function mapWaf(e: WafEvent): UnifiedRow {
 		// W.bugfix Fix #1 — read action + statusCode from the
 		// wire shape instead of hardcoding "block / 403". A
@@ -375,7 +401,12 @@
 			level: 'warn',
 			code: '429',
 			source: 'rate_limit',
-			method: 'RL',
+			// Phase Z.4 — the artificial 'RL' method tag is
+			// dropped now that SOURCE renders as its own
+			// dedicated badge column. Empty string makes the
+			// .log-msg path render the detail directly,
+			// matching the country-block row shape.
+			method: '',
 			path: '',
 			detail: `wait ${waitLabel}`,
 			detailTitle: e.zone,
@@ -536,6 +567,11 @@
 	<div class="log-header">
 		<span>Timestamp</span>
 		<span>Level</span>
+		<!-- Phase Z.4 polish — dedicated SOURCE column so
+		     operator can scan by signal type without parsing
+		     the REQUEST column's method-tag (rate_limit's
+		     "RL " prefix specifically was opaque). -->
+		<span>Source</span>
 		<span>Code</span>
 		<span>Request</span>
 		<span class="right">Source IP</span>
@@ -554,26 +590,26 @@
 		<div class="logs">
 			{#each filteredRows as r (r.key)}
 				{@const isCountryBlock = r.source === 'country_block'}
+				{@const src = sourceMeta(r.source)}
 				<div class="log-row level-{r.level}" class:level-country-block={isCountryBlock}>
 					<span class="log-time">{fmtTime(r.ts)}</span>
 					<!--
-					  W.5 — country-block rows render with a
-					  distinct pill label + slate background so
-					  the operator can distinguish them from
-					  WAF blocks (both share level='block' but
-					  the semantic differs: country-block is
-					  policy enforcement, WAF is threat
-					  signature). Pill label "COUNTRY"
-					  abbreviates "country-block" to keep the
-					  column width stable.
+					  Phase Z.4 cleanup — the level pill now
+					  consistently renders the actual level
+					  (BLOCK / DETECT / WARN / INFO) across every
+					  source. The W.5 "COUNTRY" override on the
+					  level pill was an early ad-hoc fix to
+					  differentiate country-block from WAF blocks
+					  at-a-glance, but it overloaded the level
+					  column with source taxonomy. The dedicated
+					  SOURCE column below carries that signal
+					  honestly now ; the slate tint on
+					  .log-row.level-country-block still anchors
+					  country-block rows visually for fast scrolls.
 					-->
-					{#if isCountryBlock}
-						<span class="log-lvl country-block" title="Country-block (operator-declared per-route gate)">
-							COUNTRY
-						</span>
-					{:else}
-						<span class="log-lvl {r.level}">{r.level.toUpperCase()}</span>
-					{/if}
+					<span class="log-lvl {r.level}">{r.level.toUpperCase()}</span>
+					<!-- Phase Z.4 — SOURCE badge. -->
+					<span class="log-src {src.slug}" title={r.source}>{src.label}</span>
 					<span class="mono">{r.code}</span>
 					<span class="log-msg">
 						<span class="k">{r.method}</span>
@@ -723,7 +759,7 @@
 
 	.log-header {
 		display: grid;
-		grid-template-columns: 120px 78px 60px 1fr 140px;
+		grid-template-columns: 120px 78px 100px 60px 1fr 140px;
 		gap: 10px;
 		padding: 10px 16px;
 		border-bottom: 1px solid var(--border);
@@ -744,7 +780,7 @@
 	}
 	.log-row {
 		display: grid;
-		grid-template-columns: 120px 78px 60px 1fr 140px;
+		grid-template-columns: 120px 78px 100px 60px 1fr 140px;
 		gap: 10px;
 		padding: 6px 16px;
 		align-items: baseline;
@@ -777,6 +813,32 @@
 	.log-lvl.detect { background: color-mix(in oklch, var(--status-warn) 14%, transparent); color: var(--status-warn); }
 	.log-lvl.warn { background: color-mix(in oklch, var(--status-warn) 18%, transparent); color: var(--status-warn); }
 	.log-lvl.info { background: color-mix(in oklch, var(--status-info) 18%, transparent); color: var(--status-info); }
+
+	/* Phase Z.4 — SOURCE badge column. Shares pill shape
+	   with .log-lvl but the color enum is per-source, NOT
+	   per-level. Operators can scan a single column to find
+	   every WAF block, every rate-limit hit, every cert event
+	   without parsing the request text. */
+	.log-src {
+		font-size: 10px;
+		padding: 1px 6px;
+		border-radius: 4px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		text-align: center;
+		justify-self: start;
+		font-family: var(--font-mono);
+	}
+	.log-src.waf           { background: color-mix(in oklch, var(--status-down) 18%, transparent); color: var(--status-down); }
+	.log-src.rate-limit    { background: color-mix(in oklch, var(--status-warn) 22%, transparent); color: var(--status-warn); }
+	/* throttle = auth-tier rate limit (distinct signal from
+	   the HTTP rate_limit Z.1 source). Purple tint pulls it
+	   apart visually from the amber rate-limit pill above. */
+	.log-src.throttle      { background: color-mix(in oklch, oklch(70% 0.18 300) 22%, transparent); color: oklch(70% 0.18 300); }
+	.log-src.auth          { background: color-mix(in oklch, var(--accent-cyan) 20%, transparent); color: var(--accent-cyan); }
+	.log-src.country-block { background: color-mix(in oklch, var(--status-meta) 24%, transparent); color: var(--status-meta); }
+	.log-src.cert          { background: color-mix(in oklch, var(--status-up) 20%, transparent); color: var(--status-up); }
+	.log-src.unknown       { background: color-mix(in oklch, var(--fg-dim) 20%, transparent); color: var(--fg-dim); }
 	.log-msg { color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.log-msg .k { color: var(--fg-dim); }
 	.right { text-align: right; }

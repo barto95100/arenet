@@ -745,7 +745,10 @@ describe('/logs — W.5 country-block source (W.7 follow-up: humanized + host-re
 		// Host badge replaces the raw UUID — operator sees
 		// the friendly hostname.
 		await screen.findByText('ha.example.test');
-		// Pill says COUNTRY (not BLOCK, which is the WAF label).
+		// Phase Z.4 — the level column now renders the actual
+		// level (BLOCK) consistently across every source. The
+		// SOURCE column carries the "COUNTRY" badge.
+		expect(screen.getByText('BLOCK')).toBeInTheDocument();
 		expect(screen.getByText('COUNTRY')).toBeInTheDocument();
 		// Status code from the persisted row, not hardcoded.
 		expect(screen.getByText('451')).toBeInTheDocument();
@@ -906,5 +909,169 @@ describe('/logs — W.7 follow-up: humanize reason + host resolution', () => {
 		expect(screen.getByTestId('route-host')).toHaveClass(
 			'route-host--fallback'
 		);
+	});
+});
+
+// --- Phase Z.4 polish : SOURCE column badge rendering ----------------------
+
+// The /logs unified stream merges 6 sources, each with a
+// distinct semantic. Pre-Z.4 the source was buried in the
+// REQUEST column's method-tag prefix (visible: 'RL ' for
+// rate-limit, 'GEO ' for country-block, 'ACME' for cert,
+// 'OIDC' for OIDC auth, etc. — opaque to a fresh operator).
+// Z.4 promotes source to its own column with colored badges.
+// These tests pin :
+//   - the column exists in the header
+//   - each source produces the correct badge label + slug class
+//   - the rate-limit row no longer carries the artificial 'RL '
+//     method-tag prefix in the REQUEST column (the source
+//     badge replaces it cleanly)
+describe('/logs — Phase Z.4 SOURCE column rendering', () => {
+	it('renders a SOURCE column header', async () => {
+		render(Page);
+		await screen.findByText('Timestamp');
+		expect(screen.getByText('Source')).toBeInTheDocument();
+	});
+
+	it('rate_limit row renders RATE-LIMIT badge + drops the RL method-tag prefix', async () => {
+		securityMock.fetchRateLimitEvents.mockResolvedValue({
+			events: [
+				{
+					id: 1,
+					ts: isoOffset(0),
+					routeId: 'route-rl',
+					zone: 'route-route-rl',
+					remoteIp: '198.51.100.7',
+					waitMs: 1500
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		render(Page);
+		// Badge label.
+		const badge = await screen.findByText('RATE-LIMIT');
+		expect(badge).toBeInTheDocument();
+		expect(badge).toHaveClass('log-src');
+		expect(badge).toHaveClass('rate-limit');
+		// REQUEST column no longer carries the artificial 'RL'
+		// method-tag — pre-Z.4 a <span class="k">RL</span>
+		// rendered alongside the wait detail.
+		expect(screen.queryByText(/^RL$/)).not.toBeInTheDocument();
+		// Wait detail still surfaced.
+		expect(screen.getByText(/wait 1500ms/)).toBeInTheDocument();
+	});
+
+	it('waf row renders WAF badge with the waf slug class', async () => {
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 11,
+					ts: isoOffset(0),
+					routeId: 'route-waf',
+					action: 'BLOCK',
+					statusCode: 403,
+					ruleId: '942100',
+					category: 'SQLi',
+					message: 'SQL injection',
+					requestMethod: 'POST',
+					requestPath: '/login',
+					srcIp: '203.0.113.10'
+				}
+			]
+		});
+		render(Page);
+		const badge = await screen.findByText('WAF');
+		expect(badge).toHaveClass('log-src');
+		expect(badge).toHaveClass('waf');
+	});
+
+	it('throttle row renders THROTTLE badge with the throttle slug class', async () => {
+		securityMock.fetchThrottleEvents.mockResolvedValue({
+			events: [
+				{
+					id: 22,
+					ts: isoOffset(0),
+					tier: 2,
+					srcIp: '198.51.100.20',
+					attemptedUsername: 'admin',
+					blockedUntil: isoOffset(60),
+					blockDurationSeconds: 60
+				}
+			]
+		});
+		render(Page);
+		const badge = await screen.findByText('THROTTLE');
+		expect(badge).toHaveClass('log-src');
+		expect(badge).toHaveClass('throttle');
+	});
+
+	it('country_block row renders COUNTRY badge with the country-block slug class', async () => {
+		securityMock.fetchCountryBlockEvents.mockResolvedValue({
+			events: [
+				{
+					id: 33,
+					ts: isoOffset(0),
+					routeId: 'route-cb',
+					srcIp: '203.0.113.30',
+					country: 'KP',
+					mode: 'deny',
+					statusCode: 451,
+					reason: 'deny-match'
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		render(Page);
+		const badge = await screen.findByText('COUNTRY');
+		expect(badge).toHaveClass('log-src');
+		expect(badge).toHaveClass('country-block');
+		// Phase Z.4 cleanup — the level pill renders BLOCK
+		// consistently across every block-level source now.
+		expect(screen.getByText('BLOCK')).toBeInTheDocument();
+	});
+
+	it('cert row renders CERT badge with the cert slug class', async () => {
+		securityMock.fetchCertEvents.mockResolvedValue({
+			events: [
+				{
+					timestamp: isoOffset(0),
+					level: 'INFO',
+					eventType: 'cert_obtained',
+					domain: 'example.com',
+					issuer: "Let's Encrypt",
+					challenge: 'DNS-01',
+					renewal: false,
+					error: '',
+					details: ''
+				}
+			],
+			total: 1,
+			hasMore: false
+		});
+		render(Page);
+		const badge = await screen.findByText('CERT');
+		expect(badge).toHaveClass('log-src');
+		expect(badge).toHaveClass('cert');
+	});
+
+	it('auth row renders AUTH badge with the auth slug class', async () => {
+		securityMock.fetchAuthFailures.mockResolvedValue({
+			window: '24h',
+			timeseries: [],
+			recent: [
+				{
+					timestamp: isoOffset(0),
+					action: 'login_failure',
+					ip: '203.0.113.40',
+					username: 'root'
+				}
+			]
+		});
+		render(Page);
+		const badge = await screen.findByText('AUTH');
+		expect(badge).toHaveClass('log-src');
+		expect(badge).toHaveClass('auth');
 	});
 });
