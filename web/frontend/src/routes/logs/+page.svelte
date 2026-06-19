@@ -702,6 +702,14 @@
 	</div>
 </div>
 
+<!--
+  Phase Z.5.6 — viewport-anchored flex column for the
+  activity area. table:histogram 70:30 ratio per the
+  operator brief. The wrapper claims the full remaining
+  page height so the histogram has a real visual presence
+  instead of the prior 80px slim band.
+-->
+<div class="activity-area">
 <div class="card log-card">
 	<div class="log-header">
 		<span>Timestamp</span>
@@ -816,8 +824,10 @@
 		cells={histogramCells}
 		series={histogramSeries}
 		label="Activity timeline histogram (24h, 5-minute buckets)"
+		height="fill"
 	/>
 </div>
+</div><!-- /.activity-area -->
 
 <style>
 	.card {
@@ -963,10 +973,58 @@
 
 	.log-card { padding: 0; overflow: hidden; }
 
-	/* Phase Z.5.4 — histogram card sits below the table. */
+	/* Phase Z.5.6 — viewport-anchored flex column.
+	   Wraps the table + histogram and claims the remaining
+	   page height after the PageHeader + filters card. The
+	   90px subtraction is approximate (header + filter
+	   row + paddings) — overshoot is harmless because the
+	   layout root keeps min-height: 100vh and the activity
+	   area just relinquishes any extra space. Undershoot
+	   would clip but doesn't happen for typical headers.
+
+	   On narrow screens (< 900px) the flex column collapses
+	   into the pre-Z.5.6 natural-height stack so the
+	   table doesn't get squeezed to a few rows.
+	*/
+	.activity-area {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		min-height: calc(100vh - 240px);
+	}
+	@media (max-width: 900px) {
+		.activity-area {
+			min-height: 0;
+		}
+	}
+
+	/* Z.5.6 — table claims 70 % of the activity area,
+	   histogram 30 %. min-height:0 is load-bearing on flex
+	   children so the inner scroll container (.logs) can
+	   actually shrink under content pressure instead of
+	   pushing the parent past its bound. */
+	.log-card {
+		flex: 7;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.log-card .logs {
+		flex: 1;
+		min-height: 0;
+	}
+
+	/* Phase Z.5.6 — histogram is now 30 % of the activity
+	   area instead of a fixed 80px slim band. The card
+	   becomes a flex column so its inner header + chart
+	   split correctly ; the chart gets `height="fill"` and
+	   claims the leftover space. */
 	.histogram-card {
-		margin-top: 12px;
+		flex: 3;
+		min-height: 0;
 		padding: 12px 16px 8px;
+		display: flex;
+		flex-direction: column;
 	}
 	.histogram-header {
 		display: flex;
@@ -1016,7 +1074,12 @@
 	.logs {
 		font-family: var(--font-mono);
 		font-size: 11.5px;
-		max-height: 540px;
+		/* Z.5.6 — the table scroll container's height is
+		   now driven by the flex slot (.log-card { flex: 7 }
+		   inside .activity-area), so the pre-Z.5.6 hard
+		   max-height: 540px would silently clip on tall
+		   viewports. We keep overflow-y:auto so long lists
+		   still scroll inside the slot. */
 		overflow-y: auto;
 	}
 	.log-row {

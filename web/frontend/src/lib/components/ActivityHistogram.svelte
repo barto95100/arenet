@@ -57,8 +57,17 @@
 		windowMs?: number;
 		/** Operator-readable label for screen readers. */
 		label: string;
-		/** Chart height in px. Default 80 (slim band). */
-		height?: number;
+		/**
+		 * Chart height. Number = fixed pixels (default 80,
+		 * slim band). The string literal "fill" makes the
+		 * SVG claim 100% of its container's height and
+		 * reactively re-measure on resize ; the caller is
+		 * responsible for giving the wrapper a bounded
+		 * height (e.g. flex:1 inside a flex column whose
+		 * height is constrained). Z.5.6 polish on /logs
+		 * uses "fill" with a 70/30 table/histogram ratio.
+		 */
+		height?: number | 'fill';
 	}
 
 	let {
@@ -77,6 +86,10 @@
 
 	let svgEl: SVGSVGElement | undefined = $state();
 	let svgWidth = $state(800);
+	// Z.5.6 — measured pixel height when `height === 'fill'`.
+	// Initialised to a sensible non-zero value so the first
+	// paint isn't a 0px-tall band before ResizeObserver fires.
+	let measuredHeight = $state(200);
 
 	// Bucket the cells into a fixed-width grid anchored on
 	// the most recent observation. The grid is the *display*
@@ -125,18 +138,48 @@
 
 	function resize(): void {
 		if (!svgEl) return;
-		svgWidth = svgEl.getBoundingClientRect().width;
+		const rect = svgEl.getBoundingClientRect();
+		svgWidth = rect.width;
+		// Z.5.6 — track the SVG's pixel height when in fill
+		// mode. Numeric-height callers ignore this state via
+		// the `effectiveHeight` derived below.
+		if (height === 'fill') {
+			measuredHeight = rect.height;
+		}
 	}
 
 	$effect(() => {
 		if (typeof window === 'undefined') return;
 		resize();
 		window.addEventListener('resize', resize);
-		return () => window.removeEventListener('resize', resize);
+		// Z.5.6 — ResizeObserver picks up parent-driven height
+		// changes (flex-grow on viewport-relative containers
+		// doesn't fire `window.resize`). Guarded for older
+		// browsers where ResizeObserver is absent ; on those
+		// the chart stays at the initial measuredHeight, which
+		// is honest degraded behavior.
+		let ro: ResizeObserver | undefined;
+		if (height === 'fill' && typeof ResizeObserver !== 'undefined' && svgEl) {
+			ro = new ResizeObserver(resize);
+			ro.observe(svgEl);
+		}
+		return () => {
+			window.removeEventListener('resize', resize);
+			ro?.disconnect();
+		};
 	});
 
+	// Z.5.6 — resolve the effective pixel height : numeric
+	// caller → its literal value ; 'fill' caller → live
+	// measured value from the SVG bounding-box. Pre-Z.5.6
+	// every consumer passed a number, so the default 80 path
+	// is unchanged.
+	const effectiveHeight = $derived(
+		height === 'fill' ? measuredHeight : (height as number)
+	);
+
 	const innerWidth = $derived(Math.max(0, svgWidth - PAD_L - PAD_R));
-	const innerHeight = $derived(Math.max(0, height - PAD_T - PAD_B));
+	const innerHeight = $derived(Math.max(0, effectiveHeight - PAD_T - PAD_B));
 	const barWidth = $derived(innerWidth / Math.max(1, buckets.N));
 
 	// Tooltip state on bucket hover.
@@ -183,13 +226,23 @@
 	}
 </script>
 
-<div class="activity-histogram" data-testid="activity-histogram">
+<div
+	class="activity-histogram"
+	class:fill={height === 'fill'}
+	data-testid="activity-histogram"
+>
+	<!--
+	  Z.5.6 — when height === 'fill' the SVG claims 100%
+	  of the wrapper, which itself claims 100% of its
+	  flex slot. Numeric callers get the pre-Z.5.6 fixed-
+	  pixel shape unchanged.
+	-->
 	<svg
 		bind:this={svgEl}
 		role="img"
 		aria-label={label}
 		width="100%"
-		{height}
+		height={height === 'fill' ? '100%' : height}
 		preserveAspectRatio="none"
 	>
 		<!-- Y axis baseline -->
@@ -236,13 +289,13 @@
 			{yMax}
 		</text>
 		<!-- X-axis ticks : ends + middle. -->
-		<text x={PAD_L} y={height - 4} text-anchor="start" class="axis-label">
+		<text x={PAD_L} y={effectiveHeight - 4} text-anchor="start" class="axis-label">
 			{formatBucketTime(buckets.windowStart)}
 		</text>
-		<text x={PAD_L + innerWidth / 2} y={height - 4} text-anchor="middle" class="axis-label">
+		<text x={PAD_L + innerWidth / 2} y={effectiveHeight - 4} text-anchor="middle" class="axis-label">
 			{formatBucketTime(buckets.windowStart + windowMs / 2)}
 		</text>
-		<text x={PAD_L + innerWidth} y={height - 4} text-anchor="end" class="axis-label">
+		<text x={PAD_L + innerWidth} y={effectiveHeight - 4} text-anchor="end" class="axis-label">
 			now
 		</text>
 
@@ -286,6 +339,24 @@
 <style>
 	.activity-histogram {
 		width: 100%;
+	}
+	/* Z.5.6 — fill mode : the wrapper claims the leftover
+	   space in a flex-column parent (typical: a card with
+	   a header above and the chart below). The SVG inside
+	   inherits via flex:1 + min-height:0 so its height="100%"
+	   attribute resolves to real pixels and the
+	   ResizeObserver picks up the measurement.
+	   Callers MUST place .activity-histogram.fill inside a
+	   bounded flex-column container ; a plain block parent
+	   without height context will collapse to 0px. */
+	.activity-histogram.fill {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+	}
+	.activity-histogram.fill svg {
+		flex: 1;
+		min-height: 0;
 	}
 	.bucket .bar-seg {
 		transition: opacity 0.1s;

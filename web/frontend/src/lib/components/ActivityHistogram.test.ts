@@ -118,4 +118,39 @@ describe('ActivityHistogram', () => {
 		});
 		expect(container.querySelectorAll('rect.bar-seg').length).toBe(1);
 	});
+
+	// Phase Z.5.6 — height: 'fill' mode tests.
+	it('numeric height renders the SVG with the literal pixel attribute', () => {
+		const { container } = render(ActivityHistogram, {
+			cells: [],
+			series: SERIES,
+			label: 'Numeric',
+			height: 240
+		});
+		const svg = container.querySelector('svg');
+		expect(svg).not.toBeNull();
+		// Z.5.6 invariant : numeric path is unchanged from
+		// pre-Z.5.6 behavior. The fill mode must NOT activate
+		// for callers that pass a number.
+		expect(svg?.getAttribute('height')).toBe('240');
+		const wrap = container.querySelector('.activity-histogram');
+		expect(wrap?.classList.contains('fill')).toBe(false);
+	});
+
+	it('height: "fill" renders SVG height="100%" + fill class on wrapper', () => {
+		const { container } = render(ActivityHistogram, {
+			cells: [],
+			series: SERIES,
+			label: 'Fill',
+			height: 'fill'
+		});
+		const svg = container.querySelector('svg');
+		expect(svg?.getAttribute('height')).toBe('100%');
+		const wrap = container.querySelector('.activity-histogram');
+		// .fill class is what unlocks the .fill { flex:1 }
+		// CSS rule on the wrapper. Pinning the class lets a
+		// future regression where the wire-up drops the
+		// boolean surface as a class-missing assertion.
+		expect(wrap?.classList.contains('fill')).toBe(true);
+	});
 });
