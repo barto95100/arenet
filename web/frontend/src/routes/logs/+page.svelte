@@ -629,6 +629,15 @@
 	<title>Logs · Arenet</title>
 </svelte:head>
 
+<!--
+  Phase Z.5.7 — page-root flex column. The container
+  claims the full available viewport height (set on .app-main
+  via the global :has rule below) so the activity area can
+  flex-grow without ever overflowing the viewport. Page-
+  level scroll is disabled ; the table scrolls internally.
+-->
+<div class="logs-page">
+
 <PageHeader
 	eyebrow="Trafic · Logs"
 	title="Activity log"
@@ -829,6 +838,8 @@
 </div>
 </div><!-- /.activity-area -->
 
+</div><!-- /.logs-page -->
+
 <style>
 	.card {
 		background: var(--surface);
@@ -973,29 +984,88 @@
 
 	.log-card { padding: 0; overflow: hidden; }
 
-	/* Phase Z.5.6 — viewport-anchored flex column.
-	   Wraps the table + histogram and claims the remaining
-	   page height after the PageHeader + filters card. The
-	   90px subtraction is approximate (header + filter
-	   row + paddings) — overshoot is harmless because the
-	   layout root keeps min-height: 100vh and the activity
-	   area just relinquishes any extra space. Undershoot
-	   would clip but doesn't happen for typical headers.
+	/* Phase Z.5.7 — strict viewport fit.
+	   The page is a flex column that exactly matches the
+	   .app-main height (set by the :global rule below) so
+	   there's NO page-level scroll. The PageHeader + filters
+	   card take their natural height ; .activity-area
+	   claims everything else and itself flex-splits into
+	   table (70 %) + histogram (30 %). min-height:0 cascades
+	   so children can shrink under content pressure instead
+	   of overflowing the viewport. */
+	.logs-page {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		height: 100%;
+		min-height: 0;
+	}
 
-	   On narrow screens (< 900px) the flex column collapses
-	   into the pre-Z.5.6 natural-height stack so the
-	   table doesn't get squeezed to a few rows.
-	*/
+	/* Z.5.7 — viewport-fit chain. The whole layout stack
+	   needs to be height-strict (not min-height) so the
+	   page never grows past the viewport. We use :has() to
+	   scope the override to the /logs route only ; other
+	   pages keep their pre-Z.5.7 min-height: 100vh + natural
+	   page scroll.
+
+	   Browser support : :has() has 90%+ support since 2023
+	   (Safari 15.4+, Chrome 105+, Firefox 121+). On legacy
+	   browsers the override is ignored ; the page falls back
+	   to the natural-scroll layout, which is acceptable
+	   degraded behavior.
+
+	   100dvh respects mobile address-bar shifts ; 100vh
+	   precedes it as the fallback for older Safari. */
+	:global(.app-shell:has(.logs-page)) {
+		height: 100vh;
+		height: 100dvh;
+		min-height: 0;
+		overflow: hidden;
+	}
+	:global(.app-col:has(.logs-page)) {
+		min-height: 0;
+		overflow: hidden;
+	}
+	/* box-sizing: border-box on .app-main is load-bearing :
+	   .app-main has padding:22px globally and the codebase
+	   doesn't set a universal box-sizing reset — without
+	   this override the padding would push the content past
+	   the bounded parent and re-introduce scroll. */
+	:global(.app-main:has(.logs-page)) {
+		box-sizing: border-box;
+		flex: 1;
+		min-height: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
 	.activity-area {
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
-		min-height: calc(100vh - 240px);
+		flex: 1;
+		min-height: 0;
 	}
+
+	/* Narrow screens : the strict viewport-fit becomes
+	   counterproductive (table squeezed to a few rows
+	   under a fat header). Drop the constraint and let
+	   the page scroll naturally below ~900px. */
 	@media (max-width: 900px) {
-		.activity-area {
-			min-height: 0;
+		:global(.app-main:has(.logs-page)) {
+			height: auto;
+			max-height: none;
+			overflow: visible;
 		}
+		.logs-page {
+			height: auto;
+		}
+		.activity-area {
+			flex: none;
+		}
+		.log-card { min-height: 480px; }
+		.histogram-card { min-height: 220px; }
 	}
 
 	/* Z.5.6 — table claims 70 % of the activity area,
