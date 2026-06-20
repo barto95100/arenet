@@ -13,6 +13,11 @@
 		testUpstream
 	} from '$lib/api/client';
 	import { settingsApi } from '$lib/api/settings';
+	import {
+		errorTemplatesApi,
+		SUPPORTED_ERROR_STATUS_CODES,
+		type ErrorTemplate
+	} from '$lib/api/error-templates';
 	import type {
 		ACMEChallenge,
 		CountryBlockRequest,
@@ -100,7 +105,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'rateLimit'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides'> & {
 		healthCheck: HealthCheck;
 		// W.5 — narrow to the non-optional shape. The form
 		// always carries a CountryBlockRequest (mode="off"
@@ -139,6 +144,20 @@
 		// the payload assembler converts null → omitted +
 		// object → present.
 		rateLimit: RouteRateLimit | null;
+		// Step R Phase 2.b — error-page wiring.
+		// Empty string means "use built-in Arenet default" ;
+		// non-empty is a template UUID. The wire shape uses
+		// omitempty so empty string round-trips as field-
+		// absent — the form holds it as definite "" for
+		// reactive binding.
+		errorPageTemplateId: string;
+		// Per-route override sub-form. Codes absent fall
+		// through to template / default layers at caddymgr
+		// emit time (Phase 1 3-layer resolution). Form
+		// always carries a definite Record (possibly empty) ;
+		// payload assembler converts empty → undefined for
+		// preserve-on-omit semantic on PUT.
+		errorPageOverrides: Record<number, string>;
 	};
 	let formData = $state<FormData>(emptyFormData());
 	let healthCheckTouched = $state(false);
@@ -198,6 +217,13 @@
 			// protection (the global throttle still applies
 			// system-wide).
 			rateLimit: null as RouteRateLimit | null,
+			// Step R Phase 2.b — error-page defaults : no
+			// template attached (built-in Arenet default
+			// will apply automatically on every code), no
+			// per-route overrides. Operator opts in via the
+			// "Pages d'erreur" section below.
+			errorPageTemplateId: '',
+			errorPageOverrides: {} as Record<number, string>,
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
 			// further down; operators opting in pick a mode +
@@ -860,6 +886,16 @@
 			rateLimit: r.rateLimit
 				? { events: r.rateLimit.events, window: r.rateLimit.window, key: r.rateLimit.key ?? '' }
 				: null,
+			// Step R Phase 2.b — load persisted error-page
+			// wiring. Both fields are passed through as-is ;
+			// the response shape mirrors the storage shape
+			// directly (camelCase via the route response
+			// pass-through landed Phase 1).
+			errorPageTemplateId: r.errorPageTemplateId ?? '',
+			errorPageOverrides: { ...(r.errorPageOverrides ?? {}) },
+			// (subform expansion handled below — needs to fire
+			// AFTER formData assignment so the $effect sees the
+			// new state.)
 			// Step J.2: the server's HealthCheck is always present
 			// on the wire (no omitempty). The form holds it as-is;
 			// edit-mode shows explicit values (server materialised
@@ -903,6 +939,11 @@
 		// the off-state stays collapsed to match the create-
 		// form default.
 		cbSectionOpen = r.countryBlock.mode !== 'off';
+		// Step R Phase 2.b — auto-expand the per-route
+		// overrides sub-form if the loaded route already
+		// has any. The operator returning to a mid-edit
+		// should see what's there immediately.
+		errorOverridesExpanded = Object.keys(r.errorPageOverrides ?? {}).length > 0;
 		resetFormErrors();
 		formOpen = true;
 	}
@@ -975,6 +1016,16 @@
 	// already populated server-side and (b) the form's contextual
 	// "host is covered by *.<apex>" hint + useDedicatedCert toggle.
 	let managedDomains = $state<ManagedDomain[]>([]);
+	// Step R Phase 2.b — error-page templates list for the
+	// RouteForm's "Pages d'erreur" dropdown. Loaded once on
+	// mount alongside routes/managedDomains. Sorted alpha
+	// at populate time so the dropdown's render is stable.
+	let errorTemplates = $state<ErrorTemplate[]>([]);
+	// Whether the per-route override sub-form is expanded.
+	// Collapsed by default ; auto-expands on edit when the
+	// loaded route already has overrides (operator returns
+	// to a form mid-edit, expects to see what's there).
+	let errorOverridesExpanded = $state(false);
 
 	async function loadManagedDomainsForRoutes() {
 		try {
@@ -1483,6 +1534,30 @@
 			if (formData.rateLimit !== null) {
 				payload.rateLimit = formData.rateLimit;
 			}
+			// Step R Phase 2.b — error-page wiring. Both
+			// fields are omitempty on the wire ; we ship them
+			// only when non-default to keep the PUT shape
+			// tight + preserve-on-omit semantics for unrelated
+			// edits (a PUT that doesn't touch error config
+			// should NOT clear an existing template ref).
+			if (formData.errorPageTemplateId) {
+				payload.errorPageTemplateId = formData.errorPageTemplateId;
+			}
+			const overrideKeys = Object.keys(formData.errorPageOverrides);
+			if (overrideKeys.length > 0) {
+				// Filter blank-string overrides (operator-meaningful
+				// "I cleared this code's override" gesture) before
+				// ship — same canonicalisation as the saveTemplate
+				// flow on /settings/error-pages.
+				const clean: Record<number, string> = {};
+				for (const k of overrideKeys) {
+					const v = formData.errorPageOverrides[Number(k)];
+					if (v && v.trim()) clean[Number(k)] = v;
+				}
+				if (Object.keys(clean).length > 0) {
+					payload.errorPageOverrides = clean;
+				}
+			}
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
 			// server preserve the previously stored value (on PUT)
@@ -1580,9 +1655,24 @@
 			loadRoutes(),
 			loadDNSProvider(),
 			loadForwardAuthProviders(),
-			loadManagedDomainsForRoutes()
+			loadManagedDomainsForRoutes(),
+			loadErrorTemplates()
 		]);
 	});
+
+	// Step R Phase 2.b — load templates for the dropdown.
+	// Failure is non-fatal : the dropdown falls back to
+	// "Aucun" as the only option, the operator still gets
+	// the built-in Arenet branded default for every route.
+	async function loadErrorTemplates(): Promise<void> {
+		try {
+			const list = await errorTemplatesApi.list();
+			// Alpha sort by name for stable dropdown order.
+			errorTemplates = list.sort((a, b) => a.name.localeCompare(b.name));
+		} catch {
+			errorTemplates = [];
+		}
+	}
 
 	const stats = $derived({
 		total: routes.length,
@@ -2788,6 +2878,108 @@
 								similaire.
 							</p>
 						{/if}
+					</div>
+
+					<!--
+					  Step R Phase 2.b — error pages section.
+					  Sits between Rate Limit and Country Block
+					  to match the operator's mental model :
+					  "what happens when this route returns
+					  something the client shouldn't normally
+					  see". The built-in Arenet branded default
+					  applies AUTOMATICALLY (Phase 1.1 FIX 1)
+					  for every code on every route ; the
+					  template dropdown lets the operator
+					  override the visual branding ; the per-
+					  route overrides sub-form lets the operator
+					  override individual codes (highest
+					  precedence in the 3-layer resolution).
+					-->
+					<div>
+						<label
+							class="text-sm font-medium text-secondary block mb-1"
+							for="route-error-template"
+						>
+							Pages d'erreur
+						</label>
+						<div class="mt-2 flex items-center gap-2">
+							<select
+								id="route-error-template"
+								bind:value={formData.errorPageTemplateId}
+								class="flex-1 bg-surface border border-default rounded text-sm px-2 py-1.5 text-primary"
+								data-testid="error-template-select"
+							>
+								<option value="">— Aucun (défaut Arenet branded) —</option>
+								{#each errorTemplates as t (t.id)}
+									<option value={t.id}>{t.name}</option>
+								{/each}
+							</select>
+							<a
+								href="/settings/error-pages"
+								class="text-xs text-cyan whitespace-nowrap"
+								title="Créer ou éditer les templates"
+							>
+								Gérer →
+							</a>
+						</div>
+						<p class="text-xs text-muted mt-1">
+							Le défaut Arenet branded s'applique automatiquement aux
+							codes <code>401/403/404/429/500/502/503/504</code>
+							si aucun template n'est attaché.
+						</p>
+
+						<!-- Per-route overrides : highest precedence
+						     in the 3-layer resolution (override →
+						     template → default). Collapsed by default ;
+						     auto-expanded when the loaded route has
+						     overrides. -->
+						<details
+							class="mt-3"
+							bind:open={errorOverridesExpanded}
+							data-testid="error-overrides-details"
+						>
+							<summary class="text-xs text-secondary cursor-pointer">
+								Overrides spécifiques par code
+							</summary>
+							<div class="mt-2 grid gap-2">
+								{#each SUPPORTED_ERROR_STATUS_CODES as code (code)}
+									<div>
+										<label
+											for="route-err-override-{code}"
+											class="text-xs font-medium text-secondary block mb-1"
+										>
+											HTTP {code}
+										</label>
+										<textarea
+											id="route-err-override-{code}"
+											rows="2"
+											placeholder="<!doctype html>...{code}..."
+											value={formData.errorPageOverrides[code] ?? ''}
+											oninput={(e) => {
+												const v = (e.target as HTMLTextAreaElement).value;
+												if (v) {
+													formData.errorPageOverrides = {
+														...formData.errorPageOverrides,
+														[code]: v
+													};
+												} else {
+													const next = { ...formData.errorPageOverrides };
+													delete next[code];
+													formData.errorPageOverrides = next;
+												}
+											}}
+											class="w-full bg-surface border border-default rounded text-xs px-2 py-1 font-mono text-primary"
+											data-testid="error-override-{code}"
+										></textarea>
+									</div>
+								{/each}
+								<p class="text-xs text-muted">
+									Les overrides remplacent le template ET le défaut pour
+									le code concerné. Laisser vide pour utiliser le template
+									ou le défaut.
+								</p>
+							</div>
+						</details>
 					</div>
 
 					<!-- W.5 — country-block per-route gate. Operator

@@ -275,6 +275,21 @@ export interface Route {
 	 */
 	rateLimit: RouteRateLimit | null;
 	/**
+	 * Step R Phase 1 — UUID of an attached ErrorPageTemplate,
+	 * or empty string when none. The built-in Arenet branded
+	 * default applies for every code when this is empty.
+	 * Response shape uses omitempty so an empty value may
+	 * arrive as undefined instead of "".
+	 */
+	errorPageTemplateId?: string;
+	/**
+	 * Step R Phase 1 — per-route HTML body overrides keyed
+	 * by HTTP status code. Highest precedence in the 3-layer
+	 * resolution (override → template → default). May be
+	 * undefined when the route has no overrides.
+	 */
+	errorPageOverrides?: Record<number, string>;
+	/**
 	 * Count of upstreams the HC tracker has observed as healthy.
 	 * Zero on routes without HC configured (the C13 gate doesn't
 	 * peek at tracker state). Used by the Routes table to render
@@ -550,6 +565,19 @@ export interface RouteRequest {
 	 * remote.host} at emit time when empty.
 	 */
 	rateLimit?: RouteRateLimit;
+	/**
+	 * Step R Phase 1 — UUID of an ErrorPageTemplate this
+	 * route opts into. Empty string / absent → built-in
+	 * Arenet branded default applies for every code.
+	 */
+	errorPageTemplateId?: string;
+	/**
+	 * Step R Phase 1 — per-route HTML body overrides keyed
+	 * by HTTP status code. Highest precedence in the 3-layer
+	 * resolution (override → template → default). Allowed
+	 * keys : 401, 403, 404, 429, 500, 502, 503, 504.
+	 */
+	errorPageOverrides?: Record<number, string>;
 }
 
 /**

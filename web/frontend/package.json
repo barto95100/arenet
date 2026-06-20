@@ -40,6 +40,10 @@
 		"vitest": "^4.1.6"
 	},
 	"dependencies": {
+		"@codemirror/commands": "^6.10.3",
+		"@codemirror/lang-html": "^6.4.11",
+		"@codemirror/state": "^6.6.0",
+		"@codemirror/view": "^6.43.1",
 		"@xyflow/svelte": "^1.6.0",
 		"d3": "^7.9.0",
 		"topojson-client": "^3.1.0"
