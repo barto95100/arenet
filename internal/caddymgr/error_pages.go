@@ -28,6 +28,44 @@ import (
 
 // Step R — caddymgr-side emit of per-route custom error pages.
 //
+// SUPPORTED PLACEHOLDERS (Phase 1.1 docs)
+//
+// Operators write Caddy runtime placeholders inside their template
+// body — NOT Go template syntax. The static_response handler
+// expands them at serve time via repl.ReplaceKnown
+// (staticresp.go:208). Go template syntax {{.X}} is passed through
+// literally and renders as visible text — V2 backlog if there's
+// real demand (would need a Caddy templates handler wrap).
+//
+// Inside an errors-block route (set by HTTPErrorConfig.WithError
+// at server.go:765-787 BEFORE the error route runs) :
+//
+//   {http.error.status_code}    HTTP status code (e.g. 403)
+//   {http.error.status_text}    Status text (e.g. "Forbidden")
+//   {http.error.id}             Per-error Caddy-generated UUID
+//   {http.error.message}        Error message string
+//   {http.error.trace}          Handler trace (debug-only ; tends to leak internals)
+//
+// Inside a reverse_proxy handle_response error path (Phase 1.1
+// FIX 3 ; upstream returns 4xx/5xx) :
+//
+//   {http.reverse_proxy.status_code}    Upstream's literal status
+//                                        (verified reverseproxy.go:1081)
+//
+// Standard request placeholders survive into the error pipeline
+// because WithError uses a shallow copy of *Request with the same
+// Replacer (server.go:765-772) :
+//
+//   {http.request.method}       GET / POST / etc.
+//   {http.request.host}         Host header (route's primary host)
+//   {http.request.uri}          Full URI including query
+//   {http.request.uri.path}     Path only (no query)
+//   {http.request.uuid}         Per-request Caddy-generated UUID
+//                                (useful for "show this ID when you contact support")
+//   {http.request.remote.host}  Client IP (or proxy's IP if behind LB)
+//
+// Reference : https://caddyserver.com/docs/json/apps/http/#errors
+//
 // Wire shape verified against caddy v2.11.3 :
 //   - modules/caddyhttp/server.go:745 (HTTPErrorConfig { Routes RouteList })
 //   - modules/caddyhttp/staticresp.go:127 (static_response handler)

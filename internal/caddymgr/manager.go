@@ -1183,6 +1183,58 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			}
 		}
 
+		// Step R Phase 1.1 — upstream 4xx/5xx catch.
+		//
+		// Without this block, an upstream returning 404 or 502
+		// (Proxmox 404 on a missing API path ; Jellyfin 502 on
+		// a media-server restart ; ...) streams the upstream's
+		// raw body straight to the client. The server's
+		// apps.http.servers.<*>.errors.routes chain only fires
+		// on Caddy-generated HandlerErrors (verified
+		// empirically against caddy v2.11.3
+		// modules/caddyhttp/server.go:421-423 ; the err arg is
+		// the return of s.serveHTTP, not the upstream status —
+		// modules/caddyhttp/reverseproxy/reverseproxy.go:1229
+		// writes res.StatusCode silently in finalizeResponse).
+		//
+		// Pattern : handle_response with a ResponseMatcher on
+		// status_code [4,5] (1-digit class wildcards per
+		// responsematchers.go:47-57) re-emits the upstream
+		// status as an http.handlers.error which propagates
+		// as the wrapped roundtripSucceededError (line 1165)
+		// — that one IS a HandlerError, so it triggers the
+		// server's errors chain like a native Caddy error.
+		//
+		// {http.reverse_proxy.status_code} placeholder is set
+		// at reverseproxy.go:1081 BEFORE handle_response
+		// evaluates, so it carries the upstream's literal
+		// status into the error handler.
+		//
+		// Buffering : NOT needed. handle_response evaluates
+		// on headers ; the upstream body is closed unconsumed
+		// at line 1159 if the route doesn't read it. This
+		// matters for streaming routes (Jellyfin video,
+		// large file downloads) where buffer_responses=true
+		// would buffer the full body in proxy RAM before any
+		// decision — catastrophic on a 4K stream.
+		proxyHandler["handle_response"] = []map[string]any{
+			{
+				"match": map[string]any{
+					"status_code": []int{4, 5},
+				},
+				"routes": []map[string]any{
+					{
+						"handle": []map[string]any{
+							{
+								"handler":     "error",
+								"status_code": "{http.reverse_proxy.status_code}",
+							},
+						},
+					},
+				},
+			},
+		}
+
 		// Step K.1 — per-route auth (refactored from Step I.5's flat
 		// BasicAuthEnabled toggle into the AuthMode enum: "none",
 		// "basic", "forward_auth"). The three modes are mutually
@@ -1573,30 +1625,26 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	// catch-all policy added in Finding #6).
 	// Step R — error-page routes per server. Routes WITHOUT TLS
 	// land on arenet_http, routes WITH TLS land on arenet_https.
-	// The split mirrors how primary routes are dispatched. A nil
-	// result means no route on that server has any error config
-	// — we omit the Errors field entirely to keep the JSON tight
-	// for the no-feature case (byte-identical to pre-R for routes
-	// that don't touch error pages, since the built-in default
-	// only renders when the operator opts in).
+	// The split mirrors how primary routes are dispatched.
 	//
-	// Actually : every route gets the Arenet built-in default
-	// applied automatically — operators always see a branded
-	// error page even with zero config. To preserve byte-identical
-	// JSON for pre-R routes during the rollout window, the emit
-	// only fires if the operator has touched ANY error config
-	// (template ref OR overrides on ANY route). Once any route
-	// opts in, every route on the same server gets the default
-	// (so a single template-using route doesn't leave its
-	// siblings with Caddy's bare status response).
-	emitErrors := false
-	for _, r := range routes {
-		if r.ErrorPageTemplateID != "" || len(r.ErrorPageOverrides) > 0 {
-			emitErrors = true
-			break
-		}
-	}
-
+	// Phase 1.1 fix : the Errors block is emitted for EVERY
+	// route, not gated on operator opt-in. Phase 1 wrongly
+	// added a gate "only emit if at least one route has a
+	// template/override" with the rationale "preserve byte-
+	// identical JSON for pre-R rollout". That concern was a
+	// one-time rollout safety net — post-Phase-1 the operator
+	// expectation (and the original Step R spec) is "every
+	// route always gets the Arenet branded default page for
+	// 401/403/404/429/500/502/503/504 with zero config".
+	// Empirical smoke caught this : a freshly-created route
+	// returning a Caddy-generated 404 served the bare
+	// "404 page not found" plain-text body instead of the
+	// branded default.
+	//
+	// buildErrorRoutesForServer returns nil when no route is
+	// on this server's TLS scope ; the Errors field is then
+	// omitted via omitempty, which keeps the JSON tight for
+	// the http-only-or-https-only deployment cases.
 	servers := map[string]httpServer{
 		"arenet_http": {
 			Listen: []string{httpListen},
@@ -1606,12 +1654,10 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			Routes: httpRoutes,
 		},
 	}
-	if emitErrors {
-		if errRoutes := buildErrorRoutesForServer(routes, opts.ErrorTemplates, false, nil); len(errRoutes) > 0 {
-			srv := servers["arenet_http"]
-			srv.Errors = &httpErrors{Routes: errRoutes}
-			servers["arenet_http"] = srv
-		}
+	if errRoutes := buildErrorRoutesForServer(routes, opts.ErrorTemplates, false, nil); len(errRoutes) > 0 {
+		srv := servers["arenet_http"]
+		srv.Errors = &httpErrors{Routes: errRoutes}
+		servers["arenet_http"] = srv
 	}
 
 	if len(httpsRoutes) > 0 {
@@ -1632,10 +1678,8 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			TLSConnPolicies: []tlsConnectionPolicy{{}},
 			Routes:          httpsRoutes,
 		}
-		if emitErrors {
-			if errRoutes := buildErrorRoutesForServer(routes, opts.ErrorTemplates, true, nil); len(errRoutes) > 0 {
-				httpsServer.Errors = &httpErrors{Routes: errRoutes}
-			}
+		if errRoutes := buildErrorRoutesForServer(routes, opts.ErrorTemplates, true, nil); len(errRoutes) > 0 {
+			httpsServer.Errors = &httpErrors{Routes: errRoutes}
 		}
 		servers["arenet_https"] = httpsServer
 	}

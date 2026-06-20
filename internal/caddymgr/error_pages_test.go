@@ -372,18 +372,24 @@ func TestBuildConfigJSON_EmitsErrorsBlock_WhenAnyRouteOptsIn(t *testing.T) {
 	}
 }
 
-// TestBuildConfigJSON_NoErrorBlock_WhenNobodyOptsIn pins the "emit
-// nothing extra for pre-R operators" invariant : if no route has
-// any template ref / override, the apps.http.servers.<*>.errors
-// field is omitted entirely. Pre-R operators get byte-identical
-// JSON, no behaviour change, no Caddy reload diff.
-func TestBuildConfigJSON_NoErrorBlock_WhenNobodyOptsIn(t *testing.T) {
+// TestBuildConfigJSON_EmitsErrorsBlock_ForEveryRoute pins the
+// Phase 1.1 invariant : the Errors block is emitted on every
+// route regardless of operator opt-in. Phase 1 wrongly gated
+// the emit on "at least one route has a template/override" to
+// preserve byte-identical JSON for pre-R rollout ; smoke
+// caught a freshly-created route serving Caddy's bare
+// "404 page not found" plain-text instead of the Arenet
+// branded default. The gate was deleted ; this test pins
+// the absence of any regression that would re-introduce it.
+func TestBuildConfigJSON_EmitsErrorsBlock_ForEveryRoute(t *testing.T) {
 	routes := []storage.Route{
 		{
 			ID:        "r1",
 			Host:      "noerror.example.com",
 			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
 			LBPolicy:  storage.LBPolicyRoundRobin,
+			// No template ref, no overrides : the built-in
+			// Arenet default still applies.
 		},
 	}
 
@@ -391,9 +397,6 @@ func TestBuildConfigJSON_NoErrorBlock_WhenNobodyOptsIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
-	// Decode as map[string]any to inspect the apps.http.servers
-	// shape without struct-tag rigidity. The "errors" key must
-	// be absent everywhere.
 	var generic map[string]any
 	if err := json.Unmarshal(raw, &generic); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -401,11 +404,121 @@ func TestBuildConfigJSON_NoErrorBlock_WhenNobodyOptsIn(t *testing.T) {
 	apps := generic["apps"].(map[string]any)
 	http := apps["http"].(map[string]any)
 	servers := http["servers"].(map[string]any)
-	for name, srv := range servers {
-		srvMap := srv.(map[string]any)
-		if _, has := srvMap["errors"]; has {
-			t.Errorf("server %q has 'errors' field but no route opted in (byte-identical-for-pre-R invariant broken)", name)
+	srv := servers["arenet_http"].(map[string]any)
+	errors, has := srv["errors"]
+	if !has {
+		t.Fatal("arenet_http.errors absent — Phase 1.1 invariant broken (every route gets the branded default)")
+	}
+	errorsMap := errors.(map[string]any)
+	errorRoutes, has := errorsMap["routes"].([]any)
+	if !has || len(errorRoutes) != len(storage.SupportedErrorStatusCodes) {
+		t.Errorf("errors.routes len = %d ; want %d (one per supported code)",
+			len(errorRoutes), len(storage.SupportedErrorStatusCodes))
+	}
+}
+
+// --- Phase 1.1 FIX 3 : upstream 4xx/5xx catch ------------------------------
+
+// TestBuildConfigJSON_ReverseProxy_HandleResponse4xx5xx pins the
+// Phase 1.1 invariant that every reverse_proxy handler carries a
+// handle_response block matching status [4, 5] and re-emitting
+// via http.handlers.error so the server's errors.routes chain
+// fires on upstream 4xx/5xx too (not only on Caddy-generated
+// errors). Pre-Phase-1.1 the upstream body streamed through
+// unchanged — verified empirically against Proxmox 404 in smoke.
+func TestBuildConfigJSON_ReverseProxy_HandleResponse4xx5xx(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:        "r1",
+			Host:      "example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	// Generic map decode so we don't pull a full Caddy
+	// reverseproxy struct in just to find the handle_response
+	// nested field.
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	apps := generic["apps"].(map[string]any)
+	httpApp := apps["http"].(map[string]any)
+	servers := httpApp["servers"].(map[string]any)
+	srv := servers["arenet_http"].(map[string]any)
+	srvRoutes := srv["routes"].([]any)
+
+	// Walk the route → subroute → handlers chain to find the
+	// reverse_proxy handler. Routes use the wrapInSubroute
+	// canonical shape (manager.go:wrapInSubroute) so we have
+	// to traverse two levels.
+	found := false
+	for _, r := range srvRoutes {
+		rMap := r.(map[string]any)
+		handlers, ok := rMap["handle"].([]any)
+		if !ok {
+			continue
 		}
+		for _, h := range handlers {
+			hMap := h.(map[string]any)
+			if hMap["handler"] != "subroute" {
+				continue
+			}
+			subroutes, ok := hMap["routes"].([]any)
+			if !ok {
+				continue
+			}
+			for _, sr := range subroutes {
+				srMap := sr.(map[string]any)
+				subHandlers, ok := srMap["handle"].([]any)
+				if !ok {
+					continue
+				}
+				for _, sh := range subHandlers {
+					shMap := sh.(map[string]any)
+					if shMap["handler"] != "reverse_proxy" {
+						continue
+					}
+					// Found a reverse_proxy. Pin the
+					// handle_response shape.
+					hr, ok := shMap["handle_response"].([]any)
+					if !ok {
+						t.Fatal("reverse_proxy missing handle_response — Phase 1.1 FIX 3 regression")
+					}
+					if len(hr) != 1 {
+						t.Fatalf("handle_response len = %d ; want 1", len(hr))
+					}
+					hr0 := hr[0].(map[string]any)
+					match := hr0["match"].(map[string]any)
+					statusCodes := match["status_code"].([]any)
+					if len(statusCodes) != 2 {
+						t.Errorf("status_code len = %d ; want 2 (4xx + 5xx)", len(statusCodes))
+					}
+					// JSON unmarshal gives float64 for int values.
+					if statusCodes[0].(float64) != 4 || statusCodes[1].(float64) != 5 {
+						t.Errorf("status_code = %v ; want [4, 5]", statusCodes)
+					}
+					innerRoutes := hr0["routes"].([]any)
+					inner0 := innerRoutes[0].(map[string]any)
+					innerHandlers := inner0["handle"].([]any)
+					errHandler := innerHandlers[0].(map[string]any)
+					if errHandler["handler"] != "error" {
+						t.Errorf("inner handler = %v ; want 'error'", errHandler["handler"])
+					}
+					if errHandler["status_code"] != "{http.reverse_proxy.status_code}" {
+						t.Errorf("error.status_code = %v ; want {http.reverse_proxy.status_code}", errHandler["status_code"])
+					}
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no reverse_proxy handler found in emitted config")
 	}
 }
 
