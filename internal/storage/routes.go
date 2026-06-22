@@ -422,6 +422,39 @@ type Route struct {
 	// default empty list) stay byte-equal with pre-Y snapshots
 	// on disk + in backup/restore exports.
 	WAFExcludeRules []int `json:"waf_exclude_rules,omitempty"`
+	// WAFExcludeTags (Step X Option (e), 2026-06-22) is the
+	// per-route list of OWASP CRS tag strings the operator
+	// wants SILENCED. Tag-based exclusion is the operator-
+	// friendly sibling of WAFExcludeRules : instead of
+	// enumerating N cryptic rule IDs that share a tag
+	// (e.g. excluding 911100, 911011, 911012, ... all tagged
+	// "attack-protocol"), the operator can supply the single
+	// tag string and the whole family bypasses for this route.
+	//
+	// Use case : a route hosting a legacy client that sends
+	// non-RFC HTTP requests triggers the entire
+	// "attack-protocol" tag family. One entry here kills the
+	// family without the operator having to enumerate the
+	// 15+ rule IDs. A future CRS upgrade that adds new rules
+	// to the same tag automatically inherits the exclusion.
+	//
+	// Tag matching semantics (verified empirically against
+	// Coraza v3.7.0 rulegroup.go:136-144 + strings.go:118-125) :
+	// EXACT BYTE EQUALITY, case-sensitive, no wildcards, no
+	// regex. The API layer canonicalises operator input to
+	// lowercase + dedupes + sorts at normalizeExcludeTags
+	// time so the emit pool-key + the on-wire shape stay
+	// stable.
+	//
+	// Interaction with WAFDisableCRS : same as WAFExcludeRules.
+	// When the CRS is disabled the tag exclusions become no-ops
+	// but the caddymgr emit still ships them in the SecAction
+	// so toggling DisableCRS back to false re-engages
+	// everything atomically.
+	//
+	// JSON omitempty so pre-X(e) routes stay byte-equal with
+	// pre-X(e) snapshots on disk + in backup/restore exports.
+	WAFExcludeTags []string `json:"waf_exclude_tags,omitempty"`
 	// RateLimit (Step Q, 2026-06-18) is the per-route rate
 	// limiting configuration that gates inbound requests
 	// BEFORE the WAF / country-block / CrowdSec chain runs.

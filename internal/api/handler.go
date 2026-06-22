@@ -1163,6 +1163,26 @@ type routeRequest struct {
 	// per ADR D3 since two routes with the same effective
 	// exclusion set share a WAF pool).
 	WAFExcludeRules *[]int `json:"wafExcludeRules,omitempty"`
+	// WAFExcludeTags (Step X Option (e), 2026-06-22) is the
+	// per-route CRS tag exclusion list — the operator-
+	// friendly sibling of WAFExcludeRules. Same triple-state
+	// pointer convention :
+	//   nil           → preserve-on-omit (PUT) / default
+	//                   empty (POST)
+	//   non-nil [...]  → full replacement
+	//   non-nil []    → clear all tag exclusions
+	//
+	// Validation (see normalizeExcludeTags) : entries are
+	// lowercased, deduped, sorted ; whitespace/comma/quote
+	// in a single tag → 400 (would break the SecAction
+	// directive line shape) ; per-tag length cap
+	// wafExcludeTagMaxLen (128) ; total count cap
+	// wafExcludeTagsMaxCount (64).
+	//
+	// Cross-rule with WAFDisableCRS : when CRS is disabled
+	// the tag exclusions become no-ops at runtime but are
+	// still persisted + emitted (caddymgr pool-key stability).
+	WAFExcludeTags *[]string `json:"wafExcludeTags,omitempty"`
 	// RateLimit (Step Q, 2026-06-18) is the per-route rate
 	// limiter config. Triple-state pointer per the Phase
 	// 4.5 + Step X.1 conventions :
@@ -1417,6 +1437,12 @@ type routeResponse struct {
 	// verbatim doesn't accidentally trigger preserve-on-
 	// omit semantics on the put side.
 	WAFExcludeRules []int `json:"wafExcludeRules"`
+	// WAFExcludeTags (Step X Option (e)) — per-route CRS
+	// tag exclusion list. Always present (zero-length slice
+	// when the operator has no exclusions configured) for
+	// the same GET→PUT round-trip safety reason as
+	// WAFExcludeRules above.
+	WAFExcludeTags []string `json:"wafExcludeTags"`
 	// RateLimit (Step Q) — per-route rate-limit config
 	// echoed on every GET. nil when the route has no rate
 	// limit configured (the frontend toggle reads the nil
@@ -1525,6 +1551,7 @@ func toResponse(r storage.Route) routeResponse {
 		UploadStreamingMode: r.UploadStreamingMode,
 		WAFDisableCRS:       r.WAFDisableCRS,
 		WAFExcludeRules:     emptyIntSliceIfNil(r.WAFExcludeRules),
+		WAFExcludeTags:      emptyStringSliceIfNil(r.WAFExcludeTags),
 		RateLimit:           toRateLimitResp(r.RateLimit),
 		// Step R — error-page wiring pass-through (omitempty
 		// on the response struct so pre-R routes still emit
@@ -1559,6 +1586,17 @@ func toRateLimitResp(r *storage.RouteRateLimit) *rateLimitResp {
 func emptyIntSliceIfNil(s []int) []int {
 	if s == nil {
 		return []int{}
+	}
+	return s
+}
+
+// emptyStringSliceIfNil — sibling of emptyIntSliceIfNil for the
+// Step X (e) WAFExcludeTags wire field. Same rationale : the
+// frontend always edits a list, so nil → [] keeps the response
+// JSON contract uniform.
+func emptyStringSliceIfNil(s []string) []string {
+	if s == nil {
+		return []string{}
 	}
 	return s
 }

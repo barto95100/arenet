@@ -174,6 +174,10 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// list ; tests exercising the per-rule exclusion input
 		// override via the partial Route overrides parameter.
 		wafExcludeRules: [],
+		// Step X Option (e) — strict default empty tag exclusion
+		// list ; tests exercising the per-tag input override via
+		// the partial Route overrides parameter.
+		wafExcludeTags: [],
 		// Step Q — strict default no rate limit ; tests
 		// exercising the rate-limit section override via the
 		// partial Route overrides parameter set a non-null
@@ -2523,6 +2527,126 @@ describe('Routes page — Step X Option (c) wafExcludeRules textarea', () => {
 
 		const link = screen.getByTestId('waf-exclude-rules-security-link') as HTMLAnchorElement;
 		expect(link.getAttribute('href')).toBe('/security/discover-link');
+	});
+});
+
+// --- Step X Option (e) — wafExcludeTags textarea + datalist --------
+//
+// Sibling of (c). Same operator-visible contracts :
+//   1. Empty input → ships [] (no exclusions).
+//   2. Comma-separated tags parse + canonicalise (lowercase,
+//      dedup, sort) into the payload.
+//   3. Invalid characters (comma inside a tag, whitespace
+//      inside a tag, double-quote) surface a frontend error
+//      and block submit.
+//   4. Edit loads the persisted list back into the textarea.
+//   5. Datalist exposes the curated CRS tag catalog (24 entries).
+//   6. Textarea is disabled when wafDisableCRS is true.
+
+describe('Routes page — Step X Option (e) wafExcludeTags textarea', () => {
+	it('ships empty wafExcludeTags in the create payload when textarea is empty', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute());
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'empty-tags.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.wafExcludeTags).toEqual([]);
+	});
+
+	it('parses comma-separated tags into the canonicalised create payload', async () => {
+		apiMock.createRoute.mockResolvedValue(
+			makeRoute({ wafExcludeTags: ['attack-protocol', 'attack-sqli', 'paranoia-level/3'] })
+		);
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'parse-tags.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+		const textarea = screen.getByTestId('waf-exclude-tags-input') as HTMLTextAreaElement;
+		// Type out-of-order + mixed-case + duplicate to verify
+		// the frontend canonicalises (lowercase, dedup, sort).
+		await userEvent.type(textarea, 'Paranoia-Level/3, attack-sqli, ATTACK-PROTOCOL, attack-sqli');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.wafExcludeTags).toEqual(['attack-protocol', 'attack-sqli', 'paranoia-level/3']);
+	});
+
+	it('surfaces a frontend error on a comma-smuggling tag and blocks submit', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute());
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'bad-tag.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		// Note : the parser splits on `,`, so the way to land
+		// a comma-inside-a-tag here is to use a token that the
+		// split already produced and that still contains an
+		// invalid character. Double-quote is the cleanest signal.
+		const textarea = screen.getByTestId('waf-exclude-tags-input') as HTMLTextAreaElement;
+		await userEvent.type(textarea, 'attack-sqli"');
+
+		const errorNode = screen.getByTestId('waf-exclude-tags-error');
+		expect(errorNode.textContent ?? '').toContain('SecAction');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		expect(apiMock.createRoute).not.toHaveBeenCalled();
+	});
+
+	it('reloads the persisted tag list into the textarea on edit', async () => {
+		const seeded = makeRoute({
+			id: 'tag-edit',
+			host: 'tag-edit.local',
+			wafExcludeTags: ['attack-protocol', 'paranoia-level/3']
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		const hostCell = await screen.findByText('tag-edit.local');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const textarea = screen.getByTestId('waf-exclude-tags-input') as HTMLTextAreaElement;
+		expect(textarea.value).toBe('attack-protocol, paranoia-level/3');
+	});
+
+	it('exposes the curated CRS tag catalog via <datalist>', async () => {
+		render(Page);
+		await openCreateForm();
+		const datalist = document.getElementById('waf-exclude-tags-catalog') as HTMLDataListElement;
+		expect(datalist).not.toBeNull();
+		// 24 curated tags — the catalog is hardcoded so this
+		// is a stable assertion across CRS upstream updates.
+		expect(datalist.options.length).toBe(24);
+		// Spot-check a high-traffic tag is present.
+		const values = Array.from(datalist.options).map((o) => o.value);
+		expect(values).toContain('attack-protocol');
+		expect(values).toContain('paranoia-level/3');
+	});
+
+	it('disables the textarea when wafDisableCRS is true', async () => {
+		render(Page);
+		await openCreateForm();
+		const crsToggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
+		await userEvent.click(crsToggle);
+		// The confirm dialog gates the flip ; click the confirm
+		// button by label (the ConfirmDialog component doesn't
+		// carry a stable testid on the action button — finding
+		// the visible French label is the operator-equivalent
+		// path).
+		const confirmBtn = await screen.findByRole('button', { name: 'Désactiver le CRS' });
+		await userEvent.click(confirmBtn);
+		await tick();
+
+		const textarea = screen.getByTestId('waf-exclude-tags-input') as HTMLTextAreaElement;
+		expect(textarea.disabled).toBe(true);
 	});
 });
 

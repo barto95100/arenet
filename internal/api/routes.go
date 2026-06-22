@@ -801,6 +801,88 @@ const (
 	wafExcludeRuleArenetReservedHi = 199999 // [100000, 199999] is Arenet-reserved
 )
 
+// Step X Option (e) — WAFExcludeTags canonicalisation knobs.
+const (
+	// wafExcludeTagMaxLen guards against absurd operator
+	// input (a 1 MB tag value would bloat the SecAction
+	// directive string + the BoltDB row). CRS tags in
+	// practice are <50 chars ; 128 is generous.
+	wafExcludeTagMaxLen = 128
+	// wafExcludeTagsMaxCount caps the number of tags per
+	// route. The SecAction directive line is single-line
+	// (comma-separated ctl: actions) — a runaway list
+	// would build a kilobyte-scale string Coraza has to
+	// parse on every request. 64 entries is two orders of
+	// magnitude above any plausible operator config.
+	wafExcludeTagsMaxCount = 64
+)
+
+// normalizeExcludeTags validates + canonicalises an
+// operator-supplied list of CRS tags. Mirror of
+// normalizeExcludeRules for the string-tag domain.
+//
+// Canonicalisation steps :
+//
+//   - strip surrounding whitespace
+//   - reject empty-after-trim entries
+//   - reject entries containing characters that would break
+//     the SecAction directive line shape : whitespace + ","
+//     (the directive uses comma to separate ctl: actions,
+//     so an embedded comma would break the parse + smuggle
+//     additional actions)
+//   - lowercase (CRS tags are conventionally lowercase ; the
+//     match is case-sensitive at Coraza ctl.go runtime, so
+//     normalising at the API boundary saves the operator
+//     from "Attack-SQLi" silently never matching)
+//   - dedupe (operator may paste the same tag twice)
+//   - sort ascending (stable order = stable emit + audit diff)
+//
+// Returns ([], nil) for an explicit empty input — same clear-
+// exclusions semantics as normalizeExcludeRules.
+func normalizeExcludeTags(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return []string{}, nil
+	}
+	if len(in) > wafExcludeTagsMaxCount {
+		return nil, fmt.Errorf(
+			"wafExcludeTags: too many tags (%d) ; max %d per route",
+			len(in), wafExcludeTagsMaxCount,
+		)
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		t := strings.ToLower(strings.TrimSpace(raw))
+		if t == "" {
+			return nil, fmt.Errorf("wafExcludeTags: empty tag entry")
+		}
+		if len(t) > wafExcludeTagMaxLen {
+			return nil, fmt.Errorf(
+				"wafExcludeTags: tag %q exceeds %d chars",
+				t, wafExcludeTagMaxLen,
+			)
+		}
+		// Reject characters that would smuggle additional
+		// ctl: actions into the SecAction directive line.
+		// CRS tag convention is [a-z0-9/_-] — defence in
+		// depth against an operator-typed " ", "," or '"' that
+		// would corrupt the emit.
+		if strings.ContainsAny(t, " ,\t\n\r\"") {
+			return nil, fmt.Errorf(
+				"wafExcludeTags: tag %q contains whitespace or comma (invalid for SecAction directive)",
+				raw,
+			)
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // normalizeExcludeRules validates each rule ID in the input
 // slice, returns the deduped + ascending-sorted canonical
 // form for storage. Returns a 400-ready error on the first
@@ -1249,6 +1331,21 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		excludeRules = normalised
 	}
+	// Step X Option (e) — WAFExcludeTags on POST : mirror of the
+	// WAFExcludeRules wiring above. nil pointer → no tag
+	// exclusions (pre-X(e) byte-equivalent), supplied slice
+	// canonicalised via normalizeExcludeTags (lowercase, dedupe,
+	// sort, length + count caps, reject characters that would
+	// smuggle ctl: actions into the SecAction directive).
+	var excludeTags []string
+	if req.WAFExcludeTags != nil {
+		normalised, validationErr := normalizeExcludeTags(*req.WAFExcludeTags)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		excludeTags = normalised
+	}
 	// Step Q (2026-06-18) — RateLimit on POST : nil pointer
 	// = no rate limit (pre-Q byte-equivalent) ; non-nil
 	// supplied → validated by materialiseRateLimit which
@@ -1284,6 +1381,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		UploadStreamingMode: streamingMode,
 		WAFDisableCRS:       disableCRS,
 		WAFExcludeRules:     excludeRules,
+		WAFExcludeTags:      excludeTags,
 		RateLimit:           rateLimit,
 		// Step R — error-page wiring. Both fields are
 		// pass-through ; storage.validate() enforces the
@@ -1691,6 +1789,18 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		excludeRules = normalised
 	}
+	// Step X Option (e) — WAFExcludeTags on PUT: same preserve-
+	// on-nil + replace-on-non-nil contract as WAFExcludeRules
+	// above. Empty supplied slice → clear all tag exclusions.
+	excludeTags := previous.WAFExcludeTags
+	if req.WAFExcludeTags != nil {
+		normalised, validationErr := normalizeExcludeTags(*req.WAFExcludeTags)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		excludeTags = normalised
+	}
 	// Step Q (2026-06-18) — RateLimit on PUT : nil-pointer
 	// preserves the previously stored RateLimit. Non-nil
 	// (including the operator sending explicit JSON null —
@@ -1751,6 +1861,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		UploadStreamingMode: streamingMode,
 		WAFDisableCRS:       disableCRS,
 		WAFExcludeRules:     excludeRules,
+		WAFExcludeTags:      excludeTags,
 		RateLimit:           rateLimit,
 		// Step R — error-page wiring (update path mirrors
 		// create). Pass-through both fields ; storage.validate()

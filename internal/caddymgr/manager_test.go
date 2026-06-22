@@ -1074,6 +1074,20 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 			502: `<!doctype html><h1>502 — branded</h1><p>id: {http.request.uuid}</p>`,
 		},
 	})
+	// Step X Option (e) — fold the tag-exclusion shape into THIS
+	// canonical fixture so caddy.Validate provisions the
+	// ctl:ruleRemoveByTag actions against a real CRS-enabled
+	// route. The combined route also exercises mixed rule+tag
+	// exclusion (the dual-source SecAction code path).
+	routes = append(routes, storage.Route{
+		ID:        "r-wafexcludetags",
+		Host:      "tags.example.com",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+		WAFMode:   "detect",
+		WAFExcludeRules: []int{942100},
+		WAFExcludeTags:  []string{"attack-protocol", "paranoia-level/3"},
+	})
 	// The arenet_routemetrics Caddy module's Provision asserts
 	// metrics.GlobalRegistry() is non-nil (see internal/metrics).
 	// cmd/arenet/main.go installs the registry at boot via

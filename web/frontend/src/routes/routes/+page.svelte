@@ -105,7 +105,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides'> & {
 		healthCheck: HealthCheck;
 		// W.5 — narrow to the non-optional shape. The form
 		// always carries a CountryBlockRequest (mode="off"
@@ -137,6 +137,15 @@
 		// one place (the change handler) and the rest of the
 		// form code reads a clean typed array.
 		wafExcludeRules: number[];
+		// Step X Option (e) — same shape pattern as
+		// wafExcludeRules. Form holds a definite string[]
+		// (always non-nil, [] when no tag exclusions
+		// configured). The textarea binds to a derived
+		// string view (wafExcludeTagsInput) ; the parsed
+		// canonical-ish list lives here for clean payload
+		// assembly. Frontend doesn't apply lowercase/dedup
+		// (server canonicalises on write).
+		wafExcludeTags: string[];
 		// Step Q — rate-limit holds the object when the
 		// toggle is on, null when off. Distinct from the
 		// wire shape's optional (undefined) because the
@@ -210,6 +219,9 @@
 			// next GET → openEdit reload picks up the canonical
 			// form.
 			wafExcludeRules: [] as number[],
+			// Step X Option (e) — empty tag exclusion list by
+			// default ; mirrors wafExcludeRules.
+			wafExcludeTags: [] as string[],
 			// Step Q — rate limit OFF by default. Toggle in
 			// the form's "Limitation de débit" section flips
 			// to a default-seeded RouteRateLimit on. Operator
@@ -539,6 +551,122 @@
 		return ids.join(', ');
 	}
 
+	// Step X Option (e) — exclude-tags input parsing.
+	//
+	// Operator types a comma- / whitespace-separated list of CRS
+	// tags into the textarea backed by an HTML5 <datalist> for
+	// autocomplete-lite. formData.wafExcludeTags holds the typed
+	// string[]; wafExcludeTagsInput is the textarea projection.
+	// Mirrors the wafExcludeRules pipeline.
+	//
+	// Frontend validation rejects characters that would smuggle
+	// ctl: actions into the SecAction directive line (comma,
+	// whitespace, double-quote — same as the backend
+	// normalizeExcludeTags). Length cap + count cap mirror the
+	// server-side limits so the operator gets immediate feedback
+	// rather than a 400 round-trip surprise.
+	let wafExcludeTagsInput = $state('');
+
+	const WAF_EXCLUDE_TAG_MAX_LEN = 128;
+	const WAF_EXCLUDE_TAGS_MAX_COUNT = 64;
+
+	// Curated CRS v4 tag catalog (24 entries). Extracted
+	// empirically from the embedded coraza-coreruleset v4.25.0
+	// — these are the high-traffic / operator-relevant tags
+	// most likely to surface false positives on real workloads.
+	// CRS v4 dropped OWASP_TOP_10 + PCI tags (present in v3) so
+	// they're intentionally absent from this list. Hardcoded
+	// because the CRS is embedded at binary build time → the
+	// catalog is static cross-build ; no need for an API
+	// endpoint that just serves a constant string array.
+	const CRS_TAG_CATALOG: readonly string[] = [
+		'attack-disclosure',
+		'attack-fixation',
+		'attack-generic',
+		'attack-injection-generic',
+		'attack-injection-java',
+		'attack-injection-php',
+		'attack-injection-sqli',
+		'attack-injection-xss',
+		'attack-lfi',
+		'attack-protocol',
+		'attack-rce',
+		'attack-reputation-crawler',
+		'attack-reputation-scanner',
+		'attack-rfi',
+		'attack-session-fixation',
+		'language-java',
+		'language-multi',
+		'language-php',
+		'paranoia-level/1',
+		'paranoia-level/2',
+		'paranoia-level/3',
+		'paranoia-level/4',
+		'platform-multi',
+		'platform-unix'
+	] as const;
+
+	function parseExcludeTagsInput(raw: string): { tags: string[]; error: string | null } {
+		const trimmed = raw.trim();
+		if (trimmed === '') return { tags: [], error: null };
+		const tokens = trimmed
+			.split(/[,\n]+/)
+			.map((t) => t.trim())
+			.filter((t) => t.length > 0);
+		if (tokens.length > WAF_EXCLUDE_TAGS_MAX_COUNT) {
+			return {
+				tags: [],
+				error: `Trop de tags (${tokens.length}) — max ${WAF_EXCLUDE_TAGS_MAX_COUNT}`
+			};
+		}
+		const seen = new Set<string>();
+		const tags: string[] = [];
+		for (const token of tokens) {
+			if (token.length > WAF_EXCLUDE_TAG_MAX_LEN) {
+				return {
+					tags: [],
+					error: `"${token.slice(0, 24)}…" dépasse ${WAF_EXCLUDE_TAG_MAX_LEN} caractères`
+				};
+			}
+			// Mirror backend normalizeExcludeTags rejection of
+			// characters that would smuggle a second ctl: action
+			// into the SecAction directive line. Whitespace
+			// (other than the comma/newline separators already
+			// split above) inside a tag, double-quote, and stray
+			// commas are all caught.
+			if (/[\s,"]/.test(token)) {
+				return {
+					tags: [],
+					error: `"${token}" contient un caractère invalide pour SecAction (espace, virgule ou guillemet)`
+				};
+			}
+			const lower = token.toLowerCase();
+			if (seen.has(lower)) continue;
+			seen.add(lower);
+			tags.push(lower);
+		}
+		tags.sort();
+		return { tags, error: null };
+	}
+
+	function onExcludeTagsInputChange(ev: Event): void {
+		const raw = (ev.target as HTMLTextAreaElement).value;
+		wafExcludeTagsInput = raw;
+		const { tags, error } = parseExcludeTagsInput(raw);
+		if (error) {
+			errors = { ...errors, wafExcludeTags: error };
+			return;
+		}
+		const next = { ...errors };
+		delete next.wafExcludeTags;
+		errors = next;
+		formData.wafExcludeTags = tags;
+	}
+
+	function formatExcludeTagsInput(tags: string[]): string {
+		return tags.join(', ');
+	}
+
 	function closePanel() {
 		formOpen = false;
 		formMode = 'create';
@@ -765,6 +893,8 @@
 		// lives outside formData (it's a UX projection, not a
 		// payload field) so it needs an explicit reset.
 		wafExcludeRulesInput = '';
+		// Step X Option (e) — same projection reset as rules.
+		wafExcludeTagsInput = '';
 		// W.7 follow-up — country-block section starts
 		// closed for a fresh create form (matches the
 		// healthCheck details discipline; mode=off doesn't
@@ -879,6 +1009,9 @@
 			// future formData mutations don't ripple back into
 			// the source route object.
 			wafExcludeRules: [...(r.wafExcludeRules ?? [])],
+			// Step X Option (e) — load the persisted tag
+			// exclusion list (server-canonicalised).
+			wafExcludeTags: [...(r.wafExcludeTags ?? [])],
 			// Step Q — load the persisted rate-limit. Clone
 			// to break the formData ↔ source route reference
 			// so toggling the form section doesn't ripple
@@ -918,6 +1051,8 @@
 		// the loaded canonical list so the operator sees what's
 		// stored.
 		wafExcludeRulesInput = formatExcludeRulesInput(r.wafExcludeRules ?? []);
+		// Step X Option (e) — same seeding for the tags textarea.
+		wafExcludeTagsInput = formatExcludeTagsInput(r.wafExcludeTags ?? []);
 		void loadDNSProvider();
 		void loadForwardAuthProviders();
 		// Step O.4: refresh managed-domains snapshot — see comment
@@ -1394,6 +1529,14 @@
 			next.wafExcludeRules = reparsed.error;
 		}
 
+		// Step X Option (e) — same paste-then-submit guard
+		// against stale invalid tag input that escaped the
+		// onchange path.
+		const reparsedTags = parseExcludeTagsInput(wafExcludeTagsInput);
+		if (reparsedTags.error) {
+			next.wafExcludeTags = reparsedTags.error;
+		}
+
 		errors = next;
 		return Object.keys(next).length === 0;
 	}
@@ -1524,6 +1667,9 @@
 			// operator's current list. The server canonicalises
 			// (sort + dedup) before persist.
 			payload.wafExcludeRules = formData.wafExcludeRules;
+			// Step X Option (e) — always ship the tag
+			// exclusion list, same full-replace semantic.
+			payload.wafExcludeTags = formData.wafExcludeTags;
 			// Step Q — rate limit. When the toggle is ON ship
 			// the object (POST = new value, PUT = replace) ;
 			// when OFF leave the field absent so PUT preserves
@@ -2766,6 +2912,72 @@
 										>Sécurité</a
 									>.
 								{/if}
+								{#if formData.wafDisableCRS}
+									<br />
+									<span class="text-status-warn"
+										>⚠️ Le CRS est désactivé via le toggle ci-dessus — les
+										exclusions sont silencieuses jusqu'à réactivation.</span
+									>
+								{/if}
+							</p>
+						</div>
+
+						<!-- Step X Option (e) — tag-based exclusion list.
+						     Sibling of the rule-ID exclusion above ; more
+						     operator-friendly because one tag covers a
+						     whole family of CRS rules (and survives CRS
+						     updates that add new rules to that family).
+						     The HTML5 <datalist> below seeds an
+						     autocomplete-lite UX without dragging in a
+						     custom multi-select component — operators
+						     get suggestions from the curated 24-tag
+						     catalog when they focus the textarea, but
+						     can also type any custom tag (CRS v4 has
+						     114 distinct ; we surface the high-traffic
+						     subset). Gated when wafDisableCRS=true for
+						     the same reason as the rule list. -->
+						<div class="mt-4">
+							<label
+								for="route-waf-exclude-tags"
+								class="text-sm font-medium text-secondary block mb-1"
+							>
+								Tags OWASP à exclure
+								<span class="text-muted text-xs">(tags CRS séparés par virgule)</span>
+							</label>
+							<textarea
+								id="route-waf-exclude-tags"
+								data-testid="waf-exclude-tags-input"
+								value={wafExcludeTagsInput}
+								onchange={onExcludeTagsInputChange}
+								oninput={onExcludeTagsInputChange}
+								disabled={formData.wafDisableCRS}
+								placeholder="attack-protocol, attack-sqli, paranoia-level/3"
+								rows="2"
+								{...{ list: 'waf-exclude-tags-catalog' }}
+								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+							></textarea>
+							<datalist id="waf-exclude-tags-catalog">
+								{#each CRS_TAG_CATALOG as tag (tag)}
+									<option value={tag}></option>
+								{/each}
+							</datalist>
+							{#if errors.wafExcludeTags}
+								<p
+									class="text-xs text-status-down mt-1"
+									data-testid="waf-exclude-tags-error"
+								>
+									{errors.wafExcludeTags}
+								</p>
+							{/if}
+							<p class="text-xs text-muted mt-1 max-w-prose">
+								Désactive toutes les règles CRS portant le tag listé sur cette
+								route, par familles d'attaque (e.g. <code>attack-protocol</code>
+								exclut ATTACK-911100/921100/etc.). Plus maintenable qu'une
+								liste d'IDs : une mise à jour CRS qui ajoute des règles à ce
+								tag les exclut automatiquement. Format : tag minuscule, sans
+								espace ni virgule à l'intérieur (e.g.
+								<code>paranoia-level/3</code>). L'autocomplétion propose 24
+								tags courants ; n'importe quel tag CRS valide est accepté.
 								{#if formData.wafDisableCRS}
 									<br />
 									<span class="text-status-warn"

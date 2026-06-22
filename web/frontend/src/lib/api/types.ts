@@ -267,6 +267,19 @@ export interface Route {
 	 */
 	wafExcludeRules: number[];
 	/**
+	 * Step X Option (e) (2026-06-22) — per-route CRS tag
+	 * exclusion list. Always present (zero-length array
+	 * when no exclusions configured) so a GET→PUT
+	 * roundtrip doesn't trip the preserve-on-omit
+	 * semantic. Server-side canonical : lowercase + dedup
+	 * + ascending sort. Operator-friendly sibling of
+	 * wafExcludeRules — instead of pinning 15 rule IDs
+	 * one by one, exclude the tag family they share (e.g.
+	 * "attack-protocol" covers every CRS rule with that
+	 * tag, including future rules added in CRS updates).
+	 */
+	wafExcludeTags: string[];
+	/**
 	 * Step Q (2026-06-18) — per-route rate-limit config.
 	 * null when no rate limit configured ; non-null
 	 * carries the operator-supplied (events, window, key)
@@ -556,6 +569,15 @@ export interface RouteRequest {
 	 * canonical sorted + deduped form.
 	 */
 	wafExcludeRules?: number[];
+	/**
+	 * Step X Option (e) — wafExcludeTags on the wire. Same
+	 * preserve-on-omit + full-replace semantic as
+	 * wafExcludeRules. Server-side canonicalisation : lowercase
+	 * + dedup + ascending sort ; rejects characters that would
+	 * smuggle ctl: actions into the SecAction directive line
+	 * (comma, whitespace, double-quote).
+	 */
+	wafExcludeTags?: string[];
 	/**
 	 * Step Q (2026-06-18) — per-route rate limit on the wire.
 	 * Preserve-on-omit on PUT (omit → keep stored value),

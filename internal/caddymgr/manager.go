@@ -1435,7 +1435,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//     mutations would otherwise confuse the rules);
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
-		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules); wafHandler != nil {
+		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules, r.WAFExcludeTags); wafHandler != nil {
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -2434,7 +2434,7 @@ func normalizeKnownHost(h string) string {
 	return strings.ToLower(h)
 }
 
-func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excludeRules []int) map[string]any {
+func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excludeRules []int, excludeTags []string) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
 	}
@@ -2465,12 +2465,6 @@ func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excl
 	// disable bit off). Coraza's engine constructs cleanly with
 	// zero directives beyond SecRuleEngine itself.
 	loadCRS := !disableCRS
-	directives := ""
-	if loadCRS {
-		directives = "Include @coraza.conf-recommended\n" +
-			"Include @crs-setup.conf.example\n" +
-			"Include @owasp_crs/*.conf"
-	}
 
 	// Step X Option (c) (2026-06-18) — per-route per-rule
 	// exclusion list. Emits a SecAction directive that fires
@@ -2515,22 +2509,67 @@ func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excl
 	// exclusion list in one step, with no pool-key churn caused
 	// by the directives string changing shape on toggle.
 	//
-	// Skip when len(excludeRules) == 0 so routes that don't
-	// opt-in stay byte-equal with the pre-Y directives string
-	// (pool dedup with pre-Y routes preserved).
-	if len(excludeRules) > 0 {
-		directives += "\nSecAction \"id:999001,phase:1,pass,nolog,"
-		// Canonical sort the slice locally to keep the public
-		// argument untouched (callers may rely on their slice
-		// order elsewhere).
-		sorted := make([]int, len(excludeRules))
-		copy(sorted, excludeRules)
-		sort.Ints(sorted)
-		parts := make([]string, len(sorted))
-		for i, id := range sorted {
-			parts[i] = fmt.Sprintf("ctl:ruleRemoveById=%d", id)
+	// Skip when len(excludeRules) == 0 AND len(excludeTags) == 0
+	// so routes that don't opt-in stay byte-equal with the
+	// pre-X directives string (pool dedup with pre-X routes
+	// preserved). Routes that opt into EITHER mechanism get a
+	// single SecAction carrying every ctl: action — single
+	// rule = single rule = stable pool key.
+	//
+	// Step X Option (e) — tag-based exclusion. Coraza v3.7.0
+	// exposes ctl:ruleRemoveByTag=<tag> at ctl.go:302-308 with
+	// exact-match case-sensitive semantics (verified
+	// empirically pre-code at audit time). The API normalises
+	// operator input to lowercase ; here we trust the API
+	// canonicalisation and sort-by-string for stable emit order.
+	//
+	// Ordering — CRITICAL : the SecAction MUST be emitted
+	// BEFORE the CRS Includes, not after. Coraza evaluates
+	// phase:1 rules in file load order ; a ctl:ruleRemove*
+	// action that runs after its target rule has already
+	// fired is a no-op for the current transaction (the
+	// match event is already emitted, the request is already
+	// blocked in block mode). Empirically discovered Step X
+	// (e) smoke test 2026-06-22 against rule 920170 (GET-
+	// with-body, tag attack-protocol) : ctl:ruleRemoveByTag
+	// AND ctl:ruleRemoveById both failed to bypass it when
+	// the SecAction was appended ; both pass when prepended.
+	// Same root-cause pattern as adminAPIExclusionDirective
+	// (module.go:283-291). Pre-fix Step X (c) shipped in
+	// v2.3.0 (commit a133a53) carried this latent bug —
+	// operators believed their per-rule exclusions worked,
+	// they did not until this commit.
+	var preCRSDirectives string
+	if len(excludeRules) > 0 || len(excludeTags) > 0 {
+		secAction := "SecAction \"id:999001,phase:1,pass,nolog,"
+		// Canonical sort + de-alias the operator-supplied slices
+		// locally to keep the public arguments untouched (callers
+		// may rely on their slice order elsewhere).
+		sortedRules := make([]int, len(excludeRules))
+		copy(sortedRules, excludeRules)
+		sort.Ints(sortedRules)
+		sortedTags := make([]string, len(excludeTags))
+		copy(sortedTags, excludeTags)
+		sort.Strings(sortedTags)
+		parts := make([]string, 0, len(sortedRules)+len(sortedTags))
+		for _, id := range sortedRules {
+			parts = append(parts, fmt.Sprintf("ctl:ruleRemoveById=%d", id))
 		}
-		directives += strings.Join(parts, ",") + "\""
+		for _, tag := range sortedTags {
+			parts = append(parts, fmt.Sprintf("ctl:ruleRemoveByTag=%s", tag))
+		}
+		secAction += strings.Join(parts, ",") + "\""
+		preCRSDirectives = secAction
+	}
+
+	directives := preCRSDirectives
+	if loadCRS {
+		if directives != "" {
+			directives += "\n"
+		}
+		directives += "Include @coraza.conf-recommended\n" +
+			"Include @crs-setup.conf.example\n" +
+			"Include @owasp_crs/*.conf"
 	}
 
 	out := map[string]any{
