@@ -131,17 +131,17 @@ voir [Cas particuliers](#cas-particuliers)).
 ### Scénario 1 — deux apex distincts
 
 Setup :
-- MD #1 : `worldgeekwide.fr`
-- MD #2 : `sct-telecom.fr`
-
+- MD #1 : `example.aa`
+- MD #2 : `example.bb`
+ 
 Routes :
-- `sonarr.worldgeekwide.fr` → couvert par `worldgeekwide.fr`
-- `proxmox.sct-telecom.fr` → couvert par `sct-telecom.fr`
+- `sonarr.example.aa` → couvert par `example.aa`
+- `proxmox.example.bb` → couvert par `example.bb`
 - `api.other-domain.com` → non couvert → cert dédié auto-émis
 
 Sur la liste des routes le badge **« Couvert par
-*.worldgeekwide.fr »** s'affiche sur les routes du premier
-groupe, **« Couvert par *.sct-telecom.fr »** sur le
+*.example.aa »** s'affiche sur les routes du premier
+groupe, **« Couvert par *.example.bb »** sur le
 deuxième, **« Cert dédié (HTTP-01) »** sur la route hors
 des deux apex.
 
