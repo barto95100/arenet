@@ -31,6 +31,7 @@
 	import HtmlEditor from '$lib/components/HtmlEditor.svelte';
 	import {
 		errorTemplatesApi,
+		BUILTIN_TEMPLATE_ID,
 		SUPPORTED_ERROR_STATUS_CODES,
 		ERROR_PAGE_PLACEHOLDERS,
 		type ErrorTemplate,
@@ -80,6 +81,13 @@
 
 	// Null when creating a new template, populated when editing.
 	let editingId = $state<string | null>(null);
+	// Step R Phase 2.1 — when the operator opens the virtual
+	// builtin for inspection, the editor runs in read-only
+	// mode : Save is hidden, Delete is hidden, the only
+	// available action is Duplicate. The flag distinguishes
+	// "editing a real DB template" (false) from "previewing
+	// the builtin to decide whether to duplicate" (true).
+	let editingBuiltin = $state(false);
 	let editName = $state('');
 	let editDescription = $state('');
 	// Sparse Pages map ; codes absent fall back to template-side
@@ -119,6 +127,7 @@
 
 	function startCreate(): void {
 		editingId = null;
+		editingBuiltin = false;
 		editName = '';
 		editDescription = '';
 		editPages = {};
@@ -130,6 +139,7 @@
 
 	function startEdit(t: ErrorTemplate): void {
 		editingId = t.id;
+		editingBuiltin = t.isBuiltin === true;
 		editName = t.name;
 		editDescription = t.description ?? '';
 		// Cast key strings back to numbers (server returns
@@ -145,12 +155,76 @@
 		view = 'edit';
 	}
 
+	// Step R Phase 2.1 — duplicate flow.
+	//
+	// Operator clicks "Dupliquer" on the builtin card (or on
+	// any editable row's hypothetical future Duplicate
+	// button) → we create a fresh DB template with the source
+	// content + a unique-among-existing name following the
+	// macOS Finder pattern: "Copy of X", "Copy of X (2)",
+	// "Copy of X (3)" ... Backend has no name uniqueness
+	// constraint (Phase 1 storage validate) so the suffix
+	// strategy is pure UX hygiene ; collisions would be
+	// silently accepted server-side, but the operator
+	// shouldn't see two rows with the same name.
+	//
+	// On success : reload list, switch to editing the new
+	// (now editable) row so the operator can immediately
+	// customise.
+	async function duplicateTemplate(source: ErrorTemplate): Promise<void> {
+		const baseName = `Copy of ${source.name}`;
+		const uniqueName = computeUniqueCopyName(baseName, templates);
+		const pages: Record<string, string> = { ...source.pages };
+		try {
+			const created = await errorTemplatesApi.create({
+				name: uniqueName,
+				description: source.description,
+				pages
+			});
+			pushToast(`Template "${uniqueName}" créé`, 'success');
+			await loadTemplates();
+			startEdit(created);
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : 'failed to duplicate template';
+			pushToast(msg, 'danger');
+		}
+	}
+
+	// macOS Finder-style copy naming. Returns baseName if no
+	// row already uses it ; otherwise appends "(N)" with the
+	// smallest N >= 2 that resolves the conflict.
+	//
+	// Exported via export shim at the bottom of the script so
+	// the page.test.ts can pin the algorithm without going
+	// through the full duplicate-and-create round-trip.
+	function computeUniqueCopyName(baseName: string, existing: ErrorTemplate[]): string {
+		const names = new Set(existing.map((t) => t.name));
+		if (!names.has(baseName)) return baseName;
+		for (let n = 2; n < 1000; n++) {
+			const candidate = `${baseName} (${n})`;
+			if (!names.has(candidate)) return candidate;
+		}
+		// Operator has somehow created 998 copies of the same
+		// template ; degrade with a timestamp rather than loop
+		// forever. Genuinely never reached in practice.
+		return `${baseName} (${Date.now()})`;
+	}
+
 	function cancelEdit(): void {
 		view = 'list';
 		previewHtml = '';
 	}
 
 	async function saveTemplate(): Promise<void> {
+		// Phase 2.1 — the read-only builtin path : the Save
+		// button is hidden in the template (see {#if !editingBuiltin}
+		// guard around the actions snippet) so this branch
+		// should be unreachable. Defence-in-depth in case a
+		// future refactor surfaces the button :
+		if (editingBuiltin) {
+			pushToast('Le template « Arenet default » est en lecture seule ; utilisez « Dupliquer ».', 'danger');
+			return;
+		}
 		if (!editName.trim()) {
 			pushToast('Le nom du template est requis', 'danger');
 			return;
@@ -338,12 +412,46 @@
 
 <PageHeader
 	eyebrow="Réglages · Pages d'erreur"
-	title={view === 'list' ? 'Pages d\'erreur personnalisées' : (editingId ? 'Modifier le template' : 'Nouveau template')}
+	title={view === 'list'
+		? "Pages d'erreur personnalisées"
+		: editingBuiltin
+			? 'Aperçu : Arenet default'
+			: editingId
+				? 'Modifier le template'
+				: 'Nouveau template'}
 	subtitle="Templates HTML servis par Caddy pour les codes 401/403/404/429/500/502/503/504. Sans template attaché à une route, le défaut Arenet branded s'applique automatiquement."
 >
 	{#snippet actions()}
 		{#if view === 'list'}
 			<button class="tb-btn primary" onclick={startCreate}>+ Nouveau template</button>
+		{:else if editingBuiltin}
+			<!-- Read-only mode : no Save. Operator returns to
+			     list or duplicates to customise. -->
+			<button class="tb-btn" onclick={cancelEdit}>Retour</button>
+			<button
+				class="tb-btn primary"
+				onclick={() => {
+					// Materialise a synthetic ErrorTemplate from the
+					// current edit buffer to feed the duplicate flow.
+					// Same content as what was loaded ; the duplicate
+					// will lift it to a real editable template.
+					const pages: Record<string, string> = {};
+					for (const [k, v] of Object.entries(editPages)) {
+						if (v) pages[String(k)] = v;
+					}
+					void duplicateTemplate({
+						id: BUILTIN_TEMPLATE_ID,
+						name: editName,
+						description: editDescription,
+						pages,
+						createdAt: '',
+						updatedAt: '',
+						isBuiltin: true
+					});
+				}}
+			>
+				Dupliquer pour customiser
+			</button>
 		{:else}
 			<button class="tb-btn" onclick={cancelEdit} disabled={saving}>Annuler</button>
 			<button class="tb-btn primary" onclick={() => void saveTemplate()} disabled={saving}>
@@ -384,16 +492,48 @@
 				</thead>
 				<tbody>
 					{#each templates as t (t.id)}
-						<tr>
-							<td><strong>{t.name}</strong></td>
+						<tr class:builtin-row={t.isBuiltin}>
+							<td>
+								<strong>{t.name}</strong>
+								{#if t.isBuiltin}
+									<span class="builtin-badge" title="Template Arenet par défaut, lecture seule">
+										Built-in
+									</span>
+								{/if}
+							</td>
 							<td class="dim">{t.description || '—'}</td>
 							<td class="num mono">{Object.keys(t.pages).length} / 8</td>
-							<td class="dim">{formatDate(t.updatedAt)}</td>
+							<td class="dim">
+								{t.isBuiltin ? '—' : formatDate(t.updatedAt)}
+							</td>
 							<td class="actions">
-								<button class="tb-btn sm" onclick={() => startEdit(t)}>Modifier</button>
-								<button class="tb-btn sm danger" onclick={() => askDelete(t)}>
-									Supprimer
-								</button>
+								{#if t.isBuiltin}
+									<!-- Read-only : Inspect goes to the editor in
+									     read-only mode ; Duplicate creates an
+									     editable copy. No Modifier / Supprimer. -->
+									<button class="tb-btn sm" onclick={() => startEdit(t)}>
+										Aperçu
+									</button>
+									<button
+										class="tb-btn sm primary"
+										onclick={() => void duplicateTemplate(t)}
+										title="Créer un nouveau template à partir du défaut"
+									>
+										Dupliquer
+									</button>
+								{:else}
+									<button class="tb-btn sm" onclick={() => startEdit(t)}>Modifier</button>
+									<button
+										class="tb-btn sm"
+										onclick={() => void duplicateTemplate(t)}
+										title="Créer un nouveau template à partir de celui-ci"
+									>
+										Dupliquer
+									</button>
+									<button class="tb-btn sm danger" onclick={() => askDelete(t)}>
+										Supprimer
+									</button>
+								{/if}
 							</td>
 						</tr>
 					{/each}
@@ -404,6 +544,18 @@
 {:else}
 	<!-- Editor view -->
 	<div class="editor-grid">
+		{#if editingBuiltin}
+			<!-- Step R Phase 2.1 — read-only banner. Makes
+			     the inputs-disabled state operator-obvious so
+			     the absence of a Save button isn't perceived
+			     as a UI bug. -->
+			<div class="card builtin-banner">
+				<strong>Lecture seule</strong>
+				— ce template est le défaut Arenet. Cliquez sur
+				« Dupliquer pour customiser » en haut à droite pour
+				créer une copie éditable.
+			</div>
+		{/if}
 		<!-- Top : name + description -->
 		<div class="card meta-card">
 			<label>
@@ -414,6 +566,7 @@
 					placeholder="ex: WGW Branding"
 					class="meta-input"
 					maxlength="100"
+					readonly={editingBuiltin}
 				/>
 			</label>
 			<label>
@@ -424,6 +577,7 @@
 					placeholder="Pages d'erreur brandées pour worldgeekwide.fr"
 					class="meta-input"
 					maxlength="500"
+					readonly={editingBuiltin}
 				/>
 			</label>
 		</div>
@@ -457,6 +611,7 @@
 					label="HTML body for status code {activeCode}"
 					placeholder="<!doctype html>..."
 					minHeight={360}
+					readonly={editingBuiltin}
 				/>
 			</div>
 			<div class="preview-pane">
@@ -480,13 +635,19 @@
 		<!-- Variables panel -->
 		<div class="card vars-card">
 			<details open>
-				<summary>Variables Caddy disponibles (cliquez pour insérer)</summary>
+				<summary>
+					Variables Caddy disponibles
+					{#if !editingBuiltin}(cliquez pour insérer){/if}
+				</summary>
 				<div class="vars-grid">
 					{#each ERROR_PAGE_PLACEHOLDERS as p (p.token)}
 						<button
 							class="var-btn"
-							title={`Exemple : ${p.example}`}
+							title={editingBuiltin
+								? `Exemple : ${p.example} (lecture seule)`
+								: `Exemple : ${p.example}`}
 							onclick={() => insertPlaceholder(p.token)}
+							disabled={editingBuiltin}
 						>
 							<code>{p.token}</code>
 							<span class="var-label">{p.label}</span>
@@ -566,6 +727,34 @@
 	.error { color: var(--status-down); }
 
 	/* List view */
+	/* Step R Phase 2.1 — builtin row + badge + read-only banner. */
+	.tpl-table .builtin-row {
+		background: color-mix(in oklch, var(--accent-cyan) 3%, transparent);
+	}
+	.builtin-badge {
+		display: inline-block;
+		margin-left: 8px;
+		padding: 1px 7px;
+		border-radius: 999px;
+		background: color-mix(in oklch, var(--accent-cyan) 16%, transparent);
+		color: var(--accent-cyan);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		vertical-align: middle;
+	}
+	.builtin-banner {
+		padding: 10px 14px;
+		font-size: 12.5px;
+		color: var(--fg);
+		background: color-mix(in oklch, var(--accent-cyan) 8%, transparent);
+		border-left: 3px solid var(--accent-cyan);
+	}
+	.builtin-banner strong {
+		color: var(--accent-cyan);
+	}
+
 	.tpl-table {
 		width: 100%;
 		border-collapse: collapse;

@@ -43,7 +43,11 @@ func validErrorTemplateBody(name string) string {
 	}`
 }
 
-func TestErrorTemplate_GET_List_Empty(t *testing.T) {
+func TestErrorTemplate_GET_List_OnlyBuiltinWhenDBEmpty(t *testing.T) {
+	// Phase 2.1 changed the contract : an empty DB now returns
+	// 1 entry (the virtual builtin), not zero. Pre-Phase-2.1
+	// this test expected len == 0 ; the rename + assertion
+	// update pin the new invariant.
 	env := newTestEnv(t, false)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/error-templates", nil)
 	rec := httptest.NewRecorder()
@@ -55,8 +59,11 @@ func TestErrorTemplate_GET_List_Empty(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("expected empty list ; got %d items", len(got))
+	if len(got) != 1 {
+		t.Errorf("expected 1 entry (virtual builtin) ; got %d items", len(got))
+	}
+	if got[0].ID != "arenet-default" || !got[0].IsBuiltin {
+		t.Errorf("expected first entry to be the virtual builtin ; got %+v", got[0])
 	}
 }
 
@@ -260,5 +267,131 @@ func TestErrorTemplate_Preview_RejectsMissingStatusCode(t *testing.T) {
 	env.router.ServeHTTP(rec, preview)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status=%d ; want 400 for missing statusCode", rec.Code)
+	}
+}
+
+// --- Step R Phase 2.1 — virtual builtin template -----------------------------
+
+// TestErrorTemplate_Builtin_AppearsInList pins the Phase 2.1
+// invariant : the GET /api/v1/error-templates list ALWAYS
+// returns the virtual "arenet-default" entry first, even on
+// an empty DB. The operator sees + can duplicate it without
+// any seed migration.
+func TestErrorTemplate_Builtin_AppearsInList(t *testing.T) {
+	env := newTestEnv(t, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/error-templates", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	var list []errorTemplateResponse
+	_ = json.NewDecoder(rec.Body).Decode(&list)
+	if len(list) < 1 {
+		t.Fatalf("expected at least 1 entry (builtin) ; got %d", len(list))
+	}
+	if list[0].ID != "arenet-default" {
+		t.Errorf("first entry ID = %q ; want arenet-default", list[0].ID)
+	}
+	if !list[0].IsBuiltin {
+		t.Errorf("first entry IsBuiltin = false ; want true")
+	}
+	// The 8 supported codes must all appear in the builtin
+	// pages map (Phase 1 hardcoded set).
+	for _, code := range []int{401, 403, 404, 429, 500, 502, 503, 504} {
+		if _, ok := list[0].Pages[code]; !ok {
+			t.Errorf("builtin Pages missing code %d", code)
+		}
+	}
+}
+
+func TestErrorTemplate_Builtin_GetReturnsSynthesised(t *testing.T) {
+	env := newTestEnv(t, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/error-templates/arenet-default", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	var resp errorTemplateResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.ID != "arenet-default" || !resp.IsBuiltin {
+		t.Errorf("got %+v ; want builtin", resp)
+	}
+}
+
+func TestErrorTemplate_Builtin_PUT_403(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{"name":"hijacked","pages":{"403":"<h1>x</h1>"}}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/error-templates/arenet-default",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status=%d ; want 403 (builtin is read-only)", rec.Code)
+	}
+}
+
+func TestErrorTemplate_Builtin_DELETE_403(t *testing.T) {
+	env := newTestEnv(t, false)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/error-templates/arenet-default", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status=%d ; want 403 (builtin is read-only)", rec.Code)
+	}
+}
+
+func TestErrorTemplate_Builtin_Preview_RendersWithSubstitution(t *testing.T) {
+	env := newTestEnv(t, false)
+	// Preview on the virtual builtin must work WITHOUT a
+	// store row (no seed). The arenetDefaultErrorPages map
+	// in caddymgr is the source of truth.
+	preview := httptest.NewRequest(http.MethodGet,
+		"/api/v1/error-templates/arenet-default/preview?statusCode=429", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, preview)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	bodyStr := rec.Body.String()
+	// Built-in 429 page renders "429" via {http.error.status_code}
+	// substitution + "Too Many Requests" verbatim from the template.
+	if !strings.Contains(bodyStr, "429") {
+		t.Errorf("preview missing 429 ; body=%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Too Many Requests") {
+		t.Errorf("preview missing 'Too Many Requests' ; body=%s", bodyStr)
+	}
+}
+
+func TestErrorTemplate_Builtin_Preview_UnsupportedCode_404(t *testing.T) {
+	env := newTestEnv(t, false)
+	preview := httptest.NewRequest(http.MethodGet,
+		"/api/v1/error-templates/arenet-default/preview?statusCode=418", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, preview)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status=%d ; want 400 for unsupported code on builtin", rec.Code)
+	}
+}
+
+func TestIsBuiltinTemplateID(t *testing.T) {
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"arenet-default", true},
+		{"arenet-default ", false}, // trailing space is a different ID
+		{"ARENET-DEFAULT", false},  // case-sensitive
+		{"", false},
+		{"00000000-0000-0000-0000-000000000000", false}, // UUID shape
+	}
+	for _, c := range cases {
+		got := isBuiltinTemplateID(c.id)
+		if got != c.want {
+			t.Errorf("isBuiltinTemplateID(%q) = %v ; want %v", c.id, got, c.want)
+		}
 	}
 }

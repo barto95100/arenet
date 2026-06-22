@@ -57,7 +57,8 @@
 		| 'users'
 		| 'settings'
 		| 'audit'
-		| 'alerting';
+		| 'alerting'
+		| 'error-pages';
 
 	type NavItem = {
 		href: string;
@@ -108,6 +109,17 @@
 			items: [
 				{ href: '/users', label: 'Utilisateurs', icon: 'users', adminOnly: true },
 				{ href: '/settings', label: 'Settings', icon: 'settings', adminOnly: true },
+				// Step R Phase 2.1 — /settings/error-pages nav gap.
+				// Page existed since Phase 2 but had no sidebar
+				// entry, so operators couldn't reach the custom
+				// error-pages CRUD without typing the URL. Sits
+				// next to Settings as a sibling /settings/* surface.
+				{
+					href: '/settings/error-pages',
+					label: "Pages d'erreur",
+					icon: 'error-pages',
+					adminOnly: true
+				},
 				// Step CS.2 follow-up — /audit operator-flagged
 				// nav gap. Page existed but had no sidebar entry,
 				// so operators were forced to type the URL.
@@ -211,6 +223,16 @@
 			<!-- Bell glyph: dome + base + clapper. AL.4.b.1. -->
 			<path d="M8 2c-2.5 0-4 1.7-4 4v3l-1.5 2h11L12 9V6c0-2.3-1.5-4-4-4z" />
 			<path d="M6.5 13.5a1.5 1.5 0 003 0" />
+		{:else if icon === 'error-pages'}
+			<!-- Document with exclamation glyph : page outline +
+			     dog-eared corner + central "!" mark. Conveys
+			     "error page template" without using a pure
+			     AlertTriangle (which is reserved for runtime
+			     warnings in the rest of the UI). Step R Phase 2.1. -->
+			<path d="M3.5 2h6l3 3v9a.5.5 0 01-.5.5h-8.5a.5.5 0 01-.5-.5V2.5a.5.5 0 01.5-.5z" />
+			<path d="M9.5 2v3h3" />
+			<path d="M8 8v3" />
+			<circle cx="8" cy="12.7" r="0.5" fill="currentColor" stroke="none" />
 		{/if}
 	</svg>
 {/snippet}

@@ -42,7 +42,25 @@ export interface ErrorTemplate {
 	pages: Record<string, string>;
 	createdAt: string;
 	updatedAt: string;
+	/**
+	 * Step R Phase 2.1 — true on the single virtual entry
+	 * ("arenet-default") synthesised by the backend list
+	 * handler from the caddymgr-owned arenetDefaultErrorPages
+	 * map. The list view renders a "Built-in" badge + hides
+	 * Edit/Delete actions + shows a Duplicate button instead.
+	 * Real DB templates omit this field (JSON omitempty), so
+	 * the absence-by-default reads as false on the wire.
+	 */
+	isBuiltin?: boolean;
 }
+
+/**
+ * Step R Phase 2.1 — stable ID under which the backend
+ * surfaces the virtual builtin. Frontend gates a few
+ * action paths (no save / no delete / duplicate flow)
+ * against this exact string.
+ */
+export const BUILTIN_TEMPLATE_ID = 'arenet-default';
 
 /**
  * Wire shape accepted by POST + PUT. Same fields as ErrorTemplate

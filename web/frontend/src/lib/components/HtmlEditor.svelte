@@ -47,13 +47,24 @@
 		placeholder?: string;
 		/** Optional min-height in px. Default 320. */
 		minHeight?: number;
+		/**
+		 * Step R Phase 2.1 — when true, the editor disallows
+		 * edits via Caddymgr EditorView.editable.of(false).
+		 * The doc is still visible + scrollable, but typing,
+		 * pasting, and IME composition are blocked. Used by
+		 * /settings/error-pages when the operator opens the
+		 * virtual builtin (no save path, only Duplicate-to-
+		 * customise).
+		 */
+		readonly?: boolean;
 	}
 
 	let {
 		value = $bindable(''),
 		label,
 		placeholder = '',
-		minHeight = 320
+		minHeight = 320,
+		readonly = false
 	}: Props = $props();
 
 	let containerEl: HTMLDivElement | undefined = $state();
@@ -77,6 +88,15 @@
 				html(),
 				keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
 				EditorView.lineWrapping,
+				// Phase 2.1 — read-only gate. EditorView.editable
+				// is a compartment-style facet that controls the
+				// contenteditable attribute on the .cm-content
+				// element. Static at construction time ; if the
+				// caller toggles `readonly` post-mount they'd need
+				// a reconfigure pass (V2 if real demand). For the
+				// builtin-vs-DB-template UX, the mount is always
+				// fresh (state-driven view toggle).
+				EditorView.editable.of(!readonly),
 				EditorView.theme({
 					'&': { height: '100%', minHeight: `${minHeight}px` },
 					'.cm-scroller': {

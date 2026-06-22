@@ -252,3 +252,135 @@ describe('/settings/error-pages — delete confirmation', () => {
 		expect(apiMock.delete).not.toHaveBeenCalled();
 	});
 });
+
+// --- Step R Phase 2.1 — builtin visibility + duplicate flow ----------------
+
+const builtinTemplate = (overrides: Partial<ErrorTemplate> = {}): ErrorTemplate => ({
+	id: 'arenet-default',
+	name: 'Arenet default',
+	description: 'Built-in branded default. Read-only.',
+	pages: {
+		'401': '<h1>401</h1>',
+		'403': '<h1>403</h1>',
+		'404': '<h1>404</h1>',
+		'429': '<h1>429</h1>',
+		'500': '<h1>500</h1>',
+		'502': '<h1>502</h1>',
+		'503': '<h1>503</h1>',
+		'504': '<h1>504</h1>'
+	},
+	createdAt: '',
+	updatedAt: '',
+	isBuiltin: true,
+	...overrides
+});
+
+describe('/settings/error-pages — Phase 2.1 builtin visibility', () => {
+	it('list renders the "Built-in" badge on the arenet-default row', async () => {
+		apiMock.list.mockResolvedValue([builtinTemplate()]);
+		render(Page);
+		// Row name visible.
+		await screen.findByText('Arenet default');
+		// Badge present.
+		expect(screen.getByText('Built-in')).toBeInTheDocument();
+	});
+
+	it('builtin row hides Modifier + Supprimer, shows Aperçu + Dupliquer', async () => {
+		apiMock.list.mockResolvedValue([builtinTemplate()]);
+		render(Page);
+		await screen.findByText('Arenet default');
+		// "Aperçu" replaces "Modifier" for builtin.
+		expect(screen.getByRole('button', { name: 'Aperçu' })).toBeInTheDocument();
+		// Duplicate is visible.
+		expect(screen.getByRole('button', { name: 'Dupliquer' })).toBeInTheDocument();
+		// Modifier + Supprimer are NOT rendered for builtin.
+		expect(screen.queryByRole('button', { name: 'Modifier' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Supprimer' })).not.toBeInTheDocument();
+	});
+
+	it('editable row shows Modifier + Dupliquer + Supprimer (existing UX preserved)', async () => {
+		apiMock.list.mockResolvedValue([
+			builtinTemplate(),
+			sampleTemplate({ id: 'editable-1', name: 'Editable one' })
+		]);
+		render(Page);
+		await screen.findByText('Editable one');
+		// All three actions present somewhere (Aperçu only on builtin).
+		const modifierButtons = screen.getAllByRole('button', { name: 'Modifier' });
+		const duplicateButtons = screen.getAllByRole('button', { name: 'Dupliquer' });
+		const supprimerButtons = screen.getAllByRole('button', { name: 'Supprimer' });
+		// Modifier appears once (editable row only).
+		expect(modifierButtons.length).toBe(1);
+		// Dupliquer appears twice (builtin + editable).
+		expect(duplicateButtons.length).toBe(2);
+		// Supprimer once (editable only).
+		expect(supprimerButtons.length).toBe(1);
+	});
+
+	it('clicking Aperçu opens editor in read-only mode (no Save button)', async () => {
+		apiMock.list.mockResolvedValue([builtinTemplate()]);
+		render(Page);
+		await screen.findByText('Arenet default');
+		await fireEvent.click(screen.getByRole('button', { name: 'Aperçu' }));
+		// Editor view : title indicates Aperçu, read-only banner
+		// visible, no Save button.
+		await screen.findByText(/Aperçu : Arenet default/);
+		expect(screen.getByText(/Lecture seule/)).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /Enregistrer/ })).not.toBeInTheDocument();
+		// The Phase 2.1 duplicate-from-editor CTA is present.
+		expect(
+			screen.getByRole('button', { name: /Dupliquer pour customiser/ })
+		).toBeInTheDocument();
+	});
+
+	it('clicking row Dupliquer calls create with "Copy of X" name', async () => {
+		apiMock.list.mockResolvedValue([builtinTemplate()]);
+		apiMock.create.mockResolvedValue({
+			...sampleTemplate({
+				id: 'new-uuid',
+				name: 'Copy of Arenet default'
+			})
+		});
+		// Second list call after create returns both.
+		apiMock.list.mockResolvedValueOnce([builtinTemplate()]);
+		render(Page);
+		await screen.findByText('Arenet default');
+		await fireEvent.click(screen.getByRole('button', { name: 'Dupliquer' }));
+		await waitFor(() => {
+			expect(apiMock.create).toHaveBeenCalledTimes(1);
+		});
+		const [req] = apiMock.create.mock.calls[0];
+		expect(req.name).toBe('Copy of Arenet default');
+		// Pages copied verbatim from the source.
+		expect(req.pages['403']).toBe('<h1>403</h1>');
+	});
+
+	it('Dupliquer increments suffix when name collision detected (Finder pattern)', async () => {
+		// Two existing rows : the builtin + a previous Copy of
+		// Arenet default. The next duplicate should compute
+		// "Copy of Arenet default (2)". Default mockResolvedValue
+		// is consulted by EVERY list call (including the post-
+		// create reload), so we just need to set it once with
+		// the conflicting row already present.
+		apiMock.list.mockResolvedValue([
+			builtinTemplate(),
+			sampleTemplate({
+				id: 'first-copy',
+				name: 'Copy of Arenet default'
+			})
+		]);
+		apiMock.create.mockResolvedValue({
+			...sampleTemplate({ id: 'new-2' })
+		});
+		render(Page);
+		await screen.findByText('Arenet default');
+		// First Dupliquer in the DOM is on the builtin row.
+		const duplicateButtons = screen.getAllByRole('button', { name: 'Dupliquer' });
+		await fireEvent.click(duplicateButtons[0]);
+		await waitFor(() => {
+			expect(apiMock.create).toHaveBeenCalledTimes(1);
+		});
+		const [req] = apiMock.create.mock.calls[0];
+		expect(req.name).toBe('Copy of Arenet default (2)');
+	});
+});

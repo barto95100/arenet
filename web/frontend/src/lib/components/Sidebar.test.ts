@@ -110,6 +110,40 @@ describe('Sidebar', () => {
 		expect(auditLink).toHaveAttribute('href', '/audit');
 	});
 
+	// Step R Phase 2.1 — sidebar link for the /settings/
+	// error-pages CRUD page. Closes a nav gap : the page
+	// existed since Phase 2 (commit dceb57f) but had no
+	// sidebar entry, forcing operators to type the URL.
+	it("'Pages d'erreur' link points to /settings/error-pages (admin only)", () => {
+		auth.user = {
+			username: 'admin',
+			displayName: 'Admin',
+			role: 'admin',
+			mfa: 'none',
+			passwordCompromised: false
+		} as never;
+
+		render(Sidebar);
+		const link = screen
+			.getAllByRole('link', { hidden: false })
+			.find((l) => l.textContent?.includes("Pages d'erreur"));
+		expect(link).toBeDefined();
+		expect(link).toHaveAttribute('href', '/settings/error-pages');
+	});
+
+	it("'Pages d'erreur' is hidden from non-admin (viewer)", () => {
+		auth.user = {
+			username: 'viewer',
+			displayName: 'Viewer',
+			role: 'viewer',
+			mfa: 'none',
+			passwordCompromised: false
+		} as never;
+
+		render(Sidebar);
+		expect(screen.queryByText("Pages d'erreur")).not.toBeInTheDocument();
+	});
+
 	it('keeps /security sub-routes OUT of the sidebar (R.4 D8 design)', () => {
 		// CS.3 update: the regression now covers two things:
 		//   1. /security/decisions stays absent (it was deleted

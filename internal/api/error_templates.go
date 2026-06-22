@@ -28,8 +28,48 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/barto95100/arenet/internal/audit"
+	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/storage"
 )
+
+// Step R Phase 2.1 — virtual builtin template surface.
+//
+// builtinTemplateID is the stable ID under which the caddymgr-
+// owned arenetDefaultErrorPages map surfaces as a virtual,
+// read-only template in GET /api/v1/error-templates. Operators
+// see the builtin in the list view, can preview it, and
+// duplicate it as the base for a custom template.
+//
+// Cannot collide with uuid.NewString() outputs (36 chars with
+// dashes at fixed positions) ; "arenet-default" is 14 chars
+// with a single dash at position 6.
+const builtinTemplateID = "arenet-default"
+
+// isBuiltinTemplateID reports whether the given ID refers to
+// the virtual builtin (POST/PUT/DELETE are rejected with 403).
+// Tiny helper kept in this file so the 3 admin handlers stay
+// readable with an inline guard rather than a middleware.
+func isBuiltinTemplateID(id string) bool {
+	return id == builtinTemplateID
+}
+
+// builtinErrorTemplateResponse materialises the caddymgr-owned
+// arenetDefaultErrorPages map as an errorTemplateResponse so
+// the list / get / preview surfaces can hand it back uniformly.
+// Returns a fresh struct every call (no mutation aliasing
+// between concurrent requests).
+//
+// CreatedAt/UpdatedAt : zero-value time.Time — the operator UI
+// renders this as a dash, signalling "not a real DB row".
+func builtinErrorTemplateResponse() errorTemplateResponse {
+	return errorTemplateResponse{
+		ID:          builtinTemplateID,
+		Name:        "Arenet default",
+		Description: "Built-in branded default. Read-only. Duplicate to customise.",
+		Pages:       caddymgr.ArenetDefaultErrorPagesMap(),
+		IsBuiltin:   true,
+	}
+}
 
 // Step R — error-page templates CRUD handler.
 //
@@ -63,6 +103,12 @@ type errorTemplateResponse struct {
 	Pages       map[int]string `json:"pages"`
 	CreatedAt   time.Time      `json:"createdAt"`
 	UpdatedAt   time.Time      `json:"updatedAt"`
+	// Step R Phase 2.1 — true on the virtual builtin entry.
+	// Frontend renders a "Built-in" badge + hides Edit/
+	// Delete actions + shows a Duplicate button instead.
+	// omitempty so the JSON for real DB templates stays
+	// byte-identical to the pre-2.1 shape.
+	IsBuiltin bool `json:"isBuiltin,omitempty"`
 }
 
 func errorTemplateToResponse(t storage.ErrorPageTemplate) errorTemplateResponse {
@@ -87,7 +133,12 @@ func (h *Handler) listErrorTemplates(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list error templates")
 		return
 	}
-	out := make([]errorTemplateResponse, 0, len(templates))
+	// Step R Phase 2.1 — prepend the virtual builtin so the
+	// operator sees it first in the /settings/error-pages list.
+	// Prepending (rather than appending) makes "Duplicate the
+	// builtin to start customising" the natural first gesture.
+	out := make([]errorTemplateResponse, 0, len(templates)+1)
+	out = append(out, builtinErrorTemplateResponse())
 	for _, t := range templates {
 		out = append(out, errorTemplateToResponse(t))
 	}
@@ -96,6 +147,12 @@ func (h *Handler) listErrorTemplates(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getErrorTemplate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	// Step R Phase 2.1 — virtual builtin returns the
+	// synthesised response without a store hit.
+	if isBuiltinTemplateID(id) {
+		writeJSON(w, http.StatusOK, builtinErrorTemplateResponse())
+		return
+	}
 	t, err := h.store.GetErrorPageTemplate(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -151,6 +208,17 @@ func (h *Handler) createErrorTemplate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updateErrorTemplate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	// Step R Phase 2.1 — reject mutations on the virtual
+	// builtin. The single source of truth for arenetDefault-
+	// ErrorPages lives in internal/caddymgr ; making it
+	// editable would create two divergent realities.
+	// Operator path : duplicate the builtin first, then
+	// edit the copy.
+	if isBuiltinTemplateID(id) {
+		writeError(w, http.StatusForbidden,
+			"the built-in 'Arenet default' template cannot be modified ; duplicate it to customise")
+		return
+	}
 
 	var req errorTemplateRequest
 	dec := json.NewDecoder(r.Body)
@@ -203,6 +271,14 @@ func (h *Handler) updateErrorTemplate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deleteErrorTemplate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	// Step R Phase 2.1 — same builtin guard as
+	// updateErrorTemplate ; the operator can't delete a
+	// virtual entry that doesn't exist in storage.
+	if isBuiltinTemplateID(id) {
+		writeError(w, http.StatusForbidden,
+			"the built-in 'Arenet default' template cannot be deleted")
+		return
+	}
 
 	previous, err := h.store.GetErrorPageTemplate(r.Context(), id)
 	if err != nil {
@@ -267,24 +343,40 @@ func (h *Handler) previewErrorTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := h.store.GetErrorPageTemplate(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "error template not found")
+	// Step R Phase 2.1 — virtual builtin path : pull the body
+	// from the caddymgr-owned map without a store hit. Mirror
+	// of the getErrorTemplate special-case above.
+	var body string
+	var ok bool
+	if isBuiltinTemplateID(id) {
+		body, ok = caddymgr.ArenetDefaultErrorPages(code)
+		if !ok {
+			writeError(w, http.StatusNotFound,
+				fmt.Sprintf("built-in default has no body for status code %d", code))
 			return
 		}
-		h.logger.Error("get error_template for preview", "err", err)
-		writeError(w, http.StatusInternalServerError, "failed to load error template")
-		return
+	} else {
+		t, err := h.store.GetErrorPageTemplate(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "error template not found")
+				return
+			}
+			h.logger.Error("get error_template for preview", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to load error template")
+			return
+		}
+		body, ok = t.Pages[code]
+		if !ok || body == "" {
+			writeError(w, http.StatusNotFound,
+				fmt.Sprintf("template has no body for status code %d", code))
+			return
+		}
 	}
 
-	body, ok := t.Pages[code]
-	if !ok || body == "" {
-		writeError(w, http.StatusNotFound,
-			fmt.Sprintf("template has no body for status code %d", code))
-		return
-	}
-
+	// Both branches above either populated `body` non-empty
+	// OR returned 404 via writeError + return. By construction
+	// `body` is non-empty here ; no extra guard needed.
 	rendered := previewSubstitute(body, code)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")

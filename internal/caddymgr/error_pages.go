@@ -101,6 +101,35 @@ var errorPageSanitizer = func() *bluemonday.Policy {
 	return p
 }()
 
+// ArenetDefaultErrorPages returns the built-in default body
+// for the given supported status code, plus a present flag.
+// The internal map is unexported (immutability defence — a
+// shared exported map would let callers mutate the global)
+// but the accessor lets other packages (internal/api Phase
+// 2.1 surface) materialise the builtin into a virtual
+// template visible in the operator UI.
+//
+// Returns ("", false) for unsupported codes.
+func ArenetDefaultErrorPages(code int) (string, bool) {
+	body, ok := arenetDefaultErrorPages[code]
+	return body, ok
+}
+
+// ArenetDefaultErrorPagesMap returns a shallow copy of the
+// full builtin map. Used by the /api/v1/error-templates list
+// handler to synthesise the virtual "arenet-default" entry.
+// Copy semantics : the caller may not mutate the returned
+// map's strings (Go strings are immutable) but the map
+// itself is a fresh allocation, so adding/removing keys on
+// the returned value does NOT touch the global.
+func ArenetDefaultErrorPagesMap() map[int]string {
+	out := make(map[int]string, len(arenetDefaultErrorPages))
+	for k, v := range arenetDefaultErrorPages {
+		out[k] = v
+	}
+	return out
+}
+
 // arenetDefaultErrorPages is the built-in fallback used when no
 // template / override matches. Slate dark theme matching the
 // Arenet brand. Operators get a recognisable Arenet-branded page
