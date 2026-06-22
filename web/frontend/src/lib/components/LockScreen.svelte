@@ -375,7 +375,7 @@
 	.lockscreen-input:focus {
 		border-color: var(--accent);
 		box-shadow: 0 0 0 3px var(--accent-soft);
-		background: oklch(17% 0.006 250);
+		background: var(--bg-elevated);
 	}
 	.lockscreen-input:disabled {
 		opacity: 0.6;

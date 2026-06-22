@@ -402,7 +402,7 @@
 		font-size: 12px;
 		color: var(--accent);
 		padding: 1px 5px;
-		background: oklch(13% 0.006 250);
+		background: var(--bg-sidebar);
 		border-radius: 4px;
 		border: 1px solid var(--border);
 	}
@@ -469,7 +469,7 @@
 	.setup-input:focus {
 		border-color: var(--accent);
 		box-shadow: 0 0 0 3px var(--accent-soft);
-		background: oklch(17% 0.006 250);
+		background: var(--bg-elevated);
 	}
 	.setup-input:disabled {
 		opacity: 0.6;

@@ -57,6 +57,17 @@
 	--bg-elevated: oklch(19% 0.006 250);
 	--bg-surface: oklch(22% 0.007 250);
 	--bg-hover: oklch(26% 0.008 250);
+	/* Translucent topbar background — sticky header on every
+	 * page. The 0.85 alpha + backdrop-filter blur is the
+	 * frosted-glass shape ; light theme uses a near-white
+	 * variant so the contents stay readable when the page
+	 * background shows through. */
+	--bg-topbar: oklch(17% 0.006 250 / 0.85);
+	/* Login screen background gradient endpoints. Two tokens
+	 * because the gradient interpolates from --bg-login-grad-from
+	 * (top) to --bg-login-grad-to (bottom) at 180deg. */
+	--bg-login-grad-from: oklch(13% 0.006 250);
+	--bg-login-grad-to: oklch(10% 0.005 250);
 
 	/* Borders */
 	--border-subtle: oklch(28% 0.009 250);
@@ -103,6 +114,15 @@
 	--bg-elevated: oklch(100% 0 0);
 	--bg-surface: oklch(96% 0.005 250);
 	--bg-hover: oklch(93% 0.007 250);
+	/* Translucent topbar — near-white with the same 0.85 alpha
+	 * so the frosted-glass shape stays operator-recognizable
+	 * across themes (just inverted in luminance). */
+	--bg-topbar: oklch(98% 0.004 250 / 0.85);
+	/* Login screen gradient — light variant. Soft cool-grey
+	 * top → slightly cooler bottom for the same depth cue the
+	 * dark variant carries. */
+	--bg-login-grad-from: oklch(96% 0.006 250);
+	--bg-login-grad-to: oklch(92% 0.008 250);
 
 	/* Borders */
 	--border-subtle: oklch(90% 0.008 250);

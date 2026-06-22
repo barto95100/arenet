@@ -286,7 +286,7 @@
 <style>
 	.sidebar {
 		width: var(--sb-width);
-		background: oklch(13% 0.005 250);
+		background: var(--bg-sidebar);
 		border-right: 1px solid var(--border);
 		padding: 18px 12px;
 		display: flex;

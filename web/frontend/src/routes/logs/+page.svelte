@@ -1137,7 +1137,7 @@
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 		color: var(--fg-dim);
-		background: oklch(17% 0.006 250);
+		background: var(--bg-elevated);
 	}
 	.log-header .right { text-align: right; }
 

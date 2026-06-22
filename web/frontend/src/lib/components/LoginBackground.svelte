@@ -79,7 +79,7 @@
 		background:
 			radial-gradient(110% 80% at 18% 12%, oklch(68% 0.21 255 / 0.10) 0%, transparent 55%),
 			radial-gradient(80% 60% at 88% 88%, oklch(52% 0.22 265 / 0.10) 0%, transparent 55%),
-			linear-gradient(180deg, oklch(13% 0.006 250) 0%, oklch(10% 0.005 250) 100%);
+			linear-gradient(180deg, var(--bg-login-grad-from) 0%, var(--bg-login-grad-to) 100%);
 		z-index: 0;
 	}
 
@@ -301,7 +301,11 @@
 	.bg-vignette {
 		position: fixed;
 		inset: 0;
-		background: radial-gradient(40% 30% at 50% 50%, oklch(10% 0.005 250 / 0.55) 0%, transparent 75%);
+		background: radial-gradient(
+			40% 30% at 50% 50%,
+			color-mix(in oklch, var(--bg-login-grad-to) 55%, transparent) 0%,
+			transparent 75%
+		);
 		pointer-events: none;
 		z-index: 3;
 	}

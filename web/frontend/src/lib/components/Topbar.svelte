@@ -96,7 +96,7 @@
 <style>
 	.topbar {
 		height: var(--tb-height);
-		background: oklch(17% 0.006 250 / 0.85);
+		background: var(--bg-topbar);
 		backdrop-filter: blur(8px);
 		-webkit-backdrop-filter: blur(8px);
 		border-bottom: 1px solid var(--border);
