@@ -29,6 +29,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import HtmlEditor from '$lib/components/HtmlEditor.svelte';
+	import Button from '$lib/components/Button.svelte';
 	import {
 		errorTemplatesApi,
 		BUILTIN_TEMPLATE_ID,
@@ -423,13 +424,13 @@
 >
 	{#snippet actions()}
 		{#if view === 'list'}
-			<button class="tb-btn primary" onclick={startCreate}>+ Nouveau template</button>
+			<Button variant="primary" onclick={startCreate}>+ Nouveau template</Button>
 		{:else if editingBuiltin}
 			<!-- Read-only mode : no Save. Operator returns to
 			     list or duplicates to customise. -->
-			<button class="tb-btn" onclick={cancelEdit}>Retour</button>
-			<button
-				class="tb-btn primary"
+			<Button variant="secondary" onclick={cancelEdit}>Retour</Button>
+			<Button
+				variant="primary"
 				onclick={() => {
 					// Materialise a synthetic ErrorTemplate from the
 					// current edit buffer to feed the duplicate flow.
@@ -451,12 +452,17 @@
 				}}
 			>
 				Dupliquer pour customiser
-			</button>
+			</Button>
 		{:else}
-			<button class="tb-btn" onclick={cancelEdit} disabled={saving}>Annuler</button>
-			<button class="tb-btn primary" onclick={() => void saveTemplate()} disabled={saving}>
+			<Button variant="secondary" onclick={cancelEdit} disabled={saving}>Annuler</Button>
+			<Button
+				variant="primary"
+				onclick={() => void saveTemplate()}
+				disabled={saving}
+				loading={saving}
+			>
 				{saving ? 'Enregistrement…' : 'Enregistrer'}
-			</button>
+			</Button>
 		{/if}
 	{/snippet}
 </PageHeader>
@@ -468,7 +474,7 @@
 		{:else if loadError}
 			<div class="empty-state">
 				<p class="error">{loadError}</p>
-				<button class="tb-btn" onclick={() => void loadTemplates()}>Réessayer</button>
+				<Button variant="secondary" onclick={() => void loadTemplates()}>Réessayer</Button>
 			</div>
 		{:else if templates.length === 0}
 			<div class="empty-state">
@@ -477,7 +483,7 @@
 					Toutes les routes reçoivent actuellement le défaut Arenet branded.
 					Créez un template pour personnaliser les pages d'erreur d'une route ou plusieurs.
 				</p>
-				<button class="tb-btn primary" onclick={startCreate}>+ Créer le premier template</button>
+				<Button variant="primary" onclick={startCreate}>+ Créer le premier template</Button>
 			</div>
 		{:else}
 			<table class="tpl-table">
@@ -511,28 +517,32 @@
 									<!-- Read-only : Inspect goes to the editor in
 									     read-only mode ; Duplicate creates an
 									     editable copy. No Modifier / Supprimer. -->
-									<button class="tb-btn sm" onclick={() => startEdit(t)}>
+									<Button variant="secondary" size="sm" onclick={() => startEdit(t)}>
 										Aperçu
-									</button>
-									<button
-										class="tb-btn sm primary"
+									</Button>
+									<Button
+										variant="primary"
+										size="sm"
 										onclick={() => void duplicateTemplate(t)}
 										title="Créer un nouveau template à partir du défaut"
 									>
 										Dupliquer
-									</button>
+									</Button>
 								{:else}
-									<button class="tb-btn sm" onclick={() => startEdit(t)}>Modifier</button>
-									<button
-										class="tb-btn sm"
+									<Button variant="secondary" size="sm" onclick={() => startEdit(t)}>
+										Modifier
+									</Button>
+									<Button
+										variant="secondary"
+										size="sm"
 										onclick={() => void duplicateTemplate(t)}
 										title="Créer un nouveau template à partir de celui-ci"
 									>
 										Dupliquer
-									</button>
-									<button class="tb-btn sm danger" onclick={() => askDelete(t)}>
+									</Button>
+									<Button variant="danger" size="sm" onclick={() => askDelete(t)}>
 										Supprimer
-									</button>
+									</Button>
 								{/if}
 							</td>
 						</tr>
@@ -681,16 +691,21 @@
 				Les routes qui le référencent reviendront au défaut Arenet branded.
 			</p>
 			<div class="modal-actions">
-				<button class="tb-btn" onclick={() => (deleteTarget = null)} disabled={deleting}>
-					Annuler
-				</button>
-				<button
-					class="tb-btn danger"
-					onclick={() => void confirmDelete()}
+				<Button
+					variant="secondary"
+					onclick={() => (deleteTarget = null)}
 					disabled={deleting}
 				>
+					Annuler
+				</Button>
+				<Button
+					variant="danger"
+					onclick={() => void confirmDelete()}
+					disabled={deleting}
+					loading={deleting}
+				>
 					{deleting ? 'Suppression…' : 'Supprimer'}
-				</button>
+				</Button>
 			</div>
 		</div>
 	</div>
@@ -781,8 +796,12 @@
 	.tpl-table tr:last-child td { border-bottom: none; }
 	.tpl-table .dim { color: var(--fg-dim); }
 	.tpl-table .mono { font-family: var(--font-mono); font-size: 11.5px; }
-	.tpl-table .actions { white-space: nowrap; }
-	.tpl-table .actions .tb-btn { margin-left: 6px; }
+	.tpl-table .actions {
+		white-space: nowrap;
+		display: flex;
+		gap: 6px;
+		justify-content: flex-end;
+	}
 
 	/* Editor view */
 	.editor-grid {
@@ -948,36 +967,6 @@
 		font-style: italic;
 	}
 
-	/* Buttons */
-	.tb-btn {
-		padding: 5px 12px;
-		border-radius: var(--radius);
-		background: var(--bg);
-		border: 1px solid var(--border);
-		color: var(--fg);
-		font-family: var(--font-mono);
-		font-size: 11px;
-		letter-spacing: 0.04em;
-		cursor: pointer;
-	}
-	.tb-btn:hover:not(:disabled) { border-color: var(--border-hi); color: var(--fg); }
-	.tb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-	.tb-btn.primary {
-		background: var(--accent-cyan);
-		border-color: var(--accent-cyan);
-		color: var(--bg);
-	}
-	.tb-btn.primary:hover:not(:disabled) {
-		background: color-mix(in oklch, var(--accent-cyan) 88%, white);
-	}
-	.tb-btn.danger {
-		color: var(--status-down);
-		border-color: color-mix(in oklch, var(--status-down) 40%, transparent);
-	}
-	.tb-btn.danger:hover:not(:disabled) {
-		background: color-mix(in oklch, var(--status-down) 12%, transparent);
-	}
-	.tb-btn.sm { padding: 3px 8px; font-size: 10.5px; }
 
 	/* Modal */
 	.modal-backdrop {
