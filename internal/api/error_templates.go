@@ -377,7 +377,22 @@ func (h *Handler) previewErrorTemplate(w http.ResponseWriter, r *http.Request) {
 	// Both branches above either populated `body` non-empty
 	// OR returned 404 via writeError + return. By construction
 	// `body` is non-empty here ; no extra guard needed.
-	rendered := previewSubstitute(body, code)
+	//
+	// Phase 2.2 — apply the SAME sanitize pipeline as the
+	// caddymgr emit (caddymgr.SanitizeErrorPageBody) so the
+	// operator's preview iframe shows EXACTLY what'll render
+	// in prod. Pre-2.2 the preview returned the raw operator-
+	// typed HTML while caddymgr-emit-time sanitize stripped
+	// half the content (notably <script>, @import, and pre-
+	// 2.2 the entire <style> block content). The preview was
+	// lying — operator saw a beautifully styled page in the
+	// editor and got plain text in prod.
+	//
+	// Substitution-then-sanitize order : substituting first
+	// keeps the placeholder values intact in the operator's
+	// view ; sanitize then strips any malicious HTML the
+	// operator may have typed around the placeholders.
+	rendered := caddymgr.SanitizeErrorPageBody(previewSubstitute(body, code))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")
 	_, _ = w.Write([]byte(rendered))

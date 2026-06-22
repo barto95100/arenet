@@ -545,3 +545,139 @@ func intToStr(i int) string {
 	}
 	return "?"
 }
+
+// --- Phase 2.2 : AllowUnsafe safety probe + @import strip --------------------
+//
+// Pinning the empirical findings from the R.2.2 audit. Each
+// case here was first verified against a standalone bluemonday
+// probe ; the test set protects the invariants from a future
+// "let's tighten / loosen the policy" refactor.
+
+func TestSanitizeErrorPageBody_PreservesStyleBlockContent(t *testing.T) {
+	// Phase 2.2 fix : <style> rules MUST survive sanitization.
+	// Pre-fix the inner CSS was stripped → builtin Arenet
+	// branded page rendered as bare HTML in prod.
+	input := `<style>body { background:#0d1117; color:#c9d1d9; }</style>`
+	got := SanitizeErrorPageBody(input)
+	if !strings.Contains(got, "background:#0d1117") {
+		t.Errorf("CSS rules stripped ; got %q", got)
+	}
+	if !strings.Contains(got, "color:#c9d1d9") {
+		t.Errorf("CSS rules stripped ; got %q", got)
+	}
+}
+
+func TestSanitizeErrorPageBody_StripsScriptDespiteAllowUnsafe(t *testing.T) {
+	// AllowUnsafe(true) is set on the policy ; the safety
+	// invariant is that <script> is STILL stripped because
+	// it's not declared in AllowElements. The element policy
+	// runs BEFORE the AllowUnsafe gate at sanitize.go:431-440.
+	input := `<h1>before</h1><script>alert('xss')</script><h1>after</h1>`
+	got := SanitizeErrorPageBody(input)
+	if strings.Contains(got, "<script>") || strings.Contains(got, "alert") {
+		t.Errorf("script not stripped ; got %q", got)
+	}
+	// Legitimate content survives.
+	if !strings.Contains(got, "<h1>before</h1>") {
+		t.Errorf("legitimate content stripped ; got %q", got)
+	}
+}
+
+func TestSanitizeErrorPageBody_StripsEventHandlersDespiteAllowUnsafe(t *testing.T) {
+	// Inline event handlers come from a separate UGCPolicy
+	// attribute allowlist ; AllowUnsafe has no impact.
+	input := `<a href="/" onclick="hack()">link</a>`
+	got := SanitizeErrorPageBody(input)
+	if strings.Contains(got, "onclick") {
+		t.Errorf("onclick not stripped ; got %q", got)
+	}
+}
+
+func TestSanitizeErrorPageBody_StripsAtImportFromStyleBlock(t *testing.T) {
+	// @import is the classic CSS-based exfil vector
+	// (cascades to a remote stylesheet that can ping-back to
+	// a tracking server). Operator-typed @import is still
+	// stripped defence-in-depth even though the operator
+	// role is admin (compromised-admin / reflected-XSS-via-
+	// template scenarios).
+	input := `<style>@import url("https://evil.example/track"); body { color:red; }</style>`
+	got := SanitizeErrorPageBody(input)
+	if strings.Contains(got, "@import") {
+		t.Errorf("@import not stripped ; got %q", got)
+	}
+	if strings.Contains(got, "evil.example") {
+		t.Errorf("@import target leaked ; got %q", got)
+	}
+	// Legitimate rules in the same block survive.
+	if !strings.Contains(got, "color:red") {
+		t.Errorf("non-@import rules stripped ; got %q", got)
+	}
+}
+
+func TestSanitizeErrorPageBody_StripsAtCharsetFromStyleBlock(t *testing.T) {
+	input := `<style>@charset "UTF-8"; body { color:red; }</style>`
+	got := SanitizeErrorPageBody(input)
+	if strings.Contains(got, "@charset") {
+		t.Errorf("@charset not stripped ; got %q", got)
+	}
+}
+
+func TestSanitizeErrorPageBody_PreservesUrlForBrandingAssets(t *testing.T) {
+	// url() in background-image / @font-face / etc. is left
+	// untouched because legitimate branding use cases (logo,
+	// custom fonts) need it. The admin-only RequireAdmin
+	// gate is the trust boundary ; defending here against
+	// admin-typed url() would just break the operator's
+	// brand image embeds.
+	input := `<style>body { background-image: url(https://cdn.example/logo.png); }</style>`
+	got := SanitizeErrorPageBody(input)
+	if !strings.Contains(got, "url(https://cdn.example/logo.png)") {
+		t.Errorf("legitimate url() stripped ; got %q", got)
+	}
+}
+
+func TestSanitizeErrorPageBody_StripsIframe(t *testing.T) {
+	input := `<h1>x</h1><iframe src="evil"></iframe>`
+	got := SanitizeErrorPageBody(input)
+	if strings.Contains(got, "<iframe") {
+		t.Errorf("iframe not stripped ; got %q", got)
+	}
+}
+
+func TestSanitizeErrorPageBody_BuiltinDefaultRendersStyled(t *testing.T) {
+	// End-to-end : run the real builtin 429 page through the
+	// pipeline. After 2.2 fix, the resulting body MUST contain
+	// the dark-theme background rule. Pre-fix it didn't.
+	body, ok := ArenetDefaultErrorPages(429)
+	if !ok {
+		t.Fatal("builtin 429 missing")
+	}
+	got := SanitizeErrorPageBody(body)
+	// The slate dark theme background lives in a <style> block
+	// at the top of the builtin page.
+	if !strings.Contains(got, "background:#0d1117") {
+		t.Errorf("builtin 429 lost its dark-theme background after sanitize ; "+
+			"got first 200 chars:\n%s", got[:min(200, len(got))])
+	}
+	// Sanity : <!doctype html> still re-prepended by postSanitize.
+	if !strings.HasPrefix(got, "<!doctype html>") {
+		t.Errorf("doctype prefix lost ; got first 60 chars : %q", got[:min(60, len(got))])
+	}
+}
+
+func TestStripDangerousAtRules_OnlyTouchesStyleBlocks(t *testing.T) {
+	// Defence-in-depth : the regex must NOT mangle
+	// @import-shaped strings that appear OUTSIDE <style>
+	// blocks (e.g. in a <pre> code sample or in body text
+	// explaining how to use the feature).
+	input := `<p>To use, write @import url("foo");</p><style>@import url("evil");</style>`
+	got := stripDangerousAtRules(input)
+	// @import in <p> text body stays untouched.
+	if !strings.Contains(got, "<p>To use, write @import url(") {
+		t.Errorf("text-body @import was mangled ; got %q", got)
+	}
+	// @import in <style> is stripped.
+	if strings.Contains(got, "@import url(\"evil\")") {
+		t.Errorf("style-block @import not stripped ; got %q", got)
+	}
+}

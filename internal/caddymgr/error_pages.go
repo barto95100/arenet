@@ -19,6 +19,7 @@ package caddymgr
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/microcosm-cc/bluemonday"
@@ -91,6 +92,39 @@ import (
 //
 // bluemonday.Policy is documented as goroutine-safe after the
 // AllowXxx wiring completes ; we call those wirings only here.
+//
+// Phase 2.2 — AllowUnsafe(true) is set explicitly so that the
+// CSS rules inside operator-typed <style> blocks survive the
+// sanitize pass. Without it, bluemonday strips the inner text
+// of any <style> token (sanitize.go:431-440 only emits the
+// inner text when AllowUnsafe is true). Pre-2.2 the builtin
+// Arenet branded page (which uses a <style> block in <head>
+// for the dark theme rules) rendered in prod as bare HTML
+// with no styling — matching neither the operator's preview
+// nor any reasonable "branded" expectation.
+//
+// Safety analysis (verified empirically by the 6 test cases
+// in error_pages_test.go's "AllowUnsafe safety probe"
+// section) :
+//
+//   - <script> is NOT in AllowElements, so it's stripped by
+//     the element policy BEFORE the AllowUnsafe gate matters
+//     at the TextToken switch.
+//   - <iframe>, <object>, <embed> same : not declared, stripped.
+//   - Inline event handlers (onclick, onerror, ...) are
+//     stripped by UGCPolicy's attribute allowlist regardless
+//     of AllowUnsafe.
+//   - The ONLY effect of AllowUnsafe here is preserving the
+//     textual content of <style> elements (which are explicitly
+//     allowed by our AllowElements call above).
+//
+// One remaining risk : CSS at-rules that load external
+// resources (@import / @charset) can exfil to a tracking
+// server via the stylesheet network fetch. stripDangerousAtRules
+// (post-sanitize pass) handles that. Operator-supplied url()
+// references (background-image, @font-face, ...) are left
+// untouched so legitimate branding assets (logos, brand fonts)
+// still load — the operator is a trusted admin role.
 var errorPageSanitizer = func() *bluemonday.Policy {
 	p := bluemonday.UGCPolicy()
 	p.AllowStyling()
@@ -98,8 +132,75 @@ var errorPageSanitizer = func() *bluemonday.Policy {
 	p.AllowAttrs("rel", "href", "media", "type", "crossorigin").OnElements("link")
 	p.AllowAttrs("name", "content", "charset", "http-equiv").OnElements("meta")
 	p.AllowAttrs("lang").OnElements("html")
+	p.AllowUnsafe(true)
 	return p
 }()
+
+// dangerousAtRulesRE matches CSS at-rules that load external
+// resources : @import (loads another stylesheet ; classic
+// CSS-based exfil pivot) + @charset (lower-severity but
+// still operator-side noise). Both are stripped from <style>
+// content via stripDangerousAtRules.
+//
+// Intentionally NOT stripping url(...) references — legitimate
+// branding assets (logos, custom fonts via @font-face) use them.
+// The operator role is admin-only, so we trust the operator's
+// intent for url() ; @import is the asymmetric risk because
+// it cascades into another stylesheet that the operator
+// may not have authored.
+//
+// Pattern : (?i) case-insensitive ; (?s) dot matches newline
+// so multi-line @import declarations are caught.
+var dangerousAtRulesRE = regexp.MustCompile(`(?is)@(?:import|charset)\b[^;]*;?`)
+
+// styleBlockRE matches the entire <style>...</style> element
+// including the tags. The capture group isolates the inner
+// CSS text so stripDangerousAtRules can operate on it without
+// risk of mangling adjacent HTML.
+var styleBlockRE = regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style>`)
+
+// stripDangerousAtRules removes @import / @charset declarations
+// from every <style> block in the input. Returns the modified
+// HTML. Non-<style> content (inline style="" attributes, body
+// text) is untouched.
+//
+// Defence in depth : even though the operator typed the @import
+// themselves (admin role), a compromised admin account /
+// reflected XSS via template content / future "import template
+// from URL" feature could plant a tracking @import without
+// triggering visible browser dev-tools fetches.
+func stripDangerousAtRules(html string) string {
+	return styleBlockRE.ReplaceAllStringFunc(html, func(match string) string {
+		// Extract inner CSS, strip at-rules, re-wrap.
+		inner := styleBlockRE.FindStringSubmatch(match)[1]
+		cleanInner := dangerousAtRulesRE.ReplaceAllString(inner, "")
+		// Preserve the original <style> opening tag (with any
+		// attributes like media="print") by substring-replacing
+		// the inner text inside the match.
+		return strings.Replace(match, inner, cleanInner, 1)
+	})
+}
+
+// SanitizeErrorPageBody is the exported sanitize pipeline used
+// by both the caddymgr emit path AND the API preview endpoint
+// (Phase 2.2 — preview now mirrors prod sanitize for visual
+// parity in the operator's editor iframe). Single source of
+// truth ; any future tightening lands here.
+//
+// Steps :
+//   1. bluemonday Sanitize (elements + attrs allowlist, with
+//      AllowUnsafe to preserve <style> content)
+//   2. stripDangerousAtRules (remove @import / @charset from
+//      <style> blocks)
+//   3. postSanitize (re-prepend <!doctype html> that bluemonday
+//      strips by design)
+//
+// Returns the sanitized body ready to write into either a
+// Caddy static_response.body field (prod) or an HTTP response
+// (preview).
+func SanitizeErrorPageBody(body string) string {
+	return postSanitize(stripDangerousAtRules(errorPageSanitizer.Sanitize(body)))
+}
 
 // ArenetDefaultErrorPages returns the built-in default body
 // for the given supported status code, plus a present flag.
@@ -278,7 +379,7 @@ func buildErrorRoutesForRoute(route storage.Route, templates map[string]storage.
 		if body == "" {
 			continue
 		}
-		clean := postSanitize(errorPageSanitizer.Sanitize(body))
+		clean := SanitizeErrorPageBody(body)
 		out = append(out, httpRoute{
 			Match: []matcherSet{{
 				Host:       hosts,

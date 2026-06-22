@@ -395,3 +395,114 @@ func TestIsBuiltinTemplateID(t *testing.T) {
 		}
 	}
 }
+
+// --- Phase 2.2 — preview = prod sanitize parity ---------------------------
+
+// TestErrorTemplate_Preview_AppliesSanitization pins the Phase
+// 2.2 contract : the preview endpoint passes the response body
+// through the same sanitization pipeline as the caddymgr emit
+// (caddymgr.SanitizeErrorPageBody). Pre-2.2 the preview returned
+// raw operator-typed HTML while prod stripped script/onclick/
+// @import — the iframe in the editor lied about what would land.
+func TestErrorTemplate_Preview_AppliesSanitization(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{
+		"name":"sanitize-probe",
+		"pages":{
+			"403":"<style>body{color:red}</style><h1>403</h1><script>alert('xss')</script>"
+		}
+	}`
+	post := httptest.NewRequest(http.MethodPost, "/api/v1/error-templates",
+		strings.NewReader(body))
+	post.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, post)
+	var created errorTemplateResponse
+	_ = json.NewDecoder(rec.Body).Decode(&created)
+
+	preview := httptest.NewRequest(http.MethodGet,
+		"/api/v1/error-templates/"+created.ID+"/preview?statusCode=403", nil)
+	rec = httptest.NewRecorder()
+	env.router.ServeHTTP(rec, preview)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", rec.Code, rec.Body)
+	}
+	body403 := rec.Body.String()
+	// <script> stripped (parity with prod sanitize).
+	if strings.Contains(body403, "<script>") || strings.Contains(body403, "alert") {
+		t.Errorf("preview did NOT strip <script> ; got body=%s", body403)
+	}
+	// <style> rules preserved (parity with prod via AllowUnsafe).
+	if !strings.Contains(body403, "color:red") {
+		t.Errorf("preview stripped <style> rules ; got body=%s", body403)
+	}
+	// Legit content preserved.
+	if !strings.Contains(body403, "<h1>403</h1>") {
+		t.Errorf("preview stripped legit content ; got body=%s", body403)
+	}
+}
+
+func TestErrorTemplate_Preview_StripsAtImportFromStyle(t *testing.T) {
+	// Defence in depth : even via the preview endpoint, an
+	// operator-typed @import gets stripped (the visual
+	// rendering in the iframe would otherwise leak to the
+	// operator's browser tab via the cascade, which is the
+	// scenario the strip exists to prevent).
+	env := newTestEnv(t, false)
+	body := `{
+		"name":"at-import-probe",
+		"pages":{
+			"404":"<style>@import url('https://evil.example/track'); h1{color:blue}</style><h1>404</h1>"
+		}
+	}`
+	post := httptest.NewRequest(http.MethodPost, "/api/v1/error-templates",
+		strings.NewReader(body))
+	post.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, post)
+	var created errorTemplateResponse
+	_ = json.NewDecoder(rec.Body).Decode(&created)
+
+	preview := httptest.NewRequest(http.MethodGet,
+		"/api/v1/error-templates/"+created.ID+"/preview?statusCode=404", nil)
+	rec = httptest.NewRecorder()
+	env.router.ServeHTTP(rec, preview)
+	body404 := rec.Body.String()
+	if strings.Contains(body404, "@import") || strings.Contains(body404, "evil.example") {
+		t.Errorf("preview did NOT strip @import ; got body=%s", body404)
+	}
+	if !strings.Contains(body404, "color:blue") {
+		t.Errorf("preview stripped legit rules ; got body=%s", body404)
+	}
+}
+
+func TestErrorTemplate_Preview_Builtin_RendersStyled(t *testing.T) {
+	// Phase 2.2 critical fix : the builtin Arenet branded
+	// page's <style> block must survive sanitization so the
+	// dark-theme rules render in BOTH the preview iframe AND
+	// the live prod request. Pre-2.2, both surfaces lost the
+	// CSS — preview only thanks to absence-of-sanitize ; now
+	// both apply the same sanitize and the styles survive
+	// uniformly.
+	env := newTestEnv(t, false)
+	preview := httptest.NewRequest(http.MethodGet,
+		"/api/v1/error-templates/arenet-default/preview?statusCode=429", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, preview)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	// Slate dark theme background rule from the builtin <style>
+	// block. Pre-2.2 this assertion would have failed.
+	if !strings.Contains(body, "background:#0d1117") {
+		t.Errorf("builtin preview lost dark-theme background ; got first 200 chars:\n%s", body[:min(200, len(body))])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
