@@ -50,10 +50,15 @@
 
 	// --- supported sources / kinds ----------------------------
 
-	type SourceName = 'waf_event_rate' | 'cert_expiry' | 'system_health';
+	type SourceName =
+		| 'waf_event_rate'
+		| 'cert_expiry'
+		| 'cert_renewal_failed'
+		| 'system_health';
 	const SOURCES: { value: SourceName; label: string }[] = [
 		{ value: 'waf_event_rate', label: 'Taux d’événements WAF' },
 		{ value: 'cert_expiry', label: 'Expiration de certificat' },
+		{ value: 'cert_renewal_failed', label: 'Échec de renouvellement de certificat' },
 		{ value: 'system_health', label: 'État système' }
 	];
 
@@ -98,6 +103,10 @@
 	// route it into EvalParams.value with operator "<".
 	// When kind=state or source != cert_expiry this state is
 	// ignored.
+
+	// cert_renewal_failed
+	let certRenewalDomain = $state('');
+	let certRenewalWindowSecs = $state(86400);
 
 	// system_health
 	let healthComponent = $state('');
@@ -164,6 +173,10 @@
 				wafAction = (sp.action as '' | 'BLOCK' | 'DETECT') ?? '';
 			} else if (source === 'cert_expiry') {
 				certHost = typeof sp.host === 'string' ? sp.host : '';
+			} else if (source === 'cert_renewal_failed') {
+				certRenewalDomain = typeof sp.domain === 'string' ? sp.domain : '';
+				certRenewalWindowSecs =
+					typeof sp.windowSecs === 'number' ? sp.windowSecs : 86400;
 			} else if (source === 'system_health') {
 				healthComponent = typeof sp.component === 'string' ? sp.component : '';
 			}
@@ -192,6 +205,8 @@
 			wafWindowSecs = 300;
 			wafAction = '';
 			certHost = '';
+			certRenewalDomain = '';
+			certRenewalWindowSecs = 86400;
 			healthComponent = '';
 			thresholdOp = '>';
 			thresholdValue = 50;
@@ -242,6 +257,11 @@
 			case 'cert_expiry': {
 				const p: Record<string, unknown> = {};
 				if (certHost.trim()) p.host = certHost.trim();
+				return p;
+			}
+			case 'cert_renewal_failed': {
+				const p: Record<string, unknown> = { windowSecs: certRenewalWindowSecs };
+				if (certRenewalDomain.trim()) p.domain = certRenewalDomain.trim();
 				return p;
 			}
 			case 'system_health': {
@@ -295,6 +315,15 @@
 		if (source === 'waf_event_rate') {
 			if (wafWindowSecs < 60 || wafWindowSecs > 86400) {
 				validationError = 'La fenêtre WAF doit être comprise entre 60 secondes et 24 heures.';
+				return null;
+			}
+		}
+		if (source === 'cert_renewal_failed') {
+			// Mirror backend cert_renewal_failed bounds
+			// (source_cert_renewal_failed.go [60s, 7d]).
+			if (certRenewalWindowSecs < 60 || certRenewalWindowSecs > 604800) {
+				validationError =
+					'La fenêtre d’échec de renouvellement doit être comprise entre 60 secondes et 7 jours.';
 				return null;
 			}
 		}
@@ -476,6 +505,35 @@
 				Combiné avec un seuil (ex : opérateur <code>&lt;</code> et valeur <code>14</code>)
 				dans le formulaire d’évaluation ci-dessous, alerte quand un certificat expire
 				bientôt.
+			</p>
+		{:else if source === 'cert_renewal_failed'}
+			<div class="grid grid-cols-2 gap-4">
+				<Input
+					bind:value={certRenewalDomain}
+					label="Domaine (optionnel)"
+					placeholder="vide = tous les domaines"
+				/>
+				<div>
+					<label
+						for="cert-renewal-window"
+						class="text-sm font-medium text-secondary mb-1.5 block"
+					>
+						Fenêtre d’échec (secondes)
+					</label>
+					<input
+						id="cert-renewal-window"
+						type="number"
+						bind:value={certRenewalWindowSecs}
+						min="60"
+						max="604800"
+						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+					/>
+				</div>
+			</div>
+			<p class="text-xs text-secondary -mt-2">
+				Combiné avec un seuil <code>&gt; 0</code> dans le formulaire d’évaluation ci-dessous,
+				alerte sur tout échec de renouvellement ACME (Let’s Encrypt, ZeroSSL…) dans la
+				fenêtre. Défaut 24 h — correspond à la cadence de retry Let’s Encrypt.
 			</p>
 		{:else if source === 'system_health'}
 			<div>

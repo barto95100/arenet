@@ -156,6 +156,38 @@ describe('RuleModal', () => {
 		expect(screen.queryByLabelText(/Hôte/i)).toBeNull();
 	});
 
+	it('lists cert_renewal_failed as a selectable Source option (hotfix Cert.A.2)', async () => {
+		// Regression guard for the Cert.A backend ship that
+		// left the frontend dropdown hardcoded — operators saw
+		// the source registered in journalctl but couldn't
+		// wire a rule via UI.
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
+		});
+
+		const sourceSelect = screen.getByLabelText(/^Source$/i) as HTMLSelectElement;
+		const opts = Array.from(sourceSelect.options).map((o) => o.value);
+		expect(opts).toContain('cert_renewal_failed');
+	});
+
+	it('swaps to cert_renewal_failed sub-form when source = cert_renewal_failed', async () => {
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
+		});
+
+		const sourceSelect = screen.getByLabelText(/^Source$/i) as HTMLSelectElement;
+		await fireEvent.change(sourceSelect, { target: { value: 'cert_renewal_failed' } });
+
+		// Sub-form's own inputs are present.
+		expect(screen.getByLabelText(/Domaine/i)).toBeTruthy();
+		expect(screen.getByLabelText(/Fenêtre d’échec/i)).toBeTruthy();
+		// Other sub-forms gone.
+		expect(screen.queryByLabelText(/^Hôte/i)).toBeNull();
+		expect(screen.queryByLabelText(/Composant/i)).toBeNull();
+	});
+
 	it('swaps to State eval form when kind=state', async () => {
 		const Modal = (await import('./RuleModal.svelte')).default;
 		render(Modal, {
