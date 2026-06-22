@@ -1451,6 +1451,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	if err := alertingRegistry.Register(alerting.NewCertExpirySource(certTracker)); err != nil {
 		logger.Warn("alerting: register cert_expiry source failed", "err", err)
 	}
+	if obsStore != nil {
+		if err := alertingRegistry.Register(alerting.NewCertRenewalFailedSource(obsStore)); err != nil {
+			logger.Warn("alerting: register cert_renewal_failed source failed", "err", err)
+		}
+	} else {
+		logger.Info("alerting: cert_renewal_failed source skipped (observability store unavailable)")
+	}
 	if err := alertingRegistry.Register(alerting.NewSystemHealthSource(healthChecker)); err != nil {
 		logger.Warn("alerting: register system_health source failed", "err", err)
 	}
