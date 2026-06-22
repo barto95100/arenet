@@ -74,6 +74,19 @@
 	--border-default: oklch(34% 0.011 250);
 	--border-strong: oklch(42% 0.014 250);
 
+	/* Idle / no-traffic surface for topology AliasNode (and any
+	 * future component with a "no recent activity" visual
+	 * state). --surface-idle is slightly darker than
+	 * --bg-elevated so an idle alias card visually recedes
+	 * from a trafficked one ; --border-dim mutes the border
+	 * proportionally. In light theme these flip : --surface-
+	 * idle is slightly darker than the elevated white so the
+	 * card still recedes by contrast direction. Without these
+	 * the AliasNode style falls back to hardcoded dark
+	 * literals and breaks under [data-theme=light]. */
+	--surface-idle: oklch(15% 0.004 250);
+	--border-dim: oklch(22% 0.007 250);
+
 	/* Text */
 	--text-primary: oklch(96% 0.005 250);
 	--text-secondary: oklch(68% 0.012 250);
@@ -128,6 +141,16 @@
 	--border-subtle: oklch(90% 0.008 250);
 	--border-default: oklch(84% 0.010 250);
 	--border-strong: oklch(70% 0.014 250);
+
+	/* Idle / no-traffic surface — light theme. Inverted
+	 * direction from dark : here --surface-idle is slightly
+	 * darker than --bg-elevated (white) so the idle card
+	 * recedes from a trafficked one by sitting closer to
+	 * --bg-base. --border-dim sits between --border-subtle
+	 * and --bg-hover so the dashed grid stays readable
+	 * without competing with the trafficked cards' borders. */
+	--surface-idle: oklch(94% 0.005 250);
+	--border-dim: oklch(88% 0.009 250);
 
 	/* Text */
 	--text-primary: oklch(18% 0.006 250);
