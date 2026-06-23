@@ -90,6 +90,20 @@ type certEventsResponse struct {
 //   - search: substring match across domain, issuer,
 //     error_msg, details (case-insensitive). Trimmed of
 //     surrounding whitespace; empty = no filter.
+//   - domain: exact match on the domain field. Useful for
+//     the /certs page Cert.B drill-down which wants the
+//     last N events for a specific hostname without the
+//     substring imprecision of `search` (foo.example.com
+//     matches not-foo.example.com under LIKE %X%). Trimmed
+//     of surrounding whitespace; empty = no filter.
+//   - type: exact match on the eventType field (one of
+//     "cert_obtained", "cert_failed", "cert_ocsp_revoked").
+//     Empty = no filter. Unknown values pass through to the
+//     storage layer which filters as a literal string match
+//     — an unknown type returns 0 rows rather than 400,
+//     because future certmagic versions may emit new event
+//     types we don't yet recognise (defensive, mirrors the
+//     storage layer's pass-through behaviour).
 //
 // Response: { events: [...], total, hasMore, degraded? }.
 // Auth: hard-auth gated at the route mount (viewer-accessible
@@ -176,7 +190,20 @@ func (h *Handler) securityCertEvents(w http.ResponseWriter, r *http.Request) {
 	// search — trim, empty → no filter.
 	search := strings.TrimSpace(r.URL.Query().Get("search"))
 
+	// domain — Cert.B (2026-06-23) — exact match per the doc
+	// comment above. Trim then pass through ; storage handles
+	// empty = no filter.
+	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
+
+	// type — Cert.B (2026-06-23) — exact match on eventType.
+	// Pass-through to storage. Unknown values return 0 rows
+	// rather than 400 ; defensive against future certmagic
+	// event-type additions.
+	eventType := strings.TrimSpace(r.URL.Query().Get("type"))
+
 	filter := observability.CertEventFilter{
+		Domain: domain,
+		Type:   eventType,
 		From:   since,
 		To:     until,
 		Levels: levels,

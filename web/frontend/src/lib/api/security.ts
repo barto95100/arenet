@@ -334,6 +334,24 @@ export interface FetchCertEventsParams {
 	until?: string;
 	level?: CertEventLevel[];
 	search?: string;
+	/**
+	 * Cert.B (2026-06-23) — exact-match filter on the cert
+	 * event's domain field. Different from `search` which does
+	 * substring LIKE %X% across multiple columns (and would
+	 * match e.g. "foo.example.com" when querying for
+	 * "not-foo.example.com"). Use `domain` for the /certs
+	 * drill-down where the operator wants ONLY the events for
+	 * a specific hostname.
+	 */
+	domain?: string;
+	/**
+	 * Cert.B (2026-06-23) — exact-match filter on eventType.
+	 * Typical values : "cert_obtained", "cert_failed",
+	 * "cert_ocsp_revoked". Unknown values pass through the
+	 * backend (defensive against future certmagic event-type
+	 * additions) ; expect 0 rows in that case rather than 400.
+	 */
+	type?: string;
 }
 
 export function fetchCertEvents(
@@ -347,6 +365,8 @@ export function fetchCertEvents(
 		qs.set('level', params.level.join(','));
 	}
 	if (params.search) qs.set('search', params.search);
+	if (params.domain) qs.set('domain', params.domain);
+	if (params.type) qs.set('type', params.type);
 	const suffix = qs.toString() ? `?${qs.toString()}` : '';
 	return request<CertEventsResponse>('GET', `/observability/cert-events${suffix}`);
 }

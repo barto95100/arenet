@@ -42,10 +42,12 @@
 	import WildcardApexWizard from '$lib/components/certs/WildcardApexWizard.svelte';
 	import { settingsApi } from '$lib/api/settings';
 	import { certificatesApi } from '$lib/api/certificates';
+	import { fetchCertEvents } from '$lib/api/security';
 	import { listRoutes } from '$lib/api/client';
 	import { ApiError } from '$lib/api/types';
 	import type {
 		Certificate,
+		CertEvent,
 		ManagedDomain,
 		ManagedDomainRevertTo,
 		Route,
@@ -105,6 +107,32 @@
 	let mdDeleteApex = $state('');
 	let mdDeleteRevertTo = $state<ManagedDomainRevertTo>('');
 	let mdDeleteError = $state<string | null>(null);
+
+	// Cert.B (2026-06-23) — per-domain cert events cache. Used by
+	// both the stale-failure badge derivation and the drill-down
+	// modal. Lazy-loaded after the certs list paints (loadCertEvents)
+	// so initial page render isn't blocked by N concurrent HTTP
+	// fetches. SvelteKit reactive map : assigning to a new Map
+	// triggers $derived recomputation.
+	let certEventsByDomain = $state<Map<string, CertEvent[]>>(new Map());
+
+	// Stale-failure threshold = 24h post-failure with no
+	// cert_obtained since. Stricter than the certinfo.Tracker's
+	// existing FailureFreshness 24h window (which surfaces the
+	// OBTAIN_FAILED status badge for fresh failures). This badge
+	// covers the gap : failures > 24h old where no recovery
+	// happened, currently invisible to the operator because
+	// FailureFreshness expired and the tracker reverted to the
+	// pre-failure status. Operator visiting /certs cold sees
+	// the badge and knows to investigate.
+	const STALE_FAILURE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+	// Drill-down modal state. drillDownDomain holds the domain
+	// the operator clicked the badge for ; null = closed. The
+	// modal reads certEventsByDomain[drillDownDomain] to render
+	// the 5-event list, so opening the modal is instant for any
+	// already-loaded domain.
+	let drillDownDomain = $state<string | null>(null);
 
 	const tlsRoutes = $derived(routes.filter((r) => r.tlsEnabled));
 	const tlsCount = $derived(tlsRoutes.length);
@@ -193,6 +221,85 @@
 		}
 	}
 
+	/**
+	 * Cert.B (2026-06-23) — fetch the 5 most recent cert events
+	 * per domain, after the certs list lands. Soft-failing : a
+	 * 5xx on a single domain doesn't block the others, and the
+	 * absence of events leaves the badge derivation unchanged
+	 * (no badge shown — same as "no failures observed").
+	 *
+	 * N domains = N concurrent HTTP calls. Typical homelab :
+	 * 5-50 domains, well within browser parallel-request limits.
+	 * The per-call payload is bounded by limit=5 so the total
+	 * bandwidth stays trivial.
+	 */
+	async function loadCertEvents(): Promise<void> {
+		if (certs.length === 0) return;
+		const settled = await Promise.allSettled(
+			certs.map((c) =>
+				fetchCertEvents({ domain: c.domain, limit: 5 }).then(
+					(resp) => ({ domain: c.domain, events: resp.events ?? [] })
+				)
+			)
+		);
+		const next = new Map<string, CertEvent[]>();
+		for (const result of settled) {
+			if (result.status === 'fulfilled') {
+				next.set(result.value.domain, result.value.events);
+			}
+		}
+		certEventsByDomain = next;
+	}
+
+	/**
+	 * Cert.B stale-failure detection. Returns the timestamp of
+	 * the most-recent cert_failed event for `domain` IF :
+	 *   - That failure is the most recent event of any type
+	 *   - AND it occurred > STALE_FAILURE_THRESHOLD_MS ago
+	 *
+	 * Otherwise returns null = no stale-failure badge.
+	 *
+	 * Distinct from cert.status === 'OBTAIN_FAILED' which uses
+	 * the certinfo.Tracker's 24h FailureFreshness — that badge
+	 * covers fresh failures (< 24h) ; this one covers stale
+	 * failures (> 24h, no recovery) that the tracker has
+	 * forgotten about.
+	 */
+	function staleFailureSince(domain: string): Date | null {
+		const events = certEventsByDomain.get(domain);
+		if (!events || events.length === 0) return null;
+		// API returns newest-first by ts DESC convention (verified
+		// against observability.QueryCertEvents ORDER BY ts DESC).
+		const mostRecent = events[0];
+		if (mostRecent.eventType !== 'cert_failed') return null;
+		const failTime = new Date(mostRecent.timestamp);
+		if (Date.now() - failTime.getTime() < STALE_FAILURE_THRESHOLD_MS) return null;
+		return failTime;
+	}
+
+	/**
+	 * How many cert_failed events in the loaded window. Used in
+	 * the badge tooltip ("3 tentatives") so the operator knows
+	 * whether this is a single-shot fluke or a persistent issue.
+	 */
+	function failureCountSince(domain: string): number {
+		const events = certEventsByDomain.get(domain);
+		if (!events) return 0;
+		return events.filter((e) => e.eventType === 'cert_failed').length;
+	}
+
+	/**
+	 * "Xh", "Xd" relative-time string for the badge label.
+	 * Compact ; the full timestamp lives in the tooltip.
+	 */
+	function staleAgo(failTime: Date): string {
+		const ms = Date.now() - failTime.getTime();
+		const hours = Math.floor(ms / (60 * 60 * 1000));
+		if (hours < 48) return `${hours}h`;
+		const days = Math.floor(hours / 24);
+		return `${days}j`;
+	}
+
 	async function load(): Promise<void> {
 		try {
 			const [rs] = await Promise.all([
@@ -202,6 +309,11 @@
 				loadCertificates(),
 			]);
 			routes = rs;
+			// Cert.B — load events AFTER certificates have landed
+			// (we need the cert list to know which domains to
+			// query). Fire-and-forget : badges will render once
+			// the events resolve, table is otherwise interactive.
+			void loadCertEvents();
 		} catch (err) {
 			if (err instanceof ApiError) pushToast(err.message, 'danger');
 		} finally {
@@ -411,9 +523,28 @@
 						{@const effectiveSource = resolveSource(cert)}
 						{@const days = daysUntilExpiry(cert)}
 						{@const notBeforeMissing = isZeroTimestamp(cert.notBefore)}
+						{@const staleFailedAt = staleFailureSince(cert.domain)}
+						{@const failCount = failureCountSince(cert.domain)}
 						<tr data-testid="cert-row" data-domain={cert.domain}>
 							<td>
-								<div class="mono">{cert.domain}</div>
+								<div class="domain-cell">
+									<span class="mono">{cert.domain}</span>
+									{#if staleFailedAt}
+										<!-- Cert.B stale-failure badge — clickable,
+										     opens the drill-down modal pre-loaded
+										     with the last 5 events for this domain. -->
+										<button
+											type="button"
+											class="stale-badge"
+											data-testid="cert-stale-badge"
+											data-domain={cert.domain}
+											title={`Dernier échec : ${relativeTime(staleFailedAt.toISOString())} · ${failCount} tentative${failCount === 1 ? '' : 's'} sans renouvellement réussi. Cliquez pour voir l'historique.`}
+											onclick={() => (drillDownDomain = cert.domain)}
+										>
+											⚠ Échec depuis {staleAgo(staleFailedAt)}
+										</button>
+									{/if}
+								</div>
 								<div class="dim cell-sub">
 									{certificateSourceLabel(effectiveSource)} · {inferChallengeLabel(
 										effectiveSource,
@@ -615,6 +746,72 @@
 				variant="danger"
 				onclick={() => void confirmDeleteManagedDomain()}>Delete</Button
 			>
+		{/snippet}
+	</Modal>
+{/if}
+
+<!-- Cert.B drill-down modal — last 5 cert events for a single
+     domain. Reads from certEventsByDomain cache populated by
+     loadCertEvents, so opening the modal is instant for any
+     domain whose events have landed. The "Voir tous les
+     événements" link routes to /logs?source=cert which is the
+     existing global activity log filtered by cert source. -->
+{#if drillDownDomain}
+	<Modal
+		open={drillDownDomain !== null}
+		title={`Historique des événements — ${drillDownDomain}`}
+		onClose={() => (drillDownDomain = null)}
+	>
+		{#snippet children()}
+			{@const events = certEventsByDomain.get(drillDownDomain ?? '') ?? []}
+			{#if events.length === 0}
+				<p class="modal-lead" data-testid="cert-drilldown-empty">
+					Aucun événement de cycle de vie observé pour ce domaine
+					sur la fenêtre de rétention (90 jours).
+				</p>
+			{:else}
+				<p class="modal-lead">
+					Les {events.length} événement{events.length === 1 ? '' : 's'} le{events.length === 1 ? '' : 's'} plus récent{events.length === 1 ? '' : 's'} pour
+					ce domaine, du plus récent au plus ancien.
+				</p>
+				<ul class="event-list" data-testid="cert-drilldown-list">
+					{#each events as ev (ev.timestamp + ev.eventType)}
+						<li
+							class="event-item"
+							class:event-failed={ev.eventType === 'cert_failed'}
+							class:event-obtained={ev.eventType === 'cert_obtained'}
+						>
+							<div class="event-head">
+								<span class="event-type mono">{ev.eventType}</span>
+								<span class="event-time dim">{relativeTime(ev.timestamp)}</span>
+							</div>
+							{#if ev.error}
+								<div class="event-error mono" data-testid="cert-event-error">
+									{ev.error}
+								</div>
+							{:else if ev.eventType === 'cert_obtained'}
+								<div class="event-success dim">
+									{ev.renewal ? 'Renouvellement' : 'Émission initiale'} ·
+									{ev.issuer || 'émetteur inconnu'}
+									{#if ev.challenge}· {ev.challenge}{/if}
+								</div>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		{/snippet}
+		{#snippet footer()}
+			<a
+				href={`/logs?source=cert&search=${encodeURIComponent(drillDownDomain ?? '')}`}
+				class="modal-link"
+				data-testid="cert-drilldown-logs-link"
+			>
+				Voir tous les événements dans /logs →
+			</a>
+			<Button variant="ghost" onclick={() => (drillDownDomain = null)}>
+				Fermer
+			</Button>
 		{/snippet}
 	</Modal>
 {/if}
@@ -901,6 +1098,96 @@
 	.cell-sub {
 		font-size: 11px;
 		margin-top: 3px;
+	}
+
+	/* Cert.B (2026-06-23) — domain cell now hosts the stale-
+	   failure badge alongside the hostname. flex inline-row keeps
+	   the badge on the same line as the domain unless the row
+	   wraps on narrow viewports. */
+	.domain-cell {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.stale-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 10.5px;
+		font-weight: 500;
+		font-family: var(--font-display);
+		padding: 2px 8px;
+		border-radius: 999px;
+		color: var(--text-inverse);
+		background: var(--status-down);
+		border: none;
+		cursor: pointer;
+		white-space: nowrap;
+		transition: filter 0.12s ease-out;
+	}
+	.stale-badge:hover {
+		filter: brightness(1.1);
+	}
+	.stale-badge:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+
+	/* Cert.B drill-down modal — event list. Vertical stack of
+	   timeline-like cards, newest first, colored by event type
+	   (red for cert_failed, green for cert_obtained). */
+	.event-list {
+		list-style: none;
+		padding: 0;
+		margin: 12px 0 0;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.event-item {
+		padding: 10px 12px;
+		border-radius: var(--radius);
+		border-left: 3px solid var(--border);
+		background: var(--bg-elevated);
+	}
+	.event-failed {
+		border-left-color: var(--status-down);
+	}
+	.event-obtained {
+		border-left-color: var(--status-up);
+	}
+	.event-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 12px;
+	}
+	.event-type {
+		font-size: 12px;
+		color: var(--text-primary);
+	}
+	.event-time {
+		font-size: 11px;
+	}
+	.event-error {
+		margin-top: 6px;
+		font-size: 11.5px;
+		color: var(--status-down);
+		word-break: break-word;
+	}
+	.event-success {
+		margin-top: 6px;
+		font-size: 11.5px;
+	}
+	.modal-link {
+		font-size: 12px;
+		color: var(--accent);
+		text-decoration: none;
+		margin-right: auto;
+	}
+	.modal-link:hover {
+		text-decoration: underline;
 	}
 
 	/* EXPIRE DANS column color states — amber inside the renewal

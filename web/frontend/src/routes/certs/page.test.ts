@@ -21,7 +21,7 @@ import type { Certificate } from '$lib/api/types';
 
 // Mocks. Same vi.hoisted pattern as the Routes page tests so the
 // module imports happen after the mock factories are in place.
-const { toastMock, apiMock, settingsMock, certsMock } = vi.hoisted(() => ({
+const { toastMock, apiMock, settingsMock, certsMock, securityMock } = vi.hoisted(() => ({
 	toastMock: { pushToast: vi.fn() },
 	apiMock: {
 		listRoutes: vi.fn(),
@@ -39,12 +39,16 @@ const { toastMock, apiMock, settingsMock, certsMock } = vi.hoisted(() => ({
 			list: vi.fn(),
 		},
 	},
+	securityMock: {
+		fetchCertEvents: vi.fn(),
+	},
 }));
 
 vi.mock('$lib/stores/toast', () => toastMock);
 vi.mock('$lib/api/client', () => apiMock);
 vi.mock('$lib/api/settings', () => settingsMock);
 vi.mock('$lib/api/certificates', () => certsMock);
+vi.mock('$lib/api/security', () => securityMock);
 
 import Page from './+page.svelte';
 
@@ -128,9 +132,10 @@ beforeEach(() => {
 	settingsMock.settingsApi.deleteManagedDomain.mockReset();
 	settingsMock.settingsApi.getDNSProviderOVH.mockReset();
 	certsMock.certificatesApi.list.mockReset();
+	securityMock.fetchCertEvents.mockReset();
 
 	// Sensible defaults: no routes, no domains, DNS provider
-	// configured, no certs. Individual tests override these.
+	// configured, no certs, no cert events. Individual tests override.
 	apiMock.listRoutes.mockResolvedValue([]);
 	settingsMock.settingsApi.listManagedDomains.mockResolvedValue({
 		domains: [],
@@ -143,6 +148,13 @@ beforeEach(() => {
 		configured: true,
 	});
 	certsMock.certificatesApi.list.mockResolvedValue([]);
+	// Default : no events for any domain. Cert.B tests override
+	// per-domain by mockImplementation that matches { domain } param.
+	securityMock.fetchCertEvents.mockResolvedValue({
+		events: [],
+		total: 0,
+		hasMore: false,
+	});
 });
 
 describe('/certs — auto-renewal info card', () => {
@@ -653,3 +665,227 @@ describe('/certs — Domaines tabs (T.4)', () => {
 		expect(tab.getAttribute('aria-selected')).toBe('true');
 	});
 });
+
+// --- Cert.B (2026-06-23) — stale-failure badge + drill-down --------
+//
+// Stale failure = most-recent cert_event for the domain is
+// cert_failed AND occurred > 24h ago. Distinct from the existing
+// certinfo.Tracker OBTAIN_FAILED status which covers fresh failures
+// (< 24h FailureFreshness) ; Cert.B covers the gap.
+//
+// Tests pin :
+//   1. Badge appears when last event is cert_failed > 24h ago
+//   2. Badge does NOT appear when last event is cert_obtained
+//      (successful renewal cleared the stale state)
+//   3. Badge does NOT appear when failure is < 24h (fresh, covered
+//      by the existing OBTAIN_FAILED tracker badge)
+//   4. Click on badge opens drill-down modal with last 5 events
+//   5. Modal links to /logs filtered by cert source + domain
+
+describe('/certs — Cert.B stale-failure badge', () => {
+	function staleFailureFixture(domain: string) {
+		return {
+			domain,
+			sanList: [domain],
+			issuer: "Let's Encrypt",
+			notBefore: daysFromNow(-60),
+			notAfter: daysFromNow(20),
+			// Note: status from the tracker has reverted to VALID
+			// since the failure is > 24h old (FailureFreshness
+			// expired). The stale badge derives ONLY from the
+			// cert_events history, not from the tracker status.
+			status: 'VALID' as const,
+			source: 'specific' as const,
+		};
+	}
+
+	it('renders the stale-failure badge when last event is cert_failed > 24h ago', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue([
+			staleFailureFixture('vault.example.com'),
+		]);
+		// 48h-old failure, no recovery since.
+		securityMock.fetchCertEvents.mockImplementation(
+			async (params: { domain?: string }) => {
+				if (params.domain === 'vault.example.com') {
+					return {
+						events: [
+							{
+								timestamp: new Date(
+									Date.now() - 48 * 60 * 60 * 1000
+								).toISOString(),
+								level: 'ERROR',
+								eventType: 'cert_failed',
+								domain: 'vault.example.com',
+								issuer: "Let's Encrypt",
+								challenge: 'DNS-01' as const,
+								renewal: true,
+								error: 'urn:ietf:params:acme:error:rateLimited',
+								details: '',
+							},
+						],
+						total: 1,
+						hasMore: false,
+					};
+				}
+				return { events: [], total: 0, hasMore: false };
+			}
+		);
+		render(Page);
+		const badge = await screen.findByTestId('cert-stale-badge');
+		expect(badge.getAttribute('data-domain')).toBe('vault.example.com');
+		expect(badge.textContent).toContain('Échec depuis');
+	});
+
+	it('does NOT render the stale badge when last event is a successful cert_obtained', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue([
+			staleFailureFixture('recovered.example.com'),
+		]);
+		// Failure 48h ago BUT a successful renewal happened 6h ago
+		// — the API returns events newest-first so cert_obtained
+		// is at index 0 ; the badge derivation reads index 0 only.
+		securityMock.fetchCertEvents.mockImplementation(
+			async (params: { domain?: string }) => {
+				if (params.domain === 'recovered.example.com') {
+					return {
+						events: [
+							{
+								timestamp: new Date(
+									Date.now() - 6 * 60 * 60 * 1000
+								).toISOString(),
+								level: 'INFO',
+								eventType: 'cert_obtained',
+								domain: 'recovered.example.com',
+								issuer: "Let's Encrypt",
+								challenge: 'DNS-01' as const,
+								renewal: true,
+								error: '',
+								details: '',
+							},
+							{
+								timestamp: new Date(
+									Date.now() - 48 * 60 * 60 * 1000
+								).toISOString(),
+								level: 'ERROR',
+								eventType: 'cert_failed',
+								domain: 'recovered.example.com',
+								issuer: "Let's Encrypt",
+								challenge: 'DNS-01' as const,
+								renewal: true,
+								error: 'transient timeout',
+								details: '',
+							},
+						],
+						total: 2,
+						hasMore: false,
+					};
+				}
+				return { events: [], total: 0, hasMore: false };
+			}
+		);
+		render(Page);
+		await screen.findByText('recovered.example.com');
+		// Wait one tick for cert events to load + badge derivation.
+		await tick();
+		await tick();
+		expect(screen.queryByTestId('cert-stale-badge')).toBeNull();
+	});
+
+	it('does NOT render the stale badge when failure is fresh (< 24h, covered by tracker)', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue([
+			staleFailureFixture('fresh-fail.example.com'),
+		]);
+		// 6h-old failure — within the tracker's FailureFreshness
+		// window, so the existing OBTAIN_FAILED badge would cover
+		// it. The Cert.B badge intentionally avoids overlap.
+		securityMock.fetchCertEvents.mockImplementation(
+			async (params: { domain?: string }) => {
+				if (params.domain === 'fresh-fail.example.com') {
+					return {
+						events: [
+							{
+								timestamp: new Date(
+									Date.now() - 6 * 60 * 60 * 1000
+								).toISOString(),
+								level: 'ERROR',
+								eventType: 'cert_failed',
+								domain: 'fresh-fail.example.com',
+								issuer: "Let's Encrypt",
+								challenge: 'DNS-01' as const,
+								renewal: true,
+								error: 'transient',
+								details: '',
+							},
+						],
+						total: 1,
+						hasMore: false,
+					};
+				}
+				return { events: [], total: 0, hasMore: false };
+			}
+		);
+		render(Page);
+		await screen.findByText('fresh-fail.example.com');
+		await tick();
+		await tick();
+		expect(screen.queryByTestId('cert-stale-badge')).toBeNull();
+	});
+
+	it('opens the drill-down modal with last 5 events when the badge is clicked', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue([
+			staleFailureFixture('drill.example.com'),
+		]);
+		const events = [
+			{
+				timestamp: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+				level: 'ERROR' as const,
+				eventType: 'cert_failed' as const,
+				domain: 'drill.example.com',
+				issuer: "Let's Encrypt",
+				challenge: 'DNS-01' as const,
+				renewal: true,
+				error: 'urn:ietf:params:acme:error:rateLimited',
+				details: '',
+			},
+			{
+				timestamp: new Date(Date.now() - 96 * 60 * 60 * 1000).toISOString(),
+				level: 'INFO' as const,
+				eventType: 'cert_obtained' as const,
+				domain: 'drill.example.com',
+				issuer: "Let's Encrypt",
+				challenge: 'DNS-01' as const,
+				renewal: true,
+				error: '',
+				details: '',
+			},
+		];
+		securityMock.fetchCertEvents.mockImplementation(
+			async (params: { domain?: string }) => {
+				if (params.domain === 'drill.example.com') {
+					return { events, total: events.length, hasMore: false };
+				}
+				return { events: [], total: 0, hasMore: false };
+			}
+		);
+		render(Page);
+		const badge = await screen.findByTestId('cert-stale-badge');
+		await userEvent.click(badge);
+
+		// Modal should render the list with both events.
+		const list = await screen.findByTestId('cert-drilldown-list');
+		expect(list.children.length).toBe(events.length);
+
+		// The cert_failed row carries the error message verbatim.
+		const errorNode = screen.getByTestId('cert-event-error');
+		expect(errorNode.textContent).toContain('rateLimited');
+
+		// And the "Voir tous les événements" link points at
+		// /logs?source=cert with the domain in the search param.
+		const link = screen.getByTestId(
+			'cert-drilldown-logs-link'
+		) as HTMLAnchorElement;
+		const href = link.getAttribute('href') ?? '';
+		expect(href).toContain('source=cert');
+		expect(href).toContain('drill.example.com');
+	});
+});
+

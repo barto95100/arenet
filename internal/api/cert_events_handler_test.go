@@ -420,6 +420,128 @@ func TestCertEvents_SearchTrimsWhitespace(t *testing.T) {
 	}
 }
 
+// --- Cert.B domain + type filter passthrough -------------------------------
+
+// TestCertEvents_DomainFilterPassThrough pins that ?domain= reaches
+// the storage filter as exact-match. Cert.B (2026-06-23) uses this
+// for the /certs drill-down which fetches the last N events for a
+// specific hostname without the substring imprecision of `search`.
+func TestCertEvents_DomainFilterPassThrough(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	r := &fakeCertEventReader{}
+	m.env.handler.SetCertEventReader(r)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events?domain=vault.example.com", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if r.capturedFilter.Domain != "vault.example.com" {
+		t.Errorf("filter.Domain = %q, want %q",
+			r.capturedFilter.Domain, "vault.example.com")
+	}
+}
+
+func TestCertEvents_DomainFilterTrimsWhitespace(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	r := &fakeCertEventReader{}
+	m.env.handler.SetCertEventReader(r)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events?domain=%20%20example.com%20%20", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if r.capturedFilter.Domain != "example.com" {
+		t.Errorf("filter.Domain = %q, want %q (trimmed)",
+			r.capturedFilter.Domain, "example.com")
+	}
+}
+
+func TestCertEvents_DomainFilter_EmptyPassesThroughAsNoFilter(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	r := &fakeCertEventReader{}
+	m.env.handler.SetCertEventReader(r)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events?domain=", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if r.capturedFilter.Domain != "" {
+		t.Errorf("filter.Domain = %q, want \"\" (empty = no filter)",
+			r.capturedFilter.Domain)
+	}
+}
+
+// TestCertEvents_TypeFilter_cert_failed pins that ?type=cert_failed
+// reaches the storage filter — primary use case for the /certs
+// stale-failure badge in Cert.B (operator wants "did this domain
+// have any cert_failed event in the last N hours").
+func TestCertEvents_TypeFilter_cert_failed(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	r := &fakeCertEventReader{}
+	m.env.handler.SetCertEventReader(r)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events?type=cert_failed", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if r.capturedFilter.Type != "cert_failed" {
+		t.Errorf("filter.Type = %q, want cert_failed", r.capturedFilter.Type)
+	}
+}
+
+// TestCertEvents_DomainAndTypeCombined pins that the two filters
+// compose : domain + type, both forwarded to storage.
+func TestCertEvents_DomainAndTypeCombined(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	r := &fakeCertEventReader{}
+	m.env.handler.SetCertEventReader(r)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events?domain=auth.example.com&type=cert_failed&limit=5", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if r.capturedFilter.Domain != "auth.example.com" {
+		t.Errorf("filter.Domain = %q, want auth.example.com", r.capturedFilter.Domain)
+	}
+	if r.capturedFilter.Type != "cert_failed" {
+		t.Errorf("filter.Type = %q, want cert_failed", r.capturedFilter.Type)
+	}
+	if r.capturedFilter.Limit != 5 {
+		t.Errorf("filter.Limit = %d, want 5", r.capturedFilter.Limit)
+	}
+}
+
+// TestCertEvents_TypeFilter_UnknownPassesThrough — defensive contract :
+// the handler does NOT return 400 for an unrecognised type token.
+// Future certmagic versions may emit new event types we don't yet
+// know about ; the storage layer filters as a literal string so an
+// unknown type cleanly returns 0 rows rather than blocking the call.
+func TestCertEvents_TypeFilter_UnknownPassesThrough(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	r := &fakeCertEventReader{}
+	m.env.handler.SetCertEventReader(r)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/observability/cert-events?type=cert_future_event_type", nil)
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (unknown type passes through)", rec.Code)
+	}
+	if r.capturedFilter.Type != "cert_future_event_type" {
+		t.Errorf("filter.Type = %q, want pass-through", r.capturedFilter.Type)
+	}
+}
+
 // --- Query error path ------------------------------------------------------
 
 func TestCertEvents_QueryError_503(t *testing.T) {
