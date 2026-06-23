@@ -102,19 +102,42 @@ describe('ActivityHistogram', () => {
 	});
 
 	it('honors a custom bucketMs (1-minute granularity)', () => {
-		// Two cells under 5s apart on the same source → same
-		// 1-minute bucket → exactly one stacked bar segment.
-		// Tight spread to avoid the bucket-boundary edge case
-		// where Date.now() can advance across the truncate
-		// boundary mid-test.
+		// Two cells inside the SAME 1-minute bucket → exactly
+		// one stacked bar segment.
+		//
+		// Pre-fix : the test used isoOffset(1) + isoOffset(3),
+		// expecting "tight spread under 5s = same bucket". That
+		// premise was wrong : the 1-minute bucket is aligned on
+		// epoch boundaries (Math.floor(ts/60_000)*60_000), so
+		// two timestamps 2s apart STRADDLE the boundary whenever
+		// the test happens to run within 3s of a minute mark.
+		// Fail rate ≈ 5% (3 seconds out of 60), and CI's slower
+		// startup amplifies the chance the test lands on the
+		// boundary. Locally observed pass ; CI observed fail
+		// 2026-06-23 commit ef960b5 sweep.
+		//
+		// Fix : anchor both timestamps inside a single bucket by
+		// snapping to the current bucket's floor + adding tiny
+		// offsets that stay WITHIN the same 60s window. The
+		// arithmetic is timezone-agnostic (epoch millis only).
+		const bucketMs = 60 * 1000;
+		// Pick a recent bucket floor ; aim for 90 s ago so we
+		// land safely inside the 24h default window AND have a
+		// full bucket of headroom away from the "now" boundary
+		// (avoids the symmetric flake where Date.now() advances
+		// past the bucket end between the test setup and the
+		// component's render-time current-time read).
+		const bucketFloor = Math.floor((Date.now() - 90 * 1000) / bucketMs) * bucketMs;
+		const insideBucketA = new Date(bucketFloor + 5_000).toISOString();
+		const insideBucketB = new Date(bucketFloor + 30_000).toISOString();
 		const { container } = render(ActivityHistogram, {
 			cells: [
-				{ ts: isoOffset(1), source: 'waf' },
-				{ ts: isoOffset(3), source: 'waf' }
+				{ ts: insideBucketA, source: 'waf' },
+				{ ts: insideBucketB, source: 'waf' }
 			],
 			series: SERIES,
 			label: '1-min bucket',
-			bucketMs: 60 * 1000
+			bucketMs
 		});
 		expect(container.querySelectorAll('rect.bar-seg').length).toBe(1);
 	});
