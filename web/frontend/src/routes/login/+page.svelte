@@ -44,6 +44,7 @@
 	import LoginBackground from '$lib/components/LoginBackground.svelte';
 	import SSOProviderLogo from '$lib/components/SSOProviderLogo.svelte';
 	import type { OIDCProviderKind } from '$lib/api/types';
+	import logoUrl from '$lib/assets/arenet-logo.png';
 
 	// Step K.2 — map the `?error=<code>` query the OIDC callback
 	// posts to the login page on a rejected SSO flow. Spec §5.2
@@ -171,7 +172,7 @@
 	     lang toggle are dropped — no infra behind them). -->
 	<div class="login-topbar">
 		<div class="login-brand">
-			<div class="login-brand-mark" aria-hidden="true">A</div>
+			<img class="login-brand-logo" src={logoUrl} alt="" aria-hidden="true" width="34" height="34" />
 			<div class="login-brand-name">Arenet</div>
 		</div>
 	</div>
@@ -397,22 +398,15 @@
 		align-items: center;
 		gap: 11px;
 	}
-	.login-brand-mark {
+	.login-brand-logo {
 		width: 34px;
 		height: 34px;
-		border-radius: 9px;
-		background: linear-gradient(140deg, var(--accent) 0%, oklch(52% 0.22 265) 100%);
-		display: grid;
-		place-items: center;
-		color: #fff;
-		font-family: var(--font-display);
-		font-weight: 600;
-		font-size: 16px;
-		letter-spacing: -0.02em;
-		box-shadow:
-			inset 0 1px 0 oklch(82% 0.18 250 / 0.5),
-			0 1px 0 oklch(0% 0 0 / 0.4),
-			0 12px 36px -10px oklch(60% 0.22 260 / 0.5);
+		object-fit: contain;
+		flex-shrink: 0;
+		/* Soft halo around the logo to preserve the depth of the
+		   pre-logo gradient mark — keeps the brand block visually
+		   anchored against the translucent login card. */
+		filter: drop-shadow(0 12px 36px oklch(60% 0.22 260 / 0.5));
 	}
 	.login-brand-name {
 		font-family: var(--font-display);

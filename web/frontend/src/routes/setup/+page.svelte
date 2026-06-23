@@ -24,6 +24,7 @@
 	import { auth } from '$lib/stores/auth.svelte';
 	import { ApiError } from '$lib/api/types';
 	import LoginBackground from '$lib/components/LoginBackground.svelte';
+	import logoUrl from '$lib/assets/arenet-logo.png';
 
 	let setupToken = $state('');
 	let username = $state('');
@@ -84,7 +85,7 @@
 <div class="setup-page">
 	<div class="setup-topbar">
 		<div class="setup-brand">
-			<div class="setup-brand-mark" aria-hidden="true">A</div>
+			<img class="setup-brand-logo" src={logoUrl} alt="" aria-hidden="true" width="34" height="34" />
 			<div class="setup-brand-name">Arenet</div>
 		</div>
 	</div>
@@ -320,22 +321,12 @@
 		align-items: center;
 		gap: 11px;
 	}
-	.setup-brand-mark {
+	.setup-brand-logo {
 		width: 34px;
 		height: 34px;
-		border-radius: 9px;
-		background: linear-gradient(140deg, var(--accent) 0%, oklch(52% 0.22 265) 100%);
-		display: grid;
-		place-items: center;
-		color: #fff;
-		font-family: var(--font-display);
-		font-weight: 600;
-		font-size: 16px;
-		letter-spacing: -0.02em;
-		box-shadow:
-			inset 0 1px 0 oklch(82% 0.18 250 / 0.5),
-			0 1px 0 oklch(0% 0 0 / 0.4),
-			0 12px 36px -10px oklch(60% 0.22 260 / 0.5);
+		object-fit: contain;
+		flex-shrink: 0;
+		filter: drop-shadow(0 12px 36px oklch(60% 0.22 260 / 0.5));
 	}
 	.setup-brand-name {
 		font-family: var(--font-display);

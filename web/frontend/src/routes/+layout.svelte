@@ -34,7 +34,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import favicon from '$lib/assets/favicon.svg';
+	import favicon from '$lib/assets/arenet-logo.png';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Topbar from '$lib/components/Topbar.svelte';
 	import LockScreen from '$lib/components/LockScreen.svelte';
@@ -113,7 +113,7 @@
 </script>
 
 <svelte:head>
-	<link rel="icon" href={favicon} />
+	<link rel="icon" type="image/png" href={favicon} />
 	<title>Arenet</title>
 </svelte:head>
 

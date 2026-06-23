@@ -44,6 +44,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { auth } from '$lib/stores/auth.svelte';
+	import logoUrl from '$lib/assets/arenet-logo.png';
 
 	type IconName =
 		| 'dashboard'
@@ -239,7 +240,7 @@
 
 <aside class="sidebar" aria-label="Primary">
 	<div class="brand">
-		<div class="brand-mark" aria-hidden="true">A</div>
+		<img class="brand-logo" src={logoUrl} alt="" aria-hidden="true" width="30" height="30" />
 		<div class="brand-name">AreNET</div>
 		<div class="brand-env">dev</div>
 	</div>
@@ -306,19 +307,15 @@
 		margin-bottom: 6px;
 		border-bottom: 1px solid var(--border);
 	}
-	.brand-mark {
+	.brand-logo {
 		width: 30px;
 		height: 30px;
-		border-radius: 7px;
-		background: linear-gradient(140deg, var(--accent) 0%, oklch(52% 0.22 265) 100%);
-		display: grid;
-		place-items: center;
-		color: #fff;
-		font-family: var(--font-display);
-		font-weight: 600;
-		font-size: 15px;
-		letter-spacing: -0.02em;
-		box-shadow: inset 0 1px 0 oklch(82% 0.18 250 / 0.5), 0 1px 0 oklch(0% 0 0 / 0.4);
+		object-fit: contain;
+		flex-shrink: 0;
+		/* The logo PNG is 126×106 (~1.19:1 landscape). object-fit:
+		   contain keeps the aspect ratio inside the 30×30 box —
+		   the bouclier carries its own visual identity ; the
+		   pre-logo gradient + "A" letter mark is dropped. */
 	}
 	.brand-name {
 		font-family: var(--font-display);
