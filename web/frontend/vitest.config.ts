@@ -26,6 +26,19 @@ export default defineConfig({
 		globals: false,
 		include: ['src/**/*.{test,spec}.ts'],
 		setupFiles: ['./src/test/setup.ts'],
+		// pool=forks fixes a flaky-under-load issue observed
+		// 2026-06-23 : the default 'threads' pool let test files
+		// share Svelte's module registry across workers, causing
+		// random failures (Button/Modal/dashboard/logs/routes
+		// suites would fail 5-8 tests under high parallel
+		// pressure, then pass cleanly when re-run alone). Forks
+		// isolate each suite in its own process, eliminating the
+		// shared-registry contention. Trade-off : ~3x slower
+		// startup (55s full sweep vs ~18s threads), justified by
+		// the reliability win — 842/842 stable across retries.
+		// Operators iterating locally on a single test file
+		// still get sub-second feedback via `vitest <file>`.
+		pool: 'forks',
 		coverage: {
 			// Chunk 7 §11 + AC #8: measure coverage on lib/components/
 			// (>= 70 % target). The pre-Step F config only included .ts

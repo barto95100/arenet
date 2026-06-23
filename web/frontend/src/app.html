@@ -4,14 +4,21 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
-		<!-- Early favicon hint for the pre-hydration fetch. SvelteKit
-		     layouts override this via <svelte:head> with the Vite-
+		<!-- Early favicon hints for the pre-hydration fetch. SvelteKit
+		     layouts override these via <svelte:head> with the Vite-
 		     hashed asset (cache-bustable on rebuild) once hydrated ;
-		     the static /favicon.png served by the adapter satisfies
+		     the static favicon files served by the adapter satisfy
 		     the browser's initial favicon discovery before the JS
 		     bundle is parsed, avoiding the default "globe" placeholder
-		     flash on first paint. -->
+		     flash on first paint.
+		     Multi-size set : 16/32 for tab sharpness across DPI,
+		     180 for iOS Safari home-screen pinning. The base
+		     /favicon.png (126x106 source) stays referenced as the
+		     fallback for browsers that don't honour sizes='...' . -->
+		<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+		<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
 		<link rel="icon" type="image/png" href="/favicon.png" />
+		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 		<!-- Theme bootstrap (Step F §4.3). MUST run before the SvelteKit
 		     head injection so the user never sees a flash of the wrong
 		     theme. Priority: cookie > localStorage > 'dark' default.

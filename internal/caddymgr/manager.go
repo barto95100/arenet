@@ -1090,6 +1090,42 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			"load_balancing": map[string]any{
 				"selection_policy": selectionPolicy,
 			},
+			// Preserve the original client Host header on the
+			// upstream request. Caddy's default replaces it with
+			// the upstream URL's host, which breaks every backend
+			// that builds absolute URLs from Host (IdPs like
+			// authentik / Keycloak / Authelia constructing their
+			// OIDC discovery doc, multi-tenant SaaS dispatching
+			// by Host, single-page apps generating canonical
+			// URLs, ...). Traefik and nginx both preserve Host
+			// by default — Arenet aligns with the industry
+			// convention here.
+			//
+			// Day 17 empirical motivation : the authentik OIDC
+			// route at auth.worldgeekwide.fr returned
+			// "issuer": "http://192.168.99.12/application/o/arenet/"
+			// instead of "https://auth.worldgeekwide.fr/..."
+			// because authentik used the upstream-rewritten
+			// Host to build the discovery doc. The X-Forwarded-*
+			// trio is already injected by Caddy's reverse_proxy
+			// (verified empirically against
+			// caddyserver/caddy/v2@v2.11.3 reverseproxy.go:835)
+			// so X-Forwarded-Proto / X-Forwarded-For /
+			// X-Forwarded-Host don't need explicit wiring here.
+			//
+			// {http.request.host} is the Caddy placeholder for
+			// the request's Host header (after the listener's
+			// matcher binding but before any rewrites). Match
+			// behaviour : verified by running
+			// `caddy adapt` on equivalent Caddyfile
+			// `reverse_proxy { header_up Host {host} }`.
+			"headers": map[string]any{
+				"request": map[string]any{
+					"set": map[string][]string{
+						"Host": {"{http.request.host}"},
+					},
+				},
+			},
 		}
 
 		// Step #R-PROXMOX-HTTPS-LOOP (2026-06-10) — emit
