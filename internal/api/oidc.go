@@ -129,7 +129,13 @@ func (m *OIDCManager) EnsureBuilt(ctx context.Context, cfg storage.OIDCConfig) e
 	defer cancel()
 	provider, err := oidc.NewProvider(fetchCtx, cfg.IssuerURL)
 	if err != nil {
-		return fmt.Errorf("oidc: discovery fetch failed: %w", err)
+		// Embed the issuer URL into the wrapped error so any
+		// caller's log line is self-describing without needing
+		// a parallel slog.String("issuer_url", ...) attribute.
+		// Empirically motivated by Day 17 session diagnostic
+		// where 2h were spent identifying which issuer URL was
+		// failing because the wrapped error didn't carry it.
+		return fmt.Errorf("oidc: discovery fetch failed for %q (timeout 10s): %w", cfg.IssuerURL, err)
 	}
 	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})
 	oc := &oauth2.Config{
@@ -342,6 +348,15 @@ func (h *Handler) putOIDCConfig(w http.ResponseWriter, r *http.Request) {
 		// scopes non-empty, etc.). Then EnsureBuilt verifies the
 		// IdP is actually reachable + the discovery doc parses.
 		if err := h.oidc.EnsureBuilt(r.Context(), merged); err != nil {
+			// Log server-side too — the operator-facing 400 carries
+			// the message but journalctl is where the on-call
+			// engineer looks first when an admin's PUT is rejected.
+			h.logger.Warn("oidc: config rejected at PUT validation",
+				"err", err,
+				"issuer_url", merged.IssuerURL,
+				"client_id", merged.ClientID,
+				"timeout_seconds", 10,
+			)
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("oidc config rejected: %s", err.Error()))
 			return
 		}
@@ -594,7 +609,12 @@ func (h *Handler) oidcInitiateLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.oidc.EnsureBuilt(r.Context(), cfg); err != nil {
-		h.logger.Warn("oidc: discovery fetch failed at login initiate", "err", err)
+		h.logger.Warn("oidc: discovery fetch failed at login initiate",
+			"err", err,
+			"issuer_url", cfg.IssuerURL,
+			"client_id", cfg.ClientID,
+			"timeout_seconds", 10,
+		)
 		writeError(w, http.StatusServiceUnavailable, "oidc identity provider unreachable")
 		return
 	}
@@ -699,7 +719,12 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.oidc.EnsureBuilt(r.Context(), cfg); err != nil {
-		h.logger.Warn("oidc: discovery fetch failed at callback", "err", err)
+		h.logger.Warn("oidc: discovery fetch failed at callback",
+			"err", err,
+			"issuer_url", cfg.IssuerURL,
+			"client_id", cfg.ClientID,
+			"timeout_seconds", 10,
+		)
 		http.Redirect(w, r, h.uiURL("/login?error=idp_unreachable"), http.StatusFound)
 		return
 	}
@@ -721,7 +746,11 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, err := oauthCfg.Exchange(r.Context(), code)
 	if err != nil {
-		h.logger.Warn("oidc: code exchange failed", "err", err)
+		h.logger.Warn("oidc: code exchange failed",
+			"err", err,
+			"issuer_url", cfg.IssuerURL,
+			"client_id", cfg.ClientID,
+		)
 		http.Redirect(w, r, h.uiURL("/login?error=idp_unreachable"), http.StatusFound)
 		return
 	}
@@ -737,7 +766,11 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 
 	idToken, err := verifier.Verify(r.Context(), rawIDToken)
 	if err != nil {
-		h.logger.Warn("oidc: id token verification failed", "err", err)
+		h.logger.Warn("oidc: id token verification failed",
+			"err", err,
+			"issuer_url", cfg.IssuerURL,
+			"client_id", cfg.ClientID,
+		)
 		h.appendAudit(r, audit.Event{
 			Action:  audit.ActionOIDCCallbackInvalid,
 			Message: "id_token_invalid",
