@@ -1253,10 +1253,58 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// large file downloads) where buffer_responses=true
 		// would buffer the full body in proxy RAM before any
 		// decision — catastrophic on a 4K stream.
+		// 2026-06-24 — operator-reported Harbor / Docker
+		// registry bug : the wildcard [4, 5] intercept above
+		// converted EVERY upstream 4xx/5xx into a Caddy
+		// HandlerError, which the errors chain then served as
+		// the branded HTML body. That HTML body REPLACED the
+		// upstream's response headers — including
+		// Www-Authenticate (401) and Proxy-Authenticate (407),
+		// both of which transport the auth challenge the
+		// client needs to retry with credentials.
+		//
+		// Without those headers, Docker registry v2's
+		// challenge flow can't discover the token endpoint :
+		//
+		//   docker → Arenet → Harbor 401 + Www-Authenticate: Bearer realm=...
+		//                     Arenet intercept → 401 branded HTML, header lost
+		//   docker ← 401 HTML → "no Www-Authenticate" → docker login fails
+		//
+		// Fix : narrow `match.status_code` to only codes where
+		// serving a branded HTML body is correct (the user is
+		// at a dead end ; the upstream isn't asking them to
+		// authenticate or upgrade protocol).
+		//
+		//   - 401 Unauthorized — auth challenge, MUST pass-through
+		//   - 407 Proxy Authentication Required — same, for proxy
+		//
+		// All other 4xx + 5xx still get the branded body.
+		// Caddy v2's ResponseMatcher has no `not` block (verified
+		// empirically against caddy v2.11.3 responsematchers.go),
+		// so we enumerate the include list rather than negate.
+		//
+		// Note : the branded 401 body remains available for
+		// Arenet's OWN auth handlers (BasicAuth / ForwardAuth
+		// gates that reject BEFORE reverse_proxy). Those 401s
+		// don't traverse this handle_response block — they're
+		// raised by handlers earlier in the chain and dispatch
+		// via apps.http.servers.<srv>.errors directly. The
+		// SupportedErrorStatusCodes set in internal/storage/
+		// error_template.go intentionally keeps 401 so operators
+		// can still customise the Arenet-generated 401 body via
+		// the template editor.
 		proxyHandler["handle_response"] = []map[string]any{
 			{
 				"match": map[string]any{
-					"status_code": []int{4, 5},
+					"status_code": []int{
+						// 4xx (except 401 + 407)
+						400, 402, 403, 404, 405, 406, 408, 409, 410,
+						411, 412, 413, 414, 415, 416, 417, 418, 421,
+						422, 423, 424, 425, 426, 428, 429, 431, 451,
+						// 5xx (full range)
+						500, 501, 502, 503, 504, 505, 506, 507, 508,
+						510, 511,
+					},
 				},
 				"routes": []map[string]any{
 					{

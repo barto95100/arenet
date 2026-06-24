@@ -421,11 +421,21 @@ func TestBuildConfigJSON_EmitsErrorsBlock_ForEveryRoute(t *testing.T) {
 
 // TestBuildConfigJSON_ReverseProxy_HandleResponse4xx5xx pins the
 // Phase 1.1 invariant that every reverse_proxy handler carries a
-// handle_response block matching status [4, 5] and re-emitting
+// handle_response block matching upstream errors and re-emitting
 // via http.handlers.error so the server's errors.routes chain
-// fires on upstream 4xx/5xx too (not only on Caddy-generated
-// errors). Pre-Phase-1.1 the upstream body streamed through
-// unchanged — verified empirically against Proxmox 404 in smoke.
+// fires on upstream 4xx/5xx (not only on Caddy-generated errors).
+//
+// 2026-06-24 update — the original `[4, 5]` wildcard match was
+// narrowed to an explicit code list EXCLUDING 401 + 407 after the
+// operator-reported Harbor / Docker registry bug : the wildcard
+// converted the upstream's 401 + Www-Authenticate response into
+// a Caddy HandlerError, which replaced the response headers with
+// the branded HTML body. Docker registry v2's challenge flow
+// can't complete without the Www-Authenticate header reaching
+// the client. 401 + 407 now pass through verbatim.
+//
+// This test pins the narrowed list shape AND the explicit
+// non-presence of 401 + 407 in the match.
 func TestBuildConfigJSON_ReverseProxy_HandleResponse4xx5xx(t *testing.T) {
 	routes := []storage.Route{
 		{
@@ -495,13 +505,36 @@ func TestBuildConfigJSON_ReverseProxy_HandleResponse4xx5xx(t *testing.T) {
 					hr0 := hr[0].(map[string]any)
 					match := hr0["match"].(map[string]any)
 					statusCodes := match["status_code"].([]any)
-					if len(statusCodes) != 2 {
-						t.Errorf("status_code len = %d ; want 2 (4xx + 5xx)", len(statusCodes))
+
+					// Build a quick lookup set on the
+					// emitted codes (JSON decode gives
+					// float64 for ints).
+					emitted := make(map[int]bool, len(statusCodes))
+					for _, sc := range statusCodes {
+						emitted[int(sc.(float64))] = true
 					}
-					// JSON unmarshal gives float64 for int values.
-					if statusCodes[0].(float64) != 4 || statusCodes[1].(float64) != 5 {
-						t.Errorf("status_code = %v ; want [4, 5]", statusCodes)
+
+					// 2026-06-24 contract : 401 + 407 MUST
+					// NOT be in the intercept list — they
+					// pass through verbatim so the upstream's
+					// Www-Authenticate / Proxy-Authenticate
+					// headers reach the client.
+					for _, mustPassthrough := range []int{401, 407} {
+						if emitted[mustPassthrough] {
+							t.Errorf("status_code list contains %d but it MUST pass through verbatim (Www-Authenticate / Proxy-Authenticate challenge header) ; got list=%v",
+								mustPassthrough, statusCodes)
+						}
 					}
+
+					// Spot-check : the common branded
+					// codes are still intercepted.
+					for _, mustIntercept := range []int{403, 404, 429, 500, 502, 503, 504} {
+						if !emitted[mustIntercept] {
+							t.Errorf("status_code list missing %d (operator branded body should fire) ; got list=%v",
+								mustIntercept, statusCodes)
+						}
+					}
+
 					innerRoutes := hr0["routes"].([]any)
 					inner0 := innerRoutes[0].(map[string]any)
 					innerHandlers := inner0["handle"].([]any)
