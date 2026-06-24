@@ -989,6 +989,23 @@ describe('Routes page — aggregate health badges + filter tabs', () => {
 		expect(screen.queryByText('UNKNOWN')).not.toBeInTheDocument();
 	});
 
+	it('renders "HC INACTIF" distinct badge for not_monitored aggregateStatus (2026-06-25 UX split)', async () => {
+		// Pre-2026-06-25 : routes with HealthCheck.Enabled=false
+		// rendered the same "UNKNOWN" badge as HC-enabled-but-warm-up
+		// routes, making the operator unable to tell whether the
+		// gray badge meant "I chose not to monitor" or "I monitor
+		// but I don't know yet". The split adds 'not_monitored' as
+		// a distinct aggregateStatus with its own label.
+		apiMock.listRoutes.mockResolvedValue([
+			mkRoute('r-nm', 'unmonitored.example', 'not_monitored', 0, 1),
+			mkRoute('r-u', 'warmup.example', 'unknown', 0, 1),
+		]);
+		render(Page);
+
+		expect(await screen.findByText('HC INACTIF')).toBeInTheDocument();
+		expect(screen.getByText('UNKNOWN')).toBeInTheDocument();
+	});
+
 	it('Alerts tab filters to degraded OR down; unknown excluded', async () => {
 		apiMock.listRoutes.mockResolvedValue([
 			mkRoute('r-h', 'healthy.example', 'healthy', 1, 1),

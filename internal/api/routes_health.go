@@ -26,6 +26,16 @@ const (
 	routeStatusDegraded = "degraded"
 	routeStatusDown     = "down"
 	routeStatusUnknown  = "unknown"
+	// routeStatusNotMonitored (2026-06-25) — operator UX
+	// improvement. Pre-this : a route whose HC was disabled
+	// returned routeStatusUnknown, indistinguishable in the
+	// UI from "HC enabled but warm-up window" (no event yet).
+	// Operator couldn't tell whether a gray badge meant "I
+	// chose not to monitor" or "I monitor but I don't know yet".
+	// Splitting the enum lets the frontend render a distinct
+	// "HC inactif" label + tooltip for the deliberate-off case
+	// while keeping "unknown" for the genuine warm-up case.
+	routeStatusNotMonitored = "not_monitored"
 )
 
 // computeRouteAggregateHealth derives the per-route health rollup
@@ -67,11 +77,14 @@ func computeRouteAggregateHealth(r storage.Route, status HCStatusReader) (string
 	if total == 0 {
 		return routeStatusUnknown, 0, 0
 	}
-	// C13 gate: no probe configured → status is honestly unknown.
-	// We don't even touch the tracker — what's there can only be
-	// stale.
+	// C13 gate: no probe configured → status is honestly
+	// "not monitored" (operator deliberately disabled HC).
+	// We don't even touch the tracker — what's there can only
+	// be stale. Distinct from routeStatusUnknown which is
+	// reserved for HC-enabled-but-warm-up-window (we'd know
+	// the status if we'd observed enough probes).
 	if !r.HealthCheck.Enabled {
-		return routeStatusUnknown, 0, total
+		return routeStatusNotMonitored, 0, total
 	}
 	if status == nil {
 		return routeStatusUnknown, 0, total

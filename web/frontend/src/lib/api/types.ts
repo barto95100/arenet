@@ -167,16 +167,21 @@ export interface Route {
 	/**
 	 * Critique 11 Pack A (2026-06-05) — derived per-route health
 	 * rollup the Routes API computes from the Stage B HC tracker.
-	 *   "healthy"  — HC enabled AND every upstream healthy
-	 *   "degraded" — HC enabled, at least one unhealthy upstream
-	 *   "down"     — HC enabled AND every upstream unhealthy
-	 *   "unknown"  — HC disabled, OR warm-up window with no
-	 *                unhealthy signal yet
+	 *   "healthy"        — HC enabled AND every upstream healthy
+	 *   "degraded"       — HC enabled, at least one unhealthy upstream
+	 *   "down"           — HC enabled AND every upstream unhealthy
+	 *   "unknown"        — HC enabled, warm-up window with no
+	 *                      unhealthy signal yet
+	 *   "not_monitored"  — HC disabled (operator deliberately chose
+	 *                      not to monitor ; distinct from warm-up
+	 *                      "unknown" so the UI can render a clear
+	 *                      "HC inactif" label vs the ambiguous
+	 *                      "still observing" gray badge)
 	 * Always present on a route response. See the backend
 	 * `computeRouteAggregateHealth` docstring for the full
 	 * precedence table.
 	 */
-	aggregateStatus: 'healthy' | 'degraded' | 'down' | 'unknown';
+	aggregateStatus: 'healthy' | 'degraded' | 'down' | 'unknown' | 'not_monitored';
 	/**
 	 * Step W — per-route country-block gate state.
 	 * Always present (storage zero-value reads back as

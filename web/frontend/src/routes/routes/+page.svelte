@@ -1876,6 +1876,7 @@
 	function aggregateToBadge(s: Route['aggregateStatus']): {
 		label: string;
 		variant: 'status-up' | 'status-warn' | 'status-down' | 'neutral';
+		tooltip?: string;
 	} {
 		switch (s) {
 			case 'healthy':
@@ -1884,8 +1885,24 @@
 				return { label: 'DEGRADED', variant: 'status-warn' };
 			case 'down':
 				return { label: 'DOWN', variant: 'status-down' };
+			case 'not_monitored':
+				// 2026-06-25 — distinct from "unknown" (warm-up).
+				// The operator deliberately chose not to wire HC
+				// on this route ; surface the choice explicitly
+				// rather than leaving an ambiguous gray badge.
+				return {
+					label: 'HC INACTIF',
+					variant: 'neutral',
+					tooltip:
+						'Active health check non configuré pour cette route. Activez le HC dans la section "Health check" pour surveiller l’état des upstreams.'
+				};
 			default:
-				return { label: 'UNKNOWN', variant: 'neutral' };
+				return {
+					label: 'UNKNOWN',
+					variant: 'neutral',
+					tooltip:
+						'HC activé mais aucun signal reçu pour le moment (warm-up window). Le badge va se mettre à jour aux prochaines probes.'
+				};
 		}
 	}
 
@@ -2114,7 +2131,7 @@
 									     a verdict. Hidden for single-upstream
 									     pools (noise) and for unknown-status pools
 									     (no verdict to count). -->
-									{#if r.totalUpstreamCount > 1 && r.aggregateStatus !== 'unknown'}
+									{#if r.totalUpstreamCount > 1 && r.aggregateStatus !== 'unknown' && r.aggregateStatus !== 'not_monitored'}
 										<span class="ml-1 text-xs text-muted"
 											>· {r.healthyUpstreamCount}/{r.totalUpstreamCount}
 											sains</span>
@@ -2167,7 +2184,13 @@
 									     pointer + hover tint + selected accent),
 									     matching the mock and avoiding the
 									     double-action anti-pattern. -->
-									<Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+									{#if statusBadge.tooltip}
+										<span title={statusBadge.tooltip} class="inline-block cursor-help">
+											<Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+										</span>
+									{:else}
+										<Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+									{/if}
 								</td>
 							</tr>
 						{/each}
@@ -3702,7 +3725,7 @@
 					<Button
 						onclick={submitForm}
 						loading={submitting}
-						disabled={dedicatedOptOutPendingChoice}
+						disabled={submitting || dedicatedOptOutPendingChoice}
 					>
 						{formMode === 'create' ? 'Create' : 'Save'}
 					</Button>

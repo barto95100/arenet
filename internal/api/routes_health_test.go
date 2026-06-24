@@ -143,8 +143,11 @@ func TestComputeRouteAggregateHealth_PartialHealthyPartialWarmup(t *testing.T) {
 }
 
 func TestComputeRouteAggregateHealth_NoHCConfiguredGate(t *testing.T) {
-	// C13 gate: a route without HealthCheck.Enabled must always
-	// report unknown regardless of any stale tracker state.
+	// C13 gate: a route without HealthCheck.Enabled must report
+	// "not_monitored" — distinct from "unknown" which is reserved
+	// for HC-enabled-but-warm-up. The split lets the UI render a
+	// clear "HC inactif" label vs the genuine "still observing"
+	// gray badge (2026-06-25 operator UX request).
 	r := storage.Route{
 		ID:        "r",
 		Host:      "h.example",
@@ -156,8 +159,9 @@ func TestComputeRouteAggregateHealth_NoHCConfiguredGate(t *testing.T) {
 		"http://10.0.0.1:80": "healthy",
 	}
 	got, healthy, total := computeRouteAggregateHealth(r, s)
-	if got != routeStatusUnknown {
-		t.Errorf("status = %q, want %q (C13 gate must mask tracker state)", got, routeStatusUnknown)
+	if got != routeStatusNotMonitored {
+		t.Errorf("status = %q, want %q (C13 gate must mask tracker state with the distinct not_monitored label)",
+			got, routeStatusNotMonitored)
 	}
 	// healthyCount stays at 0 for unmonitored routes — we
 	// deliberately don't peek at the tracker through the gate.
