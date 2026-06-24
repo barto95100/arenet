@@ -923,6 +923,83 @@ describe('Routes page — openEdit round-trip preserves HealthCheck', () => {
 	});
 });
 
+// --- 2026-06-25 — double-PUT guard (operator empirical report) -----
+//
+// Empirical observation : journalctl on the operator's homelab
+// showed 2 PUT /api/v1/routes/X calls 47ms apart for a single
+// Save click. The 2nd PUT carried "config is unchanged" in the
+// Caddy reload log (idempotent) but still consumed a server
+// round-trip + grace-period cycle on the 1st PUT.
+//
+// v2.9.6 added `disabled={submitting}` on the Save button but the
+// double-PUT persisted post-deploy. Root cause analysis : Svelte
+// 5 reactivity → DOM commit window has a microtask gap where a
+// queued 2nd click event (OS-level double-click setting, mouse
+// hardware bounce, accessibility tool) can pass through before
+// the disabled attribute actually lands on the <button>.
+//
+// v2.9.7 adds a `if (submitting) return` guard at the start of
+// submitForm() itself — bulletproof against any click event
+// volume, regardless of DOM commit timing.
+describe('Routes page — submitForm double-PUT guard', () => {
+	it('fires updateRoute exactly once when the form is submitted twice in rapid succession', async () => {
+		const seeded = makeRoute({
+			id: 'guard-fixture',
+			host: 'guard.example.com',
+			upstreams: [{ url: 'http://10.0.0.1:80', weight: 1 }],
+			healthCheck: {
+				enabled: true,
+				uri: '/healthz',
+				method: 'GET',
+				interval: '30s',
+				timeout: '5s',
+				expectStatus: 0,
+				expectBody: '',
+				passes: 1,
+				fails: 1
+			}
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+
+		// Slow the updateRoute response so the 2nd submit fires
+		// while the 1st is still in flight — mirrors the empirical
+		// 47ms-apart double-PUT the operator captured.
+		let resolveUpdate: (r: Route) => void;
+		apiMock.updateRoute.mockReturnValue(
+			new Promise<Route>((resolve) => {
+				resolveUpdate = resolve;
+			})
+		);
+
+		render(Page);
+
+		// Open edit panel for the route.
+		const row = await screen.findByText('guard.example.com');
+		await userEvent.click(row.closest('tr')!);
+		await tick();
+
+		// Fire submit twice within the same microtask. tick() is
+		// NOT called between them — that's the point. We mirror
+		// the OS-level double-click event delivery where both
+		// clicks land before Svelte's reactivity commits the
+		// disabled attribute.
+		const form = document.querySelector('form')!;
+		fireEvent.submit(form);
+		fireEvent.submit(form);
+		await tick();
+		await tick();
+
+		// Now resolve the in-flight updateRoute so the test cleans up.
+		resolveUpdate!(seeded);
+		await tick();
+		await tick();
+
+		// THE assertion : exactly ONE updateRoute call, no matter
+		// how many submit events fired before the resolve.
+		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
+	});
+});
+
 // --- C11 Pack A — aggregate health badge + filter tabs --------------
 //
 // Operator's Pack A smoke caught the original "static green dot"

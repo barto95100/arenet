@@ -1577,6 +1577,19 @@
 	}
 
 	async function submitForm() {
+		// 2026-06-25 — empirical double-PUT guard.
+		// The visible Save button has `disabled={submitting}` which
+		// SHOULD prevent re-fire, but Svelte 5's reactivity → DOM
+		// commit window has a microtask gap where a queued 2nd click
+		// (OS-level double-click setting, accessibility tool, or
+		// rapid touch) can pass through before the disabled attribute
+		// lands. Belt + braces : the disabled attribute is UX polish,
+		// this guard is the correctness primitive. With it, even 100
+		// queued click events fire submitForm() only once for the
+		// in-flight save.
+		if (submitting) {
+			return;
+		}
 		submitting = true;
 		resetFormErrors();
 		if (!validateBeforeSubmit()) {
@@ -2290,6 +2303,10 @@
 				<form
 					onsubmit={(e) => {
 						e.preventDefault();
+						// submitForm() carries its own `if
+						// (submitting) return` guard since v2.9.7,
+						// so a form-Enter + button-click combo is
+						// safe — the 2nd entry is a no-op.
 						submitForm();
 					}}
 					class="flex flex-col gap-4 p-5"
