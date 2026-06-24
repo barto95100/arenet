@@ -733,7 +733,43 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		)
 	}
 
-	if err := caddy.Load(cfgJSON, true); err != nil {
+	// 2026-06-24 — forceReload switched from true → false.
+	//
+	// Pre-switch behaviour (forceReload=true) : every PUT /routes/X
+	// triggered a FULL Caddy restart cycle visible in journalctl as :
+	//   - "servers shutting down; grace period initiated", duration:5
+	//   - "server shutdown", error: "context canceled", addresses [":443"]
+	//   - "stopping ..." crowdsec instance + reconnection round-trip
+	//   - WAF pool rebuild (every Coraza instance re-provisioned)
+	//   - Per-upstream HC tracker state reset (in-process memory wiped)
+	// Operator-observed symptom : route health badge stuck at "unknown"
+	// or "healthy" even when journalctl showed "connection refused"
+	// probes ; the tracker never accumulated enough consecutive
+	// failures between reloads to trip Caddy's setHealthy(false)
+	// transition AND emit the "unhealthy" event our tracker
+	// subscribes to.
+	//
+	// caddy.Load(cfgJSON, false) (forceReload=false) per Caddy
+	// v2.11.3 caddy.go:112-115 doc : "runs it only if it is
+	// different from the current config or forceReload is true".
+	// With the second arg false, Caddy hashes the new vs current
+	// config and :
+	//   - no-op when identical (saves a full reload cycle on
+	//     idempotent puts, e.g. operator clicks Save without
+	//     changing anything)
+	//   - graceful incremental reload when different : the new
+	//     config provisions in parallel, atomic swap, the OLD
+	//     server keeps serving in-flight requests until grace
+	//     completes, NO restart of subsystems that didn't change
+	//     (CrowdSec stays connected, WAF pool keys that didn't
+	//     change keep their Coraza instances, HC tracker state
+	//     survives)
+	//
+	// Side effect win : the route health badge bug (Bug #1 in the
+	// 2026-06-24 operator report) becomes immediately observable
+	// in the live UI because the HC tracker now accumulates
+	// across PUTs instead of resetting.
+	if err := caddy.Load(cfgJSON, false); err != nil {
 		return fmt.Errorf("caddy.Load: %w", err)
 	}
 
