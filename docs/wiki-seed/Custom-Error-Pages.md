@@ -1,0 +1,149 @@
+# Custom Error Pages
+
+Out of the box, Arenet serves **branded error pages** for the 8 standard HTTP error codes : 401, 403, 404, 429, 500, 502, 503, 504. The default templates are minimal dark-themed pages with the request method/URI/UUID + a "powered by Arenet" footer.
+
+You can override these with your own HTML per-template or per-route. Step R (Phase 2).
+
+---
+
+## Three layers of resolution
+
+When Caddy needs to serve an error page for a status code, it walks the resolution stack in order :
+
+1. **Route override** — if the route has a per-status-code override (Route.ErrorPageOverrides), use that
+2. **Template** — if the route has a template attached (Route.ErrorPageTemplateID), use the template's body for this status code
+3. **Built-in default** — Arenet branded fallback
+
+The first non-empty match wins.
+
+---
+
+## Built-in default
+
+The built-in default lives in `internal/caddymgr/error_pages.go` as `arenetDefaultErrorPages` — a Go-level map of `int → HTML string`. To "modify the default" you'd edit the Go source and rebuild the binary. Most operators won't need to ; **prefer the template path below** for any customization.
+
+---
+
+## Templates (operator-friendly path)
+
+A **template** is a named collection of HTML bodies, one per status code. You create N templates, attach each to N routes.
+
+### Create a template
+
+1. Sidebar → **Settings** → **Pages d'erreur** (`/settings/error-pages`)
+2. Click **+ Nouveau template**
+3. **Nom** : e.g. `homelab-branded`
+4. **Description** (optional)
+5. For each of the 8 status code tabs (401/403/404/429/500/502/503/504), fill the HTML body in the CodeMirror editor on the left
+6. The **Preview** iframe on the right shows the rendered output with mock data
+7. The **Variables Caddy disponibles** section lists every placeholder you can use ; click to insert at cursor
+8. Click **Enregistrer**
+
+### Attach a template to a route
+
+1. Sidebar → **Routes** → edit the route → **Pages d'erreur** section
+2. **Template** dropdown : pick `homelab-branded`
+3. Optionally, fill **per-status overrides** for any code you want to override the template's body
+4. Save
+
+Within 5s the route serves your template's HTML on the matched status codes.
+
+---
+
+## Caddy placeholders
+
+Inside the HTML body, you can use Caddy placeholders that expand at serve time :
+
+| Placeholder | Expands to |
+| ----------- | ---------- |
+| `{http.request.method}` | GET / POST / etc. |
+| `{http.request.uri}` | The requested URI |
+| `{http.request.host}` | The Host header value |
+| `{http.request.uuid}` | A per-request UUID (useful for support tickets) |
+| `{http.error.status_code}` | The status code being served |
+| `{http.error.status_text}` | "Not Found" / "Internal Server Error" / etc. |
+| `{http.error.message}` | Error message from the upstream handler if any |
+| `{time.now.iso8601}` | Current ISO 8601 timestamp |
+| `{time.now.year}` | Current year (for copyright lines) |
+
+Example template body for 404 :
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>404 — homelab.example.com</title>
+  <style>
+    body { background:#0d1117; color:#c9d1d9; font-family:system-ui,sans-serif;
+           min-height:100vh; display:flex; align-items:center; justify-content:center;
+           margin:0; padding:24px; }
+    .card { max-width:540px; text-align:center; }
+    .code { font-size:96px; font-weight:600; color:#58a6ff; margin:0; }
+    .meta { margin-top:32px; font-size:12px; color:#6e7681; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <p class="code">404</p>
+    <h1>This page doesn't exist on homelab.example.com</h1>
+    <p>If you got here by following a link, please report it.</p>
+    <div class="meta">
+      Request ID : <code>{http.request.uuid}</code><br>
+      Method+URI : <code>{http.request.method} {http.request.uri}</code><br>
+      Timestamp : <code>{time.now.iso8601}</code>
+    </div>
+  </div>
+</body>
+</html>
+```
+
+The placeholders inside `<code>` blocks will render the live values per-request — useful for support : the user can paste the request UUID and you can grep `/logs` to find their exact request.
+
+---
+
+## HTML sanitization
+
+Templates are passed through a sanitizer before persistence to prevent stored XSS in case multiple admins share the template editor :
+
+- `<script>` tags stripped
+- `on*` event handlers stripped
+- Inline `style` attributes preserved (we need them for styling)
+- Caddy placeholders preserved verbatim
+
+The sanitizer is bluemonday with a custom policy ; see `internal/storage/error_template.go`.
+
+---
+
+## Per-route override (advanced)
+
+If a single route needs a different body for one specific code (e.g. the registry route needs a 502 with Docker-specific guidance), use the per-status override :
+
+1. Edit route → **Pages d'erreur**
+2. **Template** : `homelab-branded` (or none)
+3. **Status code overrides** : add `502` → paste the Docker-specific 502 body
+4. Save
+
+The override takes precedence over the template's 502 ; other codes still use the template.
+
+---
+
+## 1 MiB body cap
+
+Each HTML body (template page OR per-route override) is capped at 1 MiB pre-sanitization. Sufficient for any reasonable HTML page (the built-in default is ~1.5 KiB). Inline images base64-encoded would push you near the cap ; prefer linking to images served by the route itself.
+
+---
+
+## "Inspect built-in default"
+
+In the templates list page, the built-in default appears as a row marked **Built-in** (read-only). Click **Aperçu** to open the editor in read-only mode and inspect the default templates side-by-side ; click **Dupliquer** to create an editable copy as a starting point for your own template.
+
+---
+
+## See also
+
+- [Routes](Routes) — where to attach a template to a route
+- `internal/caddymgr/error_pages.go` — the built-in default + 3-layer resolution at serve time
+- `internal/storage/error_template.go` — sanitizer + storage layer
+- `web/frontend/src/routes/settings/error-pages/+page.svelte` — the template editor UI
+- [Caddy placeholder reference](https://caddyserver.com/docs/conventions#placeholders) — full list of `{http.request.*}` and `{time.*}` placeholders
