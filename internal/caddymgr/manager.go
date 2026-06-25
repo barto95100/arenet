@@ -832,6 +832,35 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		return fmt.Errorf("caddy.Load: %w", err)
 	}
 
+	// v2.9.9 Bug B follow-up — re-prime healthy after every reload.
+	// Symmetric to the cmd/arenet boot-time prime: Caddy's active
+	// health checker only emits state-TRANSITION events; new
+	// Upstream objects default to healthy (Caddy v2.11.3 hosts.go:251
+	// — u.unhealthy.Load() == 0). After the v2.9.8 Reset() above
+	// the tracker is empty, so an upstream whose probes succeed
+	// silently leaves the badge gray forever (no event ever fires
+	// to flip it green).
+	//
+	// Priming-as-healthy matches Caddy's optimistic default. The
+	// window of risk: ≤1 probe interval (~30s default). If the
+	// upstream is actually DOWN, Caddy's first probe (fired
+	// IMMEDIATELY at goroutine start per healthchecks.go:283) will
+	// fail, accumulate to Fails threshold, transition the Upstream
+	// state to false, and emit "unhealthy" — at which point our
+	// tracker flips to DOWN and the badge turns red. Worst case
+	// the operator sees a green-then-red sequence within 30s after
+	// a Save on a route whose upstream is genuinely broken.
+	if m.hcTracker != nil {
+		for _, r := range routes {
+			if !r.HealthCheck.Enabled {
+				continue
+			}
+			for _, u := range r.Upstreams {
+				m.hcTracker.RecordHealthy(u.URL)
+			}
+		}
+	}
+
 	// Reload succeeded — sync the metrics registry with the live
 	// route IDs. Nil registry (typical for unit tests) skips the
 	// sync. Extracted into syncRegistry so the no-Caddy unit test
