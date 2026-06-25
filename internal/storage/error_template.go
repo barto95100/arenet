@@ -75,8 +75,24 @@ type ErrorPageTemplate struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	Pages       map[int]string `json:"pages"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	// IsCatchallDefault (v2.9.10 Bug 1) marks this template as the
+	// global default body for the catch-all route (a request for a
+	// host not configured on any route). At most one template
+	// carries the flag at any time — Create/Update enforce mutual
+	// exclusion by clearing the flag on every OTHER template in the
+	// same bbolt write transaction before persisting this one.
+	//
+	// When no template is flagged, the catch-all body falls back to
+	// caddymgr's arenetDefaultErrorPages[404] builtin — i.e. the
+	// Arenet branded 404 page operators already see on configured
+	// routes that hit an upstream 404. The flag is opt-in.
+	//
+	// JSON tag is camelCase to match the rest of the type's wire
+	// format; omitempty keeps the field out of GET responses for
+	// templates that don't have it set (the common case).
+	IsCatchallDefault bool      `json:"isCatchallDefault,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // ValidateErrorPageTemplate is a public shim around the private
@@ -156,6 +172,11 @@ func (s *Store) CreateErrorPageTemplate(ctx context.Context, t ErrorPageTemplate
 			return err
 		}
 		b := tx.Bucket([]byte(bucketErrorTemplates))
+		if t.IsCatchallDefault {
+			if err := clearCatchallDefaultExcept(b, t.ID); err != nil {
+				return err
+			}
+		}
 		buf, err := json.Marshal(t)
 		if err != nil {
 			return fmt.Errorf("marshal error_template: %w", err)
@@ -165,6 +186,53 @@ func (s *Store) CreateErrorPageTemplate(ctx context.Context, t ErrorPageTemplate
 		return ErrorPageTemplate{}, err
 	}
 	return t, nil
+}
+
+// clearCatchallDefaultExcept (v2.9.10 Bug 1) walks every template
+// in the bucket and clears IsCatchallDefault on any whose ID is NOT
+// `keepID`. Called from inside Create/Update bbolt write transactions
+// when the incoming payload has IsCatchallDefault=true, to enforce
+// the "at most one default" invariant atomically.
+//
+// keepID may be empty when called from a write that wants to clear
+// the flag globally without preserving any winner (not currently
+// used; future ops endpoint could call this directly).
+//
+// Mutates rows in-place: read → flip flag → write back. The bbolt
+// txn serialises the whole sequence, so a concurrent reader either
+// sees the pre-clear state or the post-clear state — never a
+// half-cleared map.
+func clearCatchallDefaultExcept(b *bolt.Bucket, keepID string) error {
+	type rewrite struct {
+		key []byte
+		t   ErrorPageTemplate
+	}
+	var pending []rewrite
+	if err := b.ForEach(func(k, v []byte) error {
+		var t ErrorPageTemplate
+		if err := json.Unmarshal(v, &t); err != nil {
+			return fmt.Errorf("clearCatchallDefaultExcept: unmarshal: %w", err)
+		}
+		if t.ID == keepID || !t.IsCatchallDefault {
+			return nil
+		}
+		t.IsCatchallDefault = false
+		t.UpdatedAt = time.Now().UTC()
+		pending = append(pending, rewrite{key: append([]byte(nil), k...), t: t})
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, r := range pending {
+		buf, err := json.Marshal(r.t)
+		if err != nil {
+			return fmt.Errorf("clearCatchallDefaultExcept: marshal: %w", err)
+		}
+		if err := b.Put(r.key, buf); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetErrorPageTemplate returns the template identified by id, or
@@ -250,6 +318,11 @@ func (s *Store) UpdateErrorPageTemplate(ctx context.Context, t ErrorPageTemplate
 		}
 		t.CreatedAt = existing.CreatedAt
 		t.UpdatedAt = time.Now().UTC()
+		if t.IsCatchallDefault {
+			if err := clearCatchallDefaultExcept(b, t.ID); err != nil {
+				return err
+			}
+		}
 		buf, err := json.Marshal(t)
 		if err != nil {
 			return fmt.Errorf("marshal error_template: %w", err)
@@ -260,6 +333,54 @@ func (s *Store) UpdateErrorPageTemplate(ctx context.Context, t ErrorPageTemplate
 		return ErrorPageTemplate{}, err
 	}
 	return t, nil
+}
+
+// GetCatchallDefaultErrorPageTemplate (v2.9.10 Bug 1) returns the
+// template currently flagged as the catch-all default, or
+// (ErrorPageTemplate{}, ErrNotFound) if no template carries the
+// flag. Used by caddymgr when building the catch-all route body —
+// a found template's Pages[404] is preferred over the builtin
+// arenetDefaultErrorPages[404].
+//
+// The mutual-exclusion invariant (Create/Update) means at most one
+// template can satisfy this query, but the implementation tolerates
+// a corrupted bucket with multiple flagged templates by returning
+// the first one encountered in the iteration order (deterministic
+// per-boot via bbolt's key-order iteration). A future repair tool
+// could detect and fix the duplicates; surfacing the corruption as
+// an error here would just hide the catch-all from the operator.
+func (s *Store) GetCatchallDefaultErrorPageTemplate(ctx context.Context) (ErrorPageTemplate, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	var out ErrorPageTemplate
+	var found bool
+	err := s.db.View(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return tx.Bucket([]byte(bucketErrorTemplates)).ForEach(func(_, v []byte) error {
+			if found {
+				return nil
+			}
+			var t ErrorPageTemplate
+			if err := json.Unmarshal(v, &t); err != nil {
+				return fmt.Errorf("unmarshal error_template: %w", err)
+			}
+			if t.IsCatchallDefault {
+				out = t
+				found = true
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return ErrorPageTemplate{}, err
+	}
+	if !found {
+		return ErrorPageTemplate{}, ErrNotFound
+	}
+	return out, nil
 }
 
 // DeleteErrorPageTemplate removes a template. Returns ErrNotFound

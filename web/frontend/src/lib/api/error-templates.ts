@@ -52,6 +52,16 @@ export interface ErrorTemplate {
 	 * the absence-by-default reads as false on the wire.
 	 */
 	isBuiltin?: boolean;
+	/**
+	 * v2.9.10 Bug 1 — when true, this template's pages[404] body
+	 * is served by Arenet's catch-all route (requests for hosts
+	 * not configured on any route). Storage enforces mutual
+	 * exclusion: at most one template carries the flag at any time.
+	 * Toggling it on Template B clears it on Template A in the same
+	 * write transaction. Absence-by-default (omitempty) reads as
+	 * false.
+	 */
+	isCatchallDefault?: boolean;
 }
 
 /**
@@ -70,6 +80,12 @@ export interface ErrorTemplateRequest {
 	name: string;
 	description?: string;
 	pages: Record<string, string>;
+	/**
+	 * v2.9.10 Bug 1 — optional flag on create/update payloads.
+	 * The backend storage layer clears the flag on every other
+	 * template in the same write transaction when set true.
+	 */
+	isCatchallDefault?: boolean;
 }
 
 /**

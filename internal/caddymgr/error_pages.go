@@ -309,6 +309,39 @@ func postSanitize(s string) string {
 	return s
 }
 
+// resolveCatchallBody (v2.9.10 Bug 1) picks the HTML body for the
+// catch-all route emitted by catchAllRoute. Resolution order:
+//
+//  1. The first template in `templates` whose IsCatchallDefault is
+//     true and whose Pages[404] is a non-empty string — returned
+//     sanitised with the same bluemonday policy applied to per-
+//     route templates.
+//  2. Else arenetDefaultErrorPages[404] (the builtin branded body
+//     shared with per-route 404 responses).
+//
+// Empty-body protection: a flagged template whose Pages[404] is
+// missing or empty falls through to the builtin. The catch-all
+// always serves SOMETHING — never a blank response.
+//
+// The templates map is the same one buildConfigJSON already builds
+// from storage.ListErrorPageTemplates; resolveCatchallBody just
+// re-uses it to keep the storage read count at one per reload.
+func resolveCatchallBody(templates map[string]storage.ErrorPageTemplate) string {
+	for _, t := range templates {
+		if !t.IsCatchallDefault {
+			continue
+		}
+		if body, ok := t.Pages[404]; ok && body != "" {
+			return SanitizeErrorPageBody(body)
+		}
+		break
+	}
+	if body, ok := arenetDefaultErrorPages[404]; ok && body != "" {
+		return body
+	}
+	return ""
+}
+
 // resolveErrorPage returns the HTML body to emit for the given
 // (route, statusCode) tuple after applying the 3-layer resolution
 // order. Empty result means no body is configured — caller skips

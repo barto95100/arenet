@@ -93,6 +93,13 @@ type errorTemplateRequest struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	Pages       map[int]string `json:"pages,omitempty"`
+	// IsCatchallDefault (v2.9.10 Bug 1) — opt-in flag marking
+	// this template's pages[404] as the body served by Arenet's
+	// catch-all route (host not configured on any route).
+	// Storage enforces mutual exclusion at write time: at most
+	// one template carries the flag at once. Setting it true
+	// auto-clears the flag on any previously-flagged template.
+	IsCatchallDefault bool `json:"isCatchallDefault,omitempty"`
 }
 
 // errorTemplateResponse is the wire shape returned by GET / list.
@@ -109,6 +116,9 @@ type errorTemplateResponse struct {
 	// omitempty so the JSON for real DB templates stays
 	// byte-identical to the pre-2.1 shape.
 	IsBuiltin bool `json:"isBuiltin,omitempty"`
+	// IsCatchallDefault (v2.9.10 Bug 1) — mirrored from storage
+	// so the frontend can render the checkbox state in the editor.
+	IsCatchallDefault bool `json:"isCatchallDefault,omitempty"`
 }
 
 func errorTemplateToResponse(t storage.ErrorPageTemplate) errorTemplateResponse {
@@ -117,12 +127,13 @@ func errorTemplateToResponse(t storage.ErrorPageTemplate) errorTemplateResponse 
 		pages = map[int]string{}
 	}
 	return errorTemplateResponse{
-		ID:          t.ID,
-		Name:        t.Name,
-		Description: t.Description,
-		Pages:       pages,
-		CreatedAt:   t.CreatedAt,
-		UpdatedAt:   t.UpdatedAt,
+		ID:                t.ID,
+		Name:              t.Name,
+		Description:       t.Description,
+		Pages:             pages,
+		CreatedAt:         t.CreatedAt,
+		UpdatedAt:         t.UpdatedAt,
+		IsCatchallDefault: t.IsCatchallDefault,
 	}
 }
 
@@ -176,9 +187,10 @@ func (h *Handler) createErrorTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := storage.ErrorPageTemplate{
-		Name:        req.Name,
-		Description: req.Description,
-		Pages:       req.Pages,
+		Name:              req.Name,
+		Description:       req.Description,
+		Pages:             req.Pages,
+		IsCatchallDefault: req.IsCatchallDefault,
 	}
 	created, err := h.store.CreateErrorPageTemplate(r.Context(), t)
 	if err != nil {
@@ -240,10 +252,11 @@ func (h *Handler) updateErrorTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := storage.ErrorPageTemplate{
-		ID:          id,
-		Name:        req.Name,
-		Description: req.Description,
-		Pages:       req.Pages,
+		ID:                id,
+		Name:              req.Name,
+		Description:       req.Description,
+		Pages:             req.Pages,
+		IsCatchallDefault: req.IsCatchallDefault,
 	}
 	updated, err := h.store.UpdateErrorPageTemplate(r.Context(), t)
 	if err != nil {

@@ -128,8 +128,27 @@ func TestBuildConfigJSON_CatchAllAppended(t *testing.T) {
 	if status, _ := h["status_code"].(float64); int(status) != 404 {
 		t.Errorf("catch-all status_code = %v, want 404", h["status_code"])
 	}
-	if body, _ := h["body"].(string); body != "Not Found - no route configured for this host" {
-		t.Errorf("catch-all body = %q, want fixed sentence", body)
+	// v2.9.10 Bug 1 — catch-all now emits the Arenet branded 404 HTML
+	// (when no template carries IsCatchallDefault, the builtin
+	// arenetDefaultErrorPages[404] is used). Assert markers from
+	// the builtin body shape instead of the old plain-text sentence.
+	body, _ := h["body"].(string)
+	if body == "" {
+		t.Errorf("catch-all body is empty")
+	}
+	for _, marker := range []string{"<!doctype html>", "404", "Not Found", "powered by Arenet"} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("catch-all body missing %q ; got first 200 chars: %.200s", marker, body)
+		}
+	}
+	// Content-Type must be text/html so browsers render the HTML.
+	headers, _ := h["headers"].(map[string]any)
+	if headers == nil {
+		t.Fatalf("catch-all handler missing headers map")
+	}
+	cts, _ := headers["Content-Type"].([]any)
+	if len(cts) != 1 || cts[0] != "text/html; charset=utf-8" {
+		t.Errorf("catch-all Content-Type = %v, want [text/html; charset=utf-8]", cts)
 	}
 
 	// User routes (a.local, b.local) must come BEFORE the catch-all so they
@@ -166,6 +185,80 @@ func TestBuildConfigJSON_CatchAllOnHTTPSServer(t *testing.T) {
 	last := httpsRoutes[len(httpsRoutes)-1].(map[string]any)
 	if _, hasMatch := last["match"]; hasMatch {
 		t.Errorf("HTTPS catch-all must have no match block")
+	}
+}
+
+// v2.9.10 Bug 1 — catch-all body resolution from a template flagged
+// with IsCatchallDefault=true. When set, that template's Pages[404]
+// wins over the builtin arenetDefaultErrorPages[404].
+func TestBuildConfigJSON_CatchAllUsesDefaultTemplate(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "a", Host: "a.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
+	}
+	custom := "<!doctype html><h1>OPERATOR-CUSTOM-CATCHALL</h1>"
+	templates := map[string]storage.ErrorPageTemplate{
+		"tmpl-default": {
+			ID:                "tmpl-default",
+			Name:              "default",
+			IsCatchallDefault: true,
+			Pages:             map[int]string{404: custom},
+		},
+		"tmpl-other": {
+			ID:    "tmpl-other",
+			Name:  "other",
+			Pages: map[int]string{404: "<!doctype html><h1>NEVER USED</h1>"},
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true, ErrorTemplates: templates})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	servers := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
+	catchAll := httpRoutes[len(httpRoutes)-1].(map[string]any)
+	h := unwrapHandlers(catchAll)[0].(map[string]any)
+	body, _ := h["body"].(string)
+	if !strings.Contains(body, "OPERATOR-CUSTOM-CATCHALL") {
+		t.Errorf("catch-all body did not pick up the IsCatchallDefault template ; first 200 chars: %.200s", body)
+	}
+	if strings.Contains(body, "NEVER USED") {
+		t.Errorf("catch-all body picked the wrong template (the un-flagged one)")
+	}
+}
+
+// v2.9.10 Bug 1 — flagged template with EMPTY Pages[404] must fall
+// back to the builtin Arenet 404 (never an empty response body).
+func TestBuildConfigJSON_CatchAllFallsBackToBuiltinOnEmptyDefault(t *testing.T) {
+	routes := []storage.Route{
+		{ID: "a", Host: "a.local", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
+	}
+	templates := map[string]storage.ErrorPageTemplate{
+		"tmpl-default": {
+			ID:                "tmpl-default",
+			Name:              "default",
+			IsCatchallDefault: true,
+			Pages:             map[int]string{404: ""}, // empty body
+		},
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true, ErrorTemplates: templates})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	servers := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
+	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
+	catchAll := httpRoutes[len(httpRoutes)-1].(map[string]any)
+	h := unwrapHandlers(catchAll)[0].(map[string]any)
+	body, _ := h["body"].(string)
+	if !strings.Contains(body, "powered by Arenet") {
+		t.Errorf("catch-all did not fall back to builtin on empty Pages[404] ; first 200 chars: %.200s", body)
 	}
 }
 

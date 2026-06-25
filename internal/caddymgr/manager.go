@@ -1795,7 +1795,9 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 
 	// Final catch-all: must be the LAST route. No match block = matches every
 	// request that none of the prior host-matched routes handled.
-	httpRoutes = append(httpRoutes, catchAllRoute())
+	// v2.9.10 Bug 1: body resolved from opts.ErrorTemplates (operator-flagged
+	// IsCatchallDefault template's Pages[404], else builtin Arenet 404 HTML).
+	httpRoutes = append(httpRoutes, catchAllRoute(opts.ErrorTemplates))
 
 	httpListen, httpsListen := listenPortsFor(opts.DevMode)
 
@@ -1869,7 +1871,8 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	}
 
 	if len(httpsRoutes) > 0 {
-		httpsRoutes = append(httpsRoutes, catchAllRoute())
+		// v2.9.10 Bug 1: same branded-body resolution as the HTTP server.
+		httpsRoutes = append(httpsRoutes, catchAllRoute(opts.ErrorTemplates))
 		httpsServer := httpServer{
 			Listen: []string{httpsListen},
 			AutomaticHTTPS: &automaticHTTPSConfig{
@@ -3244,15 +3247,27 @@ func forwardAuthDial(raw string) string {
 	return host
 }
 
-// catchAllRoute builds the final 404 catch-all route: no match block (matches
-// every remaining request) with a static_response handler.
-func catchAllRoute() httpRoute {
+// catchAllRoute builds the final 404 catch-all route: no match block
+// (matches every remaining request) with a static_response handler.
+//
+// v2.9.10 Bug 1 — the body is now branded HTML resolved by
+// resolveCatchallBody: the operator-flagged template's Pages[404]
+// if any, else arenetDefaultErrorPages[404] (the same Arenet
+// branded HTML configured routes serve on an upstream 404).
+// Pre-v2.9.10 this returned plain text "Not Found - no route
+// configured for this host" with no Content-Type, breaking
+// visual consistency.
+func catchAllRoute(templates map[string]storage.ErrorPageTemplate) httpRoute {
+	body := resolveCatchallBody(templates)
 	return httpRoute{
 		Handle: []map[string]any{
 			{
 				"handler":     "static_response",
 				"status_code": 404,
-				"body":        "Not Found - no route configured for this host",
+				"headers": map[string]any{
+					"Content-Type": []string{"text/html; charset=utf-8"},
+				},
+				"body": body,
 			},
 		},
 	}

@@ -91,6 +91,12 @@
 	let editingBuiltin = $state(false);
 	let editName = $state('');
 	let editDescription = $state('');
+	// v2.9.10 Bug 1 — when true, this template's pages[404] body
+	// is served by Arenet's catch-all (host not configured on any
+	// route). Storage enforces mutual exclusion: at most one
+	// template carries the flag at a time. Setting it true on
+	// save auto-clears any previously-flagged template.
+	let editIsCatchallDefault = $state(false);
 	// Sparse Pages map ; codes absent fall back to template-side
 	// default at serve time. Active tab governs which buffer is
 	// shown in the CodeMirror editor.
@@ -131,6 +137,7 @@
 		editingBuiltin = false;
 		editName = '';
 		editDescription = '';
+		editIsCatchallDefault = false;
 		editPages = {};
 		activeCode = 403;
 		activeBuffer = '';
@@ -143,6 +150,7 @@
 		editingBuiltin = t.isBuiltin === true;
 		editName = t.name;
 		editDescription = t.description ?? '';
+		editIsCatchallDefault = t.isCatchallDefault === true;
 		// Cast key strings back to numbers (server returns
 		// Record<string, string> by JSON convention).
 		const pages: Record<number, string> = {};
@@ -244,7 +252,8 @@
 				description: editDescription.trim() || undefined,
 				pages: Object.fromEntries(
 					Object.entries(cleanPages).map(([k, v]) => [String(k), v])
-				)
+				),
+				isCatchallDefault: editIsCatchallDefault
 			};
 			if (editingId === null) {
 				await errorTemplatesApi.create(req);
@@ -590,6 +599,32 @@
 					readonly={editingBuiltin}
 				/>
 			</label>
+			<!--
+				v2.9.10 Bug 1 — checkbox "catch-all default".
+				When checked + saved, the 404 body of THIS template
+				becomes the body served by Arenet's catch-all route
+				(requests for a host not configured on any route).
+				Storage enforces mutual exclusion: setting it true
+				here auto-clears the flag on any other template.
+				Hidden in the read-only builtin view (it's a real-
+				template-only concern).
+			-->
+			{#if !editingBuiltin}
+				<label class="catchall-toggle">
+					<input
+						type="checkbox"
+						bind:checked={editIsCatchallDefault}
+					/>
+					<span>
+						<span class="meta-label">Utiliser comme page catch-all par défaut</span>
+						<span class="catchall-hint">
+							La page 404 de ce template sera servie pour toute requête arrivant
+							sur un host non configuré dans Arenet. Un seul template peut être
+							catch-all à la fois.
+						</span>
+					</span>
+				</label>
+			{/if}
 		</div>
 
 		<!-- Status code tabs -->
@@ -839,6 +874,38 @@
 		outline: none;
 	}
 	.meta-input:focus { border-color: var(--accent-cyan); }
+
+	/* v2.9.10 Bug 1 — catchall default checkbox row. Spans the
+	   full meta-card row (flex-basis 100%) so the long hint text
+	   has room to breathe under the name/description pair. */
+	.catchall-toggle {
+		flex: 1 0 100%;
+		flex-direction: row !important;
+		align-items: flex-start !important;
+		gap: 10px !important;
+		min-width: 0 !important;
+		padding: 10px 12px;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		cursor: pointer;
+	}
+	.catchall-toggle input[type="checkbox"] {
+		margin-top: 3px;
+		accent-color: var(--accent-cyan);
+		cursor: pointer;
+		flex-shrink: 0;
+	}
+	.catchall-toggle .catchall-hint {
+		display: block;
+		font-size: 11.5px;
+		color: var(--fg-muted);
+		margin-top: 4px;
+		line-height: 1.4;
+		text-transform: none;
+		letter-spacing: 0;
+		font-family: inherit;
+	}
 
 	/* Code tabs */
 	.tabs-card { padding: 8px; }
