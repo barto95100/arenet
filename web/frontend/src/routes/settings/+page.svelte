@@ -25,6 +25,7 @@
 	import { prefersReducedMotion } from 'svelte/motion';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { theme, type Theme } from '$lib/stores/theme.svelte';
+	import { language, type Language } from '$lib/stores/language.svelte';
 	import { pushToast } from '$lib/stores/toast';
 	import { authApi, type Session } from '$lib/api/auth';
 	import { settingsApi } from '$lib/api/settings';
@@ -80,6 +81,26 @@
 		} catch (_) {
 			// theme store already reverted + toast emitted; just swallow
 			// here so the smoke session sees no unhandled rejection.
+		}
+	}
+
+	// v2.9.11 i18n Phase 1 — language selector. Same shape as the
+	// theme toggle: 2-option Toggle, store handles revert + toast on
+	// failure, this handler just swallows the rejection to keep the
+	// browser console clean during smoke testing.
+	const languageOptions: [
+		{ value: Language; label: string },
+		{ value: Language; label: string }
+	] = [
+		{ value: 'en', label: 'English' },
+		{ value: 'fr', label: 'Français' }
+	];
+
+	async function onLanguageChange(v: Language): Promise<void> {
+		try {
+			await language.set(v);
+		} catch (_) {
+			// language store already reverted + toast emitted.
 		}
 	}
 
@@ -666,6 +687,24 @@
 						value={theme.current}
 						disabled={theme.isApplying}
 						onchange={onThemeChange}
+					/>
+				</dd>
+
+				<!--
+					v2.9.11 i18n Phase 1 — Language selector. Symmetric to
+					the theme toggle above (same component, same handler
+					shape). Round-trips through POST /auth/me/language and
+					refreshes the arenet_language cookie so the FOUC
+					bootstrap picks up the new value on the next paint.
+				-->
+				<dt class="text-secondary">Language</dt>
+				<dd>
+					<Toggle
+						ariaLabel="Language"
+						options={languageOptions}
+						value={language.current}
+						disabled={language.isApplying}
+						onchange={onLanguageChange}
 					/>
 				</dd>
 

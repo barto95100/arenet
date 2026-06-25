@@ -1,0 +1,37 @@
+{
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success"
+  },
+  "auth": {
+    "loginButton": "Sign in",
+    "logoutButton": "Sign out",
+    "passwordLabel": "Password",
+    "usernameLabel": "Username"
+  },
+  "errors": {
+    "unauthorized": "Unauthorized",
+    "forbidden": "Forbidden",
+    "notFound": "Not found",
+    "internal": "Internal server error",
+    "networkOffline": "Network unreachable"
+  },
+  "settings": {
+    "languageLabel": "Language",
+    "languageEnglish": "English",
+    "languageFrench": "Français",
+    "themeLabel": "Theme",
+    "themeDark": "Dark",
+    "themeLight": "Light"
+  },
+  "toast": {
+    "savedSuccess": "Saved successfully",
+    "savedFailed": "Save failed",
+    "languageChanged": "Language updated"
+  }
+}

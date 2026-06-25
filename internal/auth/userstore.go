@@ -535,6 +535,53 @@ func (s *UserStore) UpdateThemePreference(ctx context.Context, id, theme string)
 	})
 }
 
+// UpdateLanguagePreference persists the user's UI language preference.
+// The value MUST be one of `LanguageEnglish` or `LanguageFrench`
+// exactly — any other input (including the empty string, which is a
+// valid *storage* value for legacy rows but a forbidden *input* value)
+// returns ErrLanguageInvalid.
+//
+// Pattern: read, mutate, marshal, write — byte-for-byte mirror of
+// UpdateThemePreference. Touches UpdatedAt because the user-visible
+// profile changed.
+//
+// v2.9.11 i18n Phase 1 spec.
+func (s *UserStore) UpdateLanguagePreference(ctx context.Context, id, language string) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+	if id == "" {
+		return ErrUserNotFound
+	}
+	if language != LanguageEnglish && language != LanguageFrench {
+		return ErrLanguageInvalid
+	}
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(usersBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
+		}
+		v := b.Get([]byte(id))
+		if v == nil {
+			return ErrUserNotFound
+		}
+		var u User
+		if err := json.Unmarshal(v, &u); err != nil {
+			return fmt.Errorf("auth: unmarshal user: %w", err)
+		}
+		u.LanguagePreference = language
+		u.UpdatedAt = time.Now().UTC()
+		out, err := json.Marshal(u)
+		if err != nil {
+			return fmt.Errorf("auth: marshal user: %w", err)
+		}
+		return b.Put([]byte(id), out)
+	})
+}
+
 // RecordLogin updates LastLoginAt only. UpdatedAt is intentionally NOT
 // touched: LastLoginAt is observability metadata, not a profile mutation.
 // Frequent logins should not signal "profile changed".

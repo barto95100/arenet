@@ -27,6 +27,12 @@
 		     placeholder string here — SvelteKit substitutes it naively
 		     across the whole template, including comments. -->
 		<script>(function(){var d=document.documentElement,m=document.cookie.match(/arenet_theme=(dark|light)/);if(m){d.dataset.theme=m[1];return}try{var l=localStorage.getItem('arenet_theme');if(l==='dark'||l==='light'){d.dataset.theme=l;return}}catch(_){}d.dataset.theme='dark'})();</script>
+		<!-- Language bootstrap (v2.9.11 i18n Phase 1). Mirror of the theme
+		     bootstrap above. Reads arenet_language cookie first, falls back
+		     to localStorage, defaults to 'en'. Sets <html lang> so the
+		     active locale is correct from the first paint (also feeds
+		     screen-reader pronunciation engines). -->
+		<script>(function(){var d=document.documentElement,m=document.cookie.match(/arenet_language=(en|fr)/);if(m){d.lang=m[1];return}try{var l=localStorage.getItem('arenet_language');if(l==='en'||l==='fr'){d.lang=l;return}}catch(_){}d.lang='en'})();</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

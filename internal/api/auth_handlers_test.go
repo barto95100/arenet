@@ -1599,3 +1599,162 @@ func TestSetup_SetsThemeCookieAsDark(t *testing.T) {
 		t.Errorf("setup cookie = %q, want \"dark\"", c.Value)
 	}
 }
+
+// --- POST /api/v1/auth/me/language tests (v2.9.11 i18n Phase 1) -----------
+// Byte-for-byte mirror of the theme test suite above. Same shape so
+// future readers spot the symmetric coverage at a glance.
+
+func TestPatchLanguage_RequiresHardAuth(t *testing.T) {
+	env, _ := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/language",
+		strings.NewReader(`{"language":"fr"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestPatchLanguage_Success(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/language",
+		strings.NewReader(`{"language":"fr"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+
+	// /me must now return the new preference under languagePreference.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	withSessionCookie(req, sessionCookie)
+	rec = httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/me after language set: status = %d, want 200", rec.Code)
+	}
+	var meBody map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &meBody); err != nil {
+		t.Fatalf("decode /me: %v", err)
+	}
+	if got := meBody["languagePreference"]; got != "fr" {
+		t.Errorf("languagePreference = %v, want \"fr\"", got)
+	}
+
+	// No audit event for a language change — same UX-preference
+	// treatment as theme.
+	for _, ev := range env.audit.Events() {
+		if strings.Contains(string(ev.Action), "language") {
+			t.Errorf("unexpected language-related audit event: %+v", ev)
+		}
+	}
+}
+
+func TestPatchLanguage_InvalidBody(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"not_json", `{not json`},
+		{"missing_language", `{}`},
+		{"unknown_value", `{"language":"de"}`},
+		{"empty_value", `{"language":""}`},
+		{"capitalized", `{"language":"EN"}`},
+		{"locale_form", `{"language":"fr-FR"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/language",
+				strings.NewReader(c.body))
+			req.Header.Set("Content-Type", "application/json")
+			withSessionCookie(req, sessionCookie)
+			rec := httptest.NewRecorder()
+			env.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("body=%q: status = %d, want 400", c.body, rec.Code)
+			}
+		})
+	}
+}
+
+func TestPatchLanguage_RefreshesLanguageCookie(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, sessionCookie := adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/me/language",
+		strings.NewReader(`{"language":"fr"}`))
+	req.Header.Set("Content-Type", "application/json")
+	withSessionCookie(req, sessionCookie)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("updateLanguage status = %d, want 204", rec.Code)
+	}
+
+	c := findCookie(rec, "arenet_language")
+	if c == nil {
+		t.Fatal("Set-Cookie arenet_language not emitted on successful language update")
+	}
+	if c.Value != "fr" {
+		t.Errorf("cookie value = %q, want \"fr\"", c.Value)
+	}
+	if c.HttpOnly {
+		t.Error("HttpOnly = true; want false (bootstrap reads it from JS)")
+	}
+	if c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite = %v, want Lax", c.SameSite)
+	}
+	if c.MaxAge != 30*24*60*60 {
+		t.Errorf("MaxAge = %d, want 2592000", c.MaxAge)
+	}
+}
+
+func TestLogin_SetsLanguageCookie(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, _ = adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"username":"admin","password":"`+testAdminPassword+`","rememberMe":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	c := findCookie(rec, "arenet_language")
+	if c == nil {
+		t.Fatal("Set-Cookie arenet_language not emitted on successful login")
+	}
+	// Empty-string LanguagePreference (pre-v2.9.11 user) normalises to "en".
+	if c.Value != "en" {
+		t.Errorf("cookie value = %q, want \"en\" (default for empty preference)", c.Value)
+	}
+}
+
+func TestSetup_SetsLanguageCookieAsEnglish(t *testing.T) {
+	env, token := setupTestEnv(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/setup",
+		strings.NewReader(`{"setupToken":"`+token+`","username":"admin","displayName":"","email":"admin@example.test","password":"`+testAdminPassword+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+
+	c := findCookie(rec, "arenet_language")
+	if c == nil {
+		t.Fatal("Set-Cookie arenet_language not emitted on setup")
+	}
+	if c.Value != "en" {
+		t.Errorf("setup cookie = %q, want \"en\"", c.Value)
+	}
+}

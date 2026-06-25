@@ -55,6 +55,11 @@ var (
 	// supplied value is not exactly "dark" or "light". The API layer
 	// maps this to HTTP 400. Step F spec §3.1.
 	ErrThemeInvalid = errors.New("auth: theme must be \"dark\" or \"light\"")
+
+	// ErrLanguageInvalid is returned by UpdateLanguagePreference when
+	// the supplied value is not exactly "en" or "fr". The API layer
+	// maps this to HTTP 400. v2.9.11 i18n Phase 1 spec.
+	ErrLanguageInvalid = errors.New("auth: language must be \"en\" or \"fr\"")
 )
 
 // Session store sentinel errors. See spec §3.3.

@@ -1,0 +1,37 @@
+{
+  "common": {
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "delete": "Supprimer",
+    "confirm": "Confirmer",
+    "loading": "Chargement...",
+    "error": "Erreur",
+    "success": "Succès"
+  },
+  "auth": {
+    "loginButton": "Se connecter",
+    "logoutButton": "Se déconnecter",
+    "passwordLabel": "Mot de passe",
+    "usernameLabel": "Nom d'utilisateur"
+  },
+  "errors": {
+    "unauthorized": "Non autorisé",
+    "forbidden": "Interdit",
+    "notFound": "Introuvable",
+    "internal": "Erreur interne du serveur",
+    "networkOffline": "Réseau inaccessible"
+  },
+  "settings": {
+    "languageLabel": "Langue",
+    "languageEnglish": "English",
+    "languageFrench": "Français",
+    "themeLabel": "Thème",
+    "themeDark": "Sombre",
+    "themeLight": "Clair"
+  },
+  "toast": {
+    "savedSuccess": "Enregistré avec succès",
+    "savedFailed": "Échec de l'enregistrement",
+    "languageChanged": "Langue mise à jour"
+  }
+}

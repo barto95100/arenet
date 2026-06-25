@@ -47,6 +47,7 @@ const sampleUser: User = {
 	passwordCompromised: false,
 	hibpCheckStatus: 'clean',
 	themePreference: '',
+	languagePreference: '',
 	role: 'admin',
 	authSource: 'local'
 };

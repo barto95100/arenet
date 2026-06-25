@@ -526,6 +526,123 @@ func TestUpdateThemePreference_PersistenceRoundtrip(t *testing.T) {
 	}
 }
 
+// v2.9.11 i18n Phase 1 — UpdateLanguagePreference tests. Mirror of
+// the UpdateThemePreference suite above; same shape so future
+// readers see the symmetric coverage of both preferences at a glance.
+
+func TestUpdateLanguagePreference_ValidEnglish(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if created.LanguagePreference != "" {
+		t.Errorf("fresh user LanguagePreference = %q, want empty", created.LanguagePreference)
+	}
+
+	before := time.Now().UTC()
+	if err := s.UpdateLanguagePreference(ctx, created.ID, LanguageEnglish); err != nil {
+		t.Fatalf("UpdateLanguagePreference: %v", err)
+	}
+	after := time.Now().UTC()
+
+	got, err := s.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.LanguagePreference != LanguageEnglish {
+		t.Errorf("LanguagePreference = %q, want %q", got.LanguagePreference, LanguageEnglish)
+	}
+	if got.UpdatedAt.Before(before) || got.UpdatedAt.After(after) {
+		t.Errorf("UpdatedAt = %v, want between %v and %v", got.UpdatedAt, before, after)
+	}
+}
+
+func TestUpdateLanguagePreference_ValidFrench(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := s.UpdateLanguagePreference(ctx, created.ID, LanguageEnglish); err != nil {
+		t.Fatalf("UpdateLanguagePreference en: %v", err)
+	}
+	if err := s.UpdateLanguagePreference(ctx, created.ID, LanguageFrench); err != nil {
+		t.Fatalf("UpdateLanguagePreference fr: %v", err)
+	}
+
+	got, err := s.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.LanguagePreference != LanguageFrench {
+		t.Errorf("LanguagePreference = %q, want %q", got.LanguagePreference, LanguageFrench)
+	}
+}
+
+func TestUpdateLanguagePreference_InvalidRejected(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.UpdateLanguagePreference(ctx, created.ID, LanguageEnglish); err != nil {
+		t.Fatalf("seed language: %v", err)
+	}
+
+	invalid := []string{"", "EN", "Fr", "de", "es", "english", " en ", "fr-FR"}
+	for _, val := range invalid {
+		if err := s.UpdateLanguagePreference(ctx, created.ID, val); !errors.Is(err, ErrLanguageInvalid) {
+			t.Errorf("UpdateLanguagePreference(%q) err = %v, want ErrLanguageInvalid", val, err)
+		}
+	}
+
+	got, err := s.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.LanguagePreference != LanguageEnglish {
+		t.Errorf("LanguagePreference clobbered: got %q, want %q (rejected calls must not mutate)", got.LanguagePreference, LanguageEnglish)
+	}
+}
+
+func TestUpdateLanguagePreference_EmptyIDError(t *testing.T) {
+	s := NewUserStore(newTestDB(t))
+	if err := s.UpdateLanguagePreference(context.Background(), "", LanguageEnglish); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("err = %v, want ErrUserNotFound", err)
+	}
+}
+
+func TestUpdateLanguagePreference_PersistenceRoundtrip(t *testing.T) {
+	db := newTestDB(t)
+	s := NewUserStore(db)
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "admin", "", "", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.UpdateLanguagePreference(ctx, created.ID, LanguageFrench); err != nil {
+		t.Fatalf("UpdateLanguagePreference: %v", err)
+	}
+
+	s2 := NewUserStore(db)
+	got, err := s2.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after reopen: %v", err)
+	}
+	if got.LanguagePreference != LanguageFrench {
+		t.Errorf("after reopen, LanguagePreference = %q, want %q", got.LanguagePreference, LanguageFrench)
+	}
+}
+
 func TestUserStore_RecordLogin(t *testing.T) {
 	s := NewUserStore(newTestDB(t))
 	ctx := context.Background()

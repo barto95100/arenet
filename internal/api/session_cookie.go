@@ -124,6 +124,69 @@ func normalizeThemeForCookie(theme string) string {
 	}
 	return auth.ThemeDark
 }
+
+// languageCookieName (v2.9.11 i18n Phase 1) is the cookie read by the
+// FOUC bootstrap script in app.html to pick the UI language BEFORE
+// the first paint, so the active locale is correct from the very
+// first frame instead of swapping in mid-render. Same JS-readable
+// semantics as themeCookieName (HttpOnly=false).
+const languageCookieName = "arenet_language"
+
+// languageCookieMaxAge mirrors themeCookieMaxAge — 30 days. The
+// language preference outlives a logout intentionally: a freshly
+// logged-out user sees the login screen in the language they last
+// picked, not in the hardcoded boot default.
+const languageCookieMaxAge = 30 * 24 * 60 * 60
+
+// setLanguageCookie writes the bootstrap cookie for the chosen
+// language. Same attribute set as setThemeCookie: HttpOnly=false
+// (the bootstrap reads it from JS), Secure only on TLS requests,
+// SameSite=Lax (so the cookie travels on first-navigation top-level
+// GETs from an external link — Strict would break the bootstrap).
+//
+// Caller MUST pass a normalised value ("en" or "fr"); empty / unknown
+// inputs should be mapped via normalizeLanguageForCookie first so the
+// cookie always carries a meaningful value.
+func setLanguageCookie(w http.ResponseWriter, r *http.Request, language string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     languageCookieName,
+		Value:    language,
+		Path:     "/",
+		MaxAge:   languageCookieMaxAge,
+		HttpOnly: false,
+		Secure:   isSecureRequest(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// clearLanguageCookieOnResponse mirrors clearThemeCookieOnResponse.
+// Called from /auth/logout if the project ever decides to also clear
+// the language cookie at logout — v2.9.11 keeps it set across logouts
+// for the UX reason above, so this helper is unused by the initial
+// release but defined for symmetry with theme. Safe to remove if
+// dead-code lint flags it; the cost is one block.
+func clearLanguageCookieOnResponse(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     languageCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: false,
+		Secure:   isSecureRequest(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// normalizeLanguageForCookie maps any input — including the empty
+// string from pre-v2.9.11 rows — to a guaranteed-useful "en" or "fr".
+// Empty / unknown collapse to "en" (the hardcoded default per the
+// i18n Phase 1 spec edge-cases section).
+func normalizeLanguageForCookie(language string) string {
+	if language == auth.LanguageFrench {
+		return auth.LanguageFrench
+	}
+	return auth.LanguageEnglish
+}
 // isSecureRequest returns true when the request was served over TLS,
 // in which case cookies may be set with the Secure attribute.
 //

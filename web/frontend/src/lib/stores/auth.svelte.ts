@@ -13,6 +13,7 @@
 import { authApi, type User } from '$lib/api/auth';
 import { ApiError } from '$lib/api/types';
 import { theme } from './theme.svelte';
+import { language } from './language.svelte';
 
 export type AuthState = 'unknown' | 'anonymous' | 'authenticated' | 'locked';
 
@@ -31,6 +32,10 @@ class AuthStore {
 			// the FOUC bootstrap picked with whatever the server stores.
 			// No-op when they already agree, which is the common case.
 			theme.reconcileFromServer(me.themePreference);
+			// v2.9.11 i18n Phase 1 — same reconciliation for the
+			// language bootstrap. me.languagePreference may be "" for
+			// pre-v2.9.11 rows; the store normalises that to "en".
+			language.reconcileFromServer(me.languagePreference);
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 401) {
 				this.state = 'anonymous';
@@ -58,6 +63,8 @@ class AuthStore {
 			const me = await authApi.me();
 			this.user = me;
 			theme.reconcileFromServer(me.themePreference);
+			// v2.9.11 i18n Phase 1 — language reconcile mirrors theme.
+			language.reconcileFromServer(me.languagePreference);
 		} catch (err) {
 			// Non-fatal: leave the bootstrap's theme in place. The next
 			// page navigation that hits bootstrap will pick up the

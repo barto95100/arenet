@@ -54,6 +54,15 @@ type User struct {
 	// `omitempty` keeps legacy rows decoded by older binaries identical
 	// to new rows that simply never had the field set.
 	ThemePreference string `json:"theme_preference,omitempty"`
+	// LanguagePreference (v2.9.11 i18n Phase 1): "en" | "fr" | ""
+	// (empty = pre-v2.9.11 user, frontend treats "" as "en" — the
+	// hardcoded default — see i18n spec §Edge cases). Same shape as
+	// ThemePreference: settable via POST /api/v1/auth/me/language,
+	// refreshed cookie arenet_language for the bootstrap script in
+	// app.html, mirrored in /auth/me JSON for reconcile-from-server.
+	// `omitempty` keeps legacy rows byte-identical to pre-i18n
+	// binaries' on-disk shape.
+	LanguagePreference string `json:"language_preference,omitempty"`
 	// AuthSource (Step K.2) distinguishes locally-managed users
 	// from OIDC-mapped users. "local" = bootstrapped via the
 	// boot-time setup token + login flow (password / argon2id
@@ -112,6 +121,17 @@ const (
 const (
 	ThemeDark  = "dark"
 	ThemeLight = "light"
+)
+
+// Language preference values accepted by the API per v2.9.11 i18n
+// Phase 1 spec. Same shape as the Theme* constants: "" is a valid
+// storage state (legacy pre-v2.9.11 rows that never set the field)
+// but cannot be written back via the API. The frontend normalises
+// "" to LanguageEnglish at reconcile time — hardcoded default for
+// determinism rather than reading navigator.language.
+const (
+	LanguageEnglish = "en"
+	LanguageFrench  = "fr"
 )
 
 // Session represents a server-side authenticated session.

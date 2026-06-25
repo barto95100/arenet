@@ -18,6 +18,9 @@ export interface User {
 	// "" means "no preference yet" (legacy pre-Step-F user). The theme
 	// store treats "" identically to "dark" per spec §4.2. Step F §3.1.
 	themePreference: '' | 'dark' | 'light';
+	// v2.9.11 i18n Phase 1 — "" for pre-v2.9.11 users, mapped to
+	// "en" by the language store at reconcile.
+	languagePreference: '' | 'en' | 'fr';
 	/**
 	 * Step K.2 — role on the admin surface. "admin" gets full
 	 * CRUD; "viewer" sees a read-only UI. The frontend gates
@@ -99,6 +102,14 @@ export const authApi = {
 	// so the FOUC bootstrap picks up the new value on the next paint.
 	setTheme(theme: 'dark' | 'light'): Promise<void> {
 		return request<void>('POST', '/auth/me/theme', { theme });
+	},
+
+	// setLanguage persists the user's UI language preference
+	// (v2.9.11 i18n Phase 1). Byte-for-byte mirror of setTheme:
+	// 204 on success, server refreshes arenet_language cookie for the
+	// FOUC bootstrap, no audit emission (UX preference, not security).
+	setLanguage(language: 'en' | 'fr'): Promise<void> {
+		return request<void>('POST', '/auth/me/language', { language });
 	},
 
 	// Step K.2 — anonymous OIDC status probe. Login page calls

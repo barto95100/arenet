@@ -221,6 +221,11 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 	// Setup creates a brand-new user with ThemePreference="" — normalized
 	// to "dark" so the FOUC bootstrap has a useful value (spec §4.5).
 	setThemeCookie(w, r, normalizeThemeForCookie(user.ThemePreference))
+	// v2.9.11 i18n Phase 1 — same normalize-to-default for the language
+	// bootstrap cookie so the fresh user's first paint speaks the
+	// hardcoded default ("en") instead of relying on the bootstrap
+	// script's localStorage / default-fallback chain.
+	setLanguageCookie(w, r, normalizeLanguageForCookie(user.LanguagePreference))
 
 	// Step 7: invalidate the setup token (single-use, spec §4.2).
 	h.setupToken.Invalidate()
@@ -331,6 +336,10 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	// Also set the theme cookie so the FOUC bootstrap script picks up
 	// the user's stored preference on the next paint (spec §4.5).
 	setThemeCookie(w, r, normalizeThemeForCookie(user.ThemePreference))
+	// v2.9.11 i18n Phase 1 — same shape for the language bootstrap
+	// cookie. Pre-v2.9.11 users with LanguagePreference="" land on
+	// "en" via normalizeLanguageForCookie.
+	setLanguageCookie(w, r, normalizeLanguageForCookie(user.LanguagePreference))
 
 	// Best-effort: record LastLoginAt; log warning on failure but
 	// never fail the login response. Bounded by a 5-second timeout
@@ -462,6 +471,11 @@ type meResponse struct {
 	// ThemePreference is "dark", "light", or "" (legacy users who never
 	// visited Settings). The frontend treats "" as "dark" per §4.2.
 	ThemePreference string `json:"themePreference"`
+	// LanguagePreference (v2.9.11 i18n Phase 1) is "en", "fr", or ""
+	// (pre-v2.9.11 users who never visited the Settings selector).
+	// The frontend reconcile maps "" to "en" — the hardcoded default
+	// per the i18n Phase 1 spec.
+	LanguagePreference string `json:"languagePreference"`
 	// Step K.2 — role on the admin surface ("viewer" or "admin").
 	// The frontend gates write action UI on this; the backend gates
 	// the underlying routes via RequireAdminMiddleware.
@@ -504,6 +518,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		PasswordCompromised: user.PasswordCompromised,
 		HIBPCheckStatus:     user.HIBPCheckStatus,
 		ThemePreference:     user.ThemePreference,
+		LanguagePreference:  user.LanguagePreference,
 		Role:                user.Role,
 		AuthSource:          user.AuthSource,
 	})
@@ -913,6 +928,60 @@ func (h *Handler) updateTheme(w http.ResponseWriter, r *http.Request) {
 	// req.Theme is already validated to be exactly "dark" or "light"
 	// at this point — no need to re-normalize.
 	setThemeCookie(w, r, req.Theme)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- POST /api/v1/auth/me/language -----------------------------------------
+//
+// v2.9.11 i18n Phase 1. Byte-for-byte mirror of updateTheme above:
+// same auth requirements (hard-auth via middleware), same audit
+// treatment (no emission — UX preference, not a security event),
+// same cookie-refresh contract (the FOUC bootstrap in app.html
+// reads arenet_language and sets <html lang="…"> before the first
+// paint so the active locale is right from frame 1).
+
+type updateLanguageRequest struct {
+	Language string `json:"language"` // "en" or "fr"
+}
+
+// updateLanguage handles POST /api/v1/auth/me/language. 204 on
+// success, 400 on invalid body / invalid value, 401/403 via
+// middleware, 500 on storage error.
+func (h *Handler) updateLanguage(w http.ResponseWriter, r *http.Request) {
+	var req updateLanguageRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
+		return
+	}
+	if req.Language != auth.LanguageEnglish && req.Language != auth.LanguageFrench {
+		writeError(w, http.StatusBadRequest, "language must be \"en\" or \"fr\"")
+		return
+	}
+
+	ctx := r.Context()
+	userID := auth.UserIDFromContext(ctx)
+
+	if err := h.users.UpdateLanguagePreference(ctx, userID, req.Language); err != nil {
+		// ErrLanguageInvalid here would mean the validation above
+		// passed but the store rejected the value — should be
+		// unreachable, but map to 400 to stay consistent.
+		if errors.Is(err, auth.ErrLanguageInvalid) {
+			writeError(w, http.StatusBadRequest, "language must be \"en\" or \"fr\"")
+			return
+		}
+		h.logger.Error("updateLanguage: UpdateLanguagePreference failed",
+			"err", err, "user_id", userID)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// Refresh arenet_language cookie so the FOUC bootstrap on the
+	// next paint picks up the new value. req.Language is already
+	// validated to be "en" or "fr" — no normalisation needed.
+	setLanguageCookie(w, r, req.Language)
 
 	w.WriteHeader(http.StatusNoContent)
 }

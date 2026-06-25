@@ -134,8 +134,9 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			})
 
 			// Hard-auth subgroup: /heartbeat, /sessions, DELETE /sessions/{id},
-			// /me/password, /me/theme. All viewer-accessible (the user
-			// rotates their OWN password / theme, not someone else's).
+			// /me/password, /me/theme, /me/language. All viewer-accessible
+			// (the user rotates their OWN password / theme / language, not
+			// someone else's). /me/language added in v2.9.11 i18n Phase 1.
 			r.Group(func(r chi.Router) {
 				r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.tokenLookup(), h.devMode))
 				r.Post("/heartbeat", h.heartbeat)
@@ -143,6 +144,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Delete("/sessions/{id}", h.deleteSession)
 				r.Post("/me/password", h.changePassword)
 				r.Post("/me/theme", h.updateTheme)
+				r.Post("/me/language", h.updateLanguage)
 			})
 		})
 

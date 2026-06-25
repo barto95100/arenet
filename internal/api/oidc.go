@@ -867,6 +867,10 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	setSessionCookie(w, r, sess.ID, false)
 	setThemeCookie(w, r, normalizeThemeForCookie(user.ThemePreference))
+	// v2.9.11 i18n Phase 1 — same FOUC-bootstrap cookie for the
+	// language preference. OIDC-mapped users default to "en" until
+	// they pick a language in Settings.
+	setLanguageCookie(w, r, normalizeLanguageForCookie(user.LanguagePreference))
 
 	// Best-effort LastLoginAt + Email sync. Email-sync mirrors
 	// the LastLoginAt pattern: if the IdP's email_verified=true
