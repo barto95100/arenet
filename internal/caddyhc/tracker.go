@@ -106,6 +106,35 @@ func (t *HCStatusTracker) set(addr, status string) {
 	t.mu.Unlock()
 }
 
+// Reset clears every recorded per-upstream status, restoring the
+// tracker to the same observable state as a freshly-built one
+// (every address returns StatusUnknown until the next event).
+//
+// Called by the Caddy config manager BEFORE each caddy.Load.
+//
+// Why this exists — empirical Caddy v2.11.3
+// reverseproxy/healthchecks.go:478,498 + hosts.go:251-264:
+// "healthy"/"unhealthy" events fire only on state TRANSITIONS via
+// the Upstream.setHealthy atomic CompareAndSwap. New Upstream Go
+// objects created at reload default to healthy (unhealthy = 0).
+// The first probe success therefore CASes 0→0, returns false, and
+// no event is emitted. Without this Reset, the tracker keeps its
+// pre-reload value (often "unhealthy" from a failed-probe history)
+// forever — UI badge stuck DOWN even when the upstream is now
+// answering 2xx. After Reset, the badge falls back to the gray
+// warm-up state (routeStatusUnknown) and converges on the next
+// real transition.
+//
+// Concurrency: acquires the write lock briefly. Topology readers
+// see either the pre-reset map or an empty map — both are safe
+// interpretations; the next probe event repopulates whichever
+// addresses Caddy now cares about.
+func (t *HCStatusTracker) Reset() {
+	t.mu.Lock()
+	t.statuses = make(map[string]string)
+	t.mu.Unlock()
+}
+
 // Status returns the last-known state for an upstream, or
 // StatusUnknown ("") if no event has been observed for it yet.
 // Called by the topology snapshot builder per upstream per emit.

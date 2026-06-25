@@ -130,6 +130,48 @@ func TestTracker_ConcurrentRecordAndQuery(t *testing.T) {
 	}
 }
 
+func TestTracker_ResetClearsAllEntriesAndKeepsTrackerUsable(t *testing.T) {
+	// Bug B fix (v2.9.8) — empirical Caddy v2.11.3
+	// reverseproxy/healthchecks.go:478,498 + hosts.go:251-264:
+	// "healthy"/"unhealthy" events fire only on state TRANSITIONS
+	// via atomic CAS. After a caddy.Load, new Upstream objects
+	// default to healthy; the first probe success silently CASes
+	// 0→0 with no emit, so a pre-reload "unhealthy" entry in our
+	// process-wide tracker sticks forever and the UI badge stays
+	// stuck DOWN. Reset() is called by caddymgr before every
+	// caddy.Load to restore the StatusUnknown warm-up window.
+	tr := NewTracker()
+	tr.RecordHealthy("10.0.0.1:80")
+	tr.RecordUnhealthy("10.0.0.2:80")
+	if got := tr.Status("10.0.0.1:80"); got != StatusHealthy {
+		t.Fatalf("pre-reset addr1: got %q, want %q", got, StatusHealthy)
+	}
+	if got := tr.Status("10.0.0.2:80"); got != StatusUnhealthy {
+		t.Fatalf("pre-reset addr2: got %q, want %q", got, StatusUnhealthy)
+	}
+
+	tr.Reset()
+
+	if got := tr.Status("10.0.0.1:80"); got != StatusUnknown {
+		t.Errorf("post-reset addr1: got %q, want %q (StatusUnknown)", got, StatusUnknown)
+	}
+	if got := tr.Status("10.0.0.2:80"); got != StatusUnknown {
+		t.Errorf("post-reset addr2: got %q, want %q (StatusUnknown)", got, StatusUnknown)
+	}
+
+	// Tracker must remain usable after Reset — the next event
+	// from the new Caddy config repopulates the map normally.
+	tr.RecordHealthy("10.0.0.1:80")
+	if got := tr.Status("10.0.0.1:80"); got != StatusHealthy {
+		t.Errorf("post-reset re-record: got %q, want %q", got, StatusHealthy)
+	}
+	// Untouched entry stays at StatusUnknown — Reset is total, but
+	// subsequent records only repopulate what the events report.
+	if got := tr.Status("10.0.0.2:80"); got != StatusUnknown {
+		t.Errorf("post-reset untouched addr: got %q, want %q", got, StatusUnknown)
+	}
+}
+
 func TestNormalizeAddr(t *testing.T) {
 	cases := map[string]string{
 		"":                                "",

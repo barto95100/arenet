@@ -65,13 +65,20 @@ import (
 	// that references the module.
 	"github.com/barto95100/arenet/internal/countryblock"
 
-	// #R-TOPO-real-health-probe (Stage B, 2026-06-04) — side-effect
-	// import: registers the arenet_topology_hc events handler so
-	// the apps.events.subscriptions block buildConfigJSON emits is
-	// resolvable at caddy.Load time. The actual tracker singleton
-	// is installed by cmd/arenet before this manager calls
-	// caddy.Load; the handler module's Provision pulls it then.
-	_ "github.com/barto95100/arenet/internal/caddyhc"
+	// #R-TOPO-real-health-probe (Stage B, 2026-06-04) — registers
+	// the arenet_topology_hc events handler so the apps.events.
+	// subscriptions block buildConfigJSON emits is resolvable at
+	// caddy.Load time. The tracker singleton is installed by
+	// cmd/arenet before this manager calls caddy.Load; the
+	// handler module's Provision pulls it then.
+	//
+	// v2.9.8 Bug B fix: now also imported by name so the manager
+	// can hold a typed *HCStatusTracker reference and call Reset()
+	// before each caddy.Load (defeats Caddy's transition-only emit
+	// semantics that leave stale "unhealthy" entries after reload —
+	// see caddyhc/tracker.go Reset() docstring for the empirical
+	// Caddy v2.11.3 citations).
+	"github.com/barto95100/arenet/internal/caddyhc"
 
 	// Step T T.1 (2026-06-05) — side-effect import: registers the
 	// arenet_cert_info events handler so the apps.events.subscriptions
@@ -192,6 +199,22 @@ type CaddyManager struct {
 	// first applyLocked reports every gated route as "added".
 	previousCountryBlockModes map[string]string
 
+	// hcTracker (v2.9.8, Bug B fix) is the process-wide active-
+	// health-check status tracker installed by cmd/arenet before
+	// Start. Held here so applyLocked can call Reset() before each
+	// caddy.Load. Without the reset, stale "unhealthy" entries
+	// persist across reloads forever — empirical Caddy v2.11.3
+	// reverseproxy/healthchecks.go:478,498 + hosts.go:251-264
+	// emits events only on state TRANSITIONS via atomic CAS, and
+	// new Upstream objects default to healthy, so the first probe
+	// success on a fresh reload silently CASes 0→0 and never
+	// emits the recovery event our tracker needs to clear the
+	// stale state.
+	//
+	// May be nil — unit tests instantiate the manager without a
+	// tracker; the applyLocked call site nil-guards before Reset.
+	hcTracker *caddyhc.HCStatusTracker
+
 	mu      sync.Mutex
 	started bool
 
@@ -271,6 +294,23 @@ func (m *CaddyManager) SetNormalTrafficExcludePaths(paths []string) {
 	} else {
 		m.normalTrafficExcludePaths = append([]string(nil), paths...)
 	}
+	m.mu.Unlock()
+}
+
+// SetHCTracker (v2.9.8, Bug B fix) installs the process-wide
+// active-health-check status tracker so applyLocked can call
+// Reset() on it before each caddy.Load. Without this wiring, the
+// applyLocked Reset call is a no-op (nil-guard skips it) and the
+// stale-after-reload symptom described in
+// internal/caddyhc/tracker.go Reset() docstring reappears.
+//
+// MUST be called BEFORE Start so the very first applyLocked
+// already benefits from the reset semantics. Passing nil is
+// accepted and equivalent to not calling the setter (useful for
+// unit tests that don't care about tracker behaviour).
+func (m *CaddyManager) SetHCTracker(t *caddyhc.HCStatusTracker) {
+	m.mu.Lock()
+	m.hcTracker = t
 	m.mu.Unlock()
 }
 
@@ -769,6 +809,25 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	// 2026-06-24 operator report) becomes immediately observable
 	// in the live UI because the HC tracker now accumulates
 	// across PUTs instead of resetting.
+	// v2.9.8 Bug B fix — reset the HC tracker BEFORE caddy.Load.
+	// Empirical Caddy v2.11.3 reverseproxy/healthchecks.go:478,498
+	// + hosts.go:251-264: "healthy"/"unhealthy" events fire only on
+	// state TRANSITIONS via Upstream.setHealthy atomic CAS. New
+	// Upstream objects created by the upcoming Load default to
+	// healthy (unhealthy = 0); the first probe success silently
+	// CASes 0→0 and never emits the recovery event our tracker
+	// would need to clear a pre-reload "unhealthy" entry. Without
+	// this reset the badge stays stuck DOWN forever even when the
+	// upstream is answering 2xx on the new config.
+	//
+	// Nil-guard for unit tests / boot orderings that don't install
+	// a tracker. Reset acquires its own lock; the caller's
+	// manager-mu is unrelated (covers store/registry/started, not
+	// the tracker's internal map).
+	if m.hcTracker != nil {
+		m.hcTracker.Reset()
+	}
+
 	if err := caddy.Load(cfgJSON, false); err != nil {
 		return fmt.Errorf("caddy.Load: %w", err)
 	}

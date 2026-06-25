@@ -323,6 +323,16 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		}
 	}
 
+	// v2.9.8 Bug B fix — hand the tracker to the manager so its
+	// applyLocked can call Reset() before each caddy.Load. Without
+	// this wiring, stale "unhealthy" entries persist across reloads
+	// forever (empirical Caddy v2.11.3 emits events only on state
+	// TRANSITIONS via atomic CAS; the first probe success on a
+	// freshly-reloaded healthy-default Upstream silently CASes 0→0
+	// and never emits the recovery event). See
+	// internal/caddyhc/tracker.go Reset() docstring for citations.
+	mgr.SetHCTracker(hcTracker)
+
 	// Step T T.1 (2026-06-05) — install the cert-info tracker
 	// BEFORE mgr.Start, same order as the hcTracker above and for
 	// the same reason: the arenet_cert_info handler's Provision
