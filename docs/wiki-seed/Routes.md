@@ -149,6 +149,26 @@ upload streaming mode: ✅ (large payloads ; skip WAF body buffering)
 
 ---
 
+## Upstream error interception
+
+When an upstream returns a 4xx or 5xx response, Arenet automatically replaces the upstream's raw body with the route's configured error page (see [Custom Error Pages](Custom-Error-Pages)). This keeps the visual experience consistent — operators see the Arenet-branded 404 instead of e.g. nginx's default 404.
+
+### Auto-passthrough on auth challenges
+
+Two status codes are **intentionally NOT intercepted** : **401 Unauthorized** and **407 Proxy Authentication Required**. The upstream's full response — including the `WWW-Authenticate` / `Proxy-Authenticate` header carrying the challenge — flows through to the client untouched.
+
+This is required for any auth flow where the client retries with credentials after reading the challenge header. Replacing the body with a generic HTML 401 would strip the challenge header and break the negotiation entirely.
+
+If you want a branded 401 page for one of YOUR auth gates (BasicAuth, ForwardAuth, OIDC at the Arenet layer), those still serve the branded body — they raise their 401 BEFORE the request reaches the upstream, so the auto-passthrough isn't on the path. Only upstream-originated 401/407 traverse the passthrough.
+
+### Codes intercepted
+
+`400, 402, 403, 404, 405, 406, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 421, 422, 423, 424, 425, 426, 428, 429, 431, 451` (4xx without 401+407) and `500, 501, 502, 503, 504, 505, 506, 507, 508, 510, 511` (full 5xx range).
+
+For each intercepted code, Arenet returns its own response built from the route's error-page template, the per-route override, or the Arenet built-in default (in that priority order).
+
+---
+
 ## Hot-reload
 
 Every route change applies in **< 5 seconds** without dropping in-flight connections. Caddy keeps the old config serving until the new one is fully provisioned, then swaps atomically.

@@ -134,6 +134,40 @@ Each HTML body (template page OR per-route override) is capped at 1 MiB pre-sani
 
 ---
 
+## Catch-all (host not configured)
+
+When a request hits Arenet for a hostname that is **NOT** declared as primary or alias on any route, Arenet serves a 404 — the *catch-all* response.
+
+By default that catch-all body is the Arenet built-in branded 404 page (same look as `arenetDefaultErrorPages[404]`, the one configured routes see on an upstream 404). Operators who want their own branding everywhere — including on unmatched hosts — can promote one of their templates as the catch-all default.
+
+### Promote a template as the catch-all default
+
+1. Sidebar → **Settings** → **Pages d'erreur**
+2. Edit (or create) the template whose 404 body should be served on unmatched hosts
+3. Tick the **Utiliser comme page catch-all par défaut** checkbox above the status-code tabs
+4. **Enregistrer**
+
+From that point the catch-all serves the **404 body of that template** (the other status codes of the template are ignored — the catch-all only ever responds with 404).
+
+### Mutual exclusion
+
+At most **one template** can carry the catch-all-default flag at any time. The storage layer enforces this in the same write transaction : ticking the box on Template B automatically clears it on Template A. No risk of two templates fighting for the catch-all slot ; the most recent Save wins.
+
+### Behaviour matrix
+
+| State | Catch-all body served |
+| ----- | --------------------- |
+| No template is flagged | Arenet built-in 404 (same as `arenetDefaultErrorPages[404]`) |
+| One template is flagged + its `Pages[404]` is set | Operator-defined 404 body from that template |
+| One template is flagged BUT its `Pages[404]` is empty | Falls back to Arenet built-in (catch-all never serves an empty body) |
+| The flagged template is deleted | Flag goes with it ; catch-all reverts to built-in next reload |
+
+### Why this matters
+
+Without the flag the catch-all served plain text "Not Found - no route configured for this host" (pre-v2.9.10), which was inconsistent with the branded pages on configured routes. With the flag operators get end-to-end branding even on typo'd / scan / DNS-leak requests.
+
+---
+
 ## "Inspect built-in default"
 
 In the templates list page, the built-in default appears as a row marked **Built-in** (read-only). Click **Aperçu** to open the editor in read-only mode and inspect the default templates side-by-side ; click **Dupliquer** to create an editable copy as a starting point for your own template.

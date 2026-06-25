@@ -66,7 +66,7 @@ Full guide: [docs/install/systemd-native.md](docs/install/systemd-native.md)
 - 🔄 **Host header preservation** by default — works out of the box with OIDC IdPs, multi-tenant SaaS, and any backend that builds URLs from `Host:`
 - 🩹 **Hot-reload** every route change without dropping in-flight connections
 - 📦 **HTTPS-to-HTTPS upstream support** with optional TLS verification skip for self-signed internal backends
-- 🎨 **Custom error pages** per route via HTML templates (401/403/404/429/500/502/503/504)
+- 🎨 **Custom error pages** per route via HTML templates (401/403/404/429/500/502/503/504), with optional **branded catch-all** for unmatched hosts (template-promotable via a single checkbox)
 
 ### Security
 - 🛡️ **Integrated WAF** via Coraza v3 + OWASP CRS v4 with per-route opt-out, per-rule exclusion, per-tag exclusion (e.g. exclude all `attack-protocol` rules on a noisy backend)
@@ -97,7 +97,7 @@ Full guide: [docs/install/systemd-native.md](docs/install/systemd-native.md)
 ### Operations
 - 💾 **Backup/Restore via UI** — full config snapshot (routes, users, OIDC, DNS providers, forward-auth, allowlists) with sentinel-resolution for secrets and atomic rollback on Caddy reload failure
 - 🌓 **Dark + Light themes** with system-preference detection and per-user persistence
-- 🎨 **Branded error pages** + custom HTML templates with Caddy placeholder support (`{http.request.uri}`, `{http.request.uuid}`, etc.)
+- 🎨 **Branded error pages** + custom HTML templates with Caddy placeholder support (`{http.request.uri}`, `{http.request.uuid}`, etc.), including a brandable catch-all for requests landing on hostnames not configured on any route
 - ⚙️ **Initial setup wizard** with one-time setup token for cold-boot bootstrap
 - 🐳 **Single binary** (~100 MB) — no sidecars, no agents, no external Redis/PostgreSQL dependency
 
