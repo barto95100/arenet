@@ -195,17 +195,17 @@
 </script>
 
 <svelte:head>
-	<title>WAF · Arenet</title>
+	<title>{language.current && t('waf.headTitle')}</title>
 </svelte:head>
 
 <PageHeader
-	eyebrow="Sécurité · Web Application Firewall"
+	eyebrow={language.current && t('waf.pageEyebrow')}
 	title={language.current && t('pageTitles.wafRules')}
-	subtitle="The Coraza engine applies the OWASP Core Rule Set. Event counts shown below reflect blocked requests over the last 24h, per category."
+	subtitle={language.current && t('waf.pageSubtitle')}
 >
 	{#snippet actions()}
-		<a href="/security?tab=crowdsec" class="tb-btn">History →</a>
-		<button class="tb-btn primary" disabled title="Coming soon — apply staged config">Apply changes</button>
+		<a href="/security?tab=crowdsec" class="tb-btn">{language.current && t('waf.actionHistory')}</a>
+		<button class="tb-btn primary" disabled title={language.current && t('waf.actionApplyTooltip')}>{language.current && t('waf.actionApply')}</button>
 	{/snippet}
 </PageHeader>
 
@@ -215,16 +215,16 @@
 	<div class="card error">{loadError}</div>
 {:else if disabled}
 	<div class="card empty">
-		<h3>Observability subsystem disabled</h3>
-		<p>WAF event counts are surfaced via the observability subsystem, which failed to start. Coraza is still inspecting traffic; only the dashboard projection is missing.</p>
+		<h3>{language.current && t('waf.disabledTitle')}</h3>
+		<p>{language.current && t('waf.disabledHelper')}</p>
 	</div>
 {:else}
 	<!-- KPIs -->
 	<div class="kpis">
 		<div class="kpi">
-			<div class="kpi-label">Requests inspected</div>
+			<div class="kpi-label">{language.current && t('waf.kpiRequestsInspected')}</div>
 			<div class="kpi-val">{totalInspected24h.toLocaleString()}<span class="unit">/ 24h</span></div>
-			<div class="kpi-foot">summed over rolling 24h window</div>
+			<div class="kpi-foot">{language.current && t('waf.kpiRequestsInspectedFoot')}</div>
 		</div>
 		<!--
 			#R-DASHBOARD-WAF-COUNTERS-ZERO — Blocked and
@@ -235,39 +235,39 @@
 			volume.
 		-->
 		<div class="kpi" data-testid="kpi-blocked">
-			<div class="kpi-label">Blocked</div>
+			<div class="kpi-label">{language.current && t('waf.kpiBlocked')}</div>
 			<div class="kpi-val">{totalBlocked24h.toLocaleString()}</div>
-			<div class="kpi-foot">ratio {blockRatioPct}%</div>
+			<div class="kpi-foot">{language.current && t('waf.kpiBlockedFoot', { pct: blockRatioPct })}</div>
 		</div>
 		<div class="kpi" data-testid="kpi-detected">
-			<div class="kpi-label">Detected</div>
+			<div class="kpi-label">{language.current && t('waf.kpiDetected')}</div>
 			<div class="kpi-val">{totalDetected24h.toLocaleString()}</div>
-			<div class="kpi-foot">detect-mode (request passed through)</div>
+			<div class="kpi-foot">{language.current && t('waf.kpiDetectedFoot')}</div>
 		</div>
 		<div class="kpi">
-			<div class="kpi-label">Mode</div>
-			<div class="kpi-val mode">Blocking</div>
-			<div class="kpi-foot">detection + block enabled</div>
+			<div class="kpi-label">{language.current && t('waf.kpiMode')}</div>
+			<div class="kpi-val mode">{language.current && t('waf.kpiModeBlocking')}</div>
+			<div class="kpi-foot">{language.current && t('waf.kpiModeFoot')}</div>
 		</div>
 		<div class="kpi">
-			<div class="kpi-label">Paranoia level</div>
+			<div class="kpi-label">{language.current && t('waf.kpiParanoiaLevel')}</div>
 			<div class="kpi-val">2<span class="unit">/ 4</span></div>
-			<div class="kpi-foot">Coraza default — read-only in v1.4</div>
+			<div class="kpi-foot">{language.current && t('waf.kpiParanoiaLevelFoot')}</div>
 		</div>
 	</div>
 
 	<!-- OWASP CRS categories — read-only event-count tiles -->
 	<div class="card">
 		<div class="card-h">
-			<h3>OWASP Core Rule Set — categories</h3>
-			<div class="meta">CRS via Coraza · {ALL_OWASP_CATEGORIES.length} categories</div>
+			<h3>{language.current && t('waf.categoriesTitle')}</h3>
+			<div class="meta">{language.current && t('waf.categoriesMeta', { count: ALL_OWASP_CATEGORIES.length })}</div>
 		</div>
 		<div class="ro-notice">
 			<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
 				<circle cx="8" cy="8" r="6.5" />
 				<path d="M8 5v3.5M8 11v.5" />
 			</svg>
-			<span>Granular category control (enable/disable per category) is deferred to a future step. Counts shown below are read-only.</span>
+			<span>{language.current && t('waf.categoriesReadOnlyNotice')}</span>
 		</div>
 		<!--
 			#R-DASHBOARD-WAF-COUNTERS-ZERO — each category
@@ -291,7 +291,7 @@
 			<div class="fam-block" data-testid="fam-{fam.family}">
 				<div class="fam-h">
 					<h4>{fam.familyLabel}</h4>
-					<span class="fam-meta">{fam.totalEvents.toLocaleString()} événements / 24h</span>
+					<span class="fam-meta">{language.current && t('waf.familyEventsCounter', { count: fam.totalEvents.toLocaleString() })}</span>
 				</div>
 				<div class="cat-grid">
 					{#each fam.rows as row (row.cat)}
@@ -336,34 +336,33 @@
 									<div class="cat-meta-val cat-meta-block">
 										{row.block24h.toLocaleString()}
 									</div>
-									<div class="cat-meta-foot">blocks / 24h</div>
+									<div class="cat-meta-foot">{language.current && t('waf.blocks24hFoot')}</div>
 								</div>
 								<div class="cat-meta">
 									<div class="cat-meta-val cat-meta-detect">
 										{row.detect24h.toLocaleString()}
 									</div>
-									<div class="cat-meta-foot">detects / 24h</div>
+									<div class="cat-meta-foot">{language.current && t('waf.detects24hFoot')}</div>
 								</div>
 							</button>
 							{#if d.open}
 								<div class="cat-drill" data-testid="cat-drill-{row.cat}">
 									{#if d.loading}
-										<div class="cat-drill-state">Chargement des règles…</div>
+										<div class="cat-drill-state">{language.current && t('waf.drillLoading')}</div>
 									{:else if d.error}
 										<div class="cat-drill-state error">{d.error}</div>
 									{:else if d.rows.length === 0}
 										<div class="cat-drill-state muted">
-											Aucune règle déclenchée dans cette catégorie sur les
-											dernières 24h.
+											{language.current && t('waf.drillEmpty')}
 										</div>
 									{:else}
 										<table class="rule-table">
 											<thead>
 												<tr>
-													<th>Rule ID</th>
-													<th>Catégorie</th>
-													<th class="num">Count</th>
-													<th>Last seen</th>
+													<th>{language.current && t('waf.drillColRuleID')}</th>
+													<th>{language.current && t('waf.drillColCategory')}</th>
+													<th class="num">{language.current && t('waf.drillColCount')}</th>
+													<th>{language.current && t('waf.drillColLastSeen')}</th>
 												</tr>
 											</thead>
 											<tbody>
@@ -394,13 +393,13 @@
 	     correctly deep-links to /security?tab=crowdsec. -->
 	<div class="card">
 		<div class="card-h">
-			<h3>IP enforcement</h3>
+			<h3>{language.current && t('waf.ipEnforcementTitle')}</h3>
 		</div>
 		<div class="link-list">
 			<a href="/security?tab=crowdsec" class="link-row">
 				<div>
-					<b>Active CrowdSec decisions</b>
-					<span>The full timeline of blocked IPs (auto + manual). Manual list management is deferred (see backlog).</span>
+					<b>{language.current && t('waf.ipEnforcementActiveDecisions')}</b>
+					<span>{language.current && t('waf.ipEnforcementHelper')}</span>
 				</div>
 				<span class="arrow">→</span>
 			</a>

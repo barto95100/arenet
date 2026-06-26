@@ -265,7 +265,10 @@ describe('WAF page — Phase Y taxonomy + drill-down', () => {
 		await tick();
 		await tick();
 		const drill = screen.getByTestId('cat-drill-CORRELATION');
-		expect(drill.textContent ?? '').toMatch(/aucune règle/i);
+		// v2.9.20 i18n Phase 3 batch 4 — drill empty-state copy
+		// migrated to t() → "No rule triggered in this category…"
+		// in the EN bundle (test boot default).
+		expect(drill.textContent ?? '').toMatch(/no rule triggered/i);
 	});
 
 	it('shows an error state when fetchEventsByRule rejects', async () => {
