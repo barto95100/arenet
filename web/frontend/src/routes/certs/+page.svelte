@@ -347,13 +347,13 @@
 </script>
 
 <svelte:head>
-	<title>Certificates · Arenet</title>
+	<title>{language.current && t('certs.headTitle')}</title>
 </svelte:head>
 
 <PageHeader
-	eyebrow="Sécurité · Certificats"
+	eyebrow={language.current && t('certs.pageEyebrow')}
 	title={language.current && t('pageTitles.certs')}
-	subtitle="ACME-managed TLS certificates. Wildcard apex configuration ships under managed domains; per-route certs are auto-provisioned by certmagic when TLS is enabled."
+	subtitle={language.current && t('certs.pageSubtitle')}
 />
 
 {#if loading}
@@ -361,26 +361,26 @@
 {:else}
 	<div class="kpis">
 		<div class="kpi" data-testid="kpi-certs-actifs">
-			<div class="kpi-label">Certificats actifs</div>
+			<div class="kpi-label">{language.current && t('certs.kpiActiveCertsLabel')}</div>
 			<div class="kpi-val">{certsTotal}</div>
 			<div class="kpi-foot">
-				{certsWildcard} wildcard · {certsSpecific} spécifique{certsSpecific === 1 ? '' : 's'}
+				{language.current && t('certs.kpiActiveCertsFoot', { wildcard: certsWildcard, specific: certsSpecific })}{certsSpecific === 1 ? '' : 's'}
 			</div>
 		</div>
 		<div class="kpi" data-testid="kpi-expirent-bientot">
-			<div class="kpi-label">Expirent &lt; {RENEWAL_WINDOW_DAYS} jours</div>
+			<div class="kpi-label">{language.current && t('certs.kpiExpiringLabel', { days: RENEWAL_WINDOW_DAYS })}</div>
 			<div class="kpi-val">{certsExpiringSoon}</div>
 			<div class="kpi-foot">
-				{certsExpiringSoon > 0 ? 'renouvellement auto programmé' : '—'}
+				{language.current && (certsExpiringSoon > 0 ? t('certs.kpiExpiringFootAuto') : '—')}
 			</div>
 		</div>
 		<div class="kpi" data-testid="kpi-emetteur">
-			<div class="kpi-label">Émetteur principal</div>
+			<div class="kpi-label">{language.current && t('certs.kpiIssuerLabel')}</div>
 			<div class="kpi-val mode">{principalIssuer}</div>
 			<div class="kpi-foot">&nbsp;</div>
 		</div>
 		<div class="kpi" data-testid="kpi-methode">
-			<div class="kpi-label">Méthode ACME</div>
+			<div class="kpi-label">{language.current && t('certs.kpiACMEMethodLabel')}</div>
 			<div class="kpi-val mode">{acmeMethodLabel}</div>
 			<div class="kpi-foot">{acmeMethodSub}</div>
 		</div>
@@ -413,14 +413,18 @@
 			</svg>
 		</div>
 		<div class="renewal-body">
-			<div class="renewal-title">Renouvellement automatique</div>
+			<div class="renewal-title">{language.current && t('certs.renewalTitle')}</div>
+			<!--
+				v2.9.21 i18n — the helper paragraph carries a {logsLink}
+				placeholder that's left untouched by the interpolate fn
+				(it's not in the params object). The static link is
+				rendered separately below to preserve the <a> tag without
+				HTML interpolation. Pre-fix this was a multi-line FR
+				paragraph; the t() resolution keeps the structure.
+			-->
 			<p>
-				Tous les certificats sont renouvelés automatiquement par
-				certmagic (Caddy v2) ~30 jours avant expiration, avec retry
-				exponentiel sur échec. Aucune action manuelle n'est requise.
-				Les logs de renouvellement sont disponibles dans la page <a
-					href="/logs">Logs</a
-				>.
+				{language.current && t('certs.renewalHelper', { logsLink: '' })}
+				<a href="/logs">{language.current && t('certs.renewalLogsLink')}</a>
 			</p>
 		</div>
 	</div>
@@ -437,7 +441,7 @@
 	     v1.2.0-step-t-spec, implemented by e8e6311 (T.4). -->
 	<div class="card" data-testid="domaines-card">
 		<div class="card-h">
-			<h3>Domaines</h3>
+			<h3>{language.current && t('certs.domainsCardTitle')}</h3>
 			<!-- NOTE (CS.3 extraction audit): this tablist is
 			     intentionally NOT migrated to lib/components/
 			     Tabs.svelte. The two surfaces share role="tablist"
@@ -454,7 +458,7 @@
 			         ever switches to a different filter UX
 			         (e.g. dropdown, segmented control), revisit
 			         here. -->
-			<div class="tabs" role="tablist" aria-label="Filter certificates">
+			<div class="tabs" role="tablist" aria-label={language.current && t('certs.filterCertsAria')}>
 				<button
 					type="button"
 					role="tab"
@@ -464,7 +468,7 @@
 					data-testid="tab-all"
 					onclick={() => (activeTab = 'all')}
 				>
-					Tous
+					{language.current && t('certs.tabAll')}
 				</button>
 				<button
 					type="button"
@@ -475,7 +479,7 @@
 					data-testid="tab-wildcard"
 					onclick={() => (activeTab = 'wildcard')}
 				>
-					Wildcard
+					{language.current && t('certs.tabWildcard')}
 				</button>
 				<button
 					type="button"
@@ -486,38 +490,36 @@
 					data-testid="tab-expiring"
 					onclick={() => (activeTab = 'expiring')}
 				>
-					Expirent bientôt
+					{language.current && t('certs.tabExpiring')}
 				</button>
 			</div>
 		</div>
 
 		{#if certsLoadError}
 			<div class="empty-row" data-testid="certs-error">
-				Impossible de récupérer les certificats (le service backend a
-				répondu en erreur). Le reste de cette page reste utilisable.
+				{language.current && t('certs.certsLoadError')}
 			</div>
 		{:else if certs.length === 0}
 			<div class="empty-row" data-testid="certs-empty">
-				Aucun certificat actif.
+				{language.current && t('certs.certsEmptyTitle')}
 				<div class="empty-sub">
-					Les certificats sont auto-provisionnés à la création d'une
-					route TLS ou à la déclaration d'un apex géré.
+					{language.current && t('certs.certsEmptyHelper')}
 				</div>
 			</div>
 		{:else if filteredCerts.length === 0}
 			<div class="empty-row" data-testid="certs-tab-empty">
-				Aucun certificat dans cette catégorie.
+				{language.current && t('certs.certsTabEmpty')}
 			</div>
 		{:else}
 			<table data-testid="certs-table">
 				<thead>
 					<tr>
-						<th>Domaine</th>
-						<th>Émetteur</th>
-						<th>SAN</th>
-						<th>Émis le</th>
-						<th>Expire dans</th>
-						<th>État</th>
+						<th>{language.current && t('certs.colDomain')}</th>
+						<th>{language.current && t('certs.colIssuer')}</th>
+						<th>{language.current && t('certs.colSAN')}</th>
+						<th>{language.current && t('certs.colIssuedAt')}</th>
+						<th>{language.current && t('certs.colExpiresIn')}</th>
+						<th>{language.current && t('certs.colState')}</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -540,10 +542,14 @@
 											class="stale-badge"
 											data-testid="cert-stale-badge"
 											data-domain={cert.domain}
-											title={`Dernier échec : ${relativeTime(staleFailedAt.toISOString())} · ${failCount} tentative${failCount === 1 ? '' : 's'} sans renouvellement réussi. Cliquez pour voir l'historique.`}
+											title={language.current && t('certs.staleBadgeTooltip', {
+												ago: relativeTime(staleFailedAt.toISOString()),
+												count: failCount,
+												plural: failCount === 1 ? '' : 's'
+											})}
 											onclick={() => (drillDownDomain = cert.domain)}
 										>
-											⚠ Échec depuis {staleAgo(staleFailedAt)}
+											{language.current && t('certs.staleBadgeText', { ago: staleAgo(staleFailedAt) })}
 										</button>
 									{/if}
 								</div>
@@ -572,9 +578,9 @@
 									{#if days === null}
 										—
 									{:else if days <= 0}
-										expiré
+										{language.current && t('certs.expiryExpired')}
 									{:else}
-										{days} jour{days === 1 ? '' : 's'}
+										{language.current && t('certs.expiryDays', { days, plural: days === 1 ? '' : 's' })}
 									{/if}
 								</span>
 							</td>
@@ -615,12 +621,12 @@
 	     v1.2.0-step-t-spec, implemented by 6b03f1c (T.5). -->
 	<div class="card" data-testid="policies-card">
 		<div class="card-h">
-			<h3>Politiques wildcard par apex</h3>
+			<h3>{language.current && t('certs.policiesCardTitle')}</h3>
 			<span class="card-h-meta">
 				{#if domains.length > 0}
-					{domains.length} déclarée{domains.length === 1 ? '' : 's'}
+					{language.current && t('certs.policiesDeclaredCounter', { count: domains.length, plural: domains.length === 1 ? '' : 's' })}
 				{:else}
-					Aucune
+					{language.current && t('certs.policiesEmpty')}
 				{/if}
 			</span>
 			<div class="card-h-actions">
@@ -630,24 +636,21 @@
 					onclick={() => (wizardOpen = true)}
 					data-testid="open-wildcard-wizard"
 				>
-					{#snippet children()}+ Wildcard apex{/snippet}
+					{#snippet children()}{language.current && t('certs.wildcardApexButton')}{/snippet}
 				</Button>
 			</div>
 		</div>
 
 		<p class="section-lead">
-			Un apex géré émet UN certificat wildcard via DNS-01 (couvre toutes
-			les routes en sous-domaine). Le DNS provider se configure dans <a
-				href="/settings">Settings</a
-			>.
+			{language.current && t('certs.policiesLead', { settingsLink: '' })}
+			<a href="/settings">{language.current && t('certs.settingsLink')}</a>.
 		</p>
 
 		{#if sslDNSUnconfigured}
 			<div class="warn-box" role="alert">
-				<strong>DNS provider unconfigured.</strong>
-				Wildcard issuance is disabled — covered routes will serve self-signed
-				certs from Caddy's internal CA until you configure the DNS provider
-				in <a href="/settings">/settings</a>.
+				<strong>{language.current && t('certs.dnsUnconfiguredTitle')}</strong>
+				{language.current && t('certs.dnsUnconfiguredHelper')}
+				<a href="/settings">/settings</a>.
 			</div>
 		{/if}
 
@@ -663,15 +666,15 @@
 							</div>
 							<div class="md-sub">
 								Provider: <span class="mono">{md.provider}</span>
-								{#if md.includeApex}· includes apex{/if}
+								{#if md.includeApex}· {language.current && t('certs.policiesIncludesApex')}{/if}
 							</div>
 						</div>
 						<Button
 							variant="ghost"
 							onclick={() => openDeleteManagedDomain(md.apex)}
-							aria-label={`Delete managed domain ${md.apex}`}
+							aria-label={language.current && t('certs.policiesDeleteAriaLabel', { apex: md.apex })}
 						>
-							Delete
+							{language.current && t('certs.policiesDeleteButton')}
 						</Button>
 					</li>
 				{/each}
@@ -679,11 +682,7 @@
 		{/if}
 
 		<p class="section-lead md-foot">
-			Déclarer un apex marque toutes les routes existantes sous
-			<code>*.&lt;apex&gt;</code> comme couvertes par le wildcard. Le
-			sélecteur ACME par route est masqué dans l'éditeur de routes, et le
-			certificat est provisionné une seule fois pour tous les
-			sous-domaines.
+			{language.current && t('certs.policiesFoot')}
 		</p>
 	</div>
 
@@ -709,31 +708,28 @@
 {#if mdDeleteOpen}
 	<Modal
 		open={mdDeleteOpen}
-		title={`Delete managed domain ${mdDeleteApex}?`}
+		title={language.current && t('certs.mdDeleteTitle', { apex: mdDeleteApex })}
 		onClose={() => (mdDeleteOpen = false)}
 	>
 		{#snippet children()}
 			<p class="modal-lead">
-				Covered routes' ACMEChallenge will be reverted. Pick the
-				post-revert challenge value below.
+				{language.current && t('certs.mdDeleteLead')}
 			</p>
 			<div class="modal-field">
-				<label for="md-delete-revert-to">Revert covered routes to</label>
+				<label for="md-delete-revert-to">{language.current && t('certs.mdDeleteRevertToLabel')}</label>
 				<select
 					id="md-delete-revert-to"
 					bind:value={mdDeleteRevertTo}
 					class="md-input"
 				>
-					<option value="">Default (HTTP-01 on next reload)</option>
-					<option value="http-01">Explicit HTTP-01</option>
-					<option value="dns-01">Explicit DNS-01</option>
+					<option value="">{language.current && t('certs.mdDeleteOptDefault')}</option>
+					<option value="http-01">{language.current && t('certs.mdDeleteOptHTTP01')}</option>
+					<option value="dns-01">{language.current && t('certs.mdDeleteOptDNS01')}</option>
 				</select>
 			</div>
 			{#if mdDeleteRevertTo === '' || mdDeleteRevertTo === 'http-01'}
 				<p class="modal-warn" role="alert">
-					<strong>Heads up.</strong> Each covered route will request its own HTTP-01
-					cert on the next reload. Many routes on one apex may hit Let's
-					Encrypt's per-domain rate limit (50 certs / week).
+					{language.current && t('certs.mdDeleteWarning')}
 				</p>
 			{/if}
 			{#if mdDeleteError}
@@ -742,11 +738,11 @@
 		{/snippet}
 		{#snippet footer()}
 			<Button variant="ghost" onclick={() => (mdDeleteOpen = false)}
-				>Cancel</Button
+				>{language.current && t('certs.mdDeleteCancel')}</Button
 			>
 			<Button
 				variant="danger"
-				onclick={() => void confirmDeleteManagedDomain()}>Delete</Button
+				onclick={() => void confirmDeleteManagedDomain()}>{language.current && t('certs.mdDeleteConfirm')}</Button
 			>
 		{/snippet}
 	</Modal>
@@ -761,20 +757,18 @@
 {#if drillDownDomain}
 	<Modal
 		open={drillDownDomain !== null}
-		title={`Historique des événements — ${drillDownDomain}`}
+		title={language.current && t('certs.drillTitle', { domain: drillDownDomain ?? '' })}
 		onClose={() => (drillDownDomain = null)}
 	>
 		{#snippet children()}
 			{@const events = certEventsByDomain.get(drillDownDomain ?? '') ?? []}
 			{#if events.length === 0}
 				<p class="modal-lead" data-testid="cert-drilldown-empty">
-					Aucun événement de cycle de vie observé pour ce domaine
-					sur la fenêtre de rétention (90 jours).
+					{language.current && t('certs.drillEmpty')}
 				</p>
 			{:else}
 				<p class="modal-lead">
-					Les {events.length} événement{events.length === 1 ? '' : 's'} le{events.length === 1 ? '' : 's'} plus récent{events.length === 1 ? '' : 's'} pour
-					ce domaine, du plus récent au plus ancien.
+					{language.current && t('certs.drillLead', { count: events.length, plural: events.length === 1 ? '' : 's' })}
 				</p>
 				<ul class="event-list" data-testid="cert-drilldown-list">
 					{#each events as ev (ev.timestamp + ev.eventType)}
@@ -793,8 +787,8 @@
 								</div>
 							{:else if ev.eventType === 'cert_obtained'}
 								<div class="event-success dim">
-									{ev.renewal ? 'Renouvellement' : 'Émission initiale'} ·
-									{ev.issuer || 'émetteur inconnu'}
+									{language.current && (ev.renewal ? t('certs.drillEventRenewal') : t('certs.drillEventInitial'))} ·
+									{ev.issuer || (language.current && t('certs.drillEventIssuerUnknown'))}
 									{#if ev.challenge}· {ev.challenge}{/if}
 								</div>
 							{/if}
@@ -809,10 +803,10 @@
 				class="modal-link"
 				data-testid="cert-drilldown-logs-link"
 			>
-				Voir tous les événements dans /logs →
+				{language.current && t('certs.drillFooterLink')}
 			</a>
 			<Button variant="ghost" onclick={() => (drillDownDomain = null)}>
-				Fermer
+				{language.current && t('certs.drillFooterClose')}
 			</Button>
 		{/snippet}
 	</Modal>

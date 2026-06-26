@@ -37,6 +37,8 @@
 	import { settingsApi } from '$lib/api/settings';
 	import { ApiError } from '$lib/api/types';
 	import type { ManagedDomainProvider } from '$lib/api/types';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	interface Props {
 		open: boolean;
@@ -67,7 +69,7 @@
 		if (submitting) return;
 		const trimmed = apex.trim();
 		if (trimmed === '') {
-			formError = 'Apex domain is required.';
+			formError = t('certs.wizardApexRequiredError');
 			return;
 		}
 		submitting = true;
@@ -92,7 +94,7 @@
 	}
 </script>
 
-<Modal {open} title="Nouvelle politique wildcard" onClose={close}>
+<Modal {open} title={language.current && t('certs.wizardTitle')} onClose={close}>
 	<form
 		class="wizard-form"
 		data-testid="wildcard-wizard-form"
@@ -102,7 +104,7 @@
 		}}
 	>
 		<div class="field field-full">
-			<label for="wz-apex">Apex domain</label>
+			<label for="wz-apex">{language.current && t('certs.wizardApexLabel')}</label>
 			<input
 				id="wz-apex"
 				type="text"
@@ -113,14 +115,21 @@
 				disabled={submitting}
 				data-testid="wizard-apex-input"
 			/>
+			<!--
+				v2.9.21 i18n — the hint paragraph carries dynamic
+				<code>*.{apex || 'example.com'}</code> markup that
+				can't survive a t() interpolation. Render the static
+				prefix via t() with a {wildcard} placeholder left
+				untouched, then inline the live <code> separately.
+			-->
 			<p class="hint">
-				Bare domain (no leading <code>*.</code>) — the wildcard is implied.
-				Issues a cert for <code>*.{apex || 'example.com'}</code>.
+				{language.current && t('certs.wizardApexHint', { wildcard: '' })}
+				<code>*.{apex || 'example.com'}</code>
 			</p>
 		</div>
 
 		<div class="field">
-			<label for="wz-provider">DNS provider</label>
+			<label for="wz-provider">{language.current && t('certs.wizardProviderLabel')}</label>
 			<select
 				id="wz-provider"
 				bind:value={provider}
@@ -138,7 +147,7 @@
 				bind:checked={includeApex}
 				disabled={submitting}
 			/>
-			<label for="wz-include-apex">Include bare apex in cert SAN</label>
+			<label for="wz-include-apex">{language.current && t('certs.wizardIncludeApexLabel')}</label>
 		</div>
 
 		{#if formError}
@@ -157,7 +166,7 @@
 
 	{#snippet footer()}
 		<Button variant="ghost" size="md" onclick={close} disabled={submitting}>
-			{#snippet children()}Cancel{/snippet}
+			{#snippet children()}{language.current && t('certs.wizardCancelButton')}{/snippet}
 		</Button>
 		<Button
 			variant="primary"
@@ -166,7 +175,7 @@
 			loading={submitting}
 			disabled={submitting || apex.trim() === ''}
 		>
-			{#snippet children()}{submitting ? 'Déclaration…' : 'Déclarer'}{/snippet}
+			{#snippet children()}{language.current && (submitting ? t('certs.wizardSubmitting') : t('certs.wizardSubmitButton'))}{/snippet}
 		</Button>
 	{/snippet}
 </Modal>

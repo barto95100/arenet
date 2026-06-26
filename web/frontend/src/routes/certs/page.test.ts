@@ -167,9 +167,12 @@ describe('/certs — auto-renewal info card', () => {
 		// French copy still fails loudly.
 		const card = await screen.findByTestId('auto-renewal-card');
 		expect(card).toBeInTheDocument();
-		expect(screen.getByText('Renouvellement automatique')).toBeInTheDocument();
+		// v2.9.21 i18n — "Renouvellement automatique" → "Automatic
+		// renewal" in EN bundle (test boot default). Helper text
+		// copy also flipped to EN ("30 days" not "30 jours").
+		expect(screen.getByText('Automatic renewal')).toBeInTheDocument();
 		expect(card.textContent ?? '').toMatch(/certmagic/i);
-		expect(card.textContent ?? '').toMatch(/30 jours/);
+		expect(card.textContent ?? '').toMatch(/30 days/);
 	});
 });
 
@@ -204,7 +207,9 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 		).toBeInTheDocument();
 		// Footer Declare button.
 		expect(
-			screen.getByRole('button', { name: /^déclarer$/i }),
+			// v2.9.21 i18n — wizard submit button migrated to t() →
+			// "Declare" in EN bundle (test boot default).
+			screen.getByRole('button', { name: /^declare$/i }),
 		).toBeInTheDocument();
 	});
 
@@ -325,11 +330,13 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 		).toBeInTheDocument();
 	});
 
-	it('section header carries the T.5-reframed title "Politiques wildcard par apex"', async () => {
+	it('section header carries the T.5-reframed title "Wildcard policies per apex"', async () => {
+		// v2.9.21 i18n — section title migrated to t() →
+		// "Wildcard policies per apex" in EN bundle.
 		render(Page);
 		await screen.findByTestId('open-wildcard-wizard');
 		expect(
-			screen.getByText('Politiques wildcard par apex'),
+			screen.getByText('Wildcard policies per apex'),
 		).toBeInTheDocument();
 	});
 
@@ -432,7 +439,9 @@ describe('/certs — runtime KPI cards (T.4)', () => {
 		// breakdown was 4 total / 1+1 visible).
 		expect(card.textContent ?? '').toMatch(/5/);
 		expect(card.textContent ?? '').toMatch(/2 wildcard/);
-		expect(card.textContent ?? '').toMatch(/3 spécifiques/);
+		// v2.9.21 i18n — "spécifique(s)" migrated to "specific(s)"
+		// in the EN bundle (test boot default).
+		expect(card.textContent ?? '').toMatch(/3 specific/);
 	});
 
 	it('Expirent < 30 jours excludes OBTAIN_FAILED + zero-time entries', async () => {
@@ -445,7 +454,9 @@ describe('/certs — runtime KPI cards (T.4)', () => {
 		// satisfied "<= now+30d" pre-polish; the new isExpiringSoon
 		// filter correctly excludes it.
 		expect(card.textContent ?? '').toMatch(/2/);
-		expect(card.textContent ?? '').toMatch(/renouvellement auto programmé/);
+		// v2.9.21 i18n — "renouvellement auto programmé" → EN bundle
+		// "auto-renewal scheduled".
+		expect(card.textContent ?? '').toMatch(/auto-renewal scheduled/);
 	});
 
 	it('Émetteur principal surfaces the dominant issuer', async () => {
@@ -534,13 +545,15 @@ describe('/certs — Domaines table (T.4)', () => {
 		).toBeInTheDocument();
 	});
 
-	it('expired row labels the EXPIRE DANS cell as "expiré"', async () => {
+	it('expired row labels the EXPIRE DANS cell as "expired"', async () => {
+		// v2.9.21 i18n — "expiré" migrated to t() → "expired" in EN
+		// bundle (test boot default).
 		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
 		render(Page);
 		await screen.findByTestId('certs-table');
 		const rows = screen.getAllByTestId('cert-row');
 		const expired = rows.find((r) => r.dataset.domain === 'expired.example.com')!;
-		expect(expired.textContent ?? '').toMatch(/expiré/);
+		expect(expired.textContent ?? '').toMatch(/expired/);
 	});
 
 	it('OBTAIN_FAILED row with zero-time dates renders cells as "—" instead of "expiré" / "il y a 2027 ans"', async () => {
@@ -556,7 +569,8 @@ describe('/certs — Domaines table (T.4)', () => {
 		const broken = rows.find((r) => r.dataset.domain === '*.test.local')!;
 		expect(broken).toBeDefined();
 		const text = broken.textContent ?? '';
-		expect(text).not.toMatch(/expiré/);
+		// v2.9.21 i18n — EN bundle uses "expired" not "expiré".
+		expect(text).not.toMatch(/expired/);
 		expect(text).not.toMatch(/ans/);
 		// Both ÉMIS LE and EXPIRE DANS should render "—".
 		// (Two em-dashes minimum in this row.)
@@ -583,14 +597,16 @@ describe('/certs — Domaines table (T.4)', () => {
 		certsMock.certificatesApi.list.mockResolvedValue([]);
 		render(Page);
 		const empty = await screen.findByTestId('certs-empty');
-		expect(empty.textContent ?? '').toMatch(/Aucun certificat actif/);
+		// v2.9.21 i18n — "Aucun certificat actif." → EN "No active certificate."
+		expect(empty.textContent ?? '').toMatch(/No active certificate/);
 	});
 
 	it('shows the error banner when /api/certificates rejects', async () => {
 		certsMock.certificatesApi.list.mockRejectedValue(new Error('boom'));
 		render(Page);
 		const err = await screen.findByTestId('certs-error');
-		expect(err.textContent ?? '').toMatch(/Impossible de récupérer/);
+		// v2.9.21 i18n — "Impossible de récupérer" → EN "Could not fetch".
+		expect(err.textContent ?? '').toMatch(/Could not fetch/);
 		// Pack A editor MUST still mount even when certs failed
 		// (AC #13 degraded mode mirrored on the frontend). Post-
 		// T.5 the wizard trigger is the new declaration affordance.
@@ -733,7 +749,9 @@ describe('/certs — Cert.B stale-failure badge', () => {
 		render(Page);
 		const badge = await screen.findByTestId('cert-stale-badge');
 		expect(badge.getAttribute('data-domain')).toBe('vault.example.com');
-		expect(badge.textContent).toContain('Échec depuis');
+		// v2.9.21 i18n — stale-badge text migrated to t() →
+		// "Failed for {ago}" in EN bundle (test boot default).
+		expect(badge.textContent).toContain('Failed for');
 	});
 
 	it('does NOT render the stale badge when last event is a successful cert_obtained', async () => {
