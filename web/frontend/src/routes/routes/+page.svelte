@@ -2548,7 +2548,7 @@
 								for="route-lb-policy"
 								class="text-sm font-medium text-secondary block mb-1"
 							>
-								Load balancing
+								{language.current && t('routes.form.lbSectionLabel')}
 							</label>
 							<select
 								id="route-lb-policy"
@@ -2568,8 +2568,7 @@
 					<div class="flex flex-col gap-1">
 						<Checkbox label={language.current && t('routes.form.tlsEnabledLabel')} bind:checked={formData.tlsEnabled} />
 						<p class="text-xs text-muted ml-6">
-							Public domain required for Let's Encrypt; localhost / .local
-							will fall back to internal CA.
+							{language.current && t('routes.form.tlsEnableHelper')}
 						</p>
 					</div>
 					<Checkbox
@@ -2596,16 +2595,25 @@
 							     gone — the wildcard cert serves this route. -->
 							<div>
 								<span class="text-sm font-medium text-secondary block mb-1"
-									>Certificate</span
+									>{language.current && t('routes.form.tlsCertificateLabel')}</span
 								>
+								<!--
+									v2.9.16 i18n hotfix — the "Inherits wildcard from
+									X (managed via Y)" line mixes a code span, a
+									settings link, and parenthetical chrome. Rather
+									than weave a single template literal through all
+									three, render the static prefix via t() and keep
+									the dynamic <code> + <a> as inline JSX. Same
+									pattern used by the dns01Banner above.
+								-->
 								<div
 									class="rounded border border-info/40 bg-info/10 px-3 py-2 text-sm"
 								>
-									<span class="font-medium">Inherits wildcard from</span>
+									<span class="font-medium">{language.current && t('routes.form.tlsCertificateInherits')}</span>
 									<code class="font-mono">*.{coveringManagedDomain.apex}</code>
 									<span class="text-muted">
 										(managed via <a href="/settings" class="text-cyan hover:underline"
-											>SSL / Certificates</a
+											>{language.current && t('routes.form.tlsCertificateLink')}</a
 										>)
 									</span>
 								</div>
@@ -2616,12 +2624,10 @@
 										onchange={(e) =>
 											onUseDedicatedCertToggle((e.target as HTMLInputElement).checked)}
 									/>
-									Use a dedicated cert for this route (opt out of the wildcard)
+									{language.current && t('routes.form.tlsUseDedicatedCertLabel')}
 								</label>
 								<p class="text-xs text-muted mt-1">
-									Use this for routes that need a separate key (e.g. payments,
-									staging) — the route will request its own ACME cert alongside
-									the wildcard.
+									{language.current && t('routes.form.tlsUseDedicatedCertHelper')}
 								</p>
 							</div>
 						{:else}
@@ -2718,7 +2724,7 @@
 									bind:group={formData.authMode}
 									class="accent-cyan"
 								/>
-								None
+								{language.current && t('routes.form.authNoneOption')}
 							</label>
 							<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
 								<input
@@ -2728,7 +2734,7 @@
 									bind:group={formData.authMode}
 									class="accent-cyan"
 								/>
-								Basic auth (single shared credential)
+								{language.current && t('routes.form.authBasicRadioLabel')}
 							</label>
 							<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
 								<input
@@ -2738,7 +2744,7 @@
 									bind:group={formData.authMode}
 									class="accent-cyan"
 								/>
-								Forward auth (delegate to an IdP)
+								{language.current && t('routes.form.authForwardRadioLabel')}
 							</label>
 						</div>
 			
@@ -2754,14 +2760,14 @@
 										for="basic-auth-password"
 										class="text-sm font-medium text-secondary block mb-1"
 									>
-										Password
+										{language.current && t('routes.form.authBasicPasswordLabel')}
 									</label>
 									<input
 										id="basic-auth-password"
 										type="password"
 										bind:value={formData.basicAuth.password}
 										placeholder={formMode === 'edit' && basicAuthPasswordSet
-											? '••• set (leave blank to keep)'
+											? (language.current && t('routes.form.authBasicPasswordPlaceholderSet'))
 											: ''}
 										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 									/>
@@ -2773,12 +2779,12 @@
 									for="route-forward-auth-provider"
 									class="text-sm font-medium text-secondary block"
 								>
-									Provider
+									{language.current && t('routes.form.authForwardProviderLabel')}
 								</label>
 								{#if forwardAuthProviders.length === 0}
 									<p class="text-xs text-down">
-										No forward-auth provider configured —
-										<a href="/settings" class="text-cyan hover:underline">configure one under Settings</a>.
+										{language.current && t('routes.form.authForwardNoProvider')}
+										<a href="/settings" class="text-cyan hover:underline">{language.current && t('routes.form.authForwardConfigureLink')}</a>.
 									</p>
 								{:else}
 									<select
@@ -2786,7 +2792,7 @@
 										bind:value={formData.forwardAuth.providerName}
 										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 									>
-										<option value="" disabled>— select a provider —</option>
+										<option value="" disabled>{language.current && t('routes.form.authForwardSelectPlaceholder')}</option>
 										{#each forwardAuthProviders as p (p.name)}
 											<option value={p.name}>{p.name} ({p.kind})</option>
 										{/each}
@@ -3516,9 +3522,9 @@
 							class="px-3 py-2 text-sm text-secondary cursor-pointer select-none"
 							onclick={markHealthCheckTouched}
 						>
-							Active health check
+							{language.current && t('routes.form.healthCheckActiveSection')}
 							{#if formData.healthCheck.enabled}
-								<span class="ml-1 text-xs text-muted">(on)</span>
+								<span class="ml-1 text-xs text-muted">{language.current && t('routes.form.healthCheckOnSuffix')}</span>
 							{/if}
 						</summary>
 						<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
@@ -3643,7 +3649,7 @@
 							<div class="flex flex-col gap-1.5">
 								<label
 									for="hc-expect-status"
-									class="text-sm font-medium text-secondary">Expected status</label
+									class="text-sm font-medium text-secondary">{language.current && t('routes.form.healthCheckExpectStatusLabelHTTP')}</label
 								>
 								<input
 									id="hc-expect-status"
@@ -3670,10 +3676,7 @@
 								error={errors['healthCheck.expectBody'] ?? undefined}
 							/>
 							<p class="text-xs text-muted">
-								Leave a field blank to use the server default
-								({HEALTH_CHECK_DEFAULTS.method} / {HEALTH_CHECK_DEFAULTS.interval}
-								/ {HEALTH_CHECK_DEFAULTS.timeout} / passes={HEALTH_CHECK_DEFAULTS.passes}
-								/ fails={HEALTH_CHECK_DEFAULTS.fails}). URI is required.
+								{language.current && t('routes.form.healthCheckHelper')}
 							</p>
 						</div>
 					</details>
