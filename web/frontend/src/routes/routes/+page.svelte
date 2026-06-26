@@ -2327,20 +2327,20 @@
 						</p>
 					{/if}
 					<Input
-						label="Host"
+						label={language.current && t('routes.form.hostLabel')}
 						bind:value={formData.host}
-						placeholder="example.local"
+						placeholder={language.current && t('routes.form.hostPlaceholder')}
 						error={errors['host'] ?? undefined}
 					/>
 					<!-- Step I.3: alias hostnames repeater. -->
 					<div class="flex flex-col gap-2">
 						<div class="flex items-center justify-between">
-							<span class="text-sm text-secondary">Aliases (optional)</span>
-							<Button variant="ghost" size="sm" onclick={addAlias} type="button">+ Add alias</Button>
+							<span class="text-sm text-secondary">{language.current && t('routes.form.aliasesLabel')}</span>
+							<Button variant="ghost" size="sm" onclick={addAlias} type="button">{language.current && t('routes.form.aliasesAdd')}</Button>
 						</div>
 						{#each formData.aliases as _, i (i)}
 							<div class="flex items-center gap-2">
-								<Input bind:value={formData.aliases[i]} placeholder="alt.example.com" />
+								<Input bind:value={formData.aliases[i]} placeholder={language.current && t('routes.form.aliasesPlaceholder')} />
 								<Button variant="ghost" size="sm" onclick={() => removeAlias(i)} type="button">×</Button>
 							</div>
 						{/each}
@@ -2353,13 +2353,8 @@
 					     visibility flips. -->
 					<div class="flex flex-col gap-2">
 						<div class="flex items-center justify-between">
-							<span class="text-sm font-medium text-secondary">Upstreams</span>
+							<span class="text-sm font-medium text-secondary">{language.current && t('routes.form.upstreamsLabel')}</span>
 							<div class="flex items-center gap-2">
-								<!--
-									Step #R-PROXMOX-HTTPS-LOOP commit 3 — pool-level
-									"Tester tous". Promise.all parallelise pool > 1.
-									Disabled when every row's URL is empty.
-								-->
 								<Button
 									variant="ghost"
 									size="sm"
@@ -2368,10 +2363,10 @@
 									disabled={formData.upstreams.every((u) => u.url.trim() === '')}
 									data-testid="test-all-upstreams"
 								>
-									Tester tous
+									{language.current && t('routes.form.upstreamsTestAll')}
 								</Button>
 								<Button variant="ghost" size="sm" onclick={addUpstream} type="button"
-									>+ Add upstream</Button
+									>{language.current && t('routes.form.upstreamsAdd')}</Button
 								>
 							</div>
 						</div>
@@ -2383,7 +2378,7 @@
 								<div class="flex-1 flex flex-col gap-1">
 									<Input
 										bind:value={formData.upstreams[i].url}
-										placeholder="http://127.0.0.1:8080"
+										placeholder={language.current && t('routes.form.upstreamsPlaceholder')}
 										error={errors[`upstreams[${i}].url`] ?? undefined}
 									/>
 									<!--
@@ -2489,7 +2484,7 @@
 											type="number"
 											min="1"
 											bind:value={formData.upstreams[i].weight}
-											placeholder="1"
+											placeholder={language.current && t('routes.form.upstreamsWeightPlaceholder')}
 											class="bg-surface border rounded-md px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
 											class:border-down={!!errors[`upstreams[${i}].weight`]}
 											class:border-border-default={!errors[`upstreams[${i}].weight`]}
@@ -2531,7 +2526,7 @@
 							</summary>
 							<div class="mt-2 flex flex-col gap-1">
 								<Checkbox
-									label="Ignorer la vérification du certificat upstream"
+									label={language.current && t('routes.form.upstreamsInsecureSkipVerifyLabel')}
 									bind:checked={formData.insecureSkipVerify}
 								/>
 								<p class="text-xs text-muted ml-6">
@@ -2560,25 +2555,25 @@
 								bind:value={formData.lbPolicy}
 								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 							>
-								<option value="round_robin">Round-robin (even distribution)</option>
-								<option value="weighted_round_robin">Weighted round-robin</option>
-								<option value="least_conn">Least connections</option>
-								<option value="ip_hash">IP hash (client-IP affinity)</option>
-								<option value="random">Random</option>
-								<option value="first">First available (failover)</option>
+								<option value="round_robin">{language.current && t('routes.form.lbRoundRobin')}</option>
+								<option value="weighted_round_robin">{language.current && t('routes.form.lbWeightedRoundRobin')}</option>
+								<option value="least_conn">{language.current && t('routes.form.lbLeastConn')}</option>
+								<option value="ip_hash">{language.current && t('routes.form.lbIPHash')}</option>
+								<option value="random">{language.current && t('routes.form.lbRandom')}</option>
+								<option value="first">{language.current && t('routes.form.lbFirst')}</option>
 							</select>
 						</div>
 					{/if}
 			
 					<div class="flex flex-col gap-1">
-						<Checkbox label="Enable TLS" bind:checked={formData.tlsEnabled} />
+						<Checkbox label={language.current && t('routes.form.tlsEnabledLabel')} bind:checked={formData.tlsEnabled} />
 						<p class="text-xs text-muted ml-6">
 							Public domain required for Let's Encrypt; localhost / .local
 							will fall back to internal CA.
 						</p>
 					</div>
 					<Checkbox
-						label="Redirect HTTP → HTTPS"
+						label={language.current && t('routes.form.tlsRedirectLabel')}
 						bind:checked={formData.redirectToHttps}
 						disabled={!formData.tlsEnabled}
 						title={formData.tlsEnabled
@@ -2654,8 +2649,8 @@
 										     the bound value). -->
 										<option value="" disabled>— pick one —</option>
 									{/if}
-									<option value="http-01">HTTP-01 (default, port 80)</option>
-									<option value="dns-01">DNS-01 (required for wildcards)</option>
+									<option value="http-01">{language.current && t('routes.form.tlsAcmeHTTP01')}</option>
+									<option value="dns-01">{language.current && t('routes.form.tlsAcmeDNS01')}</option>
 								</select>
 								{#if coveringManagedDomain && formData.useDedicatedCert}
 									<!-- AC #11 opt-out path: show the per-route
@@ -2713,7 +2708,7 @@
 					     exclusion enforced by the radio shape; the server
 					     re-checks (validateAuthFieldsMutex) as defence in depth. -->
 					<div class="flex flex-col gap-2">
-						<span class="text-sm font-medium text-secondary">Authentication</span>
+						<span class="text-sm font-medium text-secondary">{language.current && t('routes.form.authSectionLabel')}</span>
 						<div class="flex flex-col gap-1 ml-1">
 							<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
 								<input
@@ -2750,9 +2745,9 @@
 						{#if formData.authMode === 'basic'}
 							<div class="ml-6 flex flex-col gap-2">
 								<Input
-									label="Username"
+									label={language.current && t('routes.form.authBasicUsernameLabel')}
 									bind:value={formData.basicAuth.username}
-									placeholder="admin"
+									placeholder={language.current && t('routes.form.authBasicUsernamePlaceholder')}
 								/>
 								<div>
 									<label
@@ -2818,9 +2813,9 @@
 							bind:value={formData.wafMode}
 							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 						>
-							<option value="off">Off — no inspection</option>
-							<option value="detect">Detect — log matches, let traffic through</option>
-							<option value="block">Block — return 403 on match</option>
+							<option value="off">{language.current && t('routes.form.wafModeOff')}</option>
+							<option value="detect">{language.current && t('routes.form.wafModeDetect')}</option>
+							<option value="block">{language.current && t('routes.form.wafModeBlock')}</option>
 						</select>
 						<p class="text-xs text-muted mt-1">
 							Start with Detect to spot false positives before enforcing.
@@ -2925,7 +2920,7 @@
 								onchange={onExcludeRulesInputChange}
 								oninput={onExcludeRulesInputChange}
 								disabled={formData.wafDisableCRS}
-								placeholder="942100, 941390, 920280"
+								placeholder={language.current && t('routes.form.wafExcludeRulesPlaceholder')}
 								rows="2"
 								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
 							></textarea>
@@ -2998,7 +2993,7 @@
 								onchange={onExcludeTagsInputChange}
 								oninput={onExcludeTagsInputChange}
 								disabled={formData.wafDisableCRS}
-								placeholder="attack-protocol, attack-sqli, paranoia-level/3"
+								placeholder={language.current && t('routes.form.wafExcludeTagsPlaceholder')}
 								rows="2"
 								{...{ list: 'waf-exclude-tags-catalog' }}
 								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
@@ -3102,7 +3097,7 @@
 										id="route-rl-window"
 										data-testid="rate-limit-window-input"
 										type="text"
-										placeholder="1m"
+										placeholder={language.current && t('routes.form.rateLimitWindowPlaceholder')}
 										bind:value={formData.rateLimit.window}
 										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 									/>
@@ -3212,7 +3207,7 @@
 										<textarea
 											id="route-err-override-{code}"
 											rows="2"
-											placeholder="<!doctype html>...{code}..."
+											placeholder={language.current && t('routes.form.errorPagesOverridePlaceholder', { code })}
 											value={formData.errorPageOverrides[code] ?? ''}
 											oninput={(e) => {
 												const v = (e.target as HTMLTextAreaElement).value;
@@ -3301,7 +3296,7 @@
 								<div
 									class="cb-mode-toggle"
 									role="group"
-									aria-label="Mode du gate pays"
+									aria-label={language.current && t('routes.form.countryBlockModeLabel')}
 									data-testid="country-block-mode-toggle"
 								>
 									<button
@@ -3312,8 +3307,8 @@
 										aria-pressed={formData.countryBlock.mode === 'off'}
 										onclick={() => cbPickMode('off')}
 									>
-										<span class="cb-mode-btn__label">Désactivé</span>
-										<span class="cb-mode-btn__hint">pas de gate</span>
+										<span class="cb-mode-btn__label">{language.current && t('routes.form.countryBlockModeOff')}</span>
+										<span class="cb-mode-btn__hint">{language.current && t('routes.form.countryBlockModeOffHint')}</span>
 									</button>
 									<button
 										type="button"
@@ -3323,8 +3318,8 @@
 										aria-pressed={formData.countryBlock.mode === 'allow'}
 										onclick={() => cbPickMode('allow')}
 									>
-										<span class="cb-mode-btn__label">Allow-list</span>
-										<span class="cb-mode-btn__hint">refuse le reste</span>
+										<span class="cb-mode-btn__label">{language.current && t('routes.form.countryBlockModeAllow')}</span>
+										<span class="cb-mode-btn__hint">{language.current && t('routes.form.countryBlockModeAllowHint')}</span>
 									</button>
 									<button
 										type="button"
@@ -3334,8 +3329,8 @@
 										aria-pressed={formData.countryBlock.mode === 'deny'}
 										onclick={() => cbPickMode('deny')}
 									>
-										<span class="cb-mode-btn__label">Deny-list</span>
-										<span class="cb-mode-btn__hint">autorise le reste</span>
+										<span class="cb-mode-btn__label">{language.current && t('routes.form.countryBlockModeDeny')}</span>
+										<span class="cb-mode-btn__hint">{language.current && t('routes.form.countryBlockModeDenyHint')}</span>
 									</button>
 								</div>
 							</div>
@@ -3403,7 +3398,7 @@
 											<input
 												id="route-country-block-list-input"
 												type="text"
-												placeholder="Tapez FR, DE, Russie, États-Unis…"
+												placeholder={language.current && t('routes.form.countryBlockSearchPlaceholder')}
 												data-testid="country-block-input"
 												autocomplete="off"
 												bind:this={cbInputEl}
@@ -3456,7 +3451,7 @@
 											type="button"
 											class="cb-add-btn"
 											data-testid="country-block-add-cta"
-											aria-label="Ajouter un pays"
+											aria-label={language.current && t('routes.form.countryBlockAddCountryAria')}
 											onclick={cbOpenDropdown}
 										>
 											+ Ajouter
@@ -3485,7 +3480,7 @@
 										bind:value={formData.countryBlock.statusCode}
 										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 									>
-										<option value={0}>Défaut (ARENET_COUNTRY_BLOCK_STATUS)</option>
+										<option value={0}>{language.current && t('routes.form.countryBlockStatusDefault')}</option>
 										<option value={403}>403 Forbidden</option>
 										<option value={451}>451 Unavailable For Legal Reasons</option>
 										<option value={444}>444 (nginx — close sans réponse)</option>
@@ -3535,7 +3530,7 @@
 							     its label. -->
 							<div onclick={markHealthCheckTouched} onkeydown={markHealthCheckTouched} role="none">
 								<Checkbox
-									label="Enable active health checks"
+									label={language.current && t('routes.form.healthCheckEnableLabel')}
 									bind:checked={formData.healthCheck.enabled}
 								/>
 							</div>
@@ -3550,7 +3545,7 @@
 									id="hc-uri"
 									type="text"
 									bind:value={formData.healthCheck.uri}
-									placeholder="/healthz"
+									placeholder={language.current && t('routes.form.healthCheckURIPlaceholder')}
 									disabled={!formData.healthCheck.enabled}
 									aria-required="true"
 									oninput={markHealthCheckTouched}
@@ -3585,7 +3580,7 @@
 							</div>
 							<div class="grid grid-cols-2 gap-3">
 								<Input
-									label="Interval"
+									label={language.current && t('routes.form.healthCheckIntervalLabel')}
 									bind:value={formData.healthCheck.interval}
 									placeholder={HEALTH_CHECK_DEFAULTS.interval}
 									disabled={!formData.healthCheck.enabled}
@@ -3593,7 +3588,7 @@
 									error={errors['healthCheck.interval'] ?? undefined}
 								/>
 								<Input
-									label="Timeout"
+									label={language.current && t('routes.form.healthCheckTimeoutLabel')}
 									bind:value={formData.healthCheck.timeout}
 									placeholder={HEALTH_CHECK_DEFAULTS.timeout}
 									disabled={!formData.healthCheck.enabled}
@@ -3656,7 +3651,7 @@
 									min="0"
 									max="599"
 									bind:value={formData.healthCheck.expectStatus}
-									placeholder="200"
+									placeholder={language.current && t('routes.form.healthCheckExpectStatusPlaceholder')}
 									disabled={!formData.healthCheck.enabled}
 									oninput={markHealthCheckTouched}
 									class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
@@ -3668,7 +3663,7 @@
 								{/if}
 							</div>
 							<Input
-								label="Expected body (regex)"
+								label={language.current && t('routes.form.healthCheckExpectBodyLabel')}
 								bind:value={formData.healthCheck.expectBody}
 								disabled={!formData.healthCheck.enabled}
 								oninput={markHealthCheckTouched}
@@ -3686,7 +3681,7 @@
 					<!-- Step I.6: custom request / response headers. -->
 					<details class="rounded border border-border-subtle">
 						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-							Request headers
+							{language.current && t('routes.form.requestHeadersLabel')}
 							{#if requestHeaderRows.length > 0}
 								<span class="ml-1 text-xs text-muted">({requestHeaderRows.length})</span>
 							{/if}
@@ -3694,8 +3689,8 @@
 						<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
 							{#each requestHeaderRows as _, i (i)}
 								<div class="flex items-center gap-2">
-									<Input bind:value={requestHeaderRows[i][0]} placeholder="X-Custom-Header" />
-									<Input bind:value={requestHeaderRows[i][1]} placeholder="value" />
+									<Input bind:value={requestHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
+									<Input bind:value={requestHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
 									<Button
 										variant="ghost"
 										size="sm"
@@ -3705,13 +3700,13 @@
 								</div>
 							{/each}
 							<Button variant="ghost" size="sm" onclick={addRequestHeader} type="button"
-								>+ Add request header</Button
+								>{language.current && t('routes.form.requestHeadersAdd')}</Button
 							>
 						</div>
 					</details>
 					<details class="rounded border border-border-subtle">
 						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-							Response headers
+							{language.current && t('routes.form.responseHeadersLabel')}
 							{#if responseHeaderRows.length > 0}
 								<span class="ml-1 text-xs text-muted">({responseHeaderRows.length})</span>
 							{/if}
@@ -3719,8 +3714,8 @@
 						<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
 							{#each responseHeaderRows as _, i (i)}
 								<div class="flex items-center gap-2">
-									<Input bind:value={responseHeaderRows[i][0]} placeholder="X-Custom-Header" />
-									<Input bind:value={responseHeaderRows[i][1]} placeholder="value" />
+									<Input bind:value={responseHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
+									<Input bind:value={responseHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
 									<Button
 										variant="ghost"
 										size="sm"
@@ -3730,7 +3725,7 @@
 								</div>
 							{/each}
 							<Button variant="ghost" size="sm" onclick={addResponseHeader} type="button"
-								>+ Add response header</Button
+								>{language.current && t('routes.form.responseHeadersAdd')}</Button
 							>
 						</div>
 					</details>
@@ -3745,13 +3740,13 @@
 				     errors the panel stays open with field-level
 				     messages. -->
 				<div class="px-5 pb-5 pt-2 flex justify-end gap-2 border-t border-border-subtle">
-					<Button variant="ghost" onclick={closePanel}>Cancel</Button>
+					<Button variant="ghost" onclick={closePanel}>{language.current && t('routes.form.cancel')}</Button>
 					<Button
 						onclick={submitForm}
 						loading={submitting}
 						disabled={submitting || dedicatedOptOutPendingChoice}
 					>
-						{formMode === 'create' ? 'Create' : 'Save'}
+						{language.current && (formMode === 'create' ? t('routes.form.create') : t('routes.form.save'))}
 					</Button>
 				</div>
 			{/if}

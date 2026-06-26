@@ -1767,7 +1767,7 @@ describe('Routes page — TLS advanced disclosure + UX hints (#R-PROXMOX-HTTPS-L
 		const disclosure = screen.getByTestId('tls-advanced-disclosure');
 		// 2. Tick the toggle — would persist a true on submit.
 		const toggle = screen.getByLabelText(
-			'Ignorer la vérification du certificat upstream'
+			'Skip upstream certificate verification'
 		) as HTMLInputElement;
 		await userEvent.click(toggle);
 		await tick();
@@ -1785,7 +1785,7 @@ describe('Routes page — TLS advanced disclosure + UX hints (#R-PROXMOX-HTTPS-L
 		await userEvent.type(firstURL(), 'https://192.168.1.60:8006');
 		await tick();
 		const reborn = screen.getByLabelText(
-			'Ignorer la vérification du certificat upstream'
+			'Skip upstream certificate verification'
 		) as HTMLInputElement;
 		expect(reborn.checked).toBe(false);
 		// touch the disclosure so the previous binding is held
@@ -1870,7 +1870,7 @@ describe('Routes page — TLS advanced disclosure + UX hints (#R-PROXMOX-HTTPS-L
 		await userEvent.type(firstURL(), 'https://192.168.1.60:8006');
 		await tick();
 		const toggle = screen.getByLabelText(
-			'Ignorer la vérification du certificat upstream'
+			'Skip upstream certificate verification'
 		) as HTMLInputElement;
 		await userEvent.click(toggle);
 		await tick();
@@ -2006,7 +2006,7 @@ describe('Routes page — Test upstream button + chip (#R-PROXMOX-HTTPS-LOOP com
 		await tick();
 		// Tick the toggle so the request carries true.
 		const toggle = screen.getByLabelText(
-			'Ignorer la vérification du certificat upstream'
+			'Skip upstream certificate verification'
 		) as HTMLInputElement;
 		await userEvent.click(toggle);
 		await tick();
