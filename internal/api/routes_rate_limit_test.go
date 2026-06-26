@@ -194,3 +194,174 @@ func TestUpdateRoute_RateLimit_NonNilReplaces(t *testing.T) {
 		t.Errorf("RateLimit not replaced ; got=%+v", got[0].RateLimit)
 	}
 }
+
+// v2.9.13 Phase Q.2 — clearRateLimit sentinel field tests.
+//
+// Pins the bug fix for the operator-reported issue (2026-06-26)
+// where the UI rate-limit toggle OFF appeared to succeed (toast
+// success, form re-rendered with toggle OFF) but the underlying
+// state persisted because the PUT payload omitted the field and
+// the legacy semantic was preserve-on-omit.
+//
+// The new ClearRateLimit boolean lets the UI surface the intent
+// without relying on JSON null vs absence (which the Go json
+// decoder cannot distinguish on a *struct + omitempty field).
+
+// jsonBodyWithClearRateLimit builds a PUT body that drops the
+// rateLimit object entirely AND sets clearRateLimit=true. This is
+// what the frontend toggle OFF sends post-v2.9.13.
+func jsonBodyWithClearRateLimit(host string) string {
+	return fmt.Sprintf(
+		`{"host":%q,"upstreams":[{"url":"http://10.0.0.50:5000","weight":1}],`+
+			`"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,`+
+			`"aliases":[],"authMode":"none","requestHeaders":{},"responseHeaders":{},`+
+			`"wafMode":"off","clearRateLimit":true}`,
+		host,
+	)
+}
+
+// jsonBodyWithClearAndBody is the belt-and-suspenders case: sentinel
+// true AND a rateLimit body present. The sentinel MUST win.
+func jsonBodyWithClearAndBody(host, rateLimitJSON string) string {
+	return fmt.Sprintf(
+		`{"host":%q,"upstreams":[{"url":"http://10.0.0.50:5000","weight":1}],`+
+			`"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,`+
+			`"aliases":[],"authMode":"none","requestHeaders":{},"responseHeaders":{},`+
+			`"wafMode":"off","clearRateLimit":true,"rateLimit":%s}`,
+		host, rateLimitJSON,
+	)
+}
+
+func TestUpdateRoute_ClearRateLimit_RemovesStoredValue(t *testing.T) {
+	// Set up: route created WITH a rate-limit.
+	env := newTestEnv(t, false)
+
+	createBody := jsonBodyWithRateLimit("clear.local",
+		`{"events":42,"window":"2m"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes",
+		strings.NewReader(createBody))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body)
+	}
+	var created routeResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	// Confirm rate-limit is present pre-clear.
+	got, _ := env.store.ListRoutes(context.Background())
+	if got[0].RateLimit == nil {
+		t.Fatalf("pre-condition failed: RateLimit nil after create")
+	}
+
+	// PUT with clearRateLimit=true, no rateLimit body.
+	putBody := jsonBodyWithClearRateLimit("clear.local")
+	putReq := httptest.NewRequest(http.MethodPut,
+		"/api/v1/routes/"+created.ID, strings.NewReader(putBody))
+	putRec := httptest.NewRecorder()
+	env.router.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put status=%d body=%s", putRec.Code, putRec.Body)
+	}
+
+	got, _ = env.store.ListRoutes(context.Background())
+	if got[0].RateLimit != nil {
+		t.Errorf("RateLimit not cleared ; got=%+v want=nil", got[0].RateLimit)
+	}
+}
+
+func TestUpdateRoute_ClearRateLimit_OverridesBody(t *testing.T) {
+	// Sentinel wins even when a valid rateLimit body is also
+	// present. Documents the operator-intent semantic: an OFF
+	// toggle clears, period — body is the form's residual state.
+	env := newTestEnv(t, false)
+
+	createBody := jsonBodyWithRateLimit("override.local",
+		`{"events":42,"window":"2m"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes",
+		strings.NewReader(createBody))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body)
+	}
+	var created routeResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	putBody := jsonBodyWithClearAndBody("override.local",
+		`{"events":999,"window":"1h"}`)
+	putReq := httptest.NewRequest(http.MethodPut,
+		"/api/v1/routes/"+created.ID, strings.NewReader(putBody))
+	putRec := httptest.NewRecorder()
+	env.router.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put status=%d body=%s", putRec.Code, putRec.Body)
+	}
+
+	got, _ := env.store.ListRoutes(context.Background())
+	if got[0].RateLimit != nil {
+		t.Errorf("sentinel did NOT override body ; got=%+v want=nil",
+			got[0].RateLimit)
+	}
+}
+
+func TestUpdateRoute_NoClearRateLimit_PreservesLegacy(t *testing.T) {
+	// Regression pin for the unchanged-behaviour case: a PUT
+	// without clearRateLimit (default false) AND without a
+	// rateLimit body MUST preserve the previously stored value.
+	// This is the legacy behaviour pre-v2.9.13 — it must NOT
+	// regress with the new sentinel field.
+	env := newTestEnv(t, false)
+
+	createBody := jsonBodyWithRateLimit("legacy.local",
+		`{"events":42,"window":"2m"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes",
+		strings.NewReader(createBody))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body)
+	}
+	var created routeResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	// PUT without rateLimit AND without clearRateLimit — legacy
+	// preserve-on-omit behaviour.
+	putBody := jsonBodyWithRateLimit("legacy.local", "")
+	putReq := httptest.NewRequest(http.MethodPut,
+		"/api/v1/routes/"+created.ID, strings.NewReader(putBody))
+	putRec := httptest.NewRecorder()
+	env.router.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put status=%d body=%s", putRec.Code, putRec.Body)
+	}
+
+	got, _ := env.store.ListRoutes(context.Background())
+	if got[0].RateLimit == nil || got[0].RateLimit.Events != 42 {
+		t.Errorf("legacy preserve broken ; got=%+v want={Events:42}",
+			got[0].RateLimit)
+	}
+}
+
+func TestCreateRoute_ClearRateLimit_NoOp(t *testing.T) {
+	// POST with clearRateLimit=true is a no-op-but-valid request:
+	// the route is created with RateLimit=nil regardless of any
+	// rateLimit body. Accepted for symmetry with the PUT path.
+	env := newTestEnv(t, false)
+
+	createBody := jsonBodyWithClearAndBody("noop.local",
+		`{"events":42,"window":"2m"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes",
+		strings.NewReader(createBody))
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	got, _ := env.store.ListRoutes(context.Background())
+	if got[0].RateLimit != nil {
+		t.Errorf("RateLimit not nil after POST clearRateLimit=true ; got=%+v",
+			got[0].RateLimit)
+	}
+}

@@ -1352,10 +1352,23 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	// = no rate limit (pre-Q byte-equivalent) ; non-nil
 	// supplied → validated by materialiseRateLimit which
 	// rejects with 400 on bad Events / Window.
-	rateLimit, validationErr := materialiseRateLimit(req.RateLimit)
-	if validationErr != nil {
-		writeError(w, http.StatusBadRequest, validationErr.Error())
-		return
+	//
+	// v2.9.13 Phase Q.2 — ClearRateLimit=true on POST is a
+	// no-op-but-valid request: the route is created with
+	// RateLimit=nil regardless of what's in req.RateLimit.
+	// Accepted (rather than 400'd) for symmetry with the PUT
+	// path; a tooling client that always sends clearRateLimit
+	// alongside its updates should also work on create.
+	var rateLimit *storage.RouteRateLimit
+	if req.ClearRateLimit {
+		rateLimit = nil
+	} else {
+		var validationErr error
+		rateLimit, validationErr = materialiseRateLimit(req.RateLimit)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
 	}
 	newRoute := storage.Route{
 		Host:            req.Host,
@@ -1803,32 +1816,30 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		excludeTags = normalised
 	}
-	// Step Q (2026-06-18) — RateLimit on PUT : nil-pointer
-	// preserves the previously stored RateLimit. Non-nil
-	// (including the operator sending explicit JSON null —
-	// distinguished via the optional pointer shape) replaces.
-	// Validation mirrors the POST path : Events >= 1, Window
-	// parses, etc.
+	// Step Q (2026-06-18) — RateLimit on PUT.
+	// v2.9.13 Phase Q.2 — clearRateLimit sentinel shipped.
 	//
-	// To clear a previously-set rate limit via PUT the
-	// operator sends `"rateLimit": null` — Go's encoding/json
-	// surfaces that as a missing key (since RateLimit is
-	// `omitempty`+`*rateLimitReq`). For an explicit clear
-	// the operator omits the field AND the existing
-	// previous.RateLimit is preserved... which doesn't
-	// clear. The pragmatic compromise : sending an empty
-	// object {"rateLimit": {}} would fail validation
-	// (Events < 1). To CLEAR, the operator unticks the
-	// frontend toggle which sends a separate flag (see
-	// frontend Phase Q.2 — clearRateLimit boolean).
+	// Semantic matrix:
+	//   ClearRateLimit | RateLimit body | Result
+	//   ---------------|----------------|----------
+	//   false (default)| absent         | preserve previous (legacy)
+	//   false          | present        | replace with body (legacy)
+	//   true           | absent         | clear (set to nil) — NEW
+	//   true           | present        | clear (sentinel wins) — NEW
 	//
-	// For wire callers that don't have a clearRateLimit
-	// channel : sending wafMode=off doesn't clear it
-	// either ; the only way today is to delete + recreate
-	// the route. V2 backlog : explicit-null PUT semantic
-	// (would need a separate sentinel field).
+	// Pre-v2.9.13 there was no wire-level way to surface the
+	// operator's "remove this rate-limit" intent — the UI toggle
+	// OFF appeared to succeed but the underlying state persisted
+	// (operator-reported 2026-06-26 against the proxmox route).
+	// The sentinel closes that footgun without breaking any
+	// existing client (defaults to false → legacy semantic).
 	rateLimit := previous.RateLimit
-	if req.RateLimit != nil {
+	if req.ClearRateLimit {
+		// Sentinel wins — any req.RateLimit body is intentionally
+		// ignored. Validation of the body is also skipped: the
+		// operator's intent was clear, not replace.
+		rateLimit = nil
+	} else if req.RateLimit != nil {
 		next, validationErr := materialiseRateLimit(req.RateLimit)
 		if validationErr != nil {
 			writeError(w, http.StatusBadRequest, validationErr.Error())

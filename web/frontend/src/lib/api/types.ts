@@ -593,6 +593,22 @@ export interface RouteRequest {
 	 */
 	rateLimit?: RouteRateLimit;
 	/**
+	 * v2.9.13 Phase Q.2 — sentinel that explicitly removes a
+	 * previously-stored rate-limit on PUT (or no-op on POST).
+	 * When true, the backend handler sets RateLimit=nil and
+	 * ignores any rateLimit body present in the same payload.
+	 * When false / absent (default), the legacy preserve-on-omit
+	 * semantic applies — every existing client that doesn't
+	 * know about this field keeps the same observable behaviour.
+	 *
+	 * Set true by the frontend when the operator un-ticks the
+	 * rate-limit toggle and saves: the UI form's rateLimit slot
+	 * is null, so the payload would otherwise omit the field
+	 * and the backend would preserve the previously-stored
+	 * value (operator-reported 2026-06-26 bug closure).
+	 */
+	clearRateLimit?: boolean;
+	/**
 	 * Step R Phase 1 — UUID of an ErrorPageTemplate this
 	 * route opts into. Empty string / absent → built-in
 	 * Arenet branded default applies for every code.

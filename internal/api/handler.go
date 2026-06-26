@@ -1200,6 +1200,27 @@ type routeRequest struct {
 	// "field absent" using a sentinel bool — see the PUT
 	// path's rateLimitExplicit flag.
 	RateLimit *rateLimitReq `json:"rateLimit,omitempty"`
+	// ClearRateLimit (v2.9.13 — Phase Q.2) is the sentinel that
+	// lets a PUT or POST explicitly remove a previously-stored
+	// rate-limit. The legacy preserve-on-omit semantic (an absent
+	// RateLimit field "keeps the previous value") meant the UI
+	// rate-limit toggle OFF had no wire-level way to surface the
+	// operator's intent — Phase Q.2 was designed but never shipped,
+	// leaving operators stuck with delete + recreate the route to
+	// get rid of an old rate-limit (operator-reported 2026-06-26
+	// against route 8448574c-…).
+	//
+	// Semantic matrix on PUT:
+	//   ClearRateLimit | RateLimit body | Result
+	//   ---------------|----------------|----------
+	//   false (default)| absent         | preserve previous (legacy)
+	//   false          | present        | replace with body
+	//   true           | absent         | clear (set to nil)
+	//   true           | present        | clear (sentinel wins; body ignored)
+	//
+	// Backwards-compatible: defaults to false, so any client that
+	// doesn't know about the field keeps the legacy behaviour.
+	ClearRateLimit bool `json:"clearRateLimit,omitempty"`
 	// ErrorPageTemplateID (Step R) is the UUID of an
 	// ErrorPageTemplate this route opts into. Empty string
 	// or absent field → built-in Arenet default applies.

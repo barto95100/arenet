@@ -2795,9 +2795,19 @@ describe('Routes page — Step Q rate-limit toggle + payload', () => {
 
 		const payload = apiMock.createRoute.mock.calls[0][0];
 		expect(payload.rateLimit).toMatchObject({ events: 5, window: '10s' });
+		// v2.9.13 Phase Q.2 — when the toggle is ON, clearRateLimit
+		// MUST stay absent (or false). Otherwise the sentinel would
+		// wipe the rateLimit body the operator just typed.
+		expect(payload.clearRateLimit).toBeFalsy();
 	});
 
-	it('omits rateLimit from the payload when the toggle is off', async () => {
+	it('omits rateLimit but sends clearRateLimit:true when toggle is off (v2.9.13 Phase Q.2)', async () => {
+		// Pre-v2.9.13 the OFF case omitted both fields. The backend
+		// treated that as preserve-on-omit, so the UI toggle OFF
+		// appeared to succeed but a previously-stored rate-limit
+		// stuck around (operator-reported 2026-06-26). The frontend
+		// now signals the OFF intent via clearRateLimit:true so the
+		// backend handler actively clears the stored value.
 		apiMock.createRoute.mockResolvedValue(makeRoute());
 		render(Page);
 		await openCreateForm();
@@ -2808,6 +2818,7 @@ describe('Routes page — Step Q rate-limit toggle + payload', () => {
 		await tick();
 		const payload = apiMock.createRoute.mock.calls[0][0];
 		expect(payload.rateLimit).toBeUndefined();
+		expect(payload.clearRateLimit).toBe(true);
 	});
 
 	it('loads the persisted rateLimit into the toggle + inputs on edit', async () => {

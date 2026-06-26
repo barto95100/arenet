@@ -1683,15 +1683,22 @@
 			// Step X Option (e) — always ship the tag
 			// exclusion list, same full-replace semantic.
 			payload.wafExcludeTags = formData.wafExcludeTags;
-			// Step Q — rate limit. When the toggle is ON ship
-			// the object (POST = new value, PUT = replace) ;
-			// when OFF leave the field absent so PUT preserves
-			// the previously stored value. Operator clears a
-			// stored rate-limit via "delete + recreate the
-			// route" (see V2 backlog : explicit-null PUT
-			// semantic).
+			// Step Q + v2.9.13 Phase Q.2 — rate limit.
+			//
+			// Toggle ON  → ship the rateLimit object (POST = new,
+			//              PUT = full replace).
+			// Toggle OFF → ship clearRateLimit:true so the backend
+			//              actively clears the previously stored
+			//              value. Pre-Phase-Q.2 the OFF case
+			//              omitted both fields, which left the
+			//              backend in preserve-on-omit mode — the
+			//              UI toggle "succeeded" but the state
+			//              persisted (operator-reported 2026-06-26
+			//              bug closure).
 			if (formData.rateLimit !== null) {
 				payload.rateLimit = formData.rateLimit;
+			} else {
+				payload.clearRateLimit = true;
 			}
 			// Step R Phase 2.b — error-page wiring. Both
 			// fields are omitempty on the wire ; we ship them
