@@ -315,6 +315,21 @@
       "uploadStreamingLabel": "Upload streaming mode"
     }
   },
+  "pageTitles": {
+    "alerting": "Alerting",
+    "alertingSubtitle": "Notification channels, rules, delivery history",
+    "audit": "Audit log",
+    "certs": "Certificates",
+    "dashboard": "Gateway status",
+    "map": "Threat map",
+    "security": "Security posture",
+    "securityRoute": "Security",
+    "observability": "Observability",
+    "settings": "Settings",
+    "setupFirstInstall": "First installation",
+    "users": "Users",
+    "wafRules": "WAF rules"
+  },
   "topology": {
     "headTitle": "Topology v2 — Arenet",
     "eyebrow": "TRAFFIC · FLOW VIEW",

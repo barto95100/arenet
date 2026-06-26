@@ -639,7 +639,7 @@
 <div class="mx-auto max-w-5xl">
 	<PageHeader
 		eyebrow="Administration · Settings"
-		title="Settings"
+		title={language.current && t('pageTitles.settings')}
 		subtitle="Manage your account, sessions, DNS provider, certificates, security automation and SSO providers."
 	/>
 

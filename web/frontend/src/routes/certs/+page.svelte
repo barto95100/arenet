@@ -35,6 +35,8 @@
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import Tooltip from '$lib/components/Tooltip.svelte';
@@ -350,7 +352,7 @@
 
 <PageHeader
 	eyebrow="Sécurité · Certificats"
-	title="Certificates"
+	title={language.current && t('pageTitles.certs')}
 	subtitle="ACME-managed TLS certificates. Wildcard apex configuration ships under managed domains; per-route certs are auto-provisioned by certmagic when TLS is enabled."
 />
 

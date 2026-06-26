@@ -57,6 +57,8 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	import Spinner from '$lib/components/Spinner.svelte';
 	import TimelineChart from '$lib/components/TimelineChart.svelte';
 	import WafEventList from '$lib/components/WafEventList.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import { fetchTimeseries } from '$lib/api/metrics';
 	import { fetchEvents, fetchEventsByRule } from '$lib/api/security';
 	import { getRoute } from '$lib/api/client';
@@ -202,7 +204,7 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	import { categoryMeta } from '$lib/utils/waf-category';
 </script>
 
-<PageHeader title="Security" subtitle={route?.host ?? routeId} />
+<PageHeader title={language.current && t('pageTitles.securityRoute')} subtitle={route?.host ?? routeId} />
 
 <div class="back-link">
 	<a href="/security">← Vue globale</a>

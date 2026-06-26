@@ -40,6 +40,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import WorldMap from '$lib/components/Map/WorldMap.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import LicenseFooter from '$lib/components/Map/LicenseFooter.svelte';
 	import MapLegend from '$lib/components/Map/MapLegend.svelte';
 	import { fetchServerPosition, fetchGeoEventsReplay } from '$lib/api/security';
@@ -167,7 +169,7 @@
 
 <PageHeader
 	eyebrow="Trafic · Map"
-	title="Threat map"
+	title={language.current && t('pageTitles.map')}
 	subtitle="Visualisation géographique en temps réel des sources de trafic et des décisions sécurité. WAF, throttle, CrowdSec et auth-failures sont rendus sous forme d'arcs colorés depuis la source jusqu'à l'instance Arenet."
 />
 

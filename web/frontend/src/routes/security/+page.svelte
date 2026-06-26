@@ -39,6 +39,8 @@
 	import Spinner from '$lib/components/Spinner.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
 	import CrowdSecDecisionsPanel from '$lib/components/CrowdSecDecisionsPanel.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import { settingsApi } from '$lib/api/settings';
 	import type { OIDCConfig } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
@@ -106,7 +108,7 @@
 
 <PageHeader
 	eyebrow="Sécurité · Posture"
-	title="Security posture"
+	title={language.current && t('pageTitles.security')}
 	subtitle="Posture overview + CrowdSec drill-down (snapshot, live LAPI, scenarios)."
 />
 

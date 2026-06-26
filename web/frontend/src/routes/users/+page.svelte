@@ -22,6 +22,8 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { auth } from '$lib/stores/auth.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import { pushToast } from '$lib/stores/toast';
 	import { settingsApi } from '$lib/api/settings';
 	import { authApi } from '$lib/api/auth';
@@ -315,7 +317,7 @@
 
 <PageHeader
 	eyebrow="Administration · Utilisateurs"
-	title="Utilisateurs"
+	title={language.current && t('pageTitles.users')}
 	subtitle={subtitle}
 />
 

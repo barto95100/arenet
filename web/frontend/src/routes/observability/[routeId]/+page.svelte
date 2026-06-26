@@ -28,6 +28,8 @@ Viewer-accessible — relies on the API gate (AC #17).
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import TimelineChart from '$lib/components/TimelineChart.svelte';
 	import { fetchTimeseries } from '$lib/api/metrics';
 	import { getRoute } from '$lib/api/client';
@@ -109,7 +111,7 @@ Viewer-accessible — relies on the API gate (AC #17).
 	const fmtMs = (v: number) => `${Math.round(v)} ms`;
 </script>
 
-<PageHeader title="Observability" subtitle={route?.host ?? routeId} />
+<PageHeader title={language.current && t('pageTitles.observability')} subtitle={route?.host ?? routeId} />
 
 <div class="back-link">
 	<a href="/dashboard">← Dashboard</a>

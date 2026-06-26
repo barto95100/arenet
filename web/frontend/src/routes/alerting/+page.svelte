@@ -18,6 +18,8 @@
 	import ChannelsTab from '$lib/components/alerting/ChannelsTab.svelte';
 	import RulesTab from '$lib/components/alerting/RulesTab.svelte';
 	import HistoryTab from '$lib/components/alerting/HistoryTab.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	type TabKey = 'channels' | 'rules' | 'history';
 
@@ -58,7 +60,7 @@
 	});
 </script>
 
-<PageHeader title="Alerting" subtitle="Canaux de notification, règles, historique des envois" />
+<PageHeader title={language.current && t('pageTitles.alerting')} subtitle={language.current && t('pageTitles.alertingSubtitle')} />
 
 <div class="mt-4">
 	<nav class="tab-bar" aria-label="Sections alerting">

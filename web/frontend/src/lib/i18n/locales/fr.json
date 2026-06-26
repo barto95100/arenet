@@ -315,10 +315,25 @@
       "uploadStreamingLabel": "Mode streaming d'upload"
     }
   },
+  "pageTitles": {
+    "alerting": "Alertes",
+    "alertingSubtitle": "Canaux de notification, règles, historique des envois",
+    "audit": "Journal d'audit",
+    "certs": "Certificats",
+    "dashboard": "État de la passerelle",
+    "map": "Carte des menaces",
+    "security": "Posture de sécurité",
+    "securityRoute": "Sécurité",
+    "observability": "Observabilité",
+    "settings": "Paramètres",
+    "setupFirstInstall": "Première installation",
+    "users": "Utilisateurs",
+    "wafRules": "Règles WAF"
+  },
   "topology": {
     "headTitle": "Topology v2 — Arenet",
     "eyebrow": "TRAFIC · VUE FLUX",
-    "title": "Topology",
+    "title": "Topologie",
     "lede": "Points d'entrée du reverse proxy à gauche, services en amont à droite. L'épaisseur et la luminosité de chaque ligne reflètent le débit en temps réel sur ce flux.",
     "loadingState": "Chargement de la topologie…",
     "errorTitle": "Échec du chargement",

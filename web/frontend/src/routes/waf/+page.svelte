@@ -37,6 +37,8 @@
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import { fetchSummary } from '$lib/api/metrics';
 	import { fetchEventsByRule } from '$lib/api/security';
 	import { ApiError } from '$lib/api/types';
@@ -198,7 +200,7 @@
 
 <PageHeader
 	eyebrow="Sécurité · Web Application Firewall"
-	title="WAF rules"
+	title={language.current && t('pageTitles.wafRules')}
 	subtitle="The Coraza engine applies the OWASP Core Rule Set. Event counts shown below reflect blocked requests over the last 24h, per category."
 >
 	{#snippet actions()}

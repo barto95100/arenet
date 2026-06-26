@@ -15,6 +15,8 @@
 	import { onMount } from 'svelte';
 	import { auditApi, type AuditEvent, type AuditFilter } from '$lib/api/audit';
 	import { ApiError } from '$lib/api/types';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import { pushToast } from '$lib/stores/toast';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -184,7 +186,7 @@
 </svelte:head>
 
 <PageHeader
-	title="Audit log"
+	title={language.current && t('pageTitles.audit')}
 	subtitle="Review authentication events and route mutations."
 >
 	{#snippet actions()}

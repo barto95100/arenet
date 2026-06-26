@@ -22,6 +22,8 @@
 	import { goto } from '$app/navigation';
 	import { authApi } from '$lib/api/auth';
 	import { auth } from '$lib/stores/auth.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import { ApiError } from '$lib/api/types';
 	import LoginBackground from '$lib/components/LoginBackground.svelte';
 	import logoUrl from '$lib/assets/arenet-logo.png';
@@ -91,7 +93,7 @@
 	</div>
 
 	<div class="setup-card">
-		<h1 class="setup-title">Première installation</h1>
+		<h1 class="setup-title">{language.current && t('pageTitles.setupFirstInstall')}</h1>
 		<p class="setup-sub">Crée le compte administrateur initial.</p>
 
 		<div class="setup-info-banner">

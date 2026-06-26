@@ -40,6 +40,8 @@
 	import { pushToast } from '$lib/stores/toast';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import TimelineChart from '$lib/components/TimelineChart.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import MultiSeriesTimelineChart from '$lib/components/MultiSeriesTimelineChart.svelte';
 	import type {
 		Certificate,
@@ -265,7 +267,7 @@
 	<div class="screen-head">
 		<div>
 			<div class="eyebrow">Aperçu · Dashboard</div>
-			<h1>Gateway status</h1>
+			<h1>{language.current && t('pageTitles.dashboard')}</h1>
 		</div>
 	</div>
 	<div class="card empty">
@@ -280,7 +282,7 @@
 	<div class="screen-head">
 		<div>
 			<div class="eyebrow">Aperçu · Dashboard</div>
-			<h1>Gateway status</h1>
+			<h1>{language.current && t('pageTitles.dashboard')}</h1>
 		</div>
 	</div>
 	<div class="card empty">
@@ -294,7 +296,7 @@
 	<div class="screen-head">
 		<div>
 			<div class="eyebrow">Aperçu · Dashboard</div>
-			<h1>Gateway status</h1>
+			<h1>{language.current && t('pageTitles.dashboard')}</h1>
 			<div class="sub">
 				Real-time traffic across your {routes.length} routes, recent WAF events,
 				and upstream services. Window {window}.
