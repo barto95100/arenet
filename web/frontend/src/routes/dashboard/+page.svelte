@@ -131,11 +131,19 @@
 	// so the operator's theme-token references stay readable.
 	// status-up / accent-cyan / status-down map respectively
 	// to the green/blue/red triad the operator brief asked for.
-	const certChartSeries = [
-		{ key: 'issued' as const, label: 'Émis', color: 'var(--status-up)' },
-		{ key: 'renewed' as const, label: 'Renouvelés', color: 'var(--accent-cyan)' },
-		{ key: 'failed' as const, label: 'Échecs', color: 'var(--status-down)' }
-	];
+	const certChartSeries = $derived(
+		language.current
+			? [
+					{ key: 'issued' as const, label: t('dashboard.certChartIssued'), color: 'var(--status-up)' },
+					{ key: 'renewed' as const, label: t('dashboard.certChartRenewed'), color: 'var(--accent-cyan)' },
+					{ key: 'failed' as const, label: t('dashboard.certChartFailed'), color: 'var(--status-down)' }
+				]
+			: [
+					{ key: 'issued' as const, label: 'Issued', color: 'var(--status-up)' },
+					{ key: 'renewed' as const, label: 'Renewed', color: 'var(--accent-cyan)' },
+					{ key: 'failed' as const, label: 'Failed', color: 'var(--status-down)' }
+				]
+	);
 
 	// Distinct upstream URLs across all routes — the v1.4 stand-in
 	// for the mock's per-service-name aggregation.
@@ -261,7 +269,7 @@
 {:else if disabled}
 	<div class="screen-head">
 		<div>
-			<div class="eyebrow">Aperçu · Dashboard</div>
+			<div class="eyebrow">{language.current && t('dashboard.eyebrow')}</div>
 			<h1>{language.current && t('pageTitles.dashboard')}</h1>
 		</div>
 	</div>
@@ -276,7 +284,7 @@
 {:else if noRoutes}
 	<div class="screen-head">
 		<div>
-			<div class="eyebrow">Aperçu · Dashboard</div>
+			<div class="eyebrow">{language.current && t('dashboard.eyebrow')}</div>
 			<h1>{language.current && t('pageTitles.dashboard')}</h1>
 		</div>
 	</div>
@@ -290,7 +298,7 @@
 {:else}
 	<div class="screen-head">
 		<div>
-			<div class="eyebrow">Aperçu · Dashboard</div>
+			<div class="eyebrow">{language.current && t('dashboard.eyebrow')}</div>
 			<h1>{language.current && t('pageTitles.dashboard')}</h1>
 			<div class="sub">
 				Real-time traffic across your {routes.length} routes, recent WAF events,
@@ -302,24 +310,24 @@
 	<!-- KPIs -->
 	<div class="kpis">
 		<div class="kpi">
-			<div class="kpi-label">Requests / s</div>
+			<div class="kpi-label">{language.current && t('dashboard.kpiReqPerSec')}</div>
 			<div class="kpi-val">{kpiReqPerSec}<span class="unit">req/s</span></div>
 			<div class="kpi-foot">
-				{summary?.totalReq ?? 0} req / 24h · {summary?.activeRouteCount ?? 0} active routes
+				{language.current && t('dashboard.kpiReqPerSecFoot', { total: summary?.totalReq ?? 0, routes: summary?.activeRouteCount ?? 0 })}
 			</div>
 		</div>
 		<div class="kpi">
-			<div class="kpi-label">p95 latency</div>
+			<div class="kpi-label">{language.current && t('dashboard.kpiP95')}</div>
 			<div class="kpi-val">{fmtP95(kpiP95)}<span class="unit">ms</span></div>
 			<div class="kpi-foot">
-				{kpiP95 === null ? 'no data in window' : 'global, 24h window'}
+				{language.current && (kpiP95 === null ? t('dashboard.kpiP95FootNoData') : t('dashboard.kpiP95FootData'))}
 			</div>
 		</div>
 		<div class="kpi">
-			<div class="kpi-label">5xx error rate</div>
+			<div class="kpi-label">{language.current && t('dashboard.kpi5xxRate')}</div>
 			<div class="kpi-val">{kpi5xxPct}<span class="unit">%</span></div>
 			<div class="kpi-foot">
-				{summary?.totalFiveXx ?? 0} 5xx / 24h · {summary?.totalFourXx ?? 0} 4xx / 24h
+				{language.current && t('dashboard.kpi5xxRateFoot', { five: summary?.totalFiveXx ?? 0, four: summary?.totalFourXx ?? 0 })}
 			</div>
 		</div>
 		<!--
@@ -332,17 +340,17 @@
 			wafMode=detect default.
 		-->
 		<div class="kpi" data-testid="kpi-waf-blocked">
-			<div class="kpi-label">WAF bloqué / 24h</div>
+			<div class="kpi-label">{language.current && t('dashboard.kpiWafBlocked')}</div>
 			<div class="kpi-val">{kpiWafBlocked24h}</div>
 			<div class="kpi-foot">
-				{summary?.attackerIpsUnique ?? 0} unique IPs · {summary?.totalThrottle ?? 0} throttle · {summary?.totalRateLimitExceeded ?? 0} rate-limit (429) / 24h
+				{language.current && t('dashboard.kpiWafBlockedFoot', { ips: summary?.attackerIpsUnique ?? 0, throttle: summary?.totalThrottle ?? 0, rl: summary?.totalRateLimitExceeded ?? 0 })}
 			</div>
 		</div>
 		<div class="kpi" data-testid="kpi-waf-detected">
-			<div class="kpi-label">WAF détecté / 24h</div>
+			<div class="kpi-label">{language.current && t('dashboard.kpiWafDetected')}</div>
 			<div class="kpi-val">{kpiWafDetected24h}</div>
 			<div class="kpi-foot">
-				detect-mode (request passed through)
+				{language.current && t('dashboard.kpiWafDetectedFoot')}
 			</div>
 		</div>
 
@@ -355,22 +363,22 @@
 			migrated to StatCard yet).
 		-->
 		<div class="kpi" data-testid="kpi-cert-total">
-			<div class="kpi-label">Total certs</div>
+			<div class="kpi-label">{language.current && t('dashboard.kpiCertTotal')}</div>
 			<div class="kpi-val">{kpiCertTotal}</div>
-			<div class="kpi-foot">déployés par certmagic</div>
+			<div class="kpi-foot">{language.current && t('dashboard.kpiCertTotalFoot')}</div>
 		</div>
 		<div class="kpi" data-testid="kpi-cert-expiring">
-			<div class="kpi-label">Expirent dans 30j</div>
+			<div class="kpi-label">{language.current && t('dashboard.kpiCertExpiring')}</div>
 			<div class="kpi-val">{kpiCertExpiringSoon}</div>
 			<div class="kpi-foot">
-				{kpiCertExpiringSoon === 0 ? 'aucun renouvellement imminent' : 'à surveiller'}
+				{language.current && (kpiCertExpiringSoon === 0 ? t('dashboard.kpiCertExpiringFootZero') : t('dashboard.kpiCertExpiringFootWatch'))}
 			</div>
 		</div>
 		<div class="kpi" data-testid="kpi-cert-failed-7d">
-			<div class="kpi-label">Échecs sur 7 jours</div>
+			<div class="kpi-label">{language.current && t('dashboard.kpiCertFailed7d')}</div>
 			<div class="kpi-val">{kpiCertFailed7d}</div>
 			<div class="kpi-foot">
-				{kpiCertFailed7d === 0 ? "aucune erreur d'émission" : 'investiguer'}
+				{language.current && (kpiCertFailed7d === 0 ? t('dashboard.kpiCertFailedFootZero') : t('dashboard.kpiCertFailedFootInvestigate'))}
 			</div>
 		</div>
 	</div>
@@ -379,19 +387,19 @@
 	<div class="two-col main-row">
 		<div class="card">
 			<div class="card-h">
-				<h3>Traffic — {window} window</h3>
+				<h3>{language.current && t('dashboard.trafficCardTitle', { window })}</h3>
 				<div class="seg">
 					<button
 						class:on={chartMetric === 'req_per_sec'}
-						onclick={() => switchMetric('req_per_sec')}>Req/s</button
+						onclick={() => switchMetric('req_per_sec')}>{language.current && t('dashboard.trafficBtnReq')}</button
 					>
 					<button
 						class:on={chartMetric === 'p95_latency_ms'}
-						onclick={() => switchMetric('p95_latency_ms')}>Latency</button
+						onclick={() => switchMetric('p95_latency_ms')}>{language.current && t('dashboard.trafficBtnLatency')}</button
 					>
 					<button
 						class:on={chartMetric === 'five_xx_rate'}
-						onclick={() => switchMetric('five_xx_rate')}>Errors</button
+						onclick={() => switchMetric('five_xx_rate')}>{language.current && t('dashboard.trafficBtnErrors')}</button
 					>
 				</div>
 			</div>
@@ -410,8 +418,8 @@
 
 		<div class="card">
 			<div class="card-h">
-				<h3>Recent WAF events</h3>
-				<div class="meta">last 5</div>
+				<h3>{language.current && t('dashboard.recentWafCardTitle')}</h3>
+				<div class="meta">{language.current && t('dashboard.recentWafCardMeta')}</div>
 			</div>
 			<div class="stack">
 				{#each recentEvents as ev (ev.id)}
@@ -428,16 +436,16 @@
 					-->
 					<div class="event" data-testid="recent-event-{ev.id}">
 						<span class="pill {ev.action === 'DETECT' ? 'warn' : 'bad'}">
-							{ev.action === 'DETECT' ? 'detect' : 'block'}
+							{language.current && (ev.action === 'DETECT' ? t('dashboard.recentWafPillDetect') : t('dashboard.recentWafPillBlock'))}
 						</span>
 						<div class="what">
 							<b>{ev.category} · {ev.ruleId}</b>
-							<span>{ev.requestMethod} {ev.requestPath} — from {ev.srcIp}</span>
+							<span>{language.current && t('dashboard.recentWafFromIp', { method: ev.requestMethod, path: ev.requestPath, ip: ev.srcIp })}</span>
 						</div>
 						<div class="when">{fmtRelative(ev.ts)}</div>
 					</div>
 				{:else}
-					<div class="empty-row">No recent WAF events in the window.</div>
+					<div class="empty-row">{language.current && t('dashboard.recentWafEmpty')}</div>
 				{/each}
 			</div>
 		</div>
@@ -451,14 +459,14 @@
 	-->
 	<div class="card" data-testid="cert-lifecycle-panel">
 		<div class="card-h">
-			<h3>Cycle de vie des certificats</h3>
-			<div class="meta">30 derniers jours · 1 bucket / jour</div>
+			<h3>{language.current && t('dashboard.certLifecycleTitle')}</h3>
+			<div class="meta">{language.current && t('dashboard.certLifecycleMeta')}</div>
 		</div>
 		<div class="chart-wrap">
 			<MultiSeriesTimelineChart
 				data={certBuckets}
 				series={certChartSeries}
-				label="Cycle de vie des certificats sur 30 jours"
+				label={language.current && t('dashboard.certLifecycleAria')}
 				height={180}
 			/>
 		</div>
@@ -468,18 +476,18 @@
 	<div class="two-col bottom-row">
 		<div class="card">
 			<div class="card-h">
-				<h3>Top routes</h3>
-				<div class="meta">sorted by traffic, 24h window</div>
+				<h3>{language.current && t('dashboard.topRoutesTitle')}</h3>
+				<div class="meta">{language.current && t('dashboard.topRoutesMeta')}</div>
 			</div>
 			<table>
 				<thead>
 					<tr>
-						<th>Route</th>
-						<th class="right">Req</th>
-						<th class="right">4xx</th>
-						<th class="right">5xx</th>
-						<th class="right">WAF block</th>
-						<th class="right">WAF detect</th>
+						<th>{language.current && t('dashboard.topRoutesColRoute')}</th>
+						<th class="right">{language.current && t('dashboard.topRoutesColReq')}</th>
+						<th class="right">{language.current && t('dashboard.topRoutesColFourXX')}</th>
+						<th class="right">{language.current && t('dashboard.topRoutesColFiveXX')}</th>
+						<th class="right">{language.current && t('dashboard.topRoutesColWAFBlock')}</th>
+						<th class="right">{language.current && t('dashboard.topRoutesColWAFDetect')}</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -495,7 +503,7 @@
 							<td class="mono right warn-text">{r.wafDetected}</td>
 						</tr>
 					{:else}
-						<tr><td colspan="6" class="empty-row">No data in the window.</td></tr>
+						<tr><td colspan="6" class="empty-row">{language.current && t('dashboard.topRoutesEmpty')}</td></tr>
 					{/each}
 				</tbody>
 			</table>
@@ -503,17 +511,17 @@
 
 		<div class="card">
 			<div class="card-h">
-				<h3>Upstream services</h3>
-				<div class="meta">{upstreams.length} distinct</div>
+				<h3>{language.current && t('dashboard.upstreamsTitle')}</h3>
+				<div class="meta">{language.current && t('dashboard.upstreamsMetaCount', { count: upstreams.length })}</div>
 			</div>
 			<div class="stack">
 				{#each upstreams as u (u.url)}
 					<div class="upstream-row">
 						<span class="mono">{u.url}</span>
-						<span class="mono dim">{u.routes.length} route{u.routes.length > 1 ? 's' : ''}</span>
+						<span class="mono dim">{language.current && t('dashboard.upstreamsRouteSuffix', { count: u.routes.length, plural: u.routes.length > 1 ? 's' : '' })}</span>
 					</div>
 				{:else}
-					<div class="empty-row">No upstreams configured.</div>
+					<div class="empty-row">{language.current && t('dashboard.upstreamsEmpty')}</div>
 				{/each}
 			</div>
 		</div>
@@ -522,9 +530,9 @@
 	<!-- Live tail preview -->
 	<div class="card tail-card">
 		<div class="card-h">
-			<h3>WAF events — recent feed</h3>
+			<h3>{language.current && t('dashboard.tailTitle')}</h3>
 			<div class="meta">
-				<a href="/logs" class="meta-link">Open Logs →</a>
+				<a href="/logs" class="meta-link">{language.current && t('dashboard.tailOpenLogs')}</a>
 			</div>
 		</div>
 		<div class="logs">
@@ -556,7 +564,7 @@
 					</span>
 				</div>
 			{:else}
-				<div class="empty-row">No recent events.</div>
+				<div class="empty-row">{language.current && t('dashboard.tailEmpty')}</div>
 			{/each}
 		</div>
 	</div>

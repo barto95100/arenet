@@ -210,7 +210,7 @@ describe('/utilisateurs — activity indicator', () => {
 		await tick();
 
 		const row = screen.getByTestId('user-row-u1');
-		expect(row.textContent).toContain('En ligne');
+		expect(row.textContent).toContain('Online');
 	});
 
 	it('renders Actif when activity is between 5 and 60 min', async () => {
@@ -226,7 +226,7 @@ describe('/utilisateurs — activity indicator', () => {
 		await tick();
 		await tick();
 
-		expect(screen.getByTestId('user-row-u1').textContent).toContain('Actif');
+		expect(screen.getByTestId('user-row-u1').textContent).toContain('Active');
 	});
 
 	it('renders Hors-ligne when no active session', async () => {
@@ -238,7 +238,7 @@ describe('/utilisateurs — activity indicator', () => {
 		await tick();
 		await tick();
 
-		expect(screen.getByTestId('user-row-u1').textContent).toContain('Hors-ligne');
+		expect(screen.getByTestId('user-row-u1').textContent).toContain('Offline');
 	});
 });
 
@@ -347,9 +347,9 @@ describe('/utilisateurs — delete flow', () => {
 		await userEvent.click(screen.getByTestId('delete-btn-u1'));
 		await tick();
 
-		// ConfirmDialog renders a "Supprimer" confirm button.
+		// ConfirmDialog renders a "Delete" confirm button.
 		const confirmBtn = screen
-			.getAllByRole('button', { name: /Supprimer/ })
+			.getAllByRole('button', { name: /^Delete$/ })
 			.find((b) => !b.dataset.testid?.startsWith('delete-btn-'));
 		expect(confirmBtn).toBeTruthy();
 		await userEvent.click(confirmBtn!);
@@ -404,7 +404,7 @@ describe('/utilisateurs — Phase 2 visual polish', () => {
 		await tick();
 		await tick();
 
-		expect(screen.getByTestId('promoted-label-u1').textContent?.trim()).toBe('promu');
+		expect(screen.getByTestId('promoted-label-u1').textContent?.trim()).toBe('promoted');
 	});
 
 	it('does NOT render "promu" on local admins (break-glass) or OIDC viewers', async () => {
@@ -525,7 +525,7 @@ describe('/utilisateurs — Phase 2 visual polish', () => {
 		await tick();
 
 		const cell = screen.getByTestId('activity-state-u1');
-		expect(cell.textContent).toContain('En ligne');
+		expect(cell.textContent).toContain('Online');
 		// StatusDot renders a span with aria-label="Status: up" for
 		// the online state — assert the dot is there.
 		const dot = cell.querySelector('[aria-label^="Status:"]');

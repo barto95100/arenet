@@ -123,10 +123,17 @@
 	});
 
 	const subtitle = $derived(
-		`${counts.total} compte${counts.total > 1 ? 's' : ''} — ` +
-			`${counts.admins} admin${counts.admins > 1 ? 's' : ''}, ` +
-			`${counts.viewers} viewer${counts.viewers > 1 ? 's' : ''} · ` +
-			`${counts.oidc} OIDC, ${counts.local} local`
+		language.current &&
+			t('users.subtitle', {
+				total: counts.total,
+				plural_total: counts.total > 1 ? 's' : '',
+				admins: counts.admins,
+				plural_admins: counts.admins > 1 ? 's' : '',
+				viewers: counts.viewers,
+				plural_viewers: counts.viewers > 1 ? 's' : '',
+				oidc: counts.oidc,
+				local: counts.local
+			})
 	);
 
 	// --- Filtering --------------------------------------------
@@ -161,13 +168,14 @@
 	}
 
 	function activityLabel(state: ActivityState): string {
+		void language.current;
 		switch (state) {
 			case 'online':
-				return 'En ligne';
+				return t('users.activityOnline');
 			case 'active':
-				return 'Actif';
+				return t('users.activityActive');
 			case 'offline':
-				return 'Hors-ligne';
+				return t('users.activityOffline');
 		}
 	}
 
@@ -274,9 +282,9 @@
 		try {
 			await navigator.clipboard.writeText(revealedRotateToken);
 			rotateCopied = true;
-			pushToast('Nouveau token copié', 'success');
+			pushToast(t('users.toastTokenCopied'), 'success');
 		} catch {
-			pushToast('Copie échouée — sélectionne le texte manuellement', 'danger');
+			pushToast(t('users.toastCopyFailed'), 'danger');
 		}
 	}
 
@@ -297,7 +305,7 @@
 				await settingsApi.deleteAdminUser(u.id);
 			}
 			users = users.filter((x) => x.id !== u.id);
-			pushToast(`${u.username} supprimé`, 'success');
+			pushToast(t('users.toastDeleted', { username: u.username }), 'success');
 		} catch (err) {
 			const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : 'Failed to delete user');
 			pushToast(msg, 'danger');
@@ -309,11 +317,11 @@
 </script>
 
 <svelte:head>
-	<title>Utilisateurs · Arenet</title>
+	<title>{language.current && t('users.headTitle')}</title>
 </svelte:head>
 
 <PageHeader
-	eyebrow="Administration · Utilisateurs"
+	eyebrow={language.current && t('users.pageEyebrow')}
 	title={language.current && t('pageTitles.users')}
 	subtitle={subtitle}
 />
@@ -323,33 +331,33 @@
 {:else if loadError}
 	<Card padding="p-6">
 		<p class="text-sm text-down" role="alert">
-			Failed to load users: {loadError}
+			{language.current && t('users.loadFailed', { err: loadError })}
 		</p>
 	</Card>
 {:else}
 	<!-- KPI strip (4-up). All values derive from users[]. -->
 	<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6" data-testid="users-kpi-strip">
 		<StatCard
-			label="Total"
+			label={language.current && t('users.kpiTotalLabel')}
 			value={counts.total}
-			hint="comptes actifs"
+			hint={language.current && t('users.kpiTotalHint')}
 		/>
 		<StatCard
-			label="Admins"
+			label={language.current && t('users.kpiAdminsLabel')}
 			value={counts.admins}
-			hint={`${counts.localAdmins} local · ${counts.admins - counts.localAdmins} OIDC`}
+			hint={language.current && t('users.kpiAdminsHint', { local: counts.localAdmins, oidc: counts.admins - counts.localAdmins })}
 		/>
 		<StatCard
-			label="Comptes SSO"
+			label={language.current && t('users.kpiSSOLabel')}
 			value={counts.oidc}
-			hint="auto-créés via OIDC"
+			hint={language.current && t('users.kpiSSOHint')}
 		/>
 		<StatCard
-			label="Comptes locaux"
+			label={language.current && t('users.kpiLocalLabel')}
 			value={counts.local}
-			hint={oidcEnabled
-				? `${counts.localAdmins} en break-glass`
-				: 'gérés manuellement'}
+			hint={language.current && (oidcEnabled
+				? t('users.kpiLocalHintBreakGlass', { count: counts.localAdmins })
+				: t('users.kpiLocalHintManual'))}
 		/>
 	</div>
 
@@ -362,7 +370,7 @@
 			onclick={() => (createSvcOpen = true)}
 			data-testid="create-svc-button"
 		>
-			+ Créer un service account
+			{language.current && t('users.createServiceAccount')}
 		</Button>
 	</div>
 
@@ -379,13 +387,13 @@
 					<input
 						type="search"
 						bind:value={search}
-						placeholder="Rechercher (nom, email, rôle, source)…"
-						aria-label="Filter users"
+						placeholder={language.current && t('users.searchPlaceholder')}
+						aria-label={language.current && t('users.filterUsersAria')}
 						class="flex-1 bg-transparent outline-none text-sm text-primary placeholder-muted"
 					/>
 				</div>
 				<div class="flex items-center gap-1" data-testid="role-filter">
-					{#each [['all', 'Tous'], ['admin', 'Admins'], ['viewer', 'Viewers']] as [val, label] (val)}
+					{#each (language.current ? [['all', t('users.filterAll')], ['admin', t('users.filterAdmins')], ['viewer', t('users.filterViewers')]] : []) as [val, label] (val)}
 						<button
 							type="button"
 							class:active={roleFilter === val}
@@ -397,7 +405,7 @@
 					{/each}
 				</div>
 				<div class="flex items-center gap-1" data-testid="source-filter">
-					{#each [['all', 'Tous'], ['local', 'Local'], ['oidc', 'OIDC']] as [val, label] (val)}
+					{#each (language.current ? [['all', t('users.filterAll')], ['local', t('users.filterLocal')], ['oidc', t('users.filterOIDC')]] : []) as [val, label] (val)}
 						<button
 							type="button"
 							class:active={sourceFilter === val}
@@ -411,17 +419,17 @@
 			</div>
 
 			{#if filteredUsers.length === 0}
-				<div class="p-6 text-sm text-muted">Aucun utilisateur ne correspond aux filtres.</div>
+				<div class="p-6 text-sm text-muted">{language.current && t('users.emptyFiltered')}</div>
 			{:else}
 				<table class="w-full">
 					<thead>
 						<tr class="text-left text-xs uppercase tracking-wider text-muted border-b border-border-subtle">
-							<th class="px-4 py-3 font-medium">Utilisateur</th>
-							<th class="px-4 py-3 font-medium">Source</th>
-							<th class="px-4 py-3 font-medium">Rôle</th>
-							<th class="px-4 py-3 font-medium">Dernière activité</th>
-							<th class="px-4 py-3 font-medium">État</th>
-							<th class="px-4 py-3 font-medium text-right">Actions</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('users.colUser')}</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('users.colSource')}</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('users.colRole')}</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('users.colLastActivity')}</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('users.colState')}</th>
+							<th class="px-4 py-3 font-medium text-right">{language.current && t('users.colActions')}</th>
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-border-subtle">
@@ -442,7 +450,7 @@
 												<span>{u.displayName || u.username}</span>
 												{#if isSelf}
 													<span data-testid="self-badge-{u.id}">
-														<Badge variant="status-info">VOUS</Badge>
+														<Badge variant="status-info">{language.current && t('users.badgeYou')}</Badge>
 													</span>
 												{/if}
 											</div>
@@ -491,7 +499,7 @@
 												class="text-[10px] uppercase tracking-wider text-muted font-semibold"
 												data-testid="service-suffix-{u.id}"
 											>
-												SERVICE
+												{language.current && t('users.badgeServiceSuffix')}
 											</span>
 										</span>
 									{:else}
@@ -499,25 +507,25 @@
 									{/if}
 									{#if breakGlass}
 										<span class="ml-1" data-testid="break-glass-badge-{u.id}">
-											<Badge variant="status-warn">BREAK-GLASS</Badge>
+											<Badge variant="status-warn">{language.current && t('users.badgeBreakGlass')}</Badge>
 										</span>
 									{/if}
 								</td>
 								<td class="px-4 py-3 text-sm">
 									{#if u.role === 'admin'}
 										<span class="inline-flex items-center gap-2">
-											<Badge variant="status-up">Admin</Badge>
+											<Badge variant="status-up">{language.current && t('users.roleAdmin')}</Badge>
 											{#if u.authSource === 'oidc'}
 												<span
 													class="text-xs text-muted"
 													data-testid="promoted-label-{u.id}"
 												>
-													promu
+													{language.current && t('users.badgePromoted')}
 												</span>
 											{/if}
 										</span>
 									{:else}
-										<Badge variant="neutral">Viewer</Badge>
+										<Badge variant="neutral">{language.current && t('users.roleViewer')}</Badge>
 									{/if}
 								</td>
 								<td class="px-4 py-3 text-sm text-secondary">
@@ -541,7 +549,7 @@
 												onclick={() => onDeleteClick(u)}
 												data-testid="delete-btn-{u.id}"
 											>
-												Supprimer
+												{language.current && t('users.actionDelete')}
 											</Button>
 											<Button
 												variant="ghost"
@@ -549,7 +557,7 @@
 												onclick={() => onRotateClick(u)}
 												data-testid="rotate-btn-{u.id}"
 											>
-												Rotation
+												{language.current && t('users.actionRotate')}
 											</Button>
 										{:else}
 											{#if !isSelf}
@@ -559,7 +567,7 @@
 													onclick={() => onDeleteClick(u)}
 													data-testid="delete-btn-{u.id}"
 												>
-													Supprimer
+													{language.current && t('users.actionDelete')}
 												</Button>
 											{/if}
 											<Button
@@ -568,7 +576,7 @@
 												onclick={() => onRoleClick(u)}
 												data-testid="role-btn-{u.id}"
 											>
-												{u.role === 'admin' ? 'Rétrograder' : 'Promouvoir'}
+												{language.current && (u.role === 'admin' ? t('users.actionDemote') : t('users.actionPromote'))}
 											</Button>
 										{/if}
 									</div>
@@ -589,26 +597,31 @@
 
 <ConfirmDialog
 	bind:open={confirmRoleOpen}
-	title={pendingRole ? `${pendingRole.nextRole === 'admin' ? 'Promouvoir' : 'Rétrograder'} ${pendingRole.user.username} ?` : ''}
-	message={pendingRole
-		? pendingRole.nextRole === 'admin'
-			? `${pendingRole.user.username} obtiendra l'accès admin complet (CRUD sur routes, settings et utilisateurs).`
-			: `${pendingRole.user.username} perdra l'accès en écriture. La rétrogradation du dernier admin local est bloquée (invariant break-glass).`
+	title={pendingRole && language.current
+		? t('users.roleConfirmTitle', {
+				action: pendingRole.nextRole === 'admin' ? t('users.roleConfirmActionPromote') : t('users.roleConfirmActionDemote'),
+				username: pendingRole.user.username
+			})
 		: ''}
-	confirmLabel={pendingRole?.nextRole === 'admin' ? 'Promouvoir' : 'Rétrograder'}
+	message={pendingRole && language.current
+		? pendingRole.nextRole === 'admin'
+			? t('users.roleConfirmPromoteBody', { username: pendingRole.user.username })
+			: t('users.roleConfirmDemoteBody', { username: pendingRole.user.username })
+		: ''}
+	confirmLabel={language.current && (pendingRole?.nextRole === 'admin' ? t('users.roleConfirmActionPromote') : t('users.roleConfirmActionDemote'))}
 	confirmVariant={pendingRole?.nextRole === 'admin' ? 'primary' : 'danger'}
 	onConfirm={confirmRoleChange}
 />
 
 <ConfirmDialog
 	bind:open={confirmDeleteOpen}
-	title={pendingDelete ? `Supprimer ${pendingDelete.username} ?` : ''}
-	message={pendingDelete
+	title={pendingDelete && language.current ? t('users.deleteConfirmTitle', { username: pendingDelete.username }) : ''}
+	message={pendingDelete && language.current
 		? pendingDelete.authSource === 'service'
-			? `${pendingDelete.username} et son token API seront révoqués immédiatement. Cette action est irréversible.`
-			: `${pendingDelete.username} sera supprimé définitivement et toutes ses sessions invalidées. La suppression du dernier admin local est bloquée (invariant break-glass).`
+			? t('users.deleteConfirmServiceBody', { username: pendingDelete.username })
+			: t('users.deleteConfirmLocalBody', { username: pendingDelete.username })
 		: ''}
-	confirmLabel="Supprimer"
+	confirmLabel={language.current && t('users.deleteConfirmLabel')}
 	confirmVariant="danger"
 	onConfirm={confirmDelete}
 />
@@ -642,20 +655,17 @@
 		>
 			<header class="px-5 py-4 border-b border-border-subtle">
 				<h2 class="text-lg font-semibold">
-					{revealedRotateToken ? 'Nouveau token API' : `Rotation du token de ${pendingRotate.username} ?`}
+					{language.current && (revealedRotateToken ? t('users.rotateNewTitle') : t('users.rotateConfirmTitle', { username: pendingRotate.username }))}
 				</h2>
 			</header>
 			<div class="px-5 py-4 text-sm flex flex-col gap-3">
 				{#if !revealedRotateToken}
 					<p>
-						L'ancien token sera révoqué immédiatement. Tous les clients
-						(n8n, monitoring, scripts) qui l'utilisent recevront 401
-						jusqu'à mise à jour avec le nouveau token.
+						{language.current && t('users.rotateModalIntro')}
 					</p>
 				{:else}
 					<p>
-						Nouveau token <strong class="text-down">affiché une seule fois</strong>.
-						Copie-le maintenant.
+						{language.current && t('users.rotateRevealedShownOnce')}
 					</p>
 					<pre
 						class="px-3 py-2 rounded-md bg-surface border border-border-default font-mono text-xs break-all whitespace-pre-wrap select-all"
@@ -664,9 +674,9 @@
 			</div>
 			<footer class="px-5 py-3 border-t border-border-subtle flex justify-end gap-2">
 				{#if !revealedRotateToken}
-					<Button variant="ghost" size="sm" onclick={closeRotateModal}>Annuler</Button>
+					<Button variant="ghost" size="sm" onclick={closeRotateModal}>{language.current && t('users.rotateBtnCancel')}</Button>
 					<Button variant="primary" size="sm" onclick={confirmRotate} data-testid="rotate-confirm-btn">
-						Faire tourner
+						{language.current && t('users.rotateBtnConfirm')}
 					</Button>
 				{:else}
 					<Button
@@ -675,7 +685,7 @@
 						onclick={copyRotateToken}
 						data-testid="rotate-copy-btn"
 					>
-						{rotateCopied ? '✓ Copié' : 'Copier'}
+						{language.current && (rotateCopied ? t('users.rotateBtnCopied') : t('users.rotateBtnCopy'))}
 					</Button>
 					<Button
 						variant="primary"
@@ -684,7 +694,7 @@
 						onclick={closeRotateModal}
 						data-testid="rotate-close-btn"
 					>
-						Fermer
+						{language.current && t('users.rotateBtnClose')}
 					</Button>
 				{/if}
 			</footer>
