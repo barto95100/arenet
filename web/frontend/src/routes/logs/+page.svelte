@@ -59,6 +59,8 @@
 		WafEvent
 	} from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import { sourceMeta } from '$lib/utils/sourceMeta';
 	import { levelMeta } from '$lib/utils/levelMeta';
 	import { formatSourceIP } from '$lib/utils/ipClass';
@@ -639,15 +641,15 @@
 <div class="logs-page">
 
 <PageHeader
-	eyebrow="Trafic · Logs"
-	title="Activity log"
-	subtitle="Flux en temps réel des événements WAF, throttling, échecs d'authentification et cycle de vie des certificats. La capture complète du trafic 2xx/3xx est différée — voir backlog."
+	eyebrow={language.current && t('logs.pageEyebrow')}
+	title={language.current && t('logs.pageTitle')}
+	subtitle={language.current && t('logs.pageSubtitle')}
 >
 	{#snippet actions()}
 		<button class="tb-btn" onclick={togglePause}>
-			{paused ? '▶ Resume' : '⏸ Pause'}
+			{language.current && (paused ? t('logs.btnResume') : t('logs.btnPause'))}
 		</button>
-		<button class="tb-btn" disabled title="Coming soon">Export</button>
+		<button class="tb-btn" disabled title={language.current && t('logs.btnExportTooltip')}>{language.current && t('logs.btnExport')}</button>
 	{/snippet}
 </PageHeader>
 
@@ -667,8 +669,8 @@
 			<input
 				type="search"
 				bind:value={search}
-				placeholder="ex: 429 · auth · 185.142.* (V2: status:5xx route:/auth/*)"
-				aria-label="Filter events"
+				placeholder={language.current && t('logs.filterEventsPlaceholder')}
+				aria-label={language.current && t('logs.filterEventsAria')}
 			/>
 		</div>
 		<!-- Phase Z.5.2 — route dropdown. Native <select>
@@ -677,9 +679,9 @@
 		<select
 			class="filter-select"
 			bind:value={routeFilter}
-			aria-label="Filter by route"
+			aria-label={language.current && t('logs.filterByRouteAria')}
 		>
-			<option value="">Toutes routes</option>
+			<option value="">{language.current && t('logs.filterAllRoutes')}</option>
 			{#each routeOptions as r (r.id)}
 				<option value={r.id}>{r.host}</option>
 			{/each}
@@ -690,23 +692,23 @@
 		<select
 			class="filter-select"
 			bind:value={codeFilter}
-			aria-label="Filter by HTTP code"
+			aria-label={language.current && t('logs.filterByCodeAria')}
 		>
-			<option value="">Tous codes HTTP</option>
+			<option value="">{language.current && t('logs.filterAllCodes')}</option>
 			{#each httpCodeOptions as opt (opt.value)}
 				<option value={opt.value}>{opt.label}</option>
 			{/each}
 		</select>
-		<div class="seg" role="group" aria-label="Filter by level">
-			<button class:on={levelFilter === 'all'} onclick={() => (levelFilter = 'all')}>All</button>
-			<button class:on={levelFilter === 'block'} onclick={() => (levelFilter = 'block')}>Block</button>
-			<button class:on={levelFilter === 'detect'} onclick={() => (levelFilter = 'detect')}>Detect</button>
-			<button class:on={levelFilter === 'warn'} onclick={() => (levelFilter = 'warn')}>Warn</button>
-			<button class:on={levelFilter === 'info'} onclick={() => (levelFilter = 'info')}>Info</button>
+		<div class="seg" role="group" aria-label={language.current && t('logs.filterByLevelAria')}>
+			<button class:on={levelFilter === 'all'} onclick={() => (levelFilter = 'all')}>{language.current && t('logs.filterLevelAll')}</button>
+			<button class:on={levelFilter === 'block'} onclick={() => (levelFilter = 'block')}>{language.current && t('logs.filterLevelBlock')}</button>
+			<button class:on={levelFilter === 'detect'} onclick={() => (levelFilter = 'detect')}>{language.current && t('logs.filterLevelDetect')}</button>
+			<button class:on={levelFilter === 'warn'} onclick={() => (levelFilter = 'warn')}>{language.current && t('logs.filterLevelWarn')}</button>
+			<button class:on={levelFilter === 'info'} onclick={() => (levelFilter = 'info')}>{language.current && t('logs.filterLevelInfo')}</button>
 		</div>
 		<span class="status-pill" class:paused>
 			<span class="dot"></span>
-			{paused ? 'pause' : 'live'}
+			{language.current && (paused ? t('logs.statusPaused') : t('logs.statusLive'))}
 		</span>
 	</div>
 </div>
@@ -721,16 +723,16 @@
 <div class="activity-area">
 <div class="card log-card">
 	<div class="log-header">
-		<span>Timestamp</span>
-		<span>Level</span>
+		<span>{language.current && t('logs.colTimestamp')}</span>
+		<span>{language.current && t('logs.colLevel')}</span>
 		<!-- Phase Z.4 polish — dedicated SOURCE column so
 		     operator can scan by signal type without parsing
 		     the REQUEST column's method-tag (rate_limit's
 		     "RL " prefix specifically was opaque). -->
-		<span>Source</span>
-		<span>Code</span>
-		<span>Request</span>
-		<span class="right">Source IP</span>
+		<span>{language.current && t('logs.colSource')}</span>
+		<span>{language.current && t('logs.colCode')}</span>
+		<span>{language.current && t('logs.colRequest')}</span>
+		<span class="right">{language.current && t('logs.colSourceIP')}</span>
 	</div>
 	{#if loading && rows.length === 0}
 		<div class="loading-wrap"><Spinner /></div>
@@ -738,9 +740,10 @@
 		<div class="empty-row">{loadError}</div>
 	{:else if filteredRows.length === 0}
 		<div class="empty-row">
-			{rows.length === 0
-				? 'No events in the current window.'
-				: 'No events match the filters.'}
+			{language.current &&
+				(rows.length === 0
+					? t('logs.emptyNoEvents')
+					: t('logs.emptyNoMatch'))}
 		</div>
 	{:else}
 		<div class="logs">
@@ -819,7 +822,7 @@
 -->
 <div class="card histogram-card">
 	<div class="histogram-header">
-		<span>Activity timeline · 24h · 5m buckets</span>
+		<span>{language.current && t('logs.histogramHeader')}</span>
 		<div class="histogram-legend">
 			{#each histogramSeries as s (s.key)}
 				<span class="legend-item">
@@ -832,7 +835,7 @@
 	<ActivityHistogram
 		cells={histogramCells}
 		series={histogramSeries}
-		label="Activity timeline histogram (24h, 5-minute buckets)"
+		label={language.current && t('logs.histogramAriaLabel')}
 		height="fill"
 	/>
 </div>

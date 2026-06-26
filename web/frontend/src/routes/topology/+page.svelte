@@ -49,6 +49,8 @@
 	// Page-level UI
 	import TopologySidebar from './_components/TopologySidebar.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	type FlowApi = ReturnType<typeof useSvelteFlow<Node, Edge>>;
 
@@ -400,32 +402,30 @@
 </script>
 
 <svelte:head>
-	<title>Topology v2 — Arenet</title>
+	<title>{language.current && t('topology.headTitle')}</title>
 </svelte:head>
 
 <div class="topo-page">
 	<header class="topo-header">
-		<div class="eyebrow">TRAFIC · VUE FLUX</div>
-		<h1>Topology</h1>
+		<div class="eyebrow">{language.current && t('topology.eyebrow')}</div>
+		<h1>{language.current && t('topology.title')}</h1>
 		<p class="lede">
-			Points d'entrée du reverse proxy à gauche, services en amont à droite.
-			L'épaisseur et la luminosité de chaque ligne reflètent le débit en temps
-			réel sur ce flux.
+			{language.current && t('topology.lede')}
 		</p>
 	</header>
 
 	{#if pageStatus === 'loading'}
 		<div class="topo-state-wrap">
 			<Spinner size="lg" />
-			<p class="state-text">Chargement de la topologie…</p>
+			<p class="state-text">{language.current && t('topology.loadingState')}</p>
 		</div>
 	{:else if pageStatus === 'error'}
 		<div class="topo-state-wrap">
 			<div class="error-box">
-				<div class="error-title">Échec du chargement</div>
+				<div class="error-title">{language.current && t('topology.errorTitle')}</div>
 				<div class="error-msg">{pageError}</div>
 				<button class="retry-btn" type="button" onclick={() => void loadInitial()}>
-					Réessayer
+					{language.current && t('topology.errorRetry')}
 				</button>
 			</div>
 		</div>
@@ -435,7 +435,7 @@
 				<div class="canvas-toolbar">
 					<div class="live-indicator" class:reconnecting={liveStatus === 'reconnecting'}>
 						<span class="dot"></span>
-						<span class="label">{liveStatus === 'live' ? 'live' : 'reconnecting…'}</span>
+						<span class="label">{language.current && (liveStatus === 'live' ? t('topology.liveLive') : t('topology.liveReconnecting'))}</span>
 					</div>
 				</div>
 				<div class="canvas-frame">

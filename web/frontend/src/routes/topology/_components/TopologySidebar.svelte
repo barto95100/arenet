@@ -18,6 +18,8 @@
 <script lang="ts">
         import type { TopologyRoute, FlowTier } from '../_types';
         import { resolveFlowTier } from '../_types';
+        import { t } from '$lib/i18n';
+        import { language } from '$lib/stores/language.svelte';
 
         let { routes }: { routes: TopologyRoute[] } = $props();
 
@@ -79,23 +81,32 @@
         // The 'dead' tier (added 2026-06-03) gets a legend row so the
         // operator can distinguish "no traffic at all" (no particles,
         // dim line) from "quasi-inactif" (pale particles, < 20 req/s).
-        const LEGEND_ROWS: { tier: FlowTier; label: string }[] = [
-                { tier: 'high', label: '≥ 400 req/s — flux principal' },
-                { tier: 'mid', label: '150 – 400 req/s' },
-                { tier: 'low', label: '20 – 150 req/s' },
-                { tier: 'idle', label: '< 20 req/s — quasi-inactif' },
-                { tier: 'dead', label: '0 req/s — aucun trafic' },
-                { tier: 'warn', label: 'latence élevée (p99 > 300 ms)' },
-                { tier: 'bad', label: 'erreurs upstream (5xx ou timeout)' },
-        ];
+        //
+        // v2.9.18 i18n Phase 3 batch 3 — labels resolved via t() and
+        // wrapped in a $derived so the legend re-renders on language
+        // switch. Reading language.current inside the derived callback
+        // registers the Svelte 5 reactive dependency.
+        const LEGEND_ROWS: { tier: FlowTier; label: string }[] = $derived(
+                language.current
+                        ? [
+                                  { tier: 'high', label: t('topology.sidebar.legendHigh') },
+                                  { tier: 'mid', label: t('topology.sidebar.legendMid') },
+                                  { tier: 'low', label: t('topology.sidebar.legendLow') },
+                                  { tier: 'idle', label: t('topology.sidebar.legendIdle') },
+                                  { tier: 'dead', label: t('topology.sidebar.legendDead') },
+                                  { tier: 'warn', label: t('topology.sidebar.legendWarn') },
+                                  { tier: 'bad', label: t('topology.sidebar.legendBad') }
+                          ]
+                        : []
+        );
 </script>
 
-<aside class="topo-sidebar" aria-label="Panneau latéral topology">
+<aside class="topo-sidebar" aria-label={language.current && t('topology.sidebar.ariaLabel')}>
         <!-- =========================================================
-             Panel 1 — Légende des flux
+             Panel 1 — Flow legend
         ========================================================= -->
         <section class="panel">
-                <h3>Légende des flux</h3>
+                <h3>{language.current && t('topology.sidebar.panelLegendTitle')}</h3>
                 <ul class="legend-list">
                         {#each LEGEND_ROWS as row (row.tier)}
                                 <li>
@@ -116,9 +127,7 @@
                         {/each}
                 </ul>
                 <p class="legend-note">
-                        L'épaisseur est calculée sur la moyenne glissante des 60 dernières
-                        secondes. L'animation pointe dans le sens du trafic dominant —
-                        requêtes entrantes vers les services.
+                        {language.current && t('topology.sidebar.legendNote')}
                 </p>
         </section>
 
@@ -130,7 +139,7 @@
              so the "live" pill here was redundant noise.
         ========================================================= -->
         <section class="panel">
-                <h3>Top flux</h3>
+                <h3>{language.current && t('topology.sidebar.panelTopFluxTitle')}</h3>
                 <ul class="topflux-list">
                         {#each sortedRoutes as route (route.id)}
                                 {@const tier = routeTier(route)}
@@ -161,11 +170,11 @@
              Panel 3 — Actions rapides
         ========================================================= -->
         <section class="panel">
-                <h3>Actions rapides</h3>
+                <h3>{language.current && t('topology.sidebar.panelActionsTitle')}</h3>
                 <ul class="actions-list">
-                        <li><button type="button" class="action-btn">Drainer un upstream…</button></li>
-                        <li><button type="button" class="action-btn">Recharger la config Caddy</button></li>
-                        <li><button type="button" class="action-btn">Snapshot topology (JSON)</button></li>
+                        <li><button type="button" class="action-btn">{language.current && t('topology.sidebar.actionDrainUpstream')}</button></li>
+                        <li><button type="button" class="action-btn">{language.current && t('topology.sidebar.actionReloadCaddy')}</button></li>
+                        <li><button type="button" class="action-btn">{language.current && t('topology.sidebar.actionSnapshotJSON')}</button></li>
                 </ul>
         </section>
 </aside>

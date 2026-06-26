@@ -1140,7 +1140,7 @@ describe('/logs — Phase Z.5.2 filters', () => {
 		render(Page);
 		const select = await screen.findByLabelText('Filter by route');
 		// Both routes present + the "Toutes routes" default.
-		expect(select).toHaveTextContent('Toutes routes');
+		expect(select).toHaveTextContent('All routes');
 		expect(select).toHaveTextContent('api.example.test');
 		expect(select).toHaveTextContent('admin.example.test');
 	});
@@ -1161,7 +1161,7 @@ describe('/logs — Phase Z.5.2 filters', () => {
 		await screen.findByText('alpha.example.test');
 		const optionHosts = Array.from(select.options)
 			.map((o) => o.textContent ?? '')
-			.filter((t) => t !== 'Toutes routes');
+			.filter((t) => t !== 'All routes');
 		expect(optionHosts).toEqual([
 			'alpha.example.test',
 			'mu.example.test',
