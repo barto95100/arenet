@@ -36,6 +36,8 @@
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import { auth } from '$lib/stores/auth.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
@@ -1745,10 +1747,10 @@
 			}
 			if (formMode === 'create') {
 				await createRoute(payload);
-				pushToast('Route created', 'success');
+				pushToast(t('routes.toasts.created'), 'success');
 			} else if (editingId) {
 				await updateRoute(editingId, payload);
-				pushToast('Route updated', 'success');
+				pushToast(t('routes.toasts.updated'), 'success');
 			}
 			// Bug 1 fix (C11 Pack A polish round 3, 2026-06-06):
 			// Save MUST clear editingId so the route-row-selected
@@ -1791,7 +1793,7 @@
 		deleting = true;
 		try {
 			await deleteRoute(confirmTarget.id);
-			pushToast('Route deleted', 'success');
+			pushToast(t('routes.toasts.deleted'), 'success');
 			confirmTarget = null;
 			await loadRoutes();
 		} catch (err) {
@@ -1932,15 +1934,15 @@
 </script>
 
 <PageHeader
-	eyebrow="Trafic · Routes"
-	title="Routes"
-	subtitle="Manage reverse proxy routes — hosts, upstreams, TLS, WAF, authentication."
+	eyebrow={language.current && t('routes.pageEyebrow')}
+	title={language.current && t('routes.pageTitle')}
+	subtitle={language.current && t('routes.pageSubtitle')}
 >
 	{#snippet actions()}
-		<Button variant="ghost" disabled title="Phase 2 — Caddyfile import not yet wired"
-			>Import Caddyfile</Button
+		<Button variant="ghost" disabled title={language.current && t('routes.importCaddyfileTooltip')}
+			>{language.current && t('routes.importCaddyfile')}</Button
 		>
-		<Button onclick={openCreate}>+ Add route</Button>
+		<Button onclick={openCreate}>{language.current && t('routes.addButton')}</Button>
 	{/snippet}
 </PageHeader>
 
@@ -1956,20 +1958,18 @@
 		class="mt-4 mb-2 rounded border border-down/40 bg-down/10 px-4 py-3 text-sm text-down"
 		role="alert"
 	>
-		<strong class="font-semibold">DNS-01 routes need a DNS provider.</strong>
-		At least one route is configured for DNS-01 ACME, but the OVH DNS
-		provider is missing or incomplete in
-		<a href="/settings" class="underline">Settings</a>. Certificate
-		renewals for these routes will fail until the provider is configured.
+		<strong class="font-semibold">{language.current && t('routes.dns01Banner.title')}</strong>
+		{language.current && t('routes.dns01Banner.message')}
+		<a href="/settings" class="underline">{language.current && t('routes.dns01Banner.settingsLink')}</a>{language.current && t('routes.dns01Banner.tail')}
 	</div>
 {/if}
 
 {#if loading}
 	<div class="flex items-center gap-2 mt-12 text-secondary">
-		<Spinner /> Loading routes…
+		<Spinner /> {language.current && t('routes.loadingLabel')}
 	</div>
 {:else if loadError}
-	<div class="mt-12 text-down" role="alert">Failed to load routes: {loadError}</div>
+	<div class="mt-12 text-down" role="alert">{language.current && t('routes.loadFailed', { err: loadError })}</div>
 {:else if routes.length === 0 && !formOpen}
 	<!-- Empty-state CTA. Skipped when formOpen is true so the new-
 	     route create flow drops directly into the split layout's
@@ -1977,15 +1977,15 @@
 	     see the form, not an empty-state encore). -->
 	<div class="mt-16 flex flex-col items-center text-center gap-4">
 		<div class="text-6xl text-muted">◉</div>
-		<p class="text-secondary">No routes configured yet.</p>
-		<Button onclick={openCreate}>+ Add your first route</Button>
+		<p class="text-secondary">{language.current && t('routes.emptyState')}</p>
+		<Button onclick={openCreate}>{language.current && t('routes.emptyStateAddFirst')}</Button>
 	</div>
 {:else}
 	<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
-		<StatCard label="Total Routes" value={stats.total} />
-		<StatCard label="Active" value={stats.active} />
-		<StatCard label="With TLS" value={stats.tls} />
-		<StatCard label="With WAF" value={stats.waf} />
+		<StatCard label={language.current && t('routes.stats.total')} value={stats.total} />
+		<StatCard label={language.current && t('routes.stats.active')} value={stats.active} />
+		<StatCard label={language.current && t('routes.stats.withTLS')} value={stats.tls} />
+		<StatCard label={language.current && t('routes.stats.withWAF')} value={stats.waf} />
 	</div>
 
 	<!-- Phase 1 split layout (2026-06-02) — replaces the Step I/J
@@ -2011,8 +2011,8 @@
 					<input
 						type="search"
 						bind:value={listFilter}
-						placeholder="Filter by host, alias, upstream…"
-						aria-label="Filter routes"
+						placeholder={language.current && t('routes.list.filterPlaceholder')}
+						aria-label={language.current && t('routes.list.filterAriaLabel')}
 						class="flex-1 bg-transparent outline-none text-sm text-primary placeholder-muted"
 					/>
 				</div>
@@ -2028,43 +2028,44 @@
 						class:bg-hover={listTab === 'all'}
 						class:text-primary={listTab === 'all'}
 						class:text-secondary={listTab !== 'all'}
-					>All</button>
+					>{language.current && t('routes.list.tabAll')}</button>
 					<button
 						type="button"
 						onclick={() => (listTab = 'healthy')}
-						title="Phase 2 — needs per-route health field"
+						title={language.current && t('routes.list.tabPhase2Tooltip')}
 						class="px-3 py-1 rounded-full transition-colors"
 						class:bg-hover={listTab === 'healthy'}
 						class:text-primary={listTab === 'healthy'}
 						class:text-secondary={listTab !== 'healthy'}
-					>Healthy</button>
+					>{language.current && t('routes.list.tabHealthy')}</button>
 					<button
 						type="button"
 						onclick={() => (listTab = 'alerts')}
-						title="Phase 2 — needs per-route health field"
+						title={language.current && t('routes.list.tabPhase2Tooltip')}
 						class="px-3 py-1 rounded-full transition-colors"
 						class:bg-hover={listTab === 'alerts'}
 						class:text-primary={listTab === 'alerts'}
 						class:text-secondary={listTab !== 'alerts'}
-					>Alerts</button>
+					>{language.current && t('routes.list.tabAlerts')}</button>
 				</div>
 			</div>
 
 			{#if filteredRoutes.length === 0}
 				<div class="p-6 text-center text-sm text-secondary">
-					{routes.length === 0
-						? 'No routes configured yet.'
-						: 'No routes match the current filter.'}
+					{language.current &&
+						(routes.length === 0
+							? t('routes.emptyState')
+							: t('routes.noMatchFilter'))}
 				</div>
 			{:else}
 				<table class="w-full text-sm" bind:this={tableEl}>
 					<thead>
 						<tr class="text-left text-xs uppercase tracking-wider text-secondary border-b border-border-subtle">
-							<th class="px-4 py-3 font-medium">Host / path</th>
-							<th class="px-4 py-3 font-medium">Upstream</th>
-							<th class="px-4 py-3 font-medium">TLS</th>
-							<th class="px-4 py-3 font-medium">WAF</th>
-							<th class="px-4 py-3 font-medium text-right">État</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colHost')}</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colUpstream')}</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colTLS')}</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colWAF')}</th>
+							<th class="px-4 py-3 font-medium text-right">{language.current && t('routes.list.colState')}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -2091,14 +2092,14 @@
 									{#if r.aliases && r.aliases.length > 0}
 										<span
 											class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-sans text-secondary bg-elevated border border-border-subtle cursor-help"
-											title={`Aliases:\n${r.aliases.join('\n')}`}
+											title={language.current && `${t('routes.list.aliasesTooltip')}\n${r.aliases.join('\n')}`}
 										>+{r.aliases.length}</span>
 									{/if}
 									{#if r.authMode === 'basic'}
 										<span
 											class="ml-1.5 inline-flex items-center text-muted cursor-help"
-											title={`Basic Auth required (user: ${r.basicAuth?.username ?? ''})`}
-											aria-label="Basic Auth required"
+											title={language.current && t('routes.list.basicAuthTooltip', { username: r.basicAuth?.username ?? '' })}
+											aria-label={language.current && t('routes.list.basicAuthRequired')}
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
@@ -2118,8 +2119,8 @@
 									{:else if r.authMode === 'forward_auth'}
 										<span
 											class="ml-1.5 inline-flex items-center text-muted cursor-help"
-											title={`Forward-auth via ${r.forwardAuth?.providerName ?? ''}`}
-											aria-label="Forward-auth required"
+											title={language.current && t('routes.list.forwardAuthTooltip', { provider: r.forwardAuth?.providerName ?? '' })}
+											aria-label={language.current && t('routes.list.forwardAuthRequired')}
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
@@ -2153,8 +2154,7 @@
 									     (no verdict to count). -->
 									{#if r.totalUpstreamCount > 1 && r.aggregateStatus !== 'unknown' && r.aggregateStatus !== 'not_monitored'}
 										<span class="ml-1 text-xs text-muted"
-											>· {r.healthyUpstreamCount}/{r.totalUpstreamCount}
-											sains</span>
+											>· {language.current && t('routes.list.healthyCounter', { healthy: r.healthyUpstreamCount, total: r.totalUpstreamCount })}</span>
 									{/if}
 								</td>
 								<td class="px-4 py-3">
@@ -2172,7 +2172,7 @@
 										     in one component, so a future variant
 										     lands here too. -->
 										<div class="flex flex-wrap items-center gap-1">
-											<Badge variant="tls">TLS</Badge>
+											<Badge variant="tls">{language.current && t('routes.list.tlsBadge')}</Badge>
 											<CertSourceBadge source={r.effectiveCertSource} />
 										</div>
 									{:else}
@@ -2181,9 +2181,9 @@
 								</td>
 								<td class="px-4 py-3">
 									{#if r.wafMode === 'detect'}
-										<Badge variant="status-warn">Detect</Badge>
+										<Badge variant="status-warn">{language.current && t('routes.list.wafDetect')}</Badge>
 									{:else if r.wafMode === 'block'}
-										<Badge variant="status-down">Block</Badge>
+										<Badge variant="status-down">{language.current && t('routes.list.wafBlock')}</Badge>
 									{:else}
 										<span class="text-muted">—</span>
 									{/if}
@@ -2237,9 +2237,9 @@
 			{#if !formOpen}
 				<!-- Empty state: nothing selected, not in create mode. -->
 				<div class="p-10 text-center text-secondary text-sm">
-					Select a route on the left to edit it, or click
-					<span class="font-medium text-primary">+ Add route</span>
-					to create a new one.
+					{language.current && t('routes.panel.emptyHint')}
+					<span class="font-medium text-primary">{language.current && t('routes.panel.emptyHintAction')}</span>
+					{language.current && t('routes.panel.emptyHintTail')}
 				</div>
 			{:else}
 				<!-- Panel header — pill + title + meta. The pill border
@@ -2250,13 +2250,13 @@
 				     mode and clashing visually with the cyan text). -->
 				<div class="px-5 py-4 border-b border-border-subtle flex items-center gap-3">
 					<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-mono bg-accent-soft text-cyan border border-cyan">
-						{formMode === 'create' ? 'new' : 'edit'}
+						{language.current && (formMode === 'create' ? t('routes.panel.pillNew') : t('routes.panel.pillEdit'))}
 					</span>
 					<h3 class="text-base font-semibold text-primary truncate">
-						{formMode === 'create' ? 'New route' : (formData.host || 'Edit route')}
+						{language.current && (formMode === 'create' ? t('routes.panel.titleNew') : (formData.host || t('routes.panel.titleEdit')))}
 					</h3>
 					{#if formMode === 'edit' && editingId}
-						<span class="ml-auto text-xs text-muted font-mono shrink-0">id <span class="text-secondary">{editingId.slice(0, 7)}</span></span>
+						<span class="ml-auto text-xs text-muted font-mono shrink-0">{language.current && t('routes.panel.idLabel')} <span class="text-secondary">{editingId.slice(0, 7)}</span></span>
 					{/if}
 				</div>
 
@@ -2279,7 +2279,7 @@
 								<path d="M3 3v10h10" />
 								<path d="M5 11l3-3 2 2 3-4" />
 							</svg>
-							Metrics for this route →
+							{language.current && t('routes.panel.metricsLink')}
 						</a>
 						<a
 							href={`/security/${editingId}`}
@@ -2289,7 +2289,7 @@
 								<rect x="3" y="7" width="10" height="7" rx="1" />
 								<path d="M5 7V5a3 3 0 016 0v2" />
 							</svg>
-							Security for this route →
+							{language.current && t('routes.panel.securityLink')}
 						</a>
 						<Button
 							variant="ghost"
@@ -2300,7 +2300,7 @@
 									if (target) confirmTarget = target;
 								}
 							}}
-						>Delete</Button>
+						>{language.current && t('routes.panel.deleteButton')}</Button>
 					</div>
 				{/if}
 
@@ -3789,21 +3789,21 @@
 
 <Modal
 	open={confirmTarget !== null}
-	title="Delete route"
+	title={language.current && t('routes.delete.title')}
 	onClose={() => (confirmTarget = null)}
 >
 	{#if confirmTarget}
 		<p class="text-sm">
-			Are you sure you want to delete the route for
+			{language.current && t('routes.delete.confirmText')}
 			<code class="font-mono text-cyan">{confirmTarget.host}</code>?
 		</p>
 		<p class="text-xs text-secondary mt-2">
-			Caddy will be reloaded immediately. This action cannot be undone.
+			{language.current && t('routes.delete.warning')}
 		</p>
 	{/if}
 	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (confirmTarget = null)}>Cancel</Button>
-		<Button variant="danger" loading={deleting} onclick={confirmDelete}>Delete</Button>
+		<Button variant="ghost" onclick={() => (confirmTarget = null)}>{language.current && t('routes.delete.cancel')}</Button>
+		<Button variant="danger" loading={deleting} onclick={confirmDelete}>{language.current && t('routes.delete.confirm')}</Button>
 	{/snippet}
 </Modal>
 
@@ -3818,10 +3818,10 @@
      reverts automatically. -->
 <ConfirmDialog
 	bind:open={confirmDisableCRSOpen}
-	title="Désactiver les règles OWASP CRS ?"
-	message="Vous vous apprêtez à couper le chargement de l'OWASP Core Rule Set sur cette route. La protection contre les attaques SQLi, XSS, RCE, LFI et Protocol ne sera plus active. À n'utiliser que pour les APIs internes de confiance (LAN) ou les routes legacy générant des false-positives récurrents. Cette action peut être annulée en décochant la case à tout moment."
-	confirmLabel="Désactiver le CRS"
-	cancelLabel="Annuler"
+	title={language.current && t('routes.wafCRSDialog.title')}
+	message={language.current && t('routes.wafCRSDialog.message')}
+	confirmLabel={language.current && t('routes.wafCRSDialog.confirmLabel')}
+	cancelLabel={language.current && t('routes.wafCRSDialog.cancelLabel')}
 	confirmVariant="danger"
 	onConfirm={onConfirmDisableCRS}
 />

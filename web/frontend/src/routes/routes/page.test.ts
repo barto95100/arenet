@@ -1118,13 +1118,12 @@ describe('Routes page — aggregate health badges + filter tabs', () => {
 
 		await screen.findByText('DEGRADED');
 
-		// Counter present on the degraded multi-upstream route.
-		expect(screen.getByText(/1\/2 sains/)).toBeInTheDocument();
-		// No "0/2 sains" line for the unknown route (would be
-		// misleading on a non-monitored / warm-up route).
-		expect(screen.queryByText(/0\/2 sains/)).not.toBeInTheDocument();
-		// No counter on the single-upstream healthy route.
-		expect(screen.queryByText(/1\/1 sains/)).not.toBeInTheDocument();
+		// v2.9.14 i18n Phase 3 batch 1 — counter copy migrated
+		// from hardcoded FR "N/M sains" to t('routes.list.healthyCounter')
+		// which resolves to "N/M healthy" in EN (test default boot).
+		expect(screen.getByText(/1\/2 healthy/)).toBeInTheDocument();
+		expect(screen.queryByText(/0\/2 healthy/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/1\/1 healthy/)).not.toBeInTheDocument();
 	});
 });
 
@@ -2336,8 +2335,10 @@ describe('Routes page — Step X.2 wafDisableCRS toggle + confirm dialog', () =>
 		await openCreateForm();
 		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
 		await userEvent.click(toggle);
-		// Dialog opens — title in the document.
-		expect(screen.getByText('Désactiver les règles OWASP CRS ?')).toBeInTheDocument();
+		// v2.9.14 i18n Phase 3 batch 1 — dialog title resolves via
+		// t('routes.wafCRSDialog.title'). Test boot has no cookie/
+		// localStorage in jsdom → EN bundle wins.
+		expect(screen.getByText('Disable the OWASP CRS rules?')).toBeInTheDocument();
 		// Toggle visual state stays at false until the operator
 		// confirms via the dialog.
 		expect(toggle.checked).toBe(false);
@@ -2352,9 +2353,15 @@ describe('Routes page — Step X.2 wafDisableCRS toggle + confirm dialog', () =>
 
 		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
 		await userEvent.click(toggle);
-		// Cancel via the ConfirmDialog "Annuler" button.
-		const cancelBtn = screen.getByText('Annuler');
-		await userEvent.click(cancelBtn);
+		// Cancel via the ConfirmDialog cancel button (EN: "Cancel").
+		// v2.9.14 — multiple "Cancel" buttons exist now (form +
+		// dialog); scope the lookup to a role+name match that
+		// finds the dialog's cancel since the dialog is the only
+		// currently-visible button-named "Cancel" in modal scope.
+		const cancelBtns = screen.getAllByRole('button', { name: 'Cancel' });
+		// The CRS confirm dialog cancel is the most-recently-mounted
+		// "Cancel" button (Modal portals to body end). Click the last.
+		await userEvent.click(cancelBtns[cancelBtns.length - 1]);
 		await tick();
 
 		expect(toggle.checked).toBe(false);
@@ -2376,8 +2383,8 @@ describe('Routes page — Step X.2 wafDisableCRS toggle + confirm dialog', () =>
 		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
 		await userEvent.click(toggle);
 		// Confirm the dialog — the affirmative button reads
-		// "Désactiver le CRS" per the message copy.
-		const confirmBtn = screen.getByText('Désactiver le CRS');
+		// "Disable CRS" (EN bundle, test boot default).
+		const confirmBtn = screen.getByText('Disable CRS');
 		await userEvent.click(confirmBtn);
 		await tick();
 		expect(toggle.checked).toBe(true);
@@ -2411,9 +2418,10 @@ describe('Routes page — Step X.2 wafDisableCRS toggle + confirm dialog', () =>
 		expect(toggle.checked).toBe(true);
 
 		await userEvent.click(toggle);
-		// NO dialog — the "Désactiver les règles OWASP CRS ?"
-		// title must NOT appear on the un-tick path.
-		expect(screen.queryByText('Désactiver les règles OWASP CRS ?')).toBeNull();
+		// NO dialog on un-tick path. v2.9.14 i18n Phase 3 batch 1
+		// flipped the title to t('routes.wafCRSDialog.title') →
+		// "Disable the OWASP CRS rules?" in the EN bundle.
+		expect(screen.queryByText('Disable the OWASP CRS rules?')).toBeNull();
 		expect(toggle.checked).toBe(false);
 
 		await fireEvent.submit(document.querySelector('form')!);
@@ -2448,7 +2456,7 @@ describe('Routes page — Step X.2 wafDisableCRS toggle + confirm dialog', () =>
 		// Tick + confirm BEFORE changing wafMode.
 		const toggle = screen.getByTestId('waf-disable-crs-toggle') as HTMLInputElement;
 		await userEvent.click(toggle);
-		await userEvent.click(screen.getByText('Désactiver le CRS'));
+		await userEvent.click(screen.getByText('Disable CRS'));
 		await tick();
 		expect(toggle.checked).toBe(true);
 
@@ -2733,9 +2741,9 @@ describe('Routes page — Step X Option (e) wafExcludeTags textarea', () => {
 		// The confirm dialog gates the flip ; click the confirm
 		// button by label (the ConfirmDialog component doesn't
 		// carry a stable testid on the action button — finding
-		// the visible French label is the operator-equivalent
-		// path).
-		const confirmBtn = await screen.findByRole('button', { name: 'Désactiver le CRS' });
+		// the visible label is the operator-equivalent path).
+		// v2.9.14 i18n Phase 3 batch 1 — EN default in test boot.
+		const confirmBtn = await screen.findByRole('button', { name: 'Disable CRS' });
 		await userEvent.click(confirmBtn);
 		await tick();
 

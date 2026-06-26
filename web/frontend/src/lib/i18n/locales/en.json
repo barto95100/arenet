@@ -91,5 +91,83 @@
     "savedSuccess": "Saved successfully",
     "savedFailed": "Save failed",
     "languageChanged": "Language updated"
+  },
+  "routes": {
+    "pageEyebrow": "Traffic · Routes",
+    "pageTitle": "Routes",
+    "pageSubtitle": "Manage reverse proxy routes — hosts, upstreams, TLS, WAF, authentication.",
+    "addButton": "+ Add route",
+    "importCaddyfile": "Import Caddyfile",
+    "importCaddyfileTooltip": "Phase 2 — Caddyfile import not yet wired",
+    "loadingLabel": "Loading routes…",
+    "loadFailed": "Failed to load routes: {err}",
+    "emptyState": "No routes configured yet.",
+    "emptyStateAddFirst": "+ Add your first route",
+    "noMatchFilter": "No routes match the current filter.",
+    "dns01Banner": {
+      "title": "DNS-01 routes need a DNS provider.",
+      "message": "At least one route is configured for DNS-01 ACME, but the OVH DNS provider is missing or incomplete in",
+      "settingsLink": "Settings",
+      "tail": ". Certificate renewals for these routes will fail until the provider is configured."
+    },
+    "stats": {
+      "total": "Total Routes",
+      "active": "Active",
+      "withTLS": "With TLS",
+      "withWAF": "With WAF"
+    },
+    "list": {
+      "filterPlaceholder": "Filter by host, alias, upstream…",
+      "filterAriaLabel": "Filter routes",
+      "tabAll": "All",
+      "tabHealthy": "Healthy",
+      "tabAlerts": "Alerts",
+      "tabPhase2Tooltip": "Phase 2 — needs per-route health field",
+      "colHost": "Host / path",
+      "colUpstream": "Upstream",
+      "colTLS": "TLS",
+      "colWAF": "WAF",
+      "colState": "State",
+      "aliasesTooltip": "Aliases:",
+      "basicAuthRequired": "Basic Auth required",
+      "basicAuthTooltip": "Basic Auth required (user: {username})",
+      "forwardAuthRequired": "Forward-auth required",
+      "forwardAuthTooltip": "Forward-auth via {provider}",
+      "healthyCounter": "{healthy}/{total} healthy",
+      "tlsBadge": "TLS",
+      "wafDetect": "Detect",
+      "wafBlock": "Block"
+    },
+    "panel": {
+      "emptyHint": "Select a route on the left to edit it, or click",
+      "emptyHintAction": "+ Add route",
+      "emptyHintTail": "to create a new one.",
+      "pillNew": "new",
+      "pillEdit": "edit",
+      "titleNew": "New route",
+      "titleEdit": "Edit route",
+      "idLabel": "id",
+      "metricsLink": "Metrics for this route →",
+      "securityLink": "Security for this route →",
+      "deleteButton": "Delete"
+    },
+    "delete": {
+      "title": "Delete route",
+      "confirmText": "Are you sure you want to delete the route for",
+      "warning": "Caddy will be reloaded immediately. This action cannot be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete"
+    },
+    "wafCRSDialog": {
+      "title": "Disable the OWASP CRS rules?",
+      "message": "You are about to stop loading the OWASP Core Rule Set on this route. Protection against SQLi, XSS, RCE, LFI and Protocol attacks will no longer be active. Use this only for trusted internal APIs (LAN) or legacy routes generating recurring false-positives. You can undo this action at any time by ticking the checkbox back.",
+      "confirmLabel": "Disable CRS",
+      "cancelLabel": "Cancel"
+    },
+    "toasts": {
+      "created": "Route created",
+      "updated": "Route updated",
+      "deleted": "Route deleted"
+    }
   }
 }
