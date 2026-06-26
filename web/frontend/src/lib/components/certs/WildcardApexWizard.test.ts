@@ -129,9 +129,11 @@ describe('WildcardApexWizard', () => {
 		expect(onClose).not.toHaveBeenCalled();
 	});
 
-	it('Déclarer button is disabled until apex is non-empty', async () => {
+	it('Declare button is disabled until apex is non-empty', async () => {
+		// v2.9.21 i18n — submit button migrated to t() → "Declare"
+		// in EN bundle (test boot default).
 		render(WildcardApexWizard, { open: true, onClose: vi.fn() });
-		const declareBtn = screen.getByRole('button', { name: /^déclarer$/i });
+		const declareBtn = screen.getByRole('button', { name: /^declare$/i });
 		expect(declareBtn).toBeDisabled();
 
 		const input = screen.getByLabelText('Apex domain') as HTMLInputElement;

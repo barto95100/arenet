@@ -4,6 +4,16 @@
 
 // Audit display helpers (spec §9). Kept in a plain .ts module so they
 // can be unit-tested directly without rendering Svelte components.
+//
+// v2.9.22 i18n — relativeTime() pulls the active locale from the
+// language store so the rendered output ("2 days ago" / "il y a 2
+// jours") respects the operator's choice. Pre-v2.9.22 the
+// Intl.RelativeTimeFormat constructor was called with `undefined`
+// for the locale arg which falls back to the browser/OS default —
+// on FR-locale browsers that locked the output to French regardless
+// of the in-app language preference (operator-reported 2026-06-26).
+
+import { language } from '$lib/stores/language.svelte';
 
 export type AuditCategory = 'auth' | 'mutation' | 'security' | 'hibp' | 'meta' | 'unknown';
 
@@ -42,12 +52,26 @@ export function categoryOf(action: string): AuditCategory {
  *
  * Computed from a UTC ISO string; the resulting locale-relative text
  * stays anchored to UTC (spec §9.4 + §9.9).
+ *
+ * v2.9.22 i18n — the locale param defaults to `language.current` so
+ * the output respects the in-app language preference. Callers can
+ * pass an explicit locale string for tests that need a deterministic
+ * EN baseline regardless of the runtime store state.
+ *
+ * Callers that need reactive updates on language switch should wrap
+ * the call in a `$derived(language.current && relativeTime(iso))` so
+ * Svelte 5 registers the dependency. Otherwise the cell stays at the
+ * locale captured at first render.
  */
-export function relativeTime(isoTimestamp: string, now: Date = new Date()): string {
+export function relativeTime(
+	isoTimestamp: string,
+	now: Date = new Date(),
+	locale: string = language.current
+): string {
 	const then = new Date(isoTimestamp);
 	if (Number.isNaN(then.getTime())) return isoTimestamp;
 	const diffMs = then.getTime() - now.getTime(); // negative for past
-	const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+	const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
 	const absSec = Math.abs(diffMs) / 1000;
 	if (absSec < 60) return rtf.format(Math.round(diffMs / 1000), 'second');
 	if (absSec < 3600) return rtf.format(Math.round(diffMs / 60000), 'minute');

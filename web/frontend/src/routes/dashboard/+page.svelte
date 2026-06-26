@@ -42,6 +42,7 @@
 	import TimelineChart from '$lib/components/TimelineChart.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
+	import { relativeTime } from '$lib/utils/audit-format';
 	import MultiSeriesTimelineChart from '$lib/components/MultiSeriesTimelineChart.svelte';
 	import type {
 		Certificate,
@@ -224,17 +225,11 @@
 		return v === null ? '—' : `${Math.round(v)}`;
 	}
 
+	// v2.9.22 i18n — delegate to the shared relativeTime helper so
+	// the dashboard footers ("2 hours ago" / "il y a 2 heures") respect
+	// the active language preference instead of being locked to FR.
 	function fmtRelative(iso: string): string {
-		const ts = new Date(iso).getTime();
-		const diffSec = Math.floor((Date.now() - ts) / 1000);
-		if (diffSec < 60) return `il y a ${diffSec}s`;
-		if (diffSec < 3600) return `il y a ${Math.floor(diffSec / 60)} min`;
-		if (diffSec < 86400) {
-			const h = Math.floor(diffSec / 3600);
-			const m = Math.floor((diffSec % 3600) / 60);
-			return `il y a ${h}h ${m.toString().padStart(2, '0')}`;
-		}
-		return `il y a ${Math.floor(diffSec / 86400)}j`;
+		return relativeTime(iso);
 	}
 
 	function chartColor(m: MetricName): string {

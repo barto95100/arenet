@@ -24,6 +24,7 @@
 	import { auth } from '$lib/stores/auth.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
+	import { relativeTime } from '$lib/utils/audit-format';
 	import { pushToast } from '$lib/stores/toast';
 	import { settingsApi } from '$lib/api/settings';
 	import { authApi } from '$lib/api/auth';
@@ -203,16 +204,12 @@
 		return (parts[0][0] + parts[1][0]).toUpperCase();
 	}
 
+	// v2.9.22 i18n — delegate to the shared relativeTime helper so
+	// the user-list "last login" cells respect the active language
+	// preference instead of being locked to FR.
 	function relativeFromNow(iso: string | undefined): string {
 		if (!iso) return '—';
-		const ms = Date.now() - new Date(iso).getTime();
-		const minutes = Math.floor(ms / 60000);
-		if (minutes < 1) return 'à l’instant';
-		if (minutes < 60) return `il y a ${minutes} min`;
-		const hours = Math.floor(minutes / 60);
-		if (hours < 24) return `il y a ${hours} h`;
-		const days = Math.floor(hours / 24);
-		return `il y a ${days} j`;
+		return relativeTime(iso);
 	}
 
 	// --- Action handlers --------------------------------------
