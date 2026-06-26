@@ -1324,7 +1324,9 @@ describe('Routes page — W.5 country-block form section', () => {
 		await openCreateForm();
 		// The <summary> for the country-block <details> is
 		// the canonical anchor.
-		expect(screen.getByText('Pays bloqués')).toBeInTheDocument();
+		// v2.9.17 i18n hotfix — "Pays bloqués" migrated to t()
+		// → "Blocked countries" in the EN bundle (test boot default).
+		expect(screen.getByText('Blocked countries')).toBeInTheDocument();
 	});
 
 	it('mode=off hides the country-list + status-code sub-fields', async () => {
@@ -1333,7 +1335,7 @@ describe('Routes page — W.5 country-block form section', () => {
 		// Default mode is 'off' → the sub-fields don't render.
 		expect(screen.queryByTestId('country-block-input')).not.toBeInTheDocument();
 		expect(
-			screen.queryByLabelText(/Code HTTP/i)
+			screen.queryByLabelText(/HTTP code \(0/i)
 		).not.toBeInTheDocument();
 	});
 
@@ -1344,7 +1346,7 @@ describe('Routes page — W.5 country-block form section', () => {
 		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
 		await tick();
 		expect(screen.getByTestId('country-block-input')).toBeInTheDocument();
-		expect(screen.getByLabelText(/Code HTTP/i)).toBeInTheDocument();
+		expect(screen.getByLabelText(/HTTP code \(0/i)).toBeInTheDocument();
 	});
 
 	it('typing FR + Enter adds a chip to the country list', async () => {
@@ -1814,7 +1816,9 @@ describe('Routes page — TLS advanced disclosure + UX hints (#R-PROXMOX-HTTPS-L
 		await userEvent.type(firstURL(), 'https://192.168.1.60:8006');
 		await tick();
 		const hint = screen.getByTestId('upstream-private-ip-hint');
-		expect(hint.textContent).toMatch(/IP privée/i);
+		// v2.9.17 i18n hotfix — "IP privée + https détectés…"
+		// migrated to t() → "Private IP + https detected…" in EN.
+		expect(hint.textContent).toMatch(/Private IP/i);
 		// Negative case: http + RFC 1918 → hint absent.
 		await userEvent.clear(firstURL());
 		await userEvent.type(firstURL(), 'http://192.168.1.60:8006');
@@ -2122,7 +2126,9 @@ describe('Routes page — Phase 4.5 uploadStreamingMode toggle', () => {
 		await openCreateForm();
 
 		const label = screen.getByTestId('upload-streaming-toggle-label');
-		expect(label.textContent).toMatch(/Mode upload streaming/);
+		// v2.9.17 i18n hotfix — "Mode upload streaming…" migrated
+		// to t() → "Upload streaming mode…" in the EN bundle.
+		expect(label.textContent).toMatch(/Upload streaming mode/);
 
 		// The helper paragraph follows the label. Walk the parent
 		// to find it without coupling to exact DOM structure.

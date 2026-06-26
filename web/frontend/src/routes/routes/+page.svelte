@@ -2406,9 +2406,7 @@
 											class="text-xs text-amber-700 dark:text-amber-300"
 											data-testid="upstream-private-ip-hint"
 										>
-											IP privée + <code class="font-mono">https</code> détectés — le
-											certificat upstream est probablement auto-signé. Pensez à
-											« Options avancées TLS » si la connexion échoue.
+											{language.current && t('routes.form.upstreamPrivateIPHint')}
 										</p>
 									{/if}
 									<!--
@@ -2426,7 +2424,7 @@
 											data-testid="upstream-test-chip-{i}"
 										>
 											{#if ts.running}
-												<span class="text-secondary">⏳ Test en cours…</span>
+												<span class="text-secondary">⏳ {language.current && t('routes.form.upstreamTestRunning')}</span>
 											{:else if ts.error}
 												<span class="text-down">✗ {ts.error}</span>
 											{:else if ts.result}
@@ -2442,14 +2440,14 @@
 													{#if ts.result.cert?.selfSigned}
 														<span
 															class="text-amber-700 dark:text-amber-300"
-															title="Certificat auto-signé"
+															title={language.current && t('routes.form.upstreamTestSelfSignedTooltip')}
 														>
 															⚠ self-signed
 														</span>
 													{/if}
 												{:else}
 													<span class="text-down">
-														✗ {ts.result.error || 'connexion échouée'}
+														✗ {ts.result.error || (language.current && t('routes.form.upstreamTestConnectionFailed'))}
 													</span>
 													{#if ts.result.cert?.commonName}
 														<span class="text-muted font-mono">
@@ -2476,7 +2474,7 @@
 										!!(upstreamTests[i] && (upstreamTests[i] as { running?: boolean }).running)}
 									data-testid="test-upstream-{i}"
 								>
-									Tester
+									{language.current && t('routes.form.upstreamTestButton')}
 								</Button>
 								{#if weightVisible}
 									<div class="w-24 flex flex-col gap-1.5">
@@ -2522,7 +2520,7 @@
 							data-testid="tls-advanced-disclosure"
 						>
 							<summary class="text-sm font-medium text-secondary cursor-pointer">
-								Options avancées TLS upstream
+								{language.current && t('routes.form.tlsAdvancedSummary')}
 							</summary>
 							<div class="mt-2 flex flex-col gap-1">
 								<Checkbox
@@ -2530,10 +2528,7 @@
 									bind:checked={formData.insecureSkipVerify}
 								/>
 								<p class="text-xs text-muted ml-6">
-									À cocher uniquement si l'upstream présente un certificat
-									auto-signé (homelab Proxmox, Synology DSM, ESXi, UniFi).
-									En production, préférez ajouter le CA à la trust store de
-									l'hôte Arenet.
+									{language.current && t('routes.form.tlsAdvancedHelper')}
 								</p>
 							</div>
 						</details>
@@ -2612,7 +2607,7 @@
 									<span class="font-medium">{language.current && t('routes.form.tlsCertificateInherits')}</span>
 									<code class="font-mono">*.{coveringManagedDomain.apex}</code>
 									<span class="text-muted">
-										(managed via <a href="/settings" class="text-cyan hover:underline"
+										({language.current && t('routes.form.tlsCertificateInheritsManagedVia')} <a href="/settings" class="text-cyan hover:underline"
 											>{language.current && t('routes.form.tlsCertificateLink')}</a
 										>)
 									</span>
@@ -2846,19 +2841,11 @@
 								data-testid="upload-streaming-toggle"
 							/>
 							<span>
-								Mode upload streaming
-								<span class="text-muted">(registry, file servers)</span>
+								{language.current && t('routes.form.uploadStreamingToggleLabel')}
 							</span>
 						</label>
 						<p class="text-xs text-muted mt-1 max-w-prose">
-							Désactive l'inspection WAF du <strong>request body</strong>
-							<strong>ET</strong> le buffering Caddy en RAM. À activer pour
-							les routes qui transitent des uploads volumineux (registry
-							Docker, file servers, backups). Le WAF reste actif sur les
-							<strong>headers</strong>, l'<strong>URL</strong> et la
-							<strong>response</strong> — seul le body request n'est pas
-							scanné. Garde ce toggle désactivé pour les routes API/web où
-							l'analyse SQL/XSS du body est utile.
+							{language.current && t('routes.form.uploadStreamingHelper')}
 						</p>
 
 						<!-- Step X.2 — wafDisableCRS toggle. Sits in
@@ -2885,21 +2872,11 @@
 								data-testid="waf-disable-crs-toggle"
 							/>
 							<span>
-								Désactiver les règles OWASP CRS
-								<span class="text-muted">(API internes de confiance)</span>
+								{language.current && t('routes.form.wafDisableCRSLabel')}
 							</span>
 						</label>
 						<p class="text-xs text-muted mt-1 max-w-prose">
-							Coupe le chargement de l'OWASP Core Rule Set sur cette route :
-							plus de règles <strong>SQLi</strong> / <strong>XSS</strong> /
-							<strong>RCE</strong> / <strong>LFI</strong> / Protocol. Le
-							handler WAF reste branché (compteur dashboard + audit log
-							intacts) mais Coraza ne charge plus aucune règle, donc aucune
-							ne peut déclencher. À utiliser uniquement pour les APIs
-							internes de confiance (LAN) ou les routes legacy où le CRS
-							génère des false-positives récurrents. Le mode WAF
-							(Detect/Block) reste actif structurellement — il deviendrait
-							effectif dès le réactivation du CRS.
+							{language.current && t('routes.form.wafDisableCRSHelper')}
 						</p>
 
 						<!-- Step X Option (c) — granular per-rule
@@ -2916,8 +2893,8 @@
 								for="route-waf-exclude-rules"
 								class="text-sm font-medium text-secondary block mb-1"
 							>
-								Règles OWASP à exclure
-								<span class="text-muted text-xs">(IDs CRS séparés par virgule)</span>
+								{language.current && t('routes.form.wafExcludeRulesLabelFull')}
+								<span class="text-muted text-xs">{language.current && t('routes.form.wafExcludeRulesLabelHint')}</span>
 							</label>
 							<textarea
 								id="route-waf-exclude-rules"
@@ -2939,32 +2916,25 @@
 								</p>
 							{/if}
 							<p class="text-xs text-muted mt-1 max-w-prose">
-								Désactive uniquement les règles CRS listées sur cette route,
-								le reste du Core Rule Set reste actif. À utiliser quand une
-								règle précise génère un false-positive sur du trafic légitime.
-								Format : entier 6 chiffres (e.g. <code>942100</code>),
-								séparateurs virgule ou espace.
+								{language.current && t('routes.form.wafExcludeRulesHelper')}
 								{#if formMode === 'edit' && editingId}
-									Pour identifier les règles qui ont déclenché sur cette
-									route récemment, consultez
+									{language.current && t('routes.form.wafExcludeRulesIdentifyRules')}
 									<a
 										href="/security/{editingId}"
 										class="text-cyan hover:underline"
 										data-testid="waf-exclude-rules-security-link"
-										>l'historique WAF</a
+										>{language.current && t('routes.form.wafExcludeRulesWAFHistory')}</a
 									>.
 								{:else}
-									Pour identifier les règles qui ont déclenché récemment,
-									consultez la section
+									{language.current && t('routes.form.wafExcludeRulesIdentifyRulesGeneric')}
 									<a href="/security" class="text-cyan hover:underline"
-										>Sécurité</a
+										>{language.current && t('routes.form.wafExcludeRulesSecurityPage')}</a
 									>.
 								{/if}
 								{#if formData.wafDisableCRS}
 									<br />
 									<span class="text-status-warn"
-										>⚠️ Le CRS est désactivé via le toggle ci-dessus — les
-										exclusions sont silencieuses jusqu'à réactivation.</span
+										>{language.current && t('routes.form.wafExcludeRulesCRSDisabledWarning')}</span
 									>
 								{/if}
 							</p>
@@ -2989,8 +2959,8 @@
 								for="route-waf-exclude-tags"
 								class="text-sm font-medium text-secondary block mb-1"
 							>
-								Tags OWASP à exclure
-								<span class="text-muted text-xs">(tags CRS séparés par virgule)</span>
+								{language.current && t('routes.form.wafExcludeTagsLabelFull')}
+								<span class="text-muted text-xs">{language.current && t('routes.form.wafExcludeTagsLabelHint')}</span>
 							</label>
 							<textarea
 								id="route-waf-exclude-tags"
@@ -3018,19 +2988,11 @@
 								</p>
 							{/if}
 							<p class="text-xs text-muted mt-1 max-w-prose">
-								Désactive toutes les règles CRS portant le tag listé sur cette
-								route, par familles d'attaque (e.g. <code>attack-protocol</code>
-								exclut ATTACK-911100/921100/etc.). Plus maintenable qu'une
-								liste d'IDs : une mise à jour CRS qui ajoute des règles à ce
-								tag les exclut automatiquement. Format : tag minuscule, sans
-								espace ni virgule à l'intérieur (e.g.
-								<code>paranoia-level/3</code>). L'autocomplétion propose 24
-								tags courants ; n'importe quel tag CRS valide est accepté.
+								{language.current && t('routes.form.wafExcludeTagsHelper')}
 								{#if formData.wafDisableCRS}
 									<br />
 									<span class="text-status-warn"
-										>⚠️ Le CRS est désactivé via le toggle ci-dessus — les
-										exclusions sont silencieuses jusqu'à réactivation.</span
+										>{language.current && t('routes.form.wafExcludeRulesCRSDisabledWarning')}</span
 									>
 								{/if}
 							</p>
@@ -3053,7 +3015,7 @@
 							class="text-sm font-medium text-secondary block mb-1"
 							for="route-rate-limit-toggle"
 						>
-							Limitation de débit
+							{language.current && t('routes.form.rateLimitSection')}
 						</label>
 						<label
 							class="inline-flex items-start gap-2 text-sm text-secondary mt-1 cursor-pointer"
@@ -3068,8 +3030,7 @@
 								data-testid="rate-limit-toggle"
 							/>
 							<span>
-								Activer la limitation de débit
-								<span class="text-muted">(protection brute-force, abus API)</span>
+								{language.current && t('routes.form.rateLimitToggleLabelFull')}
 							</span>
 						</label>
 
@@ -3080,7 +3041,7 @@
 										for="route-rl-events"
 										class="text-xs font-medium text-secondary block mb-1"
 									>
-										Nombre maximum de requêtes
+										{language.current && t('routes.form.rateLimitMaxRequestsLabel')}
 									</label>
 									<input
 										id="route-rl-events"
@@ -3097,7 +3058,7 @@
 										for="route-rl-window"
 										class="text-xs font-medium text-secondary block mb-1"
 									>
-										Période <span class="text-muted">(durée Go : 30s, 1m, 5m, 1h)</span>
+										{language.current && t('routes.form.rateLimitPeriodLabel')} <span class="text-muted">{language.current && t('routes.form.rateLimitPeriodHint')}</span>
 									</label>
 									<input
 										id="route-rl-window"
@@ -3113,8 +3074,7 @@
 										for="route-rl-key"
 										class="text-xs font-medium text-secondary block mb-1"
 									>
-										Clé de limitation
-										<span class="text-muted">(placeholder Caddy ; vide = par IP client raw)</span>
+										{language.current && t('routes.form.rateLimitKeyLabelFull')}
 									</label>
 									<input
 										id="route-rl-key"
@@ -3127,15 +3087,7 @@
 								</div>
 							</div>
 							<p class="text-xs text-muted mt-2 max-w-prose">
-								Au-delà du nombre maximum de requêtes par période, les
-								requêtes sont rejetées avec <strong>HTTP 429</strong>. Algorithme
-								<strong>sliding window</strong> (pas de reset brutal en fin de
-								période). La clé par défaut <code>{'{http.request.remote.host}'}</code>
-								partitionne le compteur par IP socket — pas de confiance
-								<code>X-Forwarded-For</code> (anti-spoof). Sur déploiement
-								derrière proxy de confiance, basculer sur
-								<code>{'{http.request.header.X-Forwarded-For}'}</code> ou
-								similaire.
+								{language.current && t('routes.form.rateLimitHelper')}
 							</p>
 						{/if}
 					</div>
@@ -3160,7 +3112,7 @@
 							class="text-sm font-medium text-secondary block mb-1"
 							for="route-error-template"
 						>
-							Pages d'erreur
+							{language.current && t('routes.form.errorPagesSection')}
 						</label>
 						<div class="mt-2 flex items-center gap-2">
 							<select
@@ -3169,7 +3121,7 @@
 								class="flex-1 bg-surface border border-default rounded text-sm px-2 py-1.5 text-primary"
 								data-testid="error-template-select"
 							>
-								<option value="">— Aucun (défaut Arenet branded) —</option>
+								<option value="">{language.current && t('routes.form.errorPagesTemplateNoneOption')}</option>
 								{#each errorTemplates as t (t.id)}
 									<option value={t.id}>{t.name}</option>
 								{/each}
@@ -3177,15 +3129,13 @@
 							<a
 								href="/settings/error-pages"
 								class="text-xs text-cyan whitespace-nowrap"
-								title="Créer ou éditer les templates"
+								title={language.current && t('routes.form.errorPagesTemplateManageTooltip')}
 							>
-								Gérer →
+								{language.current && t('routes.form.errorPagesTemplateManageLink')}
 							</a>
 						</div>
 						<p class="text-xs text-muted mt-1">
-							Le défaut Arenet branded s'applique automatiquement aux
-							codes <code>401/403/404/429/500/502/503/504</code>
-							si aucun template n'est attaché.
+							{language.current && t('routes.form.errorPagesTemplateHelper')}
 						</p>
 
 						<!-- Per-route overrides : highest precedence
@@ -3199,7 +3149,7 @@
 							data-testid="error-overrides-details"
 						>
 							<summary class="text-xs text-secondary cursor-pointer">
-								Overrides spécifiques par code
+								{language.current && t('routes.form.errorPagesOverrideSection')}
 							</summary>
 							<div class="mt-2 grid gap-2">
 								{#each SUPPORTED_ERROR_STATUS_CODES as code (code)}
@@ -3234,9 +3184,7 @@
 									</div>
 								{/each}
 								<p class="text-xs text-muted">
-									Les overrides remplacent le template ET le défaut pour
-									le code concerné. Laisser vide pour utiliser le template
-									ou le défaut.
+									{language.current && t('routes.form.errorPagesOverrideHelper')}
 								</p>
 							</div>
 						</details>
@@ -3270,7 +3218,7 @@
 						data-testid="country-block-section"
 					>
 						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-							Pays bloqués
+							{language.current && t('routes.form.countryBlockBlockedListLabel')}
 							{#if formData.countryBlock.mode !== 'off'}
 								<span class="ml-1 text-xs text-muted">
 									({formData.countryBlock.mode} · {formData.countryBlock.countryList.length})
@@ -3285,7 +3233,7 @@
 									class="ml-1 text-xs text-muted"
 									data-testid="country-block-summary-off"
 								>
-									(désactivé)
+									{language.current && t('routes.form.countryBlockDisabledLabel')}
 								</span>
 							{/if}
 						</summary>
@@ -3352,10 +3300,7 @@
 											for="route-country-block-list-input"
 											class="text-sm font-medium text-secondary"
 										>
-											Pays
-											<span class="text-xs text-muted font-normal">
-												(code ISO ou nom)
-											</span>
+											{language.current && t('routes.form.countryBlockAddCountryLabel')}
 										</label>
 										{#if cbCounterLabel}
 											<span
@@ -3479,7 +3424,7 @@
 										for="route-country-block-status"
 										class="text-sm font-medium text-secondary block mb-1"
 									>
-										Code HTTP (0 = défaut env)
+										{language.current && t('routes.form.countryBlockStatusCodeLabelFull')}
 									</label>
 									<select
 										id="route-country-block-status"
@@ -3489,7 +3434,7 @@
 										<option value={0}>{language.current && t('routes.form.countryBlockStatusDefault')}</option>
 										<option value={403}>403 Forbidden</option>
 										<option value={451}>451 Unavailable For Legal Reasons</option>
-										<option value={444}>444 (nginx — close sans réponse)</option>
+										<option value={444}>{language.current && t('routes.form.countryBlockStatusCode444')}</option>
 									</select>
 								</div>
 							{:else}
