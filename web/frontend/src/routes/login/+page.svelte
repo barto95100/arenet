@@ -41,26 +41,23 @@
 	import { auth } from '$lib/stores/auth.svelte';
 	import { ApiError } from '$lib/api/types';
 	import { authApi } from '$lib/api/auth';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import LoginBackground from '$lib/components/LoginBackground.svelte';
 	import SSOProviderLogo from '$lib/components/SSOProviderLogo.svelte';
 	import type { OIDCProviderKind } from '$lib/api/types';
 	import logoUrl from '$lib/assets/arenet-logo.png';
 
-	// Step K.2 — map the `?error=<code>` query the OIDC callback
-	// posts to the login page on a rejected SSO flow. Spec §5.2
-	// callback emits these five codes; any other value falls
-	// through to a generic message.
-	const OIDC_ERROR_MESSAGES: Record<string, string> = {
-		not_authorized:
-			"Ce compte n'est pas autorisé à se connecter. Demande à un administrateur d'ajouter ton e-mail ou ton identifiant OIDC à la liste des accès.",
-		invalid_state:
-			'La requête SSO a été rejetée (jeton d\'état invalide, expiré ou rejoué). Réessaie.',
-		idp_error:
-			"Le fournisseur d'identité a rejeté la demande de connexion. Contacte l'administrateur de l'IdP.",
-		idp_unreachable:
-			"Le fournisseur d'identité est injoignable. Réessaie plus tard, ou connecte-toi avec un compte local ci-dessous.",
-		internal:
-			'Une erreur inattendue est survenue pendant la connexion SSO. Réessaie, ou utilise un compte local.'
+	// v2.9.12 i18n Phase 2 — map OIDC error codes to BUNDLE KEYS
+	// instead of literal strings. The actual message is resolved at
+	// the call site via t(); the indirection lets the same lookup
+	// work in any language without duplicating the switch.
+	const OIDC_ERROR_KEYS: Record<string, string> = {
+		not_authorized: 'auth.errors.oidcNotAuthorized',
+		invalid_state: 'auth.errors.oidcInvalidState',
+		idp_error: 'auth.errors.oidcIdpError',
+		idp_unreachable: 'auth.errors.oidcIdpUnreachable',
+		internal: 'auth.errors.oidcInternal'
 	};
 
 	let username = $state('');
@@ -107,9 +104,10 @@
 		// Step K.2 — surface ?error=<code> from the OIDC callback.
 		const errCode = page.url.searchParams.get('error');
 		if (errCode) {
-			formError =
-				OIDC_ERROR_MESSAGES[errCode] ??
-				`La connexion a échoué (code : ${errCode}). Réessaie, ou utilise un compte local.`;
+			const key = OIDC_ERROR_KEYS[errCode];
+			formError = key
+				? t(key)
+				: t('auth.errors.oidcGeneric', { code: errCode });
 		}
 	});
 
@@ -131,11 +129,11 @@
 		passwordError = '';
 		formError = '';
 		if (!username) {
-			usernameError = "L'identifiant est requis.";
+			usernameError = t('auth.errors.identifierRequired');
 			return;
 		}
 		if (!password) {
-			passwordError = 'Le mot de passe est requis.';
+			passwordError = t('auth.errors.passwordRequired');
 			return;
 		}
 		submitting = true;
@@ -147,16 +145,19 @@
 				if (err.status === 401) {
 					// Spec §4.3: same message for "user not found"
 					// and "bad password" (anti-enumeration).
-					formError = 'Identifiant ou mot de passe invalide.';
+					formError = t('auth.errors.invalidCredentials');
 				} else if (err.status === 400) {
+					// Backend-supplied validation message — left in
+					// its original language for now (Phase 3 backend
+					// i18n backlog).
 					formError = err.message;
 				} else if (err.status === 429) {
 					formError = err.message;
 				} else {
-					formError = 'Connexion impossible. Réessaie plus tard.';
+					formError = t('auth.errors.unreachable');
 				}
 			} else {
-				formError = 'Erreur inattendue.';
+				formError = t('auth.errors.unexpected');
 			}
 		} finally {
 			submitting = false;
@@ -178,8 +179,13 @@
 	</div>
 
 	<div class="login-card">
-		<h1 class="login-title">Bienvenue.</h1>
-		<p class="login-sub">Connecte-toi pour accéder à la console Arenet.</p>
+		<!--
+			v2.9.12 i18n Phase 2 — login surfaces resolved via t().
+			Reading language.current registers the reactive dependency
+			so the entire card switches on language change.
+		-->
+		<h1 class="login-title">{language.current && t('auth.welcomeTitle')}</h1>
+		<p class="login-sub">{language.current && t('auth.welcomeSub')}</p>
 
 		{#if formError}
 			<div class="login-banner" role="alert">
@@ -206,10 +212,10 @@
 				type="button"
 				onclick={handleSsoLogin}
 				disabled={submitting}
-				aria-label="Continuer avec SSO"
+				aria-label={language.current && `${t('auth.ssoContinue')} SSO`}
 			>
 				<SSOProviderLogo kind={oidcKind} size={22} />
-				<span class="login-sso-label">Continuer avec <b>SSO</b></span>
+				<span class="login-sso-label">{language.current && t('auth.ssoContinue')} <b>SSO</b></span>
 				<svg
 					class="login-sso-arrow"
 					viewBox="0 0 24 24"
@@ -227,15 +233,15 @@
 			</button>
 			<div class="login-sso-hint">
 				<span class="login-pdot" aria-hidden="true"></span>
-				IdP joignable
+				{language.current && t('auth.ssoIdpReachable')}
 			</div>
 
-			<div class="login-divider">ou avec un compte local</div>
+			<div class="login-divider">{language.current && t('auth.ssoOrLocal')}</div>
 		{/if}
 
 		<form onsubmit={handleSubmit} autocomplete="on" novalidate>
 			<div class="login-field">
-				<label for="login-username">Identifiant</label>
+				<label for="login-username">{language.current && t('auth.identifierLabel')}</label>
 				<div class="login-input-wrap">
 					<input
 						id="login-username"
@@ -254,7 +260,7 @@
 			</div>
 
 			<div class="login-field">
-				<label for="login-password">Mot de passe</label>
+				<label for="login-password">{language.current && t('auth.passwordLabel')}</label>
 				<div class="login-input-wrap">
 					<input
 						id="login-password"
@@ -271,7 +277,8 @@
 						class="login-pw-toggle"
 						onclick={togglePassword}
 						tabindex={-1}
-						aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+						aria-label={language.current &&
+							(showPassword ? t('auth.hidePassword') : t('auth.showPassword'))}
 					>
 						{#if showPassword}
 							<svg
@@ -313,8 +320,8 @@
 				<label class="login-check">
 					<input type="checkbox" bind:checked={rememberMe} disabled={submitting} />
 					<span>
-						Faire confiance à cet appareil
-						<small>session de 30 jours</small>
+						{language.current && t('auth.rememberDevice')}
+						<small>{language.current && t('auth.rememberDeviceHint')}</small>
 					</span>
 				</label>
 			</div>
@@ -326,13 +333,14 @@
 				disabled={submitting}
 			>
 				<span class="login-spin" aria-hidden="true"></span>
-				<span class="login-submit-label">Se connecter</span>
+				<span class="login-submit-label">{language.current && t('auth.loginButton')}</span>
 			</button>
 		</form>
 
 		{#if setupAvailable}
 			<div class="login-foot">
-				Première connexion ? <a href="/setup">Créer le compte administrateur</a>
+				{language.current && t('auth.firstTimePrompt')}
+				<a href="/setup">{language.current && t('auth.createAdminLink')}</a>
 			</div>
 		{/if}
 	</div>

@@ -44,6 +44,8 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { auth } from '$lib/stores/auth.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import logoUrl from '$lib/assets/arenet-logo.png';
 
 	type IconName =
@@ -61,71 +63,64 @@
 		| 'alerting'
 		| 'error-pages';
 
+	// v2.9.12 i18n Phase 2 — section / nav structures now carry
+	// bundle KEYS (labelKey) instead of literal labels. Resolution
+	// happens in the template via t(labelKey), wrapped in a derived
+	// that reads language.current so it recomputes on switch. The
+	// admin-only flag and href stay structural — those don't change
+	// across locales.
 	type NavItem = {
 		href: string;
-		label: string;
+		labelKey: string;
 		icon: IconName;
 		adminOnly?: boolean;
 	};
 
 	type NavSection = {
-		label: string;
+		labelKey: string;
 		items: NavItem[];
 		adminOnly?: boolean;
 	};
 
 	const sections: NavSection[] = [
 		{
-			label: 'Aperçu',
+			labelKey: 'sidebar.sectionOverview',
 			items: [
-				{ href: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
-				{ href: '/topology', label: 'Topology', icon: 'topology' },
-				{ href: '/map', label: 'Map', icon: 'map' }
+				{ href: '/dashboard', labelKey: 'sidebar.navDashboard', icon: 'dashboard' },
+				{ href: '/topology', labelKey: 'sidebar.navTopology', icon: 'topology' },
+				{ href: '/map', labelKey: 'sidebar.navMap', icon: 'map' }
 			]
 		},
 		{
-			label: 'Trafic',
+			labelKey: 'sidebar.sectionTraffic',
 			items: [
-				{ href: '/routes', label: 'Routes', icon: 'routes' },
-				{ href: '/logs', label: 'Logs', icon: 'logs' }
+				{ href: '/routes', labelKey: 'sidebar.navRoutes', icon: 'routes' },
+				{ href: '/logs', labelKey: 'sidebar.navLogs', icon: 'logs' }
 			]
 		},
 		{
-			label: 'Sécurité',
+			labelKey: 'sidebar.sectionSecurity',
 			items: [
-				{ href: '/waf', label: 'WAF', icon: 'waf' },
-				{ href: '/security', label: 'Security', icon: 'security' },
-				{ href: '/certs', label: 'Certificates', icon: 'certs' },
-				// AL.4.b.1 — alerting subsystem entry. Sits
-				// next to Security/Certificates since rules
-				// typically fire on security/cert signals.
-				// Page handles its own admin/viewer gating
-				// (admin-only writes, viewer-readable history).
-				{ href: '/alerting', label: 'Alerting', icon: 'alerting' }
+				{ href: '/waf', labelKey: 'sidebar.navWAF', icon: 'waf' },
+				{ href: '/security', labelKey: 'sidebar.navSecurity', icon: 'security' },
+				{ href: '/certs', labelKey: 'sidebar.navCertificates', icon: 'certs' },
+				// AL.4.b.1 — alerting subsystem entry.
+				{ href: '/alerting', labelKey: 'sidebar.navAlerting', icon: 'alerting' }
 			]
 		},
 		{
-			label: 'Administration',
+			labelKey: 'sidebar.sectionAdministration',
 			adminOnly: true,
 			items: [
-				{ href: '/users', label: 'Utilisateurs', icon: 'users', adminOnly: true },
-				{ href: '/settings', label: 'Settings', icon: 'settings', adminOnly: true },
-				// Step R Phase 2.1 — /settings/error-pages nav gap.
-				// Page existed since Phase 2 but had no sidebar
-				// entry, so operators couldn't reach the custom
-				// error-pages CRUD without typing the URL. Sits
-				// next to Settings as a sibling /settings/* surface.
+				{ href: '/users', labelKey: 'sidebar.navUsers', icon: 'users', adminOnly: true },
+				{ href: '/settings', labelKey: 'sidebar.navSettings', icon: 'settings', adminOnly: true },
 				{
 					href: '/settings/error-pages',
-					label: "Pages d'erreur",
+					labelKey: 'sidebar.navErrorPages',
 					icon: 'error-pages',
 					adminOnly: true
 				},
-				// Step CS.2 follow-up — /audit operator-flagged
-				// nav gap. Page existed but had no sidebar entry,
-				// so operators were forced to type the URL.
-				// Placed after Settings (sibling admin surface).
-				{ href: '/audit', label: 'Audit log', icon: 'audit', adminOnly: true }
+				{ href: '/audit', labelKey: 'sidebar.navAuditLog', icon: 'audit', adminOnly: true }
 			]
 		}
 	];
@@ -245,8 +240,14 @@
 		<div class="brand-env">dev</div>
 	</div>
 
-	{#each visibleSections as section (section.label)}
-		<div class="nav-section">{section.label}</div>
+	{#each visibleSections as section (section.labelKey)}
+		<!--
+			v2.9.12 i18n Phase 2 — section labels resolved live via t().
+			Reading language.current inline registers the reactive
+			dependency so the whole sidebar re-renders on language
+			switch without needing a $derived wrapper per row.
+		-->
+		<div class="nav-section">{language.current && t(section.labelKey)}</div>
 		{#each section.items as item (item.href)}
 			{@const active = isActive(item.href)}
 			<a
@@ -256,13 +257,16 @@
 				aria-current={active ? 'page' : undefined}
 			>
 				{@render itemIcon(item.icon)}
-				<span>{item.label}</span>
+				<span>{language.current && t(item.labelKey)}</span>
 			</a>
 		{/each}
 	{/each}
 
 	<div class="sidebar-foot">
-		<div class="avatar" aria-label={`Signed in as ${userLabel}`}>{userInitials}</div>
+		<div
+			class="avatar"
+			aria-label={language.current && t('common.signedInAs', { name: userLabel })}
+		>{userInitials}</div>
 		<div class="who">
 			{userLabel}
 			<small>{userRole}</small>
@@ -270,8 +274,8 @@
 		<button
 			type="button"
 			class="signout"
-			aria-label="Sign out"
-			title="Sign out"
+			aria-label={language.current && t('common.signOut')}
+			title={language.current && t('common.signOut')}
 			disabled={signingOut}
 			onclick={signOut}
 		>

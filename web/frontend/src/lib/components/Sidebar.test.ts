@@ -51,25 +51,30 @@ describe('Sidebar', () => {
 	it('renders the 3 always-visible nav sections + 8 items for an anonymous/viewer user', () => {
 		render(Sidebar);
 
-		// Section labels (mock-naming).
-		expect(screen.getByText('Aperçu')).toBeInTheDocument();
-		expect(screen.getByText('Trafic')).toBeInTheDocument();
-		expect(screen.getByText('Sécurité')).toBeInTheDocument();
+		// v2.9.12 i18n Phase 2 — labels resolve through the i18n
+		// resolver; the EN bundle is the default at test boot
+		// (no cookie / no localStorage in jsdom).
+		expect(screen.getByText('Overview')).toBeInTheDocument();
+		expect(screen.getByText('Traffic')).toBeInTheDocument();
+		// "Security" appears BOTH as a section header AND as a nav
+		// item (EN labels collide ; FR labels did too — "Sécurité"
+		// section + "Security" nav item happened to differ). Assert
+		// both surfaces exist via getAllByText.
+		expect(screen.getAllByText('Security')).toHaveLength(2);
 		// Administration is admin-only; default = no user set in store.
 		expect(screen.queryByText('Administration')).not.toBeInTheDocument();
 
-		// 8 non-admin nav items.
+		// 8 non-admin nav items (Security counted above).
 		expect(screen.getByText('Dashboard')).toBeInTheDocument();
 		expect(screen.getByText('Topology')).toBeInTheDocument();
 		expect(screen.getByText('Map')).toBeInTheDocument();
 		expect(screen.getByText('Routes')).toBeInTheDocument();
 		expect(screen.getByText('Logs')).toBeInTheDocument();
 		expect(screen.getByText('WAF')).toBeInTheDocument();
-		expect(screen.getByText('Security')).toBeInTheDocument();
 		expect(screen.getByText('Certificates')).toBeInTheDocument();
 
-		// Admin items absent.
-		expect(screen.queryByText('Utilisateurs')).not.toBeInTheDocument();
+		// Admin items absent (EN labels post v2.9.12).
+		expect(screen.queryByText('Users')).not.toBeInTheDocument();
 		expect(screen.queryByText('Settings')).not.toBeInTheDocument();
 		expect(screen.queryByText('Audit log')).not.toBeInTheDocument();
 	});
@@ -86,7 +91,10 @@ describe('Sidebar', () => {
 		render(Sidebar);
 
 		expect(screen.getByText('Administration')).toBeInTheDocument();
-		expect(screen.getByText('Utilisateurs')).toBeInTheDocument();
+		expect(screen.getByText('Users')).toBeInTheDocument();
+		// "Settings" is both an admin nav item and the route /settings;
+		// getAllByText returns 2 hits (the link + the /settings/error-pages
+		// sibling text "Error pages" comes from its own key, not "Settings").
 		expect(screen.getByText('Settings')).toBeInTheDocument();
 		// CS.2 follow-up — Audit log entry closes
 		// #R-AUDIT-not-in-nav. Admin-only.
@@ -114,7 +122,7 @@ describe('Sidebar', () => {
 	// error-pages CRUD page. Closes a nav gap : the page
 	// existed since Phase 2 (commit dceb57f) but had no
 	// sidebar entry, forcing operators to type the URL.
-	it("'Pages d'erreur' link points to /settings/error-pages (admin only)", () => {
+	it("'Error pages' link points to /settings/error-pages (admin only)", () => {
 		auth.user = {
 			username: 'admin',
 			displayName: 'Admin',
@@ -124,14 +132,16 @@ describe('Sidebar', () => {
 		} as never;
 
 		render(Sidebar);
+		// v2.9.12 i18n Phase 2 — label flipped from "Pages d'erreur"
+		// (hardcoded FR) to "Error pages" (EN default via t()).
 		const link = screen
 			.getAllByRole('link', { hidden: false })
-			.find((l) => l.textContent?.includes("Pages d'erreur"));
+			.find((l) => l.textContent?.includes('Error pages'));
 		expect(link).toBeDefined();
 		expect(link).toHaveAttribute('href', '/settings/error-pages');
 	});
 
-	it("'Pages d'erreur' is hidden from non-admin (viewer)", () => {
+	it("'Error pages' is hidden from non-admin (viewer)", () => {
 		auth.user = {
 			username: 'viewer',
 			displayName: 'Viewer',
@@ -141,7 +151,7 @@ describe('Sidebar', () => {
 		} as never;
 
 		render(Sidebar);
-		expect(screen.queryByText("Pages d'erreur")).not.toBeInTheDocument();
+		expect(screen.queryByText('Error pages')).not.toBeInTheDocument();
 	});
 
 	it('keeps /security sub-routes OUT of the sidebar (R.4 D8 design)', () => {

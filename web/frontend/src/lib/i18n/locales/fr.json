@@ -6,13 +6,40 @@
     "confirm": "Confirmer",
     "loading": "Chargement...",
     "error": "Erreur",
-    "success": "Succès"
+    "success": "Succès",
+    "signOut": "Se déconnecter",
+    "signedInAs": "Connecté en tant que {name}"
   },
   "auth": {
     "loginButton": "Se connecter",
     "logoutButton": "Se déconnecter",
     "passwordLabel": "Mot de passe",
-    "usernameLabel": "Nom d'utilisateur"
+    "usernameLabel": "Nom d'utilisateur",
+    "identifierLabel": "Identifiant",
+    "rememberDevice": "Faire confiance à cet appareil",
+    "rememberDeviceHint": "session de 30 jours",
+    "welcomeTitle": "Bienvenue.",
+    "welcomeSub": "Connecte-toi pour accéder à la console Arenet.",
+    "ssoContinue": "Continuer avec",
+    "ssoIdpReachable": "IdP joignable",
+    "ssoOrLocal": "ou avec un compte local",
+    "showPassword": "Afficher le mot de passe",
+    "hidePassword": "Masquer le mot de passe",
+    "firstTimePrompt": "Première connexion ?",
+    "createAdminLink": "Créer le compte administrateur",
+    "errors": {
+      "identifierRequired": "L'identifiant est requis.",
+      "passwordRequired": "Le mot de passe est requis.",
+      "invalidCredentials": "Identifiant ou mot de passe invalide.",
+      "unreachable": "Connexion impossible. Réessaie plus tard.",
+      "unexpected": "Erreur inattendue.",
+      "oidcGeneric": "La connexion a échoué (code : {code}). Réessaie, ou utilise un compte local.",
+      "oidcNotAuthorized": "Ce compte n'est pas autorisé à se connecter. Demande à un administrateur d'ajouter ton e-mail ou ton identifiant OIDC à la liste des accès.",
+      "oidcInvalidState": "La requête SSO a été rejetée (jeton d'état invalide, expiré ou rejoué). Réessaie.",
+      "oidcIdpError": "Le fournisseur d'identité a rejeté la demande de connexion. Contacte l'administrateur de l'IdP.",
+      "oidcIdpUnreachable": "Le fournisseur d'identité est injoignable. Réessaie plus tard, ou connecte-toi avec un compte local ci-dessous.",
+      "oidcInternal": "Une erreur inattendue est survenue pendant la connexion SSO. Réessaie, ou utilise un compte local."
+    }
   },
   "errors": {
     "unauthorized": "Non autorisé",
@@ -21,13 +48,44 @@
     "internal": "Erreur interne du serveur",
     "networkOffline": "Réseau inaccessible"
   },
+  "sidebar": {
+    "sectionOverview": "Aperçu",
+    "sectionTraffic": "Trafic",
+    "sectionSecurity": "Sécurité",
+    "sectionAdministration": "Administration",
+    "navDashboard": "Tableau de bord",
+    "navTopology": "Topologie",
+    "navMap": "Carte",
+    "navRoutes": "Routes",
+    "navLogs": "Journaux",
+    "navWAF": "WAF",
+    "navSecurity": "Sécurité",
+    "navCertificates": "Certificats",
+    "navAlerting": "Alertes",
+    "navUsers": "Utilisateurs",
+    "navSettings": "Paramètres",
+    "navErrorPages": "Pages d'erreur",
+    "navAuditLog": "Journal d'audit"
+  },
+  "topbar": {
+    "statusAriaLabel": "État de la passerelle",
+    "statusHealthy": "Passerelle saine"
+  },
   "settings": {
     "languageLabel": "Langue",
     "languageEnglish": "English",
     "languageFrench": "Français",
     "themeLabel": "Thème",
     "themeDark": "Sombre",
-    "themeLight": "Clair"
+    "themeLight": "Clair",
+    "appearanceSection": "Apparence",
+    "accountSection": "Compte",
+    "sessionsSection": "Sessions",
+    "reduceMotion": "Réduire les animations",
+    "reduceMotionEnabled": "Activé",
+    "reduceMotionDisabled": "Désactivé",
+    "reduceMotionHint": "(préférence système)",
+    "changePassword": "Changer le mot de passe"
   },
   "toast": {
     "savedSuccess": "Enregistré avec succès",

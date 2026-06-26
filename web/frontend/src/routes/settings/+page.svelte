@@ -26,6 +26,7 @@
 	import { auth } from '$lib/stores/auth.svelte';
 	import { theme, type Theme } from '$lib/stores/theme.svelte';
 	import { language, type Language } from '$lib/stores/language.svelte';
+	import { t } from '$lib/i18n';
 	import { pushToast } from '$lib/stores/toast';
 	import { authApi, type Session } from '$lib/api/auth';
 	import { settingsApi } from '$lib/api/settings';
@@ -59,13 +60,26 @@
 	import BackupSection from '$lib/components/BackupSection.svelte';
 	import ServerPositionSection from '$lib/components/ServerPositionSection.svelte';
 
-	const options: [
-		{ value: Theme; label: string },
-		{ value: Theme; label: string }
-	] = [
-		{ value: 'dark', label: 'Dark' },
-		{ value: 'light', label: 'Light' }
-	];
+	// v2.9.12 i18n Phase 2 — theme toggle options are derived from
+	// the active language so the on-screen labels switch live with
+	// the Language toggle next to them. Reading language.current
+	// registers the reactive dependency.
+	const options = $derived<
+		[
+			{ value: Theme; label: string },
+			{ value: Theme; label: string }
+		]
+	>(
+		language.current
+			? [
+					{ value: 'dark', label: t('settings.themeDark') },
+					{ value: 'light', label: t('settings.themeLight') }
+				]
+			: [
+					{ value: 'dark', label: 'Dark' },
+					{ value: 'light', label: 'Light' }
+				]
+	);
 
 	// Local ChangePasswordModal instance (Decision: Option B from the
 	// Chunk 6 brief). The layout-shell instance handles the
@@ -88,13 +102,28 @@
 	// theme toggle: 2-option Toggle, store handles revert + toast on
 	// failure, this handler just swallows the rejection to keep the
 	// browser console clean during smoke testing.
-	const languageOptions: [
-		{ value: Language; label: string },
-		{ value: Language; label: string }
-	] = [
-		{ value: 'en', label: 'English' },
-		{ value: 'fr', label: 'Français' }
-	];
+	//
+	// v2.9.12 — option labels are language names rendered in their
+	// own language ("English" / "Français") regardless of the
+	// active locale, mirroring how OS-level locale pickers behave.
+	// Keeping them as a $derived is symmetric with the theme
+	// options above; the values themselves don't change.
+	const languageOptions = $derived<
+		[
+			{ value: Language; label: string },
+			{ value: Language; label: string }
+		]
+	>(
+		language.current
+			? [
+					{ value: 'en', label: t('settings.languageEnglish') },
+					{ value: 'fr', label: t('settings.languageFrench') }
+				]
+			: [
+					{ value: 'en', label: 'English' },
+					{ value: 'fr', label: 'Français' }
+				]
+	);
 
 	async function onLanguageChange(v: Language): Promise<void> {
 		try {
@@ -633,7 +662,9 @@
 		<!-- ACCOUNT SECTION -->
 		<Card padding="p-6">
 			<header class="border-b border-border-subtle pb-3 mb-4">
-				<h2 class="text-xl font-semibold">Account</h2>
+				<h2 class="text-xl font-semibold">
+					{language.current && t('settings.accountSection')}
+				</h2>
 			</header>
 
 			<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-3 text-sm">
@@ -667,7 +698,7 @@
 
 			<div class="mt-6">
 				<Button variant="secondary" onclick={() => (changePasswordOpen = true)}>
-					Change password
+					{language.current && t('settings.changePassword')}
 				</Button>
 			</div>
 		</Card>
@@ -675,14 +706,19 @@
 		<!-- APPEARANCE SECTION -->
 		<Card padding="p-6">
 			<header class="border-b border-border-subtle pb-3 mb-4">
-				<h2 class="text-xl font-semibold">Appearance</h2>
+				<!-- v2.9.12 i18n Phase 2 — section + row labels resolved
+				     via t(). Reading language.current registers the
+				     reactive dependency on each surface. -->
+				<h2 class="text-xl font-semibold">
+					{language.current && t('settings.appearanceSection')}
+				</h2>
 			</header>
 
 			<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-4 text-sm items-center">
-				<dt class="text-secondary">Theme</dt>
+				<dt class="text-secondary">{language.current && t('settings.themeLabel')}</dt>
 				<dd>
 					<Toggle
-						ariaLabel="Theme"
+						ariaLabel={language.current && t('settings.themeLabel')}
 						{options}
 						value={theme.current}
 						disabled={theme.isApplying}
@@ -697,10 +733,10 @@
 					refreshes the arenet_language cookie so the FOUC
 					bootstrap picks up the new value on the next paint.
 				-->
-				<dt class="text-secondary">Language</dt>
+				<dt class="text-secondary">{language.current && t('settings.languageLabel')}</dt>
 				<dd>
 					<Toggle
-						ariaLabel="Language"
+						ariaLabel={language.current && t('settings.languageLabel')}
 						options={languageOptions}
 						value={language.current}
 						disabled={language.isApplying}
@@ -708,10 +744,15 @@
 					/>
 				</dd>
 
-				<dt class="text-secondary">Reduce motion</dt>
+				<dt class="text-secondary">{language.current && t('settings.reduceMotion')}</dt>
 				<dd class="text-primary">
-					{prefersReducedMotion.current ? 'Enabled' : 'Disabled'}
-					<span class="text-muted ml-2 text-xs">(system preference)</span>
+					{language.current &&
+						(prefersReducedMotion.current
+							? t('settings.reduceMotionEnabled')
+							: t('settings.reduceMotionDisabled'))}
+					<span class="text-muted ml-2 text-xs">
+						{language.current && t('settings.reduceMotionHint')}
+					</span>
 				</dd>
 			</dl>
 		</Card>
@@ -721,7 +762,9 @@
 	<div class="mb-6">
 		<Card padding="p-6">
 			<header class="border-b border-border-subtle pb-3 mb-4">
-				<h2 class="text-xl font-semibold">Sessions</h2>
+				<h2 class="text-xl font-semibold">
+					{language.current && t('settings.sessionsSection')}
+				</h2>
 			</header>
 
 			{#if sessionsLoading}

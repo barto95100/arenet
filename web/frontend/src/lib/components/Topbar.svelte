@@ -32,37 +32,50 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { auth } from '$lib/stores/auth.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
-	const pathLabels: Record<string, string> = {
-		'/dashboard': 'Dashboard',
-		'/topology': 'Topology',
-		'/map': 'Map',
-		'/routes': 'Routes',
-		'/logs': 'Logs',
-		'/waf': 'WAF',
-		'/security': 'Security',
-		'/certs': 'Certificates',
-		'/users': 'Utilisateurs',
-		'/settings': 'Settings',
-		'/observability': 'Observability',
-		'/audit': 'Audit',
-		'/admin/users': 'Utilisateurs'
+	// v2.9.12 i18n Phase 2 — crumb labels resolved from the active
+	// bundle. Each entry maps a pathname to a bundle key under
+	// sidebar.* (reusing the sidebar nav-item translations so the
+	// crumb and the nav stay in sync). The `language.current &&`
+	// dependency trigger inside $derived recomputes on every
+	// language change.
+	const pathToBundleKey: Record<string, string> = {
+		'/dashboard': 'sidebar.navDashboard',
+		'/topology': 'sidebar.navTopology',
+		'/map': 'sidebar.navMap',
+		'/routes': 'sidebar.navRoutes',
+		'/logs': 'sidebar.navLogs',
+		'/waf': 'sidebar.navWAF',
+		'/security': 'sidebar.navSecurity',
+		'/certs': 'sidebar.navCertificates',
+		'/users': 'sidebar.navUsers',
+		'/settings': 'sidebar.navSettings',
+		'/audit': 'sidebar.navAuditLog',
+		'/admin/users': 'sidebar.navUsers'
 	};
 
 	const currentPath = $derived(page.url.pathname);
 	const crumbLabel = $derived(
-		pathLabels[currentPath] ??
-			(() => {
-				// Sub-route fallback: e.g. /admin/users → "Utilisateurs · users".
-				// /security?tab=crowdsec is a query-param tab so falls through to
-				// the root /security label, which is the right thing — the parent
-				// tab label sits in the topbar; the active sub-tab is visible inline.
-				const segs = currentPath.split('/').filter(Boolean);
-				if (segs.length === 0) return 'Arenet';
-				const root = '/' + segs[0];
-				const rootLabel = pathLabels[root] ?? segs[0];
-				return segs.length > 1 ? `${rootLabel} · ${segs.slice(1).join('/')}` : rootLabel;
-			})()
+		// Touching language.current registers the reactive dependency
+		// so the crumb re-resolves on language switch (see
+		// $lib/i18n/index.ts docstring for the idiom).
+		language.current &&
+			(pathToBundleKey[currentPath]
+				? t(pathToBundleKey[currentPath])
+				: (() => {
+						// Sub-route fallback (e.g. /admin/users → "Users · users").
+						const segs = currentPath.split('/').filter(Boolean);
+						if (segs.length === 0) return 'Arenet';
+						const root = '/' + segs[0];
+						const rootLabel = pathToBundleKey[root]
+							? t(pathToBundleKey[root])
+							: segs[0];
+						return segs.length > 1
+							? `${rootLabel} · ${segs.slice(1).join('/')}`
+							: rootLabel;
+					})())
 	);
 
 	// Backend-driven viewer gating. When the session role IS
@@ -87,9 +100,9 @@
 		<b>{crumbLabel}</b>
 	</div>
 
-	<div class="tb-status" aria-label="État de la passerelle">
+	<div class="tb-status" aria-label={language.current && t('topbar.statusAriaLabel')}>
 		<span class="dot ok" aria-hidden="true"></span>
-		<span>Passerelle saine</span>
+		<span>{language.current && t('topbar.statusHealthy')}</span>
 	</div>
 </div>
 

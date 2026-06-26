@@ -6,13 +6,40 @@
     "confirm": "Confirm",
     "loading": "Loading...",
     "error": "Error",
-    "success": "Success"
+    "success": "Success",
+    "signOut": "Sign out",
+    "signedInAs": "Signed in as {name}"
   },
   "auth": {
     "loginButton": "Sign in",
     "logoutButton": "Sign out",
     "passwordLabel": "Password",
-    "usernameLabel": "Username"
+    "usernameLabel": "Username",
+    "identifierLabel": "Identifier",
+    "rememberDevice": "Trust this device",
+    "rememberDeviceHint": "30-day session",
+    "welcomeTitle": "Welcome.",
+    "welcomeSub": "Sign in to access the Arenet console.",
+    "ssoContinue": "Continue with",
+    "ssoIdpReachable": "IdP reachable",
+    "ssoOrLocal": "or with a local account",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "firstTimePrompt": "First time here?",
+    "createAdminLink": "Create the admin account",
+    "errors": {
+      "identifierRequired": "Identifier is required.",
+      "passwordRequired": "Password is required.",
+      "invalidCredentials": "Invalid identifier or password.",
+      "unreachable": "Cannot connect. Try again later.",
+      "unexpected": "Unexpected error.",
+      "oidcGeneric": "Sign-in failed (code: {code}). Try again, or use a local account.",
+      "oidcNotAuthorized": "This account is not allowed to sign in. Ask an administrator to add your e-mail or OIDC identifier to the access list.",
+      "oidcInvalidState": "The SSO request was rejected (invalid, expired or replayed state token). Try again.",
+      "oidcIdpError": "The identity provider rejected the sign-in request. Contact the IdP administrator.",
+      "oidcIdpUnreachable": "The identity provider is unreachable. Try again later, or sign in with a local account below.",
+      "oidcInternal": "An unexpected error occurred during SSO sign-in. Try again, or use a local account."
+    }
   },
   "errors": {
     "unauthorized": "Unauthorized",
@@ -21,13 +48,44 @@
     "internal": "Internal server error",
     "networkOffline": "Network unreachable"
   },
+  "sidebar": {
+    "sectionOverview": "Overview",
+    "sectionTraffic": "Traffic",
+    "sectionSecurity": "Security",
+    "sectionAdministration": "Administration",
+    "navDashboard": "Dashboard",
+    "navTopology": "Topology",
+    "navMap": "Map",
+    "navRoutes": "Routes",
+    "navLogs": "Logs",
+    "navWAF": "WAF",
+    "navSecurity": "Security",
+    "navCertificates": "Certificates",
+    "navAlerting": "Alerting",
+    "navUsers": "Users",
+    "navSettings": "Settings",
+    "navErrorPages": "Error pages",
+    "navAuditLog": "Audit log"
+  },
+  "topbar": {
+    "statusAriaLabel": "Gateway status",
+    "statusHealthy": "Gateway healthy"
+  },
   "settings": {
     "languageLabel": "Language",
     "languageEnglish": "English",
     "languageFrench": "Français",
     "themeLabel": "Theme",
     "themeDark": "Dark",
-    "themeLight": "Light"
+    "themeLight": "Light",
+    "appearanceSection": "Appearance",
+    "accountSection": "Account",
+    "sessionsSection": "Sessions",
+    "reduceMotion": "Reduce motion",
+    "reduceMotionEnabled": "Enabled",
+    "reduceMotionDisabled": "Disabled",
+    "reduceMotionHint": "(system preference)",
+    "changePassword": "Change password"
   },
   "toast": {
     "savedSuccess": "Saved successfully",
