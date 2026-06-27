@@ -41,6 +41,8 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Checkbox from '$lib/components/Checkbox.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	interface Props {
 		open: boolean;
@@ -169,20 +171,20 @@
 
 	function buildRequest(): AlertChannelRequest | null {
 		if (!name.trim()) {
-			validationError = 'Le nom est requis.';
+			validationError = t('alerting.channelModal.errNameRequired');
 			return null;
 		}
 		if (kind === 'webhook') {
 			if (!webhookUrl.trim()) {
-				validationError = 'L’URL du webhook est requise.';
+				validationError = t('alerting.channelModal.errWebhookUrlRequired');
 				return null;
 			}
 			if (!/^https?:\/\//.test(webhookUrl)) {
-				validationError = 'L’URL doit commencer par http:// ou https://.';
+				validationError = t('alerting.channelModal.errWebhookUrlScheme');
 				return null;
 			}
 			if (webhookTimeout < 1 || webhookTimeout > 60) {
-				validationError = 'Le timeout doit être compris entre 1 et 60 secondes.';
+				validationError = t('alerting.channelModal.errTimeoutRange');
 				return null;
 			}
 			const headers: Record<string, string> = {};
@@ -207,30 +209,30 @@
 		}
 		// email
 		if (!smtpHost.trim()) {
-			validationError = 'L’hôte SMTP est requis.';
+			validationError = t('alerting.channelModal.errSmtpHostRequired');
 			return null;
 		}
 		if (smtpPort < 1 || smtpPort > 65535) {
-			validationError = 'Le port SMTP doit être compris entre 1 et 65535.';
+			validationError = t('alerting.channelModal.errSmtpPortRange');
 			return null;
 		}
 		if (!from.trim() || !from.includes('@')) {
-			validationError = 'L’adresse "From" doit être un email valide.';
+			validationError = t('alerting.channelModal.errFromEmail');
 			return null;
 		}
-		const tos = toList.map((t) => t.trim()).filter((t) => t !== '');
+		const tos = toList.map((s) => s.trim()).filter((s) => s !== '');
 		if (tos.length === 0) {
-			validationError = 'Au moins un destinataire "To" est requis.';
+			validationError = t('alerting.channelModal.errAtLeastOneTo');
 			return null;
 		}
-		for (const t of tos) {
-			if (!t.includes('@')) {
-				validationError = `Adresse "${t}" invalide.`;
+		for (const addr of tos) {
+			if (!addr.includes('@')) {
+				validationError = t('alerting.channelModal.errInvalidAddress', { addr });
 				return null;
 			}
 		}
-		const cc = ccList.map((t) => t.trim()).filter((t) => t !== '');
-		const bcc = bccList.map((t) => t.trim()).filter((t) => t !== '');
+		const cc = ccList.map((s) => s.trim()).filter((s) => s !== '');
+		const bcc = bccList.map((s) => s.trim()).filter((s) => s !== '');
 		// Password: edit + unchecked → send "" so backend
 		// preserves stored value. Otherwise send the typed
 		// value (may be empty on create, in which case backend
@@ -268,14 +270,14 @@
 		try {
 			if (channel) {
 				await channelsStore.update(channel.id, req);
-				pushToast(`Canal "${req.name}" enregistré.`, 'success');
+				pushToast(t('alerting.channelModal.toastSaved', { name: req.name }), 'success');
 			} else {
 				await channelsStore.create(req);
-				pushToast(`Canal "${req.name}" créé.`, 'success');
+				pushToast(t('alerting.channelModal.toastCreated', { name: req.name }), 'success');
 			}
 			onSaved();
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'Erreur réseau';
+			const msg = err instanceof ApiError ? err.message : t('alerting.networkError');
 			validationError = msg;
 		} finally {
 			submitting = false;
@@ -288,35 +290,35 @@
 		try {
 			const res = await alertingApi.testChannel(channel.id);
 			if (res.ok) {
-				pushToast(`Canal "${channel.name}" testé : envoi réussi.`, 'success');
+				pushToast(t('alerting.channelModal.toastTestedOk', { name: channel.name }), 'success');
 			} else {
 				pushToast(
-					`Canal "${channel.name}" : échec — ${res.error ?? 'erreur inconnue'}`,
+					t('alerting.channelModal.toastTestedFail', { name: channel.name, err: res.error ?? t('alerting.channelModal.toastUnknownErr') }),
 					'danger'
 				);
 			}
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'Erreur réseau';
-			pushToast(`Canal "${channel.name}" : ${msg}`, 'danger');
+			const msg = err instanceof ApiError ? err.message : t('alerting.networkError');
+			pushToast(t('alerting.channelModal.toastTestErr', { name: channel.name, err: msg }), 'danger');
 		} finally {
 			testing = false;
 		}
 	}
 </script>
 
-<Modal {open} title={isEdit ? 'Modifier le canal' : 'Ajouter un canal'} {onClose} width="lg">
+<Modal {open} title={language.current && (isEdit ? t('alerting.channelModal.titleEdit') : t('alerting.channelModal.titleCreate'))} {onClose} width="lg">
 	<form onsubmit={onSubmit} class="space-y-4">
 		<!-- Common fields -->
-		<Input bind:value={name} label="Nom" placeholder="ops-webhook" required />
+		<Input bind:value={name} label={language.current && t('alerting.channelModal.labelName')} placeholder={t('alerting.channelModal.placeholderName')} required />
 
 		<div class="flex items-center gap-4">
-			<Checkbox bind:checked={enabled} label="Actif" />
+			<Checkbox bind:checked={enabled} label={language.current && t('alerting.channelModal.labelEnabled')} />
 		</div>
 
 		<div class="grid grid-cols-2 gap-4">
 			<div>
 				<label for="channel-kind" class="text-sm font-medium text-secondary mb-1.5 block">
-					Type
+					{language.current && t('alerting.channelModal.labelType')}
 				</label>
 				<select
 					id="channel-kind"
@@ -329,7 +331,7 @@
 				</select>
 				{#if isEdit}
 					<p class="text-xs text-secondary mt-1">
-						Le type ne peut pas être modifié après création.
+						{language.current && t('alerting.channelModal.typeLockedAfterCreate')}
 					</p>
 				{/if}
 			</div>
@@ -338,7 +340,7 @@
 					for="channel-severity"
 					class="text-sm font-medium text-secondary mb-1.5 block"
 				>
-					Sévérité min
+					{language.current && t('alerting.channelModal.labelMinSeverity')}
 				</label>
 				<select
 					id="channel-severity"
@@ -358,8 +360,8 @@
 		{#if kind === 'webhook'}
 			<Input
 				bind:value={webhookUrl}
-				label="URL"
-				placeholder="https://example.com/hook"
+				label={language.current && t('alerting.channelModal.labelWebhookUrl')}
+				placeholder={t('alerting.channelModal.placeholderWebhookUrl')}
 				required
 			/>
 
@@ -369,7 +371,7 @@
 						for="webhook-method"
 						class="text-sm font-medium text-secondary mb-1.5 block"
 					>
-						Méthode
+						{language.current && t('alerting.channelModal.labelMethod')}
 					</label>
 					<select
 						id="webhook-method"
@@ -378,14 +380,14 @@
 					>
 						<option value="POST">POST</option>
 					</select>
-					<p class="text-xs text-secondary mt-1">V1 : POST uniquement.</p>
+					<p class="text-xs text-secondary mt-1">{language.current && t('alerting.channelModal.methodLocked')}</p>
 				</div>
 				<div>
 					<label
 						for="webhook-timeout"
 						class="text-sm font-medium text-secondary mb-1.5 block"
 					>
-						Timeout (s)
+						{language.current && t('alerting.channelModal.labelTimeout')}
 					</label>
 					<input
 						id="webhook-timeout"
@@ -400,29 +402,29 @@
 
 			<div>
 				<div class="flex items-center justify-between mb-2">
-					<span class="text-sm font-medium text-secondary">En-têtes HTTP</span>
+					<span class="text-sm font-medium text-secondary">{language.current && t('alerting.channelModal.labelHttpHeaders')}</span>
 					<Button variant="ghost" size="sm" onclick={addHeader}>
-						{#snippet children()}+ Ajouter{/snippet}
+						{#snippet children()}{language.current && t('alerting.channelModal.btnAdd')}{/snippet}
 					</Button>
 				</div>
 				{#if webhookHeaders.length === 0}
-					<p class="text-xs text-secondary">Aucun en-tête personnalisé.</p>
+					<p class="text-xs text-secondary">{language.current && t('alerting.channelModal.noCustomHeader')}</p>
 				{:else}
 					<div class="space-y-2">
 						{#each webhookHeaders as h, i (i)}
 							<div class="flex gap-2 items-start">
-								<Input bind:value={h.key} placeholder="X-Auth" />
+								<Input bind:value={h.key} placeholder={t('alerting.channelModal.placeholderHeaderKey')} />
 								<Input
 									bind:value={h.value}
 									placeholder={isEdit && h.value === '[redacted]'
-										? '[redacted] — laissez vide pour conserver'
-										: 'valeur'}
+										? t('alerting.channelModal.placeholderHeaderRedacted')
+										: t('alerting.channelModal.placeholderHeaderValue')}
 								/>
 								<Button
 									variant="ghost"
 									size="sm"
 									onclick={() => removeHeader(i)}
-									aria-label="Supprimer l’en-tête"
+									aria-label={language.current && t('alerting.channelModal.ariaRemoveHeader')}
 								>
 									{#snippet children()}×{/snippet}
 								</Button>
@@ -432,8 +434,7 @@
 				{/if}
 				{#if isEdit}
 					<p class="text-xs text-secondary mt-2">
-						Les valeurs d’en-tête sont redactées sur l’API. Laissez la valeur affichée
-						"[redacted]" telle quelle pour conserver le secret existant.
+						{language.current && t('alerting.channelModal.redactedHeadersNote')}
 					</p>
 				{/if}
 			</div>
@@ -443,7 +444,7 @@
 					for="webhook-body-template"
 					class="text-sm font-medium text-secondary mb-1.5 block"
 				>
-					Template du corps (optionnel)
+					{language.current && t('alerting.channelModal.labelBodyTemplate')}
 				</label>
 				<textarea
 					id="webhook-body-template"
@@ -453,7 +454,7 @@
 					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 				></textarea>
 				<p class="text-xs text-secondary mt-1">
-					Laissez vide pour envoyer l’événement complet en JSON. Placeholders :
+					{language.current && t('alerting.channelModal.bodyTemplatePlaceholders')}
 					<code>{`{{.RuleName}}`}</code>, <code>{`{{.Severity}}`}</code>,
 					<code>{`{{.Subject}}`}</code>.
 				</p>
@@ -466,14 +467,14 @@
 				<div class="col-span-2">
 					<Input
 						bind:value={smtpHost}
-						label="Hôte SMTP"
-						placeholder="smtp.example.com"
+						label={language.current && t('alerting.channelModal.labelSmtpHost')}
+						placeholder={t('alerting.channelModal.placeholderSmtpHost')}
 						required
 					/>
 				</div>
 				<div>
 					<label for="smtp-port" class="text-sm font-medium text-secondary mb-1.5 block">
-						Port
+						{language.current && t('alerting.channelModal.labelSmtpPort')}
 					</label>
 					<input
 						id="smtp-port"
@@ -488,8 +489,8 @@
 
 			<Input
 				bind:value={smtpUsername}
-				label="Utilisateur SMTP"
-				placeholder="alerts@example.com"
+				label={language.current && t('alerting.channelModal.labelSmtpUsername')}
+				placeholder={t('alerting.channelModal.placeholderSmtpUsername')}
 			/>
 
 			<div>
@@ -497,21 +498,21 @@
 					for="smtp-password"
 					class="text-sm font-medium text-secondary mb-1.5 block"
 				>
-					Mot de passe SMTP
+					{language.current && t('alerting.channelModal.labelSmtpPassword')}
 				</label>
 				{#if isEdit && !smtpPasswordDirty}
 					<div class="flex items-center gap-3">
 						<input
 							id="smtp-password"
 							type="text"
-							value="[défini]"
+							value={language.current && t('alerting.channelModal.passwordPlaceholder')}
 							readonly
 							disabled
 							class="flex-1 bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-secondary"
 						/>
 						<Checkbox
 							bind:checked={smtpPasswordDirty}
-							label="Modifier le mot de passe"
+							label={language.current && t('alerting.channelModal.labelChangePassword')}
 						/>
 					</div>
 				{:else}
@@ -527,34 +528,34 @@
 
 			<Input
 				bind:value={from}
-				label="From"
+				label={language.current && t('alerting.channelModal.labelFrom')}
 				type="email"
-				placeholder="alerts@example.com"
+				placeholder={t('alerting.channelModal.placeholderFromEmail')}
 				required
 			/>
 
 			<div>
 				<div class="flex items-center justify-between mb-2">
-					<span class="text-sm font-medium text-secondary">To</span>
+					<span class="text-sm font-medium text-secondary">{language.current && t('alerting.channelModal.labelTo')}</span>
 					<Button
 						variant="ghost"
 						size="sm"
 						onclick={() => addRecipient(toList, (n) => (toList = n))}
 					>
-						{#snippet children()}+ Ajouter{/snippet}
+						{#snippet children()}{language.current && t('alerting.channelModal.btnAdd')}{/snippet}
 					</Button>
 				</div>
 				<div class="space-y-2">
 					{#each toList as _r, i (i)}
 						<div class="flex gap-2 items-start">
-							<Input bind:value={toList[i]} placeholder="ops@example.com" />
+							<Input bind:value={toList[i]} placeholder={t('alerting.channelModal.placeholderTo')} />
 							{#if toList.length > 1}
 								<Button
 									variant="ghost"
 									size="sm"
 									onclick={() =>
 										removeRecipient(toList, i, (n) => (toList = n))}
-									aria-label="Supprimer le destinataire"
+									aria-label={language.current && t('alerting.channelModal.ariaRemoveTo')}
 								>
 									{#snippet children()}×{/snippet}
 								</Button>
@@ -565,28 +566,28 @@
 			</div>
 
 			<details>
-				<summary class="text-sm text-secondary cursor-pointer">Options avancées</summary>
+				<summary class="text-sm text-secondary cursor-pointer">{language.current && t('alerting.channelModal.advancedOptions')}</summary>
 				<div class="mt-3 space-y-3 pl-2 border-l border-border-subtle">
 					<div>
 						<div class="flex items-center justify-between mb-2">
-							<span class="text-sm font-medium text-secondary">Cc</span>
+							<span class="text-sm font-medium text-secondary">{language.current && t('alerting.channelModal.labelCc')}</span>
 							<Button
 								variant="ghost"
 								size="sm"
 								onclick={() => addRecipient(ccList, (n) => (ccList = n))}
 							>
-								{#snippet children()}+ Ajouter{/snippet}
+								{#snippet children()}{language.current && t('alerting.channelModal.btnAdd')}{/snippet}
 							</Button>
 						</div>
 						{#each ccList as _r, i (i)}
 							<div class="flex gap-2 items-start mb-2">
-								<Input bind:value={ccList[i]} placeholder="audit@example.com" />
+								<Input bind:value={ccList[i]} placeholder={t('alerting.channelModal.placeholderCc')} />
 								<Button
 									variant="ghost"
 									size="sm"
 									onclick={() =>
 										removeRecipient(ccList, i, (n) => (ccList = n))}
-									aria-label="Supprimer Cc"
+									aria-label={language.current && t('alerting.channelModal.ariaRemoveCc')}
 								>
 									{#snippet children()}×{/snippet}
 								</Button>
@@ -595,24 +596,24 @@
 					</div>
 					<div>
 						<div class="flex items-center justify-between mb-2">
-							<span class="text-sm font-medium text-secondary">Bcc</span>
+							<span class="text-sm font-medium text-secondary">{language.current && t('alerting.channelModal.labelBcc')}</span>
 							<Button
 								variant="ghost"
 								size="sm"
 								onclick={() => addRecipient(bccList, (n) => (bccList = n))}
 							>
-								{#snippet children()}+ Ajouter{/snippet}
+								{#snippet children()}{language.current && t('alerting.channelModal.btnAdd')}{/snippet}
 							</Button>
 						</div>
 						{#each bccList as _r, i (i)}
 							<div class="flex gap-2 items-start mb-2">
-								<Input bind:value={bccList[i]} placeholder="shadow@example.com" />
+								<Input bind:value={bccList[i]} placeholder={t('alerting.channelModal.placeholderBcc')} />
 								<Button
 									variant="ghost"
 									size="sm"
 									onclick={() =>
 										removeRecipient(bccList, i, (n) => (bccList = n))}
-									aria-label="Supprimer Bcc"
+									aria-label={language.current && t('alerting.channelModal.ariaRemoveBcc')}
 								>
 									{#snippet children()}×{/snippet}
 								</Button>
@@ -623,19 +624,19 @@
 			</details>
 
 			<fieldset>
-				<legend class="text-sm font-medium text-secondary mb-1.5">Chiffrement</legend>
+				<legend class="text-sm font-medium text-secondary mb-1.5">{language.current && t('alerting.channelModal.legendEncryption')}</legend>
 				<div class="flex gap-4">
 					<label class="flex items-center gap-2 text-sm">
 						<input type="radio" bind:group={tlsMode} value="none" />
-						Aucun
+						{language.current && t('alerting.channelModal.encryptionNone')}
 					</label>
 					<label class="flex items-center gap-2 text-sm">
 						<input type="radio" bind:group={tlsMode} value="starttls" />
-						STARTTLS (port 587)
+						{language.current && t('alerting.channelModal.encryptionStartTLS')}
 					</label>
 					<label class="flex items-center gap-2 text-sm">
 						<input type="radio" bind:group={tlsMode} value="tls" />
-						TLS implicite (port 465)
+						{language.current && t('alerting.channelModal.encryptionTLS')}
 					</label>
 				</div>
 			</fieldset>
@@ -645,7 +646,7 @@
 					for="email-subject-template"
 					class="text-sm font-medium text-secondary mb-1.5 block"
 				>
-					Template du sujet (optionnel)
+					{language.current && t('alerting.channelModal.labelSubjectTemplate')}
 				</label>
 				<input
 					id="email-subject-template"
@@ -660,13 +661,13 @@
 					for="email-body-template"
 					class="text-sm font-medium text-secondary mb-1.5 block"
 				>
-					Template du corps (optionnel)
+					{language.current && t('alerting.channelModal.labelEmailBodyTemplate')}
 				</label>
 				<textarea
 					id="email-body-template"
 					bind:value={emailBodyTemplate}
 					rows="4"
-					placeholder={`Règle : {{.RuleName}}\nSévérité : {{.Severity}}\nDétail : {{.Body}}`}
+					placeholder={`Rule: {{.RuleName}}\nSeverity: {{.Severity}}\nDetail: {{.Body}}`}
 					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 				></textarea>
 			</div>
@@ -690,11 +691,11 @@
 				disabled={testing || submitting}
 				loading={testing}
 			>
-				{#snippet children()}Envoyer un test{/snippet}
+				{#snippet children()}{language.current && t('alerting.channelModal.btnSendTest')}{/snippet}
 			</Button>
 		{/if}
 		<Button variant="ghost" onclick={onClose} disabled={submitting}>
-			{#snippet children()}Annuler{/snippet}
+			{#snippet children()}{language.current && t('alerting.channelModal.btnCancel')}{/snippet}
 		</Button>
 		<Button
 			variant="primary"
@@ -702,7 +703,7 @@
 			disabled={submitting}
 			loading={submitting}
 		>
-			{#snippet children()}{isEdit ? 'Enregistrer' : 'Créer'}{/snippet}
+			{#snippet children()}{language.current && (isEdit ? t('alerting.channelModal.btnSave') : t('alerting.channelModal.btnCreate'))}{/snippet}
 		</Button>
 	{/snippet}
 </Modal>

@@ -95,7 +95,7 @@ describe('ChannelModal', () => {
 
 		expect(screen.getByLabelText(/URL/i)).toBeTruthy();
 		// Email-specific labels should NOT be present.
-		expect(screen.queryByLabelText(/Hôte SMTP/i)).toBeNull();
+		expect(screen.queryByLabelText(/SMTP host/i)).toBeNull();
 		expect(screen.queryByLabelText(/^From$/i)).toBeNull();
 	});
 
@@ -108,7 +108,7 @@ describe('ChannelModal', () => {
 		const kindSelect = screen.getByLabelText(/^Type$/i) as HTMLSelectElement;
 		await fireEvent.change(kindSelect, { target: { value: 'email' } });
 
-		expect(screen.getByLabelText(/Hôte SMTP/i)).toBeTruthy();
+		expect(screen.getByLabelText(/SMTP host/i)).toBeTruthy();
 		expect(screen.getByLabelText(/^From$/i)).toBeTruthy();
 		// Webhook fields should be hidden.
 		expect(screen.queryByLabelText(/^URL$/i)).toBeNull();
@@ -128,7 +128,7 @@ describe('ChannelModal', () => {
 		expect(kindSelect.disabled).toBe(true);
 	});
 
-	it('shows [défini] placeholder for SMTP password in email edit mode', async () => {
+	it('shows [set] placeholder for SMTP password in email edit mode', async () => {
 		const Modal = (await import('./ChannelModal.svelte')).default;
 		render(Modal, {
 			props: {
@@ -138,14 +138,14 @@ describe('ChannelModal', () => {
 				onSaved: () => {}
 			}
 		});
-		const pwd = screen.getByLabelText(/Mot de passe SMTP/i) as HTMLInputElement;
-		expect(pwd.value).toBe('[défini]');
+		const pwd = screen.getByLabelText(/SMTP password/i) as HTMLInputElement;
+		expect(pwd.value).toBe('[set]');
 		expect(pwd.disabled).toBe(true);
-		// The "Modifier le mot de passe" checkbox should be present.
-		expect(screen.getByLabelText(/Modifier le mot de passe/i)).toBeTruthy();
+		// The "Change password" checkbox should be present.
+		expect(screen.getByLabelText(/Change password/i)).toBeTruthy();
 	});
 
-	it('enables the password input after toggling "Modifier le mot de passe"', async () => {
+	it('enables the password input after toggling "Change password"', async () => {
 		const Modal = (await import('./ChannelModal.svelte')).default;
 		render(Modal, {
 			props: {
@@ -155,10 +155,10 @@ describe('ChannelModal', () => {
 				onSaved: () => {}
 			}
 		});
-		const toggle = screen.getByLabelText(/Modifier le mot de passe/i) as HTMLInputElement;
+		const toggle = screen.getByLabelText(/Change password/i) as HTMLInputElement;
 		await fireEvent.click(toggle);
-		const pwd = screen.getByLabelText(/Mot de passe SMTP/i) as HTMLInputElement;
-		// After toggling the readonly [défini] input is replaced
+		const pwd = screen.getByLabelText(/SMTP password/i) as HTMLInputElement;
+		// After toggling the readonly [set] input is replaced
 		// with a fresh editable password input.
 		expect(pwd.disabled).toBe(false);
 		expect(pwd.value).toBe('');
@@ -171,13 +171,13 @@ describe('ChannelModal', () => {
 			props: { open: true, channel: null, onClose: () => {}, onSaved }
 		});
 
-		const nameInput = screen.getByLabelText(/^Nom$/i) as HTMLInputElement;
+		const nameInput = screen.getByLabelText(/^Name$/i) as HTMLInputElement;
 		await fireEvent.input(nameInput, { target: { value: 'test-wh' } });
 		// URL intentionally left empty.
-		await fireEvent.click(screen.getByText('Créer'));
+		await fireEvent.click(screen.getByText('Create'));
 
 		await waitFor(() => {
-			expect(screen.getByText(/URL du webhook est requise/i)).toBeTruthy();
+			expect(screen.getByText(/webhook URL is required/i)).toBeTruthy();
 		});
 		expect(createMock).not.toHaveBeenCalled();
 		expect(onSaved).not.toHaveBeenCalled();
@@ -189,16 +189,16 @@ describe('ChannelModal', () => {
 			props: { open: true, channel: null, onClose: () => {}, onSaved: () => {} }
 		});
 
-		await fireEvent.input(screen.getByLabelText(/^Nom$/i), {
+		await fireEvent.input(screen.getByLabelText(/^Name$/i), {
 			target: { value: 'test-wh' }
 		});
 		await fireEvent.input(screen.getByLabelText(/^URL$/i), {
 			target: { value: 'ftp://bad.example.com' }
 		});
-		await fireEvent.click(screen.getByText('Créer'));
+		await fireEvent.click(screen.getByText('Create'));
 
 		await waitFor(() => {
-			expect(screen.getByText(/http:\/\/ ou https:\/\//i)).toBeTruthy();
+			expect(screen.getByText(/http:\/\/ or https:\/\//i)).toBeTruthy();
 		});
 		expect(createMock).not.toHaveBeenCalled();
 	});
@@ -211,13 +211,13 @@ describe('ChannelModal', () => {
 			props: { open: true, channel: null, onClose: () => {}, onSaved }
 		});
 
-		await fireEvent.input(screen.getByLabelText(/^Nom$/i), {
+		await fireEvent.input(screen.getByLabelText(/^Name$/i), {
 			target: { value: 'ops-webhook' }
 		});
 		await fireEvent.input(screen.getByLabelText(/^URL$/i), {
 			target: { value: 'https://hooks.example.com/x' }
 		});
-		await fireEvent.click(screen.getByText('Créer'));
+		await fireEvent.click(screen.getByText('Create'));
 
 		await waitFor(() => {
 			expect(createMock).toHaveBeenCalledTimes(1);
@@ -228,7 +228,7 @@ describe('ChannelModal', () => {
 		expect(onSaved).toHaveBeenCalledTimes(1);
 	});
 
-	it('sends smtpPassword="" on edit when "Modifier" stays unchecked (preserve)', async () => {
+	it('sends smtpPassword="" on edit when "Change password" stays unchecked (preserve)', async () => {
 		updateMock.mockResolvedValue(emailFixture());
 		const Modal = (await import('./ChannelModal.svelte')).default;
 		render(Modal, {
@@ -241,7 +241,7 @@ describe('ChannelModal', () => {
 		});
 
 		// Submit without touching the password toggle.
-		await fireEvent.click(screen.getByText('Enregistrer'));
+		await fireEvent.click(screen.getByText('Save'));
 
 		await waitFor(() => {
 			expect(updateMock).toHaveBeenCalledTimes(1);

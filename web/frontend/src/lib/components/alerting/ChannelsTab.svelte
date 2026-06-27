@@ -26,6 +26,8 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import ChannelModal from './ChannelModal.svelte';
 	import { relativeTime } from '$lib/utils/audit-format';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	const channels = $derived(channelsStore.state.channels);
 	const loading = $derived(channelsStore.state.loading);
@@ -84,16 +86,16 @@
 		try {
 			const res = await channelsStore.test(c.id);
 			if (res.ok) {
-				pushToast(`Canal "${c.name}" testé : envoi réussi.`, 'success');
+				pushToast(t('alerting.channels.toastTestedOk', { name: c.name }), 'success');
 			} else {
 				pushToast(
-					`Canal "${c.name}" : échec — ${res.error ?? 'erreur inconnue'}`,
+					t('alerting.channels.toastTestedFail', { name: c.name, err: res.error ?? t('alerting.channels.toastUnknownErr') }),
 					'danger'
 				);
 			}
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'Erreur réseau';
-			pushToast(`Canal "${c.name}" : ${msg}`, 'danger');
+			const msg = err instanceof ApiError ? err.message : t('alerting.networkError');
+			pushToast(t('alerting.channels.toastTestNamedErr', { name: c.name, err: msg }), 'danger');
 		} finally {
 			testingIds = { ...testingIds, [c.id]: false };
 			// Refresh to pick up LastSentAt/LastError changes.
@@ -113,10 +115,10 @@
 		confirmOpen = false;
 		try {
 			await channelsStore.remove(target.id);
-			pushToast(`Canal "${target.name}" supprimé.`, 'success');
+			pushToast(t('alerting.channels.toastDeleted', { name: target.name }), 'success');
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'Erreur réseau';
-			pushToast(`Suppression échouée : ${msg}`, 'danger');
+			const msg = err instanceof ApiError ? err.message : t('alerting.networkError');
+			pushToast(t('alerting.channels.toastDeleteFailed', { err: msg }), 'danger');
 		} finally {
 			deletingIds = { ...deletingIds, [target.id]: false };
 			confirmTarget = null;
@@ -146,7 +148,8 @@
 	}
 
 	function lastSentLabel(c: AlertChannel): string {
-		if (!c.lastSentAt) return 'Jamais';
+		void language.current;
+		if (!c.lastSentAt) return t('alerting.never');
 		return relativeTime(c.lastSentAt);
 	}
 </script>
@@ -154,7 +157,7 @@
 <div class="space-y-4">
 	<div class="flex justify-end">
 		<Button variant="primary" onclick={openCreate}>
-			{#snippet children()}Ajouter un canal{/snippet}
+			{#snippet children()}{language.current && t('alerting.channels.addBtn')}{/snippet}
 		</Button>
 	</div>
 
@@ -163,9 +166,9 @@
 			class="p-4 rounded bg-down/10 border border-down text-down flex items-center justify-between"
 			role="alert"
 		>
-			<span>⚠ Échec du chargement des canaux : {loadError}</span>
+			<span>{language.current && t('alerting.channels.loadErr', { err: loadError })}</span>
 			<Button variant="secondary" size="sm" onclick={reload} disabled={loading}>
-				{#snippet children()}Réessayer{/snippet}
+				{#snippet children()}{language.current && t('alerting.actionRetry')}{/snippet}
 			</Button>
 		</div>
 	{/if}
@@ -177,17 +180,23 @@
 	{:else if channels.length === 0 && didInitialLoad && !loadError}
 		<div class="rounded-lg border border-border-subtle bg-elevated p-8 text-center">
 			<div class="text-4xl text-muted mb-3">🔔</div>
-			<p class="text-primary font-medium mb-1">Aucun canal configuré</p>
+			<p class="text-primary font-medium mb-1">{language.current && t('alerting.channels.emptyTitle')}</p>
 			<p class="text-secondary text-sm max-w-md mx-auto">
-				Ajoutez un premier canal (webhook ou email) pour commencer à recevoir des
-				notifications. Les canaux sont ensuite ciblés par les règles dans l'onglet
-				Règles.
+				{language.current && t('alerting.channels.emptyBody')}
 			</p>
 		</div>
 	{:else if channels.length > 0}
 		<DataTable
 			items={channels}
-			headers={['Nom', 'Type', 'État', 'Sévérité min', 'Dernier envoi', 'Erreur', 'Actions']}
+			headers={language.current ? [
+				t('alerting.channels.colName'),
+				t('alerting.channels.colType'),
+				t('alerting.channels.colState'),
+				t('alerting.channels.colMinSeverity'),
+				t('alerting.channels.colLastSent'),
+				t('alerting.channels.colError'),
+				t('alerting.channels.colActions')
+			] : []}
 			row={channelRow}
 			interactive={false}
 		/>
@@ -203,29 +212,29 @@
 	<td class="px-4 py-3 text-sm">
 		{#if c.enabled}
 			<Badge variant="status-up">
-				{#snippet children()}Actif{/snippet}
+				{#snippet children()}{language.current && t('alerting.stateEnabled')}{/snippet}
 			</Badge>
 		{:else}
 			<Badge variant="neutral">
-				{#snippet children()}Désactivé{/snippet}
+				{#snippet children()}{language.current && t('alerting.stateDisabled')}{/snippet}
 			</Badge>
 		{/if}
 	</td>
 	<td class="px-4 py-3 text-sm">
-		<span title={`Sévérité minimum filtrée par ce canal. ${severityTooltip(c.minSeverity)}`}>
+		<span title={language.current && t('alerting.channels.severityTooltipPrefix', { tooltip: severityTooltip(c.minSeverity) })}>
 			<Badge variant={severityBadgeVariant(c.minSeverity)}>
 				{#snippet children()}{severityLabelFR(c.minSeverity)}{/snippet}
 			</Badge>
 		</span>
 	</td>
-	<td class="px-4 py-3 text-sm text-secondary" title={c.lastSentAt ?? 'Jamais'}>
+	<td class="px-4 py-3 text-sm text-secondary" title={c.lastSentAt ?? (language.current && t('alerting.never'))}>
 		{lastSentLabel(c)}
 	</td>
 	<td class="px-4 py-3 text-sm">
 		{#if c.lastError}
 			<span title={`${c.lastError}\n(${c.lastErrorAt ?? ''})`}>
 				<Badge variant="status-down">
-					{#snippet children()}Erreur{/snippet}
+					{#snippet children()}{language.current && t('alerting.errorBadge')}{/snippet}
 				</Badge>
 			</span>
 		{:else}
@@ -238,9 +247,9 @@
 				variant="ghost"
 				size="sm"
 				onclick={() => openEdit(c)}
-				aria-label={`Éditer le canal ${c.name}`}
+				aria-label={language.current && t('alerting.channels.ariaEdit', { name: c.name })}
 			>
-				{#snippet children()}Édit{/snippet}
+				{#snippet children()}{language.current && t('alerting.actionEdit')}{/snippet}
 			</Button>
 			<Button
 				variant="ghost"
@@ -248,18 +257,18 @@
 				onclick={() => onTest(c)}
 				disabled={testingIds[c.id]}
 				loading={testingIds[c.id]}
-				aria-label={`Tester le canal ${c.name}`}
+				aria-label={language.current && t('alerting.channels.ariaTest', { name: c.name })}
 			>
-				{#snippet children()}Test{/snippet}
+				{#snippet children()}{language.current && t('alerting.actionTest')}{/snippet}
 			</Button>
 			<Button
 				variant="ghost"
 				size="sm"
 				onclick={() => askDelete(c)}
 				disabled={deletingIds[c.id]}
-				aria-label={`Supprimer le canal ${c.name}`}
+				aria-label={language.current && t('alerting.channels.ariaDelete', { name: c.name })}
 			>
-				{#snippet children()}Suppr.{/snippet}
+				{#snippet children()}{language.current && t('alerting.actionDelete')}{/snippet}
 			</Button>
 		</div>
 	</td>
@@ -274,12 +283,12 @@
 
 <ConfirmDialog
 	bind:open={confirmOpen}
-	title="Supprimer le canal"
-	message={confirmTarget
-		? `Supprimer le canal "${confirmTarget.name}" ? Cette action est irréversible.`
+	title={language.current && t('alerting.channels.confirmTitle')}
+	message={confirmTarget && language.current
+		? t('alerting.channels.confirmMessage', { name: confirmTarget.name })
 		: ''}
-	confirmLabel="Supprimer"
-	cancelLabel="Annuler"
+	confirmLabel={language.current && t('alerting.channels.confirmDeleteLabel')}
+	cancelLabel={language.current && t('alerting.channels.confirmCancelLabel')}
 	confirmVariant="danger"
 	onConfirm={confirmDelete}
 />

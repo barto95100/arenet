@@ -23,10 +23,10 @@
 
 	type TabKey = 'channels' | 'rules' | 'history';
 
-	const TABS: { key: TabKey; label: string }[] = [
-		{ key: 'channels', label: 'Canaux' },
-		{ key: 'rules', label: 'Règles' },
-		{ key: 'history', label: 'Historique' }
+	const TABS: { key: TabKey; labelKey: string }[] = [
+		{ key: 'channels', labelKey: 'alerting.tabChannels' },
+		{ key: 'rules', labelKey: 'alerting.tabRules' },
+		{ key: 'history', labelKey: 'alerting.tabHistory' }
 	];
 
 	let active = $state<TabKey>('channels');
@@ -63,7 +63,7 @@
 <PageHeader title={language.current && t('pageTitles.alerting')} subtitle={language.current && t('pageTitles.alertingSubtitle')} />
 
 <div class="mt-4">
-	<nav class="tab-bar" aria-label="Sections alerting">
+	<nav class="tab-bar" aria-label={language.current && t('alerting.tabsAria')}>
 		{#each TABS as tab (tab.key)}
 			<button
 				type="button"
@@ -72,7 +72,7 @@
 				aria-current={active === tab.key ? 'page' : undefined}
 				onclick={() => selectTab(tab.key)}
 			>
-				{tab.label}
+				{language.current && t(tab.labelKey)}
 			</button>
 		{/each}
 	</nav>

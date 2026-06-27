@@ -36,6 +36,8 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Checkbox from '$lib/components/Checkbox.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	interface Props {
 		open: boolean;
@@ -55,21 +57,41 @@
 		| 'cert_expiry'
 		| 'cert_renewal_failed'
 		| 'system_health';
-	const SOURCES: { value: SourceName; label: string }[] = [
-		{ value: 'waf_event_rate', label: 'Taux d’événements WAF' },
-		{ value: 'cert_expiry', label: 'Expiration de certificat' },
-		{ value: 'cert_renewal_failed', label: 'Échec de renouvellement de certificat' },
-		{ value: 'system_health', label: 'État système' }
-	];
+	const SOURCES = $derived(
+		language.current
+			? [
+					{ value: 'waf_event_rate' as SourceName, label: t('alerting.ruleModal.sourceWafEventRate') },
+					{ value: 'cert_expiry' as SourceName, label: t('alerting.ruleModal.sourceCertExpiry') },
+					{ value: 'cert_renewal_failed' as SourceName, label: t('alerting.ruleModal.sourceCertRenewalFailed') },
+					{ value: 'system_health' as SourceName, label: t('alerting.ruleModal.sourceSystemHealth') }
+				]
+			: [
+					{ value: 'waf_event_rate' as SourceName, label: 'WAF event rate' },
+					{ value: 'cert_expiry' as SourceName, label: 'Certificate expiry' },
+					{ value: 'cert_renewal_failed' as SourceName, label: 'Certificate renewal failure' },
+					{ value: 'system_health' as SourceName, label: 'System health' }
+				]
+	);
 
-	const HEALTH_COMPONENTS: { value: string; label: string }[] = [
-		{ value: '', label: 'Global (toute la santé système)' },
-		{ value: 'caddy', label: 'Caddy' },
-		{ value: 'boltdb', label: 'BoltDB' },
-		{ value: 'metrics', label: 'Métriques' },
-		{ value: 'crowdsec', label: 'CrowdSec' },
-		{ value: 'certmagic', label: 'Certmagic' }
-	];
+	const HEALTH_COMPONENTS = $derived(
+		language.current
+			? [
+					{ value: '', label: t('alerting.ruleModal.healthGlobal') },
+					{ value: 'caddy', label: 'Caddy' },
+					{ value: 'boltdb', label: 'BoltDB' },
+					{ value: 'metrics', label: 'Metrics' },
+					{ value: 'crowdsec', label: 'CrowdSec' },
+					{ value: 'certmagic', label: 'Certmagic' }
+				]
+			: [
+					{ value: '', label: 'Global (all system health)' },
+					{ value: 'caddy', label: 'Caddy' },
+					{ value: 'boltdb', label: 'BoltDB' },
+					{ value: 'metrics', label: 'Metrics' },
+					{ value: 'crowdsec', label: 'CrowdSec' },
+					{ value: 'certmagic', label: 'Certmagic' }
+				]
+	);
 
 	const OPERATORS = ['>', '>=', '<', '<=', '==', '!='] as const;
 	type Operator = (typeof OPERATORS)[number];
@@ -233,15 +255,18 @@
 	// --- formatting helpers -----------------------------------
 
 	function cooldownFormatted(secs: number): string {
-		if (secs < 60) return `${secs} secondes`;
+		void language.current;
+		if (secs < 60) return t('alerting.ruleModal.fmtSecondsShort', { n: secs });
 		if (secs < 3600) {
 			const m = Math.floor(secs / 60);
 			const s = secs % 60;
-			return s === 0 ? `${m} minute${m > 1 ? 's' : ''}` : `${m} min ${s} s`;
+			if (s !== 0) return t('alerting.ruleModal.fmtMinSecs', { m, s });
+			return m > 1 ? t('alerting.ruleModal.fmtMinutesPlural', { n: m }) : t('alerting.ruleModal.fmtMinuteSingular', { n: m });
 		}
 		const h = Math.floor(secs / 3600);
 		const m = Math.floor((secs % 3600) / 60);
-		return m === 0 ? `${h} heure${h > 1 ? 's' : ''}` : `${h} h ${m} min`;
+		if (m !== 0) return t('alerting.ruleModal.fmtHourMin', { h, m });
+		return h > 1 ? t('alerting.ruleModal.fmtHoursPlural', { n: h }) : t('alerting.ruleModal.fmtHourSingular', { n: h });
 	}
 
 	// --- build request from form state ------------------------
@@ -281,40 +306,39 @@
 
 	function buildRequest(): AlertRuleRequest | null {
 		if (!name.trim()) {
-			validationError = 'Le nom est requis.';
+			validationError = t('alerting.ruleModal.errNameRequired');
 			return null;
 		}
 		if (!/^[a-z0-9-]{1,64}$/.test(name.trim())) {
-			validationError =
-				'Le nom doit être en minuscules, alphanumérique et tirets uniquement (1-64 caractères).';
+			validationError = t('alerting.ruleModal.errNameSlug');
 			return null;
 		}
 		if (cooldownSecs < 30 || cooldownSecs > 86400) {
-			validationError = 'Le cooldown doit être compris entre 30 secondes et 24 heures.';
+			validationError = t('alerting.ruleModal.errCooldownRange');
 			return null;
 		}
 		if (channelIds.length === 0) {
-			validationError = 'Sélectionnez au moins un canal.';
+			validationError = t('alerting.ruleModal.errAtLeastOneChannel');
 			return null;
 		}
 		if (kind === 'threshold') {
 			if (!OPERATORS.includes(thresholdOp)) {
-				validationError = `Opérateur ${thresholdOp} non supporté.`;
+				validationError = t('alerting.ruleModal.errOperatorUnsupported', { op: thresholdOp });
 				return null;
 			}
 			if (!Number.isFinite(thresholdValue)) {
-				validationError = 'La valeur seuil doit être numérique.';
+				validationError = t('alerting.ruleModal.errThresholdNumeric');
 				return null;
 			}
 		} else if (kind === 'state') {
 			if (!stateExpected.trim()) {
-				validationError = 'La valeur attendue ne peut pas être vide.';
+				validationError = t('alerting.ruleModal.errExpectedEmpty');
 				return null;
 			}
 		}
 		if (source === 'waf_event_rate') {
 			if (wafWindowSecs < 60 || wafWindowSecs > 86400) {
-				validationError = 'La fenêtre WAF doit être comprise entre 60 secondes et 24 heures.';
+				validationError = t('alerting.ruleModal.errWafWindowRange');
 				return null;
 			}
 		}
@@ -322,8 +346,7 @@
 			// Mirror backend cert_renewal_failed bounds
 			// (source_cert_renewal_failed.go [60s, 7d]).
 			if (certRenewalWindowSecs < 60 || certRenewalWindowSecs > 604800) {
-				validationError =
-					'La fenêtre d’échec de renouvellement doit être comprise entre 60 secondes et 7 jours.';
+				validationError = t('alerting.ruleModal.errCertRenewalWindowRange');
 				return null;
 			}
 		}
@@ -353,14 +376,14 @@
 		try {
 			if (rule) {
 				await rulesStore.update(rule.id, req);
-				pushToast(`Règle "${req.name}" enregistrée.`, 'success');
+				pushToast(t('alerting.ruleModal.toastSaved', { name: req.name }), 'success');
 			} else {
 				await rulesStore.create(req);
-				pushToast(`Règle "${req.name}" créée.`, 'success');
+				pushToast(t('alerting.ruleModal.toastCreated', { name: req.name }), 'success');
 			}
 			onSaved();
 		} catch (err) {
-			validationError = err instanceof ApiError ? err.message : 'Erreur réseau';
+			validationError = err instanceof ApiError ? err.message : t('alerting.networkError');
 		} finally {
 			submitting = false;
 		}
@@ -368,15 +391,15 @@
 
 	function summariseTest(res: AlertRuleTestResponse): string {
 		if (res.sent) {
-			return `Envoi réussi sur ${res.channelsFired.length} canal/aux.`;
+			return t('alerting.ruleModal.summaryTestOk', { count: res.channelsFired.length });
 		}
 		const lines: string[] = [];
-		lines.push(`Envoyés : ${res.channelsFired.length}`);
+		lines.push(t('alerting.ruleModal.summaryTestSentLine', { count: res.channelsFired.length }));
 		if (res.errors && Object.keys(res.errors).length > 0) {
-			lines.push(`Échecs : ${Object.keys(res.errors).length}`);
+			lines.push(t('alerting.ruleModal.summaryTestErrorsLine', { count: Object.keys(res.errors).length }));
 		}
 		if (res.skipped && Object.keys(res.skipped).length > 0) {
-			lines.push(`Ignorés : ${Object.keys(res.skipped).length}`);
+			lines.push(t('alerting.ruleModal.summaryTestSkippedLine', { count: Object.keys(res.skipped).length }));
 		}
 		return lines.join(' · ');
 	}
@@ -388,38 +411,38 @@
 		try {
 			const res = await alertingApi.testRule(rule.id);
 			testResultLine = summariseTest(res);
-			pushToast(`Règle "${rule.name}" : ${testResultLine}`, res.sent ? 'success' : 'info');
+			pushToast(t('alerting.ruleModal.toastRuleResult', { name: rule.name, line: testResultLine }), res.sent ? 'success' : 'info');
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'Erreur réseau';
+			const msg = err instanceof ApiError ? err.message : t('alerting.networkError');
 			testResultLine = msg;
-			pushToast(`Règle "${rule.name}" : ${msg}`, 'danger');
+			pushToast(t('alerting.ruleModal.toastRuleErr', { name: rule.name, err: msg }), 'danger');
 		} finally {
 			testing = false;
 		}
 	}
 </script>
 
-<Modal {open} title={isEdit ? 'Modifier la règle' : 'Ajouter une règle'} {onClose} width="lg">
+<Modal {open} title={language.current && (isEdit ? t('alerting.ruleModal.titleEdit') : t('alerting.ruleModal.titleCreate'))} {onClose} width="lg">
 	<form onsubmit={onSubmit} class="space-y-4">
 		<!-- Common: identity + severity -->
-		<Input bind:value={name} label="Nom (slug)" placeholder="block-rate-elevated" required />
+		<Input bind:value={name} label={language.current && t('alerting.ruleModal.labelName')} placeholder={t('alerting.ruleModal.placeholderName')} required />
 
 		<div class="flex items-center gap-4">
-			<Checkbox bind:checked={enabled} label="Actif" />
+			<Checkbox bind:checked={enabled} label={language.current && t('alerting.ruleModal.labelEnabled')} />
 		</div>
 
 		<div class="grid grid-cols-2 gap-4">
-			<Input bind:value={category} label="Catégorie" placeholder="waf / cert / system / ..." />
+			<Input bind:value={category} label={language.current && t('alerting.ruleModal.labelCategory')} placeholder={t('alerting.ruleModal.placeholderCategory')} />
 			<div>
 				<label for="rule-severity" class="text-sm font-medium text-secondary mb-1.5 block">
-					Sévérité
+					{language.current && t('alerting.ruleModal.labelSeverity')}
 				</label>
 				<select
 					id="rule-severity"
 					bind:value={severity}
 					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 				>
-					{#each SEVERITY_TOKENS as _t, i (i)}
+					{#each SEVERITY_TOKENS as _tok, i (i)}
 						<option value={i}>{severityLabelFR(i)}</option>
 					{/each}
 				</select>
@@ -431,7 +454,7 @@
 		<!-- Source picker + dynamic per-source form -->
 		<div>
 			<label for="rule-source" class="text-sm font-medium text-secondary mb-1.5 block">
-				Source
+				{language.current && t('alerting.ruleModal.labelSource')}
 			</label>
 			<select
 				id="rule-source"
@@ -448,14 +471,14 @@
 			<div class="grid grid-cols-3 gap-4">
 				<div>
 					<label for="waf-route" class="text-sm font-medium text-secondary mb-1.5 block">
-						Route
+						{language.current && t('alerting.ruleModal.labelRoute')}
 					</label>
 					<select
 						id="waf-route"
 						bind:value={wafRouteId}
 						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 					>
-						<option value="">Toutes les routes</option>
+						<option value="">{language.current && t('alerting.ruleModal.routeAll')}</option>
 						{#each routes as r (r.id)}
 							<option value={r.id}>{r.host}</option>
 						{/each}
@@ -466,7 +489,7 @@
 						for="waf-window"
 						class="text-sm font-medium text-secondary mb-1.5 block"
 					>
-						Fenêtre (secondes)
+						{language.current && t('alerting.ruleModal.labelWindowSecs')}
 					</label>
 					<input
 						id="waf-window"
@@ -482,14 +505,14 @@
 						for="waf-action"
 						class="text-sm font-medium text-secondary mb-1.5 block"
 					>
-						Action
+						{language.current && t('alerting.ruleModal.labelAction')}
 					</label>
 					<select
 						id="waf-action"
 						bind:value={wafAction}
 						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 					>
-						<option value="">Toutes</option>
+						<option value="">{language.current && t('alerting.ruleModal.actionAll')}</option>
 						<option value="BLOCK">BLOCK</option>
 						<option value="DETECT">DETECT</option>
 					</select>
@@ -498,27 +521,25 @@
 		{:else if source === 'cert_expiry'}
 			<Input
 				bind:value={certHost}
-				label="Hôte (optionnel)"
-				placeholder="vide = certificat expirant le plus tôt"
+				label={language.current && t('alerting.ruleModal.labelHostOptional')}
+				placeholder={t('alerting.ruleModal.placeholderHostOptional')}
 			/>
 			<p class="text-xs text-secondary -mt-2">
-				Combiné avec un seuil (ex : opérateur <code>&lt;</code> et valeur <code>14</code>)
-				dans le formulaire d’évaluation ci-dessous, alerte quand un certificat expire
-				bientôt.
+				{language.current && t('alerting.ruleModal.certExpiryHelper')}
 			</p>
 		{:else if source === 'cert_renewal_failed'}
 			<div class="grid grid-cols-2 gap-4">
 				<Input
 					bind:value={certRenewalDomain}
-					label="Domaine (optionnel)"
-					placeholder="vide = tous les domaines"
+					label={language.current && t('alerting.ruleModal.labelDomainOptional')}
+					placeholder={t('alerting.ruleModal.placeholderDomainOptional')}
 				/>
 				<div>
 					<label
 						for="cert-renewal-window"
 						class="text-sm font-medium text-secondary mb-1.5 block"
 					>
-						Fenêtre d’échec (secondes)
+						{language.current && t('alerting.ruleModal.labelRenewalWindow')}
 					</label>
 					<input
 						id="cert-renewal-window"
@@ -531,9 +552,7 @@
 				</div>
 			</div>
 			<p class="text-xs text-secondary -mt-2">
-				Combiné avec un seuil <code>&gt; 0</code> dans le formulaire d’évaluation ci-dessous,
-				alerte sur tout échec de renouvellement ACME (Let’s Encrypt, ZeroSSL…) dans la
-				fenêtre. Défaut 24 h — correspond à la cadence de retry Let’s Encrypt.
+				{language.current && t('alerting.ruleModal.certRenewalHelper')}
 			</p>
 		{:else if source === 'system_health'}
 			<div>
@@ -541,7 +560,7 @@
 					for="health-component"
 					class="text-sm font-medium text-secondary mb-1.5 block"
 				>
-					Composant
+					{language.current && t('alerting.ruleModal.labelComponent')}
 				</label>
 				<select
 					id="health-component"
@@ -559,7 +578,7 @@
 
 		<!-- Kind picker + dynamic per-kind eval form -->
 		<fieldset>
-			<legend class="text-sm font-medium text-secondary mb-1.5">Type de règle</legend>
+			<legend class="text-sm font-medium text-secondary mb-1.5">{language.current && t('alerting.ruleModal.ruleTypeLegend')}</legend>
 			<div class="flex gap-4">
 				<label class="flex items-center gap-2 text-sm" class:opacity-50={isEdit}>
 					<input
@@ -568,7 +587,7 @@
 						value="threshold"
 						disabled={isEdit}
 					/>
-					Seuil (numérique)
+					{language.current && t('alerting.ruleModal.kindThresholdRadio')}
 				</label>
 				<label class="flex items-center gap-2 text-sm" class:opacity-50={isEdit}>
 					<input
@@ -577,12 +596,12 @@
 						value="state"
 						disabled={isEdit}
 					/>
-					État (chaîne)
+					{language.current && t('alerting.ruleModal.kindStateRadio')}
 				</label>
 			</div>
 			{#if isEdit}
 				<p class="text-xs text-secondary mt-1">
-					Le type ne peut pas être modifié après création.
+					{language.current && t('alerting.ruleModal.kindLockedAfterCreate')}
 				</p>
 			{/if}
 		</fieldset>
@@ -594,7 +613,7 @@
 						for="threshold-op"
 						class="text-sm font-medium text-secondary mb-1.5 block"
 					>
-						Opérateur
+						{language.current && t('alerting.ruleModal.labelOperator')}
 					</label>
 					<select
 						id="threshold-op"
@@ -611,7 +630,7 @@
 						for="threshold-value"
 						class="text-sm font-medium text-secondary mb-1.5 block"
 					>
-						Valeur seuil
+						{language.current && t('alerting.ruleModal.labelThresholdValue')}
 					</label>
 					<input
 						id="threshold-value"
@@ -624,8 +643,8 @@
 		{:else}
 			<Input
 				bind:value={stateExpected}
-				label="Valeur attendue"
-				placeholder="degraded / unhealthy / healthy / ..."
+				label={language.current && t('alerting.ruleModal.labelExpectedValue')}
+				placeholder={t('alerting.ruleModal.placeholderExpectedValue')}
 				required
 			/>
 		{/if}
@@ -635,13 +654,13 @@
 		<!-- Channels multi-select -->
 		<div>
 			<span class="text-sm font-medium text-secondary mb-1.5 block">
-				Canaux ({channelIds.length} sélectionné{channelIds.length === 1 ? '' : 's'})
+				{language.current && t('alerting.ruleModal.channelsLabel', { count: channelIds.length })}
 			</span>
 			{#if channelsStore.state.loading && availableChannels.length === 0}
-				<p class="text-xs text-secondary">Chargement…</p>
+				<p class="text-xs text-secondary">{language.current && t('alerting.ruleModal.channelsLoading')}</p>
 			{:else if availableChannels.length === 0}
 				<p class="text-xs text-secondary">
-					Aucun canal actif disponible. Créez d’abord un canal dans l’onglet Canaux.
+					{language.current && t('alerting.ruleModal.channelsEmpty')}
 				</p>
 			{:else}
 				<div class="space-y-1 max-h-40 overflow-y-auto border border-border-subtle rounded p-2">
@@ -663,7 +682,7 @@
 		<!-- Cooldown -->
 		<div>
 			<label for="rule-cooldown" class="text-sm font-medium text-secondary mb-1.5 block">
-				Cooldown (secondes)
+				{language.current && t('alerting.ruleModal.labelCooldownSecs')}
 			</label>
 			<input
 				id="rule-cooldown"
@@ -673,13 +692,13 @@
 				max="86400"
 				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 			/>
-			<p class="text-xs text-secondary mt-1">≈ {cooldownFormatted(cooldownSecs)}</p>
+			<p class="text-xs text-secondary mt-1">{language.current && t('alerting.ruleModal.cooldownApprox', { formatted: cooldownFormatted(cooldownSecs) })}</p>
 		</div>
 
 		<!-- Templates -->
 		<details>
 			<summary class="text-sm text-secondary cursor-pointer">
-				Templates de notification (optionnel)
+				{language.current && t('alerting.ruleModal.templatesSection')}
 			</summary>
 			<div class="mt-3 space-y-3 pl-2 border-l border-border-subtle">
 				<div>
@@ -687,7 +706,7 @@
 						for="rule-subject-tmpl"
 						class="text-sm font-medium text-secondary mb-1.5 block"
 					>
-						Template du sujet
+						{language.current && t('alerting.ruleModal.labelSubjectTemplate')}
 					</label>
 					<input
 						id="rule-subject-tmpl"
@@ -701,18 +720,18 @@
 						for="rule-body-tmpl"
 						class="text-sm font-medium text-secondary mb-1.5 block"
 					>
-						Template du corps
+						{language.current && t('alerting.ruleModal.labelBodyTemplate')}
 					</label>
 					<textarea
 						id="rule-body-tmpl"
 						bind:value={bodyTemplate}
 						rows="3"
-						placeholder={`Source {{.Source}} a déclenché à {{.Value}}`}
+						placeholder={`Source {{.Source}} fired at {{.Value}}`}
 						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 					></textarea>
 				</div>
 				<p class="text-xs text-secondary">
-					Placeholders disponibles : <code>{`{{.RuleName}}`}</code>,
+					{language.current && t('alerting.ruleModal.templatesPlaceholdersAvailable')} <code>{`{{.RuleName}}`}</code>,
 					<code>{`{{.Severity}}`}</code>, <code>{`{{.Source}}`}</code>,
 					<code>{`{{.Value}}`}</code>, <code>{`{{.Subject}}`}</code>.
 				</p>
@@ -721,7 +740,7 @@
 
 		{#if testResultLine}
 			<div class="p-3 rounded bg-elevated border border-border-default text-sm text-primary">
-				Résultat du test : {testResultLine}
+				{language.current && t('alerting.ruleModal.testResultLine', { line: testResultLine })}
 			</div>
 		{/if}
 
@@ -740,11 +759,11 @@
 				disabled={testing || submitting}
 				loading={testing}
 			>
-				{#snippet children()}Tester la règle{/snippet}
+				{#snippet children()}{language.current && t('alerting.ruleModal.btnTest')}{/snippet}
 			</Button>
 		{/if}
 		<Button variant="ghost" onclick={onClose} disabled={submitting}>
-			{#snippet children()}Annuler{/snippet}
+			{#snippet children()}{language.current && t('alerting.ruleModal.btnCancel')}{/snippet}
 		</Button>
 		<Button
 			variant="primary"
@@ -752,7 +771,7 @@
 			disabled={submitting}
 			loading={submitting}
 		>
-			{#snippet children()}{isEdit ? 'Enregistrer' : 'Créer'}{/snippet}
+			{#snippet children()}{language.current && (isEdit ? t('alerting.ruleModal.btnSave') : t('alerting.ruleModal.btnCreate'))}{/snippet}
 		</Button>
 	{/snippet}
 </Modal>

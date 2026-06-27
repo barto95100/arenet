@@ -32,6 +32,8 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { relativeTime } from '$lib/utils/audit-format';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	const DEBOUNCE_MS = 300;
 	const PAGE_SIZE = 50;
@@ -72,7 +74,7 @@
 			if (!reset) {
 				// Load-more failure: keep existing rows visible,
 				// surface as toast (mirrors /audit's pattern).
-				const msg = err instanceof ApiError ? err.message : 'Échec du chargement';
+				const msg = err instanceof ApiError ? err.message : t('alerting.loadFailed');
 				pushToast(msg, 'danger');
 			}
 		} finally {
@@ -118,18 +120,18 @@
 	);
 
 	const emptyStateMessage = $derived(
-		hasAnyFilter
-			? 'Aucun événement ne correspond aux filtres actuels.'
-			: 'Aucun événement enregistré pour le moment. Créez un canal puis une règle dans les onglets ci-dessus, puis cliquez sur Test pour générer un premier événement.'
+		language.current &&
+			(hasAnyFilter
+				? t('alerting.history.emptyFiltered')
+				: t('alerting.history.emptyNoFilters'))
 	);
 
 	const a11yStatus = $derived.by(() => {
-		if (loading) return 'Chargement des événements…';
-		if (loadError) return `Échec : ${loadError}`;
+		void language.current;
+		if (loading) return t('alerting.history.a11yLoading');
+		if (loadError) return t('alerting.history.a11yError', { err: loadError });
 		if (events.length === 0 && didInitialLoad) return emptyStateMessage;
-		return `${events.length} événement${events.length === 1 ? '' : 's'} chargé${
-			events.length === 1 ? '' : 's'
-		}`;
+		return t('alerting.history.a11yCount', { count: events.length, plural: events.length === 1 ? '' : 's' });
 	});
 
 	function failedCount(ev: AlertEvent): number {
@@ -147,8 +149,7 @@
 <div class="space-y-6">
 	{#if degraded}
 		<div class="rounded border border-down/40 bg-down/10 px-4 py-3 text-sm text-down" role="alert">
-			Observabilité indisponible : l'historique des alertes n'est pas accessible. Vérifiez
-			que <code>metrics.db</code> est ouvert.
+			{language.current && t('alerting.history.degradedNotice')}
 		</div>
 	{/if}
 
@@ -156,21 +157,21 @@
 	<div
 		class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 p-4 bg-elevated border border-border-default rounded-lg"
 	>
-		<Input bind:value={fromValue} label="Depuis (RFC 3339)" placeholder="2026-06-15T00:00:00Z" />
-		<Input bind:value={toValue} label="Jusqu'à (RFC 3339)" placeholder="2026-06-16T00:00:00Z" />
+		<Input bind:value={fromValue} label={language.current && t('alerting.history.filterFromLabel')} placeholder="2026-06-15T00:00:00Z" />
+		<Input bind:value={toValue} label={language.current && t('alerting.history.filterToLabel')} placeholder="2026-06-16T00:00:00Z" />
 		<div>
 			<label
 				for="alerting-severity-filter"
 				class="text-sm font-medium text-secondary mb-1.5 block"
 			>
-				Sévérité
+				{language.current && t('alerting.history.filterSeverityLabel')}
 			</label>
 			<select
 				id="alerting-severity-filter"
 				bind:value={severityFilter}
 				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 			>
-				<option value="">Toutes</option>
+				<option value="">{language.current && t('alerting.history.filterAllSeverities')}</option>
 				{#each SEVERITY_TOKENS as token, i (token)}
 					<option value={String(i)}>{severityLabelFR(i)}</option>
 				{/each}
@@ -181,26 +182,26 @@
 				for="alerting-rule-filter"
 				class="text-sm font-medium text-secondary mb-1.5 block"
 			>
-				Règle
+				{language.current && t('alerting.history.filterRuleLabel')}
 			</label>
 			<select
 				id="alerting-rule-filter"
 				bind:value={ruleFilter}
 				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 			>
-				<option value="">Toutes</option>
+				<option value="">{language.current && t('alerting.history.filterAllRules')}</option>
 				{#each rules as r (r.id)}
 					<option value={r.id}>{r.name}</option>
 				{/each}
 			</select>
 		</div>
-		<Input bind:value={categoryFilter} label="Catégorie" placeholder="waf / cert / ..." />
+		<Input bind:value={categoryFilter} label={language.current && t('alerting.history.filterCategoryLabel')} placeholder={language.current && t('alerting.history.filterCategoryPlaceholder')} />
 	</div>
 
 	{#if hasAnyFilter}
 		<div class="flex">
 			<Button variant="ghost" size="sm" onclick={clearFilters}>
-				{#snippet children()}Réinitialiser les filtres{/snippet}
+				{#snippet children()}{language.current && t('alerting.history.resetFilters')}{/snippet}
 			</Button>
 		</div>
 	{/if}
@@ -210,9 +211,9 @@
 			class="p-4 rounded bg-down/10 border border-down text-down flex items-center justify-between"
 			role="alert"
 		>
-			<span>⚠ Échec du chargement : {loadError}</span>
+			<span>{language.current && t('alerting.history.loadErr', { err: loadError })}</span>
 			<Button variant="secondary" size="sm" onclick={() => load(true)} disabled={loading}>
-				{#snippet children()}Réessayer{/snippet}
+				{#snippet children()}{language.current && t('alerting.actionRetry')}{/snippet}
 			</Button>
 		</div>
 	{/if}
@@ -226,7 +227,15 @@
 	{:else if events.length > 0}
 		<DataTable
 			items={events.map((e) => ({ ...e, id: e.eventId }))}
-			headers={['Date', 'Règle', 'Sévérité', 'Catégorie', 'Sujet', 'Envoyés', 'Échecs']}
+			headers={language.current ? [
+				t('alerting.history.colDate'),
+				t('alerting.history.colRule'),
+				t('alerting.history.colSeverity'),
+				t('alerting.history.colCategory'),
+				t('alerting.history.colSubject'),
+				t('alerting.history.colSent'),
+				t('alerting.history.colFailed')
+			] : []}
 			row={historyRowSnippet}
 			interactive={false}
 		/>
@@ -241,7 +250,7 @@
 					loading={loadMoreLoading}
 				>
 					{#snippet children()}
-						<span>{loadMoreLoading ? 'Chargement…' : 'Charger plus'}</span>
+						<span>{language.current && (loadMoreLoading ? t('alerting.history.loadingMore') : t('alerting.history.loadMore'))}</span>
 					{/snippet}
 				</Button>
 			</div>

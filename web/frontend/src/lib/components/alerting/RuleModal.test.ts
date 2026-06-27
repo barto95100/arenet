@@ -122,10 +122,10 @@ describe('RuleModal', () => {
 		});
 
 		// waf_event_rate exposes a window/action/route trio.
-		expect(screen.getByLabelText(/Fenêtre/i)).toBeTruthy();
+		expect(screen.getByLabelText(/Window/i)).toBeTruthy();
 		expect(screen.getByLabelText(/Action/i)).toBeTruthy();
 		// cert_expiry-only label must NOT be present.
-		expect(screen.queryByLabelText(/Hôte/i)).toBeNull();
+		expect(screen.queryByLabelText(/Host/i)).toBeNull();
 	});
 
 	it('swaps to cert_expiry sub-form when source = cert_expiry', async () => {
@@ -137,9 +137,9 @@ describe('RuleModal', () => {
 		const sourceSelect = screen.getByLabelText(/^Source$/i) as HTMLSelectElement;
 		await fireEvent.change(sourceSelect, { target: { value: 'cert_expiry' } });
 
-		expect(screen.getByLabelText(/Hôte/i)).toBeTruthy();
+		expect(screen.getByLabelText(/Host/i)).toBeTruthy();
 		// waf_event_rate fields gone.
-		expect(screen.queryByLabelText(/Fenêtre/i)).toBeNull();
+		expect(screen.queryByLabelText(/Window/i)).toBeNull();
 	});
 
 	it('swaps to system_health sub-form when source = system_health', async () => {
@@ -151,9 +151,9 @@ describe('RuleModal', () => {
 		const sourceSelect = screen.getByLabelText(/^Source$/i) as HTMLSelectElement;
 		await fireEvent.change(sourceSelect, { target: { value: 'system_health' } });
 
-		expect(screen.getByLabelText(/Composant/i)).toBeTruthy();
-		expect(screen.queryByLabelText(/Fenêtre/i)).toBeNull();
-		expect(screen.queryByLabelText(/Hôte/i)).toBeNull();
+		expect(screen.getByLabelText(/Component/i)).toBeTruthy();
+		expect(screen.queryByLabelText(/Window/i)).toBeNull();
+		expect(screen.queryByLabelText(/Host/i)).toBeNull();
 	});
 
 	it('lists cert_renewal_failed as a selectable Source option (hotfix Cert.A.2)', async () => {
@@ -181,11 +181,11 @@ describe('RuleModal', () => {
 		await fireEvent.change(sourceSelect, { target: { value: 'cert_renewal_failed' } });
 
 		// Sub-form's own inputs are present.
-		expect(screen.getByLabelText(/Domaine/i)).toBeTruthy();
-		expect(screen.getByLabelText(/Fenêtre d’échec/i)).toBeTruthy();
+		expect(screen.getByLabelText(/Domain/i)).toBeTruthy();
+		expect(screen.getByLabelText(/Failure window/i)).toBeTruthy();
 		// Other sub-forms gone.
 		expect(screen.queryByLabelText(/^Hôte/i)).toBeNull();
-		expect(screen.queryByLabelText(/Composant/i)).toBeNull();
+		expect(screen.queryByLabelText(/Component/i)).toBeNull();
 	});
 
 	it('swaps to State eval form when kind=state', async () => {
@@ -194,11 +194,11 @@ describe('RuleModal', () => {
 			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
 		});
 
-		const stateRadio = screen.getByLabelText(/État \(chaîne\)/i) as HTMLInputElement;
+		const stateRadio = screen.getByLabelText(/State \(string\)/i) as HTMLInputElement;
 		await fireEvent.click(stateRadio);
 
-		expect(screen.getByLabelText(/Valeur attendue/i)).toBeTruthy();
-		expect(screen.queryByLabelText(/Opérateur/i)).toBeNull();
+		expect(screen.getByLabelText(/Expected value/i)).toBeTruthy();
+		expect(screen.queryByLabelText(/Operator/i)).toBeNull();
 	});
 
 	it('disables the kind selector in edit mode', async () => {
@@ -207,8 +207,8 @@ describe('RuleModal', () => {
 			props: { open: true, rule: thresholdRule(), onClose: () => {}, onSaved: () => {} }
 		});
 
-		const threshRadio = screen.getByLabelText(/Seuil \(numérique\)/i) as HTMLInputElement;
-		const stateRadio = screen.getByLabelText(/État \(chaîne\)/i) as HTMLInputElement;
+		const threshRadio = screen.getByLabelText(/Threshold \(numeric\)/i) as HTMLInputElement;
+		const stateRadio = screen.getByLabelText(/State \(string\)/i) as HTMLInputElement;
 		expect(threshRadio.disabled).toBe(true);
 		expect(stateRadio.disabled).toBe(true);
 	});
@@ -225,14 +225,14 @@ describe('RuleModal', () => {
 		});
 
 		// Fill required scalar fields.
-		await fireEvent.input(screen.getByLabelText(/^Nom \(slug\)$/i), {
+		await fireEvent.input(screen.getByLabelText(/^Name \(slug\)$/i), {
 			target: { value: 'no-channels' }
 		});
 		// Don't tick any channel checkbox.
-		await fireEvent.click(screen.getByText('Créer'));
+		await fireEvent.click(screen.getByText('Create'));
 
 		await waitFor(() => {
-			expect(screen.getByText(/au moins un canal/i)).toBeTruthy();
+			expect(screen.getByText(/at least one channel/i)).toBeTruthy();
 		});
 		expect(createMock).not.toHaveBeenCalled();
 	});
@@ -243,7 +243,7 @@ describe('RuleModal', () => {
 			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
 		});
 
-		await fireEvent.input(screen.getByLabelText(/^Nom \(slug\)$/i), {
+		await fireEvent.input(screen.getByLabelText(/^Name \(slug\)$/i), {
 			target: { value: 'Block Rate High!' } // spaces + caps + bang
 		});
 		// Tick a channel so the only invariant left is the name.
@@ -252,10 +252,10 @@ describe('RuleModal', () => {
 		});
 		const opsWh = screen.getByText('ops-webhook').previousElementSibling as HTMLInputElement;
 		await fireEvent.click(opsWh);
-		await fireEvent.click(screen.getByText('Créer'));
+		await fireEvent.click(screen.getByText('Create'));
 
 		await waitFor(() => {
-			expect(screen.getByText(/minuscules.*alphanumérique.*tirets/i)).toBeTruthy();
+			expect(screen.getByText(/lowercase.*alphanumeric.*dashes/i)).toBeTruthy();
 		});
 		expect(createMock).not.toHaveBeenCalled();
 	});
@@ -272,12 +272,12 @@ describe('RuleModal', () => {
 			expect(screen.getByText('ops-webhook')).toBeTruthy();
 		});
 
-		await fireEvent.input(screen.getByLabelText(/^Nom \(slug\)$/i), {
+		await fireEvent.input(screen.getByLabelText(/^Name \(slug\)$/i), {
 			target: { value: 'block-rate' }
 		});
 		const opsWh = screen.getByText('ops-webhook').previousElementSibling as HTMLInputElement;
 		await fireEvent.click(opsWh);
-		await fireEvent.click(screen.getByText('Créer'));
+		await fireEvent.click(screen.getByText('Create'));
 
 		await waitFor(() => {
 			expect(createMock).toHaveBeenCalledTimes(1);
@@ -302,16 +302,16 @@ describe('RuleModal', () => {
 			props: { open: true, rule: thresholdRule(), onClose: () => {}, onSaved: () => {} }
 		});
 
-		const nameInput = screen.getByLabelText(/^Nom \(slug\)$/i) as HTMLInputElement;
+		const nameInput = screen.getByLabelText(/^Name \(slug\)$/i) as HTMLInputElement;
 		expect(nameInput.value).toBe('block-rate');
 
 		const sourceSelect = screen.getByLabelText(/^Source$/i) as HTMLSelectElement;
 		expect(sourceSelect.value).toBe('waf_event_rate');
 
-		const opSelect = screen.getByLabelText(/Opérateur/i) as HTMLSelectElement;
+		const opSelect = screen.getByLabelText(/Operator/i) as HTMLSelectElement;
 		expect(opSelect.value).toBe('>');
 
-		const valueInput = screen.getByLabelText(/Valeur seuil/i) as HTMLInputElement;
+		const valueInput = screen.getByLabelText(/Threshold value/i) as HTMLInputElement;
 		expect(Number(valueInput.value)).toBe(50);
 
 		// The pre-populated channel checkbox is ticked.

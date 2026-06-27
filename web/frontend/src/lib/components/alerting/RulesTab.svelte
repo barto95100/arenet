@@ -28,6 +28,8 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import RuleModal from './RuleModal.svelte';
 	import { relativeTime } from '$lib/utils/audit-format';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	const rules = $derived(rulesStore.state.rules);
 	const loading = $derived(rulesStore.state.loading);
@@ -90,7 +92,7 @@
 	function summariseTest(name: string, res: AlertRuleTestResponse): { msg: string; variant: 'success' | 'danger' | 'info' } {
 		if (res.sent) {
 			return {
-				msg: `Règle "${name}" testée : envoi vers ${res.channelsFired.length} canal/aux.`,
+				msg: t('alerting.rules.summaryTestOk', { name, count: res.channelsFired.length }),
 				variant: 'success'
 			};
 		}
@@ -98,17 +100,17 @@
 		const skippedCount = res.skipped ? Object.keys(res.skipped).length : 0;
 		if (failedCount > 0) {
 			return {
-				msg: `Règle "${name}" : ${res.channelsFired.length} envoyé(s), ${failedCount} échec(s).`,
+				msg: t('alerting.rules.summaryTestErrors', { name, sent: res.channelsFired.length, failed: failedCount }),
 				variant: 'danger'
 			};
 		}
 		if (skippedCount > 0) {
 			return {
-				msg: `Règle "${name}" : ${res.channelsFired.length} envoyé(s), ${skippedCount} ignoré(s) (canal désactivé ou sévérité min).`,
+				msg: t('alerting.rules.summaryTestSkipped', { name, sent: res.channelsFired.length, skipped: skippedCount }),
 				variant: 'info'
 			};
 		}
-		return { msg: `Règle "${name}" : aucun canal joignable.`, variant: 'danger' };
+		return { msg: t('alerting.rules.summaryTestNoChannels', { name }), variant: 'danger' };
 	}
 
 	async function onTest(r: AlertRule) {
@@ -118,8 +120,8 @@
 			const { msg, variant } = summariseTest(r.name, res);
 			pushToast(msg, variant);
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'Erreur réseau';
-			pushToast(`Règle "${r.name}" : ${msg}`, 'danger');
+			const msg = err instanceof ApiError ? err.message : t('alerting.networkError');
+			pushToast(t('alerting.rules.toastTestNamedErr', { name: r.name, err: msg }), 'danger');
 		} finally {
 			testingIds = { ...testingIds, [r.id]: false };
 			void reload();
@@ -138,10 +140,10 @@
 		confirmOpen = false;
 		try {
 			await rulesStore.remove(target.id);
-			pushToast(`Règle "${target.name}" supprimée.`, 'success');
+			pushToast(t('alerting.rules.toastDeleted', { name: target.name }), 'success');
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'Erreur réseau';
-			pushToast(`Suppression échouée : ${msg}`, 'danger');
+			const msg = err instanceof ApiError ? err.message : t('alerting.networkError');
+			pushToast(t('alerting.rules.toastDeleteFailed', { err: msg }), 'danger');
 		} finally {
 			deletingIds = { ...deletingIds, [target.id]: false };
 			confirmTarget = null;
@@ -149,7 +151,8 @@
 	}
 
 	function kindLabel(kind: string): string {
-		return kind === 'threshold' ? 'Seuil' : kind === 'state' ? 'État' : kind;
+		void language.current;
+		return kind === 'threshold' ? t('alerting.rules.kindThreshold') : kind === 'state' ? t('alerting.rules.kindState') : kind;
 	}
 
 	function cooldownLabel(secs: number): string {
@@ -168,27 +171,31 @@
 	}
 
 	function lastEvalLabel(r: AlertRule): string {
-		if (!r.lastEvalAt) return 'Jamais';
+		void language.current;
+		if (!r.lastEvalAt) return t('alerting.never');
 		return relativeTime(r.lastEvalAt);
 	}
 
 	function lastEvalTooltip(r: AlertRule): string {
+		void language.current;
 		if (!r.lastEvalAt) {
 			return r.enabled
-				? "Pas encore évaluée — le watcher polle toutes les 30 secondes ; patientez ou attendez le prochain tick."
-				: 'Règle désactivée — le watcher l’ignore.';
+				? t('alerting.rules.lastEvalTooltipPendingEnabled')
+				: t('alerting.rules.lastEvalTooltipDisabled');
 		}
 		return r.lastEvalAt;
 	}
 
 	function lastFireLabel(r: AlertRule): string {
-		if (!r.lastFiredAt) return 'Jamais';
+		void language.current;
+		if (!r.lastFiredAt) return t('alerting.never');
 		return relativeTime(r.lastFiredAt);
 	}
 
 	function lastFireTooltip(r: AlertRule): string {
+		void language.current;
 		if (!r.lastFiredAt) {
-			return "Jamais déclenchée. La condition n’a pas été satisfaite depuis la création, ou la règle est encore en cooldown. Utilisez le bouton Test pour forcer un envoi sans attendre.";
+			return t('alerting.rules.lastFireTooltipNever');
 		}
 		return r.lastFiredAt;
 	}
@@ -197,7 +204,7 @@
 <div class="space-y-4">
 	<div class="flex justify-end">
 		<Button variant="primary" onclick={openCreate}>
-			{#snippet children()}Ajouter une règle{/snippet}
+			{#snippet children()}{language.current && t('alerting.rules.addBtn')}{/snippet}
 		</Button>
 	</div>
 
@@ -206,9 +213,9 @@
 			class="p-4 rounded bg-down/10 border border-down text-down flex items-center justify-between"
 			role="alert"
 		>
-			<span>⚠ Échec du chargement des règles : {loadError}</span>
+			<span>{language.current && t('alerting.rules.loadErr', { err: loadError })}</span>
 			<Button variant="secondary" size="sm" onclick={reload} disabled={loading}>
-				{#snippet children()}Réessayer{/snippet}
+				{#snippet children()}{language.current && t('alerting.actionRetry')}{/snippet}
 			</Button>
 		</div>
 	{/if}
@@ -220,28 +227,26 @@
 	{:else if rules.length === 0 && didInitialLoad && !loadError}
 		<div class="rounded-lg border border-border-subtle bg-elevated p-8 text-center">
 			<div class="text-4xl text-muted mb-3">⚙️</div>
-			<p class="text-primary font-medium mb-1">Aucune règle configurée</p>
+			<p class="text-primary font-medium mb-1">{language.current && t('alerting.rules.emptyTitle')}</p>
 			<p class="text-secondary text-sm max-w-md mx-auto">
-				Ajoutez une première règle (seuil sur les blocages WAF, expiration des certificats,
-				ou état système) pour déclencher des notifications automatiques toutes les 30 secondes.
-				Au moins un canal doit être créé au préalable dans l'onglet Canaux.
+				{language.current && t('alerting.rules.emptyBody')}
 			</p>
 		</div>
 	{:else if rules.length > 0}
 		<DataTable
 			items={rules}
-			headers={[
-				'Nom',
-				'État',
-				'Type',
-				'Source',
-				'Sévérité',
-				'Canaux',
-				'Cooldown',
-				'Dernière éval',
-				'Dernière fire',
-				'Actions'
-			]}
+			headers={language.current ? [
+				t('alerting.rules.colName'),
+				t('alerting.rules.colState'),
+				t('alerting.rules.colType'),
+				t('alerting.rules.colSource'),
+				t('alerting.rules.colSeverity'),
+				t('alerting.rules.colChannels'),
+				t('alerting.rules.colCooldown'),
+				t('alerting.rules.colLastEval'),
+				t('alerting.rules.colLastFire'),
+				t('alerting.rules.colActions')
+			] : []}
 			row={ruleRow}
 			interactive={false}
 		/>
@@ -253,11 +258,11 @@
 	<td class="px-4 py-3 text-sm">
 		{#if r.enabled}
 			<Badge variant="status-up">
-				{#snippet children()}Actif{/snippet}
+				{#snippet children()}{language.current && t('alerting.stateEnabled')}{/snippet}
 			</Badge>
 		{:else}
 			<Badge variant="neutral">
-				{#snippet children()}Désactivé{/snippet}
+				{#snippet children()}{language.current && t('alerting.stateDisabled')}{/snippet}
 			</Badge>
 		{/if}
 	</td>
@@ -287,7 +292,7 @@
 		{#if r.lastError}
 			<span title={`${r.lastError}\n(${r.lastErrorAt ?? ''})`} class="ml-2">
 				<Badge variant="status-down">
-					{#snippet children()}Erreur{/snippet}
+					{#snippet children()}{language.current && t('alerting.errorBadge')}{/snippet}
 				</Badge>
 			</span>
 		{/if}
@@ -301,9 +306,9 @@
 				variant="ghost"
 				size="sm"
 				onclick={() => openEdit(r)}
-				aria-label={`Éditer la règle ${r.name}`}
+				aria-label={language.current && t('alerting.rules.ariaEdit', { name: r.name })}
 			>
-				{#snippet children()}Édit{/snippet}
+				{#snippet children()}{language.current && t('alerting.actionEdit')}{/snippet}
 			</Button>
 			<Button
 				variant="ghost"
@@ -311,18 +316,18 @@
 				onclick={() => onTest(r)}
 				disabled={testingIds[r.id]}
 				loading={testingIds[r.id]}
-				aria-label={`Tester la règle ${r.name}`}
+				aria-label={language.current && t('alerting.rules.ariaTest', { name: r.name })}
 			>
-				{#snippet children()}Test{/snippet}
+				{#snippet children()}{language.current && t('alerting.actionTest')}{/snippet}
 			</Button>
 			<Button
 				variant="ghost"
 				size="sm"
 				onclick={() => askDelete(r)}
 				disabled={deletingIds[r.id]}
-				aria-label={`Supprimer la règle ${r.name}`}
+				aria-label={language.current && t('alerting.rules.ariaDelete', { name: r.name })}
 			>
-				{#snippet children()}Suppr.{/snippet}
+				{#snippet children()}{language.current && t('alerting.actionDelete')}{/snippet}
 			</Button>
 		</div>
 	</td>
@@ -332,12 +337,12 @@
 
 <ConfirmDialog
 	bind:open={confirmOpen}
-	title="Supprimer la règle"
-	message={confirmTarget
-		? `Supprimer la règle "${confirmTarget.name}" ? Cette action est irréversible.`
+	title={language.current && t('alerting.rules.confirmTitle')}
+	message={confirmTarget && language.current
+		? t('alerting.rules.confirmMessage', { name: confirmTarget.name })
 		: ''}
-	confirmLabel="Supprimer"
-	cancelLabel="Annuler"
+	confirmLabel={language.current && t('alerting.rules.confirmDeleteLabel')}
+	cancelLabel={language.current && t('alerting.rules.confirmCancelLabel')}
 	confirmVariant="danger"
 	onConfirm={confirmDelete}
 />

@@ -168,19 +168,23 @@ export function severityToken(n: number): SeverityToken | 'unknown' {
 	return SEVERITY_TOKENS[n];
 }
 
-/** Map severity int → French human label. */
+/** Map severity int → human label.
+ *  Operator-locked EN labels (v2.9.23 decision) — coherent with
+ *  DEBUG/INFO/WARN/ERROR pattern from logs v2.9.18. The function
+ *  name stays severityLabelFR for backwards-compat with existing
+ *  call sites. */
 export function severityLabelFR(n: number): string {
 	switch (n) {
 		case 0:
 			return 'Info';
 		case 1:
-			return 'Avertissement';
+			return 'Warning';
 		case 2:
-			return 'Critique';
+			return 'Critical';
 		case 3:
-			return 'Urgence';
+			return 'Emergency';
 		default:
-			return 'Inconnu';
+			return 'Unknown';
 	}
 }
 
@@ -213,15 +217,15 @@ export function severityBadgeVariant(
 export function severityTooltip(n: number): string {
 	switch (n) {
 		case 0:
-			return 'Info (niveau 0) — informationnel, aucune action requise.';
+			return 'Info (level 0) — informational, no action required.';
 		case 1:
-			return 'Avertissement (niveau 1) — condition dégradée à surveiller.';
+			return 'Warning (level 1) — degraded condition to monitor.';
 		case 2:
-			return 'Critique (niveau 2) — action opérateur requise sous peu.';
+			return 'Critical (level 2) — operator action required soon.';
 		case 3:
-			return 'Urgence (niveau 3) — Arenet en difficulté, plan de données impacté possible.';
+			return 'Emergency (level 3) — Arenet in trouble, data plane impact possible.';
 		default:
-			return 'Inconnu — valeur de sévérité hors plage [0..3].';
+			return 'Unknown — severity value out of range [0..3].';
 	}
 }
 

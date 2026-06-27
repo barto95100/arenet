@@ -93,12 +93,12 @@ describe('severity helpers', () => {
 		expect(severityToken(4)).toBe('unknown');
 	});
 
-	it('maps int → French label', () => {
+	it('maps int → EN label (operator-locked v2.9.23)', () => {
 		expect(severityLabelFR(0)).toBe('Info');
-		expect(severityLabelFR(1)).toBe('Avertissement');
-		expect(severityLabelFR(2)).toBe('Critique');
-		expect(severityLabelFR(3)).toBe('Urgence');
-		expect(severityLabelFR(99)).toBe('Inconnu');
+		expect(severityLabelFR(1)).toBe('Warning');
+		expect(severityLabelFR(2)).toBe('Critical');
+		expect(severityLabelFR(3)).toBe('Emergency');
+		expect(severityLabelFR(99)).toBe('Unknown');
 	});
 
 	it('maps int → Badge variant', () => {
@@ -117,14 +117,14 @@ describe('severity helpers', () => {
 	// hover always surfaces the correct level + int + role
 	// description (matters when reading the API directly).
 	it('returns a level-prefixed tooltip for each valid severity', () => {
-		expect(severityTooltip(0)).toMatch(/Info \(niveau 0\)/);
-		expect(severityTooltip(1)).toMatch(/Avertissement \(niveau 1\)/);
-		expect(severityTooltip(2)).toMatch(/Critique \(niveau 2\)/);
-		expect(severityTooltip(3)).toMatch(/Urgence \(niveau 3\)/);
+		expect(severityTooltip(0)).toMatch(/Info \(level 0\)/);
+		expect(severityTooltip(1)).toMatch(/Warning \(level 1\)/);
+		expect(severityTooltip(2)).toMatch(/Critical \(level 2\)/);
+		expect(severityTooltip(3)).toMatch(/Emergency \(level 3\)/);
 	});
 
 	it('returns an out-of-range tooltip for unknown severities', () => {
-		expect(severityTooltip(-1)).toMatch(/Inconnu/);
-		expect(severityTooltip(99)).toMatch(/Inconnu/);
+		expect(severityTooltip(-1)).toMatch(/Unknown/);
+		expect(severityTooltip(99)).toMatch(/Unknown/);
 	});
 });
