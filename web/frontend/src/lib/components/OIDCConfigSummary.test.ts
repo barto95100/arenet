@@ -59,7 +59,7 @@ beforeEach(() => {
 });
 
 describe('OIDCConfigSummary — Phase 2 polish', () => {
-	it('renders the GoAuthentik title + hostname subtitle + CONNECTÉ badge', async () => {
+	it('renders the GoAuthentik title + hostname subtitle + CONNECTED badge', async () => {
 		getOIDCConfigMock.mockResolvedValue(configuredEnabled);
 		const Component = (await import('./OIDCConfigSummary.svelte')).default;
 		render(Component);
@@ -68,7 +68,7 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 		await waitFor(() => expect(screen.getByText('GoAuthentik')).toBeTruthy());
 
 		expect(screen.getByText('OIDC · authentik.arenet.fr')).toBeTruthy();
-		expect(screen.getByText('CONNECTÉ')).toBeTruthy();
+		expect(screen.getByText('CONNECTED')).toBeTruthy();
 	});
 
 	it('fires a success toast on a reachable probe with matching scopes', async () => {
@@ -83,7 +83,7 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 
 		const Component = (await import('./OIDCConfigSummary.svelte')).default;
 		render(Component);
-		await waitFor(() => screen.getByText('Tester la connexion'));
+		await waitFor(() => screen.getByText('Test connection'));
 
 		await fireEvent.click(screen.getByTestId('oidc-test-button'));
 
@@ -107,7 +107,7 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 
 		const Component = (await import('./OIDCConfigSummary.svelte')).default;
 		render(Component);
-		await waitFor(() => screen.getByText('Tester la connexion'));
+		await waitFor(() => screen.getByText('Test connection'));
 
 		await fireEvent.click(screen.getByTestId('oidc-test-button'));
 
@@ -128,7 +128,7 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 
 		const Component = (await import('./OIDCConfigSummary.svelte')).default;
 		render(Component);
-		await waitFor(() => screen.getByText('Tester la connexion'));
+		await waitFor(() => screen.getByText('Test connection'));
 
 		await fireEvent.click(screen.getByTestId('oidc-test-button'));
 
@@ -139,7 +139,7 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 		);
 	});
 
-	it('renders a "Configurer" CTA when OIDC is not configured', async () => {
+	it('renders a "Configure" CTA when OIDC is not configured', async () => {
 		getOIDCConfigMock.mockResolvedValue({
 			...configuredEnabled,
 			enabled: false,
@@ -151,11 +151,11 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 		const Component = (await import('./OIDCConfigSummary.svelte')).default;
 		render(Component);
 
-		await waitFor(() => expect(screen.getByText('Configurer')).toBeTruthy());
+		await waitFor(() => expect(screen.getByText('Configure')).toBeTruthy());
 		expect(screen.queryByText('Tester la connexion')).toBeNull();
 	});
 
-	it('navigates via SvelteKit goto when "Modifier la config" is clicked', async () => {
+	it('navigates via SvelteKit goto when "Edit config" is clicked', async () => {
 		getOIDCConfigMock.mockResolvedValue(configuredEnabled);
 		const Component = (await import('./OIDCConfigSummary.svelte')).default;
 		render(Component);
@@ -166,7 +166,7 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 		expect(gotoMock).toHaveBeenCalledWith('/settings#oidc-config');
 	});
 
-	it('renders the Client secret + Email non vérifié rows aligned with the storage struct', async () => {
+	it('renders the Client secret + Email unverified rows aligned with the storage struct', async () => {
 		getOIDCConfigMock.mockResolvedValue({
 			...configuredEnabled,
 			clientSecretSet: true,
@@ -177,12 +177,12 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 		render(Component);
 
 		await waitFor(() => expect(screen.getByText('Client secret')).toBeTruthy());
-		expect(screen.getByText('défini')).toBeTruthy();
-		expect(screen.getByText('Email non vérifié')).toBeTruthy();
-		expect(screen.getByText('accepté')).toBeTruthy();
+		expect(screen.getByText('set')).toBeTruthy();
+		expect(screen.getByText('Email unverified')).toBeTruthy();
+		expect(screen.getByText('accepted')).toBeTruthy();
 	});
 
-	it('renders "manquant" + "refusé" badges when client secret missing and email verified strictly required', async () => {
+	it('renders "missing" + "rejected" badges when client secret missing and email verified strictly required', async () => {
 		getOIDCConfigMock.mockResolvedValue({
 			...configuredEnabled,
 			clientSecretSet: false,
@@ -192,7 +192,7 @@ describe('OIDCConfigSummary — Phase 2 polish', () => {
 		const Component = (await import('./OIDCConfigSummary.svelte')).default;
 		render(Component);
 
-		await waitFor(() => expect(screen.getByText('manquant')).toBeTruthy());
-		expect(screen.getByText('refusé')).toBeTruthy();
+		await waitFor(() => expect(screen.getByText('missing')).toBeTruthy());
+		expect(screen.getByText('rejected')).toBeTruthy();
 	});
 });
