@@ -24,6 +24,8 @@
 	import Card from '$lib/components/Card.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	let confirmIncludeSecretsOpen = $state(false);
 	let restoreFile = $state<File | null>(null);
@@ -66,7 +68,7 @@
 			});
 			restoreReport = report;
 			pushToast(
-				`Restore complete: ${report.routesImported} routes, ${report.usersImported} users imported`,
+				t('backupSection.toastRestoreComplete', { routes: report.routesImported, users: report.usersImported }),
 				'success'
 			);
 		} catch (err) {
@@ -75,11 +77,11 @@
 			if (err instanceof ApiError) {
 				restoreError = err.message;
 			} else if (err instanceof SyntaxError) {
-				restoreError = 'Invalid JSON in selected file.';
+				restoreError = t('backupSection.errInvalidJson');
 			} else if (err instanceof Error) {
 				restoreError = err.message;
 			} else {
-				restoreError = 'Unexpected error during restore.';
+				restoreError = t('backupSection.errUnexpected');
 			}
 		} finally {
 			restoreSubmitting = false;
@@ -90,40 +92,33 @@
 <Card padding="p-6">
 	<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
 		<div>
-			<h2 class="text-xl font-semibold">Backup &amp; restore</h2>
+			<h2 class="text-xl font-semibold">{language.current && t('backupSection.title')}</h2>
 			<p class="text-xs text-muted mt-1">
-				Export the entire Arenet configuration as JSON, or restore
-				from a previously-exported file.
+				{language.current && t('backupSection.subtitle')}
 			</p>
 		</div>
 	</header>
 
 	<div class="space-y-6">
 		<section>
-			<h3 class="text-base font-semibold text-primary mb-2">Export</h3>
+			<h3 class="text-base font-semibold text-primary mb-2">{language.current && t('backupSection.exportTitle')}</h3>
 			<p class="text-xs text-muted mb-3">
-				Default export redacts secrets (admin password hashes, OVH
-				keys, OIDC client secret, forward-auth client secrets,
-				per-route Basic Auth hashes). Use "Include secrets" only
-				for disaster-recovery archives that you can store
-				securely.
+				{language.current && t('backupSection.exportHelper')}
 			</p>
 			<div class="flex gap-2">
 				<Button variant="primary" size="md" onclick={exportDefault}>
-					Export (redacted)
+					{language.current && t('backupSection.btnExportRedacted')}
 				</Button>
 				<Button variant="secondary" size="md" onclick={exportIncludeSecrets}>
-					Export with secrets…
+					{language.current && t('backupSection.btnExportWithSecrets')}
 				</Button>
 			</div>
 		</section>
 
 		<section class="pt-4 border-t border-border-subtle">
-			<h3 class="text-base font-semibold text-primary mb-2">Restore</h3>
+			<h3 class="text-base font-semibold text-primary mb-2">{language.current && t('backupSection.restoreTitle')}</h3>
 			<p class="text-xs text-muted mb-3">
-				Choose a previously-exported file. The restore is
-				all-or-nothing: any validation failure aborts before any
-				change is written to storage.
+				{language.current && t('backupSection.restoreHelper')}
 			</p>
 
 			<input
@@ -141,10 +136,9 @@
 						class="rounded border-border-default bg-surface text-cyan focus:ring-cyan"
 					/>
 					<span>
-						<span class="font-medium">Allow incomplete restore</span>
+						<span class="font-medium">{language.current && t('backupSection.allowIncompleteLabel')}</span>
 						<span class="text-xs text-muted block">
-							Sentinels that can't inherit from this instance will
-							be cleared. Affected secrets need to be re-saved.
+							{language.current && t('backupSection.allowIncompleteHelper')}
 						</span>
 					</span>
 				</label>
@@ -155,10 +149,9 @@
 						class="rounded border-border-default bg-surface text-cyan focus:ring-cyan"
 					/>
 					<span>
-						<span class="font-medium">Allow empty users</span>
+						<span class="font-medium">{language.current && t('backupSection.allowEmptyUsersLabel')}</span>
 						<span class="text-xs text-muted block">
-							Accept a backup with zero users; the next boot will
-							re-trigger the setup-token flow.
+							{language.current && t('backupSection.allowEmptyUsersHelper')}
 						</span>
 					</span>
 				</label>
@@ -171,7 +164,7 @@
 					disabled={!restoreFile || restoreSubmitting}
 					onclick={submitRestore}
 				>
-					{restoreSubmitting ? 'Restoring…' : 'Restore'}
+					{language.current && (restoreSubmitting ? t('backupSection.btnRestoring') : t('backupSection.btnRestore'))}
 				</Button>
 			</div>
 
@@ -184,19 +177,19 @@
 
 			{#if restoreReport}
 				<dl class="mt-4 grid grid-cols-[14rem_1fr] gap-x-4 gap-y-1 text-xs">
-					<dt class="text-secondary">Routes imported</dt>
+					<dt class="text-secondary">{language.current && t('backupSection.reportRoutesImported')}</dt>
 					<dd class="font-mono">{restoreReport.routesImported}</dd>
-					<dt class="text-secondary">Users imported</dt>
+					<dt class="text-secondary">{language.current && t('backupSection.reportUsersImported')}</dt>
 					<dd class="font-mono">{restoreReport.usersImported}</dd>
-					<dt class="text-secondary">DNS providers imported</dt>
+					<dt class="text-secondary">{language.current && t('backupSection.reportDnsImported')}</dt>
 					<dd class="font-mono">{restoreReport.dnsProvidersImported}</dd>
-					<dt class="text-secondary">Forward-auth providers imported</dt>
+					<dt class="text-secondary">{language.current && t('backupSection.reportForwardAuthImported')}</dt>
 					<dd class="font-mono">{restoreReport.forwardAuthProvidersImported}</dd>
-					<dt class="text-secondary">OIDC config imported</dt>
-					<dd class="font-mono">{restoreReport.oidcConfigImported ? 'yes' : 'no'}</dd>
-					<dt class="text-secondary">Sentinels inherited</dt>
+					<dt class="text-secondary">{language.current && t('backupSection.reportOidcImported')}</dt>
+					<dd class="font-mono">{language.current && (restoreReport.oidcConfigImported ? t('backupSection.yes') : t('backupSection.no'))}</dd>
+					<dt class="text-secondary">{language.current && t('backupSection.reportSentinelsInherited')}</dt>
 					<dd class="font-mono">{restoreReport.sentinelsInheritedTotal}</dd>
-					<dt class="text-secondary">Sentinels unresolved (cleared)</dt>
+					<dt class="text-secondary">{language.current && t('backupSection.reportSentinelsUnresolved')}</dt>
 					<dd class="font-mono">{restoreReport.sentinelsUnresolvedTotal}</dd>
 				</dl>
 			{/if}
@@ -206,9 +199,9 @@
 
 <ConfirmDialog
 	bind:open={confirmIncludeSecretsOpen}
-	title="Export with cleartext secrets?"
-	message="The exported file will contain plaintext admin password hashes, OVH API keys, OIDC client secret, forward-auth client secrets, and per-route Basic Auth hashes. The browser will save the file with its default permissions — store it to a restricted location and consider encrypting at rest (age / GPG / vault)."
-	confirmLabel="Download with secrets"
+	title={language.current && t('backupSection.confirmDialogTitle')}
+	message={language.current && t('backupSection.confirmDialogMessage')}
+	confirmLabel={language.current && t('backupSection.confirmDialogConfirm')}
 	confirmVariant="danger"
 	onConfirm={confirmIncludeSecretsDownload}
 />

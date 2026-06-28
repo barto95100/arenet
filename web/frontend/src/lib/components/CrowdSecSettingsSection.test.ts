@@ -295,7 +295,7 @@ describe('CrowdSecSettingsSection — Reset (CS.2 follow-up)', () => {
 		// ConfirmDialog renders the message; check for a stable
 		// substring from the i18n string.
 		await waitFor(() => {
-			expect(screen.getByText(/Aucun impact sur la configuration Security Automation/i)).toBeInTheDocument();
+			expect(screen.getByText(/No impact on the Security Automation configuration/i)).toBeInTheDocument();
 		});
 		// DELETE is NOT called yet — only on confirm.
 		expect(deleteMock).not.toHaveBeenCalled();
@@ -308,13 +308,13 @@ describe('CrowdSecSettingsSection — Reset (CS.2 follow-up)', () => {
 		await waitFor(() => expect(getMock).toHaveBeenCalled());
 
 		await fireEvent.click(screen.getByTestId('crowdsec-reset-btn'));
-		await waitFor(() => expect(screen.getByText(/Aucun impact sur la configuration Security Automation/i)).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText(/No impact on the Security Automation configuration/i)).toBeInTheDocument());
 
-		// Click the confirm button — its label is "Réinitialiser"
+		// Click the confirm button — its label is "Reset"
 		// in the dialog. Need to scope: there are two buttons with
 		// that name now (Section Reset + Dialog Confirm) when the
 		// dialog is open.
-		const confirmButtons = screen.getAllByRole('button', { name: /Réinitialiser/i });
+		const confirmButtons = screen.getAllByRole('button', { name: /Reset/i });
 		// The dialog Confirm button is rendered AFTER the section
 		// Reset button (the dialog mounts at the end of the
 		// component tree). Click the last one.
@@ -325,7 +325,7 @@ describe('CrowdSecSettingsSection — Reset (CS.2 follow-up)', () => {
 		});
 		await waitFor(() => {
 			expect(pushToastMock).toHaveBeenCalledWith(
-				expect.stringMatching(/désactivé/i),
+				expect.stringMatching(/disabled/i),
 				'success'
 			);
 		});
@@ -346,19 +346,19 @@ describe('CrowdSecSettingsSection — Reset (CS.2 follow-up)', () => {
 		await waitFor(() => expect(getMock).toHaveBeenCalled());
 
 		await fireEvent.click(screen.getByTestId('crowdsec-reset-btn'));
-		await waitFor(() => expect(screen.getByText(/Aucun impact sur la configuration Security Automation/i)).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText(/No impact on the Security Automation configuration/i)).toBeInTheDocument());
 
-		const confirmButtons = screen.getAllByRole('button', { name: /Réinitialiser/i });
+		const confirmButtons = screen.getAllByRole('button', { name: /Reset/i });
 		await fireEvent.click(confirmButtons[confirmButtons.length - 1]);
 
 		await waitFor(() => {
 			expect(pushToastMock).toHaveBeenCalledWith(
-				expect.stringMatching(/Échec/i),
+				expect.stringMatching(/Reset failed/i),
 				'danger'
 			);
 		});
 		// Dialog still open so operator can retry.
-		expect(screen.getByText(/Aucun impact sur la configuration Security Automation/i)).toBeInTheDocument();
+		expect(screen.getByText(/No impact on the Security Automation configuration/i)).toBeInTheDocument();
 		// Badge still "Configured" — the row wasn't actually
 		// wiped on the backend (rollback contract).
 		expect(screen.getByText(/^Configured$/i)).toBeInTheDocument();

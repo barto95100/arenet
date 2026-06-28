@@ -42,6 +42,8 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	let settings = $state<CrowdSecSettings | null>(null);
 	let loading = $state(true);
@@ -75,7 +77,7 @@
 			form.timeoutSeconds = cfg.timeoutSeconds || 5;
 			form.apiKey = ''; // never round-trip the secret
 		} catch (err) {
-			loadError = err instanceof Error ? err.message : 'Failed to load CrowdSec settings';
+			loadError = err instanceof Error ? err.message : t('crowdsecSettings.loadFailed', { err: '' });
 		} finally {
 			loading = false;
 		}
@@ -95,8 +97,8 @@
 			form.apiKey = ''; // clear so a re-visit doesn't show ghost value
 			pushToast(
 				next.configured
-					? 'CrowdSec bouncer saved & bouncer reloaded'
-					: 'CrowdSec bouncer cleared',
+					? t('crowdsecSettings.saveAppliedToast')
+					: t('crowdsecSettings.saveClearedToast'),
 				'success'
 			);
 		} catch (err) {
@@ -163,11 +165,11 @@
 			form.timeoutSeconds = next.timeoutSeconds || 5;
 			form.apiKey = '';
 			testResult = null;
-			pushToast('CrowdSec bouncer désactivé', 'success');
+			pushToast(t('crowdsecSettings.resetToastSuccess'), 'success');
 			resetConfirmOpen = false;
 		} catch (err) {
 			const msg = err instanceof ApiError ? err.message : String(err);
-			pushToast(`Échec de la réinitialisation : ${msg}`, 'danger');
+			pushToast(t('crowdsecSettings.resetToastFailed', { err: msg }), 'danger');
 			// Keep the dialog open so the operator can retry.
 		}
 	}
@@ -183,26 +185,23 @@
 			class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4"
 		>
 			<div>
-				<h2 class="text-xl font-semibold">CrowdSec bouncer</h2>
+				<h2 class="text-xl font-semibold">{language.current && t('crowdsecSettings.title')}</h2>
 				<p class="text-xs text-muted mt-1">
-					IP-reputation gate. Reads block decisions from the LAPI
-					and rejects connections from sources CrowdSec flagged.
-					Bouncer runs in-process; no extra container needed if
-					CrowdSec engine is already on this host.
+					{language.current && t('crowdsecSettings.subtitle')}
 				</p>
 			</div>
 			{#if loading}
 				<Spinner size="sm" />
 			{:else if settings?.configured}
-				<Badge variant="status-up">Configured</Badge>
+				<Badge variant="status-up">{language.current && t('crowdsecSettings.statusConfigured')}</Badge>
 			{:else}
-				<Badge variant="status-warn">Not configured</Badge>
+				<Badge variant="status-warn">{language.current && t('crowdsecSettings.statusNotConfigured')}</Badge>
 			{/if}
 		</header>
 
 		{#if loadError}
 			<p class="text-sm text-down mb-3" role="alert">
-				Failed to load CrowdSec settings: {loadError}
+				{language.current && t('crowdsecSettings.loadFailed', { err: loadError })}
 			</p>
 		{/if}
 
@@ -215,27 +214,24 @@
 		>
 			<div class="md:col-span-2">
 				<label for="cs-lapi-url" class="text-sm font-medium text-secondary block mb-1">
-					LAPI URL
+					{language.current && t('crowdsecSettings.labelLapiUrl')}
 				</label>
 				<input
 					id="cs-lapi-url"
 					type="text"
 					bind:value={form.lapiUrl}
 					oninput={onFormEdit}
-					placeholder="http://crowdsec:8080 or http://127.0.0.1:8080"
+					placeholder={language.current && t('crowdsecSettings.lapiUrlPlaceholder')}
 					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 				/>
 				<p class="text-xs text-muted mt-1">
-					LAPI listen URL. <code class="font-mono">http://127.0.0.1:8080</code>
-					for an apt install on the same host; <code class="font-mono">http://crowdsec:8080</code>
-					for a sibling Docker container in the same compose network; or any
-					custom URL the deployment exposes.
+					{language.current && t('crowdsecSettings.lapiUrlHelper')}
 				</p>
 			</div>
 
 			<div>
 				<label for="cs-api-key" class="text-sm font-medium text-secondary block mb-1">
-					Bouncer API key
+					{language.current && t('crowdsecSettings.labelApiKey')}
 				</label>
 				<input
 					id="cs-api-key"
@@ -243,36 +239,34 @@
 					autocomplete="off"
 					bind:value={form.apiKey}
 					oninput={onFormEdit}
-					placeholder={settings?.configured ? '••• set (leave blank to keep)' : ''}
+					placeholder={settings?.configured ? (language.current && t('crowdsecSettings.apiKeyPlaceholder')) : ''}
 					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 				/>
 				<p class="text-xs text-muted mt-1">
-					Generate with <code class="font-mono">cscli bouncers add arenet</code>
-					on the CrowdSec host. The key is shown only once at creation; if
-					lost, delete + re-add the bouncer.
+					{language.current && t('crowdsecSettings.apiKeyHelper')}
 				</p>
 			</div>
 
 			<div>
 				<label for="cs-bouncer-name" class="text-sm font-medium text-secondary block mb-1">
-					Bouncer name
+					{language.current && t('crowdsecSettings.labelBouncerName')}
 				</label>
 				<input
 					id="cs-bouncer-name"
 					type="text"
 					bind:value={form.bouncerName}
 					oninput={onFormEdit}
-					placeholder="arenet"
+					placeholder={language.current && t('crowdsecSettings.bouncerNamePlaceholder')}
 					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 				/>
 				<p class="text-xs text-muted mt-1">
-					Cosmetic identifier. Must match the name used in <code class="font-mono">cscli bouncers add</code>.
+					{language.current && t('crowdsecSettings.bouncerNameHelper')}
 				</p>
 			</div>
 
 			<div>
 				<label for="cs-timeout" class="text-sm font-medium text-secondary block mb-1">
-					Connection timeout (seconds)
+					{language.current && t('crowdsecSettings.labelTimeout')}
 				</label>
 				<input
 					id="cs-timeout"
@@ -284,7 +278,7 @@
 					class="w-32 bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 				/>
 				<p class="text-xs text-muted mt-1">
-					Per-request cap on LAPI calls. Range 1–60. Default 5.
+					{language.current && t('crowdsecSettings.timeoutHelper')}
 				</p>
 			</div>
 
@@ -295,12 +289,12 @@
 							class="rounded border border-up/40 bg-up/10 px-3 py-2 text-sm text-up"
 							role="status"
 						>
-							<strong class="font-semibold">Connected</strong>
+							<strong class="font-semibold">{language.current && t('crowdsecSettings.testConnected')}</strong>
 							{#if testResult.version}
-								to LAPI <code class="font-mono">{testResult.version}</code>
+								{language.current && t('crowdsecSettings.testConnectedToLapi')} <code class="font-mono">{testResult.version}</code>
 							{/if}
 							{#if testResult.effectiveUrl}
-								at <code class="font-mono">{testResult.effectiveUrl}</code>
+								{language.current && t('crowdsecSettings.testConnectedAt')} <code class="font-mono">{testResult.effectiveUrl}</code>
 							{/if}
 						</div>
 					{:else}
@@ -308,8 +302,8 @@
 							class="rounded border border-down/40 bg-down/10 px-3 py-2 text-sm text-down"
 							role="alert"
 						>
-							<strong class="font-semibold">Connection failed:</strong>
-							{testResult.error ?? 'unknown error'}
+							<strong class="font-semibold">{language.current && t('crowdsecSettings.testConnectionFailed')}</strong>
+							{testResult.error ?? (language.current && t('crowdsecSettings.testUnknownError'))}
 							{#if testResult.statusCode}
 								<span class="text-xs ml-1">(HTTP {testResult.statusCode})</span>
 							{/if}
@@ -338,7 +332,7 @@
 							onclick={openResetConfirm}
 							data-testid="crowdsec-reset-btn"
 						>
-							Réinitialiser
+							{language.current && t('crowdsecSettings.btnReset')}
 						</Button>
 					{/if}
 				</div>
@@ -349,33 +343,27 @@
 						disabled={testing || submitting}
 						onclick={testConnection}
 					>
-						{testing ? 'Testing…' : 'Test connection'}
+						{language.current && (testing ? t('crowdsecSettings.btnTesting') : t('crowdsecSettings.btnTest'))}
 					</Button>
 					<Button type="submit" disabled={submitting || testing}>
-						{submitting ? 'Saving…' : 'Save & apply'}
+						{language.current && (submitting ? t('crowdsecSettings.btnSaving') : t('crowdsecSettings.btnSave'))}
 					</Button>
 				</div>
 			</div>
 		</form>
 
 		<p class="text-xs text-muted mt-4">
-			Save & apply hot-reloads the embedded Caddy without a process
-			restart. Active routes drop the request only after the new bouncer
-			creds are live, so there's no race window. Pour désactiver le
-			bouncer proprement, utilise <strong>Réinitialiser</strong>
-			(en bas à gauche) — la configuration BoltDB est wipée + le
-			bouncer drop out du data plane immédiatement (audit row
-			<code>crowdsec_reset</code>).
+			{language.current && t('crowdsecSettings.saveFooter')}
 		</p>
 	</Card>
 </div>
 
 <ConfirmDialog
 	bind:open={resetConfirmOpen}
-	title="Réinitialiser la configuration CrowdSec ?"
-	message="Le bouncer s'arrêtera immédiatement de gater le trafic. Les routes resteront protégées par le WAF + rate-limiter, mais la gate IP-reputation sera désactivée. Aucun impact sur la configuration Security Automation (watcher credentials)."
-	confirmLabel="Réinitialiser"
-	cancelLabel="Annuler"
+	title={language.current && t('crowdsecSettings.resetDialogTitle')}
+	message={language.current && t('crowdsecSettings.resetDialogMessage')}
+	confirmLabel={language.current && t('crowdsecSettings.resetDialogConfirm')}
+	cancelLabel={language.current && t('crowdsecSettings.resetDialogCancel')}
 	confirmVariant="danger"
 	onConfirm={confirmReset}
 />

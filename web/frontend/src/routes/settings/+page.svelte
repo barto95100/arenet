@@ -411,11 +411,11 @@
 			credsForm.machineId = next.machineId;
 			credsForm.password = '';
 			credsFormError = null;
-			pushToast('Security Automation désactivée', 'success');
+			pushToast(t('settingsSubcards.automationResetToastSuccess'), 'success');
 			automationResetConfirmOpen = false;
 		} catch (err) {
 			const msg = err instanceof ApiError ? err.message : String(err);
-			pushToast(`Échec de la réinitialisation : ${msg}`, 'danger');
+			pushToast(t('settingsSubcards.automationResetToastFailed', { err: msg }), 'danger');
 			// Keep the dialog open so the operator can retry.
 		}
 	}
@@ -1074,22 +1074,17 @@
 									onclick={openAutomationResetConfirm}
 									data-testid="automation-reset-btn"
 								>
-									Réinitialiser
+									{language.current && t('settingsSubcards.automationReset')}
 								</Button>
 							{/if}
 						</div>
 						<Button type="submit" disabled={credsSubmitting}>
-							{credsSubmitting ? 'Saving…' : 'Save credentials'}
+							{language.current && (credsSubmitting ? t('settingsSubcards.saving') : t('settingsSubcards.saveCredentials'))}
 						</Button>
 					</div>
 				</form>
 				<p class="text-xs text-muted mt-2">
-					Pour désactiver l'auto-classifier proprement, utilise
-					<strong>Réinitialiser</strong> (en bas à gauche) — la configuration
-					BoltDB est wipée + l'écrivain LAPI est détaché immédiatement
-					(audit row <code>automation_reset</code>). Les <em>trigger rules</em>
-					ci-dessous ne sont pas touchées : tu peux garder ta config pour
-					une re-activation future.
+					{language.current && t('settingsSubcards.automationResetHelper')}
 				</p>
 			</section>
 
@@ -1506,9 +1501,9 @@
 	<!-- Revoke confirmation (Chunk 6.4 — replaces native confirm()). -->
 	<ConfirmDialog
 		bind:open={revokeConfirmOpen}
-		title="Revoke session?"
-		message="The other device will be signed out immediately."
-		confirmLabel="Revoke"
+		title={language.current && t('settingsSubcards.revokeSessionTitle')}
+		message={language.current && t('settingsSubcards.revokeSessionMessage')}
+		confirmLabel={language.current && t('settingsSubcards.revokeSessionConfirm')}
 		confirmVariant="danger"
 		onConfirm={confirmRevoke}
 	/>
@@ -1518,10 +1513,10 @@
 	     Réinitialiser dialog. -->
 	<ConfirmDialog
 		bind:open={automationResetConfirmOpen}
-		title="Réinitialiser Security Automation ?"
-		message="L'auto-classifier s'arrêtera immédiatement de pousser des decisions vers LAPI. Les trigger rules ne sont pas touchées — tu peux les garder pour une re-activation future. Aucun impact sur la configuration CrowdSec bouncer (lecture-side)."
-		confirmLabel="Réinitialiser"
-		cancelLabel="Annuler"
+		title={language.current && t('settingsSubcards.automationResetDialogTitle')}
+		message={language.current && t('settingsSubcards.automationResetDialogMessage')}
+		confirmLabel={language.current && t('settingsSubcards.automationResetDialogConfirm')}
+		cancelLabel={language.current && t('settingsSubcards.automationResetDialogCancel')}
 		confirmVariant="danger"
 		onConfirm={confirmAutomationReset}
 	/>

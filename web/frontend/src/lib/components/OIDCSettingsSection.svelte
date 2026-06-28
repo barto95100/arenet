@@ -33,6 +33,8 @@
 	import Button from '$lib/components/Button.svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	let config = $state<OIDCConfig | null>(null);
 	let allowlist = $state<OIDCAllowedIdentity[]>([]);
@@ -78,7 +80,7 @@
 			// what the empty state means.
 			form.clientSecret = '';
 		} catch (err) {
-			loadError = err instanceof Error ? err.message : 'Failed to load OIDC config';
+			loadError = err instanceof Error ? err.message : t('oidcSettings.loadFailed', { err: '' });
 		} finally {
 			loading = false;
 		}
@@ -110,14 +112,14 @@
 			config = saved;
 			form.scopes = (saved.scopes ?? []).join(' ');
 			form.clientSecret = ''; // reset the secret field after save
-			pushToast('OIDC settings saved', 'success');
+			pushToast(t('oidcSettings.toastSaved'), 'success');
 		} catch (err) {
 			if (err instanceof ApiError) {
 				formError = err.message;
 			} else if (err instanceof Error) {
 				formError = err.message;
 			} else {
-				formError = 'Failed to save OIDC settings';
+				formError = t('oidcSettings.saveFailed');
 			}
 		} finally {
 			submitting = false;
@@ -129,7 +131,7 @@
 		allowlistError = '';
 		const email = newEntry.email.trim();
 		if (!email) {
-			allowlistError = 'Email is required';
+			allowlistError = t('oidcSettings.allowlistEmailRequired');
 			return;
 		}
 		allowlistSubmitting = true;
@@ -142,10 +144,10 @@
 			});
 			newEntry = { email: '', displayName: '', sub: '' };
 			allowlist = await settingsApi.listOIDCAllowlist();
-			pushToast(`Added ${email} to OIDC allowlist`, 'success');
+			pushToast(t('oidcSettings.allowlistAddedToast', { email }), 'success');
 		} catch (err) {
 			allowlistError =
-				err instanceof Error ? err.message : 'Failed to add allowlist entry';
+				err instanceof Error ? err.message : t('oidcSettings.allowlistAddFailed');
 		} finally {
 			allowlistSubmitting = false;
 		}
@@ -155,10 +157,10 @@
 		try {
 			await settingsApi.deleteOIDCAllowlist(email);
 			allowlist = allowlist.filter((e) => e.email !== email);
-			pushToast(`Removed ${email}`, 'success');
+			pushToast(t('oidcSettings.allowlistRemovedToast', { email }), 'success');
 		} catch (err) {
 			pushToast(
-				err instanceof Error ? err.message : 'Failed to remove entry',
+				err instanceof Error ? err.message : t('oidcSettings.allowlistRemoveFailed'),
 				'danger'
 			);
 		}
@@ -173,28 +175,27 @@
 <Card padding="p-6">
 	<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
 		<div>
-			<h2 class="text-xl font-semibold">OIDC SSO</h2>
+			<h2 class="text-xl font-semibold">{language.current && t('oidcSettings.title')}</h2>
 			<p class="text-xs text-muted mt-1">
-				Delegate admin login to an external identity provider. Local
-				login remains available regardless (break-glass).
+				{language.current && t('oidcSettings.subtitle')}
 			</p>
 		</div>
 		{#if loading}
 			<Spinner size="sm" />
 		{:else if config}
 			{#if config.enabled && config.configured}
-				<Badge variant="status-up">Enabled</Badge>
+				<Badge variant="status-up">{language.current && t('oidcSettings.statusEnabled')}</Badge>
 			{:else if config.configured}
-				<Badge variant="status-warn">Configured · disabled</Badge>
+				<Badge variant="status-warn">{language.current && t('oidcSettings.statusConfiguredDisabled')}</Badge>
 			{:else}
-				<Badge variant="status-warn">Not configured</Badge>
+				<Badge variant="status-warn">{language.current && t('oidcSettings.statusNotConfigured')}</Badge>
 			{/if}
 		{/if}
 	</header>
 
 	{#if loadError}
 		<p class="text-sm text-down mb-3" role="alert">
-			Failed to load OIDC config: {loadError}
+			{language.current && t('oidcSettings.loadFailed', { err: loadError })}
 		</p>
 	{/if}
 
@@ -212,13 +213,13 @@
 					bind:checked={form.enabled}
 					class="rounded border-border-default bg-surface text-cyan focus:ring-cyan"
 				/>
-				Enable OIDC SSO login
+				{language.current && t('oidcSettings.labelEnable')}
 			</label>
 		</div>
 
 		<div class="md:col-span-2">
 			<label for="oidc-kind" class="text-sm font-medium text-secondary block mb-1">
-				Provider
+				{language.current && t('oidcSettings.labelProvider')}
 			</label>
 			<select
 				id="oidc-kind"
@@ -227,21 +228,18 @@
 			>
 				{#each OIDC_PROVIDER_KINDS as k (k)}
 					<option value={k}>
-						{k === '' ? '— Generic (default) —' : k}
+						{k === '' ? (language.current && t('oidcSettings.providerGeneric')) : k}
 					</option>
 				{/each}
 			</select>
 			<p class="text-xs text-muted mt-1">
-				Choisis ton fournisseur OIDC pour afficher son logo sur le
-				bouton de connexion. Laisse vide pour utiliser le logo
-				générique. Le choix n'influence PAS la logique d'authentification
-				— c'est purement visuel.
+				{language.current && t('oidcSettings.providerHelper')}
 			</p>
 		</div>
 
 		<div class="md:col-span-2">
 			<label for="oidc-issuer" class="text-sm font-medium text-secondary block mb-1">
-				Issuer URL
+				{language.current && t('oidcSettings.labelIssuer')}
 			</label>
 			<input
 				id="oidc-issuer"
@@ -251,20 +249,13 @@
 				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 			/>
 			<p class="text-xs text-muted mt-1">
-				URL d'émetteur OIDC (champ <code class="font-mono">issuer</code> du
-				discovery document). NE PAS inclure le suffixe
-				<code class="font-mono">/.well-known/openid-configuration</code> —
-				Arenet l'ajoute automatiquement (si tu colles l'URL complète, le
-				suffixe est strippé silencieusement côté serveur). Authentik :
-				<code class="font-mono">/application/o/&lt;slug&gt;/</code> ; Keycloak :
-				<code class="font-mono">/realms/&lt;realm&gt;</code> ; Authelia : la racine
-				du déploiement.
+				{language.current && t('oidcSettings.issuerHelper')}
 			</p>
 		</div>
 
 		<div>
 			<label for="oidc-client-id" class="text-sm font-medium text-secondary block mb-1">
-				Client ID
+				{language.current && t('oidcSettings.labelClientId')}
 			</label>
 			<input
 				id="oidc-client-id"
@@ -276,21 +267,21 @@
 
 		<div>
 			<label for="oidc-client-secret" class="text-sm font-medium text-secondary block mb-1">
-				Client secret
+				{language.current && t('oidcSettings.labelClientSecret')}
 			</label>
 			<input
 				id="oidc-client-secret"
 				type="password"
 				autocomplete="off"
 				bind:value={form.clientSecret}
-				placeholder={config?.clientSecretSet ? '••• set (leave blank to keep)' : ''}
+				placeholder={config?.clientSecretSet ? (language.current && t('oidcSettings.clientSecretPlaceholder')) : ''}
 				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 			/>
 		</div>
 
 		<div class="md:col-span-2">
 			<label for="oidc-redirect" class="text-sm font-medium text-secondary block mb-1">
-				Redirect URL
+				{language.current && t('oidcSettings.labelRedirect')}
 			</label>
 			<input
 				id="oidc-redirect"
@@ -303,7 +294,7 @@
 
 		<div class="md:col-span-2">
 			<label for="oidc-scopes" class="text-sm font-medium text-secondary block mb-1">
-				Scopes
+				{language.current && t('oidcSettings.labelScopes')}
 			</label>
 			<input
 				id="oidc-scopes"
@@ -313,9 +304,7 @@
 				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 			/>
 			<p class="text-xs text-muted mt-1">
-				Space- or comma-separated. <code class="font-mono">openid</code> is
-				mandatory; <code class="font-mono">email</code> is required for the
-				canonicalisation step.
+				{language.current && t('oidcSettings.scopesHelper')}
 			</p>
 		</div>
 
@@ -326,15 +315,10 @@
 					bind:checked={form.acceptUnverifiedEmail}
 					class="rounded border-border-default bg-surface text-cyan focus:ring-cyan"
 				/>
-				Accept unverified email on first login (advanced)
+				{language.current && t('oidcSettings.labelAcceptUnverifiedEmail')}
 			</label>
 			<p class="text-xs text-muted mt-1">
-				Off by default. Enable only when your IdP does not assert
-				<code class="font-mono">email_verified=true</code> on its ID tokens
-				(Authentik admin-created accounts being the typical case) and you
-				fully control IdP-side account creation. Relaxes the Δ7 guard for the
-				allowlist Email-bootstrap pass — only safe when the IdP itself is
-				trusted.
+				{language.current && t('oidcSettings.acceptUnverifiedEmailHelper')}
 			</p>
 		</div>
 		{#if formError}
@@ -343,16 +327,15 @@
 
 		<div class="md:col-span-2 flex justify-end">
 			<Button type="submit" disabled={submitting}>
-				{submitting ? 'Saving…' : 'Save'}
+				{language.current && (submitting ? t('oidcSettings.btnSaving') : t('oidcSettings.btnSave'))}
 			</Button>
 		</div>
 	</form>
 
 	<div class="mt-8 pt-6 border-t border-border-subtle">
-		<h3 class="text-base font-semibold text-primary mb-2">Allowlist</h3>
+		<h3 class="text-base font-semibold text-primary mb-2">{language.current && t('oidcSettings.allowlistTitle')}</h3>
 		<p class="text-xs text-muted mb-4">
-			Only emails on this list can log in via SSO. New entries are
-			"pending" until the user's first login canonicalises them.
+			{language.current && t('oidcSettings.allowlistSubtitle')}
 		</p>
 
 		<form
@@ -366,13 +349,13 @@
 				<input
 					type="email"
 					bind:value={newEntry.email}
-					placeholder="user@example.com"
+					placeholder={language.current && t('oidcSettings.allowlistEmailPlaceholder')}
 					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 				/>
 				<input
 					type="text"
 					bind:value={newEntry.displayName}
-					placeholder="Display name (optional)"
+					placeholder={language.current && t('oidcSettings.allowlistDisplayNamePlaceholder')}
 					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 				/>
 			</div>
@@ -380,18 +363,15 @@
 				<input
 					type="text"
 					bind:value={newEntry.sub}
-					placeholder="OIDC Subject ID (optional)"
+					placeholder={language.current && t('oidcSettings.allowlistSubPlaceholder')}
 					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 				/>
 				<Button type="submit" disabled={allowlistSubmitting}>
-					{allowlistSubmitting ? 'Adding…' : 'Add'}
+					{language.current && (allowlistSubmitting ? t('oidcSettings.allowlistAdding') : t('oidcSettings.allowlistAdd'))}
 				</Button>
 			</div>
 			<p class="text-xs text-muted">
-				To find the OIDC Subject ID, look it up in your IdP's admin
-				console. Leaving this field empty uses email-bootstrap on
-				first login (requires the IdP to emit
-				<code class="font-mono">email_verified=true</code>).
+				{language.current && t('oidcSettings.allowlistAddHelper')}
 			</p>
 		</form>
 
@@ -400,7 +380,7 @@
 		{/if}
 
 		{#if allowlist.length === 0}
-			<p class="text-sm text-muted">No entries yet.</p>
+			<p class="text-sm text-muted">{language.current && t('oidcSettings.allowlistEmpty')}</p>
 		{:else}
 			<ul class="divide-y divide-border-subtle">
 				{#each allowlist as entry (entry.email)}
@@ -409,9 +389,9 @@
 							<div class="flex items-center gap-2">
 								<span class="font-mono text-sm">{entry.email}</span>
 								{#if entry.sub}
-									<Badge variant="status-up">Linked</Badge>
+									<Badge variant="status-up">{language.current && t('oidcSettings.allowlistBadgeLinked')}</Badge>
 								{:else}
-									<Badge variant="status-warn">Pending</Badge>
+									<Badge variant="status-warn">{language.current && t('oidcSettings.allowlistBadgePending')}</Badge>
 								{/if}
 							</div>
 							{#if entry.displayName}
@@ -423,7 +403,7 @@
 							size="sm"
 							onclick={() => void deleteAllowlistEntry(entry.email)}
 						>
-							Remove
+							{language.current && t('oidcSettings.allowlistBtnRemove')}
 						</Button>
 					</li>
 				{/each}
