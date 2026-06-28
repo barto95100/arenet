@@ -58,9 +58,9 @@
 		} catch (err) {
 			if (err instanceof ApiError) {
 				if (err.status === 403) {
-					errors = { setupToken: 'Jeton de setup invalide ou expiré.' };
+					errors = { setupToken: t('setup.errInvalidToken') };
 				} else if (err.status === 404) {
-					formError = 'Setup indisponible : un compte administrateur existe déjà.';
+					formError = t('setup.errAdminExists');
 				} else if (err.status === 400) {
 					// Heuristic field mapping based on the error message text
 					// (spec §6.10). Phase 2 will replace this with structured
@@ -74,7 +74,7 @@
 					formError = err.message;
 				}
 			} else {
-				formError = 'Erreur inattendue.';
+				formError = t('setup.errUnexpected');
 			}
 		} finally {
 			submitting = false;
@@ -94,7 +94,7 @@
 
 	<div class="setup-card">
 		<h1 class="setup-title">{language.current && t('pageTitles.setupFirstInstall')}</h1>
-		<p class="setup-sub">Crée le compte administrateur initial.</p>
+		<p class="setup-sub">{language.current && t('setup.subtitle')}</p>
 
 		<div class="setup-info-banner">
 			<svg
@@ -111,9 +111,8 @@
 				<line x1="12" y1="8" x2="12.01" y2="8" />
 			</svg>
 			<div>
-				<b>Jeton de setup requis.</b> Cherche dans les logs serveur Arenet une ligne commençant par
-				<code>Setup token:</code>. Le jeton est régénéré à chaque démarrage tant qu'aucun
-				administrateur n'existe.
+				<b>{language.current && t('setup.infoBannerTitle')}</b> {language.current && t('setup.infoBannerBody')}
+				<code>Setup token:</code>. {language.current && t('setup.infoBannerBodySuffix')}
 			</div>
 		</div>
 
@@ -138,13 +137,13 @@
 
 		<form onsubmit={handleSubmit} autocomplete="on" novalidate>
 			<div class="setup-field">
-				<label for="setup-token">Jeton de setup</label>
+				<label for="setup-token">{language.current && t('setup.labelSetupToken')}</label>
 				<div class="setup-input-wrap">
 					<input
 						id="setup-token"
 						class="setup-input setup-input-mono"
 						type="text"
-						placeholder="Coller depuis les logs serveur"
+						placeholder={language.current && t('setup.placeholderSetupToken')}
 						bind:value={setupToken}
 						disabled={submitting}
 						aria-invalid={errors.setupToken ? 'true' : undefined}
@@ -157,13 +156,13 @@
 			</div>
 
 			<div class="setup-field">
-				<label for="setup-username">Identifiant</label>
+				<label for="setup-username">{language.current && t('setup.labelUsername')}</label>
 				<div class="setup-input-wrap">
 					<input
 						id="setup-username"
 						class="setup-input"
 						type="text"
-						placeholder="ex. admin"
+						placeholder={language.current && t('setup.placeholderUsername')}
 						autocomplete="username"
 						bind:value={username}
 						disabled={submitting}
@@ -177,13 +176,13 @@
 			</div>
 
 			<div class="setup-field">
-				<label for="setup-displayname">Nom d'affichage <small>(optionnel)</small></label>
+				<label for="setup-displayname">{language.current && t('setup.labelDisplayName')} <small>{language.current && t('setup.labelDisplayNameOptional')}</small></label>
 				<div class="setup-input-wrap">
 					<input
 						id="setup-displayname"
 						class="setup-input"
 						type="text"
-						placeholder="ex. Site Admin"
+						placeholder={language.current && t('setup.placeholderDisplayName')}
 						bind:value={displayName}
 						disabled={submitting}
 						aria-invalid={errors.displayName ? 'true' : undefined}
@@ -198,7 +197,7 @@
 			</div>
 
 			<div class="setup-field">
-				<label for="setup-password">Mot de passe <small>(minimum 15 caractères)</small></label>
+				<label for="setup-password">{language.current && t('setup.labelPassword')} <small>{language.current && t('setup.labelPasswordHint')}</small></label>
 				<div class="setup-input-wrap">
 					<input
 						id="setup-password"
@@ -215,7 +214,7 @@
 						class="setup-pw-toggle"
 						onclick={togglePassword}
 						tabindex={-1}
-						aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+						aria-label={language.current && (showPassword ? t('setup.ariaHidePassword') : t('setup.ariaShowPassword'))}
 					>
 						{#if showPassword}
 							<svg
@@ -260,7 +259,7 @@
 				disabled={submitting}
 			>
 				<span class="setup-spin" aria-hidden="true"></span>
-				<span class="setup-submit-label">Créer le compte administrateur</span>
+				<span class="setup-submit-label">{language.current && t('setup.btnSubmit')}</span>
 			</button>
 		</form>
 	</div>

@@ -40,6 +40,8 @@
 	} from '$lib/api/error-templates';
 	import { pushToast } from '$lib/stores/toast';
 	import { ApiError } from '$lib/api/types';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	// --- View state ---------------------------------------
 
@@ -67,7 +69,7 @@
 					? err.message
 					: err instanceof Error
 						? err.message
-						: 'failed to load templates';
+						: t('errorPages.errFailedLoad');
 			templates = [];
 		} finally {
 			loading = false;
@@ -190,11 +192,11 @@
 				description: source.description,
 				pages
 			});
-			pushToast(`Template "${uniqueName}" créé`, 'success');
+			pushToast(t('errorPages.toastDuplicated', { name: uniqueName }), 'success');
 			await loadTemplates();
 			startEdit(created);
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'failed to duplicate template';
+			const msg = err instanceof ApiError ? err.message : t('errorPages.errFailedDuplicate');
 			pushToast(msg, 'danger');
 		}
 	}
@@ -231,11 +233,11 @@
 		// should be unreachable. Defence-in-depth in case a
 		// future refactor surfaces the button :
 		if (editingBuiltin) {
-			pushToast('Le template « Arenet default » est en lecture seule ; utilisez « Dupliquer ».', 'danger');
+			pushToast(t('errorPages.toastReadOnly'), 'danger');
 			return;
 		}
 		if (!editName.trim()) {
-			pushToast('Le nom du template est requis', 'danger');
+			pushToast(t('errorPages.toastNameRequired'), 'danger');
 			return;
 		}
 		saving = true;
@@ -257,15 +259,15 @@
 			};
 			if (editingId === null) {
 				await errorTemplatesApi.create(req);
-				pushToast(`Template "${editName}" créé`, 'success');
+				pushToast(t('errorPages.toastCreated', { name: editName }), 'success');
 			} else {
 				await errorTemplatesApi.update(editingId, req);
-				pushToast(`Template "${editName}" mis à jour`, 'success');
+				pushToast(t('errorPages.toastUpdated', { name: editName }), 'success');
 			}
 			await loadTemplates();
 			view = 'list';
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'failed to save template';
+			const msg = err instanceof ApiError ? err.message : t('errorPages.errFailedSave');
 			pushToast(msg, 'danger');
 		} finally {
 			saving = false;
@@ -287,11 +289,11 @@
 		deleting = true;
 		try {
 			await errorTemplatesApi.delete(target.id);
-			pushToast(`Template "${target.name}" supprimé`, 'success');
+			pushToast(t('errorPages.toastDeleted', { name: target.name }), 'success');
 			deleteTarget = null;
 			await loadTemplates();
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : 'failed to delete template';
+			const msg = err instanceof ApiError ? err.message : t('errorPages.errFailedDelete');
 			pushToast(msg, 'danger');
 		} finally {
 			deleting = false;
@@ -340,7 +342,7 @@
 				previewHtml = clientSidePreview(activeBuffer, activeCode);
 			}
 		} catch (err) {
-			previewError = err instanceof Error ? err.message : 'preview failed';
+			previewError = err instanceof Error ? err.message : t('errorPages.errPreviewFailed');
 			previewHtml = '';
 		} finally {
 			previewLoading = false;
@@ -408,7 +410,8 @@
 
 	function formatDate(iso: string): string {
 		const d = new Date(iso);
-		return d.toLocaleDateString('fr-FR', {
+		const locale = language.current === 'fr' ? 'fr-FR' : 'en-US';
+		return d.toLocaleDateString(locale, {
 			year: 'numeric',
 			month: 'short',
 			day: 'numeric'
@@ -417,27 +420,27 @@
 </script>
 
 <svelte:head>
-	<title>Pages d'erreur · Arenet</title>
+	<title>{language.current && t('errorPages.headTitle')}</title>
 </svelte:head>
 
 <PageHeader
-	eyebrow="Réglages · Pages d'erreur"
-	title={view === 'list'
-		? "Pages d'erreur personnalisées"
+	eyebrow={language.current && t('errorPages.eyebrow')}
+	title={language.current && (view === 'list'
+		? t('errorPages.titleList')
 		: editingBuiltin
-			? 'Aperçu : Arenet default'
+			? t('errorPages.titleBuiltinPreview')
 			: editingId
-				? 'Modifier le template'
-				: 'Nouveau template'}
-	subtitle="Templates HTML servis par Caddy pour les codes 401/403/404/429/500/502/503/504. Sans template attaché à une route, le défaut Arenet branded s'applique automatiquement."
+				? t('errorPages.titleEdit')
+				: t('errorPages.titleNew'))}
+	subtitle={language.current && t('errorPages.subtitle')}
 >
 	{#snippet actions()}
 		{#if view === 'list'}
-			<Button variant="primary" onclick={startCreate}>+ Nouveau template</Button>
+			<Button variant="primary" onclick={startCreate}>{language.current && t('errorPages.btnNew')}</Button>
 		{:else if editingBuiltin}
 			<!-- Read-only mode : no Save. Operator returns to
 			     list or duplicates to customise. -->
-			<Button variant="secondary" onclick={cancelEdit}>Retour</Button>
+			<Button variant="secondary" onclick={cancelEdit}>{language.current && t('errorPages.btnBack')}</Button>
 			<Button
 				variant="primary"
 				onclick={() => {
@@ -460,17 +463,17 @@
 					});
 				}}
 			>
-				Dupliquer pour customiser
+				{language.current && t('errorPages.btnDuplicateToCustomise')}
 			</Button>
 		{:else}
-			<Button variant="secondary" onclick={cancelEdit} disabled={saving}>Annuler</Button>
+			<Button variant="secondary" onclick={cancelEdit} disabled={saving}>{language.current && t('errorPages.btnCancel')}</Button>
 			<Button
 				variant="primary"
 				onclick={() => void saveTemplate()}
 				disabled={saving}
 				loading={saving}
 			>
-				{saving ? 'Enregistrement…' : 'Enregistrer'}
+				{language.current && (saving ? t('errorPages.btnSaving') : t('errorPages.btnSave'))}
 			</Button>
 		{/if}
 	{/snippet}
@@ -483,74 +486,73 @@
 		{:else if loadError}
 			<div class="empty-state">
 				<p class="error">{loadError}</p>
-				<Button variant="secondary" onclick={() => void loadTemplates()}>Réessayer</Button>
+				<Button variant="secondary" onclick={() => void loadTemplates()}>{language.current && t('errorPages.btnRetry')}</Button>
 			</div>
 		{:else if templates.length === 0}
 			<div class="empty-state">
-				<h3>Aucun template personnalisé</h3>
+				<h3>{language.current && t('errorPages.emptyTitle')}</h3>
 				<p>
-					Toutes les routes reçoivent actuellement le défaut Arenet branded.
-					Créez un template pour personnaliser les pages d'erreur d'une route ou plusieurs.
+					{language.current && t('errorPages.emptyBody')}
 				</p>
-				<Button variant="primary" onclick={startCreate}>+ Créer le premier template</Button>
+				<Button variant="primary" onclick={startCreate}>{language.current && t('errorPages.btnCreateFirst')}</Button>
 			</div>
 		{:else}
 			<table class="tpl-table">
 				<thead>
 					<tr>
-						<th>Nom</th>
-						<th>Description</th>
-						<th class="num">Codes configurés</th>
-						<th>Mis à jour</th>
-						<th class="actions">Actions</th>
+						<th>{language.current && t('errorPages.colName')}</th>
+						<th>{language.current && t('errorPages.colDescription')}</th>
+						<th class="num">{language.current && t('errorPages.colCodesConfigured')}</th>
+						<th>{language.current && t('errorPages.colUpdated')}</th>
+						<th class="actions">{language.current && t('errorPages.colActions')}</th>
 					</tr>
 				</thead>
 				<tbody>
-					{#each templates as t (t.id)}
-						<tr class:builtin-row={t.isBuiltin}>
+					{#each templates as tpl (tpl.id)}
+						<tr class:builtin-row={tpl.isBuiltin}>
 							<td>
-								<strong>{t.name}</strong>
-								{#if t.isBuiltin}
-									<span class="builtin-badge" title="Template Arenet par défaut, lecture seule">
-										Built-in
+								<strong>{tpl.name}</strong>
+								{#if tpl.isBuiltin}
+									<span class="builtin-badge" title={language.current && t('errorPages.builtinTooltip')}>
+										{language.current && t('errorPages.builtinBadge')}
 									</span>
 								{/if}
 							</td>
-							<td class="dim">{t.description || '—'}</td>
-							<td class="num mono">{Object.keys(t.pages).length} / 8</td>
+							<td class="dim">{tpl.description || '—'}</td>
+							<td class="num mono">{Object.keys(tpl.pages).length} / 8</td>
 							<td class="dim">
-								{t.isBuiltin ? '—' : formatDate(t.updatedAt)}
+								{tpl.isBuiltin ? '—' : formatDate(tpl.updatedAt)}
 							</td>
 							<td class="actions">
-								{#if t.isBuiltin}
+								{#if tpl.isBuiltin}
 									<!-- Read-only : Inspect goes to the editor in
 									     read-only mode ; Duplicate creates an
 									     editable copy. No Modifier / Supprimer. -->
-									<Button variant="secondary" size="sm" onclick={() => startEdit(t)}>
-										Aperçu
+									<Button variant="secondary" size="sm" onclick={() => startEdit(tpl)}>
+										{language.current && t('errorPages.btnPreview')}
 									</Button>
 									<Button
 										variant="primary"
 										size="sm"
-										onclick={() => void duplicateTemplate(t)}
-										title="Créer un nouveau template à partir du défaut"
+										onclick={() => void duplicateTemplate(tpl)}
+										title={language.current && t('errorPages.btnDuplicateBuiltinTooltip')}
 									>
-										Dupliquer
+										{language.current && t('errorPages.btnDuplicate')}
 									</Button>
 								{:else}
-									<Button variant="secondary" size="sm" onclick={() => startEdit(t)}>
-										Modifier
+									<Button variant="secondary" size="sm" onclick={() => startEdit(tpl)}>
+										{language.current && t('errorPages.btnEdit')}
 									</Button>
 									<Button
 										variant="secondary"
 										size="sm"
-										onclick={() => void duplicateTemplate(t)}
-										title="Créer un nouveau template à partir de celui-ci"
+										onclick={() => void duplicateTemplate(tpl)}
+										title={language.current && t('errorPages.btnDuplicateTooltip')}
 									>
-										Dupliquer
+										{language.current && t('errorPages.btnDuplicate')}
 									</Button>
-									<Button variant="danger" size="sm" onclick={() => askDelete(t)}>
-										Supprimer
+									<Button variant="danger" size="sm" onclick={() => askDelete(tpl)}>
+										{language.current && t('errorPages.btnDelete')}
 									</Button>
 								{/if}
 							</td>
@@ -569,31 +571,29 @@
 			     the absence of a Save button isn't perceived
 			     as a UI bug. -->
 			<div class="card builtin-banner">
-				<strong>Lecture seule</strong>
-				— ce template est le défaut Arenet. Cliquez sur
-				« Dupliquer pour customiser » en haut à droite pour
-				créer une copie éditable.
+				<strong>{language.current && t('errorPages.readOnlyBannerStrong')}</strong>
+				{language.current && t('errorPages.readOnlyBannerBody')}
 			</div>
 		{/if}
 		<!-- Top : name + description -->
 		<div class="card meta-card">
 			<label>
-				<span class="meta-label">Nom du template</span>
+				<span class="meta-label">{language.current && t('errorPages.metaNameLabel')}</span>
 				<input
 					type="text"
 					bind:value={editName}
-					placeholder="ex: WGW Branding"
+					placeholder={language.current && t('errorPages.metaNamePlaceholder')}
 					class="meta-input"
 					maxlength="100"
 					readonly={editingBuiltin}
 				/>
 			</label>
 			<label>
-				<span class="meta-label">Description (optionnel)</span>
+				<span class="meta-label">{language.current && t('errorPages.metaDescriptionLabel')}</span>
 				<input
 					type="text"
 					bind:value={editDescription}
-					placeholder="Pages d'erreur brandées pour worldgeekwide.fr"
+					placeholder={language.current && t('errorPages.metaDescriptionPlaceholder')}
 					class="meta-input"
 					maxlength="500"
 					readonly={editingBuiltin}
@@ -616,11 +616,9 @@
 						bind:checked={editIsCatchallDefault}
 					/>
 					<span>
-						<span class="meta-label">Utiliser comme page catch-all par défaut</span>
+						<span class="meta-label">{language.current && t('errorPages.catchallToggleLabel')}</span>
 						<span class="catchall-hint">
-							La page 404 de ce template sera servie pour toute requête arrivant
-							sur un host non configuré dans Arenet. Un seul template peut être
-							catch-all à la fois.
+							{language.current && t('errorPages.catchallHint')}
 						</span>
 					</span>
 				</label>
@@ -629,7 +627,7 @@
 
 		<!-- Status code tabs -->
 		<div class="card tabs-card">
-			<div class="code-tabs" role="tablist" aria-label="Status codes">
+			<div class="code-tabs" role="tablist" aria-label={language.current && t('errorPages.tabsAriaLabel')}>
 				{#each SUPPORTED_ERROR_STATUS_CODES as code (code)}
 					<button
 						role="tab"
@@ -649,26 +647,26 @@
 		<!-- Main editor + preview + variables -->
 		<div class="card editor-card">
 			<div class="editor-pane">
-				<div class="pane-label">Éditeur HTML — code {activeCode}</div>
+				<div class="pane-label">{language.current && t('errorPages.editorPaneLabel', { code: activeCode })}</div>
 				<HtmlEditor
 					bind:this={editorRef}
 					bind:value={activeBuffer}
-					label="HTML body for status code {activeCode}"
-					placeholder="<!doctype html>..."
+					label={language.current && t('errorPages.editorAriaLabel', { code: activeCode })}
+					placeholder={t('errorPages.editorPlaceholder')}
 					minHeight={360}
 					readonly={editingBuiltin}
 				/>
 			</div>
 			<div class="preview-pane">
 				<div class="pane-label">
-					Prévisualisation
-					{#if previewLoading}<span class="dim">(chargement…)</span>{/if}
+					{language.current && t('errorPages.previewPaneLabel')}
+					{#if previewLoading}<span class="dim">{language.current && t('errorPages.previewLoading')}</span>{/if}
 				</div>
 				{#if previewError}
 					<div class="preview-error">{previewError}</div>
 				{:else}
 					<iframe
-						title="Aperçu HTML du template (sandbox)"
+						title={language.current && t('errorPages.previewAlt')}
 						sandbox=""
 						srcdoc={previewHtml}
 						class="preview-frame"
@@ -681,16 +679,16 @@
 		<div class="card vars-card">
 			<details open>
 				<summary>
-					Variables Caddy disponibles
-					{#if !editingBuiltin}(cliquez pour insérer){/if}
+					{language.current && t('errorPages.varsSummary')}
+					{#if !editingBuiltin}{language.current && t('errorPages.varsSummarySuffix')}{/if}
 				</summary>
 				<div class="vars-grid">
 					{#each ERROR_PAGE_PLACEHOLDERS as p (p.token)}
 						<button
 							class="var-btn"
-							title={editingBuiltin
-								? `Exemple : ${p.example} (lecture seule)`
-								: `Exemple : ${p.example}`}
+							title={language.current && (editingBuiltin
+								? t('errorPages.varsExampleReadOnlyTooltip', { ex: p.example })
+								: t('errorPages.varsExampleTooltip', { ex: p.example }))}
 							onclick={() => insertPlaceholder(p.token)}
 							disabled={editingBuiltin}
 						>
@@ -700,8 +698,7 @@
 					{/each}
 				</div>
 				<p class="vars-help">
-					Ces placeholders sont remplacés par Caddy au moment de la requête
-					(pas dans la prévisualisation, qui utilise des valeurs fictives).
+					{language.current && t('errorPages.varsHelp')}
 				</p>
 			</details>
 		</div>
@@ -720,10 +717,9 @@
 			tabindex="-1"
 			onclick={(e) => e.stopPropagation()}
 		>
-			<h3 id="delete-modal-title">Supprimer le template ?</h3>
+			<h3 id="delete-modal-title">{language.current && t('errorPages.deleteModalTitle')}</h3>
 			<p>
-				Supprimer « <strong>{deleteTarget.name}</strong> » est irréversible.
-				Les routes qui le référencent reviendront au défaut Arenet branded.
+				{language.current && t('errorPages.deleteModalBody', { name: deleteTarget.name })}
 			</p>
 			<div class="modal-actions">
 				<Button
@@ -731,7 +727,7 @@
 					onclick={() => (deleteTarget = null)}
 					disabled={deleting}
 				>
-					Annuler
+					{language.current && t('errorPages.btnCancel')}
 				</Button>
 				<Button
 					variant="danger"
@@ -739,7 +735,7 @@
 					disabled={deleting}
 					loading={deleting}
 				>
-					{deleting ? 'Suppression…' : 'Supprimer'}
+					{language.current && (deleting ? t('errorPages.btnDeleting') : t('errorPages.btnDelete'))}
 				</Button>
 			</div>
 		</div>

@@ -72,9 +72,9 @@ describe('/settings/error-pages — list view', () => {
 	it('renders the empty state when no templates exist', async () => {
 		apiMock.list.mockResolvedValue([]);
 		render(Page);
-		await screen.findByText(/Aucun template personnalisé/);
+		await screen.findByText(/No custom template/);
 		// CTA to create the first template is present.
-		const ctas = screen.getAllByRole('button', { name: /Créer le premier/ });
+		const ctas = screen.getAllByRole('button', { name: /Create the first/ });
 		expect(ctas.length).toBeGreaterThan(0);
 	});
 
@@ -103,18 +103,18 @@ describe('/settings/error-pages — list view', () => {
 		await waitFor(() => {
 			expect(screen.getByText('network down')).toBeInTheDocument();
 		});
-		const retryBtn = screen.getByRole('button', { name: 'Réessayer' });
+		const retryBtn = screen.getByRole('button', { name: 'Retry' });
 		expect(retryBtn).toBeInTheDocument();
 	});
 });
 
 describe('/settings/error-pages — create flow', () => {
-	it('clicking "Nouveau template" switches to editor view', async () => {
+	it('clicking "New template" switches to editor view', async () => {
 		apiMock.list.mockResolvedValue([]);
 		render(Page);
-		await screen.findByText(/Aucun template personnalisé/);
+		await screen.findByText(/No custom template/);
 		// Header CTA = "+ Nouveau template", empty state CTA also creates.
-		const cta = screen.getByRole('button', { name: '+ Nouveau template' });
+		const cta = screen.getByRole('button', { name: '+ New template' });
 		await fireEvent.click(cta);
 		// Editor view : the header eyebrow switches to "Nouveau template"
 		// and the meta-card name input appears.
@@ -127,13 +127,13 @@ describe('/settings/error-pages — create flow', () => {
 		// After save, the list re-fetch returns the created.
 		apiMock.list.mockResolvedValueOnce([]); // initial empty
 		render(Page);
-		await screen.findByText(/Aucun template personnalisé/);
-		await fireEvent.click(screen.getByRole('button', { name: '+ Nouveau template' }));
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('button', { name: '+ New template' }));
 		const nameInput = await screen.findByPlaceholderText(/WGW Branding/);
 		await fireEvent.input(nameInput, { target: { value: 'New One' } });
 		// Second list call returns the new entry.
 		apiMock.list.mockResolvedValueOnce([sampleTemplate({ id: 'new-id', name: 'New One' })]);
-		await fireEvent.click(screen.getByRole('button', { name: /Enregistrer/ }));
+		await fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
 		await waitFor(() => {
 			expect(apiMock.create).toHaveBeenCalledTimes(1);
 		});
@@ -144,14 +144,14 @@ describe('/settings/error-pages — create flow', () => {
 	it('rejects empty name with a toast', async () => {
 		apiMock.list.mockResolvedValue([]);
 		render(Page);
-		await screen.findByText(/Aucun template personnalisé/);
-		await fireEvent.click(screen.getByRole('button', { name: '+ Nouveau template' }));
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('button', { name: '+ New template' }));
 		await screen.findByPlaceholderText(/WGW Branding/);
 		// Click save with empty name.
-		await fireEvent.click(screen.getByRole('button', { name: /Enregistrer/ }));
+		await fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
 		await waitFor(() => {
 			expect(toastMock.pushToast).toHaveBeenCalledWith(
-				expect.stringContaining('nom du template'),
+				expect.stringContaining('Template name is required'),
 				'danger'
 			);
 		});
@@ -164,8 +164,8 @@ describe('/settings/error-pages — editor', () => {
 	it('renders the 8 supported status-code tabs', async () => {
 		apiMock.list.mockResolvedValue([]);
 		render(Page);
-		await screen.findByText(/Aucun template personnalisé/);
-		await fireEvent.click(screen.getByRole('button', { name: '+ Nouveau template' }));
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('button', { name: '+ New template' }));
 		// All 8 codes appear as tab labels.
 		for (const code of [401, 403, 404, 429, 500, 502, 503, 504]) {
 			expect(screen.getByRole('tab', { name: new RegExp(`^${code}`) })).toBeInTheDocument();
@@ -175,11 +175,11 @@ describe('/settings/error-pages — editor', () => {
 	it('renders the Variables panel with placeholder tokens', async () => {
 		apiMock.list.mockResolvedValue([]);
 		render(Page);
-		await screen.findByText(/Aucun template personnalisé/);
-		await fireEvent.click(screen.getByRole('button', { name: '+ Nouveau template' }));
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('button', { name: '+ New template' }));
 		// Panel header.
 		expect(
-			screen.getByText(/Variables Caddy disponibles/)
+			screen.getByText(/Available Caddy variables/)
 		).toBeInTheDocument();
 		// Some token examples are rendered as <code>.
 		expect(screen.getByText('{http.error.status_code}')).toBeInTheDocument();
@@ -198,7 +198,7 @@ describe('/settings/error-pages — editor', () => {
 		render(Page);
 		await screen.findByText('Existing brand');
 		// Click Modifier on the row.
-		const editBtn = screen.getByRole('button', { name: 'Modifier' });
+		const editBtn = screen.getByRole('button', { name: 'Edit' });
 		await fireEvent.click(editBtn);
 		// Editor view : name input has the existing value.
 		const nameInput = (await screen.findByPlaceholderText(/WGW Branding/)) as HTMLInputElement;
@@ -209,9 +209,9 @@ describe('/settings/error-pages — editor', () => {
 		apiMock.list.mockResolvedValue([sampleTemplate()]);
 		render(Page);
 		await screen.findByText('WGW Branding');
-		await fireEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 		await screen.findByPlaceholderText(/WGW Branding/);
-		await fireEvent.click(screen.getByRole('button', { name: 'Annuler' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 		// Back to list : the table is visible again.
 		await waitFor(() => {
 			expect(screen.getByText('WGW Branding')).toBeInTheDocument();
@@ -226,14 +226,14 @@ describe('/settings/error-pages — delete confirmation', () => {
 		apiMock.delete.mockResolvedValue(undefined);
 		render(Page);
 		await screen.findByText('Doomed');
-		await fireEvent.click(screen.getByRole('button', { name: 'Supprimer' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 		// Modal heading appears.
-		await screen.findByText(/Supprimer le template/);
+		await screen.findByText(/Delete template/);
 		// Second-stage list call after delete.
 		apiMock.list.mockResolvedValueOnce([]);
 		// Click the modal's Supprimer button (second occurrence).
 		const confirmBtn = screen
-			.getAllByRole('button', { name: /^Supprimer$/ })
+			.getAllByRole('button', { name: /^Delete$/ })
 			.pop();
 		expect(confirmBtn).toBeDefined();
 		await fireEvent.click(confirmBtn!);
@@ -246,9 +246,9 @@ describe('/settings/error-pages — delete confirmation', () => {
 		apiMock.list.mockResolvedValue([sampleTemplate({ id: 'safe' })]);
 		render(Page);
 		await screen.findByText('WGW Branding');
-		await fireEvent.click(screen.getByRole('button', { name: 'Supprimer' }));
-		await screen.findByText(/Supprimer le template/);
-		await fireEvent.click(screen.getByRole('button', { name: 'Annuler' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+		await screen.findByText(/Delete template/);
+		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 		expect(apiMock.delete).not.toHaveBeenCalled();
 	});
 });
@@ -290,12 +290,12 @@ describe('/settings/error-pages — Phase 2.1 builtin visibility', () => {
 		render(Page);
 		await screen.findByText('Arenet default');
 		// "Aperçu" replaces "Modifier" for builtin.
-		expect(screen.getByRole('button', { name: 'Aperçu' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument();
 		// Duplicate is visible.
-		expect(screen.getByRole('button', { name: 'Dupliquer' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Duplicate' })).toBeInTheDocument();
 		// Modifier + Supprimer are NOT rendered for builtin.
-		expect(screen.queryByRole('button', { name: 'Modifier' })).not.toBeInTheDocument();
-		expect(screen.queryByRole('button', { name: 'Supprimer' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
 	});
 
 	it('editable row shows Modifier + Dupliquer + Supprimer (existing UX preserved)', async () => {
@@ -306,9 +306,9 @@ describe('/settings/error-pages — Phase 2.1 builtin visibility', () => {
 		render(Page);
 		await screen.findByText('Editable one');
 		// All three actions present somewhere (Aperçu only on builtin).
-		const modifierButtons = screen.getAllByRole('button', { name: 'Modifier' });
-		const duplicateButtons = screen.getAllByRole('button', { name: 'Dupliquer' });
-		const supprimerButtons = screen.getAllByRole('button', { name: 'Supprimer' });
+		const modifierButtons = screen.getAllByRole('button', { name: 'Edit' });
+		const duplicateButtons = screen.getAllByRole('button', { name: 'Duplicate' });
+		const supprimerButtons = screen.getAllByRole('button', { name: 'Delete' });
 		// Modifier appears once (editable row only).
 		expect(modifierButtons.length).toBe(1);
 		// Dupliquer appears twice (builtin + editable).
@@ -321,15 +321,15 @@ describe('/settings/error-pages — Phase 2.1 builtin visibility', () => {
 		apiMock.list.mockResolvedValue([builtinTemplate()]);
 		render(Page);
 		await screen.findByText('Arenet default');
-		await fireEvent.click(screen.getByRole('button', { name: 'Aperçu' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
 		// Editor view : title indicates Aperçu, read-only banner
 		// visible, no Save button.
-		await screen.findByText(/Aperçu : Arenet default/);
-		expect(screen.getByText(/Lecture seule/)).toBeInTheDocument();
-		expect(screen.queryByRole('button', { name: /Enregistrer/ })).not.toBeInTheDocument();
+		await screen.findByText(/Preview: Arenet default/);
+		expect(screen.getByText(/Read-only/)).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Save$/ })).not.toBeInTheDocument();
 		// The Phase 2.1 duplicate-from-editor CTA is present.
 		expect(
-			screen.getByRole('button', { name: /Dupliquer pour customiser/ })
+			screen.getByRole('button', { name: /Duplicate to customise/ })
 		).toBeInTheDocument();
 	});
 
@@ -345,7 +345,7 @@ describe('/settings/error-pages — Phase 2.1 builtin visibility', () => {
 		apiMock.list.mockResolvedValueOnce([builtinTemplate()]);
 		render(Page);
 		await screen.findByText('Arenet default');
-		await fireEvent.click(screen.getByRole('button', { name: 'Dupliquer' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }));
 		await waitFor(() => {
 			expect(apiMock.create).toHaveBeenCalledTimes(1);
 		});
@@ -375,7 +375,7 @@ describe('/settings/error-pages — Phase 2.1 builtin visibility', () => {
 		render(Page);
 		await screen.findByText('Arenet default');
 		// First Dupliquer in the DOM is on the builtin row.
-		const duplicateButtons = screen.getAllByRole('button', { name: 'Dupliquer' });
+		const duplicateButtons = screen.getAllByRole('button', { name: 'Duplicate' });
 		await fireEvent.click(duplicateButtons[0]);
 		await waitFor(() => {
 			expect(apiMock.create).toHaveBeenCalledTimes(1);

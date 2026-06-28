@@ -167,32 +167,34 @@
 	);
 
 	const emptyStateMessage = $derived(
-		hasAnyFilter
-			? 'No audit events match the current filters.'
-			: 'No audit events recorded yet.'
+		language.current &&
+			(hasAnyFilter
+				? t('audit.emptyFiltered')
+				: t('audit.emptyNoFilters'))
 	);
 
 	// Status line for screen readers (spec §9.10).
 	const a11yStatus = $derived.by(() => {
-		if (loading) return 'Loading audit events…';
-		if (loadError) return `Failed to load: ${loadError}`;
+		void language.current;
+		if (loading) return t('audit.a11yLoading');
+		if (loadError) return t('audit.a11yError', { err: loadError });
 		if (events.length === 0 && didInitialLoad) return emptyStateMessage;
-		return `Loaded ${events.length} event${events.length === 1 ? '' : 's'}`;
+		return t('audit.a11yCount', { count: events.length, plural: events.length === 1 ? '' : 's' });
 	});
 </script>
 
 <svelte:head>
-	<title>Audit log — Arenet</title>
+	<title>{language.current && t('audit.headTitle')}</title>
 </svelte:head>
 
 <PageHeader
 	title={language.current && t('pageTitles.audit')}
-	subtitle="Review authentication events and route mutations."
+	subtitle={language.current && t('audit.subtitle')}
 >
 	{#snippet actions()}
 		{#if hasAnyFilter}
 			<Button variant="ghost" size="sm" onclick={clearAllFilters}>
-				Clear filters
+				{language.current && t('audit.btnClearFilters')}
 			</Button>
 		{/if}
 	{/snippet}
@@ -205,12 +207,12 @@
 	>
 		<Input
 			bind:value={fromValue}
-			label="From (RFC 3339)"
+			label={language.current && t('audit.filterFromLabel')}
 			placeholder="2026-05-01T00:00:00Z"
 		/>
 		<Input
 			bind:value={toValue}
-			label="To (RFC 3339)"
+			label={language.current && t('audit.filterToLabel')}
 			placeholder="2026-05-18T00:00:00Z"
 		/>
 		<div>
@@ -218,7 +220,7 @@
 				for="audit-action-filter"
 				class="text-sm font-medium text-secondary mb-1.5 block"
 			>
-				Action
+				{language.current && t('audit.filterActionLabel')}
 			</label>
 			<select
 				id="audit-action-filter"
@@ -226,7 +228,7 @@
 				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 			>
 				{#each ACTIONS as action (action)}
-					<option value={action}>{action || 'All actions'}</option>
+					<option value={action}>{action || (language.current && t('audit.filterAllActions'))}</option>
 				{/each}
 			</select>
 		</div>
@@ -237,40 +239,40 @@
 		<div class="flex flex-wrap items-center gap-2">
 			{#if actionFilter}
 				<span class="filter-pill">
-					Action: {actionFilter}
+					{language.current && t('audit.pillActionPrefix', { value: actionFilter })}
 					<button
 						type="button"
-						aria-label={`Remove filter: action=${actionFilter}`}
+						aria-label={language.current && t('audit.ariaRemoveFilterAction', { value: actionFilter })}
 						onclick={() => removePill('action')}
 					>×</button>
 				</span>
 			{/if}
 			{#if actorFilter}
 				<span class="filter-pill">
-					Actor: {actorFilterDisplayName || actorFilter}
+					{language.current && t('audit.pillActorPrefix', { value: actorFilterDisplayName || actorFilter })}
 					<button
 						type="button"
-						aria-label={`Remove filter: actor=${actorFilterDisplayName || actorFilter}`}
+						aria-label={language.current && t('audit.ariaRemoveFilterActor', { value: actorFilterDisplayName || actorFilter })}
 						onclick={() => removePill('actor')}
 					>×</button>
 				</span>
 			{/if}
 			{#if fromValue}
 				<span class="filter-pill">
-					From: {fromValue}
+					{language.current && t('audit.pillFromPrefix', { value: fromValue })}
 					<button
 						type="button"
-						aria-label={`Remove filter: from=${fromValue}`}
+						aria-label={language.current && t('audit.ariaRemoveFilterFrom', { value: fromValue })}
 						onclick={() => removePill('from')}
 					>×</button>
 				</span>
 			{/if}
 			{#if toValue}
 				<span class="filter-pill">
-					To: {toValue}
+					{language.current && t('audit.pillToPrefix', { value: toValue })}
 					<button
 						type="button"
-						aria-label={`Remove filter: to=${toValue}`}
+						aria-label={language.current && t('audit.ariaRemoveFilterTo', { value: toValue })}
 						onclick={() => removePill('to')}
 					>×</button>
 				</span>
@@ -287,9 +289,9 @@
 			class="p-4 rounded bg-down/10 border border-down text-down flex items-center justify-between"
 			role="alert"
 		>
-			<span>⚠ Failed to load audit events: {loadError}</span>
+			<span>{language.current && t('audit.loadErr', { err: loadError })}</span>
 			<Button variant="secondary" size="sm" onclick={() => load(true)} disabled={loading}>
-				{#snippet children()}Retry{/snippet}
+				{#snippet children()}{language.current && t('audit.btnRetry')}{/snippet}
 			</Button>
 		</div>
 	{/if}
@@ -303,7 +305,13 @@
 	{:else if events.length > 0}
 		<DataTable
 			items={events}
-			headers={['Time', 'Action', 'Actor', 'Target', 'IP']}
+			headers={language.current ? [
+				t('audit.colTime'),
+				t('audit.colAction'),
+				t('audit.colActor'),
+				t('audit.colTarget'),
+				t('audit.colIp')
+			] : []}
 			row={auditRowSnippet}
 			expanded={auditExpandedSnippet}
 		/>
@@ -318,7 +326,7 @@
 					loading={loadMoreLoading}
 				>
 					{#snippet children()}
-						<span>{loadMoreLoading ? 'Loading…' : 'Load more'}</span>
+						<span>{language.current && (loadMoreLoading ? t('audit.btnLoading') : t('audit.btnLoadMore'))}</span>
 					{/snippet}
 				</Button>
 			</div>
