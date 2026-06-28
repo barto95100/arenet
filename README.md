@@ -4,6 +4,8 @@
 
 # Arenet
 
+**🌐 English** · [Français](README.fr.md)
+
 **A homelab-friendly reverse proxy with integrated security**
 
 [![Release](https://img.shields.io/github/v/release/barto95100/arenet?style=flat-square&color=2563eb)](https://github.com/barto95100/arenet/releases)
