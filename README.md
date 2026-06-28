@@ -181,6 +181,16 @@ Arenet is currently a single-developer project but contributions are welcome.
 - All source files MUST carry the AGPL-3.0 header — see `CLAUDE.md` § "AGPLv3 Header"
 - Empirical verification rule — any claim about Caddy / Coraza / CrowdSec runtime behaviour must cite source or be backed by a test
 
+## 🌐 Translations
+
+Arenet's UI, README, and Wiki are i18n complete end-to-end in **English** and **French** as of v2.10.x.
+
+- App UI : EN + FR (Phase 3 frontend i18n, v2.9.x ships)
+- README : [English](README.md) · [Français](README.fr.md)
+- Wiki : [English](https://github.com/barto95100/arenet/wiki/Home) · [Français](https://github.com/barto95100/arenet/wiki/Home-FR)
+
+Contributions for additional languages (DE, ES, IT, etc.) welcome — see the wiki's [`Home`](https://github.com/barto95100/arenet/wiki/Home) and `web/frontend/src/lib/i18n/locales/` for the existing bundle structure. Open an issue first to coordinate.
+
 ## 📜 License
 
 [AGPL-3.0](LICENSE) — copyleft for the network-served use case. Modifications served over a network must be made available under the same license.
