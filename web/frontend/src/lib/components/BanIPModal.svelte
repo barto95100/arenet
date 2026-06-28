@@ -30,6 +30,8 @@
 	import { ApiError, type ManualBanRequest } from '$lib/api/types';
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	interface Props {
 		open: boolean;
@@ -135,11 +137,11 @@
 	// operator gets feedback without paying a round-trip.
 	// Returns an error string OR null on success.
 	function validateClientSide(): string | null {
-		if (value.trim() === '') return 'IP / CIDR is required';
-		if (effectiveDuration === '') return 'Durée is required (custom field empty)';
-		if (reason.trim() === '') return 'Reason is required';
+		if (value.trim() === '') return t('banIp.errValueRequired');
+		if (effectiveDuration === '') return t('banIp.errDurationRequired');
+		if (reason.trim() === '') return t('banIp.errReasonRequired');
 		if (reason.trim().length > 256) {
-			return `Reason exceeds 256 chars (got ${reason.trim().length})`;
+			return t('banIp.errReasonTooLong', { count: reason.trim().length });
 		}
 		// Defer IP / duration syntax to the backend — keeping
 		// the client-side checks light avoids two-validator
@@ -166,7 +168,7 @@
 				reason: reason.trim()
 			};
 			const resp = await createManualBan(req);
-			pushToast(`IP bannie : ${resp.value} (${resp.scope})`, 'success');
+			pushToast(t('banIp.toastBanned', { value: resp.value, scope: resp.scope }), 'success');
 			onSuccess?.();
 			// Close the modal AFTER onSuccess so the parent's
 			// loadLive() fires before the visual transition.
@@ -185,7 +187,7 @@
 				errorMsg = err.message;
 			} else {
 				errorKind = 'other';
-				errorMsg = err instanceof Error ? err.message : 'Submit failed';
+				errorMsg = err instanceof Error ? err.message : t('banIp.errSubmitFailed');
 			}
 		} finally {
 			submitting = false;
@@ -203,7 +205,7 @@
 	}
 </script>
 
-<Modal {open} title="Bannir une IP" onClose={() => {
+<Modal {open} title={language.current && t('banIp.title')} onClose={() => {
 	if (submitting) return;
 	onClose();
 }}>
@@ -216,39 +218,39 @@
 			}}
 		>
 			<div class="field">
-				<label for="ban-value">IP ou CIDR</label>
+				<label for="ban-value">{language.current && t('banIp.labelValue')}</label>
 				<input
 					id="ban-value"
 					type="text"
 					autocomplete="off"
-					placeholder="203.0.113.42 ou 10.0.0.0/16"
+					placeholder={language.current && t('banIp.valuePlaceholder')}
 					bind:value
 					data-testid="ban-input-value"
 					required
 				/>
 				{#if maskWarn.wide}
 					<p class="warn" role="status" data-testid="ban-mask-warn">
-						⚠ Vous allez bannir {maskWarn.approxIPs} IPs.
+						{language.current && t('banIp.maskWarn', { count: maskWarn.approxIPs })}
 					</p>
 				{/if}
 			</div>
 
 			<div class="row">
 				<div class="field">
-					<label for="ban-duration">Durée</label>
+					<label for="ban-duration">{language.current && t('banIp.labelDuration')}</label>
 					<select id="ban-duration" bind:value={durationPreset} data-testid="ban-input-duration">
-						<option value="1h">1 heure</option>
-						<option value="4h">4 heures</option>
-						<option value="24h">24 heures</option>
-						<option value="7d">7 jours</option>
-						<option value="30d">30 jours</option>
-						<option value="custom">Custom…</option>
+						<option value="1h">{language.current && t('banIp.duration1h')}</option>
+						<option value="4h">{language.current && t('banIp.duration4h')}</option>
+						<option value="24h">{language.current && t('banIp.duration24h')}</option>
+						<option value="7d">{language.current && t('banIp.duration7d')}</option>
+						<option value="30d">{language.current && t('banIp.duration30d')}</option>
+						<option value="custom">{language.current && t('banIp.durationCustom')}</option>
 					</select>
 					{#if durationPreset === 'custom'}
 						<input
 							class="custom-duration"
 							type="text"
-							placeholder="ex: 1h30m, 90s, 14d"
+							placeholder={language.current && t('banIp.customDurationPlaceholder')}
 							autocomplete="off"
 							bind:value={customDuration}
 							data-testid="ban-input-custom-duration"
@@ -257,7 +259,7 @@
 				</div>
 
 				<div class="field">
-					<label for="ban-type">Action</label>
+					<label for="ban-type">{language.current && t('banIp.labelAction')}</label>
 					<select id="ban-type" bind:value={banType} data-testid="ban-input-type">
 						<option value="ban">ban</option>
 						<option value="captcha">captcha</option>
@@ -267,32 +269,31 @@
 			</div>
 
 			<div class="field">
-				<label for="ban-reason">Raison</label>
+				<label for="ban-reason">{language.current && t('banIp.labelReason')}</label>
 				<input
 					id="ban-reason"
 					type="text"
 					autocomplete="off"
-					placeholder="Pourquoi ce ban ? (visible dans l'audit log)"
+					placeholder={language.current && t('banIp.reasonPlaceholder')}
 					bind:value={reason}
 					data-testid="ban-input-reason"
 					required
 				/>
 				<p class="hint">
-					{reason.trim().length} / 256 chars
+					{language.current && t('banIp.reasonHint', { count: reason.trim().length })}
 				</p>
 			</div>
 
 			{#if errorKind === 'not_configured'}
 				<div class="error-block cta" role="alert" data-testid="ban-not-configured">
-					<strong>Security Automation non configurée.</strong>
-					Le ban manuel utilise les credentials watcher de Security
-					Automation. Va dans <a href="/settings#security-automation" class="link">Settings → Security Automation</a>
-					et saisis ton watcher (<code>cscli machines add arenet-writer</code> sur le host CrowdSec).
+					<strong>{language.current && t('banIp.notConfiguredTitle')}</strong>
+					{language.current && t('banIp.notConfiguredBody')} <a href="/settings#security-automation" class="link">{language.current && t('banIp.notConfiguredLink')}</a>
+					{language.current && t('banIp.notConfiguredSuffix', { cmd: 'cscli machines add arenet-writer' })}
 				</div>
 			{:else if errorKind === 'unreachable'}
 				<div class="error-block error" role="alert" data-testid="ban-unreachable">
-					<strong>LAPI inaccessible :</strong> {errorMsg ?? 'unknown error'}
-					<button type="button" class="retry-btn" onclick={onRetry}>Réessayer</button>
+					<strong>{language.current && t('banIp.errLapiUnreachablePrefix')}</strong> {errorMsg ?? (language.current && t('banIp.errUnknownError'))}
+					<button type="button" class="retry-btn" onclick={onRetry}>{language.current && t('banIp.btnRetry')}</button>
 				</div>
 			{:else if errorKind !== null && errorMsg !== null}
 				<div class="error-block error" role="alert" data-testid="ban-error">
@@ -304,7 +305,7 @@
 
 	{#snippet footer()}
 		<Button variant="ghost" type="button" onclick={onCancel} disabled={submitting}>
-			Annuler
+			{language.current && t('banIp.btnCancel')}
 		</Button>
 		<Button
 			variant="danger"
@@ -313,7 +314,7 @@
 			disabled={submitting}
 			data-testid="ban-submit"
 		>
-			{submitting ? 'En cours…' : 'Bannir'}
+			{language.current && (submitting ? t('banIp.btnSubmitting') : t('banIp.btnSubmit'))}
 		</Button>
 	{/snippet}
 </Modal>

@@ -84,22 +84,22 @@ describe('ServerPositionSection — mount + load', () => {
 		});
 	});
 
-	it('renders the Manuel badge for a manual override', async () => {
+	it('renders the Manual badge for a manual override', async () => {
 		fetchServerPositionMock.mockResolvedValue(manualPosition);
 		render(ServerPositionSection);
 		await waitFor(() => {
 			expect(screen.getByTestId('server-position-header').textContent ?? '').toContain(
-				'Manuel'
+				'Manual'
 			);
 		});
 	});
 
-	it('renders the Dégradé badge + degraded banner when degraded:true', async () => {
+	it('renders the Degraded badge + degraded banner when degraded:true', async () => {
 		fetchServerPositionMock.mockResolvedValue(degradedPosition);
 		render(ServerPositionSection);
 		await waitFor(() => {
 			expect(screen.getByTestId('server-position-header').textContent ?? '').toContain(
-				'Dégradé'
+				'Degraded'
 			);
 			expect(screen.getByTestId('server-position-degraded')).toBeInTheDocument();
 		});
@@ -218,7 +218,7 @@ describe('ServerPositionSection — validation', () => {
 		await waitFor(() => {
 			// The Input component renders the error in a <p>
 			// next to the input — find it via text content.
-			expect(screen.getByText(/-90 et 90/)).toBeInTheDocument();
+			expect(screen.getByText(/-90 and 90/)).toBeInTheDocument();
 		});
 		// PUT must NOT be called because validation rejected.
 		expect(putServerPositionMock).not.toHaveBeenCalled();
@@ -236,7 +236,7 @@ describe('ServerPositionSection — validation', () => {
 		await fireEvent.submit(screen.getByTestId('server-position-form'));
 
 		await waitFor(() => {
-			expect(screen.getByText(/-90 et 90/)).toBeInTheDocument();
+			expect(screen.getByText(/-90 and 90/)).toBeInTheDocument();
 		});
 		expect(putServerPositionMock).not.toHaveBeenCalled();
 	});
@@ -253,7 +253,7 @@ describe('ServerPositionSection — validation', () => {
 		await fireEvent.submit(screen.getByTestId('server-position-form'));
 
 		await waitFor(() => {
-			expect(screen.getByText(/-180 et 180/)).toBeInTheDocument();
+			expect(screen.getByText(/-180 and 180/)).toBeInTheDocument();
 		});
 		expect(putServerPositionMock).not.toHaveBeenCalled();
 	});
@@ -309,7 +309,7 @@ describe('ServerPositionSection — Redetect button', () => {
 			expect(screen.getByTestId('server-position-form')).toBeInTheDocument();
 		});
 
-		const redetectBtn = screen.getByText(/Re-détecter/i);
+		const redetectBtn = screen.getByText(/Re-detect/i);
 		await fireEvent.click(redetectBtn);
 
 		await waitFor(() => {
@@ -322,10 +322,10 @@ describe('ServerPositionSection — Redetect button', () => {
 		redetectServerPositionMock.mockResolvedValue(degradedPosition);
 		render(ServerPositionSection);
 		await waitFor(() => {
-			expect(screen.getByText(/Re-détecter/i)).toBeInTheDocument();
+			expect(screen.getByText(/Re-detect/i)).toBeInTheDocument();
 		});
 
-		await fireEvent.click(screen.getByText(/Re-détecter/i));
+		await fireEvent.click(screen.getByText(/Re-detect/i));
 
 		await waitFor(() => {
 			const dangerCall = pushToastMock.mock.calls.find((c) => c[1] === 'danger');
@@ -338,10 +338,10 @@ describe('ServerPositionSection — Redetect button', () => {
 		redetectServerPositionMock.mockResolvedValue(autoPosition);
 		render(ServerPositionSection);
 		await waitFor(() => {
-			expect(screen.getByText(/Re-détecter/i)).toBeInTheDocument();
+			expect(screen.getByText(/Re-detect/i)).toBeInTheDocument();
 		});
 
-		await fireEvent.click(screen.getByText(/Re-détecter/i));
+		await fireEvent.click(screen.getByText(/Re-detect/i));
 
 		await waitFor(() => {
 			const successCall = pushToastMock.mock.calls.find((c) => c[1] === 'success');
@@ -362,7 +362,7 @@ describe('ServerPositionSection — Reset button', () => {
 		await fireEvent.input(lat, { target: { value: '12.345' } });
 		expect(lat.value).toBe('12.345');
 
-		const resetBtn = screen.getByText(/Réinitialiser/i);
+		const resetBtn = screen.getByText(/Reset/i);
 		await fireEvent.click(resetBtn);
 
 		await waitFor(() => {

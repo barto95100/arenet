@@ -45,6 +45,8 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import Input from '$lib/components/Input.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	// Last-known backend state. Used both to populate the form
 	// on mount and as the "reset to" reference. null while
@@ -125,20 +127,20 @@
 		const latRaw = String(latStr ?? '').trim();
 		const lat = Number(latRaw);
 		if (latRaw === '' || Number.isNaN(lat)) {
-			latError = 'Valeur requise (nombre).';
+			latError = t('serverPosition.errValueRequired');
 			ok = false;
 		} else if (lat < -90 || lat > 90) {
-			latError = 'Doit être entre -90 et 90.';
+			latError = t('serverPosition.errLatRange');
 			ok = false;
 		}
 
 		const lonRaw = String(lonStr ?? '').trim();
 		const lon = Number(lonRaw);
 		if (lonRaw === '' || Number.isNaN(lon)) {
-			lonError = 'Valeur requise (nombre).';
+			lonError = t('serverPosition.errValueRequired');
 			ok = false;
 		} else if (lon < -180 || lon > 180) {
-			lonError = 'Doit être entre -180 et 180.';
+			lonError = t('serverPosition.errLonRange');
 			ok = false;
 		}
 
@@ -158,10 +160,10 @@
 			});
 			position = saved;
 			resetForm();
-			pushToast('Position enregistrée (mode manuel).', 'success');
+			pushToast(t('serverPosition.toastSaved'), 'success');
 		} catch (err) {
 			const msg = err instanceof ApiError ? err.message : String(err);
-			pushToast(`Échec de l'enregistrement : ${msg}`, 'danger');
+			pushToast(t('serverPosition.toastSaveFailed', { err: msg }), 'danger');
 		} finally {
 			saving = false;
 		}
@@ -176,18 +178,18 @@
 			resetForm();
 			if (detected.degraded) {
 				pushToast(
-					'Détection échouée : MMDB absent ou ipify hors-ligne. État dégradé.',
+					t('serverPosition.toastDetectFailed'),
 					'danger'
 				);
 			} else {
 				pushToast(
-					`Position détectée (${detected.city || '—'}, ${detected.country || '—'}).`,
+					t('serverPosition.toastDetected', { city: detected.city || '—', country: detected.country || '—' }),
 					'success'
 				);
 			}
 		} catch (err) {
 			const msg = err instanceof ApiError ? err.message : String(err);
-			pushToast(`Échec de la détection : ${msg}`, 'danger');
+			pushToast(t('serverPosition.toastDetectError', { err: msg }), 'danger');
 		} finally {
 			redetecting = false;
 		}
@@ -212,29 +214,27 @@
 			data-testid="server-position-header"
 		>
 			<div>
-				<h2 class="text-xl font-semibold">Position du serveur</h2>
+				<h2 class="text-xl font-semibold">{language.current && t('serverPosition.title')}</h2>
 				<p class="text-xs text-muted mt-1">
-					Centre de la carte des menaces (page <code>/map</code>). Détecté
-					automatiquement au démarrage via ipify + GeoLite2, ou défini manuellement
-					ci-dessous.
+					{language.current && t('serverPosition.subtitle')}
 				</p>
 			</div>
 			{#if loading}
 				<Spinner size="sm" />
 			{:else if position}
 				{#if position.degraded}
-					<Badge variant="status-warn">Dégradé</Badge>
+					<Badge variant="status-warn">{language.current && t('serverPosition.badgeDegraded')}</Badge>
 				{:else if position.mode === 'manual'}
-					<Badge variant="current">Manuel</Badge>
+					<Badge variant="current">{language.current && t('serverPosition.badgeManual')}</Badge>
 				{:else}
-					<Badge variant="status-up">Auto</Badge>
+					<Badge variant="status-up">{language.current && t('serverPosition.badgeAuto')}</Badge>
 				{/if}
 			{/if}
 		</header>
 
 		{#if loadError}
 			<p class="text-sm text-down mb-3" role="alert" data-testid="server-position-load-error">
-				Échec du chargement : {loadError}
+				{language.current && t('serverPosition.loadErr', { err: loadError })}
 			</p>
 		{/if}
 
@@ -244,11 +244,8 @@
 				role="status"
 				data-testid="server-position-degraded"
 			>
-				<strong class="font-semibold">GeoIP non configuré.</strong>
-				La détection automatique n'a pas trouvé la base GeoLite2-City. Placez-la
-				à <code>/var/lib/arenet/GeoLite2-City.mmdb</code> (ou définissez la variable
-				<code>ARENET_GEOIP_MMDB</code>) puis cliquez sur "Re-détecter" — ou saisissez
-				une position manuelle ci-dessous.
+				<strong class="font-semibold">{language.current && t('serverPosition.degradedTitle')}</strong>
+				{language.current && t('serverPosition.degradedBody')}
 			</div>
 		{/if}
 
@@ -257,9 +254,9 @@
 				class="text-xs text-muted mb-4"
 				data-testid="server-position-detected-at"
 			>
-				Détectée {relativeTime(position.detectedAt)}
+				{language.current && t('serverPosition.detectedAtPrefix')} {relativeTime(position.detectedAt)}
 				{#if position.mode === 'auto' && position.sourceIp}
-					· IP source <code>{position.sourceIp}</code>
+					{language.current && t('serverPosition.detectedAtSourceIp')} <code>{position.sourceIp}</code>
 				{/if}
 			</p>
 		{/if}
@@ -273,7 +270,7 @@
 			}}
 		>
 			<Input
-				label="Latitude"
+				label={language.current && t('serverPosition.labelLatitude')}
 				type="number"
 				step="0.0001"
 				min="-90"
@@ -285,7 +282,7 @@
 				data-testid="server-position-lat-input"
 			/>
 			<Input
-				label="Longitude"
+				label={language.current && t('serverPosition.labelLongitude')}
 				type="number"
 				step="0.0001"
 				min="-180"
@@ -297,13 +294,13 @@
 				data-testid="server-position-lon-input"
 			/>
 			<Input
-				label="Ville (libellé)"
+				label={language.current && t('serverPosition.labelCity')}
 				placeholder="Paris"
 				bind:value={city}
 				data-testid="server-position-city-input"
 			/>
 			<Input
-				label="Pays (libellé)"
+				label={language.current && t('serverPosition.labelCountry')}
 				placeholder="FR"
 				bind:value={country}
 				data-testid="server-position-country-input"
@@ -318,7 +315,7 @@
 					disabled={loading || saving || redetecting}
 				>
 					{#snippet children()}
-						Enregistrer
+						{language.current && t('serverPosition.btnSave')}
 					{/snippet}
 				</Button>
 				<Button
@@ -330,7 +327,7 @@
 					onclick={() => void submitRedetect()}
 				>
 					{#snippet children()}
-						Re-détecter automatiquement
+						{language.current && t('serverPosition.btnRedetect')}
 					{/snippet}
 				</Button>
 				<Button
@@ -341,7 +338,7 @@
 					onclick={resetForm}
 				>
 					{#snippet children()}
-						Réinitialiser
+						{language.current && t('serverPosition.btnReset')}
 					{/snippet}
 				</Button>
 			</div>

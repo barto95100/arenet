@@ -23,6 +23,8 @@
 	import { settingsApi } from '$lib/api/settings';
 	import { pushToast } from '$lib/stores/toast';
 	import type { CreateServiceAccountResponse, UserRole } from '$lib/api/types';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	interface Props {
 		open: boolean;
@@ -86,7 +88,7 @@
 	async function submit() {
 		const trimmed = name.trim();
 		if (!trimmed) {
-			pushToast('Nom requis', 'danger');
+			pushToast(t('createServiceAccount.toastNameRequired'), 'danger');
 			return;
 		}
 		submitting = true;
@@ -100,8 +102,8 @@
 			revealed = result;
 			onCreated?.();
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : 'Erreur réseau';
-			pushToast(`Échec : ${msg}`, 'danger');
+			const msg = err instanceof Error ? err.message : t('createServiceAccount.toastNetworkError');
+			pushToast(t('createServiceAccount.toastSubmitFailed', { err: msg }), 'danger');
 		} finally {
 			submitting = false;
 		}
@@ -112,14 +114,14 @@
 		try {
 			await navigator.clipboard.writeText(revealed.token);
 			copied = true;
-			pushToast('Token copié dans le presse-papier', 'success');
+			pushToast(t('createServiceAccount.toastTokenCopied'), 'success');
 		} catch {
-			pushToast('Copie échouée — sélectionne le texte manuellement', 'danger');
+			pushToast(t('createServiceAccount.toastCopyFailed'), 'danger');
 		}
 	}
 </script>
 
-<Modal {open} title={revealed ? 'Token API généré' : 'Créer un service account'} onClose={handleClose}>
+<Modal {open} title={language.current && (revealed ? t('createServiceAccount.titleReveal') : t('createServiceAccount.titleCreate'))} onClose={handleClose}>
 	{#if !revealed}
 		<form
 			class="flex flex-col gap-4"
@@ -129,61 +131,59 @@
 			}}
 		>
 			<label class="flex flex-col gap-1 text-sm">
-				<span class="text-secondary">Nom</span>
+				<span class="text-secondary">{language.current && t('createServiceAccount.labelName')}</span>
 				<input
 					type="text"
 					bind:value={name}
-					placeholder="n8n-prod"
+					placeholder={language.current && t('createServiceAccount.namePlaceholder')}
 					required
 					autocomplete="off"
 					pattern="[a-z0-9_-]+"
-					title="Lettres minuscules, chiffres, tiret, underscore"
+					title={language.current && t('createServiceAccount.nameTitle')}
 					class="px-2 py-1 rounded-md bg-surface border border-border-default text-primary placeholder-muted outline-none focus:border-accent-cyan"
 					data-testid="svc-name-input"
 				/>
-				<span class="text-xs text-muted">a-z 0-9 _ - · 3-32 caractères</span>
+				<span class="text-xs text-muted">{language.current && t('createServiceAccount.nameHint')}</span>
 			</label>
 
 			<label class="flex flex-col gap-1 text-sm">
-				<span class="text-secondary">Rôle</span>
+				<span class="text-secondary">{language.current && t('createServiceAccount.labelRole')}</span>
 				<select
 					bind:value={role}
 					class="px-2 py-1 rounded-md bg-surface border border-border-default text-primary outline-none focus:border-accent-cyan"
 					data-testid="svc-role-select"
 				>
-					<option value="viewer">viewer (lecture seule)</option>
-					<option value="admin">admin (CRUD complet)</option>
+					<option value="viewer">{language.current && t('createServiceAccount.roleViewerOption')}</option>
+					<option value="admin">{language.current && t('createServiceAccount.roleAdminOption')}</option>
 				</select>
 			</label>
 
 			<label class="flex flex-col gap-1 text-sm">
-				<span class="text-secondary">Expiration</span>
+				<span class="text-secondary">{language.current && t('createServiceAccount.labelExpiry')}</span>
 				<select
 					bind:value={expiry}
 					class="px-2 py-1 rounded-md bg-surface border border-border-default text-primary outline-none focus:border-accent-cyan"
 					data-testid="svc-expiry-select"
 				>
-					<option value="never">Jamais (set-and-forget)</option>
-					<option value="30d">30 jours</option>
-					<option value="90d">90 jours</option>
-					<option value="1y">1 an</option>
+					<option value="never">{language.current && t('createServiceAccount.expiryNever')}</option>
+					<option value="30d">{language.current && t('createServiceAccount.expiry30d')}</option>
+					<option value="90d">{language.current && t('createServiceAccount.expiry90d')}</option>
+					<option value="1y">{language.current && t('createServiceAccount.expiry1y')}</option>
 				</select>
 			</label>
 		</form>
 	{:else}
 		<div class="flex flex-col gap-3">
 			<p class="text-sm">
-				Le token est affiché <strong class="text-down">une seule fois</strong>.
-				Copie-le maintenant — il ne sera plus jamais récupérable. La rotation
-				régénère un nouveau token.
+				{language.current && t('createServiceAccount.revealedPrefix')} <strong class="text-down">{language.current && t('createServiceAccount.revealedOnce')}</strong>{language.current && t('createServiceAccount.revealedSuffix')}
 			</p>
 			<pre
 				class="px-3 py-2 rounded-md bg-surface border border-border-default font-mono text-xs break-all whitespace-pre-wrap select-all"
 				data-testid="svc-revealed-token">{revealed.token}</pre>
 			<p class="text-xs text-muted">
-				Identifiant du token : <code class="font-mono">{revealed.tokenId}</code>
+				{language.current && t('createServiceAccount.tokenIdLabel')} <code class="font-mono">{revealed.tokenId}</code>
 				{#if revealed.expiresAt}
-					 · Expire le {new Date(revealed.expiresAt).toLocaleString()}
+					 {language.current && t('createServiceAccount.expiresOnLabel')} {new Date(revealed.expiresAt).toLocaleString()}
 				{/if}
 			</p>
 		</div>
@@ -191,7 +191,7 @@
 
 	{#snippet footer()}
 		{#if !revealed}
-			<Button variant="ghost" size="sm" onclick={handleClose}>Annuler</Button>
+			<Button variant="ghost" size="sm" onclick={handleClose}>{language.current && t('createServiceAccount.btnCancel')}</Button>
 			<Button
 				variant="primary"
 				size="sm"
@@ -199,7 +199,7 @@
 				onclick={submit}
 				data-testid="svc-submit-button"
 			>
-				Créer
+				{language.current && t('createServiceAccount.btnCreate')}
 			</Button>
 		{:else}
 			<Button
@@ -208,7 +208,7 @@
 				onclick={copyToken}
 				data-testid="svc-copy-button"
 			>
-				{copied ? '✓ Copié' : 'Copier'}
+				{language.current && (copied ? t('createServiceAccount.btnCopied') : t('createServiceAccount.btnCopy'))}
 			</Button>
 			<Button
 				variant="primary"
@@ -217,7 +217,7 @@
 				onclick={handleClose}
 				data-testid="svc-close-button"
 			>
-				Fermer
+				{language.current && t('createServiceAccount.btnClose')}
 			</Button>
 		{/if}
 	{/snippet}

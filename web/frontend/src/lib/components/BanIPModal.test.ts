@@ -81,7 +81,7 @@ describe('BanIPModal — mask warning (info-only, non-blocking)', () => {
 		});
 		await waitFor(() => {
 			const warn = screen.getByTestId('ban-mask-warn');
-			expect(warn.textContent ?? '').toMatch(/Vous allez bannir/i);
+			expect(warn.textContent ?? '').toMatch(/You are about to ban/i);
 			expect(warn.textContent ?? '').toMatch(/65\.5|65,5|10\^/);
 		});
 	});
@@ -176,7 +176,7 @@ describe('BanIPModal — client validation', () => {
 		// Custom field left empty.
 		await fireEvent.click(screen.getByTestId('ban-submit'));
 		await waitFor(() => {
-			expect(screen.getByTestId('ban-error').textContent ?? '').toMatch(/Durée/i);
+			expect(screen.getByTestId('ban-error').textContent ?? '').toMatch(/Duration is required/i);
 		});
 		expect(securityMock.createManualBan).not.toHaveBeenCalled();
 	});
@@ -295,7 +295,7 @@ describe('BanIPModal — error UX', () => {
 		expect(onClose).not.toHaveBeenCalled();
 	});
 
-	it('shows the "LAPI inaccessible" banner + Réessayer on 502 + retry works', async () => {
+	it('shows the "LAPI unreachable" banner + Retry on 502 + retry works', async () => {
 		securityMock.createManualBan
 			.mockRejectedValueOnce(new ApiError('connection refused', 502))
 			.mockResolvedValueOnce(happyResponse('1.1.1.1'));
@@ -317,7 +317,7 @@ describe('BanIPModal — error UX', () => {
 		expect(onClose).not.toHaveBeenCalled();
 
 		// Retry button.
-		await fireEvent.click(screen.getByRole('button', { name: /Réessayer/i }));
+		await fireEvent.click(screen.getByRole('button', { name: /Retry/i }));
 		await waitFor(() => {
 			expect(securityMock.createManualBan).toHaveBeenCalledTimes(2);
 		});

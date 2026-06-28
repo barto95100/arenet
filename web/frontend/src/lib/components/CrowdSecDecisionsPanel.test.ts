@@ -176,7 +176,7 @@ describe('CrowdSec decisions panel — Local snapshot tab', () => {
 		securityMock.fetchDecisions.mockResolvedValue({ disabled: true, events: [] });
 		render(Page);
 		await waitFor(() => {
-			expect(screen.getByText(/non configuré/i)).toBeInTheDocument();
+			expect(screen.getByText(/not configured/i)).toBeInTheDocument();
 		});
 	});
 });
@@ -447,8 +447,8 @@ describe('CrowdSec decisions panel — Live LAPI tab', () => {
 
 		await waitFor(() => {
 			const empty = screen.getByTestId('live-empty');
-			expect(empty.textContent ?? '').toMatch(/cette catégorie/);
-			expect(empty.textContent ?? '').toMatch(/1 au total/);
+			expect(empty.textContent ?? '').toMatch(/this category/);
+			expect(empty.textContent ?? '').toMatch(/1 total/);
 		});
 	});
 
@@ -473,10 +473,10 @@ describe('CrowdSec decisions panel — Live LAPI tab', () => {
 
 		await waitFor(() => {
 			const banner = screen.getByTestId('live-unreachable');
-			expect(banner.textContent ?? '').toContain('LAPI inaccessible');
+			expect(banner.textContent ?? '').toContain('LAPI unreachable');
 			expect(banner.textContent ?? '').toContain('connection refused');
 		});
-		expect(screen.getByRole('button', { name: /Réessayer/i })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
 	});
 
 	it('retries the fetch when the Réessayer button is clicked', async () => {
@@ -490,7 +490,7 @@ describe('CrowdSec decisions panel — Live LAPI tab', () => {
 			expect(screen.getByTestId('live-unreachable')).toBeInTheDocument();
 		});
 
-		await fireEvent.click(screen.getByRole('button', { name: /Réessayer/i }));
+		await fireEvent.click(screen.getByRole('button', { name: /Retry/i }));
 
 		await waitFor(() => {
 			expect(screen.getByText('5.6.7.0/24')).toBeInTheDocument();
@@ -572,7 +572,7 @@ describe('CrowdSec decisions panel — Live LAPI tab', () => {
 		await waitFor(() => {
 			// Modal mount surfaces a dialog with the "Bannir
 			// une IP" title.
-			expect(screen.getByRole('dialog', { name: /Bannir une IP/i })).toBeInTheDocument();
+			expect(screen.getByRole('dialog', { name: /Ban an IP/i })).toBeInTheDocument();
 		});
 	});
 });
@@ -649,10 +649,10 @@ describe('CrowdSec decisions panel — Scenarios tab', () => {
 
 		await waitFor(() => {
 			const banner = screen.getByTestId('scenarios-unreachable');
-			expect(banner.textContent ?? '').toContain('LAPI inaccessible');
+			expect(banner.textContent ?? '').toContain('LAPI unreachable');
 			expect(banner.textContent ?? '').toContain('machine credentials rejected');
 		});
-		expect(screen.getByRole('button', { name: /Réessayer/i })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
 	});
 
 	it('retries on Réessayer click after a 502', async () => {
@@ -665,7 +665,7 @@ describe('CrowdSec decisions panel — Scenarios tab', () => {
 			expect(screen.getByTestId('scenarios-unreachable')).toBeInTheDocument();
 		});
 
-		await fireEvent.click(screen.getByRole('button', { name: /Réessayer/i }));
+		await fireEvent.click(screen.getByRole('button', { name: /Retry/i }));
 
 		await waitFor(() => {
 			expect(screen.getByText('http-cve')).toBeInTheDocument();

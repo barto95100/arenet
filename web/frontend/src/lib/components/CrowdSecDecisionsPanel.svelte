@@ -31,6 +31,8 @@
 	import { ApiError, isArenetAutoScenario } from '$lib/api/types';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { pushToast } from '$lib/stores/toast';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 
 	// Step CS.3 Commit D — admin gate for the "Bannir une IP"
 	// button. Mirrors the backend RequireAdminMiddleware on
@@ -309,9 +311,9 @@
 	async function copyToClipboard(text: string): Promise<void> {
 		try {
 			await navigator.clipboard.writeText(text);
-			copyToast = 'Copié ✓';
+			copyToast = t('crowdsecDecisions.copyToast');
 		} catch {
-			copyToast = 'Copie indisponible';
+			copyToast = t('crowdsecDecisions.copyUnavailable');
 		}
 		if (copyToastTimer !== null) clearTimeout(copyToastTimer);
 		copyToastTimer = setTimeout(() => {
@@ -533,9 +535,7 @@
 
 {#if activeTab === 'snapshot'}
 	<p class="tab-subtitle">
-		Snapshot Arenet-side des decisions reçues du LAPI.
-		Cumulatif sur ~7 jours. Pour voir ce qui est enforced
-		<em>maintenant</em>, ouvre le tab <strong>Live LAPI</strong>.
+		{language.current && t('crowdsecDecisions.panelSubtitle')}
 	</p>
 
 	{#if snapshotLoading}
@@ -549,13 +549,9 @@
 	{:else if snapshotDisabled}
 		<Card>
 			<div class="empty-wrap">
-				<h3>CrowdSec mirror non configuré</h3>
+				<h3>{language.current && t('crowdsecDecisions.mirrorNotConfiguredTitle')}</h3>
 				<p>
-					Le bouncer CrowdSec côté Caddy + le consommateur
-					StreamBouncer côté Arenet partagent la même clé LAPI.
-					Configure-le via Settings → CrowdSec bouncer
-					(<code>cscli bouncers add arenet</code> sur ton instance
-					CrowdSec).
+					{language.current && t('crowdsecDecisions.mirrorNotConfiguredBody')}
 				</p>
 			</div>
 		</Card>
@@ -567,20 +563,18 @@
 					class:active={!onlyActive}
 					onclick={() => toggleActive(false)}
 				>
-					Toutes
+					{language.current && t('crowdsecDecisions.tabAll')}
 				</button>
 				<button
 					type="button"
 					class:active={onlyActive}
 					onclick={() => toggleActive(true)}
 				>
-					Actives uniquement
+					{language.current && t('crowdsecDecisions.tabActiveOnly')}
 				</button>
 			</div>
 			<div class="meta">
-				{decisions.length}{decisions.length === 100 ? '+' : ''} décision{decisions.length > 1
-					? 's'
-					: ''}
+				{decisions.length}{decisions.length === 100 ? '+' : ''} {language.current && (decisions.length > 1 ? t('crowdsecDecisions.decisionsSuffixPlural') : t('crowdsecDecisions.decisionsSuffix'))}
 			</div>
 		</div>
 
@@ -588,9 +582,9 @@
 			<div class="block">
 				{#if decisions.length === 0}
 					<div class="empty-inline">
-						{onlyActive
-							? 'Aucune décision active. Le bouncer ne bloque aucune source actuellement.'
-							: "Aucune décision dans la fenêtre. Le bouncer n'a jamais reçu de décision de LAPI."}
+						{language.current && (onlyActive
+							? t('crowdsecDecisions.emptyActive')
+							: t('crowdsecDecisions.emptyWindow'))}
 					</div>
 				{:else}
 					<table>
@@ -639,21 +633,17 @@
 {:else if activeTab === 'live'}
 	<p class="tab-subtitle">
 		Decisions actives <strong>maintenant</strong> selon LAPI
-		(live pass-through, polling 30s). Source de vérité pour
-		"qu'est-ce qui est enforced en ce moment ?". Diffère du
-		snapshot car le bouncer peut prendre quelques secondes à
-		propager une nouvelle décision.
+		(live pass-through, polling 30s).
 	</p>
 
 	{#if liveErrorKind === 'not_configured'}
 		<Card>
 			<div class="empty-wrap" data-testid="live-not-configured">
-				<h3>CrowdSec non configuré</h3>
+				<h3>{language.current && t('crowdsecDecisions.liveNotConfiguredTitle')}</h3>
 				<p>
-					Le bouncer n'est pas configuré. Va dans
-					<a href="/settings" class="link">Settings → CrowdSec bouncer</a>
-					pour saisir l'URL LAPI + la clé bouncer
-					(<code>cscli bouncers add arenet</code>).
+					{language.current && t('crowdsecDecisions.liveNotConfiguredBody')}
+					<a href="/settings" class="link">{language.current && t('crowdsecDecisions.liveNotConfiguredLink')}</a>
+					{language.current && t('crowdsecDecisions.liveNotConfiguredSuffix')}
 				</p>
 			</div>
 		</Card>
@@ -667,7 +657,7 @@
 			<Tabs
 				bind:value={liveOriginTab}
 				tabs={liveOriginTabDescriptors}
-				ariaLabel="Filtrer les décisions actives par origine"
+				ariaLabel={language.current && t('crowdsecDecisions.filterAriaLabel')}
 				onChange={onLiveOriginTabChange}
 			/>
 		</div>
@@ -693,7 +683,7 @@
 					{#if liveDecisionsFiltered.length !== liveMeta.total}
 						<span class="muted">/ {liveMeta.total}</span>
 					{/if}
-					décision{liveDecisionsFiltered.length > 1 ? 's' : ''}
+					{language.current && (liveDecisionsFiltered.length > 1 ? t('crowdsecDecisions.liveDecisionsSuffixPlural') : t('crowdsecDecisions.liveDecisionsSuffix'))}
 					{#if liveLastFetched !== null}
 						<span class="muted">· fetched {lastFetchedLabel(liveLastFetched)}</span>
 					{/if}
@@ -713,7 +703,7 @@
 							onclick={openBanModal}
 							data-testid="ban-open-btn"
 						>
-							+ Bannir une IP
+							{language.current && t('crowdsecDecisions.btnBanIp')}
 						</button>
 					{/if}
 				{/if}
@@ -723,15 +713,14 @@
 		{#if liveErrorKind === 'unreachable'}
 			<Card>
 				<div class="error-banner" role="alert" data-testid="live-unreachable">
-					<strong>LAPI inaccessible :</strong> {liveErrorMsg ?? 'unknown error'}
+					<strong>{language.current && t('banIp.errLapiUnreachablePrefix')}</strong> {liveErrorMsg ?? (language.current && t('banIp.errUnknownError'))}
 					{#if liveDecisions.length > 0}
 						<p class="muted">
-							Données affichées : dernier polling réussi (le tableau
-							ne s'efface pas sur une erreur transitoire).
+							{language.current && t('crowdsecDecisions.liveStaleNotice')} {language.current && t('crowdsecDecisions.liveStaleNoticeSuffix')}
 						</p>
 					{/if}
 					<button type="button" class="retry-btn" onclick={refreshLive}>
-						Réessayer
+						{language.current && t('crowdsecDecisions.btnRetry')}
 					</button>
 				</div>
 			</Card>
@@ -746,17 +735,13 @@
 				{#if liveDecisionsFiltered.length === 0 && !liveLoading && !liveErrorKind}
 					<div class="empty-inline" data-testid="live-empty">
 						{#if liveMeta.total === 0}
-							Aucune décision active selon LAPI. Le bouncer surveille
-							mais aucune source n'est actuellement bloquée. (CAPI sync
-							tourne toutes les ~2–15 min ; un bouncer fraîchement
-							démarré peut prendre quelques minutes à recevoir la
-							blocklist communauté.)
+							{language.current && t('crowdsecDecisions.emptyLiveAll')}
 						{:else}
 							<!-- CS.3 Commit B — the LAPI returned data, but the
 							     selected origin tab has zero matches. Distinct
 							     empty state so the operator knows the filter is
 							     the cause, not LAPI emptiness. -->
-							Aucune décision dans cette catégorie ({liveMeta.total} au total — voir l'onglet <strong>Toutes</strong>).
+							{language.current && t('crowdsecDecisions.emptyLiveFiltered', { total: liveMeta.total, tabAll: t('crowdsecDecisions.tabAll') })}
 						{/if}
 					</div>
 				{:else if liveDecisionsFiltered.length > 0}
@@ -826,12 +811,8 @@
 	{/if}
 {:else if activeTab === 'scenarios'}
 	<p class="tab-subtitle">
-		Scenarios CrowdSec ayant fired sur les dernières
-		<strong>{scenariosMeta.windowHours}h</strong>. Lecture LAPI
-		<code>/v1/alerts</code> via les credentials Security Automation
-		(<a href="/settings#security-automation" class="link">Settings → Security Automation</a>).
-		Read-only — utilise <code>cscli</code> sur le host pour
-		install/inspect/disable.
+		{language.current && t('crowdsecDecisions.scenariosSubtitle')}
+		<strong>{scenariosMeta.windowHours}h</strong>.
 	</p>
 
 	{#if scenariosLoading && scenarios.length === 0}
@@ -841,20 +822,13 @@
 	{:else if scenariosErrorKind === 'not_configured'}
 		<Card>
 			<div class="empty-wrap" data-testid="scenarios-not-configured">
-				<h3>Security Automation non configurée</h3>
+				<h3>{language.current && t('crowdsecDecisions.automationNotConfiguredTitle')}</h3>
 				<p>
-					Le tab Scenarios utilise les credentials du watcher
-					Security Automation (machine_id + password) pour
-					s'authentifier auprès de LAPI <code>/v1/alerts</code>.
-					Va dans
+					{language.current && t('crowdsecDecisions.automationNotConfiguredBody', { endpoint: '/v1/alerts' })}
 					<a href="/settings#security-automation" class="link">Settings → Security Automation</a>
-					et saisis ton watcher (<code>cscli machines add arenet-writer</code>
-					sur le host CrowdSec).
 				</p>
 				<p class="muted">
-					Les autres tabs (Local snapshot, Live LAPI) fonctionnent
-					indépendamment — ce coupling concerne uniquement le tab
-					Scenarios.
+					{language.current && t('crowdsecDecisions.automationNotConfiguredFooter')} Scenarios.
 				</p>
 			</div>
 		</Card>
@@ -879,10 +853,10 @@
 		{#if scenariosErrorKind === 'unreachable'}
 			<Card>
 				<div class="error-banner" role="alert" data-testid="scenarios-unreachable">
-					<strong>LAPI inaccessible :</strong>
-					{scenariosErrorMsg ?? 'unknown error'}
+					<strong>{language.current && t('banIp.errLapiUnreachablePrefix')}</strong>
+					{scenariosErrorMsg ?? (language.current && t('banIp.errUnknownError'))}
 					<button type="button" class="retry-btn" onclick={refreshScenarios}>
-						Réessayer
+						{language.current && t('crowdsecDecisions.scenariosBtnRetry')}
 					</button>
 				</div>
 			</Card>
@@ -896,10 +870,8 @@
 			<div class="block">
 				{#if scenarios.length === 0 && !scenariosLoading && !scenariosErrorKind}
 					<div class="empty-inline" data-testid="scenarios-empty">
-						Aucune activité scenario sur {scenariosMeta.windowHours}h.
-						Soit aucune attaque détectée, soit Arenet logs pas encore
-						acquis par CrowdSec (voir
-						<code>docs/setup/crowdsec.md</code> §acquisition).
+						{language.current && t('crowdsecDecisions.scenariosEmptyWindow', { hours: scenariosMeta.windowHours })}
+						{language.current && t('crowdsecDecisions.scenariosEmptyHelp')}
 					</div>
 				{:else if scenarios.length > 0}
 					<table>
