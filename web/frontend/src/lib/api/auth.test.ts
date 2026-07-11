@@ -17,12 +17,13 @@ beforeEach(() => {
 });
 
 describe('authApi wrappers: method + path + body', () => {
-	it('setup POSTs /auth/setup with all 4 fields', async () => {
-		await authApi.setup('tok', 'admin', 'Admin', 'pw');
+	it('setup POSTs /auth/setup with all fields incl. optional email', async () => {
+		await authApi.setup('tok', 'admin', 'Admin', 'admin@example.test', 'pw');
 		expect(requestMock).toHaveBeenCalledWith('POST', '/auth/setup', {
 			setupToken: 'tok',
 			username: 'admin',
 			displayName: 'Admin',
+			email: 'admin@example.test',
 			password: 'pw'
 		});
 	});

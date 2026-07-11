@@ -51,10 +51,10 @@ type setupRequest struct {
 	SetupToken  string `json:"setupToken"`
 	Username    string `json:"username"`
 	DisplayName string `json:"displayName"`
-	// Email is now required on the setup flow (users-page
-	// Phase 1 refactor — contact field surfaced in the
-	// /utilisateurs table). Format validated below (basic
-	// `@` + max-length check; same envelope as the OIDC
+	// Email is OPTIONAL on the setup flow — a contact/display
+	// field surfaced in the /utilisateurs table, not a login
+	// key or match key. Validated below only when non-empty
+	// (basic `@` + max-length check; same envelope as the OIDC
 	// allowlist email validator at oidc.go:425+).
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -136,22 +136,26 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 2.5: email validation (users-page Phase 1 — required
-	// on new local accounts so the /utilisateurs table surfaces
-	// contact info). Same envelope as the OIDC allowlist email
-	// path: non-empty, ≤320 chars (RFC 5321), contains "@".
+	// Step 2.5: email validation. Email is OPTIONAL on local
+	// accounts — it is a contact/display field only (surfaced in
+	// the /utilisateurs table), never a login key, uniqueness
+	// constraint, or match key (OIDC matchAllowlist keys off the
+	// allowlist's own Email, not User.Email; local login is by
+	// username). The setup form ships no email field, so requiring
+	// it here made first-admin creation impossible. When the
+	// operator DOES supply one, it must still be well-formed: same
+	// envelope as the OIDC allowlist path — ≤320 chars (RFC 5321),
+	// contains "@".
 	email := strings.TrimSpace(req.Email)
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "email must not be empty")
-		return
-	}
-	if len(email) > oidcEmailMaxLen {
-		writeError(w, http.StatusBadRequest, "email exceeds 320 characters")
-		return
-	}
-	if !strings.Contains(email, "@") {
-		writeError(w, http.StatusBadRequest, "email must contain @")
-		return
+	if email != "" {
+		if len(email) > oidcEmailMaxLen {
+			writeError(w, http.StatusBadRequest, "email exceeds 320 characters")
+			return
+		}
+		if !strings.Contains(email, "@") {
+			writeError(w, http.StatusBadRequest, "email must contain @")
+			return
+		}
 	}
 
 	// Step 3: password validation (length + top-10k + HIBP).

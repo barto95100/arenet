@@ -175,6 +175,66 @@ func TestSetup_HappyPath(t *testing.T) {
 	}
 }
 
+// Email is a contact/display field only for local accounts (never a
+// login key, uniqueness constraint, or match key — see oidc.go
+// matchAllowlist, which keys off the OIDC allowlist's own Email, not
+// User.Email). It must therefore be OPTIONAL at setup. The frontend
+// setup form ships no email field, so a required-email backend made
+// first-admin creation impossible.
+
+func TestSetup_EmailOmitted_Succeeds(t *testing.T) {
+	env, token := setupTestEnv(t)
+	// No "email" key at all — mirrors the current setup form payload.
+	rec := postJSONTLS(t, env.router, "/api/v1/auth/setup", map[string]string{
+		"setupToken":  token,
+		"username":    "admin",
+		"displayName": "Site Admin",
+		"password":    "correct horse battery staple",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("body not JSON: %s (%v)", rec.Body.String(), err)
+	}
+	// Empty email persists as empty (omitempty may drop the key).
+	if e, ok := resp["email"]; ok && e != "" {
+		t.Errorf("email = %v, want empty/absent", e)
+	}
+}
+
+func TestSetup_EmailEmptyString_Succeeds(t *testing.T) {
+	env, token := setupTestEnv(t)
+	rec := postJSONTLS(t, env.router, "/api/v1/auth/setup", map[string]string{
+		"setupToken":  token,
+		"username":    "admin",
+		"displayName": "Site Admin",
+		"email":       "",
+		"password":    "correct horse battery staple",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSetup_400OnMalformedEmailWhenProvided(t *testing.T) {
+	env, token := setupTestEnv(t)
+	// If the operator DOES supply an email, it must still be valid.
+	rec := postJSON(t, env.router, "/api/v1/auth/setup", map[string]string{
+		"setupToken": token,
+		"username":   "admin",
+		"email":      "not-an-email", // no "@"
+		"password":   "correct horse battery staple",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "@") {
+		t.Errorf("body = %s, want message mentioning @", rec.Body.String())
+	}
+}
+
 func TestSetup_DevMode_OmitsSecure(t *testing.T) {
 	dir := t.TempDir()
 	store, err := storage.NewStore(filepath.Join(dir, "arenet.db"))
