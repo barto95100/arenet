@@ -13,7 +13,7 @@
 //     editor must remain functional even when /api/certificates
 //     fails (AC #13 degraded mode mirrored on the frontend).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
@@ -125,6 +125,21 @@ const fixtureCerts: Certificate[] = [
 ];
 
 beforeEach(() => {
+	// Freeze the real clock on the same anchor the fixtures are
+	// computed against (NOW). Without this, the component's
+	// isExpiringSoon()/daysUntilExpiry() calls fall back to
+	// `new Date()` (real wall-clock) while fixture notAfter values
+	// stay pinned to 2026-06-05 — so as real time drifts past the
+	// anchor, certs authored as "60d out" slide into the 30d
+	// renewal window and the KPI/tab counts break. This is the
+	// stubbing the header comment (l.55) always intended.
+	//
+	// toFake:['Date'] ONLY — faking setTimeout/setInterval too would
+	// deadlock Testing Library's findBy*/userEvent, which poll on
+	// real timers.
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(NOW);
+
 	toastMock.pushToast.mockReset();
 	apiMock.listRoutes.mockReset();
 	settingsMock.settingsApi.listManagedDomains.mockReset();
@@ -155,6 +170,10 @@ beforeEach(() => {
 		total: 0,
 		hasMore: false,
 	});
+});
+
+afterEach(() => {
+	vi.useRealTimers();
 });
 
 describe('/certs — auto-renewal info card', () => {
