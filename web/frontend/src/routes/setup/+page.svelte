@@ -31,6 +31,7 @@
 	let setupToken = $state('');
 	let username = $state('');
 	let displayName = $state('');
+	let email = $state('');
 	let password = $state('');
 	let showPassword = $state(false);
 	let errors = $state<Record<string, string>>({});
@@ -48,7 +49,7 @@
 		formError = '';
 		submitting = true;
 		try {
-			const user = await authApi.setup(setupToken, username, displayName, password);
+			const user = await authApi.setup(setupToken, username, displayName, email, password);
 			// /setup directly populates the auth store (the server sets
 			// the cookie; the auth store now reflects the authenticated
 			// admin without a follow-up /me round-trip).
@@ -69,6 +70,7 @@
 					if (msg.includes('username')) errors = { username: err.message };
 					else if (msg.includes('password')) errors = { password: err.message };
 					else if (msg.includes('displayname')) errors = { displayName: err.message };
+					else if (msg.includes('email')) errors = { email: err.message };
 					else formError = err.message;
 				} else {
 					formError = err.message;
@@ -135,7 +137,7 @@
 			</div>
 		{/if}
 
-		<form onsubmit={handleSubmit} autocomplete="on" novalidate>
+		<form onsubmit={handleSubmit} autocomplete="on" novalidate data-testid="setup-form">
 			<div class="setup-field">
 				<label for="setup-token">{language.current && t('setup.labelSetupToken')}</label>
 				<div class="setup-input-wrap">
@@ -192,6 +194,28 @@
 				{#if errors.displayName}
 					<small id="setup-displayname-error" class="setup-field-error">
 						{errors.displayName}
+					</small>
+				{/if}
+			</div>
+
+			<div class="setup-field">
+				<label for="setup-email">{language.current && t('setup.labelEmail')} <small>{language.current && t('setup.labelEmailOptional')}</small></label>
+				<div class="setup-input-wrap">
+					<input
+						id="setup-email"
+						class="setup-input"
+						type="email"
+						autocomplete="email"
+						placeholder={language.current && t('setup.placeholderEmail')}
+						bind:value={email}
+						disabled={submitting}
+						aria-invalid={errors.email ? 'true' : undefined}
+						aria-describedby={errors.email ? 'setup-email-error' : undefined}
+					/>
+				</div>
+				{#if errors.email}
+					<small id="setup-email-error" class="setup-field-error">
+						{errors.email}
 					</small>
 				{/if}
 			</div>

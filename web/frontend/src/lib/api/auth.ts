@@ -53,12 +53,14 @@ export const authApi = {
 		setupToken: string,
 		username: string,
 		displayName: string,
+		email: string,
 		password: string
 	): Promise<User> {
 		return request<User>('POST', '/auth/setup', {
 			setupToken,
 			username,
 			displayName,
+			email,
 			password
 		});
 	},
