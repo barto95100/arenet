@@ -10,6 +10,33 @@ last decade works) + the ability to run `sudo`.
 
 ---
 
+## 0. One-liner (fastest path)
+
+If you just want it running on amd64/arm64, the install script
+does everything — downloads the release binary + systemd unit,
+creates the `arenet` user and data dir, then enables & starts the
+service:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/barto95100/arenet/main/packaging/systemd/install.sh | sudo bash
+```
+
+Then jump to [step 4](#4-grab-the-setup-token) to grab the setup
+token. Useful environment overrides:
+
+| Var | Effect |
+|-----|--------|
+| `ARENET_VERSION=v1.2.3` | Pin a release tag (default: latest). |
+| `ARENET_SKIP_BINARY=1` | Don't download the binary — you'll build/copy it yourself (see step 1). |
+| `ARENET_NO_START=1` | Install everything but don't enable/start the service. |
+
+Prefer to do it by hand (build from source, air-gapped box,
+custom binary)? Follow steps 1–3 below instead — the same script
+run locally (`sudo ./install.sh`) reuses an existing binary and
+the sibling unit file.
+
+---
+
 ## 1. Get the binary onto the box
 
 Three options:
@@ -64,15 +91,19 @@ cd arenet/packaging/systemd
 sudo ./install.sh
 ```
 
-The script creates the `arenet` system user, sets up
+Run locally from a checkout, the script detects the binary you
+placed in step 1 (it won't re-download), installs the sibling
+`arenet.service`, creates the `arenet` system user, sets up
 `/var/lib/arenet/` with the right permissions, drops a sample
-env file at `/etc/arenet/arenet.env`, and installs the systemd
-unit. It's idempotent — safe to re-run.
+env file at `/etc/arenet/arenet.env`, then **enables and starts
+the service**. It's idempotent — safe to re-run.
 
-## 3. Start the service
+Pass `ARENET_NO_START=1` if you'd rather stage everything and
+start it yourself later.
+
+## 3. Confirm it's running
 
 ```bash
-sudo systemctl enable --now arenet
 sudo systemctl status arenet
 ```
 
