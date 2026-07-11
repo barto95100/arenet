@@ -1079,13 +1079,6 @@
 		max-width: 40rem;
 		margin: 0 auto;
 	}
-	.empty-wrap code {
-		font-family: var(--font-mono, monospace);
-		background: var(--bg-surface);
-		padding: 0 0.25rem;
-		border-radius: 2px;
-		color: var(--text-primary);
-	}
 	.link {
 		color: var(--accent-cyan);
 		text-decoration: underline;
