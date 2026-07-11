@@ -37,25 +37,29 @@ Two install paths, both under 5 minutes.
 ### Docker (recommended)
 
 ```bash
-docker run -d \
-  --name arenet \
-  -p 80:80 -p 443:443 -p 443:443/udp \
-  -p 8001:8001 \
-  -v arenet-data:/data \
-  ghcr.io/barto95100/arenet:latest
+# Grab the reference compose file and bring the stack up. It wires
+# the data volume, the NET_BIND_SERVICE cap for :80/:443, and the
+# in-binary healthcheck for you.
+curl -O https://raw.githubusercontent.com/barto95100/arenet/main/docker-compose.yml
+docker compose up -d
 ```
 
-Then open `http://<host>:8001` and follow the setup wizard.
+The admin UI on `:8001` binds to `127.0.0.1` only by default. Grab
+the setup token with `docker compose logs arenet | grep 'Setup token'`,
+then reach the admin via an SSH tunnel (`ssh -L 8001:localhost:8001 <host>`)
+and open `http://localhost:8001`.
 
 Full guide: [docs/install/docker-quickstart.md](docs/install/docker-quickstart.md)
 
 ### Native Linux + systemd
 
 ```bash
-# Latest release binary + systemd unit + initial config
+# Downloads the release binary + systemd unit, creates the arenet
+# user + data dir, then enables & starts the service. One command.
 curl -fsSL https://raw.githubusercontent.com/barto95100/arenet/main/packaging/systemd/install.sh | sudo bash
-sudo systemctl start arenet
 ```
+
+Then grab the setup token: `sudo journalctl -u arenet | grep 'Setup token'`.
 
 Full guide: [docs/install/systemd-native.md](docs/install/systemd-native.md)
 

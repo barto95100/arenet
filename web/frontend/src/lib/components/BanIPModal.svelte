@@ -386,12 +386,6 @@
 		border: 1px solid color-mix(in oklch, var(--accent-cyan) 30%, transparent);
 		color: var(--text-primary);
 	}
-	.error-block code {
-		font-family: var(--font-mono, monospace);
-		background: var(--bg-surface);
-		padding: 0 0.2rem;
-		border-radius: 2px;
-	}
 	.retry-btn {
 		display: inline-block;
 		margin-top: 0.4rem;
