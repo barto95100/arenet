@@ -34,9 +34,10 @@
 <script lang="ts">
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import Spinner from '$lib/components/Spinner.svelte';
 	import { settingsApi } from '$lib/api/settings';
 	import { ApiError } from '$lib/api/types';
-	import type { ManagedDomainProvider } from '$lib/api/types';
+	import type { DNSProvider } from '$lib/api/types';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 
@@ -49,10 +50,36 @@
 	let { open, onClose, onCreated }: Props = $props();
 
 	let apex = $state('');
-	let provider = $state<ManagedDomainProvider>('ovh');
+	let providers = $state<DNSProvider[]>([]);
+	let providerId = $state<string>('');
+	let providersLoading = $state(true);
 	let includeApex = $state(true);
 	let submitting = $state(false);
 	let formError = $state<string | null>(null);
+
+	// Fetch the configured DNS providers when the wizard opens. The
+	// dropdown is fed dynamically (multi-config backend) instead of a
+	// hardcoded single OVH option. On error we fall back to an empty
+	// list, which renders the empty-state CTA.
+	$effect(() => {
+		if (open) {
+			providersLoading = true;
+			settingsApi
+				.listDNSProviders()
+				.then((list) => {
+					providers = list;
+					if (list.length > 0 && providerId === '') {
+						providerId = list[0].id;
+					}
+				})
+				.catch(() => {
+					providers = [];
+				})
+				.finally(() => {
+					providersLoading = false;
+				});
+		}
+	});
 
 	function close(): void {
 		onClose();
@@ -60,13 +87,17 @@
 
 	function resetForm(): void {
 		apex = '';
-		provider = 'ovh';
+		providerId = providers[0]?.id ?? '';
 		includeApex = true;
 		formError = null;
 	}
 
 	async function handleSubmit(): Promise<void> {
 		if (submitting) return;
+		// No provider configured — the empty-state CTA already blocks
+		// this path, but guard the handler so an Enter keypress can't
+		// submit an unusable request.
+		if (providers.length === 0) return;
 		const trimmed = apex.trim();
 		if (trimmed === '') {
 			formError = t('certs.wizardApexRequiredError');
@@ -78,7 +109,7 @@
 			await settingsApi.createManagedDomain({
 				apex: trimmed,
 				includeApex,
-				provider,
+				providerId,
 			});
 			// onCreated lets the parent refresh the declared-policies
 			// list BEFORE we reset/close so the new row is visible
@@ -129,15 +160,36 @@
 		</div>
 
 		<div class="field">
-			<label for="wz-provider">{language.current && t('certs.wizardProviderLabel')}</label>
-			<select
-				id="wz-provider"
-				bind:value={provider}
-				class="md-input"
-				disabled={submitting}
-			>
-				<option value="ovh">OVH</option>
-			</select>
+			{#if providersLoading}
+				<div class="providers-loading" data-testid="wizard-providers-loading">
+					<Spinner />
+				</div>
+			{:else if providers.length === 0}
+				<div class="wizard-empty" role="alert" data-testid="wizard-provider-empty">
+					<p>
+						{language.current &&
+							t('certs.wildcardWizard.dnsProvider.emptyState.message')}
+					</p>
+					<a href="/settings#dns-providers">
+						{language.current &&
+							t('certs.wildcardWizard.dnsProvider.emptyState.ctaLabel')}
+					</a>
+				</div>
+			{:else}
+				<label for="wz-provider"
+					>{language.current && t('certs.wildcardWizard.dnsProvider.label')}</label
+				>
+				<select
+					id="wz-provider"
+					bind:value={providerId}
+					class="md-input"
+					disabled={submitting}
+				>
+					{#each providers as p (p.id)}
+						<option value={p.id}>{p.label} · {p.type.toUpperCase()}</option>
+					{/each}
+				</select>
+			{/if}
 		</div>
 
 		<div class="field field-checkbox">
@@ -173,7 +225,7 @@
 			size="md"
 			onclick={() => void handleSubmit()}
 			loading={submitting}
-			disabled={submitting || apex.trim() === ''}
+			disabled={submitting || apex.trim() === '' || providers.length === 0}
 		>
 			{#snippet children()}{language.current && (submitting ? t('certs.wizardSubmitting') : t('certs.wizardSubmitButton'))}{/snippet}
 		</Button>
@@ -236,6 +288,30 @@
 		color: var(--status-down);
 		font-size: 12.5px;
 		margin: 0;
+	}
+	.providers-loading {
+		display: flex;
+		align-items: center;
+		padding: 8px 0;
+	}
+	.wizard-empty {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 10px 12px;
+	}
+	.wizard-empty p {
+		margin: 0 0 6px 0;
+		font-size: 12.5px;
+		color: var(--fg-muted);
+	}
+	.wizard-empty a {
+		font-size: 12.5px;
+		color: var(--accent);
+		text-decoration: none;
+	}
+	.wizard-empty a:hover {
+		text-decoration: underline;
 	}
 	/* Hidden but functional submit button so pressing Enter inside
 	   the apex input fires the form submission. The visible

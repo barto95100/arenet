@@ -1174,7 +1174,16 @@
     "wizardApexRequiredError": "Le domaine apex est requis.",
     "wizardCancelButton": "Annuler",
     "wizardSubmitButton": "Déclarer",
-    "wizardSubmitting": "Déclaration…"
+    "wizardSubmitting": "Déclaration…",
+    "wildcardWizard": {
+      "dnsProvider": {
+        "label": "Fournisseur DNS",
+        "emptyState": {
+          "message": "Aucun fournisseur DNS configuré pour l'instant.",
+          "ctaLabel": "Configurer un fournisseur DNS dans les Réglages"
+        }
+      }
+    }
   },
   "waf": {
     "headTitle": "WAF · Arenet",

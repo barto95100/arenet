@@ -1174,7 +1174,16 @@
     "wizardApexRequiredError": "Apex domain is required.",
     "wizardCancelButton": "Cancel",
     "wizardSubmitButton": "Declare",
-    "wizardSubmitting": "Declaring…"
+    "wizardSubmitting": "Declaring…",
+    "wildcardWizard": {
+      "dnsProvider": {
+        "label": "DNS provider",
+        "emptyState": {
+          "message": "No DNS provider configured yet.",
+          "ctaLabel": "Configure a DNS provider in Settings"
+        }
+      }
+    }
   },
   "waf": {
     "headTitle": "WAF · Arenet",

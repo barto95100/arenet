@@ -32,6 +32,7 @@ const { toastMock, apiMock, settingsMock, certsMock, securityMock } = vi.hoisted
 			createManagedDomain: vi.fn(),
 			deleteManagedDomain: vi.fn(),
 			getDNSProviderOVH: vi.fn(),
+			listDNSProviders: vi.fn(),
 		},
 	},
 	certsMock: {
@@ -146,6 +147,7 @@ beforeEach(() => {
 	settingsMock.settingsApi.createManagedDomain.mockReset();
 	settingsMock.settingsApi.deleteManagedDomain.mockReset();
 	settingsMock.settingsApi.getDNSProviderOVH.mockReset();
+	settingsMock.settingsApi.listDNSProviders.mockReset();
 	certsMock.certificatesApi.list.mockReset();
 	securityMock.fetchCertEvents.mockReset();
 
@@ -162,6 +164,18 @@ beforeEach(() => {
 		consumerKey: '',
 		configured: true,
 	});
+	// The wildcard wizard now fetches its provider dropdown from this
+	// collection endpoint. Default: one configured OVH provider.
+	settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
+		{
+			id: 'id-1',
+			label: 'OVH perso',
+			type: 'ovh',
+			endpoint: 'ovh-eu',
+			configured: true,
+			usedBy: [],
+		},
+	]);
 	certsMock.certificatesApi.list.mockResolvedValue([]);
 	// Default : no events for any domain. Cert.B tests override
 	// per-domain by mockImplementation that matches { domain } param.
@@ -295,7 +309,7 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 		expect(settingsMock.settingsApi.createManagedDomain).toHaveBeenCalledWith({
 			apex: 'new.example',
 			includeApex: true,
-			provider: 'ovh',
+			providerId: 'id-1',
 		});
 	});
 
