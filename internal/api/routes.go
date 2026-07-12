@@ -359,6 +359,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Get("/settings/dns-providers/{id}", h.getDNSProvider)
 				r.Put("/settings/dns-providers/{id}", h.updateDNSProvider)
 				r.Delete("/settings/dns-providers/{id}", h.deleteDNSProvider)
+				// v2.12.3 — opt-in update checker. Admin-gated (unlike
+				// the public /system/health): carries operator-relevant
+				// version state + toggles the opt-in.
+				r.Get("/system/version", h.systemVersion)
+				r.Post("/system/version/check", h.systemVersionCheck)
+				r.Put("/system/version/config", h.systemVersionConfig)
 				// Step K.1 — forward-auth provider CRUD.
 				r.Get("/settings/forward-auth/providers", h.listForwardAuthProviders)
 				r.Post("/settings/forward-auth/providers", h.createForwardAuthProvider)

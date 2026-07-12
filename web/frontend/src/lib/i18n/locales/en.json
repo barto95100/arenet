@@ -69,7 +69,8 @@
 	},
 	"topbar": {
 		"statusAriaLabel": "Gateway status",
-		"statusHealthy": "Gateway healthy"
+		"statusHealthy": "Gateway healthy",
+		"updateAvailable": "Update available: {version}"
 	},
 	"settings": {
 		"languageLabel": "Language",
@@ -139,6 +140,20 @@
 			},
 			"loadError": "Failed to load DNS providers: {err}",
 			"loading": "Loading DNS providers…"
+		},
+		"updates": {
+			"title": "Updates",
+			"subtitle": "Check GitHub for a newer stable release. Opt-in — Arenet makes no external call until you enable it.",
+			"current": "Current version",
+			"latest": "Latest available",
+			"upToDate": "Up to date",
+			"enableToggle": "Check for updates automatically",
+			"checkNow": "Check now",
+			"checking": "Checking…",
+			"lastChecked": "Last check",
+			"lastErrorLabel": "Last check failed",
+			"viewRelease": "View release on GitHub",
+			"never": "never"
 		}
 	},
 	"toast": {
@@ -785,6 +800,9 @@
 			"summaryTestSkippedLine": "Skipped: {count}",
 			"toastRuleResult": "Rule \"{name}\": {line}",
 			"toastRuleErr": "Rule \"{name}\": {err}"
+		},
+		"sources": {
+			"updateAvailable": "Update available"
 		}
 	},
 	"audit": {

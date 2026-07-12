@@ -91,6 +91,10 @@ const (
 	// back to the built-in arenetDefaultErrorPages map.
 	// See error_template.go.
 	bucketErrorTemplates = "error_templates"
+	// v2.12.3 — opt-in update-checker config (single row, keyed
+	// "config"). Enabled defaults to false (no external call
+	// without consent). See update_check_config.go.
+	bucketUpdateCheck = "update_check"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -144,6 +148,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketAlertingChannels),     // Step AL.1.a
 			[]byte(bucketAlertRules),           // Step AL.2.a
 			[]byte(bucketErrorTemplates),       // Step R
+			[]byte(bucketUpdateCheck),          // v2.12.3
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)

@@ -69,7 +69,8 @@
 	},
 	"topbar": {
 		"statusAriaLabel": "État de la passerelle",
-		"statusHealthy": "Passerelle saine"
+		"statusHealthy": "Passerelle saine",
+		"updateAvailable": "Mise à jour disponible : {version}"
 	},
 	"settings": {
 		"languageLabel": "Langue",
@@ -139,6 +140,20 @@
 			},
 			"loadError": "Échec du chargement des fournisseurs DNS : {err}",
 			"loading": "Chargement des fournisseurs DNS…"
+		},
+		"updates": {
+			"title": "Mises à jour",
+			"subtitle": "Vérifier sur GitHub s'il existe une version stable plus récente. Opt-in — Arenet ne fait aucun appel externe tant que vous ne l'activez pas.",
+			"current": "Version actuelle",
+			"latest": "Dernière disponible",
+			"upToDate": "À jour",
+			"enableToggle": "Vérifier les mises à jour automatiquement",
+			"checkNow": "Vérifier maintenant",
+			"checking": "Vérification…",
+			"lastChecked": "Dernière vérification",
+			"lastErrorLabel": "Échec de la dernière vérification",
+			"viewRelease": "Voir la release sur GitHub",
+			"never": "jamais"
 		}
 	},
 	"toast": {
@@ -785,6 +800,9 @@
 			"summaryTestSkippedLine": "Ignorés : {count}",
 			"toastRuleResult": "Règle \"{name}\" : {line}",
 			"toastRuleErr": "Règle \"{name}\" : {err}"
+		},
+		"sources": {
+			"updateAvailable": "Mise à jour disponible"
 		}
 	},
 	"audit": {
