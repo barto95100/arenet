@@ -172,6 +172,18 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	}()
 	logger.Info("storage opened", "path", dbPath)
 
+	// One-shot boot migration: convert the pre-v2.11 singleton OVH DNS
+	// provider (fixed "ovh" key) into the UUID-keyed collection and
+	// repoint any managed domain that still references the legacy value.
+	// Idempotent by state (no-op once migrated / on a fresh install) and
+	// non-fatal: a migration error is logged and boot continues with
+	// whatever is in storage, so a migration bug never bricks startup.
+	if migrated, err := store.MigrateLegacyDNSProvider(ctx); err != nil {
+		logger.Error("dns provider migration failed", "err", err)
+	} else if migrated {
+		logger.Info("migrated legacy OVH DNS provider config to multi-config format")
+	}
+
 	if cfg.InsertTestRoute {
 		if err := ensureTestRoute(ctx, logger, store); err != nil {
 			return err
