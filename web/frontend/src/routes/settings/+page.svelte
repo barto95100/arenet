@@ -53,6 +53,7 @@
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import DNSProvidersSection from '$lib/components/settings/DNSProvidersSection.svelte';
+	import UpdatesSection from '$lib/components/settings/UpdatesSection.svelte';
 	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
 	import CrowdSecSettingsSection from '$lib/components/CrowdSecSettingsSection.svelte';
 	import BackupSection from '$lib/components/BackupSection.svelte';
@@ -744,6 +745,9 @@
 	     carries id="dns-providers" so the wildcard wizard's
 	     empty-state CTA can deep-link here. -->
 	<DNSProvidersSection />
+
+	<!-- v2.12.3 — opt-in update checker mini-card. -->
+	<UpdatesSection />
 
 	<!-- ROW 2.6 — SSL / Certificates section migrated to /certs
 	     in #R-6 Pack A (2026-06-04). The managed-domains CRUD
