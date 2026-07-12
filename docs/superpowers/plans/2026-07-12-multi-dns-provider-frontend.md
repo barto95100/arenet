@@ -340,10 +340,23 @@ Create `DNSProvidersSection.svelte` (AGPL header). Structure: load `listDNSProvi
 
 Replace the singleton OVH form usage with `<DNSProvidersSection />`. Remove now-dead `getDNSProviderOVH`/`DNSProviderOVH` references. Give the section an `id="dns-providers"` anchor (the wizard empty-state links to `/settings#dns-providers`).
 
+- [ ] **Step 4b: Migrate the two collateral consumers (found during 2a)**
+
+Task 2a's contract change (removing `getDNSProviderOVH`, `ManagedDomain.provider`→`providerId`) also breaks two files the original plan didn't list. Fix them here so `npm run check` can reach 0:
+
+**`src/routes/certs/+page.svelte`** (3 sites):
+- `~171` `via ${domains[0].provider.toUpperCase()}` — `domains[0].provider` no longer exists. Options: derive the label from the referenced provider. Minimal correct fix: load providers once (`settingsApi.listDNSProviders()`), build an `id→label` map, and render `via ${labelFor(domains[0].providerId)}`. If that's heavier than warranted for a subtitle, show `via DNS-01` (drop the provider name) — pick the lighter one that still typechecks and reads sensibly; document the choice.
+- `~192` `loadDNSProvider()` calling `getDNSProviderOVH()` to set `dnsProviderConfigured` — replace with `const list = await settingsApi.listDNSProviders(); dnsProviderConfigured = list.some((p) => p.configured);`. Drop the `DNSProviderOVH` type import.
+- `~674` `Provider: {md.provider}` — change to resolve+show the provider label from `md.providerId` via the same id→label map, or show the id if no map is loaded. Prefer the label.
+
+**`src/routes/routes/+page.svelte`** (`~1128`): `loadDNSProvider()` calls `getDNSProviderOVH()` into a single `dnsProvider`. Replace with `listDNSProviders()`; the consumer likely only needs "is any provider configured" — set a boolean `dnsProviderConfigured = list.some((p) => p.configured)` (read the surrounding usage and adapt the state shape; drop the `DNSProviderOVH`/`ApiError`-only-for-this handling if it becomes dead).
+
+After these, `DNSProviderOVH`/`DNSProviderOVHRequest`/`ManagedDomainProvider` should be unreferenced — remove them from `types.ts` (grep to confirm zero references first).
+
 - [ ] **Step 5: Run tests + typecheck + build**
 
-Run: `cd web/frontend && npx vitest run src/lib/components/settings/DNSProvidersSection.test.ts && npm run check 2>&1 | tail -5 && npm run build 2>&1 | tail -3`
-Expected: tests PASS, svelte-check 0 errors, build OK.
+Run: `cd web/frontend && npx vitest run src/lib/components/settings/DNSProvidersSection.test.ts && npm run check 2>&1 | tail -8 && npm run build 2>&1 | tail -3`
+Expected: tests PASS, **svelte-check 0 errors** (all consumers migrated — wizard from 2b, settings + certs + routes from 2c), build OK. If certs/+page.svelte or routes/+page.svelte have vitest tests that referenced the old `.provider`/`getDNSProviderOVH`, update those too.
 
 - [ ] **Step 6: Commit**
 
