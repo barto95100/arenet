@@ -79,7 +79,7 @@ func toManagedDomainResponse(md storage.ManagedDomain) managedDomainResponse {
 	return managedDomainResponse{
 		Apex:        md.Apex,
 		IncludeApex: md.IncludeApex,
-		Provider:    md.Provider,
+		Provider:    md.ProviderID,
 	}
 }
 
@@ -146,15 +146,19 @@ func (h *Handler) createManagedDomain(w http.ResponseWriter, r *http.Request) {
 	if req.IncludeApex != nil {
 		includeApex = *req.IncludeApex
 	}
+	// Task 1a transitional: the storage field is now ProviderID (a
+	// config id, not a type). Task 1c reworks this handler to accept
+	// `providerId` and validate existence. For now, map the legacy
+	// `provider` wire field straight through and default to "ovh".
 	provider := req.Provider
 	if provider == "" {
-		provider = storage.ManagedDomainProviderOVH // D3.B default
+		provider = storage.DNSProviderTypeOVH
 	}
 
 	md := storage.ManagedDomain{
 		Apex:        apex,
 		IncludeApex: includeApex,
-		Provider:    provider,
+		ProviderID:  provider,
 	}
 
 	// Overlap detection (§5 risks "multi-domain overlap").

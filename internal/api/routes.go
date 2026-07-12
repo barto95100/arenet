@@ -1167,7 +1167,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ACMEChallenge == storage.ACMEChallengeDNS01 {
-		cfg, err := h.store.GetDNSProviderOVH(r.Context())
+		cfg, err := h.firstDNSProviderOVH(r)
 		if err != nil && !errors.Is(err, storage.ErrNotFound) {
 			h.logger.Error("read dns provider", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to verify dns provider")
@@ -1625,7 +1625,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ACMEChallenge == storage.ACMEChallengeDNS01 {
-		cfg, err := h.store.GetDNSProviderOVH(r.Context())
+		cfg, err := h.firstDNSProviderOVH(r)
 		if err != nil && !errors.Is(err, storage.ErrNotFound) {
 			h.logger.Error("read dns provider (update)", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to verify dns provider")

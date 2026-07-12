@@ -1668,14 +1668,23 @@ func storeDNS01Inconsistency(ctx context.Context, store *storage.Store) (bool, b
 	if !anyDNS01 {
 		return false, true, nil
 	}
-	cfg, err := store.GetDNSProviderOVH(ctx)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+	// Task 1a transitional: the singleton provider became a UUID-keyed
+	// collection. "providerOK" now means at least one fully-configured
+	// provider exists in the collection.
+	providers, err := store.ListDNSProviders(ctx)
+	if err != nil {
 		return anyDNS01, false, err
 	}
-	providerOK := cfg.Endpoint != "" &&
-		cfg.ApplicationKey != "" &&
-		cfg.ApplicationSecret != "" &&
-		cfg.ConsumerKey != ""
+	providerOK := false
+	for _, cfg := range providers {
+		if cfg.Endpoint != "" &&
+			cfg.ApplicationKey != "" &&
+			cfg.ApplicationSecret != "" &&
+			cfg.ConsumerKey != "" {
+			providerOK = true
+			break
+		}
+	}
 	return anyDNS01, providerOK, nil
 }
 

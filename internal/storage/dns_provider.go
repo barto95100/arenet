@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -45,11 +46,22 @@ import (
 //     empty strings in BeforeJSON / AfterJSON.
 //   - No slog call ever logs the struct whole; callers must strip.
 type DNSProviderConfig struct {
+	ID                string `json:"id"`
+	Label             string `json:"label"`
+	Type              string `json:"type"` // one of DNSProviderTypes
 	Endpoint          string `json:"endpoint"`
 	ApplicationKey    string `json:"application_key"`    // SECRET — never echoed by the API or audit
 	ApplicationSecret string `json:"application_secret"` // SECRET — never echoed by the API or audit
 	ConsumerKey       string `json:"consumer_key"`       // SECRET — never echoed by the API or audit
 }
+
+// DNSProviderTypeOVH is the only provider type wired in v1. The
+// closed enum below is the forward-compat extension point for
+// cloudflare / route53.
+const DNSProviderTypeOVH = "ovh"
+
+// DNSProviderTypes is the closed set of accepted Type values.
+var DNSProviderTypes = []string{DNSProviderTypeOVH}
 
 // OVHEndpoints lists the seven endpoint identifiers accepted by the
 // go-ovh SDK (see github.com/ovh/go-ovh@v1.7.0/ovh/ovh.go:40-48).
@@ -64,12 +76,6 @@ var OVHEndpoints = []string{
 	"soyoustart-eu",
 	"soyoustart-ca",
 }
-
-// dnsProviderKeyOVH is the fixed bucket key under which the single
-// OVH provider config lives. The bucket layout is "key → JSON blob"
-// keyed by provider name, ready to accept additional providers in a
-// later step without a schema rewrite.
-const dnsProviderKeyOVH = "ovh"
 
 // validate runs the strict last-line-of-defence checks on a
 // DNSProviderConfig. The API layer is expected to handle the
@@ -87,6 +93,19 @@ func ValidateDNSProvider(c DNSProviderConfig) error {
 }
 
 func (c *DNSProviderConfig) validate() error {
+	if c.Label == "" {
+		return errors.New("dns_provider: label must not be empty")
+	}
+	typeOK := false
+	for _, t := range DNSProviderTypes {
+		if c.Type == t {
+			typeOK = true
+			break
+		}
+	}
+	if !typeOK {
+		return fmt.Errorf("dns_provider: type %q is not a recognised provider type", c.Type)
+	}
 	if c.Endpoint == "" {
 		return errors.New("dns_provider: endpoint must not be empty")
 	}
@@ -112,12 +131,36 @@ func (c *DNSProviderConfig) validate() error {
 	return nil
 }
 
-// GetDNSProviderOVH returns the persisted OVH DNS provider
-// configuration. Returns ErrNotFound when no row exists (fresh
-// install) — callers MUST distinguish that case from a real I/O
-// error so the UI can render the "not configured" status without a
-// spurious 500.
-func (s *Store) GetDNSProviderOVH(ctx context.Context) (DNSProviderConfig, error) {
+// ListDNSProviders returns all configured providers, unordered
+// (bbolt iteration order). The API/frontend sorts by Label.
+func (s *Store) ListDNSProviders(ctx context.Context) ([]DNSProviderConfig, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	out := []DNSProviderConfig{}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(bucketDNSProviders))
+		return b.ForEach(func(_, raw []byte) error {
+			var c DNSProviderConfig
+			if err := json.Unmarshal(raw, &c); err != nil {
+				return fmt.Errorf("unmarshal dns provider: %w", err)
+			}
+			out = append(out, c)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetDNSProvider returns the provider with the given id, or
+// ErrNotFound.
+func (s *Store) GetDNSProvider(ctx context.Context, id string) (DNSProviderConfig, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 
@@ -126,8 +169,7 @@ func (s *Store) GetDNSProviderOVH(ctx context.Context) (DNSProviderConfig, error
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		b := tx.Bucket([]byte(bucketDNSProviders))
-		raw := b.Get([]byte(dnsProviderKeyOVH))
+		raw := tx.Bucket([]byte(bucketDNSProviders)).Get([]byte(id))
 		if raw == nil {
 			return ErrNotFound
 		}
@@ -139,60 +181,111 @@ func (s *Store) GetDNSProviderOVH(ctx context.Context) (DNSProviderConfig, error
 	return out, nil
 }
 
-// DeleteDNSProviderOVH removes the persisted OVH DNS provider row.
-// Returns nil on a fresh install (row already absent) — the call
-// is idempotent so the API "PUT with all four fields blank"
-// erasure path is safe to invoke without a prior existence check.
-//
-// Step J.4 §5.4 design: the recon described `delete = PUT with
-// all fields blank`. The API layer (putDNSProviderOVH)
-// distinguishes the "PUT with all four blank" erasure from the
-// "PUT with some non-empty fields" merge-and-preserve path, and
-// calls this method on the erasure path. There is no `DELETE`
-// HTTP endpoint — the v1.0 lifecycle decision keeps the single
-// PUT verb (§5.4 "no delete endpoint").
-func (s *Store) DeleteDNSProviderOVH(ctx context.Context) error {
+// CreateDNSProvider assigns a fresh UUID, validates, and persists.
+func (s *Store) CreateDNSProvider(ctx context.Context, c DNSProviderConfig) (DNSProviderConfig, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 
-	return s.db.Update(func(tx *bolt.Tx) error {
+	c.ID = uuid.NewString()
+	if c.Type == "" {
+		c.Type = DNSProviderTypeOVH
+	}
+	if err := c.validate(); err != nil {
+		return DNSProviderConfig{}, err
+	}
+	buf, err := json.Marshal(c)
+	if err != nil {
+		return DNSProviderConfig{}, fmt.Errorf("marshal dns provider: %w", err)
+	}
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return tx.Bucket([]byte(bucketDNSProviders)).Put([]byte(c.ID), buf)
+	})
+	if err != nil {
+		return DNSProviderConfig{}, err
+	}
+	return c, nil
+}
+
+// UpdateDNSProvider applies preserve-on-edit secret semantics: any of
+// the three secret fields left blank in `c` keeps the stored value;
+// a non-empty field replaces it. Label/Type/Endpoint always overwrite
+// (Type falls back to the existing value only when left blank).
+// Returns ErrNotFound if no provider has the given id.
+func (s *Store) UpdateDNSProvider(ctx context.Context, id string, c DNSProviderConfig) (DNSProviderConfig, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	var out DNSProviderConfig
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		b := tx.Bucket([]byte(bucketDNSProviders))
-		if b.Get([]byte(dnsProviderKeyOVH)) == nil {
-			return nil
+		raw := b.Get([]byte(id))
+		if raw == nil {
+			return ErrNotFound
 		}
-		return b.Delete([]byte(dnsProviderKeyOVH))
+		var existing DNSProviderConfig
+		if err := json.Unmarshal(raw, &existing); err != nil {
+			return fmt.Errorf("unmarshal dns provider: %w", err)
+		}
+		merged := c
+		merged.ID = id
+		if merged.ApplicationKey == "" {
+			merged.ApplicationKey = existing.ApplicationKey
+		}
+		if merged.ApplicationSecret == "" {
+			merged.ApplicationSecret = existing.ApplicationSecret
+		}
+		if merged.ConsumerKey == "" {
+			merged.ConsumerKey = existing.ConsumerKey
+		}
+		if merged.Type == "" {
+			merged.Type = existing.Type
+		}
+		if err := merged.validate(); err != nil {
+			return err
+		}
+		buf, err := json.Marshal(merged)
+		if err != nil {
+			return fmt.Errorf("marshal dns provider: %w", err)
+		}
+		out = merged
+		return b.Put([]byte(id), buf)
 	})
+	if err != nil {
+		return DNSProviderConfig{}, err
+	}
+	return out, nil
 }
 
-// PutDNSProviderOVH persists the OVH DNS provider configuration as
-// the canonical row at key "ovh", overwriting any previous value
-// (upsert). validate() runs first so a partial / malformed row is
-// never written.
-//
-// Preserve-on-edit semantics — empty secret fields preserve the
-// stored value — are the API layer's responsibility: this function
-// trusts that the caller has merged the new payload with the
-// existing row before passing the final config in. Storage is the
-// final commit point, not the merge point (same separation Step I.5
-// BasicAuth uses).
-func (s *Store) PutDNSProviderOVH(ctx context.Context, c DNSProviderConfig) error {
+// DeleteDNSProvider removes the provider, but only if no managed
+// domain references it. Returns ErrProviderInUse otherwise,
+// ErrNotFound if the id doesn't exist.
+func (s *Store) DeleteDNSProvider(ctx context.Context, id string) error {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 
-	if err := c.validate(); err != nil {
+	mds, err := s.ListManagedDomains(ctx)
+	if err != nil {
 		return err
+	}
+	for _, md := range mds {
+		if md.ProviderID == id {
+			return ErrProviderInUse
+		}
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		buf, err := json.Marshal(c)
-		if err != nil {
-			return fmt.Errorf("marshal dns provider: %w", err)
+		b := tx.Bucket([]byte(bucketDNSProviders))
+		if b.Get([]byte(id)) == nil {
+			return ErrNotFound
 		}
-		return tx.Bucket([]byte(bucketDNSProviders)).Put([]byte(dnsProviderKeyOVH), buf)
+		return b.Delete([]byte(id))
 	})
 }

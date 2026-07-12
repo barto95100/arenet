@@ -31,7 +31,7 @@ import (
 // (decision D4, consistent with OIDCStore in internal/api).
 type Storer interface {
 	ListRoutes(ctx context.Context) ([]storage.Route, error)
-	GetDNSProviderOVH(ctx context.Context) (storage.DNSProviderConfig, error)
+	ListDNSProviders(ctx context.Context) ([]storage.DNSProviderConfig, error)
 	ListForwardAuthProviders(ctx context.Context) ([]storage.ForwardAuthProvider, error)
 	GetOIDCConfig(ctx context.Context) (storage.OIDCConfig, error)
 }
@@ -65,16 +65,14 @@ func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion s
 		return nil, fmt.Errorf("export: list users: %w", err)
 	}
 
-	// DNS provider: a single row keyed "ovh" (J.4 design). The
-	// store returns ErrNotFound when never configured; we treat
-	// that as an empty slice rather than propagating the error
-	// (export of a never-configured DNS provider is normal, not a
-	// failure).
-	dnsList := []storage.DNSProviderConfig{}
-	if dns, err := store.GetDNSProviderOVH(ctx); err == nil {
-		dnsList = append(dnsList, dns)
-	} else if !errors.Is(err, storage.ErrNotFound) {
-		return nil, fmt.Errorf("export: get dns provider: %w", err)
+	// DNS providers: the v2.11 UUID-keyed collection (Task 1a). An
+	// empty collection on a never-configured install exports as an
+	// empty slice — normal, not a failure. Task 1e revisits backup
+	// for the full collection semantics; this keeps export compiling
+	// and correctly emits every provider.
+	dnsList, err := store.ListDNSProviders(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("export: list dns providers: %w", err)
 	}
 
 	fwdList, err := store.ListForwardAuthProviders(ctx)

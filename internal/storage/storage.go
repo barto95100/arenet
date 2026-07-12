@@ -30,7 +30,7 @@ import (
 
 // Bucket names used inside the BoltDB file.
 const (
-	bucketRoutes   = "routes"
+	bucketRoutes    = "routes"
 	bucketUsers     = "users"
 	bucketSessions  = "sessions"
 	bucketAudit     = "audit"
@@ -100,6 +100,11 @@ var ErrNotFound = errors.New("storage: record not found")
 // uniqueness constraint at the storage layer (e.g. creating a
 // ForwardAuthProvider with a Name that already exists).
 var ErrConflict = errors.New("storage: conflict")
+
+// ErrProviderInUse is returned by DeleteDNSProvider when at least one
+// managed domain still references the provider by its ProviderID.
+// The API maps it to 409 Conflict.
+var ErrProviderInUse = errors.New("storage: dns provider is referenced by one or more managed domains")
 
 // Store is the BoltDB-backed persistence layer for Arenet.
 type Store struct {

@@ -556,9 +556,17 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	// for) rather than failing the whole reload. ErrNotFound on a
 	// fresh install with no dns-01 routes is the normal path and
 	// is silent.
-	dnsProvider, err := m.store.GetDNSProviderOVH(ctx)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
-		return fmt.Errorf("read dns provider: %w", err)
+	// Task 1a transitional: the singleton GetDNSProviderOVH was replaced
+	// by the UUID-keyed collection. Until Task 1d reworks this into a
+	// per-ProviderID map, keep the single-provider behaviour by picking
+	// the first configured provider (fresh install → zero value).
+	var dnsProvider storage.DNSProviderConfig
+	dnsProviders, err := m.store.ListDNSProviders(ctx)
+	if err != nil {
+		return fmt.Errorf("read dns providers: %w", err)
+	}
+	if len(dnsProviders) > 0 {
+		dnsProvider = dnsProviders[0]
 	}
 
 	// Step K.1: read the instance-level forward-auth provider
@@ -2222,12 +2230,11 @@ func buildManagedDomainPolicies(opts buildOpts) []map[string]any {
 		// D4.A: configured → DNS-01 ACME; unconfigured →
 		// internal CA (loud unconfigured state, no silent
 		// HTTP-01 fallback because wildcards EXIGENT DNS-01).
-		// v1.2 value space for Provider is {"ovh"} (D3.B
-		// forward-compat enum), so the lookup currently
-		// always goes to opts.DNSProvider. When future
-		// providers land, this switch becomes a per-Provider
-		// dispatch.
-		if md.Provider == storage.ManagedDomainProviderOVH && dnsProviderConfigured(opts.DNSProvider) {
+		// Task 1a transitional: a non-empty ProviderID means a
+		// provider is assigned; the single opts.DNSProvider is
+		// still the (sole) credential source until Task 1d wires
+		// the per-ProviderID map dispatch.
+		if md.ProviderID != "" && dnsProviderConfigured(opts.DNSProvider) {
 			out = append(out, buildACMEPolicy(subjects, opts, &opts.DNSProvider))
 		} else {
 			out = append(out, map[string]any{

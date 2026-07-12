@@ -177,11 +177,16 @@ func readLive(ctx context.Context, store Storer, users UserStorer) (*liveSnapsho
 	for _, u := range uList {
 		ls.usersByID[u.ID] = u
 	}
-	dns, err := store.GetDNSProviderOVH(ctx)
-	if err == nil {
-		ls.dnsByKey["ovh"] = dns
-	} else if !errors.Is(err, storage.ErrNotFound) {
+	// Task 1a transitional: the DNS provider collection is now
+	// UUID-keyed. Index the live rows by their ID so per-provider
+	// secret-sentinel resolution (below) matches the snapshot row's
+	// own ID. Task 1e revisits backup for the full collection.
+	dnsList, err := store.ListDNSProviders(ctx)
+	if err != nil {
 		return nil, err
+	}
+	for _, dns := range dnsList {
+		ls.dnsByKey[dns.ID] = dns
 	}
 	fwd, err := store.ListForwardAuthProviders(ctx)
 	if err != nil {
@@ -267,12 +272,12 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 		u.PasswordHash = v
 	}
 
-	// DNS providers — keyed by "ovh" (single-row design).
+	// DNS providers — keyed by provider ID (UUID collection, Task 1a).
 	for i := range out.DNSProviders {
 		d := &out.DNSProviders[i]
-		liveDNS, ok := live.dnsByKey["ovh"]
+		liveDNS, ok := live.dnsByKey[d.ID]
 		liveExists := ok
-		ak, err := resolve("dns_providers", "ovh", "application_key", d.ApplicationKey, func() (string, bool) {
+		ak, err := resolve("dns_providers", d.ID, "application_key", d.ApplicationKey, func() (string, bool) {
 			if liveExists {
 				return liveDNS.ApplicationKey, true
 			}
@@ -282,7 +287,7 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 			return nil, err
 		}
 		d.ApplicationKey = ak
-		as, err := resolve("dns_providers", "ovh", "application_secret", d.ApplicationSecret, func() (string, bool) {
+		as, err := resolve("dns_providers", d.ID, "application_secret", d.ApplicationSecret, func() (string, bool) {
 			if liveExists {
 				return liveDNS.ApplicationSecret, true
 			}
@@ -292,7 +297,7 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 			return nil, err
 		}
 		d.ApplicationSecret = as
-		ck, err := resolve("dns_providers", "ovh", "consumer_key", d.ConsumerKey, func() (string, bool) {
+		ck, err := resolve("dns_providers", d.ID, "consumer_key", d.ConsumerKey, func() (string, bool) {
 			if liveExists {
 				return liveDNS.ConsumerKey, true
 			}

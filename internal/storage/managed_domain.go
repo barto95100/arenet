@@ -35,14 +35,14 @@ import (
 // IncludeApex / spec D2.C), covering every route whose host is
 // `<single-label>.<apex>`.
 //
-// The Provider field is a forward-compat enum (spec D3.B): the
-// value space is currently {"ovh"}, but the schema reads as
-// "future-additive for cloudflare / route53 without migration".
-// Validation rejects unknown values.
+// The ProviderID field references a DNSProviderConfig by its UUID
+// (spec v2.11 multi-config). Empty means "no provider assigned"
+// (the wildcard falls back to the internal CA); a non-empty value
+// is validated for existence at the API layer, not in storage.
 //
 // SECRECY: this struct holds NO secrets. The DNS provider
 // credentials it references live in DNSProviderConfig (keyed by
-// Provider name) — fetched separately by caddymgr at config-build
+// its UUID) — fetched separately by caddymgr at config-build
 // time. So the audit and API layers can echo ManagedDomain rows
 // verbatim without redaction.
 type ManagedDomain struct {
@@ -60,27 +60,14 @@ type ManagedDomain struct {
 	// API layer because most homelab operators have a landing
 	// page on the apex.
 	IncludeApex bool `json:"include_apex"`
-	// Provider names which DNS provider config caddymgr should
-	// look up for the DNS-01 challenge. v1.2 value space:
-	// {"ovh"}. Future-additive (D3.B); the storage validator
-	// rejects unknown values.
-	Provider string `json:"provider"`
-}
-
-// ManagedDomainProvider enum (spec D3.B). v1.2 value space is
-// {"ovh"}; the constant + ManagedDomainProviders slice are the
-// extension point for future Cloudflare / Route53 providers.
-const (
-	ManagedDomainProviderOVH = "ovh"
-)
-
-// ManagedDomainProviders lists the accepted Provider values. The
-// validator rejects any other string at storage time. Adding a
-// new provider is a 3-step change: extend this slice, wire the
-// caddymgr emission for the new provider name, and the
-// DNSProviderConfig schema for the credentials.
-var ManagedDomainProviders = []string{
-	ManagedDomainProviderOVH,
+	// ProviderID references the DNSProviderConfig.ID whose credentials
+	// caddymgr uses for the DNS-01 challenge. Empty means "no provider
+	// assigned" (wildcard falls back to the internal CA). Replaces the
+	// pre-v2.11 `Provider` (a type string); the boot migration repoints
+	// legacy "ovh" values to the migrated config's UUID. Existence of a
+	// non-empty ProviderID is validated at the API layer against
+	// GetDNSProvider — storage stays referential-integrity-free.
+	ProviderID string `json:"provider_id"`
 }
 
 // managedDomainApexRE is a pragmatic RFC 1123 hostname check for
@@ -136,16 +123,11 @@ func (md *ManagedDomain) validate() error {
 	if !managedDomainApexRE.MatchString(md.Apex) {
 		return fmt.Errorf("managed_domain: apex %q is not a valid RFC 1123 hostname", md.Apex)
 	}
-	ok := false
-	for _, p := range ManagedDomainProviders {
-		if md.Provider == p {
-			ok = true
-			break
-		}
-	}
-	if !ok {
-		return fmt.Errorf("managed_domain: provider %q is not a recognised DNS provider", md.Provider)
-	}
+	// ProviderID may be empty (unassigned → internal CA fallback) OR
+	// any non-empty string. Existence against the DNSProviderConfig
+	// collection is validated at the API layer (GetDNSProvider), not
+	// here — storage stays referential-integrity-free like the rest
+	// of the bucket layer.
 	return nil
 }
 
@@ -153,7 +135,7 @@ func (md *ManagedDomain) validate() error {
 // the given apex. Apex is normalised on the way in so callers
 // don't need to pre-canonicalise. Returns ErrNotFound when no
 // row exists — callers MUST distinguish that case from a real
-// I/O error (same posture as GetDNSProviderOVH).
+// I/O error (same posture as GetDNSProvider).
 func (s *Store) GetManagedDomain(ctx context.Context, apex string) (ManagedDomain, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()

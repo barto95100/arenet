@@ -79,6 +79,23 @@ func dnsProviderForAudit(c storage.DNSProviderConfig) storage.DNSProviderConfig 
 	return c
 }
 
+// firstDNSProviderOVH is a Task 1a transitional shim: the singleton
+// GetDNSProviderOVH was replaced by the UUID-keyed collection. Until
+// Task 1c rewrites these handlers into a proper collection API, the
+// legacy singleton endpoints operate on the FIRST configured provider
+// (there is at most one on any pre-v2.11 install). Returns ErrNotFound
+// when the collection is empty, matching the old contract.
+func (h *Handler) firstDNSProviderOVH(r *http.Request) (storage.DNSProviderConfig, error) {
+	list, err := h.store.ListDNSProviders(r.Context())
+	if err != nil {
+		return storage.DNSProviderConfig{}, err
+	}
+	if len(list) == 0 {
+		return storage.DNSProviderConfig{}, storage.ErrNotFound
+	}
+	return list[0], nil
+}
+
 // getDNSProviderOVH serves GET
 // /api/v1/settings/dns-providers/ovh. Always 200 on a successful
 // read (including a fresh-install no-row case, which surfaces as
@@ -86,7 +103,7 @@ func dnsProviderForAudit(c storage.DNSProviderConfig) storage.DNSProviderConfig 
 // in §5.4 is "no delete, no 404 for absent config; the operator
 // PUTs to create".
 func (h *Handler) getDNSProviderOVH(w http.ResponseWriter, r *http.Request) {
-	cfg, err := h.store.GetDNSProviderOVH(r.Context())
+	cfg, err := h.firstDNSProviderOVH(r)
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		h.logger.Error("get dns provider", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to get dns provider")
@@ -128,7 +145,7 @@ func (h *Handler) putDNSProviderOVH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	previous, prevErr := h.store.GetDNSProviderOVH(r.Context())
+	previous, prevErr := h.firstDNSProviderOVH(r)
 	if prevErr != nil && !errors.Is(prevErr, storage.ErrNotFound) {
 		h.logger.Error("get dns provider (update)", "err", prevErr)
 		writeError(w, http.StatusInternalServerError, "failed to load dns provider")
@@ -157,14 +174,14 @@ func (h *Handler) putDNSProviderOVH(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, dnsProviderResponse{})
 			return
 		}
-		if err := h.store.DeleteDNSProviderOVH(r.Context()); err != nil {
+		if err := h.store.DeleteDNSProvider(r.Context(), previous.ID); err != nil {
 			h.logger.Error("delete dns provider", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to delete dns provider")
 			return
 		}
 		if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
 			h.logger.Error("caddy reload after dns provider erase — rolling back", "err", err)
-			if rbErr := h.store.PutDNSProviderOVH(r.Context(), previous); rbErr != nil {
+			if _, rbErr := h.store.CreateDNSProvider(r.Context(), previous); rbErr != nil {
 				h.logger.Error("rollback dns provider failed", "err", rbErr)
 			}
 			writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
@@ -186,7 +203,17 @@ func (h *Handler) putDNSProviderOVH(w http.ResponseWriter, r *http.Request) {
 	// value; non-empty overwrite. Endpoint always takes the
 	// supplied value — empty endpoint when not in the erasure
 	// path is rejected by validate (a config error per §5.4).
+	// Task 1a transitional: the collection struct carries Label + Type.
+	// Preserve the previous label if any, else a default; type is
+	// always "ovh" on this legacy endpoint. Task 1c replaces this whole
+	// handler with the label-aware collection API.
+	label := previous.Label
+	if label == "" {
+		label = "OVH"
+	}
 	merged := storage.DNSProviderConfig{
+		Label:             label,
+		Type:              storage.DNSProviderTypeOVH,
 		Endpoint:          req.Endpoint,
 		ApplicationKey:    req.ApplicationKey,
 		ApplicationSecret: req.ApplicationSecret,
@@ -202,11 +229,18 @@ func (h *Handler) putDNSProviderOVH(w http.ResponseWriter, r *http.Request) {
 		merged.ConsumerKey = previous.ConsumerKey
 	}
 
-	if err := h.store.PutDNSProviderOVH(r.Context(), merged); err != nil {
-		// storage.validate() rejects with a user-friendly message
-		// (endpoint enum, any secret blank). Bubble through as 400.
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	// Create a new row on a fresh install, else update the existing one
+	// (preserving its UUID). Both run storage validate().
+	if errors.Is(prevErr, storage.ErrNotFound) {
+		if _, err := h.store.CreateDNSProvider(r.Context(), merged); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else {
+		if _, err := h.store.UpdateDNSProvider(r.Context(), previous.ID, merged); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// Reload Caddy so any existing dns-01 route picks up the new
@@ -220,7 +254,7 @@ func (h *Handler) putDNSProviderOVH(w http.ResponseWriter, r *http.Request) {
 			// reload would log here; the operator gets the 500
 			// below and can re-PUT.
 		} else {
-			if rbErr := h.store.PutDNSProviderOVH(r.Context(), previous); rbErr != nil {
+			if _, rbErr := h.store.UpdateDNSProvider(r.Context(), previous.ID, previous); rbErr != nil {
 				h.logger.Error("rollback dns provider failed", "err", rbErr)
 			}
 		}
