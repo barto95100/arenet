@@ -21,8 +21,8 @@ import type {
 	CrowdSecSettingsRequest,
 	CrowdSecTestRequest,
 	CrowdSecTestResponse,
-	DNSProviderOVH,
-	DNSProviderOVHRequest,
+	DNSProvider,
+	DNSProviderRequest,
 	ForwardAuthProvider,
 	ForwardAuthProviderRequest,
 	ManagedDomain,
@@ -41,10 +41,21 @@ import type {
 } from './types';
 
 export const settingsApi = {
-	getDNSProviderOVH: (): Promise<DNSProviderOVH> =>
-		request<DNSProviderOVH>('GET', '/settings/dns-providers/ovh'),
-	putDNSProviderOVH: (r: DNSProviderOVHRequest): Promise<DNSProviderOVH> =>
-		request<DNSProviderOVH>('PUT', '/settings/dns-providers/ovh', r),
+	// v2.12 — multi-config DNS provider collection CRUD. Mirrors the
+	// forward-auth provider pattern below. The list/view responses
+	// carry no secrets; create/update send them in DNSProviderRequest
+	// (blank on edit = preserve-on-edit). 409 `provider_in_use` on
+	// delete carries `params.wildcards` via ApiError.params.
+	listDNSProviders: (): Promise<DNSProvider[]> =>
+		request<DNSProvider[]>('GET', '/settings/dns-providers'),
+	getDNSProvider: (id: string): Promise<DNSProvider> =>
+		request<DNSProvider>('GET', `/settings/dns-providers/${encodeURIComponent(id)}`),
+	createDNSProvider: (r: DNSProviderRequest): Promise<DNSProvider> =>
+		request<DNSProvider>('POST', '/settings/dns-providers', r),
+	updateDNSProvider: (id: string, r: DNSProviderRequest): Promise<DNSProvider> =>
+		request<DNSProvider>('PUT', `/settings/dns-providers/${encodeURIComponent(id)}`, r),
+	deleteDNSProvider: (id: string): Promise<void> =>
+		request<void>('DELETE', `/settings/dns-providers/${encodeURIComponent(id)}`),
 
 	// Step K.1 — forward-auth provider CRUD.
 	listForwardAuthProviders: (): Promise<ForwardAuthProvider[]> =>

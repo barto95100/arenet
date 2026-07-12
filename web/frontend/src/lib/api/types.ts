@@ -723,31 +723,35 @@ export interface CountryBlockRequest {
 }
 
 /**
- * Step J.4 — instance-level DNS provider configuration for the OVH
- * provider (v1.0 supports OVH only). The three secret fields are
- * always emitted as empty strings on the wire (server-side
- * redaction, like the Step I.5 BasicAuthPasswordHash). Configured
- * is the single status flag the UI binds to.
+ * v2.12 — multi-config DNS provider view (no secrets on the wire).
+ * The backend returns one row per configured provider; `configured`
+ * reflects whether the secrets are present, and `usedBy` lists the
+ * wildcard apexes currently bound to this provider (drives the 409
+ * `provider_in_use` guard on delete).
  */
-export interface DNSProviderOVH {
+export interface DNSProvider {
+	id: string;
+	label: string;
+	type: string;
 	endpoint: string;
-	applicationKey: string; // always "" on the wire (redacted)
-	applicationSecret: string; // always "" on the wire (redacted)
-	consumerKey: string; // always "" on the wire (redacted)
 	configured: boolean;
+	usedBy: string[];
 }
 
 /**
- * Step J.4 — wire shape for PUT /api/v1/settings/dns-providers/ovh.
- * Empty secret fields trigger the preserve-on-edit path (the
- * stored value is kept); non-empty overwrites. Endpoint must be
- * non-empty and one of the seven OVH region IDs.
+ * v2.12 — wire shape for POST/PUT /api/v1/settings/dns-providers[/{id}].
+ * The three secret fields are optional: on create they configure the
+ * provider; on edit, leaving them blank triggers the preserve-on-edit
+ * path (the stored value is kept). `type`/`endpoint` are provider
+ * identifiers (e.g. "ovh" / "ovh-eu"), not translated strings.
  */
-export interface DNSProviderOVHRequest {
+export interface DNSProviderRequest {
+	label: string;
+	type: string;
 	endpoint: string;
-	applicationKey: string;
-	applicationSecret: string;
-	consumerKey: string;
+	applicationKey?: string;
+	applicationSecret?: string;
+	consumerKey?: string;
 }
 
 /**
@@ -771,36 +775,30 @@ export const OVH_ENDPOINTS: readonly string[] = [
  * whose host is `<single-label>.<apex>` (plus the bare apex
  * when `includeApex` is true, per spec D2.C).
  *
- * The `provider` enum value space is currently {"ovh"} (D3.B
- * forward-compat); future Cloudflare / Route53 additions are
- * additive without migration.
+ * v2.12 — `providerId` references a row in the multi-config DNS
+ * provider collection (DNSProvider.id); the pre-v2.12 `provider`
+ * enum was removed when the singleton OVH config became a
+ * collection.
  */
 export interface ManagedDomain {
 	apex: string;
 	includeApex: boolean;
-	provider: ManagedDomainProvider;
+	providerId: string;
 }
 
 /**
  * Step O.1 — POST /api/v1/settings/managed-domains body shape.
  * `includeApex` is optional on the wire (the backend defaults
  * to `true` per spec D2.C when the field is omitted);
- * `provider` defaults to "ovh" when omitted.
+ * `providerId` references a row in the DNS provider collection
+ * (v2.12) — the backend picks the sole provider when omitted and
+ * exactly one is configured.
  */
 export interface ManagedDomainRequest {
 	apex: string;
 	includeApex?: boolean;
-	provider?: ManagedDomainProvider;
+	providerId?: string;
 }
-
-/**
- * Step O.1 — managed-domain provider enum. v1.2 value space is
- * {"ovh"}; the type is open-ended (`string` widened via the
- * union below) so future Cloudflare / Route53 values don't
- * require a frontend type rebuild at the same time as the
- * backend enum extension.
- */
-export type ManagedDomainProvider = 'ovh';
 
 /**
  * Step O.3 — GET /api/v1/settings/managed-domains envelope.
@@ -1271,8 +1269,20 @@ export class ApiError extends Error {
 	// consumer is LockScreen, which redirects OIDC users to a
 	// fresh SSO sign-in when password-based unlock is rejected.
 	code?: string;
-	
-	constructor(message: string, status: number, kind?: ErrorKind, retryAfterSeconds?: number, code?: string) {
+	// Optional structured parameters accompanying `code` (e.g. the
+	// 409 `provider_in_use` body carries `params.wildcards: []`, the
+	// 400 `invalid_provider_id` body carries `params.providerId`).
+	// Consumers render these into translated messages.
+	params?: Record<string, unknown>;
+
+	constructor(
+		message: string,
+		status: number,
+		kind?: ErrorKind,
+		retryAfterSeconds?: number,
+		code?: string,
+		params?: Record<string, unknown>
+	) {
 		super(message);
 		this.status = status;
 		if (kind !== undefined) {
@@ -1283,6 +1293,7 @@ export class ApiError extends Error {
 		}
 		this.retryAfterSeconds = retryAfterSeconds;
 		this.code = code;
+		this.params = params;
 	}
 }
 

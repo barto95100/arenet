@@ -56,7 +56,7 @@ const { toastMock, apiMock, settingsMock, authMock } = vi.hoisted(() => ({
 		testUpstream: vi.fn()
 	},
 	settingsMock: {
-		getDNSProviderOVH: vi.fn()
+		listDNSProviders: vi.fn()
 	},
 	// Day 13 — #R-FRONTEND-PUT-NO-TIMEOUT layer B. submitForm
 	// reads auth.state to decide whether to suppress the
@@ -94,13 +94,13 @@ vi.mock('$lib/api/client', () => ({
 	testUpstream: (...args: unknown[]) => apiMock.testUpstream(...args)
 }));
 
-// $lib/api/settings: getDNSProviderOVH is called in openCreate /
+// $lib/api/settings: listDNSProviders is called in openCreate /
 // openEdit and on mount (via the DNS provider snapshot). Default
-// to a "not configured" shape; tests touching the DNS-01 path
-// rebind for that scenario.
+// to an empty list ("not configured"); tests touching the DNS-01
+// path rebind for that scenario.
 vi.mock('$lib/api/settings', () => ({
 	settingsApi: {
-		getDNSProviderOVH: () => settingsMock.getDNSProviderOVH()
+		listDNSProviders: () => settingsMock.listDNSProviders()
 	}
 }));
 
@@ -194,7 +194,7 @@ beforeEach(() => {
 	apiMock.updateRoute.mockReset();
 	apiMock.deleteRoute.mockReset();
 	apiMock.testUpstream.mockReset();
-	settingsMock.getDNSProviderOVH.mockReset();
+	settingsMock.listDNSProviders.mockReset();
 	// Day 13 — auth store defaults: every test starts in
 	// authenticated state. Tests exercising the lock-screen-
 	// during-save branch flip authMock.state = 'locked' before
@@ -204,15 +204,10 @@ beforeEach(() => {
 	authMock.setLocked.mockReset();
 
 	// Sensible defaults so tests that don't override see an empty
-	// page (no routes) and a not-configured DNS provider.
+	// page (no routes) and a not-configured DNS provider (empty
+	// collection → dnsProviderConfigured=false).
 	apiMock.listRoutes.mockResolvedValue([]);
-	settingsMock.getDNSProviderOVH.mockResolvedValue({
-		endpoint: '',
-		applicationKey: '',
-		applicationSecret: '',
-		consumerKey: '',
-		configured: false
-	});
+	settingsMock.listDNSProviders.mockResolvedValue([]);
 });
 
 // Opens the create form (clicks "+ Add route") and returns after

@@ -34,17 +34,14 @@
 		AUTOMATION_SOURCES,
 		AUTOMATION_SOURCE_LABELS,
 		FORWARD_AUTH_PROVIDER_KINDS,
-		OVH_ENDPOINTS,
 		type AutomationCredentialsView,
 		type AutomationRule,
 		type AutomationRuleSet,
 		type AutomationSource,
-		type DNSProviderOVH,
 		type ForwardAuthProvider,
 		type ForwardAuthProviderKind
 	} from '$lib/api/types';
 	import { ApiError } from '$lib/api/types';
-	import { listRoutes } from '$lib/api/client';
 	import { relativeTime } from '$lib/utils/audit-format';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
@@ -55,6 +52,7 @@
 	import Toggle from '$lib/components/Toggle.svelte';
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import DNSProvidersSection from '$lib/components/settings/DNSProvidersSection.svelte';
 	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
 	import CrowdSecSettingsSection from '$lib/components/CrowdSecSettingsSection.svelte';
 	import BackupSection from '$lib/components/BackupSection.svelte';
@@ -193,93 +191,13 @@
 		return s.slice(0, max) + '…';
 	}
 
-	// --- DNS provider section (Step J.4 §5.4) ----------------------------
-
-	// Snapshot of the stored OVH config. The three secret fields are
-	// always empty strings on the wire (server-side redaction);
-	// dnsProvider.configured is the single status flag the badge
-	// binds to. Loaded on mount and refreshed after a successful PUT.
-	let dnsProvider = $state<DNSProviderOVH | null>(null);
-	let dnsProviderLoading = $state(true);
-	let dnsProviderLoadError = $state<string | null>(null);
-
-	// Local form state. The three secret fields are write-only:
-	// blank on submit preserves the stored value (server merges
-	// against the previous row). The endpoint dropdown is the only
-	// non-secret field, round-trips normally.
-	let dnsForm = $state({
-		endpoint: 'ovh-eu',
-		applicationKey: '',
-		applicationSecret: '',
-		consumerKey: ''
-	});
-	let dnsSubmitting = $state(false);
-	let dnsFormError = $state<string | null>(null);
-
-	async function loadDNSProvider(): Promise<void> {
-		dnsProviderLoading = true;
-		dnsProviderLoadError = null;
-		try {
-			const cfg = await settingsApi.getDNSProviderOVH();
-			dnsProvider = cfg;
-			// Pre-fill the endpoint from the stored value so the user
-			// sees the active region. Secrets stay blank (the wire
-			// always emits "" for them, and a blank submit preserves
-			// the stored value — same UX as Step I.5 BasicAuth).
-			if (cfg.endpoint !== '') {
-				dnsForm.endpoint = cfg.endpoint;
-			}
-		} catch (err) {
-			dnsProviderLoadError =
-				err instanceof Error ? err.message : 'Failed to load DNS provider';
-		} finally {
-			dnsProviderLoading = false;
-		}
-	}
-
-	async function submitDNSProvider(): Promise<void> {
-		dnsSubmitting = true;
-		dnsFormError = null;
-		try {
-			const next = await settingsApi.putDNSProviderOVH({
-				endpoint: dnsForm.endpoint,
-				applicationKey: dnsForm.applicationKey,
-				applicationSecret: dnsForm.applicationSecret,
-				consumerKey: dnsForm.consumerKey
-			});
-			dnsProvider = next;
-			// Clear the secret inputs after a successful save so the
-			// next visit doesn't show ghost values. Endpoint stays.
-			dnsForm.applicationKey = '';
-			dnsForm.applicationSecret = '';
-			dnsForm.consumerKey = '';
-			pushToast('DNS provider saved', 'success');
-			void loadDNS01Status();
-		} catch (err) {
-			dnsFormError = err instanceof ApiError ? err.message : String(err);
-		} finally {
-			dnsSubmitting = false;
-		}
-	}
-
-	// (β) bandeau gate on the Settings page: does any persisted
-	// route already use DNS-01 ACME? If so, an incomplete provider
-	// config is a live problem and gets surfaced above the form.
-	let anyDNS01Route = $state(false);
-	async function loadDNS01Status(): Promise<void> {
-		try {
-			const all = await listRoutes();
-			anyDNS01Route = all.some((r) => r.acmeChallenge === 'dns-01');
-		} catch {
-			// Best-effort — the bandeau being absent is not a hard
-			// failure (the form still works).
-			anyDNS01Route = false;
-		}
-	}
-
-	const dnsInconsistent = $derived(
-		anyDNS01Route && dnsProvider !== null && !dnsProvider.configured
-	);
+	// --- DNS providers section (v2.12) -----------------------------------
+	//
+	// The pre-v2.12 singleton OVH credentials form + its DNS-01
+	// consistency bandeau were replaced by the self-contained
+	// DNSProvidersSection component (multi-config collection: table +
+	// add/edit modal + delete). It owns its own load / state, so the
+	// page no longer carries any dnsProvider* state here.
 
 	// --- SSL / Certificates state — MIGRATED to /certs (#R-6 Pack A) ---------
 	//
@@ -596,8 +514,7 @@
 
 	onMount(() => {
 		void loadSessions();
-		void loadDNSProvider();
-		void loadDNS01Status();
+		// DNS providers now load inside DNSProvidersSection (v2.12).
 		void loadForwardAuthProviders();
 		// loadManagedDomains() moved to /certs in #R-6 Pack A.
 		void loadAutomation();
@@ -821,140 +738,12 @@
 		</Card>
 	</div>
 
-	<!-- ROW 2.5 — DNS provider (Step J.4 §5.4).
-	     Full-width like Sessions: the three secret inputs + the
-	     endpoint dropdown read better in a column. Status badge
-	     binds to `dnsProvider.configured` — the single source of
-	     truth on the wire. -->
-	<div class="mb-6">
-		<Card padding="p-6">
-			<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
-				<div>
-					<h2 class="text-xl font-semibold">DNS provider</h2>
-					<p class="text-xs text-muted mt-1">
-						Required for DNS-01 ACME (wildcards). v1.0 supports OVH.
-					</p>
-				</div>
-				{#if dnsProviderLoading}
-					<Spinner size="sm" />
-				{:else if dnsProvider}
-					{#if dnsProvider.configured}
-						<Badge variant="status-up">Configured</Badge>
-					{:else}
-						<Badge variant="status-warn">Not configured</Badge>
-					{/if}
-				{/if}
-			</header>
-
-			{#if dnsInconsistent}
-				<div
-					class="mb-4 rounded border border-down/40 bg-down/10 px-3 py-2 text-sm text-down"
-					role="alert"
-				>
-					<strong class="font-semibold">DNS-01 routes are waiting on this config.</strong>
-					At least one route already requests DNS-01 ACME. Until this
-					provider is fully configured, certificate renewals for those
-					routes will fail.
-				</div>
-			{/if}
-
-			{#if dnsProviderLoadError}
-				<p class="text-sm text-down mb-3" role="alert">
-					Failed to load DNS provider: {dnsProviderLoadError}
-				</p>
-			{/if}
-
-			<form
-				class="grid grid-cols-1 md:grid-cols-2 gap-4"
-				onsubmit={(e) => {
-					e.preventDefault();
-					void submitDNSProvider();
-				}}
-			>
-				<div class="md:col-span-2">
-					<label for="dns-endpoint" class="text-sm font-medium text-secondary block mb-1">
-						OVH region
-					</label>
-					<select
-						id="dns-endpoint"
-						bind:value={dnsForm.endpoint}
-						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-					>
-						{#each OVH_ENDPOINTS as ep (ep)}
-							<option value={ep}>{ep}</option>
-						{/each}
-					</select>
-				</div>
-
-				<div>
-					<label
-						for="dns-application-key"
-						class="text-sm font-medium text-secondary block mb-1"
-					>
-						Application key
-					</label>
-					<input
-						id="dns-application-key"
-						type="password"
-						autocomplete="off"
-						bind:value={dnsForm.applicationKey}
-						placeholder={dnsProvider?.configured ? '••• set (leave blank to keep)' : ''}
-						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-					/>
-				</div>
-
-				<div>
-					<label
-						for="dns-application-secret"
-						class="text-sm font-medium text-secondary block mb-1"
-					>
-						Application secret
-					</label>
-					<input
-						id="dns-application-secret"
-						type="password"
-						autocomplete="off"
-						bind:value={dnsForm.applicationSecret}
-						placeholder={dnsProvider?.configured ? '••• set (leave blank to keep)' : ''}
-						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-					/>
-				</div>
-
-				<div class="md:col-span-2">
-					<label
-						for="dns-consumer-key"
-						class="text-sm font-medium text-secondary block mb-1"
-					>
-						Consumer key
-					</label>
-					<input
-						id="dns-consumer-key"
-						type="password"
-						autocomplete="off"
-						bind:value={dnsForm.consumerKey}
-						placeholder={dnsProvider?.configured ? '••• set (leave blank to keep)' : ''}
-						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-					/>
-				</div>
-
-				{#if dnsFormError}
-					<p class="text-sm text-down md:col-span-2" role="alert">{dnsFormError}</p>
-				{/if}
-
-				<div class="md:col-span-2 flex justify-end">
-					<Button type="submit" disabled={dnsSubmitting}>
-						{dnsSubmitting ? 'Saving…' : 'Save'}
-					</Button>
-				</div>
-			</form>
-
-			<p class="text-xs text-muted mt-4">
-				Secrets are stored encrypted in transit but at rest in the
-				BoltDB file — protected by the file's filesystem permissions.
-				Restrict the data directory to the Arenet process user.
-			</p>
-		</Card>
-	</div>
+	<!-- ROW 2.5 — DNS providers (v2.12). Self-contained collection
+	     component: table + add/edit modal + delete. Replaces the
+	     pre-v2.12 singleton OVH credentials form. The section root
+	     carries id="dns-providers" so the wildcard wizard's
+	     empty-state CTA can deep-link here. -->
+	<DNSProvidersSection />
 
 	<!-- ROW 2.6 — SSL / Certificates section migrated to /certs
 	     in #R-6 Pack A (2026-06-04). The managed-domains CRUD

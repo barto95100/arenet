@@ -17,14 +17,16 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { ApiError } from '$lib/api/types';
+import type { DNSProvider } from '$lib/api/types';
 
 const { settingsMock } = vi.hoisted(() => ({
 	settingsMock: {
 		settingsApi: {
 			createManagedDomain: vi.fn(),
+			listDNSProviders: vi.fn(),
 		},
 	},
 }));
@@ -32,8 +34,24 @@ vi.mock('$lib/api/settings', () => settingsMock);
 
 import WildcardApexWizard from './WildcardApexWizard.svelte';
 
+function provider(over: Partial<DNSProvider> = {}): DNSProvider {
+	return {
+		id: 'id-1',
+		label: 'OVH perso',
+		type: 'ovh',
+		endpoint: 'ovh-eu',
+		configured: true,
+		usedBy: [],
+		...over,
+	};
+}
+
 beforeEach(() => {
 	settingsMock.settingsApi.createManagedDomain.mockReset();
+	settingsMock.settingsApi.listDNSProviders.mockReset();
+	// Default: one configured provider so existing submit/close tests
+	// have a providerId to send.
+	settingsMock.settingsApi.listDNSProviders.mockResolvedValue([provider()]);
 });
 
 describe('WildcardApexWizard', () => {
@@ -42,10 +60,13 @@ describe('WildcardApexWizard', () => {
 		expect(screen.queryByTestId('wildcard-wizard-form')).not.toBeInTheDocument();
 	});
 
-	it('mounts the three form controls when open=true', () => {
+	it('mounts the three form controls when open=true', async () => {
 		render(WildcardApexWizard, { open: true, onClose: vi.fn() });
 		expect(screen.getByLabelText('Apex domain')).toBeInTheDocument();
-		expect(screen.getByLabelText('DNS provider')).toBeInTheDocument();
+		// The DNS provider dropdown mounts after listDNSProviders resolves.
+		await waitFor(() =>
+			expect(screen.getByLabelText('DNS provider')).toBeInTheDocument(),
+		);
 		expect(
 			screen.getByLabelText('Include bare apex in cert SAN'),
 		).toBeInTheDocument();
@@ -73,6 +94,11 @@ describe('WildcardApexWizard', () => {
 	it('submitting with empty apex shows a validation error instead of calling the API', async () => {
 		const onClose = vi.fn();
 		render(WildcardApexWizard, { open: true, onClose });
+		// Wait for the provider fetch so the empty-provider submit guard
+		// doesn't short-circuit before the apex-required check.
+		await waitFor(() =>
+			expect(screen.getByLabelText('DNS provider')).toBeInTheDocument(),
+		);
 		const form = screen.getByTestId('wildcard-wizard-form');
 		await fireEvent.submit(form);
 		await tick();
@@ -89,9 +115,14 @@ describe('WildcardApexWizard', () => {
 		settingsMock.settingsApi.createManagedDomain.mockResolvedValue({
 			apex: 'new.example',
 			includeApex: true,
-			provider: 'ovh',
+			providerId: 'id-1',
 		});
 		render(WildcardApexWizard, { open: true, onClose, onCreated });
+
+		// Wait for the provider fetch so providerId is populated.
+		await waitFor(() =>
+			expect(screen.getByLabelText('DNS provider')).toBeInTheDocument(),
+		);
 
 		const input = screen.getByLabelText('Apex domain') as HTMLInputElement;
 		await userEvent.type(input, '  new.example  ');
@@ -103,10 +134,58 @@ describe('WildcardApexWizard', () => {
 		expect(settingsMock.settingsApi.createManagedDomain).toHaveBeenCalledWith({
 			apex: 'new.example',
 			includeApex: true,
-			provider: 'ovh',
+			providerId: 'id-1',
 		});
 		expect(onCreated).toHaveBeenCalled();
 		expect(onClose).toHaveBeenCalled();
+	});
+
+	it('populates the provider dropdown from listDNSProviders', async () => {
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
+			provider({ id: 'id-1', label: 'OVH perso', endpoint: 'ovh-eu' }),
+			provider({ id: 'id-2', label: 'OVH pro', endpoint: 'ovh-ca' }),
+		]);
+		render(WildcardApexWizard, { open: true, onClose: vi.fn() });
+		await waitFor(() =>
+			expect(screen.getByText(/OVH perso/)).toBeInTheDocument(),
+		);
+		expect(screen.getByText(/OVH pro/)).toBeInTheDocument();
+	});
+
+	it('sends providerId on submit', async () => {
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
+			provider({ id: 'id-1' }),
+		]);
+		settingsMock.settingsApi.createManagedDomain.mockResolvedValue({});
+		render(WildcardApexWizard, { open: true, onClose: vi.fn() });
+		await waitFor(() =>
+			expect(screen.getByLabelText('DNS provider')).toBeInTheDocument(),
+		);
+		await fireEvent.input(screen.getByLabelText('Apex domain'), {
+			target: { value: 'example.com' },
+		});
+		await fireEvent.submit(screen.getByTestId('wildcard-wizard-form'));
+		await waitFor(() =>
+			expect(settingsMock.settingsApi.createManagedDomain).toHaveBeenCalledWith(
+				expect.objectContaining({ apex: 'example.com', providerId: 'id-1' }),
+			),
+		);
+	});
+
+	it('shows an empty-state CTA when no provider is configured and blocks submit', async () => {
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([]);
+		render(WildcardApexWizard, { open: true, onClose: vi.fn() });
+		await waitFor(() =>
+			expect(
+				screen.getByText(/configure.*dns provider|configurer.*fournisseur/i),
+			).toBeInTheDocument(),
+		);
+		// No dropdown rendered.
+		expect(screen.queryByLabelText('DNS provider')).not.toBeInTheDocument();
+		// Submitting must not reach the API.
+		await fireEvent.submit(screen.getByTestId('wildcard-wizard-form'));
+		await tick();
+		expect(settingsMock.settingsApi.createManagedDomain).not.toHaveBeenCalled();
 	});
 
 	it('failed submit shows the error in the modal and keeps onClose un-called', async () => {

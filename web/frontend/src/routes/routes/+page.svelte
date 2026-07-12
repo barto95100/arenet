@@ -21,7 +21,6 @@
 	import type {
 		ACMEChallenge,
 		CountryBlockRequest,
-		DNSProviderOVH,
 		ForwardAuthProvider,
 		HealthCheck,
 		LBPolicy,
@@ -1120,16 +1119,18 @@
 	//       carries acmeChallenge="dns-01" while the provider is
 	//       missing / incomplete (provider deleted AFTER routes
 	//       were saved).
-	let dnsProvider = $state<DNSProviderOVH | null>(null);
-	let dnsProviderLoadError = $state<string | null>(null);
+	// v2.12 — the Routes page only needs "is any DNS provider
+	// configured" (the DNS-01 selector hint + the (β) bandeau gate),
+	// not the full provider config. Collapse to a boolean fed by the
+	// multi-config collection endpoint.
+	let dnsProviderConfigured = $state(false);
 
 	async function loadDNSProvider() {
 		try {
-			dnsProvider = await settingsApi.getDNSProviderOVH();
-			dnsProviderLoadError = null;
-		} catch (err) {
-			dnsProvider = null;
-			dnsProviderLoadError = err instanceof ApiError ? err.message : String(err);
+			const list = await settingsApi.listDNSProviders();
+			dnsProviderConfigured = list.some((p) => p.configured);
+		} catch {
+			dnsProviderConfigured = false;
 		}
 	}
 
@@ -1205,7 +1206,7 @@
 	// routes + provider snapshot; updates automatically when either
 	// list changes after a refresh.
 	const dns01Inconsistent = $derived.by(() => {
-		if (!dnsProvider || dnsProvider.configured) return false;
+		if (dnsProviderConfigured) return false;
 		return routes.some((r) => r.acmeChallenge === 'dns-01');
 	});
 
@@ -2685,7 +2686,7 @@
 									<p class="text-xs text-muted mt-1">
 										Wildcard hosts require DNS-01.
 									</p>
-								{:else if formData.acmeChallenge === 'dns-01' && (!dnsProvider || !dnsProvider.configured)}
+								{:else if formData.acmeChallenge === 'dns-01' && !dnsProviderConfigured}
 									<p class="text-xs text-down mt-1">
 										DNS-01 requires a configured DNS provider —
 										<a href="/settings" class="text-cyan hover:underline"

@@ -85,7 +85,60 @@
     "reduceMotionEnabled": "Activé",
     "reduceMotionDisabled": "Désactivé",
     "reduceMotionHint": "(préférence système)",
-    "changePassword": "Changer le mot de passe"
+    "changePassword": "Changer le mot de passe",
+    "dnsProviders": {
+      "title": "Fournisseurs DNS",
+      "subtitle": "Comptes DNS utilisés pour émettre les certificats wildcard (ACME DNS-01).",
+      "table": {
+        "label": "Libellé",
+        "type": "Type",
+        "endpoint": "Endpoint",
+        "status": "Statut",
+        "usedBy": "Utilisé par",
+        "actions": "Actions",
+        "usedByNone": "—",
+        "addButton": "+ Ajouter un fournisseur",
+        "emptyCta": "+ Ajouter votre premier fournisseur"
+      },
+      "modal": {
+        "addTitle": "Ajouter un fournisseur DNS",
+        "editTitle": "Modifier le fournisseur DNS",
+        "labelField": "Libellé",
+        "typeField": "Type",
+        "endpointField": "Endpoint",
+        "appKey": "Application key",
+        "appSecret": "Application secret",
+        "consumerKey": "Consumer key",
+        "secretsKeepHint": "Laisser vide pour conserver la valeur actuelle.",
+        "cancel": "Annuler",
+        "add": "Ajouter",
+        "save": "Enregistrer",
+        "saving": "Enregistrement…"
+      },
+      "validation": {
+        "labelRequired": "Le libellé est requis.",
+        "endpointRequired": "L'endpoint est requis."
+      },
+      "delete": {
+        "confirmTitle": "Supprimer le fournisseur DNS",
+        "confirmText": "Cette action est irréversible.",
+        "confirm": "Supprimer",
+        "cancel": "Annuler",
+        "error409": "Fournisseur utilisé par : {wildcards}. Réassignez ou supprimez ces wildcards d'abord.",
+        "errorGeneric": "Échec de la suppression du fournisseur : {err}"
+      },
+      "toast": {
+        "created": "Fournisseur DNS ajouté.",
+        "updated": "Fournisseur DNS mis à jour.",
+        "deleted": "Fournisseur DNS supprimé."
+      },
+      "badge": {
+        "configured": "configuré",
+        "notConfigured": "non configuré"
+      },
+      "loadError": "Échec du chargement des fournisseurs DNS : {err}",
+      "loading": "Chargement des fournisseurs DNS…"
+    }
   },
   "toast": {
     "savedSuccess": "Enregistré avec succès",
@@ -1174,7 +1227,16 @@
     "wizardApexRequiredError": "Le domaine apex est requis.",
     "wizardCancelButton": "Annuler",
     "wizardSubmitButton": "Déclarer",
-    "wizardSubmitting": "Déclaration…"
+    "wizardSubmitting": "Déclaration…",
+    "wildcardWizard": {
+      "dnsProvider": {
+        "label": "Fournisseur DNS",
+        "emptyState": {
+          "message": "Aucun fournisseur DNS configuré pour l'instant.",
+          "ctaLabel": "Configurer un fournisseur DNS dans les Réglages"
+        }
+      }
+    }
   },
   "waf": {
     "headTitle": "WAF · Arenet",

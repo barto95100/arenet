@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // real store (no mock).
 import { language } from '$lib/stores/language.svelte';
 import { t } from './index';
+import en from './locales/en.json';
+import fr from './locales/fr.json';
 
 describe('i18n.t()', () => {
 	beforeEach(() => {
@@ -84,5 +86,35 @@ describe('i18n.t()', () => {
 		expect(t('settings.themeLabel')).toBe('Theme');
 		language.applyLocally('fr');
 		expect(t('settings.themeLabel')).toBe('Thème');
+	});
+});
+
+// v2.12.1 multi-DNS-provider — EN/FR key-parity guard. The t()
+// resolver falls back to EN when a key is missing in FR, so an
+// asymmetric bundle renders silently-English text in the FR UI
+// (the residual-string bug class from i18n Phase 3, e.g. v2.9.17).
+// This test makes any key present in one bundle but not the other a
+// hard failure, so it can never drift unnoticed again.
+describe('i18n bundle parity (EN ↔ FR)', () => {
+	function flattenKeys(obj: Record<string, unknown>, prefix = ''): string[] {
+		const keys: string[] = [];
+		for (const [k, v] of Object.entries(obj)) {
+			const key = prefix ? `${prefix}.${k}` : k;
+			if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+				keys.push(...flattenKeys(v as Record<string, unknown>, key));
+			} else {
+				keys.push(key);
+			}
+		}
+		return keys;
+	}
+
+	it('has identical key sets in en.json and fr.json', () => {
+		const enKeys = new Set(flattenKeys(en as Record<string, unknown>));
+		const frKeys = new Set(flattenKeys(fr as Record<string, unknown>));
+		const missingInFr = [...enKeys].filter((k) => !frKeys.has(k));
+		const missingInEn = [...frKeys].filter((k) => !enKeys.has(k));
+		expect(missingInFr, `keys in EN but missing in FR: ${missingInFr.join(', ')}`).toEqual([]);
+		expect(missingInEn, `keys in FR but missing in EN: ${missingInEn.join(', ')}`).toEqual([]);
 	});
 });

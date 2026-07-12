@@ -53,7 +53,6 @@
 		ManagedDomain,
 		ManagedDomainRevertTo,
 		Route,
-		DNSProviderOVH,
 	} from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import { relativeTime } from '$lib/utils/audit-format';
@@ -96,6 +95,16 @@
 	// (settings already mirrors the same dependency). nil-safe
 	// when the GET fails (network blip / not-configured shape).
 	let dnsProviderConfigured = $state(false);
+
+	// v2.12 — providerId → label map, built from the DNS providers
+	// collection. Used to resolve a managed domain's `providerId` to
+	// its human label in the policies list + the ACME-method KPI
+	// sub-line. Falls back to the raw id when the provider isn't in
+	// the map (deleted / not yet loaded).
+	let providerLabels = $state<Record<string, string>>({});
+	function labelForProvider(id: string): string {
+		return providerLabels[id] ?? id;
+	}
 
 	// Step T T.5 — wizard-open state. Bindable; the wizard
 	// component handles its own form state (apex / provider /
@@ -168,7 +177,7 @@
 	// some of the cert pool); else "Auto" (HTTP-01 default).
 	const acmeMethodLabel = $derived(domains.length > 0 ? 'DNS-01' : 'Auto');
 	const acmeMethodSub = $derived(
-		domains.length > 0 ? `via ${domains[0].provider.toUpperCase()}` : 'HTTP-01'
+		domains.length > 0 ? `via ${labelForProvider(domains[0].providerId)}` : 'HTTP-01'
 	);
 
 	// Filtered cert list per the active tab. Pure client-side —
@@ -189,13 +198,20 @@
 
 	async function loadDNSProvider(): Promise<void> {
 		try {
-			const p: DNSProviderOVH = await settingsApi.getDNSProviderOVH();
-			dnsProviderConfigured = p.configured;
+			const list = await settingsApi.listDNSProviders();
+			// "Configured" for the warning gate = at least one provider
+			// has its secrets set (v2.12 multi-config semantic).
+			dnsProviderConfigured = list.some((p) => p.configured);
+			// Build the id → label map for the policies list + KPI.
+			const next: Record<string, string> = {};
+			for (const p of list) next[p.id] = p.label;
+			providerLabels = next;
 		} catch {
 			// Treat fetch failures as "not configured" so the
 			// warning still surfaces. Logging is left to the
 			// upstream request helper.
 			dnsProviderConfigured = false;
+			providerLabels = {};
 		}
 	}
 
@@ -671,7 +687,7 @@
 									>{/if}
 							</div>
 							<div class="md-sub">
-								Provider: <span class="mono">{md.provider}</span>
+								Provider: <span class="mono">{labelForProvider(md.providerId)}</span>
 								{#if md.includeApex}· {language.current && t('certs.policiesIncludesApex')}{/if}
 							</div>
 						</div>
