@@ -688,15 +688,56 @@ git commit -m "feat(storage): one-shot legacy OVH provider migration + ProviderI
   - `GET /api/v1/settings/dns-providers/{id}` → `dnsProviderView` | 404
   - `PUT /api/v1/settings/dns-providers/{id}` → `dnsProviderView` | 404 | 400
   - `DELETE /api/v1/settings/dns-providers/{id}` → 204 | 409 | 404
-- Consumes: storage methods from 1a; `h.appendAudit`; existing `writeJSON`/`writeError`; chi `URLParam`.
+- Consumes: storage methods from 1a; `h.appendAudit`; existing `writeJSON`/`writeError`; new `writeErrorCode` (Step 0); chi `URLParam`.
+- Test harness: this package uses `setupTestEnv(t) (*testEnv, string)` and `postJSON(t, router, path, body)` / plus a GET/DELETE equivalent — grep `internal/api/*_test.go` and match those exact names (NOT `newAdminTestEnv`/`postJSONAuthed`).
+
+- [ ] **Step 0: Add `writeErrorCode` (structured, i18n-able errors)**
+
+The current `writeError` emits only `{"error": message}`. User-facing
+errors that the frontend must translate (the 409 provider-in-use with
+wildcard names; validation errors) need a machine-readable `code` +
+`params` so the FR/EN UI builds the string itself — otherwise Plan 2
+would ship a hardcoded EN message in the FR UI. The frontend already
+reads `errBody.code` (`client.ts:155`, `ApiError.code`); we add `params`
+alongside.
+
+In `internal/api/errors.go`, add next to `writeError`:
+
+```go
+// writeErrorCode emits a structured, i18n-able error:
+//
+//	{"error":"<EN fallback>","code":"<machine_code>","params":{...}}
+//
+// The frontend translates via t('errors.'+code, params); `error` is a
+// non-localized fallback for logs / non-UI consumers. Use this for any
+// user-facing error whose text carries data (names, counts). Plain
+// writeError stays for internal / non-translated cases.
+func writeErrorCode(w http.ResponseWriter, status int, code, message string, params map[string]any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	body := map[string]any{"error": message, "code": code}
+	if len(params) > 0 {
+		body["params"] = params
+	}
+	_ = json.NewEncoder(w).Encode(body)
+}
+```
+
+Frontend counterpart (implemented in Plan 2, noted here for the contract):
+`ApiError` gains `params?: Record<string, unknown>` read from `errBody.params`,
+and `client.ts` passes it through. Do NOT implement the frontend side in
+this plan.
 
 - [ ] **Step 1: Write the failing handler test (create + list hides secrets)**
 
-Append to `internal/api/dns_provider_test.go`:
+Append to `internal/api/dns_provider_test.go`. Match the real test-env
+helpers: `env, _ := setupTestEnv(t)` (returns `*testEnv` + setup token)
+and `postJSON(t, env.router, path, body)`; grep the package for the GET
+and DELETE equivalents and use those exact names.
 
 ```go
 func TestDNSProviders_CreateThenListHidesSecrets(t *testing.T) {
-	env := newAdminTestEnv(t) // existing helper: authed admin router + store
+	env, _ := setupTestEnv(t) // (*testEnv, setupToken) — see auth_handlers_test.go
 	body := map[string]string{
 		"label": "OVH perso", "type": "ovh", "endpoint": "ovh-eu",
 		"applicationKey": "ak", "applicationSecret": "as", "consumerKey": "ck",
@@ -884,7 +925,12 @@ func (h *Handler) deleteDNSProvider(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, storage.ErrProviderInUse):
 		idx, _ := h.usedByIndex(r.Context())
-		writeError(w, http.StatusConflict, "dns provider is in use by: "+strings.Join(idx[id], ", "))
+		// Structured error: the frontend (Plan 2) translates via
+		// t('errors.providerInUse', { wildcards }) — the message
+		// here is an EN fallback only. code + params keep it i18n-able.
+		writeErrorCode(w, http.StatusConflict, "provider_in_use",
+			"dns provider is in use by: "+strings.Join(idx[id], ", "),
+			map[string]any{"wildcards": idx[id]})
 		return
 	case errors.Is(err, storage.ErrNotFound):
 		writeError(w, http.StatusNotFound, "dns provider not found")
@@ -1218,6 +1264,13 @@ pkill -f arenet-smoke; rm -rf /tmp/arenet-smoke /tmp/smoke.log "$DD" cookies
 Backend complete. Do NOT tag from this plan — tagging `v2.11.0` on `main` happens after the PR is merged (per the workstream's tag-after-merge policy). Record the smoke results in the PR description.
 
 ---
+
+## Rollback / failure handling
+
+- **Migration is a single bbolt `Update` transaction** (Task 1b): it commits atomically or not at all. A partial failure (crash mid-txn) leaves the DB untouched — bbolt rolls the transaction back. Next boot re-detects the legacy `"ovh"` key and retries. There is no half-migrated state.
+- **Boot migration is non-fatal** (Task 1b Step 7): a migration error is logged and the binary continues with whatever is in storage, so a migration bug never bricks startup.
+- **Branch-level rollback**: all work lands on `feature/multi-dns-provider-configs`; nothing is tagged mid-workstream. If backend smoke (1f) fails, revert the offending commit(s) on the branch — `main` and shipped versions are untouched until the `v2.11.0` tag after merge.
+- **Backup safety net**: an operator can `Export` before upgrading; a bad migration is recoverable by restoring the pre-v2.11 backup (import re-runs the same migration, Task 1e).
 
 ## Self-Review
 
