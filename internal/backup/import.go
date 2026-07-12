@@ -25,6 +25,7 @@ import (
 
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
+	"github.com/google/uuid"
 )
 
 // ImportStorer is the storage subset Import consumes. The Import
@@ -275,6 +276,27 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 	// DNS providers — keyed by provider ID (UUID collection, Task 1a).
 	for i := range out.DNSProviders {
 		d := &out.DNSProviders[i]
+		// Backward-compat (pre-v2.11 / pre-Task-1a): a singleton backup
+		// carries one provider row with an EMPTY ID (and no Label/Type —
+		// they didn't exist in the old struct). Promote it to a valid
+		// collection entry HERE, before secret resolution, validation
+		// (validateResolvedSnapshot) and marshalling (buildRestoreInput)
+		// so all three agree on the same UUID key. We assign a fresh
+		// UUID and default Label/Type to "OVH (default)"/"ovh" — mirroring
+		// the boot migration (MigrateLegacyDNSProvider) so the imported
+		// row is immediately usable, with no reliance on a second
+		// migration pass. Note the resolve() identity below then records
+		// the real UUID (not the literal "ovh"), keeping IncompleteRows
+		// consistent with the stored key.
+		if d.ID == "" {
+			d.ID = uuid.NewString()
+			if d.Label == "" {
+				d.Label = "OVH (default)"
+			}
+			if d.Type == "" {
+				d.Type = storage.DNSProviderTypeOVH
+			}
+		}
 		liveDNS, ok := live.dnsByKey[d.ID]
 		liveExists := ok
 		ak, err := resolve("dns_providers", d.ID, "application_key", d.ApplicationKey, func() (string, bool) {
@@ -385,9 +407,15 @@ func buildRestoreInput(snap *Snapshot) (storage.RestoreSnapshotInput, error) {
 	for _, d := range snap.DNSProviders {
 		b, err := json.Marshal(d)
 		if err != nil {
-			return out, fmt.Errorf("marshal dns provider: %w", err)
+			return out, fmt.Errorf("marshal dns provider %q: %w", d.ID, err)
 		}
-		out.DNSProviders["ovh"] = b
+		// Key by the provider's own UUID (v2.11 multi-config collection).
+		// Pre-v2.11 rows with an empty ID are promoted to a fresh UUID in
+		// resolveSentinels BEFORE this point, so d.ID is always non-empty
+		// here for a resolved snapshot. The prior code re-keyed every row
+		// under the fixed literal "ovh", collapsing a multi-provider
+		// backup down to a single stored entry (data loss on restore).
+		out.DNSProviders[d.ID] = b
 	}
 	for _, p := range snap.ForwardAuthProviders {
 		b, err := json.Marshal(p)

@@ -168,17 +168,22 @@ func validateRouteWithDerogation(r storage.Route, cleared clearedSet) error {
 
 func validateDNSProviderWithDerogation(d storage.DNSProviderConfig, cleared clearedSet) error {
 	// Three secret fields; any of them may be in the cleared set.
+	// The dérogation identity is the provider's own UUID (v2.11
+	// multi-config), matching the identity the resolver records in
+	// IncompleteRows (resolve("dns_providers", d.ID, ...)). Pre-2.11
+	// empty-ID rows are promoted to a UUID in resolveSentinels before
+	// this runs, so d.ID is always the stable collection key here.
 	probe := d
 	clearedAny := false
-	if d.ApplicationKey == "" && cleared.has("dns_providers", "ovh", "application_key") {
+	if d.ApplicationKey == "" && cleared.has("dns_providers", d.ID, "application_key") {
 		probe.ApplicationKey = "incomplete-restore-placeholder"
 		clearedAny = true
 	}
-	if d.ApplicationSecret == "" && cleared.has("dns_providers", "ovh", "application_secret") {
+	if d.ApplicationSecret == "" && cleared.has("dns_providers", d.ID, "application_secret") {
 		probe.ApplicationSecret = "incomplete-restore-placeholder"
 		clearedAny = true
 	}
-	if d.ConsumerKey == "" && cleared.has("dns_providers", "ovh", "consumer_key") {
+	if d.ConsumerKey == "" && cleared.has("dns_providers", d.ID, "consumer_key") {
 		probe.ConsumerKey = "incomplete-restore-placeholder"
 		clearedAny = true
 	}
@@ -187,7 +192,7 @@ func validateDNSProviderWithDerogation(d storage.DNSProviderConfig, cleared clea
 		target = probe
 	}
 	if err := storage.ValidateDNSProvider(target); err != nil {
-		return fmt.Errorf("restore: dns_provider (ovh): %w", err)
+		return fmt.Errorf("restore: dns_provider (id=%s, label=%q): %w", d.ID, d.Label, err)
 	}
 	return nil
 }
