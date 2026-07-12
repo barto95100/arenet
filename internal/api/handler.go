@@ -32,6 +32,7 @@ import (
 	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
+	"github.com/barto95100/arenet/internal/updatecheck"
 )
 
 // AlertingDispatcher (Step AL.1.b) is the seam the /test
@@ -217,6 +218,17 @@ type Handler struct {
 	// external monitoring scrape never sees a 500. Set via
 	// SetSystemHealthChecker at boot.
 	systemHealthChecker SystemHealthChecker
+
+	// updateChecker (v2.12.3) powers GET/POST /api/v1/system/version.
+	// nil-tolerant: when nil (never wired, or the opt-in is off at
+	// boot), the version endpoint reports enabled=false and no update.
+	// Set via SetUpdateChecker.
+	updateChecker updateChecker
+
+	// onUpdateConfigChange (v2.12.3) is invoked after a successful
+	// version-config PUT so the boot wiring can start/stop the poll
+	// loop. nil-tolerant.
+	onUpdateConfigChange func(storage.UpdateCheckConfig)
 
 	// alertingDispatcher (Step AL.1.b) fans an AlertEvent
 	// out to a list of channel IDs, owns the per-channel
@@ -614,6 +626,27 @@ func (h *Handler) SetUIOrigin(origin string) {
 // coherent JSON shape regardless.
 func (h *Handler) SetSystemHealthChecker(s SystemHealthChecker) {
 	h.systemHealthChecker = s
+}
+
+// updateChecker is the seam the version endpoint reads through.
+// *updatecheck.Checker satisfies it; tests can supply a fake.
+type updateChecker interface {
+	Status() updatecheck.Status
+	Check(ctx context.Context) updatecheck.Status
+}
+
+// SetUpdateChecker (v2.12.3) attaches the update checker. Pass nil to
+// leave the version endpoint in its enabled=false / no-update state
+// (handler tests that don't exercise the checker).
+func (h *Handler) SetUpdateChecker(c updateChecker) {
+	h.updateChecker = c
+}
+
+// SetUpdateConfigHook (v2.12.3) registers a callback invoked after the
+// version-config PUT persists, so main can start/stop the poll loop to
+// match the new enabled/interval. nil-tolerant (tests don't wire it).
+func (h *Handler) SetUpdateConfigHook(fn func(storage.UpdateCheckConfig)) {
+	h.onUpdateConfigChange = fn
 }
 
 // SetAlertingDispatcher (Step AL.1.b) attaches the

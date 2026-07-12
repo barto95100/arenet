@@ -89,6 +89,7 @@ import (
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/internal/systemhealth"
 	"github.com/barto95100/arenet/internal/throttle"
+	"github.com/barto95100/arenet/internal/updatecheck"
 	"github.com/barto95100/arenet/internal/waf"
 	"github.com/barto95100/arenet/web"
 )
@@ -1483,6 +1484,67 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	if err := alertingRegistry.Register(alerting.NewSystemHealthSource(healthChecker)); err != nil {
 		logger.Warn("alerting: register system_health source failed", "err", err)
 	}
+
+	// v2.12.3 — opt-in update checker. Construct it, register the
+	// update_available alerting source (reads a live snapshot), wire it
+	// into the handler, and start a supervised poll loop ONLY when the
+	// operator has opted in. The loop is a goroutine with its own
+	// cancelable context; the version-config PUT hook restarts/stops it
+	// to match the new enabled/interval without a reboot.
+	updateChecker := updatecheck.New(version, nil)
+	if err := alertingRegistry.Register(alerting.NewUpdateAvailableSource(updateChecker.Status)); err != nil {
+		logger.Warn("alerting: register update_available source failed", "err", err)
+	}
+	apiHandler.SetUpdateChecker(updateChecker)
+
+	// updateLoopMu guards the current loop's cancel func so the config
+	// hook and shutdown don't race.
+	var updateLoopMu sync.Mutex
+	var updateLoopCancel context.CancelFunc
+	startUpdateLoop := func(uc storage.UpdateCheckConfig) {
+		updateLoopMu.Lock()
+		defer updateLoopMu.Unlock()
+		if updateLoopCancel != nil {
+			updateLoopCancel() // stop a previous loop
+			updateLoopCancel = nil
+		}
+		if !uc.Enabled {
+			logger.Info("update checker disabled")
+			return
+		}
+		interval := resolveUpdateInterval(uc.IntervalOverride, logger)
+		loopCtx, cancel := context.WithCancel(ctx)
+		updateLoopCancel = cancel
+		go func() {
+			// First check ~30s after (re)start so a fresh boot surfaces
+			// news quickly without an immediate outbound call.
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+			_ = updateChecker.Check(loopCtx)
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-loopCtx.Done():
+					return
+				case <-ticker.C:
+					_ = updateChecker.Check(loopCtx)
+				}
+			}
+		}()
+		logger.Info("update checker enabled", "interval", interval.String())
+	}
+	apiHandler.SetUpdateConfigHook(startUpdateLoop)
+	// Kick off according to the persisted opt-in state.
+	if uc, ucErr := store.GetUpdateCheckConfig(ctx); ucErr != nil {
+		logger.Warn("update checker: read config failed; leaving disabled", "err", ucErr)
+	} else {
+		startUpdateLoop(uc)
+	}
+
 	// Step AL.3b — expose the source registry to the
 	// rule CRUD validator. nil-tolerant on the handler
 	// side, but in production every wired source must
@@ -1963,6 +2025,32 @@ func (a certEventInserterAdapter) InsertCertEventBatch(ctx context.Context, even
 		return nil
 	}
 	return a.store.InsertCertEventBatch(ctx, events)
+}
+
+// resolveUpdateInterval (v2.12.3) picks the update-check cadence:
+// stored override → ARENET_UPDATE_CHECK_INTERVAL env → 24h default.
+// Anything below the 1h floor (or unparseable) falls back to 24h with a
+// warning, so a bad value can't spam GitHub.
+func resolveUpdateInterval(override string, logger *slog.Logger) time.Duration {
+	const def = 24 * time.Hour
+	const floor = time.Hour
+	candidate := override
+	if candidate == "" {
+		candidate = os.Getenv("ARENET_UPDATE_CHECK_INTERVAL")
+	}
+	if candidate == "" {
+		return def
+	}
+	d, err := time.ParseDuration(candidate)
+	if err != nil {
+		logger.Warn("update checker: invalid interval, using 24h default", "value", candidate, "err", err)
+		return def
+	}
+	if d < floor {
+		logger.Warn("update checker: interval below 1h floor, using 24h default", "value", candidate)
+		return def
+	}
+	return d
 }
 
 func main() {
