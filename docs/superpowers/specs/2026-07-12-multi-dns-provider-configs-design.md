@@ -108,7 +108,49 @@ DELETE /settings/dns-providers/{id}   → 204 | 409 (nomme les wildcards) | 404 
 - **Client API `settings.ts`** : `getDNSProviderOVH`/`putDNSProviderOVH` → `listDNSProviders` / `getDNSProvider` / `createDNSProvider` / `updateDNSProvider` / `deleteDNSProvider`. Type TS `DNSProviderConfig { id, label, type, endpoint, configured, usedBy[] }` (sans secrets).
 - **`WildcardApexWizard.svelte`** : `<select>` mono-option → **dropdown custom** (libellé + icône de type — choix Q2 option A) alimenté par `listDNSProviders()`. Envoie `providerId`. Empty state : liste vide → avertissement + lien « Configurer un provider dans Settings ».
 - **`/settings` section DNS Providers** : formulaire unique → **table** (choix Q3 option B). Colonnes : **Libellé | Type | Endpoint | Statut | Utilisé par | Actions (✎ 🗑)**. Modal Ajouter/Éditer (libellé, endpoint, 3 secrets preserve-on-edit). Suppression → confirm ; 409 → toast nommant les wildcards bloquants. Empty state : « + Ajouter votre premier provider ».
-- **i18n EN/FR** : toutes les nouvelles chaînes via `t()`.
+- **i18n EN/FR** : toutes les nouvelles chaînes via `t()` — détaillé en §3.7.
+
+### 3.7 Intégration i18n (EN + FR)
+
+Toutes les nouvelles chaînes UI passent par `t()`, cohérent avec
+l'infra i18n Phase 3 (shippée end-to-end v2.9.11 → v2.9.28). Aucune
+surface de ce chantier n'introduit de FR/EN hardcodé — c'est une
+porte de validation bloquante, pour éviter les résidus FR observés
+en Phase 3 (v2.9.17, v2.9.24).
+
+**Inventaire des clés de bundle** (ajoutées à `en.json` + `fr.json`) :
+
+`settings.dnsProviders.*`
+- `title`, `subtitle`
+- `table.headers.{label, type, endpoint, status, usedBy, actions}`
+- `table.emptyState.{title, text, ctaLabel}`
+- `modal.add.{title, submitLabel}`, `modal.edit.{title, submitLabel}`
+- `form.{labelField, typeField, endpointField, appKeyField, appSecretField, consumerKeyField}`
+- `form.helpers.{label, endpoint, secrets}` (dont "laisser vide pour conserver" preserve-on-edit)
+- `form.validation.{labelRequired, typeInvalid, endpointInvalid}`
+- `delete.{confirmTitle, confirmText, submitLabel}`
+- `delete.error409.{title, text, usedByPrefix}`
+- `toast.{created, updated, deleted, error}`
+- `badges.{configured, notConfigured, inUse}`
+
+`certs.wildcardWizard.dnsProvider.*` (namespace du wizard existant)
+- `dropdown.{label, placeholder}`
+- `dropdown.emptyState.{message, ctaLabel}` (lien vers /settings)
+
+**Chaînes qui restent EN dans les deux langues** (décisions Phase 3
+verrouillées — voir mémoire i18n_phase_3_complete) :
+- Acronymes : DNS, OVH, ACME, API, UUID, TLS.
+- Identifiants de type / valeurs de config : `ovh`, `cloudflare` (futur), `ovh-eu`/`ovh-ca`/`ovh-us` (endpoints).
+- Noms de providers futurs : "Cloudflare", "Route53".
+
+**Cohérence de pattern** :
+- Le libellé du provider (`Label`) est saisi par l'opérateur → jamais traduit (donnée utilisateur).
+- Aucune date/timestamp affichée dans les nouvelles surfaces (la table providers n'en comporte pas) → pas de dépendance à un helper de formatage de date.
+- Réutiliser `relativeTime()` (`audit-format.ts:66`) uniquement si un besoin de temps relatif émerge (non prévu ici).
+
+**Validation empirique i18n** (portes) :
+- Smoke EN + FR sur chaque nouvelle surface (table settings, modal add/edit, dropdown wizard, empty states).
+- Vérifier : aucun mix FR/EN sur un même écran, aucune clé brute affichée (fallback chain OK), empty states cohérents dans les deux langues.
 
 ## 4. Matrice des décisions verrouillées
 
@@ -133,6 +175,7 @@ DELETE /settings/dns-providers/{id}   → 204 | 409 (nomme les wildcards) | 404 
 | S4-Q3 | Layout settings | Table listing |
 | S4-Q4 | Scope frontend | Wizard + Settings table + client API (Cert.B exclu) |
 | S4-+ | Colonne table | « Endpoint » (pas « Région ») — universel multi-type |
+| S4-i18n | i18n | Toutes les chaînes via `t()` EN+FR dès le design (§3.7), porte bloquante |
 
 ## 5. V3 backlog
 
