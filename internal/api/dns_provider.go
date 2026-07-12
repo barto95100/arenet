@@ -17,49 +17,55 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/storage"
+	"github.com/go-chi/chi/v5"
 )
 
-// dnsProviderRequest is the wire shape accepted by PUT
-// /api/v1/settings/dns-providers/ovh (Step J.4 §5.4). Empty secret
-// fields trigger the preserve-on-edit path (the stored value is
-// kept); non-empty secrets overwrite.
+// v2.11 — the pre-v2.11 singleton OVH DNS provider (GET/PUT
+// /settings/dns-providers/ovh) became a UUID-keyed collection. This
+// file serves the standard 5-verb collection API mirroring
+// managed-domains. Secrets (ApplicationKey / ApplicationSecret /
+// ConsumerKey) are NEVER serialized in any response or audit row.
+
+// dnsProviderView is the wire shape returned by every read/write on the
+// collection. The three OVH secret fields are DELIBERATELY absent from
+// this struct — they can never leak over HTTP. `configured` is the
+// single boolean the UI binds to (true when all three stored secrets
+// are non-empty); `usedBy` lists the apexes of the managed domains that
+// reference this provider (for the delete-in-use guard + UI badge).
+type dnsProviderView struct {
+	ID         string   `json:"id"`
+	Label      string   `json:"label"`
+	Type       string   `json:"type"`
+	Endpoint   string   `json:"endpoint"`
+	Configured bool     `json:"configured"`
+	UsedBy     []string `json:"usedBy"`
+}
+
+// dnsProviderRequest is the wire shape accepted by POST and PUT. Empty
+// secret fields on PUT trigger the storage preserve-on-edit path (the
+// stored value is kept); non-empty secrets overwrite.
 type dnsProviderRequest struct {
+	Label             string `json:"label"`
+	Type              string `json:"type"`
 	Endpoint          string `json:"endpoint"`
 	ApplicationKey    string `json:"applicationKey"`
 	ApplicationSecret string `json:"applicationSecret"`
 	ConsumerKey       string `json:"consumerKey"`
 }
 
-// dnsProviderResponse is the wire shape returned by GET
-// /api/v1/settings/dns-providers/ovh. The three secret fields are
-// ALWAYS emitted as empty strings — same redaction policy as Step
-// I.5's BasicAuthPasswordHash. Configured carries the single
-// boolean status flag the UI binds to (true when all four stored
-// fields are non-empty); the operator can't tell which secret is
-// missing, deliberately.
-type dnsProviderResponse struct {
-	Endpoint string `json:"endpoint"`
-	// ApplicationKey, ApplicationSecret, ConsumerKey are always
-	// emitted as empty strings — redacted server-side.
-	ApplicationKey    string `json:"applicationKey"`
-	ApplicationSecret string `json:"applicationSecret"`
-	ConsumerKey       string `json:"consumerKey"`
-	// Configured is true when all four stored fields are non-empty,
-	// false otherwise. Single source of truth for the UI's
-	// "configured" / "not configured" badge.
-	Configured bool `json:"configured"`
-}
-
-// dnsProviderComplete reports whether all four fields of an OVH
-// DNS provider config are non-empty. Used by the route edit-time
-// guard (createRoute / updateRoute) AND by the GET response's
-// `configured` flag.
+// dnsProviderComplete reports whether all four credential-bearing
+// fields of an OVH DNS provider config are non-empty. Used by the
+// route edit-time DNS-01 guard (createRoute / updateRoute) AND by the
+// view's `configured` flag.
 func dnsProviderComplete(c storage.DNSProviderConfig) bool {
 	return c.Endpoint != "" &&
 		c.ApplicationKey != "" &&
@@ -67,11 +73,27 @@ func dnsProviderComplete(c storage.DNSProviderConfig) bool {
 		c.ConsumerKey != ""
 }
 
-// dnsProviderForAudit returns a copy of c with the three secret
-// fields blanked. Mirrors routeForAudit (Step I.5) for the
-// BasicAuthPasswordHash redaction. Apply to every
-// storage.DNSProviderConfig passed into mustMarshalForAudit's
-// BeforeJSON / AfterJSON.
+// anyDNSProviderConfigured reports whether at least one fully-configured
+// DNS provider exists. The route DNS-01 guard uses this: a dns-01 route
+// is only accepted while a usable provider is present (which one is
+// resolved at reload time by caddymgr, Task 1d).
+func (h *Handler) anyDNSProviderConfigured(ctx context.Context) (bool, error) {
+	list, err := h.store.ListDNSProviders(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, c := range list {
+		if dnsProviderComplete(c) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// dnsProviderForAudit returns a copy of c with the three secret fields
+// blanked. Applied to every storage.DNSProviderConfig passed into an
+// audit event's BeforeJSON / AfterJSON — the audit log holds the
+// endpoint + label, never the secret payload.
 func dnsProviderForAudit(c storage.DNSProviderConfig) storage.DNSProviderConfig {
 	c.ApplicationKey = ""
 	c.ApplicationSecret = ""
@@ -79,64 +101,93 @@ func dnsProviderForAudit(c storage.DNSProviderConfig) storage.DNSProviderConfig 
 	return c
 }
 
-// firstDNSProviderOVH is a Task 1a transitional shim: the singleton
-// GetDNSProviderOVH was replaced by the UUID-keyed collection. Until
-// Task 1c rewrites these handlers into a proper collection API, the
-// legacy singleton endpoints operate on the FIRST configured provider
-// (there is at most one on any pre-v2.11 install). Returns ErrNotFound
-// when the collection is empty, matching the old contract.
-func (h *Handler) firstDNSProviderOVH(r *http.Request) (storage.DNSProviderConfig, error) {
-	list, err := h.store.ListDNSProviders(r.Context())
-	if err != nil {
-		return storage.DNSProviderConfig{}, err
+// toDNSProviderView maps a stored config + its usedBy apexes to the
+// secret-free wire shape.
+func toDNSProviderView(c storage.DNSProviderConfig, usedBy []string) dnsProviderView {
+	if usedBy == nil {
+		usedBy = []string{}
 	}
-	if len(list) == 0 {
-		return storage.DNSProviderConfig{}, storage.ErrNotFound
+	return dnsProviderView{
+		ID:         c.ID,
+		Label:      c.Label,
+		Type:       c.Type,
+		Endpoint:   c.Endpoint,
+		Configured: dnsProviderComplete(c),
+		UsedBy:     usedBy,
 	}
-	return list[0], nil
 }
 
-// getDNSProviderOVH serves GET
-// /api/v1/settings/dns-providers/ovh. Always 200 on a successful
-// read (including a fresh-install no-row case, which surfaces as
-// `configured: false` with empty fields) — the lifecycle decision
-// in §5.4 is "no delete, no 404 for absent config; the operator
-// PUTs to create".
-func (h *Handler) getDNSProviderOVH(w http.ResponseWriter, r *http.Request) {
-	cfg, err := h.firstDNSProviderOVH(r)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+// usedByIndex builds providerID -> [apex...] from the managed domains,
+// so the list/get views and the delete-in-use guard share one source
+// of truth for "which wildcards reference this provider".
+func (h *Handler) usedByIndex(ctx context.Context) (map[string][]string, error) {
+	mds, err := h.store.ListManagedDomains(ctx)
+	if err != nil {
+		return nil, err
+	}
+	idx := map[string][]string{}
+	for _, md := range mds {
+		if md.ProviderID != "" {
+			idx[md.ProviderID] = append(idx[md.ProviderID], md.Apex)
+		}
+	}
+	return idx, nil
+}
+
+// listDNSProviders serves GET /api/v1/settings/dns-providers. Returns
+// the collection sorted by Label, each entry secret-free with its
+// usedBy[] and configured flag. Empty list on a fresh install.
+func (h *Handler) listDNSProviders(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	list, err := h.store.ListDNSProviders(ctx)
+	if err != nil {
+		h.logger.Error("list dns providers", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to list dns providers")
+		return
+	}
+	idx, err := h.usedByIndex(ctx)
+	if err != nil {
+		h.logger.Error("list managed domains (usedBy)", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to load managed domains")
+		return
+	}
+	out := make([]dnsProviderView, 0, len(list))
+	for _, c := range list {
+		out = append(out, toDNSProviderView(c, idx[c.ID]))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Label < out[j].Label })
+	writeJSON(w, http.StatusOK, out)
+}
+
+// getDNSProvider serves GET /api/v1/settings/dns-providers/{id}.
+// 404 with code "provider_not_found" when the id is unknown.
+func (h *Handler) getDNSProvider(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	c, err := h.store.GetDNSProvider(r.Context(), id)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErrorCode(w, http.StatusNotFound, "provider_not_found",
+			"dns provider not found", map[string]any{"id": id})
+		return
+	}
+	if err != nil {
 		h.logger.Error("get dns provider", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to get dns provider")
 		return
 	}
-	resp := dnsProviderResponse{
-		Endpoint:          cfg.Endpoint,
-		ApplicationKey:    "",
-		ApplicationSecret: "",
-		ConsumerKey:       "",
-		Configured:        dnsProviderComplete(cfg),
+	idx, err := h.usedByIndex(r.Context())
+	if err != nil {
+		h.logger.Error("list managed domains (usedBy)", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to load managed domains")
+		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, toDNSProviderView(c, idx[c.ID]))
 }
 
-// putDNSProviderOVH serves PUT
-// /api/v1/settings/dns-providers/ovh. Implements the preserve-on-
-// edit secret semantics (§5.4):
-//   - Endpoint: round-trips normally; an empty endpoint on PUT is
-//     a config error (rejected by the validator).
-//   - ApplicationKey / ApplicationSecret / ConsumerKey: empty on
-//     PUT preserves the previously stored value; non-empty
-//     overwrites. The merged DNSProviderConfig is then handed to
-//     storage.PutDNSProviderOVH which runs the strict last-line-
-//     of-defence validate() (all four fields non-empty + endpoint
-//     in the OVH enum).
-//
-// Audit: emits dns_provider_updated AFTER the storage write
-// succeeds. Both BeforeJSON and AfterJSON are scrubbed of the
-// three secret fields via dnsProviderForAudit — the audit log
-// holds the endpoint + the fact a change happened, never the
-// secret payload.
-func (h *Handler) putDNSProviderOVH(w http.ResponseWriter, r *http.Request) {
+// createDNSProvider serves POST /api/v1/settings/dns-providers.
+// 201 with the secret-free view on success; 400 with a structured
+// validation code on a bad body. Emits dns_provider_created (no
+// secrets in the audit row).
+func (h *Handler) createDNSProvider(w http.ResponseWriter, r *http.Request) {
 	var req dnsProviderRequest
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -144,149 +195,155 @@ func (h *Handler) putDNSProviderOVH(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
-
-	previous, prevErr := h.firstDNSProviderOVH(r)
-	if prevErr != nil && !errors.Is(prevErr, storage.ErrNotFound) {
-		h.logger.Error("get dns provider (update)", "err", prevErr)
-		writeError(w, http.StatusInternalServerError, "failed to load dns provider")
-		return
-	}
-
-	// Step J.4 erasure path: PUT with ALL FOUR fields blank means
-	// "de-configure the provider". Without this branch the
-	// preserve-on-edit merge below would carry the previous
-	// secrets forward and the operator would have no way to
-	// remove the OVH credentials from storage (the design intent
-	// stated explicitly in the recon: delete = PUT all blank).
-	// The cross-rule check above (no dns-01 route may exist
-	// when erasing) defers to the Caddy reload below: an
-	// erasure that leaves dns-01 routes orphaned fails caddy.Load
-	// → the operator gets the 500 + the storage rollback restores
-	// the previous credentials. Same single-rollback pattern as
-	// /routes mutations.
-	if req.Endpoint == "" &&
-		req.ApplicationKey == "" &&
-		req.ApplicationSecret == "" &&
-		req.ConsumerKey == "" {
-		if errors.Is(prevErr, storage.ErrNotFound) {
-			// Nothing to erase — return the same "not configured"
-			// response shape callers see on a fresh install.
-			writeJSON(w, http.StatusOK, dnsProviderResponse{})
-			return
-		}
-		if err := h.store.DeleteDNSProvider(r.Context(), previous.ID); err != nil {
-			h.logger.Error("delete dns provider", "err", err)
-			writeError(w, http.StatusInternalServerError, "failed to delete dns provider")
-			return
-		}
-		if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
-			h.logger.Error("caddy reload after dns provider erase — rolling back", "err", err)
-			if _, rbErr := h.store.CreateDNSProvider(r.Context(), previous); rbErr != nil {
-				h.logger.Error("rollback dns provider failed", "err", rbErr)
-			}
-			writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
-			return
-		}
-		h.appendAudit(r, audit.Event{
-			Action:     audit.ActionDNSProviderUpdated,
-			TargetType: "dns_provider",
-			TargetID:   "ovh",
-			BeforeJSON: mustMarshalForAudit(dnsProviderForAudit(previous)),
-			// AfterJSON intentionally nil — the row no longer
-			// exists; the audit diff carries "was X, now gone".
-		})
-		writeJSON(w, http.StatusOK, dnsProviderResponse{})
-		return
-	}
-
-	// Preserve-on-edit merge. Empty secret fields keep the previous
-	// value; non-empty overwrite. Endpoint always takes the
-	// supplied value — empty endpoint when not in the erasure
-	// path is rejected by validate (a config error per §5.4).
-	// Task 1a transitional: the collection struct carries Label + Type.
-	// Preserve the previous label if any, else a default; type is
-	// always "ovh" on this legacy endpoint. Task 1c replaces this whole
-	// handler with the label-aware collection API.
-	label := previous.Label
-	if label == "" {
-		label = "OVH"
-	}
-	merged := storage.DNSProviderConfig{
-		Label:             label,
-		Type:              storage.DNSProviderTypeOVH,
+	cfg := storage.DNSProviderConfig{
+		Label:             strings.TrimSpace(req.Label),
+		Type:              req.Type,
 		Endpoint:          req.Endpoint,
 		ApplicationKey:    req.ApplicationKey,
 		ApplicationSecret: req.ApplicationSecret,
 		ConsumerKey:       req.ConsumerKey,
 	}
-	if merged.ApplicationKey == "" {
-		merged.ApplicationKey = previous.ApplicationKey
+	created, err := h.store.CreateDNSProvider(r.Context(), cfg)
+	if err != nil {
+		writeDNSProviderValidationError(w, err)
+		return
 	}
-	if merged.ApplicationSecret == "" {
-		merged.ApplicationSecret = previous.ApplicationSecret
-	}
-	if merged.ConsumerKey == "" {
-		merged.ConsumerKey = previous.ConsumerKey
-	}
+	h.appendAudit(r, audit.Event{
+		Action:     audit.ActionDNSProviderCreated,
+		TargetType: "dns_provider",
+		TargetID:   created.ID,
+		AfterJSON:  mustMarshalForAudit(dnsProviderForAudit(created)),
+	})
+	writeJSON(w, http.StatusCreated, toDNSProviderView(created, nil))
+}
 
-	// Create a new row on a fresh install, else update the existing one
-	// (preserving its UUID). Both run storage validate().
+// updateDNSProvider serves PUT /api/v1/settings/dns-providers/{id}.
+// Preserve-on-edit: blank secret fields keep the stored value. 404
+// with code "provider_not_found" for an unknown id; 400 for a bad
+// body/validation. Emits dns_provider_updated (no secrets).
+func (h *Handler) updateDNSProvider(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req dnsProviderRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
+		return
+	}
+	previous, prevErr := h.store.GetDNSProvider(r.Context(), id)
 	if errors.Is(prevErr, storage.ErrNotFound) {
-		if _, err := h.store.CreateDNSProvider(r.Context(), merged); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	} else {
-		if _, err := h.store.UpdateDNSProvider(r.Context(), previous.ID, merged); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+		writeErrorCode(w, http.StatusNotFound, "provider_not_found",
+			"dns provider not found", map[string]any{"id": id})
+		return
 	}
+	if prevErr != nil {
+		h.logger.Error("get dns provider (update)", "err", prevErr)
+		writeError(w, http.StatusInternalServerError, "failed to load dns provider")
+		return
+	}
+	cfg := storage.DNSProviderConfig{
+		Label:             strings.TrimSpace(req.Label),
+		Type:              req.Type,
+		Endpoint:          req.Endpoint,
+		ApplicationKey:    req.ApplicationKey,
+		ApplicationSecret: req.ApplicationSecret,
+		ConsumerKey:       req.ConsumerKey,
+	}
+	updated, err := h.store.UpdateDNSProvider(r.Context(), id, cfg)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeErrorCode(w, http.StatusNotFound, "provider_not_found",
+			"dns provider not found", map[string]any{"id": id})
+		return
+	}
+	if err != nil {
+		writeDNSProviderValidationError(w, err)
+		return
+	}
+	h.appendAudit(r, audit.Event{
+		Action:     audit.ActionDNSProviderUpdated,
+		TargetType: "dns_provider",
+		TargetID:   id,
+		BeforeJSON: mustMarshalForAudit(dnsProviderForAudit(previous)),
+		AfterJSON:  mustMarshalForAudit(dnsProviderForAudit(updated)),
+	})
+	writeJSON(w, http.StatusOK, toDNSProviderView(updated, nil))
+}
 
-	// Reload Caddy so any existing dns-01 route picks up the new
-	// credentials at the next renewal. Same rollback pattern as
-	// /routes mutations: on failure, restore the previous row.
-	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
-		h.logger.Error("caddy reload after dns provider update — rolling back", "err", err)
-		if errors.Is(prevErr, storage.ErrNotFound) {
-			// No previous row to restore — leave the new write in
-			// place. A fresh install whose first PUT fails the
-			// reload would log here; the operator gets the 500
-			// below and can re-PUT.
-		} else {
-			if _, rbErr := h.store.UpdateDNSProvider(r.Context(), previous.ID, previous); rbErr != nil {
-				h.logger.Error("rollback dns provider failed", "err", rbErr)
-			}
-		}
-		writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
+// deleteDNSProvider serves DELETE /api/v1/settings/dns-providers/{id}.
+// 204 on success; 409 with code "provider_in_use" (+ params.wildcards)
+// when a managed domain still references it; 404 with code
+// "provider_not_found" for an unknown id. Emits dns_provider_deleted.
+func (h *Handler) deleteDNSProvider(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	// Read the row up front so the audit event carries the deleted
+	// endpoint/label (secret-scrubbed). ErrNotFound here → 404.
+	previous, prevErr := h.store.GetDNSProvider(r.Context(), id)
+	if errors.Is(prevErr, storage.ErrNotFound) {
+		writeErrorCode(w, http.StatusNotFound, "provider_not_found",
+			"dns provider not found", map[string]any{"id": id})
+		return
+	}
+	if prevErr != nil {
+		h.logger.Error("get dns provider (delete)", "err", prevErr)
+		writeError(w, http.StatusInternalServerError, "failed to load dns provider")
 		return
 	}
 
-	// Emit dns_provider_updated AFTER the reload succeeds. Audit
-	// payload is scrubbed of secrets — the endpoint and the
-	// before/after `configured` flag are recoverable from the
-	// blanked struct, the secrets are not.
-	evt := audit.Event{
-		Action:     audit.ActionDNSProviderUpdated,
-		TargetType: "dns_provider",
-		TargetID:   "ovh",
-		AfterJSON:  mustMarshalForAudit(dnsProviderForAudit(merged)),
+	err := h.store.DeleteDNSProvider(r.Context(), id)
+	switch {
+	case errors.Is(err, storage.ErrProviderInUse):
+		idx, ixErr := h.usedByIndex(r.Context())
+		if ixErr != nil {
+			h.logger.Error("list managed domains (in-use)", "err", ixErr)
+			writeError(w, http.StatusInternalServerError, "failed to load managed domains")
+			return
+		}
+		wildcards := idx[id]
+		if wildcards == nil {
+			wildcards = []string{}
+		}
+		// Structured error: the frontend (Plan 2) translates via
+		// t('errors.provider_in_use', { wildcards }) — the message here
+		// is an EN fallback only. code + params keep it i18n-able.
+		writeErrorCode(w, http.StatusConflict, "provider_in_use",
+			"dns provider is in use by: "+strings.Join(wildcards, ", "),
+			map[string]any{"wildcards": wildcards})
+		return
+	case errors.Is(err, storage.ErrNotFound):
+		writeErrorCode(w, http.StatusNotFound, "provider_not_found",
+			"dns provider not found", map[string]any{"id": id})
+		return
+	case err != nil:
+		h.logger.Error("delete dns provider", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to delete dns provider")
+		return
 	}
-	if !errors.Is(prevErr, storage.ErrNotFound) {
-		evt.BeforeJSON = mustMarshalForAudit(dnsProviderForAudit(previous))
-	}
-	h.appendAudit(r, evt)
 
-	// Response shape mirrors the GET — secrets redacted, configured
-	// flag reflects the new state. The frontend receives the
-	// truthful `configured: true` after a successful PUT and
-	// updates its badge without a separate GET.
-	resp := dnsProviderResponse{
-		Endpoint:          merged.Endpoint,
-		ApplicationKey:    "",
-		ApplicationSecret: "",
-		ConsumerKey:       "",
-		Configured:        dnsProviderComplete(merged),
+	h.appendAudit(r, audit.Event{
+		Action:     audit.ActionDNSProviderDeleted,
+		TargetType: "dns_provider",
+		TargetID:   id,
+		BeforeJSON: mustMarshalForAudit(dnsProviderForAudit(previous)),
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeDNSProviderValidationError maps a storage.validate() error to a
+// structured 400. storage.validate returns generic errors, so we detect
+// the failing field cheaply by substring and pick the most specific
+// code; the always-present EN `error` string is the fallback. The
+// baseline code is "invalid_dns_provider" with a {reason} param.
+func writeDNSProviderValidationError(w http.ResponseWriter, err error) {
+	msg := err.Error()
+	code := "invalid_dns_provider"
+	switch {
+	case strings.Contains(msg, "label"):
+		code = "invalid_label"
+	case strings.Contains(msg, "type"):
+		code = "invalid_type"
+	case strings.Contains(msg, "endpoint"):
+		code = "invalid_endpoint"
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeErrorCode(w, http.StatusBadRequest, code, msg, map[string]any{"reason": msg})
 }

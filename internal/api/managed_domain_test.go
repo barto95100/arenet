@@ -67,7 +67,10 @@ func TestManagedDomain_POST_Create_201_AndListReturnsIt(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Apex != "example.com" || !got.IncludeApex || got.Provider != "ovh" {
+	// v2.11: providerId is a config UUID, not a type string. With no
+	// provider configured, a legacy provider:"ovh" body resolves to an
+	// empty ProviderID (the sole-provider resolution finds nothing).
+	if got.Apex != "example.com" || !got.IncludeApex || got.ProviderID != "" {
 		t.Errorf("POST response = %+v", got)
 	}
 
@@ -127,9 +130,11 @@ func TestManagedDomain_POST_IncludeApex_Default_True(t *testing.T) {
 	}
 }
 
-// TestManagedDomain_POST_Provider_Default_OVH pins the D3.B
-// default value for the provider field when omitted.
-func TestManagedDomain_POST_Provider_Default_OVH(t *testing.T) {
+// TestManagedDomain_POST_NoProviderId_Unassigned pins the v2.11
+// default: omitting providerId (and any legacy provider) leaves the
+// managed domain unassigned (ProviderID == ""), which caddymgr treats
+// as the internal-CA fallback.
+func TestManagedDomain_POST_NoProviderId_Unassigned(t *testing.T) {
 	env := newTestEnv(t, false)
 
 	body := map[string]any{"apex": "example.com", "includeApex": true}
@@ -144,8 +149,8 @@ func TestManagedDomain_POST_Provider_Default_OVH(t *testing.T) {
 	}
 	var got managedDomainResponse
 	json.Unmarshal(rec.Body.Bytes(), &got)
-	if got.Provider != "ovh" {
-		t.Errorf("provider default should be ovh per D3.B, got %q", got.Provider)
+	if got.ProviderID != "" {
+		t.Errorf("providerId should be empty when unassigned, got %q", got.ProviderID)
 	}
 }
 
@@ -191,9 +196,13 @@ func TestManagedDomain_POST_Rejects_WildcardForm(t *testing.T) {
 	}
 }
 
-// TestManagedDomain_POST_Rejects_UnknownProvider pins the D3.B
-// enum check at the API layer.
-func TestManagedDomain_POST_Rejects_UnknownProvider(t *testing.T) {
+// TestManagedDomain_POST_LegacyUnknownProvider_Ignored pins the v2.11
+// contract change: `provider` is a legacy compat field, no longer a
+// type enum. Only provider:"ovh" triggers sole-provider resolution;
+// any other legacy value is ignored, leaving ProviderID empty (NOT a
+// 400). Existence validation now applies only to a non-empty
+// `providerId` (covered by TestManagedDomains_UnknownProviderId_Returns400).
+func TestManagedDomain_POST_LegacyUnknownProvider_Ignored(t *testing.T) {
 	env := newTestEnv(t, false)
 
 	body := map[string]any{"apex": "example.com", "includeApex": true, "provider": "cloudflare"}
@@ -203,8 +212,13 @@ func TestManagedDomain_POST_Rejects_UnknownProvider(t *testing.T) {
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("unknown provider: status=%d, want 400 — body=%s", rec.Code, rec.Body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("legacy unknown provider should be ignored: status=%d body=%s", rec.Code, rec.Body)
+	}
+	var got managedDomainResponse
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.ProviderID != "" {
+		t.Errorf("providerId should be empty (legacy value ignored), got %q", got.ProviderID)
 	}
 }
 
