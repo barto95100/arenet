@@ -184,6 +184,16 @@
 					}),
 					'danger',
 				);
+			} else if (err instanceof ApiError && err.code === 'provider_in_use_by_routes') {
+				const routes = Array.isArray(err.params?.routes)
+					? (err.params.routes as string[])
+					: [];
+				pushToast(
+					t('settings.dnsProviders.delete.error409Routes', {
+						routes: routes.join(', '),
+					}),
+					'danger',
+				);
 			} else {
 				const msg = err instanceof Error ? err.message : String(err);
 				pushToast(

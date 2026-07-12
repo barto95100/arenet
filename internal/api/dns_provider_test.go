@@ -498,3 +498,120 @@ func TestRouteCreate_DNS01_WithProvider_Accepts(t *testing.T) {
 		t.Errorf("response missing acmeChallenge=dns-01: %s", rec.Body)
 	}
 }
+
+// createDNS01Route POSTs a dns-01 route (a provider must already be
+// configured or the create is rejected 400).
+func createDNS01Route(t *testing.T, env *testEnv, host string) {
+	t.Helper()
+	body := `{"host":"` + host + `","upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],"lbPolicy":"round_robin","tlsEnabled":true,"acmeChallenge":"dns-01","wafMode":"off"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create dns-01 route %q: status=%d body=%s", host, rec.Code, rec.Body)
+	}
+}
+
+// Fix #1 — create / update / delete must reload Caddy so the live
+// config reflects the provider change (otherwise dns-01 hosts run on a
+// stale provider set).
+func TestDNSProviders_Create_ReloadsCaddy(t *testing.T) {
+	env := newTestEnv(t, false)
+	before := env.caddy.CallCount()
+	createProviderViaAPI(t, env, "OVH new")
+	if env.caddy.CallCount() <= before {
+		t.Errorf("create did not reload caddy (calls before=%d after=%d)", before, env.caddy.CallCount())
+	}
+}
+
+func TestDNSProviders_Update_ReloadsCaddy(t *testing.T) {
+	env := newTestEnv(t, false)
+	created := createProviderViaAPI(t, env, "OVH")
+	before := env.caddy.CallCount()
+	buf, _ := json.Marshal(map[string]string{"label": "OVH renamed", "type": "ovh", "endpoint": "ovh-ca"})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/dns-providers/"+created["id"].(string), strings.NewReader(string(buf)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", rec.Code, rec.Body)
+	}
+	if env.caddy.CallCount() <= before {
+		t.Errorf("update did not reload caddy (before=%d after=%d)", before, env.caddy.CallCount())
+	}
+}
+
+func TestDNSProviders_Delete_ReloadsCaddy(t *testing.T) {
+	env := newTestEnv(t, false)
+	created := createProviderViaAPI(t, env, "OVH")
+	before := env.caddy.CallCount()
+	rec := deleteRec(t, env, "/api/v1/settings/dns-providers/"+created["id"].(string))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", rec.Code, rec.Body)
+	}
+	if env.caddy.CallCount() <= before {
+		t.Errorf("delete did not reload caddy (before=%d after=%d)", before, env.caddy.CallCount())
+	}
+}
+
+// Fix #3 — deleting the last configured provider while dns-01 routes
+// depend on it must be blocked with a structured 409 naming the routes.
+func TestDNSProviders_DeleteBlockedByDNS01Routes_Returns409(t *testing.T) {
+	env := newTestEnv(t, false)
+	created := createProviderViaAPI(t, env, "OVH sole")
+	id := created["id"].(string)
+	createDNS01Route(t, env, "wild.example.com")
+
+	rec := deleteRec(t, env, "/api/v1/settings/dns-providers/"+id)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["code"] != "provider_in_use_by_routes" {
+		t.Errorf("code = %v, want provider_in_use_by_routes; body=%s", body["code"], rec.Body)
+	}
+	params, _ := body["params"].(map[string]any)
+	routes, _ := params["routes"].([]any)
+	found := false
+	for _, r := range routes {
+		if r == "wild.example.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("params.routes = %v, want to contain wild.example.com", routes)
+	}
+	// The provider must still exist (delete refused).
+	if getRec(t, env, "/api/v1/settings/dns-providers/"+id).Code != http.StatusOK {
+		t.Error("provider was deleted despite 409")
+	}
+}
+
+// Fix #3 predicate — deleting a SPARE provider while another configured
+// one remains is allowed even if dns-01 routes exist (default shifts).
+func TestDNSProviders_DeleteSpareProvider_AllowedWithDNS01Routes(t *testing.T) {
+	env := newTestEnv(t, false)
+	spare := createProviderViaAPI(t, env, "OVH spare")
+	createProviderViaAPI(t, env, "OVH keep")
+	createDNS01Route(t, env, "wild.example.com")
+
+	rec := deleteRec(t, env, "/api/v1/settings/dns-providers/"+spare["id"].(string))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (another provider remains); body=%s", rec.Code, rec.Body)
+	}
+}
+
+// Non-regression — no dns-01 route → deleting the only provider is fine.
+func TestDNSProviders_DeleteOnlyProvider_NoDNS01Routes_Allowed(t *testing.T) {
+	env := newTestEnv(t, false)
+	created := createProviderViaAPI(t, env, "OVH sole")
+
+	rec := deleteRec(t, env, "/api/v1/settings/dns-providers/"+created["id"].(string))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (no dns-01 route depends on it); body=%s", rec.Code, rec.Body)
+	}
+}
