@@ -167,6 +167,32 @@ describe('DNSProvidersSection', () => {
 		});
 	});
 
+	it('delete-blocked-by-routes: a 409 provider_in_use_by_routes surfaces the route hosts in the toast', async () => {
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
+			provider({ id: 'id-1', usedBy: [] }),
+		]);
+		settingsMock.settingsApi.deleteDNSProvider.mockRejectedValue(
+			new ApiError('in use by routes', 409, 'validation', undefined, 'provider_in_use_by_routes', {
+				routes: ['app.example.com', 'api.example.com'],
+			}),
+		);
+
+		render(DNSProvidersSection);
+		await waitFor(() => screen.getByTestId('dns-provider-delete-id-1'));
+		await userEvent.click(screen.getByTestId('dns-provider-delete-id-1'));
+		await waitFor(() =>
+			expect(screen.getByRole('button', { name: /^delete$/i })).toBeInTheDocument(),
+		);
+		await userEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+
+		await waitFor(() => {
+			const msgs = toastMock.pushToast.mock.calls.map((c) => String(c[0]));
+			expect(
+				msgs.some((m) => m.includes('app.example.com') && m.includes('api.example.com')),
+			).toBe(true);
+		});
+	});
+
 	it('delete-allowed: resolves, toasts success, refetches without the row', async () => {
 		settingsMock.settingsApi.listDNSProviders
 			.mockResolvedValueOnce([provider({ id: 'id-1', label: 'OVH perso' })])

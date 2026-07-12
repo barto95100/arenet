@@ -2185,6 +2185,18 @@ func buildTLSPolicies(partition acmePartition, opts buildOpts) []map[string]any 
 	if len(partition.DNS01) > 0 {
 		if prov, ok := defaultDNSProvider(opts.DNSProviders); ok {
 			policies = append(policies, buildACMEPolicy(partition.DNS01, opts, &prov))
+		} else {
+			// Fix #2 (v2.12.2): no configured DNS provider for these
+			// dns-01 hosts. They get NO ACME policy and fall through to
+			// the internal CA (self-signed). Before v2.12.2 this was
+			// silent; log it loudly so the drop is visible in the
+			// journal. The API delete-guard (Fix #3) prevents this via
+			// the normal flow, but import / manual-DB paths can still
+			// reach here.
+			slog.Warn("per-route DNS-01 hosts have no configured DNS provider; "+
+				"they will NOT get an ACME cert and fall back to the internal CA (self-signed) — "+
+				"configure a DNS provider in Settings",
+				"hosts", partition.DNS01)
 		}
 	}
 	policies = append(policies, managedPolicies...)

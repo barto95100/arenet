@@ -208,6 +208,13 @@ func (h *Handler) createDNSProvider(w http.ResponseWriter, r *http.Request) {
 		writeDNSProviderValidationError(w, err)
 		return
 	}
+	// Fix #1 (v2.12.2): reload so a newly-configured provider becomes
+	// usable by dns-01 routes in the live config immediately.
+	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
+		h.logger.Error("caddy reload after dns provider create", "err", err)
+		writeError(w, http.StatusInternalServerError, "provider created but caddy reload failed")
+		return
+	}
 	h.appendAudit(r, audit.Event{
 		Action:     audit.ActionDNSProviderCreated,
 		TargetType: "dns_provider",
@@ -259,6 +266,14 @@ func (h *Handler) updateDNSProvider(w http.ResponseWriter, r *http.Request) {
 		writeDNSProviderValidationError(w, err)
 		return
 	}
+	// Fix #1 (v2.12.2): reload so credential/endpoint edits take effect
+	// in the live config (otherwise Caddy keeps the old provider until
+	// an unrelated reload — the operator's fix is silently ignored).
+	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
+		h.logger.Error("caddy reload after dns provider update", "err", err)
+		writeError(w, http.StatusInternalServerError, "provider updated but caddy reload failed")
+		return
+	}
 	h.appendAudit(r, audit.Event{
 		Action:     audit.ActionDNSProviderUpdated,
 		TargetType: "dns_provider",
@@ -287,6 +302,28 @@ func (h *Handler) deleteDNSProvider(w http.ResponseWriter, r *http.Request) {
 	if prevErr != nil {
 		h.logger.Error("get dns provider (delete)", "err", prevErr)
 		writeError(w, http.StatusInternalServerError, "failed to load dns provider")
+		return
+	}
+
+	// Fix #3 (v2.12.2): block the delete when it would leave per-route
+	// dns-01 routes with NO configured provider remaining. Per-route
+	// DNS-01 has no per-route providerId (it uses the single default
+	// provider from the collection), so ANY dns-01 route depends on
+	// there being at least one configured provider. If removing THIS
+	// provider drops the configured count to zero while dns-01 routes
+	// exist, deleting would silently orphan them (Bug #1). Deleting a
+	// spare while another configured provider remains is safe — the
+	// default just shifts. Mirrors the managed-domain 409 posture.
+	orphaned, orphErr := h.dns01RoutesOrphanedByProviderDelete(r.Context(), id)
+	if orphErr != nil {
+		h.logger.Error("check dns-01 route dependency (provider delete)", "err", orphErr)
+		writeError(w, http.StatusInternalServerError, "failed to verify route dependencies")
+		return
+	}
+	if len(orphaned) > 0 {
+		writeErrorCode(w, http.StatusConflict, "provider_in_use_by_routes",
+			"dns provider is the last one configured and is used by dns-01 routes: "+strings.Join(orphaned, ", "),
+			map[string]any{"routes": orphaned})
 		return
 	}
 
@@ -320,6 +357,19 @@ func (h *Handler) deleteDNSProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fix #1 (v2.12.2): reload Caddy so the removed provider leaves the
+	// live config. Without this the running config keeps referencing the
+	// deleted provider until some other event reloads — at which point
+	// dns-01 hosts silently fall through to the internal CA. Mirrors
+	// forward_auth_provider.go. Storage is already mutated; a reload
+	// error is logged + surfaced (no rollback — consistency with the
+	// other settings handlers).
+	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
+		h.logger.Error("caddy reload after dns provider delete", "err", err)
+		writeError(w, http.StatusInternalServerError, "provider deleted but caddy reload failed")
+		return
+	}
+
 	h.appendAudit(r, audit.Event{
 		Action:     audit.ActionDNSProviderDeleted,
 		TargetType: "dns_provider",
@@ -327,6 +377,42 @@ func (h *Handler) deleteDNSProvider(w http.ResponseWriter, r *http.Request) {
 		BeforeJSON: mustMarshalForAudit(dnsProviderForAudit(previous)),
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// dns01RoutesOrphanedByProviderDelete returns the hosts of per-route
+// dns-01 routes that would be left with no configured DNS provider if
+// the provider `deleteID` were removed. Empty result → the delete is
+// safe (either no dns-01 routes, or another configured provider would
+// remain). Used by deleteDNSProvider to emit a 409 instead of silently
+// orphaning dns-01 routes (Fix #3, v2.12.2).
+func (h *Handler) dns01RoutesOrphanedByProviderDelete(ctx context.Context, deleteID string) ([]string, error) {
+	providers, err := h.store.ListDNSProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Would any configured provider survive the delete?
+	survivingConfigured := false
+	for _, p := range providers {
+		if p.ID != deleteID && dnsProviderComplete(p) {
+			survivingConfigured = true
+			break
+		}
+	}
+	if survivingConfigured {
+		return nil, nil // the default just shifts; safe
+	}
+	// No configured provider would remain — collect dependent dns-01 routes.
+	routes, err := h.store.ListRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var hosts []string
+	for _, rt := range routes {
+		if rt.ACMEChallenge == storage.ACMEChallengeDNS01 {
+			hosts = append(hosts, rt.Host)
+		}
+	}
+	return hosts, nil
 }
 
 // writeDNSProviderValidationError maps a storage.validate() error to a

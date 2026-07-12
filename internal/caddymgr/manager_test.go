@@ -17,6 +17,7 @@
 package caddymgr
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -3431,5 +3432,61 @@ func assertProviderEndpoint(t *testing.T, pol map[string]any, wantEndpoint, labe
 	provider, _ := dns["provider"].(map[string]any)
 	if provider["endpoint"] != wantEndpoint {
 		t.Errorf("%s: provider.endpoint = %v, want %q", label, provider["endpoint"], wantEndpoint)
+	}
+}
+
+// Fix #2 (v2.12.2): a per-route dns-01 host with NO configured DNS
+// provider must (a) NOT get a DNS-01 ACME policy and (b) emit a
+// slog.Warn naming the orphaned host — instead of silently falling
+// through to the internal CA.
+func TestBuildConfigJSON_DNS01_NoProvider_WarnsAndDrops(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	routes := []storage.Route{
+		{
+			ID: "r1", Host: "app.example.com",
+			Upstreams:     []storage.Upstream{{URL: "http://127.0.0.1:9001", Weight: 1}},
+			LBPolicy:      storage.LBPolicyRoundRobin,
+			TLSEnabled:    true,
+			ACMEChallenge: storage.ACMEChallengeDNS01,
+		},
+	}
+	// No DNSProviders in opts → the dns-01 host is orphaned.
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: false, ACMEEmail: "ops@example.com"})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	// (a) no ACME DNS-01 policy for app.example.com.
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	pols, _ := cfg["apps"].(map[string]any)["tls"].(map[string]any)["automation"].(map[string]any)["policies"].([]any)
+	for _, p := range pols {
+		pm, _ := p.(map[string]any)
+		subs, _ := pm["subjects"].([]any)
+		for _, s := range subs {
+			if s == "app.example.com" {
+				for _, iss := range pm["issuers"].([]any) {
+					im, _ := iss.(map[string]any)
+					if _, hasCh := im["challenges"]; hasCh {
+						t.Errorf("app.example.com got an ACME policy despite no provider: %v", pm)
+					}
+				}
+			}
+		}
+	}
+
+	// (b) a warning naming the orphaned host was emitted.
+	logged := buf.String()
+	if !strings.Contains(logged, "app.example.com") {
+		t.Errorf("expected a warning naming app.example.com; log=%s", logged)
+	}
+	if !strings.Contains(strings.ToLower(logged), "dns-01") && !strings.Contains(strings.ToLower(logged), "provider") {
+		t.Errorf("expected a dns-01/provider warning; log=%s", logged)
 	}
 }
