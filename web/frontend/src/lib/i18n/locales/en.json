@@ -85,7 +85,60 @@
     "reduceMotionEnabled": "Enabled",
     "reduceMotionDisabled": "Disabled",
     "reduceMotionHint": "(system preference)",
-    "changePassword": "Change password"
+    "changePassword": "Change password",
+    "dnsProviders": {
+      "title": "DNS Providers",
+      "subtitle": "DNS accounts used to issue wildcard certificates (ACME DNS-01).",
+      "table": {
+        "label": "Label",
+        "type": "Type",
+        "endpoint": "Endpoint",
+        "status": "Status",
+        "usedBy": "Used by",
+        "actions": "Actions",
+        "usedByNone": "—",
+        "addButton": "+ Add provider",
+        "emptyCta": "+ Add your first provider"
+      },
+      "modal": {
+        "addTitle": "Add DNS provider",
+        "editTitle": "Edit DNS provider",
+        "labelField": "Label",
+        "typeField": "Type",
+        "endpointField": "Endpoint",
+        "appKey": "Application key",
+        "appSecret": "Application secret",
+        "consumerKey": "Consumer key",
+        "secretsKeepHint": "Leave blank to keep the current value.",
+        "cancel": "Cancel",
+        "add": "Add",
+        "save": "Save",
+        "saving": "Saving…"
+      },
+      "validation": {
+        "labelRequired": "Label is required.",
+        "endpointRequired": "Endpoint is required."
+      },
+      "delete": {
+        "confirmTitle": "Delete DNS provider",
+        "confirmText": "This cannot be undone.",
+        "confirm": "Delete",
+        "cancel": "Cancel",
+        "error409": "Provider is in use by: {wildcards}. Reassign or remove those wildcards first.",
+        "errorGeneric": "Failed to delete provider: {err}"
+      },
+      "toast": {
+        "created": "DNS provider added.",
+        "updated": "DNS provider updated.",
+        "deleted": "DNS provider deleted."
+      },
+      "badge": {
+        "configured": "configured",
+        "notConfigured": "not configured"
+      },
+      "loadError": "Failed to load DNS providers: {err}",
+      "loading": "Loading DNS providers…"
+    }
   },
   "toast": {
     "savedSuccess": "Saved successfully",

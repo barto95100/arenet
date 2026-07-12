@@ -31,7 +31,6 @@ const { toastMock, apiMock, settingsMock, certsMock, securityMock } = vi.hoisted
 			listManagedDomains: vi.fn(),
 			createManagedDomain: vi.fn(),
 			deleteManagedDomain: vi.fn(),
-			getDNSProviderOVH: vi.fn(),
 			listDNSProviders: vi.fn(),
 		},
 	},
@@ -146,7 +145,6 @@ beforeEach(() => {
 	settingsMock.settingsApi.listManagedDomains.mockReset();
 	settingsMock.settingsApi.createManagedDomain.mockReset();
 	settingsMock.settingsApi.deleteManagedDomain.mockReset();
-	settingsMock.settingsApi.getDNSProviderOVH.mockReset();
 	settingsMock.settingsApi.listDNSProviders.mockReset();
 	certsMock.certificatesApi.list.mockReset();
 	securityMock.fetchCertEvents.mockReset();
@@ -157,15 +155,10 @@ beforeEach(() => {
 	settingsMock.settingsApi.listManagedDomains.mockResolvedValue({
 		domains: [],
 	});
-	settingsMock.settingsApi.getDNSProviderOVH.mockResolvedValue({
-		endpoint: 'ovh-eu',
-		applicationKey: '',
-		applicationSecret: '',
-		consumerKey: '',
-		configured: true,
-	});
-	// The wildcard wizard now fetches its provider dropdown from this
-	// collection endpoint. Default: one configured OVH provider.
+	// The DNS-provider warning gate + the wildcard wizard dropdown
+	// both read this collection endpoint. Default: one configured
+	// OVH provider (so the "unconfigured" warning stays hidden and
+	// the wizard has a providerId).
 	settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
 		{
 			id: 'id-1',
@@ -252,12 +245,12 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 				{
 					apex: 'example.com',
 					includeApex: true,
-					provider: 'ovh',
+					providerId: 'id-1',
 				},
 				{
 					apex: 'other.example',
 					includeApex: false,
-					provider: 'ovh',
+					providerId: 'id-1',
 				},
 			],
 		});
@@ -285,7 +278,7 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 		settingsMock.settingsApi.createManagedDomain.mockResolvedValue({
 			apex: 'new.example',
 			includeApex: true,
-			provider: 'ovh',
+			providerId: 'id-1',
 		});
 
 		render(Page);
@@ -328,7 +321,7 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 		settingsMock.settingsApi.createManagedDomain.mockResolvedValue({
 			apex: 'new.example',
 			includeApex: true,
-			provider: 'ovh',
+			providerId: 'id-1',
 		});
 		// First call (page load): empty. Second call (after
 		// wizard onCreated): the new policy. Reflects the
@@ -337,7 +330,7 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 			.mockResolvedValueOnce({ domains: [] })
 			.mockResolvedValueOnce({
 				domains: [
-					{ apex: 'new.example', includeApex: true, provider: 'ovh' },
+					{ apex: 'new.example', includeApex: true, providerId: 'id-1' },
 				],
 			});
 
@@ -379,7 +372,7 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 				{
 					apex: 'example.com',
 					includeApex: true,
-					provider: 'ovh',
+					providerId: 'id-1',
 				},
 			],
 		});
@@ -412,14 +405,19 @@ describe('/certs — managed-domains editor (migrated from /settings in #R-6 Pac
 });
 
 describe('/certs — DNS-provider-unconfigured warning', () => {
-	it('renders the warning when configured=false', async () => {
-		settingsMock.settingsApi.getDNSProviderOVH.mockResolvedValue({
-			endpoint: '',
-			applicationKey: '',
-			applicationSecret: '',
-			consumerKey: '',
-			configured: false,
-		});
+	it('renders the warning when no provider is configured', async () => {
+		// v2.12 — the warning gate reads listDNSProviders; a
+		// not-configured collection trips it.
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
+			{
+				id: 'id-1',
+				label: 'OVH perso',
+				type: 'ovh',
+				endpoint: 'ovh-eu',
+				configured: false,
+				usedBy: [],
+			},
+		]);
 
 		render(Page);
 		// Wait until the editor is mounted (post-load) — the
@@ -437,9 +435,9 @@ describe('/certs — DNS-provider-unconfigured warning', () => {
 		).toBeInTheDocument();
 	});
 
-	it('hides the warning when configured=true', async () => {
-		// Default beforeEach sets configured=true; this test
-		// pins the negative-path explicitly.
+	it('hides the warning when a provider is configured', async () => {
+		// Default beforeEach lists one configured provider; this
+		// test pins the negative-path explicitly.
 		render(Page);
 		// Wait until the editor is mounted (post-load) — the
 		// submit button is the most stable signal because it's
@@ -508,7 +506,7 @@ describe('/certs — runtime KPI cards (T.4)', () => {
 
 	it('Méthode ACME flips to DNS-01 when at least one managed domain is declared', async () => {
 		settingsMock.settingsApi.listManagedDomains.mockResolvedValue({
-			domains: [{ apex: 'example.com', includeApex: true, provider: 'ovh' }],
+			domains: [{ apex: 'example.com', includeApex: true, providerId: 'id-1' }],
 		});
 		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
 		render(Page);

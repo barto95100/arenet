@@ -723,34 +723,6 @@ export interface CountryBlockRequest {
 }
 
 /**
- * Step J.4 — instance-level DNS provider configuration for the OVH
- * provider (v1.0 supports OVH only). The three secret fields are
- * always emitted as empty strings on the wire (server-side
- * redaction, like the Step I.5 BasicAuthPasswordHash). Configured
- * is the single status flag the UI binds to.
- */
-export interface DNSProviderOVH {
-	endpoint: string;
-	applicationKey: string; // always "" on the wire (redacted)
-	applicationSecret: string; // always "" on the wire (redacted)
-	consumerKey: string; // always "" on the wire (redacted)
-	configured: boolean;
-}
-
-/**
- * Step J.4 — wire shape for PUT /api/v1/settings/dns-providers/ovh.
- * Empty secret fields trigger the preserve-on-edit path (the
- * stored value is kept); non-empty overwrites. Endpoint must be
- * non-empty and one of the seven OVH region IDs.
- */
-export interface DNSProviderOVHRequest {
-	endpoint: string;
-	applicationKey: string;
-	applicationSecret: string;
-	consumerKey: string;
-}
-
-/**
  * v2.12 — multi-config DNS provider view (no secrets on the wire).
  * The backend returns one row per configured provider; `configured`
  * reflects whether the secrets are present, and `usedBy` lists the
@@ -803,9 +775,10 @@ export const OVH_ENDPOINTS: readonly string[] = [
  * whose host is `<single-label>.<apex>` (plus the bare apex
  * when `includeApex` is true, per spec D2.C).
  *
- * The `provider` enum value space is currently {"ovh"} (D3.B
- * forward-compat); future Cloudflare / Route53 additions are
- * additive without migration.
+ * v2.12 — `providerId` references a row in the multi-config DNS
+ * provider collection (DNSProvider.id); the pre-v2.12 `provider`
+ * enum was removed when the singleton OVH config became a
+ * collection.
  */
 export interface ManagedDomain {
 	apex: string;
@@ -817,22 +790,15 @@ export interface ManagedDomain {
  * Step O.1 — POST /api/v1/settings/managed-domains body shape.
  * `includeApex` is optional on the wire (the backend defaults
  * to `true` per spec D2.C when the field is omitted);
- * `provider` defaults to "ovh" when omitted.
+ * `providerId` references a row in the DNS provider collection
+ * (v2.12) — the backend picks the sole provider when omitted and
+ * exactly one is configured.
  */
 export interface ManagedDomainRequest {
 	apex: string;
 	includeApex?: boolean;
 	providerId?: string;
 }
-
-/**
- * Step O.1 — managed-domain provider enum. v1.2 value space is
- * {"ovh"}; the type is open-ended (`string` widened via the
- * union below) so future Cloudflare / Route53 values don't
- * require a frontend type rebuild at the same time as the
- * backend enum extension.
- */
-export type ManagedDomainProvider = 'ovh';
 
 /**
  * Step O.3 — GET /api/v1/settings/managed-domains envelope.
