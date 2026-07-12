@@ -32,6 +32,24 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
+// writeErrorCode emits a structured, i18n-able error:
+//
+//	{"error":"<EN fallback>","code":"<machine_code>","params":{...}}
+//
+// The frontend translates via t('errors.'+code, params); `error` is a
+// non-localized fallback for logs / non-UI consumers. Use this for any
+// user-facing error whose text carries data (names, counts). Plain
+// writeError stays for internal / non-translated cases.
+func writeErrorCode(w http.ResponseWriter, status int, code, message string, params map[string]any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	body := map[string]any{"error": message, "code": code}
+	if len(params) > 0 {
+		body["params"] = params
+	}
+	_ = json.NewEncoder(w).Encode(body)
+}
+
 // writeJSON serializes v as JSON with the given status. The encoder error
 // (if any) is silently discarded: WriteHeader has already committed the
 // status line so a fallback response is no longer possible. This is safe

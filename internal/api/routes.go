@@ -351,9 +351,14 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// routes_test_upstream.go for the SSRF posture
 				// rationale).
 				r.Post("/routes/test-upstream", h.testUpstream)
-				// Step J.4 — DNS provider config.
-				r.Get("/settings/dns-providers/ovh", h.getDNSProviderOVH)
-				r.Put("/settings/dns-providers/ovh", h.putDNSProviderOVH)
+				// v2.11 — DNS provider collection (UUID-keyed,
+				// multi-config). Replaces the pre-v2.11 singleton
+				// /settings/dns-providers/ovh GET/PUT.
+				r.Get("/settings/dns-providers", h.listDNSProviders)
+				r.Post("/settings/dns-providers", h.createDNSProvider)
+				r.Get("/settings/dns-providers/{id}", h.getDNSProvider)
+				r.Put("/settings/dns-providers/{id}", h.updateDNSProvider)
+				r.Delete("/settings/dns-providers/{id}", h.deleteDNSProvider)
 				// Step K.1 — forward-auth provider CRUD.
 				r.Get("/settings/forward-auth/providers", h.listForwardAuthProviders)
 				r.Post("/settings/forward-auth/providers", h.createForwardAuthProvider)
@@ -1167,13 +1172,13 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ACMEChallenge == storage.ACMEChallengeDNS01 {
-		cfg, err := h.store.GetDNSProviderOVH(r.Context())
-		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		configured, err := h.anyDNSProviderConfigured(r.Context())
+		if err != nil {
 			h.logger.Error("read dns provider", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to verify dns provider")
 			return
 		}
-		if errors.Is(err, storage.ErrNotFound) || !dnsProviderComplete(cfg) {
+		if !configured {
 			writeError(w, http.StatusBadRequest,
 				"acmeChallenge \"dns-01\" requires a configured DNS provider — see Settings")
 			return
@@ -1625,13 +1630,13 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ACMEChallenge == storage.ACMEChallengeDNS01 {
-		cfg, err := h.store.GetDNSProviderOVH(r.Context())
-		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		configured, err := h.anyDNSProviderConfigured(r.Context())
+		if err != nil {
 			h.logger.Error("read dns provider (update)", "err", err)
 			writeError(w, http.StatusInternalServerError, "failed to verify dns provider")
 			return
 		}
-		if errors.Is(err, storage.ErrNotFound) || !dnsProviderComplete(cfg) {
+		if !configured {
 			writeError(w, http.StatusBadRequest,
 				"acmeChallenge \"dns-01\" requires a configured DNS provider — see Settings")
 			return

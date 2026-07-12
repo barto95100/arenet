@@ -64,6 +64,13 @@ const (
 	// site; tests in actions_test.go pin the enum count.
 	ActionDNSProviderUpdated = "dns_provider_updated"
 
+	// v2.11 multi-config DNS providers (+2) — the singleton OVH
+	// endpoint became a UUID-keyed collection (Task 1c). Create and
+	// delete join the pre-existing dns_provider_updated. No secrets
+	// are ever written to the audit row (endpoint + label only).
+	ActionDNSProviderCreated = "dns_provider_created"
+	ActionDNSProviderDeleted = "dns_provider_deleted"
+
 	// Step K.1 — forward-auth provider (2)
 	ActionForwardAuthProviderUpdated = "forward_auth_provider_updated"
 	ActionForwardAuthProviderDeleted = "forward_auth_provider_deleted"
@@ -82,7 +89,7 @@ const (
 	// deleted user's wire response and AfterJSON empty. The
 	// last-admin guard rejects deletes of the only local
 	// admin before this audit ever fires.
-	ActionUserDeleted               = "user_deleted"
+	ActionUserDeleted = "user_deleted"
 
 	// Phase 4 — service-account lifecycle (3 actions). The plain
 	// token is NEVER recorded in BeforeJSON / AfterJSON; only the
@@ -234,6 +241,8 @@ var allActions = []string{
 	ActionPasswordHIBPPending,
 	ActionPasswordCompromisedDetected,
 	ActionDNSProviderUpdated,
+	ActionDNSProviderCreated,
+	ActionDNSProviderDeleted,
 	ActionForwardAuthProviderUpdated,
 	ActionForwardAuthProviderDeleted,
 	ActionOIDCConfigured,

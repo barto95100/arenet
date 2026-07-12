@@ -172,6 +172,18 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	}()
 	logger.Info("storage opened", "path", dbPath)
 
+	// One-shot boot migration: convert the pre-v2.11 singleton OVH DNS
+	// provider (fixed "ovh" key) into the UUID-keyed collection and
+	// repoint any managed domain that still references the legacy value.
+	// Idempotent by state (no-op once migrated / on a fresh install) and
+	// non-fatal: a migration error is logged and boot continues with
+	// whatever is in storage, so a migration bug never bricks startup.
+	if migrated, err := store.MigrateLegacyDNSProvider(ctx); err != nil {
+		logger.Error("dns provider migration failed", "err", err)
+	} else if migrated {
+		logger.Info("migrated legacy OVH DNS provider config to multi-config format")
+	}
+
 	if cfg.InsertTestRoute {
 		if err := ensureTestRoute(ctx, logger, store); err != nil {
 			return err
@@ -1668,14 +1680,23 @@ func storeDNS01Inconsistency(ctx context.Context, store *storage.Store) (bool, b
 	if !anyDNS01 {
 		return false, true, nil
 	}
-	cfg, err := store.GetDNSProviderOVH(ctx)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+	// Task 1a transitional: the singleton provider became a UUID-keyed
+	// collection. "providerOK" now means at least one fully-configured
+	// provider exists in the collection.
+	providers, err := store.ListDNSProviders(ctx)
+	if err != nil {
 		return anyDNS01, false, err
 	}
-	providerOK := cfg.Endpoint != "" &&
-		cfg.ApplicationKey != "" &&
-		cfg.ApplicationSecret != "" &&
-		cfg.ConsumerKey != ""
+	providerOK := false
+	for _, cfg := range providers {
+		if cfg.Endpoint != "" &&
+			cfg.ApplicationKey != "" &&
+			cfg.ApplicationSecret != "" &&
+			cfg.ConsumerKey != "" {
+			providerOK = true
+			break
+		}
+	}
 	return anyDNS01, providerOK, nil
 }
 

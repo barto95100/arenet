@@ -26,6 +26,7 @@ import (
 
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
+	"github.com/google/uuid"
 )
 
 // Step K.3 backup/restore tests — the security-critical surfaces
@@ -508,6 +509,265 @@ func TestExportImport_RoundTrip_IncludeSecrets(t *testing.T) {
 	if usersAfter[0].PasswordHash == SentinelLiteral {
 		t.Errorf("SENTINEL LEAK: user password_hash equals sentinel after include-secrets round-trip")
 	}
+}
+
+// ============================================================
+// (10) Multi-config DNS provider collection round-trip (Task 1e)
+// ============================================================
+
+// TestExportImport_DNSProviders_Roundtrip_TwoProviders is the
+// anti-regression pin for the import.go re-keying bug: before the fix
+// buildRestoreInput stored every provider under the fixed literal key
+// "ovh", so a 2-provider backup collapsed to 1 on restore. It must
+// round-trip BOTH providers, each under its own UUID, with labels /
+// endpoints / secrets intact.
+func TestExportImport_DNSProviders_Roundtrip_TwoProviders(t *testing.T) {
+	srcStore, srcUS := newTestStoreWithUserStore(t)
+	ctx := context.Background()
+	// A user is required for a non-empty-users import (AC #15).
+	_ = seedLiveUser(t, srcUS, "admin", "admin-password-15c-x")
+
+	pA, err := srcStore.CreateDNSProvider(ctx, storage.DNSProviderConfig{
+		Label: "OVH perso", Type: "ovh", Endpoint: "ovh-eu",
+		ApplicationKey: "akA", ApplicationSecret: "asA", ConsumerKey: "ckA",
+	})
+	if err != nil {
+		t.Fatalf("create provider A: %v", err)
+	}
+	pB, err := srcStore.CreateDNSProvider(ctx, storage.DNSProviderConfig{
+		Label: "OVH pro", Type: "ovh", Endpoint: "ovh-ca",
+		ApplicationKey: "akB", ApplicationSecret: "asB", ConsumerKey: "ckB",
+	})
+	if err != nil {
+		t.Fatalf("create provider B: %v", err)
+	}
+
+	snap, err := Export(ctx, srcStore, srcUS, "test", true)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if len(snap.DNSProviders) != 2 {
+		t.Fatalf("exported %d providers, want 2", len(snap.DNSProviders))
+	}
+
+	dstStore, dstUS := newTestStoreWithUserStore(t)
+	if _, err := Import(ctx, dstStore, dstUS, snap, ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	list, err := dstStore.ListDNSProviders(ctx)
+	if err != nil {
+		t.Fatalf("list after import: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("MULTI-CONFIG RESTORE REGRESSION: imported %d providers, want 2 (the import.go re-keying bug drops all but one)", len(list))
+	}
+
+	byID := map[string]storage.DNSProviderConfig{}
+	for _, p := range list {
+		byID[p.ID] = p
+	}
+	gotA, ok := byID[pA.ID]
+	if !ok {
+		t.Fatalf("provider A (id=%s) missing after import; got ids %v", pA.ID, keysOf(byID))
+	}
+	if gotA.Label != "OVH perso" || gotA.Endpoint != "ovh-eu" || gotA.ApplicationKey != "akA" || gotA.ApplicationSecret != "asA" || gotA.ConsumerKey != "ckA" {
+		t.Errorf("provider A round-trip mismatch: %+v", gotA)
+	}
+	gotB, ok := byID[pB.ID]
+	if !ok {
+		t.Fatalf("provider B (id=%s) missing after import; got ids %v", pB.ID, keysOf(byID))
+	}
+	if gotB.Label != "OVH pro" || gotB.Endpoint != "ovh-ca" || gotB.ApplicationKey != "akB" || gotB.ApplicationSecret != "asB" || gotB.ConsumerKey != "ckB" {
+		t.Errorf("provider B round-trip mismatch: %+v", gotB)
+	}
+}
+
+// ============================================================
+// (11) Pre-v2.11 backup import — empty-ID provider row
+// ============================================================
+
+// TestImport_PreV211Provider_EmptyID_GetsUUIDAndDefaultLabel pins the
+// backward-compat path: an old singleton backup carries one
+// DNSProviderConfig with an EMPTY ID (pre-Task-1a format). The import
+// fix assigns a fresh UUID and defaults Label/Type so the imported row
+// is a valid collection entry directly (no reliance on a second boot
+// migration pass — managed domains aren't even part of the snapshot).
+func TestImport_PreV211Provider_EmptyID_GetsUUIDAndDefaultLabel(t *testing.T) {
+	dstStore, dstUS := newTestStoreWithUserStore(t)
+	ctx := context.Background()
+
+	snap := minimalSnapshot()
+	snap.Users = []auth.User{seedFakeUser("u-1", "$argon2id$hash")}
+	// Old singleton row: no ID, no Label, no Type — just endpoint + secrets.
+	snap.DNSProviders = []storage.DNSProviderConfig{
+		{Endpoint: "ovh-eu", ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck"},
+	}
+
+	if _, err := Import(ctx, dstStore, dstUS, snap, ImportOptions{}); err != nil {
+		t.Fatalf("import pre-v2.11 backup: %v", err)
+	}
+
+	list, err := dstStore.ListDNSProviders(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("imported %d providers, want 1", len(list))
+	}
+	got := list[0]
+	if got.ID == "" {
+		t.Fatalf("pre-v2.11 provider was not assigned a UUID: %+v", got)
+	}
+	if _, err := uuid.Parse(got.ID); err != nil {
+		t.Errorf("assigned ID %q is not a valid UUID: %v", got.ID, err)
+	}
+	if got.Label != "OVH (default)" || got.Type != "ovh" {
+		t.Errorf("pre-v2.11 provider not defaulted to a valid entry: %+v", got)
+	}
+	if got.ApplicationKey != "ak" || got.ApplicationSecret != "as" || got.ConsumerKey != "ck" {
+		t.Errorf("secrets not carried over: %+v", got)
+	}
+
+	// The row is retrievable by its assigned ID.
+	fetched, err := dstStore.GetDNSProvider(ctx, got.ID)
+	if err != nil {
+		t.Fatalf("GetDNSProvider(%s): %v", got.ID, err)
+	}
+	if fetched.ID != got.ID {
+		t.Errorf("GetDNSProvider id = %q, want %q", fetched.ID, got.ID)
+	}
+
+	// End-to-end wildcard link: a managed domain pointing at the newly
+	// assigned provider ID resolves to a real provider (managed domains
+	// are not part of the backup snapshot, so we seed it against the
+	// imported provider's UUID and verify the reference is live).
+	if err := dstStore.PutManagedDomain(ctx, storage.ManagedDomain{Apex: "example.com", ProviderID: got.ID}); err != nil {
+		t.Fatalf("PutManagedDomain: %v", err)
+	}
+	md, err := dstStore.GetManagedDomain(ctx, "example.com")
+	if err != nil {
+		t.Fatalf("GetManagedDomain: %v", err)
+	}
+	if md.ProviderID != got.ID {
+		t.Fatalf("managed domain ProviderID = %q, want %q", md.ProviderID, got.ID)
+	}
+	if _, err := dstStore.GetDNSProvider(ctx, md.ProviderID); err != nil {
+		t.Errorf("wildcard link dangling: provider %q not resolvable: %v", md.ProviderID, err)
+	}
+}
+
+// ============================================================
+// (12) Sentinel / secret resolution survives ID keying (Step K.3)
+// ============================================================
+
+// TestImport_DNSProvider_SentinelInheritsByID confirms the pre-existing
+// preserve-on-ID-match behaviour still works now that import keys by ID:
+// includeSecrets=false against a live store that already holds the
+// provider's secrets → secrets inherited (not cleared, not the literal).
+func TestImport_DNSProvider_SentinelInheritsByID(t *testing.T) {
+	store, us := newTestStoreWithUserStore(t)
+	ctx := context.Background()
+	_ = seedLiveUser(t, us, "admin", "admin-password-15c-x")
+
+	live, err := store.CreateDNSProvider(ctx, storage.DNSProviderConfig{
+		Label: "OVH perso", Type: "ovh", Endpoint: "ovh-eu",
+		ApplicationKey: "live-ak", ApplicationSecret: "live-as", ConsumerKey: "live-ck",
+	})
+	if err != nil {
+		t.Fatalf("seed live provider: %v", err)
+	}
+
+	// A redacted (secrets-excluded) snapshot: same provider ID, sentinel
+	// in every secret field. Import must inherit the live secrets.
+	snap := minimalSnapshot()
+	snap.SecretsIncluded = false
+	snap.Users = []auth.User{seedFakeUser("u-1", "$argon2id$hash")}
+	snap.DNSProviders = []storage.DNSProviderConfig{
+		{ID: live.ID, Label: "OVH perso", Type: "ovh", Endpoint: "ovh-eu",
+			ApplicationKey: SentinelLiteral, ApplicationSecret: SentinelLiteral, ConsumerKey: SentinelLiteral},
+	}
+
+	report, err := Import(ctx, store, us, snap, ImportOptions{})
+	if err != nil {
+		t.Fatalf("import with sentinel inherit: %v", err)
+	}
+	if report.SentinelsInheritedTotal < 3 {
+		t.Errorf("expected >=3 inherited sentinels (3 secret fields), got %d", report.SentinelsInheritedTotal)
+	}
+
+	got, err := store.GetDNSProvider(ctx, live.ID)
+	if err != nil {
+		t.Fatalf("get after import: %v", err)
+	}
+	if got.ApplicationKey != "live-ak" || got.ApplicationSecret != "live-as" || got.ConsumerKey != "live-ck" {
+		t.Errorf("SENTINEL LEAK/LOSS: secrets not inherited by ID: %+v", got)
+	}
+}
+
+// TestImport_DNSProvider_SentinelUnresolved_Rejects confirms the loud-fail
+// path: includeSecrets=false, NO live secret to inherit (fresh-ish target
+// with a user present so pre-flight skips) → the whole import rejects with
+// the typed unresolved-sentinel error (no --allow-incomplete-restore).
+func TestImport_DNSProvider_SentinelUnresolved_Rejects(t *testing.T) {
+	store, us := newTestStoreWithUserStore(t)
+	ctx := context.Background()
+	// Seed a user so isFresh()==false (pre-flight skips), but NO live
+	// DNS provider → nothing to inherit for the snapshot's provider.
+	_ = seedLiveUser(t, us, "admin", "admin-password-15c-x")
+
+	snap := minimalSnapshot()
+	snap.SecretsIncluded = false
+	snap.Users = []auth.User{seedFakeUser("u-1", "$argon2id$hash")}
+	snap.DNSProviders = []storage.DNSProviderConfig{
+		{ID: uuid.NewString(), Label: "OVH perso", Type: "ovh", Endpoint: "ovh-eu",
+			ApplicationKey: SentinelLiteral, ApplicationSecret: SentinelLiteral, ConsumerKey: SentinelLiteral},
+	}
+
+	_, err := Import(ctx, store, us, snap, ImportOptions{})
+	if err == nil {
+		t.Fatal("expected unresolved-sentinel rejection, got nil")
+	}
+	if !IsUnresolvedSentinelError(err) {
+		t.Errorf("err = %v, want an unresolved-sentinel error", err)
+	}
+}
+
+// ============================================================
+// (13) Schema version — no MAJOR bump for the collection change
+// ============================================================
+
+func TestExport_DNSCollection_SchemaVersionUnchanged(t *testing.T) {
+	srcStore, srcUS := newTestStoreWithUserStore(t)
+	ctx := context.Background()
+	_ = seedLiveUser(t, srcUS, "admin", "admin-password-15c-x")
+	_, _ = srcStore.CreateDNSProvider(ctx, storage.DNSProviderConfig{
+		Label: "OVH", Type: "ovh", Endpoint: "ovh-eu",
+		ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck",
+	})
+
+	snap, err := Export(ctx, srcStore, srcUS, "test", true)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if snap.SchemaVersion != "1.0.0" {
+		t.Errorf("SchemaVersion = %q, want 1.0.0 (no MAJOR bump for the DNS collection change)", snap.SchemaVersion)
+	}
+
+	// A snapshot carrying SchemaMajor "1" imports cleanly.
+	dstStore, dstUS := newTestStoreWithUserStore(t)
+	if _, err := Import(ctx, dstStore, dstUS, snap, ImportOptions{}); err != nil {
+		t.Fatalf("import of SchemaMajor-1 snapshot: %v", err)
+	}
+}
+
+// keysOf returns the map keys, for diagnostic assertions.
+func keysOf(m map[string]storage.DNSProviderConfig) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // ============================================================

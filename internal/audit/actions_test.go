@@ -25,9 +25,9 @@ import "testing"
 // actions without updating the spec / decisions doc is a process
 // violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 52
+	const wantCount = 54
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3 + R=3)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + v2.11-dns=2 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3 + R=3)", got, wantCount)
 	}
 }
 
@@ -91,6 +91,9 @@ func TestAllActions_ExactSet(t *testing.T) {
 		"password_hibp_pending":         true,
 		"password_compromised_detected": true,
 		"dns_provider_updated":          true,
+		// v2.11 multi-config DNS providers (+2).
+		"dns_provider_created":          true,
+		"dns_provider_deleted":          true,
 		"forward_auth_provider_updated": true,
 		"forward_auth_provider_deleted": true,
 		"oidc_configured":               true,

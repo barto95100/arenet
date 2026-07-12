@@ -50,50 +50,48 @@ func TestManagedDomain_Validate(t *testing.T) {
 	}{
 		{
 			name: "valid minimal",
-			md:   ManagedDomain{Apex: "example.com", Provider: "ovh"},
+			md:   ManagedDomain{Apex: "example.com", ProviderID: "ovh"},
 		},
 		{
 			name: "valid with includeApex",
-			md:   ManagedDomain{Apex: "example.com", IncludeApex: true, Provider: "ovh"},
+			md:   ManagedDomain{Apex: "example.com", IncludeApex: true, ProviderID: "ovh"},
 		},
 		{
 			name: "valid single-label apex (homelab .lan)",
-			md:   ManagedDomain{Apex: "lan", Provider: "ovh"},
+			md:   ManagedDomain{Apex: "lan", ProviderID: "ovh"},
 		},
 		{
 			name:    "empty apex rejected",
-			md:      ManagedDomain{Provider: "ovh"},
+			md:      ManagedDomain{ProviderID: "ovh"},
 			wantErr: "apex must not be empty",
 		},
 		{
 			name:    "wildcard form rejected",
-			md:      ManagedDomain{Apex: "*.example.com", Provider: "ovh"},
+			md:      ManagedDomain{Apex: "*.example.com", ProviderID: "ovh"},
 			wantErr: `not the wildcard form`,
 		},
 		{
 			name:    "uppercase rejected (not canonical)",
-			md:      ManagedDomain{Apex: "Example.com", Provider: "ovh"},
+			md:      ManagedDomain{Apex: "Example.com", ProviderID: "ovh"},
 			wantErr: "not in canonical form",
 		},
 		{
 			name:    "trailing dot rejected (not canonical)",
-			md:      ManagedDomain{Apex: "example.com.", Provider: "ovh"},
+			md:      ManagedDomain{Apex: "example.com.", ProviderID: "ovh"},
 			wantErr: "not in canonical form",
 		},
 		{
 			name:    "invalid hostname chars rejected",
-			md:      ManagedDomain{Apex: "ex_ample.com", Provider: "ovh"},
+			md:      ManagedDomain{Apex: "ex_ample.com", ProviderID: "ovh"},
 			wantErr: "valid RFC 1123 hostname",
 		},
 		{
-			name:    "empty provider rejected",
-			md:      ManagedDomain{Apex: "example.com"},
-			wantErr: "not a recognised DNS provider",
+			name: "empty providerID accepted (unassigned → internal CA)",
+			md:   ManagedDomain{Apex: "example.com"},
 		},
 		{
-			name:    "unknown provider rejected (D3.B forward-compat enum)",
-			md:      ManagedDomain{Apex: "example.com", Provider: "cloudflare"},
-			wantErr: "not a recognised DNS provider",
+			name: "arbitrary providerID accepted (existence checked at API layer)",
+			md:   ManagedDomain{Apex: "example.com", ProviderID: "any-uuid-like-string"},
 		},
 	}
 	for _, c := range cases {
@@ -119,7 +117,7 @@ func TestManagedDomain_PutGet_Roundtrip(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	md := ManagedDomain{Apex: "example.com", IncludeApex: true, Provider: "ovh"}
+	md := ManagedDomain{Apex: "example.com", IncludeApex: true, ProviderID: "ovh"}
 	if err := s.PutManagedDomain(ctx, md); err != nil {
 		t.Fatalf("PutManagedDomain: %v", err)
 	}
@@ -137,7 +135,7 @@ func TestManagedDomain_Get_NormalizesInput(t *testing.T) {
 	ctx := context.Background()
 
 	if err := s.PutManagedDomain(ctx, ManagedDomain{
-		Apex: "example.com", Provider: "ovh",
+		Apex: "example.com", ProviderID: "ovh",
 	}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -164,7 +162,7 @@ func TestManagedDomain_List_OrderedByApex(t *testing.T) {
 
 	apexes := []string{"zeta.com", "alpha.com", "mu.com"}
 	for _, a := range apexes {
-		if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: a, Provider: "ovh"}); err != nil {
+		if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: a, ProviderID: "ovh"}); err != nil {
 			t.Fatalf("Put %q: %v", a, err)
 		}
 	}
@@ -203,7 +201,7 @@ func TestManagedDomain_Delete_Idempotent(t *testing.T) {
 		t.Errorf("Delete missing should be nil, got %v", err)
 	}
 
-	if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: "example.com", Provider: "ovh"}); err != nil {
+	if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: "example.com", ProviderID: "ovh"}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if err := s.DeleteManagedDomain(ctx, "example.com"); err != nil {
@@ -222,14 +220,17 @@ func TestManagedDomain_Put_RejectsInvalid(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: "", Provider: "ovh"}); err == nil {
+	if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: "", ProviderID: "ovh"}); err == nil {
 		t.Error("expected validation error on empty apex, got nil")
 	}
-	if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: "*.example.com", Provider: "ovh"}); err == nil {
+	if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: "*.example.com", ProviderID: "ovh"}); err == nil {
 		t.Error("expected validation error on wildcard apex, got nil")
 	}
-	if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: "example.com", Provider: "fly"}); err == nil {
-		t.Error("expected validation error on unknown provider, got nil")
+	// A non-empty ProviderID that does not map to a stored provider is
+	// NOT rejected at the storage layer (referential integrity is an
+	// API-layer concern via GetDNSProvider).
+	if err := s.PutManagedDomain(ctx, ManagedDomain{Apex: "example.com", ProviderID: "fly"}); err != nil {
+		t.Errorf("unexpected error for arbitrary providerID: %v", err)
 	}
 }
 
@@ -265,7 +266,7 @@ func TestManagedDomain_PutWithRouteMigration_AtomicMutation(t *testing.T) {
 		return strings.HasSuffix(host, ".example.com") || host == "example.com"
 	}
 	mutated, err := s.PutManagedDomainWithRouteMigration(ctx,
-		ManagedDomain{Apex: "example.com", Provider: "ovh"}, isCovered)
+		ManagedDomain{Apex: "example.com", ProviderID: "ovh"}, isCovered)
 	if err != nil {
 		t.Fatalf("PutManagedDomainWithRouteMigration: %v", err)
 	}
@@ -291,7 +292,7 @@ func TestManagedDomain_PutWithRouteMigration_AtomicMutation(t *testing.T) {
 	// unchanged AND returns 0 mutations (the already-inherited
 	// row is skipped at the inner ACMEChallenge==Inherited check).
 	mutated2, err := s.PutManagedDomainWithRouteMigration(ctx,
-		ManagedDomain{Apex: "example.com", Provider: "ovh"}, isCovered)
+		ManagedDomain{Apex: "example.com", ProviderID: "ovh"}, isCovered)
 	if err != nil {
 		t.Fatalf("idempotent re-run: %v", err)
 	}
@@ -311,7 +312,7 @@ func TestManagedDomain_DeleteWithRouteMigration_ReversesInherited(t *testing.T) 
 
 	// Setup: declare managed domain, then create routes.
 	if err := s.PutManagedDomain(ctx,
-		ManagedDomain{Apex: "example.com", Provider: "ovh"}); err != nil {
+		ManagedDomain{Apex: "example.com", ProviderID: "ovh"}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 

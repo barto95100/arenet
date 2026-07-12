@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/caddymgr"
@@ -44,7 +45,14 @@ import (
 type managedDomainRequest struct {
 	Apex        string `json:"apex"`
 	IncludeApex *bool  `json:"includeApex,omitempty"`
-	Provider    string `json:"provider"`
+	// ProviderID references a configured DNSProviderConfig by its UUID
+	// (v2.11 multi-config). Provider is the legacy pre-v2.11 wire field
+	// (a type value, historically "ovh") retained for backward
+	// compatibility — an incoming provider:"ovh" with no providerId is
+	// resolved to the sole migrated provider. This rétro-compat path is
+	// intentionally kept forever.
+	ProviderID string `json:"providerId"`
+	Provider   string `json:"provider"`
 }
 
 // managedDomainResponse is the wire shape returned by GET / POST.
@@ -53,7 +61,9 @@ type managedDomainRequest struct {
 type managedDomainResponse struct {
 	Apex        string `json:"apex"`
 	IncludeApex bool   `json:"includeApex"`
-	Provider    string `json:"provider"`
+	// ProviderID is the DNSProviderConfig UUID this wildcard uses for
+	// the DNS-01 challenge (empty = unassigned → internal-CA fallback).
+	ProviderID string `json:"providerId"`
 }
 
 // listManagedDomainsResponse is the GET list wire shape: an object
@@ -79,7 +89,7 @@ func toManagedDomainResponse(md storage.ManagedDomain) managedDomainResponse {
 	return managedDomainResponse{
 		Apex:        md.Apex,
 		IncludeApex: md.IncludeApex,
-		Provider:    md.Provider,
+		ProviderID:  md.ProviderID,
 	}
 }
 
@@ -146,15 +156,35 @@ func (h *Handler) createManagedDomain(w http.ResponseWriter, r *http.Request) {
 	if req.IncludeApex != nil {
 		includeApex = *req.IncludeApex
 	}
-	provider := req.Provider
-	if provider == "" {
-		provider = storage.ManagedDomainProviderOVH // D3.B default
+	// v2.11: the storage field is ProviderID (a DNSProviderConfig UUID),
+	// not a type string. Accept `providerId`; validate a non-empty one
+	// exists. Keep the defensive rétro-compat path: a legacy body with
+	// provider:"ovh" and no providerId resolves to the sole configured
+	// provider when exactly one exists (decision locked "keep forever").
+	providerID := strings.TrimSpace(req.ProviderID)
+	if providerID == "" && req.Provider == storage.DNSProviderTypeOVH {
+		if list, lErr := h.store.ListDNSProviders(r.Context()); lErr == nil && len(list) == 1 {
+			providerID = list[0].ID
+		}
+	}
+	if providerID != "" {
+		if _, gErr := h.store.GetDNSProvider(r.Context(), providerID); gErr != nil {
+			if errors.Is(gErr, storage.ErrNotFound) {
+				writeErrorCode(w, http.StatusBadRequest, "invalid_provider_id",
+					"providerId does not reference a configured DNS provider",
+					map[string]any{"providerId": providerID})
+				return
+			}
+			h.logger.Error("get dns provider (managed domain create)", "err", gErr)
+			writeError(w, http.StatusInternalServerError, "failed to verify dns provider")
+			return
+		}
 	}
 
 	md := storage.ManagedDomain{
 		Apex:        apex,
 		IncludeApex: includeApex,
-		Provider:    provider,
+		ProviderID:  providerID,
 	}
 
 	// Overlap detection (§5 risks "multi-domain overlap").

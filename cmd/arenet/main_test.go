@@ -100,13 +100,15 @@ func TestStoreDNS01Inconsistency(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateRoute: %v", err)
 		}
-		if err := s.PutDNSProviderOVH(ctx, storage.DNSProviderConfig{
+		if _, err := s.CreateDNSProvider(ctx, storage.DNSProviderConfig{
+			Label:             "OVH",
+			Type:              storage.DNSProviderTypeOVH,
 			Endpoint:          "ovh-eu",
 			ApplicationKey:    "k",
 			ApplicationSecret: "s",
 			ConsumerKey:       "c",
 		}); err != nil {
-			t.Fatalf("PutDNSProviderOVH: %v", err)
+			t.Fatalf("CreateDNSProvider: %v", err)
 		}
 
 		anyDNS01, providerOK, err := storeDNS01Inconsistency(ctx, s)
@@ -135,13 +137,15 @@ func TestStoreDNS01Inconsistency(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateRoute: %v", err)
 		}
-		if err := s.PutDNSProviderOVH(ctx, storage.DNSProviderConfig{
+		if _, err := s.CreateDNSProvider(ctx, storage.DNSProviderConfig{
+			Label:             "OVH",
+			Type:              storage.DNSProviderTypeOVH,
 			Endpoint:          "ovh-eu",
 			ApplicationKey:    "k",
 			ApplicationSecret: "s",
 			ConsumerKey:       "c",
 		}); err != nil {
-			t.Fatalf("PutDNSProviderOVH: %v", err)
+			t.Fatalf("CreateDNSProvider: %v", err)
 		}
 
 		anyDNS01, providerOK, err := storeDNS01Inconsistency(ctx, s)
