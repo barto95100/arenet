@@ -24,17 +24,34 @@ import (
 	"github.com/caddyserver/caddy/v2"
 )
 
+// ovhProviderFixtureID is the stable config ID the O.2 emission tests
+// reference from their managed domains, matching the fixture provider
+// returned by ovhProvidersFixture. Task 1d: managed domains dispatch by
+// ProviderID, so the fixture domain must point at this id.
+const ovhProviderFixtureID = "ovh-fixture-id"
+
 // ovhProviderFixture returns a fully-populated DNSProviderConfig
 // matching the buildOpts shape callers send when the operator has
 // configured OVH credentials. Centralised so changes to the OVH
 // shape land in one place across O.2 tests.
 func ovhProviderFixture() storage.DNSProviderConfig {
 	return storage.DNSProviderConfig{
+		ID:                ovhProviderFixtureID,
+		Label:             "OVH fixture",
+		Type:              storage.DNSProviderTypeOVH,
 		Endpoint:          "ovh-eu",
 		ApplicationKey:    "ak",
 		ApplicationSecret: "as",
 		ConsumerKey:       "ck",
 	}
+}
+
+// ovhProvidersFixture returns the DNSProviders map (keyed by config ID)
+// that buildOpts now carries — the Task 1d replacement for the old
+// singleton DNSProvider field.
+func ovhProvidersFixture() map[string]storage.DNSProviderConfig {
+	f := ovhProviderFixture()
+	return map[string]storage.DNSProviderConfig{f.ID: f}
 }
 
 // tlsRoute is a TLS-enabled route fixture for ACME-policy tests.
@@ -76,9 +93,9 @@ func TestBuildConfigJSON_NoManagedDomains_EqualsStepJ_Bytes(t *testing.T) {
 		tlsRoute("r2", "api.other.com", storage.ACMEChallengeDNS01, false),
 	}
 	opts := buildOpts{
-		DevMode:     true,
-		ACMEEmail:   "ops@example.com",
-		DNSProvider: ovhProviderFixture(),
+		DevMode:      true,
+		ACMEEmail:    "ops@example.com",
+		DNSProviders: ovhProvidersFixture(),
 	}
 
 	rawJ, err := buildConfigJSON(routes, opts)
@@ -110,11 +127,11 @@ func TestBuildConfigJSON_ManagedDomain_EmitsWildcardPolicy(t *testing.T) {
 		tlsRoute("r1", "app.example.com", storage.ACMEChallengeInherited, false),
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{
-		DevMode:     true,
-		ACMEEmail:   "ops@example.com",
-		DNSProvider: ovhProviderFixture(),
+		DevMode:      true,
+		ACMEEmail:    "ops@example.com",
+		DNSProviders: ovhProvidersFixture(),
 		ManagedDomains: []storage.ManagedDomain{
-			{Apex: "example.com", IncludeApex: true, Provider: storage.ManagedDomainProviderOVH},
+			{Apex: "example.com", IncludeApex: true, ProviderID: ovhProviderFixtureID},
 		},
 	})
 	if err != nil {
@@ -159,10 +176,10 @@ func TestBuildConfigJSON_ManagedDomain_EmitsWildcardPolicy(t *testing.T) {
 // single-SAN cert covering only the wildcard.
 func TestBuildConfigJSON_ManagedDomain_IncludeApexFalse_OmitsApexSAN(t *testing.T) {
 	raw, err := buildConfigJSON(nil, buildOpts{
-		DevMode:     true,
-		DNSProvider: ovhProviderFixture(),
+		DevMode:      true,
+		DNSProviders: ovhProvidersFixture(),
 		ManagedDomains: []storage.ManagedDomain{
-			{Apex: "example.com", IncludeApex: false, Provider: storage.ManagedDomainProviderOVH},
+			{Apex: "example.com", IncludeApex: false, ProviderID: ovhProviderFixtureID},
 		},
 	})
 	if err != nil {
@@ -190,9 +207,11 @@ func TestBuildConfigJSON_ManagedDomain_IncludeApexFalse_OmitsApexSAN(t *testing.
 func TestBuildConfigJSON_ManagedDomain_NoProvider_InternalIssuer(t *testing.T) {
 	raw, err := buildConfigJSON(nil, buildOpts{
 		DevMode: true,
-		// DNSProvider intentionally left at zero value.
+		// DNSProviders intentionally left nil: the managed domain
+		// references a ProviderID that resolves to no configured
+		// provider, so the dispatch falls back to the internal issuer.
 		ManagedDomains: []storage.ManagedDomain{
-			{Apex: "example.com", IncludeApex: true, Provider: storage.ManagedDomainProviderOVH},
+			{Apex: "example.com", IncludeApex: true, ProviderID: ovhProviderFixtureID},
 		},
 	})
 	if err != nil {
@@ -218,11 +237,11 @@ func TestBuildConfigJSON_ManagedDomain_NoProvider_InternalIssuer(t *testing.T) {
 // caller provides them.
 func TestBuildConfigJSON_MultipleManagedDomains_EmitsAll(t *testing.T) {
 	raw, err := buildConfigJSON(nil, buildOpts{
-		DevMode:     true,
-		DNSProvider: ovhProviderFixture(),
+		DevMode:      true,
+		DNSProviders: ovhProvidersFixture(),
 		ManagedDomains: []storage.ManagedDomain{
-			{Apex: "alpha.com", IncludeApex: true, Provider: storage.ManagedDomainProviderOVH},
-			{Apex: "beta.com", IncludeApex: false, Provider: storage.ManagedDomainProviderOVH},
+			{Apex: "alpha.com", IncludeApex: true, ProviderID: ovhProviderFixtureID},
+			{Apex: "beta.com", IncludeApex: false, ProviderID: ovhProviderFixtureID},
 		},
 	})
 	if err != nil {
@@ -255,10 +274,10 @@ func TestBuildConfigJSON_CoveredRoute_SkipsPerRoutePolicy(t *testing.T) {
 		tlsRoute("r3", "api.example.com", storage.ACMEChallengeInherited, false),
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{
-		DevMode:     true,
-		DNSProvider: ovhProviderFixture(),
+		DevMode:      true,
+		DNSProviders: ovhProvidersFixture(),
 		ManagedDomains: []storage.ManagedDomain{
-			{Apex: "example.com", IncludeApex: true, Provider: storage.ManagedDomainProviderOVH},
+			{Apex: "example.com", IncludeApex: true, ProviderID: ovhProviderFixtureID},
 		},
 	})
 	if err != nil {
@@ -290,10 +309,10 @@ func TestBuildConfigJSON_DedicatedOptOut_EmitsPerRoutePolicyBeforeWildcard(t *te
 		tlsRoute("r-app", "app.example.com", storage.ACMEChallengeInherited, false),
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{
-		DevMode:     true,
-		DNSProvider: ovhProviderFixture(),
+		DevMode:      true,
+		DNSProviders: ovhProvidersFixture(),
 		ManagedDomains: []storage.ManagedDomain{
-			{Apex: "example.com", IncludeApex: true, Provider: storage.ManagedDomainProviderOVH},
+			{Apex: "example.com", IncludeApex: true, ProviderID: ovhProviderFixtureID},
 		},
 	})
 	if err != nil {
@@ -325,10 +344,10 @@ func TestBuildConfigJSON_UncoveredRoute_UsesPerRoutePolicy(t *testing.T) {
 		tlsRoute("r-other", "other.org", "", false),     // uncovered → per-route HTTP-01
 	}
 	raw, err := buildConfigJSON(routes, buildOpts{
-		DevMode:     true,
-		DNSProvider: ovhProviderFixture(),
+		DevMode:      true,
+		DNSProviders: ovhProvidersFixture(),
 		ManagedDomains: []storage.ManagedDomain{
-			{Apex: "example.com", IncludeApex: true, Provider: storage.ManagedDomainProviderOVH},
+			{Apex: "example.com", IncludeApex: true, ProviderID: ovhProviderFixtureID},
 		},
 	})
 	if err != nil {
@@ -353,10 +372,10 @@ func TestBuildConfigJSON_UncoveredRoute_UsesPerRoutePolicy(t *testing.T) {
 // emission code).
 func TestBuildConfigJSON_ManagedDomain_ReloadPreserves(t *testing.T) {
 	opts := buildOpts{
-		DevMode:     true,
-		DNSProvider: ovhProviderFixture(),
+		DevMode:      true,
+		DNSProviders: ovhProvidersFixture(),
 		ManagedDomains: []storage.ManagedDomain{
-			{Apex: "example.com", IncludeApex: true, Provider: storage.ManagedDomainProviderOVH},
+			{Apex: "example.com", IncludeApex: true, ProviderID: ovhProviderFixtureID},
 		},
 	}
 	raw1, err := buildConfigJSON(nil, opts)
@@ -408,13 +427,14 @@ func TestBuildConfigJSON_ManagedDomain_OVHProviderModuleResolves(t *testing.T) {
 		t.Fatalf("caddy module `dns.providers.ovh` not registered: %v — managed-domain wildcard issuance would fail at Provision time", err)
 	}
 	// Sanity: the wildcard policy emits `provider.name: "ovh"`,
-	// matching the module ID above. Drift in either direction
+	// matching the module ID above. The closed provider-type enum's
+	// OVH value must equal that module ID. Drift in either direction
 	// (rename the constant OR change the emitted value) surfaces
 	// here as a missing-module error when the live smoke runs
 	// at O.5.
-	if storage.ManagedDomainProviderOVH != "ovh" {
-		t.Errorf("ManagedDomainProviderOVH = %q, want \"ovh\" (must match Caddy module ID)",
-			storage.ManagedDomainProviderOVH)
+	if storage.DNSProviderTypeOVH != "ovh" {
+		t.Errorf("DNSProviderTypeOVH = %q, want \"ovh\" (must match Caddy module ID)",
+			storage.DNSProviderTypeOVH)
 	}
 }
 

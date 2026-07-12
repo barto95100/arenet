@@ -90,7 +90,10 @@ func TestIsHostCoveredByManagedDomain_FixtureFile(t *testing.T) {
 			converted = append(converted, storage.ManagedDomain{
 				Apex:        m.Apex,
 				IncludeApex: m.IncludeApex,
-				Provider:    m.Provider,
+				// The fixture's legacy "provider" (a type string) maps
+				// to ProviderID here; the coverage predicate ignores it,
+				// so the exact value is immaterial to these cases.
+				ProviderID: m.Provider,
 			})
 		}
 		mdsSets[name] = converted

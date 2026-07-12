@@ -1173,14 +1173,47 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 	// route. The combined route also exercises mixed rule+tag
 	// exclusion (the dual-source SecAction code path).
 	routes = append(routes, storage.Route{
-		ID:        "r-wafexcludetags",
-		Host:      "tags.example.com",
-		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
-		LBPolicy:  storage.LBPolicyRoundRobin,
-		WAFMode:   "detect",
+		ID:              "r-wafexcludetags",
+		Host:            "tags.example.com",
+		Upstreams:       []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:        storage.LBPolicyRoundRobin,
+		WAFMode:         "detect",
 		WAFExcludeRules: []int{942100},
 		WAFExcludeTags:  []string{"attack-protocol", "paranoia-level/3"},
 	})
+	// Task 1d empirical gate — fold the multi-provider managed-domain
+	// scenarios into THIS canonical caddy.Validate call (rather than
+	// spawning a competing parallel caddy.Validate test, which would
+	// poison admin-endpoint state for the alphabetically-next test —
+	// same precedent as the DNS01 / ErrorPages folds above). The
+	// providers carry real OVH credentials so caddy.Validate has to
+	// Provision the `dns.providers.ovh` module for each wildcard.
+	//
+	//   Scenario A — 1 wildcard managed domain referencing 1 provider
+	//   (legacy-equivalent single-provider path).
+	//   Scenario B — 2 wildcard managed domains referencing 2 DISTINCT
+	//   providers (the Task 1d per-ProviderID multi-account surface).
+	//
+	// Hosts are unique apexes so they don't collide with the per-route
+	// fixtures above.
+	dnsProviders := map[string]storage.DNSProviderConfig{
+		"prov-a": {
+			ID: "prov-a", Label: "OVH A", Type: storage.DNSProviderTypeOVH,
+			Endpoint: "ovh-eu", ApplicationKey: "ak-a", ApplicationSecret: "as-a", ConsumerKey: "ck-a",
+		},
+		"prov-b": {
+			ID: "prov-b", Label: "OVH B", Type: storage.DNSProviderTypeOVH,
+			Endpoint: "ovh-ca", ApplicationKey: "ak-b", ApplicationSecret: "as-b", ConsumerKey: "ck-b",
+		},
+	}
+	managedDomains := []storage.ManagedDomain{
+		// Scenario A: single wildcard + single provider.
+		{Apex: "scenario-a.example", IncludeApex: true, ProviderID: "prov-a"},
+		// Scenario B: two wildcards, two distinct providers.
+		{Apex: "scenario-b1.example", IncludeApex: false, ProviderID: "prov-a"},
+		{Apex: "scenario-b2.example", IncludeApex: true, ProviderID: "prov-b"},
+	}
+
 	// The arenet_routemetrics Caddy module's Provision asserts
 	// metrics.GlobalRegistry() is non-nil (see internal/metrics).
 	// cmd/arenet/main.go installs the registry at boot via
@@ -1190,7 +1223,11 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 	// nothing to do with the WAF config we're trying to exercise.
 	metrics.SetRegistry(metrics.NewRegistry())
 
-	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	raw, err := buildConfigJSON(routes, buildOpts{
+		DevMode:        true,
+		DNSProviders:   dnsProviders,
+		ManagedDomains: managedDomains,
+	})
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)
 	}
@@ -1249,14 +1286,21 @@ func TestBuildConfigJSON_LoadsCleanly_DNS01(t *testing.T) {
 	}
 	metrics.SetRegistry(metrics.NewRegistry())
 
+	// Task 1d: per-route DNS-01 has no per-route provider selection,
+	// so the sole configured provider in the collection is used.
 	opts := buildOpts{
 		DevMode:   true,
 		ACMEEmail: "ops@example.com",
-		DNSProvider: storage.DNSProviderConfig{
-			Endpoint:          "ovh-eu",
-			ApplicationKey:    "fixture-app-key",
-			ApplicationSecret: "fixture-app-secret",
-			ConsumerKey:       "fixture-consumer-key",
+		DNSProviders: map[string]storage.DNSProviderConfig{
+			"prov-1": {
+				ID:                "prov-1",
+				Label:             "OVH",
+				Type:              storage.DNSProviderTypeOVH,
+				Endpoint:          "ovh-eu",
+				ApplicationKey:    "fixture-app-key",
+				ApplicationSecret: "fixture-app-secret",
+				ConsumerKey:       "fixture-consumer-key",
+			},
 		},
 	}
 	raw, err := buildConfigJSON(routes, opts)
@@ -3321,5 +3365,71 @@ func TestBuildConfigJSON_GracePeriod_Bounded(t *testing.T) {
 	}
 	if got != "5s" {
 		t.Errorf("apps.http.grace_period = %q; want %q", got, "5s")
+	}
+}
+
+// TestBuildManagedDomainPolicies_PerProviderDispatch pins the Task 1d
+// per-ProviderID dispatch: two managed domains referencing two
+// DISTINCT DNS provider configs each get their OWN ACME DNS-01 policy
+// sourced from THAT provider's credentials — the multi-account
+// surface. Before Task 1d, buildOpts carried a single DNSProvider and
+// every managed domain shared it; here each md.ProviderID looks up its
+// own config in opts.DNSProviders.
+func TestBuildManagedDomainPolicies_PerProviderDispatch(t *testing.T) {
+	p1 := storage.DNSProviderConfig{ID: "id-1", Label: "A", Type: "ovh", Endpoint: "ovh-eu", ApplicationKey: "k1", ApplicationSecret: "s1", ConsumerKey: "c1"}
+	p2 := storage.DNSProviderConfig{ID: "id-2", Label: "B", Type: "ovh", Endpoint: "ovh-ca", ApplicationKey: "k2", ApplicationSecret: "s2", ConsumerKey: "c2"}
+	opts := buildOpts{
+		DNSProviders: map[string]storage.DNSProviderConfig{"id-1": p1, "id-2": p2},
+		ManagedDomains: []storage.ManagedDomain{
+			{Apex: "a.com", IncludeApex: false, ProviderID: "id-1"},
+			{Apex: "b.org", IncludeApex: false, ProviderID: "id-2"},
+		},
+	}
+	policies := buildManagedDomainPolicies(opts)
+	if len(policies) != 2 {
+		t.Fatalf("policies = %d, want 2", len(policies))
+	}
+
+	// Index each policy by its single subject so we can assert the
+	// right provider credentials landed on the right apex.
+	byApex := map[string]map[string]any{}
+	for _, pol := range policies {
+		subs, _ := pol["subjects"].([]string)
+		if len(subs) != 1 {
+			t.Errorf("subjects = %v, want exactly 1", subs)
+			continue
+		}
+		if _, hasIssuers := pol["issuers"]; !hasIssuers {
+			t.Errorf("policy missing issuers: %v", pol)
+		}
+		byApex[subs[0]] = pol
+	}
+
+	// a.com must be ACME DNS-01 sourced from p1 (endpoint ovh-eu).
+	assertProviderEndpoint(t, byApex["*.a.com"], "ovh-eu", "id-1")
+	// b.org must be ACME DNS-01 sourced from p2 (endpoint ovh-ca).
+	assertProviderEndpoint(t, byApex["*.b.org"], "ovh-ca", "id-2")
+}
+
+// assertProviderEndpoint drills into a wildcard ACME policy and checks
+// the DNS-01 provider block carries the expected endpoint — proving the
+// per-ProviderID credential threaded through, not a shared singleton.
+func assertProviderEndpoint(t *testing.T, pol map[string]any, wantEndpoint, label string) {
+	t.Helper()
+	if pol == nil {
+		t.Fatalf("%s: policy not found for expected subject", label)
+	}
+	issuers, _ := pol["issuers"].([]map[string]any)
+	if len(issuers) != 1 {
+		t.Fatalf("%s: issuers = %v, want 1", label, pol["issuers"])
+	}
+	if issuers[0]["module"] != "acme" {
+		t.Fatalf("%s: issuer module = %v, want acme", label, issuers[0]["module"])
+	}
+	challenges, _ := issuers[0]["challenges"].(map[string]any)
+	dns, _ := challenges["dns"].(map[string]any)
+	provider, _ := dns["provider"].(map[string]any)
+	if provider["endpoint"] != wantEndpoint {
+		t.Errorf("%s: provider.endpoint = %v, want %q", label, provider["endpoint"], wantEndpoint)
 	}
 }

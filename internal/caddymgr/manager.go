@@ -544,29 +544,24 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		return fmt.Errorf("list routes: %w", err)
 	}
 
-	// Step J.4: read the instance-level OVH DNS provider config (if
-	// any). Used by buildTLSPolicies to emit the DNS-01 ACME policy
-	// when at least one route has ACMEChallenge=dns-01. The API
-	// layer rejects a route create / update that would activate
-	// DNS-01 without a configured provider, so reaching this code
-	// path with a dns-01 route and ErrNotFound is a programming
-	// error — the generator handles it defensively (no DNS-01
-	// policy emitted; the route silently falls back to HTTP-01
-	// emission which Caddy can still serve a pre-existing cert
-	// for) rather than failing the whole reload. ErrNotFound on a
-	// fresh install with no dns-01 routes is the normal path and
-	// is silent.
-	// Task 1a transitional: the singleton GetDNSProviderOVH was replaced
-	// by the UUID-keyed collection. Until Task 1d reworks this into a
-	// per-ProviderID map, keep the single-provider behaviour by picking
-	// the first configured provider (fresh install → zero value).
-	var dnsProvider storage.DNSProviderConfig
-	dnsProviders, err := m.store.ListDNSProviders(ctx)
+	// Task 1d: read the UUID-keyed DNS provider collection into a map
+	// keyed by config ID. Used by buildManagedDomainPolicies to emit a
+	// DNS-01 ACME policy per managed domain, each sourced from ITS OWN
+	// provider (md.ProviderID → config), and by buildTLSPolicies for
+	// per-route (non-wildcard) DNS-01. Empty map on a fresh install is
+	// the normal, silent path. The API layer rejects a route create /
+	// update that would activate DNS-01 without a configured provider,
+	// so reaching the emit paths with a DNS-01 subject and an empty map
+	// is a programming error the generator handles defensively (no
+	// DNS-01 policy emitted; route falls back to the internal issuer)
+	// rather than failing the whole reload.
+	provList, err := m.store.ListDNSProviders(ctx)
 	if err != nil {
 		return fmt.Errorf("read dns providers: %w", err)
 	}
-	if len(dnsProviders) > 0 {
-		dnsProvider = dnsProviders[0]
+	dnsProviders := make(map[string]storage.DNSProviderConfig, len(provList))
+	for _, p := range provList {
+		dnsProviders[p.ID] = p
 	}
 
 	// Step K.1: read the instance-level forward-auth provider
@@ -614,7 +609,7 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	cfgJSON, err := buildConfigJSON(routes, buildOpts{
 		DevMode:                   m.devMode,
 		ACMEEmail:                 m.acmeEmail,
-		DNSProvider:               dnsProvider,
+		DNSProviders:              dnsProviders,
 		ForwardAuthProviders:      fwdAuthMap,
 		CrowdSec:                  m.crowdsec,
 		ManagedDomains:            managedDomains,
@@ -1051,16 +1046,19 @@ type buildOpts struct {
 	// route has TLSEnabled=true. Empty is accepted (Let's Encrypt
 	// won't send expiry reminders).
 	ACMEEmail string
-	// DNSProvider (Step J.4) is the instance-level OVH credential
-	// row read by the manager from BoltDB before each apply. Zero
-	// value (all four string fields empty) means "not configured";
-	// buildTLSPolicies treats that state as "no DNS-01 policy
-	// emittable" and silently falls back to no DNS-01 policy. The
-	// API rejects route create / update that would activate DNS-01
-	// without a configured provider, so reaching this code path
-	// with DNS-01 routes and an empty DNSProvider is a programming
-	// error caught at apply time.
-	DNSProvider storage.DNSProviderConfig
+	// DNSProviders (Task 1d) maps DNSProviderConfig.ID -> config,
+	// read by the manager from BoltDB before each apply. It replaces
+	// the pre-v2.11 single DNSProvider and is the per-managed-domain
+	// DNS-01 dispatch source: each managed domain looks up its own
+	// credentials by md.ProviderID (multi-account). An empty / nil
+	// map means "no provider configured"; buildManagedDomainPolicies
+	// then emits the internal issuer (D4.A loud unconfigured state)
+	// and buildTLSPolicies emits no per-route DNS-01 policy. The API
+	// rejects route create / update that would activate DNS-01
+	// without a configured provider, so reaching those code paths
+	// with DNS-01 subjects and an empty map is a programming error
+	// caught defensively at apply time.
+	DNSProviders map[string]storage.DNSProviderConfig
 	// ForwardAuthProviders (Step K.1) is the map of configured
 	// forward-auth provider rows, keyed by Name, read by the
 	// manager from BoltDB before each apply. Routes with
@@ -2130,13 +2128,14 @@ func buildCrowdSecApp(cfg crowdsecConfig) *crowdsecApp {
 // bypass it on a future refactor.
 //
 // Step J.4 DNS-01 specifics (§5.4):
-//   - The DNS-01 policy is emitted ONLY when both `partition.DNS01`
-//     is non-empty AND the operator has configured an OVH provider
-//     in storage (opts.DNSProvider.ApplicationKey + Secret +
-//     ConsumerKey + Endpoint all non-empty). The API validates the
-//     latter at edit time, so reaching this code with DNS-01 hosts
-//     and an unconfigured provider is a programming error — we
-//     defensively skip the DNS-01 policy emission rather than emit
+//   - The per-route DNS-01 policy is emitted ONLY when both
+//     `partition.DNS01` is non-empty AND at least one fully-configured
+//     provider exists in opts.DNSProviders (Endpoint + ApplicationKey
+//   - ApplicationSecret + ConsumerKey all non-empty). The default
+//     provider is chosen by defaultDNSProvider. The API validates
+//     provider presence at edit time, so reaching this code with
+//     DNS-01 hosts and no configured provider is a programming error —
+//     we defensively skip the DNS-01 policy emission rather than emit
 //     a malformed Caddy config that would fail Validate.
 //   - The provider sub-block always carries `name: "ovh"` so
 //     Caddy's `caddy:"namespace=dns.providers inline_key=name"` tag
@@ -2179,8 +2178,14 @@ func buildTLSPolicies(partition acmePartition, opts buildOpts) []map[string]any 
 	if len(partition.HTTP01) > 0 {
 		policies = append(policies, buildACMEPolicy(partition.HTTP01, opts, nil))
 	}
-	if len(partition.DNS01) > 0 && dnsProviderConfigured(opts.DNSProvider) {
-		policies = append(policies, buildACMEPolicy(partition.DNS01, opts, &opts.DNSProvider))
+	// Per-route (non-wildcard) DNS-01: there is NO per-route provider
+	// selection in the data model (only managed domains carry a
+	// ProviderID), so we pick a single default provider from the
+	// collection. See defaultDNSProvider for the deterministic choice.
+	if len(partition.DNS01) > 0 {
+		if prov, ok := defaultDNSProvider(opts.DNSProviders); ok {
+			policies = append(policies, buildACMEPolicy(partition.DNS01, opts, &prov))
+		}
 	}
 	policies = append(policies, managedPolicies...)
 	policies = append(policies, internalPolicy)
@@ -2199,22 +2204,22 @@ func buildTLSPolicies(partition acmePartition, opts buildOpts) []map[string]any 
 //   - subjects = ["*.<apex>", "<apex>"] if IncludeApex == true (D2.C)
 //
 // Issuer selection (D4.A "loud unconfigured state"):
-//   - When the DNS provider that this managed domain references
-//     is configured (the v1.2 value space is {"ovh"} per D3.B,
-//     so we always look at opts.DNSProvider for now), emit the
-//     acme issuer with the dns-01 challenge sub-block.
-//   - When the DNS provider is NOT configured, emit the
-//     internal issuer — the wildcard policy stays in the JSON
-//     (a subsequent reload doesn't drop it), routes serve
-//     internal-CA self-signed certs, no ACME traffic. The
-//     Settings UI surfaces the unconfigured state separately
-//     (AC #8). This avoids the infinite-ACME-retry risk
-//     called out in §5 risks.
+//   - When the DNS provider that this managed domain references by
+//     md.ProviderID is present in opts.DNSProviders AND fully
+//     configured, emit the acme issuer with the dns-01 challenge
+//     sub-block sourced from THAT provider's credentials.
+//   - When the referenced provider is missing or NOT configured,
+//     emit the internal issuer — the wildcard policy stays in the
+//     JSON (a subsequent reload doesn't drop it), routes serve
+//     internal-CA self-signed certs, no ACME traffic. The Settings
+//     UI surfaces the unconfigured state separately (AC #8). This
+//     avoids the infinite-ACME-retry risk called out in §5 risks.
 //
-// Multi-managed-domain (D6.A): the slice is iterated verbatim
-// — N managed domains produce N policies. The provider config
-// is shared across all OVH-using managed domains (one OVH
-// account covers all zones the operator owns).
+// Multi-managed-domain (D6.A) + Task 1d multi-provider: the slice is
+// iterated verbatim — N managed domains produce N policies — and each
+// domain dispatches to its OWN provider config via md.ProviderID, so
+// two domains under different OVH accounts each get their own
+// credentials in their own policy.
 func buildManagedDomainPolicies(opts buildOpts) []map[string]any {
 	if len(opts.ManagedDomains) == 0 {
 		return nil
@@ -2227,15 +2232,14 @@ func buildManagedDomainPolicies(opts buildOpts) []map[string]any {
 		} else {
 			subjects = []string{"*." + md.Apex}
 		}
-		// D4.A: configured → DNS-01 ACME; unconfigured →
-		// internal CA (loud unconfigured state, no silent
-		// HTTP-01 fallback because wildcards EXIGENT DNS-01).
-		// Task 1a transitional: a non-empty ProviderID means a
-		// provider is assigned; the single opts.DNSProvider is
-		// still the (sole) credential source until Task 1d wires
-		// the per-ProviderID map dispatch.
-		if md.ProviderID != "" && dnsProviderConfigured(opts.DNSProvider) {
-			out = append(out, buildACMEPolicy(subjects, opts, &opts.DNSProvider))
+		// D4.A + Task 1d: look up THIS domain's provider by id.
+		// Configured → DNS-01 ACME with that provider's creds;
+		// missing/unconfigured → internal CA (loud unconfigured
+		// state, no silent HTTP-01 fallback because wildcards
+		// require DNS-01).
+		prov, ok := opts.DNSProviders[md.ProviderID]
+		if ok && dnsProviderConfigured(prov) {
+			out = append(out, buildACMEPolicy(subjects, opts, &prov))
 		} else {
 			out = append(out, map[string]any{
 				"subjects": subjects,
@@ -2246,6 +2250,46 @@ func buildManagedDomainPolicies(opts buildOpts) []map[string]any {
 		}
 	}
 	return out
+}
+
+// defaultDNSProvider picks the single provider used for per-route
+// (non-wildcard) DNS-01 challenges. Unlike managed domains, a
+// per-route DNS-01 route carries no ProviderID in the data model, so
+// there is no per-route provider selection — the collection must
+// designate one default.
+//
+// Behaviour (documented, deterministic):
+//   - 0 configured providers → (zero, false): the caller skips the
+//     DNS-01 policy (fail-open, same as the pre-Task-1d unconfigured
+//     path). A route requesting DNS-01 with no provider is a
+//     programming error rejected at the API layer.
+//   - exactly 1 configured provider → that provider. The unambiguous,
+//     overwhelmingly common homelab case.
+//   - >1 configured providers → the configured provider with the
+//     lexicographically smallest ID (stable across reloads because the
+//     input is a map with no inherent order). This is inherently
+//     ambiguous — the data model cannot express which OVH account a
+//     bare per-route DNS-01 route should use — so we log a WARN once
+//     per apply and keep the choice deterministic. Operators who need
+//     per-account control should use managed domains, which DO dispatch
+//     per ProviderID.
+func defaultDNSProvider(providers map[string]storage.DNSProviderConfig) (storage.DNSProviderConfig, bool) {
+	ids := make([]string, 0, len(providers))
+	for id, p := range providers {
+		if dnsProviderConfigured(p) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return storage.DNSProviderConfig{}, false
+	}
+	sort.Strings(ids)
+	if len(ids) > 1 {
+		slog.Warn("per-route DNS-01 with multiple configured DNS providers is ambiguous; "+
+			"defaulting to the provider with the smallest id — use managed domains for per-account control",
+			"chosen_id", ids[0], "configured_count", len(ids))
+	}
+	return providers[ids[0]], true
 }
 
 // buildTLSApp returns the full apps.tls section, combining the

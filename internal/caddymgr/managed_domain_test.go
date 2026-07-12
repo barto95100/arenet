@@ -30,8 +30,8 @@ import (
 // D5.A empty-mds short-circuit.
 func TestIsHostCoveredByManagedDomain_Predicate(t *testing.T) {
 	mds := []storage.ManagedDomain{
-		{Apex: "example.com", IncludeApex: true, Provider: "ovh"},
-		{Apex: "noapex.com", IncludeApex: false, Provider: "ovh"},
+		{Apex: "example.com", IncludeApex: true, ProviderID: "ovh"},
+		{Apex: "noapex.com", IncludeApex: false, ProviderID: "ovh"},
 	}
 
 	cases := []struct {
@@ -100,7 +100,7 @@ func TestIsHostCoveredByManagedDomain_Predicate(t *testing.T) {
 		{
 			name: "mds with empty apex skipped (defensive)",
 			host: "app.example.com",
-			mds:  []storage.ManagedDomain{{Apex: "", Provider: "ovh"}},
+			mds:  []storage.ManagedDomain{{Apex: "", ProviderID: "ovh"}},
 		},
 	}
 	for _, c := range cases {
@@ -122,8 +122,8 @@ func TestIsHostCoveredByManagedDomain_Predicate(t *testing.T) {
 // ListManagedDomains, so deterministic).
 func TestIsHostCoveredByManagedDomain_MultipleManagedDomains(t *testing.T) {
 	mds := []storage.ManagedDomain{
-		{Apex: "alpha.com", IncludeApex: true, Provider: "ovh"},
-		{Apex: "beta.com", IncludeApex: true, Provider: "ovh"},
+		{Apex: "alpha.com", IncludeApex: true, ProviderID: "ovh"},
+		{Apex: "beta.com", IncludeApex: true, ProviderID: "ovh"},
 	}
 	got, ok := IsHostCoveredByManagedDomain("app.beta.com", mds)
 	if !ok {
