@@ -751,6 +751,38 @@ export interface DNSProviderOVHRequest {
 }
 
 /**
+ * v2.12 — multi-config DNS provider view (no secrets on the wire).
+ * The backend returns one row per configured provider; `configured`
+ * reflects whether the secrets are present, and `usedBy` lists the
+ * wildcard apexes currently bound to this provider (drives the 409
+ * `provider_in_use` guard on delete).
+ */
+export interface DNSProvider {
+	id: string;
+	label: string;
+	type: string;
+	endpoint: string;
+	configured: boolean;
+	usedBy: string[];
+}
+
+/**
+ * v2.12 — wire shape for POST/PUT /api/v1/settings/dns-providers[/{id}].
+ * The three secret fields are optional: on create they configure the
+ * provider; on edit, leaving them blank triggers the preserve-on-edit
+ * path (the stored value is kept). `type`/`endpoint` are provider
+ * identifiers (e.g. "ovh" / "ovh-eu"), not translated strings.
+ */
+export interface DNSProviderRequest {
+	label: string;
+	type: string;
+	endpoint: string;
+	applicationKey?: string;
+	applicationSecret?: string;
+	consumerKey?: string;
+}
+
+/**
  * Step J.4 — the seven OVH endpoint identifiers accepted by the
  * go-ovh SDK. Mirrors storage.OVHEndpoints; the UI dropdown
  * populates from this list.
@@ -778,7 +810,7 @@ export const OVH_ENDPOINTS: readonly string[] = [
 export interface ManagedDomain {
 	apex: string;
 	includeApex: boolean;
-	provider: ManagedDomainProvider;
+	providerId: string;
 }
 
 /**
@@ -790,7 +822,7 @@ export interface ManagedDomain {
 export interface ManagedDomainRequest {
 	apex: string;
 	includeApex?: boolean;
-	provider?: ManagedDomainProvider;
+	providerId?: string;
 }
 
 /**
@@ -1271,8 +1303,20 @@ export class ApiError extends Error {
 	// consumer is LockScreen, which redirects OIDC users to a
 	// fresh SSO sign-in when password-based unlock is rejected.
 	code?: string;
-	
-	constructor(message: string, status: number, kind?: ErrorKind, retryAfterSeconds?: number, code?: string) {
+	// Optional structured parameters accompanying `code` (e.g. the
+	// 409 `provider_in_use` body carries `params.wildcards: []`, the
+	// 400 `invalid_provider_id` body carries `params.providerId`).
+	// Consumers render these into translated messages.
+	params?: Record<string, unknown>;
+
+	constructor(
+		message: string,
+		status: number,
+		kind?: ErrorKind,
+		retryAfterSeconds?: number,
+		code?: string,
+		params?: Record<string, unknown>
+	) {
 		super(message);
 		this.status = status;
 		if (kind !== undefined) {
@@ -1283,6 +1327,7 @@ export class ApiError extends Error {
 		}
 		this.retryAfterSeconds = retryAfterSeconds;
 		this.code = code;
+		this.params = params;
 	}
 }
 
