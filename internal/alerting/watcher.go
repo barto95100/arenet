@@ -276,6 +276,11 @@ func (w *Watcher) evalOneRule(ctx context.Context, r storage.AlertRule) {
 	}
 	fired, err := ev.Evaluate(value, r.EvalParams)
 	if err != nil {
+		// Eval error is not a genuine state transition. Return before
+		// the edge block, deliberately leaving a state rule's LastMatched
+		// untouched: a transient error must not clear the edge (which
+		// would re-fire on recovery) nor fabricate one. Worst case is a
+		// suppressed re-fire, never a spurious flood.
 		w.persistEvalState(ctx, r.ID, now, fmt.Errorf("evaluate: %w", err))
 		return
 	}

@@ -624,8 +624,10 @@ func TestWatcher_StateRule_RetriesWhenDispatchFails(t *testing.T) {
 func TestWatcher_ThresholdRule_UnchangedFiresEachTick(t *testing.T) {
 	// regression guard: a threshold rule over its limit still fires on
 	// successive ticks, proving edge logic is scoped to state rules.
-	// Cooldown default (300s) would suppress the 2nd fire, so use a
-	// cooldown of 0 to isolate "does the edge logic touch threshold?".
+	// Any non-zero cooldown would suppress the 2nd fire, so the fixture
+	// sets CooldownSecs=0 to isolate "does the edge logic touch
+	// threshold?". (The 300s default lives in the storage/API layer and
+	// doesn't apply to a fixture handed straight to the watcher.)
 	src := &fakeSource{name: "stub", readValue: FloatValue(100)}
 	r := mustRule(t, baseRule("r-1", "thr", []string{"ch-1"}))
 	r.CooldownSecs = 0
