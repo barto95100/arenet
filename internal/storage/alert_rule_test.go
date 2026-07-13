@@ -179,6 +179,49 @@ func TestAlertRule_Delete_NotFound(t *testing.T) {
 	}
 }
 
+func TestUpdateAlertRuleLastMatched_RoundTrip(t *testing.T) {
+	store := newStoreForTest(t)
+	created, err := store.CreateAlertRule(context.Background(), sampleRule("rule-1", "lm"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// default is false
+	got, err := store.GetAlertRule(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.LastMatched {
+		t.Fatalf("fresh rule LastMatched = true; want false")
+	}
+	// set true, read back
+	if err := store.UpdateAlertRuleLastMatched(context.Background(), created.ID, true); err != nil {
+		t.Fatalf("update last matched: %v", err)
+	}
+	got, _ = store.GetAlertRule(context.Background(), created.ID)
+	if !got.LastMatched {
+		t.Fatalf("LastMatched = false after set true")
+	}
+}
+
+func TestUpdateAlertRule_PreservesLastMatched(t *testing.T) {
+	store := newStoreForTest(t)
+	created, _ := store.CreateAlertRule(context.Background(), sampleRule("rule-1", "lm"))
+	if err := store.UpdateAlertRuleLastMatched(context.Background(), created.ID, true); err != nil {
+		t.Fatalf("set last matched: %v", err)
+	}
+	// operator PUT that carries LastMatched=false (as the API layer would)
+	edit := created
+	edit.LastMatched = false
+	edit.Name = "lm-edited"
+	if _, err := store.UpdateAlertRule(context.Background(), edit); err != nil {
+		t.Fatalf("update rule: %v", err)
+	}
+	got, _ := store.GetAlertRule(context.Background(), created.ID)
+	if !got.LastMatched {
+		t.Fatalf("operator PUT reset LastMatched to false; want preserved true")
+	}
+}
+
 func TestAlertRule_MarkEval_ErrorPath(t *testing.T) {
 	store := newStoreForTest(t)
 	_, _ = store.CreateAlertRule(context.Background(), sampleRule("rule-1", "name"))

@@ -77,6 +77,7 @@ type AlertRule struct {
 	LastEvalAt  *time.Time `json:"last_eval_at,omitempty"`
 	LastError   string     `json:"last_error,omitempty"`
 	LastErrorAt *time.Time `json:"last_error_at,omitempty"`
+	LastMatched bool       `json:"last_matched,omitempty"`
 }
 
 // validate runs storage-layer last-line-of-defence
@@ -260,6 +261,11 @@ func (s *Store) UpdateAlertRule(ctx context.Context, r AlertRule) (AlertRule, er
 			r.LastError = existing.LastError
 			r.LastErrorAt = existing.LastErrorAt
 		}
+		// LastMatched is watcher-owned edge state. A bool's zero
+		// value is indistinguishable from a deliberate false, so
+		// (unlike the pointer fields above) always copy it from the
+		// stored rule — the operator API never sets it.
+		r.LastMatched = existing.LastMatched
 
 		var conflict bool
 		_ = b.ForEach(func(k, v []byte) error {
@@ -390,6 +396,39 @@ func (s *Store) UpdateAlertRuleFiredState(ctx context.Context, id string, firedA
 		}
 		r.LastFiredAt = &at
 		r.UpdatedAt = at
+		buf, err := json.Marshal(r)
+		if err != nil {
+			return fmt.Errorf("marshal alert_rule: %w", err)
+		}
+		return b.Put([]byte(id), buf)
+	})
+}
+
+// UpdateAlertRuleLastMatched persists the state-rule edge-detection
+// flag (whether the rule's condition was met at the last evaluation).
+// Watcher-owned; the operator API never writes it. Bumps UpdatedAt.
+func (s *Store) UpdateAlertRuleLastMatched(ctx context.Context, id string, matched bool) error {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	if id == "" {
+		return errors.New("alert_rule: id must not be empty")
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(bucketAlertRules))
+		raw := b.Get([]byte(id))
+		if raw == nil {
+			return ErrNotFound
+		}
+		var r AlertRule
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return fmt.Errorf("unmarshal alert_rule: %w", err)
+		}
+		r.LastMatched = matched
+		r.UpdatedAt = time.Now().UTC()
 		buf, err := json.Marshal(r)
 		if err != nil {
 			return fmt.Errorf("marshal alert_rule: %w", err)
