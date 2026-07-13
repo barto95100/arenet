@@ -71,17 +71,22 @@ Download the new release binary, verify its checksum, swap it in, restart:
 VERSION=v2.12.3
 ARCH=linux-amd64        # or linux-arm64
 
-# Download the binary + the checksums manifest
-curl -L -o /tmp/arenet "https://github.com/barto95100/arenet/releases/download/${VERSION}/arenet-${ARCH}"
-curl -L -o /tmp/checksums.txt "https://github.com/barto95100/arenet/releases/download/${VERSION}/checksums.txt"
+cd /tmp
 
-# Verify integrity (the release publishes a sha256 manifest)
-cd /tmp && grep "arenet-${ARCH}\$" checksums.txt | sha256sum -c -
+# Download the binary UNDER ITS RELEASE NAME + the checksums manifest.
+# The name must match the entry in checksums.txt (arenet-linux-amd64)
+# so `sha256sum -c` can find the file.
+curl -L -o "arenet-${ARCH}" "https://github.com/barto95100/arenet/releases/download/${VERSION}/arenet-${ARCH}"
+curl -L -o checksums.txt "https://github.com/barto95100/arenet/releases/download/${VERSION}/checksums.txt"
+
+# Verify integrity (the release publishes a sha256 manifest). Run this
+# in the same dir as the downloaded file.
+grep "arenet-${ARCH}\$" checksums.txt | sha256sum -c -
 #   → "arenet-linux-amd64: OK"
 
-# Swap the binary in and restart
+# Swap the binary in (rename to the install path) and restart
 sudo systemctl stop arenet
-sudo mv /tmp/arenet /usr/local/bin/arenet
+sudo mv "arenet-${ARCH}" /usr/local/bin/arenet
 sudo chmod +x /usr/local/bin/arenet
 sudo chown root:root /usr/local/bin/arenet
 sudo systemctl start arenet
