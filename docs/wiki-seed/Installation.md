@@ -1,5 +1,7 @@
 # Installation
 
+**🌐 English** · [Français](Installation-FR)
+
 Two supported install paths : **Docker** (recommended for most homelabs) and **native systemd** on Linux. Pick one — both end at the same place : a running Arenet instance with the admin UI accessible on `:8001` and the public listener on `:80` + `:443`.
 
 This page is the condensed guide. For per-OS details, see the [docs/install/](https://github.com/barto95100/arenet/tree/main/docs/install) folder in the main repo.
@@ -14,7 +16,7 @@ This page is the condensed guide. For per-OS details, see the [docs/install/](ht
 | Public DNS pointing at the host | For ACME HTTP-01 challenge to work for auto-HTTPS |
 | TCP/80 + TCP/443 open inbound | HTTP-to-HTTPS redirect + HTTPS serving |
 | **UDP/443 open inbound** | HTTP/3 over QUIC ([see HTTP/3 doc](https://github.com/barto95100/arenet/blob/main/docs/operations/http3.md)) |
-| Optional : DNS provider API creds | DNS-01 challenge for wildcard certs (OVH currently supported) |
+| Optional : DNS provider API creds | DNS-01 challenge for wildcard certs — configure one or more OVH accounts, see [DNS Providers](DNS-Providers) |
 
 Hardware target : 2 vCPU + 1 GB RAM is comfortable for 50 routes. The Coraza WAF is the heaviest consumer — disable it per-route on low-resource hosts if needed (see [WAF](WAF)).
 
