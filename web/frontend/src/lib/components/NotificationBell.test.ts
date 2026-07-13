@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, fireEvent, waitFor } from '@testing-library/svelte';
 import type { AlertEvent } from '$lib/api/alerting';
 
-const { store } = vi.hoisted(() => ({
+const { store, gotoMock } = vi.hoisted(() => ({
 	store: {
 		recent: [] as AlertEvent[],
 		unreadCount: 0,
@@ -14,13 +14,15 @@ const { store } = vi.hoisted(() => ({
 		loadError: '',
 		load: vi.fn().mockResolvedValue(undefined),
 		markAllRead: vi.fn()
-	}
+	},
+	gotoMock: vi.fn()
 }));
 vi.mock('$lib/stores/notifications.svelte', () => ({
 	notificationsStore: store,
 	PANEL_LIMIT: 15,
 	SYNTHETIC_UPDATE_ID: 'synthetic:update'
 }));
+vi.mock('$app/navigation', () => ({ goto: (...a: unknown[]) => gotoMock(...a) }));
 
 import NotificationBell from './NotificationBell.svelte';
 
@@ -36,6 +38,7 @@ beforeEach(() => {
 	store.loadError = '';
 	store.load.mockClear();
 	store.markAllRead.mockClear();
+	gotoMock.mockClear();
 });
 
 describe('NotificationBell', () => {
@@ -77,6 +80,23 @@ describe('NotificationBell', () => {
 		expect(getByText('Cert expiring')).toBeTruthy();
 		await fireEvent.click(getByTestId('notif-markread'));
 		expect(store.markAllRead).toHaveBeenCalled();
+	});
+
+	it('navigates to /alerting#history via goto when View all is clicked', async () => {
+		store.recent = [evt({ subject: 'Cert expiring' })];
+		const { getByTestId, getByText } = render(NotificationBell);
+		await fireEvent.click(getByTestId('notif-trigger')); // open panel
+		await fireEvent.click(getByText('View all in Alerting →'));
+		expect(gotoMock).toHaveBeenCalledWith('/alerting#history');
+	});
+
+	it('navigates internal notification links via goto (no page reload)', async () => {
+		// a cert event → internal /certs (notificationHref maps it)
+		store.recent = [evt({ subject: 'Cert expiring', category: 'cert_expiry' })];
+		const { getByTestId, getByText } = render(NotificationBell);
+		await fireEvent.click(getByTestId('notif-trigger'));
+		await fireEvent.click(getByText('Cert expiring'));
+		expect(gotoMock).toHaveBeenCalledWith('/certs');
 	});
 
 	it('polls load() on a 60s interval and stops on unmount (spec §1)', () => {
