@@ -47,6 +47,7 @@
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 	import logoUrl from '$lib/assets/arenet-logo.png';
+	import NotificationBell from './NotificationBell.svelte';
 
 	type IconName =
 		| 'dashboard'
@@ -262,6 +263,10 @@
 		{/each}
 	{/each}
 
+	<div class="sidebar-bottom">
+		<NotificationBell />
+	</div>
+
 	<div class="sidebar-foot">
 		<div
 			class="avatar"
@@ -378,8 +383,15 @@
 		opacity: 0.9;
 	}
 
-	.sidebar-foot {
+	/* Pushes the whole bottom cluster (Notifications entry + user/foot
+	   block) to the bottom of the sidebar. margin-top:auto lives on the
+	   first bottom element so the Notifications entry and the foot stay
+	   grouped together at the very bottom, above nothing. */
+	.sidebar-bottom {
 		margin-top: auto;
+	}
+
+	.sidebar-foot {
 		padding: 10px;
 		border-top: 1px solid var(--border);
 		display: flex;
