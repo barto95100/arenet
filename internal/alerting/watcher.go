@@ -118,6 +118,7 @@ type AlertRuleStore interface {
 	ListAlertRules(ctx context.Context) ([]storage.AlertRule, error)
 	UpdateAlertRuleEvalState(ctx context.Context, id string, evalAt time.Time, evalErr error) error
 	UpdateAlertRuleFiredState(ctx context.Context, id string, firedAt time.Time) error
+	UpdateAlertRuleLastMatched(ctx context.Context, id string, matched bool) error
 }
 
 // WatcherDispatcher is the seam the watcher dispatches
@@ -275,6 +276,11 @@ func (w *Watcher) evalOneRule(ctx context.Context, r storage.AlertRule) {
 	}
 	fired, err := ev.Evaluate(value, r.EvalParams)
 	if err != nil {
+		// Eval error is not a genuine state transition. Return before
+		// the edge block, deliberately leaving a state rule's LastMatched
+		// untouched: a transient error must not clear the edge (which
+		// would re-fire on recovery) nor fabricate one. Worst case is a
+		// suppressed re-fire, never a spurious flood.
 		w.persistEvalState(ctx, r.ID, now, fmt.Errorf("evaluate: %w", err))
 		return
 	}
@@ -283,16 +289,45 @@ func (w *Watcher) evalOneRule(ctx context.Context, r storage.AlertRule) {
 	// may not be met).
 	w.persistEvalState(ctx, r.ID, now, nil)
 
-	// Step 4: short-circuit if condition not met.
-	if !fired {
-		return
+	// Step 4: state rules are edge-triggered — dispatch only on the
+	// not-match → match transition; threshold rules fire whenever the
+	// condition holds (cooldown-gated). Persist the edge state for
+	// state rules so the transition memory survives a restart.
+	isState := r.Kind == RuleKindState
+
+	if isState {
+		if !fired {
+			// State left (or never reached) the matched value. Clear
+			// the edge flag so the next rising edge can fire. Only
+			// write when it actually changes, to avoid churn.
+			if r.LastMatched {
+				if err := w.cfg.Store.UpdateAlertRuleLastMatched(ctx, r.ID, false); err != nil {
+					w.cfg.Logger.Warn("alerting watcher: persist last-matched(false) failed",
+						"rule_id", r.ID, "err", err)
+				}
+			}
+			return
+		}
+		if r.LastMatched {
+			// Still matched since last tick — no rising edge, stay silent.
+			return
+		}
+		// Rising edge: fall through to dispatch. State rules bypass the
+		// cooldown (the edge itself is the anti-flood gate); LastMatched
+		// is persisted true only after a successful dispatch below.
+	} else {
+		// Threshold: unchanged — short-circuit when the condition isn't met.
+		if !fired {
+			return
+		}
 	}
 
-	// Step 5: per-channel cooldown + dispatch.
+	// Step 5: dispatch. Threshold rules consult the cooldown; state
+	// rules (rising edge) skip it.
 	cooldown := time.Duration(r.CooldownSecs) * time.Second
 	channelsFired := make([]string, 0, len(r.Channels))
 	for _, channelID := range r.Channels {
-		if w.cfg.Cooldown.OnCooldown(r.ID, channelID, cooldown) {
+		if !isState && w.cfg.Cooldown.OnCooldown(r.ID, channelID, cooldown) {
 			w.cfg.Logger.Debug("alerting watcher: channel on cooldown — skipped",
 				"rule_id", r.ID, "channel_id", channelID,
 				"cooldown_secs", r.CooldownSecs)
@@ -317,11 +352,20 @@ func (w *Watcher) evalOneRule(ctx context.Context, r storage.AlertRule) {
 		// re-emit.
 	}
 
-	// Step 6: fired-state write if ≥1 channel succeeded.
+	// Step 6: post-dispatch persistence.
 	if len(channelsFired) > 0 {
 		if err := w.cfg.Store.UpdateAlertRuleFiredState(ctx, r.ID, now); err != nil {
 			w.cfg.Logger.Warn("alerting watcher: persist fired state failed",
 				"rule_id", r.ID, "err", err)
+		}
+		// For state rules, record the rising edge as consumed ONLY after
+		// a successful fire — a failed dispatch leaves LastMatched false
+		// so the edge is retried next tick.
+		if isState {
+			if err := w.cfg.Store.UpdateAlertRuleLastMatched(ctx, r.ID, true); err != nil {
+				w.cfg.Logger.Warn("alerting watcher: persist last-matched(true) failed",
+					"rule_id", r.ID, "err", err)
+			}
 		}
 	}
 }
