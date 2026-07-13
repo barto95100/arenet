@@ -321,6 +321,24 @@ describe('Routes page — upstream-pool repeater', () => {
 	});
 });
 
+// --- 1b. Aliases layout -------------------------------------------
+
+describe('Routes page — aliases layout', () => {
+	it('lays alias inputs out in an auto-fit grid (not a vertical stack)', async () => {
+		render(Page);
+		await openCreateForm();
+		const addAlias = screen.getByRole('button', { name: /\+\s*Add alias/i });
+		await userEvent.click(addAlias);
+		await userEvent.click(addAlias);
+		await tick();
+		// two alias inputs now present (by their placeholder)
+		expect(screen.getAllByPlaceholderText('alt.example.com')).toHaveLength(2);
+		// and they live inside the auto-fit grid container
+		const grid = screen.getByTestId('alias-grid');
+		expect(grid.className).toContain('grid-cols-[repeat(auto-fit,minmax(200px,1fr))]');
+	});
+});
+
 // --- 2. LB-selector visibility flip -------------------------------
 
 describe('Routes page — LB selector visibility', () => {
