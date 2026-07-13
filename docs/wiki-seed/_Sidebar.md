@@ -16,6 +16,7 @@
 - [OIDC SSO](OIDC-SSO) · [OIDC SSO 🇫🇷](OIDC-SSO-FR)
 
 ## Operations / Opérations
+- [Certificates](Certificates) · [Certificats 🇫🇷](Certificates-FR)
 - [Updating Arenet](Updates) · [Mettre à jour 🇫🇷](Updates-FR)
 - [Backup & Restore](Backup-Restore) · [Backup & Restore 🇫🇷](Backup-Restore-FR)
 - [Alerting](Alerting) · [Alerting 🇫🇷](Alerting-FR)
