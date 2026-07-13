@@ -2125,7 +2125,10 @@ func main() {
 		return
 	}
 
-	logger.Info("Arenet v" + version + " starting...")
+	// `version` already carries its "v" prefix (release workflow injects
+	// the tag verbatim, e.g. "v2.13.0"); don't add another or the line
+	// reads "vv2.13.0". Consistent with the structured `version=` attr above.
+	logger.Info("Arenet " + version + " starting...")
 
 	if err := run(ctx, logger, cfg); err != nil {
 		logger.Error("fatal error", "err", err)
