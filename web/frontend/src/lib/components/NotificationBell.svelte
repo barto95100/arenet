@@ -9,6 +9,7 @@
 -->
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { notificationsStore, SYNTHETIC_UPDATE_ID } from '$lib/stores/notifications.svelte';
 	import { notificationHref } from '$lib/utils/notification-href';
 	import { relativeTime } from '$lib/utils/audit-format';
@@ -51,6 +52,15 @@
 	}
 	function markRead(): void {
 		notificationsStore.markAllRead();
+	}
+	// Navigate to an internal route then close. Using goto() rather than
+	// relying on the <a>'s default click means closing the panel (which
+	// unmounts the link) can't race the navigation. External links keep
+	// their native <a target=_blank> behavior.
+	function goInternal(e: MouseEvent, href: string): void {
+		e.preventDefault();
+		open = false;
+		void goto(href);
 	}
 
 	function onKey(e: KeyboardEvent): void {
@@ -120,7 +130,7 @@
 			{:else if notificationsStore.recent.length === 0}
 				<div class="panel-empty">
 					<p>{language.current && t('notifications.empty')}</p>
-					<a href="/alerting" onclick={close}>{language.current && t('notifications.emptyCta')}</a>
+					<a href="/alerting" onclick={(e) => goInternal(e, '/alerting')}>{language.current && t('notifications.emptyCta')}</a>
 				</div>
 			{:else}
 				<ul class="panel-list">
@@ -131,7 +141,7 @@
 								href={dest.href}
 								target={dest.external ? '_blank' : undefined}
 								rel={dest.external ? 'noopener noreferrer' : undefined}
-								onclick={close}
+								onclick={dest.external ? close : (e) => goInternal(e, dest.href)}
 							>
 								<span class="subject">{subjectOf(ev)}</span>
 								<span class="meta">{language.current && relativeTime(ev.timestamp)}</span>
@@ -140,7 +150,7 @@
 					{/each}
 				</ul>
 				<div class="panel-foot">
-					<a href="/alerting" onclick={close}>{language.current && t('notifications.viewAll')}</a>
+					<a href="/alerting#history" onclick={(e) => goInternal(e, '/alerting#history')}>{language.current && t('notifications.viewAll')}</a>
 				</div>
 			{/if}
 		</div>

@@ -306,6 +306,14 @@
 		top: 0;
 		height: 100vh;
 		flex: none;
+		/* The sidebar is a sticky positioned element, so it forms its own
+		   stacking context. Without an explicit z-index it loses to
+		   later-in-DOM page content (graphs/charts in .app-main have no
+		   z-index but paint after the sidebar), which then covers the
+		   NotificationBell popover and swallows its clicks. Lift the whole
+		   sidebar above page content — but keep it below true overlays
+		   (tooltips z-50/51, modals z-1000). */
+		z-index: 40;
 	}
 
 	.brand {
