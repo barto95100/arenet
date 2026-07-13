@@ -1538,10 +1538,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		logger.Info("update checker enabled", "interval", interval.String())
 	}
 	apiHandler.SetUpdateConfigHook(startUpdateLoop)
-	// Kick off according to the persisted opt-in state.
+	// Kick off according to the persisted opt-in state. Capture the
+	// effective enabled/interval for the boot "effective config" log.
+	updateEnabled := false
+	updateIntervalStr := humanizeDuration(resolveUpdateInterval("", logger))
 	if uc, ucErr := store.GetUpdateCheckConfig(ctx); ucErr != nil {
 		logger.Warn("update checker: read config failed; leaving disabled", "err", ucErr)
 	} else {
+		updateEnabled = uc.Enabled
+		updateIntervalStr = humanizeDuration(resolveUpdateInterval(uc.IntervalOverride, logger))
 		startUpdateLoop(uc)
 	}
 
@@ -1665,6 +1670,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		listenAttrs = append(listenAttrs, "https", mgr.HTTPSListen())
 	}
 	logger.Info("Arenet listening", listenAttrs...)
+
+	// v2.12.3 — one-line summary of the EFFECTIVE operator-facing config
+	// (env / .env override or built-in default), so an operator can
+	// confirm at a glance that a variable was picked up. Secrets are
+	// reported as set/unset, never their value.
+	logger.Info("effective config", effectiveConfigLogAttrs(
+		cfg.AdminPort, cfg.DataDir, mgr.HTTPListen(), mgr.HTTPSListen(),
+		updateEnabled, updateIntervalStr,
+	)...)
 
 	select {
 	case <-ctx.Done():
