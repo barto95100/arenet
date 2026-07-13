@@ -1,5 +1,7 @@
 # Arenet Wiki
 
+**🌐 English** · [Français](Home-FR)
+
 Welcome. This wiki is the **how-to** companion to the [README](https://github.com/barto95100/arenet/blob/main/README.md) — task-oriented guides for every feature, written for the operator running Arenet on their homelab.
 
 If you're new : start with [Installation](Installation), then follow [Routes](Routes) to get your first proxied host live. Everything else is feature-by-feature reference.
@@ -11,6 +13,7 @@ If you're new : start with [Installation](Installation), then follow [Routes](Ro
 ### Get started
 - **[Installation](Installation)** — Docker, native systemd, first-boot wizard
 - **[Routes](Routes)** — your first reverse proxy route, TLS, upstreams, aliases
+- **[DNS Providers](DNS-Providers)** — multi-account OVH config for wildcard (DNS-01) certificates
 - **[Topology](Topology)** — live dashboard with real-time traffic visualization
 
 ### Security stack
@@ -21,6 +24,7 @@ If you're new : start with [Installation](Installation), then follow [Routes](Ro
 - **[OIDC SSO](OIDC-SSO)** — authentik / Keycloak / Authelia integration + RBAC
 
 ### Operations
+- **[Updating Arenet](Updates)** — manual upgrade workflow (Docker + binary), rollback, security notes
 - **[Backup & Restore](Backup-Restore)** — full config export, sentinel-resolution import, disaster recovery
 - **[Alerting](Alerting)** — channels, threshold + state rules, Discord/email/webhook
 - **[Custom Error Pages](Custom-Error-Pages)** — per-route HTML templates with Caddy placeholders
@@ -55,7 +59,7 @@ If you find a gap or want to contribute a page, [open an issue](https://github.c
 
 ## Version coverage
 
-This wiki tracks **Arenet v2.9.x** (the current stable release line). Older versions may differ in feature surface ; check the [release notes](https://github.com/barto95100/arenet/releases) when in doubt.
+This wiki tracks **Arenet v2.12.x** (the current stable release line). Older versions may differ in feature surface ; check the [release notes](https://github.com/barto95100/arenet/releases) when in doubt.
 
 ## Where things live (cheat sheet)
 
@@ -63,6 +67,7 @@ This wiki tracks **Arenet v2.9.x** (the current stable release line). Older vers
 | ------- | ------- | -------- | ------- |
 | Routes | `/routes` | `/api/v1/routes` | BoltDB `routes` bucket |
 | Certificates | `/certs` | `/api/v1/certificates` | Caddy storage + cert tracker |
+| DNS providers | `/settings` (DNS Providers) | `/api/v1/settings/dns-providers` | BoltDB `dns_providers` bucket |
 | WAF events | `/security` | `/api/v1/security/events` | SQLite `waf_event` table |
 | Cert events | `/logs` (CERT badge) | `/api/v1/observability/cert-events` | SQLite `cert_event` table |
 | Audit log | `/audit` | `/api/v1/audit/events` | BoltDB `audit` bucket |
