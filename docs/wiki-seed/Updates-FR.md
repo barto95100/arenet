@@ -14,7 +14,7 @@ Il n'y a **pas de flag `--version`**. Lis la version en cours via l'un de :
 
 - **UI** — *Réglages → Mises à jour* affiche la version actuelle (et la dernière disponible, si le checker est activé).
 - **API** — `GET /api/v1/system/version` (session admin) → `{"current": "v2.12.3", ...}`.
-- **Logs** — `journalctl -u arenet | grep '"version"'` (systemd) ou `docker logs arenet 2>&1 | grep '"version"'` (Docker).
+- **Logs** — `journalctl -u arenet | grep "Arenet starting" | tail -1` (systemd) ou `docker logs arenet 2>&1 | grep "Arenet starting" | tail -1` (Docker). La dernière ligne montre la version en cours (`version=vX.Y.Z`).
 
 Compare avec la [dernière release](https://github.com/barto95100/arenet/releases/latest).
 
@@ -30,7 +30,7 @@ Si tu déploies avec le `docker-compose.yml` de référence (image `ghcr.io/bart
 cd ~/arenet            # là où vit ton docker-compose.yml
 docker compose pull    # récupère la nouvelle image :latest
 docker compose up -d   # recrée le conteneur sur la nouvelle image
-docker compose logs -f arenet | grep '"version"'   # confirme la nouvelle version
+docker compose logs -f arenet | grep "Arenet starting"   # confirme la nouvelle version
 ```
 
 Ton état vit dans le volume nommé `arenet-data` (monté sur `/var/lib/arenet`), il survit donc à la recréation du conteneur. Rien d'autre à faire.
@@ -71,22 +71,27 @@ Télécharge le nouveau binaire de release, vérifie son checksum, remplace-le, 
 VERSION=v2.12.3
 ARCH=linux-amd64        # ou linux-arm64
 
-# Télécharge le binaire + le manifeste de checksums
-curl -L -o /tmp/arenet "https://github.com/barto95100/arenet/releases/download/${VERSION}/arenet-${ARCH}"
-curl -L -o /tmp/checksums.txt "https://github.com/barto95100/arenet/releases/download/${VERSION}/checksums.txt"
+cd /tmp
 
-# Vérifie l'intégrité (la release publie un manifeste sha256)
-cd /tmp && grep "arenet-${ARCH}\$" checksums.txt | sha256sum -c -
+# Télécharge le binaire SOUS SON NOM DE RELEASE + le manifeste de checksums.
+# Le nom doit correspondre à l'entrée dans checksums.txt (arenet-linux-amd64)
+# pour que `sha256sum -c` retrouve le fichier.
+curl -L -o "arenet-${ARCH}" "https://github.com/barto95100/arenet/releases/download/${VERSION}/arenet-${ARCH}"
+curl -L -o checksums.txt "https://github.com/barto95100/arenet/releases/download/${VERSION}/checksums.txt"
+
+# Vérifie l'intégrité (la release publie un manifeste sha256). À lancer
+# dans le même dossier que le fichier téléchargé.
+grep "arenet-${ARCH}\$" checksums.txt | sha256sum -c -
 #   → "arenet-linux-amd64: OK"
 
-# Remplace le binaire et redémarre
+# Remplace le binaire (renomme vers le chemin d'install) et redémarre
 sudo systemctl stop arenet
-sudo mv /tmp/arenet /usr/local/bin/arenet
+sudo mv "arenet-${ARCH}" /usr/local/bin/arenet
 sudo chmod +x /usr/local/bin/arenet
 sudo chown root:root /usr/local/bin/arenet
 sudo systemctl start arenet
 sudo systemctl status arenet          # Active: active (running)
-sudo journalctl -u arenet | grep '"version"'
+sudo journalctl -u arenet | grep "Arenet starting" | tail -1
 ```
 
 Le dossier de données (`/var/lib/arenet` par défaut) n'est pas touché par un remplacement de binaire.
