@@ -7,24 +7,28 @@
 ## Goal
 
 Add a dedicated **sidebar notification entry** (bell icon + "Notifications"
-label + unread count), placed just above the user/logout footer block.
-Clicking it opens a panel listing the most recent alerting events, with
-per-notification contextual navigation. The existing topbar `UpdateBadge`
-stays (see §2.5) — this is an addition, not a move.
+label + unread count), placed just above the user/logout footer block, and
+**remove the topbar `UpdateBadge`**. Clicking the sidebar entry opens a
+panel listing the most recent alerting events **plus a synthetic
+"update available" notification** derived directly from `/system/version`,
+each with contextual navigation.
 
 ## Motivation
 
 - Notifications currently have no first-class home in the nav. The only
   topbar signal is `UpdateBadge` — a discreet, update-only dot next to the
   "Gateway Healthy" pill — which the operator found easy to miss and too
-  narrow (updates only).
+  narrow (updates only). The operator wants it removed and superseded by
+  the sidebar panel.
 - The update-checker work (v2.12.3–v2.12.5) added `update_available` as an
   alerting source. Operators need a visible place where alert events
   (updates, cert expiry, WAF spikes…) surface at a glance, with a jump-off
   to the relevant page.
-- The panel is rule-driven (alerting history); `UpdateBadge` remains the
-  always-on, zero-config update indicator. The two are complementary — see
-  the §2.5 comparison table.
+- **Guarantee to preserve:** `UpdateBadge` was zero-config — it showed an
+  available update even with NO alerting rule. To keep that guarantee after
+  removing it, the panel reads `/system/version` directly and synthesizes
+  an update notification (see §2.6). So removing the badge does not regress
+  the always-on update signal.
 
 ## Non-Goals (YAGNI)
 
@@ -93,17 +97,27 @@ A thin layer over `alertEventsStore` that owns unread bookkeeping. It does
 **not** duplicate fetching — it delegates to `alertEventsStore.load(...)`
 and derives from `alertEventsStore.events`.
 
+A notification item, as consumed by the panel, is the existing `AlertEvent`
+shape (the synthetic update item is constructed to satisfy that same shape,
+so the panel renders both uniformly).
+
 Public surface:
-- `recent: AlertEvent[]` — `$derived` slice of `alertEventsStore.events`
-  capped at `PANEL_LIMIT` (the store may hold more from other views).
-- `unreadCount: number` — `$derived`; events with `timestamp > lastSeen`.
+- `recent: AlertEvent[]` — `$derived`: the synthetic update item (§2.6,
+  when `updateAvailable`) prepended to the `PANEL_LIMIT`-capped slice of
+  `alertEventsStore.events`, then the whole list re-capped to `PANEL_LIMIT`
+  and sorted newest-first by `timestamp`.
+- `unreadCount: number` — `$derived`; items in `recent` with
+  `timestamp > lastSeen`.
 - `lastSeen: string` — the persisted RFC-3339 marker (localStorage-backed).
-- `load(): Promise<void>` — calls
-  `alertEventsStore.load({ limit: PANEL_LIMIT }, true)`.
-- `markAllRead(): void` — sets `lastSeen` to the newest event's timestamp
-  (or client "now" if list empty), persists to localStorage.
+- `load(): Promise<void>` — runs both fetches: `alertEventsStore.load({
+  limit: PANEL_LIMIT }, true)` and `systemApi.getVersion()`; updates the
+  synthetic-update bookkeeping (`updateFirstSeen`, §2.6).
+- `markAllRead(): void` — sets `lastSeen` to the newest item's timestamp
+  in `recent` (or client "now" if list empty), persists to localStorage.
 - `loading: boolean`, `loadError: string` — re-exposed from
-  `alertEventsStore` state for the panel's loading/error UI.
+  `alertEventsStore` state for the panel's loading/error UI. A failed
+  version fetch is swallowed (like `UpdateBadge` did) and does not set
+  `loadError` — the panel still shows alert events.
 
 localStorage access is guarded (`typeof localStorage !== 'undefined'`) so
 SSR/prerender (adapter-static build step) doesn't crash.
@@ -158,7 +172,11 @@ External URLs (`external: true`) open in a new tab with
   bell button on close. All interactive elements carry ARIA labels
   (project a11y convention).
 - **i18n:** all strings via `t()`. New keys under `notifications.*` in both
-  `en.json` and `fr.json` (parity guard test enforces both exist).
+  `en.json` and `fr.json` (parity guard test enforces both exist). The
+  `topbar.updateAvailable` key becomes orphaned when `UpdateBadge` is
+  deleted — remove it from both bundles. The new
+  `notifications.updateAvailable` key (with a `{version}` param) replaces
+  its role for the synthetic item.
 
 ### 2.4 Modified: `Sidebar.svelte`
 
@@ -167,56 +185,73 @@ External URLs (`external: true`) open in a new tab with
 - Insert `<NotificationBell />` immediately **before** the `.sidebar-foot`
   block (the avatar/username/logout row, ~line 265).
 
-### 2.5 The topbar `UpdateBadge` — keep, don't delete
+### 2.5 Modified: `Topbar.svelte` — remove `UpdateBadge`
 
-The "petite cloche à côté de Gateway Healthy" the operator referred to is
-**`UpdateBadge.svelte`** (`Topbar.svelte:105`, shipped v2.12.3). It is NOT
-a notification center — it is a discreet, **zero-config** update indicator
-that reads `GET /api/v1/system/version` directly and renders only when
-`updateAvailable` is true, linking to the GitHub release.
+The "petite cloche à côté de Gateway Healthy" is **`UpdateBadge.svelte`**
+(`Topbar.svelte:105`, shipped v2.12.3): a discreet, zero-config update dot
+reading `GET /api/v1/system/version`, rendered only when `updateAvailable`.
 
-**Decision: keep `UpdateBadge` in the topbar; do not remove it.** Rationale
-— the two surfaces have different guarantees and are complementary, not
-redundant:
+**Remove it from the topbar** (operator's choice): delete the
+`<UpdateBadge />` line and its `import` in `Topbar.svelte`. The
+`UpdateBadge.svelte` component file itself is **deleted** (no other
+consumer — verify with a grep at implementation time; if another consumer
+exists, keep the file and only remove the topbar usage).
 
-| | `UpdateBadge` (topbar) | Notification panel (sidebar) |
-| --- | --- | --- |
-| Source | `GET /system/version` (direct) | alerting history (`alert-events`) |
-| Config required | **none** — works out of the box | requires an `update_available` **rule** |
-| Scope | update availability only | all alert events (updates, certs, WAF…) |
+The always-on update guarantee it provided is preserved by §2.6.
 
-Deleting `UpdateBadge` would regress operators who have the update checker
-enabled but **no alerting rule** configured — they'd lose their update
-indicator entirely. The sidebar panel does not replace that guarantee
-(it's rule-driven). So both coexist: `UpdateBadge` is the always-on "an
-update exists" dot; the sidebar panel is the richer, rule-driven event
-feed. This also keeps the change surgical (pure addition to the sidebar,
-no topbar edit).
+### 2.6 The synthetic "update available" notification
 
-> If the operator later wants the topbar badge gone for visual reasons,
-> that's a trivial follow-up — but it's a deliberate UX call, not a
-> mechanical cleanup, so it's out of scope here.
+`UpdateBadge` worked with **zero config** — it showed an available update
+even when no alerting rule existed. Alert-events are rule-driven, so to
+keep that guarantee the panel reads `/system/version` directly and injects
+a synthetic notification.
+
+- `notifications.svelte.ts` also fetches `systemApi.getVersion()` →
+  `SystemVersion { current, latest, updateAvailable, url }`.
+- When `updateAvailable === true`, the store prepends a **synthetic**
+  notification item to `recent`:
+  - stable id: `"synthetic:update"` (so it dedupes across refreshes and can
+    key unread separately from `alert_event` rows).
+  - `subject`: `t('notifications.updateAvailable', { version: latest })`
+    → e.g. "Mise à jour v2.12.6 disponible".
+  - `timestamp`: the version fetch time (client "now" at fetch). Because
+    `Date.now()` is fine in the browser (this is frontend, not a workflow
+    script), the store stamps it when the fetch resolves.
+  - `context.url = url` → clicking opens the GitHub release (same behavior
+    the badge had), via the §2.2 `context.url` branch.
+  - `severity`: info-level.
+- The synthetic item participates in unread counting like any other
+  (`timestamp > lastSeen`). Its `timestamp` is set once per "update becomes
+  available" transition: if `updateAvailable` stays true across polls, the
+  store keeps the FIRST-seen timestamp for `synthetic:update` (don't
+  re-stamp on every poll, or it would perpetually re-mark unread). Track
+  this with a stored `updateFirstSeen` value.
+- If `updateAvailable` flips back to false (operator upgraded), the
+  synthetic item disappears from `recent` and `updateFirstSeen` resets.
+
+This means: even a fresh install with **no alerting rules** still shows the
+update notification in the panel — the zero-config guarantee is intact,
+just relocated from the topbar dot into the sidebar panel.
 
 ---
 
 ## Data flow
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │ GET /api/v1/observability/alert-events   │
-                    │        ?limit=15   (existing, admin)     │
-                    └───────────────────┬──────────────────────┘
-                                        │
-                        alertingApi.listAlertEvents()
-                                        │
-                              alertEventsStore.load()
-                                        │  .events
-                                        ▼
+     ┌──────────────────────────────────────┐   ┌───────────────────────────┐
+     │ GET /observability/alert-events?limit=15 │ │ GET /system/version       │
+     │        (existing, admin)             │   │ {updateAvailable,url,...} │
+     └───────────────┬──────────────────────┘   └────────────┬──────────────┘
+                     │ alertEventsStore.load()                │ systemApi.getVersion()
+                     │ .events                                │
+                     ▼                                        ▼
         ┌──────────────────────────────────────────────────────┐
         │ notifications.svelte.ts                               │
-        │  recent = events.slice(0, 15)   (derived)            │
-        │  unreadCount = events > lastSeen (derived)           │
+        │  synthetic update item (if updateAvailable) ───┐     │
+        │  recent = [synthetic?, ...events].sort().slice(0,15) │
+        │  unreadCount = recent items with ts > lastSeen       │
         │  lastSeen  ← localStorage 'arenet.notifications...'  │
+        │  updateFirstSeen ← localStorage (stable synthetic ts)│
         └───────────────┬──────────────────────────────────────┘
                         │
                  NotificationBell.svelte
@@ -245,13 +280,22 @@ no topbar edit).
 Unit tests (vitest + @testing-library/svelte), each written failing-first:
 
 1. **`notifications.svelte.ts`**
-   - `unreadCount` counts only events strictly newer than `lastSeen`.
+   - `unreadCount` counts only items strictly newer than `lastSeen`.
    - First visit (no localStorage key) → `unreadCount === 0` and `lastSeen`
-     initialized to newest event's timestamp.
-   - `markAllRead()` sets `lastSeen` to newest event timestamp, drops count
+     initialized to newest item's timestamp.
+   - `markAllRead()` sets `lastSeen` to newest item timestamp, drops count
      to 0, and persists.
    - `recent` is capped at `PANEL_LIMIT` even when the store holds more.
    - localStorage-absent path does not throw (count 0).
+   - **Synthetic update:** when `getVersion()` returns
+     `updateAvailable: true`, `recent` includes a `synthetic:update` item
+     with `context.url` = the release URL and subject naming `latest`.
+   - `updateAvailable: false` → no synthetic item in `recent`.
+   - Synthetic timestamp is stable across polls while the update stays
+     available (`updateFirstSeen` not re-stamped) → it does not perpetually
+     re-mark unread after being read.
+   - A failed `getVersion()` does not throw and does not set `loadError`;
+     alert events still populate `recent`.
 
 2. **`notificationHref`**
    - `context.url` present → returns that URL, `external: true`.
@@ -273,9 +317,12 @@ Unit tests (vitest + @testing-library/svelte), each written failing-first:
 
 After implementation, build the frontend + run the binary, log in, and:
 - Confirm the bell + label appears in the sidebar above the user block, and
-  the old topbar bell is gone.
-- With ≥1 alert event present (e.g. trigger/seed an `update_available` or
-  any rule), confirm the count badge appears and the panel lists it.
+  the topbar `UpdateBadge` (next to Gateway Healthy) is gone.
+- **Zero-config update path:** with the update checker reporting an update
+  but NO alerting rule configured, confirm the panel still shows the
+  synthetic "Mise à jour disponible" notification and the count badge.
+- With ≥1 alert event present (e.g. seed an alerting rule that fires),
+  confirm the count badge appears and the panel lists the event.
 - Click an `update_available` notification → new tab to the GitHub release
   URL from `context.url`.
 - Click a non-update notification → lands on the mapped internal page (or
@@ -292,8 +339,11 @@ After implementation, build the frontend + run the binary, log in, and:
 | Create | `web/frontend/src/lib/stores/notifications.test.ts` |
 | Create | `web/frontend/src/lib/components/NotificationBell.test.ts` |
 | Modify | `web/frontend/src/lib/components/Sidebar.svelte` (mount bell above foot) |
-| Modify | `web/frontend/src/lib/i18n/locales/en.json` (+`notifications.*`) |
-| Modify | `web/frontend/src/lib/i18n/locales/fr.json` (+`notifications.*`) |
+| Modify | `web/frontend/src/lib/components/Topbar.svelte` (remove `<UpdateBadge />` + import) |
+| Delete | `web/frontend/src/lib/components/UpdateBadge.svelte` (only consumer is Topbar — confirmed) |
+| Delete | `web/frontend/src/lib/components/UpdateBadge.test.ts` (exists — confirmed) |
+| Modify | `web/frontend/src/lib/i18n/locales/en.json` (+`notifications.*`, −`topbar.updateAvailable`) |
+| Modify | `web/frontend/src/lib/i18n/locales/fr.json` (+`notifications.*`, −`topbar.updateAvailable`) |
 
 ## Global constraints (from CLAUDE.md)
 
