@@ -639,3 +639,81 @@ func TestWatcher_ThresholdRule_UnchangedFiresEachTick(t *testing.T) {
 		t.Fatalf("threshold dispatch calls = %d; want 2 (unchanged)", got)
 	}
 }
+
+// --- Integration: real BoltDB Store (verify-skill runtime proof) ---
+//
+// The fake-store edge tests prove the branching logic; this test
+// proves the same behavior end-to-end through the REAL *storage.Store
+// (BoltDB persistence of LastMatched) — including the load-bearing
+// "no re-fire after restart" guarantee that the persisted flag
+// provides. A fresh watcher built against the same on-disk store must
+// NOT re-fire a state rule whose LastMatched was persisted true.
+func TestWatcher_StateRule_Integration_NoRefireAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.NewStore(dir + "/db")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	rule := storage.AlertRule{
+		ID:           "upd-1",
+		Name:         "update-avail",
+		Enabled:      true,
+		Kind:         RuleKindState,
+		Severity:     int(SeverityInfo),
+		Category:     "system",
+		Source:       "stub",
+		SourceParams: json.RawMessage(`{}`),
+		EvalParams:   json.RawMessage(`{"expected":"available"}`),
+		Channels:     []string{"ch-1"},
+		CooldownSecs: 300,
+	}
+	if _, err := store.CreateAlertRule(ctx, rule); err != nil {
+		t.Fatalf("CreateAlertRule: %v", err)
+	}
+
+	src := &fakeSource{name: "stub", readValue: StringValue("available")}
+	disp := &fakeDispatcher{}
+	cfg := WatcherConfig{
+		Store:      store,
+		Sources:    &fakeLookup{known: map[string]Source{"stub": src}},
+		Dispatcher: disp,
+		Cooldown:   NewCooldownLRU(nil),
+		Logger:     silentLogger(),
+	}
+
+	// First watcher: two ticks, update available the whole time.
+	w1, err := NewWatcher(cfg)
+	if err != nil {
+		t.Fatalf("NewWatcher(1): %v", err)
+	}
+	w1.tick(ctx)
+	w1.tick(ctx)
+	if got := len(disp.calls); got != 1 {
+		t.Fatalf("first watcher dispatch calls = %d; want 1 (edge-triggered)", got)
+	}
+
+	// The edge must be persisted to BoltDB.
+	stored, err := store.GetAlertRule(ctx, "upd-1")
+	if err != nil {
+		t.Fatalf("GetAlertRule: %v", err)
+	}
+	if !stored.LastMatched {
+		t.Fatalf("LastMatched not persisted true after fire")
+	}
+
+	// Simulate a restart: brand-new watcher + brand-new cooldown LRU
+	// (in-memory, so it resets — proving suppression comes from the
+	// PERSISTED LastMatched, not a warm cooldown), same on-disk store.
+	cfg.Cooldown = NewCooldownLRU(nil)
+	w2, err := NewWatcher(cfg)
+	if err != nil {
+		t.Fatalf("NewWatcher(2): %v", err)
+	}
+	w2.tick(ctx)
+	if got := len(disp.calls); got != 1 {
+		t.Fatalf("post-restart dispatch calls = %d; want 1 (no re-fire — persisted edge suppresses it)", got)
+	}
+}
