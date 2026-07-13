@@ -29,6 +29,8 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/oschwald/geoip2-golang"
 )
@@ -49,19 +51,24 @@ type Location struct {
 }
 
 // Lookup wraps a MaxMind GeoLite2-City reader. Safe for concurrent
-// use: the underlying maxminddb.Reader is documented as goroutine-safe
-// for reads, and Close is mutex-guarded for idempotency.
+// use: the underlying reader is a read-only mmap (goroutine-safe for
+// reads), published via an atomic pointer so Reload can swap it in at
+// runtime without a lock on the lookup hot path.
 //
 // A nil *Lookup is a valid degraded-mode receiver: LookupIP returns
-// Location{Found: false} and Close is a no-op. This matches the AC #13
-// pattern from Step T (nil reader → empty result, never panic).
+// Location{Found: false} and Close/Reload are safe.
 type Lookup struct {
-	reader *geoip2.Reader
-	path   string
+	reader atomic.Pointer[geoip2.Reader]
 
-	mu     sync.Mutex
-	closed bool
+	// pathMu guards path, updated by Reload off the hot path.
+	pathMu sync.Mutex
+	path   string
 }
+
+// closeGracePeriod is how long Reload waits before closing the previous
+// reader, so concurrent in-flight lookups (each a microsecond-scale
+// City() call) finish against the old mmap before it is unmapped.
+const closeGracePeriod = 5 * time.Second
 
 // NewLookup opens the MMDB file at the given path. Returns an error
 // if the path is empty, the file is missing, or the file is not a
@@ -76,7 +83,9 @@ func NewLookup(mmdbPath string) (*Lookup, error) {
 	if err != nil {
 		return nil, fmt.Errorf("geo: open mmdb %q: %w", mmdbPath, err)
 	}
-	return &Lookup{reader: reader, path: mmdbPath}, nil
+	l := &Lookup{path: mmdbPath}
+	l.reader.Store(reader)
+	return l, nil
 }
 
 // Path returns the MMDB file path this Lookup was opened against.
@@ -85,6 +94,8 @@ func (l *Lookup) Path() string {
 	if l == nil {
 		return ""
 	}
+	l.pathMu.Lock()
+	defer l.pathMu.Unlock()
 	return l.path
 }
 
@@ -102,7 +113,7 @@ func (l *Lookup) Path() string {
 // Country name resolution prefers English ("en") for stable wire shape;
 // the frontend handles its own localization layer.
 func (l *Lookup) LookupIP(ip net.IP) Location {
-	if l == nil || l.reader == nil {
+	if l == nil {
 		return Location{Found: false}
 	}
 	if ip == nil || ip.IsUnspecified() {
@@ -111,19 +122,14 @@ func (l *Lookup) LookupIP(ip net.IP) Location {
 	if isLAN(ip) {
 		return Location{Country: "LAN", Found: false}
 	}
-
-	l.mu.Lock()
-	closed := l.closed
-	l.mu.Unlock()
-	if closed {
+	r := l.reader.Load()
+	if r == nil {
 		return Location{Found: false}
 	}
-
-	rec, err := l.reader.City(ip)
+	rec, err := r.City(ip)
 	if err != nil || rec == nil {
 		return Location{Found: false}
 	}
-
 	loc := Location{
 		Country:     rec.Country.IsoCode,
 		CountryName: rec.Country.Names["en"],
@@ -135,19 +141,48 @@ func (l *Lookup) LookupIP(ip net.IP) Location {
 	return loc
 }
 
+// Reload opens the MMDB at newPath and atomically swaps it in as the
+// active reader. In-flight lookups continue against whichever reader
+// they already loaded; the previous reader is closed after a grace
+// period so those lookups finish first.
+//
+// On open error the current reader is left in place — a failed download
+// or corrupt file never degrades a working lookup. A nil receiver or
+// empty path returns an error.
+func (l *Lookup) Reload(newPath string) error {
+	if l == nil {
+		return errors.New("geo: reload on nil Lookup")
+	}
+	if newPath == "" {
+		return errors.New("geo: reload path is empty")
+	}
+	nr, err := geoip2.Open(newPath)
+	if err != nil {
+		return fmt.Errorf("geo: reload open mmdb %q: %w", newPath, err)
+	}
+	old := l.reader.Swap(nr)
+	l.pathMu.Lock()
+	l.path = newPath
+	l.pathMu.Unlock()
+	if old != nil {
+		go func(r *geoip2.Reader) {
+			time.Sleep(closeGracePeriod)
+			_ = r.Close()
+		}(old)
+	}
+	return nil
+}
+
 // Close releases the MMDB file handle. Safe to call on nil, safe to
 // call multiple times.
 func (l *Lookup) Close() error {
-	if l == nil || l.reader == nil {
+	if l == nil {
 		return nil
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.closed {
-		return nil
+	if r := l.reader.Swap(nil); r != nil {
+		return r.Close()
 	}
-	l.closed = true
-	return l.reader.Close()
+	return nil
 }
 
 // rfc1918Ranges + loopback + link-local CIDR set used by isLAN.

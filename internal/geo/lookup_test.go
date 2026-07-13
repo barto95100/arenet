@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -176,6 +177,85 @@ func TestIsLAN_NilIP(t *testing.T) {
 	if isLAN(nil) {
 		t.Fatal("expected isLAN(nil)=false")
 	}
+}
+
+// setPathForTest sets the unexported path field for tests that assert
+// Path() behavior without a real MMDB.
+func (l *Lookup) setPathForTest(p string) {
+	l.pathMu.Lock()
+	l.path = p
+	l.pathMu.Unlock()
+}
+
+func TestReload_EmptyPath_ReturnsErrorNoChange(t *testing.T) {
+	l := &Lookup{} // nil reader
+	if err := l.Reload(""); err == nil {
+		t.Fatal("Reload(\"\") = nil; want error")
+	}
+	// reader untouched → still degraded, no panic
+	if got := l.LookupIP(net.ParseIP("8.8.8.8")); got.Found {
+		t.Errorf("LookupIP after failed reload = %+v; want Found=false", got)
+	}
+}
+
+func TestReload_InvalidPath_PreservesReader(t *testing.T) {
+	l := &Lookup{}
+	missing := filepath.Join(t.TempDir(), "nope.mmdb")
+	err := l.Reload(missing)
+	if err == nil {
+		t.Fatal("Reload(missing) = nil; want error")
+	}
+	if !strings.Contains(err.Error(), "reload open mmdb") {
+		t.Errorf("error = %v; want wrapped 'reload open mmdb'", err)
+	}
+	// current (nil) reader preserved; lookups still safe
+	if got := l.LookupIP(net.ParseIP("8.8.8.8")); got.Found {
+		t.Errorf("LookupIP after failed reload = %+v; want Found=false", got)
+	}
+}
+
+func TestReload_NilReceiver_ReturnsError(t *testing.T) {
+	var l *Lookup
+	if err := l.Reload("/whatever"); err == nil {
+		t.Fatal("nil *Lookup Reload = nil; want error")
+	}
+}
+
+func TestReload_FailedReload_DoesNotChangePath(t *testing.T) {
+	l := &Lookup{}
+	l.setPathForTest("original.mmdb") // see helper below
+	_ = l.Reload(filepath.Join(t.TempDir(), "missing.mmdb"))
+	if got := l.Path(); got != "original.mmdb" {
+		t.Errorf("Path after failed reload = %q; want unchanged 'original.mmdb'", got)
+	}
+}
+
+func TestReload_Concurrent_RaceSafe(t *testing.T) {
+	l := &Lookup{}
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	// readers
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = l.LookupIP(net.ParseIP("8.8.8.8"))
+				}
+			}
+		}()
+	}
+	// reloader (reloads fail-open since no real DB; still exercises Swap path)
+	missing := filepath.Join(t.TempDir(), "missing.mmdb")
+	for i := 0; i < 50; i++ {
+		_ = l.Reload(missing)
+	}
+	close(stop)
+	wg.Wait()
 }
 
 // TestLookupIP_RealMMDB exercises the full pipeline against an actual
