@@ -78,4 +78,23 @@ describe('NotificationBell', () => {
 		await fireEvent.click(getByTestId('notif-markread'));
 		expect(store.markAllRead).toHaveBeenCalled();
 	});
+
+	it('polls load() on a 60s interval and stops on unmount (spec §1)', () => {
+		vi.useFakeTimers();
+		try {
+			const { unmount } = render(NotificationBell);
+			// one immediate load on mount
+			expect(store.load).toHaveBeenCalledTimes(1);
+			vi.advanceTimersByTime(60_000);
+			expect(store.load).toHaveBeenCalledTimes(2);
+			vi.advanceTimersByTime(60_000);
+			expect(store.load).toHaveBeenCalledTimes(3);
+			unmount();
+			vi.advanceTimersByTime(120_000);
+			// no further polls after unmount
+			expect(store.load).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

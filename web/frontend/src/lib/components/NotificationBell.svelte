@@ -16,9 +16,15 @@
 	import { language } from '$lib/stores/language.svelte';
 	import type { AlertEvent } from '$lib/api/alerting';
 
+	// Background refresh cadence (spec §1). Keeps the unread badge
+	// current — including a newly-available update — without the
+	// operator having to reload the page or open the panel.
+	const POLL_INTERVAL_MS = 60_000;
+
 	let open = $state(false);
 	let triggerEl = $state<HTMLButtonElement | null>(null);
 	let panelEl = $state<HTMLDivElement | null>(null);
+	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	const count = $derived(notificationsStore.unreadCount);
 	const badge = $derived(count > 99 ? '99+' : String(count));
@@ -59,10 +65,12 @@
 
 	onMount(() => {
 		notificationsStore.load();
+		pollTimer = setInterval(() => notificationsStore.load(), POLL_INTERVAL_MS);
 		document.addEventListener('keydown', onKey);
 		document.addEventListener('click', onClickOutside, true);
 	});
 	onDestroy(() => {
+		if (pollTimer !== null) clearInterval(pollTimer);
 		if (typeof document === 'undefined') return;
 		document.removeEventListener('keydown', onKey);
 		document.removeEventListener('click', onClickOutside, true);

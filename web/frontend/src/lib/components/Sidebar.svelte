@@ -263,7 +263,9 @@
 		{/each}
 	{/each}
 
-	<NotificationBell />
+	<div class="sidebar-bottom">
+		<NotificationBell />
+	</div>
 
 	<div class="sidebar-foot">
 		<div
@@ -381,8 +383,15 @@
 		opacity: 0.9;
 	}
 
-	.sidebar-foot {
+	/* Pushes the whole bottom cluster (Notifications entry + user/foot
+	   block) to the bottom of the sidebar. margin-top:auto lives on the
+	   first bottom element so the Notifications entry and the foot stay
+	   grouped together at the very bottom, above nothing. */
+	.sidebar-bottom {
 		margin-top: auto;
+	}
+
+	.sidebar-foot {
 		padding: 10px;
 		border-top: 1px solid var(--border);
 		display: flex;
