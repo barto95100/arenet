@@ -36,11 +36,12 @@ import (
 // --- test fakes ------------------------------------------
 
 type fakeRuleStore struct {
-	mu              sync.Mutex
-	rules           []storage.AlertRule
-	evalUpdates     []evalCall
-	firedUpdates    []firedCall
-	listErr         error
+	mu                 sync.Mutex
+	rules              []storage.AlertRule
+	evalUpdates        []evalCall
+	firedUpdates       []firedCall
+	lastMatchedUpdates []lastMatchedCall
+	listErr            error
 }
 
 type evalCall struct {
@@ -52,6 +53,10 @@ type evalCall struct {
 type firedCall struct {
 	id string
 	at time.Time
+}
+type lastMatchedCall struct {
+	id      string
+	matched bool
 }
 
 func (f *fakeRuleStore) ListAlertRules(_ context.Context) ([]storage.AlertRule, error) {
@@ -78,6 +83,21 @@ func (f *fakeRuleStore) UpdateAlertRuleFiredState(_ context.Context, id string, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.firedUpdates = append(f.firedUpdates, firedCall{id: id, at: at})
+	return nil
+}
+
+// UpdateAlertRuleLastMatched records the call AND mutates the stored
+// rule so the next ListAlertRules reflects the new edge state — the
+// edge-trigger tests need multi-tick state to actually change.
+func (f *fakeRuleStore) UpdateAlertRuleLastMatched(_ context.Context, id string, matched bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastMatchedUpdates = append(f.lastMatchedUpdates, lastMatchedCall{id: id, matched: matched})
+	for i := range f.rules {
+		if f.rules[i].ID == id {
+			f.rules[i].LastMatched = matched
+		}
+	}
 	return nil
 }
 
@@ -120,8 +140,8 @@ type fakeSource struct {
 	mu        sync.Mutex
 }
 
-func (f *fakeSource) Name() string                              { return f.name }
-func (f *fakeSource) ValidateParams(_ json.RawMessage) error    { return nil }
+func (f *fakeSource) Name() string                           { return f.name }
+func (f *fakeSource) ValidateParams(_ json.RawMessage) error { return nil }
 func (f *fakeSource) Read(_ context.Context, _ json.RawMessage) (SourceValue, error) {
 	f.mu.Lock()
 	f.calls++
@@ -393,11 +413,11 @@ func TestWatcher_CooldownExpiresAfterWindow(t *testing.T) {
 		Now:        clk.Now,
 		Logger:     silentLogger(),
 	}
-	runOneTick(t, cfg)    // tick 1 → dispatch
+	runOneTick(t, cfg) // tick 1 → dispatch
 	clk.Advance(30 * time.Second)
-	runOneTick(t, cfg)    // tick 2 → suppressed
+	runOneTick(t, cfg)            // tick 2 → suppressed
 	clk.Advance(40 * time.Second) // total 70s > 60s window
-	runOneTick(t, cfg)    // tick 3 → re-dispatch
+	runOneTick(t, cfg)            // tick 3 → re-dispatch
 
 	if len(disp.calls) != 2 {
 		t.Errorf("dispatch calls = %d; want 2 (1 + 0 + 1)", len(disp.calls))
@@ -519,5 +539,103 @@ func TestWatcher_TickImmediateAtStart(t *testing.T) {
 	disp.mu.Unlock()
 	if got != 1 {
 		t.Errorf("dispatch calls at Started = %d; want 1 (immediate first tick)", got)
+	}
+}
+
+// --- edge-trigger tests (state rules) ---------------------
+
+func stateRule(id string, channels []string) storage.AlertRule {
+	r := baseRule(id, "state-"+id, channels)
+	r.Kind = RuleKindState
+	r.EvalParams = json.RawMessage(`{"expected":"available"}`)
+	// baseRule already sets SourceParams; EvalParams is set above, so
+	// mustRule (which requires a non-nil *testing.T for t.Helper()) is
+	// unneeded here — r already has both params filled.
+	return r
+}
+
+func newWatcherFor(t *testing.T, store *fakeRuleStore, disp *fakeDispatcher, src *fakeSource) *Watcher {
+	t.Helper()
+	w, err := NewWatcher(WatcherConfig{
+		Store:      store,
+		Sources:    &fakeLookup{known: map[string]Source{"stub": src}},
+		Dispatcher: disp,
+		Cooldown:   NewCooldownLRU(nil),
+		Logger:     silentLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	return w
+}
+
+func TestWatcher_StateRule_FiresOnceWhileMatched(t *testing.T) {
+	src := &fakeSource{name: "stub", readValue: StringValue("available")}
+	store := &fakeRuleStore{rules: []storage.AlertRule{stateRule("r-1", []string{"ch-1"})}}
+	disp := &fakeDispatcher{}
+	w := newWatcherFor(t, store, disp, src)
+	ctx := context.Background()
+	w.tick(ctx)
+	w.tick(ctx)
+	w.tick(ctx)
+	if got := len(disp.calls); got != 1 {
+		t.Fatalf("dispatch calls = %d; want 1 (edge-triggered)", got)
+	}
+	if len(store.lastMatchedUpdates) == 0 || !store.lastMatchedUpdates[len(store.lastMatchedUpdates)-1].matched {
+		t.Fatalf("LastMatched not persisted true after fire")
+	}
+}
+
+func TestWatcher_StateRule_RefiresAfterReturningToMatch(t *testing.T) {
+	src := &fakeSource{name: "stub", readValue: StringValue("available")}
+	store := &fakeRuleStore{rules: []storage.AlertRule{stateRule("r-1", []string{"ch-1"})}}
+	disp := &fakeDispatcher{}
+	w := newWatcherFor(t, store, disp, src)
+	ctx := context.Background()
+	w.tick(ctx)                               // available → fire (1)
+	src.readValue = StringValue("up_to_date") // leaves match; persists LastMatched=false
+	w.tick(ctx)                               // no fire
+	src.readValue = StringValue("available")  // returns to match
+	w.tick(ctx)                               // rising edge again → fire (2)
+	if got := len(disp.calls); got != 2 {
+		t.Fatalf("dispatch calls = %d; want 2", got)
+	}
+}
+
+func TestWatcher_StateRule_RetriesWhenDispatchFails(t *testing.T) {
+	src := &fakeSource{name: "stub", readValue: StringValue("available")}
+	store := &fakeRuleStore{rules: []storage.AlertRule{stateRule("r-1", []string{"ch-1"})}}
+	disp := &fakeDispatcher{failFor: map[string]string{"ch-1": "boom"}}
+	w := newWatcherFor(t, store, disp, src)
+	ctx := context.Background()
+	w.tick(ctx) // rising edge, dispatch fails → LastMatched stays false
+	for _, u := range store.lastMatchedUpdates {
+		if u.matched {
+			t.Fatalf("LastMatched set true despite failed dispatch")
+		}
+	}
+	disp.failFor = nil // recover
+	w.tick(ctx)        // still matched, still an edge (LastMatched false) → retry succeeds
+	if got := len(disp.calls); got != 2 {
+		t.Fatalf("dispatch calls = %d; want 2 (retry after failure)", got)
+	}
+}
+
+func TestWatcher_ThresholdRule_UnchangedFiresEachTick(t *testing.T) {
+	// regression guard: a threshold rule over its limit still fires on
+	// successive ticks, proving edge logic is scoped to state rules.
+	// Cooldown default (300s) would suppress the 2nd fire, so use a
+	// cooldown of 0 to isolate "does the edge logic touch threshold?".
+	src := &fakeSource{name: "stub", readValue: FloatValue(100)}
+	r := mustRule(t, baseRule("r-1", "thr", []string{"ch-1"}))
+	r.CooldownSecs = 0
+	store := &fakeRuleStore{rules: []storage.AlertRule{r}}
+	disp := &fakeDispatcher{}
+	w := newWatcherFor(t, store, disp, src)
+	ctx := context.Background()
+	w.tick(ctx)
+	w.tick(ctx)
+	if got := len(disp.calls); got != 2 {
+		t.Fatalf("threshold dispatch calls = %d; want 2 (unchanged)", got)
 	}
 }
