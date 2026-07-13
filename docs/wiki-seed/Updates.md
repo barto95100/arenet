@@ -13,7 +13,7 @@ Arenet ships as a single binary / container image. **Updating is a manual, opera
 There is **no `--version` flag**. Read the running version from any of:
 
 - **UI** — *Settings → Updates* shows the current version (and the latest available, if the checker is enabled).
-- **API** — `GET /api/v1/system/version` (admin session) → `{"current": "v2.12.3", ...}`.
+- **API** — `GET /api/v1/system/version` (admin session) → `{"current": "vX.Y.Z", ...}`.
 - **Logs** — `journalctl -u arenet | grep "Arenet starting" | tail -1` (systemd) or `docker logs arenet 2>&1 | grep "Arenet starting" | tail -1` (Docker). The last match shows the running version (`version=vX.Y.Z`).
 
 Compare against the [latest release](https://github.com/barto95100/arenet/releases/latest).
@@ -41,9 +41,9 @@ Your state lives in the named volume `arenet-data` (mounted at `/var/lib/arenet`
 # docker-compose.yml
 services:
   arenet:
-    image: ghcr.io/barto95100/arenet:v2.12.3   # explicit tag
+    image: ghcr.io/barto95100/arenet:vX.Y.Z   # pick a tag from the releases page
 ```
-Then bump the tag, `docker compose pull`, `docker compose up -d`.
+Replace `vX.Y.Z` with a tag from the [releases page](https://github.com/barto95100/arenet/releases), then `docker compose pull`, `docker compose up -d`. To move to a newer version later, bump the tag and repeat.
 
 ---
 
@@ -68,16 +68,17 @@ The `arenet-data` volume carries your data across the replace. Keep the **same `
 Download the new release binary, verify its checksum, swap it in, restart:
 
 ```bash
-VERSION=v2.12.3
 ARCH=linux-amd64        # or linux-arm64
 
 cd /tmp
 
-# Download the binary UNDER ITS RELEASE NAME + the checksums manifest.
-# The name must match the entry in checksums.txt (arenet-linux-amd64)
-# so `sha256sum -c` can find the file.
-curl -L -o "arenet-${ARCH}" "https://github.com/barto95100/arenet/releases/download/${VERSION}/arenet-${ARCH}"
-curl -L -o checksums.txt "https://github.com/barto95100/arenet/releases/download/${VERSION}/checksums.txt"
+# Download the LATEST stable binary + its checksums manifest. The
+# /releases/latest/download/ URL always redirects to the newest stable
+# release — no version number to keep up to date. The file is saved
+# under its release name (arenet-linux-amd64) so it matches the entry
+# in checksums.txt and `sha256sum -c` can find it.
+curl -L -o "arenet-${ARCH}" "https://github.com/barto95100/arenet/releases/latest/download/arenet-${ARCH}"
+curl -L -o checksums.txt "https://github.com/barto95100/arenet/releases/latest/download/checksums.txt"
 
 # Verify integrity (the release publishes a sha256 manifest). Run this
 # in the same dir as the downloaded file.
@@ -102,10 +103,10 @@ The data dir (`/var/lib/arenet` by default) is untouched by a binary swap.
 
 An upgrade is reversible as long as you didn't cross a schema MAJOR bump (see [§5](#5-migration-safety)).
 
-**Docker Compose / run** — re-pin the previous image tag and recreate:
+**Docker Compose / run** — re-pin the previous image tag and recreate. Replace `vPREV` with the version you were on before the upgrade (find it in your shell history, or on the [releases page](https://github.com/barto95100/arenet/releases)):
 ```bash
-docker pull ghcr.io/barto95100/arenet:v2.12.2   # the version you were on
-# edit compose image tag back, or re-run docker run with :v2.12.2
+docker pull ghcr.io/barto95100/arenet:vPREV
+# edit the compose image tag back to :vPREV, or re-run docker run with :vPREV
 docker compose up -d
 ```
 

@@ -13,7 +13,7 @@ Arenet est livré comme un binaire / image de conteneur unique. **La mise à jou
 Il n'y a **pas de flag `--version`**. Lis la version en cours via l'un de :
 
 - **UI** — *Réglages → Mises à jour* affiche la version actuelle (et la dernière disponible, si le checker est activé).
-- **API** — `GET /api/v1/system/version` (session admin) → `{"current": "v2.12.3", ...}`.
+- **API** — `GET /api/v1/system/version` (session admin) → `{"current": "vX.Y.Z", ...}`.
 - **Logs** — `journalctl -u arenet | grep "Arenet starting" | tail -1` (systemd) ou `docker logs arenet 2>&1 | grep "Arenet starting" | tail -1` (Docker). La dernière ligne montre la version en cours (`version=vX.Y.Z`).
 
 Compare avec la [dernière release](https://github.com/barto95100/arenet/releases/latest).
@@ -41,9 +41,9 @@ Ton état vit dans le volume nommé `arenet-data` (monté sur `/var/lib/arenet`)
 # docker-compose.yml
 services:
   arenet:
-    image: ghcr.io/barto95100/arenet:v2.12.3   # tag explicite
+    image: ghcr.io/barto95100/arenet:vX.Y.Z   # choisis un tag sur la page des releases
 ```
-Puis bump le tag, `docker compose pull`, `docker compose up -d`.
+Remplace `vX.Y.Z` par un tag de la [page des releases](https://github.com/barto95100/arenet/releases), puis `docker compose pull`, `docker compose up -d`. Pour passer à une version plus récente ensuite, bump le tag et recommence.
 
 ---
 
@@ -68,16 +68,18 @@ Le volume `arenet-data` porte tes données à travers le remplacement. Garde le 
 Télécharge le nouveau binaire de release, vérifie son checksum, remplace-le, redémarre :
 
 ```bash
-VERSION=v2.12.3
 ARCH=linux-amd64        # ou linux-arm64
 
 cd /tmp
 
-# Télécharge le binaire SOUS SON NOM DE RELEASE + le manifeste de checksums.
-# Le nom doit correspondre à l'entrée dans checksums.txt (arenet-linux-amd64)
-# pour que `sha256sum -c` retrouve le fichier.
-curl -L -o "arenet-${ARCH}" "https://github.com/barto95100/arenet/releases/download/${VERSION}/arenet-${ARCH}"
-curl -L -o checksums.txt "https://github.com/barto95100/arenet/releases/download/${VERSION}/checksums.txt"
+# Télécharge le DERNIER binaire stable + son manifeste de checksums.
+# L'URL /releases/latest/download/ redirige toujours vers la release
+# stable la plus récente — aucun numéro de version à maintenir. Le
+# fichier est enregistré sous son nom de release (arenet-linux-amd64)
+# pour correspondre à l'entrée dans checksums.txt et que `sha256sum -c`
+# le retrouve.
+curl -L -o "arenet-${ARCH}" "https://github.com/barto95100/arenet/releases/latest/download/arenet-${ARCH}"
+curl -L -o checksums.txt "https://github.com/barto95100/arenet/releases/latest/download/checksums.txt"
 
 # Vérifie l'intégrité (la release publie un manifeste sha256). À lancer
 # dans le même dossier que le fichier téléchargé.
@@ -102,10 +104,10 @@ Le dossier de données (`/var/lib/arenet` par défaut) n'est pas touché par un 
 
 Une mise à niveau est réversible tant que tu n'as pas franchi un bump MAJOR de schéma (voir [§5](#5-sûreté-de-migration)).
 
-**Docker Compose / run** — ré-épingle le tag d'image précédent et recrée :
+**Docker Compose / run** — ré-épingle le tag d'image précédent et recrée. Remplace `vPREV` par la version où tu étais avant la mise à niveau (dans ton historique shell, ou sur la [page des releases](https://github.com/barto95100/arenet/releases)) :
 ```bash
-docker pull ghcr.io/barto95100/arenet:v2.12.2   # la version où tu étais
-# édite le tag d'image du compose en arrière, ou relance docker run avec :v2.12.2
+docker pull ghcr.io/barto95100/arenet:vPREV
+# remets le tag d'image du compose à :vPREV, ou relance docker run avec :vPREV
 docker compose up -d
 ```
 
