@@ -740,6 +740,7 @@
 			"sourceCertExpiry": "Expiration de certificat",
 			"sourceCertRenewalFailed": "Échec de renouvellement de certificat",
 			"sourceSystemHealth": "État système",
+			"sourceUpdateAvailable": "Mise à jour disponible",
 			"labelRoute": "Route",
 			"routeAll": "Toutes les routes",
 			"labelWindowSecs": "Fenêtre (secondes)",

@@ -171,6 +171,38 @@ describe('RuleModal', () => {
 		expect(opts).toContain('cert_renewal_failed');
 	});
 
+	it('lists update_available as a selectable Source option (v2.12.5)', async () => {
+		// Same class of bug as cert_renewal_failed above: v2.12.3
+		// registered the update_available backend source but the
+		// dropdown stayed hardcoded, so operators couldn't wire an
+		// "update available" alert rule via the UI.
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
+		});
+
+		const sourceSelect = screen.getByLabelText(/^Source$/i) as HTMLSelectElement;
+		const opts = Array.from(sourceSelect.options).map((o) => o.value);
+		expect(opts).toContain('update_available');
+	});
+
+	it('update_available is a state source with no source-specific params', async () => {
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
+		});
+
+		const sourceSelect = screen.getByLabelText(/^Source$/i) as HTMLSelectElement;
+		await fireEvent.change(sourceSelect, { target: { value: 'update_available' } });
+
+		// No per-source sub-form fields (unlike waf/cert/system_health).
+		expect(screen.queryByLabelText(/Window/i)).toBeNull();
+		expect(screen.queryByLabelText(/Host/i)).toBeNull();
+		expect(screen.queryByLabelText(/Component/i)).toBeNull();
+		// It is a state rule → the state "expected" field is present.
+		expect(screen.getByLabelText(/Expected/i)).toBeTruthy();
+	});
+
 	it('swaps to cert_renewal_failed sub-form when source = cert_renewal_failed', async () => {
 		const Modal = (await import('./RuleModal.svelte')).default;
 		render(Modal, {
