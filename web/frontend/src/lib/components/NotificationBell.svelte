@@ -77,7 +77,7 @@
 		data-testid="notif-trigger"
 		aria-haspopup="dialog"
 		aria-expanded={open}
-		aria-label={language.current && t('notifications.ariaOpen')}
+		aria-label={language.current && t(open ? 'notifications.ariaClose' : 'notifications.ariaOpen')}
 		onclick={toggle}
 	>
 		<span class="bell" aria-hidden="true">
@@ -105,7 +105,9 @@
 				>{language.current && t('notifications.markAllRead')}</button>
 			</div>
 
-			{#if notificationsStore.loadError}
+			{#if notificationsStore.loading && notificationsStore.recent.length === 0}
+				<div class="panel-msg">{language.current && t('common.loading')}</div>
+			{:else if notificationsStore.loadError}
 				<div class="panel-msg error">{language.current && t('notifications.loadError')}</div>
 			{:else if notificationsStore.recent.length === 0}
 				<div class="panel-empty">
@@ -175,5 +177,6 @@
 	.panel-empty { padding: 18px 14px; text-align: center; font-size: 12.5px; color: var(--fg-muted); }
 	.panel-empty a, .panel-foot a { color: var(--accent); font-size: 11.5px; text-decoration: none; }
 	.panel-foot { padding: 10px 14px; border-top: 1px solid var(--border); text-align: center; }
-	.panel-msg.error { padding: 14px; font-size: 12px; color: var(--danger, #d9534f); }
+	.panel-msg { padding: 14px; font-size: 12px; color: var(--fg-muted); text-align: center; }
+	.panel-msg.error { color: var(--danger, #d9534f); }
 </style>
