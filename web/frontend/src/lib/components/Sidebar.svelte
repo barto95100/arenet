@@ -47,6 +47,7 @@
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 	import logoUrl from '$lib/assets/arenet-logo.png';
+	import NotificationBell from './NotificationBell.svelte';
 
 	type IconName =
 		| 'dashboard'
@@ -261,6 +262,8 @@
 			</a>
 		{/each}
 	{/each}
+
+	<NotificationBell />
 
 	<div class="sidebar-foot">
 		<div

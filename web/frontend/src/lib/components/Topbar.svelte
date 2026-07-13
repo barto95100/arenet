@@ -34,7 +34,6 @@
 	import { auth } from '$lib/stores/auth.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
-	import UpdateBadge from '$lib/components/UpdateBadge.svelte';
 
 	// v2.9.12 i18n Phase 2 — crumb labels resolved from the active
 	// bundle. Each entry maps a pathname to a bundle key under
@@ -102,7 +101,6 @@
 	</div>
 
 	<div class="tb-status" aria-label={language.current && t('topbar.statusAriaLabel')}>
-		<UpdateBadge />
 		<span class="dot ok" aria-hidden="true"></span>
 		<span>{language.current && t('topbar.statusHealthy')}</span>
 	</div>

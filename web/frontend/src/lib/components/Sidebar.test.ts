@@ -28,6 +28,11 @@
 //     case (no user → role !== 'admin' → Administration hidden).
 //     The admin-visibility test sets the role explicitly via the
 //     store.
+//   - NotificationBell (mounted before .sidebar-foot, Task 5): pulls
+//     in notifications.svelte's store, which calls load() on mount
+//     and hits the real alerting API client. Mocked the same way
+//     NotificationBell.test.ts does, so Sidebar's own tests don't
+//     trigger a real (and here, unmockable-URL) fetch.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -35,6 +40,19 @@ vi.mock('$app/state', () => ({
 	page: {
 		url: new URL('http://localhost/routes')
 	}
+}));
+
+vi.mock('$lib/stores/notifications.svelte', () => ({
+	notificationsStore: {
+		recent: [],
+		unreadCount: 0,
+		loading: false,
+		loadError: '',
+		load: vi.fn().mockResolvedValue(undefined),
+		markAllRead: vi.fn()
+	},
+	PANEL_LIMIT: 15,
+	SYNTHETIC_UPDATE_ID: 'synthetic:update'
 }));
 
 import { render, screen } from '@testing-library/svelte';
