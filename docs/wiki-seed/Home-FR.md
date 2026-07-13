@@ -77,3 +77,28 @@ Ce wiki suit **Arenet v2.12.x** (la ligne de release stable courante). Les versi
 | Snapshot backup | `/settings` (section Backup) | `/api/v1/admin/backup` + `/admin/restore` | Tous les buckets sérialisés en JSON |
 
 Port admin par défaut : `:8001` (loopback par défaut ; set `ARENET_ADMIN_BIND=0.0.0.0:8001` pour accès LAN).
+
+---
+
+## Variables d'environnement (cheat sheet)
+
+Toutes optionnelles — chaque variable a un défaut safe. Définis-les de la même façon dans **les deux** modes de déploiement :
+
+- **Docker** — un bloc `environment:` dans `docker-compose.yml` (ou `-e VAR=value` sur `docker run`).
+- **systemd / binaire** — des lignes dans `/etc/arenet/arenet.env` (sourcé par l'unit via `EnvironmentFile=`), ou `Environment="VAR=value"` dans l'unit.
+
+| Variable | Défaut | Rôle |
+| -------- | ------ | ---- |
+| `ARENET_ADMIN_BIND` | `127.0.0.1:8001` | Adresse de bind de l'UI/API d'admin (`0.0.0.0:8001` pour le LAN). |
+| `ARENET_DATA_DIR` | `/var/lib/arenet` | Dossier d'état (BoltDB + SQLite). |
+| `ARENET_HTTP_PORT` / `ARENET_HTTPS_PORT` | `:80` / `:443` | Ports d'écoute du data-plane public. |
+| `ARENET_ACME_EMAIL` | _(aucun)_ | Email de contact pour l'émetteur ACME (notices Let's Encrypt). |
+| `ARENET_UPDATE_CHECK_INTERVAL` | `24h` | Cadence du vérificateur de mises à jour (durée Go, min `1h` ; le check s'active dans *Réglages → Mises à jour*, pas par env). |
+| `ARENET_TRUSTED_PROXIES` | _(aucun)_ | CIDRs dont le `X-Forwarded-For` est de confiance (derrière un proxy/LB frontal). |
+| `ARENET_UI_ORIGIN` | _(aucun)_ | Origin du SPA pour les redirects de callback OIDC quand l'UI est servie séparément. |
+| `ARENET_CROWDSEC_API_URL` / `ARENET_CROWDSEC_API_KEY` | _(aucun)_ | Câblage LAPI CrowdSec — voir [CrowdSec](CrowdSec-FR). |
+| `ARENET_GEOIP_MMDB` | _(embarqué)_ | Chemin vers un `.mmdb` MaxMind GeoLite2 custom (remplace la DB embarquée). |
+| `ARENET_PUBLIC_IP` | _(auto)_ | Force l'IP publique détectée du serveur (topology / carte geo). |
+| `ARENET_TOPOLOGY_TICK_MS` | `2000` | Intervalle de push WebSocket de la topology, en ms (arrondi à un multiple de 1000). |
+
+> **Lors d'une mise à niveau :** les variables d'environnement sont **fournies par toi** — Arenet n'écrit jamais dans ton `.env` ni ton compose (un service exposé au réseau ne doit pas éditer sa propre config système ; même raisonnement que [pourquoi il n'y a pas d'auto-update](Updates-FR#notes-de-sécurité)). Les nouvelles variables d'une release sont listées dans les notes de cette release ; ajoute celles que tu veux à ton `.env` / compose. Chaque variable a un défaut safe, donc une mise à niveau ne *nécessite* jamais d'éditer ta config — non définie = « utilise le défaut ».

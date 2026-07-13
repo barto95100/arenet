@@ -128,6 +128,21 @@ Then `systemctl daemon-reload && systemctl restart arenet`.
 
 ---
 
+## Environment variables (optional)
+
+All of these are optional overrides — set them via `environment:` in `docker-compose.yml` or `Environment="..."` in the systemd unit.
+
+| Variable | Default | What |
+| -------- | ------- | ---- |
+| `ARENET_ADMIN_BIND` | `127.0.0.1:8001` | Admin UI/API bind address. Set `0.0.0.0:8001` for LAN access (see above). |
+| `ARENET_DATA_DIR` | `/var/lib/arenet` | Where the binary stores its BoltDB/SQLite state. |
+| `ARENET_UPDATE_CHECK_INTERVAL` | `24h` | Cadence of the opt-in update checker (Go duration, min `1h`). The check must still be **enabled in Settings → Updates** — there is no env toggle for that. See [DNS Providers → Stay updated](DNS-Providers#stay-updated). |
+| `ARENET_ACME_EMAIL` | _(none)_ | Contact email passed to the ACME issuer for Let's Encrypt notices. |
+
+More operational env vars (`ARENET_CROWDSEC_*`, `ARENET_UI_ORIGIN`, …) are documented in the relevant feature pages.
+
+---
+
 ## Verifying the install
 
 ```bash

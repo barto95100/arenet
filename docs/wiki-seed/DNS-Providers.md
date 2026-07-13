@@ -111,6 +111,8 @@ More general help: [Troubleshooting](Troubleshooting).
 
 Arenet v2.12.3 added an **opt-in update checker**. Enable it in **Settings → Updates** to be notified (topbar badge + optional alerting rule) when a newer stable release ships — so a fix like the save-safety above reaches you promptly. Arenet never auto-updates; you stay in control of when to upgrade.
 
+The **enable switch is UI-only** (there is no env toggle — the check stays off until you opt in). Once enabled, the check runs ~30s after boot then every **24h**; a manual "Check now" button bypasses the cadence. To change the cadence, set **`ARENET_UPDATE_CHECK_INTERVAL`** (a Go duration such as `12h`; default `24h`, minimum `1h` — lower or invalid values fall back to `24h`). See how to upgrade once notified in [Updating Arenet](Updates).
+
 ---
 
 ## V3 backlog

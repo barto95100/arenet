@@ -111,6 +111,8 @@ Aide plus générale : [Troubleshooting](Troubleshooting-FR).
 
 La v2.12.3 d'Arenet a ajouté un **vérificateur de mises à jour opt-in**. Active-le dans **Réglages → Mises à jour** pour être notifié (badge dans la topbar + règle d'alerting optionnelle) quand une version stable plus récente sort — pour qu'un correctif comme la sûreté ci-dessus t'arrive rapidement. Arenet ne se met jamais à jour tout seul ; tu gardes le contrôle du moment de la mise à niveau.
 
+Le **switch d'activation est UI uniquement** (pas de toggle env — le check reste inactif tant que tu n'as pas opt-in). Une fois activé, le check tourne ~30s après le boot puis toutes les **24h** ; un bouton « Vérifier maintenant » contourne la cadence. Pour changer la cadence, définis **`ARENET_UPDATE_CHECK_INTERVAL`** (une durée Go comme `12h` ; défaut `24h`, minimum `1h` — les valeurs plus basses ou invalides retombent sur `24h`). Vois comment mettre à jour une fois notifié dans [Mettre à jour Arenet](Updates-FR).
+
 ---
 
 ## Backlog V3

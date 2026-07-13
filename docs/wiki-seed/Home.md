@@ -77,3 +77,28 @@ This wiki tracks **Arenet v2.12.x** (the current stable release line). Older ver
 | Backup snapshot | `/settings` (Backup section) | `/api/v1/admin/backup` + `/admin/restore` | All buckets serialized to JSON |
 
 Default admin port : `:8001` (loopback by default ; set `ARENET_ADMIN_BIND=0.0.0.0:8001` for LAN access).
+
+---
+
+## Environment variables (cheat sheet)
+
+All optional — every variable has a safe default. Set them the same way in **both** deploy modes:
+
+- **Docker** — an `environment:` block in `docker-compose.yml` (or `-e VAR=value` on `docker run`).
+- **systemd / binary** — lines in `/etc/arenet/arenet.env` (sourced by the unit via `EnvironmentFile=`), or `Environment="VAR=value"` in the unit file.
+
+| Variable | Default | What |
+| -------- | ------- | ---- |
+| `ARENET_ADMIN_BIND` | `127.0.0.1:8001` | Admin UI/API bind address (`0.0.0.0:8001` for LAN). |
+| `ARENET_DATA_DIR` | `/var/lib/arenet` | State directory (BoltDB + SQLite). |
+| `ARENET_HTTP_PORT` / `ARENET_HTTPS_PORT` | `:80` / `:443` | Public data-plane listen ports. |
+| `ARENET_ACME_EMAIL` | _(none)_ | Contact email for the ACME issuer (Let's Encrypt notices). |
+| `ARENET_UPDATE_CHECK_INTERVAL` | `24h` | Update-checker cadence (Go duration, min `1h`; the check is enabled in *Settings → Updates*, not by env). |
+| `ARENET_TRUSTED_PROXIES` | _(none)_ | CIDRs whose `X-Forwarded-For` is trusted (behind a front proxy / LB). |
+| `ARENET_UI_ORIGIN` | _(none)_ | SPA origin for OIDC callback redirects when the UI is served separately. |
+| `ARENET_CROWDSEC_API_URL` / `ARENET_CROWDSEC_API_KEY` | _(none)_ | CrowdSec LAPI wiring — see [CrowdSec](CrowdSec). |
+| `ARENET_GEOIP_MMDB` | _(embedded)_ | Path to a custom MaxMind GeoLite2 `.mmdb` (overrides the embedded DB). |
+| `ARENET_PUBLIC_IP` | _(auto)_ | Override the server's detected public IP (topology / geo map). |
+| `ARENET_TOPOLOGY_TICK_MS` | `2000` | Topology WebSocket push interval, in ms (snapped up to a multiple of 1000). |
+
+> **When you upgrade:** environment variables are **provided by you** — Arenet never writes to your `.env` or compose file (a network-facing service should not edit its own system config; same reasoning as [why there's no auto-update](Updates#security-notes)). New variables in a release are listed in that release's notes; add the ones you want to your `.env` / compose. Every variable has a safe default, so an upgrade never *requires* editing your config — unset just means "use the default".
