@@ -14,7 +14,7 @@ There is **no `--version` flag**. Read the running version from any of:
 
 - **UI** — *Settings → Updates* shows the current version (and the latest available, if the checker is enabled).
 - **API** — `GET /api/v1/system/version` (admin session) → `{"current": "v2.12.3", ...}`.
-- **Logs** — `journalctl -u arenet | grep '"version"'` (systemd) or `docker logs arenet 2>&1 | grep '"version"'` (Docker).
+- **Logs** — `journalctl -u arenet | grep "Arenet starting" | tail -1` (systemd) or `docker logs arenet 2>&1 | grep "Arenet starting" | tail -1` (Docker). The last match shows the running version (`version=vX.Y.Z`).
 
 Compare against the [latest release](https://github.com/barto95100/arenet/releases/latest).
 
@@ -30,7 +30,7 @@ If you deploy with the reference `docker-compose.yml` (image `ghcr.io/barto95100
 cd ~/arenet            # wherever your docker-compose.yml lives
 docker compose pull    # fetch the newest :latest image
 docker compose up -d   # recreate the container on the new image
-docker compose logs -f arenet | grep '"version"'   # confirm the new version
+docker compose logs -f arenet | grep "Arenet starting"   # confirm the new version
 ```
 
 Your state lives in the named volume `arenet-data` (mounted at `/var/lib/arenet`), so it survives the container recreation. Nothing else to do.
@@ -91,7 +91,7 @@ sudo chmod +x /usr/local/bin/arenet
 sudo chown root:root /usr/local/bin/arenet
 sudo systemctl start arenet
 sudo systemctl status arenet          # Active: active (running)
-sudo journalctl -u arenet | grep '"version"'
+sudo journalctl -u arenet | grep "Arenet starting" | tail -1
 ```
 
 The data dir (`/var/lib/arenet` by default) is untouched by a binary swap.
