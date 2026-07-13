@@ -892,6 +892,13 @@ func TestBuildConfigJSON_BasicAuth_EmitsAuthHandler(t *testing.T) {
 	if hash["algorithm"] != "argon2id" {
 		t.Errorf("hash.algorithm = %v; want argon2id", hash["algorithm"])
 	}
+	// hash_cache must be emitted so Caddy caches per-credential
+	// verification (avoids re-running the 64 MiB argon2id hash on every
+	// request — catastrophic for SSE-heavy upstreams). Empty object =
+	// enabled.
+	if _, ok := httpBasic["hash_cache"].(map[string]any); !ok {
+		t.Errorf("http_basic.hash_cache missing or wrong type; want an (empty) object to enable Caddy's verification cache. got: %v", httpBasic["hash_cache"])
+	}
 	accounts, _ := httpBasic["accounts"].([]any)
 	if len(accounts) != 1 {
 		t.Fatalf("accounts length = %d; want 1", len(accounts))

@@ -1565,6 +1565,20 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 					"http_basic": map[string]any{
 						"hash":  map[string]any{"algorithm": "argon2id"},
 						"realm": fmt.Sprintf("Arenet route %s", r.Host),
+						// hash_cache enables Caddy's per-credential
+						// verification cache (caddyauth.Cache). Without
+						// it, Caddy re-runs the full 64 MiB argon2id
+						// derivation on EVERY request; an SSE-heavy
+						// upstream that opens many reconnecting streams
+						// then exhausts RAM+swap. The cache collapses
+						// repeated identical verifications to one hash
+						// (singleflight coalesces concurrent ones). Empty
+						// object = enabled; the cache has no tunable
+						// fields (internal random eviction). Tradeoff:
+						// plaintext passwords stay in memory a bit
+						// longer — acceptable, since Basic Auth receives
+						// them per request over the wire regardless.
+						"hash_cache": map[string]any{},
 						"accounts": []map[string]any{
 							{
 								"username": r.BasicAuth.Username,
