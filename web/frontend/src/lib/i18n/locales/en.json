@@ -740,6 +740,7 @@
 			"sourceCertExpiry": "Certificate expiry",
 			"sourceCertRenewalFailed": "Certificate renewal failure",
 			"sourceSystemHealth": "System health",
+			"sourceUpdateAvailable": "Update available",
 			"labelRoute": "Route",
 			"routeAll": "All routes",
 			"labelWindowSecs": "Window (seconds)",

@@ -1535,7 +1535,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 				}
 			}
 		}()
-		logger.Info("update checker enabled", "interval", interval.String())
+		logger.Info("update checker enabled", "interval", humanizeDuration(interval))
 	}
 	apiHandler.SetUpdateConfigHook(startUpdateLoop)
 	// Kick off according to the persisted opt-in state. Capture the

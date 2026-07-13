@@ -56,20 +56,23 @@
 		| 'waf_event_rate'
 		| 'cert_expiry'
 		| 'cert_renewal_failed'
-		| 'system_health';
+		| 'system_health'
+		| 'update_available';
 	const SOURCES = $derived(
 		language.current
 			? [
 					{ value: 'waf_event_rate' as SourceName, label: t('alerting.ruleModal.sourceWafEventRate') },
 					{ value: 'cert_expiry' as SourceName, label: t('alerting.ruleModal.sourceCertExpiry') },
 					{ value: 'cert_renewal_failed' as SourceName, label: t('alerting.ruleModal.sourceCertRenewalFailed') },
-					{ value: 'system_health' as SourceName, label: t('alerting.ruleModal.sourceSystemHealth') }
+					{ value: 'system_health' as SourceName, label: t('alerting.ruleModal.sourceSystemHealth') },
+					{ value: 'update_available' as SourceName, label: t('alerting.ruleModal.sourceUpdateAvailable') }
 				]
 			: [
 					{ value: 'waf_event_rate' as SourceName, label: 'WAF event rate' },
 					{ value: 'cert_expiry' as SourceName, label: 'Certificate expiry' },
 					{ value: 'cert_renewal_failed' as SourceName, label: 'Certificate renewal failure' },
-					{ value: 'system_health' as SourceName, label: 'System health' }
+					{ value: 'system_health' as SourceName, label: 'System health' },
+					{ value: 'update_available' as SourceName, label: 'Update available' }
 				]
 	);
 
@@ -104,6 +107,18 @@
 	let severity = $state(1);
 	let kind = $state<RuleKind>('threshold');
 	let source = $state<SourceName>('waf_event_rate');
+
+	// update_available is a state-only source (it emits "available" /
+	// "up_to_date", never a number). Selecting it forces a state rule
+	// and defaults the expected value to "available" so the operator
+	// can't accidentally build a meaningless threshold rule. Only runs
+	// on create (kind is locked after create — see isEdit).
+	$effect(() => {
+		if (!isEdit && source === 'update_available') {
+			kind = 'state';
+			if (stateExpected !== 'available') stateExpected = 'available';
+		}
+	});
 	let channelIds = $state<string[]>([]);
 	let cooldownSecs = $state(300);
 	let subjectTemplate = $state('');
@@ -293,6 +308,12 @@
 				const p: Record<string, unknown> = {};
 				if (healthComponent) p.component = healthComponent;
 				return p;
+			}
+			case 'update_available': {
+				// State source, no per-source params (the checker's
+				// status drives it). The rule fires when the state
+				// equals the expected value (default "available").
+				return {};
 			}
 		}
 	}
