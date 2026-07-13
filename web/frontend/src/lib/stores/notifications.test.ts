@@ -67,12 +67,25 @@ describe('notificationsStore', () => {
 		expect(localStorage.getItem('arenet.notifications.lastSeen')).toBe('2026-07-13T10:00:00Z');
 	});
 
-	it('caps recent at PANEL_LIMIT', async () => {
-		alertMock.state.events = Array.from({ length: 30 }, (_, i) =>
-			evt(`2026-07-13T${String(10 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z`));
+	it('caps recent at PANEL_LIMIT, keeping the newest items', async () => {
+		// 30 events in newest-first order (minutes 29..00), matching the
+		// real /alert-events API contract. After the cap, recent must hold
+		// the NEWEST 15 (minutes 29..15), sorted newest-first, and drop the
+		// oldest 15 (minutes 14..00).
+		alertMock.state.events = Array.from({ length: 30 }, (_, i) => {
+			const min = 29 - i; // 29, 28, ..., 0
+			return evt(`2026-07-13T10:${String(min).padStart(2, '0')}:00Z`, { eventId: `e${min}` });
+		});
 		const s = await freshStore();
 		await s.load();
 		expect(s.recent.length).toBe(15);
+		// newest-first ordering, newest 15 retained
+		expect(s.recent[0].timestamp).toBe('2026-07-13T10:29:00Z');
+		expect(s.recent[14].timestamp).toBe('2026-07-13T10:15:00Z');
+		// the oldest 15 (minutes 14..00) are dropped
+		const timestamps = s.recent.map((e) => e.timestamp);
+		expect(timestamps).not.toContain('2026-07-13T10:14:00Z');
+		expect(timestamps).not.toContain('2026-07-13T10:00:00Z');
 	});
 
 	it('injects a synthetic update item when updateAvailable', async () => {

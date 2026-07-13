@@ -33,16 +33,20 @@ function lsDel(key: string): void {
 interface NotifState {
 	lastSeen: string;
 	updateItem: AlertEvent | null;
-	initialized: boolean;
 }
 
 function createNotificationsStore() {
 	const state = $state<NotifState>({
 		lastSeen: lsGet(LAST_SEEN_KEY),
-		updateItem: null,
-		initialized: false
+		updateItem: null
 	});
 
+	// recent merges the synthetic update item (if any) with the alert
+	// events, sorts newest-first, and caps at PANEL_LIMIT. The sort makes
+	// ordering correct regardless of the events' incoming order; the
+	// pre-sort slice assumes the alert-events API returns newest-first
+	// (it is called with {limit: PANEL_LIMIT}), so the newest PANEL_LIMIT
+	// events are the ones considered.
 	const recent = $derived.by<AlertEvent[]>(() => {
 		const events = alertEventsStore.state.events.slice(0, PANEL_LIMIT);
 		const merged = state.updateItem ? [state.updateItem, ...events] : events;
@@ -94,12 +98,13 @@ function createNotificationsStore() {
 			alertEventsStore.load({ limit: PANEL_LIMIT }, true),
 			refreshUpdateItem()
 		]);
-		if (!state.initialized && !lsGet(LAST_SEEN_KEY)) {
-			// First-ever visit: treat existing items as read.
+		if (!lsGet(LAST_SEEN_KEY)) {
+			// First-ever visit (no persisted marker): treat existing items
+			// as read. After this, LAST_SEEN_KEY is set, so later loads
+			// skip this branch.
 			state.lastSeen = newestTimestamp();
 			lsSet(LAST_SEEN_KEY, state.lastSeen);
 		}
-		state.initialized = true;
 	}
 
 	function markAllRead(): void {
