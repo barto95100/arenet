@@ -2333,18 +2333,24 @@
 						placeholder={language.current && t('routes.form.hostPlaceholder')}
 						error={errors['host'] ?? undefined}
 					/>
-					<!-- Step I.3: alias hostnames repeater. -->
+					<!-- Step I.3: alias hostnames repeater. Auto-fit grid so
+					     multiple aliases sit side by side and wrap to width
+					     instead of stacking and pushing the form down. -->
 					<div class="flex flex-col gap-2">
 						<div class="flex items-center justify-between">
 							<span class="text-sm text-secondary">{language.current && t('routes.form.aliasesLabel')}</span>
 							<Button variant="ghost" size="sm" onclick={addAlias} type="button">{language.current && t('routes.form.aliasesAdd')}</Button>
 						</div>
-						{#each formData.aliases as _, i (i)}
-							<div class="flex items-center gap-2">
-								<Input bind:value={formData.aliases[i]} placeholder={language.current && t('routes.form.aliasesPlaceholder')} />
-								<Button variant="ghost" size="sm" onclick={() => removeAlias(i)} type="button">×</Button>
-							</div>
-						{/each}
+						<div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2" data-testid="alias-grid">
+							{#each formData.aliases as _, i (i)}
+								<div class="flex items-center gap-2">
+									<div class="flex-1">
+										<Input bind:value={formData.aliases[i]} placeholder={language.current && t('routes.form.aliasesPlaceholder')} />
+									</div>
+									<Button variant="ghost" size="sm" onclick={() => removeAlias(i)} type="button">×</Button>
+								</div>
+							{/each}
+						</div>
 					</div>
 			
 					<!-- Step J.3: upstream pool repeater (replaces the Step I single
