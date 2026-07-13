@@ -2,7 +2,7 @@
 
 Arenet ships a **full-snapshot JSON export/import** of every BoltDB-stored config object : routes, DNS providers, forward-auth providers, OIDC config + allowlist, users (including password hashes), error page templates.
 
-Cert files and TLS keys are NOT in the snapshot — they live in Caddy's filesystem store and are auto-reissued by ACME on the new host (unless you also copy `/var/lib/arenet/caddy/` separately).
+Cert files and TLS keys are NOT in the snapshot — they live in Caddy's filesystem store and are auto-reissued by ACME on the new host (unless you also copy `/var/lib/arenet/.local/share/caddy/` separately). See [Certificates](Certificates) for the on-disk layout.
 
 ---
 
@@ -54,7 +54,7 @@ JSON schema v1 (`schema_version: "1.0.0"`) :
 ```
 
 Fields **NOT** in the snapshot :
-- Caddy cert filesystem (`/var/lib/arenet/caddy/`) — back this up separately if you want to skip ACME re-issuance on restore
+- Caddy cert filesystem (`/var/lib/arenet/.local/share/caddy/`) — back this up separately if you want to skip ACME re-issuance on restore
 - Audit log (BoltDB `audit` bucket) — historical events, not config
 - SQLite event tables (waf_event, cert_event, throttle_event, ...) — runtime observability, not config
 - Server position (last-known geo, dashboard map state)
@@ -111,7 +111,7 @@ curl http://localhost:8001/healthz
 scp ~/backups/arenet-full.json newhost:/root/
 
 # Source host — copy Caddy cert files too (optional, skips ACME re-issuance)
-docker cp arenet:/var/lib/arenet/caddy ~/backups/caddy-state
+docker cp arenet:/var/lib/arenet/.local/share/caddy ~/backups/caddy-state
 scp -r ~/backups/caddy-state newhost:/root/
 
 # New host
