@@ -69,8 +69,7 @@
 	},
 	"topbar": {
 		"statusAriaLabel": "Gateway status",
-		"statusHealthy": "Gateway healthy",
-		"updateAvailable": "Update available: {version}"
+		"statusHealthy": "Gateway healthy"
 	},
 	"settings": {
 		"languageLabel": "Language",
@@ -155,6 +154,18 @@
 			"viewRelease": "View release on GitHub",
 			"never": "never"
 		}
+	},
+	"notifications": {
+		"label": "Notifications",
+		"title": "Notifications",
+		"markAllRead": "Mark all read",
+		"empty": "No notifications",
+		"emptyCta": "Set up alerts in Alerting →",
+		"viewAll": "View all in Alerting →",
+		"updateAvailable": "Update {version} available",
+		"ariaOpen": "Open notifications",
+		"ariaClose": "Close notifications",
+		"loadError": "Could not load notifications"
 	},
 	"toast": {
 		"savedSuccess": "Saved successfully",

@@ -69,8 +69,7 @@
 	},
 	"topbar": {
 		"statusAriaLabel": "État de la passerelle",
-		"statusHealthy": "Passerelle saine",
-		"updateAvailable": "Mise à jour disponible : {version}"
+		"statusHealthy": "Passerelle saine"
 	},
 	"settings": {
 		"languageLabel": "Langue",
@@ -155,6 +154,18 @@
 			"viewRelease": "Voir la release sur GitHub",
 			"never": "jamais"
 		}
+	},
+	"notifications": {
+		"label": "Notifications",
+		"title": "Notifications",
+		"markAllRead": "Tout marquer lu",
+		"empty": "Aucune notification",
+		"emptyCta": "Configurer des alertes dans Alerting →",
+		"viewAll": "Voir tout dans Alerting →",
+		"updateAvailable": "Mise à jour {version} disponible",
+		"ariaOpen": "Ouvrir les notifications",
+		"ariaClose": "Fermer les notifications",
+		"loadError": "Impossible de charger les notifications"
 	},
 	"toast": {
 		"savedSuccess": "Enregistré avec succès",
