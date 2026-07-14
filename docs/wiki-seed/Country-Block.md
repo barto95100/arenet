@@ -1,6 +1,6 @@
 # Country Block
 
-Per-route geographic filtering using the embedded **MaxMind GeoLite2-Country** database. Allow-list or deny-list any combination of ISO 3166 country codes for any route.
+Per-route geographic filtering using the **MaxMind GeoLite2-City** database. Allow-list or deny-list any combination of ISO 3166 country codes for any route.
 
 Use when : your homelab's intended audience is geographically bounded (e.g. France-only family services) and you want to drop traffic from outside the bubble before it ever reaches the WAF or your backend.
 
@@ -38,11 +38,11 @@ Allow is safer (default-deny posture). Deny is more permissive but easier to mai
 For each request :
 
 1. Get the source IP (after X-Forwarded-For trust if configured)
-2. Look up the IP in the embedded MaxMind GeoLite2-Country DB
+2. Look up the IP in the MaxMind GeoLite2-City DB
 3. Match the resolved country code against the route's allow/deny list
 4. Decision : pass-through or 403
 
-The MaxMind DB is bundled in the Arenet binary (~6 MB) and refreshed on each release. No external API call, no per-request network cost.
+The MaxMind DB is **operator-supplied**, not embedded in the binary : Arenet reads it from the path in `ARENET_GEOIP_MMDB` (default `/var/lib/arenet/GeoLite2-City.mmdb`). Once loaded, lookups are local — no external API call, no per-request network cost. See [Settings → GeoIP](#updating-the-geolite2-database) below for how to get the file in place, including auto-download.
 
 ---
 
@@ -109,9 +109,11 @@ Available modes : `"off"` (or empty), `"allow"`, `"deny"`. Country codes are 2-l
 
 ## Updating the GeoLite2 database
 
-The database ships embedded in each Arenet release. To refresh between releases (e.g. a country's IP allocation shifted), upgrade to a newer Arenet build — the binary always carries the latest DB at build time.
+The database is **operator-supplied**, not embedded in the Arenet binary. Arenet reads it from `ARENET_GEOIP_MMDB` (default `/var/lib/arenet/GeoLite2-City.mmdb`) — you're responsible for putting a `.mmdb` file there and keeping it fresh.
 
-No runtime "update the DB" hook is exposed in the UI ; the file isn't user-replaceable in the running binary.
+The easiest way to do that is **Settings → GeoIP** : enter your free [MaxMind account ID + license key](https://www.maxmind.com/en/accounts/current/license-key), then either enable weekly auto-update or click **Update now** to download/refresh the database immediately. Arenet stores the credentials, downloads the DB to the configured path, and reloads it without a restart.
+
+If you'd rather manage the file yourself (no MaxMind account, air-gapped host, etc.), drop a `GeoLite2-City.mmdb` at the configured path manually — Arenet picks up changes to that file without needing the auto-update feature configured.
 
 ---
 
