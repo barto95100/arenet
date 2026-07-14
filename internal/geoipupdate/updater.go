@@ -22,11 +22,13 @@
 // before reloading the shared *geo.Lookup so the running process
 // picks up the new database without a restart.
 //
-// This file (Task 1) implements the core UpdateOnce download/install
-// flow. The edition guard (rejecting a downloaded edition that does
-// not match the configured EditionID) and its "updated" happy-path
-// test land in Task 2 — see the marked insertion point below. The
-// scheduler (periodic ticking) is a later task.
+// Task 1 implemented the core UpdateOnce download/install flow. Task
+// 2 added the edition guard: after downloading, the temp file is
+// opened and its Metadata().DatabaseType is checked to be a City
+// edition (Arenet's reader.City() requires it — a Country/ASN DB
+// would silently fail-open, disabling geoblock and blanking the world
+// map) before it is renamed into place. The scheduler (periodic
+// ticking) is a later task.
 package geoipupdate
 
 import (
@@ -39,10 +41,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/maxmind/geoipupdate/v8/client"
+	"github.com/oschwald/geoip2-golang"
 
 	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/storage"
@@ -202,8 +206,9 @@ func (u *Updater) defaultDownload(
 //  4. If the server reports no update available, return
 //     StatusUpToDate without writing anything.
 //  5. Otherwise install atomically: stream the response into
-//     "<path>.tmp", fsync, close, (edition guard lands in Task 2),
-//     rename over the final path, then reload the shared *geo.Lookup.
+//     "<path>.tmp", fsync, close, verify it is a City-type MMDB
+//     (rejecting Country/ASN editions), rename over the final path,
+//     then reload the shared *geo.Lookup.
 //
 // The result is recorded so Status() reflects it.
 func (u *Updater) UpdateOnce(ctx context.Context) UpdateResult {
@@ -269,6 +274,12 @@ func (u *Updater) updateOnce(ctx context.Context) UpdateResult {
 
 	// Step 5: atomic install (temp write + rename), then reload.
 	if err := u.install(ctx, resp.Reader); err != nil {
+		var editionErr *editionGuardError
+		if errors.As(err, &editionErr) {
+			msg := fmt.Sprintf("downloaded edition %q is not a City database: %v", cfg.EditionID, editionErr.Unwrap())
+			u.logger.ErrorContext(ctx, "geoipupdate: edition guard rejected download", "edition_id", cfg.EditionID, "error", editionErr.Unwrap())
+			return UpdateResult{Status: StatusError, Error: msg, At: now}
+		}
 		u.logger.ErrorContext(ctx, "geoipupdate: install failed", "error", err)
 		return UpdateResult{Status: StatusError, Error: "install failed", At: now}
 	}
@@ -307,18 +318,74 @@ func (u *Updater) install(_ context.Context, r io.Reader) error {
 		return fmt.Errorf("geoipupdate: close temp file: %w", err)
 	}
 
-	// EDITION GUARD (Task 2)
+	// Edition guard: Arenet's reader calls reader.City(), which requires a
+	// City-type MMDB. A Country/ASN DB would silently fail-open (every
+	// LookupIP -> Found:false), disabling geoblock + blanking the world
+	// map. Verify the freshly-downloaded file is a City database before
+	// installing. On failure, the defer above removes tmpPath; we do NOT
+	// rename or Reload, so the existing on-disk DB (if any) is untouched.
+	if err := verifyCityMMDB(tmpPath); err != nil {
+		return &editionGuardError{err: err}
+	}
 
 	if err := os.Rename(tmpPath, u.mmdbPath); err != nil {
 		return fmt.Errorf("geoipupdate: rename temp file into place: %w", err)
 	}
 	tmpStillPresent = false
 
+	// From this point the new file IS installed at u.mmdbPath. If Reload
+	// fails below, the returned error still means "installed but reload
+	// failed" — NOT "old DB still active" — callers must not mistake a
+	// StatusError here for the pre-install state.
 	if err := u.lookup.Reload(u.mmdbPath); err != nil {
 		return fmt.Errorf("geoipupdate: reload lookup: %w", err)
 	}
 
 	return nil
+}
+
+// editionGuardError wraps a verifyCityMMDB failure so updateOnce can
+// distinguish "downloaded edition is not a City database" from other
+// install failures and produce the operator-facing message that names
+// the configured edition ID.
+type editionGuardError struct {
+	err error
+}
+
+func (e *editionGuardError) Error() string {
+	return fmt.Sprintf("geoipupdate: edition guard: %v", e.err)
+}
+
+func (e *editionGuardError) Unwrap() error {
+	return e.err
+}
+
+// verifyCityMMDB opens the MMDB at path and confirms it is a City-type
+// database (the type Arenet's reader.City() requires). Returns an
+// error for Country/ASN/other editions, or if the file cannot be
+// opened as a valid MMDB at all.
+func verifyCityMMDB(path string) error {
+	r, err := geoip2.Open(path)
+	if err != nil {
+		return fmt.Errorf("open downloaded mmdb: %w", err)
+	}
+	defer r.Close()
+
+	dbType := r.Metadata().DatabaseType // e.g. "GeoLite2-City", "GeoLite2-Country"
+	if !isCityType(dbType) {
+		return fmt.Errorf("database type %q is not a City edition", dbType)
+	}
+	return nil
+}
+
+// isCityType reports whether dbType (a geoip2 Metadata().DatabaseType
+// value) names a City-type edition. Matches "GeoLite2-City" and
+// "GeoIP2-City"; rejects "GeoLite2-Country", "GeoLite2-ASN", and
+// similar non-City editions. Factored out of verifyCityMMDB so the
+// accept/reject decision has a pure-logic unit test independent of
+// any MMDB fixture.
+func isCityType(dbType string) bool {
+	return strings.Contains(dbType, "City")
 }
 
 // Status returns a thread-safe snapshot of the most recent UpdateOnce
