@@ -249,7 +249,12 @@ func TestReload_Concurrent_RaceSafe(t *testing.T) {
 			}
 		}()
 	}
-	// reloader (reloads fail-open since no real DB; still exercises Swap path)
+	// reloader: without a real MMDB fixture, geoip2.Open fails, so each
+	// Reload returns before l.reader.Swap — this proves the concurrent
+	// Load()/Reload() control flow is race-free (the atomic pointer API
+	// under concurrent access), NOT the swap-to-real-reader + delayed-
+	// close path. That end-to-end path is verified in brick 3 against a
+	// real MaxMind DB. See the plan's testing section.
 	missing := filepath.Join(t.TempDir(), "missing.mmdb")
 	for i := 0; i < 50; i++ {
 		_ = l.Reload(missing)
