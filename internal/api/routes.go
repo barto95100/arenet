@@ -457,6 +457,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Get("/settings/maxmind", h.getMaxMindSettings)
 				r.Put("/settings/maxmind", h.putMaxMindSettings)
 				r.Delete("/settings/maxmind", h.deleteMaxMindSettings)
+				r.Post("/settings/maxmind/test", h.testMaxMindConnection)
 				// Step CS.2.A — Live LAPI decisions proxy.
 				// Distinct from /security/decisions (which
 				// queries the local mirror in metrics.db) —

@@ -31,6 +31,126 @@ import (
 	"github.com/barto95100/arenet/internal/storage"
 )
 
+// --- POST /test (Brick 2 Task 3) --------------------------------
+//
+// maxMindProbe is a package-level func var (see
+// maxmind_test_connection.go) substituted here so these unit
+// tests NEVER hit the real MaxMind API.
+
+// TestMaxMindTest_ValidCreds_Reachable mirrors the stubbed-seam
+// pattern from the task brief: a stub probe that returns nil
+// (auth ok) must produce {reachable:true, error:""} using the
+// stored config via UseStored.
+func TestMaxMindTest_ValidCreds_Reachable(t *testing.T) {
+	var logBuf bytes.Buffer
+	h := newTestHandler(t, &fakeAuditAppender{}, &logBuf)
+
+	if err := h.store.PutMaxMindConfig(context.Background(), storage.MaxMindConfig{
+		AccountID:  12345,
+		LicenseKey: "good-key",
+		EditionID:  "GeoLite2-City",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	orig := maxMindProbe
+	maxMindProbe = func(_ context.Context, id int, key, edition string) error {
+		if id != 12345 || key != "good-key" || edition != "GeoLite2-City" {
+			t.Errorf("probe called with unexpected creds: id=%d key=%q edition=%q", id, key, edition)
+		}
+		return nil
+	}
+	defer func() { maxMindProbe = orig }()
+
+	req := reqWithAuth(http.MethodPost, "/api/v1/settings/maxmind/test", "user", "admin", "1.2.3.4", "test")
+	req.Body = httpBody(`{"useStored":true}`)
+	rec := httptest.NewRecorder()
+	h.testMaxMindConnection(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp maxMindTestResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if !resp.Reachable {
+		t.Errorf("Reachable = false, want true (error=%q)", resp.Error)
+	}
+	if resp.Error != "" {
+		t.Errorf("Error = %q, want empty on success", resp.Error)
+	}
+}
+
+// TestMaxMindTest_BadCreds_NotReachable: a stub probe returning an
+// error must yield 200 + {reachable:false, error contains the
+// underlying message} — never a 4xx/5xx (this is a diagnostic
+// probe, not a hard failure).
+func TestMaxMindTest_BadCreds_NotReachable(t *testing.T) {
+	var logBuf bytes.Buffer
+	h := newTestHandler(t, &fakeAuditAppender{}, &logBuf)
+
+	orig := maxMindProbe
+	maxMindProbe = func(_ context.Context, _ int, _, _ string) error {
+		return errors.New("401 invalid credentials")
+	}
+	defer func() { maxMindProbe = orig }()
+
+	req := reqWithAuth(http.MethodPost, "/api/v1/settings/maxmind/test", "user", "admin", "1.2.3.4", "test")
+	req.Body = httpBody(`{"accountId":1,"licenseKey":"bad-key"}`)
+	rec := httptest.NewRecorder()
+	h.testMaxMindConnection(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (probe failures must not be HTTP errors), body=%s", rec.Code, rec.Body.String())
+	}
+	var resp maxMindTestResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp.Reachable {
+		t.Error("Reachable = true, want false")
+	}
+	if !strings.Contains(resp.Error, "401 invalid credentials") {
+		t.Errorf("Error = %q, want it to contain the underlying probe error", resp.Error)
+	}
+}
+
+// TestMaxMindTest_NoCreds_NotReachable: no stored config and no
+// wire creds → the handler must short-circuit with a friendly
+// "no credentials" message WITHOUT calling maxMindProbe at all
+// (verified via a probe stub that fails the test if invoked).
+func TestMaxMindTest_NoCreds_NotReachable(t *testing.T) {
+	var logBuf bytes.Buffer
+	h := newTestHandler(t, &fakeAuditAppender{}, &logBuf)
+
+	orig := maxMindProbe
+	maxMindProbe = func(_ context.Context, _ int, _, _ string) error {
+		t.Fatal("maxMindProbe must not be called when no credentials are usable")
+		return nil
+	}
+	defer func() { maxMindProbe = orig }()
+
+	req := reqWithAuth(http.MethodPost, "/api/v1/settings/maxmind/test", "user", "admin", "1.2.3.4", "test")
+	req.Body = httpBody(`{}`)
+	rec := httptest.NewRecorder()
+	h.testMaxMindConnection(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp maxMindTestResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp.Reachable {
+		t.Error("Reachable = true, want false")
+	}
+	if resp.Error != "no credentials" {
+		t.Errorf("Error = %q, want %q", resp.Error, "no credentials")
+	}
+}
+
 // --- GET -----------------------------------------------------
 
 // TestGetMaxMindSettings_StoredRow_RedactsLicenseKey mirrors
