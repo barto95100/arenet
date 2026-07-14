@@ -30,6 +30,9 @@ import type {
 	ManagedDomainRequest,
 	ManagedDomainRevertTo,
 	ManagedDomainsListResponse,
+	MaxMindConfig,
+	MaxMindRequest,
+	MaxMindTestResult,
 	OIDCAllowedIdentity,
 	OIDCAllowlistAddRequest,
 	OIDCConfig,
@@ -199,6 +202,19 @@ export const settingsApi = {
 	testCrowdSecConnection: (r: CrowdSecTestRequest): Promise<CrowdSecTestResponse> =>
 		request<CrowdSecTestResponse>('POST', '/settings/crowdsec/test', r),
 
+	// Brick 2 — MaxMind GeoIP account credentials. GET returns the
+	// stored row (licenseKey redacted) + the configured boolean,
+	// mirroring the CrowdSec/OIDC pattern. PUT preserves the
+	// licenseKey when empty (preserve-on-edit). DELETE wipes the
+	// row. POST /test probes the real MaxMind API without mutating
+	// state — useStored=true reuses the saved credentials.
+	getMaxMind: (): Promise<MaxMindConfig> => request<MaxMindConfig>('GET', '/settings/maxmind'),
+	putMaxMind: (r: MaxMindRequest): Promise<MaxMindConfig> =>
+		request<MaxMindConfig>('PUT', '/settings/maxmind', r),
+	deleteMaxMind: (): Promise<void> => request<void>('DELETE', '/settings/maxmind'),
+	testMaxMind: (r: MaxMindRequest & { useStored?: boolean }): Promise<MaxMindTestResult> =>
+		request<MaxMindTestResult>('POST', '/settings/maxmind/test', r),
+
 	// Step K.3 — backup / restore. The export endpoint streams a
 	// JSON file; we don't go through the typed `request` helper
 	// because we want the raw Response so we can save the file via
@@ -230,6 +246,7 @@ export interface RestoreReport {
 	dnsProvidersImported: number;
 	forwardAuthProvidersImported: number;
 	oidcConfigImported: boolean;
+	maxmindConfigImported: boolean;
 	sentinelsInheritedTotal: number;
 	sentinelsUnresolvedTotal: number;
 	incompleteRows: number;

@@ -70,6 +70,10 @@ func redactSnapshotInPlace(s *Snapshot) {
 	if s.OIDCConfig.ClientSecret != "" {
 		s.OIDCConfig.ClientSecret = SentinelLiteral
 	}
+	// maxmind_config.license_key
+	if s.MaxMindConfig != nil && s.MaxMindConfig.LicenseKey != "" {
+		s.MaxMindConfig.LicenseKey = SentinelLiteral
+	}
 }
 
 // unresolvedSentinel is the dedicated error returned by the
@@ -105,6 +109,8 @@ func identityKey(entity string) string {
 	case "forward_auth_providers":
 		return "name"
 	case "oidc_config":
+		return "key"
+	case "maxmind_config":
 		return "key"
 	}
 	return "id"

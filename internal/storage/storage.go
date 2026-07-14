@@ -68,6 +68,11 @@ const (
 	// keyed "default" — same convention as bucketOIDCConfig.
 	// See crowdsec_config.go.
 	bucketCrowdSecConfig = "crowdsec_config"
+	// Brick 2 Task 1 — instance-level MaxMind GeoIP credentials
+	// (account_id + license_key + edition_id). Single row,
+	// keyed "default" — same convention as bucketCrowdSecConfig.
+	// See maxmind_config.go.
+	bucketMaxMindConfig = "maxmind_config"
 	// Step AL.1.a — instance-level alerting channel
 	// registry (webhook + email V1; slack + discord
 	// deferred V2). One row per Channel, keyed by
@@ -95,6 +100,12 @@ const (
 	// "config"). Enabled defaults to false (no external call
 	// without consent). See update_check_config.go.
 	bucketUpdateCheck = "update_check"
+	// Brick 3 Task 3 — opt-in GeoIP auto-update scheduler config
+	// (single row, keyed "config"). Enabled defaults to false, same
+	// convention as bucketUpdateCheck. Kept separate from
+	// bucketMaxMindConfig so the scheduler toggles independently of
+	// the MaxMind credentials. See geoip_update_config.go.
+	bucketGeoIPUpdate = "geoip_update"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -145,10 +156,12 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketAutomation),           // Step P.1
 			[]byte(bucketServerPosition),       // Step V.4
 			[]byte(bucketCrowdSecConfig),       // Step CS.1
+			[]byte(bucketMaxMindConfig),        // Brick 2 Task 1
 			[]byte(bucketAlertingChannels),     // Step AL.1.a
 			[]byte(bucketAlertRules),           // Step AL.2.a
 			[]byte(bucketErrorTemplates),       // Step R
 			[]byte(bucketUpdateCheck),          // v2.12.3
+			[]byte(bucketGeoIPUpdate),          // Brick 3 Task 3
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)

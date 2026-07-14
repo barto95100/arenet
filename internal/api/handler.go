@@ -30,6 +30,7 @@ import (
 	"github.com/barto95100/arenet/internal/certinfo"
 	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/geo"
+	"github.com/barto95100/arenet/internal/geoipupdate"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/internal/updatecheck"
@@ -229,6 +230,22 @@ type Handler struct {
 	// version-config PUT so the boot wiring can start/stop the poll
 	// loop. nil-tolerant.
 	onUpdateConfigChange func(storage.UpdateCheckConfig)
+
+	// onGeoIPConfigChange (GeoIP auto-update Brick 3, Task 4) is
+	// invoked after a successful GeoIP-update-config PUT so the boot
+	// wiring can start/stop the scheduler loop to match the new
+	// enabled/interval, mirroring onUpdateConfigChange. Wired via
+	// SetGeoIPConfigHook; the PUT handler that calls this lands in
+	// Task 5. nil-tolerant (tests don't wire it).
+	onGeoIPConfigChange func(storage.GeoIPUpdateConfig)
+
+	// geoIPUpdater (Brick 3, Task 5) powers the
+	// /api/v1/system/geoip/{update,status} endpoints. nil-tolerant:
+	// when nil (build failed at boot, or unit tests that don't wire
+	// it), POST /system/geoip/update reports 409 and GET
+	// /system/geoip/status reports a zero-value snapshot. Set via
+	// SetGeoIPUpdater.
+	geoIPUpdater geoIPUpdater
 
 	// alertingDispatcher (Step AL.1.b) fans an AlertEvent
 	// out to a list of channel IDs, owns the per-channel
@@ -649,6 +666,30 @@ func (h *Handler) SetUpdateConfigHook(fn func(storage.UpdateCheckConfig)) {
 	h.onUpdateConfigChange = fn
 }
 
+// geoIPUpdater is the seam the GeoIP update endpoints read/drive through.
+// *geoipupdate.Updater satisfies it; tests can supply a fake.
+type geoIPUpdater interface {
+	UpdateOnce(ctx context.Context) geoipupdate.UpdateResult
+	Status() geoipupdate.UpdateResult
+}
+
+// SetGeoIPUpdater (Brick 3, Task 5) attaches the GeoIP updater. Pass nil
+// to leave POST /system/geoip/update reporting 409 and GET
+// /system/geoip/status reporting a zero-value snapshot (handler tests
+// that don't exercise the updater).
+func (h *Handler) SetGeoIPUpdater(u geoIPUpdater) {
+	h.geoIPUpdater = u
+}
+
+// SetGeoIPConfigHook (GeoIP auto-update Brick 3, Task 4) registers a
+// callback invoked after a GeoIP-update-config PUT persists, so main
+// can start/stop the scheduler loop to match the new enabled/interval.
+// nil-tolerant (tests don't wire it). Mirrors SetUpdateConfigHook; the
+// PUT endpoint that calls onGeoIPConfigChange is added in Task 5.
+func (h *Handler) SetGeoIPConfigHook(fn func(storage.GeoIPUpdateConfig)) {
+	h.onGeoIPConfigChange = fn
+}
+
 // SetAlertingDispatcher (Step AL.1.b) attaches the
 // per-channel fan-out dispatcher used by the /test
 // endpoint. Pass nil to fall back to the legacy direct-
@@ -933,7 +974,9 @@ func (h *Handler) SetGeoLookup(l GeoIPLookup) {
 // journalctl rather than silent country-suffix degradation
 // on the /logs page.
 func (h *Handler) HasGeoLookup() bool {
-	return h.geoLookup != nil
+	// geoLookup is now always non-nil (a degraded &geo.Lookup{} when no
+	// DB is present), so check Loaded() for a real DB, not just non-nil.
+	return h.geoLookup != nil && h.geoLookup.Loaded()
 }
 
 // SetServerPositionStore (Step V.4, 2026-06-07) attaches

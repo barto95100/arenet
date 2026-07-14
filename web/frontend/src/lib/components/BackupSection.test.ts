@@ -111,6 +111,7 @@ const happyReport: RestoreReport = {
 	dnsProvidersImported: 1,
 	forwardAuthProvidersImported: 0,
 	oidcConfigImported: true,
+	maxmindConfigImported: false,
 	sentinelsInheritedTotal: 2,
 	sentinelsUnresolvedTotal: 0,
 	incompleteRows: 0

@@ -76,7 +76,14 @@ type Snapshot struct {
 	DNSProviders         []storage.DNSProviderConfig   `json:"dns_providers"`
 	ForwardAuthProviders []storage.ForwardAuthProvider `json:"forward_auth_providers"`
 	OIDCConfig           storage.OIDCConfig            `json:"oidc_config"`
-	Users                []auth.User                   `json:"users"`
+	// MaxMindConfig is nil when the instance has never configured
+	// MaxMind GeoIP credentials (mirrors the OIDC "never configured"
+	// zero-value shape, but as a pointer since MaxMindConfig has no
+	// natural "disabled" zero value the way OIDCConfig.Enabled
+	// gives OIDC — a nil pointer is the unambiguous "row absent"
+	// signal for the single-record store).
+	MaxMindConfig *storage.MaxMindConfig `json:"maxmind_config,omitempty"`
+	Users         []auth.User            `json:"users"`
 }
 
 // ImportOptions controls the two opt-in bypass flags. Both default
@@ -115,6 +122,7 @@ type ImportReport struct {
 	DNSProvidersImported         int
 	ForwardAuthProvidersImported int
 	OIDCConfigImported           bool
+	MaxMindConfigImported        bool
 	// SentinelsInheritedTotal counts sentinel occurrences resolved
 	// by ID match against the live store.
 	SentinelsInheritedTotal int
@@ -135,7 +143,7 @@ type ImportReport struct {
 // AllowIncompleteRestore. The caller persists the same names in
 // the audit event so a post-mortem can list every affected surface.
 type IncompleteRow struct {
-	Entity   string // "routes", "users", "dns_providers", "forward_auth_providers", "oidc_config"
+	Entity   string // "routes", "users", "dns_providers", "forward_auth_providers", "oidc_config", "maxmind_config"
 	Identity string // route id, user id, "ovh", provider name, or "default"
 	Field    string // "basic_auth.password_hash", "password_hash", "application_key", etc.
 }

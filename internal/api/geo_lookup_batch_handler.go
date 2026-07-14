@@ -75,6 +75,11 @@ const maxLookupBatchSize = 256
 // so tests inject a fake without touching the MMDB.
 type GeoIPLookup interface {
 	LookupIP(ip net.IP) geo.Location
+	// Loaded reports whether a real MMDB is installed (false in
+	// degraded mode). Needed because the wired *geo.Lookup is now
+	// always non-nil (a degraded &geo.Lookup{} when no DB is present),
+	// so a nil check alone no longer detects the degraded state.
+	Loaded() bool
 }
 
 type geoLookupBatchRequest struct {
@@ -99,9 +104,10 @@ func (h *Handler) geoLookupBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := geoLookupBatchResponse{Results: map[string]string{}}
-	if h.geoLookup == nil {
+	if h.geoLookup == nil || !h.geoLookup.Loaded() {
 		// AC #13 degraded : answer with empty strings, never
-		// 5xx, so the frontend renders raw IPs cleanly.
+		// 5xx, so the frontend renders raw IPs cleanly. Covers both
+		// an unwired lookup (nil) and a degraded one (no DB loaded).
 		resp.Degraded = true
 		for _, ip := range req.IPs {
 			resp.Results[ip] = ""

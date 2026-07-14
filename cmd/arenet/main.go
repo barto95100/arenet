@@ -83,6 +83,7 @@ import (
 	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/geo"
+	"github.com/barto95100/arenet/internal/geoipupdate"
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/ratelimit"
@@ -505,17 +506,32 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	}
 	geoLookup, geoErr := geo.NewLookup(geoMMDBPath)
 	if geoErr != nil {
+		// Degraded Lookup, not nil. A nil geoLookup here would
+		// break the auto-update bootstrap: geoipupdate.New (Brick
+		// 3) rejects a nil Lookup, so on a fileless first boot the
+		// updater would never build and the first DB could never
+		// be downloaded — no DB -> nil Lookup -> no updater -> no
+		// download -> no DB, forever. &geo.Lookup{} is a safe
+		// degraded receiver (nil internal reader): LookupIP always
+		// returns Found:false, Close is a no-op, and Reload installs
+		// a DB into it live once the updater downloads one — so the
+		// updater can build now and bootstrap the first DB without
+		// a restart.
+		geoLookup = &geo.Lookup{}
 		logger.Warn("geoip database not loaded — geo enrichment degraded",
 			"path", geoMMDBPath, "present", false, "err", geoErr)
 	} else {
 		logger.Info("geoip database loaded",
 			"path", geoMMDBPath, "present", true)
-		defer func() {
-			if cerr := geoLookup.Close(); cerr != nil {
-				logger.Warn("geoip database close error", "err", cerr)
-			}
-		}()
 	}
+	// Close unconditionally: geoLookup is always non-nil from here
+	// on, and Close on a degraded Lookup (nil internal reader) is a
+	// safe no-op.
+	defer func() {
+		if cerr := geoLookup.Close(); cerr != nil {
+			logger.Warn("geoip database close error", "err", cerr)
+		}
+	}()
 
 	// Step W.3 — upgrade the country-block lookup adapter
 	// from the nil-inner placeholder (installed before
@@ -526,11 +542,11 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// .SetNormalSubmitter from "not yet installed" to the
 	// real DefaultNormalSink once the geo bus is up.
 	//
-	// On the degraded path (MMDB missing), geoLookup is nil
-	// and this call re-installs the same nil-inner adapter
-	// the placeholder set — no-op but explicit so future
-	// readers see the parallel with the placeholder install
-	// above.
+	// On the degraded path (MMDB missing), geoLookup is a
+	// degraded &geo.Lookup{} (nil internal reader) rather than
+	// nil, but LookupIP behaves identically to the nil-inner
+	// placeholder set above — always Found:false — so this call
+	// is functionally a no-op until Reload installs a real DB.
 	countryblock.SetGlobalLookup(countryBlockGeoLookup{inner: geoLookup})
 
 	// Step V.4 — server position resolution. Order of
@@ -582,7 +598,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// auto row (or no row) we re-detect on every boot so the
 	// position stays fresh when the public IP changes.
 	if bootPositionMode != geo.ServerPositionModeManual {
-		if geoLookup != nil {
+		if geoLookup.Loaded() {
 			autoPos, autoErr := geo.DetectFromPublicIP(geoLookup)
 			if autoErr != nil {
 				logger.Warn("server position auto-detect failed; manual override required (V.4)",
@@ -750,7 +766,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		}
 	}()
 	logger.Info("country block sink wired",
-		"present", geoLookup != nil,
+		"present", geoLookup.Loaded(),
 		"status_code", cbStatusCode,
 		"trusted_ips_count", len(cbTrustedIPs),
 		"sample_pct", normalSamplePct,
@@ -1383,16 +1399,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	)
 	// Phase Z.5.3 — geo lookup wire-up. The /logs SOURCE
 	// IP enrichment endpoint (POST /api/v1/geo/lookup-batch)
-	// uses this seam. Nil-tolerant : a nil geoLookup
-	// (degraded MMDB) makes the endpoint return empty
-	// country codes so the frontend renders raw IPs cleanly.
-	// Same HF4 boot-log pattern : any future regression
-	// surfaces as lookup_present=false in journalctl.
-	if geoLookup != nil {
-		apiHandler.SetGeoLookup(geoLookup)
-	}
+	// uses this seam. geoLookup is always non-nil now (real or
+	// degraded per the auto-update bootstrap fix), so the seam
+	// is always wired: in degraded mode LookupIP returns empty
+	// country codes so the frontend renders raw IPs cleanly,
+	// and once the geoip auto-updater Reloads a DB in place this
+	// same handle starts resolving live, with no restart needed.
+	apiHandler.SetGeoLookup(geoLookup)
 	logger.Info("api handler wired with geo lookup",
-		"lookup_present", apiHandler.HasGeoLookup(),
+		"lookup_present", geoLookup.Loaded(),
 	)
 
 	// Step V.4 — server position wire-up.
@@ -1548,6 +1563,71 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		updateEnabled = uc.Enabled
 		updateIntervalStr = humanizeDuration(resolveUpdateInterval(uc.IntervalOverride, logger))
 		startUpdateLoop(uc)
+	}
+
+	// GeoIP auto-update (Brick 3, Task 4) — opt-in periodic scheduler
+	// mirroring the update-checker above. geoUpdater.Run downloads a
+	// fresh MaxMind database when credentials are configured and the
+	// on-disk md5 no longer matches, then reloads geoLookup in place.
+	// A 5-minute HTTP timeout accommodates a full City-DB download
+	// (tens of MB) over a slow homelab uplink, vs. the update-
+	// checker's much smaller GitHub releases payload.
+	geoUpdater, geoUpdaterErr := geoipupdate.New(geoipupdate.Config{
+		Store:      store,
+		Lookup:     geoLookup,
+		MMDBPath:   geoMMDBPath,
+		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
+		Logger:     logger,
+	})
+	if geoUpdaterErr != nil {
+		logger.Warn("geoip auto-update: build updater failed; feature disabled", "err", geoUpdaterErr)
+	}
+
+	// geoipLoopMu guards the current loop's cancel func so the config
+	// hook and shutdown don't race, mirroring updateLoopMu above.
+	var geoipLoopMu sync.Mutex
+	var geoipLoopCancel context.CancelFunc
+	startGeoIPLoop := func(cfg storage.GeoIPUpdateConfig) {
+		geoipLoopMu.Lock()
+		defer geoipLoopMu.Unlock()
+		if geoipLoopCancel != nil {
+			geoipLoopCancel() // stop a previous loop
+			geoipLoopCancel = nil
+		}
+		if geoUpdater == nil {
+			return // updater failed to build; nothing to (re)start
+		}
+		if !cfg.Enabled {
+			logger.Info("geoip auto-update disabled")
+			return
+		}
+		interval := resolveGeoIPInterval(cfg.IntervalOverride, logger)
+		loopCtx, cancel := context.WithCancel(ctx)
+		geoipLoopCancel = cancel
+		go geoUpdater.Run(loopCtx, interval)
+		logger.Info("geoip auto-update enabled", "interval", humanizeDuration(interval))
+	}
+	apiHandler.SetGeoIPConfigHook(startGeoIPLoop)
+	// Brick 3, Task 5 — wire the updater itself so the admin API's
+	// manual POST /system/geoip/update and GET /system/geoip/status
+	// endpoints work even if geoUpdaterErr != nil is not the case.
+	// SetGeoIPUpdater is nil-tolerant on the geoUpdater side too: when
+	// New failed above, geoUpdater is a nil *geoipupdate.Updater, and
+	// passing a nil concrete pointer through an interface parameter
+	// produces a non-nil interface value — so guard explicitly to keep
+	// the handler's own nil check meaningful.
+	if geoUpdater != nil {
+		apiHandler.SetGeoIPUpdater(geoUpdater)
+	}
+	// Kick off according to the persisted opt-in state. Bootstrap is
+	// implicit here: when cfg.Enabled and MaxMind credentials are
+	// configured, the loop's warmup-then-first-run calls UpdateOnce,
+	// which downloads a fresh database when none is present on disk —
+	// there is no separate bootstrap call to wire.
+	if gc, gcErr := store.GetGeoIPUpdateConfig(ctx); gcErr != nil {
+		logger.Warn("geoip auto-update: read config failed; leaving disabled", "err", gcErr)
+	} else {
+		startGeoIPLoop(gc)
 	}
 
 	// Step AL.3b — expose the source registry to the
@@ -2062,6 +2142,35 @@ func resolveUpdateInterval(override string, logger *slog.Logger) time.Duration {
 	}
 	if d < floor {
 		logger.Warn("update checker: interval below 1h floor, using 24h default", "value", candidate)
+		return def
+	}
+	return d
+}
+
+// resolveGeoIPInterval (GeoIP auto-update Brick 3, Task 4) picks the
+// GeoIP scheduler cadence: stored override → ARENET_GEOIP_UPDATE_INTERVAL
+// env → 168h (weekly) default. MaxMind publishes GeoLite2 updates
+// roughly weekly, so a weekly poll is the sane default cadence — much
+// coarser than the update-checker's 24h. Anything below the 1h floor
+// (or unparseable) falls back to the 168h default with a warning, so a
+// bad value can't spam MaxMind's API. Mirrors resolveUpdateInterval.
+func resolveGeoIPInterval(override string, logger *slog.Logger) time.Duration {
+	const def = 168 * time.Hour
+	const floor = time.Hour
+	candidate := override
+	if candidate == "" {
+		candidate = os.Getenv("ARENET_GEOIP_UPDATE_INTERVAL")
+	}
+	if candidate == "" {
+		return def
+	}
+	d, err := time.ParseDuration(candidate)
+	if err != nil {
+		logger.Warn("geoip auto-update: invalid interval, using 168h default", "value", candidate, "err", err)
+		return def
+	}
+	if d < floor {
+		logger.Warn("geoip auto-update: interval below 1h floor, using 168h default", "value", candidate)
 		return def
 	}
 	return d

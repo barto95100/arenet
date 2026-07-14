@@ -365,6 +365,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Get("/system/version", h.systemVersion)
 				r.Post("/system/version/check", h.systemVersionCheck)
 				r.Put("/system/version/config", h.systemVersionConfig)
+				// Brick 3, Task 5 — opt-in GeoIP database auto-update.
+				// Admin-gated, mirroring the update checker above.
+				r.Get("/system/geoip/update-config", h.getGeoIPUpdateConfig)
+				r.Put("/system/geoip/update-config", h.putGeoIPUpdateConfig)
+				r.Post("/system/geoip/update", h.postGeoIPUpdate)
+				r.Get("/system/geoip/status", h.getGeoIPStatus)
 				// Step K.1 — forward-auth provider CRUD.
 				r.Get("/settings/forward-auth/providers", h.listForwardAuthProviders)
 				r.Post("/settings/forward-auth/providers", h.createForwardAuthProvider)
@@ -447,6 +453,17 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Put("/settings/crowdsec", h.putCrowdSecSettings)
 				r.Delete("/settings/crowdsec", h.deleteCrowdSecSettings)
 				r.Post("/settings/crowdsec/test", h.testCrowdSecConnection)
+				// Brick 2 Task 2 — MaxMind GeoIP account
+				// credentials. GET returns the persisted row
+				// (secret redacted) + fresh-install fallback
+				// (configured=false). PUT persists; DELETE
+				// wipes. Mirror of the CrowdSec settings
+				// endpoints above; the /test connection probe
+				// is added in Task 3.
+				r.Get("/settings/maxmind", h.getMaxMindSettings)
+				r.Put("/settings/maxmind", h.putMaxMindSettings)
+				r.Delete("/settings/maxmind", h.deleteMaxMindSettings)
+				r.Post("/settings/maxmind/test", h.testMaxMindConnection)
 				// Step CS.2.A — Live LAPI decisions proxy.
 				// Distinct from /security/decisions (which
 				// queries the local mirror in metrics.db) —

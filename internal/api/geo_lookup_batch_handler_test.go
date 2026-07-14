@@ -35,7 +35,15 @@ import (
 // unrecognized public IPs).
 type fakeGeoLookup struct {
 	m map[string]string
+	// notLoaded makes Loaded() report false (degraded mode). Default
+	// false → Loaded() true, so existing tests (which give the fake real
+	// data) keep behaving as a loaded DB.
+	notLoaded bool
 }
+
+// Loaded satisfies the GeoIPLookup interface. Reports true unless the
+// test explicitly sets notLoaded to exercise the degraded path.
+func (f *fakeGeoLookup) Loaded() bool { return !f.notLoaded }
 
 func (f *fakeGeoLookup) LookupIP(ip net.IP) geo.Location {
 	c, ok := f.m[ip.String()]
@@ -109,6 +117,32 @@ func TestGeoLookupBatch_NilLookup_DegradedResponse(t *testing.T) {
 	}
 	if _, ok := resp.Results["192.168.1.5"]; !ok {
 		t.Errorf("192.168.1.5 missing from degraded results map")
+	}
+}
+
+// TestGeoLookupBatch_DegradedLookup_DegradedResponse covers the case a nil
+// check alone would miss: a wired-but-degraded lookup (non-nil, no DB
+// loaded). Since geoLookup is now always non-nil (a degraded &geo.Lookup{}
+// at boot when no MMDB is present), the handler must key the degraded
+// response on Loaded(), not on nil. Guards the bootstrap-nil-Lookup fix.
+func TestGeoLookupBatch_DegradedLookup_DegradedResponse(t *testing.T) {
+	m := newMetricsTestEnv(t)
+	// A wired lookup that reports NOT loaded (degraded mode).
+	m.env.handler.SetGeoLookup(&fakeGeoLookup{m: map[string]string{}, notLoaded: true})
+	body, _ := json.Marshal(map[string]any{"ips": []string{"82.65.1.2"}})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/geo/lookup-batch", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	m.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", rec.Code)
+	}
+	var resp geoLookupBatchResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if !resp.Degraded {
+		t.Errorf("Degraded = false; want true (lookup wired but not loaded)")
+	}
+	if resp.Results["82.65.1.2"] != "" {
+		t.Errorf("82.65.1.2 = %q; want empty (degraded)", resp.Results["82.65.1.2"])
 	}
 }
 

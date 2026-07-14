@@ -31,7 +31,7 @@ import (
 // correct identity per spec §5.3 (route id, user id, "ovh", forward-
 // auth name, "default").
 //
-// All five sections are applied in a single bbolt write transaction.
+// All six sections are applied in a single bbolt write transaction.
 // On any error, the entire transaction is rolled back — the BoltDB
 // is left untouched. This is the spec §5.3 "all-or-nothing" property
 // enforced at the storage layer.
@@ -49,9 +49,13 @@ type RestoreSnapshotInput struct {
 	// OIDCConfig is the JSON-marshalled storage.OIDCConfig for the
 	// "default" key, or nil/empty to clear the OIDC bucket.
 	OIDCConfig []byte
+	// MaxMindConfig is the JSON-marshalled storage.MaxMindConfig for
+	// the "default" key, or nil/empty to clear the maxmind_config
+	// bucket (mirrors the OIDCConfig single-record convention).
+	MaxMindConfig []byte
 }
 
-// RestoreSnapshot atomically replaces the contents of the five
+// RestoreSnapshot atomically replaces the contents of the six
 // backup-relevant buckets with the supplied input. Every bucket is
 // cleared first then refilled inside the same transaction; a bbolt
 // commit failure rolls back to the prior state.
@@ -91,6 +95,13 @@ func (s *Store) RestoreSnapshot(ctx context.Context, in RestoreSnapshotInput) er
 		}
 		if err := resetAndFill(tx, bucketOIDCConfig, oidcRows); err != nil {
 			return fmt.Errorf("restore oidc_config: %w", err)
+		}
+		maxMindRows := map[string][]byte{}
+		if len(in.MaxMindConfig) > 0 {
+			maxMindRows[maxMindConfigKey] = in.MaxMindConfig
+		}
+		if err := resetAndFill(tx, bucketMaxMindConfig, maxMindRows); err != nil {
+			return fmt.Errorf("restore maxmind_config: %w", err)
 		}
 		return nil
 	})

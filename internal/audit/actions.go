@@ -219,6 +219,16 @@ const (
 	// BeforeJSON carries the wiped row (Password scrubbed);
 	// AfterJSON is omitted (the row no longer exists).
 	ActionAutomationReset = "automation_reset"
+
+	// Brick 2 Task 2 — MaxMind GeoIP account credential admin
+	// actions. ConfigUpdated emitted by PUT
+	// /api/v1/settings/maxmind (both first write and subsequent
+	// updates); ConfigDeleted emitted by DELETE. Mirror of the
+	// CrowdSec pattern above: before/after JSON carries the
+	// MaxMind config with the license key scrubbed (SECRET —
+	// same shape as APIKey scrubbing for crowdsec/oidc/dns).
+	ActionMaxMindConfigUpdated = "maxmind_config_updated"
+	ActionMaxMindConfigDeleted = "maxmind_config_deleted"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -279,6 +289,8 @@ var allActions = []string{
 	ActionCrowdSecReset,
 	ActionCrowdSecDecisionCreate,
 	ActionAutomationReset,
+	ActionMaxMindConfigUpdated,
+	ActionMaxMindConfigDeleted,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

@@ -32,4 +32,27 @@ describe('systemApi', () => {
 			intervalOverride: '24h'
 		});
 	});
+
+	it('getGeoIPUpdateConfig GETs /system/geoip/update-config', async () => {
+		await systemApi.getGeoIPUpdateConfig();
+		expect(requestMock).toHaveBeenCalledWith('GET', '/system/geoip/update-config');
+	});
+
+	it('putGeoIPUpdateConfig PUTs the config body', async () => {
+		await systemApi.putGeoIPUpdateConfig({ enabled: true, intervalHours: 24 });
+		expect(requestMock).toHaveBeenCalledWith('PUT', '/system/geoip/update-config', {
+			enabled: true,
+			intervalHours: 24
+		});
+	});
+
+	it('triggerGeoIPUpdate POSTs /system/geoip/update', async () => {
+		await systemApi.triggerGeoIPUpdate();
+		expect(requestMock).toHaveBeenCalledWith('POST', '/system/geoip/update');
+	});
+
+	it('getGeoIPStatus GETs /system/geoip/status', async () => {
+		await systemApi.getGeoIPStatus();
+		expect(requestMock).toHaveBeenCalledWith('GET', '/system/geoip/status');
+	});
 });

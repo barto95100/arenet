@@ -54,6 +54,7 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import DNSProvidersSection from '$lib/components/settings/DNSProvidersSection.svelte';
 	import UpdatesSection from '$lib/components/settings/UpdatesSection.svelte';
+	import GeoIPSettingsSection from '$lib/components/settings/GeoIPSettingsSection.svelte';
 	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
 	import CrowdSecSettingsSection from '$lib/components/CrowdSecSettingsSection.svelte';
 	import BackupSection from '$lib/components/BackupSection.svelte';
@@ -748,6 +749,11 @@
 
 	<!-- v2.12.3 — opt-in update checker mini-card. -->
 	<UpdatesSection />
+
+	<!-- Brick 4, Task 3 — GeoIP settings (MaxMind credentials +
+	     auto-update). Mounted right after UpdatesSection: both are
+	     opt-in "keep this data fresh" mini-sections. -->
+	<GeoIPSettingsSection />
 
 	<!-- ROW 2.6 — SSL / Certificates section migrated to /certs
 	     in #R-6 Pack A (2026-06-04). The managed-domains CRUD

@@ -18,6 +18,7 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -730,6 +731,131 @@ func TestImport_DNSProvider_SentinelUnresolved_Rejects(t *testing.T) {
 	}
 	if !IsUnresolvedSentinelError(err) {
 		t.Errorf("err = %v, want an unresolved-sentinel error", err)
+	}
+}
+
+// ============================================================
+// (12b) MaxMind config — sentinel round-trip (Brick 2 Task 4)
+// ============================================================
+
+// TestImport_MaxMind_SentinelInheritsByID mirrors
+// TestImport_DNSProvider_SentinelInheritsByID for the single-record
+// MaxMind config: a redacted (secrets-excluded) snapshot carrying the
+// sentinel in license_key must inherit the live stored key on
+// restore — never write the literal sentinel into BoltDB.
+func TestImport_MaxMind_SentinelInheritsByID(t *testing.T) {
+	store, us := newTestStoreWithUserStore(t)
+	ctx := context.Background()
+	_ = seedLiveUser(t, us, "admin", "admin-password-15c-x")
+
+	if err := store.PutMaxMindConfig(ctx, storage.MaxMindConfig{
+		AccountID: 12345, LicenseKey: "live-license-key", EditionID: "GeoLite2-City",
+	}); err != nil {
+		t.Fatalf("seed live maxmind config: %v", err)
+	}
+
+	snap := minimalSnapshot()
+	snap.SecretsIncluded = false
+	snap.Users = []auth.User{seedFakeUser("u-1", "$argon2id$hash")}
+	snap.MaxMindConfig = &storage.MaxMindConfig{
+		AccountID: 12345, LicenseKey: SentinelLiteral, EditionID: "GeoLite2-City",
+	}
+
+	// Redacted export must never contain the plaintext key.
+	body, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(body), "live-license-key") {
+		t.Fatal("REDACTION LEAK: plaintext maxmind license_key present in snapshot JSON")
+	}
+
+	report, err := Import(ctx, store, us, snap, ImportOptions{})
+	if err != nil {
+		t.Fatalf("import with sentinel inherit: %v", err)
+	}
+	if report.SentinelsInheritedTotal == 0 {
+		t.Error("report should record at least 1 inherited sentinel")
+	}
+
+	got, err := store.GetMaxMindConfig(ctx)
+	if err != nil {
+		t.Fatalf("get after import: %v", err)
+	}
+	if got.LicenseKey == SentinelLiteral {
+		t.Fatalf("SENTINEL LEAK: maxmind license_key written as the literal sentinel — geoip updates would break")
+	}
+	if got.LicenseKey != "live-license-key" {
+		t.Errorf("SENTINEL LOSS: license_key not inherited, got %q", got.LicenseKey)
+	}
+	if got.AccountID != 12345 {
+		t.Errorf("account_id should travel verbatim, got %d", got.AccountID)
+	}
+}
+
+// TestImport_MaxMind_SentinelUnresolved_Rejects mirrors
+// TestImport_DNSProvider_SentinelUnresolved_Rejects: no live MaxMind
+// config to inherit from → the whole import rejects with the typed
+// unresolved-sentinel error (no --allow-incomplete-restore).
+func TestImport_MaxMind_SentinelUnresolved_Rejects(t *testing.T) {
+	store, us := newTestStoreWithUserStore(t)
+	ctx := context.Background()
+	_ = seedLiveUser(t, us, "admin", "admin-password-15c-x")
+
+	snap := minimalSnapshot()
+	snap.SecretsIncluded = false
+	snap.Users = []auth.User{seedFakeUser("u-1", "$argon2id$hash")}
+	snap.MaxMindConfig = &storage.MaxMindConfig{
+		AccountID: 999, LicenseKey: SentinelLiteral, EditionID: "GeoLite2-City",
+	}
+
+	_, err := Import(ctx, store, us, snap, ImportOptions{})
+	if err == nil {
+		t.Fatal("expected unresolved-sentinel rejection, got nil")
+	}
+	if !IsUnresolvedSentinelError(err) {
+		t.Errorf("err = %v, want an unresolved-sentinel error", err)
+	}
+}
+
+// TestImport_MaxMind_SentinelMismatch_AllowIncompleteClears mirrors
+// the OIDC/route AllowIncompleteRestore path: with the flag set, an
+// unresolvable maxmind sentinel is cleared (never the literal) and
+// recorded in IncompleteRows.
+func TestImport_MaxMind_SentinelMismatch_AllowIncompleteClears(t *testing.T) {
+	store, us := newTestStoreWithUserStore(t)
+	ctx := context.Background()
+	_ = seedLiveUser(t, us, "admin", "admin-password-15c-x")
+
+	snap := minimalSnapshot()
+	snap.SecretsIncluded = false
+	snap.Users = []auth.User{seedFakeUser("u-1", "$argon2id$hash")}
+	snap.MaxMindConfig = &storage.MaxMindConfig{
+		AccountID: 999, LicenseKey: SentinelLiteral, EditionID: "GeoLite2-City",
+	}
+
+	report, err := Import(ctx, store, us, snap, ImportOptions{AllowIncompleteRestore: true})
+	if err != nil {
+		t.Fatalf("--allow-incomplete-restore should bypass, got: %v", err)
+	}
+	got, err := store.GetMaxMindConfig(ctx)
+	if err != nil {
+		t.Fatalf("get after import: %v", err)
+	}
+	if got.LicenseKey == SentinelLiteral {
+		t.Fatalf("SENTINEL LEAK: maxmind license_key written as the literal sentinel")
+	}
+	if got.LicenseKey != "" {
+		t.Errorf("license_key should be cleared on incomplete restore, got %q", got.LicenseKey)
+	}
+	found := false
+	for _, row := range report.IncompleteRows {
+		if row.Entity == "maxmind_config" && row.Field == "license_key" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("report.IncompleteRows should list the cleared maxmind_config.license_key row")
 	}
 }
 

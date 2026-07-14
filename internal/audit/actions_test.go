@@ -21,13 +21,13 @@ import "testing"
 // TestAllActions_Count guards against accidental drift from D7
 // (Step D shipped 15) + Step J.4 (+1 = 16) + Step K.1 (+2 = 18)
 // + Step K.2 (+7 = 25) + Step K.3 (+3 = 28) + Step O.3 (+2 = 30)
-// + Step P.3 (+2 = 32) + Step V.4 (+2 = 34). Adding or removing
-// actions without updating the spec / decisions doc is a process
-// violation; this test forces the conversation.
+// + Step P.3 (+2 = 32) + Step V.4 (+2 = 34) + MaxMind (+2 = 36).
+// Adding or removing actions without updating the spec / decisions
+// doc is a process violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 54
+	const wantCount = 56
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + v2.11-dns=2 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3 + R=3)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + v2.11-dns=2 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3 + R=3 + MaxMind=2)", got, wantCount)
 	}
 }
 
@@ -176,6 +176,13 @@ func TestAllActions_ExactSet(t *testing.T) {
 		"error_template_created": true,
 		"error_template_updated": true,
 		"error_template_deleted": true,
+		// MaxMind (+2) — GeoIP account credential admin events.
+		// ConfigUpdated emitted by PUT /api/v1/settings/maxmind
+		// (first write and subsequent updates); ConfigDeleted
+		// emitted by DELETE. Mirror of CrowdSec CS.1: license
+		// key scrubbed from before/after JSON.
+		"maxmind_config_updated": true,
+		"maxmind_config_deleted": true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {
