@@ -108,6 +108,12 @@ func DetectFromPublicIP(lookup *Lookup) (*ServerPosition, error) {
 	if lookup == nil {
 		return nil, errors.New("geo: server position requires a non-nil Lookup (GeoIP database not loaded)")
 	}
+	// Note: a degraded &Lookup{} (no DB) is NOT short-circuited here — the
+	// caller gates the boot-time auto-detect on geoLookup.Loaded(), and the
+	// manual :redetect path still resolves the public IP then fails at the
+	// MMDB lookup with a clear error. This keeps DetectFromPublicIP's network
+	// logic unit-testable with a degraded stub Lookup. The extra round-trip
+	// on a degraded manual redetect is negligible (operator-triggered).
 
 	ipStr, err := resolvePublicIP()
 	if err != nil {

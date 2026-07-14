@@ -974,7 +974,9 @@ func (h *Handler) SetGeoLookup(l GeoIPLookup) {
 // journalctl rather than silent country-suffix degradation
 // on the /logs page.
 func (h *Handler) HasGeoLookup() bool {
-	return h.geoLookup != nil
+	// geoLookup is now always non-nil (a degraded &geo.Lookup{} when no
+	// DB is present), so check Loaded() for a real DB, not just non-nil.
+	return h.geoLookup != nil && h.geoLookup.Loaded()
 }
 
 // SetServerPositionStore (Step V.4, 2026-06-07) attaches
