@@ -100,6 +100,12 @@ const (
 	// "config"). Enabled defaults to false (no external call
 	// without consent). See update_check_config.go.
 	bucketUpdateCheck = "update_check"
+	// Brick 3 Task 3 — opt-in GeoIP auto-update scheduler config
+	// (single row, keyed "config"). Enabled defaults to false, same
+	// convention as bucketUpdateCheck. Kept separate from
+	// bucketMaxMindConfig so the scheduler toggles independently of
+	// the MaxMind credentials. See geoip_update_config.go.
+	bucketGeoIPUpdate = "geoip_update"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -155,6 +161,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketAlertRules),           // Step AL.2.a
 			[]byte(bucketErrorTemplates),       // Step R
 			[]byte(bucketUpdateCheck),          // v2.12.3
+			[]byte(bucketGeoIPUpdate),          // Brick 3 Task 3
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)
