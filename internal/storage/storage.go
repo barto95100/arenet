@@ -68,6 +68,11 @@ const (
 	// keyed "default" — same convention as bucketOIDCConfig.
 	// See crowdsec_config.go.
 	bucketCrowdSecConfig = "crowdsec_config"
+	// Brick 2 Task 1 — instance-level MaxMind GeoIP credentials
+	// (account_id + license_key + edition_id). Single row,
+	// keyed "default" — same convention as bucketCrowdSecConfig.
+	// See maxmind_config.go.
+	bucketMaxMindConfig = "maxmind_config"
 	// Step AL.1.a — instance-level alerting channel
 	// registry (webhook + email V1; slack + discord
 	// deferred V2). One row per Channel, keyed by
@@ -145,6 +150,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketAutomation),           // Step P.1
 			[]byte(bucketServerPosition),       // Step V.4
 			[]byte(bucketCrowdSecConfig),       // Step CS.1
+			[]byte(bucketMaxMindConfig),        // Brick 2 Task 1
 			[]byte(bucketAlertingChannels),     // Step AL.1.a
 			[]byte(bucketAlertRules),           // Step AL.2.a
 			[]byte(bucketErrorTemplates),       // Step R
