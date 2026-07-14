@@ -447,6 +447,16 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Put("/settings/crowdsec", h.putCrowdSecSettings)
 				r.Delete("/settings/crowdsec", h.deleteCrowdSecSettings)
 				r.Post("/settings/crowdsec/test", h.testCrowdSecConnection)
+				// Brick 2 Task 2 — MaxMind GeoIP account
+				// credentials. GET returns the persisted row
+				// (secret redacted) + fresh-install fallback
+				// (configured=false). PUT persists; DELETE
+				// wipes. Mirror of the CrowdSec settings
+				// endpoints above; the /test connection probe
+				// is added in Task 3.
+				r.Get("/settings/maxmind", h.getMaxMindSettings)
+				r.Put("/settings/maxmind", h.putMaxMindSettings)
+				r.Delete("/settings/maxmind", h.deleteMaxMindSettings)
 				// Step CS.2.A — Live LAPI decisions proxy.
 				// Distinct from /security/decisions (which
 				// queries the local mirror in metrics.db) —
