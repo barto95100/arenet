@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -174,8 +175,8 @@ func TestPutMaxMindSettings_SetsKey(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(events))
 	}
-	if events[0].Action != "maxmind_config_updated" {
-		t.Errorf("audit action = %q, want maxmind_config_updated", events[0].Action)
+	if events[0].Action != audit.ActionMaxMindConfigUpdated {
+		t.Errorf("audit action = %q, want %q", events[0].Action, audit.ActionMaxMindConfigUpdated)
 	}
 }
 
@@ -231,8 +232,8 @@ func TestDeleteMaxMindSettings_RemovesRow(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(events))
 	}
-	if events[0].Action != "maxmind_config_deleted" {
-		t.Errorf("audit action = %q, want maxmind_config_deleted", events[0].Action)
+	if events[0].Action != audit.ActionMaxMindConfigDeleted {
+		t.Errorf("audit action = %q, want %q", events[0].Action, audit.ActionMaxMindConfigDeleted)
 	}
 
 	// Subsequent GET reflects configured:false.

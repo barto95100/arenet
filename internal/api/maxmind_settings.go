@@ -163,7 +163,7 @@ func (h *Handler) putMaxMindSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	evt := audit.Event{
-		Action:     "maxmind_config_updated",
+		Action:     audit.ActionMaxMindConfigUpdated,
 		TargetType: "maxmind_config",
 		TargetID:   "default",
 		AfterJSON:  mustMarshalForAudit(maxMindConfigForAudit(persisted)),
@@ -197,7 +197,7 @@ func (h *Handler) deleteMaxMindSettings(w http.ResponseWriter, r *http.Request) 
 
 	if !errors.Is(prevErr, storage.ErrNotFound) {
 		h.appendAudit(r, audit.Event{
-			Action:     "maxmind_config_deleted",
+			Action:     audit.ActionMaxMindConfigDeleted,
 			TargetType: "maxmind_config",
 			TargetID:   "default",
 			BeforeJSON: mustMarshalForAudit(maxMindConfigForAudit(previous)),
