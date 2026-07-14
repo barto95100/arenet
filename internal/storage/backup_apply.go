@@ -31,7 +31,7 @@ import (
 // correct identity per spec §5.3 (route id, user id, "ovh", forward-
 // auth name, "default").
 //
-// All five sections are applied in a single bbolt write transaction.
+// All six sections are applied in a single bbolt write transaction.
 // On any error, the entire transaction is rolled back — the BoltDB
 // is left untouched. This is the spec §5.3 "all-or-nothing" property
 // enforced at the storage layer.
