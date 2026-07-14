@@ -358,8 +358,12 @@ func (e *errorReader) Read(p []byte) (int, error) {
 // fake store (credentials always present so updateOnce reaches the
 // download step every tick). It asserts Run calls UpdateOnce more than
 // once (immediate first run after warmup, then ticker-driven runs) and
-// that cancelling ctx stops the loop, closing Done() promptly — mirrors
-// internal/alerting/watcher.go's Run/Done lifecycle test shape.
+// that cancelling ctx stops the loop — observed by polling the call
+// count until it stops increasing, since Run no longer exposes a
+// Done() channel (see TestRun_CalledTwiceOnSameUpdater_DoesNotPanic:
+// Done() was unused in production and its backing "close once-created
+// channel" implementation double-closed when Run was restarted on the
+// same Updater, so it was removed).
 func TestRun_TicksRepeatedlyAndStopsOnCancel(t *testing.T) {
 	var calls int64
 	dl := func(_ context.Context, _ int, _, _, _ string) (client.DownloadResponse, error) {
@@ -397,18 +401,102 @@ func TestRun_TicksRepeatedlyAndStopsOnCancel(t *testing.T) {
 
 	cancel()
 
-	select {
-	case <-u.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run did not exit / Done() did not close after ctx cancel")
+	// Run no longer exposes a completion signal (Done() was removed —
+	// it was dead production code; see the fix note above). Instead,
+	// poll for the loop to stop: snapshot the call count, wait a bound
+	// exceeding the 10ms tick interval, and confirm the count has
+	// stopped climbing.
+	countAtCancel := atomic.LoadInt64(&calls)
+	time.Sleep(200 * time.Millisecond)
+	countAfterWait := atomic.LoadInt64(&calls)
+	if countAfterWait > countAtCancel+1 {
+		t.Fatalf("Run kept ticking after ctx cancel: count went from %d to %d", countAtCancel, countAfterWait)
 	}
 
-	// No further calls should land after Done() closed (best-effort:
-	// give a stopped loop a moment to prove it isn't still ticking).
-	countAtStop := atomic.LoadInt64(&calls)
+	// Confirm it has genuinely settled (not just slow): a further short
+	// wait must show no additional increase at all.
 	time.Sleep(50 * time.Millisecond)
-	if got := atomic.LoadInt64(&calls); got > countAtStop+1 {
-		t.Fatalf("Run kept ticking after ctx cancel: count went from %d to %d", countAtStop, got)
+	if got := atomic.LoadInt64(&calls); got != countAfterWait {
+		t.Fatalf("Run kept ticking well after ctx cancel: count went from %d to %d", countAfterWait, got)
+	}
+}
+
+// TestRun_CalledTwiceOnSameUpdater_DoesNotPanic is a regression test for
+// the production crash pattern: cmd/arenet/main.go's startGeoIPLoop
+// calls "go geoUpdater.Run(loopCtx, interval)" on the SAME *Updater
+// every time the GeoIP config PUT hook fires (enable/disable/interval
+// change), cancelling the previous loop's context first. The old Run
+// implementation did "defer close(u.done)" on a channel created once in
+// New — so the second Run call's exit closed an already-closed channel,
+// panicking the whole process ("close of closed channel"). Run no
+// longer touches any once-created channel, so calling it twice in
+// sequence on one Updater (the exact production pattern) must not
+// panic. This test crashes the test binary on the old code and passes
+// cleanly on the fix.
+func TestRun_CalledTwiceOnSameUpdater_DoesNotPanic(t *testing.T) {
+	var calls int64
+	dl := func(_ context.Context, _ int, _, _, _ string) (client.DownloadResponse, error) {
+		atomic.AddInt64(&calls, 1)
+		return client.DownloadResponse{UpdateAvailable: false, Reader: io.NopCloser(bytes.NewReader(nil))}, nil
+	}
+
+	u, err := New(Config{
+		Store:    okStore(),
+		Lookup:   &geo.Lookup{},
+		MMDBPath: filepath.Join(t.TempDir(), "db.mmdb"),
+		Download: dl,
+		NoWarmup: true,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	const interval = 10 * time.Millisecond
+	waitForTick := func(prev int64) {
+		t.Helper()
+		deadline := time.After(2 * time.Second)
+		for {
+			if atomic.LoadInt64(&calls) > prev {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("timed out waiting for a tick past count %d", prev)
+			case <-time.After(2 * time.Millisecond):
+			}
+		}
+	}
+
+	// First "start" of the loop (e.g. operator enables GeoIP updates).
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	before1 := atomic.LoadInt64(&calls)
+	go u.Run(ctx1, interval)
+	waitForTick(before1)
+	cancel1()
+	// Give the goroutine a moment to actually return (the old code's
+	// close(u.done) runs in this window).
+	time.Sleep(50 * time.Millisecond)
+
+	// Second "start" on the SAME Updater instance — exactly what
+	// startGeoIPLoop does on every config PUT (e.g. operator changes
+	// the interval or re-enables after disabling).
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	before2 := atomic.LoadInt64(&calls)
+	go u.Run(ctx2, interval)
+	waitForTick(before2)
+	cancel2()
+	time.Sleep(50 * time.Millisecond)
+
+	// Reaching here without the test binary crashing from an unrecovered
+	// panic in the Run goroutine is the assertion: the old "defer
+	// close(u.done)" on a once-created channel would panic on this
+	// second Run's exit ("close of closed channel"), taking the whole
+	// test process down. No explicit assertion is needed beyond normal
+	// completion, but confirm forward progress happened in both runs so
+	// the test is non-vacuous.
+	if got := atomic.LoadInt64(&calls); got < before2+1 {
+		t.Fatalf("expected ticks in both Run invocations, got only %d total calls", got)
 	}
 }
 

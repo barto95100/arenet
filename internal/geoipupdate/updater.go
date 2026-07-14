@@ -156,8 +156,6 @@ type Updater struct {
 
 	mu     sync.Mutex
 	status UpdateResult
-
-	done chan struct{} // closed when Run exits
 }
 
 // New builds an Updater from cfg, validating required dependencies
@@ -195,7 +193,6 @@ func New(cfg Config) (*Updater, error) {
 		httpClient: httpClient,
 		warmup:     warmup,
 		logger:     logger,
-		done:       make(chan struct{}),
 	}
 
 	download := cfg.Download
@@ -435,11 +432,11 @@ func (u *Updater) Status() UpdateResult {
 // Run is resilient: a failed UpdateOnce (StatusError, already logged
 // by UpdateOnce itself) never stops the loop — only an explicit ctx
 // cancellation does. Blocks until ctx is done; call it in its own
-// goroutine. Safe to call once per Updater; Done() closes when Run
-// returns.
+// goroutine. The loop exits solely when ctx is cancelled — callers
+// that need to restart the schedule (e.g. cmd/arenet's config PUT
+// hook) may call Run again on the same Updater with a fresh ctx once
+// the previous call has returned.
 func (u *Updater) Run(ctx context.Context, interval time.Duration) {
-	defer close(u.done)
-
 	select {
 	case <-ctx.Done():
 		return
@@ -459,11 +456,6 @@ func (u *Updater) Run(ctx context.Context, interval time.Duration) {
 		}
 	}
 }
-
-// Done returns a channel closed once Run has exited. Tests and
-// cmd/arenet/main.go use it to await clean shutdown after cancelling
-// the loop's context.
-func (u *Updater) Done() <-chan struct{} { return u.done }
 
 // md5OfFile returns the hex-encoded md5 digest of the file at path,
 // or "" (with a nil error) if the file does not exist — the
