@@ -365,6 +365,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Get("/system/version", h.systemVersion)
 				r.Post("/system/version/check", h.systemVersionCheck)
 				r.Put("/system/version/config", h.systemVersionConfig)
+				// Brick 3, Task 5 — opt-in GeoIP database auto-update.
+				// Admin-gated, mirroring the update checker above.
+				r.Get("/system/geoip/update-config", h.getGeoIPUpdateConfig)
+				r.Put("/system/geoip/update-config", h.putGeoIPUpdateConfig)
+				r.Post("/system/geoip/update", h.postGeoIPUpdate)
+				r.Get("/system/geoip/status", h.getGeoIPStatus)
 				// Step K.1 — forward-auth provider CRUD.
 				r.Get("/settings/forward-auth/providers", h.listForwardAuthProviders)
 				r.Post("/settings/forward-auth/providers", h.createForwardAuthProvider)

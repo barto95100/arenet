@@ -1594,6 +1594,17 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		logger.Info("geoip auto-update enabled", "interval", humanizeDuration(interval))
 	}
 	apiHandler.SetGeoIPConfigHook(startGeoIPLoop)
+	// Brick 3, Task 5 — wire the updater itself so the admin API's
+	// manual POST /system/geoip/update and GET /system/geoip/status
+	// endpoints work even if geoUpdaterErr != nil is not the case.
+	// SetGeoIPUpdater is nil-tolerant on the geoUpdater side too: when
+	// New failed above, geoUpdater is a nil *geoipupdate.Updater, and
+	// passing a nil concrete pointer through an interface parameter
+	// produces a non-nil interface value — so guard explicitly to keep
+	// the handler's own nil check meaningful.
+	if geoUpdater != nil {
+		apiHandler.SetGeoIPUpdater(geoUpdater)
+	}
 	// Kick off according to the persisted opt-in state. Bootstrap is
 	// implicit here: when cfg.Enabled and MaxMind credentials are
 	// configured, the loop's warmup-then-first-run calls UpdateOnce,

@@ -17,6 +17,26 @@ export interface SystemVersion {
 	enabled: boolean;
 }
 
+// Brick 3, Task 5 — GeoIP database auto-update client. Backs the
+// (future, Brick 4) /settings GeoIP updates panel.
+
+export interface GeoIPUpdateConfig {
+	enabled: boolean;
+	intervalHours: number;
+}
+
+export interface GeoIPUpdateResult {
+	status: string;
+	error?: string;
+	lastModified?: string;
+}
+
+export interface GeoIPStatus {
+	lastStatus: string;
+	lastError?: string;
+	lastUpdated?: string;
+}
+
 export const systemApi = {
 	getVersion: (): Promise<SystemVersion> => request<SystemVersion>('GET', '/system/version'),
 	checkVersion: (): Promise<SystemVersion> =>
@@ -24,5 +44,16 @@ export const systemApi = {
 	setVersionConfig: (body: {
 		enabled: boolean;
 		intervalOverride?: string;
-	}): Promise<SystemVersion> => request<SystemVersion>('PUT', '/system/version/config', body)
+	}): Promise<SystemVersion> => request<SystemVersion>('PUT', '/system/version/config', body),
+
+	getGeoIPUpdateConfig: (): Promise<GeoIPUpdateConfig> =>
+		request<GeoIPUpdateConfig>('GET', '/system/geoip/update-config'),
+	putGeoIPUpdateConfig: (body: {
+		enabled: boolean;
+		intervalHours?: number;
+	}): Promise<GeoIPUpdateConfig> =>
+		request<GeoIPUpdateConfig>('PUT', '/system/geoip/update-config', body),
+	triggerGeoIPUpdate: (): Promise<GeoIPUpdateResult> =>
+		request<GeoIPUpdateResult>('POST', '/system/geoip/update'),
+	getGeoIPStatus: (): Promise<GeoIPStatus> => request<GeoIPStatus>('GET', '/system/geoip/status')
 };
