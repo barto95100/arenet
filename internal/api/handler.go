@@ -230,6 +230,14 @@ type Handler struct {
 	// loop. nil-tolerant.
 	onUpdateConfigChange func(storage.UpdateCheckConfig)
 
+	// onGeoIPConfigChange (GeoIP auto-update Brick 3, Task 4) is
+	// invoked after a successful GeoIP-update-config PUT so the boot
+	// wiring can start/stop the scheduler loop to match the new
+	// enabled/interval, mirroring onUpdateConfigChange. Wired via
+	// SetGeoIPConfigHook; the PUT handler that calls this lands in
+	// Task 5. nil-tolerant (tests don't wire it).
+	onGeoIPConfigChange func(storage.GeoIPUpdateConfig)
+
 	// alertingDispatcher (Step AL.1.b) fans an AlertEvent
 	// out to a list of channel IDs, owns the per-channel
 	// MinSeverity / Enabled gates, and writes the per-send
@@ -647,6 +655,15 @@ func (h *Handler) SetUpdateChecker(c updateChecker) {
 // match the new enabled/interval. nil-tolerant (tests don't wire it).
 func (h *Handler) SetUpdateConfigHook(fn func(storage.UpdateCheckConfig)) {
 	h.onUpdateConfigChange = fn
+}
+
+// SetGeoIPConfigHook (GeoIP auto-update Brick 3, Task 4) registers a
+// callback invoked after a GeoIP-update-config PUT persists, so main
+// can start/stop the scheduler loop to match the new enabled/interval.
+// nil-tolerant (tests don't wire it). Mirrors SetUpdateConfigHook; the
+// PUT endpoint that calls onGeoIPConfigChange is added in Task 5.
+func (h *Handler) SetGeoIPConfigHook(fn func(storage.GeoIPUpdateConfig)) {
+	h.onGeoIPConfigChange = fn
 }
 
 // SetAlertingDispatcher (Step AL.1.b) attaches the

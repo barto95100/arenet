@@ -88,8 +88,8 @@ type CredStore interface {
 type DownloadFunc func(ctx context.Context, accountID int, licenseKey, editionID, currentMD5 string) (client.DownloadResponse, error)
 
 // Config holds the dependencies for an Updater. Store, Lookup, and
-// MMDBPath are required; HTTPClient, Download, and Logger default
-// when left zero.
+// MMDBPath are required; HTTPClient, Download, Warmup, and Logger
+// default when left zero.
 type Config struct {
 	// Store supplies the MaxMind account credentials. Required.
 	Store CredStore
@@ -105,10 +105,27 @@ type Config struct {
 	// Download is the download seam. Defaults to a real
 	// geoipupdate/v8 client call when nil.
 	Download DownloadFunc
+	// Warmup is how long Run waits before its first UpdateOnce call,
+	// mirroring the update-checker's 30s post-boot delay so a fresh
+	// start doesn't fire an immediate outbound call. Defaults to 30s
+	// when left zero (see New) — production wiring (cmd/arenet/main.go)
+	// leaves this unset. Tests that want the loop to run without
+	// waiting set NoWarmup (below), since the zero value of this
+	// field is reserved for "use the 30s default."
+	Warmup time.Duration
+	// NoWarmup, when true, forces Run's warmup delay to exactly zero
+	// instead of defaulting Warmup to 30s. Exists purely so tests can
+	// request "tick immediately" without the zero value of Warmup
+	// being ambiguous with "left unset."
+	NoWarmup bool
 	// Logger receives operational log lines. Defaults to
 	// slog.Default() when nil. The LicenseKey is NEVER logged.
 	Logger *slog.Logger
 }
+
+// defaultWarmup is Config.Warmup's zero-value default — the delay
+// before Run's first UpdateOnce call.
+const defaultWarmup = 30 * time.Second
 
 // UpdateResult is the outcome of a single UpdateOnce call.
 type UpdateResult struct {
@@ -134,10 +151,13 @@ type Updater struct {
 	mmdbPath   string
 	httpClient *http.Client
 	download   DownloadFunc
+	warmup     time.Duration
 	logger     *slog.Logger
 
 	mu     sync.Mutex
 	status UpdateResult
+
+	done chan struct{} // closed when Run exits
 }
 
 // New builds an Updater from cfg, validating required dependencies
@@ -163,12 +183,19 @@ func New(cfg Config) (*Updater, error) {
 		logger = slog.Default()
 	}
 
+	warmup := cfg.Warmup
+	if warmup == 0 && !cfg.NoWarmup {
+		warmup = defaultWarmup
+	}
+
 	u := &Updater{
 		store:      cfg.Store,
 		lookup:     cfg.Lookup,
 		mmdbPath:   cfg.MMDBPath,
 		httpClient: httpClient,
+		warmup:     warmup,
 		logger:     logger,
+		done:       make(chan struct{}),
 	}
 
 	download := cfg.Download
@@ -396,6 +423,47 @@ func (u *Updater) Status() UpdateResult {
 	defer u.mu.Unlock()
 	return u.status
 }
+
+// Run starts the periodic scheduler loop: it waits Config.Warmup (30s
+// default) — or returns early if ctx is cancelled first — then calls
+// UpdateOnce once, then re-runs UpdateOnce every interval via a
+// time.Ticker until ctx is cancelled. Mirrors the lifecycle shape of
+// internal/alerting/watcher.go's Watcher.Run (warmup/immediate-first-
+// tick/ticker/ctx-cancel) and cmd/arenet/main.go's startUpdateLoop
+// goroutine.
+//
+// Run is resilient: a failed UpdateOnce (StatusError, already logged
+// by UpdateOnce itself) never stops the loop — only an explicit ctx
+// cancellation does. Blocks until ctx is done; call it in its own
+// goroutine. Safe to call once per Updater; Done() closes when Run
+// returns.
+func (u *Updater) Run(ctx context.Context, interval time.Duration) {
+	defer close(u.done)
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(u.warmup):
+	}
+
+	u.UpdateOnce(ctx)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			u.UpdateOnce(ctx)
+		}
+	}
+}
+
+// Done returns a channel closed once Run has exited. Tests and
+// cmd/arenet/main.go use it to await clean shutdown after cancelling
+// the loop's context.
+func (u *Updater) Done() <-chan struct{} { return u.done }
 
 // md5OfFile returns the hex-encoded md5 digest of the file at path,
 // or "" (with a nil error) if the file does not exist — the

@@ -83,6 +83,7 @@ import (
 	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/geo"
+	"github.com/barto95100/arenet/internal/geoipupdate"
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/ratelimit"
@@ -1550,6 +1551,60 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		startUpdateLoop(uc)
 	}
 
+	// GeoIP auto-update (Brick 3, Task 4) — opt-in periodic scheduler
+	// mirroring the update-checker above. geoUpdater.Run downloads a
+	// fresh MaxMind database when credentials are configured and the
+	// on-disk md5 no longer matches, then reloads geoLookup in place.
+	// A 5-minute HTTP timeout accommodates a full City-DB download
+	// (tens of MB) over a slow homelab uplink, vs. the update-
+	// checker's much smaller GitHub releases payload.
+	geoUpdater, geoUpdaterErr := geoipupdate.New(geoipupdate.Config{
+		Store:      store,
+		Lookup:     geoLookup,
+		MMDBPath:   geoMMDBPath,
+		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
+		Logger:     logger,
+	})
+	if geoUpdaterErr != nil {
+		logger.Warn("geoip auto-update: build updater failed; feature disabled", "err", geoUpdaterErr)
+	}
+
+	// geoipLoopMu guards the current loop's cancel func so the config
+	// hook and shutdown don't race, mirroring updateLoopMu above.
+	var geoipLoopMu sync.Mutex
+	var geoipLoopCancel context.CancelFunc
+	startGeoIPLoop := func(cfg storage.GeoIPUpdateConfig) {
+		geoipLoopMu.Lock()
+		defer geoipLoopMu.Unlock()
+		if geoipLoopCancel != nil {
+			geoipLoopCancel() // stop a previous loop
+			geoipLoopCancel = nil
+		}
+		if geoUpdater == nil {
+			return // updater failed to build; nothing to (re)start
+		}
+		if !cfg.Enabled {
+			logger.Info("geoip auto-update disabled")
+			return
+		}
+		interval := resolveGeoIPInterval(cfg.IntervalOverride, logger)
+		loopCtx, cancel := context.WithCancel(ctx)
+		geoipLoopCancel = cancel
+		go geoUpdater.Run(loopCtx, interval)
+		logger.Info("geoip auto-update enabled", "interval", humanizeDuration(interval))
+	}
+	apiHandler.SetGeoIPConfigHook(startGeoIPLoop)
+	// Kick off according to the persisted opt-in state. Bootstrap is
+	// implicit here: when cfg.Enabled and MaxMind credentials are
+	// configured, the loop's warmup-then-first-run calls UpdateOnce,
+	// which downloads a fresh database when none is present on disk —
+	// there is no separate bootstrap call to wire.
+	if gc, gcErr := store.GetGeoIPUpdateConfig(ctx); gcErr != nil {
+		logger.Warn("geoip auto-update: read config failed; leaving disabled", "err", gcErr)
+	} else {
+		startGeoIPLoop(gc)
+	}
+
 	// Step AL.3b — expose the source registry to the
 	// rule CRUD validator. nil-tolerant on the handler
 	// side, but in production every wired source must
@@ -2062,6 +2117,35 @@ func resolveUpdateInterval(override string, logger *slog.Logger) time.Duration {
 	}
 	if d < floor {
 		logger.Warn("update checker: interval below 1h floor, using 24h default", "value", candidate)
+		return def
+	}
+	return d
+}
+
+// resolveGeoIPInterval (GeoIP auto-update Brick 3, Task 4) picks the
+// GeoIP scheduler cadence: stored override → ARENET_GEOIP_UPDATE_INTERVAL
+// env → 168h (weekly) default. MaxMind publishes GeoLite2 updates
+// roughly weekly, so a weekly poll is the sane default cadence — much
+// coarser than the update-checker's 24h. Anything below the 1h floor
+// (or unparseable) falls back to the 168h default with a warning, so a
+// bad value can't spam MaxMind's API. Mirrors resolveUpdateInterval.
+func resolveGeoIPInterval(override string, logger *slog.Logger) time.Duration {
+	const def = 168 * time.Hour
+	const floor = time.Hour
+	candidate := override
+	if candidate == "" {
+		candidate = os.Getenv("ARENET_GEOIP_UPDATE_INTERVAL")
+	}
+	if candidate == "" {
+		return def
+	}
+	d, err := time.ParseDuration(candidate)
+	if err != nil {
+		logger.Warn("geoip auto-update: invalid interval, using 168h default", "value", candidate, "err", err)
+		return def
+	}
+	if d < floor {
+		logger.Warn("geoip auto-update: interval below 1h floor, using 168h default", "value", candidate)
 		return def
 	}
 	return d

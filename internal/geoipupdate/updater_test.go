@@ -26,7 +26,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/maxmind/geoipupdate/v8/client"
 
@@ -349,4 +351,102 @@ func (e *errorReader) Read(p []byte) (int, error) {
 	n := copy(p, bytes.Repeat([]byte{'x'}, e.failAfter-e.sent))
 	e.sent += n
 	return n, nil
+}
+
+// TestRun_TicksRepeatedlyAndStopsOnCancel drives Run with a zero warmup
+// and a fast interval, counting DownloadFunc invocations via a counting
+// fake store (credentials always present so updateOnce reaches the
+// download step every tick). It asserts Run calls UpdateOnce more than
+// once (immediate first run after warmup, then ticker-driven runs) and
+// that cancelling ctx stops the loop, closing Done() promptly — mirrors
+// internal/alerting/watcher.go's Run/Done lifecycle test shape.
+func TestRun_TicksRepeatedlyAndStopsOnCancel(t *testing.T) {
+	var calls int64
+	dl := func(_ context.Context, _ int, _, _, _ string) (client.DownloadResponse, error) {
+		atomic.AddInt64(&calls, 1)
+		return client.DownloadResponse{UpdateAvailable: false, Reader: io.NopCloser(bytes.NewReader(nil))}, nil
+	}
+
+	u, err := New(Config{
+		Store:    okStore(),
+		Lookup:   &geo.Lookup{},
+		MMDBPath: filepath.Join(t.TempDir(), "db.mmdb"),
+		Download: dl,
+		NoWarmup: true, // no warmup delay in tests
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go u.Run(ctx, 10*time.Millisecond)
+
+	// Wait for at least 3 ticks (immediate + at least 2 ticker fires).
+	deadline := time.After(2 * time.Second)
+	for {
+		if atomic.LoadInt64(&calls) >= 3 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for 3 UpdateOnce calls, got %d", atomic.LoadInt64(&calls))
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	cancel()
+
+	select {
+	case <-u.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not exit / Done() did not close after ctx cancel")
+	}
+
+	// No further calls should land after Done() closed (best-effort:
+	// give a stopped loop a moment to prove it isn't still ticking).
+	countAtStop := atomic.LoadInt64(&calls)
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt64(&calls); got > countAtStop+1 {
+		t.Fatalf("Run kept ticking after ctx cancel: count went from %d to %d", countAtStop, got)
+	}
+}
+
+// TestRun_ResilientToFailedUpdate asserts a failing UpdateOnce (download
+// error) does not stop the loop — it must log and keep ticking, never
+// treat a single failed cycle as fatal.
+func TestRun_ResilientToFailedUpdate(t *testing.T) {
+	var calls int64
+	dl := func(_ context.Context, _ int, _, _, _ string) (client.DownloadResponse, error) {
+		atomic.AddInt64(&calls, 1)
+		return client.DownloadResponse{}, errors.New("network boom")
+	}
+
+	u, err := New(Config{
+		Store:    okStore(),
+		Lookup:   &geo.Lookup{},
+		MMDBPath: filepath.Join(t.TempDir(), "db.mmdb"),
+		Download: dl,
+		NoWarmup: true,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go u.Run(ctx, 10*time.Millisecond)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if atomic.LoadInt64(&calls) >= 3 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("loop stopped ticking after a failed UpdateOnce, got %d calls", atomic.LoadInt64(&calls))
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
