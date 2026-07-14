@@ -506,17 +506,32 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	}
 	geoLookup, geoErr := geo.NewLookup(geoMMDBPath)
 	if geoErr != nil {
+		// Degraded Lookup, not nil. A nil geoLookup here would
+		// break the auto-update bootstrap: geoipupdate.New (Brick
+		// 3) rejects a nil Lookup, so on a fileless first boot the
+		// updater would never build and the first DB could never
+		// be downloaded — no DB -> nil Lookup -> no updater -> no
+		// download -> no DB, forever. &geo.Lookup{} is a safe
+		// degraded receiver (nil internal reader): LookupIP always
+		// returns Found:false, Close is a no-op, and Reload installs
+		// a DB into it live once the updater downloads one — so the
+		// updater can build now and bootstrap the first DB without
+		// a restart.
+		geoLookup = &geo.Lookup{}
 		logger.Warn("geoip database not loaded — geo enrichment degraded",
 			"path", geoMMDBPath, "present", false, "err", geoErr)
 	} else {
 		logger.Info("geoip database loaded",
 			"path", geoMMDBPath, "present", true)
-		defer func() {
-			if cerr := geoLookup.Close(); cerr != nil {
-				logger.Warn("geoip database close error", "err", cerr)
-			}
-		}()
 	}
+	// Close unconditionally: geoLookup is always non-nil from here
+	// on, and Close on a degraded Lookup (nil internal reader) is a
+	// safe no-op.
+	defer func() {
+		if cerr := geoLookup.Close(); cerr != nil {
+			logger.Warn("geoip database close error", "err", cerr)
+		}
+	}()
 
 	// Step W.3 — upgrade the country-block lookup adapter
 	// from the nil-inner placeholder (installed before
@@ -527,11 +542,11 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// .SetNormalSubmitter from "not yet installed" to the
 	// real DefaultNormalSink once the geo bus is up.
 	//
-	// On the degraded path (MMDB missing), geoLookup is nil
-	// and this call re-installs the same nil-inner adapter
-	// the placeholder set — no-op but explicit so future
-	// readers see the parallel with the placeholder install
-	// above.
+	// On the degraded path (MMDB missing), geoLookup is a
+	// degraded &geo.Lookup{} (nil internal reader) rather than
+	// nil, but LookupIP behaves identically to the nil-inner
+	// placeholder set above — always Found:false — so this call
+	// is functionally a no-op until Reload installs a real DB.
 	countryblock.SetGlobalLookup(countryBlockGeoLookup{inner: geoLookup})
 
 	// Step V.4 — server position resolution. Order of
@@ -583,7 +598,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// auto row (or no row) we re-detect on every boot so the
 	// position stays fresh when the public IP changes.
 	if bootPositionMode != geo.ServerPositionModeManual {
-		if geoLookup != nil {
+		if geoLookup.Loaded() {
 			autoPos, autoErr := geo.DetectFromPublicIP(geoLookup)
 			if autoErr != nil {
 				logger.Warn("server position auto-detect failed; manual override required (V.4)",
@@ -751,7 +766,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		}
 	}()
 	logger.Info("country block sink wired",
-		"present", geoLookup != nil,
+		"present", geoLookup.Loaded(),
 		"status_code", cbStatusCode,
 		"trusted_ips_count", len(cbTrustedIPs),
 		"sample_pct", normalSamplePct,
@@ -1384,16 +1399,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	)
 	// Phase Z.5.3 — geo lookup wire-up. The /logs SOURCE
 	// IP enrichment endpoint (POST /api/v1/geo/lookup-batch)
-	// uses this seam. Nil-tolerant : a nil geoLookup
-	// (degraded MMDB) makes the endpoint return empty
-	// country codes so the frontend renders raw IPs cleanly.
-	// Same HF4 boot-log pattern : any future regression
-	// surfaces as lookup_present=false in journalctl.
-	if geoLookup != nil {
-		apiHandler.SetGeoLookup(geoLookup)
-	}
+	// uses this seam. geoLookup is always non-nil now (real or
+	// degraded per the auto-update bootstrap fix), so the seam
+	// is always wired: in degraded mode LookupIP returns empty
+	// country codes so the frontend renders raw IPs cleanly,
+	// and once the geoip auto-updater Reloads a DB in place this
+	// same handle starts resolving live, with no restart needed.
+	apiHandler.SetGeoLookup(geoLookup)
 	logger.Info("api handler wired with geo lookup",
-		"lookup_present", apiHandler.HasGeoLookup(),
+		"lookup_present", geoLookup.Loaded(),
 	)
 
 	// Step V.4 — server position wire-up.

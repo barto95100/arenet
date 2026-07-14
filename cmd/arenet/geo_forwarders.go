@@ -274,9 +274,11 @@ var _ countryblock.CountryLookup = countryBlockGeoLookup{}
 // *geo.Lookup so the handler can re-run V.1's
 // DetectFromPublicIP path without taking a hard dependency
 // on internal/geo at the api package boundary. The lookup
-// pointer may be nil (degraded GeoIP mode); the underlying
-// DetectFromPublicIP returns an error in that case and the
-// handler renders the degraded shape.
+// pointer is always non-nil (real when an MMDB was found at
+// boot, degraded &geo.Lookup{} otherwise per the auto-update
+// bootstrap fix); in the degraded case DetectFromPublicIP
+// still returns an error (MMDB miss) and the handler renders
+// the degraded shape.
 type serverPositionRedetector struct {
 	lookup *geo.Lookup
 }

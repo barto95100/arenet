@@ -103,11 +103,16 @@ func NewEnricher(lookup *Lookup) *Enricher {
 	return &Enricher{lookup: lookup}
 }
 
-// HasLookup reports whether the enricher has a non-nil
-// GeoIP Lookup. cmd/arenet logs this at boot per the HF4
-// pattern so a missing MMDB is immediately visible.
+// HasLookup reports whether the enricher has a Lookup with an
+// active MMDB reader — i.e. NOT degraded. Uses Lookup.Loaded()
+// rather than a nil check because cmd/arenet may hand this a
+// non-nil-but-degraded &Lookup{} (the auto-update bootstrap
+// case: built when no MMDB file was present at boot, so the
+// updater can build and Reload the first DB in place). cmd/arenet
+// logs this at boot per the HF4 pattern so a missing MMDB is
+// immediately visible.
 func (e *Enricher) HasLookup() bool {
-	return e != nil && e.lookup != nil
+	return e != nil && e.lookup.Loaded()
 }
 
 // EnrichWAFEvent maps a waf.Event to the common GeoEvent

@@ -88,6 +88,23 @@ func NewLookup(mmdbPath string) (*Lookup, error) {
 	return l, nil
 }
 
+// Loaded reports whether this Lookup has an active MMDB reader —
+// i.e. it is NOT degraded. A nil receiver, or a non-nil Lookup whose
+// internal reader is nil (the degraded-bootstrap case: constructed
+// as &Lookup{} when no MMDB file was present at boot), both report
+// false. True once NewLookup succeeded or Reload has installed a DB.
+//
+// Callers that used to test "geoLookup != nil" as a proxy for "do we
+// have a real database" should use Loaded() instead now that callers
+// may hold a always-non-nil, possibly-degraded *Lookup (see cmd/arenet
+// boot wiring): the pointer alone no longer signals DB presence.
+func (l *Lookup) Loaded() bool {
+	if l == nil {
+		return false
+	}
+	return l.reader.Load() != nil
+}
+
 // Path returns the MMDB file path this Lookup was opened against.
 // Returns "" on a nil receiver. Useful for boot-log diagnostics.
 func (l *Lookup) Path() string {
