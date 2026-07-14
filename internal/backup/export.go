@@ -34,6 +34,7 @@ type Storer interface {
 	ListDNSProviders(ctx context.Context) ([]storage.DNSProviderConfig, error)
 	ListForwardAuthProviders(ctx context.Context) ([]storage.ForwardAuthProvider, error)
 	GetOIDCConfig(ctx context.Context) (storage.OIDCConfig, error)
+	GetMaxMindConfig(ctx context.Context) (storage.MaxMindConfig, error)
 }
 
 // UserStorer is the userstore subset Export consumes.
@@ -88,6 +89,17 @@ func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion s
 	// fields empty); that's the correct exported shape for "never
 	// configured".
 
+	// MaxMind config (Brick 2 Task 4): a single-record store like
+	// OIDC, but represented as a pointer in the snapshot — nil when
+	// the instance has never configured it, populated otherwise.
+	var maxMindCfg *storage.MaxMindConfig
+	mm, err := store.GetMaxMindConfig(ctx)
+	if err == nil {
+		maxMindCfg = &mm
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return nil, fmt.Errorf("export: get maxmind config: %w", err)
+	}
+
 	snap := &Snapshot{
 		SchemaVersion:        SchemaVersion,
 		ExportedAt:           time.Now().UTC(),
@@ -97,6 +109,7 @@ func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion s
 		DNSProviders:         dnsList,
 		ForwardAuthProviders: fwdList,
 		OIDCConfig:           oidcCfg,
+		MaxMindConfig:        maxMindCfg,
 		Users:                usersList,
 	}
 	if !includeSecrets {

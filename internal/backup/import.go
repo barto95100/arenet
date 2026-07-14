@@ -130,6 +130,7 @@ func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Sna
 	report.DNSProvidersImported = len(resolved.DNSProviders)
 	report.ForwardAuthProvidersImported = len(resolved.ForwardAuthProviders)
 	report.OIDCConfigImported = resolved.OIDCConfig.IssuerURL != "" || resolved.OIDCConfig.ClientID != ""
+	report.MaxMindConfigImported = resolved.MaxMindConfig != nil
 	return report, nil
 }
 
@@ -142,6 +143,8 @@ type liveSnapshot struct {
 	fwdAuthByName map[string]storage.ForwardAuthProvider
 	oidc          storage.OIDCConfig
 	oidcExists    bool
+	maxMind       storage.MaxMindConfig
+	maxMindExists bool
 }
 
 func (ls *liveSnapshot) isFresh() bool {
@@ -205,6 +208,13 @@ func readLive(ctx context.Context, store Storer, users UserStorer) (*liveSnapsho
 	} else if !errors.Is(err, storage.ErrNotFound) {
 		return nil, err
 	}
+	maxMind, err := store.GetMaxMindConfig(ctx)
+	if err == nil {
+		ls.maxMind = maxMind
+		ls.maxMindExists = true
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return nil, err
+	}
 	return ls, nil
 }
 
@@ -224,6 +234,10 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 	out.DNSProviders = append([]storage.DNSProviderConfig(nil), snap.DNSProviders...)
 	out.ForwardAuthProviders = append([]storage.ForwardAuthProvider(nil), snap.ForwardAuthProviders...)
 	out.OIDCConfig = snap.OIDCConfig
+	if snap.MaxMindConfig != nil {
+		mm := *snap.MaxMindConfig
+		out.MaxMindConfig = &mm
+	}
 
 	resolve := func(entity, identity, field, current string, lookup func() (string, bool)) (string, error) {
 		if current != SentinelLiteral {
@@ -358,6 +372,21 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 	}
 	out.OIDCConfig.ClientSecret = v
 
+	// MaxMind config — keyed by "default", account_id/edition_id
+	// travel verbatim (never sentinel-guarded), only license_key is.
+	if out.MaxMindConfig != nil {
+		mv, err := resolve("maxmind_config", "default", "license_key", out.MaxMindConfig.LicenseKey, func() (string, bool) {
+			if live.maxMindExists {
+				return live.maxMind.LicenseKey, true
+			}
+			return "", false
+		})
+		if err != nil {
+			return nil, err
+		}
+		out.MaxMindConfig.LicenseKey = mv
+	}
+
 	return &out, nil
 }
 
@@ -430,6 +459,13 @@ func buildRestoreInput(snap *Snapshot) (storage.RestoreSnapshotInput, error) {
 			return out, fmt.Errorf("marshal oidc config: %w", err)
 		}
 		out.OIDCConfig = b
+	}
+	if snap.MaxMindConfig != nil {
+		b, err := json.Marshal(snap.MaxMindConfig)
+		if err != nil {
+			return out, fmt.Errorf("marshal maxmind config: %w", err)
+		}
+		out.MaxMindConfig = b
 	}
 	return out, nil
 }

@@ -2223,6 +2223,42 @@ export interface CrowdSecTestResponse {
 }
 
 /**
+ * Brick 2 Task 2 — wire shape returned by GET
+ * /api/v1/settings/maxmind. `licenseKey` is NEVER echoed by the
+ * backend (mirrors the CrowdSec `apiKey` / OIDC `clientSecret`
+ * redaction pattern) — there is no license key field on the wire
+ * at all, only the `configured` flag the UI binds to render the
+ * "•••• already saved" placeholder.
+ */
+export interface MaxMindConfig {
+	accountId: number;
+	editionId: string;
+	configured: boolean;
+}
+
+/**
+ * Brick 2 Task 2 — wire shape for PUT /api/v1/settings/maxmind.
+ * Empty `licenseKey` triggers the preserve-on-edit path (stored
+ * value is kept). `editionId` is optional — blank lets the
+ * backend default to "GeoLite2-City".
+ */
+export interface MaxMindRequest {
+	accountId: number;
+	licenseKey: string;
+	editionId?: string;
+}
+
+/**
+ * Brick 2 Task 3 — wire shape returned by POST
+ * /api/v1/settings/maxmind/test. Always HTTP 200; `reachable`
+ * is the boolean the UI flips a green / red badge on.
+ */
+export interface MaxMindTestResult {
+	reachable: boolean;
+	error?: string;
+}
+
+/**
  * Step CS.3 Commit D — POST /api/v1/security/crowdsec/decisions
  * request body. Mirrors the backend manualBanRequest struct
  * verbatim. Validation duplicates the backend rules so the
