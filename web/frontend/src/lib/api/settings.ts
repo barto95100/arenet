@@ -246,6 +246,7 @@ export interface RestoreReport {
 	dnsProvidersImported: number;
 	forwardAuthProvidersImported: number;
 	oidcConfigImported: boolean;
+	maxmindConfigImported: boolean;
 	sentinelsInheritedTotal: number;
 	sentinelsUnresolvedTotal: number;
 	incompleteRows: number;
