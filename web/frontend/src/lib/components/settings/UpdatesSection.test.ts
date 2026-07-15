@@ -65,4 +65,17 @@ describe('UpdatesSection', () => {
 		render(UpdatesSection);
 		await waitFor(() => expect(screen.getByTestId('updates-lasterror')).toBeInTheDocument());
 	});
+
+	it('shows "never" (not a bogus 2027-years-ago) when lastChecked is the Go zero time', async () => {
+		// Before the first check (or after a container restart, since the
+		// timestamp is in-memory only), the backend emits the Go zero time
+		// "0001-01-01T00:00:00Z" — a truthy string that a naive guard would
+		// feed to relativeTime(), rendering "2,027 years ago". The zero-time
+		// guard must catch it and show the "never" label instead.
+		systemMock.getVersion.mockResolvedValue(version({ lastChecked: '0001-01-01T00:00:00Z' }));
+		render(UpdatesSection);
+		const state = await screen.findByTestId('updates-laststate');
+		expect(state.textContent ?? '').toMatch(/never/i);
+		expect(state.textContent ?? '').not.toMatch(/years? ago|ans/i);
+	});
 });

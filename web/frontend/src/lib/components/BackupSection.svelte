@@ -89,7 +89,10 @@
 	}
 </script>
 
-<Card padding="p-6">
+<!-- mb-6 mirrors the other settings sections (Crowdsec, GeoIP,
+     ServerPosition) so the next section below isn't flush against this
+     card. Without it, ServerPositionSection sat glued to Backup. -->
+<Card padding="p-6" class="mb-6">
 	<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
 		<div>
 			<h2 class="text-xl font-semibold">{language.current && t('backupSection.title')}</h2>
