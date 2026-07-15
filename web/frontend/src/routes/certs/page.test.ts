@@ -938,3 +938,73 @@ describe('/certs — Cert.B stale-failure badge', () => {
 	});
 });
 
+
+// --- Auto-refresh polling -------------------------------------------------
+//
+// ACME issuance is asynchronous: certmagic obtains the cert AFTER the
+// route/managed-domain is created, so a freshly-issued cert never appears
+// on /certs until a manual page reload. This suite pins the fix — the page
+// re-fetches the cert list on an interval while mounted, so a new cert
+// surfaces on its own within one poll cycle.
+//
+// This describe fully fakes timers (setInterval included) so we can drive
+// the poll deterministically. It deliberately avoids findBy*/userEvent
+// (which poll on real timers and would deadlock under faked setInterval) —
+// it asserts on the mock call counts directly.
+describe('/certs — auto-refresh polling', () => {
+	beforeEach(() => {
+		vi.useFakeTimers(); // fake ALL timers incl. setInterval
+		vi.setSystemTime(NOW);
+		apiMock.listRoutes.mockResolvedValue([]);
+		settingsMock.settingsApi.listManagedDomains.mockResolvedValue({ domains: [] });
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([]);
+		// One cert so loadCertEvents() actually queries fetchCertEvents
+		// (it early-returns on an empty cert list) — lets the test pin
+		// BOTH halves of the poll: the cert list AND the events.
+		certsMock.certificatesApi.list.mockResolvedValue([
+			{
+				domain: 'poll.example.com',
+				sanList: ['poll.example.com'],
+				issuer: "Let's Encrypt",
+				notBefore: daysFromNow(-10),
+				notAfter: daysFromNow(80),
+				status: 'VALID',
+				source: 'specific',
+			},
+		]);
+		securityMock.fetchCertEvents.mockResolvedValue({ events: [], total: 0, hasMore: false });
+	});
+
+	it('re-fetches the certificate list AND events on an interval while mounted', async () => {
+		const { unmount } = render(Page);
+
+		// Let the onMount load() settle.
+		await vi.advanceTimersByTimeAsync(0);
+		const listAfterMount = certsMock.certificatesApi.list.mock.calls.length;
+		const eventsAfterMount = securityMock.fetchCertEvents.mock.calls.length;
+		expect(listAfterMount).toBeGreaterThanOrEqual(1);
+		expect(eventsAfterMount).toBeGreaterThanOrEqual(1);
+
+		// Advance one poll cycle (~20s) — BOTH the list and (after it
+		// resolves) the events must be fetched again. The events re-fetch
+		// pins the load()-mirroring ordering: loadCertEvents runs after
+		// loadCertificates resolves, so a cert present this tick gets its
+		// events in the same cycle.
+		await vi.advanceTimersByTimeAsync(20000);
+		expect(certsMock.certificatesApi.list.mock.calls.length).toBeGreaterThan(listAfterMount);
+		expect(securityMock.fetchCertEvents.mock.calls.length).toBeGreaterThan(eventsAfterMount);
+
+		// A second cycle keeps polling.
+		const listAfterFirstPoll = certsMock.certificatesApi.list.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(20000);
+		expect(certsMock.certificatesApi.list.mock.calls.length).toBeGreaterThan(listAfterFirstPoll);
+
+		// After unmount, the interval is cleared — no further fetches.
+		unmount();
+		const listAfterUnmount = certsMock.certificatesApi.list.mock.calls.length;
+		const eventsAfterUnmount = securityMock.fetchCertEvents.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(60000);
+		expect(certsMock.certificatesApi.list.mock.calls.length).toBe(listAfterUnmount);
+		expect(securityMock.fetchCertEvents.mock.calls.length).toBe(eventsAfterUnmount);
+	});
+});
