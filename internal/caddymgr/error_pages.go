@@ -188,12 +188,12 @@ func stripDangerousAtRules(html string) string {
 // truth ; any future tightening lands here.
 //
 // Steps :
-//   1. bluemonday Sanitize (elements + attrs allowlist, with
-//      AllowUnsafe to preserve <style> content)
-//   2. stripDangerousAtRules (remove @import / @charset from
-//      <style> blocks)
-//   3. postSanitize (re-prepend <!doctype html> that bluemonday
-//      strips by design)
+//  1. bluemonday Sanitize (elements + attrs allowlist, with
+//     AllowUnsafe to preserve <style> content)
+//  2. stripDangerousAtRules (remove @import / @charset from
+//     <style> blocks)
+//  3. postSanitize (re-prepend <!doctype html> that bluemonday
+//     strips by design)
 //
 // Returns the sanitized body ready to write into either a
 // Caddy static_response.body field (prod) or an HTTP response
@@ -279,13 +279,61 @@ func arenetDefaultPage(code int, title, msg string) string {
   <h1>%s</h1>
   <p>%s</p>
   <div class="meta">
-    {http.request.method} {http.request.uri} · request id: {http.request.uuid}<br>
+    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}<br>
     <a href="https://github.com/barto95100/arenet">powered by Arenet</a>
   </div>
 </div>
 </body>
 </html>`, code, title, code, title, msg)
 }
+
+// arenetGenericErrorPage is the branded body served by the
+// per-host generic fallback error route (buildErrorRoutesForRoute).
+// Unlike arenetDefaultPage it hard-codes NO status code: the
+// {http.error.status_code} placeholder renders whatever status the
+// errors subroute is dispatching, so a SINGLE body covers every
+// intercepted code that has no dedicated per-code page.
+//
+// Why this exists: the reverse_proxy handle_response block intercepts
+// ~40 upstream 4xx/5xx codes, but only the 8 SupportedErrorStatusCodes
+// have a per-code branded page. Before this fallback, any other
+// intercepted code (400, 402, 405, 406, 409, 501, 505, ...) was
+// re-raised into the errors chain, matched no route, and finalized as
+// a bare empty-body response — the exact symptom that made an upstream
+// 400 (e.g. Home Assistant rejecting an untrusted X-Forwarded-For
+// proxy) undiagnosable. The generic page guarantees a legible branded
+// body for every intercepted status.
+//
+// The body carries the same Caddy runtime placeholders the
+// static_response handler expands at serve time.
+var arenetGenericErrorPage = fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{http.error.status_code} · Arenet</title>
+<style>
+  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .card { max-width:520px; text-align:center; }
+  .code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }
+  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }
+  p { color:#8b949e; line-height:1.5; margin:8px 0; }
+  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:"SF Mono",Menlo,Consolas,monospace; }
+  a { color:#58a6ff; text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <p class="code">{http.error.status_code}</p>
+  <h1>%s</h1>
+  <p>%s</p>
+  <div class="meta">
+    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}<br>
+    <a href="https://github.com/barto95100/arenet">powered by Arenet</a>
+  </div>
+</div>
+</body>
+</html>`, "Request could not be completed", "The server or an upstream service returned an error for this request.")
 
 // postSanitize re-prepends the `<!doctype html>` declaration
 // that bluemonday strips by design (sanitize.go:241 — "DocType
@@ -406,7 +454,7 @@ func buildErrorRoutesForRoute(route storage.Route, templates map[string]storage.
 		}
 	}
 
-	out := make([]httpRoute, 0, len(storage.SupportedErrorStatusCodes))
+	out := make([]httpRoute, 0, len(storage.SupportedErrorStatusCodes)+1)
 	for _, code := range storage.SupportedErrorStatusCodes {
 		body := resolveErrorPage(route, code, templates)
 		if body == "" {
@@ -430,6 +478,28 @@ func buildErrorRoutesForRoute(route storage.Route, templates map[string]storage.
 			},
 		})
 	}
+	// Generic fallback (empty-body-400 class fix). MUST be last: Caddy
+	// evaluates errors subroutes in order, so the per-code routes above
+	// win for the 8 customizable codes, and any OTHER intercepted status
+	// (400, 402, 405, 409, 501, ...) falls through to this catch-all
+	// instead of finalizing as a bare empty-body response. No per-code
+	// Expression → matches every error status for this host; the body
+	// renders the live {http.error.status_code} placeholder so one page
+	// serves them all. status_code echoes the dispatched error status so
+	// the client still receives the upstream's real code, not a rewrite.
+	out = append(out, httpRoute{
+		Match: []matcherSet{{Host: hosts}},
+		Handle: []map[string]any{
+			{
+				"handler":     "static_response",
+				"status_code": "{http.error.status_code}",
+				"headers": map[string]any{
+					"Content-Type": []string{"text/html; charset=utf-8"},
+				},
+				"body": arenetGenericErrorPage,
+			},
+		},
+	})
 	return out
 }
 

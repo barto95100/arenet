@@ -1360,6 +1360,81 @@ func TestBuildConfigJSON_LoadsCleanly_DNS01(t *testing.T) {
 	}
 }
 
+// TestBuildConfigJSON_LoadsCleanly_SkipCertificates feeds a config with a
+// managed-domain-covered route (ACMEChallenge "inherited") through
+// caddy.Validate so the emitted automatic_https.skip_certificates field is
+// actually exercised by a real Caddy Provision — not just unmarshalled into
+// a map. Guards against the silently-ignored-JSON-tag class the prior
+// `SkipCerts bool` declaration fell into: if the field name/tag ever drifts
+// from Caddy's real `skip_certificates`, Validate would still pass (Caddy
+// ignores unknown keys), so we ALSO assert the value round-trips into the
+// typed caddy.Config. Placed after the TestSyncRegistry tests (per the
+// ordering note above) to avoid caddy.Validate goroutine-pollution.
+func TestBuildConfigJSON_LoadsCleanly_SkipCertificates(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:            "r-covered",
+			Host:          "app.covered.example.com",
+			Upstreams:     []storage.Upstream{{URL: "http://127.0.0.1:9006", Weight: 1}},
+			LBPolicy:      storage.LBPolicyRoundRobin,
+			TLSEnabled:    true,
+			ACMEChallenge: storage.ACMEChallengeInherited,
+			WAFMode:       "off",
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+	opts := buildOpts{
+		DevMode:   true,
+		ACMEEmail: "ops@example.com",
+		DNSProviders: map[string]storage.DNSProviderConfig{
+			"prov-1": {
+				ID:                "prov-1",
+				Label:             "OVH",
+				Type:              storage.DNSProviderTypeOVH,
+				Endpoint:          "ovh-eu",
+				ApplicationKey:    "fixture-app-key",
+				ApplicationSecret: "fixture-app-secret",
+				ConsumerKey:       "fixture-consumer-key",
+			},
+		},
+		ManagedDomains: []storage.ManagedDomain{
+			{Apex: "covered.example.com", IncludeApex: true, ProviderID: "prov-1"},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, raw)
+	}
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate failed on covered-route config (skip_certificates shape): %v\n%s", err, raw)
+	}
+
+	// Assert the covered host actually round-tripped into
+	// automatic_https.skip_certificates (raw JSON, so a tag drift to the
+	// wrong key would fail here even though Validate tolerates it).
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal full: %v", err)
+	}
+	apps, _ := full["apps"].(map[string]any)
+	httpApp, _ := apps["http"].(map[string]any)
+	servers, _ := httpApp["servers"].(map[string]any)
+	srv, _ := servers["arenet_https"].(map[string]any)
+	ah, _ := srv["automatic_https"].(map[string]any)
+	skipCerts, ok := ah["skip_certificates"].([]any)
+	if !ok || len(skipCerts) != 1 || skipCerts[0] != "app.covered.example.com" {
+		t.Fatalf("automatic_https.skip_certificates = %v; want [app.covered.example.com]\n%s", ah["skip_certificates"], raw)
+	}
+	if _, hasSkip := ah["skip"]; hasSkip {
+		t.Errorf("automatic_https.skip present (%v); covered hosts must use skip_certificates", ah["skip"])
+	}
+}
+
 // noopLookup satisfies countryblock.CountryLookup for the
 // caddy.Validate-driven test below. Always returns ""
 // (degraded-lookup path); the matcher's §D5 fail-open

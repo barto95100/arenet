@@ -956,14 +956,23 @@ type automaticHTTPSConfig struct {
 	Disable             bool `json:"disable"`
 	DisableRedirects    bool `json:"disable_redirects,omitempty"`
 	DisableCertificates bool `json:"disable_certificates,omitempty"`
-	// Skip lists hostnames that Caddy's auto-HTTPS should NOT
-	// auto-acquire certs for. Used by Step #S-20 to prevent per-
-	// host cert acquisition on routes covered by a managed-domain
-	// wildcard (which is pre-acquired via apps.tls.certificates.
-	// automate). Caddy's automatic_https.skip is a list of names,
-	// NOT a bool — the prior `SkipCerts bool` declaration was a
-	// type bug that emitted JSON Caddy would silently ignore.
+	// Skip lists hostnames EXCLUDED from auto-HTTPS entirely — no cert
+	// management AND no redirect handling, and removed from the
+	// server's domain set (caddy v2.11.3 autohttps.go:53-54, 161-162).
+	// Arenet does not currently need this full exclusion; left here for
+	// completeness / future use. Kept empty in normal operation.
 	Skip []string `json:"skip,omitempty"`
+	// SkipCerts lists hostnames that STAY in auto-HTTPS but for which
+	// Caddy must NOT provision a per-host cert (autohttps.go:57-60,
+	// 204). This is the correct field for Step #S-20's intent: routes
+	// covered by a managed-domain wildcard get the wildcard cert
+	// (pre-acquired via apps.tls.certificates.automate) served at
+	// handshake via SNI, so per-host acquisition must be suppressed —
+	// WITHOUT dropping the host from redirect/auto-HTTPS processing.
+	// Prior code emitted these into Skip, which also silently removed
+	// redirect handling for the host (latent bug); skip_certificates
+	// keeps that behaviour intact.
+	SkipCerts []string `json:"skip_certificates,omitempty"`
 }
 
 type tlsConnectionPolicy struct {
@@ -1903,8 +1912,11 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				// Caddy serves the wildcard cert (pre-acquired via
 				// apps.tls.certificates.automate) for them at TLS
 				// handshake via SNI matching instead of obtaining
-				// a separate cert per route.
-				Skip: buildSkipList(routes),
+				// a separate cert per route. This uses
+				// skip_certificates (NOT skip): the host stays in
+				// auto-HTTPS (routing + redirect handling intact),
+				// only per-host cert provisioning is suppressed.
+				SkipCerts: buildSkipList(routes),
 			},
 			TLSConnPolicies: []tlsConnectionPolicy{{}},
 			Routes:          httpsRoutes,
@@ -2375,8 +2387,10 @@ func buildAutomateList(managedDomains []storage.ManagedDomain) []string {
 // buildSkipList returns the route hostnames (Host + every Alias) of
 // routes whose ACMEChallenge == "inherited" — i.e., routes covered
 // by a managed-domain wildcard. These names go into
-// apps.http.servers.arenet_https.automatic_https.skip so Caddy
-// does NOT add them to its auto-managed cert acquisition list.
+// apps.http.servers.arenet_https.automatic_https.skip_certificates
+// so Caddy does NOT add them to its auto-managed cert acquisition
+// list, while keeping them in auto-HTTPS (routing + redirect handling
+// intact — the plain "skip" field would drop both).
 //
 // Without this skip, Caddy would obtain a separate per-host cert
 // for each route via the wildcard policy's DNS-01 challenge config

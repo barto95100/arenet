@@ -109,13 +109,15 @@ func TestBuildErrorRoutesForRoute_EmitsOnePerSupportedCode(t *testing.T) {
 		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
 	}
 	got := buildErrorRoutesForRoute(route, nil, nil)
-	// Built-in default covers all 8 codes → 8 routes emitted.
-	if len(got) != len(storage.SupportedErrorStatusCodes) {
-		t.Errorf("expected %d routes ; got %d", len(storage.SupportedErrorStatusCodes), len(got))
+	// Built-in default covers all 8 codes → 8 per-code routes, PLUS the
+	// generic fallback route appended last (empty-body-400 class fix).
+	wantLen := len(storage.SupportedErrorStatusCodes) + 1
+	if len(got) != wantLen {
+		t.Fatalf("expected %d routes (8 per-code + 1 generic fallback) ; got %d", wantLen, len(got))
 	}
-	// Each route carries the expression matcher for its code.
-	for i, r := range got {
-		code := storage.SupportedErrorStatusCodes[i]
+	// The first 8 routes each carry the expression matcher for their code.
+	for i, code := range storage.SupportedErrorStatusCodes {
+		r := got[i]
 		if len(r.Match) != 1 {
 			t.Errorf("route[%d] expected 1 matcher set ; got %d", i, len(r.Match))
 			continue
@@ -132,6 +134,13 @@ func TestBuildErrorRoutesForRoute_EmitsOnePerSupportedCode(t *testing.T) {
 		if len(r.Handle) != 1 || r.Handle[0]["handler"] != "static_response" {
 			t.Errorf("route[%d] handler = %v ; want static_response", i, r.Handle)
 		}
+	}
+	// The final route is the generic fallback: host-scoped, NO per-code
+	// Expression (matches any status). Covered in depth by
+	// TestBuildErrorRoutesForRoute_EmitsGenericFallback.
+	fallback := got[len(got)-1]
+	if fallback.Match[0].Expression != "" {
+		t.Errorf("final route must be the generic fallback (no Expression); got %q", fallback.Match[0].Expression)
 	}
 }
 
@@ -348,10 +357,11 @@ func TestBuildConfigJSON_EmitsErrorsBlock_WhenAnyRouteOptsIn(t *testing.T) {
 	if !has {
 		t.Fatal("errors.routes absent or wrong type")
 	}
-	// 8 codes default + override merges → still 8 routes (the
-	// override REPLACES the default for code 404, doesn't ADD).
-	if got := len(errorRoutes); got != len(storage.SupportedErrorStatusCodes) {
-		t.Errorf("errors.routes len = %d ; want %d", got, len(storage.SupportedErrorStatusCodes))
+	// 8 codes default + override merges → 8 per-code routes (the
+	// override REPLACES the default for code 404, doesn't ADD), PLUS
+	// the generic fallback route appended per host (empty-body-400 fix).
+	if got := len(errorRoutes); got != len(storage.SupportedErrorStatusCodes)+1 {
+		t.Errorf("errors.routes len = %d ; want %d (8 per-code + 1 generic fallback)", got, len(storage.SupportedErrorStatusCodes)+1)
 	}
 	// Spot-check first route shape : match.expression +
 	// handler=static_response.
@@ -411,9 +421,9 @@ func TestBuildConfigJSON_EmitsErrorsBlock_ForEveryRoute(t *testing.T) {
 	}
 	errorsMap := errors.(map[string]any)
 	errorRoutes, has := errorsMap["routes"].([]any)
-	if !has || len(errorRoutes) != len(storage.SupportedErrorStatusCodes) {
-		t.Errorf("errors.routes len = %d ; want %d (one per supported code)",
-			len(errorRoutes), len(storage.SupportedErrorStatusCodes))
+	if !has || len(errorRoutes) != len(storage.SupportedErrorStatusCodes)+1 {
+		t.Errorf("errors.routes len = %d ; want %d (one per supported code + 1 generic fallback)",
+			len(errorRoutes), len(storage.SupportedErrorStatusCodes)+1)
 	}
 }
 
@@ -712,5 +722,79 @@ func TestStripDangerousAtRules_OnlyTouchesStyleBlocks(t *testing.T) {
 	// @import in <style> is stripped.
 	if strings.Contains(got, "@import url(\"evil\")") {
 		t.Errorf("style-block @import not stripped ; got %q", got)
+	}
+}
+
+// TestBuildErrorRoutesForRoute_EmitsGenericFallback pins the fix for
+// the empty-body-400 class of bug: the reverse_proxy handle_response
+// intercepts ~40 upstream 4xx/5xx codes (manager.go), but only the 8
+// SupportedErrorStatusCodes have a branded page. A code like 400
+// (Home Assistant returns it for an untrusted X-Forwarded-For proxy),
+// 402, 405, 409, 501, ... was re-raised into the errors chain, matched
+// no per-code route, and finalized as a bare empty-body response.
+//
+// The fix appends a GENERIC fallback error route per host: no
+// per-code Expression (so it matches any status that reaches the
+// errors subroute), serving a branded body that renders the live
+// {http.error.status_code}. This guarantees no intercepted code ever
+// yields an empty body.
+func TestBuildErrorRoutesForRoute_EmitsGenericFallback(t *testing.T) {
+	route := storage.Route{
+		ID:        "r-fallback",
+		Host:      "app.example.com",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+	}
+	got := buildErrorRoutesForRoute(route, nil, nil)
+	if len(got) == 0 {
+		t.Fatal("expected at least the generic fallback route, got none")
+	}
+	// The LAST route must be the generic fallback: matches the host,
+	// carries NO per-code Expression (matches every error status), and
+	// serves a non-empty body that uses the live status-code placeholder.
+	last := got[len(got)-1]
+	if len(last.Match) != 1 {
+		t.Fatalf("fallback route: want 1 matcher set, got %d", len(last.Match))
+	}
+	if last.Match[0].Expression != "" {
+		t.Errorf("fallback route must have NO per-code Expression (must match any status); got %q", last.Match[0].Expression)
+	}
+	if len(last.Match[0].Host) == 0 || last.Match[0].Host[0] != "app.example.com" {
+		t.Errorf("fallback route host = %v; want [app.example.com]", last.Match[0].Host)
+	}
+	if len(last.Handle) == 0 {
+		t.Fatal("fallback route has no handler")
+	}
+	body, _ := last.Handle[0]["body"].(string)
+	if body == "" {
+		t.Error("fallback route serves an empty body — defeats the purpose")
+	}
+	sc, _ := last.Handle[0]["status_code"].(string)
+	if sc != "{http.error.status_code}" {
+		t.Errorf("fallback status_code = %q; want the live placeholder {http.error.status_code}", sc)
+	}
+}
+
+// TestErrorPages_UseEscapedURIPlaceholder is a security guard: the branded
+// error bodies MUST reference {http.request.uri_escaped}, never the raw
+// {http.request.uri}. static_response expands placeholders with NO HTML
+// escaping (staticresp.go ReplaceKnown), so a raw URI reflects a crafted
+// path like /<script>... straight into the error HTML → reflected XSS.
+// uri_escaped runs url.QueryEscape (Caddy replacer.go), neutralizing
+// <, >, ". Covers both arenetDefaultPage (the 8 per-code bodies) and
+// arenetGenericErrorPage (the fallback).
+func TestErrorPages_UseEscapedURIPlaceholder(t *testing.T) {
+	// The generic fallback body.
+	if strings.Contains(arenetGenericErrorPage, "{http.request.uri}") {
+		t.Error("arenetGenericErrorPage uses raw {http.request.uri} — reflected-XSS vector; use {http.request.uri_escaped}")
+	}
+	if !strings.Contains(arenetGenericErrorPage, "{http.request.uri_escaped}") {
+		t.Error("arenetGenericErrorPage must reference {http.request.uri_escaped}")
+	}
+	// Every built-in per-code default page.
+	for code, body := range arenetDefaultErrorPages {
+		if strings.Contains(body, "{http.request.uri}") {
+			t.Errorf("arenetDefaultErrorPages[%d] uses raw {http.request.uri} — reflected-XSS vector; use {http.request.uri_escaped}", code)
+		}
 	}
 }
