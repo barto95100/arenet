@@ -174,6 +174,33 @@ In the templates list page, the built-in default appears as a row marked **Built
 
 ---
 
+## Ready-made example templates
+
+Arenet ships a set of **branded, drop-in example pages** — one polished dark-themed HTML page per supported status code (401, 403, 404, 429, 500, 502, 503, 504). They use only the placeholders Caddy substitutes at serve time, contain no JavaScript, and pass the sanitizer unchanged (verified). Use them as a starting point instead of writing a template from scratch.
+
+**Where they live** (in the repo, both languages):
+
+```
+docs/mocks/error-pages/
+  en/   401.html 403.html 404.html 429.html 500.html 502.html 503.html 504.html
+  fr/   401.html 403.html 404.html 429.html 500.html 502.html 503.html 504.html
+  {en,fr}/error-pages-overview.html   ← a visual catalog of all 8 pages
+```
+
+**How to use one:**
+
+1. Open the file for the status code you want (e.g. `en/404.html`) and copy its full HTML.
+2. Sidebar → **Settings** → **Error Pages** → **+ New template** (or edit an existing one).
+3. Paste the HTML into the tab for that status code (the `404` tab for `404.html`, etc.).
+4. Repeat for each code you want branded, then **Save**.
+5. Attach the template to a route (see [Routes](Routes)), or tick **catch-all default** to brand un-routed hosts too.
+
+The placeholders inside these pages (`{http.error.id}`, `{http.request.uuid}`, `{http.request.method}`, `{http.request.uri.path}`, `{http.request.host}`, `{http.request.remote.host}`, `{http.reverse_proxy.status_code}` on 502/503/504, and `{time.now.year}` in the footer) are filled in by Caddy at serve time — no extra configuration needed.
+
+> These are **examples**, not the built-in defaults. Arenet's own built-in fallback pages (served when no template is configured) are the minimal ones defined in `internal/caddymgr/error_pages.go`. Copy an example into a template to opt into the richer branding.
+
+---
+
 ## See also
 
 - [Routes](Routes) — where to attach a template to a route
