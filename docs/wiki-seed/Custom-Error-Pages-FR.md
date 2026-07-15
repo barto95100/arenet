@@ -178,18 +178,30 @@ Dans la page liste des templates, le défaut intégré apparaît comme une ligne
 
 Arenet fournit un ensemble de **pages d'exemple brandées, prêtes à l'emploi** — une page HTML soignée en thème sombre par code de statut supporté (401, 403, 404, 429, 500, 502, 503, 504). Elles n'utilisent que les placeholders que Caddy substitue au moment de servir la réponse, ne contiennent aucun JavaScript, et passent l'assainisseur sans modification (vérifié). Utilise-les comme point de départ plutôt que d'écrire un template depuis zéro.
 
-**Où elles se trouvent** (dans le dépôt, dans les deux langues) :
+### 📁 Récupérer les fichiers
 
-```
-docs/mocks/error-pages/
-  en/   401.html 403.html 404.html 429.html 500.html 502.html 503.html 504.html
-  fr/   401.html 403.html 404.html 429.html 500.html 502.html 503.html 504.html
-  {en,fr}/error-pages-overview.html   ← un catalogue visuel des 8 pages
-```
+Tous les templates vivent dans le dépôt, dans les deux langues :
 
-**Comment en utiliser une :**
+**➡️ [`docs/mocks/error-pages/`](https://github.com/barto95100/arenet/tree/main/docs/mocks/error-pages)** — parcourir le dossier
 
-1. Ouvre le fichier correspondant au code de statut voulu (par ex. `fr/404.html`) et copie tout le HTML.
+| Statut | Anglais | Français |
+| ------ | ------- | -------- |
+| 401 Unauthorized | [en/401.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/401.html) | [fr/401.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/401.html) |
+| 403 Forbidden | [en/403.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/403.html) | [fr/403.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/403.html) |
+| 404 Not Found | [en/404.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/404.html) | [fr/404.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/404.html) |
+| 429 Too Many Requests | [en/429.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/429.html) | [fr/429.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/429.html) |
+| 500 Internal Server Error | [en/500.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/500.html) | [fr/500.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/500.html) |
+| 502 Bad Gateway | [en/502.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/502.html) | [fr/502.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/502.html) |
+| 503 Service Unavailable | [en/503.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/503.html) | [fr/503.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/503.html) |
+| 504 Gateway Timeout | [en/504.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/504.html) | [fr/504.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/504.html) |
+
+Il y a aussi un catalogue visuel des 8 pages : [en/error-pages-overview.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/error-pages-overview.html) · [fr/error-pages-overview.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/error-pages-overview.html) (ouvre le fichier brut dans un navigateur pour le prévisualiser).
+
+> Astuce : sur la page d'un fichier, clique sur le bouton **Raw** (ou **Copy raw file**) pour récupérer tout le HTML, ou **Download raw file** pour le télécharger.
+
+### Comment en utiliser une
+
+1. Ouvre le fichier correspondant au code de statut voulu (par ex. [fr/404.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/404.html)) et copie tout le HTML (utilise la vue **Raw**).
 2. Barre latérale → **Réglages** → **Pages d'erreur** → **+ Nouveau template** (ou édite un template existant).
 3. Colle le HTML dans l'onglet correspondant à ce code de statut (l'onglet `404` pour `404.html`, etc.).
 4. Répète pour chaque code que tu veux brander, puis **Enregistre**.

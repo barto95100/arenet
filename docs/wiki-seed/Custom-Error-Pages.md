@@ -178,18 +178,30 @@ In the templates list page, the built-in default appears as a row marked **Built
 
 Arenet ships a set of **branded, drop-in example pages** — one polished dark-themed HTML page per supported status code (401, 403, 404, 429, 500, 502, 503, 504). They use only the placeholders Caddy substitutes at serve time, contain no JavaScript, and pass the sanitizer unchanged (verified). Use them as a starting point instead of writing a template from scratch.
 
-**Where they live** (in the repo, both languages):
+### 📁 Get the files
 
-```
-docs/mocks/error-pages/
-  en/   401.html 403.html 404.html 429.html 500.html 502.html 503.html 504.html
-  fr/   401.html 403.html 404.html 429.html 500.html 502.html 503.html 504.html
-  {en,fr}/error-pages-overview.html   ← a visual catalog of all 8 pages
-```
+All templates live in the repo, in both languages:
 
-**How to use one:**
+**➡️ [`docs/mocks/error-pages/`](https://github.com/barto95100/arenet/tree/main/docs/mocks/error-pages)** — browse the folder
 
-1. Open the file for the status code you want (e.g. `en/404.html`) and copy its full HTML.
+| Status | English | French |
+| ------ | ------- | ------ |
+| 401 Unauthorized | [en/401.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/401.html) | [fr/401.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/401.html) |
+| 403 Forbidden | [en/403.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/403.html) | [fr/403.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/403.html) |
+| 404 Not Found | [en/404.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/404.html) | [fr/404.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/404.html) |
+| 429 Too Many Requests | [en/429.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/429.html) | [fr/429.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/429.html) |
+| 500 Internal Server Error | [en/500.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/500.html) | [fr/500.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/500.html) |
+| 502 Bad Gateway | [en/502.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/502.html) | [fr/502.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/502.html) |
+| 503 Service Unavailable | [en/503.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/503.html) | [fr/503.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/503.html) |
+| 504 Gateway Timeout | [en/504.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/504.html) | [fr/504.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/504.html) |
+
+There's also a visual catalog of all 8 pages: [en/error-pages-overview.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/error-pages-overview.html) · [fr/error-pages-overview.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/fr/error-pages-overview.html) (open the raw file in a browser to preview it).
+
+> Tip: on a file page, click the **Raw** button (or **Copy raw file**) to grab the full HTML, or **Download raw file** to save it.
+
+### How to use one
+
+1. Open the file for the status code you want (e.g. [en/404.html](https://github.com/barto95100/arenet/blob/main/docs/mocks/error-pages/en/404.html)) and copy its full HTML (use the **Raw** view).
 2. Sidebar → **Settings** → **Error Pages** → **+ New template** (or edit an existing one).
 3. Paste the HTML into the tab for that status code (the `404` tab for `404.html`, etc.).
 4. Repeat for each code you want branded, then **Save**.
