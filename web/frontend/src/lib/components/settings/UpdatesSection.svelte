@@ -13,6 +13,7 @@
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 	import { relativeTime } from '$lib/utils/audit-format';
+	import { isZeroTimestamp } from '$lib/utils/certificate-format';
 	import Card from '$lib/components/Card.svelte';
 	import Button from '$lib/components/Button.svelte';
 
@@ -94,7 +95,9 @@
 
 			<div class="text-xs text-muted" data-testid="updates-laststate">
 				{language.current && t('settings.updates.lastChecked')}:
-				{info?.lastChecked ? relativeTime(info.lastChecked) : (language.current && t('settings.updates.never'))}
+				{!isZeroTimestamp(info?.lastChecked)
+					? relativeTime(info!.lastChecked)
+					: (language.current && t('settings.updates.never'))}
 				{#if info?.lastError}
 					· <span class="text-down" data-testid="updates-lasterror">{language.current && t('settings.updates.lastErrorLabel')}</span>
 				{/if}

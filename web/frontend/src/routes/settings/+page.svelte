@@ -30,6 +30,7 @@
 	import { pushToast } from '$lib/stores/toast';
 	import { authApi, type Session } from '$lib/api/auth';
 	import { settingsApi } from '$lib/api/settings';
+	import { systemApi } from '$lib/api/system';
 	import {
 		AUTOMATION_SOURCES,
 		AUTOMATION_SOURCE_LABELS,
@@ -502,17 +503,43 @@
 	}
 
 	// License URL ref resolution (Step G G.2).
-	// `git describe --tags --always` produces three shapes:
+	// Version for the About card. The authoritative source is the
+	// backend's main.version (ldflag-injected), exposed by
+	// GET /api/v1/system/version → `current`. We prefer it over the
+	// build-time VITE_APP_VERSION because the latter comes from
+	// `git describe` at frontend-build time, which yields "unknown" in
+	// the Docker image (.git is excluded from the build context) even
+	// though the binary knows its real version. VITE_APP_VERSION is the
+	// resilience fallback when the API hasn't answered yet.
+	const appVersion = import.meta.env.VITE_APP_VERSION;
+	let apiVersion = $state<string>('');
+	const displayVersion = $derived(apiVersion || appVersion);
+
+	// GitHub ref for the License link. `git describe --tags --always`
+	// produces three shapes:
 	//   - clean tag   → `v0.4.0-step-f`           (valid GitHub ref)
 	//   - describe    → `v0.4.0-step-f-3-g7471243` (NOT a ref → 404)
 	//   - bare sha    → `7471243`                  (NOT a ref → 404)
 	// Also `unknown` when git is unavailable (vite.config.ts fallback).
-	// Clean tag is the only shape we can safely use as a GitHub ref;
+	// The API `current` (main.version) is a clean tag when built from a
+	// release, so prefer it; only a clean tag can be used as a GitHub ref,
 	// every other shape falls back to `main` to avoid the 404.
-	const appVersion = import.meta.env.VITE_APP_VERSION;
-	const isCleanTag =
-		/^v[^\s]+$/.test(appVersion) && !/-\d+-g[0-9a-f]{7,40}$/.test(appVersion);
-	const licenseRef = isCleanTag ? appVersion : 'main';
+	const refCandidate = $derived(apiVersion || appVersion);
+	const licenseRef = $derived(
+		/^v[^\s]+$/.test(refCandidate) && !/-\d+-g[0-9a-f]{7,40}$/.test(refCandidate)
+			? refCandidate
+			: 'main'
+	);
+
+	async function loadVersion(): Promise<void> {
+		try {
+			const v = await systemApi.getVersion();
+			if (v.current) apiVersion = v.current;
+		} catch {
+			// Leave apiVersion empty → displayVersion falls back to
+			// VITE_APP_VERSION. No toast: the About card is passive.
+		}
+	}
 
 	onMount(() => {
 		void loadSessions();
@@ -520,6 +547,7 @@
 		void loadForwardAuthProviders();
 		// loadManagedDomains() moved to /certs in #R-6 Pack A.
 		void loadAutomation();
+		void loadVersion();
 	});
 
 	// #R-CS2C-anchor-link follow-up — SPA hash scroll.
@@ -1262,7 +1290,7 @@
 
 		<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-3 text-sm">
 			<dt class="text-secondary">Version</dt>
-			<dd class="text-primary font-mono">{import.meta.env.VITE_APP_VERSION}</dd>
+			<dd class="text-primary font-mono" data-testid="about-version">{displayVersion}</dd>
 
 			<dt class="text-secondary">License</dt>
 			<dd>
