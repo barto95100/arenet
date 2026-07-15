@@ -77,15 +77,20 @@ sudo systemctl start arenet
 # sudo rm -rf ".../certificates/acme-v02.api.letsencrypt.org-directory/wildcard_.example.com"
 ```
 
-**Docker** (container `arenet`, data volume mounted at `/var/lib/arenet`):
+**Docker** (container `arenet`, data volume `arenet-data` mounted at `/var/lib/arenet`):
+
+The runtime image is **distroless — it has no shell**, so `docker exec arenet ls/rm …` does **not** work. Operate on the named volume through a throwaway `alpine` container instead:
 
 ```bash
 # Inspect
-docker exec arenet ls /var/lib/arenet/.local/share/caddy/certificates/
+docker run --rm -v arenet-data:/data alpine \
+  ls /data/.local/share/caddy/certificates/
 
-# Remove, then restart the container so Arenet re-reads the (now cleaned) disk on boot
-docker exec arenet rm -rf "/var/lib/arenet/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/app.example.com"
-docker compose restart arenet
+# Remove the domain's cert dir, then restart so Arenet re-reads the cleaned disk on boot
+docker compose stop arenet
+docker run --rm -v arenet-data:/data alpine \
+  rm -rf "/data/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/app.example.com"
+docker compose start arenet
 ```
 
 On restart, Arenet's boot-time reconcile re-seeds the `/certs` dashboard from the now-cleaned store, so the removed certificate disappears from the UI.

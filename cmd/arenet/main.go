@@ -147,6 +147,60 @@ func ensureTestRoute(ctx context.Context, logger *slog.Logger, store *storage.St
 	return nil
 }
 
+// resolveCertStorageHome pins $HOME so Arenet's own certinfo path
+// derivation is deterministic when no $HOME/$XDG_DATA_HOME is present.
+//
+// IMPORTANT scope limit — this does NOT redirect Caddy's actual cert
+// storage. Caddy's storage path is caddy.DefaultStorage, a package-level
+// var frozen at PROGRAM INIT: `var DefaultStorage = &FileStorage{Path:
+// AppDataDir()}` (caddy v2.11.3 storage.go:160), and config load assigns
+// that already-materialized pointer without re-calling AppDataDir()
+// (caddy.go:553-554). By the time run() executes, DefaultStorage.Path is
+// already set, so os.Setenv("HOME", …) here CANNOT move Caddy's store.
+// The load-bearing fix for Caddy is the Dockerfile's `ENV HOME=` — set
+// before the process starts, so init sees it and DefaultStorage freezes
+// to /var/lib/arenet/.local/share/caddy. See the Dockerfile comment.
+//
+// What this guard DOES fix: certinfo derives its path LIVE on every call
+// via caddy.AppDataDir() (main.go's certStorageDir + certinfo/listener.go
+// resolveStoragePath), both after this runs — so pinning HOME keeps the
+// /certs dashboard + reconcile pointed at the same dir Caddy uses. It
+// also keeps $HOME sane for any other tooling in the process. On the
+// distroless image HOME is already set (Dockerfile ENV), so here it is a
+// no-op; it only fires in a degraded no-HOME run, where it aligns
+// certinfo but — per the init-freeze above — does not repair Caddy's TLS.
+//
+// Background on the underlying bug: certmagic (via DefaultStorage) stores
+// TLS certs under caddy.AppDataDir() = $XDG_DATA_HOME/caddy, else
+// $HOME/.local/share/caddy, else the RELATIVE "./caddy" resolved against
+// cwd when both are unset (storage.go:122-153). systemd sets
+// $HOME=/var/lib/arenet via the arenet user's passwd entry; the
+// distroless nonroot image sets no $HOME → "./caddy" → wrong path →
+// handshake finds no cert → ERR_SSL_PROTOCOL_ERROR (issuance error is
+// only logged async, so caddy.Load still succeeds and the admin UI works).
+//
+// Pins $HOME to dataDir ONLY when both $HOME and $XDG_DATA_HOME are empty;
+// strict no-op when either is already set (no existing install is moved,
+// no silent migration). getenv/setenv are injected for testability.
+func resolveCertStorageHome(
+	getenv func(string) string,
+	setenv func(string, string) error,
+	dataDir string,
+) (home string, defaulted bool, err error) {
+	if h := getenv("HOME"); h != "" {
+		return h, false, nil
+	}
+	// XDG_DATA_HOME takes precedence over HOME in AppDataDir(); if it's
+	// set the storage path is already deterministic — leave HOME alone.
+	if getenv("XDG_DATA_HOME") != "" {
+		return "", false, nil
+	}
+	if err := setenv("HOME", dataDir); err != nil {
+		return "", false, fmt.Errorf("pin HOME for cert storage: %w", err)
+	}
+	return dataDir, true, nil
+}
+
 func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retErr error) {
 	logger.Info("Arenet starting",
 		"version", version,
@@ -158,6 +212,24 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return err
 	}
+
+	// Pin $HOME so certmagic's default cert-storage path
+	// (caddy.AppDataDir → $HOME/.local/share/caddy) is deterministic.
+	// Align certinfo's live AppDataDir()-derived paths when no $HOME is
+	// present. NOTE: this canNOT redirect Caddy's own cert storage —
+	// caddy.DefaultStorage froze AppDataDir() at program init, before
+	// run(); the load-bearing fix for Caddy is the Dockerfile's ENV HOME
+	// (set pre-init). This guard only keeps certinfo consistent and $HOME
+	// sane. No-op when $HOME or $XDG_DATA_HOME is already set — which is
+	// the case in the shipped image. See resolveCertStorageHome.
+	if certHome, defaulted, herr := resolveCertStorageHome(os.Getenv, os.Setenv, cfg.DataDir); herr != nil {
+		return herr
+	} else if defaulted {
+		logger.Warn("HOME/XDG_DATA_HOME unset; pinned HOME for certinfo path consistency "+
+			"(Caddy's own cert storage is fixed by setting HOME before process start — see Dockerfile)",
+			"home", certHome, "cert_storage", filepath.Join(certHome, ".local", "share", "caddy"))
+	}
+
 	dbPath := filepath.Join(cfg.DataDir, "arenet.db")
 
 	store, err := storage.NewStore(dbPath)

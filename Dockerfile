@@ -106,6 +106,23 @@ COPY --from=backend --chown=nonroot:nonroot /out/data /var/lib/arenet
 # `-p` / compose `ports:` directive.
 EXPOSE 80 443 8001
 
+# TLS cert storage path fix. certmagic stores certs under
+# caddy.AppDataDir() = $HOME/.local/share/caddy on Linux. The
+# distroless base sets NO $HOME (unlike systemd, which derives it
+# from the arenet user's passwd entry), so without this the binary
+# falls back to a relative "./caddy" dir resolved against WORKDIR —
+# a different, cwd-dependent path that breaks reverse-proxy TLS in
+# Docker while working fine on the binary. Pinning HOME here makes
+# the container store certs at /var/lib/arenet/.local/share/caddy,
+# identical to the systemd install and to what the docs describe.
+# This ENV is the LOAD-BEARING fix: it is set before the process
+# starts, so it is visible at program init when caddy.DefaultStorage
+# freezes AppDataDir() (caddy/v2 storage.go:160). The Go-side
+# resolveCertStorageHome() runs after init and only aligns certinfo's
+# live-derived paths — it canNOT move Caddy's already-frozen storage,
+# so setting HOME in the image is what actually repairs the handshake.
+ENV HOME=/var/lib/arenet
+
 # Run as nonroot (uid 65532). The systemd unit ships the same
 # pattern via User=arenet + CAP_NET_BIND_SERVICE; Docker handles
 # privileged-port bind via the runtime's CAP_NET_BIND_SERVICE
