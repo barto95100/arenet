@@ -138,6 +138,11 @@
 	// the badge and knows to investigate.
 	const STALE_FAILURE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
+	// Auto-refresh cadence for the cert list + events while /certs is
+	// mounted (see onMount). ACME issuance is rare and slow, so 20s is
+	// proportionate without hammering the backend GETs.
+	const CERT_REFRESH_INTERVAL_MS = 20000;
+
 	// Drill-down modal state. drillDownDomain holds the domain
 	// the operator clicked the badge for ; null = closed. The
 	// modal reads certEventsByDomain[drillDownDomain] to render
@@ -365,6 +370,22 @@
 
 	onMount(() => {
 		void load();
+		// Auto-refresh: ACME issuance is asynchronous (certmagic obtains
+		// the cert AFTER the route/managed-domain is created), so a
+		// freshly-issued cert would otherwise only appear on a manual
+		// page reload. Poll the cert list + events every 20s while the
+		// page is mounted. Issuance is a rare, low-frequency event, so
+		// polling is proportionate — no WS needed. Interval cleared on
+		// unmount via the returned cleanup.
+		//
+		// Ordering mirrors load(): events are fetched AFTER the cert list
+		// lands (loadCertEvents reads the current certs array to know
+		// which domains to query), so a cert appearing this cycle gets
+		// its events in the same tick rather than lagging one cycle.
+		const id = setInterval(() => {
+			void loadCertificates().then(() => loadCertEvents());
+		}, CERT_REFRESH_INTERVAL_MS);
+		return () => clearInterval(id);
 	});
 </script>
 
