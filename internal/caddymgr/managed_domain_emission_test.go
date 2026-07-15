@@ -18,6 +18,7 @@ package caddymgr
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/barto95100/arenet/internal/storage"
@@ -292,6 +293,59 @@ func TestBuildConfigJSON_CoveredRoute_SkipsPerRoutePolicy(t *testing.T) {
 	subj, _ := policies[0]["subjects"].([]any)
 	if len(subj) != 2 || subj[0] != "*.example.com" {
 		t.Errorf("policies[0].subjects = %v, want wildcard for example.com", subj)
+	}
+}
+
+// TestBuildConfigJSON_CoveredRoute_UsesSkipCertificatesNotSkip pins the
+// fix for the Caddy-API misuse in buildSkipList. A managed-domain-covered
+// route's host must land in automatic_https.skip_certificates (json
+// "skip_certificates"), NOT skip (json "skip").
+//
+// Semantics (caddy v2.11.3 autohttps.go): "skip" removes the host from
+// auto-HTTPS ENTIRELY — no cert management AND no redirect handling —
+// and excludes it from the server's domain set. "skip_certificates"
+// keeps the host in auto-HTTPS, only suppressing per-host cert
+// provisioning (the wildcard already serves the cert). Arenet's intent
+// is purely "don't obtain a per-host cert, the wildcard covers it" =
+// skip_certificates. Emitting into "skip" is a latent inconsistency
+// (it also drops the host's redirect handling from Caddy's auto-HTTPS).
+func TestBuildConfigJSON_CoveredRoute_UsesSkipCertificatesNotSkip(t *testing.T) {
+	routes := []storage.Route{
+		tlsRoute("r1", "app.example.com", storage.ACMEChallengeInherited, false),
+	}
+	raw, err := buildConfigJSON(routes, buildOpts{
+		DevMode:      true,
+		DNSProviders: ovhProvidersFixture(),
+		ManagedDomains: []storage.ManagedDomain{
+			{Apex: "example.com", IncludeApex: true, ProviderID: ovhProviderFixtureID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	apps := cfg["apps"].(map[string]any)
+	httpApp := apps["http"].(map[string]any)
+	servers := httpApp["servers"].(map[string]any)
+	srv := servers["arenet_https"].(map[string]any)
+	ah := srv["automatic_https"].(map[string]any)
+
+	// The covered host must be in skip_certificates.
+	skipCerts, hasSkipCerts := ah["skip_certificates"].([]any)
+	if !hasSkipCerts {
+		t.Fatalf("automatic_https.skip_certificates absent; covered host must land there, got automatic_https = %v", ah)
+	}
+	if len(skipCerts) != 1 || skipCerts[0] != "app.example.com" {
+		t.Errorf("skip_certificates = %v; want [app.example.com]", skipCerts)
+	}
+
+	// And it must NOT be in the plain "skip" list (which would also drop
+	// redirect handling for the host).
+	if skip, hasSkip := ah["skip"]; hasSkip {
+		t.Errorf("automatic_https.skip present (%v); covered hosts must use skip_certificates, not skip", skip)
 	}
 }
 
