@@ -77,15 +77,20 @@ sudo systemctl start arenet
 # sudo rm -rf ".../certificates/acme-v02.api.letsencrypt.org-directory/wildcard_.example.com"
 ```
 
-**Docker** (conteneur `arenet`, volume de données monté sur `/var/lib/arenet`) :
+**Docker** (conteneur `arenet`, volume nommé `arenet-data` monté sur `/var/lib/arenet`) :
+
+L'image runtime est **distroless — elle n'a pas de shell**, donc `docker exec arenet ls/rm …` ne **fonctionne pas**. Opérez sur le volume nommé via un conteneur `alpine` jetable :
 
 ```bash
 # Inspecte
-docker exec arenet ls /var/lib/arenet/.local/share/caddy/certificates/
+docker run --rm -v arenet-data:/data alpine \
+  ls /data/.local/share/caddy/certificates/
 
-# Supprime, puis redémarre le conteneur pour qu'Arenet relise le disque (nettoyé) au boot
-docker exec arenet rm -rf "/var/lib/arenet/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/app.example.com"
-docker compose restart arenet
+# Supprime le dossier du domaine, puis redémarre pour qu'Arenet relise le disque nettoyé au boot
+docker compose stop arenet
+docker run --rm -v arenet-data:/data alpine \
+  rm -rf "/data/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/app.example.com"
+docker compose start arenet
 ```
 
 Au redémarrage, la reconciliation au boot d'Arenet reconstruit le tableau de bord `/certs` depuis le store (maintenant nettoyé), donc le certificat supprimé disparaît de l'UI.
