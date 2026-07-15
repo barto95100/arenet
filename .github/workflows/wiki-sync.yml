@@ -1,0 +1,92 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# Wiki sync workflow — publishes docs/wiki-seed/ to the GitHub Wiki.
+#
+# The wiki-seed folder in this repo is the SOURCE OF TRUTH for the
+# operator wiki (reviewed via normal PRs). The published GitHub Wiki
+# (github.com/<owner>/<repo>/wiki) is a SEPARATE git repository
+# (<repo>.wiki.git). Before this workflow, every wiki-seed change had
+# to be copied into the wiki by hand, so the published pages drifted
+# behind the repo. This job mirrors wiki-seed → wiki automatically.
+#
+# Triggers:
+#   - push to main that touches docs/wiki-seed/** — only then, so
+#     unrelated pushes don't spawn a no-op sync.
+#   - workflow_dispatch — manual run (useful for the first publish or
+#     to force a re-sync).
+#
+# Mechanism: clone the .wiki.git repo with the workflow token, replace
+# its .md pages with the current wiki-seed contents, and push only if
+# something actually changed. GitHub derives each wiki page name from
+# the .md filename (Custom-Error-Pages.md → the "Custom-Error-Pages"
+# page); Home.md is the wiki landing page and _Sidebar.md is its nav.
+#
+# Permissions: contents:write so the token may push to the wiki repo.
+# NOTE (one-time setup): the wiki must already exist — create the first
+# page once in the GitHub UI (Wiki tab → Create the first page), then
+# this workflow keeps it in sync. A brand-new repo with no wiki page
+# has no .wiki.git to clone yet.
+
+name: wiki-sync
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/wiki-seed/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: publish wiki-seed → GitHub Wiki
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Clone the wiki repository
+        run: |
+          git clone \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git" \
+            wiki
+
+      - name: Mirror wiki-seed into the wiki
+        run: |
+          # Remove the wiki's tracked .md pages (but keep .git), then
+          # copy the current seed over. This makes the sync a true
+          # mirror: a page deleted from wiki-seed is deleted in the wiki.
+          #
+          # EXCLUDE docs/wiki-seed/README.md — it documents the seed
+          # FOLDER itself ("This folder holds the GitHub Wiki pages as
+          # draft Markdown files…"), it is NOT a wiki page. Copying it
+          # would publish a bogus "README" page on the wiki.
+          find wiki -maxdepth 1 -name '*.md' -delete
+          for f in docs/wiki-seed/*.md; do
+            [ "$(basename "$f")" = "README.md" ] && continue
+            cp "$f" wiki/
+          done
+
+      - name: Commit and push if changed
+        working-directory: wiki
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date — nothing to publish."
+          else
+            git commit -m "Sync wiki from docs/wiki-seed @ ${{ github.sha }}"
+            git push
+            echo "Wiki updated."
+          fi
