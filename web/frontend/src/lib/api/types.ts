@@ -629,11 +629,11 @@ export interface RouteRequest {
 	 */
 	errorPageOverrides?: Record<number, string>;
 	/**
-	 * v2.14.3 — route disable/enable. Not sent by the route
-	 * form (create/update); the disable/enable actions go
-	 * through dedicated endpoints (disableRoute / enableRoute).
-	 * Optional here only for symmetry with the Route response
-	 * shape and to allow round-tripping the field if ever needed.
+	 * v2.14.3 — route disable/enable flag. The route form
+	 * sends this on every POST/PUT (create/update); when
+	 * omitted on the wire, defaults to false (enabled). A
+	 * dedicated toggle endpoint (POST /routes/{id}/disable|enable)
+	 * also exists for row-level state changes without a full-body PUT.
 	 */
 	disabled?: boolean;
 }
