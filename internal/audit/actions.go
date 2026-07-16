@@ -55,6 +55,10 @@ const (
 	ActionRouteDisabled = "route_disabled"
 	ActionRouteEnabled  = "route_enabled"
 
+	// Certificate deletion (1) — emitted when a certificate is deleted
+	// via the certificate management endpoints.
+	ActionCertDeleted = "cert_deleted"
+
 	// Audit (1)
 	ActionAuditViewed = "audit_viewed"
 
@@ -255,6 +259,7 @@ var allActions = []string{
 	ActionRouteDeleted,
 	ActionRouteDisabled,
 	ActionRouteEnabled,
+	ActionCertDeleted,
 	ActionAuditViewed,
 	ActionPasswordHIBPClean,
 	ActionPasswordHIBPPending,
