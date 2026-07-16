@@ -59,16 +59,50 @@ Open `http://<your-host>:8001` in a browser. The setup wizard asks for :
 
 Click **Submit** → you're in. The setup token is consumed (one-time use), the admin account is created with role `admin`, and the setup wizard disappears on subsequent visits.
 
-### Bind mount instead of named volume ?
+### Data directory setup (named volume vs bind mount)
 
-If you prefer a host-path bind mount (easier to backup with `tar`), create the directory first with the correct ownership :
+The data directory holds `arenet.db` (routes, users, audit, and **secrets** — OIDC client secrets, DNS API keys, the admin password hash) plus the TLS private keys under `certmagic/`. Arenet keeps it **owner-only (`0700`)**, owned by the distroless `nonroot` user (UID **65532**).
+
+**Named volume (the default) — nothing to do.** Docker seeds a fresh named volume's ownership and permissions from the image's `/var/lib/arenet`, which ships as `65532:65532` mode `0700`. It just works, and secrets are owner-only from the first boot.
+
+**Bind mount (`./data:/var/lib/arenet`) — needs a one-time ownership fix.** A host directory is owned by whoever created it (usually root or your login user), **not** UID 65532. The distroless container has no shell and can't `chown` its own mount, so it crash-loops with `permission denied`. Pick one:
+
+**Option A — manual (simplest):** create the dir with the right owner and mode before `docker compose up` :
 
 ```bash
 mkdir -p ./data
-sudo chown -R 65532:65532 ./data  # distroless 'nonroot' UID
+sudo chown -R 65532:65532 ./data   # distroless 'nonroot' UID
+sudo chmod 700 ./data              # owner-only: secrets + TLS keys
 ```
 
-Then edit `docker-compose.yml` to use `./data:/var/lib/arenet` instead of the named volume.
+Then edit `docker-compose.yml` to mount `./data:/var/lib/arenet` instead of the named volume.
+
+**Option B — init container (automatic, idempotent):** add a one-shot service that fixes ownership before Arenet starts. It also **tightens a directory left at `0755` by a pre-v2.15.1 install**. Add to `docker-compose.yml` :
+
+```yaml
+services:
+  arenet:
+    # ... existing config ...
+    volumes:
+      - ./data:/var/lib/arenet     # bind mount instead of the named volume
+    depends_on:
+      arenet-init:
+        condition: service_completed_successfully
+
+  arenet-init:
+    image: busybox:1.37
+    user: "0:0"                    # runs as root only to chown the mount
+    command: ["sh", "-c", "chown -R 65532:65532 /data && chmod 700 /data"]
+    volumes:
+      - ./data:/data               # SAME host dir as arenet's bind mount
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+```
+
+`arenet-init` runs once, fixes the mount, and exits; `depends_on … service_completed_successfully` makes Arenet wait for it. It's safe to leave in place — re-running it is a no-op.
+
+> **Why 65532 / 0700?** `65532` is the distroless `nonroot` user Arenet runs as. `0700` means only that user can read or write the directory — so the secrets in `arenet.db` and the TLS private keys aren't exposed to other users or containers sharing the host. See [Updates → Migration safety](Updates#5-migration-safety) if you're upgrading an older install, and [Troubleshooting → permission denied](Troubleshooting) if a boot fails on the data dir.
 
 ---
 
@@ -90,6 +124,8 @@ The script :
 - Installs the systemd unit at `/etc/systemd/system/arenet.service`
 - Creates `/var/lib/arenet/` for BoltDB + SQLite state
 - Reloads systemd (`systemctl daemon-reload`)
+
+Arenet creates and keeps `/var/lib/arenet` at mode **`0700`** (owner-only) — it holds secrets and TLS private keys. Fresh installs get this automatically; if you're **upgrading from before v2.15.1**, the binary tightens the dir to `0700` on its next boot. To confirm : `stat -c '%a' /var/lib/arenet` → `700`.
 
 ### 2. Start the service
 
