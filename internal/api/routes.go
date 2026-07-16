@@ -335,6 +335,8 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Post("/routes", h.createRoute)
 				r.Put("/routes/{id}", h.updateRoute)
 				r.Delete("/routes/{id}", h.deleteRoute)
+				r.Post("/routes/{id}/disable", h.disableRoute)
+				r.Post("/routes/{id}/enable", h.enableRoute)
 				// Step R — custom error pages CRUD (admin-only).
 				// GET endpoints are mounted in the viewer-accessible
 				// section above so the RouteForm dropdown can list
@@ -1968,6 +1970,87 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	resp := toResponse(updated)
 	resp.EffectiveCertSource = computeEffectiveCertSource(updated, mds)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// toggleRouteDisabled is the shared body of the disable/enable
+// endpoints. It mirrors updateRoute's reload+rollback+audit contract:
+// GetRoute → set Disabled → UpdateRoute → ReloadFromStore → roll back
+// on reload failure → appendAudit. Idempotent: setting the same value
+// is a no-op success. On /disable it computes lastHttpsRouteAffected.
+func (h *Handler) toggleRouteDisabled(w http.ResponseWriter, r *http.Request, disabled bool) {
+	id := chi.URLParam(r, "id")
+
+	previous, err := h.store.GetRoute(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "route not found")
+			return
+		}
+		h.logger.Error("get route for toggle", "err", err, "id", id)
+		writeError(w, http.StatusInternalServerError, "failed to load route")
+		return
+	}
+
+	// Compute the hint BEFORE mutation: is this the last active TLS route?
+	lastHTTPS := false
+	if disabled && previous.TLSEnabled && !previous.Disabled {
+		all, lerr := h.store.ListRoutes(r.Context())
+		if lerr == nil {
+			activeTLS := 0
+			for _, rt := range all {
+				if rt.TLSEnabled && !rt.Disabled {
+					activeTLS++
+				}
+			}
+			lastHTTPS = activeTLS == 1
+		}
+	}
+
+	next := previous
+	next.Disabled = disabled
+	updated, err := h.store.UpdateRoute(r.Context(), next)
+	if err != nil {
+		h.logger.Error("toggle route disabled", "err", err, "id", id)
+		writeError(w, http.StatusInternalServerError, "failed to update route")
+		return
+	}
+
+	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
+		h.logger.Error("caddy reload after toggle — rolling back", "err", err, "id", id)
+		if _, rbErr := h.store.UpdateRoute(r.Context(), previous); rbErr != nil {
+			h.logger.Error("rollback failed, DB and Caddy may diverge", "err", rbErr, "id", id)
+		}
+		writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
+		return
+	}
+
+	action := audit.ActionRouteEnabled
+	if disabled {
+		action = audit.ActionRouteDisabled
+	}
+	h.appendAudit(r, audit.Event{
+		Action:     action,
+		TargetType: "route",
+		TargetID:   id,
+		BeforeJSON: mustMarshalForAudit(routeForAudit(previous)),
+		AfterJSON:  mustMarshalForAudit(routeForAudit(updated)),
+	})
+
+	resp := toResponse(updated)
+	// Attach the hint on the disable path so the frontend can pre-warn.
+	writeJSONWithHint(w, resp, disabled && lastHTTPS)
+}
+
+// disableRoute handles POST /routes/{id}/disable. Idempotent: disabling
+// an already-disabled route returns 200 without error.
+func (h *Handler) disableRoute(w http.ResponseWriter, r *http.Request) {
+	h.toggleRouteDisabled(w, r, true)
+}
+
+// enableRoute handles POST /routes/{id}/enable. Idempotent: enabling
+// an already-enabled route returns 200 without error.
+func (h *Handler) enableRoute(w http.ResponseWriter, r *http.Request) {
+	h.toggleRouteDisabled(w, r, false)
 }
 
 func (h *Handler) deleteRoute(w http.ResponseWriter, r *http.Request) {
