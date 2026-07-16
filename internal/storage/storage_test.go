@@ -19,8 +19,10 @@ package storage
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +125,68 @@ func TestNewStore_ReopenIdempotent(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("view: %v", err)
+	}
+}
+
+// TestNewStore_DataDirIsHardened_FreshDir verifies that NewStore creates
+// the data directory with 0o700 (owner-only) permissions. The directory
+// holds arenet.db, which stores routes, users, audit records and secrets,
+// plus (in production) the certmagic TLS material — none of it should be
+// world- or group-readable. This is the fresh-install path: the parent of
+// the db file does not exist yet, so MkdirAll materialises it.
+func TestNewStore_DataDirIsHardened_FreshDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	// Nest one level below t.TempDir() so the db's parent is created
+	// fresh by NewStore's MkdirAll (t.TempDir() itself already exists).
+	dataDir := filepath.Join(t.TempDir(), "arenet-data")
+	s, err := NewStore(filepath.Join(dataDir, "arenet.db"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	fi, err := os.Stat(dataDir)
+	if err != nil {
+		t.Fatalf("stat data dir: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o700 {
+		t.Errorf("data dir perms = %04o, want 0700 (secrets must not be world/group readable)", got)
+	}
+}
+
+// TestNewStore_DataDirIsHardened_ExistingLooseDir verifies the upgrade
+// path: an operator who installed before hardening already has the data
+// dir at a looser mode (0o755). NewStore must actively tighten it to
+// 0o700, because MkdirAll is a no-op on an existing directory's perms
+// (verified empirically) — only an explicit Chmod fixes an install in
+// place. Without that Chmod this test fails, which is the point.
+func TestNewStore_DataDirIsHardened_ExistingLooseDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	dataDir := filepath.Join(t.TempDir(), "arenet-data")
+	if err := os.Mkdir(dataDir, 0o755); err != nil {
+		t.Fatalf("pre-create loose dir: %v", err)
+	}
+	// Defeat the umask so the pre-existing dir really is 0o755 on disk.
+	if err := os.Chmod(dataDir, 0o755); err != nil {
+		t.Fatalf("chmod loose dir: %v", err)
+	}
+
+	s, err := NewStore(filepath.Join(dataDir, "arenet.db"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	fi, err := os.Stat(dataDir)
+	if err != nil {
+		t.Fatalf("stat data dir: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o700 {
+		t.Errorf("existing data dir perms = %04o, want 0700 (upgrade must tighten in place)", got)
 	}
 }
 
