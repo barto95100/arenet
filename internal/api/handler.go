@@ -1112,7 +1112,16 @@ type routeRequest struct {
 	LBPolicy        string   `json:"lbPolicy"`
 	TLSEnabled      bool     `json:"tlsEnabled"`
 	RedirectToHTTPS bool     `json:"redirectToHttps"`
-	Aliases         []string `json:"aliases"`
+	// Disabled takes a route out of service without deleting its
+	// config (v2.15.0 enable/disable feature). The dedicated
+	// /disable + /enable endpoints are the primary toggle, but the
+	// route form also sends this on create/update so the wire struct
+	// must accept it — without this field dec.DisallowUnknownFields()
+	// rejects every POST/PUT that carries "disabled" with a 400. On
+	// create/update the value is applied directly: absent or false =
+	// enabled (the legacy zero-value), true = created/left disabled.
+	Disabled bool     `json:"disabled,omitempty"`
+	Aliases  []string `json:"aliases"`
 	// Step K.1 — per-route auth mode. One of "" / "none" / "basic"
 	// / "forward_auth". On POST, empty is normalised to "none". On
 	// PUT, empty preserves the previously stored value (same UX as
