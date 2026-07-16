@@ -28,7 +28,6 @@ Most homelab reverse proxies (Nginx Proxy Manager, Zoraxy) give you an admin UI 
 
 Arenet is the **engine + UI + security stack as one binary**. Configure a route, pick a TLS mode, toggle a WAF profile, attach an OIDC SSO, wire a Discord alert on cert renewal failures — all from the same admin UI, all served by one Go binary, all backed by a single embedded BoltDB.
 
-Designed for the operator running 5-50 routes on a single homelab host who wants production posture without the production complexity.
 
 ## 🚀 Quickstart
 
@@ -119,13 +118,13 @@ Full guide: [docs/install/systemd-native.md](docs/install/systemd-native.md)
 | Web admin UI                  | ✅     | ✅     | ✅      | Limited | ❌        |
 | Integrated WAF (OWASP CRS)    | ✅     | ❌     | ❌      | Plugin  | Plugin    |
 | CrowdSec bouncer              | ✅     | ❌     | ❌      | Plugin  | Plugin    |
-| Country blocking              | ✅     | ❌     | ❌      | Plugin  | Plugin    |
-| Live topology graph           | ✅     | ❌     | ❌      | ❌      | ❌        |
-| OIDC SSO + RBAC               | ✅     | ❌     | ❌      | Limited | ❌        |
+| Country blocking              | ✅     | ✅     | ❌      | Plugin  | Plugin    |
+| Live topology graph           | ✅     | ✅     | ❌      | ❌      | ❌        |
+| OIDC SSO + RBAC               | ✅     | Limited| ❌      | Limited | ❌        |
 | Backup/restore via UI         | ✅     | Limited| ✅      | ❌      | ❌        |
 | Per-route alerting rules      | ✅     | ❌     | ❌      | ❌      | ❌        |
 | Auto-HTTPS + HTTP/3           | ✅     | ✅     | ✅      | ✅      | ✅        |
-| Cert lifecycle observability  | ✅     | ❌     | ❌      | Limited | Logs only |
+| Cert lifecycle observability  | ✅     | Limited| ❌      | Limited | Logs only |
 | AGPL-3.0 (truly open-source)  | ✅     | ✅     | MIT     | MIT     | Apache    |
 
 Arenet's positioning : **production-grade security + observability that ships in the box**, not as N plugins to wire together.
