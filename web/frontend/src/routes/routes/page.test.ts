@@ -33,7 +33,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 
 // --- Mocks. vi.mock + the supporting references both go through
@@ -53,7 +53,10 @@ const { toastMock, apiMock, settingsMock, authMock } = vi.hoisted(() => ({
 		// Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-
 		// triggered upstream probe. Per-test rebinds the
 		// resolve / reject to drive the result chip states.
-		testUpstream: vi.fn()
+		testUpstream: vi.fn(),
+		// v2.14.3 — route disable/enable dedicated endpoints.
+		disableRoute: vi.fn(),
+		enableRoute: vi.fn()
 	},
 	settingsMock: {
 		listDNSProviders: vi.fn()
@@ -91,7 +94,9 @@ vi.mock('$lib/api/client', () => ({
 	createRoute: (...args: unknown[]) => apiMock.createRoute(...args),
 	updateRoute: (...args: unknown[]) => apiMock.updateRoute(...args),
 	deleteRoute: (...args: unknown[]) => apiMock.deleteRoute(...args),
-	testUpstream: (...args: unknown[]) => apiMock.testUpstream(...args)
+	testUpstream: (...args: unknown[]) => apiMock.testUpstream(...args),
+	disableRoute: (...args: unknown[]) => apiMock.disableRoute(...args),
+	enableRoute: (...args: unknown[]) => apiMock.enableRoute(...args)
 }));
 
 // $lib/api/settings: listDNSProviders is called in openCreate /
@@ -194,6 +199,8 @@ beforeEach(() => {
 	apiMock.updateRoute.mockReset();
 	apiMock.deleteRoute.mockReset();
 	apiMock.testUpstream.mockReset();
+	apiMock.disableRoute.mockReset();
+	apiMock.enableRoute.mockReset();
 	settingsMock.listDNSProviders.mockReset();
 	// Day 13 — auth store defaults: every test starts in
 	// authenticated state. Tests exercising the lock-screen-
@@ -2863,5 +2870,176 @@ describe('Routes page — Step Q rate-limit toggle + payload', () => {
 		expect(toggle.checked).toBe(true);
 		const events = screen.getByTestId('rate-limit-events-input') as HTMLInputElement;
 		expect(events.value).toBe('100');
+	});
+});
+
+// --- v2.14.3 — route disable/enable ---------------------------------
+//
+// Task 7 (frontend UI). API client (disableRoute/enableRoute), the
+// Route.disabled wire field, and the i18n keys were wired in Tasks
+// 6/T6. This suite pins: the Disabled badge on a disabled row, the
+// dim treatment, the enable/disable toggle action, the confirm
+// dialog (normal + special last-HTTPS-route copy), and the
+// RouteForm "Disabled" checkbox round-trip.
+
+describe('/routes — disable/enable', () => {
+	it('renders a Disabled badge for a disabled route', async () => {
+		// Arrange: listRoutes returns one disabled route.
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r1',
+				host: 'off.example.com',
+				upstreams: [{ url: 'http://x', weight: 1 }],
+				tlsEnabled: false,
+				disabled: true
+			})
+		]);
+		render(Page);
+		expect(await screen.findByText(/Disabled/i)).toBeInTheDocument();
+	});
+
+	it('dims the row (opacity class) for a disabled route', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r1',
+				host: 'off.example.com',
+				upstreams: [{ url: 'http://x', weight: 1 }],
+				tlsEnabled: false,
+				disabled: true
+			})
+		]);
+		render(Page);
+		const hostCell = await screen.findByText('off.example.com');
+		const row = hostCell.closest('tr')!;
+		expect(row.className).toContain('opacity-50');
+	});
+
+	it('clicking Disable on an active route opens the confirm dialog then calls disableRoute', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r2',
+				host: 'live.example.com',
+				upstreams: [{ url: 'http://x', weight: 1 }],
+				tlsEnabled: false,
+				disabled: false
+			})
+		]);
+		apiMock.disableRoute.mockResolvedValue({ id: 'r2', disabled: true, lastHttpsRouteAffected: false });
+		render(Page);
+		await screen.findByText('live.example.com');
+		await fireEvent.click(screen.getByTestId('route-disable-r2'));
+		// confirm dialog appears
+		await fireEvent.click(screen.getByTestId('route-disable-confirm'));
+		await waitFor(() => expect(apiMock.disableRoute).toHaveBeenCalledWith('r2'));
+	});
+
+	it('shows the normal confirm copy (not the last-HTTPS warning) for a non-TLS route', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r2',
+				host: 'live.example.com',
+				upstreams: [{ url: 'http://x', weight: 1 }],
+				tlsEnabled: false,
+				disabled: false
+			})
+		]);
+		apiMock.disableRoute.mockResolvedValue({ id: 'r2', disabled: true, lastHttpsRouteAffected: false });
+		render(Page);
+		await screen.findByText('live.example.com');
+		await fireEvent.click(screen.getByTestId('route-disable-r2'));
+		expect(await screen.findByText('Disable route?')).toBeInTheDocument();
+		expect(screen.queryByText('Disable the last HTTPS route?')).not.toBeInTheDocument();
+	});
+
+	it('shows the special last-HTTPS-route confirm copy when disabling the only active TLS route', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r-tls',
+				host: 'secure.example.com',
+				upstreams: [{ url: 'http://x', weight: 1 }],
+				tlsEnabled: true,
+				disabled: false
+			})
+		]);
+		apiMock.disableRoute.mockResolvedValue({ id: 'r-tls', disabled: true, lastHttpsRouteAffected: true });
+		render(Page);
+		await screen.findByText('secure.example.com');
+		await fireEvent.click(screen.getByTestId('route-disable-r-tls'));
+		expect(await screen.findByText('Disable the last HTTPS route?')).toBeInTheDocument();
+		await fireEvent.click(screen.getByTestId('route-disable-confirm'));
+		await waitFor(() => expect(apiMock.disableRoute).toHaveBeenCalledWith('r-tls'));
+	});
+
+	it('does NOT show the last-HTTPS warning when a second active TLS route exists', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r-tls-1',
+				host: 'secure1.example.com',
+				upstreams: [{ url: 'http://x', weight: 1 }],
+				tlsEnabled: true,
+				disabled: false
+			}),
+			makeRoute({
+				id: 'r-tls-2',
+				host: 'secure2.example.com',
+				upstreams: [{ url: 'http://y', weight: 1 }],
+				tlsEnabled: true,
+				disabled: false
+			})
+		]);
+		render(Page);
+		await screen.findByText('secure1.example.com');
+		await fireEvent.click(screen.getByTestId('route-disable-r-tls-1'));
+		expect(await screen.findByText('Disable route?')).toBeInTheDocument();
+		expect(screen.queryByText('Disable the last HTTPS route?')).not.toBeInTheDocument();
+	});
+
+	it('clicking Enable on a disabled route calls enableRoute directly (no confirm dialog)', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r3',
+				host: 'off.example.com',
+				upstreams: [{ url: 'http://x', weight: 1 }],
+				tlsEnabled: false,
+				disabled: true
+			})
+		]);
+		apiMock.enableRoute.mockResolvedValue({ id: 'r3', disabled: false });
+		render(Page);
+		await screen.findByText('off.example.com');
+		await fireEvent.click(screen.getByTestId('route-enable-r3'));
+		await waitFor(() => expect(apiMock.enableRoute).toHaveBeenCalledWith('r3'));
+		// No confirm dialog gating the enable path.
+		expect(screen.queryByTestId('route-disable-confirm')).not.toBeInTheDocument();
+	});
+
+	it('RouteForm exposes a Disabled checkbox that round-trips into the update payload', async () => {
+		const seeded = makeRoute({
+			id: 'edit-disable',
+			host: 'edit-disable.example.com',
+			upstreams: [{ url: 'http://127.0.0.1:9000', weight: 1 }],
+			disabled: false
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+
+		const hostCell = await screen.findByText('edit-disable.example.com');
+		await fireEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const disabledCheckbox = screen.getByLabelText('Disabled') as HTMLInputElement;
+		expect(disabledCheckbox.checked).toBe(false);
+		await userEvent.click(disabledCheckbox);
+		await tick();
+		expect(disabledCheckbox.checked).toBe(true);
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		expect(payload.disabled).toBe(true);
 	});
 });
