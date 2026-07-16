@@ -1406,6 +1406,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		LBPolicy:        req.LBPolicy,
 		TLSEnabled:      req.TLSEnabled,
 		RedirectToHTTPS: req.RedirectToHTTPS,
+		Disabled:        req.Disabled,
 		Aliases:         req.Aliases,
 		AuthMode:        req.AuthMode,
 		BasicAuth: storage.BasicAuthRouteConfig{
@@ -1884,6 +1885,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		LBPolicy:        req.LBPolicy,
 		TLSEnabled:      req.TLSEnabled,
 		RedirectToHTTPS: req.RedirectToHTTPS,
+		Disabled:        req.Disabled,
 		Aliases:         req.Aliases,
 		AuthMode:        req.AuthMode,
 		BasicAuth: storage.BasicAuthRouteConfig{
