@@ -127,6 +127,7 @@ Si l'état a été touché et ne charge plus, restaure le backup que tu as pris 
 - Arenet exécute des **migrations de boot idempotentes** au démarrage (ex. la migration DNS-provider de v2.12.0). Elles sont sûres à ré-exécuter et ne demandent aucune action.
 - **Les backups portent une version de schéma** (`SchemaVersion`, MAJOR `1` aujourd'hui). La restauration impose **MAJOR-égal** : un backup d'une génération de schéma différente est rejeté avec un message clair plutôt que de corrompre l'état. À l'intérieur du même MAJOR, restaurer entre versions minor/patch est OK.
 - **Règle pratique :** les mises à niveau patch/minor sont drop-in. Avant une mise à niveau **MAJOR**, lis les notes de cette release, prends un backup, et sois prêt à revenir au binaire/image précédent (un backup ne peut être restauré que sur un binaire de même MAJOR).
+- **Mise à niveau vers v2.15.1+ (permissions du répertoire de données) :** v2.15.1 resserre le répertoire de données en `0700` (owner-only) car il contient des secrets et des clés privées TLS. Les installs neuves et les mises à niveau standard l'ont automatiquement — le binaire chmod le dir en `0700` au boot. **Aucune action nécessaire** dans le cas courant ; pour confirmer : `stat -c '%a' /var/lib/arenet` → `700`. Si tu tournes Arenet sous un bind mount et que le boot échoue sur le répertoire de données, vois [Installation → Setup du répertoire de données](Installation-FR#setup-du-répertoire-de-données-volume-nommé-vs-bind-mount).
 
 ---
 

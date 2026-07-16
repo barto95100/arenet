@@ -209,8 +209,19 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		"dev", cfg.Dev,
 	)
 
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+	// Create the data dir owner-only (0o700): it holds arenet.db with
+	// secrets and, in production, the TLS material. MkdirAll sets the
+	// mode only on creation, so also Chmod to tighten a pre-hardening
+	// install (0o755) in place. storage.NewStore re-applies the same
+	// guard defensively; doing it here first means the dir is 0o700
+	// from the moment it exists, before any secret is written. A failed
+	// Chmod is a warning, not fatal.
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return err
+	}
+	if err := os.Chmod(cfg.DataDir, 0o700); err != nil {
+		logger.Warn("could not enforce 0700 on data dir; secrets may be readable by other users",
+			"data_dir", cfg.DataDir, "err", err)
 	}
 
 	// Pin $HOME so certmagic's default cert-storage path

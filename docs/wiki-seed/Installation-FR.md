@@ -59,16 +59,50 @@ Ouvre `http://<your-host>:8001` dans un navigateur. Le wizard de setup demande :
 
 Clique **Submit** → tu es dedans. Le setup token est consommé (usage one-time), le compte admin est créé avec le rôle `admin`, et le wizard de setup disparaît aux visites suivantes.
 
-### Bind mount au lieu d'un volume nommé ?
+### Setup du répertoire de données (volume nommé vs bind mount)
 
-Si tu préfères un bind mount host-path (plus facile à backup avec `tar`), crée le directory d'abord avec le bon ownership :
+Le répertoire de données contient `arenet.db` (routes, users, audit, et **secrets** — client secrets OIDC, clés API DNS, le hash du password admin) plus les clés privées TLS sous `certmagic/`. Arenet le garde **owner-only (`0700`)**, appartenant à l'utilisateur distroless `nonroot` (UID **65532**).
+
+**Volume nommé (le défaut) — rien à faire.** Docker seed l'ownership et les permissions d'un volume nommé neuf depuis le `/var/lib/arenet` de l'image, qui ship en `65532:65532` mode `0700`. Ça marche direct, et les secrets sont owner-only dès le premier boot.
+
+**Bind mount (`./data:/var/lib/arenet`) — nécessite un fix d'ownership une fois.** Un directory host appartient à qui l'a créé (souvent root ou ton user de login), **pas** à l'UID 65532. Le container distroless n'a pas de shell et ne peut pas `chown` son propre mount, donc il crash-loop avec `permission denied`. Choisis :
+
+**Option A — manuel (le plus simple) :** crée le dir avec le bon owner et mode avant `docker compose up` :
 
 ```bash
 mkdir -p ./data
-sudo chown -R 65532:65532 ./data  # UID distroless 'nonroot'
+sudo chown -R 65532:65532 ./data   # UID distroless 'nonroot'
+sudo chmod 700 ./data              # owner-only : secrets + clés TLS
 ```
 
-Puis édite `docker-compose.yml` pour utiliser `./data:/var/lib/arenet` au lieu du volume nommé.
+Puis édite `docker-compose.yml` pour monter `./data:/var/lib/arenet` au lieu du volume nommé.
+
+**Option B — init container (automatique, idempotent) :** ajoute un service one-shot qui fixe l'ownership avant qu'Arenet démarre. Il **resserre aussi un directory laissé en `0755` par une install pré-v2.15.1**. Ajoute à `docker-compose.yml` :
+
+```yaml
+services:
+  arenet:
+    # ... config existante ...
+    volumes:
+      - ./data:/var/lib/arenet     # bind mount au lieu du volume nommé
+    depends_on:
+      arenet-init:
+        condition: service_completed_successfully
+
+  arenet-init:
+    image: busybox:1.37
+    user: "0:0"                    # tourne en root juste pour chown le mount
+    command: ["sh", "-c", "chown -R 65532:65532 /data && chmod 700 /data"]
+    volumes:
+      - ./data:/data               # MÊME dir host que le bind mount d'arenet
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+```
+
+`arenet-init` tourne une fois, fixe le mount, et sort ; `depends_on … service_completed_successfully` fait attendre Arenet. On peut le laisser en place — le relancer est un no-op.
+
+> **Pourquoi 65532 / 0700 ?** `65532` est l'utilisateur distroless `nonroot` sous lequel Arenet tourne. `0700` veut dire que seul cet utilisateur peut lire ou écrire le directory — donc les secrets dans `arenet.db` et les clés privées TLS ne sont pas exposés aux autres users ou containers qui partagent le host. Vois [Updates → Sûreté de migration](Updates-FR#5-sûreté-de-migration) si tu upgrades une install plus ancienne, et [Troubleshooting → permission denied](Troubleshooting) si un boot échoue sur le répertoire de données (page EN pour l'instant).
 
 ---
 
@@ -90,6 +124,8 @@ Le script :
 - Installe l'unit systemd à `/etc/systemd/system/arenet.service`
 - Crée `/var/lib/arenet/` pour l'état BoltDB + SQLite
 - Reload systemd (`systemctl daemon-reload`)
+
+Arenet crée et garde `/var/lib/arenet` en mode **`0700`** (owner-only) — il contient des secrets et des clés privées TLS. Les installs neuves l'ont automatiquement ; si tu **upgrades depuis avant v2.15.1**, le binaire resserre le dir en `0700` à son prochain boot. Pour confirmer : `stat -c '%a' /var/lib/arenet` → `700`.
 
 ### 2. Démarre le service
 

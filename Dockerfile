@@ -99,7 +99,14 @@ COPY --from=backend /out/arenet /usr/local/bin/arenet
 # (UID 65532) can't write → restart loop with permission denied.
 # Bind mounts require the operator to chown the host dir
 # separately (see docs/install/docker-quickstart.md).
-COPY --from=backend --chown=nonroot:nonroot /out/data /var/lib/arenet
+#
+# --chmod=700 bakes owner-only perms into the image dir. The Go
+# boot path also chmods 0o700 at runtime, but a named volume's
+# perms are seeded from THIS image dir on first mount, so setting
+# it here keeps a fresh named-volume install owner-only from the
+# very first boot rather than relying on the runtime chmod. Needs
+# BuildKit (the release pipeline builds via docker buildx).
+COPY --from=backend --chown=nonroot:nonroot --chmod=700 /out/data /var/lib/arenet
 
 # Data plane ports + admin port. The container EXPOSE is purely
 # informational — Docker doesn't open ports without an explicit

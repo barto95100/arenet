@@ -57,6 +57,11 @@ services:
     #   - certmagic/  (TLS certs + ACME state)
     # Cold-stop + tar of this volume is the canonical backup
     # procedure — see docs/operations/backup.md.
+    #
+    # The named volume inherits owner-only (0700, nonroot) perms
+    # from the image — no setup needed. A BIND MOUNT instead needs
+    # a one-time ownership fix (init container) — see the wiki
+    # Installation page, "Data directory setup".
     volumes:
       - arenet-data:/var/lib/arenet
 

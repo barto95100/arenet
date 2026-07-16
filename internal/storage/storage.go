@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -133,8 +134,21 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, errors.New("storage: dbPath must not be empty")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+	// The data dir holds arenet.db (routes, users, audit, secrets) and,
+	// in production, the certmagic TLS material. Keep it owner-only
+	// (0o700). MkdirAll applies the mode only when it CREATES the
+	// directory — on an existing dir it is a no-op on perms (verified
+	// empirically), so a pre-hardening install (0o755) needs an explicit
+	// Chmod to be tightened in place on the next boot. A failed Chmod is
+	// a warning, not fatal: an over-permissive dir should not stop Arenet
+	// from starting (e.g. dir owned by another user under a bind mount).
+	dataDir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("storage: create data dir: %w", err)
+	}
+	if err := os.Chmod(dataDir, 0o700); err != nil {
+		slog.Warn("could not enforce 0700 on data dir; secrets may be readable by other users",
+			"data_dir", dataDir, "err", err)
 	}
 
 	db, err := bolt.Open(dbPath, 0o600, &bolt.Options{Timeout: 3 * time.Second})

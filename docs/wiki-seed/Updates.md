@@ -126,6 +126,7 @@ If state was touched and won't load, restore the backup you took: [Backup & Rest
 - Arenet runs **idempotent boot migrations** on startup (e.g. the v2.12.0 DNS-provider migration). They're safe to re-run and require no action.
 - **Backups carry a schema version** (`SchemaVersion`, MAJOR `1` today). Restore enforces **MAJOR-equal**: a backup from a different schema generation is rejected with a clear message rather than corrupting state. Within the same MAJOR, restore across minor/patch versions is fine.
 - **Practical rule:** patch/minor upgrades are drop-in. Before a **MAJOR** upgrade, read that release's notes, take a backup, and be ready to roll back to the prior binary/image (a backup can only be restored on a same-MAJOR binary).
+- **Upgrading to v2.15.1+ (data-dir permissions):** v2.15.1 tightens the data directory to `0700` (owner-only) because it holds secrets and TLS private keys. Fresh installs and standard upgrades get this automatically — the binary chmods the dir to `0700` on boot. **No action needed** in the common case; to confirm: `stat -c '%a' /var/lib/arenet` → `700`. If you run Arenet under a bind mount and boot fails on the data dir, see [Installation → Data directory setup](Installation#data-directory-setup-named-volume-vs-bind-mount).
 
 ---
 
