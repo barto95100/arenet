@@ -191,6 +191,15 @@ export const updateRoute = (id: string, r: RouteRequest): Promise<Route> =>
 	request<Route>('PUT', `/routes/${id}`, r);
 export const deleteRoute = (id: string): Promise<void> => request<void>('DELETE', `/routes/${id}`);
 
+// v2.14.3 — route disable/enable. Idempotent on the backend; both
+// return the updated route plus lastHttpsRouteAffected (true when
+// this action flips the last active HTTPS route, so the UI can warn
+// the operator the HTTPS server (:443) is stopping/starting).
+export const disableRoute = (id: string): Promise<Route & { lastHttpsRouteAffected?: boolean }> =>
+	request('POST', `/routes/${id}/disable`);
+export const enableRoute = (id: string): Promise<Route & { lastHttpsRouteAffected?: boolean }> =>
+	request('POST', `/routes/${id}/enable`);
+
 // Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-triggered
 // upstream probe. Backend is per-URL; the route-form UI
 // parallelises pool > 1 via Promise.all so the operator

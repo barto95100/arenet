@@ -115,15 +115,15 @@ func BuildSnapshot(
 // Routes WITHOUT a configured health check still report
 // StatusUnknown unconditionally, regardless of any state the
 // tracker might be carrying. Two reasons:
-//   1. The tracker has no way to forget addresses when the
-//      operator removes a health check from a route — stale state
-//      could otherwise paint green/red on an upstream that is no
-//      longer being probed (the original misleading-green case
-//      from #R-TOPO-health-coherence).
-//   2. HealthCheckConfigured is the honest signal "this upstream
-//      is being watched"; respecting it as the gate keeps the
-//      Stage B semantics consistent with the v1.1.0 contract the
-//      Activity glyph + accent stripe were built around.
+//  1. The tracker has no way to forget addresses when the
+//     operator removes a health check from a route — stale state
+//     could otherwise paint green/red on an upstream that is no
+//     longer being probed (the original misleading-green case
+//     from #R-TOPO-health-coherence).
+//  2. HealthCheckConfigured is the honest signal "this upstream
+//     is being watched"; respecting it as the gate keeps the
+//     Stage B semantics consistent with the v1.1.0 contract the
+//     Activity glyph + accent stripe were built around.
 //
 // The lookup returns the empty string ("" / StatusUnknown) for
 // addresses it hasn't seen yet (warm-up window between Caddy
@@ -142,6 +142,7 @@ func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Rout
 		P99LatencyMs: agg.P95LatencyMs, // p95 substitute, see types doc
 		ErrorRate5xx: agg.ErrorRate5xx,
 		TLSEnabled:   r.TLSEnabled,
+		Disabled:     r.Disabled,
 		WAFLevel:     r.WAFMode,
 		// rateLimited and mtlsRequired: see Stage A docstring on
 		// types.Route. rateLimited derivation will land when
@@ -219,8 +220,8 @@ func cloneStrings(in []string) []string {
 // Every route looks idle.
 type noopMetricsView struct{}
 
-func (noopMetricsView) Aggregate(string) Aggregate                  { return Aggregate{} }
-func (noopMetricsView) AggregateByHost(string, string) Aggregate    { return Aggregate{} }
+func (noopMetricsView) Aggregate(string) Aggregate               { return Aggregate{} }
+func (noopMetricsView) AggregateByHost(string, string) Aggregate { return Aggregate{} }
 
 // buildAliasMetrics assembles the per-alias breakdown for a
 // single route. Topology Plan B Phase 2.2.

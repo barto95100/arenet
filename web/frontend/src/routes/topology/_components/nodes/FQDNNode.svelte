@@ -44,13 +44,37 @@
   imported directly because the alternative — threading a
   callback through NodeProps.data, which must be a plain object —
   would force a serialisable shape on a UI concern.
+
+  v2.14.3 (route disable/enable): disabled routes still appear
+  in the topology (Caddy config generation just skips them; the
+  canvas reads storage directly), so without a visual cue a
+  disabled route reads as a mysterious zero-traffic phantom
+  indistinguishable from an idle-but-enabled one. When
+  data.disabled is true the card gets the `.disabled` class
+  (reduced opacity + dashed border, mirroring the RouteGroupNode
+  dashed-border language already used for route framing) plus
+  `data-disabled` for tests and a `title` tooltip resolved via
+  t('topology.disabled.tooltip') so hovering explains the dim
+  state instead of leaving the operator guessing.
 -->
 <script lang="ts">
         import { Handle, Position, type NodeProps } from '@xyflow/svelte';
         import type { FQDNNodeData } from '../../_types';
         import { collapsedRoutes } from '../../_collapsed.svelte';
+        import { t } from '$lib/i18n';
+        import { language } from '$lib/stores/language.svelte';
 
         let { data }: NodeProps & { data: FQDNNodeData } = $props();
+
+        // v2.14.3 — disabled tooltip. `language.current &&` is the
+        // reactivity trigger per the project's i18n idiom (see
+        // $lib/i18n/index.ts usage docs): without reading it inside
+        // the $derived, the string would not recompute on language
+        // change. Empty string when enabled — no title attribute
+        // clutter on the common case.
+        let disabledTooltip = $derived(
+                data.disabled && language.current ? t('topology.disabled.tooltip') : ''
+        );
 
         // Hosts tooltip — primary host first, then aliases, comma-
         // separated. Empty string when the route has no aliases (the
@@ -106,7 +130,12 @@
         }
 </script>
 
-<div class="fqdn-node">
+<div
+        class="fqdn-node"
+        class:disabled={data.disabled}
+        data-disabled={data.disabled}
+        title={disabledTooltip || undefined}
+>
         <div class="host-row">
                 <span class="host">{data.host}</span>
                 {#if (data.aliasCount ?? 0) > 0}
@@ -198,6 +227,16 @@
                 color: var(--fg, oklch(96% 0.005 250));
                 font-size: 12px;
                 box-shadow: 0 1px 0 rgb(0 0 0 / 0.4);
+        }
+
+        /* v2.14.3 — disabled route. Reduced opacity + dashed border
+           mirrors the RouteGroupNode's dashed-border language
+           already used elsewhere on the canvas to say "this is a
+           soft/inactive framing element", so a disabled route
+           reads as deliberately off rather than a broken card. */
+        .fqdn-node.disabled {
+                opacity: 0.5;
+                border: 1px dashed var(--border, oklch(28% 0.009 250));
         }
 
         .host-row {

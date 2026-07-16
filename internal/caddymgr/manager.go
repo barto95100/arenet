@@ -538,11 +538,39 @@ func (m *CaddyManager) ReloadFromStore(ctx context.Context) error {
 // rolled back by the caller (handlers in internal/api/routes.go),
 // so the registry already reflects the pre-attempt state, and we
 // must not re-sync against a state that was rejected.
+
+// filterDisabledRoutes returns the routes that must be emitted into
+// Caddy — i.e. the ones with Disabled=false. Filtering the slice ONCE
+// here removes disabled routes from every downstream emission at once:
+// routing, TLS connection policies, ACME issuance (subjects accumulate
+// inside buildConfigJSON's route loop), buildSkipList, error routes,
+// and the HC re-prime loop below — because they all consume this slice.
+func filterDisabledRoutes(routes []storage.Route) []storage.Route {
+	live := routes[:0:0]
+	for _, r := range routes {
+		if r.Disabled {
+			continue
+		}
+		live = append(live, r)
+	}
+	return live
+}
+
 func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	routes, err := m.store.ListRoutes(ctx)
 	if err != nil {
 		return fmt.Errorf("list routes: %w", err)
 	}
+
+	// v2.14.3: drop disabled routes before anything consumes the slice.
+	// One filter point covers routing + TLS policies + ACME issuance +
+	// skip_certificates + error routes + the HC re-prime loop.
+	for _, r := range routes {
+		if r.Disabled {
+			m.logger.Info("route skipped: disabled", "route_id", r.ID, "host", r.Host)
+		}
+	}
+	routes = filterDisabledRoutes(routes)
 
 	// Task 1d: read the UUID-keyed DNS provider collection into a map
 	// keyed by config ID. Used by buildManagedDomainPolicies to emit a
@@ -3372,7 +3400,7 @@ func (m *CaddyManager) HasHTTPSServer(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, r := range routes {
-		if r.TLSEnabled {
+		if r.TLSEnabled && !r.Disabled {
 			return true, nil
 		}
 	}

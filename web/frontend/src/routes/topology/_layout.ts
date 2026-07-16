@@ -339,6 +339,7 @@ export function buildTopologyGraph(
                         aliasCount: aliasMetrics.length,
                         aliasTotalRps,
                         collapsed,
+                        disabled: route.disabled,
                 };
                 // Standalone FQDN — absolute position, default
                 // drag affordance. Whether the route has aliases

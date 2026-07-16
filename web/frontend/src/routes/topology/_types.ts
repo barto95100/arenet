@@ -84,6 +84,15 @@ export interface TopologyRoute {
         // backend always emits the field.
         hasHealthCheck: boolean;
 
+        // v2.14.3 route disable/enable. Mirrors storage.Route.Disabled
+        // via internal/api/topology/types.go Route.Disabled. A disabled
+        // route is not emitted into Caddy (serves nothing) but the
+        // topology reads storage directly, so it still appears here —
+        // this flag is what lets the FQDN node render dimmed instead of
+        // looking like a mysterious zero-traffic phantom. The backend
+        // always emits the field (non-omitempty); NOT optional.
+        disabled: boolean;
+
         clusterLabel?: string;
 }
 
@@ -165,6 +174,10 @@ export type FQDNNodeData = {
          *  topology view. Drives the chevron glyph (▶ collapsed,
          *  ▼ expanded) and which meta line variant renders. */
         collapsed: boolean;
+        /** v2.14.3 route disable/enable — mirrors TopologyRoute.disabled.
+         *  Drives the dimmed/dashed "deliberately off" card state and
+         *  the `topology.disabled.tooltip` title on the FQDN node. */
+        disabled: boolean;
 } & Record<string, unknown>;
 
 /** The single central Caddy hub.

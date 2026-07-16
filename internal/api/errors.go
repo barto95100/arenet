@@ -60,3 +60,24 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// writeJSONWithHint writes resp as JSON with an extra top-level
+// "lastHttpsRouteAffected" boolean merged in. Used by the route
+// disable endpoint so the frontend can warn before removing the
+// last HTTPS listener.
+func writeJSONWithHint(w http.ResponseWriter, resp any, hint bool) {
+	b, err := json.Marshal(resp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encode response")
+		return
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		writeError(w, http.StatusInternalServerError, "encode response")
+		return
+	}
+	m["lastHttpsRouteAffected"] = hint
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(m)
+}

@@ -505,6 +505,17 @@ type Route struct {
 	ErrorPageOverrides map[int]string `json:"error_page_overrides,omitempty"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
+	// Disabled (v2.14.3) takes a route out of service WITHOUT
+	// deleting its config. When true, the route is filtered out
+	// before the Caddy config is built (caddymgr applyLocked), so
+	// it is not routed AND no cert is requested for its host —
+	// requests fall to the branded catch-all 404. Zero value is
+	// false = enabled: pre-v2.14.3 routes and old backups decode
+	// as enabled (backward-safe, no migration). Polarity mirrors
+	// WAFDisableCRS / InsecureSkipVerify — the JSON zero-value must
+	// equal legacy behavior. omitempty keeps enabled routes'
+	// wire bytes identical to pre-feature routes.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // RouteRateLimit (Step Q, 2026-06-18) — per-route rate limit
@@ -512,12 +523,12 @@ type Route struct {
 //
 // Validation contract (applied at the API layer + a
 // belt-and-suspenders boot-time decode check) :
-//  - Events >= 1 (zero would block every request and is
-//    almost certainly a typo).
-//  - Window parses cleanly via time.ParseDuration.
-//  - Key default-initialised to "{http.request.remote.host}"
-//    when empty at decode/emit time so the operator can
-//    leave it blank in the UI for the common case.
+//   - Events >= 1 (zero would block every request and is
+//     almost certainly a typo).
+//   - Window parses cleanly via time.ParseDuration.
+//   - Key default-initialised to "{http.request.remote.host}"
+//     when empty at decode/emit time so the operator can
+//     leave it blank in the UI for the common case.
 type RouteRateLimit struct {
 	// Events is the maximum number of requests allowed
 	// within Window. mholt/caddy-ratelimit uses a sliding-

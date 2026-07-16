@@ -30,7 +30,7 @@ vi.mock('$lib/stores/loading', () => ({
 	endRequest: vi.fn()
 }));
 
-const { request } = await import('./client');
+const { request, disableRoute, enableRoute } = await import('./client');
 const { ApiError } = await import('./types');
 type ApiErrorType = InstanceType<typeof ApiError>;
 const { goto } = await import('$app/navigation');
@@ -277,5 +277,38 @@ describe('request: signature stays backward-compatible', () => {
 		// AbortController machinery is invisible to the caller —
 		// no change to the public shape.
 		expect((init?.signal as AbortSignal).aborted).toBe(false);
+	});
+});
+
+// v2.14.3 — route disable/enable client wrappers.
+describe('disableRoute / enableRoute', () => {
+	it('disableRoute POSTs to /routes/{id}/disable and returns the route + lastHttpsRouteAffected', async () => {
+		const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			expect(String(input)).toContain('/routes/abc/disable');
+			expect(init?.method).toBe('POST');
+			return new Response(JSON.stringify({ id: 'abc', disabled: true, lastHttpsRouteAffected: true }), {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		});
+		(globalThis as { fetch?: unknown }).fetch = fetchSpy;
+		const result = await disableRoute('abc');
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(result).toEqual({ id: 'abc', disabled: true, lastHttpsRouteAffected: true });
+	});
+
+	it('enableRoute POSTs to /routes/{id}/enable and returns the route + lastHttpsRouteAffected', async () => {
+		const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			expect(String(input)).toContain('/routes/abc/enable');
+			expect(init?.method).toBe('POST');
+			return new Response(JSON.stringify({ id: 'abc', disabled: false, lastHttpsRouteAffected: false }), {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		});
+		(globalThis as { fetch?: unknown }).fetch = fetchSpy;
+		const result = await enableRoute('abc');
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(result).toEqual({ id: 'abc', disabled: false, lastHttpsRouteAffected: false });
 	});
 });

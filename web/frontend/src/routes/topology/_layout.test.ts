@@ -58,6 +58,7 @@ function makeRoute(overrides: Partial<TopologyRoute> = {}): TopologyRoute {
 		tlsEnabled: false,
 		httpRedirect: false,
 		hasHealthCheck: false,
+		disabled: false,
 		...overrides
 	};
 }

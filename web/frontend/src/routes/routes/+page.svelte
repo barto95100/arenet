@@ -10,7 +10,9 @@
 		createRoute,
 		updateRoute,
 		deleteRoute,
-		testUpstream
+		testUpstream,
+		disableRoute,
+		enableRoute
 	} from '$lib/api/client';
 	import { settingsApi } from '$lib/api/settings';
 	import {
@@ -106,8 +108,15 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled'> & {
 		healthCheck: HealthCheck;
+		// v2.14.3 — narrowed to a non-optional boolean, same
+		// pattern as insecureSkipVerify/uploadStreamingMode: the
+		// form always carries a definite value (default false on
+		// create), and it's always shipped full-replacement on
+		// both POST and PUT (no preserve-on-omit semantic needed
+		// here — the operator's checkbox state is the truth).
+		disabled: boolean;
 		// W.5 — narrow to the non-optional shape. The form
 		// always carries a CountryBlockRequest (mode="off"
 		// when disabled); the wire optionality lives on
@@ -179,6 +188,8 @@
 			lbPolicy: 'round_robin',
 			tlsEnabled: false,
 			redirectToHttps: false,
+			// v2.14.3 — default unchecked (enabled) for new routes.
+			disabled: false,
 			aliases: [],
 			authMode: 'none',
 			basicAuth: { username: '', password: '' },
@@ -392,6 +403,68 @@
 	// flips the toggle from false → true ; the reverse flip
 	// (re-enabling CRS) is always safe so it bypasses the dialog.
 	let confirmDisableCRSOpen = $state(false);
+
+	// v2.14.3 — row-level disable/enable toggle.
+	//
+	// Disable gates behind a ConfirmDialog (destructive: stops
+	// traffic to the route). Enable is a direct call — re-enabling
+	// is always safe, mirrors the wafDisableCRS "reverse flip
+	// bypasses the dialog" precedent above.
+	//
+	// The "last active HTTPS route" warning: the disableRoute
+	// response carries `lastHttpsRouteAffected` but that's only
+	// known AFTER the call — too late to pick which confirm COPY
+	// to show before the operator commits. So we compute the same
+	// invariant PRE-call on the client from the currently-loaded
+	// route list: if exactly one route has tlsEnabled && !disabled
+	// and it's the row being disabled, showing the special
+	// last-HTTPS confirm copy is the correct prediction (matches
+	// the backend's HasHTTPSServer gate — see caddymgr).
+	let disableTarget = $state<Route | null>(null);
+	let disableIsLastHttps = $state(false);
+	let disablingRoute = $state(false);
+
+	function isLastActiveHTTPSRoute(r: Route): boolean {
+		if (!r.tlsEnabled) return false;
+		const activeHTTPSCount = routes.filter((x) => x.tlsEnabled && !x.disabled).length;
+		return activeHTTPSCount === 1;
+	}
+
+	function openDisableConfirm(r: Route) {
+		disableTarget = r;
+		disableIsLastHttps = isLastActiveHTTPSRoute(r);
+	}
+
+	async function confirmDisableRoute() {
+		if (!disableTarget) return;
+		disablingRoute = true;
+		try {
+			await disableRoute(disableTarget.id);
+			// No dedicated "toasts.disabled" i18n key exists (out of
+			// this task's key set); the confirm dialog's own action
+			// label already told the operator what just happened, so
+			// reuse the disabled badge label for the toast text.
+			pushToast(t('routes.disabled.badge'), 'success');
+			disableTarget = null;
+			await loadRoutes();
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : String(err);
+			pushToast(msg, 'danger');
+		} finally {
+			disablingRoute = false;
+		}
+	}
+
+	async function handleEnableRoute(r: Route) {
+		try {
+			await enableRoute(r.id);
+			pushToast(t('routes.enable.action'), 'success');
+			await loadRoutes();
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : String(err);
+			pushToast(msg, 'danger');
+		}
+	}
 
 
 	// Step J.3: errors map keyed by formData field path. Replaces
@@ -942,6 +1015,10 @@
 			lbPolicy: r.lbPolicy,
 			tlsEnabled: r.tlsEnabled,
 			redirectToHttps: r.redirectToHttps,
+			// v2.14.3 — load the persisted disabled flag so the
+			// checkbox reflects what's actually saved. Storage
+			// zero-value reads back as false/undefined.
+			disabled: r.disabled ?? false,
 			aliases: [...(r.aliases ?? [])],
 			authMode: r.authMode,
 			basicAuth: {
@@ -1627,6 +1704,9 @@
 				lbPolicy: lbSelectorVisible ? (formData.lbPolicy as LBPolicy) : '',
 				tlsEnabled: formData.tlsEnabled,
 				redirectToHttps: formData.redirectToHttps,
+				// v2.14.3 — always ship the Disabled checkbox state,
+				// full-replacement semantic (mirrors uploadStreamingMode).
+				disabled: formData.disabled,
 				aliases: formData.aliases.map((a) => a.trim()).filter((a) => a.length > 0),
 				authMode: formData.authMode,
 				basicAuth,
@@ -2067,6 +2147,7 @@
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colTLS')}</th>
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colWAF')}</th>
 							<th class="px-4 py-3 font-medium text-right">{language.current && t('routes.list.colState')}</th>
+							<th class="px-4 py-3 font-medium text-right"><span class="sr-only">{language.current && t('routes.disable.action')}</span></th>
 						</tr>
 					</thead>
 					<tbody>
@@ -2076,6 +2157,7 @@
 							<tr
 								class="route-row border-b border-border-subtle last:border-b-0 cursor-pointer transition-colors hover:bg-hover"
 								class:route-row-selected={selected}
+								class:opacity-50={r.disabled}
 								data-testid={selected ? 'route-row-selected' : 'route-row'}
 								onclick={() => selectOrToggleRoute(r)}
 								onkeydown={(e) => {
@@ -2089,6 +2171,9 @@
 								role="button"
 							>
 								<td class="px-4 py-3 font-mono">
+									{#if r.disabled}
+										<Badge variant="neutral">{language.current && t('routes.disabled.badge')}</Badge>
+									{/if}
 									{r.host}
 									{#if r.aliases && r.aliases.length > 0}
 										<span
@@ -2213,6 +2298,31 @@
 										<Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
 									{/if}
 								</td>
+								<td class="px-4 py-3 text-right">
+									<!-- v2.14.3 — row-level enable/disable toggle.
+									     stopPropagation so the click doesn't also
+									     fire the row's onclick (which would open
+									     the edit panel). Disable is destructive
+									     (stops traffic) so it gates behind the
+									     ConfirmDialog below; enable is a direct,
+									     always-safe call. -->
+									<Button
+										variant="ghost"
+										size="sm"
+										type="button"
+										data-testid={`route-${r.disabled ? 'enable' : 'disable'}-${r.id}`}
+										onclick={(e) => {
+											e.stopPropagation();
+											if (r.disabled) {
+												handleEnableRoute(r);
+											} else {
+												openDisableConfirm(r);
+											}
+										}}
+									>
+										{language.current && (r.disabled ? t('routes.enable.action') : t('routes.disable.action'))}
+									</Button>
+								</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -2333,6 +2443,24 @@
 						placeholder={language.current && t('routes.form.hostPlaceholder')}
 						error={errors['host'] ?? undefined}
 					/>
+					<!-- v2.14.3 — Disabled checkbox. Default unchecked
+					     (enabled) for new routes; loads the persisted
+					     value on edit (openEdit). A disabled route
+					     keeps its config but is excluded from the
+					     emitted Caddy config (serves no traffic). This
+					     is the same underlying flag as the row-level
+					     toggle action in the table — the PUT here
+					     ships it full-replacement alongside the rest
+					     of the form. -->
+					<div class="flex flex-col gap-1">
+						<Checkbox
+							label={language.current && t('routes.form.disabledLabel')}
+							bind:checked={formData.disabled}
+						/>
+						<p class="text-xs text-muted ml-6">
+							{language.current && t('routes.form.disabledHelper')}
+						</p>
+					</div>
 					<!-- Step I.3: alias hostnames repeater. Auto-fit grid so
 					     multiple aliases sit side by side and wrap to width
 					     instead of stacking and pushing the form down. -->
@@ -3775,6 +3903,46 @@
 	confirmVariant="danger"
 	onConfirm={onConfirmDisableCRS}
 />
+
+<!-- v2.14.3 — row-level Disable confirm. Uses the Modal + manual
+     footer pattern (matching the Delete dialog above) rather than
+     ConfirmDialog, because the test-driven contract needs a
+     data-testid on the confirm button (ConfirmDialog's internal
+     Button doesn't expose one). Copy branches on disableIsLastHttps,
+     computed PRE-call in openDisableConfirm() from the currently-
+     loaded route list (see the function's doc comment): true only
+     when the row being disabled is the sole active TLS route. -->
+<Modal
+	open={disableTarget !== null}
+	title={language.current &&
+		(disableIsLastHttps
+			? t('routes.disable.confirm.lastHttps.title')
+			: t('routes.disable.confirm.title'))}
+	onClose={() => (disableTarget = null)}
+>
+	{#if disableTarget}
+		<p class="text-sm">
+			{language.current &&
+				(disableIsLastHttps
+					? t('routes.disable.confirm.lastHttps.text')
+					: t('routes.disable.confirm.text'))}
+		</p>
+	{/if}
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (disableTarget = null)}>{language.current && t('routes.delete.cancel')}</Button>
+		<Button
+			variant="danger"
+			loading={disablingRoute}
+			data-testid="route-disable-confirm"
+			onclick={confirmDisableRoute}
+		>
+			{language.current &&
+				(disableIsLastHttps
+					? t('routes.disable.confirm.lastHttps.action')
+					: t('routes.disable.confirm.action'))}
+		</Button>
+	{/snippet}
+</Modal>
 
 <style>
 	/* Selected-row visual state for the Routes table (C11 Pack A

@@ -48,6 +48,13 @@ const (
 	ActionRouteUpdated = "route_updated"
 	ActionRouteDeleted = "route_deleted"
 
+	// v2.14.3 — per-route enable/disable toggle. Emitted AFTER the
+	// Caddy reload succeeds, mirroring route_updated. Distinct from
+	// route_updated so operators see "took the route down" vs a
+	// config edit in the audit trail.
+	ActionRouteDisabled = "route_disabled"
+	ActionRouteEnabled  = "route_enabled"
+
 	// Audit (1)
 	ActionAuditViewed = "audit_viewed"
 
@@ -246,6 +253,8 @@ var allActions = []string{
 	ActionRouteCreated,
 	ActionRouteUpdated,
 	ActionRouteDeleted,
+	ActionRouteDisabled,
+	ActionRouteEnabled,
 	ActionAuditViewed,
 	ActionPasswordHIBPClean,
 	ActionPasswordHIBPPending,

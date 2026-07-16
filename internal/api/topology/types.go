@@ -100,6 +100,14 @@ type Route struct {
 	// frontend treats the combination consistently.
 	HTTPRedirect bool `json:"httpRedirect"`
 
+	// Disabled (v2.14.3) mirrors storage.Route.Disabled. When true,
+	// the route is not emitted into Caddy (serves nothing); the
+	// frontend renders its node dimmed/dashed so the operator sees
+	// a deliberately-off route rather than a mysterious zero-traffic
+	// phantom (topology reads storage directly, so a disabled route
+	// still appears here — this flag is what lets the UI dim it).
+	Disabled bool `json:"disabled"`
+
 	// HasHealthCheck mirrors storage.Route.HealthCheck.Enabled. The
 	// frontend uses this to drive the per-upstream "monitored"
 	// shield indicator (#R-TOPO-health-coherence v1.1.0 compromise,
