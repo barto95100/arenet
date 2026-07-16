@@ -52,6 +52,7 @@ function makeData(overrides: Partial<FQDNNodeData> = {}): FQDNNodeData {
 		aliasCount: 0,
 		aliasTotalRps: 0,
 		collapsed: false,
+		disabled: false,
 		...overrides
 	};
 }
@@ -222,5 +223,38 @@ describe('FQDNNode chevron toggle', () => {
 			}
 			unmount();
 		}
+	});
+});
+
+// v2.14.3 route disable/enable — a disabled route still appears in the
+// topology (Caddy config generation just skips it), so the FQDN node
+// must read as "deliberately off" rather than a mysterious zero-traffic
+// phantom. See internal/api/topology/types.go Route.Disabled docstring.
+describe('FQDNNode disabled route dimming', () => {
+	it('applies the dim/disabled state when data.disabled is true', () => {
+		const { container } = render(FQDNNode, {
+			props: nodeProps(makeData({ disabled: true }))
+		});
+		const node = container.querySelector('.fqdn-node');
+		expect(node?.classList.contains('disabled')).toBe(true);
+		expect(node?.getAttribute('data-disabled')).toBe('true');
+	});
+
+	it('sets the tooltip to the disabled i18n string when disabled', () => {
+		const { container } = render(FQDNNode, {
+			props: nodeProps(makeData({ disabled: true }))
+		});
+		const node = container.querySelector('.fqdn-node');
+		expect(node?.getAttribute('title')).toBe('Disabled — not serving traffic');
+	});
+
+	it('does not apply the dim state or tooltip when disabled is false', () => {
+		const { container } = render(FQDNNode, {
+			props: nodeProps(makeData({ disabled: false }))
+		});
+		const node = container.querySelector('.fqdn-node');
+		expect(node?.classList.contains('disabled')).toBe(false);
+		expect(node?.getAttribute('data-disabled')).toBe('false');
+		expect(node?.getAttribute('title')).toBeNull();
 	});
 });
