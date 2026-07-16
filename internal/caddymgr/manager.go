@@ -538,6 +538,7 @@ func (m *CaddyManager) ReloadFromStore(ctx context.Context) error {
 // rolled back by the caller (handlers in internal/api/routes.go),
 // so the registry already reflects the pre-attempt state, and we
 // must not re-sync against a state that was rejected.
+
 // filterDisabledRoutes returns the routes that must be emitted into
 // Caddy — i.e. the ones with Disabled=false. Filtering the slice ONCE
 // here removes disabled routes from every downstream emission at once:
