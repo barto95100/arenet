@@ -392,8 +392,25 @@
 			"errorPagesTemplateLink": "Créer ou éditer les templates",
 			"errorPagesOverrideLabel": "Override par statut (HTML)",
 			"errorPagesOverridePlaceholder": "<!doctype html>...{code}...",
-			"uploadStreamingLabel": "Mode streaming d'upload"
-		}
+			"uploadStreamingLabel": "Mode streaming d'upload",
+			"disabledLabel": "Désactivée",
+			"disabledHelper": "Une route désactivée conserve sa config mais ne sert aucun trafic (les requêtes reçoivent la page 404)."
+		},
+		"disabled": { "badge": "Désactivée" },
+		"disable": {
+			"action": "Désactiver",
+			"confirm": {
+				"title": "Désactiver la route ?",
+				"text": "Cette route ne servira plus de trafic. Sa configuration est conservée : tu peux la réactiver à tout moment.",
+				"action": "Désactiver",
+				"lastHttps": {
+					"title": "Désactiver la dernière route HTTPS ?",
+					"text": "C'est la dernière route HTTPS active. La désactiver arrête le serveur HTTPS (port 443) — toute requête HTTPS échouera avec « connexion refusée ». Continuer ?",
+					"action": "Désactiver quand même"
+				}
+			}
+		},
+		"enable": { "action": "Activer" }
 	},
 	"pageTitles": {
 		"alerting": "Alertes",
@@ -1376,7 +1393,8 @@
 			"actionDrainUpstream": "Drainer un upstream…",
 			"actionReloadCaddy": "Recharger la config Caddy",
 			"actionSnapshotJSON": "Snapshot topology (JSON)"
-		}
+		},
+		"disabled": { "tooltip": "Désactivée — ne sert aucun trafic" }
 	},
 	"logs": {
 		"pageEyebrow": "Trafic · Journaux",

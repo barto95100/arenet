@@ -392,8 +392,25 @@
 			"errorPagesTemplateLink": "Create or edit templates",
 			"errorPagesOverrideLabel": "Per-status override (HTML)",
 			"errorPagesOverridePlaceholder": "<!doctype html>...{code}...",
-			"uploadStreamingLabel": "Upload streaming mode"
-		}
+			"uploadStreamingLabel": "Upload streaming mode",
+			"disabledLabel": "Disabled",
+			"disabledHelper": "A disabled route keeps its config but serves no traffic (requests get the 404 page)."
+		},
+		"disabled": { "badge": "Disabled" },
+		"disable": {
+			"action": "Disable",
+			"confirm": {
+				"title": "Disable route?",
+				"text": "This route will no longer serve traffic. Its configuration is preserved so you can re-enable it anytime.",
+				"action": "Disable",
+				"lastHttps": {
+					"title": "Disable the last HTTPS route?",
+					"text": "This is the last active HTTPS route. Disabling it stops the HTTPS server (port 443) — requests to any HTTPS URL will fail with connection refused. Continue?",
+					"action": "Disable anyway"
+				}
+			}
+		},
+		"enable": { "action": "Enable" }
 	},
 	"pageTitles": {
 		"alerting": "Alerting",
@@ -1376,7 +1393,8 @@
 			"actionDrainUpstream": "Drain an upstream…",
 			"actionReloadCaddy": "Reload Caddy config",
 			"actionSnapshotJSON": "Snapshot topology (JSON)"
-		}
+		},
+		"disabled": { "tooltip": "Disabled — not serving traffic" }
 	},
 	"logs": {
 		"pageEyebrow": "Traffic · Logs",

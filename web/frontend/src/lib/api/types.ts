@@ -317,6 +317,13 @@ export interface Route {
 	totalUpstreamCount: number;
 	createdAt: string;
 	updatedAt: string;
+	/**
+	 * v2.14.3 — route disable/enable. When true, the route is
+	 * excluded from the emitted Caddy config (serves no traffic,
+	 * config preserved). Always present on a stored route
+	 * (storage zero-value reads back as false).
+	 */
+	disabled?: boolean;
 }
 
 /**
@@ -621,6 +628,14 @@ export interface RouteRequest {
 	 * keys : 401, 403, 404, 429, 500, 502, 503, 504.
 	 */
 	errorPageOverrides?: Record<number, string>;
+	/**
+	 * v2.14.3 — route disable/enable. Not sent by the route
+	 * form (create/update); the disable/enable actions go
+	 * through dedicated endpoints (disableRoute / enableRoute).
+	 * Optional here only for symmetry with the Route response
+	 * shape and to allow round-tripping the field if ever needed.
+	 */
+	disabled?: boolean;
 }
 
 /**
