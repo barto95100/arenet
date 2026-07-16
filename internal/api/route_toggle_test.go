@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -109,5 +110,32 @@ func TestRouteDisable_LastHttpsRouteHint(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	if !resp.LastHTTPSRouteAffected {
 		t.Error("disabling the only TLS route should report lastHttpsRouteAffected=true")
+	}
+}
+
+// TestRouteDisable_ReloadFails_Rollback covers the rollback branch in
+// toggleRouteDisabled: if ReloadFromStore fails after the route was
+// flipped to Disabled=true, the handler must restore the pre-toggle
+// route (Disabled=false) and return 500. Modeled on the sibling
+// TestUpdateRoute_ReloadFails_Rollback in handler_test.go, which uses
+// the same env.caddy.SetNextErr seam.
+func TestRouteDisable_ReloadFails_Rollback(t *testing.T) {
+	env := newTestEnv(t, false)
+	id := seedToggleRoute(t, env, "rb-toggle.example.com", false)
+
+	env.caddy.SetNextErr(errors.New("simulated"))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes/"+id+"/disable", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d; want 500; body=%s", rec.Code, rec.Body)
+	}
+	got, err := env.store.GetRoute(context.Background(), id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Disabled {
+		t.Error("rollback failed: route still Disabled after reload failure")
 	}
 }
