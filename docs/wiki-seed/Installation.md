@@ -156,27 +156,6 @@ If you see `{"status":"ok"}`, Arenet is running and the embedded Caddy + BoltDB 
 
 ---
 
-## Upgrading
-
-**Docker** :
-```bash
-cd ~/arenet
-docker compose pull
-docker compose up -d
-```
-
-The container restart is < 5s. Caddy reloads its config from BoltDB on boot ; no route reconfiguration needed.
-
-**systemd** :
-```bash
-sudo arenet --self-update   # if shipped (post-v2.10) ; else re-run install.sh
-sudo systemctl restart arenet
-```
-
-Before upgrading across a MAJOR version boundary, **always [backup](Backup-Restore) first**. The backup format includes a `schema_version` field ; a major bump in Arenet may require an explicit migration.
-
----
-
 ## See also
 
 - [Routes](Routes) — wire your first proxied host

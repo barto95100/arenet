@@ -28,8 +28,6 @@ La plupart des reverse proxies homelab (Nginx Proxy Manager, Zoraxy) te donnent 
 
 Arenet est le **moteur + UI + stack sécurité dans un seul binaire**. Configure une route, choisis un mode TLS, active un profil WAF, attache un SSO OIDC, câble une alerte Discord sur les échecs de renouvellement de certificat — tout depuis la même UI d'admin, tout servi par un seul binaire Go, tout backé par un seul BoltDB embarqué.
 
-Conçu pour l'opérateur qui fait tourner 5-50 routes sur un seul host homelab et qui veut une posture production sans la complexité production.
-
 ## 🚀 Démarrage rapide
 
 Deux chemins d'installation, tous les deux sous 5 minutes.
@@ -120,13 +118,13 @@ Guide complet : [docs/install/systemd-native.md](docs/install/systemd-native.md)
 | UI d'admin web                | ✅     | ✅     | ✅      | Limitée | ❌        |
 | WAF intégré (OWASP CRS)       | ✅     | ❌     | ❌      | Plugin  | Plugin    |
 | Bouncer CrowdSec              | ✅     | ❌     | ❌      | Plugin  | Plugin    |
-| Blocage par pays              | ✅     | ❌     | ❌      | Plugin  | Plugin    |
-| Graphe topologie live         | ✅     | ❌     | ❌      | ❌      | ❌        |
-| SSO OIDC + RBAC               | ✅     | ❌     | ❌      | Limité  | ❌        |
+| Blocage par pays              | ✅     | ✅     | ❌      | Plugin  | Plugin    |
+| Graphe topologie live         | ✅     | ✅     | ❌      | ❌      | ❌        |
+| SSO OIDC + RBAC               | ✅     | Limité | ❌      | Limité  | ❌        |
 | Backup/restore via UI         | ✅     | Limité | ✅      | ❌      | ❌        |
 | Règles d'alerting par route   | ✅     | ❌     | ❌      | ❌      | ❌        |
 | Auto-HTTPS + HTTP/3           | ✅     | ✅     | ✅      | ✅      | ✅        |
-| Observabilité cycle cert      | ✅     | ❌     | ❌      | Limitée | Logs only |
+| Observabilité cycle cert      | ✅     | Limité | ❌      | Limitée | Logs only |
 | AGPL-3.0 (truly open-source)  | ✅     | ✅     | MIT     | MIT     | Apache    |
 
 Le positionnement d'Arenet : **sécurité + observabilité production-grade qui ship dans la boîte**, pas comme N plugins à câbler ensemble.
