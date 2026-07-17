@@ -107,6 +107,11 @@ const (
 	// bucketMaxMindConfig so the scheduler toggles independently of
 	// the MaxMind credentials. See geoip_update_config.go.
 	bucketGeoIPUpdate = "geoip_update"
+	// Task 2 — global single-slot maintenance-page HTML template
+	// (single row, keyed "config"). Empty HTML = serve the branded
+	// default, same convention as bucketGeoIPUpdate. See
+	// maintenance_page_config.go.
+	bucketMaintenancePage = "maintenance_page"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -176,6 +181,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketErrorTemplates),       // Step R
 			[]byte(bucketUpdateCheck),          // v2.12.3
 			[]byte(bucketGeoIPUpdate),          // Brick 3 Task 3
+			[]byte(bucketMaintenancePage),      // Task 2
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)
