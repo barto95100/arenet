@@ -410,7 +410,12 @@
 				}
 			}
 		},
-		"enable": { "action": "Enable" }
+		"enable": { "action": "Enable" },
+		"state": {
+			"active": "Active",
+			"maintenance": "Maintenance",
+			"disabled": "Disabled"
+		}
 	},
 	"pageTitles": {
 		"alerting": "Alerting",
