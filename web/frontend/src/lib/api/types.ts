@@ -324,6 +324,40 @@ export interface Route {
 	 * (storage zero-value reads back as false).
 	 */
 	disabled?: boolean;
+	/**
+	 * Task 8/9 — route maintenance mode. When present (non-null),
+	 * the route is in maintenance: Caddy keeps the route emitted
+	 * (the host/TLS server stays alive — unlike `disabled`, a
+	 * maintenance route does NOT drop the last-active-HTTPS :443
+	 * server) but responses are replaced with a maintenance page,
+	 * except for the configured bypass IPs/CIDRs. Absent/undefined
+	 * when the route is not in maintenance. Mutually exclusive
+	 * with `disabled` in the UI's 3-state model (RouteStateControl):
+	 * disabled takes precedence when both happen to be set.
+	 */
+	maintenanceConfig?: MaintenanceConfig;
+}
+
+/**
+ * Task 8/9 — per-route maintenance-mode configuration. Mirrors the
+ * backend's wire shape for `Route.maintenanceConfig` /
+ * `RouteRequest.maintenanceConfig`.
+ */
+export interface MaintenanceConfig {
+	/**
+	 * Value sent in the `Retry-After` header of the maintenance
+	 * response, in seconds. Operator-facing hint for how long the
+	 * client should wait before retrying.
+	 */
+	retryAfterSeconds: number;
+	/**
+	 * IPs/CIDRs allowed to bypass the maintenance page and reach
+	 * the real upstream — lets the operator keep testing the
+	 * backend while the public-facing route serves the
+	 * maintenance page to everyone else. Always a definite array
+	 * (possibly empty) on the wire.
+	 */
+	bypassIps: string[];
 }
 
 /**
@@ -636,6 +670,15 @@ export interface RouteRequest {
 	 * also exists for row-level state changes without a full-body PUT.
 	 */
 	disabled?: boolean;
+	/**
+	 * Task 8/9 — route maintenance-mode config. The form ships
+	 * this full-replacement on every POST/PUT alongside the rest
+	 * of the maintenance-section fields; omitted means "not in
+	 * maintenance" (mirrors the row-level dedicated endpoints
+	 * POST /routes/{id}/maintenance and .../maintenance/off, which
+	 * exist for changing state without a full-body PUT).
+	 */
+	maintenanceConfig?: MaintenanceConfig;
 }
 
 /**

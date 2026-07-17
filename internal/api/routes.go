@@ -164,6 +164,11 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			r.Get("/error-templates", h.listErrorTemplates)
 			r.Get("/error-templates/{id}", h.getErrorTemplate)
 			r.Get("/error-templates/{id}/preview", h.previewErrorTemplate)
+			// Task 7 — global maintenance page read. Viewer-
+			// accessible so the /settings/maintenance editor's
+			// initial load doesn't require admin scope; the
+			// PUT (write) sits in the admin-only sub-group below.
+			r.Get("/settings/maintenance-page", h.getMaintenancePage)
 			r.Get("/audit", h.listAudit)
 			// Step L L.2 — per-route metrics history.
 			// Read-only; viewer-accessible per AC #17. No
@@ -337,6 +342,8 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Delete("/routes/{id}", h.deleteRoute)
 				r.Post("/routes/{id}/disable", h.disableRoute)
 				r.Post("/routes/{id}/enable", h.enableRoute)
+				r.Post("/routes/{id}/maintenance", h.enterMaintenance)
+				r.Post("/routes/{id}/maintenance/off", h.exitMaintenance)
 				r.Delete("/certificates/{domain}", h.deleteCertificate)
 				// Step R — custom error pages CRUD (admin-only).
 				// GET endpoints are mounted in the viewer-accessible
@@ -345,6 +352,10 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Post("/error-templates", h.createErrorTemplate)
 				r.Put("/error-templates/{id}", h.updateErrorTemplate)
 				r.Delete("/error-templates/{id}", h.deleteErrorTemplate)
+				// Task 7 — global maintenance page write (admin-
+				// only). GET is mounted in the viewer-accessible
+				// section above, same split as error-templates.
+				r.Put("/settings/maintenance-page", h.putMaintenancePage)
 				// Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-
 				// triggered upstream probe (UI button). Per-URL
 				// invocation; frontend parallelises pool > 1 via
@@ -1402,14 +1413,15 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	newRoute := storage.Route{
-		Host:            req.Host,
-		Upstreams:       storeUpstreams,
-		LBPolicy:        req.LBPolicy,
-		TLSEnabled:      req.TLSEnabled,
-		RedirectToHTTPS: req.RedirectToHTTPS,
-		Disabled:        req.Disabled,
-		Aliases:         req.Aliases,
-		AuthMode:        req.AuthMode,
+		Host:              req.Host,
+		Upstreams:         storeUpstreams,
+		LBPolicy:          req.LBPolicy,
+		TLSEnabled:        req.TLSEnabled,
+		RedirectToHTTPS:   req.RedirectToHTTPS,
+		Disabled:          req.Disabled,
+		MaintenanceConfig: req.MaintenanceConfig,
+		Aliases:           req.Aliases,
+		AuthMode:          req.AuthMode,
 		BasicAuth: storage.BasicAuthRouteConfig{
 			Username:     req.BasicAuth.Username,
 			PasswordHash: basicAuthHash,
@@ -1880,15 +1892,16 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		rateLimit = next
 	}
 	newRoute := storage.Route{
-		ID:              id,
-		Host:            req.Host,
-		Upstreams:       storeUpstreams,
-		LBPolicy:        req.LBPolicy,
-		TLSEnabled:      req.TLSEnabled,
-		RedirectToHTTPS: req.RedirectToHTTPS,
-		Disabled:        req.Disabled,
-		Aliases:         req.Aliases,
-		AuthMode:        req.AuthMode,
+		ID:                id,
+		Host:              req.Host,
+		Upstreams:         storeUpstreams,
+		LBPolicy:          req.LBPolicy,
+		TLSEnabled:        req.TLSEnabled,
+		RedirectToHTTPS:   req.RedirectToHTTPS,
+		Disabled:          req.Disabled,
+		MaintenanceConfig: req.MaintenanceConfig,
+		Aliases:           req.Aliases,
+		AuthMode:          req.AuthMode,
 		BasicAuth: storage.BasicAuthRouteConfig{
 			Username:     req.BasicAuth.Username,
 			PasswordHash: basicAuthHash,
@@ -2011,6 +2024,17 @@ func (h *Handler) toggleRouteDisabled(w http.ResponseWriter, r *http.Request, di
 
 	next := previous
 	next.Disabled = disabled
+	// spec-8: "Returning to Active/Disabled sets MaintenanceConfig =
+	// nil." Only clear on the disable transition — a disabled route
+	// must never carry a stale MaintenanceConfig that would resurrect
+	// it into maintenance (instead of active) on a later /enable,
+	// since /enable only clears Disabled and routeState() derives
+	// 'maintenance' from any non-nil MaintenanceConfig when Disabled
+	// is false. Enable itself leaves MaintenanceConfig untouched
+	// (there is none left to clear, by this same invariant).
+	if disabled {
+		next.MaintenanceConfig = nil
+	}
 	updated, err := h.store.UpdateRoute(r.Context(), next)
 	if err != nil {
 		h.logger.Error("toggle route disabled", "err", err, "id", id)
@@ -2054,6 +2078,98 @@ func (h *Handler) disableRoute(w http.ResponseWriter, r *http.Request) {
 // an already-enabled route returns 200 without error.
 func (h *Handler) enableRoute(w http.ResponseWriter, r *http.Request) {
 	h.toggleRouteDisabled(w, r, false)
+}
+
+// defaultMaintenanceRetryAfterSeconds is the RetryAfterSeconds applied
+// when a route enters maintenance with no prior MaintenanceConfig.
+// 300s (5 min) is a conservative default for the 503 Retry-After
+// header — long enough to avoid a thundering herd of retries, short
+// enough that clients don't need a manual refresh.
+const defaultMaintenanceRetryAfterSeconds = 300
+
+// toggleRouteMaintenance is the shared body of the maintenance
+// enter/exit endpoints. Mirrors toggleRouteDisabled's contract:
+// GetRoute → mutate MaintenanceConfig → UpdateRoute → ReloadFromStore
+// → roll back on reload failure → appendAudit. On enter (on=true), an
+// existing MaintenanceConfig is preserved as-is (idempotent — calling
+// /maintenance again does not reset a previously customised
+// RetryAfterSeconds/BypassIPs); absent a prior config, defaults are
+// applied (300s retry-after, no bypass IPs). On exit (on=false), the
+// config is cleared to nil (clear-on-off) — re-entering maintenance
+// later always starts from defaults. Unlike toggleRouteDisabled, this
+// does NOT compute a last-HTTPS hint: a route in maintenance stays
+// emitted in the Caddy config (it serves a 503 rather than being
+// pulled), so its :443 listener is unaffected.
+func (h *Handler) toggleRouteMaintenance(w http.ResponseWriter, r *http.Request, on bool) {
+	id := chi.URLParam(r, "id")
+
+	previous, err := h.store.GetRoute(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "route not found")
+			return
+		}
+		h.logger.Error("get route for maintenance toggle", "err", err, "id", id)
+		writeError(w, http.StatusInternalServerError, "failed to load route")
+		return
+	}
+
+	next := previous
+	if on {
+		if previous.MaintenanceConfig != nil {
+			next.MaintenanceConfig = previous.MaintenanceConfig
+		} else {
+			next.MaintenanceConfig = &storage.MaintenanceConfig{RetryAfterSeconds: defaultMaintenanceRetryAfterSeconds}
+		}
+	} else {
+		next.MaintenanceConfig = nil
+	}
+
+	updated, err := h.store.UpdateRoute(r.Context(), next)
+	if err != nil {
+		h.logger.Error("toggle route maintenance", "err", err, "id", id)
+		writeError(w, http.StatusInternalServerError, "failed to update route")
+		return
+	}
+
+	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
+		h.logger.Error("caddy reload after maintenance toggle — rolling back", "err", err, "id", id)
+		if _, rbErr := h.store.UpdateRoute(r.Context(), previous); rbErr != nil {
+			h.logger.Error("rollback failed, DB and Caddy may diverge", "err", rbErr, "id", id)
+		}
+		writeError(w, http.StatusInternalServerError, "caddy reload failed: "+err.Error())
+		return
+	}
+
+	action := audit.ActionRouteMaintenanceOff
+	if on {
+		action = audit.ActionRouteMaintenanceOn
+	}
+	h.appendAudit(r, audit.Event{
+		Action:     action,
+		TargetType: "route",
+		TargetID:   id,
+		BeforeJSON: mustMarshalForAudit(routeForAudit(previous)),
+		AfterJSON:  mustMarshalForAudit(routeForAudit(updated)),
+	})
+
+	writeJSON(w, http.StatusOK, toResponse(updated))
+}
+
+// enterMaintenance handles POST /routes/{id}/maintenance. Idempotent:
+// re-entering maintenance on a route already under maintenance
+// preserves the existing RetryAfterSeconds/BypassIPs rather than
+// resetting to defaults.
+func (h *Handler) enterMaintenance(w http.ResponseWriter, r *http.Request) {
+	h.toggleRouteMaintenance(w, r, true)
+}
+
+// exitMaintenance handles POST /routes/{id}/maintenance/off.
+// Idempotent: exiting maintenance on a route not under maintenance
+// returns 200 without error. Clear-on-off: the MaintenanceConfig is
+// set to nil, so a later /maintenance call starts from defaults.
+func (h *Handler) exitMaintenance(w http.ResponseWriter, r *http.Request) {
+	h.toggleRouteMaintenance(w, r, false)
 }
 
 func (h *Handler) deleteRoute(w http.ResponseWriter, r *http.Request) {

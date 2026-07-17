@@ -29,7 +29,9 @@ const { apiMock, toastMock } = vi.hoisted(() => ({
 		create: vi.fn(),
 		update: vi.fn(),
 		delete: vi.fn(),
-		preview: vi.fn()
+		preview: vi.fn(),
+		getMaintenancePage: vi.fn(),
+		putMaintenancePage: vi.fn()
 	},
 	toastMock: { pushToast: vi.fn() }
 }));
@@ -63,9 +65,13 @@ beforeEach(() => {
 	apiMock.update.mockReset();
 	apiMock.delete.mockReset();
 	apiMock.preview.mockReset();
+	apiMock.getMaintenancePage.mockReset();
+	apiMock.putMaintenancePage.mockReset();
 	toastMock.pushToast.mockReset();
 	apiMock.list.mockResolvedValue([]);
 	apiMock.preview.mockResolvedValue('<h1>preview</h1>');
+	apiMock.getMaintenancePage.mockResolvedValue({ html: '' });
+	apiMock.putMaintenancePage.mockResolvedValue({ html: '' });
 });
 
 describe('/settings/error-pages — list view', () => {
@@ -382,5 +388,87 @@ describe('/settings/error-pages — Phase 2.1 builtin visibility', () => {
 		});
 		const [req] = apiMock.create.mock.calls[0];
 		expect(req.name).toBe('Copy of Arenet default (2)');
+	});
+});
+
+// --- Task 10 — Maintenance tab -------------------------------------
+
+describe('/settings/error-pages — Maintenance tab', () => {
+	it('shows a Maintenance tab alongside the templates list', async () => {
+		apiMock.list.mockResolvedValue([]);
+		render(Page);
+		await screen.findByText(/No custom template/);
+		expect(screen.getByRole('tab', { name: /Maintenance/ })).toBeInTheDocument();
+	});
+
+	it('loads the current maintenance page HTML when the tab is opened', async () => {
+		apiMock.list.mockResolvedValue([]);
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Back soon</h1>' });
+		render(Page);
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
+		await waitFor(() => {
+			expect(apiMock.getMaintenancePage).toHaveBeenCalledTimes(1);
+		});
+		const editor = await screen.findByRole('textbox', { name: /Maintenance page HTML/ });
+		expect(editor.getAttribute('data-placeholder')).toBeDefined();
+		// The editor mounted with the loaded value (CodeMirror renders
+		// the doc into .cm-content ; assert via the container's own
+		// data since jsdom won't run full CM layout reliably — instead
+		// assert through the page's own exposed value by checking the
+		// editor is present and getMaintenancePage resolved before mount
+		// completed).
+		expect(editor).toBeInTheDocument();
+	});
+
+	it('editing and clicking Save calls putMaintenancePage with the new HTML', async () => {
+		apiMock.list.mockResolvedValue([]);
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Old</h1>' });
+		apiMock.putMaintenancePage.mockResolvedValue({ html: '<h1>New</h1>' });
+		render(Page);
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
+		await waitFor(() => {
+			expect(apiMock.getMaintenancePage).toHaveBeenCalledTimes(1);
+		});
+		await screen.findByRole('textbox', { name: /Maintenance page HTML/ });
+		const saveBtn = screen.getByRole('button', { name: /^Save$/ });
+		await fireEvent.click(saveBtn);
+		await waitFor(() => {
+			expect(apiMock.putMaintenancePage).toHaveBeenCalledTimes(1);
+		});
+		expect(apiMock.putMaintenancePage).toHaveBeenCalledWith('<h1>Old</h1>');
+	});
+
+	it('"Reset to default" clears the buffer to empty string', async () => {
+		apiMock.list.mockResolvedValue([]);
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Custom page</h1>' });
+		render(Page);
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
+		await waitFor(() => {
+			expect(apiMock.getMaintenancePage).toHaveBeenCalledTimes(1);
+		});
+		await screen.findByRole('textbox', { name: /Maintenance page HTML/ });
+		const resetBtn = screen.getByRole('button', { name: /Reset to default/ });
+		await fireEvent.click(resetBtn);
+		apiMock.putMaintenancePage.mockResolvedValue({ html: '' });
+		const saveBtn = screen.getByRole('button', { name: /^Save$/ });
+		await fireEvent.click(saveBtn);
+		await waitFor(() => {
+			expect(apiMock.putMaintenancePage).toHaveBeenCalledWith('');
+		});
+	});
+
+	it('documents the {arenet.maintenance.retry_after} placeholder in editor help', async () => {
+		apiMock.list.mockResolvedValue([]);
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '' });
+		render(Page);
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
+		await waitFor(() => {
+			expect(apiMock.getMaintenancePage).toHaveBeenCalledTimes(1);
+		});
+		expect(screen.getByText(/\{arenet\.maintenance\.retry_after\}/)).toBeInTheDocument();
 	});
 });

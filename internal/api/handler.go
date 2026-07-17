@@ -1120,9 +1120,9 @@ type routeRequest struct {
 	// validation so the storage row carries the explicit value).
 	// Empty on PUT means "preserve the previously stored value",
 	// same UX as WAFMode below.
-	LBPolicy        string   `json:"lbPolicy"`
-	TLSEnabled      bool     `json:"tlsEnabled"`
-	RedirectToHTTPS bool     `json:"redirectToHttps"`
+	LBPolicy        string `json:"lbPolicy"`
+	TLSEnabled      bool   `json:"tlsEnabled"`
+	RedirectToHTTPS bool   `json:"redirectToHttps"`
 	// Disabled takes a route out of service without deleting its
 	// config (v2.15.0 enable/disable feature). The dedicated
 	// /disable + /enable endpoints are the primary toggle, but the
@@ -1131,8 +1131,18 @@ type routeRequest struct {
 	// rejects every POST/PUT that carries "disabled" with a 400. On
 	// create/update the value is applied directly: absent or false =
 	// enabled (the legacy zero-value), true = created/left disabled.
-	Disabled bool     `json:"disabled,omitempty"`
-	Aliases  []string `json:"aliases"`
+	Disabled bool `json:"disabled,omitempty"`
+	// MaintenanceConfig (v2.16.0 maintenance-mode feature) mirrors
+	// Disabled's wire-field pattern: the dedicated /maintenance +
+	// /maintenance/off endpoints are the primary toggle, but the
+	// route form also sends this on create/update, so the wire
+	// struct must accept it — without this field
+	// dec.DisallowUnknownFields() rejects every POST/PUT that
+	// carries "maintenanceConfig" with a 400. nil = not in
+	// maintenance (the default); non-nil = maintenance active with
+	// the given retry-after + bypass IPs.
+	MaintenanceConfig *storage.MaintenanceConfig `json:"maintenanceConfig,omitempty"`
+	Aliases           []string                   `json:"aliases"`
 	// Step K.1 — per-route auth mode. One of "" / "none" / "basic"
 	// / "forward_auth". On POST, empty is normalised to "none". On
 	// PUT, empty preserves the previously stored value (same UX as
@@ -1589,6 +1599,12 @@ type routeResponse struct {
 	TotalUpstreamCount   int    `json:"totalUpstreamCount"`
 	CreatedAt            string `json:"createdAt"`
 	UpdatedAt            string `json:"updatedAt"`
+	// MaintenanceConfig (v2.16.0) — echoed on every GET so the
+	// frontend can render the maintenance banner + preserve the
+	// config across an unrelated route edit. nil = not in
+	// maintenance (the common case); omitempty keeps pre-existing
+	// snapshots byte-identical.
+	MaintenanceConfig *storage.MaintenanceConfig `json:"maintenanceConfig,omitempty"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with
@@ -1677,6 +1693,7 @@ func toResponse(r storage.Route) routeResponse {
 		ErrorPageOverrides:  r.ErrorPageOverrides,
 		CreatedAt:           r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:           r.UpdatedAt.UTC().Format(timestampFormat),
+		MaintenanceConfig:   r.MaintenanceConfig,
 	}
 }
 

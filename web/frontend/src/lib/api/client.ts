@@ -200,6 +200,13 @@ export const disableRoute = (id: string): Promise<Route & { lastHttpsRouteAffect
 export const enableRoute = (id: string): Promise<Route & { lastHttpsRouteAffected?: boolean }> =>
 	request('POST', `/routes/${id}/enable`);
 
+// Task 8 — route maintenance mode. Mirrors disableRoute/enableRoute's
+// fetch/error style exactly.
+export const enterMaintenance = (id: string): Promise<Route> =>
+	request('POST', `/routes/${id}/maintenance`);
+export const exitMaintenance = (id: string): Promise<Route> =>
+	request('POST', `/routes/${id}/maintenance/off`);
+
 // Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-triggered
 // upstream probe. Backend is per-URL; the route-form UI
 // parallelises pool > 1 via Promise.all so the operator

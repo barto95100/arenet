@@ -43,6 +43,18 @@
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 
+	// --- Top-level section tabs ----------------------------
+
+	// Task 10 — the page now has two top-level sections :
+	// "Templates" (the pre-existing list/edit CRUD, unchanged
+	// below) and "Maintenance" (a single global HTML page
+	// served on any route toggled into maintenance mode).
+	// Kept as a sibling state machine rather than folding
+	// Maintenance into the `view` union above so the existing
+	// list/edit toggle (and its many call sites) stay untouched.
+	type Section = 'templates' | 'maintenance';
+	let section = $state<Section>('templates');
+
 	// --- View state ---------------------------------------
 
 	type View = 'list' | 'edit';
@@ -402,6 +414,74 @@
 		editorRef?.insertAtCursor(token);
 	}
 
+	// --- Maintenance section (Task 10) ---------------------
+	//
+	// Single global HTML page served on any route toggled into
+	// maintenance mode (backend Task 7 : GET/PUT
+	// /api/v1/settings/maintenance-page). Reuses HtmlEditor.svelte
+	// (same component as the templates editor above) but is NOT
+	// per-status-code — there's exactly one buffer.
+	//
+	// Loaded lazily on first visit to the Maintenance tab rather
+	// than on page mount, so opening /settings/error-pages doesn't
+	// pay for a request the operator may never need.
+
+	let maintenanceHtml = $state('');
+	let maintenanceLoading = $state(false);
+	let maintenanceLoadError = $state<string | null>(null);
+	let maintenanceSaving = $state(false);
+	let maintenanceLoadedOnce = false;
+	let maintenanceEditorRef = $state<HtmlEditor | undefined>();
+
+	async function loadMaintenancePage(): Promise<void> {
+		maintenanceLoading = true;
+		maintenanceLoadError = null;
+		try {
+			const res = await errorTemplatesApi.getMaintenancePage();
+			maintenanceHtml = res.html;
+			maintenanceLoadedOnce = true;
+		} catch (err) {
+			maintenanceLoadError =
+				err instanceof ApiError
+					? err.message
+					: err instanceof Error
+						? err.message
+						: t('errorPages.maintenance.errFailedLoad');
+		} finally {
+			maintenanceLoading = false;
+		}
+	}
+
+	function selectSection(next: Section): void {
+		section = next;
+		if (next === 'maintenance' && !maintenanceLoadedOnce) {
+			void loadMaintenancePage();
+		}
+	}
+
+	async function saveMaintenancePage(): Promise<void> {
+		maintenanceSaving = true;
+		try {
+			const res = await errorTemplatesApi.putMaintenancePage(maintenanceHtml);
+			maintenanceHtml = res.html;
+			pushToast(t('errorPages.maintenance.toastSaved'), 'success');
+		} catch (err) {
+			const msg =
+				err instanceof ApiError ? err.message : t('errorPages.maintenance.errFailedSave');
+			pushToast(msg, 'danger');
+		} finally {
+			maintenanceSaving = false;
+		}
+	}
+
+	// "Reset to default" only clears the local buffer — the operator
+	// must still click Save to persist an empty string server-side
+	// (mirrors the rest of the page's explicit-Save contract; nothing
+	// is written until Save is clicked).
+	function resetMaintenanceToDefault(): void {
+		maintenanceHtml = '';
+	}
+
 	// --- Helpers -----------------------------------------
 
 	function codeHasContent(code: number): boolean {
@@ -425,17 +505,37 @@
 
 <PageHeader
 	eyebrow={language.current && t('errorPages.eyebrow')}
-	title={language.current && (view === 'list'
-		? t('errorPages.titleList')
-		: editingBuiltin
-			? t('errorPages.titleBuiltinPreview')
-			: editingId
-				? t('errorPages.titleEdit')
-				: t('errorPages.titleNew'))}
-	subtitle={language.current && t('errorPages.subtitle')}
+	title={language.current && (section === 'maintenance'
+		? t('errorPages.tabMaintenance')
+		: view === 'list'
+			? t('errorPages.titleList')
+			: editingBuiltin
+				? t('errorPages.titleBuiltinPreview')
+				: editingId
+					? t('errorPages.titleEdit')
+					: t('errorPages.titleNew'))}
+	subtitle={language.current && (section === 'maintenance'
+		? t('errorPages.maintenance.subtitle')
+		: t('errorPages.subtitle'))}
 >
 	{#snippet actions()}
-		{#if view === 'list'}
+		{#if section === 'maintenance'}
+			<Button
+				variant="secondary"
+				onclick={resetMaintenanceToDefault}
+				disabled={maintenanceSaving || maintenanceLoading}
+			>
+				{language.current && t('errorPages.maintenance.btnResetToDefault')}
+			</Button>
+			<Button
+				variant="primary"
+				onclick={() => void saveMaintenancePage()}
+				disabled={maintenanceSaving || maintenanceLoading}
+				loading={maintenanceSaving}
+			>
+				{language.current && (maintenanceSaving ? t('errorPages.btnSaving') : t('errorPages.btnSave'))}
+			</Button>
+		{:else if view === 'list'}
 			<Button variant="primary" onclick={startCreate}>{language.current && t('errorPages.btnNew')}</Button>
 		{:else if editingBuiltin}
 			<!-- Read-only mode : no Save. Operator returns to
@@ -479,7 +579,85 @@
 	{/snippet}
 </PageHeader>
 
-{#if view === 'list'}
+<!-- Task 10 — top-level section tabs (Templates / Maintenance).
+     Only shown alongside the list view ; hidden while editing a
+     template so the existing editor's own tabs (status codes)
+     aren't visually competing with a second tab row. -->
+{#if section === 'templates' && view === 'edit'}
+	<!-- editor in progress : no top tabs, matches pre-Task-10 layout -->
+{:else}
+	<div class="card top-tabs-card">
+		<div class="top-tabs" role="tablist" aria-label={language.current && t('errorPages.tabsAriaLabelTop')}>
+			<button
+				role="tab"
+				aria-selected={section === 'templates'}
+				class="top-tab"
+				class:active={section === 'templates'}
+				onclick={() => selectSection('templates')}
+			>
+				{language.current && t('errorPages.tabTemplates')}
+			</button>
+			<button
+				role="tab"
+				aria-selected={section === 'maintenance'}
+				class="top-tab"
+				class:active={section === 'maintenance'}
+				onclick={() => selectSection('maintenance')}
+			>
+				{language.current && t('errorPages.tabMaintenance')}
+			</button>
+		</div>
+	</div>
+{/if}
+
+{#if section === 'maintenance'}
+	<!-- Task 10 — global maintenance page editor. One buffer
+	     (no per-status-code tabs, unlike the templates editor
+	     below), same HtmlEditor.svelte component + an iframe
+	     preview for visual parity with the templates editor. -->
+	<div class="editor-grid">
+		{#if maintenanceLoading}
+			<div class="card"><div class="loading-wrap"><Spinner /></div></div>
+		{:else if maintenanceLoadError}
+			<div class="card empty-state">
+				<p class="error">{maintenanceLoadError}</p>
+				<Button variant="secondary" onclick={() => void loadMaintenancePage()}>
+					{language.current && t('errorPages.btnRetry')}
+				</Button>
+			</div>
+		{:else}
+			<div class="card editor-card">
+				<div class="editor-pane">
+					<div class="pane-label">{language.current && t('errorPages.maintenance.editorPaneLabel')}</div>
+					<HtmlEditor
+						bind:this={maintenanceEditorRef}
+						bind:value={maintenanceHtml}
+						label={language.current && t('errorPages.maintenance.editorAriaLabel')}
+						placeholder={t('errorPages.maintenance.editorPlaceholder')}
+						minHeight={360}
+					/>
+				</div>
+				<div class="preview-pane">
+					<div class="pane-label">{language.current && t('errorPages.maintenance.previewPaneLabel')}</div>
+					<iframe
+						title={language.current && t('errorPages.maintenance.previewPaneLabel')}
+						sandbox=""
+						srcdoc={maintenanceHtml}
+						class="preview-frame"
+					></iframe>
+				</div>
+			</div>
+			<div class="card vars-card">
+				<p class="vars-help">
+					{language.current && t('errorPages.maintenance.helpRetryAfter')}
+				</p>
+				<p class="vars-help">
+					{language.current && t('errorPages.maintenance.helpEmpty')}
+				</p>
+			</div>
+		{/if}
+	</div>
+{:else if view === 'list'}
 	<div class="card">
 		{#if loading}
 			<div class="loading-wrap"><Spinner /></div>
@@ -901,6 +1079,33 @@
 		text-transform: none;
 		letter-spacing: 0;
 		font-family: inherit;
+	}
+
+	/* Task 10 — top-level section tabs (Templates / Maintenance) */
+	.top-tabs-card { padding: 8px; margin-bottom: 12px; }
+	.top-tabs {
+		display: inline-flex;
+		gap: 2px;
+		padding: 2px;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+	}
+	.top-tab {
+		padding: 6px 16px;
+		border-radius: 999px;
+		background: transparent;
+		border: none;
+		color: var(--fg-dim);
+		cursor: pointer;
+		font-size: 13px;
+		font-weight: 500;
+	}
+	.top-tab:hover { color: var(--fg); }
+	.top-tab.active {
+		background: var(--surface-hi);
+		color: var(--fg);
+		box-shadow: inset 0 0 0 1px var(--border-hi);
 	}
 
 	/* Code tabs */

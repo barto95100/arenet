@@ -56,7 +56,10 @@ const { toastMock, apiMock, settingsMock, authMock } = vi.hoisted(() => ({
 		testUpstream: vi.fn(),
 		// v2.14.3 — route disable/enable dedicated endpoints.
 		disableRoute: vi.fn(),
-		enableRoute: vi.fn()
+		enableRoute: vi.fn(),
+		// Task 8/9 — route maintenance mode dedicated endpoints.
+		enterMaintenance: vi.fn(),
+		exitMaintenance: vi.fn()
 	},
 	settingsMock: {
 		listDNSProviders: vi.fn()
@@ -96,7 +99,9 @@ vi.mock('$lib/api/client', () => ({
 	deleteRoute: (...args: unknown[]) => apiMock.deleteRoute(...args),
 	testUpstream: (...args: unknown[]) => apiMock.testUpstream(...args),
 	disableRoute: (...args: unknown[]) => apiMock.disableRoute(...args),
-	enableRoute: (...args: unknown[]) => apiMock.enableRoute(...args)
+	enableRoute: (...args: unknown[]) => apiMock.enableRoute(...args),
+	enterMaintenance: (...args: unknown[]) => apiMock.enterMaintenance(...args),
+	exitMaintenance: (...args: unknown[]) => apiMock.exitMaintenance(...args)
 }));
 
 // $lib/api/settings: listDNSProviders is called in openCreate /
@@ -201,6 +206,8 @@ beforeEach(() => {
 	apiMock.testUpstream.mockReset();
 	apiMock.disableRoute.mockReset();
 	apiMock.enableRoute.mockReset();
+	apiMock.enterMaintenance.mockReset();
+	apiMock.exitMaintenance.mockReset();
 	settingsMock.listDNSProviders.mockReset();
 	// Day 13 — auth store defaults: every test starts in
 	// authenticated state. Tests exercising the lock-screen-
@@ -2873,14 +2880,37 @@ describe('Routes page — Step Q rate-limit toggle + payload', () => {
 	});
 });
 
-// --- v2.14.3 — route disable/enable ---------------------------------
+// --- v2.14.3 / Task 9 — route disable/enable/maintenance state control ---
 //
 // Task 7 (frontend UI). API client (disableRoute/enableRoute), the
 // Route.disabled wire field, and the i18n keys were wired in Tasks
-// 6/T6. This suite pins: the Disabled badge on a disabled row, the
-// dim treatment, the enable/disable toggle action, the confirm
-// dialog (normal + special last-HTTPS-route copy), and the
-// RouteForm "Disabled" checkbox round-trip.
+// 6/T6. Task 9 replaces the row-level Activer/Désactiver ghost
+// button with the 3-state RouteStateControl (Task 8) and wires it
+// to enterMaintenance/exitMaintenance in addition to
+// disableRoute/enableRoute. This suite pins: the Disabled badge on
+// a disabled row, the dim treatment, the 3-state control reflecting
+// derived state, the onchange routing to the right endpoint, the
+// confirm dialog (normal + special last-HTTPS-route copy) gated to
+// the DISABLED transition only, and the RouteForm "Disabled"
+// checkbox round-trip.
+
+// Returns the RouteStateControl's radiogroup scoped to the row for
+// the given route id — the row is located via the host text, and
+// the radiogroup is the one descendant with role="radiogroup"
+// inside that <tr>.
+function stateControlFor(host: string): HTMLElement {
+	const hostCell = screen.getByText(host);
+	const row = hostCell.closest('tr')!;
+	const group = row.querySelector('[role="radiogroup"]');
+	expect(group).toBeTruthy();
+	return group as HTMLElement;
+}
+
+function pickSegment(group: HTMLElement, state: 'active' | 'maintenance' | 'disabled'): void {
+	const btn = group.querySelector(`[data-state="${state}"]`) as HTMLButtonElement;
+	expect(btn).toBeTruthy();
+	fireEvent.click(btn);
+}
 
 describe('/routes — disable/enable', () => {
 	it('renders a Disabled badge for a disabled route', async () => {
@@ -2895,7 +2925,12 @@ describe('/routes — disable/enable', () => {
 			})
 		]);
 		render(Page);
-		expect(await screen.findByText(/Disabled/i)).toBeInTheDocument();
+		// Task 9 — the RouteStateControl segment also has a
+		// "Disabled" label, so scope to the badge element
+		// specifically (data-variant="status-down" per the
+		// strengthened Task 9 badge) rather than a bare text match.
+		const badge = await screen.findByText('Disabled', { selector: '.badge' });
+		expect(badge).toBeInTheDocument();
 	});
 
 	it('dims the row (opacity class) for a disabled route', async () => {
@@ -2927,7 +2962,7 @@ describe('/routes — disable/enable', () => {
 		apiMock.disableRoute.mockResolvedValue({ id: 'r2', disabled: true, lastHttpsRouteAffected: false });
 		render(Page);
 		await screen.findByText('live.example.com');
-		await fireEvent.click(screen.getByTestId('route-disable-r2'));
+		pickSegment(stateControlFor('live.example.com'), 'disabled');
 		// confirm dialog appears
 		await fireEvent.click(screen.getByTestId('route-disable-confirm'));
 		await waitFor(() => expect(apiMock.disableRoute).toHaveBeenCalledWith('r2'));
@@ -2946,7 +2981,7 @@ describe('/routes — disable/enable', () => {
 		apiMock.disableRoute.mockResolvedValue({ id: 'r2', disabled: true, lastHttpsRouteAffected: false });
 		render(Page);
 		await screen.findByText('live.example.com');
-		await fireEvent.click(screen.getByTestId('route-disable-r2'));
+		pickSegment(stateControlFor('live.example.com'), 'disabled');
 		expect(await screen.findByText('Disable route?')).toBeInTheDocument();
 		expect(screen.queryByText('Disable the last HTTPS route?')).not.toBeInTheDocument();
 	});
@@ -2964,7 +2999,7 @@ describe('/routes — disable/enable', () => {
 		apiMock.disableRoute.mockResolvedValue({ id: 'r-tls', disabled: true, lastHttpsRouteAffected: true });
 		render(Page);
 		await screen.findByText('secure.example.com');
-		await fireEvent.click(screen.getByTestId('route-disable-r-tls'));
+		pickSegment(stateControlFor('secure.example.com'), 'disabled');
 		expect(await screen.findByText('Disable the last HTTPS route?')).toBeInTheDocument();
 		await fireEvent.click(screen.getByTestId('route-disable-confirm'));
 		await waitFor(() => expect(apiMock.disableRoute).toHaveBeenCalledWith('r-tls'));
@@ -2989,7 +3024,7 @@ describe('/routes — disable/enable', () => {
 		]);
 		render(Page);
 		await screen.findByText('secure1.example.com');
-		await fireEvent.click(screen.getByTestId('route-disable-r-tls-1'));
+		pickSegment(stateControlFor('secure1.example.com'), 'disabled');
 		expect(await screen.findByText('Disable route?')).toBeInTheDocument();
 		expect(screen.queryByText('Disable the last HTTPS route?')).not.toBeInTheDocument();
 	});
@@ -3007,7 +3042,7 @@ describe('/routes — disable/enable', () => {
 		apiMock.enableRoute.mockResolvedValue({ id: 'r3', disabled: false });
 		render(Page);
 		await screen.findByText('off.example.com');
-		await fireEvent.click(screen.getByTestId('route-enable-r3'));
+		pickSegment(stateControlFor('off.example.com'), 'active');
 		await waitFor(() => expect(apiMock.enableRoute).toHaveBeenCalledWith('r3'));
 		// No confirm dialog gating the enable path.
 		expect(screen.queryByTestId('route-disable-confirm')).not.toBeInTheDocument();
@@ -3041,5 +3076,253 @@ describe('/routes — disable/enable', () => {
 		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
 		const [, payload] = apiMock.updateRoute.mock.calls[0];
 		expect(payload.disabled).toBe(true);
+	});
+});
+
+// --- Task 9 — 3-state control + maintenance form section -----------------
+//
+// Wires RouteStateControl (Task 8) into the routes list, replacing
+// the old Activer/Désactiver ghost button (see the suite above,
+// which was updated in place to drive the control instead of the
+// button). This suite covers what's new: state derivation from
+// `disabled` + `maintenanceConfig`, the onchange routing to
+// enterMaintenance/exitMaintenance, the disabled-only last-HTTPS
+// warning gate, and the edit-form Maintenance section.
+
+describe('/routes — 3-state control + maintenance', () => {
+	it('renders RouteStateControl reflecting "active" for a plain route', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-active', host: 'active.example.com', disabled: false })
+		]);
+		render(Page);
+		await screen.findByText('active.example.com');
+		const group = stateControlFor('active.example.com');
+		const activeSeg = group.querySelector('[data-state="active"]') as HTMLButtonElement;
+		expect(activeSeg.getAttribute('aria-checked')).toBe('true');
+	});
+
+	it('renders RouteStateControl reflecting "disabled" when route.disabled is true', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-off', host: 'off2.example.com', disabled: true })
+		]);
+		render(Page);
+		await screen.findByText('off2.example.com');
+		const group = stateControlFor('off2.example.com');
+		const seg = group.querySelector('[data-state="disabled"]') as HTMLButtonElement;
+		expect(seg.getAttribute('aria-checked')).toBe('true');
+	});
+
+	it('renders RouteStateControl reflecting "maintenance" when route.maintenanceConfig is set', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r-maint',
+				host: 'maint.example.com',
+				disabled: false,
+				maintenanceConfig: { retryAfterSeconds: 120, bypassIps: [] }
+			})
+		]);
+		render(Page);
+		await screen.findByText('maint.example.com');
+		const group = stateControlFor('maint.example.com');
+		const seg = group.querySelector('[data-state="maintenance"]') as HTMLButtonElement;
+		expect(seg.getAttribute('aria-checked')).toBe('true');
+	});
+
+	it('selecting "maintenance" calls enterMaintenance and refreshes the list', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-a', host: 'a.example.com', disabled: false })
+		]);
+		apiMock.enterMaintenance.mockResolvedValue(
+			makeRoute({
+				id: 'r-a',
+				host: 'a.example.com',
+				disabled: false,
+				maintenanceConfig: { retryAfterSeconds: 300, bypassIps: [] }
+			})
+		);
+		render(Page);
+		await screen.findByText('a.example.com');
+		pickSegment(stateControlFor('a.example.com'), 'maintenance');
+		await waitFor(() => expect(apiMock.enterMaintenance).toHaveBeenCalledWith('r-a'));
+		// Refresh: listRoutes called again after the mutation (mount + post-action).
+		await waitFor(() => expect(apiMock.listRoutes).toHaveBeenCalledTimes(2));
+		// No confirm dialog for the maintenance transition.
+		expect(screen.queryByTestId('route-disable-confirm')).not.toBeInTheDocument();
+	});
+
+	it('selecting "active" from maintenance calls exitMaintenance', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r-b',
+				host: 'b.example.com',
+				disabled: false,
+				maintenanceConfig: { retryAfterSeconds: 300, bypassIps: [] }
+			})
+		]);
+		apiMock.exitMaintenance.mockResolvedValue(
+			makeRoute({ id: 'r-b', host: 'b.example.com', disabled: false })
+		);
+		render(Page);
+		await screen.findByText('b.example.com');
+		pickSegment(stateControlFor('b.example.com'), 'active');
+		await waitFor(() => expect(apiMock.exitMaintenance).toHaveBeenCalledWith('r-b'));
+		expect(apiMock.enableRoute).not.toHaveBeenCalled();
+	});
+
+	it('selecting "active" from disabled calls enableRoute (not exitMaintenance)', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-c', host: 'c.example.com', disabled: true })
+		]);
+		apiMock.enableRoute.mockResolvedValue(makeRoute({ id: 'r-c', host: 'c.example.com', disabled: false }));
+		render(Page);
+		await screen.findByText('c.example.com');
+		pickSegment(stateControlFor('c.example.com'), 'active');
+		await waitFor(() => expect(apiMock.enableRoute).toHaveBeenCalledWith('r-c'));
+		expect(apiMock.exitMaintenance).not.toHaveBeenCalled();
+	});
+
+	it('switching the LAST TLS route to Maintenance does NOT show the last-HTTPS warning', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-tls-only', host: 'onlytls.example.com', tlsEnabled: true, disabled: false })
+		]);
+		apiMock.enterMaintenance.mockResolvedValue(
+			makeRoute({
+				id: 'r-tls-only',
+				host: 'onlytls.example.com',
+				tlsEnabled: true,
+				disabled: false,
+				maintenanceConfig: { retryAfterSeconds: 300, bypassIps: [] }
+			})
+		);
+		render(Page);
+		await screen.findByText('onlytls.example.com');
+		pickSegment(stateControlFor('onlytls.example.com'), 'maintenance');
+		await waitFor(() => expect(apiMock.enterMaintenance).toHaveBeenCalledWith('r-tls-only'));
+		expect(screen.queryByText('Disable the last HTTPS route?')).not.toBeInTheDocument();
+		expect(screen.queryByTestId('route-disable-confirm')).not.toBeInTheDocument();
+	});
+
+	it('switching the LAST TLS route to Disabled still shows the last-HTTPS warning', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-tls-only2', host: 'onlytls2.example.com', tlsEnabled: true, disabled: false })
+		]);
+		apiMock.disableRoute.mockResolvedValue({
+			id: 'r-tls-only2',
+			disabled: true,
+			lastHttpsRouteAffected: true
+		});
+		render(Page);
+		await screen.findByText('onlytls2.example.com');
+		pickSegment(stateControlFor('onlytls2.example.com'), 'disabled');
+		expect(await screen.findByText('Disable the last HTTPS route?')).toBeInTheDocument();
+	});
+
+	it('shows a Maintenance badge for a route with maintenanceConfig set', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r-badge',
+				host: 'badge.example.com',
+				disabled: false,
+				maintenanceConfig: { retryAfterSeconds: 60, bypassIps: [] }
+			})
+		]);
+		render(Page);
+		// Scope to the badge element — the RouteStateControl segment
+		// also renders a "Maintenance" label.
+		const badge = await screen.findByText('Maintenance', { selector: '.badge' });
+		expect(badge).toBeInTheDocument();
+	});
+
+	it('edit form shows a Maintenance section seeded from route.maintenanceConfig', async () => {
+		const seeded = makeRoute({
+			id: 'edit-maint',
+			host: 'edit-maint.example.com',
+			maintenanceConfig: { retryAfterSeconds: 180, bypassIps: ['10.0.0.5', '192.168.1.0/24'] }
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+
+		const hostCell = await screen.findByText('edit-maint.example.com');
+		await fireEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const retryInput = screen.getByLabelText(/Retry-After/i) as HTMLInputElement;
+		expect(retryInput.value).toBe('180');
+		expect(screen.getByDisplayValue('10.0.0.5')).toBeInTheDocument();
+		expect(screen.getByDisplayValue('192.168.1.0/24')).toBeInTheDocument();
+	});
+
+	it('ships maintenanceConfig in the update payload after editing the Maintenance section', async () => {
+		const seeded = makeRoute({
+			id: 'edit-maint2',
+			host: 'edit-maint2.example.com',
+			maintenanceConfig: { retryAfterSeconds: 60, bypassIps: [] }
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+
+		const hostCell = await screen.findByText('edit-maint2.example.com');
+		await fireEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const retryInput = screen.getByLabelText(/Retry-After/i) as HTMLInputElement;
+		await userEvent.clear(retryInput);
+		await userEvent.type(retryInput, '90');
+		await tick();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		expect(payload.maintenanceConfig).toBeDefined();
+		expect(payload.maintenanceConfig.retryAfterSeconds).toBe(90);
+	});
+
+	// Finding #1 (final review, v2.17.0) — CRITICAL. A route that is
+	// NOT in maintenance (no maintenanceConfig, not disabled) must NOT
+	// have maintenanceConfig introduced by a routine edit. Before the
+	// fix, the payload assembler always shipped
+	// formData.maintenanceConfig, which openEdit seeds with the
+	// synthetic default {retryAfterSeconds:300, bypassIps:[]} for a
+	// route that has never been put into maintenance — so ANY edit
+	// (e.g. changing the upstream URL) silently flipped the route
+	// into maintenance (503 to everyone) on the next reload. This
+	// test seeds a plain ACTIVE route, edits an unrelated field, and
+	// asserts the update payload's maintenanceConfig stays
+	// null/absent — i.e. the edit does NOT introduce maintenance.
+	it('does NOT ship maintenanceConfig when editing an ACTIVE route (no maintenance introduced)', async () => {
+		const seeded = makeRoute({
+			id: 'edit-active-no-maint',
+			host: 'active-no-maint.example.com'
+			// disabled: false (default), maintenanceConfig: undefined (default) — plain active route.
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+
+		const hostCell = await screen.findByText('active-no-maint.example.com');
+		await fireEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		// Edit an unrelated field (the upstream URL) — a routine edit
+		// that has nothing to do with maintenance.
+		const upstreamInput = upstreamURLInputs()[0];
+		await userEvent.clear(upstreamInput);
+		await userEvent.type(upstreamInput, 'http://127.0.0.1:9100');
+		await tick();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		// Must NOT be the synthetic default {retryAfterSeconds:300, bypassIps:[]}
+		// and must NOT be present at all (undefined/null) — the route
+		// must stay active.
+		expect(payload.maintenanceConfig == null).toBe(true);
 	});
 });

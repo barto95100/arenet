@@ -30,7 +30,8 @@ vi.mock('$lib/stores/loading', () => ({
 	endRequest: vi.fn()
 }));
 
-const { request, disableRoute, enableRoute } = await import('./client');
+const { request, disableRoute, enableRoute, enterMaintenance, exitMaintenance } =
+	await import('./client');
 const { ApiError } = await import('./types');
 type ApiErrorType = InstanceType<typeof ApiError>;
 const { goto } = await import('$app/navigation');
@@ -310,5 +311,40 @@ describe('disableRoute / enableRoute', () => {
 		const result = await enableRoute('abc');
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(result).toEqual({ id: 'abc', disabled: false, lastHttpsRouteAffected: false });
+	});
+});
+
+// Task 8 — route maintenance client wrappers. Mirrors disableRoute/
+// enableRoute exactly (same fetch/error style, same POST-and-return-
+// route shape).
+describe('enterMaintenance / exitMaintenance', () => {
+	it('enterMaintenance POSTs to /routes/{id}/maintenance and returns the route', async () => {
+		const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			expect(String(input)).toContain('/routes/abc/maintenance');
+			expect(init?.method).toBe('POST');
+			return new Response(JSON.stringify({ id: 'abc', maintenance: true }), {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		});
+		(globalThis as { fetch?: unknown }).fetch = fetchSpy;
+		const result = await enterMaintenance('abc');
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(result).toEqual({ id: 'abc', maintenance: true });
+	});
+
+	it('exitMaintenance POSTs to /routes/{id}/maintenance/off and returns the route', async () => {
+		const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			expect(String(input)).toContain('/routes/abc/maintenance/off');
+			expect(init?.method).toBe('POST');
+			return new Response(JSON.stringify({ id: 'abc', maintenance: false }), {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		});
+		(globalThis as { fetch?: unknown }).fetch = fetchSpy;
+		const result = await exitMaintenance('abc');
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(result).toEqual({ id: 'abc', maintenance: false });
 	});
 });
