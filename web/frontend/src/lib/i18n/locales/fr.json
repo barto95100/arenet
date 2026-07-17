@@ -208,6 +208,7 @@
 			"colTLS": "TLS",
 			"colWAF": "WAF",
 			"colState": "État",
+			"colActions": "Actions",
 			"aliasesTooltip": "Alias :",
 			"basicAuthRequired": "Authentification Basic requise",
 			"basicAuthTooltip": "Authentification Basic requise (utilisateur : {username})",
@@ -394,9 +395,16 @@
 			"errorPagesOverridePlaceholder": "<!doctype html>...{code}...",
 			"uploadStreamingLabel": "Mode streaming d'upload",
 			"disabledLabel": "Désactivée",
-			"disabledHelper": "Une route désactivée conserve sa config mais ne sert aucun trafic (les requêtes reçoivent la page 404)."
+			"disabledHelper": "Une route désactivée conserve sa config mais ne sert aucun trafic (les requêtes reçoivent la page 404).",
+			"maintenance": {
+				"sectionTitle": "Maintenance",
+				"retryAfter": "Retry-After (secondes)",
+				"bypassIps": "IPs / CIDRs de contournement",
+				"bypassIpsAdd": "+ Ajouter une IP de contournement"
+			}
 		},
 		"disabled": { "badge": "Désactivée" },
+		"maintenance": { "badge": "Maintenance" },
 		"disable": {
 			"action": "Désactiver",
 			"confirm": {

@@ -208,6 +208,7 @@
 			"colTLS": "TLS",
 			"colWAF": "WAF",
 			"colState": "State",
+			"colActions": "Actions",
 			"aliasesTooltip": "Aliases:",
 			"basicAuthRequired": "Basic Auth required",
 			"basicAuthTooltip": "Basic Auth required (user: {username})",
@@ -394,9 +395,16 @@
 			"errorPagesOverridePlaceholder": "<!doctype html>...{code}...",
 			"uploadStreamingLabel": "Upload streaming mode",
 			"disabledLabel": "Disabled",
-			"disabledHelper": "A disabled route keeps its config but serves no traffic (requests get the 404 page)."
+			"disabledHelper": "A disabled route keeps its config but serves no traffic (requests get the 404 page).",
+			"maintenance": {
+				"sectionTitle": "Maintenance",
+				"retryAfter": "Retry-After (seconds)",
+				"bypassIps": "Bypass IPs / CIDRs",
+				"bypassIpsAdd": "+ Add bypass IP"
+			}
 		},
 		"disabled": { "badge": "Disabled" },
+		"maintenance": { "badge": "Maintenance" },
 		"disable": {
 			"action": "Disable",
 			"confirm": {

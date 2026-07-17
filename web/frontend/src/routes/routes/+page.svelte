@@ -12,7 +12,9 @@
 		deleteRoute,
 		testUpstream,
 		disableRoute,
-		enableRoute
+		enableRoute,
+		enterMaintenance,
+		exitMaintenance
 	} from '$lib/api/client';
 	import { settingsApi } from '$lib/api/settings';
 	import {
@@ -26,6 +28,7 @@
 		ForwardAuthProvider,
 		HealthCheck,
 		LBPolicy,
+		MaintenanceConfig,
 		ManagedDomain,
 		Route,
 		RouteRateLimit,
@@ -49,6 +52,7 @@
 	import Input from '$lib/components/Input.svelte';
 	import Checkbox from '$lib/components/Checkbox.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import RouteStateControl from '$lib/components/RouteStateControl.svelte';
 
 	let routes = $state<Route[]>([]);
 	let loading = $state(true);
@@ -177,6 +181,14 @@
 		// payload assembler converts empty → undefined for
 		// preserve-on-omit semantic on PUT.
 		errorPageOverrides: Record<number, string>;
+		// Task 9 — maintenance-mode sub-form. Always a definite
+		// object (never null/undefined) so the section's inputs
+		// have something to bind to regardless of whether the
+		// route is currently in maintenance; the 3-state control
+		// (derived separately from route.disabled/maintenanceConfig)
+		// is the actual on/off switch. Full-replacement on submit,
+		// same shape as the wire's MaintenanceConfig.
+		maintenanceConfig: MaintenanceConfig;
 	};
 	let formData = $state<FormData>(emptyFormData());
 	let healthCheckTouched = $state(false);
@@ -248,6 +260,15 @@
 			// "Pages d'erreur" section below.
 			errorPageTemplateId: '',
 			errorPageOverrides: {} as Record<number, string>,
+			// Task 9 — maintenance defaults: no bypass IPs, a
+			// 300s (5 minute) Retry-After — an operator-friendly
+			// default matching a typical short maintenance window.
+			// The section is inert until the operator selects
+			// "Maintenance" on the 3-state control.
+			maintenanceConfig: {
+				retryAfterSeconds: 300,
+				bypassIps: [] as string[]
+			},
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
 			// further down; operators opting in pick a mode +
@@ -463,6 +484,79 @@
 		} catch (err) {
 			const msg = err instanceof ApiError ? err.message : String(err);
 			pushToast(msg, 'danger');
+		}
+	}
+
+	// Task 9 — 3-state control wiring.
+	//
+	// Derives the RouteStateControl value from the two independent
+	// wire fields: `disabled` (v2.14.3) and `maintenanceConfig`
+	// (Task 8). `disabled` takes precedence if a route somehow
+	// carries both (shouldn't happen via this UI, since the 3
+	// states are mutually exclusive on the control, but a future
+	// API caller could set both — disabled wins because it's the
+	// stronger "serves no traffic at all" state).
+	function routeState(r: Route): 'active' | 'maintenance' | 'disabled' {
+		if (r.disabled) return 'disabled';
+		if (r.maintenanceConfig) return 'maintenance';
+		return 'active';
+	}
+
+	async function handleEnterMaintenance(r: Route) {
+		try {
+			await enterMaintenance(r.id);
+			pushToast(t('routes.state.maintenance'), 'success');
+			await loadRoutes();
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : String(err);
+			pushToast(msg, 'danger');
+		}
+	}
+
+	async function handleExitMaintenance(r: Route) {
+		try {
+			await exitMaintenance(r.id);
+			pushToast(t('routes.state.active'), 'success');
+			await loadRoutes();
+		} catch (err) {
+			const msg = err instanceof ApiError ? err.message : String(err);
+			pushToast(msg, 'danger');
+		}
+	}
+
+	// Task 9 — RouteStateControl onchange router. Maps the 3-state
+	// control's target value + the route's CURRENT derived state to
+	// the right endpoint:
+	//   → 'disabled'                    : disableRoute (gated behind
+	//                                     the existing ConfirmDialog
+	//                                     — see openDisableConfirm;
+	//                                     the last-HTTPS warning is
+	//                                     wired ONLY to this branch)
+	//   → 'maintenance'                 : enterMaintenance (direct,
+	//                                     no confirm — a maintenance
+	//                                     route keeps :443 alive, so
+	//                                     the last-HTTPS invariant
+	//                                     the disable warning guards
+	//                                     against doesn't apply)
+	//   → 'active', from 'disabled'     : enableRoute (direct, always
+	//                                     safe — mirrors the pre-
+	//                                     existing enable semantics)
+	//   → 'active', from 'maintenance'  : exitMaintenance (direct)
+	function onRouteStateChange(r: Route, next: 'active' | 'maintenance' | 'disabled') {
+		const current = routeState(r);
+		if (next === 'disabled') {
+			openDisableConfirm(r);
+			return;
+		}
+		if (next === 'maintenance') {
+			void handleEnterMaintenance(r);
+			return;
+		}
+		// next === 'active'
+		if (current === 'disabled') {
+			void handleEnableRoute(r);
+		} else if (current === 'maintenance') {
+			void handleExitMaintenance(r);
 		}
 	}
 
@@ -1104,6 +1198,18 @@
 			// pass-through landed Phase 1).
 			errorPageTemplateId: r.errorPageTemplateId ?? '',
 			errorPageOverrides: { ...(r.errorPageOverrides ?? {}) },
+			// Task 9 — seed the maintenance sub-form from the
+			// loaded route. Clone bypassIps to break the formData
+			// ↔ source route reference (same pattern as rateLimit
+			// / errorPageOverrides above). Falls back to the
+			// emptyFormData defaults when the route has never been
+			// put into maintenance (r.maintenanceConfig undefined).
+			maintenanceConfig: r.maintenanceConfig
+				? {
+						retryAfterSeconds: r.maintenanceConfig.retryAfterSeconds,
+						bypassIps: [...(r.maintenanceConfig.bypassIps ?? [])]
+					}
+				: { retryAfterSeconds: 300, bypassIps: [] },
 			// (subform expansion handled below — needs to fire
 			// AFTER formData assignment so the $effect sees the
 			// new state.)
@@ -1176,6 +1282,20 @@
 	}
 	function removeAlias(i: number) {
 		formData.aliases = formData.aliases.filter((_, idx) => idx !== i);
+	}
+
+	// Task 9 — maintenance bypass-IP repeater. Mirrors the alias
+	// repeater above: an ordinary string[] with add/remove rows;
+	// blank rows are dropped at submit time (see submitForm's
+	// payload assembly), not here, so an operator mid-typing a
+	// CIDR doesn't lose the row on every keystroke re-render.
+	function addBypassIp() {
+		formData.maintenanceConfig.bypassIps = [...formData.maintenanceConfig.bypassIps, ''];
+	}
+	function removeBypassIp(i: number) {
+		formData.maintenanceConfig.bypassIps = formData.maintenanceConfig.bypassIps.filter(
+			(_, idx) => idx !== i
+		);
 	}
 
 	// Step I.7 hotfix (Finding #5): TLS off ⇒ no HTTP→HTTPS redirect.
@@ -1807,6 +1927,23 @@
 					payload.errorPageOverrides = clean;
 				}
 			}
+			// Task 9 — always ship maintenanceConfig, full-
+			// replacement (same always-ship semantic as `disabled`
+			// above — the operator's current form state is the
+			// truth, not a preserve-on-omit sub-form). The 3-state
+			// control on the list row is the primary way operators
+			// flip maintenance on/off (dedicated endpoints, no full
+			// PUT); this form section lets them tune retryAfter /
+			// bypassIps for a route already in maintenance (or
+			// pre-stage values before switching it on via the
+			// control). Bypass IPs are trimmed + blanks dropped so
+			// an empty repeater row doesn't ship a stray "".
+			payload.maintenanceConfig = {
+				retryAfterSeconds: formData.maintenanceConfig.retryAfterSeconds,
+				bypassIps: formData.maintenanceConfig.bypassIps
+					.map((ip) => ip.trim())
+					.filter((ip) => ip.length > 0)
+			};
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
 			// server preserve the previously stored value (on PUT)
@@ -2147,7 +2284,14 @@
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colTLS')}</th>
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colWAF')}</th>
 							<th class="px-4 py-3 font-medium text-right">{language.current && t('routes.list.colState')}</th>
-							<th class="px-4 py-3 font-medium text-right"><span class="sr-only">{language.current && t('routes.disable.action')}</span></th>
+							<!-- Task 9 — was sr-only (icon-only ghost button
+							     needed no visible header); now a visible
+							     column header since the cell holds the
+							     3-state RouteStateControl, a labeled
+							     interactive control worth naming in the
+							     table's structure for sighted + assistive
+							     users alike. -->
+							<th class="px-4 py-3 font-medium text-right">{language.current && t('routes.list.colActions')}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -2172,7 +2316,23 @@
 							>
 								<td class="px-4 py-3 font-mono">
 									{#if r.disabled}
-										<Badge variant="neutral">{language.current && t('routes.disabled.badge')}</Badge>
+										<!-- Task 9 — strengthened from the
+										     neutral/grey variant: a disabled
+										     route serves NO traffic at all, so
+										     it deserves the same visual weight
+										     as the DOWN health badge, not a
+										     bland informational grey that reads
+										     the same as "no TLS" or "no WAF". -->
+										<Badge variant="status-down">{language.current && t('routes.disabled.badge')}</Badge>
+									{:else if r.maintenanceConfig}
+										<!-- Task 9 — maintenance badge (amber
+										     status-warn): distinct from
+										     disabled — the route is still
+										     emitted (the HTTPS server / :443
+										     stays up), it just serves the
+										     maintenance page instead of
+										     proxying to the upstream. -->
+										<Badge variant="status-warn">{language.current && t('routes.maintenance.badge')}</Badge>
 									{/if}
 									{r.host}
 									{#if r.aliases && r.aliases.length > 0}
@@ -2299,29 +2459,25 @@
 									{/if}
 								</td>
 								<td class="px-4 py-3 text-right">
-									<!-- v2.14.3 — row-level enable/disable toggle.
-									     stopPropagation so the click doesn't also
+									<!-- Task 9 — row-level 3-state control,
+									     replacing the v2.14.3 Activer/Désactiver
+									     ghost button. stopPropagation on the
+									     wrapper so a segment click doesn't also
 									     fire the row's onclick (which would open
-									     the edit panel). Disable is destructive
-									     (stops traffic) so it gates behind the
-									     ConfirmDialog below; enable is a direct,
-									     always-safe call. -->
-									<Button
-										variant="ghost"
-										size="sm"
-										type="button"
-										data-testid={`route-${r.disabled ? 'enable' : 'disable'}-${r.id}`}
-										onclick={(e) => {
-											e.stopPropagation();
-											if (r.disabled) {
-												handleEnableRoute(r);
-											} else {
-												openDisableConfirm(r);
-											}
-										}}
-									>
-										{language.current && (r.disabled ? t('routes.enable.action') : t('routes.disable.action'))}
-									</Button>
+									     the edit panel). onRouteStateChange
+									     routes 'disabled' to the existing
+									     ConfirmDialog-gated flow (destructive:
+									     stops traffic; last-HTTPS warning lives
+									     there) and 'maintenance'/'active' to
+									     direct, always-safe calls. -->
+									<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+									<div onclick={(e) => e.stopPropagation()}>
+										<RouteStateControl
+											value={routeState(r)}
+											ariaLabel={language.current && t('routes.list.colActions')}
+											onchange={(next) => onRouteStateChange(r, next)}
+										/>
+									</div>
 								</td>
 							</tr>
 						{/each}
@@ -2460,6 +2616,56 @@
 						<p class="text-xs text-muted ml-6">
 							{language.current && t('routes.form.disabledHelper')}
 						</p>
+					</div>
+					<!-- Task 9 — Maintenance section. Shown always (not
+					     gated behind the route's current state) so an
+					     operator can pre-configure retryAfter / bypass
+					     IPs before switching the row's 3-state control
+					     to "Maintenance", and can still tune them while
+					     already in maintenance. The section itself
+					     doesn't turn maintenance on/off — that's the
+					     RouteStateControl's job via the dedicated
+					     enterMaintenance/exitMaintenance endpoints; this
+					     is config-only, shipped full-replacement on every
+					     submit (see payload.maintenanceConfig above). -->
+					<div class="flex flex-col gap-2 p-3 rounded-md border border-border-subtle">
+						<span class="text-sm font-medium text-secondary">
+							{language.current && t('routes.form.maintenance.sectionTitle')}
+						</span>
+						<Input
+							type="number"
+							min="0"
+							label={language.current && t('routes.form.maintenance.retryAfter')}
+							value={String(formData.maintenanceConfig.retryAfterSeconds)}
+							oninput={(e: Event) => {
+								const raw = (e.target as HTMLInputElement).value;
+								const n = parseInt(raw, 10);
+								formData.maintenanceConfig.retryAfterSeconds = Number.isNaN(n) ? 0 : n;
+							}}
+						/>
+						<div class="flex flex-col gap-2">
+							<div class="flex items-center justify-between">
+								<span class="text-sm text-secondary">
+									{language.current && t('routes.form.maintenance.bypassIps')}
+								</span>
+								<Button variant="ghost" size="sm" onclick={addBypassIp} type="button"
+									>{language.current && t('routes.form.maintenance.bypassIpsAdd')}</Button
+								>
+							</div>
+							<div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2" data-testid="maintenance-bypass-ip-grid">
+								{#each formData.maintenanceConfig.bypassIps as _, i (i)}
+									<div class="flex items-center gap-2">
+										<div class="flex-1">
+											<Input
+												bind:value={formData.maintenanceConfig.bypassIps[i]}
+												placeholder="10.0.0.5 or 192.168.1.0/24"
+											/>
+										</div>
+										<Button variant="ghost" size="sm" onclick={() => removeBypassIp(i)} type="button">×</Button>
+									</div>
+								{/each}
+							</div>
+						</div>
 					</div>
 					<!-- Step I.3: alias hostnames repeater. Auto-fit grid so
 					     multiple aliases sit side by side and wrap to width
