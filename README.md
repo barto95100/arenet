@@ -90,7 +90,7 @@ Full guide: [docs/install/systemd-native.md](docs/install/systemd-native.md)
 - 🛡️ **WAF event drilldown** per route — CRS category distribution, rule history, false-positive triage
 - 🗺️ **GeoIP world map** showing live blocked-by-country distribution
 - 📋 **Audit log** for every config change with before/after diff and actor attribution
-- 🎫 **Cert lifecycle observability** — track every `cert_obtained`, `cert_failed`, `cert_ocsp_revoked` event with 90d retention
+- 🎫 **Cert lifecycle observability** — track every `cert_obtained`, `cert_failed`, `cert_ocsp_revoked` event with 90d retention, and **delete an orphan certificate** from the dashboard
 
 ### Alerting (Step AL)
 - 🔔 **Multi-channel routing** — Discord webhook, generic webhook, SMTP email

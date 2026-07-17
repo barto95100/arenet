@@ -1,28 +1,31 @@
 # Certificats
 
-Arenet obtient et renouvelle les certificats TLS **automatiquement** via le moteur Caddy v2 / certmagic embarqué. Un certificat est émis parce qu'une **route** (ou une **politique wildcard par apex**) référence son nom d'hôte — il n'y a donc pas d'action « créer un certificat », ni de bouton « supprimer un certificat ». Cette page explique pourquoi, et donne la procédure manuelle exacte pour supprimer un certificat (HTTP-01 ou DNS-01) quand c'est réellement nécessaire.
+Arenet obtient et renouvelle les certificats TLS **automatiquement** via le moteur Caddy v2 / certmagic embarqué. Un certificat est émis parce qu'une **route** (ou une **politique wildcard par apex**) référence son nom d'hôte — il n'y a donc pas d'action « créer un certificat ». Depuis la **v2.16.0**, la page `/certs` a un bouton **Supprimer** pour retirer un certificat dont tu n'as plus besoin ; cette page explique comment il fonctionne, et la procédure manuelle sur disque pour les cas que le bouton bloque volontairement.
 
 ---
 
 ## Comment les certificats sont gérés
 
 - Les certificats sont **émis et renouvelés automatiquement** par certmagic. Tu ne les crées jamais à la main : active TLS sur une route (challenge `http-01` ou `dns-01`), ou définis une politique wildcard par apex, et Arenet génère la config Caddy correspondante pour qu'ACME obtienne le certificat.
-- La page `/certs` est en **lecture seule** (tableau de bord état/expiration avec un drill-down dans les événements cert). Elle n'a **ni bouton supprimer, ni révoquer, ni forcer le renouvellement** — c'est voulu.
-- Il n'existe **aucune API `DELETE`** pour les certificats. Le seul endpoint cert est `GET /api/certificates` (la source de données du tableau de bord).
+- La page `/certs` est un tableau de bord état/expiration avec un drill-down dans les événements cert, **plus une action Supprimer par ligne** (v2.16.0). Il n'y a pas de bouton forcer-le-renouvellement ni révoquer.
+- La suppression de certificat est exposée via `DELETE /api/v1/certificates/{domain}` (admin uniquement) ; `GET /api/certificates` reste la source de données du tableau de bord.
 - Arenet ne conserve **aucun enregistrement de certificat dans sa base**. Le cycle de vie des certs vit entièrement sur disque dans le store certmagic ; Arenet n'en garde qu'une vue en mémoire, reconstruite depuis le disque à chaque démarrage.
-
-**Conséquence :** supprimer une route (ou une politique par apex) arrête de **servir** le certificat (Caddy ne référence plus son nom d'hôte) et retire sa ligne de `/certs` — mais les **fichiers du certificat restent sur le disque**. Pour les supprimer physiquement, tu dois les effacer sur le serveur puis redémarrer Arenet.
 
 ---
 
-## Pourquoi il n'y a pas de bouton « supprimer un certificat »
+## Supprimer un certificat depuis l'UI
 
-C'est un choix de conception délibéré, pas un oubli :
+Sur la page `/certs`, chaque ligne de certificat a un bouton **Supprimer**. Clique dessus, confirme, et Arenet retire les fichiers du certificat sur disque (`.crt`/`.key`/`.json`, pour tous les émetteurs) et efface sa ligne — sans accès serveur ni redémarrage.
 
-- **Caddy v2 n'émet aucun événement de suppression de certificat**, donc Arenet ne peut pas réagir de façon fiable à une suppression dans le processus.
-- L'approche « supprimer les fichiers et laisser ACME ré-obtenir » introduit une **fenêtre de coupure** au prochain handshake TLS, et a été explicitement rejetée comme action automatisée dans l'app à cause de ce risque en production.
+**Orphelins uniquement.** Un certificat ne peut être supprimé que si **plus rien ne référence son domaine**. Si une route (host ou alias — y compris une route *désactivée*) ou un wildcard managed-domain utilise encore le nom d'hôte, la suppression est **bloquée** et un dialogue liste la/les route(s) qui gênent. Supprime ou désactive-les d'abord, puis supprime le certificat.
 
-La suppression d'un certificat reste donc une **opération manuelle, délibérée, sur le disque** — décrite ci-dessous.
+Pourquoi bloquer ? Supprimer un certificat dont le nom d'hôte est encore servi ferait juste **ré-émettre** le cert par Caddy au prochain reload (une nouvelle requête ACME — et, si tu es proche de la limite Let's Encrypt, une boucle d'échec). Retirer un *orphelin* est sûr : rien ne le sert, donc rien ne le redemande.
+
+- **Pas de révocation.** La suppression retire uniquement les fichiers locaux ; elle ne **révoque pas** le certificat auprès du CA (il reste techniquement valide jusqu'à expiration). La révocation n'est pas proposée dans l'app.
+- Les **wildcards** sont traités pareil — la ligne `/certs` de `*.example.com` supprime le matériel `wildcard_.example.com`, et est bloquée tant que la politique wildcard par apex qui la gère est active.
+- Le certificat supprimé est évincé du cache mémoire de Caddy par le même reload, donc il cesse d'être servi immédiatement.
+
+Si le certificat que tu veux supprimer est **encore référencé** (ex. tu veux forcer une ré-émission propre pour une route *active* sans supprimer la route), le bouton le bloquera — utilise la procédure manuelle sur disque ci-dessous.
 
 ---
 
@@ -46,9 +49,9 @@ certmagic stocke les certificats dans le répertoire de données de Caddy, réso
 
 ---
 
-## Procédure de nettoyage manuel
+## Procédure de nettoyage manuel (cas avancés / bloqués)
 
-À faire uniquement quand tu veux réellement supprimer le certificat (ex. domaine décommissionné, ou tu veux forcer une ré-émission propre). Deux étapes : arrêter de le servir, puis supprimer les fichiers.
+Le bouton Supprimer de l'UI (ci-dessus) est le chemin normal et couvre les certificats orphelins. N'utilise cette procédure manuelle que pour les cas que le bouton bloque volontairement — principalement **forcer une ré-émission propre pour un domaine encore servi** (encore référencé par une route active ou une politique wildcard active). Deux étapes : arrêter de le servir, puis supprimer les fichiers.
 
 ### Étape 1 — arrêter de servir le certificat (dans l'app)
 
@@ -101,7 +104,7 @@ Au redémarrage, la reconciliation au boot d'Arenet reconstruit le tableau de bo
 
 ## Certificats « orphelins »
 
-Si tu supprimes une route mais sautes l'Étape 2, le certificat devient un **orphelin sur le disque** : inoffensif (Caddy ne le sert plus, il n'apparaît plus dans `/certs`), mais il occupe toujours de l'espace et garde ses références de compte ACME. Fais l'Étape 2 quand tu veux récupérer cet état.
+Si tu supprimes une route mais gardes son certificat, le certificat devient un **orphelin sur le disque** : inoffensif (Caddy ne le sert plus), mais il occupe toujours de l'espace et garde ses références de compte ACME. Sa ligne `/certs` propose maintenant le bouton **Supprimer** (c'est un orphelin, donc la suppression est autorisée) — c'est le moyen en un clic de le récupérer. L'Étape 2 manuelle ci-dessus reste disponible si tu préfères opérer directement sur le store.
 
 ---
 

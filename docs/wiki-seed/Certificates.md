@@ -1,28 +1,31 @@
 # Certificates
 
-Arenet obtains and renews TLS certificates **automatically** through the embedded Caddy v2 / certmagic engine. A certificate is issued because a **route** (or a **wildcard managed-domain policy**) references its hostname — there is no separate "create a certificate" action, and there is no "delete a certificate" button either. This page explains why, and the exact manual procedure to remove a certificate (HTTP-01 or DNS-01) when you really need to.
+Arenet obtains and renews TLS certificates **automatically** through the embedded Caddy v2 / certmagic engine. A certificate is issued because a **route** (or a **wildcard managed-domain policy**) references its hostname — there is no separate "create a certificate" action. Since **v2.16.0** the `/certs` page has a **Delete** button for removing a certificate you no longer need; this page explains how it works, and the manual on-disk procedure for the cases the button intentionally blocks.
 
 ---
 
 ## How certificates are managed
 
 - Certificates are **auto-issued and auto-renewed** by certmagic. You never create them by hand: enable TLS on a route (challenge `http-01` or `dns-01`), or define a wildcard apex policy, and Arenet emits the matching Caddy config so ACME obtains the cert.
-- The `/certs` page is **read-only** (a status/expiry dashboard with a drill-down into cert events). It has **no delete, revoke, or force-renew button** by design.
-- There is **no `DELETE` API** for certificates. The only cert endpoint is `GET /api/certificates` (the dashboard's data source).
+- The `/certs` page is a status/expiry dashboard with a drill-down into cert events, **plus a Delete action per row** (v2.16.0). There is no force-renew or revoke button.
+- Certificate deletion is exposed as `DELETE /api/v1/certificates/{domain}` (admin only); `GET /api/certificates` remains the dashboard's data source.
 - Arenet keeps **no certificate record in its database**. The cert lifecycle lives entirely on disk under certmagic's store; Arenet only holds an in-memory view, rebuilt from disk at every boot.
-
-**Consequence:** deleting a route (or a managed-domain policy) stops the certificate from being **served** (Caddy no longer references its hostname) and clears its row from `/certs` — but the certificate **files stay on disk**. To physically remove them you must delete them on the server and restart Arenet.
 
 ---
 
-## Why there is no "delete certificate" button
+## Deleting a certificate from the UI
 
-This is a deliberate design choice, not an oversight:
+On the `/certs` page, each certificate row has a **Delete** button. Click it, confirm, and Arenet removes the certificate's on-disk material (`.crt`/`.key`/`.json`, across every issuer) and clears its row — no server access or restart needed.
 
-- **Caddy v2 emits no cert-removal event**, so Arenet cannot reliably react to a deletion in-process.
-- The "delete the files and let ACME re-obtain" approach introduces a **downtime window** at the next TLS handshake, and was explicitly rejected as an automated in-app action for that production-impact risk.
+**Orphans only.** A certificate can be deleted only when **nothing still references its domain**. If a route (host or alias — including a *disabled* route) or a wildcard managed-domain still uses the hostname, the delete is **blocked** and a dialog lists the route(s) in the way. Delete or disable those first, then delete the certificate.
 
-So certificate removal stays a **deliberate, manual, on-disk operation** — described below.
+Why block it? Deleting a certificate whose hostname is still served would just make Caddy **re-issue it** on the next reload (a fresh ACME request — and, if you are near Let's Encrypt's rate limit, a failure loop). Removing an *orphan* is safe: nothing serves it, so nothing re-requests it.
+
+- **No revocation.** Deletion removes the local files only; it does **not** revoke the certificate at the CA (it stays technically valid until expiry). Revocation is not offered in-app.
+- **Wildcards** are handled the same way — the `/certs` row for `*.example.com` deletes the `wildcard_.example.com` material, and is blocked while the managing wildcard apex policy is live.
+- The removed certificate is evicted from Caddy's in-memory cache by the same reload, so it stops being served immediately.
+
+If the certificate you want gone is **still referenced** (e.g. you want to force a clean re-issue for an *active* route without deleting the route), the button will block it — use the manual on-disk procedure below instead.
 
 ---
 
@@ -46,9 +49,9 @@ Notes:
 
 ---
 
-## Manual cleanup procedure
+## Manual cleanup procedure (advanced / blocked cases)
 
-Do this only when you genuinely want the certificate gone (e.g. a decommissioned domain, or you want to force a clean re-issue). Two steps: stop serving it, then remove the files.
+The UI Delete button (above) is the normal path and covers orphan certificates. Use this manual procedure only for the cases the button intentionally blocks — chiefly **forcing a clean re-issue for a domain that is still served** (still referenced by an active route or a live wildcard policy). Two steps: stop serving it, then remove the files.
 
 ### Step 1 — stop serving the certificate (in the app)
 
@@ -101,7 +104,7 @@ On restart, Arenet's boot-time reconcile re-seeds the `/certs` dashboard from th
 
 ## "Orphaned" certificates
 
-If you delete a route but skip Step 2, the certificate becomes an **orphan on disk**: harmless (Caddy no longer serves it, it no longer shows in `/certs`), but it still occupies space and keeps its ACME account references. Run Step 2 whenever you want to reclaim that state.
+If you delete a route but keep its certificate, the certificate becomes an **orphan on disk**: harmless (Caddy no longer serves it), but it still occupies space and keeps its ACME account references. Its `/certs` row now offers the **Delete** button (it is an orphan, so deletion is allowed) — that's the one-click way to reclaim it. The manual Step 2 above remains available if you prefer operating on the store directly.
 
 ---
 
