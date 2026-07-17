@@ -634,6 +634,16 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		errorTemplatesMap[t.ID] = t
 	}
 
+	// Task 4 — read the global maintenance page singleton before
+	// each apply, same plumbing as ErrorTemplates above. A fresh
+	// install / never-customized page returns a zero value (empty
+	// HTML) with nil error; buildConfigJSON's maintenance branch
+	// falls back to the branded default in that case.
+	maintenancePage, err := m.store.GetMaintenancePageConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("get maintenance page config: %w", err)
+	}
+
 	cfgJSON, err := buildConfigJSON(routes, buildOpts{
 		DevMode:                   m.devMode,
 		ACMEEmail:                 m.acmeEmail,
@@ -643,6 +653,7 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		ManagedDomains:            managedDomains,
 		NormalTrafficExcludePaths: m.normalTrafficExcludePaths,
 		ErrorTemplates:            errorTemplatesMap,
+		MaintenancePageHTML:       maintenancePage.HTML,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -1147,6 +1158,14 @@ type buildOpts struct {
 	// caddymgr emit falls back to the built-in Arenet
 	// default for every route.
 	ErrorTemplates map[string]storage.ErrorPageTemplate
+	// MaintenancePageHTML (Task 4) is the operator's stored global
+	// maintenance page body (Task 2, storage.MaintenancePageConfig
+	// singleton), read by the manager from BoltDB before each
+	// applyLocked — same plumbing as ErrorTemplates above. Empty
+	// string (fresh install / operator never customized it) means
+	// "use the branded default" — resolveMaintenancePage in
+	// maintenance.go implements that fallback.
+	MaintenancePageHTML string
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -1484,6 +1503,76 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 					},
 				},
 			},
+		}
+
+		// Task 4 — maintenance mode. When the route carries a
+		// MaintenanceConfig, it is served EXCLUSIVELY by the
+		// maintenance subroute: everyone gets a static_response
+		// 503 (+ Retry-After + branded/operator body) except the
+		// client_ip bypass allow-list, which reaches the normal
+		// proxy handler chain unmodified. This branch REPLACES
+		// the whole normal gate/proxy assembly below (auth, WAF,
+		// headers) — a maintenance route is not simultaneously
+		// gated by those, mirroring the forward-auth deny path's
+		// "STOP appending to the chain" posture (manager.go
+		// buildForwardAuthDenyHandler precedent) but with a
+		// DISTINCT two-inner-route subroute shape instead of a
+		// single terminal static_response.
+		//
+		// Note: Route.Disabled routes never reach buildConfigJSON
+		// at all (filterDisabledRoutes runs once in applyLocked
+		// before this loop, manager.go:542-573), so a maintenance
+		// route reaching this point is implicitly enabled. The
+		// r.Disabled check below is defensive belt-and-braces for
+		// direct buildConfigJSON callers (e.g. tests) that don't
+		// pre-filter.
+		if r.MaintenanceConfig != nil && !r.Disabled {
+			maintenanceHTML := resolveMaintenancePage(opts.MaintenancePageHTML)
+			maintRoute := buildMaintenanceRoute(
+				metricsHandler,
+				proxyHandler,
+				r.MaintenanceConfig.BypassIPs,
+				r.MaintenanceConfig.RetryAfterSeconds,
+				maintenanceHTML,
+			)
+
+			allHosts := r.AllHosts()
+			route := httpRoute{
+				Match:    []matcherSet{{Host: allHosts}},
+				Handle:   []map[string]any{maintRoute},
+				Terminal: true,
+			}
+
+			// Same TLS-redirect / cert-registration tail as the
+			// normal path below (Step I.2 + Step I.3/J.4): a
+			// maintenance route still needs its host reachable
+			// on both listeners and its cert issued/kept alive,
+			// only the served content differs.
+			if r.TLSEnabled && r.RedirectToHTTPS {
+				httpRoutes = append(httpRoutes, buildRedirectRoute(r.ID, r.Host, r.CountryBlock, allHosts))
+			} else {
+				httpRoutes = append(httpRoutes, route)
+			}
+			if r.TLSEnabled {
+				httpsRoutes = append(httpsRoutes, route)
+				for _, h := range allHosts {
+					if !certmagic.SubjectQualifiesForPublicCert(h) {
+						continue
+					}
+					if !r.UseDedicatedCert {
+						if _, covered := IsHostCoveredByManagedDomain(h, opts.ManagedDomains); covered {
+							continue
+						}
+					}
+					switch r.ACMEChallenge {
+					case storage.ACMEChallengeDNS01:
+						acme.DNS01 = append(acme.DNS01, h)
+					default:
+						acme.HTTP01 = append(acme.HTTP01, h)
+					}
+				}
+			}
+			continue
 		}
 
 		// Step K.1 — per-route auth (refactored from Step I.5's flat

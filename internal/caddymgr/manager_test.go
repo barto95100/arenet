@@ -1189,6 +1189,27 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 		WAFExcludeRules: []int{942100},
 		WAFExcludeTags:  []string{"attack-protocol", "paranoia-level/3"},
 	})
+	// Task 4 — fold the maintenance-mode route into THIS canonical
+	// fixture so caddy.Validate provisions the maintenance subroute
+	// (client_ip bypass matcher + static_response 503) against a
+	// real emitted shape, same anti-poisoning rationale as every
+	// other fold above: a SECOND caddy.Validate call in a file that
+	// sorts alphabetically before this one would leak admin-endpoint
+	// state into TestSyncRegistry_NotCalledOnReloadFailure (see
+	// managed_domain_emission_test.go:462-478 for the precedent).
+	// The structural (non-Validate) assertions on the maintenance
+	// shape live in maintenance_test.go instead.
+	routes = append(routes, storage.Route{
+		ID:        "r-maintenance",
+		Host:      "maintenance.example.com",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+		WAFMode:   "off",
+		MaintenanceConfig: &storage.MaintenanceConfig{
+			RetryAfterSeconds: 300,
+			BypassIPs:         []string{"192.168.1.0/24"},
+		},
+	})
 	// Task 1d empirical gate — fold the multi-provider managed-domain
 	// scenarios into THIS canonical caddy.Validate call (rather than
 	// spawning a competing parallel caddy.Validate test, which would
