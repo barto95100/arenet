@@ -238,10 +238,21 @@ export const errorTemplatesApi = {
 	// internal/api/maintenance_page.go (Task 7). Single global HTML
 	// singleton served on maintenance-mode 503s for any route ; empty
 	// HTML means "serve the branded default" (backend doc comment).
-	getMaintenancePage(): Promise<{ html: string }> {
-		return request<{ html: string }>('GET', '/settings/maintenance-page');
+	//
+	// v2.17.1 Item E — the response shape grew an `isDefault` flag.
+	// GET now always returns non-empty `html` : when the operator has
+	// never customized the page, the backend serves the branded
+	// built-in default HTML with isDefault=true (instead of an empty
+	// string), so the editor has a real starting point rather than a
+	// blank buffer. PUT echoes the same shape (isDefault=true again
+	// after a "Reset to default" save, since that persists an empty
+	// string server-side).
+	getMaintenancePage(): Promise<{ html: string; isDefault: boolean }> {
+		return request<{ html: string; isDefault: boolean }>('GET', '/settings/maintenance-page');
 	},
-	putMaintenancePage(html: string): Promise<{ html: string }> {
-		return request<{ html: string }>('PUT', '/settings/maintenance-page', { html });
+	putMaintenancePage(html: string): Promise<{ html: string; isDefault: boolean }> {
+		return request<{ html: string; isDefault: boolean }>('PUT', '/settings/maintenance-page', {
+			html
+		});
 	}
 };
