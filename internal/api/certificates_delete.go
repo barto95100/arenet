@@ -89,6 +89,22 @@ func (h *Handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {
 	if _, covered := caddymgr.IsHostCoveredByManagedDomain(domain, mds); covered {
 		blocking = append(blocking, domain)
 	}
+	// IsHostCoveredByManagedDomain only handles sub-label coverage
+	// (e.g. "sub.<apex>") — it bails on any "*."-prefixed host, so
+	// it never catches the wildcard/apex subjects a managed domain
+	// itself emits. A managed domain emits `*.<apex>` unconditionally
+	// and `<apex>` when IncludeApex is set; deleting the cert for
+	// either subject while the managed domain is live would just
+	// make Caddy re-issue it (cert churn), so block those too.
+	lowerDomain := strings.ToLower(strings.TrimSuffix(domain, "."))
+	for _, md := range mds {
+		apex := strings.ToLower(md.Apex)
+		if lowerDomain == "*."+apex {
+			blocking = append(blocking, "*."+apex+" (managed domain)")
+		} else if lowerDomain == apex && md.IncludeApex {
+			blocking = append(blocking, apex+" (managed domain)")
+		}
+	}
 	if len(blocking) > 0 {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":          "certificate in use; delete or disable the referencing route(s) first",

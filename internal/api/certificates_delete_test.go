@@ -148,6 +148,74 @@ func TestDeleteCertificate_Wildcard_Routes(t *testing.T) {
 	}
 }
 
+// TestDeleteCertificate_BlockedByManagedDomainWildcard_409 pins the
+// final-review bug fix: a live managed domain (Apex="darro.ovh")
+// emits the cert subject "*.darro.ovh" unconditionally (via
+// buildAutomateList), so deleting that exact wildcard cert while the
+// managed domain still exists must be blocked with 409 — otherwise
+// Caddy just re-issues it on the next reload (cert churn).
+// IsHostCoveredByManagedDomain alone does NOT catch this: it bails on
+// any "*."-prefixed host, so this test exercises the new
+// managed-domain-subject check added in deleteCertificate.
+func TestDeleteCertificate_BlockedByManagedDomainWildcard_409(t *testing.T) {
+	env := newTestEnv(t, false)
+	storageDir := t.TempDir()
+	env.handler.SetCertStorageDir(storageDir)
+
+	if err := env.store.PutManagedDomain(context.Background(), storage.ManagedDomain{
+		Apex:        "darro.ovh",
+		IncludeApex: true,
+	}); err != nil {
+		t.Fatalf("seed managed domain: %v", err)
+	}
+	leaf := seedCertOnDisk(t, storageDir, "acme-v02.api.letsencrypt.org-directory", "wildcard_.darro.ovh")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/certificates/"+url.PathEscape("*.darro.ovh"), nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s; want 409 (live managed domain still emits this wildcard)", rec.Code, rec.Body)
+	}
+	var resp struct {
+		BlockingRoutes []string `json:"blockingRoutes"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.BlockingRoutes) == 0 {
+		t.Error("blockingRoutes empty; want it to name the managed domain")
+	}
+	if _, err := os.Stat(leaf); os.IsNotExist(err) {
+		t.Error("wildcard cert dir was deleted; want it left on disk since delete was blocked")
+	}
+}
+
+// TestDeleteCertificate_BlockedByManagedDomainApex_409 covers the
+// bare-apex half of the same fix: a managed domain with
+// IncludeApex=true also emits a cert covering the bare apex itself
+// (e.g. "darro.ovh", not just "*.darro.ovh"). Deleting that apex cert
+// while the managed domain is live must also be blocked with 409.
+func TestDeleteCertificate_BlockedByManagedDomainApex_409(t *testing.T) {
+	env := newTestEnv(t, false)
+	storageDir := t.TempDir()
+	env.handler.SetCertStorageDir(storageDir)
+
+	if err := env.store.PutManagedDomain(context.Background(), storage.ManagedDomain{
+		Apex:        "darro.ovh",
+		IncludeApex: true,
+	}); err != nil {
+		t.Fatalf("seed managed domain: %v", err)
+	}
+	seedCertOnDisk(t, storageDir, "acme-v02.api.letsencrypt.org-directory", "darro.ovh")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/certificates/darro.ovh", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s; want 409 (live managed domain with IncludeApex still emits this apex cert)", rec.Code, rec.Body)
+	}
+}
+
 // --- Gap 1: tracker purge assertions ---------------------------------------
 
 // TestDeleteCertificate_Orphan_PurgesTracker pins that the DELETE
