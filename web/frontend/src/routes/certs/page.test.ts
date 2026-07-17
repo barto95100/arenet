@@ -37,6 +37,7 @@ const { toastMock, apiMock, settingsMock, certsMock, securityMock } = vi.hoisted
 	certsMock: {
 		certificatesApi: {
 			list: vi.fn(),
+			deleteCertificate: vi.fn(),
 		},
 	},
 	securityMock: {
@@ -147,6 +148,7 @@ beforeEach(() => {
 	settingsMock.settingsApi.deleteManagedDomain.mockReset();
 	settingsMock.settingsApi.listDNSProviders.mockReset();
 	certsMock.certificatesApi.list.mockReset();
+	certsMock.certificatesApi.deleteCertificate.mockReset();
 	securityMock.fetchCertEvents.mockReset();
 
 	// Sensible defaults: no routes, no domains, DNS provider
@@ -642,6 +644,93 @@ describe('/certs — Domaines table (T.4)', () => {
 		// (AC #13 degraded mode mirrored on the frontend). Post-
 		// T.5 the wizard trigger is the new declaration affordance.
 		expect(screen.getByTestId('open-wildcard-wizard')).toBeInTheDocument();
+	});
+});
+
+// --- Task 7 — per-cert Delete action + confirm/blocked dialogs -----
+//
+// Reuses the same Modal + pushToast + loadCertificates list-refresh
+// the page already wires for the managed-domain delete flow. On 200
+// the row disappears (list refreshed) + a success toast fires; on
+// 409 a blocked dialog lists the offending routes from
+// e.blockingRoutes instead of touching the toast.
+describe('/certs — cert delete action (Task 7)', () => {
+	function orphanCert(domain: string) {
+		return {
+			domain,
+			sanList: [domain],
+			issuer: "Let's Encrypt",
+			notBefore: daysFromNow(-30),
+			notAfter: daysFromNow(60),
+			status: 'VALID' as const,
+			source: 'specific' as const,
+		};
+	}
+
+	it('deletes an orphan cert, toasts success, and refreshes the list', async () => {
+		certsMock.certificatesApi.list
+			.mockResolvedValueOnce([orphanCert('orphan.example.com')])
+			.mockResolvedValueOnce([]);
+		certsMock.certificatesApi.deleteCertificate.mockResolvedValue({
+			domain: 'orphan.example.com',
+			deleted: 3,
+		});
+
+		render(Page);
+		await userEvent.click(
+			await screen.findByTestId('cert-delete-orphan.example.com'),
+		);
+		await userEvent.click(await screen.findByTestId('cert-delete-confirm'));
+
+		expect(certsMock.certificatesApi.deleteCertificate).toHaveBeenCalledWith(
+			'orphan.example.com',
+		);
+		expect(toastMock.pushToast).toHaveBeenCalledWith(
+			expect.stringContaining('orphan.example.com'),
+			'success',
+		);
+		// List refresh (loadCertificates) ran a second time post-delete —
+		// the row is gone.
+		await tick();
+		expect(
+			screen.queryByTestId('cert-delete-orphan.example.com'),
+		).not.toBeInTheDocument();
+	});
+
+	it('shows the blocked dialog with the blocking routes on 409', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue([
+			orphanCert('used.example.com'),
+		]);
+		certsMock.certificatesApi.deleteCertificate.mockRejectedValue(
+			Object.assign(new Error('in use'), {
+				status: 409,
+				blockingRoutes: ['used.example.com'],
+			}),
+		);
+
+		render(Page);
+		await userEvent.click(
+			await screen.findByTestId('cert-delete-used.example.com'),
+		);
+		await userEvent.click(await screen.findByTestId('cert-delete-confirm'));
+
+		expect(
+			await screen.findByText(/is in use by: used\.example\.com/),
+		).toBeInTheDocument();
+		// No success toast on the blocked path.
+		expect(toastMock.pushToast).not.toHaveBeenCalledWith(
+			expect.anything(),
+			'success',
+		);
+	});
+
+	it('delete button carries a per-domain aria-label', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue([
+			orphanCert('labeled.example.com'),
+		]);
+		render(Page);
+		const btn = await screen.findByTestId('cert-delete-labeled.example.com');
+		expect(btn.getAttribute('aria-label')).toBe('Delete certificate');
 	});
 });
 
