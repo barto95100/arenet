@@ -879,6 +879,18 @@ export interface Certificate {
 }
 
 /**
+ * Task 5 — DELETE /api/v1/certificates/{domain} success response
+ * shape (internal/api/certificates_delete.go). `deleted` is the
+ * count of on-disk cert files removed across all issuers (0 for a
+ * "ghost" tracker entry with nothing on disk — still a 200, the
+ * delete is idempotent).
+ */
+export interface CertificateDeleteResult {
+	domain: string;
+	deleted: number;
+}
+
+/**
  * Step O.3 — DELETE /api/v1/settings/managed-domains/{apex}
  * response shape. The `mutatedRoutes` count tells the frontend
  * how many covered routes had their ACMEChallenge reverted, so

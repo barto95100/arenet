@@ -1424,6 +1424,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// certmagic via the arenet_cert_info handler module by the
 	// time this setter fires.
 	apiHandler.SetCertInfoReader(certTracker)
+	apiHandler.SetCertStorageDir(certStorageDir)
 	// Post-T.5 hotfix (2026-06-05) — log the wire-up state so
 	// any future regression (CertInfoReader interface narrowing,
 	// missed setter call after a refactor, deploy of a stale

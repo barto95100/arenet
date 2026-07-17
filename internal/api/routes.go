@@ -337,6 +337,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Delete("/routes/{id}", h.deleteRoute)
 				r.Post("/routes/{id}/disable", h.disableRoute)
 				r.Post("/routes/{id}/enable", h.enableRoute)
+				r.Delete("/certificates/{domain}", h.deleteCertificate)
 				// Step R — custom error pages CRUD (admin-only).
 				// GET endpoints are mounted in the viewer-accessible
 				// section above so the RouteForm dropdown can list

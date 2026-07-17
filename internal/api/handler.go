@@ -369,6 +369,10 @@ type Handler struct {
 	// an error) so the Certificates page renders the "no data
 	// yet" empty state rather than 500ing.
 	certInfo CertInfoReader
+	// certStorageDir is the certmagic storage root
+	// (caddy.AppDataDir()); the cert-delete handler needs it to
+	// remove on-disk cert material. Empty until SetCertStorageDir.
+	certStorageDir string
 	// certEvents (Step U.3, 2026-06-06) is the cert_event
 	// table read surface. Backs GET /api/v1/observability/
 	// cert-events — the Activity log page's cert source.
@@ -804,6 +808,13 @@ func (h *Handler) SetHCStatusReader(r HCStatusReader) {
 // metrics + security readers above.
 func (h *Handler) SetCertInfoReader(r CertInfoReader) {
 	h.certInfo = r
+}
+
+// SetCertStorageDir attaches the certmagic storage root so the
+// cert-delete handler can remove on-disk material. Wired once at
+// boot from main.go's certStorageDir (caddy.AppDataDir()).
+func (h *Handler) SetCertStorageDir(dir string) {
+	h.certStorageDir = dir
 }
 
 // HasCertInfoPurger reports whether the cert-info seam is wired

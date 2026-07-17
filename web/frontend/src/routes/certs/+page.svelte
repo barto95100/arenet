@@ -119,6 +119,16 @@
 	let mdDeleteRevertTo = $state<ManagedDomainRevertTo>('');
 	let mdDeleteError = $state<string | null>(null);
 
+	// Task 7 — per-row certificate delete. Mirrors the
+	// managed-domain delete flow's shape (a target + a Modal
+	// gated by it) rather than inventing a new dialog primitive.
+	// deleteTarget holds the domain awaiting confirmation;
+	// blockedDialog holds the 409 outcome (domain + the routes
+	// still referencing it) so the operator knows what to fix
+	// before retrying the delete.
+	let deleteTarget = $state<string | null>(null);
+	let blockedDialog = $state<{ domain: string; routes: string[] } | null>(null);
+
 	// Cert.B (2026-06-23) — per-domain cert events cache. Used by
 	// both the stale-failure badge derivation and the drill-down
 	// modal. Lazy-loaded after the certs list paints (loadCertEvents)
@@ -368,6 +378,32 @@
 		}
 	}
 
+	/**
+	 * Task 7 — confirm handler for the per-row certificate delete.
+	 * On 200: success toast + list refresh (loadCertificates, same
+	 * fn the T.4 auto-poll uses). On 409 (still referenced by a
+	 * route or a wildcard policy): opens the blocked dialog with
+	 * the offending hosts from `e.blockingRoutes` instead of
+	 * toasting an error. Any other failure falls back to a danger
+	 * toast.
+	 */
+	async function doDeleteCert(domain: string): Promise<void> {
+		try {
+			await certificatesApi.deleteCertificate(domain);
+			pushToast(t('certs.delete.success', { domain }), 'success');
+			deleteTarget = null;
+			await loadCertificates();
+		} catch (err) {
+			deleteTarget = null;
+			const e = err as { status?: number; blockingRoutes?: string[]; message?: string };
+			if (e?.status === 409) {
+				blockedDialog = { domain, routes: e.blockingRoutes ?? [] };
+			} else {
+				pushToast(e?.message ?? t('certs.delete.action'), 'danger');
+			}
+		}
+	}
+
 	onMount(() => {
 		void load();
 		// Auto-refresh: ACME issuance is asynchronous (certmagic obtains
@@ -563,6 +599,7 @@
 						<th>{language.current && t('certs.colIssuedAt')}</th>
 						<th>{language.current && t('certs.colExpiresIn')}</th>
 						<th>{language.current && t('certs.colState')}</th>
+						<th class="col-actions"><span class="visually-hidden">{language.current && t('certs.delete.action')}</span></th>
 					</tr>
 				</thead>
 				<tbody>
@@ -645,6 +682,17 @@
 										{certificateStatusLabel(cert.status)}
 									</Badge>
 								{/if}
+							</td>
+							<td class="col-actions">
+								<button
+									type="button"
+									class="row-delete-btn"
+									data-testid={`cert-delete-${cert.domain}`}
+									aria-label={language.current && t('certs.delete.action')}
+									onclick={() => (deleteTarget = cert.domain)}
+								>
+									{language.current && t('certs.delete.action')}
+								</button>
 							</td>
 						</tr>
 					{/each}
@@ -787,6 +835,63 @@
 				variant="danger"
 				onclick={() => void confirmDeleteManagedDomain()}>{language.current && t('certs.mdDeleteConfirm')}</Button
 			>
+		{/snippet}
+	</Modal>
+{/if}
+
+<!-- Task 7 — certificate delete confirm dialog. Same Modal
+     component + footer button pair as the managed-domain delete
+     dialog above; the confirm button carries the fixed testid the
+     brief's tests key on. -->
+{#if deleteTarget}
+	<Modal
+		open={deleteTarget !== null}
+		title={language.current && t('certs.delete.confirm.title')}
+		onClose={() => (deleteTarget = null)}
+	>
+		{#snippet children()}
+			<p class="modal-lead">
+				{language.current && t('certs.delete.confirm.text', { domain: deleteTarget ?? '' })}
+			</p>
+		{/snippet}
+		{#snippet footer()}
+			<Button variant="ghost" onclick={() => (deleteTarget = null)}
+				>{language.current && t('common.cancel')}</Button
+			>
+			<Button
+				variant="danger"
+				data-testid="cert-delete-confirm"
+				onclick={() => void doDeleteCert(deleteTarget ?? '')}
+			>
+				{language.current && t('certs.delete.confirm.action')}
+			</Button>
+		{/snippet}
+	</Modal>
+{/if}
+
+<!-- Task 7 — blocked-delete dialog. Surfaces the 409 outcome: the
+     certificate is still referenced by one or more routes /
+     wildcard policies, listed verbatim from e.blockingRoutes so the
+     operator knows what to clear first. Single "Got it"
+     acknowledgement button — there is nothing to confirm here. -->
+{#if blockedDialog}
+	<Modal
+		open={blockedDialog !== null}
+		title={language.current && t('certs.delete.blocked.title')}
+		onClose={() => (blockedDialog = null)}
+	>
+		{#snippet children()}
+			<p class="modal-lead" role="alert">
+				{language.current && t('certs.delete.blocked.text', {
+					domain: blockedDialog?.domain ?? '',
+					routes: (blockedDialog?.routes ?? []).join(', ')
+				})}
+			</p>
+		{/snippet}
+		{#snippet footer()}
+			<Button variant="ghost" onclick={() => (blockedDialog = null)}>
+				{language.current && t('common.confirm')}
+			</Button>
 		{/snippet}
 	</Modal>
 {/if}
@@ -1258,5 +1363,52 @@
 		display: flex;
 		justify-content: center;
 		padding: 48px;
+	}
+
+	/* Task 7 — per-row certificate delete action. Narrow column,
+	   right-aligned so it doesn't compete with the domain/issuer
+	   cells' left-aligned reading flow. */
+	.col-actions {
+		width: 1%;
+		white-space: nowrap;
+		text-align: right;
+	}
+	.row-delete-btn {
+		appearance: none;
+		background: transparent;
+		border: 1px solid var(--border);
+		color: var(--fg-muted);
+		font-size: 11px;
+		font-family: inherit;
+		padding: 4px 10px;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		transition: color var(--motion-fast, 120ms), background var(--motion-fast, 120ms),
+			border-color var(--motion-fast, 120ms);
+	}
+	.row-delete-btn:hover {
+		color: var(--status-down);
+		border-color: var(--status-down);
+		background: color-mix(in oklch, var(--status-down) 8%, transparent);
+	}
+	.row-delete-btn:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+
+	/* Visually-hidden column header — the Actions column has no
+	   printed label (bare icon-less button), but a screen-reader
+	   user still needs a header cell name. Standard clip-based
+	   visually-hidden pattern. */
+	.visually-hidden {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
 	}
 </style>

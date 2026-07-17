@@ -1329,6 +1329,19 @@
 					"ctaLabel": "Configure a DNS provider in Settings"
 				}
 			}
+		},
+		"delete": {
+			"action": "Delete certificate",
+			"confirm": {
+				"title": "Delete certificate",
+				"text": "Permanently delete the certificate for {domain}? The .crt/.key/.json files will be removed from disk. This is irreversible.",
+				"action": "Delete certificate"
+			},
+			"blocked": {
+				"title": "Cannot delete",
+				"text": "The certificate for {domain} is in use by: {routes}. Delete or disable those route(s) first."
+			},
+			"success": "Certificate for {domain} deleted"
 		}
 	},
 	"waf": {
