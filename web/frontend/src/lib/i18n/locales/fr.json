@@ -1329,6 +1329,19 @@
 					"ctaLabel": "Configurer un fournisseur DNS dans les Réglages"
 				}
 			}
+		},
+		"delete": {
+			"action": "Supprimer le certificat",
+			"confirm": {
+				"title": "Supprimer le certificat",
+				"text": "Supprimer définitivement le certificat de {domain} ? Les fichiers .crt/.key/.json seront supprimés du disque. Cette action est irréversible.",
+				"action": "Supprimer le certificat"
+			},
+			"blocked": {
+				"title": "Suppression impossible",
+				"text": "Le certificat de {domain} est utilisé par : {routes}. Supprime ou désactive d'abord ces route(s)."
+			},
+			"success": "Certificat de {domain} supprimé"
 		}
 	},
 	"waf": {
