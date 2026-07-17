@@ -1599,6 +1599,14 @@ type routeResponse struct {
 	TotalUpstreamCount   int    `json:"totalUpstreamCount"`
 	CreatedAt            string `json:"createdAt"`
 	UpdatedAt            string `json:"updatedAt"`
+	// Disabled (v2.15.0 field, response serialization fixed v2.17.1) —
+	// echoed on every GET so the frontend's 3-state control + the
+	// last-HTTPS count read the real state. It was missing from this
+	// struct since v2.15.0: storage + the /disable endpoint set it, but
+	// the response never carried it, so a disabled route decoded as
+	// undefined (falsy) → the UI showed it Active. omitempty keeps
+	// enabled routes byte-identical (absent → the FE reads not-disabled).
+	Disabled bool `json:"disabled,omitempty"`
 	// MaintenanceConfig (v2.16.0) — echoed on every GET so the
 	// frontend can render the maintenance banner + preserve the
 	// config across an unrelated route edit. nil = not in
@@ -1693,6 +1701,7 @@ func toResponse(r storage.Route) routeResponse {
 		ErrorPageOverrides:  r.ErrorPageOverrides,
 		CreatedAt:           r.CreatedAt.UTC().Format(timestampFormat),
 		UpdatedAt:           r.UpdatedAt.UTC().Format(timestampFormat),
+		Disabled:            r.Disabled,
 		MaintenanceConfig:   r.MaintenanceConfig,
 	}
 }
