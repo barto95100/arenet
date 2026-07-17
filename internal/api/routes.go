@@ -2024,6 +2024,17 @@ func (h *Handler) toggleRouteDisabled(w http.ResponseWriter, r *http.Request, di
 
 	next := previous
 	next.Disabled = disabled
+	// spec-8: "Returning to Active/Disabled sets MaintenanceConfig =
+	// nil." Only clear on the disable transition — a disabled route
+	// must never carry a stale MaintenanceConfig that would resurrect
+	// it into maintenance (instead of active) on a later /enable,
+	// since /enable only clears Disabled and routeState() derives
+	// 'maintenance' from any non-nil MaintenanceConfig when Disabled
+	// is false. Enable itself leaves MaintenanceConfig untouched
+	// (there is none left to clear, by this same invariant).
+	if disabled {
+		next.MaintenanceConfig = nil
+	}
 	updated, err := h.store.UpdateRoute(r.Context(), next)
 	if err != nil {
 		h.logger.Error("toggle route disabled", "err", err, "id", id)

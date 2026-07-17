@@ -106,3 +106,51 @@ func TestUpdateRoute_PreservesMaintenanceOnEdit(t *testing.T) {
 	}
 	_ = json.Marshal // keep import
 }
+
+// Final-review Finding #2 (v2.17.0) — spec decision 8: "Returning to
+// Active/Disabled sets MaintenanceConfig = nil." toggleRouteDisabled
+// previously preserved MaintenanceConfig across /disable, so a route
+// disabled while in maintenance kept a stale MaintenanceConfig. A
+// later /enable (which only clears Disabled) then resurrected the
+// route straight into maintenance (503) instead of active, because
+// routeState() derives 'maintenance' from a non-nil MaintenanceConfig
+// whenever Disabled is false.
+func TestRouteDisable_ClearsMaintenanceConfig(t *testing.T) {
+	env := newTestEnv(t, false)
+	created, _ := env.store.CreateRoute(context.Background(), storage.Route{
+		Host: "disable-clears-maint.example.com", Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin,
+		MaintenanceConfig: &storage.MaintenanceConfig{RetryAfterSeconds: 300},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes/"+created.ID+"/disable", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable status=%d body=%s; want 200", rec.Code, rec.Body)
+	}
+
+	got, _ := env.store.GetRoute(context.Background(), created.ID)
+	if !got.Disabled {
+		t.Error("route not marked Disabled after /disable")
+	}
+	if got.MaintenanceConfig != nil {
+		t.Errorf("MaintenanceConfig = %+v after /disable; want nil (spec-8 clear-on-disable)", got.MaintenanceConfig)
+	}
+
+	// Enable must bring the route back to Active, not resurrect
+	// maintenance from a stale MaintenanceConfig.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/routes/"+created.ID+"/enable", nil)
+	rec2 := httptest.NewRecorder()
+	env.router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s; want 200", rec2.Code, rec2.Body)
+	}
+
+	got2, _ := env.store.GetRoute(context.Background(), created.ID)
+	if got2.Disabled {
+		t.Error("route still Disabled after /enable")
+	}
+	if got2.MaintenanceConfig != nil {
+		t.Errorf("MaintenanceConfig = %+v after /enable; want nil (route must land Active, not Maintenance)", got2.MaintenanceConfig)
+	}
+}

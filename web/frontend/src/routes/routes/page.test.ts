@@ -3280,4 +3280,49 @@ describe('/routes — 3-state control + maintenance', () => {
 		expect(payload.maintenanceConfig).toBeDefined();
 		expect(payload.maintenanceConfig.retryAfterSeconds).toBe(90);
 	});
+
+	// Finding #1 (final review, v2.17.0) — CRITICAL. A route that is
+	// NOT in maintenance (no maintenanceConfig, not disabled) must NOT
+	// have maintenanceConfig introduced by a routine edit. Before the
+	// fix, the payload assembler always shipped
+	// formData.maintenanceConfig, which openEdit seeds with the
+	// synthetic default {retryAfterSeconds:300, bypassIps:[]} for a
+	// route that has never been put into maintenance — so ANY edit
+	// (e.g. changing the upstream URL) silently flipped the route
+	// into maintenance (503 to everyone) on the next reload. This
+	// test seeds a plain ACTIVE route, edits an unrelated field, and
+	// asserts the update payload's maintenanceConfig stays
+	// null/absent — i.e. the edit does NOT introduce maintenance.
+	it('does NOT ship maintenanceConfig when editing an ACTIVE route (no maintenance introduced)', async () => {
+		const seeded = makeRoute({
+			id: 'edit-active-no-maint',
+			host: 'active-no-maint.example.com'
+			// disabled: false (default), maintenanceConfig: undefined (default) — plain active route.
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+
+		const hostCell = await screen.findByText('active-no-maint.example.com');
+		await fireEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		// Edit an unrelated field (the upstream URL) — a routine edit
+		// that has nothing to do with maintenance.
+		const upstreamInput = upstreamURLInputs()[0];
+		await userEvent.clear(upstreamInput);
+		await userEvent.type(upstreamInput, 'http://127.0.0.1:9100');
+		await tick();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		// Must NOT be the synthetic default {retryAfterSeconds:300, bypassIps:[]}
+		// and must NOT be present at all (undefined/null) — the route
+		// must stay active.
+		expect(payload.maintenanceConfig == null).toBe(true);
+	});
 });

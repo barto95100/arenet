@@ -1927,23 +1927,36 @@
 					payload.errorPageOverrides = clean;
 				}
 			}
-			// Task 9 — always ship maintenanceConfig, full-
-			// replacement (same always-ship semantic as `disabled`
-			// above — the operator's current form state is the
-			// truth, not a preserve-on-omit sub-form). The 3-state
-			// control on the list row is the primary way operators
-			// flip maintenance on/off (dedicated endpoints, no full
-			// PUT); this form section lets them tune retryAfter /
-			// bypassIps for a route already in maintenance (or
-			// pre-stage values before switching it on via the
-			// control). Bypass IPs are trimmed + blanks dropped so
-			// an empty repeater row doesn't ship a stray "".
-			payload.maintenanceConfig = {
-				retryAfterSeconds: formData.maintenanceConfig.retryAfterSeconds,
-				bypassIps: formData.maintenanceConfig.bypassIps
-					.map((ip) => ip.trim())
-					.filter((ip) => ip.length > 0)
-			};
+			// Task 9 / Final-review Finding #1 fix — maintenanceConfig
+			// is shipped ONLY when the route being saved is ACTUALLY
+			// in maintenance. openEdit seeds formData.maintenanceConfig
+			// with a synthetic default ({retryAfterSeconds:300,
+			// bypassIps:[]}) for a route that has NEVER been put into
+			// maintenance, so formData.maintenanceConfig being
+			// "truthy" tells us nothing about the route's real state.
+			// The route's real state (routeState()/the 3-state
+			// control) is the source of truth — NOT the form's
+			// default. Ship the block full-replacement (bypass IPs
+			// trimmed + blanks dropped) only when the edited route is
+			// currently in maintenance; otherwise omit it (undefined
+			// on the wire → backend maps to nil → not in maintenance,
+			// same preserve/clear semantic as the dedicated
+			// maintenance endpoints). This also covers 'create', where
+			// there is no prior route and a brand-new route must
+			// never be born into maintenance via this form.
+			const editingRouteForMaintenance =
+				formMode === 'edit' && editingId ? routes.find((r) => r.id === editingId) : undefined;
+			const isActuallyInMaintenance = editingRouteForMaintenance
+				? routeState(editingRouteForMaintenance) === 'maintenance'
+				: false;
+			if (isActuallyInMaintenance) {
+				payload.maintenanceConfig = {
+					retryAfterSeconds: formData.maintenanceConfig.retryAfterSeconds,
+					bypassIps: formData.maintenanceConfig.bypassIps
+						.map((ip) => ip.trim())
+						.filter((ip) => ip.length > 0)
+				};
+			}
 			// Step J.2 preserve-or-replace: ship the HC block only
 			// if the user touched it. Otherwise omit, letting the
 			// server preserve the previously stored value (on PUT)
@@ -2475,6 +2488,11 @@
 										<RouteStateControl
 											value={routeState(r)}
 											ariaLabel={language.current && t('routes.list.colActions')}
+											labels={language.current && {
+												active: t('routes.state.active'),
+												maintenance: t('routes.state.maintenance'),
+												disabled: t('routes.state.disabled')
+											}}
 											onchange={(next) => onRouteStateChange(r, next)}
 										/>
 									</div>

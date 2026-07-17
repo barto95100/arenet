@@ -27,6 +27,15 @@
     onchange — fired with the new state on user interaction
     disabled — disables interaction entirely (e.g. while isApplying)
     ariaLabel — labels the group for screen readers
+    labels   — Final-review Finding #3 (i18n regression) fix: the
+               segment labels as a {active, maintenance, disabled}
+               map. This is a leaf component with no store/i18n
+               import of its own (mirrors Toggle.svelte, its
+               closest neighbor, which takes labels via its
+               `options` prop) — the PARENT owns `t()` and passes
+               translated strings in. Defaults to the English
+               literals so existing callers that don't pass `labels`
+               keep working unchanged.
 -->
 <script lang="ts">
 	type RouteState = 'active' | 'maintenance' | 'disabled';
@@ -36,17 +45,18 @@
 		onchange?: (v: RouteState) => void;
 		disabled?: boolean;
 		ariaLabel?: string;
+		labels?: Record<RouteState, string>;
 	}
 
-	let { value, onchange, disabled = false, ariaLabel }: Props = $props();
-
-	const STATES: RouteState[] = ['active', 'maintenance', 'disabled'];
-
-	const LABELS: Record<RouteState, string> = {
+	const DEFAULT_LABELS: Record<RouteState, string> = {
 		active: 'Active',
 		maintenance: 'Maintenance',
 		disabled: 'Disabled'
 	};
+
+	let { value, onchange, disabled = false, ariaLabel, labels = DEFAULT_LABELS }: Props = $props();
+
+	const STATES: RouteState[] = ['active', 'maintenance', 'disabled'];
 
 	function pick(v: RouteState): void {
 		if (disabled || v === value) return;
@@ -132,7 +142,7 @@
 					</svg>
 				{/if}
 			</span>
-			<span class="lbl">{LABELS[state]}</span>
+			<span class="lbl">{labels[state]}</span>
 		</button>
 	{/each}
 </div>

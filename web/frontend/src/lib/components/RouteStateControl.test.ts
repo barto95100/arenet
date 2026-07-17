@@ -15,6 +15,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import RouteStateControl from './RouteStateControl.svelte';
+import { t } from '$lib/i18n';
+import { language } from '$lib/stores/language.svelte';
 
 describe('RouteStateControl', () => {
 	it('renders 3 radio segments with the state labels, active one aria-checked=true', () => {
@@ -48,5 +50,34 @@ describe('RouteStateControl', () => {
 		render(RouteStateControl, { value: 'disabled', ariaLabel: 'Route state' });
 
 		expect(screen.getByRole('radiogroup', { name: 'Route state' })).toBeInTheDocument();
+	});
+
+	// Final-review Finding #3 (v2.17.0) — i18n regression. The
+	// component previously hardcoded LABELS = {active:'Active', ...}
+	// in English regardless of locale, even though the
+	// `routes.state.*` i18n keys exist and differ by locale
+	// (fr.json disabled: "Désactivée"). The parent (+page.svelte)
+	// now passes a `labels` prop built from t('routes.state.*').
+	// This test renders the component the way the parent does under
+	// the FR locale and asserts the FR label appears — it must FAIL
+	// against the old hardcoded-English behavior (which ignores any
+	// `labels` prop and always renders "Disabled").
+	it('renders the FR-translated label when the parent passes labels resolved via t() under the FR locale', () => {
+		language.applyLocally('fr');
+		try {
+			const labels = {
+				active: t('routes.state.active'),
+				maintenance: t('routes.state.maintenance'),
+				disabled: t('routes.state.disabled')
+			};
+			expect(labels.disabled).toBe('Désactivée');
+
+			render(RouteStateControl, { value: 'disabled', labels });
+
+			expect(screen.getByRole('radio', { name: 'Désactivée' })).toBeInTheDocument();
+			expect(screen.queryByRole('radio', { name: 'Disabled' })).toBeNull();
+		} finally {
+			language.applyLocally('en');
+		}
 	});
 });
