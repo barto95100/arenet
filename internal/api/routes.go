@@ -164,6 +164,11 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			r.Get("/error-templates", h.listErrorTemplates)
 			r.Get("/error-templates/{id}", h.getErrorTemplate)
 			r.Get("/error-templates/{id}/preview", h.previewErrorTemplate)
+			// Task 7 — global maintenance page read. Viewer-
+			// accessible so the /settings/maintenance editor's
+			// initial load doesn't require admin scope; the
+			// PUT (write) sits in the admin-only sub-group below.
+			r.Get("/settings/maintenance-page", h.getMaintenancePage)
 			r.Get("/audit", h.listAudit)
 			// Step L L.2 — per-route metrics history.
 			// Read-only; viewer-accessible per AC #17. No
@@ -347,6 +352,10 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Post("/error-templates", h.createErrorTemplate)
 				r.Put("/error-templates/{id}", h.updateErrorTemplate)
 				r.Delete("/error-templates/{id}", h.deleteErrorTemplate)
+				// Task 7 — global maintenance page write (admin-
+				// only). GET is mounted in the viewer-accessible
+				// section above, same split as error-templates.
+				r.Put("/settings/maintenance-page", h.putMaintenancePage)
 				// Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-
 				// triggered upstream probe (UI button). Per-URL
 				// invocation; frontend parallelises pool > 1 via
