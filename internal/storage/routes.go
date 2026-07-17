@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strings"
@@ -160,6 +161,41 @@ type HealthCheck struct {
 	ExpectBody   string `json:"expect_body"`
 	Passes       int    `json:"passes"`
 	Fails        int    `json:"fails"`
+}
+
+// MaintenanceConfig, when non-nil (and Disabled=false), puts the route
+// in maintenance mode: Caddy serves 503 + the global maintenance page +
+// Retry-After, except BypassIPs which reach the real upstream. Nil =
+// not in maintenance (zero value, migration-free). Exiting maintenance
+// sets this back to nil (clear-on-off).
+type MaintenanceConfig struct {
+	// RetryAfterSeconds is sent as the 503 Retry-After header and
+	// substituted into the maintenance page. 0 = omit the header.
+	RetryAfterSeconds int `json:"retryAfterSeconds,omitempty"`
+	// BypassIPs is an IP/CIDR allow-list; matching clients reach the
+	// real upstream instead of the 503.
+	BypassIPs []string `json:"bypassIps,omitempty"`
+}
+
+// Validate rejects a negative Retry-After and any bypass entry that is
+// neither a bare IP nor a CIDR.
+func (m *MaintenanceConfig) Validate() error {
+	if m == nil {
+		return nil
+	}
+	if m.RetryAfterSeconds < 0 {
+		return fmt.Errorf("maintenance: retryAfterSeconds must be >= 0, got %d", m.RetryAfterSeconds)
+	}
+	for _, e := range m.BypassIPs {
+		if _, _, err := net.ParseCIDR(e); err == nil {
+			continue
+		}
+		if net.ParseIP(e) != nil {
+			continue
+		}
+		return fmt.Errorf("maintenance: bypass entry %q is not an IP or CIDR", e)
+	}
+	return nil
 }
 
 // Route is a proxied virtual host served by Arenet.
@@ -516,6 +552,11 @@ type Route struct {
 	// equal legacy behavior. omitempty keeps enabled routes'
 	// wire bytes identical to pre-feature routes.
 	Disabled bool `json:"disabled,omitempty"`
+	// MaintenanceConfig, when non-nil, puts the route in maintenance
+	// mode (see the MaintenanceConfig type doc above). Nil is the
+	// zero value — pre-feature routes and fresh creates decode with
+	// no maintenance active, no migration needed.
+	MaintenanceConfig *MaintenanceConfig `json:"maintenanceConfig,omitempty"`
 }
 
 // RouteRateLimit (Step Q, 2026-06-18) — per-route rate limit
@@ -801,6 +842,14 @@ func (r *Route) validate() error {
 		if len(body) > 1<<20 {
 			return fmt.Errorf("route: error_page_overrides[%d] exceeds 1 MiB (%d bytes)", code, len(body))
 		}
+	}
+	// MaintenanceConfig: nil is inert (route not in maintenance); a
+	// non-nil config is validated so a bad bypass IP/CIDR or a
+	// negative Retry-After is rejected at the storage layer, the
+	// same last-line-of-defence pattern as CountryBlock / HealthCheck
+	// above.
+	if err := r.MaintenanceConfig.Validate(); err != nil {
+		return err
 	}
 	return nil
 }
