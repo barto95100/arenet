@@ -49,8 +49,21 @@ type maintenancePageRequest struct {
 
 // maintenancePageResponse is the wire shape returned by GET (and echoed
 // by PUT for symmetry with the error-templates handlers).
+//
+// v2.17.1 Item E — added IsDefault: GET previously returned an empty
+// HTML string when the operator had never customized the page, which
+// left the frontend editor looking blank with no visible starting
+// point. Now GET returns the branded built-in default HTML (see
+// caddymgr.DefaultMaintenancePageHTML) with IsDefault=true whenever
+// the stored config is empty, so the frontend can show it labeled as
+// "Arenet Default (built-in)" — mirroring the error-templates
+// surface's virtual "arenet-default" builtin entry. PUT continues to
+// echo exactly what was persisted (IsDefault=false unless the
+// operator explicitly saves an empty string, which is the "reset"
+// path — the NEXT GET will then report IsDefault=true again).
 type maintenancePageResponse struct {
-	HTML string `json:"html"`
+	HTML      string `json:"html"`
+	IsDefault bool   `json:"isDefault"`
 }
 
 func (h *Handler) getMaintenancePage(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +73,14 @@ func (h *Handler) getMaintenancePage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get maintenance page")
 		return
 	}
-	writeJSON(w, http.StatusOK, maintenancePageResponse{HTML: cfg.HTML})
+	if cfg.HTML == "" {
+		writeJSON(w, http.StatusOK, maintenancePageResponse{
+			HTML:      caddymgr.DefaultMaintenancePageHTML(),
+			IsDefault: true,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, maintenancePageResponse{HTML: cfg.HTML, IsDefault: false})
 }
 
 func (h *Handler) putMaintenancePage(w http.ResponseWriter, r *http.Request) {
@@ -86,5 +106,17 @@ func (h *Handler) putMaintenancePage(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("maintenance_page: caddy reload after update failed", "err", err)
 	}
 
-	writeJSON(w, http.StatusOK, maintenancePageResponse{HTML: sanitized})
+	// Echo the same {html, isDefault} shape GET would return right
+	// after this write: a "Reset to default" PUT (empty sanitized
+	// HTML) reports the built-in default + IsDefault=true, matching
+	// what the very next GET would produce, rather than echoing back
+	// an empty string with IsDefault=false (a shape GET never emits).
+	if sanitized == "" {
+		writeJSON(w, http.StatusOK, maintenancePageResponse{
+			HTML:      caddymgr.DefaultMaintenancePageHTML(),
+			IsDefault: true,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, maintenancePageResponse{HTML: sanitized, IsDefault: false})
 }

@@ -120,3 +120,19 @@ func TestBuildConfigJSON_MaintenanceRoute_NoBypass(t *testing.T) {
 		t.Error("no static_response 503 emitted for maintenance route")
 	}
 }
+
+// TestDefaultMaintenancePageHTML_MatchesInternalDefault pins the
+// v2.17.1 Item E exported accessor: it must return the exact same
+// HTML as the package-private arenetDefaultMaintenancePage used by
+// resolveMaintenancePage's empty-stored-HTML fallback, and it must be
+// non-empty so internal/api's GET handler has something real to
+// surface to the frontend as the built-in default.
+func TestDefaultMaintenancePageHTML_MatchesInternalDefault(t *testing.T) {
+	got := DefaultMaintenancePageHTML()
+	if got == "" {
+		t.Fatal("DefaultMaintenancePageHTML() returned empty string")
+	}
+	if got != arenetDefaultMaintenancePage {
+		t.Error("DefaultMaintenancePageHTML() does not match arenetDefaultMaintenancePage")
+	}
+}

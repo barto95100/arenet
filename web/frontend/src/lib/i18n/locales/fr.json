@@ -982,7 +982,9 @@
 			"errFailedLoad": "échec du chargement de la page de maintenance",
 			"errFailedSave": "échec de l'enregistrement de la page de maintenance",
 			"helpRetryAfter": "Utilisez le placeholder {arenet.maintenance.retry_after} pour afficher le délai de nouvelle tentative par route (substitué au moment de la requête).",
-			"helpEmpty": "Une page vide signifie qu'Arenet sert sa page de maintenance branded par défaut."
+			"helpEmpty": "Une page vide signifie qu'Arenet sert sa page de maintenance branded par défaut.",
+			"builtinBadge": "Défaut Arenet (intégré)",
+			"builtinTooltip": "Ceci est la page de maintenance par défaut intégrée à Arenet — la modifier puis cliquer sur Enregistrer en fait votre page personnalisée."
 		}
 	},
 	"settingsSubcards": {

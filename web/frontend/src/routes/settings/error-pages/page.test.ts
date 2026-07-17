@@ -70,8 +70,17 @@ beforeEach(() => {
 	toastMock.pushToast.mockReset();
 	apiMock.list.mockResolvedValue([]);
 	apiMock.preview.mockResolvedValue('<h1>preview</h1>');
-	apiMock.getMaintenancePage.mockResolvedValue({ html: '' });
-	apiMock.putMaintenancePage.mockResolvedValue({ html: '' });
+	// v2.17.1 Item E — GET/PUT now return {html, isDefault}. Default
+	// mock mirrors a fresh store: non-empty built-in HTML, isDefault
+	// true (matches the real backend contract post-change).
+	apiMock.getMaintenancePage.mockResolvedValue({
+		html: '<h1>Back soon (built-in default)</h1>',
+		isDefault: true
+	});
+	apiMock.putMaintenancePage.mockResolvedValue({
+		html: '<h1>Back soon (built-in default)</h1>',
+		isDefault: true
+	});
 });
 
 describe('/settings/error-pages — list view', () => {
@@ -403,7 +412,7 @@ describe('/settings/error-pages — Maintenance tab', () => {
 
 	it('loads the current maintenance page HTML when the tab is opened', async () => {
 		apiMock.list.mockResolvedValue([]);
-		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Back soon</h1>' });
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Back soon</h1>', isDefault: false });
 		render(Page);
 		await screen.findByText(/No custom template/);
 		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
@@ -423,8 +432,8 @@ describe('/settings/error-pages — Maintenance tab', () => {
 
 	it('editing and clicking Save calls putMaintenancePage with the new HTML', async () => {
 		apiMock.list.mockResolvedValue([]);
-		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Old</h1>' });
-		apiMock.putMaintenancePage.mockResolvedValue({ html: '<h1>New</h1>' });
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Old</h1>', isDefault: false });
+		apiMock.putMaintenancePage.mockResolvedValue({ html: '<h1>New</h1>', isDefault: false });
 		render(Page);
 		await screen.findByText(/No custom template/);
 		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
@@ -442,7 +451,7 @@ describe('/settings/error-pages — Maintenance tab', () => {
 
 	it('"Reset to default" clears the buffer to empty string', async () => {
 		apiMock.list.mockResolvedValue([]);
-		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Custom page</h1>' });
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Custom page</h1>', isDefault: false });
 		render(Page);
 		await screen.findByText(/No custom template/);
 		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
@@ -452,7 +461,7 @@ describe('/settings/error-pages — Maintenance tab', () => {
 		await screen.findByRole('textbox', { name: /Maintenance page HTML/ });
 		const resetBtn = screen.getByRole('button', { name: /Reset to default/ });
 		await fireEvent.click(resetBtn);
-		apiMock.putMaintenancePage.mockResolvedValue({ html: '' });
+		apiMock.putMaintenancePage.mockResolvedValue({ html: '', isDefault: true });
 		const saveBtn = screen.getByRole('button', { name: /^Save$/ });
 		await fireEvent.click(saveBtn);
 		await waitFor(() => {
@@ -460,9 +469,47 @@ describe('/settings/error-pages — Maintenance tab', () => {
 		});
 	});
 
+	// v2.17.1 Item E — a fresh store (backend isDefault:true) must
+	// show the built-in default HTML in the editor (not an empty
+	// buffer) labeled "Arenet Default (built-in)", mirroring the
+	// templates tab's builtin badge.
+	it('shows the built-in default HTML labeled "Arenet Default (built-in)" when isDefault is true', async () => {
+		apiMock.list.mockResolvedValue([]);
+		apiMock.getMaintenancePage.mockResolvedValue({
+			html: '<h1>503 branded default</h1>',
+			isDefault: true
+		});
+		render(Page);
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
+		await waitFor(() => {
+			expect(apiMock.getMaintenancePage).toHaveBeenCalledTimes(1);
+		});
+		await screen.findByRole('textbox', { name: /Maintenance page HTML/ });
+		expect(screen.getByText('Arenet Default (built-in)')).toBeInTheDocument();
+	});
+
+	// Once the operator has a saved custom page (isDefault false),
+	// the built-in label must NOT show.
+	it('does not show the built-in label once a custom page is saved (isDefault false)', async () => {
+		apiMock.list.mockResolvedValue([]);
+		apiMock.getMaintenancePage.mockResolvedValue({
+			html: '<h1>My custom page</h1>',
+			isDefault: false
+		});
+		render(Page);
+		await screen.findByText(/No custom template/);
+		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
+		await waitFor(() => {
+			expect(apiMock.getMaintenancePage).toHaveBeenCalledTimes(1);
+		});
+		await screen.findByRole('textbox', { name: /Maintenance page HTML/ });
+		expect(screen.queryByText('Arenet Default (built-in)')).toBeNull();
+	});
+
 	it('documents the {arenet.maintenance.retry_after} placeholder in editor help', async () => {
 		apiMock.list.mockResolvedValue([]);
-		apiMock.getMaintenancePage.mockResolvedValue({ html: '' });
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '', isDefault: true });
 		render(Page);
 		await screen.findByText(/No custom template/);
 		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));

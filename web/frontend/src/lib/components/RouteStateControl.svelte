@@ -8,6 +8,17 @@
   has a fixed semantic color + icon (play triangle / wrench / power)
   and the active segment is filled with its semantic color.
 
+  v2.17.1 UX polish (Item A): renders ICONS ONLY — the visible
+  `.lbl` text span was dropped. Three (icon+word) segments made the
+  control too wide, which pushed the Actions column wider and forced
+  the neighbouring Health Check / "Cert dédié (HTTP-01)" cells to
+  wrap onto 2 lines. The `labels` prop is kept (parent still passes
+  t('routes.state.*')) but now feeds `title` (hover tooltip) and
+  `aria-label` per segment instead of visible text — the semantic
+  fill color (green/amber/red) + the active-segment highlight convey
+  which state is selected to sighted users; screen readers still get
+  the full label via aria-label.
+
   This is a NEW standalone component — it deliberately does NOT
   extend or import Toggle.svelte (which is hardcoded to 2 generic
   slots and used by Theme/Language; touching it risks regressing
@@ -109,6 +120,8 @@
 			data-state={state}
 			class:active={state === value}
 			aria-checked={state === value}
+			aria-label={labels[state]}
+			title={labels[state]}
 			tabindex={state === value ? 0 : -1}
 			{disabled}
 			onclick={() => pick(state)}
@@ -142,7 +155,6 @@
 					</svg>
 				{/if}
 			</span>
-			<span class="lbl">{labels[state]}</span>
 		</button>
 	{/each}
 </div>
@@ -163,9 +175,8 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		gap: var(--space-2);
-		padding: var(--space-2) var(--space-3);
-		min-width: 64px;
+		padding: var(--space-2);
+		min-width: 32px;
 		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--text-secondary);
@@ -200,8 +211,5 @@
 	.icon {
 		display: inline-flex;
 		line-height: 0;
-	}
-	.lbl {
-		line-height: 1;
 	}
 </style>

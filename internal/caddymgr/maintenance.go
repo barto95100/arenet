@@ -145,3 +145,15 @@ var arenetDefaultMaintenancePage = fmt.Sprintf(`<!doctype html>
 </div>
 </body>
 </html>`, maintenanceRetryAfterSentinel)
+
+// DefaultMaintenancePageHTML returns the branded default maintenance
+// page HTML served when the operator has not customized the global
+// maintenance page (storage.MaintenancePageConfig.HTML empty). It is
+// the exported accessor for arenetDefaultMaintenancePage, added
+// (v2.17.1 Item E) so internal/api's GET /settings/maintenance-page
+// handler can surface the built-in default to the frontend — mirrors
+// how the error-templates surface exposes its own built-in default
+// (Step R Phase 2.1's virtual "arenet-default" template entry).
+func DefaultMaintenancePageHTML() string {
+	return arenetDefaultMaintenancePage
+}

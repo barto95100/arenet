@@ -19,6 +19,14 @@ import { t } from '$lib/i18n';
 import { language } from '$lib/stores/language.svelte';
 
 describe('RouteStateControl', () => {
+	// v2.17.1 UX polish (Item A): the component now renders ICONS
+	// ONLY — the visible `.lbl` text span was removed to keep the
+	// control compact. The labels still exist, but as `title`
+	// (hover tooltip) + `aria-label` per segment rather than a text
+	// node. `getByRole('radio', { name })` matches the ACCESSIBLE
+	// NAME, which aria-label now supplies directly (no visible text
+	// contributes to it), so this continues to locate segments by
+	// label while proving the labels are no longer visible text.
 	it('renders 3 radio segments with the state labels, active one aria-checked=true', () => {
 		render(RouteStateControl, { value: 'active' });
 
@@ -33,6 +41,18 @@ describe('RouteStateControl', () => {
 		expect(active).toHaveAttribute('aria-checked', 'true');
 		expect(maintenance).toHaveAttribute('aria-checked', 'false');
 		expect(disabled).toHaveAttribute('aria-checked', 'false');
+
+		// The label is carried by title + aria-label, NOT a visible
+		// text node — this is the crux of Item A.
+		expect(active).toHaveAttribute('title', 'Active');
+		expect(active).toHaveAttribute('aria-label', 'Active');
+		expect(maintenance).toHaveAttribute('title', 'Maintenance');
+		expect(maintenance).toHaveAttribute('aria-label', 'Maintenance');
+		expect(disabled).toHaveAttribute('title', 'Disabled');
+		expect(disabled).toHaveAttribute('aria-label', 'Disabled');
+		expect(screen.queryByText('Active')).toBeNull();
+		expect(screen.queryByText('Maintenance')).toBeNull();
+		expect(screen.queryByText('Disabled')).toBeNull();
 	});
 
 	it('calls onchange with "maintenance" when the maintenance segment is clicked', async () => {
@@ -40,6 +60,9 @@ describe('RouteStateControl', () => {
 		const user = userEvent.setup();
 		render(RouteStateControl, { value: 'active', onchange });
 
+		// Locate the segment via its aria-label (Item A: the segment
+		// with aria-label "Maintenance" fires onchange('maintenance')
+		// on click, per the brief).
 		await user.click(screen.getByRole('radio', { name: 'Maintenance' }));
 
 		expect(onchange).toHaveBeenCalledTimes(1);
@@ -74,7 +97,9 @@ describe('RouteStateControl', () => {
 
 			render(RouteStateControl, { value: 'disabled', labels });
 
-			expect(screen.getByRole('radio', { name: 'Désactivée' })).toBeInTheDocument();
+			const seg = screen.getByRole('radio', { name: 'Désactivée' });
+			expect(seg).toBeInTheDocument();
+			expect(seg).toHaveAttribute('title', 'Désactivée');
 			expect(screen.queryByRole('radio', { name: 'Disabled' })).toBeNull();
 		} finally {
 			language.applyLocally('en');

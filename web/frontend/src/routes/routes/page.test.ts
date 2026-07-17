@@ -33,7 +33,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 
 // --- Mocks. vi.mock + the supporting references both go through
@@ -2913,7 +2913,13 @@ function pickSegment(group: HTMLElement, state: 'active' | 'maintenance' | 'disa
 }
 
 describe('/routes — disable/enable', () => {
-	it('renders a Disabled badge for a disabled route', async () => {
+	// v2.17.1 Item C — the redundant "Disabled" text badge near the
+	// host cell was REMOVED (the RouteStateControl now carries the
+	// state via its fill color + active segment; see the
+	// '/routes — 3-state control + maintenance' suite below for the
+	// aria-checked assertion on the control itself). This test now
+	// pins the ABSENCE of the old badge markup instead.
+	it('does not render a redundant Disabled badge near the host (state lives in RouteStateControl)', async () => {
 		// Arrange: listRoutes returns one disabled route.
 		apiMock.listRoutes.mockResolvedValue([
 			makeRoute({
@@ -2925,12 +2931,8 @@ describe('/routes — disable/enable', () => {
 			})
 		]);
 		render(Page);
-		// Task 9 — the RouteStateControl segment also has a
-		// "Disabled" label, so scope to the badge element
-		// specifically (data-variant="status-down" per the
-		// strengthened Task 9 badge) rather than a bare text match.
-		const badge = await screen.findByText('Disabled', { selector: '.badge' });
-		expect(badge).toBeInTheDocument();
+		await screen.findByText('off.example.com');
+		expect(screen.queryByText('Disabled', { selector: '.badge' })).toBeNull();
 	});
 
 	it('dims the row (opacity class) for a disabled route', async () => {
@@ -3063,7 +3065,13 @@ describe('/routes — disable/enable', () => {
 		await fireEvent.click(hostCell.closest('tr')!);
 		await tick();
 
-		const disabledCheckbox = screen.getByLabelText('Disabled') as HTMLInputElement;
+		// Scope to the <form> — v2.17.1 Item A gave the row-level
+		// RouteStateControl segment an aria-label="Disabled" too
+		// (title/aria-label now carry the label instead of visible
+		// text), so an unscoped getByLabelText('Disabled') matches
+		// both it and the form's checkbox.
+		const form = document.querySelector('form')!;
+		const disabledCheckbox = within(form).getByLabelText('Disabled') as HTMLInputElement;
 		expect(disabledCheckbox.checked).toBe(false);
 		await userEvent.click(disabledCheckbox);
 		await tick();
@@ -3217,7 +3225,12 @@ describe('/routes — 3-state control + maintenance', () => {
 		expect(await screen.findByText('Disable the last HTTPS route?')).toBeInTheDocument();
 	});
 
-	it('shows a Maintenance badge for a route with maintenanceConfig set', async () => {
+	// v2.17.1 Item C — the redundant "Maintenance" text badge near
+	// the host cell was REMOVED (the RouteStateControl now carries
+	// the state; see 'renders RouteStateControl reflecting
+	// "maintenance"...' above for the aria-checked assertion). This
+	// test now pins the ABSENCE of the old badge markup instead.
+	it('does not render a redundant Maintenance badge near the host (state lives in RouteStateControl)', async () => {
 		apiMock.listRoutes.mockResolvedValue([
 			makeRoute({
 				id: 'r-badge',
@@ -3227,10 +3240,8 @@ describe('/routes — 3-state control + maintenance', () => {
 			})
 		]);
 		render(Page);
-		// Scope to the badge element — the RouteStateControl segment
-		// also renders a "Maintenance" label.
-		const badge = await screen.findByText('Maintenance', { selector: '.badge' });
-		expect(badge).toBeInTheDocument();
+		await screen.findByText('badge.example.com');
+		expect(screen.queryByText('Maintenance', { selector: '.badge' })).toBeNull();
 	});
 
 	it('edit form shows a Maintenance section seeded from route.maintenanceConfig', async () => {

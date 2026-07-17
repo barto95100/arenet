@@ -25,13 +25,20 @@ import (
 	"testing"
 
 	"github.com/barto95100/arenet/internal/auth"
+	"github.com/barto95100/arenet/internal/caddymgr"
 )
 
 // Task 7 — global maintenance page GET/PUT handler tests. Mirrors the
 // error-templates handler tests' shape (newTestEnv harness, real router)
 // and the GeoIP-update viewer-gating pattern for the admin-only PUT.
 
-func TestMaintenancePage_GET_FreshStore_EmptyHTML(t *testing.T) {
+// TestMaintenancePage_GET_FreshStore_ReturnsBuiltinDefault pins the
+// v2.17.1 Item E behavior change: a fresh store (stored HTML empty)
+// no longer returns an empty HTML string — it returns the branded
+// built-in default (caddymgr.DefaultMaintenancePageHTML) with
+// IsDefault=true, so the frontend editor has something real to show
+// instead of a blank buffer.
+func TestMaintenancePage_GET_FreshStore_ReturnsBuiltinDefault(t *testing.T) {
 	env := newTestEnv(t, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/maintenance-page", nil)
@@ -45,8 +52,14 @@ func TestMaintenancePage_GET_FreshStore_EmptyHTML(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.HTML != "" {
-		t.Errorf("HTML = %q; want empty on fresh store", got.HTML)
+	if got.HTML == "" {
+		t.Error("HTML is empty on fresh store; want the built-in default HTML")
+	}
+	if got.HTML != caddymgr.DefaultMaintenancePageHTML() {
+		t.Errorf("HTML = %q; want the exact built-in default", got.HTML)
+	}
+	if !got.IsDefault {
+		t.Error("IsDefault = false on fresh store; want true")
 	}
 }
 
@@ -61,6 +74,13 @@ func TestMaintenancePage_PUT_AdminPersists_GET_Echoes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status=%d body=%s", rec.Code, rec.Body)
 	}
+	var putGot maintenancePageResponse
+	if err := json.NewDecoder(rec.Body).Decode(&putGot); err != nil {
+		t.Fatalf("decode PUT response: %v", err)
+	}
+	if putGot.IsDefault {
+		t.Error("PUT IsDefault = true for a non-empty saved page; want false")
+	}
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/settings/maintenance-page", nil)
 	getRec := httptest.NewRecorder()
@@ -74,6 +94,9 @@ func TestMaintenancePage_PUT_AdminPersists_GET_Echoes(t *testing.T) {
 	}
 	if got.HTML != "<h1>Back soon</h1>" {
 		t.Errorf("HTML = %q; want echoed persisted value", got.HTML)
+	}
+	if got.IsDefault {
+		t.Error("IsDefault = true after saving a custom page; want false")
 	}
 
 	if env.caddy.CallCount() < 1 {

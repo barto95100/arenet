@@ -432,6 +432,13 @@
 	let maintenanceSaving = $state(false);
 	let maintenanceLoadedOnce = false;
 	let maintenanceEditorRef = $state<HtmlEditor | undefined>();
+	// v2.17.1 Item E — true when the buffer currently shown IS the
+	// Arenet built-in default (backend reported isDefault:true because
+	// the stored page is empty), false once the operator has a saved
+	// custom page. Mirrors the templates tab's `tpl.isBuiltin` concept
+	// (its "Built-in" badge) so the maintenance editor shows the same
+	// visual cue instead of looking like an empty, unstarted buffer.
+	let maintenanceIsDefault = $state(false);
 
 	async function loadMaintenancePage(): Promise<void> {
 		maintenanceLoading = true;
@@ -439,6 +446,7 @@
 		try {
 			const res = await errorTemplatesApi.getMaintenancePage();
 			maintenanceHtml = res.html;
+			maintenanceIsDefault = res.isDefault;
 			maintenanceLoadedOnce = true;
 		} catch (err) {
 			maintenanceLoadError =
@@ -464,6 +472,7 @@
 		try {
 			const res = await errorTemplatesApi.putMaintenancePage(maintenanceHtml);
 			maintenanceHtml = res.html;
+			maintenanceIsDefault = res.isDefault;
 			pushToast(t('errorPages.maintenance.toastSaved'), 'success');
 		} catch (err) {
 			const msg =
@@ -477,9 +486,13 @@
 	// "Reset to default" only clears the local buffer — the operator
 	// must still click Save to persist an empty string server-side
 	// (mirrors the rest of the page's explicit-Save contract; nothing
-	// is written until Save is clicked).
+	// is written until Save is clicked). `maintenanceIsDefault` flips
+	// to true immediately: an empty buffer IS the "will serve the
+	// built-in default" state, so the built-in label should show
+	// right away rather than waiting for the Save round-trip.
 	function resetMaintenanceToDefault(): void {
 		maintenanceHtml = '';
+		maintenanceIsDefault = true;
 	}
 
 	// --- Helpers -----------------------------------------
@@ -628,7 +641,23 @@
 		{:else}
 			<div class="card editor-card">
 				<div class="editor-pane">
-					<div class="pane-label">{language.current && t('errorPages.maintenance.editorPaneLabel')}</div>
+					<div class="pane-label">
+						{language.current && t('errorPages.maintenance.editorPaneLabel')}
+						{#if maintenanceIsDefault}
+							<!-- v2.17.1 Item E — labels the buffer as the
+							     built-in default (mirrors the templates
+							     tab's tpl.isBuiltin "Built-in" badge) so
+							     the operator sees a real starting point
+							     instead of an unexplained pre-filled
+							     editor. -->
+							<span
+								class="builtin-badge"
+								title={language.current && t('errorPages.maintenance.builtinTooltip')}
+							>
+								{language.current && t('errorPages.maintenance.builtinBadge')}
+							</span>
+						{/if}
+					</div>
 					<HtmlEditor
 						bind:this={maintenanceEditorRef}
 						bind:value={maintenanceHtml}
