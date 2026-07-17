@@ -1199,12 +1199,26 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 	// managed_domain_emission_test.go:462-478 for the precedent).
 	// The structural (non-Validate) assertions on the maintenance
 	// shape live in maintenance_test.go instead.
+	//
+	// TLSEnabled:true is deliberate (review follow-up on 5d04f7f):
+	// without it, this fixture only ever walks the plain-HTTP branch
+	// in manager.go's maintenance emission and never exercises the
+	// TLS tail (manager.go ~1551-1574) that keeps a maintenance
+	// host's cert issued/renewed while :443 stays up. With TLS on
+	// (and RedirectToHTTPS left false), the route lands in BOTH
+	// httpRoutes and httpsRoutes, and maintenance.example.com — a
+	// public-cert-qualifying host not covered by any managed domain
+	// in this fixture's opts — is registered into acme.HTTP01, so
+	// caddy.Validate below provisions the ACME/cert-subject
+	// registration for a TLS-enabled maintenance route, not just the
+	// 503 static_response.
 	routes = append(routes, storage.Route{
-		ID:        "r-maintenance",
-		Host:      "maintenance.example.com",
-		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
-		LBPolicy:  storage.LBPolicyRoundRobin,
-		WAFMode:   "off",
+		ID:         "r-maintenance",
+		Host:       "maintenance.example.com",
+		Upstreams:  []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:   storage.LBPolicyRoundRobin,
+		WAFMode:    "off",
+		TLSEnabled: true,
 		MaintenanceConfig: &storage.MaintenanceConfig{
 			RetryAfterSeconds: 300,
 			BypassIPs:         []string{"192.168.1.0/24"},
