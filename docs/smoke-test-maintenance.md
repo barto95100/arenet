@@ -28,16 +28,24 @@ go build -o /tmp/arenet ./cmd/arenet
 python3 -m http.server 9099 --bind 127.0.0.1 &
 UPSTREAM_PID=$!
 
-# 3. Boot Arenet in dev mode (no ACME issuance; :80/:443 on high ports so no root needed).
-/tmp/arenet --dev --admin-port 127.0.0.1:8001 \
-  --http-port :8080 --https-port :8443 \
-  --data-dir "$(mktemp -d)" &
+# 3. Boot Arenet in dev mode (no ACME issuance; high ports so no root needed).
+#    NOTE: there is NO --http-port / --https-port flag — the data-plane
+#    ports are set via the ARENET_HTTP_PORT / ARENET_HTTPS_PORT env vars
+#    (verified against the real binary — the only flags are admin-port,
+#    data-dir, dev, config, export/restore, healthcheck, topology-tick-ms,
+#    ui-origin, insert-test-route, include-secrets, allow-*).
+ARENET_HTTP_PORT=:8080 ARENET_HTTPS_PORT=:8443 \
+  /tmp/arenet --dev --admin-port 127.0.0.1:8001 --data-dir "$(mktemp -d)" &
 ARENET_PID=$!
-sleep 3
+sleep 4
 
-# Grab the setup token + create an admin session, OR (dev) use the admin API
-# directly per docs/smoke-test-step-i.md §"admin session". Export the session
-# cookie into $COOKIE for the curl calls below.
+# Bootstrap the admin from the setup token, then keep the session cookie.
+TOKEN=$(grep "Setup token:" <arenet.log | tail -1 | sed 's/.*Setup token: //' | tr -d '"')
+curl -s -c /tmp/cookies -X POST http://127.0.0.1:8001/api/v1/auth/setup \
+  -H 'Content-Type: application/json' \
+  -d "{\"setupToken\":\"$TOKEN\",\"username\":\"admin\",\"password\":\"SmokeTestPass123!\",\"email\":\"a@b.co\"}"
+# password MUST be >= 15 chars; the field is "setupToken" (not "token").
+# Use `-b /tmp/cookies` on the admin-API curls below.
 ```
 
 ## Create a maintenance route with a bypass
