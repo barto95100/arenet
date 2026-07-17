@@ -21,7 +21,7 @@ Route enable/disable shipped in v2.15.0 (`Disabled bool` → route filtered befo
 5. **Maintenance page is GLOBAL** (one shared template), customizable in a new **Maintenance** section of `/settings/error-pages`, with a **branded default** page matching Arenet's default error pages. Not per-route.
 6. **Bypass = a per-route IP/CIDR allow-list** on `MaintenanceConfig`. Listed IPs reach the real upstream; everyone else gets the 503.
 7. **`Retry-After` = a configurable fixed value** per route (seconds). **No auto-end / scheduler** — the operator returns the route to Active manually.
-8. **MaintenanceConfig is preserved** even when the route is Active or Disabled (disable philosophy: keep all config; the control reflects what's *active*, storage holds what's *configured*). Re-entering maintenance reuses the last config.
+8. **Clear-on-off (RESOLVED — supersedes the earlier "preserve" idea).** `MaintenanceConfig != nil` IS the maintenance signal (decision 3). Returning to Active/Disabled sets `MaintenanceConfig = nil` — the Retry-After + bypass IPs are cleared. Re-entering maintenance starts from defaults (RetryAfterSeconds = 300, no bypass IPs). Rationale: keeping "is in maintenance" and "the maintenance config" as one nilable field is the simplest migration-free model; a separate active-flag to preserve the config across cycles was considered and rejected as over-engineering for this ship. (Config still persists while the route stays in maintenance and is edited normally.)
 9. **Config detail in the edit form:** the Retry-After value and bypass IP list live in a new "Maintenance" section of the route edit form. Switching to Maintenance with no prior config uses defaults.
 10. **One ship, v2.17.0** — backend + UI together.
 
@@ -85,7 +85,7 @@ The plan picks one after reading the error-template CRUD + the settings UI; both
 **Routes list (`web/frontend/src/routes/routes/+page.svelte`):**
 - A **segmented control** per row (variant C): 3 segments Active/Maintenance/Disabled, filled semantic color + icon. Either extend `Toggle.svelte` (currently 2 fixed options, controlled) to N options, or a new `StateControl.svelte` — plan decides. `role="radiogroup"`, each segment `role="radio"`, keyboard-navigable, aria-labelled.
 - Clicking a segment calls the matching endpoint (`/maintenance`, `/maintenance/off`, `/disable`, `/enable`) and refreshes.
-- **Last-HTTPS warning:** switching the last active TLS route to Maintenance OR Disabled removes `:443` — reuse the existing disable warning dialog (extend its trigger to the maintenance transition).
+- **Last-HTTPS warning — Disabled ONLY (CORRECTED after empirical check).** A maintenance route IS emitted and serves the 503 over TLS on `:443`, so it STILL counts as a live HTTPS route (all three predicates test `TLSEnabled && !Disabled`, none reference maintenance: `HasHTTPSServer` manager.go:3403, `filterDisabledRoutes` :544, the inline hint routes.go:2004). So switching the last TLS route to **Maintenance does NOT remove :443** — do NOT fire the warning for the maintenance transition. Fire it ONLY for the Disabled transition (reuse the existing disable warning unchanged).
 - **Folded UX fixes:** stronger state badge (amber "Maintenance" / red "Disabled" via `--status-warn`/`--status-down`, not neutral grey); dimmed row for disabled; a visible **"Actions"/"State" column header** (currently `sr-only`).
 - The old separate "Activer/Désactiver" ghost button is **removed** — the segmented control replaces it.
 
