@@ -59,6 +59,11 @@ const (
 	// via the certificate management endpoints.
 	ActionCertDeleted = "cert_deleted"
 
+	// Route maintenance (2) — emitted when maintenance mode is toggled
+	// on or off for a route.
+	ActionRouteMaintenanceOn  = "route_maintenance_on"
+	ActionRouteMaintenanceOff = "route_maintenance_off"
+
 	// Audit (1)
 	ActionAuditViewed = "audit_viewed"
 
@@ -260,6 +265,8 @@ var allActions = []string{
 	ActionRouteDisabled,
 	ActionRouteEnabled,
 	ActionCertDeleted,
+	ActionRouteMaintenanceOn,
+	ActionRouteMaintenanceOff,
 	ActionAuditViewed,
 	ActionPasswordHIBPClean,
 	ActionPasswordHIBPPending,
