@@ -2296,15 +2296,17 @@
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colUpstream')}</th>
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colTLS')}</th>
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colWAF')}</th>
-							<th class="px-4 py-3 font-medium text-right">{language.current && t('routes.list.colState')}</th>
+							<th class="px-4 py-3 font-medium text-center">{language.current && t('routes.list.colState')}</th>
 							<!-- Task 9 — was sr-only (icon-only ghost button
 							     needed no visible header); now a visible
 							     column header since the cell holds the
 							     3-state RouteStateControl, a labeled
 							     interactive control worth naming in the
 							     table's structure for sighted + assistive
-							     users alike. -->
-							<th class="px-4 py-3 font-medium text-right">{language.current && t('routes.list.colActions')}</th>
+							     users alike. v2.17.1 Item B — centered
+							     (was text-right) so the header sits over
+							     the now-compact, icon-only control. -->
+							<th class="px-4 py-3 font-medium text-center">{language.current && t('routes.list.colActions')}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -2328,25 +2330,16 @@
 								role="button"
 							>
 								<td class="px-4 py-3 font-mono">
-									{#if r.disabled}
-										<!-- Task 9 — strengthened from the
-										     neutral/grey variant: a disabled
-										     route serves NO traffic at all, so
-										     it deserves the same visual weight
-										     as the DOWN health badge, not a
-										     bland informational grey that reads
-										     the same as "no TLS" or "no WAF". -->
-										<Badge variant="status-down">{language.current && t('routes.disabled.badge')}</Badge>
-									{:else if r.maintenanceConfig}
-										<!-- Task 9 — maintenance badge (amber
-										     status-warn): distinct from
-										     disabled — the route is still
-										     emitted (the HTTPS server / :443
-										     stays up), it just serves the
-										     maintenance page instead of
-										     proxying to the upstream. -->
-										<Badge variant="status-warn">{language.current && t('routes.maintenance.badge')}</Badge>
-									{/if}
+									<!-- v2.17.1 Item C — the Maintenance /
+									     Disabled text badges that used to sit
+									     here were REMOVED: the RouteStateControl
+									     (Actions column) now carries the state
+									     via its fill color + active segment, so
+									     the badges were a redundant text
+									     duplicate. The dimmed row (opacity-50,
+									     set via class:opacity-50={r.disabled}
+									     on the <tr>) remains as the secondary
+									     disabled cue. -->
 									{r.host}
 									{#if r.aliases && r.aliases.length > 0}
 										<span
@@ -2447,7 +2440,7 @@
 										<span class="text-muted">—</span>
 									{/if}
 								</td>
-								<td class="px-4 py-3 text-right">
+								<td class="px-4 py-3 text-center">
 									<!-- Critique 11 Pack A (2026-06-05): per-route
 									     health rollup driven by the Stage B HC
 									     tracker. aggregateToBadge maps the wire-
@@ -2471,7 +2464,7 @@
 										<Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
 									{/if}
 								</td>
-								<td class="px-4 py-3 text-right">
+								<td class="px-4 py-3 text-center">
 									<!-- Task 9 — row-level 3-state control,
 									     replacing the v2.14.3 Activer/Désactiver
 									     ghost button. stopPropagation on the
@@ -2482,9 +2475,12 @@
 									     ConfirmDialog-gated flow (destructive:
 									     stops traffic; last-HTTPS warning lives
 									     there) and 'maintenance'/'active' to
-									     direct, always-safe calls. -->
+									     direct, always-safe calls. v2.17.1 Item
+									     B — centered (was text-right) to match
+									     the centered header + the narrower
+									     icon-only control. -->
 									<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-									<div onclick={(e) => e.stopPropagation()}>
+									<div class="flex justify-center" onclick={(e) => e.stopPropagation()}>
 										<RouteStateControl
 											value={routeState(r)}
 											ariaLabel={language.current && t('routes.list.colActions')}
