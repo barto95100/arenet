@@ -24,6 +24,7 @@ If you're new : start with [Installation](Installation), then follow [Routes](Ro
 - **[OIDC SSO](OIDC-SSO)** — authentik / Keycloak / Authelia integration + RBAC
 
 ### Operations
+- **[Certificates](Certificates)** — auto-issued TLS lifecycle, storage layout, deleting a certificate from `/certs`
 - **[Updating Arenet](Updates)** — manual upgrade workflow (Docker + binary), rollback, security notes
 - **[Backup & Restore](Backup-Restore)** — full config export, sentinel-resolution import, disaster recovery
 - **[Alerting](Alerting)** — channels, threshold + state rules, Discord/email/webhook
