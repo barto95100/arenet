@@ -966,7 +966,24 @@
 		"errFailedSave": "échec de l'enregistrement du template",
 		"errFailedDelete": "échec de la suppression du template",
 		"errFailedLoad": "échec du chargement des templates",
-		"errPreviewFailed": "échec de l'aperçu"
+		"errPreviewFailed": "échec de l'aperçu",
+		"tabTemplates": "Templates",
+		"tabMaintenance": "Maintenance",
+		"tabsAriaLabelTop": "Sections des pages d'erreur",
+		"maintenance": {
+			"subtitle": "Page HTML globale servie sur toute route basculée en mode maintenance (HTTP 503).",
+			"editorPaneLabel": "HTML de la page de maintenance",
+			"editorAriaLabel": "HTML de la page de maintenance",
+			"editorPlaceholder": "Laisser vide pour servir le défaut Arenet branded…",
+			"previewPaneLabel": "Aperçu",
+			"btnResetToDefault": "Réinitialiser au défaut",
+			"toastReset": "Effacé — le défaut branded sera servi tant que vous n'avez pas Enregistré",
+			"toastSaved": "Page de maintenance enregistrée",
+			"errFailedLoad": "échec du chargement de la page de maintenance",
+			"errFailedSave": "échec de l'enregistrement de la page de maintenance",
+			"helpRetryAfter": "Utilisez le placeholder {arenet.maintenance.retry_after} pour afficher le délai de nouvelle tentative par route (substitué au moment de la requête).",
+			"helpEmpty": "Une page vide signifie qu'Arenet sert sa page de maintenance branded par défaut."
+		}
 	},
 	"settingsSubcards": {
 		"automationReset": "Réinitialiser",

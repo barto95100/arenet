@@ -232,5 +232,16 @@ export const errorTemplatesApi = {
 			throw new Error(msg);
 		}
 		return await res.text();
+	},
+
+	// Task 10 — global maintenance page GET/PUT. Backend mirror :
+	// internal/api/maintenance_page.go (Task 7). Single global HTML
+	// singleton served on maintenance-mode 503s for any route ; empty
+	// HTML means "serve the branded default" (backend doc comment).
+	getMaintenancePage(): Promise<{ html: string }> {
+		return request<{ html: string }>('GET', '/settings/maintenance-page');
+	},
+	putMaintenancePage(html: string): Promise<{ html: string }> {
+		return request<{ html: string }>('PUT', '/settings/maintenance-page', { html });
 	}
 };
