@@ -398,7 +398,16 @@
 			"disabledHelper": "Une route désactivée conserve sa config mais ne sert aucun trafic (les requêtes reçoivent la page 404).",
 			"maintenance": {
 				"sectionTitle": "Maintenance",
-				"retryAfter": "Retry-After (secondes)",
+				"retryAfter": "Retry-After",
+				"retryAfterValueAria": "Valeur du Retry-After",
+				"retryAfterUnitAria": "Unité du Retry-After",
+				"retryAfterHelp": "Envoyé en {seconds}s dans l'en-tête Retry-After (les navigateurs et robots lisent des secondes).",
+				"unit": {
+					"seconds": "secondes",
+					"minutes": "minutes",
+					"hours": "heures",
+					"days": "jours"
+				},
 				"bypassIps": "IPs / CIDRs de contournement",
 				"bypassIpsAdd": "+ Ajouter une IP de contournement"
 			}
@@ -984,7 +993,10 @@
 			"helpRetryAfter": "Utilisez le placeholder {arenet.maintenance.retry_after} pour afficher le délai de nouvelle tentative par route (substitué au moment de la requête).",
 			"helpEmpty": "Une page vide signifie qu'Arenet sert sa page de maintenance branded par défaut.",
 			"builtinBadge": "Défaut Arenet (intégré)",
-			"builtinTooltip": "Ceci est la page de maintenance par défaut intégrée à Arenet — la modifier puis cliquer sur Enregistrer en fait votre page personnalisée."
+			"builtinTooltip": "Ceci est la page de maintenance par défaut intégrée à Arenet — la modifier puis cliquer sur Enregistrer en fait votre page personnalisée.",
+			"messageLabel": "Message de maintenance",
+			"messagePlaceholder": "ex. Migration de la base en cours — retour vers 14h00. Merci de votre patience.",
+			"messageHelp": "Message texte global affiché sur chaque page de maintenance via le placeholder {arenet.maintenance.message} (rendu aussi par la page par défaut intégrée). Laissez vide pour afficher la ligne générique par défaut."
 		}
 	},
 	"settingsSubcards": {

@@ -37,6 +37,7 @@
 		Upstream
 	} from '$lib/api/types';
 	import { countryName, matchCountries, type CountryMatch } from '$lib/data/countries';
+	import { secondsToParts, partsToSeconds, type DurationUnit } from '$lib/utils/duration';
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import { auth } from '$lib/stores/auth.svelte';
@@ -1071,6 +1072,9 @@
 		// three modes.
 		cbSectionOpen = false;
 		resetFormErrors();
+		// v2.18.0 — sync the friendly Retry-After input from the
+		// seeded seconds (create default is 300 → "5 minutes").
+		seedRetryParts();
 		formOpen = true;
 		// Step J.4: refresh provider status whenever the form opens
 		// so the inline hint reflects any provider changes the
@@ -1264,6 +1268,9 @@
 		// should see what's there immediately.
 		errorOverridesExpanded = Object.keys(r.errorPageOverrides ?? {}).length > 0;
 		resetFormErrors();
+		// v2.18.0 — sync the friendly Retry-After input from the loaded
+		// route's stored seconds (shows the largest round unit).
+		seedRetryParts();
 		formOpen = true;
 	}
 
@@ -1296,6 +1303,30 @@
 		formData.maintenanceConfig.bypassIps = formData.maintenanceConfig.bypassIps.filter(
 			(_, idx) => idx !== i
 		);
+	}
+
+	// v2.18.0 — friendly Retry-After input. formData holds the wire
+	// value (retryAfterSeconds); these two drive the UI (a number +
+	// unit selector). Seeded from the seconds whenever the form opens
+	// (seedRetryParts, called from openCreate/openEdit), then any edit
+	// to either recomputes retryAfterSeconds. The wire value stays in
+	// seconds — nothing about storage or the Retry-After header changes.
+	let retryValue = $state(5);
+	let retryUnit = $state<DurationUnit>('minutes');
+
+	// Order for the unit <select>, aligned with i18n option keys.
+	const RETRY_UNITS: DurationUnit[] = ['seconds', 'minutes', 'hours', 'days'];
+
+	function seedRetryParts() {
+		const parts = secondsToParts(formData.maintenanceConfig.retryAfterSeconds);
+		retryValue = parts.value;
+		retryUnit = parts.unit;
+	}
+
+	// Recompute the wire seconds from the current (value, unit) pair.
+	// Called on both the number input and the unit selector change.
+	function syncRetryAfterSeconds() {
+		formData.maintenanceConfig.retryAfterSeconds = partsToSeconds(retryValue, retryUnit);
 	}
 
 	// Step I.7 hotfix (Finding #5): TLS off ⇒ no HTTP→HTTPS redirect.
@@ -2646,17 +2677,50 @@
 						<span class="text-sm font-medium text-secondary">
 							{language.current && t('routes.form.maintenance.sectionTitle')}
 						</span>
-						<Input
-							type="number"
-							min="0"
-							label={language.current && t('routes.form.maintenance.retryAfter')}
-							value={String(formData.maintenanceConfig.retryAfterSeconds)}
-							oninput={(e: Event) => {
-								const raw = (e.target as HTMLInputElement).value;
-								const n = parseInt(raw, 10);
-								formData.maintenanceConfig.retryAfterSeconds = Number.isNaN(n) ? 0 : n;
-							}}
-						/>
+						<!-- v2.18.0 — friendly Retry-After: number + unit
+						     selector. The wire value (retryAfterSeconds,
+						     recomputed via syncRetryAfterSeconds) stays in
+						     seconds; the operator picks e.g. "5 minutes"
+						     instead of typing "300". -->
+						<div class="flex flex-col gap-1">
+							<span class="text-sm text-secondary">
+								{language.current && t('routes.form.maintenance.retryAfter')}
+							</span>
+							<div class="flex items-center gap-2">
+								<div class="w-28">
+									<Input
+										type="number"
+										min="0"
+										value={String(retryValue)}
+										aria-label={language.current &&
+											t('routes.form.maintenance.retryAfterValueAria')}
+										oninput={(e: Event) => {
+											const raw = (e.target as HTMLInputElement).value;
+											const n = parseInt(raw, 10);
+											retryValue = Number.isNaN(n) || n < 0 ? 0 : n;
+											syncRetryAfterSeconds();
+										}}
+									/>
+								</div>
+								<select
+									class="h-9 rounded-md border border-border-subtle bg-surface px-2 text-sm text-primary"
+									aria-label={language.current &&
+										t('routes.form.maintenance.retryAfterUnitAria')}
+									bind:value={retryUnit}
+									onchange={syncRetryAfterSeconds}
+								>
+									{#each RETRY_UNITS as u (u)}
+										<option value={u}>{language.current && t(`routes.form.maintenance.unit.${u}`)}</option>
+									{/each}
+								</select>
+							</div>
+							<span class="text-xs text-muted">
+								{language.current &&
+									t('routes.form.maintenance.retryAfterHelp', {
+										seconds: String(formData.maintenanceConfig.retryAfterSeconds)
+									})}
+							</span>
+						</div>
 						<div class="flex flex-col gap-2">
 							<div class="flex items-center justify-between">
 								<span class="text-sm text-secondary">

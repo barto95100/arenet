@@ -75,11 +75,13 @@ beforeEach(() => {
 	// true (matches the real backend contract post-change).
 	apiMock.getMaintenancePage.mockResolvedValue({
 		html: '<h1>Back soon (built-in default)</h1>',
-		isDefault: true
+		isDefault: true,
+		message: ''
 	});
 	apiMock.putMaintenancePage.mockResolvedValue({
 		html: '<h1>Back soon (built-in default)</h1>',
-		isDefault: true
+		isDefault: true,
+		message: ''
 	});
 });
 
@@ -412,7 +414,7 @@ describe('/settings/error-pages — Maintenance tab', () => {
 
 	it('loads the current maintenance page HTML when the tab is opened', async () => {
 		apiMock.list.mockResolvedValue([]);
-		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Back soon</h1>', isDefault: false });
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Back soon</h1>', isDefault: false, message: '' });
 		render(Page);
 		await screen.findByText(/No custom template/);
 		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
@@ -432,8 +434,8 @@ describe('/settings/error-pages — Maintenance tab', () => {
 
 	it('editing and clicking Save calls putMaintenancePage with the new HTML', async () => {
 		apiMock.list.mockResolvedValue([]);
-		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Old</h1>', isDefault: false });
-		apiMock.putMaintenancePage.mockResolvedValue({ html: '<h1>New</h1>', isDefault: false });
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Old</h1>', isDefault: false, message: '' });
+		apiMock.putMaintenancePage.mockResolvedValue({ html: '<h1>New</h1>', isDefault: false, message: '' });
 		render(Page);
 		await screen.findByText(/No custom template/);
 		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
@@ -446,12 +448,12 @@ describe('/settings/error-pages — Maintenance tab', () => {
 		await waitFor(() => {
 			expect(apiMock.putMaintenancePage).toHaveBeenCalledTimes(1);
 		});
-		expect(apiMock.putMaintenancePage).toHaveBeenCalledWith('<h1>Old</h1>');
+		expect(apiMock.putMaintenancePage).toHaveBeenCalledWith('<h1>Old</h1>', '');
 	});
 
 	it('"Reset to default" clears the buffer to empty string', async () => {
 		apiMock.list.mockResolvedValue([]);
-		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Custom page</h1>', isDefault: false });
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '<h1>Custom page</h1>', isDefault: false, message: '' });
 		render(Page);
 		await screen.findByText(/No custom template/);
 		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));
@@ -461,11 +463,11 @@ describe('/settings/error-pages — Maintenance tab', () => {
 		await screen.findByRole('textbox', { name: /Maintenance page HTML/ });
 		const resetBtn = screen.getByRole('button', { name: /Reset to default/ });
 		await fireEvent.click(resetBtn);
-		apiMock.putMaintenancePage.mockResolvedValue({ html: '', isDefault: true });
+		apiMock.putMaintenancePage.mockResolvedValue({ html: '', isDefault: true, message: '' });
 		const saveBtn = screen.getByRole('button', { name: /^Save$/ });
 		await fireEvent.click(saveBtn);
 		await waitFor(() => {
-			expect(apiMock.putMaintenancePage).toHaveBeenCalledWith('');
+			expect(apiMock.putMaintenancePage).toHaveBeenCalledWith('', '');
 		});
 	});
 
@@ -477,7 +479,8 @@ describe('/settings/error-pages — Maintenance tab', () => {
 		apiMock.list.mockResolvedValue([]);
 		apiMock.getMaintenancePage.mockResolvedValue({
 			html: '<h1>503 branded default</h1>',
-			isDefault: true
+			isDefault: true,
+			message: ''
 		});
 		render(Page);
 		await screen.findByText(/No custom template/);
@@ -495,7 +498,8 @@ describe('/settings/error-pages — Maintenance tab', () => {
 		apiMock.list.mockResolvedValue([]);
 		apiMock.getMaintenancePage.mockResolvedValue({
 			html: '<h1>My custom page</h1>',
-			isDefault: false
+			isDefault: false,
+			message: ''
 		});
 		render(Page);
 		await screen.findByText(/No custom template/);
@@ -509,7 +513,7 @@ describe('/settings/error-pages — Maintenance tab', () => {
 
 	it('documents the {arenet.maintenance.retry_after} placeholder in editor help', async () => {
 		apiMock.list.mockResolvedValue([]);
-		apiMock.getMaintenancePage.mockResolvedValue({ html: '', isDefault: true });
+		apiMock.getMaintenancePage.mockResolvedValue({ html: '', isDefault: true, message: '' });
 		render(Page);
 		await screen.findByText(/No custom template/);
 		await fireEvent.click(screen.getByRole('tab', { name: /Maintenance/ }));

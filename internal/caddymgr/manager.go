@@ -654,6 +654,7 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		NormalTrafficExcludePaths: m.normalTrafficExcludePaths,
 		ErrorTemplates:            errorTemplatesMap,
 		MaintenancePageHTML:       maintenancePage.HTML,
+		MaintenanceMessage:        maintenancePage.Message,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -1166,6 +1167,15 @@ type buildOpts struct {
 	// "use the branded default" — resolveMaintenancePage in
 	// maintenance.go implements that fallback.
 	MaintenancePageHTML string
+	// MaintenanceMessage (v2.18.0) is the operator's global
+	// maintenance message (storage.MaintenancePageConfig.Message),
+	// read from BoltDB before each applyLocked alongside
+	// MaintenancePageHTML. It is substituted — HTML-escaped, with
+	// newlines rendered as <br> — into the maintenance 503 body via
+	// the {arenet.maintenance.message} placeholder (both in the
+	// built-in default page and in any custom page that references
+	// it). Empty string (default) renders nothing.
+	MaintenanceMessage string
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -1534,6 +1544,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				r.MaintenanceConfig.BypassIPs,
 				r.MaintenanceConfig.RetryAfterSeconds,
 				maintenanceHTML,
+				opts.MaintenanceMessage,
 			)
 
 			allHosts := r.AllHosts()

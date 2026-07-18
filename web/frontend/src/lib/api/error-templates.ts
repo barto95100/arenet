@@ -247,12 +247,24 @@ export const errorTemplatesApi = {
 	// blank buffer. PUT echoes the same shape (isDefault=true again
 	// after a "Reset to default" save, since that persists an empty
 	// string server-side).
-	getMaintenancePage(): Promise<{ html: string; isDefault: boolean }> {
-		return request<{ html: string; isDefault: boolean }>('GET', '/settings/maintenance-page');
+	// v2.18.0 — the shape grew a `message` field: the global maintenance
+	// message rendered by the built-in default page (and any custom page)
+	// via {arenet.maintenance.message}. Plain text, independent of the
+	// HTML buffer / isDefault flag.
+	getMaintenancePage(): Promise<{ html: string; isDefault: boolean; message: string }> {
+		return request<{ html: string; isDefault: boolean; message: string }>(
+			'GET',
+			'/settings/maintenance-page'
+		);
 	},
-	putMaintenancePage(html: string): Promise<{ html: string; isDefault: boolean }> {
-		return request<{ html: string; isDefault: boolean }>('PUT', '/settings/maintenance-page', {
-			html
-		});
+	putMaintenancePage(
+		html: string,
+		message: string
+	): Promise<{ html: string; isDefault: boolean; message: string }> {
+		return request<{ html: string; isDefault: boolean; message: string }>(
+			'PUT',
+			'/settings/maintenance-page',
+			{ html, message }
+		);
 	}
 };

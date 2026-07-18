@@ -29,6 +29,14 @@ import (
 // same convention as GeoIPUpdateConfig / update_check_config.
 type MaintenancePageConfig struct {
 	HTML string `json:"html,omitempty"`
+	// Message is the global operator-authored line rendered inside the
+	// maintenance 503 body via the {arenet.maintenance.message}
+	// placeholder (v2.18.0). Stored verbatim (plain text) — it is
+	// HTML-escaped at emission, not here, so a message can't inject
+	// markup into every route's 503. Empty = the built-in default's
+	// generic sentence stands alone. omitempty keeps pre-v2.18.0 rows
+	// migration-free.
+	Message string `json:"message,omitempty"`
 }
 
 // maintenancePageKey is the fixed single-row key in

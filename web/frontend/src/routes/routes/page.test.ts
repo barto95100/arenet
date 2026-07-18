@@ -3257,8 +3257,12 @@ describe('/routes — 3-state control + maintenance', () => {
 		await fireEvent.click(hostCell.closest('tr')!);
 		await tick();
 
-		const retryInput = screen.getByLabelText(/Retry-After/i) as HTMLInputElement;
-		expect(retryInput.value).toBe('180');
+		// v2.18.0 — friendly Retry-After: 180s renders as value "3" with
+		// unit "minutes" (largest whole unit that divides evenly).
+		const retryInput = screen.getByLabelText(/Retry-After value/i) as HTMLInputElement;
+		expect(retryInput.value).toBe('3');
+		const retryUnit = screen.getByLabelText(/Retry-After unit/i) as HTMLSelectElement;
+		expect(retryUnit.value).toBe('minutes');
 		expect(screen.getByDisplayValue('10.0.0.5')).toBeInTheDocument();
 		expect(screen.getByDisplayValue('192.168.1.0/24')).toBeInTheDocument();
 	});
@@ -3277,7 +3281,12 @@ describe('/routes — 3-state control + maintenance', () => {
 		await fireEvent.click(hostCell.closest('tr')!);
 		await tick();
 
-		const retryInput = screen.getByLabelText(/Retry-After/i) as HTMLInputElement;
+		// v2.18.0 — pick "seconds" unit then type 90 so the wire value is
+		// 90s (not 90 * the seeded "minutes" factor). Verifies the
+		// number+unit → seconds conversion feeds the payload.
+		const retryUnit = screen.getByLabelText(/Retry-After unit/i) as HTMLSelectElement;
+		await userEvent.selectOptions(retryUnit, 'seconds');
+		const retryInput = screen.getByLabelText(/Retry-After value/i) as HTMLInputElement;
 		await userEvent.clear(retryInput);
 		await userEvent.type(retryInput, '90');
 		await tick();

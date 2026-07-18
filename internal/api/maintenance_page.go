@@ -19,6 +19,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/storage"
@@ -43,8 +44,16 @@ import (
 // maintenance-mode routes pick up the new page immediately.
 
 // maintenancePageRequest is the wire shape accepted by PUT.
+//
+// v2.18.0 — Message is the global operator maintenance message,
+// substituted into the 503 body via {arenet.maintenance.message}. It
+// is optional (a pre-v2.18.0 client omitting it still succeeds). It is
+// stored as plain text (verbatim, only outer whitespace trimmed) and
+// HTML-escaped at emission in caddymgr — NOT run through the HTML
+// sanitizer here, because it is not HTML.
 type maintenancePageRequest struct {
-	HTML string `json:"html"`
+	HTML    string `json:"html"`
+	Message string `json:"message"`
 }
 
 // maintenancePageResponse is the wire shape returned by GET (and echoed
@@ -64,6 +73,11 @@ type maintenancePageRequest struct {
 type maintenancePageResponse struct {
 	HTML      string `json:"html"`
 	IsDefault bool   `json:"isDefault"`
+	// Message (v2.18.0) is the global maintenance message, echoed on
+	// GET and PUT. Independent of IsDefault (which describes the HTML
+	// buffer only) — the message can be set while the HTML is still
+	// the built-in default.
+	Message string `json:"message"`
 }
 
 func (h *Handler) getMaintenancePage(w http.ResponseWriter, r *http.Request) {
@@ -77,10 +91,11 @@ func (h *Handler) getMaintenancePage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, maintenancePageResponse{
 			HTML:      caddymgr.DefaultMaintenancePageHTML(),
 			IsDefault: true,
+			Message:   cfg.Message,
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, maintenancePageResponse{HTML: cfg.HTML, IsDefault: false})
+	writeJSON(w, http.StatusOK, maintenancePageResponse{HTML: cfg.HTML, IsDefault: false, Message: cfg.Message})
 }
 
 func (h *Handler) putMaintenancePage(w http.ResponseWriter, r *http.Request) {
@@ -93,8 +108,12 @@ func (h *Handler) putMaintenancePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sanitized := caddymgr.SanitizeErrorPageBody(req.HTML)
+	// Message is plain text: trim outer whitespace for tidiness but
+	// keep inner content verbatim. It is NOT HTML-sanitized here — it
+	// is HTML-escaped at emission in caddymgr (buildMaintenanceBody).
+	message := strings.TrimSpace(req.Message)
 
-	if err := h.store.PutMaintenancePageConfig(r.Context(), storage.MaintenancePageConfig{HTML: sanitized}); err != nil {
+	if err := h.store.PutMaintenancePageConfig(r.Context(), storage.MaintenancePageConfig{HTML: sanitized, Message: message}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save maintenance page")
 		return
 	}
@@ -115,8 +134,9 @@ func (h *Handler) putMaintenancePage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, maintenancePageResponse{
 			HTML:      caddymgr.DefaultMaintenancePageHTML(),
 			IsDefault: true,
+			Message:   message,
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, maintenancePageResponse{HTML: sanitized, IsDefault: false})
+	writeJSON(w, http.StatusOK, maintenancePageResponse{HTML: sanitized, IsDefault: false, Message: message})
 }
