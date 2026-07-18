@@ -2024,17 +2024,16 @@ func (h *Handler) toggleRouteDisabled(w http.ResponseWriter, r *http.Request, di
 
 	next := previous
 	next.Disabled = disabled
-	// spec-8: "Returning to Active/Disabled sets MaintenanceConfig =
-	// nil." Only clear on the disable transition — a disabled route
-	// must never carry a stale MaintenanceConfig that would resurrect
-	// it into maintenance (instead of active) on a later /enable,
-	// since /enable only clears Disabled and routeState() derives
-	// 'maintenance' from any non-nil MaintenanceConfig when Disabled
-	// is false. Enable itself leaves MaintenanceConfig untouched
-	// (there is none left to clear, by this same invariant).
-	if disabled {
-		next.MaintenanceConfig = nil
-	}
+	// The 3 states (Active / Maintenance / Disabled) are mutually
+	// exclusive, so BOTH /disable and /enable establish a non-maintenance
+	// state and must clear MaintenanceConfig unconditionally. /disable →
+	// Disabled (spec-8). /enable → Active: without clearing, a route that
+	// still carries MaintenanceConfig would be derived as 'maintenance'
+	// (routeState prioritises MaintenanceConfig once Disabled is false),
+	// so /enable would resurrect maintenance instead of going Active. The
+	// UI reaches Active-from-maintenance via /maintenance/off, but /enable
+	// must be robust to any caller.
+	next.MaintenanceConfig = nil
 	updated, err := h.store.UpdateRoute(r.Context(), next)
 	if err != nil {
 		h.logger.Error("toggle route disabled", "err", err, "id", id)
@@ -2121,6 +2120,13 @@ func (h *Handler) toggleRouteMaintenance(w http.ResponseWriter, r *http.Request,
 		} else {
 			next.MaintenanceConfig = &storage.MaintenanceConfig{RetryAfterSeconds: defaultMaintenanceRetryAfterSeconds}
 		}
+		// The 3 states are mutually exclusive. Entering maintenance from a
+		// disabled route must clear Disabled — otherwise routeState()
+		// (Disabled wins over Maintenance) keeps showing it disabled (the
+		// maintenance toast lies), and a later /enable resurrects
+		// maintenance instead of going Active. Mirror of the /disable side
+		// which clears MaintenanceConfig (spec-8).
+		next.Disabled = false
 	} else {
 		next.MaintenanceConfig = nil
 	}
