@@ -72,6 +72,7 @@ Full guide: [docs/install/systemd-native.md](docs/install/systemd-native.md)
 - 🩹 **Hot-reload** every route change without dropping in-flight connections
 - 📦 **HTTPS-to-HTTPS upstream support** with optional TLS verification skip for self-signed internal backends
 - 🎨 **Custom error pages** per route via HTML templates (401/403/404/429/500/502/503/504), with optional **branded catch-all** for unmatched hosts (template-promotable via a single checkbox)
+- 🚦 **3-state route lifecycle** — one control per route toggles **Active / Maintenance / Disabled**. Maintenance serves a branded 503 page + `Retry-After` (friendly number+unit input) + an optional global message, with a per-route **client-IP bypass allow-list** so you can verify the app is back before flipping everyone over ; Disabled parks the route (config preserved) and drops it from Caddy
 
 ### Security
 - 🛡️ **Integrated WAF** via Coraza v3 + OWASP CRS v4 with per-route opt-out, per-rule exclusion, per-tag exclusion (e.g. exclude all `attack-protocol` rules on a noisy backend)

@@ -137,10 +137,12 @@ Le mode maintenance sert pour le cas « je dois couper l'app un moment, mais je 
 
 Configure la maintenance dans le **formulaire d'édition** de la route, section **Maintenance** (affichée pour toute route, pas seulement celles actuellement en maintenance, pour que tu puisses pré-remplir avant de basculer le contrôle d'état) :
 
-- **Retry-After (seconds)** — envoyé comme header de réponse `Retry-After` et substitué dans la page de maintenance via le placeholder `{arenet.maintenance.retry_after}`. `0` omet le header. Défaut `300` la première fois qu'une route entre en maintenance.
+- **Retry-After** — choisis un **nombre + une unité** (secondes / minutes / heures / jours) au lieu de convertir à la main en secondes. La valeur est envoyée dans le header de réponse `Retry-After` (toujours en secondes, conformément à la RFC 9110 — les navigateurs et robots lisent des secondes) et substituée dans la page de maintenance via le placeholder `{arenet.maintenance.retry_after}`. La valeur `0` omet le header. Défaut `5 minutes` (300 s) la première fois qu'une route entre en maintenance. _(Le sélecteur d'unité n'est qu'un confort d'UI — la valeur stockée/wire est toujours en secondes.)_
 - **Bypass IPs / CIDRs** — un répéteur d'IPs nues (`10.0.0.5`) ou de plages CIDR (`192.168.1.0/24`). Ajoutes-en autant que nécessaire.
 
 Le check de bypass matche l'**IP réelle du client** (le matcher `client_ip` de Caddy), pas le header `X-Forwarded-For` — donc il ne peut pas être spoofé par un header de requête comme le serait un check `X-Forwarded-For`.
+
+**Message de maintenance global (v2.18.0).** Séparément du Retry-After par route, il existe un **message global** — défini dans **Settings → Error Pages → onglet Maintenance**, au-dessus de l'éditeur HTML — affiché sur *toutes* les routes en maintenance via le placeholder `{arenet.maintenance.message}`. La page par défaut intégrée le rend automatiquement (laisse-le vide pour afficher la ligne générique par défaut) ; une page personnalisée peut placer le placeholder où elle veut. Le message est du texte brut : il est échappé en HTML et ses retours à la ligne deviennent des `<br>` au moment du rendu, donc un opérateur ne peut pas injecter de markup — et les placeholders Caddy `{env.*}` / `{file.*}` dans le message (ou dans une page personnalisée) sont neutralisés pour qu'ils ne puissent pas fuiter de secrets ou de contenu de fichiers dans le 503 public.
 
 Basculer le contrôle d'état vers/depuis Maintenance est idempotent et immédiat — ré-entrer en maintenance sur une route déjà en maintenance garde ta config Retry-After/bypass existante (ça ne reset pas aux défauts) ; en sortir efface la config de maintenance à nil, donc la prochaine fois que tu entres en maintenance ça repart des défauts (`300`s).
 

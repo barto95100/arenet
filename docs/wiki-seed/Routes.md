@@ -135,10 +135,12 @@ Maintenance mode is for **"I need to take the app down for a bit, but I still wa
 
 Configure maintenance in the route's **edit form**, in the **Maintenance** section (shown for every route, not just ones currently in maintenance, so you can pre-fill it before switching the state control):
 
-- **Retry-After (seconds)** — sent as the `Retry-After` response header and substituted into the maintenance page via the `{arenet.maintenance.retry_after}` placeholder. `0` omits the header. Defaults to `300` the first time a route enters maintenance.
+- **Retry-After** — pick a **number + unit** (seconds / minutes / hours / days) instead of hand-converting to seconds. The value is sent as the `Retry-After` response header (always in seconds, per RFC 9110 — browsers and bots read seconds) and substituted into the maintenance page via the `{arenet.maintenance.retry_after}` placeholder. A `0` value omits the header. Defaults to `5 minutes` (300 s) the first time a route enters maintenance. _(The unit selector is UI sugar only — the stored/wire value is always seconds.)_
 - **Bypass IPs / CIDRs** — a repeater of bare IPs (`10.0.0.5`) or CIDR ranges (`192.168.1.0/24`). Add as many as you need.
 
 The bypass check matches the **real client IP** (Caddy's `client_ip` matcher), not the `X-Forwarded-For` header — so it can't be spoofed by a request header the way an `X-Forwarded-For` check could.
+
+**Global maintenance message (v2.18.0).** Separately from the per-route Retry-After, there is one **global message** — set in **Settings → Error Pages → Maintenance tab**, above the HTML editor — that is shown on *every* maintenance route via the `{arenet.maintenance.message}` placeholder. The built-in default page renders it automatically (leave it empty to show the generic default line); a custom page can place the placeholder wherever it likes. The message is plain text: it's HTML-escaped and its line breaks become `<br>` at serve time, so an operator can't inject markup — and `{env.*}` / `{file.*}` Caddy placeholders in the message (or in a custom page) are neutralized so they can't leak secrets or file contents into the public 503.
 
 Toggling the state control to/from Maintenance is idempotent and immediate — entering maintenance again on an already-in-maintenance route keeps your existing Retry-After/bypass config (it doesn't reset to defaults) ; exiting clears the maintenance config back to nil, so the next time you enter maintenance it starts fresh from the default `300`s.
 
