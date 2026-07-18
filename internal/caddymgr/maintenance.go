@@ -57,7 +57,15 @@ const maintenanceMessageSentinel = "{arenet.maintenance.message}"
 // first, so only the newline-derived <br> tags are real markup. An
 // empty message substitutes to the empty string.
 func buildMaintenanceBody(pageHTML string, retryAfter int, message string) string {
-	renderedMsg := strings.ReplaceAll(html.EscapeString(message), "\n", "<br>")
+	// Escape HTML markup, then defang dangerous Caddy placeholders
+	// ({env.*}/{file.*}) the operator may have typed — the message
+	// has no legitimate placeholders of its own and is substituted
+	// into a placeholder-expanded static_response body, so an
+	// unneutralized {env.SECRET} would leak into the public 503.
+	// Newlines last so multi-line messages render as <br>.
+	renderedMsg := html.EscapeString(message)
+	renderedMsg = neutralizeDangerousPlaceholders(renderedMsg)
+	renderedMsg = strings.ReplaceAll(renderedMsg, "\n", "<br>")
 	out := strings.ReplaceAll(pageHTML, maintenanceRetryAfterSentinel, strconv.Itoa(retryAfter))
 	return strings.ReplaceAll(out, maintenanceMessageSentinel, renderedMsg)
 }

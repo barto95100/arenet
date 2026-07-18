@@ -164,6 +164,22 @@ func TestBuildMaintenanceBody_MessageNewlinesToBr(t *testing.T) {
 	}
 }
 
+// v2.18.0 security — the message is operator free text substituted into
+// the (placeholder-expanded) 503 body. A message of {env.SECRET} would
+// otherwise leak a process-env secret into the public 503. The message
+// has no documented placeholders of its own, so dangerous Caddy
+// namespaces ({env.*}, {file.*}) must be neutralized.
+func TestBuildMaintenanceBody_NeutralizesEnvPlaceholderInMessage(t *testing.T) {
+	html := `<div>{arenet.maintenance.message}</div>`
+	got := buildMaintenanceBody(html, 60, "leak: {env.ACME_DNS_API_TOKEN} and {file./etc/passwd}")
+	if strings.Contains(got, "{env.ACME_DNS_API_TOKEN}") {
+		t.Errorf("{env.*} in message survived — secret disclosure: %q", got)
+	}
+	if strings.Contains(got, "{file./etc/passwd}") {
+		t.Errorf("{file.*} in message survived — file disclosure: %q", got)
+	}
+}
+
 func TestBuildMaintenanceBody_EmptyMessageSubstitutesNothing(t *testing.T) {
 	html := `<div>[{arenet.maintenance.message}]</div>`
 	got := buildMaintenanceBody(html, 60, "")
