@@ -103,6 +103,61 @@ Unhealthy upstreams are skipped by the load balancer ; the `/topology` dashboard
 
 ---
 
+## Route states (Active / Maintenance / Disabled)
+
+Every route has a **3-state lifecycle control**, shown as an icon-only segmented control on the `/routes` list — play (▶, green) = **Active**, wrench (🔧, amber) = **Maintenance**, power (⏻, red) = **Disabled**. Hover any segment for a tooltip with its name ; click a segment to switch state.
+
+| State | Traffic | TLS / `:443` | Config |
+| ----- | ------- | ------------- | ------ |
+| **Active** | Normal reverse-proxy to the upstream pool | Kept if `tlsEnabled` | — |
+| **Maintenance** | 503 + branded maintenance page + `Retry-After` header to everyone, except bypass IPs which reach the real upstream | **Kept** — host/TLS stay served | Upstreams/WAF/etc. untouched, just wrapped |
+| **Disabled** | Route removed from Caddy entirely ; the host falls through to the catch-all (404) | Dropped ; disabling the **last** active HTTPS route removes the `:443` listener (a confirm dialog warns you first) | **Preserved** for one-click re-enable |
+
+If a route somehow carries both a `disabled` flag and a `maintenanceConfig` at once, **Disabled wins** — it's the stronger "serves no traffic at all" state. Priority : **Disabled → 404** (wins) > **Maintenance → 503** > **Active**.
+
+### Disabled (v2.15.0)
+
+Disabling a route is for **maintenance windows where you don't want the app reachable at all**, or for parking a route you don't want to delete (its host/upstreams/TLS/WAF/aliases config is preserved in BoltDB — nothing is lost). A disabled route is filtered out before the Caddy config is built, so:
+
+- The host stops resolving through Arenet — a request for it hits the **catch-all** (404, see [Custom Error Pages](Custom-Error-Pages#catch-all-host-not-configured)).
+- If it was the **last route with `tlsEnabled` + active**, disabling it also removes the `:443` HTTPS listener — any other HTTPS URL served by Arenet will fail with connection refused until you re-enable a route or add a new HTTPS one. The UI detects this case and shows a dedicated warning dialog ("Disable the last HTTPS route?") before you confirm.
+- Re-enabling is one click (or `POST /routes/{id}/enable`) — same upstreams, TLS, WAF, everything comes back exactly as configured.
+
+### Maintenance (v2.17.0)
+
+Maintenance mode is for **"I need to take the app down for a bit, but I still want to hit it myself to verify"**. Unlike Disabled, the route **stays served** — Caddy keeps the host + TLS cert alive — but every request gets:
+
+- **HTTP 503**
+- The **global maintenance page** (customized in Settings → Error Pages → Maintenance tab, see [Custom Error Pages](Custom-Error-Pages#maintenance-page))
+- A **`Retry-After`** header (seconds, configurable per route)
+
+...**except** requests from IPs/CIDRs on the route's **bypass allow-list**, which are forwarded straight to the real upstream as if the route were Active. This lets you validate the app is actually back up before flipping everyone else over.
+
+Configure maintenance in the route's **edit form**, in the **Maintenance** section (shown for every route, not just ones currently in maintenance, so you can pre-fill it before switching the state control):
+
+- **Retry-After (seconds)** — sent as the `Retry-After` response header and substituted into the maintenance page via the `{arenet.maintenance.retry_after}` placeholder. `0` omits the header. Defaults to `300` the first time a route enters maintenance.
+- **Bypass IPs / CIDRs** — a repeater of bare IPs (`10.0.0.5`) or CIDR ranges (`192.168.1.0/24`). Add as many as you need.
+
+The bypass check matches the **real client IP** (Caddy's `client_ip` matcher), not the `X-Forwarded-For` header — so it can't be spoofed by a request header the way an `X-Forwarded-For` check could.
+
+Toggling the state control to/from Maintenance is idempotent and immediate — entering maintenance again on an already-in-maintenance route keeps your existing Retry-After/bypass config (it doesn't reset to defaults) ; exiting clears the maintenance config back to nil, so the next time you enter maintenance it starts fresh from the default `300`s.
+
+### API reference (state control)
+
+```bash
+# Disable / re-enable
+curl -b /tmp/jar -X POST http://localhost:8001/api/v1/routes/<route-id>/disable
+curl -b /tmp/jar -X POST http://localhost:8001/api/v1/routes/<route-id>/enable
+
+# Enter / exit maintenance (config — retryAfter/bypassIps — is set via the normal PUT route update)
+curl -b /tmp/jar -X POST http://localhost:8001/api/v1/routes/<route-id>/maintenance
+curl -b /tmp/jar -X POST http://localhost:8001/api/v1/routes/<route-id>/maintenance/off
+```
+
+All four endpoints are idempotent : disabling an already-disabled route, or entering maintenance on a route already in maintenance, returns `200` without error.
+
+---
+
 ## Per-route security knobs (cheat sheet)
 
 The most common configuration combinations :
@@ -206,7 +261,7 @@ Auth : the cookie jar (`/tmp/jar`) must hold a session from `/api/v1/auth/login`
 
 - [Topology](Topology) — visualize your routes as a live graph
 - [WAF](WAF) — protect your routes against OWASP attacks
-- [Custom Error Pages](Custom-Error-Pages) — brand the 4xx/5xx pages per route
+- [Custom Error Pages](Custom-Error-Pages) — brand the 4xx/5xx pages per route ; also covers the global [Maintenance page](Custom-Error-Pages#maintenance-page)
 - [Rate Limit](Rate-Limit) — throttle abusive clients
 - [Country Block](Country-Block) — geo-fence per route
 - [OIDC SSO](OIDC-SSO) — single sign-on for admin tools

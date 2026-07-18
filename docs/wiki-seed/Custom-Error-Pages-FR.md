@@ -174,6 +174,42 @@ Dans la page liste des templates, le défaut intégré apparaît comme une ligne
 
 ---
 
+## Page de maintenance
+
+La **page de maintenance** est un concept séparé des templates ci-dessus : c'est la **seule page HTML globale** servie sur les réponses `503` pour toute route qu'un opérateur bascule en [état Maintenance](Routes-FR#maintenance-v2170) (v2.17.0). Contrairement aux templates de pages d'erreur (plusieurs, attachables par route), il n'y a qu'**une seule** page de maintenance pour toute l'instance Arenet — chaque route en maintenance sert le même corps.
+
+### La personnaliser
+
+1. Barre latérale → **Réglages** → **Pages d'erreur** (`/settings/error-pages`)
+2. Clique sur l'onglet **Maintenance** (à côté de la liste des templates)
+3. L'éditeur s'ouvre avec **Arenet Default (built-in)** — une page brandée « Back soon » en thème sombre — préchargée comme point de départ. Un badge **Built-in** la marque comme telle jusqu'à ce que tu enregistres une modification.
+4. Édite le HTML dans le panneau CodeMirror ; le panneau **Aperçu** à droite le rend en direct
+5. Clique sur **Enregistrer**
+
+Un corps **vide** équivaut à ne pas la personnaliser — Arenet sert le défaut intégré brandé dans ce cas.
+
+### Le placeholder `{arenet.maintenance.retry_after}`
+
+Contrairement aux placeholders Caddy `{http.request.*}` / `{time.*}` utilisés dans les templates de pages d'erreur, la page de maintenance a exactement **un** placeholder dédié :
+
+| Placeholder | S'étend en |
+| ----------- | ---------- |
+| `{arenet.maintenance.retry_after}` | La valeur Retry-After configurée sur la **route déclenchante**, en secondes, substituée au moment de servir la réponse |
+
+Ce n'est pas une expression runtime Caddy — c'est un entier statique par route (les secondes Retry-After configurées dans la section Maintenance de cette route, voir [Routes](Routes-FR#maintenance-v2170)) intégré dans le corps de la réponse au moment de la construction de la config. Comme la même page de maintenance globale est partagée entre toutes les routes en maintenance, ce placeholder est ce qui permet à chaque route d'afficher *sa propre* valeur Retry-After dans un HTML par ailleurs identique. Les placeholders Caddy `{http.request.*}` / `{time.*}` documentés plus haut fonctionnent aussi toujours dans le corps de la page de maintenance (méthode, URI, UUID de requête, timestamp).
+
+### Réinitialiser au défaut
+
+Clique sur **Réinitialiser au défaut** pour effacer la page stockée et revenir à vide — le prochain Enregistrer servira à nouveau le défaut intégré brandé. C'est l'équivalent, pour la page de maintenance, de supprimer un template personnalisé.
+
+### Où ça se situe
+
+- La page de maintenance ne fait **pas** partie de la pile de résolution à 3 niveaux des pages d'erreur ci-dessus — elle s'applique uniquement aux routes en maintenance (`503` depuis le handler de maintenance), pas aux erreurs d'origine upstream ni au catch-all.
+- Elle passe par le même pipeline d'[assainissement HTML](#assainissement-html) que les templates et les surcharges par route avant d'être persistée.
+- Voir [Routes](Routes-FR#maintenance-v2170) pour comment une route entre/sort de maintenance et configure son Retry-After + sa liste d'IPs bypass.
+
+---
+
 ## Modèles d'exemple prêts à l'emploi
 
 Arenet fournit un ensemble de **pages d'exemple brandées, prêtes à l'emploi** — une page HTML soignée en thème sombre par code de statut supporté (401, 403, 404, 429, 500, 502, 503, 504). Elles n'utilisent que les placeholders que Caddy substitue au moment de servir la réponse, ne contiennent aucun JavaScript, et passent l'assainisseur sans modification (vérifié). Utilise-les comme point de départ plutôt que d'écrire un template depuis zéro.
@@ -215,8 +251,9 @@ Les placeholders à l'intérieur de ces pages (`{http.error.id}`, `{http.request
 
 ## Voir aussi
 
-- [Routes](Routes-FR) — où attacher un template à une route
+- [Routes](Routes-FR) — où attacher un template à une route ; [Route states](Routes-FR#route-states-active-maintenance-disabled) pour comment une route passe en Maintenance
 - `internal/caddymgr/error_pages.go` — le défaut intégré + la résolution à 3 niveaux au moment de servir la réponse
+- `internal/caddymgr/maintenance.go` — handler 503 de maintenance, bypass `client_ip`, substitution `{arenet.maintenance.retry_after}`
 - `internal/storage/error_template.go` — assainisseur + couche de stockage
-- `web/frontend/src/routes/settings/error-pages/+page.svelte` — l'UI de l'éditeur de templates
+- `web/frontend/src/routes/settings/error-pages/+page.svelte` — l'UI de l'éditeur de templates + l'onglet Maintenance
 - [Référence des placeholders Caddy](https://caddyserver.com/docs/conventions#placeholders) — liste complète des placeholders `{http.request.*}` et `{time.*}`
