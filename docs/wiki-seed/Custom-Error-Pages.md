@@ -174,6 +174,42 @@ In the templates list page, the built-in default appears as a row marked **Built
 
 ---
 
+## Maintenance page
+
+The **maintenance page** is a separate concept from the templates above : it's the **one global HTML page** served on `503` responses for any route an operator switches into [Maintenance state](Routes#route-states-active-maintenance-disabled) (v2.17.0). Unlike error-page templates (many, attachable per-route), there is only **one** maintenance page for the whole Arenet instance — every route in maintenance serves the same body.
+
+### Customize it
+
+1. Sidebar → **Settings** → **Error Pages** (`/settings/error-pages`)
+2. Click the **Maintenance** tab (next to the templates list)
+3. The editor opens with **Arenet Default (built-in)** — a branded "Back soon" dark-themed page — pre-loaded as a starting point. A **Built-in** badge marks it as such until you save a change.
+4. Edit the HTML in the CodeMirror pane ; the **Preview** pane on the right renders it live
+5. Click **Save**
+
+An **empty** body is equivalent to not customizing it — Arenet serves the branded built-in default in that case.
+
+### The `{arenet.maintenance.retry_after}` placeholder
+
+Unlike the `{http.request.*}` / `{time.*}` Caddy placeholders used in error-page templates, the maintenance page has exactly **one** dedicated placeholder :
+
+| Placeholder | Expands to |
+| ----------- | ---------- |
+| `{arenet.maintenance.retry_after}` | The **triggering route's** configured Retry-After value (seconds), substituted at serve time |
+
+This isn't a Caddy runtime expression — it's a static per-route integer (the Retry-After seconds configured in that route's Maintenance section, see [Routes](Routes#maintenance-v2170)) baked into the response body at config-build time. Since the same global maintenance page is shared across every route in maintenance, this placeholder is what lets each route show *its own* Retry-After value inside otherwise-identical HTML. The `{http.request.*}` / `{time.*}` Caddy placeholders documented above also still work inside the maintenance page body (method, URI, request UUID, timestamp).
+
+### Reset to default
+
+Click **Reset to default** to clear the stored page back to empty — the next Save serves the branded built-in default again. This is the maintenance-page equivalent of deleting a custom template.
+
+### Where it fits
+
+- The maintenance page is **not** part of the 3-layer error-page resolution stack above — it only applies to routes in maintenance (`503` from the maintenance handler), not to upstream-originated errors or the catch-all.
+- It goes through the same [HTML sanitization](#html-sanitization) pipeline as templates and per-route overrides before being persisted.
+- See [Routes](Routes#maintenance-v2170) for how a route enters/exits maintenance and configures its Retry-After + bypass IP allow-list.
+
+---
+
 ## Ready-made example templates
 
 Arenet ships a set of **branded, drop-in example pages** — one polished dark-themed HTML page per supported status code (401, 403, 404, 429, 500, 502, 503, 504). They use only the placeholders Caddy substitutes at serve time, contain no JavaScript, and pass the sanitizer unchanged (verified). Use them as a starting point instead of writing a template from scratch.
@@ -215,8 +251,9 @@ The placeholders inside these pages (`{http.error.id}`, `{http.request.uuid}`, `
 
 ## See also
 
-- [Routes](Routes) — where to attach a template to a route
+- [Routes](Routes) — where to attach a template to a route ; [Route states](Routes#route-states-active-maintenance-disabled) for how a route enters Maintenance
 - `internal/caddymgr/error_pages.go` — the built-in default + 3-layer resolution at serve time
+- `internal/caddymgr/maintenance.go` — maintenance 503 handler, `client_ip` bypass, `{arenet.maintenance.retry_after}` substitution
 - `internal/storage/error_template.go` — sanitizer + storage layer
-- `web/frontend/src/routes/settings/error-pages/+page.svelte` — the template editor UI
+- `web/frontend/src/routes/settings/error-pages/+page.svelte` — the template editor UI + the Maintenance tab
 - [Caddy placeholder reference](https://caddyserver.com/docs/conventions#placeholders) — full list of `{http.request.*}` and `{time.*}` placeholders
