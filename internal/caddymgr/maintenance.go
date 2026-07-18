@@ -18,6 +18,7 @@ package caddymgr
 
 import (
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 )
@@ -31,13 +32,42 @@ import (
 // Retry-After seconds".
 const maintenanceRetryAfterSentinel = "{arenet.maintenance.retry_after}"
 
+// maintenanceMessageSentinel is replaced at emission time with the
+// global operator-authored maintenance message
+// (storage.MaintenancePageConfig.Message, v2.18.0). Unlike the
+// retry_after value (a trusted int), the message is untrusted free
+// text, so buildMaintenanceBody HTML-escapes it before substitution
+// and renders its newlines as <br>. Empty message → substituted with
+// the empty string, so the built-in default's generic sentence stands
+// alone and a custom page referencing the placeholder renders nothing
+// there.
+const maintenanceMessageSentinel = "{arenet.maintenance.message}"
+
 // buildMaintenanceBody returns the maintenance HTML with the per-route
-// Retry-After substituted in. `html` is the operator's stored page
-// (already sanitized via SanitizeErrorPageBody upstream) or the
-// branded default (arenetDefaultMaintenancePage). retryAfter is
-// seconds; it is rendered as a plain integer (e.g. "300").
-func buildMaintenanceBody(html string, retryAfter int) string {
-	return strings.ReplaceAll(html, maintenanceRetryAfterSentinel, strconv.Itoa(retryAfter))
+// Retry-After and the global message substituted in. `pageHTML` is the
+// operator's stored page (already sanitized via SanitizeErrorPageBody
+// upstream) or the branded default (arenetDefaultMaintenancePage).
+// retryAfter is seconds, rendered as a plain integer (e.g. "300").
+//
+// message is untrusted operator free text. It is HTML-escaped (so it
+// cannot inject markup into every 503 body) and its newlines rendered
+// as <br> (so a multi-line message from the Settings textarea displays
+// across lines instead of collapsing). Escape-then-<br> ordering is
+// deliberate: any <br> typed into the message is escaped to &lt;br&gt;
+// first, so only the newline-derived <br> tags are real markup. An
+// empty message substitutes to the empty string.
+func buildMaintenanceBody(pageHTML string, retryAfter int, message string) string {
+	// Escape HTML markup, then defang dangerous Caddy placeholders
+	// ({env.*}/{file.*}) the operator may have typed — the message
+	// has no legitimate placeholders of its own and is substituted
+	// into a placeholder-expanded static_response body, so an
+	// unneutralized {env.SECRET} would leak into the public 503.
+	// Newlines last so multi-line messages render as <br>.
+	renderedMsg := html.EscapeString(message)
+	renderedMsg = neutralizeDangerousPlaceholders(renderedMsg)
+	renderedMsg = strings.ReplaceAll(renderedMsg, "\n", "<br>")
+	out := strings.ReplaceAll(pageHTML, maintenanceRetryAfterSentinel, strconv.Itoa(retryAfter))
+	return strings.ReplaceAll(out, maintenanceMessageSentinel, renderedMsg)
 }
 
 // resolveMaintenancePage returns the HTML body to use for a
@@ -71,7 +101,11 @@ func resolveMaintenancePage(storedHTML string) string {
 // "matches nothing meaningfully" territory we don't want to rely on
 // — omitting the route entirely is the unambiguous "all traffic hits
 // the 503" shape.
-func buildMaintenanceRoute(metricsHandler, proxyHandler map[string]any, bypassIPs []string, retryAfterSeconds int, maintenanceHTML string) map[string]any {
+//
+// message is the global operator maintenance message (v2.18.0),
+// substituted (escaped, newlines→<br>) into the body via
+// buildMaintenanceBody. Empty message renders nothing.
+func buildMaintenanceRoute(metricsHandler, proxyHandler map[string]any, bypassIPs []string, retryAfterSeconds int, maintenanceHTML, message string) map[string]any {
 	innerRoutes := make([]map[string]any, 0, 2)
 
 	if len(bypassIPs) > 0 {
@@ -84,7 +118,7 @@ func buildMaintenanceRoute(metricsHandler, proxyHandler map[string]any, bypassIP
 		})
 	}
 
-	body := buildMaintenanceBody(maintenanceHTML, retryAfterSeconds)
+	body := buildMaintenanceBody(maintenanceHTML, retryAfterSeconds, message)
 	headers := map[string]any{
 		"Content-Type": []string{"text/html; charset=utf-8"},
 	}
@@ -128,6 +162,10 @@ var arenetDefaultMaintenancePage = fmt.Sprintf(`<!doctype html>
   h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }
   p { color:#8b949e; line-height:1.5; margin:8px 0; }
   .retry { color:#58a6ff; font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; }
+  /* .msg holds the operator's global message ({arenet.maintenance.message}).
+     :empty collapses it to zero height so an unset message leaves no gap. */
+  .msg { color:#c9d1d9; line-height:1.6; margin:16px 0 0; }
+  .msg:empty { display:none; }
   .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:"SF Mono",Menlo,Consolas,monospace; }
   a { color:#58a6ff; text-decoration:none; }
 </style>
@@ -137,6 +175,7 @@ var arenetDefaultMaintenancePage = fmt.Sprintf(`<!doctype html>
   <p class="code">503</p>
   <h1>Back soon</h1>
   <p>This service is undergoing scheduled maintenance. Please check back shortly.</p>
+  <p class="msg">%s</p>
   <p class="retry">Retry in %ss</p>
   <div class="meta">
     {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}<br>
@@ -144,7 +183,7 @@ var arenetDefaultMaintenancePage = fmt.Sprintf(`<!doctype html>
   </div>
 </div>
 </body>
-</html>`, maintenanceRetryAfterSentinel)
+</html>`, maintenanceMessageSentinel, maintenanceRetryAfterSentinel)
 
 // DefaultMaintenancePageHTML returns the branded default maintenance
 // page HTML served when the operator has not customized the global

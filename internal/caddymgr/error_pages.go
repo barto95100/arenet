@@ -199,7 +199,39 @@ func stripDangerousAtRules(html string) string {
 // Caddy static_response.body field (prod) or an HTTP response
 // (preview).
 func SanitizeErrorPageBody(body string) string {
-	return postSanitize(stripDangerousAtRules(errorPageSanitizer.Sanitize(body)))
+	return neutralizeDangerousPlaceholders(postSanitize(stripDangerousAtRules(errorPageSanitizer.Sanitize(body))))
+}
+
+// dangerousPlaceholderPrefixes are the Caddy replacer namespaces that
+// resolve process/host state independent of the request, so they would
+// leak into a PUBLIC static_response body regardless of who triggers
+// the 5xx. Verified against Caddy v2.11.3 replacer.go:
+//   - {env.*}  → os.Getenv (replacer.go:382-384) — process secrets
+//   - {file.*} → readFileIntoBuffer (replacer.go:350-361) — arbitrary
+//     on-disk file contents
+//
+// The documented-safe {http.request.*} (offered in the error-page
+// editor's variable palette) and our own {arenet.*} sentinels are
+// deliberately NOT in this list — they stay expandable.
+var dangerousPlaceholderPrefixes = []string{"{env.", "{file."}
+
+// neutralizeDangerousPlaceholders defangs {env.*} / {file.*} in
+// operator-supplied page bodies by replacing the opening brace with its
+// HTML entity (&#123;). The text still RENDERS as "{env.FOO}" in the
+// browser, but Caddy's placeholder replacer scans for a literal '{' and
+// no longer matches, so the value is never expanded at serve time.
+// Applied AFTER bluemonday (bluemonday passes {…} through as ordinary
+// text, so it must run here, on the final operator content). Our own
+// {arenet.maintenance.*} sentinels are substituted in Go before Caddy
+// ever sees the body, and {http.request.*} is a documented-safe,
+// request-scoped namespace — neither is touched.
+func neutralizeDangerousPlaceholders(s string) string {
+	for _, prefix := range dangerousPlaceholderPrefixes {
+		if strings.Contains(s, prefix) {
+			s = strings.ReplaceAll(s, prefix, "&#123;"+prefix[1:])
+		}
+	}
+	return s
 }
 
 // ArenetDefaultErrorPages returns the built-in default body

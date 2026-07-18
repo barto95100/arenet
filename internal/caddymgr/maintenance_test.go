@@ -121,6 +121,76 @@ func TestBuildConfigJSON_MaintenanceRoute_NoBypass(t *testing.T) {
 	}
 }
 
+// v2.18.0 — buildMaintenanceBody must substitute BOTH the per-route
+// retry_after sentinel AND the global message sentinel. The message is
+// operator free text: it MUST be HTML-escaped (so it can't inject
+// markup into every 503), and its newlines rendered as <br> (so a
+// multi-line message from the Settings textarea displays across lines
+// rather than collapsing to one). An empty message substitutes to
+// nothing (the built-in default's generic line then stands alone).
+func TestBuildMaintenanceBody_SubstitutesMessage(t *testing.T) {
+	html := `<p class="msg">{arenet.maintenance.message}</p><p>retry {arenet.maintenance.retry_after}s</p>`
+	got := buildMaintenanceBody(html, 300, "Back at 14:00")
+	if !strings.Contains(got, "Back at 14:00") {
+		t.Errorf("message not substituted; body=%q", got)
+	}
+	if !strings.Contains(got, "retry 300s") {
+		t.Errorf("retry_after not substituted; body=%q", got)
+	}
+	if strings.Contains(got, "{arenet.maintenance.message}") {
+		t.Errorf("message sentinel left unsubstituted; body=%q", got)
+	}
+}
+
+func TestBuildMaintenanceBody_EscapesMessageHTML(t *testing.T) {
+	html := `<div>{arenet.maintenance.message}</div>`
+	got := buildMaintenanceBody(html, 60, `<script>alert(1)</script> & "quoted"`)
+	if strings.Contains(got, "<script>") {
+		t.Errorf("message HTML not escaped — raw <script> in body: %q", got)
+	}
+	if !strings.Contains(got, "&lt;script&gt;") {
+		t.Errorf("expected escaped script tag; body=%q", got)
+	}
+	if !strings.Contains(got, "&amp;") {
+		t.Errorf("expected escaped ampersand; body=%q", got)
+	}
+}
+
+func TestBuildMaintenanceBody_MessageNewlinesToBr(t *testing.T) {
+	html := `<div>{arenet.maintenance.message}</div>`
+	got := buildMaintenanceBody(html, 60, "line one\nline two")
+	if !strings.Contains(got, "line one<br>line two") {
+		t.Errorf("newline not rendered as <br>; body=%q", got)
+	}
+}
+
+// v2.18.0 security — the message is operator free text substituted into
+// the (placeholder-expanded) 503 body. A message of {env.SECRET} would
+// otherwise leak a process-env secret into the public 503. The message
+// has no documented placeholders of its own, so dangerous Caddy
+// namespaces ({env.*}, {file.*}) must be neutralized.
+func TestBuildMaintenanceBody_NeutralizesEnvPlaceholderInMessage(t *testing.T) {
+	html := `<div>{arenet.maintenance.message}</div>`
+	got := buildMaintenanceBody(html, 60, "leak: {env.ACME_DNS_API_TOKEN} and {file./etc/passwd}")
+	if strings.Contains(got, "{env.ACME_DNS_API_TOKEN}") {
+		t.Errorf("{env.*} in message survived — secret disclosure: %q", got)
+	}
+	if strings.Contains(got, "{file./etc/passwd}") {
+		t.Errorf("{file.*} in message survived — file disclosure: %q", got)
+	}
+}
+
+func TestBuildMaintenanceBody_EmptyMessageSubstitutesNothing(t *testing.T) {
+	html := `<div>[{arenet.maintenance.message}]</div>`
+	got := buildMaintenanceBody(html, 60, "")
+	if !strings.Contains(got, "[]") {
+		t.Errorf("empty message should substitute to nothing (leaving []); body=%q", got)
+	}
+	if strings.Contains(got, "{arenet.maintenance.message}") {
+		t.Errorf("empty message left the sentinel unsubstituted; body=%q", got)
+	}
+}
+
 // TestDefaultMaintenancePageHTML_MatchesInternalDefault pins the
 // v2.17.1 Item E exported accessor: it must return the exact same
 // HTML as the package-private arenetDefaultMaintenancePage used by

@@ -128,6 +128,70 @@ func TestMaintenancePage_PUT_SanitizesScriptTag(t *testing.T) {
 	}
 }
 
+// v2.18.0 — the global maintenance Message persists through PUT and is
+// echoed by GET, alongside the HTML. Message is plain text stored
+// verbatim (escaping happens at emission in caddymgr, not here).
+func TestMaintenancePage_PUT_Message_Persists_GET_Echoes(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	putBody := `{"html":"<h1>Back soon</h1>","message":"DB migration, back at 14:00"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/maintenance-page", strings.NewReader(putBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", rec.Code, rec.Body)
+	}
+	var putGot maintenancePageResponse
+	if err := json.NewDecoder(rec.Body).Decode(&putGot); err != nil {
+		t.Fatalf("decode PUT response: %v", err)
+	}
+	if putGot.Message != "DB migration, back at 14:00" {
+		t.Errorf("PUT echoed Message = %q; want the persisted value", putGot.Message)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/settings/maintenance-page", nil)
+	getRec := httptest.NewRecorder()
+	env.router.ServeHTTP(getRec, getReq)
+	var got maintenancePageResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode GET: %v", err)
+	}
+	if got.Message != "DB migration, back at 14:00" {
+		t.Errorf("GET Message = %q; want echoed persisted value", got.Message)
+	}
+
+	stored, err := env.store.GetMaintenancePageConfig(context.Background())
+	if err != nil {
+		t.Fatalf("GetMaintenancePageConfig: %v", err)
+	}
+	if stored.Message != "DB migration, back at 14:00" {
+		t.Errorf("stored Message = %q; want verbatim", stored.Message)
+	}
+}
+
+// Back-compat: a PUT that omits `message` (pre-v2.18.0 client) must
+// still succeed — the field is optional, not required.
+func TestMaintenancePage_PUT_WithoutMessage_StillWorks(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	putBody := `{"html":"<h1>Back soon</h1>"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/maintenance-page", strings.NewReader(putBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT without message status=%d body=%s", rec.Code, rec.Body)
+	}
+	stored, err := env.store.GetMaintenancePageConfig(context.Background())
+	if err != nil {
+		t.Fatalf("GetMaintenancePageConfig: %v", err)
+	}
+	if stored.Message != "" {
+		t.Errorf("stored Message = %q; want empty when omitted", stored.Message)
+	}
+}
+
 // TestRequireAdmin_ViewerRejectedOnMaintenancePagePUT mirrors the
 // GeoIP-update viewer-gating pattern (TestRequireAdmin_ViewerRejectedOnGeoIPUpdateEndpoints):
 // a viewer session must get 403 on the admin-only PUT, exercised through

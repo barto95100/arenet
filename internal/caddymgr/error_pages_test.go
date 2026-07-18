@@ -170,6 +170,35 @@ func TestBuildErrorRoutesForRoute_HostMatcherIncludesAliases(t *testing.T) {
 
 // --- Sanitization -----------------------------------------------------------
 
+// v2.18.0 security — operator-supplied custom page bodies flow into a
+// Caddy static_response body, which is placeholder-expanded at serve
+// time (repl.ReplaceKnown). {env.*} resolves secrets from Arenet's
+// process environment and {file.*} reads arbitrary files off disk,
+// regardless of request state — so an admin-typed {env.SECRET} would
+// leak into the PUBLIC error/maintenance body. SanitizeErrorPageBody
+// must neutralize these dangerous namespaces while leaving the
+// documented-safe {http.request.*} and {arenet.*} placeholders intact.
+func TestSanitizeErrorPageBody_NeutralizesEnvAndFilePlaceholders(t *testing.T) {
+	in := `<p>{env.SECRET_TOKEN}</p><p>{file./etc/passwd}</p><p>host {http.request.host}</p><p>{arenet.maintenance.retry_after}</p>`
+	got := SanitizeErrorPageBody(in)
+
+	// Dangerous namespaces neutralized (the literal live prefix must
+	// not survive so Caddy can't expand it).
+	if strings.Contains(got, "{env.SECRET_TOKEN}") {
+		t.Errorf("{env.*} placeholder survived — secret disclosure vector: %q", got)
+	}
+	if strings.Contains(got, "{file./etc/passwd}") {
+		t.Errorf("{file.*} placeholder survived — file disclosure vector: %q", got)
+	}
+	// Documented-safe placeholders preserved (still expandable by Caddy).
+	if !strings.Contains(got, "{http.request.host}") {
+		t.Errorf("documented {http.request.host} was wrongly neutralized: %q", got)
+	}
+	if !strings.Contains(got, "{arenet.maintenance.retry_after}") {
+		t.Errorf("documented {arenet.*} placeholder was wrongly neutralized: %q", got)
+	}
+}
+
 func TestErrorPageSanitizer_StripsScriptTag(t *testing.T) {
 	// XSS payload should never reach the emitted body, even from
 	// an admin who typed it deliberately. UGCPolicy bans script.

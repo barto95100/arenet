@@ -188,17 +188,30 @@
 			color var(--motion-fast),
 			background-color var(--motion-fast);
 	}
+	/* Active segment uses the app-wide status badge pattern (Badge.svelte,
+	   --badge-*-{bg,border}) — a soft ~15% tint of the status color +
+	   that color's border and icon — rather than a full-saturation solid
+	   fill, so the selected state reads as the SAME nuance as the status
+	   indicators elsewhere without the flashy/pushy look. Green = active
+	   (--status-up), amber = maintenance (--status-warn, the WAF-detect
+	   amber), red = disabled (--status-down). */
 	.segment[data-state='active'].active {
-		background: var(--status-up);
-		color: var(--text-on-color, #fff);
+		background: var(--badge-success-bg);
+		box-shadow: inset 0 0 0 1px var(--badge-success-border);
+		color: var(--status-up);
 	}
 	.segment[data-state='maintenance'].active {
-		background: var(--status-warn);
-		color: var(--text-on-color, #fff);
+		background: var(--badge-warning-bg);
+		box-shadow: inset 0 0 0 1px var(--badge-warning-border);
+		color: var(--status-warn);
 	}
+	/* Disabled: same tinted pattern but visibly muted ("teinte opaque /
+	   atténuée") — a lower-opacity red + dimmed icon so a disabled route
+	   reads as switched-off, not alarming. */
 	.segment[data-state='disabled'].active {
-		background: var(--status-down);
-		color: var(--text-on-color, #fff);
+		background: var(--badge-danger-bg);
+		box-shadow: inset 0 0 0 1px var(--badge-danger-border);
+		color: color-mix(in oklch, var(--status-down) 75%, var(--text-secondary));
 	}
 	.segment:disabled {
 		cursor: not-allowed;

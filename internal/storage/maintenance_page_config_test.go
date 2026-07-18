@@ -45,3 +45,28 @@ func TestMaintenancePageConfig_Roundtrip(t *testing.T) {
 		t.Errorf("HTML = %q; want the stored value", got.HTML)
 	}
 }
+
+// v2.18.0 — the global maintenance Message field round-trips alongside
+// HTML. Message is operator free text substituted into the maintenance
+// body via {arenet.maintenance.message} at emission; it is stored
+// verbatim (escaping happens at emission, not here).
+func TestMaintenancePageConfig_MessageRoundtrip(t *testing.T) {
+	s := newTestStore(t)
+	want := MaintenancePageConfig{
+		HTML:    "<h1>Back soon</h1>",
+		Message: "DB migration in progress, back around 14:00.",
+	}
+	if err := s.PutMaintenancePageConfig(context.Background(), want); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	got, err := s.GetMaintenancePageConfig(context.Background())
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.HTML != want.HTML {
+		t.Errorf("HTML = %q; want %q", got.HTML, want.HTML)
+	}
+	if got.Message != want.Message {
+		t.Errorf("Message = %q; want %q", got.Message, want.Message)
+	}
+}

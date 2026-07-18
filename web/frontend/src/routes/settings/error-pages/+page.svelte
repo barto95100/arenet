@@ -439,6 +439,10 @@
 	// (its "Built-in" badge) so the maintenance editor shows the same
 	// visual cue instead of looking like an empty, unstarted buffer.
 	let maintenanceIsDefault = $state(false);
+	// v2.18.0 — the global maintenance message rendered by the built-in
+	// default page (and any custom page) via {arenet.maintenance.message}.
+	// Plain text, independent of the HTML buffer / isDefault flag.
+	let maintenanceMessage = $state('');
 
 	async function loadMaintenancePage(): Promise<void> {
 		maintenanceLoading = true;
@@ -447,6 +451,7 @@
 			const res = await errorTemplatesApi.getMaintenancePage();
 			maintenanceHtml = res.html;
 			maintenanceIsDefault = res.isDefault;
+			maintenanceMessage = res.message;
 			maintenanceLoadedOnce = true;
 		} catch (err) {
 			maintenanceLoadError =
@@ -470,9 +475,10 @@
 	async function saveMaintenancePage(): Promise<void> {
 		maintenanceSaving = true;
 		try {
-			const res = await errorTemplatesApi.putMaintenancePage(maintenanceHtml);
+			const res = await errorTemplatesApi.putMaintenancePage(maintenanceHtml, maintenanceMessage);
 			maintenanceHtml = res.html;
 			maintenanceIsDefault = res.isDefault;
+			maintenanceMessage = res.message;
 			pushToast(t('errorPages.maintenance.toastSaved'), 'success');
 		} catch (err) {
 			const msg =
@@ -493,6 +499,11 @@
 	function resetMaintenanceToDefault(): void {
 		maintenanceHtml = '';
 		maintenanceIsDefault = true;
+		// v2.18.0 — reset clears the global message too, so "Reset to
+		// default" returns the maintenance surface to a fully pristine
+		// state (built-in page + no custom message). Still buffer-only;
+		// nothing persists until Save.
+		maintenanceMessage = '';
 	}
 
 	// --- Helpers -----------------------------------------
@@ -639,6 +650,27 @@
 				</Button>
 			</div>
 		{:else}
+			<!-- v2.18.0 — global maintenance message. Plain text
+			     substituted into the 503 body via
+			     {arenet.maintenance.message} (built-in default page +
+			     any custom page). Placed ABOVE the HTML editor so it
+			     reads as the primary, no-HTML-needed knob; the editor
+			     below is the advanced surface. -->
+			<div class="card message-card">
+				<label class="message-label" for="maintenance-message">
+					{language.current && t('errorPages.maintenance.messageLabel')}
+				</label>
+				<textarea
+					id="maintenance-message"
+					class="message-input"
+					rows="3"
+					bind:value={maintenanceMessage}
+					placeholder={t('errorPages.maintenance.messagePlaceholder')}
+				></textarea>
+				<p class="vars-help">
+					{language.current && t('errorPages.maintenance.messageHelp')}
+				</p>
+			</div>
 			<div class="card editor-card">
 				<div class="editor-pane">
 					<div class="pane-label">
@@ -1262,6 +1294,38 @@
 		color: var(--fg-muted);
 		font-size: 12px;
 		font-style: italic;
+	}
+
+	/* v2.18.0 — global maintenance message field (above the editor) */
+	.message-card {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.message-label {
+		font-family: var(--font-mono);
+		font-size: 11.5px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--fg-dim);
+	}
+	.message-input {
+		width: 100%;
+		box-sizing: border-box;
+		resize: vertical;
+		padding: 10px 12px;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		color: var(--fg);
+		font-family: inherit;
+		font-size: 13px;
+		line-height: 1.5;
+	}
+	.message-input:focus {
+		outline: none;
+		border-color: var(--accent-cyan);
+		box-shadow: 0 0 0 1px var(--accent-cyan);
 	}
 
 

@@ -188,15 +188,24 @@ The **maintenance page** is a separate concept from the templates above : it's t
 
 An **empty** body is equivalent to not customizing it — Arenet serves the branded built-in default in that case.
 
-### The `{arenet.maintenance.retry_after}` placeholder
+### Global message (v2.18.0)
 
-Unlike the `{http.request.*}` / `{time.*}` Caddy placeholders used in error-page templates, the maintenance page has exactly **one** dedicated placeholder :
+Above the HTML editor there is a **Maintenance message** field — one line (or a few) of plain text shared across every maintenance route. Type "Database migration in progress, back around 14:00" once and it appears on all of them, no HTML editing required. Leave it empty and the built-in default falls back to its generic sentence.
+
+The message renders wherever the `{arenet.maintenance.message}` placeholder appears — the built-in default page already includes it, and a custom page can place it anywhere. It's plain text: HTML-escaped and its line breaks turned into `<br>` at serve time, so a message can't inject markup. **Reset to default** clears the message too.
+
+### Maintenance placeholders
+
+Unlike the `{http.request.*}` / `{time.*}` Caddy placeholders used in error-page templates, the maintenance page has **two** dedicated Arenet placeholders :
 
 | Placeholder | Expands to |
 | ----------- | ---------- |
 | `{arenet.maintenance.retry_after}` | The **triggering route's** configured Retry-After value (seconds), substituted at serve time |
+| `{arenet.maintenance.message}` | The **global** maintenance message (above), HTML-escaped, line breaks → `<br>`. Empty when no message is set |
 
-This isn't a Caddy runtime expression — it's a static per-route integer (the Retry-After seconds configured in that route's Maintenance section, see [Routes](Routes#maintenance-v2170)) baked into the response body at config-build time. Since the same global maintenance page is shared across every route in maintenance, this placeholder is what lets each route show *its own* Retry-After value inside otherwise-identical HTML. The `{http.request.*}` / `{time.*}` Caddy placeholders documented above also still work inside the maintenance page body (method, URI, request UUID, timestamp).
+Neither is a Caddy runtime expression — both are baked into the response body at config-build time. `retry_after` is a static per-route integer (the Retry-After seconds configured in that route's Maintenance section, see [Routes](Routes#maintenance-v2170)), so each route shows *its own* value inside the otherwise-identical shared HTML ; `message` is the one global text. The `{http.request.*}` / `{time.*}` Caddy placeholders documented above also still work inside the maintenance page body (method, URI, request UUID, timestamp).
+
+> **Note (security).** `{env.*}` and `{file.*}` Caddy placeholders are **neutralized** inside operator-supplied maintenance/error page bodies and the global message — they render as literal text instead of expanding — so an admin can't accidentally (or a compromised admin can't deliberately) leak a process-environment secret or an on-disk file into the public response.
 
 ### Reset to default
 
