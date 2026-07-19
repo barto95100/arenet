@@ -212,6 +212,10 @@ Aucun n'est une expression runtime Caddy — tous sont intégrés dans le corps 
 
 > **Note (sécurité).** Les placeholders Caddy `{env.*}` et `{file.*}` sont **neutralisés** dans les corps de pages de maintenance/erreur fournis par l'opérateur et dans le message global — ils s'affichent en texte littéral au lieu de s'étendre — pour qu'un admin ne puisse pas (accidentellement, ou délibérément si le compte est compromis) faire fuiter un secret d'environnement ou un fichier disque dans la réponse publique.
 
+### Page d'exemple pour démarrer
+
+Une page de maintenance d'exemple soignée et prête à copier est fournie dans le repo : [`docs/examples/maintenance-page-example.html`](https://github.com/barto95100/arenet/blob/main/docs/examples/maintenance-page-example.html). C'est une page sombre animée qui utilise **uniquement** les placeholders qu'Arenet substitue réellement — `{arenet.maintenance.refresh_meta}` dans le `<head>` (auto-refresh), `{arenet.maintenance.message}` (se réduit proprement quand vide, via une règle `.message:empty`), `{arenet.maintenance.retry_after}`, et les variables de requête `{http.request.*}` / `{time.now.year}`. Copie son contenu dans l'éditeur Maintenance et adapte le texte/branding. Un test de non-régression la maintient valide face aux évolutions du sanitizer, donc ce que tu copies est toujours ce qu'Arenet servira réellement.
+
 ### Réinitialiser au défaut
 
 Clique sur **Réinitialiser au défaut** pour effacer la page stockée et revenir à vide — le prochain Enregistrer servira à nouveau le défaut intégré brandé. C'est l'équivalent, pour la page de maintenance, de supprimer un template personnalisé.

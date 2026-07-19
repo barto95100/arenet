@@ -212,6 +212,10 @@ None is a Caddy runtime expression — all are baked into the response body at c
 
 > **Note (security).** `{env.*}` and `{file.*}` Caddy placeholders are **neutralized** inside operator-supplied maintenance/error page bodies and the global message — they render as literal text instead of expanding — so an admin can't accidentally (or a compromised admin can't deliberately) leak a process-environment secret or an on-disk file into the public response.
 
+### Example page to start from
+
+A polished, ready-to-copy example maintenance page ships in the repo at [`docs/examples/maintenance-page-example.html`](https://github.com/barto95100/arenet/blob/main/docs/examples/maintenance-page-example.html). It's a dark, animated page that uses **only** the placeholders Arenet actually substitutes — `{arenet.maintenance.refresh_meta}` in `<head>` (auto-refresh), `{arenet.maintenance.message}` (collapses cleanly when empty, via a `.message:empty` rule), `{arenet.maintenance.retry_after}`, and the `{http.request.*}` / `{time.now.year}` request vars. Copy its contents into the Maintenance editor and adapt the wording/branding. A regression test keeps it valid against sanitizer changes, so what you copy is always what Arenet will actually serve.
+
 ### Reset to default
 
 Click **Reset to default** to clear the stored page back to empty — the next Save serves the branded built-in default again. This is the maintenance-page equivalent of deleting a custom template.
