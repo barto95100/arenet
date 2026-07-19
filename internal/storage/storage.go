@@ -112,6 +112,9 @@ const (
 	// default, same convention as bucketGeoIPUpdate. See
 	// maintenance_page_config.go.
 	bucketMaintenancePage = "maintenance_page"
+	// Task 1 (v2.19.0) — operator-uploaded TLS certificates served on
+	// a route via load_pem. See external_cert.go.
+	bucketExternalCertificates = "external_certificates"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -182,6 +185,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketUpdateCheck),          // v2.12.3
 			[]byte(bucketGeoIPUpdate),          // Brick 3 Task 3
 			[]byte(bucketMaintenancePage),      // Task 2
+			[]byte(bucketExternalCertificates), // v2.19.0
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)
