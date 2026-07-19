@@ -644,6 +644,23 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		return fmt.Errorf("get maintenance page config: %w", err)
 	}
 
+	// v2.19.0 (external-certificates SOCLE) — read every
+	// operator-uploaded external certificate before each apply, same
+	// plumbing as ErrorTemplates / maintenance above. Keyed by ID so
+	// buildConfigJSON can resolve a manual-cert route's Route.CertID to
+	// its PEM material for load_pem emission. A dangling CertID (cert
+	// deleted between two reloads) resolves to a missing map entry and
+	// buildLoadPemList skips it defensively. Empty bucket → empty map →
+	// no load_pem block (the common case, no manual-cert routes).
+	extCerts, err := m.store.ListExternalCertificates(ctx)
+	if err != nil {
+		return fmt.Errorf("list external certificates: %w", err)
+	}
+	extCertsMap := make(map[string]storage.ExternalCertificate, len(extCerts))
+	for _, c := range extCerts {
+		extCertsMap[c.ID] = c
+	}
+
 	cfgJSON, err := buildConfigJSON(routes, buildOpts{
 		DevMode:                   m.devMode,
 		ACMEEmail:                 m.acmeEmail,
@@ -655,6 +672,7 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		ErrorTemplates:            errorTemplatesMap,
 		MaintenancePageHTML:       maintenancePage.HTML,
 		MaintenanceMessage:        maintenancePage.Message,
+		ExternalCerts:             extCertsMap,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -1176,6 +1194,17 @@ type buildOpts struct {
 	// built-in default page and in any custom page that references
 	// it). Empty string (default) renders nothing.
 	MaintenanceMessage string
+	// ExternalCerts (v2.19.0, external-certificates SOCLE) maps
+	// ExternalCertificate.ID → the operator-uploaded cert, read by
+	// the manager from BoltDB before each applyLocked. A route with
+	// CertSource=="manual" references one via Route.CertID; the
+	// caddymgr emit then (a) serves the cert through
+	// apps.tls.certificates.load_pem, (b) adds the host to
+	// automatic_https.skip_certificates, and (c) EXCLUDES the host
+	// from every ACME subject partition — so Caddy never tries to
+	// ACME-issue a host it already serves a manual cert for. A nil /
+	// empty map is the common case (no manual-cert routes).
+	ExternalCerts map[string]storage.ExternalCertificate
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -1573,20 +1602,30 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			}
 			if r.TLSEnabled {
 				httpsRoutes = append(httpsRoutes, route)
-				for _, h := range allHosts {
-					if !certmagic.SubjectQualifiesForPublicCert(h) {
-						continue
-					}
-					if !r.UseDedicatedCert {
-						if _, covered := IsHostCoveredByManagedDomain(h, opts.ManagedDomains); covered {
+				// v2.19.0 — a manual-cert route serves its uploaded
+				// cert via load_pem; it must NEVER be added to the ACME
+				// subject partition (Caddy would then ACME-issue the
+				// host IN ADDITION to serving the manual cert — the
+				// exact rate-limit / duplication bug the SOCLE prevents).
+				// The httpsRoutes append above is kept: the route still
+				// serves on :443 (that's how the manual cert is used at
+				// handshake, and how a maintenance manual route 503s).
+				if r.CertSource != storage.RouteCertSourceManual {
+					for _, h := range allHosts {
+						if !certmagic.SubjectQualifiesForPublicCert(h) {
 							continue
 						}
-					}
-					switch r.ACMEChallenge {
-					case storage.ACMEChallengeDNS01:
-						acme.DNS01 = append(acme.DNS01, h)
-					default:
-						acme.HTTP01 = append(acme.HTTP01, h)
+						if !r.UseDedicatedCert {
+							if _, covered := IsHostCoveredByManagedDomain(h, opts.ManagedDomains); covered {
+								continue
+							}
+						}
+						switch r.ACMEChallenge {
+						case storage.ACMEChallengeDNS01:
+							acme.DNS01 = append(acme.DNS01, h)
+						default:
+							acme.HTTP01 = append(acme.HTTP01, h)
+						}
 					}
 				}
 			}
@@ -1784,14 +1823,22 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 					// Still register TLS subjects so the cert is
 					// issued (the operator can fix the provider
 					// without losing the cert when reload runs).
-					for _, h := range denyHosts {
-						if !certmagic.SubjectQualifiesForPublicCert(h) {
-							continue
-						}
-						if r.ACMEChallenge == storage.ACMEChallengeDNS01 {
-							acme.DNS01 = append(acme.DNS01, h)
-						} else {
-							acme.HTTP01 = append(acme.HTTP01, h)
+					// v2.19.0 — but NOT for a manual-cert route: it
+					// serves the uploaded cert via load_pem, so adding
+					// its host to the ACME partition here would
+					// double-issue (see the maintenance-path note
+					// above). httpsRoutes stays appended — the deny
+					// route still serves on :443.
+					if r.CertSource != storage.RouteCertSourceManual {
+						for _, h := range denyHosts {
+							if !certmagic.SubjectQualifiesForPublicCert(h) {
+								continue
+							}
+							if r.ACMEChallenge == storage.ACMEChallengeDNS01 {
+								acme.DNS01 = append(acme.DNS01, h)
+							} else {
+								acme.HTTP01 = append(acme.HTTP01, h)
+							}
 						}
 					}
 				}
@@ -1910,48 +1957,58 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			// only if it fails the IP/loopback/.local classification;
 			// wildcards DO qualify and reach the partition, where the
 			// API guarantees they sit on a dns-01 route.
-			for _, h := range allHosts {
-				if !certmagic.SubjectQualifiesForPublicCert(h) {
-					continue
-				}
-				// Step O.2 (D5.A short-circuit on empty managed
-				// domains): when the route's host is covered by
-				// a managed domain AND the route does NOT opt
-				// out via UseDedicatedCert, skip the per-route
-				// partition — the wildcard policy at
-				// `*.<apex>` will serve the cert at handshake
-				// time via certmagic's wildcard expansion. The
-				// covered+opt-out path (UseDedicatedCert=true)
-				// emits its own per-route policy ALONGSIDE the
-				// wildcard, sharing the apex but with a
-				// dedicated key (D1.B).
-				if !r.UseDedicatedCert {
-					if _, covered := IsHostCoveredByManagedDomain(h, opts.ManagedDomains); covered {
+			//
+			// v2.19.0 — a manual-cert route is EXCLUDED from the ACME
+			// partition entirely: it serves its operator-uploaded cert
+			// via load_pem, so adding its host here would make Caddy
+			// ACME-issue the host IN ADDITION (the rate-limit /
+			// duplication bug the SOCLE prevents). httpsRoutes above is
+			// kept — the route still serves on :443, which is how the
+			// manual cert is presented at handshake.
+			if r.CertSource != storage.RouteCertSourceManual {
+				for _, h := range allHosts {
+					if !certmagic.SubjectQualifiesForPublicCert(h) {
 						continue
 					}
-				}
-				switch r.ACMEChallenge {
-				case storage.ACMEChallengeDNS01:
-					acme.DNS01 = append(acme.DNS01, h)
-				case storage.ACMEChallengeInherited:
-					// Defensive: a route persisted as
-					// "inherited" should always be covered by
-					// some managed domain (the storage layer
-					// only sets "inherited" inside the managed-
-					// domain create handler). Reaching this
-					// fallback means the operator deleted the
-					// managing apex without invoking the
-					// reverse migration — programming-error
-					// path. Same posture as J.4's "dns-01 with
-					// no provider" defensive fall-back: route
-					// to HTTP-01 so the host still gets a cert
-					// rather than silently dropping it from
-					// every policy. The dashboard will show
-					// the route as "per-route ACME" instead
-					// of "inherited"; the operator notices.
-					acme.HTTP01 = append(acme.HTTP01, h)
-				default:
-					acme.HTTP01 = append(acme.HTTP01, h)
+					// Step O.2 (D5.A short-circuit on empty managed
+					// domains): when the route's host is covered by
+					// a managed domain AND the route does NOT opt
+					// out via UseDedicatedCert, skip the per-route
+					// partition — the wildcard policy at
+					// `*.<apex>` will serve the cert at handshake
+					// time via certmagic's wildcard expansion. The
+					// covered+opt-out path (UseDedicatedCert=true)
+					// emits its own per-route policy ALONGSIDE the
+					// wildcard, sharing the apex but with a
+					// dedicated key (D1.B).
+					if !r.UseDedicatedCert {
+						if _, covered := IsHostCoveredByManagedDomain(h, opts.ManagedDomains); covered {
+							continue
+						}
+					}
+					switch r.ACMEChallenge {
+					case storage.ACMEChallengeDNS01:
+						acme.DNS01 = append(acme.DNS01, h)
+					case storage.ACMEChallengeInherited:
+						// Defensive: a route persisted as
+						// "inherited" should always be covered by
+						// some managed domain (the storage layer
+						// only sets "inherited" inside the managed-
+						// domain create handler). Reaching this
+						// fallback means the operator deleted the
+						// managing apex without invoking the
+						// reverse migration — programming-error
+						// path. Same posture as J.4's "dns-01 with
+						// no provider" defensive fall-back: route
+						// to HTTP-01 so the host still gets a cert
+						// rather than silently dropping it from
+						// every policy. The dashboard will show
+						// the route as "per-route ACME" instead
+						// of "inherited"; the operator notices.
+						acme.HTTP01 = append(acme.HTTP01, h)
+					default:
+						acme.HTTP01 = append(acme.HTTP01, h)
+					}
 				}
 			}
 		}
@@ -2109,7 +2166,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			"grace_period": "5s",
 			"servers":      cfg.Apps.HTTP.Servers,
 		},
-		"tls": buildTLSApp(acme, opts),
+		"tls": buildTLSApp(acme, opts, routes),
 	}
 	// Step #S-19v2: suppress Caddy's default local-CA root install
 	// attempt. v1.0.2 (now reverted) tried to set this via the typed
@@ -2475,7 +2532,7 @@ func defaultDNSProvider(providers map[string]storage.DNSProviderConfig) (storage
 // This preserves the D5.A short-circuit invariant pinned by
 // TestBuildConfigJSON_NoManagedDomains_PreservesShape (or
 // equivalent test name).
-func buildTLSApp(acme acmePartition, opts buildOpts) map[string]any {
+func buildTLSApp(acme acmePartition, opts buildOpts, routes []storage.Route) map[string]any {
 	tls := map[string]any{
 		"automation": map[string]any{
 			"policies": buildTLSPolicies(acme, opts),
@@ -2486,7 +2543,61 @@ func buildTLSApp(acme acmePartition, opts buildOpts) map[string]any {
 			"automate": automate,
 		}
 	}
+	// v2.19.0 (external-certificates SOCLE) — serve each manual-cert
+	// route's operator-uploaded cert via apps.tls.certificates.load_pem.
+	// Merge with any existing "automate" key (managed domains) rather
+	// than clobbering it: both sub-keys can coexist under
+	// tls["certificates"].
+	if loadPem := buildLoadPemList(routes, opts.ExternalCerts); len(loadPem) > 0 {
+		certs, _ := tls["certificates"].(map[string]any)
+		if certs == nil {
+			certs = map[string]any{}
+		}
+		certs["load_pem"] = loadPem
+		tls["certificates"] = certs
+	}
 	return tls
+}
+
+// buildLoadPemList returns the apps.tls.certificates.load_pem entries
+// for every route whose CertSource=="manual", resolving Route.CertID
+// against the operator-uploaded certs map (ext). Each entry is
+// {"certificate": <leaf PEM (+ "\n" + chain PEM when present)>, "key":
+// <key PEM>} — the Caddy v2 CertKeyFilePair shape for inline PEM.
+//
+// Dedup by CertID: a certificate shared by several routes (e.g. a SAN
+// cert covering multiple hostnames) emits ONCE. A route whose CertID is
+// absent from ext (dangling reference — cert deleted between reloads) is
+// skipped defensively rather than emitting a broken half-entry.
+func buildLoadPemList(routes []storage.Route, ext map[string]storage.ExternalCertificate) []map[string]any {
+	out := make([]map[string]any, 0)
+	seen := make(map[string]struct{})
+	for _, route := range routes {
+		if route.CertSource != storage.RouteCertSourceManual {
+			continue
+		}
+		if _, dup := seen[route.CertID]; dup {
+			continue
+		}
+		cert, ok := ext[route.CertID]
+		if !ok {
+			// Dangling CertID — skip rather than emit a broken entry.
+			continue
+		}
+		seen[route.CertID] = struct{}{}
+		pem := cert.CertPEM
+		if cert.ChainPEM != "" {
+			pem = cert.CertPEM + "\n" + cert.ChainPEM
+		}
+		out = append(out, map[string]any{
+			"certificate": pem,
+			"key":         cert.KeyPEM,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // buildAutomateList returns the subjects Caddy should proactively
@@ -2542,6 +2653,18 @@ func buildSkipList(routes []storage.Route) []string {
 	out := make([]string, 0, len(routes))
 	for _, route := range routes {
 		if route.ACMEChallenge == storage.ACMEChallengeInherited {
+			out = append(out, route.Host)
+			out = append(out, route.Aliases...)
+		}
+		// v2.19.0 (external-certificates SOCLE) — a manual-cert route
+		// serves its operator-uploaded cert via load_pem. Its host must
+		// be skipped from auto-HTTPS cert management (same mechanism as
+		// the managed-domain wildcard above: kept in auto-HTTPS routing
+		// / redirect handling, but never auto-issued), so Caddy does not
+		// try to ACME-acquire a host it already has a cert for. The ACME
+		// subject partition is excluded at the three per-route sites in
+		// buildConfigJSON; this skip is the auto-HTTPS-side companion.
+		if route.CertSource == storage.RouteCertSourceManual {
 			out = append(out, route.Host)
 			out = append(out, route.Aliases...)
 		}
