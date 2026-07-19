@@ -408,6 +408,9 @@
 					"hours": "heures",
 					"days": "jours"
 				},
+				"message": "Message de maintenance",
+				"messagePlaceholder": "ex. Migration de la base en cours — retour vers 14h00.",
+				"messageHelp": "Affiché sur la page de maintenance de cette route. Laissez vide pour utiliser le message global (Settings → Error Pages → Maintenance).",
 				"bypassIps": "IPs / CIDRs de contournement",
 				"bypassIpsAdd": "+ Ajouter une IP de contournement"
 			}
@@ -994,9 +997,19 @@
 			"helpEmpty": "Une page vide signifie qu'Arenet sert sa page de maintenance branded par défaut.",
 			"builtinBadge": "Défaut Arenet (intégré)",
 			"builtinTooltip": "Ceci est la page de maintenance par défaut intégrée à Arenet — la modifier puis cliquer sur Enregistrer en fait votre page personnalisée.",
-			"messageLabel": "Message de maintenance",
+			"messageLabel": "Message de maintenance global",
 			"messagePlaceholder": "ex. Migration de la base en cours — retour vers 14h00. Merci de votre patience.",
-			"messageHelp": "Message texte global affiché sur chaque page de maintenance via le placeholder {arenet.maintenance.message} (rendu aussi par la page par défaut intégrée). Laissez vide pour afficher la ligne générique par défaut."
+			"messageHelp": "Message par défaut affiché sur les pages de maintenance via le placeholder {arenet.maintenance.message}. Une route qui définit son propre message (dans son formulaire d'édition) le remplace. Laissez vide pour afficher la ligne générique par défaut.",
+			"placeholdersTitle": "Placeholders disponibles",
+			"ph": {
+				"retryAfter": "La valeur Retry-After de la route déclenchante (secondes)",
+				"message": "Le message de la route, ou ce message global en repli",
+				"refreshMeta": "Balise meta d'auto-refresh construite depuis le Retry-After (page par défaut uniquement ; vide si Retry-After = 0)",
+				"method": "Méthode de la requête (GET, POST, …)",
+				"host": "Host demandé",
+				"uri": "URI complète de la requête",
+				"uuid": "ID par requête (pratique pour le support)"
+			}
 		}
 	},
 	"settingsSubcards": {

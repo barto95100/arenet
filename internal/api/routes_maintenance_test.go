@@ -49,6 +49,45 @@ func TestCreateRoute_WithMaintenanceConfig(t *testing.T) {
 	}
 }
 
+// v2.18.1 — the per-route maintenance message inside maintenanceConfig
+// must be accepted by the DisallowUnknownFields decoder (no 400), stored,
+// AND echoed back on GET. This pins the wire-field round-trip for the new
+// nested field (the recurring 400 / silent-drop regression class).
+func TestCreateRoute_WithPerRouteMaintenanceMessage_RoundTrips(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := maintBody("pm.example.com", `,"maintenanceConfig":{"retryAfterSeconds":300,"bypassIps":[],"message":"per-route down for DB migration"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s; want 201 (per-route message must be accepted, not 400)", rec.Code, rec.Body)
+	}
+
+	// Stored verbatim.
+	stored, _ := env.store.ListRoutes(context.Background())
+	if stored[0].MaintenanceConfig == nil || stored[0].MaintenanceConfig.Message != "per-route down for DB migration" {
+		t.Errorf("stored per-route Message = %+v; want the submitted text", stored[0].MaintenanceConfig)
+	}
+
+	// Echoed on GET (response serialization — the v2.17.1 disabled class).
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/routes/"+stored[0].ID, nil)
+	getRec := httptest.NewRecorder()
+	env.router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s", getRec.Code, getRec.Body)
+	}
+	var resp struct {
+		MaintenanceConfig *storage.MaintenanceConfig `json:"maintenanceConfig"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode GET: %v", err)
+	}
+	if resp.MaintenanceConfig == nil || resp.MaintenanceConfig.Message != "per-route down for DB migration" {
+		t.Errorf("GET maintenanceConfig.message = %+v; want echoed per-route message", resp.MaintenanceConfig)
+	}
+}
+
 func TestMaintenanceEndpoint_On_SetsConfig(t *testing.T) {
 	env := newTestEnv(t, false)
 	created, _ := env.store.CreateRoute(context.Background(), storage.Route{

@@ -24,7 +24,7 @@ import (
 func TestRoute_MaintenanceConfig_Roundtrip(t *testing.T) {
 	s := newTestStore(t)
 	r := minimalRoute("m.example.com", "http://u:1")
-	r.MaintenanceConfig = &MaintenanceConfig{RetryAfterSeconds: 300, BypassIPs: []string{"192.168.1.0/24", "10.0.0.5"}}
+	r.MaintenanceConfig = &MaintenanceConfig{RetryAfterSeconds: 300, BypassIPs: []string{"192.168.1.0/24", "10.0.0.5"}, Message: "DB migration, back at 14:00"}
 	created, err := s.CreateRoute(context.Background(), r)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -41,6 +41,10 @@ func TestRoute_MaintenanceConfig_Roundtrip(t *testing.T) {
 	}
 	if len(got.MaintenanceConfig.BypassIPs) != 2 {
 		t.Errorf("BypassIPs len = %d; want 2", len(got.MaintenanceConfig.BypassIPs))
+	}
+	// v2.18.1 — per-route maintenance message round-trips.
+	if got.MaintenanceConfig.Message != "DB migration, back at 14:00" {
+		t.Errorf("Message = %q; want the stored per-route message", got.MaintenanceConfig.Message)
 	}
 }
 

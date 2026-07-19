@@ -175,6 +175,13 @@ type MaintenanceConfig struct {
 	// BypassIPs is an IP/CIDR allow-list; matching clients reach the
 	// real upstream instead of the 503.
 	BypassIPs []string `json:"bypassIps,omitempty"`
+	// Message is the per-route maintenance message rendered via the
+	// {arenet.maintenance.message} placeholder (v2.18.1). When empty,
+	// the emission falls back to the GLOBAL message
+	// (MaintenancePageConfig.Message). Stored verbatim (plain text) —
+	// HTML-escaped + {env.*}/{file.*}-neutralized at emission, not
+	// here. omitempty keeps pre-v2.18.1 rows migration-free.
+	Message string `json:"message,omitempty"`
 }
 
 // Validate rejects a negative Retry-After and any bypass entry that is

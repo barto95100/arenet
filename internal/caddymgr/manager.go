@@ -1538,13 +1538,20 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// pre-filter.
 		if r.MaintenanceConfig != nil && !r.Disabled {
 			maintenanceHTML := resolveMaintenancePage(opts.MaintenancePageHTML)
+			// v2.18.1 — per-route message wins; fall back to the global
+			// message (MaintenancePageConfig.Message via opts) when the
+			// route sets none. Both empty → empty substitution.
+			effectiveMsg := r.MaintenanceConfig.Message
+			if effectiveMsg == "" {
+				effectiveMsg = opts.MaintenanceMessage
+			}
 			maintRoute := buildMaintenanceRoute(
 				metricsHandler,
 				proxyHandler,
 				r.MaintenanceConfig.BypassIPs,
 				r.MaintenanceConfig.RetryAfterSeconds,
 				maintenanceHTML,
-				opts.MaintenanceMessage,
+				effectiveMsg,
 			)
 
 			allHosts := r.AllHosts()

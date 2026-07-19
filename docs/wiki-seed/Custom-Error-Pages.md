@@ -188,22 +188,27 @@ The **maintenance page** is a separate concept from the templates above : it's t
 
 An **empty** body is equivalent to not customizing it — Arenet serves the branded built-in default in that case.
 
-### Global message (v2.18.0)
+### Maintenance message (per-route, with global fallback — v2.18.1)
 
-Above the HTML editor there is a **Maintenance message** field — one line (or a few) of plain text shared across every maintenance route. Type "Database migration in progress, back around 14:00" once and it appears on all of them, no HTML editing required. Leave it empty and the built-in default falls back to its generic sentence.
+The message shown on a maintenance page is **per-route** (set in each route's edit form, Maintenance section) with the **global message** as a shared fallback. Above the HTML editor here is the **global Maintenance message** field — the default shown on any route that doesn't set its own. Type "Database migration in progress, back around 14:00" once and it applies to every route without a specific message ; a route that needs a different notice sets its own in its edit form.
 
-The message renders wherever the `{arenet.maintenance.message}` placeholder appears — the built-in default page already includes it, and a custom page can place it anywhere. It's plain text: HTML-escaped and its line breaks turned into `<br>` at serve time, so a message can't inject markup. **Reset to default** clears the message too.
+Resolution : **per-route message if set → else the global message → else nothing** (the built-in default then shows its generic sentence). The message is plain text : HTML-escaped and its line breaks turned into `<br>` at serve time, so it can't inject markup. **Reset to default** clears the global message too.
+
+### Auto-refresh (v2.18.1)
+
+The built-in default page carries a `<meta http-equiv="refresh">` built from the route's Retry-After (via the `{arenet.maintenance.refresh_meta}` placeholder), so a visitor's browser reloads itself when the window is expected to end. Retry-After `0` emits no meta (a `content="0"` would loop). Custom pages don't get this automatically — add your own `<meta http-equiv="refresh" content="{arenet.maintenance.retry_after}">` if you want it.
 
 ### Maintenance placeholders
 
-Unlike the `{http.request.*}` / `{time.*}` Caddy placeholders used in error-page templates, the maintenance page has **two** dedicated Arenet placeholders :
+Unlike the `{http.request.*}` / `{time.*}` Caddy placeholders used in error-page templates, the maintenance page has these dedicated Arenet placeholders :
 
 | Placeholder | Expands to |
 | ----------- | ---------- |
 | `{arenet.maintenance.retry_after}` | The **triggering route's** configured Retry-After value (seconds), substituted at serve time |
-| `{arenet.maintenance.message}` | The **global** maintenance message (above), HTML-escaped, line breaks → `<br>`. Empty when no message is set |
+| `{arenet.maintenance.message}` | The route's message, or the global message as fallback (HTML-escaped, line breaks → `<br>`). Empty when neither is set |
+| `{arenet.maintenance.refresh_meta}` | A `<meta http-equiv="refresh" content="N">` tag (N = Retry-After) ; empty when Retry-After is `0`. Present in the built-in default page's `<head>` — add it to a custom page if you want auto-refresh |
 
-Neither is a Caddy runtime expression — both are baked into the response body at config-build time. `retry_after` is a static per-route integer (the Retry-After seconds configured in that route's Maintenance section, see [Routes](Routes#maintenance-v2170)), so each route shows *its own* value inside the otherwise-identical shared HTML ; `message` is the one global text. The `{http.request.*}` / `{time.*}` Caddy placeholders documented above also still work inside the maintenance page body (method, URI, request UUID, timestamp).
+None is a Caddy runtime expression — all are baked into the response body at config-build time. `retry_after` and `refresh_meta` are per-route (each route shows *its own* value inside the otherwise-identical shared HTML) ; `message` resolves per-route-then-global. The `{http.request.*}` / `{time.*}` Caddy placeholders documented above also still work inside the maintenance page body (method, URI, request UUID, timestamp).
 
 > **Note (security).** `{env.*}` and `{file.*}` Caddy placeholders are **neutralized** inside operator-supplied maintenance/error page bodies and the global message — they render as literal text instead of expanding — so an admin can't accidentally (or a compromised admin can't deliberately) leak a process-environment secret or an on-disk file into the public response.
 

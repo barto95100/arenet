@@ -444,6 +444,22 @@
 	// Plain text, independent of the HTML buffer / isDefault flag.
 	let maintenanceMessage = $state('');
 
+	// v2.18.1 — placeholders usable in the maintenance page HTML, shown
+	// as a click-to-insert palette under the editor. The two Arenet
+	// sentinels are baked in Go at emission ; the {http.request.*} ones
+	// are expanded by Caddy at serve time (same set the templates editor
+	// offers). {env.*}/{file.*} are intentionally absent — they're
+	// neutralized for security.
+	const maintenancePlaceholders = $derived([
+		{ token: '{arenet.maintenance.retry_after}', desc: t('errorPages.maintenance.ph.retryAfter') },
+		{ token: '{arenet.maintenance.message}', desc: t('errorPages.maintenance.ph.message') },
+		{ token: '{arenet.maintenance.refresh_meta}', desc: t('errorPages.maintenance.ph.refreshMeta') },
+		{ token: '{http.request.method}', desc: t('errorPages.maintenance.ph.method') },
+		{ token: '{http.request.host}', desc: t('errorPages.maintenance.ph.host') },
+		{ token: '{http.request.uri}', desc: t('errorPages.maintenance.ph.uri') },
+		{ token: '{http.request.uuid}', desc: t('errorPages.maintenance.ph.uuid') }
+	]);
+
 	async function loadMaintenancePage(): Promise<void> {
 		maintenanceLoading = true;
 		maintenanceLoadError = null;
@@ -709,6 +725,22 @@
 				</div>
 			</div>
 			<div class="card vars-card">
+				<!-- v2.18.1 — placeholder reference for the maintenance page.
+				     Mirrors the templates editor's variable palette. -->
+				<div class="pane-label">{language.current && t('errorPages.maintenance.placeholdersTitle')}</div>
+				<div class="vars-grid">
+					{#each maintenancePlaceholders as ph (ph.token)}
+						<button
+							type="button"
+							class="var-btn"
+							title={language.current && ph.desc}
+							onclick={() => maintenanceEditorRef?.insertAtCursor(ph.token)}
+						>
+							<code>{ph.token}</code>
+							<span class="var-label">{language.current && ph.desc}</span>
+						</button>
+					{/each}
+				</div>
 				<p class="vars-help">
 					{language.current && t('errorPages.maintenance.helpRetryAfter')}
 				</p>

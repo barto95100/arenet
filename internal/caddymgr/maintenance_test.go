@@ -164,6 +164,88 @@ func TestBuildMaintenanceBody_MessageNewlinesToBr(t *testing.T) {
 	}
 }
 
+// v2.18.1 — per-route message resolution: a route's own
+// MaintenanceConfig.Message wins; when empty, the global message
+// (opts.MaintenanceMessage) is used. Exercised through buildConfigJSON
+// (the real emission path where the resolution lives).
+func TestBuildConfigJSON_MaintenanceMessage_PerRouteWinsElseGlobal(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID: "own", Host: "own.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://10.0.0.9:8080", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			MaintenanceConfig: &storage.MaintenanceConfig{
+				RetryAfterSeconds: 60, Message: "ROUTE_OWN_MSG",
+			},
+		},
+		{
+			ID: "fallback", Host: "fallback.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://10.0.0.9:8080", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			MaintenanceConfig: &storage.MaintenanceConfig{
+				RetryAfterSeconds: 60, // no per-route message
+			},
+		},
+	}
+
+	cfgJSON, err := buildConfigJSON(routes, buildOpts{DevMode: true, MaintenanceMessage: "GLOBAL_MSG"})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	out := string(cfgJSON)
+	// The route with its own message shows it; the one without shows the
+	// global. Both must be present in the combined config.
+	if !strings.Contains(out, "ROUTE_OWN_MSG") {
+		t.Error("per-route message not emitted for the route that set one")
+	}
+	if !strings.Contains(out, "GLOBAL_MSG") {
+		t.Error("global fallback message not emitted for the route without its own")
+	}
+}
+
+// v2.18.1 — the built-in default page auto-refreshes the browser via a
+// meta http-equiv tag built from the route's Retry-After. buildMaintenance
+// Body substitutes the {arenet.maintenance.refresh_meta} sentinel with a
+// <meta http-equiv="refresh" content="N"> when retryAfter > 0, and with
+// NOTHING when retryAfter == 0 (content="0" would reload instantly = a
+// hammering loop).
+func TestBuildMaintenanceBody_RefreshMeta_PositiveRetry(t *testing.T) {
+	html := `<head>{arenet.maintenance.refresh_meta}</head>`
+	got := buildMaintenanceBody(html, 1800, "")
+	if !strings.Contains(got, `<meta http-equiv="refresh" content="1800">`) {
+		t.Errorf("expected meta refresh with content=1800; body=%q", got)
+	}
+	if strings.Contains(got, "{arenet.maintenance.refresh_meta}") {
+		t.Errorf("refresh_meta sentinel left unsubstituted; body=%q", got)
+	}
+}
+
+func TestBuildMaintenanceBody_RefreshMeta_ZeroRetryOmits(t *testing.T) {
+	html := `<head>[{arenet.maintenance.refresh_meta}]</head>`
+	got := buildMaintenanceBody(html, 0, "")
+	if strings.Contains(got, "http-equiv") {
+		t.Errorf("retry_after=0 must NOT emit a meta refresh (hammering loop); body=%q", got)
+	}
+	if !strings.Contains(got, "[]") {
+		t.Errorf("zero-retry refresh_meta should substitute to nothing (leaving []); body=%q", got)
+	}
+}
+
+// A CUSTOM page has no refresh_meta sentinel, so buildMaintenanceBody
+// leaves it untouched (auto-refresh is default-page-only per the locked
+// decision). The {arenet.maintenance.retry_after} placeholder stays
+// available so a custom author can add their own meta refresh.
+func TestBuildMaintenanceBody_RefreshMeta_CustomPageUntouched(t *testing.T) {
+	html := `<head><title>custom</title></head><body>retry {arenet.maintenance.retry_after}</body>`
+	got := buildMaintenanceBody(html, 1800, "")
+	if strings.Contains(got, "http-equiv") {
+		t.Errorf("custom page (no sentinel) must not gain an auto meta refresh; body=%q", got)
+	}
+	if !strings.Contains(got, "retry 1800") {
+		t.Errorf("retry_after placeholder should still work on custom page; body=%q", got)
+	}
+}
+
 // v2.18.0 security — the message is operator free text substituted into
 // the (placeholder-expanded) 503 body. A message of {env.SECRET} would
 // otherwise leak a process-env secret into the public 503. The message

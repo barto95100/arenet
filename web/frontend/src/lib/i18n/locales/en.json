@@ -408,6 +408,9 @@
 					"hours": "hours",
 					"days": "days"
 				},
+				"message": "Maintenance message",
+				"messagePlaceholder": "e.g. Database migration in progress — back around 14:00.",
+				"messageHelp": "Shown on this route's maintenance page. Leave empty to use the global message (Settings → Error Pages → Maintenance).",
 				"bypassIps": "Bypass IPs / CIDRs",
 				"bypassIpsAdd": "+ Add bypass IP"
 			}
@@ -994,9 +997,19 @@
 			"helpEmpty": "An empty page means Arenet serves its branded default maintenance page.",
 			"builtinBadge": "Arenet Default (built-in)",
 			"builtinTooltip": "This is the built-in Arenet default page — editing it and clicking Save turns it into your custom page.",
-			"messageLabel": "Maintenance message",
+			"messageLabel": "Global maintenance message",
 			"messagePlaceholder": "e.g. Database migration in progress — back around 14:00. Thanks for your patience.",
-			"messageHelp": "Global plain-text message shown on every maintenance page via the {arenet.maintenance.message} placeholder (rendered by the built-in default too). Leave empty to show the generic default line."
+			"messageHelp": "Default message shown on maintenance pages via the {arenet.maintenance.message} placeholder. A route that sets its own message (in its edit form) overrides this. Leave empty to show the generic default line.",
+			"placeholdersTitle": "Available placeholders",
+			"ph": {
+				"retryAfter": "The triggering route's Retry-After value (seconds)",
+				"message": "The route's message, or this global message as fallback",
+				"refreshMeta": "Auto-refresh meta tag built from Retry-After (built-in default only; empty when Retry-After is 0)",
+				"method": "Request method (GET, POST, …)",
+				"host": "Requested host",
+				"uri": "Full request URI",
+				"uuid": "Per-request ID (handy for support)"
+			}
 		}
 	},
 	"settingsSubcards": {
