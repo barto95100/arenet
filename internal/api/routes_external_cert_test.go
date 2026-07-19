@@ -191,3 +191,34 @@ func TestDeleteExternalCert_ReferencedByRoute_409(t *testing.T) {
 		t.Errorf("cert should survive a blocked delete: %v", err)
 	}
 }
+
+// v2.19.1 — a manual route WITHOUT TLS enabled does NOT actually serve
+// the cert (buildLoadPemList only emits for TLS routes), so it must NOT
+// block deletion. Mirrors the v2.18.2 ACME cert-delete fix: the block
+// must mirror the emission condition, not host/CertID equality alone.
+func TestDeleteExternalCert_ReferencedByNonTLSRoute_200(t *testing.T) {
+	env := newTestEnv(t, false)
+	certID := seedExternalCert(t, env, "notls", []string{"*.example.com"})
+
+	// Seed the route directly with TLSEnabled=false + manual/CertID
+	// (the API create path would apply the SAN cross-check; we want the
+	// specific non-TLS-manual state that a route could reach by toggling
+	// TLS off after linking a cert).
+	if _, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host:       "notls.example.com",
+		Upstreams:  []storage.Upstream{{URL: "http://u:1", Weight: 1}},
+		LBPolicy:   storage.LBPolicyRoundRobin,
+		TLSEnabled: false,
+		CertSource: storage.RouteCertSourceManual,
+		CertID:     certID,
+	}); err != nil {
+		t.Fatalf("seed non-TLS manual route: %v", err)
+	}
+
+	dr := httptest.NewRequest(http.MethodDelete, "/api/v1/certificates/external/"+certID, nil)
+	drec := httptest.NewRecorder()
+	env.router.ServeHTTP(drec, dr)
+	if drec.Code != http.StatusOK {
+		t.Fatalf("DELETE status=%d body=%s; want 200 (non-TLS route must not block)", drec.Code, drec.Body)
+	}
+}

@@ -131,7 +131,16 @@ func (h *Handler) createExternalCert(w http.ResponseWriter, r *http.Request) {
 	if req.ChainPEM != nil {
 		chain = *req.ChainPEM
 	}
-	meta, warnings, err := storage.ParseExternalCert(req.CertPEM, req.KeyPEM, chain)
+	// Normalize a pasted "fullchain" (leaf + intermediates in the
+	// Certificate field, the common CA download format): split the leaf
+	// from the chain so storage/emission stay clean. Rejects the
+	// ambiguous case where a chain is supplied in both places.
+	leafPEM, chainPEM, err := storage.SplitLeafAndChain(req.CertPEM, chain)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	meta, warnings, err := storage.ParseExternalCert(leafPEM, req.KeyPEM, chainPEM)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -139,9 +148,9 @@ func (h *Handler) createExternalCert(w http.ResponseWriter, r *http.Request) {
 	rec := meta // parse populated the metadata fields
 	rec.Name = req.Name
 	rec.Description = req.Description
-	rec.CertPEM = req.CertPEM
+	rec.CertPEM = leafPEM
 	rec.KeyPEM = req.KeyPEM
-	rec.ChainPEM = chain
+	rec.ChainPEM = chainPEM
 	created, err := h.store.CreateExternalCertificate(r.Context(), rec)
 	if err != nil {
 		h.logger.Error("create external cert", "err", err)
@@ -193,6 +202,24 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 		// non-empty value replaces the stored chain. (A nil pointer —
 		// the field absent from JSON — falls through to "keep".)
 		chainPEM = *req.ChainPEM
+	}
+
+	// When a NEW cert is supplied it may be a pasted fullchain — split
+	// the leaf from the intermediates (rejects the two-places conflict).
+	// Only applies to the incoming cert; a preserved (empty req.CertPEM)
+	// cert is already stored split.
+	if req.CertPEM != "" {
+		suppliedChain := ""
+		if req.ChainPEM != nil {
+			suppliedChain = *req.ChainPEM
+		}
+		leafPEM, splitChain, serr := storage.SplitLeafAndChain(req.CertPEM, suppliedChain)
+		if serr != nil {
+			writeError(w, http.StatusBadRequest, serr.Error())
+			return
+		}
+		certPEM = leafPEM
+		chainPEM = splitChain
 	}
 
 	certChanged := req.CertPEM != "" && req.CertPEM != existing.CertPEM
@@ -261,7 +288,13 @@ func (h *Handler) deleteExternalCert(w http.ResponseWriter, r *http.Request) {
 	}
 	var blockingRoutes []string
 	for _, rt := range routes {
-		if rt.CertSource == storage.RouteCertSourceManual && rt.CertID == id {
+		// Mirror the emission condition (buildLoadPemList): a route only
+		// SERVES this cert when it references it AND has TLS enabled.
+		// A route pointing at the cert with TLS off emits no load_pem, so
+		// it does not "use" the cert and must not block deletion — same
+		// lesson as the v2.18.2 ACME cert-delete fix (block == emission
+		// mirror, not host/CertID equality alone).
+		if rt.CertSource == storage.RouteCertSourceManual && rt.CertID == id && rt.TLSEnabled {
 			blockingRoutes = append(blockingRoutes, rt.Host)
 		}
 	}

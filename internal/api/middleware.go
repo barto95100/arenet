@@ -45,6 +45,13 @@ func slogLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 				// when explicitly enabled but stay out of the default log
 				// stream.
 				level = slog.LevelDebug
+			case ww.Status() == 409:
+				// v2.19.1: 409 Conflict is always an EXPECTED business
+				// state, not an operator-actionable error — a cert still
+				// referenced by a route, a duplicate name, a provider in
+				// use. The client surfaces the reason in its own dialog;
+				// logging it at WARN just adds noise on normal usage.
+				level = slog.LevelInfo
 			case ww.Status() >= 400:
 				level = slog.LevelWarn
 			}

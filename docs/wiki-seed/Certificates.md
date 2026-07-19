@@ -121,10 +121,12 @@ An **external certificate** is a leaf certificate + its chain + its private key,
 1. Sidebar → **Certificates** (`/certs`) → **External certificates** card → **+ Upload certificate**
 2. Give it a **name** (and optional description)
 3. Paste the three PEM blocks:
-   - **Certificate** — the leaf (public)
-   - **Chain** — the intermediate(s) (public; optional if your leaf is directly issued)
-   - **Private key** — the matching key
+   - **Certificate** — your domain's certificate, the "leaf" (e.g. `your_domain.crt` / `cert.pem` / `fullchain.pem`, public)
+   - **Chain** — the CA's intermediate certificate(s) linking your leaf to a trusted root (e.g. `intermediate.crt` / `ca-bundle.crt` / `chain.pem`, public; optional if your leaf is directly issued)
+   - **Private key** — the matching key generated with your CSR (e.g. `your_domain.key` / `privkey.pem`)
 4. **Upload**
+
+> **Fullchain shortcut (v2.19.1).** Many CAs (vendor-agnostic) hand you a single **"fullchain"** file with several `-----BEGIN CERTIFICATE-----` blocks — the leaf first, then the intermediates. Just paste the whole file into **Certificate** and leave **Chain** empty: Arenet splits the leaf from the intermediates automatically. Supplying a chain in **both** the Certificate field (as a fullchain) and the Chain field is rejected (`chain_specified_twice`) to avoid a duplicated chain.
 
 Arenet validates the material before storing it. **Blocking** errors reject the upload: the leaf PEM does not parse, the chain PEM does not parse, or the **private key does not match the certificate**. **Non-blocking** warnings are surfaced but still let you save — the cert is already expired, not yet valid (you can stage a cert ahead of a cutover), signed with a weak algorithm (SHA-1 / MD5), or the chain looks incomplete. A CRLF PEM pasted from a Windows tool is normalized automatically.
 

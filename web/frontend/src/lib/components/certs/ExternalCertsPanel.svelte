@@ -223,6 +223,7 @@
 				disabled={uploading}
 				data-testid="external-cert-cert-pem"
 			></textarea>
+			<p class="field-help">{language.current && t('certificates.external.upload.certHelp')}</p>
 		</div>
 
 		<div class="field field-full">
@@ -239,6 +240,7 @@
 				disabled={uploading}
 				data-testid="external-cert-chain-pem"
 			></textarea>
+			<p class="field-help">{language.current && t('certificates.external.upload.chainHelp')}</p>
 		</div>
 
 		<div class="field field-full">
@@ -253,6 +255,7 @@
 				disabled={uploading}
 				data-testid="external-cert-key-pem"
 			></textarea>
+			<p class="field-help">{language.current && t('certificates.external.upload.keyHelp')}</p>
 		</div>
 
 		{#if uploadError}
@@ -467,6 +470,12 @@
 	}
 	.field-full {
 		grid-column: 1 / -1;
+	}
+	.field-help {
+		margin: 4px 0 0;
+		color: var(--fg-muted);
+		font-size: 11.5px;
+		line-height: 1.45;
 	}
 	.ext-input {
 		width: 100%;
