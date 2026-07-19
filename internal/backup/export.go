@@ -35,6 +35,7 @@ type Storer interface {
 	ListForwardAuthProviders(ctx context.Context) ([]storage.ForwardAuthProvider, error)
 	GetOIDCConfig(ctx context.Context) (storage.OIDCConfig, error)
 	GetMaxMindConfig(ctx context.Context) (storage.MaxMindConfig, error)
+	ListExternalCertificates(ctx context.Context) ([]storage.ExternalCertificate, error)
 }
 
 // UserStorer is the userstore subset Export consumes.
@@ -100,6 +101,15 @@ func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion s
 		return nil, fmt.Errorf("export: get maxmind config: %w", err)
 	}
 
+	// External certificates (v2.19.0 UUID-keyed collection): an empty
+	// collection on a never-configured install exports as an empty
+	// slice — normal, not a failure. The KeyPEM secret is redacted
+	// below when includeSecrets is false.
+	extList, err := store.ListExternalCertificates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("export: list external certificates: %w", err)
+	}
+
 	snap := &Snapshot{
 		SchemaVersion:        SchemaVersion,
 		ExportedAt:           time.Now().UTC(),
@@ -111,6 +121,7 @@ func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion s
 		OIDCConfig:           oidcCfg,
 		MaxMindConfig:        maxMindCfg,
 		Users:                usersList,
+		ExternalCertificates: extList,
 	}
 	if !includeSecrets {
 		redactSnapshotInPlace(snap)

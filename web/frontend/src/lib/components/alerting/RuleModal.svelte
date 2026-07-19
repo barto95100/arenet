@@ -319,9 +319,12 @@
 				return {};
 			}
 			case 'cert_manual_expiring': {
-				const p: Record<string, unknown> = {};
-				if (certHost.trim()) p.host = certHost.trim();
-				return p;
+				// The backend param struct (CertManualExpiringParams) has
+				// only thresholdDays, which is carried in the threshold
+				// eval params (value), not source params. There is NO host
+				// filter for this source — the old p.host was silently
+				// ignored by the backend, so we send no source params.
+				return {};
 			}
 		}
 	}

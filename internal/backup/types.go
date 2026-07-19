@@ -84,6 +84,13 @@ type Snapshot struct {
 	// signal for the single-record store).
 	MaxMindConfig *storage.MaxMindConfig `json:"maxmind_config,omitempty"`
 	Users         []auth.User            `json:"users"`
+	// ExternalCertificates carries operator-uploaded TLS certs
+	// (v2.19.0). Each row's KeyPEM is a SECRET redacted by default
+	// (sentinel) and preserved-on-ID-match at import, mirroring the
+	// DNS-provider secret discipline. A pre-v2.19.0 snapshot has no
+	// external_certificates key → this field decodes to nil, which
+	// imports cleanly (backward-compat).
+	ExternalCertificates []storage.ExternalCertificate `json:"external_certificates"`
 }
 
 // ImportOptions controls the two opt-in bypass flags. Both default
@@ -123,6 +130,7 @@ type ImportReport struct {
 	ForwardAuthProvidersImported int
 	OIDCConfigImported           bool
 	MaxMindConfigImported        bool
+	ExternalCertificatesImported int
 	// SentinelsInheritedTotal counts sentinel occurrences resolved
 	// by ID match against the live store.
 	SentinelsInheritedTotal int

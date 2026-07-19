@@ -131,6 +131,7 @@ func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Sna
 	report.ForwardAuthProvidersImported = len(resolved.ForwardAuthProviders)
 	report.OIDCConfigImported = resolved.OIDCConfig.IssuerURL != "" || resolved.OIDCConfig.ClientID != ""
 	report.MaxMindConfigImported = resolved.MaxMindConfig != nil
+	report.ExternalCertificatesImported = len(resolved.ExternalCertificates)
 	return report, nil
 }
 
@@ -145,6 +146,7 @@ type liveSnapshot struct {
 	oidcExists    bool
 	maxMind       storage.MaxMindConfig
 	maxMindExists bool
+	extCertsByID  map[string]storage.ExternalCertificate
 }
 
 func (ls *liveSnapshot) isFresh() bool {
@@ -166,6 +168,7 @@ func readLive(ctx context.Context, store Storer, users UserStorer) (*liveSnapsho
 		usersByID:     map[string]auth.User{},
 		dnsByKey:      map[string]storage.DNSProviderConfig{},
 		fwdAuthByName: map[string]storage.ForwardAuthProvider{},
+		extCertsByID:  map[string]storage.ExternalCertificate{},
 	}
 	routes, err := store.ListRoutes(ctx)
 	if err != nil {
@@ -215,6 +218,16 @@ func readLive(ctx context.Context, store Storer, users UserStorer) (*liveSnapsho
 	} else if !errors.Is(err, storage.ErrNotFound) {
 		return nil, err
 	}
+	// External certificates (v2.19.0): index by ID so a redacted
+	// snapshot's KeyPEM sentinel inherits the live key of the same
+	// cert (preserve-on-ID-match, mirroring DNS providers).
+	extCerts, err := store.ListExternalCertificates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range extCerts {
+		ls.extCertsByID[c.ID] = c
+	}
 	return ls, nil
 }
 
@@ -233,6 +246,7 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 	out.Users = append([]auth.User(nil), snap.Users...)
 	out.DNSProviders = append([]storage.DNSProviderConfig(nil), snap.DNSProviders...)
 	out.ForwardAuthProviders = append([]storage.ForwardAuthProvider(nil), snap.ForwardAuthProviders...)
+	out.ExternalCertificates = append([]storage.ExternalCertificate(nil), snap.ExternalCertificates...)
 	out.OIDCConfig = snap.OIDCConfig
 	if snap.MaxMindConfig != nil {
 		mm := *snap.MaxMindConfig
@@ -360,6 +374,22 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 		p.ClientSecret = v
 	}
 
+	// External certificates — keyed by cert ID. Only KeyPEM is a
+	// secret; CertPEM / ChainPEM / metadata travel verbatim.
+	for i := range out.ExternalCertificates {
+		c := &out.ExternalCertificates[i]
+		v, err := resolve("external_certificates", c.ID, "keyPEM", c.KeyPEM, func() (string, bool) {
+			if liveCert, ok := live.extCertsByID[c.ID]; ok {
+				return liveCert.KeyPEM, true
+			}
+			return "", false
+		})
+		if err != nil {
+			return nil, err
+		}
+		c.KeyPEM = v
+	}
+
 	// OIDC config — keyed by "default".
 	v, err := resolve("oidc_config", "default", "client_secret", out.OIDCConfig.ClientSecret, func() (string, bool) {
 		if live.oidcExists {
@@ -418,6 +448,7 @@ func buildRestoreInput(snap *Snapshot) (storage.RestoreSnapshotInput, error) {
 		Users:                map[string][]byte{},
 		DNSProviders:         map[string][]byte{},
 		ForwardAuthProviders: map[string][]byte{},
+		ExternalCertificates: map[string][]byte{},
 	}
 	for _, r := range snap.Routes {
 		b, err := json.Marshal(r)
@@ -452,6 +483,16 @@ func buildRestoreInput(snap *Snapshot) (storage.RestoreSnapshotInput, error) {
 			return out, fmt.Errorf("marshal forward-auth provider %q: %w", p.Name, err)
 		}
 		out.ForwardAuthProviders[p.Name] = b
+	}
+	for _, c := range snap.ExternalCertificates {
+		b, err := json.Marshal(c)
+		if err != nil {
+			return out, fmt.Errorf("marshal external cert %q: %w", c.ID, err)
+		}
+		// Key by the cert's own UUID (v2.19.0 collection). A resolved
+		// snapshot always has a non-empty ID here (external certs are
+		// created with a fresh UUID, never carry an empty ID).
+		out.ExternalCertificates[c.ID] = b
 	}
 	if snap.OIDCConfig.IssuerURL != "" || snap.OIDCConfig.ClientID != "" || len(snap.OIDCConfig.AllowedIdentities) > 0 {
 		b, err := json.Marshal(snap.OIDCConfig)

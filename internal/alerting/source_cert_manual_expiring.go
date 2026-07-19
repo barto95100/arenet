@@ -82,12 +82,31 @@ func (s *CertManualExpiringSource) Read(ctx context.Context, raw json.RawMessage
 	if err != nil {
 		return SourceValue{}, fmt.Errorf("cert_manual_expiring: list: %w", err)
 	}
-	cutoff := s.now().Add(time.Duration(p.ThresholdDays) * 24 * time.Hour)
-	count := 0
+	now := s.now()
+	cutoff := now.Add(time.Duration(p.ThresholdDays) * 24 * time.Hour)
+	// The numeric value the ThresholdEvaluator fires on is the count
+	// of certs inside the window; the Context payload names each of
+	// them so the alert body has actionable detail (spec §7), mirroring
+	// source_cert_renewal_failed / source_cert_expiry which populate
+	// SourceValue.Context.
+	within := make([]map[string]any, 0)
 	for _, c := range certs {
-		if !c.NotAfter.IsZero() && c.NotAfter.Before(cutoff) {
-			count++
+		if c.NotAfter.IsZero() || !c.NotAfter.Before(cutoff) {
+			continue
 		}
+		daysLeft := c.NotAfter.Sub(now).Hours() / 24
+		within = append(within, map[string]any{
+			"id":       c.ID,
+			"name":     c.Name,
+			"dnsNames": c.DNSNames,
+			"notAfter": c.NotAfter.UTC().Format(time.RFC3339),
+			"daysLeft": daysLeft,
+		})
 	}
-	return FloatValue(float64(count)), nil
+	v := FloatValue(float64(len(within)))
+	v.Context = map[string]any{
+		"certs": within,
+		"count": len(within),
+	}
+	return v, nil
 }

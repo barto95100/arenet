@@ -53,6 +53,10 @@ type RestoreSnapshotInput struct {
 	// the "default" key, or nil/empty to clear the maxmind_config
 	// bucket (mirrors the OIDCConfig single-record convention).
 	MaxMindConfig []byte
+	// ExternalCertificates maps external cert ID → JSON-marshalled
+	// storage.ExternalCertificate (v2.19.0). nil or empty clears the
+	// bucket.
+	ExternalCertificates map[string][]byte
 }
 
 // RestoreSnapshot atomically replaces the contents of the six
@@ -102,6 +106,9 @@ func (s *Store) RestoreSnapshot(ctx context.Context, in RestoreSnapshotInput) er
 		}
 		if err := resetAndFill(tx, bucketMaxMindConfig, maxMindRows); err != nil {
 			return fmt.Errorf("restore maxmind_config: %w", err)
+		}
+		if err := resetAndFill(tx, bucketExternalCertificates, in.ExternalCertificates); err != nil {
+			return fmt.Errorf("restore external_certificates: %w", err)
 		}
 		return nil
 	})

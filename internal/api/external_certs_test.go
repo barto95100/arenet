@@ -149,6 +149,36 @@ func TestExternalCert_Upload_InvalidCertRejected(t *testing.T) {
 	}
 }
 
+// TestExternalCert_Upload_EmptyKeyReturnsKeyRequired pins spec §3.6:
+// an empty keyPEM on create is a distinct, actionable error
+// (key_required, 400) — NOT the generic key_does_not_match_cert that
+// tls.X509KeyPair would otherwise surface when handed an empty key.
+func TestExternalCert_Upload_EmptyKeyReturnsKeyRequired(t *testing.T) {
+	env := newTestEnv(t, false)
+	certPEM, _ := genSelfSignedAPI(t, "app.example.com", []string{"app.example.com"})
+	rec := postExternalCert(t, env, "nokey", certPEM, "", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; empty key on create must be 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "key_required") {
+		t.Errorf("want key_required error; body=%s", rec.Body)
+	}
+}
+
+// TestExternalCert_Upload_EmptyCertReturnsCertRequired mirrors the
+// key_required guard for the leaf certificate PEM.
+func TestExternalCert_Upload_EmptyCertReturnsCertRequired(t *testing.T) {
+	env := newTestEnv(t, false)
+	_, keyPEM := genSelfSignedAPI(t, "app.example.com", []string{"app.example.com"})
+	rec := postExternalCert(t, env, "nocert", "", keyPEM, "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; empty cert on create must be 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "cert_required") {
+		t.Errorf("want cert_required error; body=%s", rec.Body)
+	}
+}
+
 // TestExternalCert_List_SortedByExpiry asserts the list is ordered by
 // NotAfter ascending (soonest-expiring first) regardless of insert
 // order.

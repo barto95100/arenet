@@ -113,6 +113,20 @@ func (h *Handler) createExternalCert(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
+	// Spec §3.6: on CREATE both PEMs are mandatory. Guard BEFORE
+	// ParseExternalCert so an empty input yields an actionable error
+	// (key_required / cert_required) instead of the generic
+	// key_does_not_match_cert / invalid_cert_pem that tls.X509KeyPair
+	// / PEM-decode would surface. This is create-only — the PUT edit
+	// path treats an empty KeyPEM as "keep the stored key".
+	if req.CertPEM == "" {
+		writeError(w, http.StatusBadRequest, "cert_required")
+		return
+	}
+	if req.KeyPEM == "" {
+		writeError(w, http.StatusBadRequest, "key_required")
+		return
+	}
 	chain := ""
 	if req.ChainPEM != nil {
 		chain = *req.ChainPEM
