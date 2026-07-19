@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<!--
+  Arenet — example custom maintenance page.
+
+  Copy this into Settings → Error Pages → Maintenance (HTML editor) and
+  tweak to taste. It uses ONLY the placeholders Arenet actually
+  substitutes (verified against the binary):
+
+    {arenet.maintenance.refresh_meta}  — auto-refresh <meta> built from
+                                          the route's Retry-After. Empty
+                                          when Retry-After is 0. Put it in
+                                          <head>. (This is what makes the
+                                          browser reload itself.)
+    {arenet.maintenance.message}       — the route's message, or the global
+                                          message as fallback. Empty when
+                                          neither is set — the .msg block
+                                          below collapses via :empty so no
+                                          empty box shows.
+    {arenet.maintenance.retry_after}   — Retry-After value in seconds.
+    {http.request.host} / .method / .uri / .uuid   — Caddy request vars.
+    {time.now.year}                    — current year.
+
+  NOTE: {env.*} and {file.*} are neutralized by Arenet (rendered as
+  literal text) — you can't use them to read secrets/files. That's by
+  design.
+-->
+{arenet.maintenance.refresh_meta}
+<title>Under maintenance</title>
+<style>
+:root{
+  --bg:oklch(15% 0.005 250);--bg-deep:oklch(11% 0.005 250);
+  --surface:oklch(19% 0.006 250);--surface-2:oklch(22% 0.007 250);
+  --border:oklch(28% 0.009 250);--border-hi:oklch(34% 0.011 250);
+  --fg:oklch(96% 0.005 250);--fg-muted:oklch(68% 0.012 250);--fg-dim:oklch(54% 0.011 250);
+  --accent:oklch(68% 0.21 255);--accent-soft:oklch(68% 0.21 255 / 0.14);
+  --tone:oklch(70% 0.18 195);--tone-2:oklch(64% 0.20 290);
+  --tone-soft:oklch(70% 0.18 195 / 0.14);--tone-glow:oklch(70% 0.18 195 / 0.45);
+  --font-display:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif;
+  --font-body:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,'IBM Plex Mono',Menlo,monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100vh;color:var(--fg);font-family:var(--font-body);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+html{background:var(--bg-deep)}body{position:relative;overflow-x:hidden;background:transparent}
+a{color:inherit;text-decoration:none}::selection{background:var(--accent-soft);color:var(--fg)}
+
+.bg-stage{position:fixed;inset:0;z-index:0;background:radial-gradient(110% 80% at 18% 12%, oklch(68% 0.21 255 / 0.10) 0%, transparent 55%),radial-gradient(80% 60% at 88% 88%, oklch(52% 0.22 265 / 0.10) 0%, transparent 55%),linear-gradient(180deg, oklch(13% 0.006 250) 0%, oklch(10% 0.005 250) 100%)}
+.bg-conic{position:fixed;inset:-20%;z-index:1;pointer-events:none;background:conic-gradient(from 200deg at 50% 50%,transparent 0deg,oklch(68% 0.21 255 / 0.08) 60deg,transparent 130deg,oklch(52% 0.22 285 / 0.07) 220deg,transparent 320deg,transparent 360deg);filter:blur(40px);opacity:.85;animation:conicSpin 90s linear infinite}
+@keyframes conicSpin{to{transform:rotate(360deg)}}
+.bg-aurora{position:fixed;inset:-25%;z-index:1;pointer-events:none;overflow:hidden}
+.bg-aurora::before,.bg-aurora::after{content:"";position:absolute;width:60vmax;height:60vmax;border-radius:50%;filter:blur(80px);opacity:.5;will-change:transform}
+.bg-aurora::before{top:-15%;left:-10%;background:radial-gradient(circle, oklch(58% 0.18 255 / 0.45) 0%, transparent 65%);animation:auroraDriftA 55s ease-in-out infinite alternate}
+.bg-aurora::after{bottom:-15%;right:-10%;background:radial-gradient(circle, oklch(50% 0.20 290 / 0.40) 0%, transparent 65%);animation:auroraDriftB 70s ease-in-out infinite alternate}
+@keyframes auroraDriftA{0%{transform:translate(-8%,-5%) scale(1)}50%{transform:translate(25%,18%) scale(1.15)}100%{transform:translate(8%,30%) scale(0.95)}}
+@keyframes auroraDriftB{0%{transform:translate(10%,5%) scale(1)}50%{transform:translate(-22%,-15%) scale(1.18)}100%{transform:translate(-5%,-28%) scale(0.92)}}
+.bg-grid{position:fixed;inset:0;z-index:2;pointer-events:none;background-image:linear-gradient(to right, var(--border) 1px, transparent 1px),linear-gradient(to bottom, var(--border) 1px, transparent 1px);background-size:64px 64px;opacity:.14;-webkit-mask-image:radial-gradient(140% 100% at 50% 40%, #000 25%, transparent 80%);mask-image:radial-gradient(140% 100% at 50% 40%, #000 25%, transparent 80%)}
+.bg-halo{position:fixed;top:50%;left:50%;width:600px;height:600px;transform:translate(-50%,-50%);border-radius:50%;background:radial-gradient(circle, var(--tone-soft) 0%, oklch(52% 0.22 265 / 0.08) 35%, transparent 70%);filter:blur(46px);pointer-events:none;z-index:2;animation:haloBreath 9s ease-in-out infinite}
+@keyframes haloBreath{0%,100%{transform:translate(-50%,-50%) scale(0.92);opacity:0.6}50%{transform:translate(-50%,-50%) scale(1.08);opacity:0.95}}
+.dots{position:fixed;inset:0;z-index:3;pointer-events:none;overflow:hidden}
+.dots .d{position:absolute;width:3px;height:3px;border-radius:50%;background:var(--tone);box-shadow:0 0 10px oklch(70% 0.18 195 / 0.6),0 0 22px oklch(70% 0.18 195 / 0.3);opacity:0;animation:dotDrift linear infinite}
+.dots .d.v{background:var(--tone-2);box-shadow:0 0 10px oklch(64% 0.20 290 / 0.55),0 0 22px oklch(64% 0.20 290 / 0.28)}
+.dots .d.s{width:2px;height:2px}.dots .d.l{width:4px;height:4px}
+@keyframes dotDrift{0%{transform:translate(0,0) scale(0.6);opacity:0}10%{opacity:.85}50%{transform:translate(var(--mx,40px),var(--my,-60px)) scale(1);opacity:1}90%{opacity:.8}100%{transform:translate(calc(var(--mx,40px)*2),calc(var(--my,-60px)*2)) scale(0.6);opacity:0}}
+.dots .d:nth-child(1){left:8%;top:14%;animation-duration:22s;animation-delay:0s;--mx:120px;--my:-80px}
+.dots .d:nth-child(2){left:18%;top:78%;animation-duration:28s;animation-delay:-4s;--mx:-90px;--my:-140px}
+.dots .d:nth-child(3){left:34%;top:22%;animation-duration:24s;animation-delay:-9s;--mx:80px;--my:120px}
+.dots .d:nth-child(4){left:46%;top:88%;animation-duration:30s;animation-delay:-2s;--mx:-110px;--my:-180px}
+.dots .d:nth-child(5){left:62%;top:18%;animation-duration:26s;animation-delay:-12s;--mx:-140px;--my:100px}
+.dots .d:nth-child(6){left:74%;top:72%;animation-duration:32s;animation-delay:-6s;--mx:90px;--my:-160px}
+.dots .d:nth-child(7){left:86%;top:28%;animation-duration:20s;animation-delay:-1s;--mx:-100px;--my:140px}
+.dots .d:nth-child(8){left:92%;top:62%;animation-duration:34s;animation-delay:-15s;--mx:-130px;--my:-100px}
+.dots .d:nth-child(9){left:24%;top:48%;animation-duration:25s;animation-delay:-7s;--mx:160px;--my:60px}
+.dots .d:nth-child(10){left:56%;top:54%;animation-duration:29s;animation-delay:-11s;--mx:-150px;--my:90px}
+.dots .d:nth-child(11){left:68%;top:38%;animation-duration:23s;animation-delay:-3s;--mx:110px;--my:-130px}
+.dots .d:nth-child(12){left:14%;top:34%;animation-duration:31s;animation-delay:-8s;--mx:130px;--my:170px}
+.bg-noise{position:fixed;inset:0;z-index:4;pointer-events:none;opacity:.045;mix-blend-mode:overlay;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.85   0 0 0 0 0.86   0 0 0 0 0.92   0 0 0 0.55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");background-size:240px 240px}
+.bg-vignette{position:fixed;inset:0;z-index:4;pointer-events:none;background:radial-gradient(45% 32% at 50% 50%, oklch(10% 0.005 250 / 0.55) 0%, transparent 75%)}
+
+.content{position:relative;z-index:5;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:56px 24px 88px}
+.card{position:relative;width:100%;max-width:520px;background:oklch(19% 0.006 250 / 0.62);border:1px solid var(--border);border-radius:20px;padding:0 0 34px;overflow:hidden;-webkit-backdrop-filter:blur(20px) saturate(140%);backdrop-filter:blur(20px) saturate(140%);box-shadow:0 26px 70px oklch(8% 0.004 250 / 0.6),0 0 0 1px oklch(100% 0 0 / 0.02) inset,0 0 90px var(--tone-soft);text-align:center}
+/* top status ribbon */
+.ribbon{position:relative;height:3px;width:100%;background:linear-gradient(90deg,transparent,var(--tone) 30%,var(--tone-2) 70%,transparent);overflow:hidden}
+.ribbon::after{content:"";position:absolute;top:0;left:0;height:100%;width:34%;background:linear-gradient(90deg,transparent,oklch(96% 0.005 250 / 0.75),transparent);animation:ribbonSweep 3.2s ease-in-out infinite}
+@keyframes ribbonSweep{0%{left:-34%}100%{left:100%}}
+.card-inner{padding:38px 40px 0}
+
+.title{font-family:var(--font-display);font-weight:600;font-size:30px;line-height:1.14;letter-spacing:-0.024em;color:var(--fg);margin:18px 0 12px;text-shadow:0 0 44px var(--tone-glow)}
+
+/* Operator message ({arenet.maintenance.message}). Collapses cleanly
+   via :empty when no per-route / global message is set, so the layout
+   stays tidy either way. */
+.message{color:var(--fg-muted);font-size:15.5px;line-height:1.62;max-width:400px;margin:0 auto 30px}
+.message:empty{display:none}
+
+/* Retry-After hero stat. {arenet.maintenance.retry_after} is the raw
+   seconds value — Arenet substitutes it as a plain integer. */
+.eta-hero{display:flex;flex-direction:column;align-items:center;gap:6px;margin:0 auto 26px;padding:20px 22px;max-width:340px;border:1px solid var(--border);border-radius:16px;background:linear-gradient(180deg, oklch(22% 0.007 250 / 0.7), oklch(19% 0.006 250 / 0.5));box-shadow:0 0 0 1px oklch(100% 0 0 / 0.02) inset}
+.eta-hero .eta-k{display:inline-flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:0.16em;color:var(--fg-dim)}
+.eta-hero .eta-k::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--tone);box-shadow:0 0 7px var(--tone-glow)}
+.eta-hero .eta-v{font-family:var(--font-mono);font-size:26px;font-weight:500;letter-spacing:-0.02em;color:var(--tone);text-shadow:0 0 24px var(--tone-glow);line-height:1}
+.eta-hero .eta-sub{margin-top:3px;font-family:var(--font-mono);font-size:11px;letter-spacing:0.01em;color:var(--fg-dim)}
+
+/* segmented progress track */
+.progress{position:relative;height:6px;border-radius:999px;background:oklch(28% 0.009 250 / 0.65);overflow:hidden;margin:0 auto 30px;max-width:340px;border:1px solid oklch(28% 0.009 250)}
+.progress .bar{position:absolute;top:0;left:0;height:100%;width:40%;border-radius:999px;background:linear-gradient(90deg,transparent,var(--tone),var(--tone-2),transparent);box-shadow:0 0 16px var(--tone-glow);animation:sweep 2.4s cubic-bezier(.5,0,.5,1) infinite}
+@keyframes sweep{0%{left:-42%}100%{left:100%}}
+
+.divider{height:1px;background:linear-gradient(90deg,transparent 0%, var(--border) 50%, transparent 100%);margin:2px 40px 18px}
+.meta{display:grid;grid-template-columns:1fr 1fr;gap:10px 22px;font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);text-align:left;padding:0 40px}
+.meta .k{color:var(--fg-dim);font-size:10px;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:2px}
+.meta .v{color:var(--fg-muted);font-size:11.5px;word-break:break-all;line-height:1.4}
+.meta .row{min-width:0}
+.botbar{position:fixed;bottom:0;left:0;right:0;z-index:5;display:flex;justify-content:space-between;align-items:center;padding:14px 28px;font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);background:oklch(11% 0.005 250 / 0.5);border-top:1px solid var(--border);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.botbar a{color:var(--fg-muted);transition:color .15s}.botbar a:hover{color:var(--fg)}
+.botbar .pwr{display:inline-flex;align-items:center;gap:6px}
+.botbar .pwr .pdot{width:5px;height:5px;border-radius:50%;background:var(--tone);box-shadow:0 0 6px var(--tone-glow)}
+@media (max-width:640px){.card-inner{padding:30px 24px 0}.title{font-size:24px}.eta-hero .eta-v{font-size:22px}.eta-hero{max-width:100%}.divider{margin:2px 24px 16px}.meta{grid-template-columns:1fr;gap:8px 0;padding:0 24px}.botbar{padding:11px 18px;font-size:10px;flex-direction:column;gap:6px}}
+@media (max-width:480px){.bg-conic{display:none}.bg-aurora::before,.bg-aurora::after{filter:blur(60px);opacity:.35}.dots .d{box-shadow:0 0 6px oklch(70% 0.18 195 / 0.5)}}
+@media (prefers-reduced-motion:reduce){.bg-conic,.bg-aurora::before,.bg-aurora::after,.bg-halo,.dots .d,.progress .bar,.ribbon::after{animation:none !important}.bg-aurora::before,.bg-aurora::after{transform:none}.bg-halo{opacity:.85;transform:translate(-50%,-50%) scale(1)}.progress .bar{left:0;width:100%;opacity:.6}}
+</style>
+</head>
+<body>
+<div class="bg-stage"></div><div class="bg-conic"></div><div class="bg-aurora"></div>
+<div class="bg-grid"></div><div class="bg-halo"></div>
+<div class="dots">
+  <div class="d"></div><div class="d v"></div><div class="d s"></div><div class="d l"></div>
+  <div class="d v s"></div><div class="d"></div><div class="d l v"></div><div class="d s"></div>
+  <div class="d"></div><div class="d v"></div><div class="d s"></div><div class="d"></div>
+</div>
+<div class="bg-vignette"></div><div class="bg-noise"></div>
+
+<div class="content">
+  <div class="card">
+    <div class="ribbon"></div>
+    <div class="card-inner">
+      <h1 class="title">Under maintenance</h1>
+
+      <!-- The operator message. Empty → this <p> collapses via .message:empty.
+           Set a per-route message (route edit form) or the global one
+           (Settings → Error Pages → Maintenance). -->
+      <p class="message">{arenet.maintenance.message}</p>
+
+      <div class="eta-hero">
+        <span class="eta-k">Suggested retry in</span>
+        <span class="eta-v">{arenet.maintenance.retry_after}s</span>
+        <span class="eta-sub">This page will refresh automatically</span>
+      </div>
+
+      <div class="progress"><div class="bar"></div></div>
+
+      <div class="divider"></div>
+      <div class="meta">
+        <div class="row"><div class="k">Host</div><div class="v">{http.request.host}</div></div>
+        <div class="row"><div class="k">Method</div><div class="v">{http.request.method}</div></div>
+        <div class="row"><div class="k">Request</div><div class="v">{http.request.uuid}</div></div>
+        <div class="row"><div class="k">Status</div><div class="v">503 · Service Unavailable</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="botbar">
+  <div>&copy; {time.now.year} {http.request.host}</div>
+  <a class="pwr" href="https://github.com/barto95100/arenet" target="_blank" rel="noopener noreferrer">
+    <span class="pdot"></span><span>Powered by AreNET</span>
+  </a>
+</div>
+</body>
+</html>
