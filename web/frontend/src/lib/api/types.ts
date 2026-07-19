@@ -336,6 +336,31 @@ export interface Route {
 	 * disabled takes precedence when both happen to be set.
 	 */
 	maintenanceConfig?: MaintenanceConfig;
+	/**
+	 * v2.19.0 external-certs SOCLE — cert provider selector.
+	 *   - "" / "acme"  → ACME-issued cert (managed-domain wildcard,
+	 *                    per-route http-01/dns-01; the default).
+	 *   - "internal"   → Caddy internal self-signed CA.
+	 *   - "manual"     → an operator-uploaded external cert,
+	 *                    referenced by `cert_id`.
+	 *
+	 * WIRE NAME IS snake_case (`cert_source`) — the sole exception to
+	 * the otherwise-camelCase route wire shape. The API client does
+	 * no case transformation (res.json() cast straight to the type),
+	 * so the TS property MUST be `cert_source` to round-trip; a
+	 * camelCased `certSource` would ship an unknown field and the
+	 * backend's DisallowUnknownFields decoder would 400. omitempty on
+	 * the Go side means a pre-v2.19.0 route reads back with the field
+	 * absent (undefined), which the form treats as "acme".
+	 */
+	cert_source?: string;
+	/**
+	 * v2.19.0 external-certs SOCLE — ExternalCertificate.id the route
+	 * serves when `cert_source === 'manual'`. Empty / absent for any
+	 * other source. snake_case on the wire for the same reason as
+	 * `cert_source` above.
+	 */
+	cert_id?: string;
 }
 
 /**
@@ -687,6 +712,22 @@ export interface RouteRequest {
 	 * exist for changing state without a full-body PUT).
 	 */
 	maintenanceConfig?: MaintenanceConfig;
+	/**
+	 * v2.19.0 external-certs SOCLE — cert provider on the wire.
+	 * The route form ships this full-replacement on every POST/PUT
+	 * ("" / "acme" / "internal" / "manual"). snake_case wire name
+	 * (see Route.cert_source) — the backend routeRequest decodes
+	 * `cert_source` and rejects unknown fields, so this MUST stay
+	 * snake_case to avoid a 400.
+	 */
+	cert_source?: string;
+	/**
+	 * v2.19.0 external-certs SOCLE — referenced external cert id.
+	 * Shipped only when `cert_source === 'manual'` (mirrors the
+	 * acmeChallenge-only-under-tls discipline: don't synthesize a
+	 * manual reference on a non-manual route). snake_case wire name.
+	 */
+	cert_id?: string;
 }
 
 /**
