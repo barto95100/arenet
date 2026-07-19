@@ -288,7 +288,13 @@ func (h *Handler) deleteExternalCert(w http.ResponseWriter, r *http.Request) {
 	}
 	var blockingRoutes []string
 	for _, rt := range routes {
-		if rt.CertSource == storage.RouteCertSourceManual && rt.CertID == id {
+		// Mirror the emission condition (buildLoadPemList): a route only
+		// SERVES this cert when it references it AND has TLS enabled.
+		// A route pointing at the cert with TLS off emits no load_pem, so
+		// it does not "use" the cert and must not block deletion — same
+		// lesson as the v2.18.2 ACME cert-delete fix (block == emission
+		// mirror, not host/CertID equality alone).
+		if rt.CertSource == storage.RouteCertSourceManual && rt.CertID == id && rt.TLSEnabled {
 			blockingRoutes = append(blockingRoutes, rt.Host)
 		}
 	}

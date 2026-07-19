@@ -2573,7 +2573,10 @@ func buildLoadPemList(routes []storage.Route, ext map[string]storage.ExternalCer
 	out := make([]map[string]any, 0)
 	seen := make(map[string]struct{})
 	for _, route := range routes {
-		if route.CertSource != storage.RouteCertSourceManual {
+		// A manual-cert route only serves the cert when TLS is enabled;
+		// a non-TLS route has no :443 listener to present it on, so emit
+		// no load_pem for it (mirrors the delete-guard condition).
+		if route.CertSource != storage.RouteCertSourceManual || !route.TLSEnabled {
 			continue
 		}
 		if _, dup := seen[route.CertID]; dup {
@@ -2664,7 +2667,7 @@ func buildSkipList(routes []storage.Route) []string {
 		// try to ACME-acquire a host it already has a cert for. The ACME
 		// subject partition is excluded at the three per-route sites in
 		// buildConfigJSON; this skip is the auto-HTTPS-side companion.
-		if route.CertSource == storage.RouteCertSourceManual {
+		if route.CertSource == storage.RouteCertSourceManual && route.TLSEnabled {
 			out = append(out, route.Host)
 			out = append(out, route.Aliases...)
 		}
