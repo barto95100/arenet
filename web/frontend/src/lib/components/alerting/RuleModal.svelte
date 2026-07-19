@@ -57,7 +57,8 @@
 		| 'cert_expiry'
 		| 'cert_renewal_failed'
 		| 'system_health'
-		| 'update_available';
+		| 'update_available'
+		| 'cert_manual_expiring';
 	const SOURCES = $derived(
 		language.current
 			? [
@@ -65,14 +66,16 @@
 					{ value: 'cert_expiry' as SourceName, label: t('alerting.ruleModal.sourceCertExpiry') },
 					{ value: 'cert_renewal_failed' as SourceName, label: t('alerting.ruleModal.sourceCertRenewalFailed') },
 					{ value: 'system_health' as SourceName, label: t('alerting.ruleModal.sourceSystemHealth') },
-					{ value: 'update_available' as SourceName, label: t('alerting.ruleModal.sourceUpdateAvailable') }
+					{ value: 'update_available' as SourceName, label: t('alerting.ruleModal.sourceUpdateAvailable') },
+					{ value: 'cert_manual_expiring' as SourceName, label: t('alerting.ruleModal.sourceCertManualExpiring') }
 				]
 			: [
 					{ value: 'waf_event_rate' as SourceName, label: 'WAF event rate' },
 					{ value: 'cert_expiry' as SourceName, label: 'Certificate expiry' },
 					{ value: 'cert_renewal_failed' as SourceName, label: 'Certificate renewal failure' },
 					{ value: 'system_health' as SourceName, label: 'System health' },
-					{ value: 'update_available' as SourceName, label: 'Update available' }
+					{ value: 'update_available' as SourceName, label: 'Update available' },
+					{ value: 'cert_manual_expiring' as SourceName, label: 'External cert expiring' }
 				]
 	);
 
@@ -314,6 +317,11 @@
 				// status drives it). The rule fires when the state
 				// equals the expected value (default "available").
 				return {};
+			}
+			case 'cert_manual_expiring': {
+				const p: Record<string, unknown> = {};
+				if (certHost.trim()) p.host = certHost.trim();
+				return p;
 			}
 		}
 	}

@@ -130,15 +130,12 @@ describe('ExternalCertsPanel — delete dialog', () => {
 		render(Panel);
 		await userEvent.click(await screen.findByTestId(`external-cert-delete-${cert.id}`));
 
-		// The revoke notice element is present. Its copy is owned by the
-		// i18n key certificates.external.delete.confirm.revokeNotice
-		// (Task 9 fills EN/FR). Until then t() renders the raw key, so we
-		// assert on the element + that the key is referenced.
+		// The revoke notice element is present and carries the "does NOT
+		// revoke with the issuing CA" copy owned by the i18n key
+		// certificates.external.delete.confirm.revokeNotice (Task 9).
 		const notice = await screen.findByTestId('external-cert-revoke-notice');
 		expect(notice).toBeInTheDocument();
-		expect(notice.textContent ?? '').toContain(
-			'certificates.external.delete.confirm.revokeNotice'
-		);
+		expect(notice.textContent ?? '').toContain('does NOT revoke');
 		// The confirm button is wired.
 		expect(screen.getByTestId('external-cert-delete-confirm')).toBeInTheDocument();
 	});
