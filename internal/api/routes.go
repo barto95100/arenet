@@ -1433,6 +1433,8 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		RedirectToHTTPS:   req.RedirectToHTTPS,
 		Disabled:          req.Disabled,
 		MaintenanceConfig: req.MaintenanceConfig,
+		CertSource:        req.CertSource,
+		CertID:            req.CertID,
 		Aliases:           req.Aliases,
 		AuthMode:          req.AuthMode,
 		BasicAuth: storage.BasicAuthRouteConfig{
@@ -1460,6 +1462,13 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		// supported-code allowlist + 1 MiB body cap.
 		ErrorPageTemplateID: req.ErrorPageTemplateID,
 		ErrorPageOverrides:  req.ErrorPageOverrides,
+	}
+	// v2.19.0 manual-cert cross-check: a route pinned to an uploaded
+	// external cert must reference an existing cert whose SANs cover
+	// the host. Rejected with a 400 before the storage write.
+	if verr := h.validateManualCertRef(r.Context(), &newRoute); verr != nil {
+		writeError(w, http.StatusBadRequest, verr.Error())
+		return
 	}
 	// Step K.1: when AuthMode != "basic" / "forward_auth", clear
 	// the corresponding sub-struct (storage trusts the API to
@@ -1913,6 +1922,8 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		RedirectToHTTPS:   req.RedirectToHTTPS,
 		Disabled:          req.Disabled,
 		MaintenanceConfig: req.MaintenanceConfig,
+		CertSource:        req.CertSource,
+		CertID:            req.CertID,
 		Aliases:           req.Aliases,
 		AuthMode:          req.AuthMode,
 		BasicAuth: storage.BasicAuthRouteConfig{
@@ -1940,6 +1951,11 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		// rejects unsupported codes + oversized bodies.
 		ErrorPageTemplateID: req.ErrorPageTemplateID,
 		ErrorPageOverrides:  req.ErrorPageOverrides,
+	}
+	// v2.19.0 manual-cert cross-check (mirrors createRoute).
+	if verr := h.validateManualCertRef(r.Context(), &newRoute); verr != nil {
+		writeError(w, http.StatusBadRequest, verr.Error())
+		return
 	}
 	if newRoute.AuthMode != storage.RouteAuthBasic {
 		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}

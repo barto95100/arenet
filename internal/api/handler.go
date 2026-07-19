@@ -1142,7 +1142,15 @@ type routeRequest struct {
 	// maintenance (the default); non-nil = maintenance active with
 	// the given retry-after + bypass IPs.
 	MaintenanceConfig *storage.MaintenanceConfig `json:"maintenanceConfig,omitempty"`
-	Aliases           []string                   `json:"aliases"`
+	// CertSource (v2.19.0) selects the cert provider for this route.
+	// "" / "acme" (default), "internal", or "manual". When "manual",
+	// CertID must reference an uploaded external certificate whose
+	// SANs cover the route host (validated at create/update time).
+	CertSource string `json:"cert_source"`
+	// CertID references an ExternalCertificate.ID; required when
+	// CertSource == "manual".
+	CertID  string   `json:"cert_id"`
+	Aliases []string `json:"aliases"`
 	// Step K.1 — per-route auth mode. One of "" / "none" / "basic"
 	// / "forward_auth". On POST, empty is normalised to "none". On
 	// PUT, empty preserves the previously stored value (same UX as
@@ -1613,6 +1621,14 @@ type routeResponse struct {
 	// maintenance (the common case); omitempty keeps pre-existing
 	// snapshots byte-identical.
 	MaintenanceConfig *storage.MaintenanceConfig `json:"maintenanceConfig,omitempty"`
+	// CertSource (v2.19.0) — echoed on every GET so the frontend's
+	// cert-source selector reads the persisted value and a GET→PUT
+	// round-trip carries it back. omitempty keeps pre-v2.19.0 rows
+	// (CertSource == "") byte-identical on the wire.
+	CertSource string `json:"cert_source,omitempty"`
+	// CertID (v2.19.0) — the referenced external cert, echoed alongside
+	// CertSource. omitempty for the same byte-identity reason.
+	CertID string `json:"cert_id,omitempty"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with
@@ -1703,6 +1719,8 @@ func toResponse(r storage.Route) routeResponse {
 		UpdatedAt:           r.UpdatedAt.UTC().Format(timestampFormat),
 		Disabled:            r.Disabled,
 		MaintenanceConfig:   r.MaintenanceConfig,
+		CertSource:          r.CertSource,
+		CertID:              r.CertID,
 	}
 }
 
@@ -1791,6 +1809,11 @@ func computeEffectiveCertSource(r storage.Route, mds []storage.ManagedDomain) st
 	if !r.TLSEnabled {
 		return ""
 	}
+	// v2.19.0: a route pinned to an operator-uploaded external cert
+	// serves that material regardless of ACME / managed-domain state.
+	if r.CertSource == storage.RouteCertSourceManual {
+		return "per-route-manual"
+	}
 	// Covered + not-opted-out → managed-domain wildcard.
 	if !r.UseDedicatedCert {
 		for _, h := range r.AllHosts() {
@@ -1818,6 +1841,36 @@ func computeEffectiveCertSource(r storage.Route, mds []storage.ManagedDomain) st
 		return "per-route-acme:http-01"
 	}
 	return "per-route-internal"
+}
+
+// validateManualCertRef enforces the v2.19.0 manual-cert cross-rules
+// on a route about to be written. When CertSource != "manual" it is a
+// no-op (returns nil). When CertSource == "manual" it requires:
+//   - CertID non-empty (else cert_id_required),
+//   - CertID references an existing external cert (else cert_not_found),
+//   - the referenced cert's SANs cover the route host (else
+//     host_not_covered_by_cert).
+//
+// The returned error's message carries the machine-readable code so
+// the API layer can surface it verbatim in the 400 body.
+func (h *Handler) validateManualCertRef(ctx context.Context, r *storage.Route) error {
+	if r.CertSource != storage.RouteCertSourceManual {
+		return nil
+	}
+	if r.CertID == "" {
+		return errors.New("cert_id_required: certSource \"manual\" requires a certId")
+	}
+	cert, err := h.store.GetExternalCertificate(ctx, r.CertID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return errors.New("cert_not_found: referenced external certificate does not exist")
+	}
+	if err != nil {
+		return err
+	}
+	if !storage.HostMatchesSAN(r.Host, cert.DNSNames) {
+		return errors.New("host_not_covered_by_cert: the route host is not present in the certificate SANs")
+	}
+	return nil
 }
 
 // reconcileManagedDomainCoverage (Step O.3 / spec D1.B + D8.A)

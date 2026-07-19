@@ -235,7 +235,29 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) deleteExternalCert(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	// Route-reference 409 guard is added in Task 4 once Route.CertSource/CertID exist.
+	// v2.19.0: refuse to delete a cert still referenced by any manual
+	// route — deleting it would leave those routes pointing at a
+	// vanished cert. Surface the blocking route hosts so the operator
+	// knows what to repoint first.
+	routes, err := h.store.ListRoutes(r.Context())
+	if err != nil {
+		h.logger.Error("list routes for cert delete guard", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to verify certificate references")
+		return
+	}
+	var blockingRoutes []string
+	for _, rt := range routes {
+		if rt.CertSource == storage.RouteCertSourceManual && rt.CertID == id {
+			blockingRoutes = append(blockingRoutes, rt.Host)
+		}
+	}
+	if len(blockingRoutes) > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":          "certificate is referenced by one or more routes",
+			"blockingRoutes": blockingRoutes,
+		})
+		return
+	}
 
 	if err := h.store.DeleteExternalCertificate(r.Context(), id); err == storage.ErrNotFound {
 		writeError(w, http.StatusNotFound, "certificate not found")
