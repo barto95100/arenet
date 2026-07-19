@@ -268,7 +268,8 @@
 			// "Maintenance" on the 3-state control.
 			maintenanceConfig: {
 				retryAfterSeconds: 300,
-				bypassIps: [] as string[]
+				bypassIps: [] as string[],
+				message: ''
 			},
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
@@ -1211,9 +1212,10 @@
 			maintenanceConfig: r.maintenanceConfig
 				? {
 						retryAfterSeconds: r.maintenanceConfig.retryAfterSeconds,
-						bypassIps: [...(r.maintenanceConfig.bypassIps ?? [])]
+						bypassIps: [...(r.maintenanceConfig.bypassIps ?? [])],
+						message: r.maintenanceConfig.message ?? ''
 					}
-				: { retryAfterSeconds: 300, bypassIps: [] },
+				: { retryAfterSeconds: 300, bypassIps: [], message: '' },
 			// (subform expansion handled below — needs to fire
 			// AFTER formData assignment so the $effect sees the
 			// new state.)
@@ -1985,7 +1987,10 @@
 					retryAfterSeconds: formData.maintenanceConfig.retryAfterSeconds,
 					bypassIps: formData.maintenanceConfig.bypassIps
 						.map((ip) => ip.trim())
-						.filter((ip) => ip.length > 0)
+						.filter((ip) => ip.length > 0),
+					// v2.18.1 — per-route message (trimmed). Empty → the
+					// backend falls back to the global message.
+					message: (formData.maintenanceConfig.message ?? '').trim()
 				};
 			}
 			// Step J.2 preserve-or-replace: ship the HC block only
@@ -2719,6 +2724,24 @@
 									t('routes.form.maintenance.retryAfterHelp', {
 										seconds: String(formData.maintenanceConfig.retryAfterSeconds)
 									})}
+							</span>
+						</div>
+						<!-- v2.18.1 — per-route maintenance message. Empty → the
+						     global message (Settings → Error Pages → Maintenance)
+						     is used instead. -->
+						<div class="flex flex-col gap-1">
+							<span class="text-sm text-secondary">
+								{language.current && t('routes.form.maintenance.message')}
+							</span>
+							<textarea
+								class="w-full box-border resize-y rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-primary"
+								rows="2"
+								bind:value={formData.maintenanceConfig.message}
+								placeholder={t('routes.form.maintenance.messagePlaceholder')}
+								aria-label={language.current && t('routes.form.maintenance.message')}
+							></textarea>
+							<span class="text-xs text-muted">
+								{language.current && t('routes.form.maintenance.messageHelp')}
 							</span>
 						</div>
 						<div class="flex flex-col gap-2">

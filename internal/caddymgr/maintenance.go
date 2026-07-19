@@ -43,6 +43,17 @@ const maintenanceRetryAfterSentinel = "{arenet.maintenance.retry_after}"
 // there.
 const maintenanceMessageSentinel = "{arenet.maintenance.message}"
 
+// maintenanceRefreshMetaSentinel is replaced at emission time with a
+// <meta http-equiv="refresh" content="N"> tag (N = the route's
+// Retry-After seconds) so the built-in default page auto-reloads the
+// browser when the maintenance window is expected to end (v2.18.1).
+// When Retry-After is 0 the sentinel is replaced with the empty string
+// — content="0" would reload instantly, hammering the server in a loop.
+// Only the built-in default page carries this sentinel; custom pages
+// don't (auto-refresh is default-page-only), but they can add their own
+// meta refresh using {arenet.maintenance.retry_after}.
+const maintenanceRefreshMetaSentinel = "{arenet.maintenance.refresh_meta}"
+
 // buildMaintenanceBody returns the maintenance HTML with the per-route
 // Retry-After and the global message substituted in. `pageHTML` is the
 // operator's stored page (already sanitized via SanitizeErrorPageBody
@@ -66,7 +77,18 @@ func buildMaintenanceBody(pageHTML string, retryAfter int, message string) strin
 	renderedMsg := html.EscapeString(message)
 	renderedMsg = neutralizeDangerousPlaceholders(renderedMsg)
 	renderedMsg = strings.ReplaceAll(renderedMsg, "\n", "<br>")
+
+	// Auto-refresh meta (default page only): a positive Retry-After
+	// yields a <meta http-equiv="refresh">; 0 yields nothing (an
+	// instant-reload loop guard). Custom pages carry no sentinel, so
+	// this ReplaceAll is a no-op there.
+	refreshMeta := ""
+	if retryAfter > 0 {
+		refreshMeta = `<meta http-equiv="refresh" content="` + strconv.Itoa(retryAfter) + `">`
+	}
+
 	out := strings.ReplaceAll(pageHTML, maintenanceRetryAfterSentinel, strconv.Itoa(retryAfter))
+	out = strings.ReplaceAll(out, maintenanceRefreshMetaSentinel, refreshMeta)
 	return strings.ReplaceAll(out, maintenanceMessageSentinel, renderedMsg)
 }
 
@@ -154,6 +176,7 @@ var arenetDefaultMaintenancePage = fmt.Sprintf(`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{arenet.maintenance.refresh_meta}
 <title>503 Maintenance</title>
 <style>
   body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }

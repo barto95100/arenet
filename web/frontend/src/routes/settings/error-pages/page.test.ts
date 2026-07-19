@@ -511,7 +511,7 @@ describe('/settings/error-pages — Maintenance tab', () => {
 		expect(screen.queryByText('Arenet Default (built-in)')).toBeNull();
 	});
 
-	it('documents the {arenet.maintenance.retry_after} placeholder in editor help', async () => {
+	it('documents the maintenance placeholders (retry_after + message) in the editor palette', async () => {
 		apiMock.list.mockResolvedValue([]);
 		apiMock.getMaintenancePage.mockResolvedValue({ html: '', isDefault: true, message: '' });
 		render(Page);
@@ -520,6 +520,10 @@ describe('/settings/error-pages — Maintenance tab', () => {
 		await waitFor(() => {
 			expect(apiMock.getMaintenancePage).toHaveBeenCalledTimes(1);
 		});
-		expect(screen.getByText(/\{arenet\.maintenance\.retry_after\}/)).toBeInTheDocument();
+		// retry_after now appears both as a clickable palette <code> and in
+		// the help text — at least one is enough to prove it's documented.
+		expect(screen.getAllByText(/\{arenet\.maintenance\.retry_after\}/).length).toBeGreaterThan(0);
+		// v2.18.1 — the new message placeholder is also offered.
+		expect(screen.getByText('{arenet.maintenance.message}')).toBeInTheDocument();
 	});
 });

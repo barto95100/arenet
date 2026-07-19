@@ -358,6 +358,14 @@ export interface MaintenanceConfig {
 	 * (possibly empty) on the wire.
 	 */
 	bypassIps: string[];
+	/**
+	 * Per-route maintenance message rendered via the
+	 * `{arenet.maintenance.message}` placeholder (v2.18.1). When empty,
+	 * the emission falls back to the global message
+	 * (Settings → Error Pages → Maintenance). Plain text — HTML-escaped
+	 * at serve time.
+	 */
+	message?: string;
 }
 
 /**
