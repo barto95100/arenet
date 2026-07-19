@@ -169,6 +169,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// initial load doesn't require admin scope; the
 			// PUT (write) sits in the admin-only sub-group below.
 			r.Get("/settings/maintenance-page", h.getMaintenancePage)
+			// External certificates read-side (v2.19.0). Viewer-
+			// accessible so the RouteForm cert dropdown can list
+			// uploaded certs without admin scope; KeyPEM is
+			// redacted in every response. POST/PUT/DELETE sit in
+			// the admin-only sub-group below.
+			r.Get("/certificates/external", h.listExternalCerts)
+			r.Get("/certificates/external/{id}", h.getExternalCert)
 			r.Get("/audit", h.listAudit)
 			// Step L L.2 — per-route metrics history.
 			// Read-only; viewer-accessible per AC #17. No
@@ -356,6 +363,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// only). GET is mounted in the viewer-accessible
 				// section above, same split as error-templates.
 				r.Put("/settings/maintenance-page", h.putMaintenancePage)
+				// External certificates write-side (admin-only,
+				// v2.19.0). GETs are in the viewer section above,
+				// same split as maintenance-page / error-templates.
+				r.Post("/certificates/external", h.createExternalCert)
+				r.Put("/certificates/external/{id}", h.updateExternalCert)
+				r.Delete("/certificates/external/{id}", h.deleteExternalCert)
 				// Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-
 				// triggered upstream probe (UI button). Per-URL
 				// invocation; frontend parallelises pool > 1 via

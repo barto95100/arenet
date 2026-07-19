@@ -245,6 +245,15 @@ const (
 	// same shape as APIKey scrubbing for crowdsec/oidc/dns).
 	ActionMaxMindConfigUpdated = "maxmind_config_updated"
 	ActionMaxMindConfigDeleted = "maxmind_config_deleted"
+
+	// External certificates (3) — v2.19.0. Operator-uploaded TLS
+	// certs served via load_pem. The private key (KeyPEM) is a
+	// SECRET and is NEVER recorded in the audit row — only the
+	// certificate identity (target_id = external cert UUID) lands
+	// here. Uploaded on POST, Updated on PUT, Deleted on DELETE.
+	ActionExternalCertUploaded = "external_cert_uploaded"
+	ActionExternalCertUpdated  = "external_cert_updated"
+	ActionExternalCertDeleted  = "external_cert_deleted"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -312,6 +321,9 @@ var allActions = []string{
 	ActionAutomationReset,
 	ActionMaxMindConfigUpdated,
 	ActionMaxMindConfigDeleted,
+	ActionExternalCertUploaded,
+	ActionExternalCertUpdated,
+	ActionExternalCertDeleted,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

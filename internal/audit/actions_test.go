@@ -25,9 +25,9 @@ import "testing"
 // Adding or removing actions without updating the spec / decisions
 // doc is a process violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 61
+	const wantCount = 64
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + v2.11-dns=2 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3 + R=3 + MaxMind=2 + route-toggle=2 + route-maintenance=2 + cert-delete=1)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + v2.11-dns=2 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3 + R=3 + MaxMind=2 + route-toggle=2 + route-maintenance=2 + cert-delete=1 + external-cert=3)", got, wantCount)
 	}
 }
 
@@ -188,6 +188,13 @@ func TestAllActions_ExactSet(t *testing.T) {
 		// key scrubbed from before/after JSON.
 		"maxmind_config_updated": true,
 		"maxmind_config_deleted": true,
+		// External certificates (+3) — v2.19.0. Operator-uploaded
+		// TLS certs served via load_pem. Uploaded on POST, Updated
+		// on PUT, Deleted on DELETE. The private key is NEVER in the
+		// audit row (only the cert UUID as target_id).
+		"external_cert_uploaded": true,
+		"external_cert_updated":  true,
+		"external_cert_deleted":  true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {
