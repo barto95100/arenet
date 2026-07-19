@@ -40,7 +40,19 @@ import (
 // every user who copied it. Mirrors the managed-domain fixture test's
 // "the shipped artifact is a contract" posture.
 func TestExampleMaintenancePage_SurvivesPipeline(t *testing.T) {
-	path := filepath.Join("..", "..", "docs", "examples", "maintenance-page-example.html")
+	// Both language variants of the shipped example are contracts.
+	for _, name := range []string{
+		"maintenance-page-example-en.html",
+		"maintenance-page-example-fr.html",
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertExampleMaintenancePageSurvives(t, name)
+		})
+	}
+}
+
+func assertExampleMaintenancePageSurvives(t *testing.T, filename string) {
+	path := filepath.Join("..", "..", "docs", "examples", filename)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read example page: %v", err)
