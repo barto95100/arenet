@@ -121,10 +121,12 @@ Un **certificat externe** est un certificat leaf + sa chaîne + sa clé privée,
 1. Barre latérale → **Certificates** (`/certs`) → carte **Certificats externes** → **+ Uploader un certificat**
 2. Donne-lui un **nom** (et une description optionnelle)
 3. Colle les trois blocs PEM :
-   - **Certificat** — le leaf (public)
-   - **Chaîne** — le/les intermédiaire(s) (public ; optionnel si ton leaf est émis directement)
-   - **Clé privée** — la clé correspondante
+   - **Certificat** — le certificat de ton domaine, le « leaf » (ex. `your_domain.crt` / `cert.pem` / `fullchain.pem`, public)
+   - **Chaîne** — le/les certificat(s) intermédiaire(s) du CA reliant ton leaf à une racine de confiance (ex. `intermediate.crt` / `ca-bundle.crt` / `chain.pem`, public ; optionnel si ton leaf est émis directement)
+   - **Clé privée** — la clé correspondante générée avec ton CSR (ex. `your_domain.key` / `privkey.pem`)
 4. **Uploader**
+
+> **Raccourci fullchain (v2.19.1).** Beaucoup de CA (quel que soit le fournisseur) te donnent un seul fichier **« fullchain »** avec plusieurs blocs `-----BEGIN CERTIFICATE-----` — le leaf en premier, puis les intermédiaires. Colle simplement tout le fichier dans **Certificat** et laisse **Chaîne** vide : Arenet sépare automatiquement le leaf des intermédiaires. Fournir une chaîne à la fois dans le champ Certificat (en fullchain) ET dans le champ Chaîne est rejeté (`chain_specified_twice`) pour éviter une chaîne dupliquée.
 
 Arenet valide le matériel avant de le stocker. Les erreurs **bloquantes** rejettent l'upload : le PEM du leaf ne parse pas, le PEM de la chaîne ne parse pas, ou la **clé privée ne correspond pas au certificat**. Les avertissements **non bloquants** sont remontés mais laissent quand même sauvegarder — le cert est déjà expiré, pas encore valide (tu peux préparer un cert en avance d'une bascule), signé avec un algorithme faible (SHA-1 / MD5), ou la chaîne semble incomplète. Un PEM en CRLF collé depuis un outil Windows est normalisé automatiquement.
 
