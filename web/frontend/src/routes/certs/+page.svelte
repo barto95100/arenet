@@ -42,6 +42,7 @@
 	import Tooltip from '$lib/components/Tooltip.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import WildcardApexWizard from '$lib/components/certs/WildcardApexWizard.svelte';
+	import ExternalCertsPanel from '$lib/components/certs/ExternalCertsPanel.svelte';
 	import { settingsApi } from '$lib/api/settings';
 	import { certificatesApi } from '$lib/api/certificates';
 	import { fetchCertEvents } from '$lib/api/security';
@@ -776,6 +777,14 @@
 			{language.current && t('certs.policiesFoot')}
 		</p>
 	</div>
+
+	<!-- v2.19.0 external-certs SOCLE (Task 7) — bring-your-own-cert
+	     upload panel + list. Self-contained component: owns its own
+	     data load, upload form, list table, and delete/blocked
+	     dialogs. Placed below the wildcard policies section as the
+	     distinct "certificates I supply myself" surface (vs. the
+	     ACME-issued certs the Domaines table above tracks). -->
+	<ExternalCertsPanel />
 
 {/if}
 
