@@ -26,6 +26,7 @@ import (
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/caddymgr"
 	"github.com/barto95100/arenet/internal/certinfo"
+	"github.com/barto95100/arenet/internal/storage"
 )
 
 // deleteCertificate handles DELETE /api/v1/certificates/{domain}. It
@@ -72,23 +73,47 @@ func (h *Handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "list managed domains: "+err.Error())
 		return
 	}
+	// Known forward-auth provider names, so routeEmitsCertSubject can
+	// detect the fail-closed deny path (a forward_auth route pointing at
+	// an unknown provider emits its subject unconditionally).
+	fwdAuthProviders, err := h.store.ListForwardAuthProviders(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list forward-auth providers: "+err.Error())
+		return
+	}
+	knownFwdAuth := make(map[string]struct{}, len(fwdAuthProviders))
+	for _, p := range fwdAuthProviders {
+		knownFwdAuth[p.Name] = struct{}{}
+	}
 
 	var blocking []string
 	for _, rt := range routes {
-		if strings.EqualFold(rt.Host, domain) {
-			blocking = append(blocking, rt.Host)
+		// A route only "uses" (and re-issues) the cert for a host if it
+		// actually EMITS that per-host cert subject. This must mirror the
+		// emission condition in caddymgr (manager.go: a subject is emitted
+		// only when r.TLSEnabled AND (r.UseDedicatedCert OR the host is not
+		// covered by a managed-domain wildcard)). Blocking on host equality
+		// alone wrongly held certs hostage to routes that don't serve them:
+		//   - a route with TLS off emits no subject at all;
+		//   - a TLS route covered by a *.apex wildcard (without opting into
+		//     a dedicated cert) is served by the wildcard, so its leftover
+		//     per-host cert is orphaned and must be deletable.
+		if !routeEmitsCertSubject(rt, domain, mds, knownFwdAuth) {
 			continue
 		}
-		for _, a := range rt.Aliases {
-			if strings.EqualFold(a, domain) {
-				blocking = append(blocking, rt.Host)
-				break
-			}
-		}
+		blocking = append(blocking, rt.Host)
 	}
-	if _, covered := caddymgr.IsHostCoveredByManagedDomain(domain, mds); covered {
-		blocking = append(blocking, domain)
-	}
+	// NOTE: we deliberately do NOT block just because `domain` is a
+	// sub-label covered by a wildcard (IsHostCoveredByManagedDomain).
+	// The wildcard cert is a DIFFERENT disk entry (`*.<apex>`); a
+	// leftover per-host cert for a now-wildcard-covered host is orphaned
+	// (Caddy serves the wildcard at handshake and never re-issues the
+	// per-host cert), so it must be deletable. Whether a route still
+	// legitimately emits this per-host subject is decided by
+	// routeEmitsCertSubject above (which accounts for UseDedicatedCert).
+	// We still block deletion of the wildcard/apex SUBJECTS themselves,
+	// below — those the managed domain does re-issue.
+	//
 	// IsHostCoveredByManagedDomain only handles sub-label coverage
 	// (e.g. "sub.<apex>") — it bails on any "*."-prefixed host, so
 	// it never catches the wildcard/apex subjects a managed domain
@@ -149,4 +174,55 @@ func (h *Handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {
 		"domain":  domain,
 		"deleted": deleted,
 	})
+}
+
+// routeEmitsCertSubject reports whether the route would register a
+// per-host ACME cert subject for `domain` (its Host or an alias). It is
+// the delete-time mirror of caddymgr's emission gate (manager.go): a
+// subject is emitted only when the route has TLS enabled AND either it
+// opted into a dedicated cert OR the host is not already covered by a
+// managed-domain wildcard. A route that does not emit the subject does
+// not "use" the cert, so it must not block deletion. `mds` is the
+// managed-domain list (passed in to avoid a per-route store read).
+func routeEmitsCertSubject(rt storage.Route, domain string, mds []storage.ManagedDomain, knownFwdAuthProviders map[string]struct{}) bool {
+	// TLS off → no subject emitted for any of its hosts.
+	if !rt.TLSEnabled {
+		return false
+	}
+	// Does this route reference the domain by Host or alias?
+	matches := strings.EqualFold(rt.Host, domain)
+	if !matches {
+		for _, a := range rt.Aliases {
+			if strings.EqualFold(a, domain) {
+				matches = true
+				break
+			}
+		}
+	}
+	if !matches {
+		return false
+	}
+	// Forward-auth fail-closed deny path (manager.go: provider missing):
+	// a forward_auth route referencing an UNKNOWN provider emits the deny
+	// route AND registers its per-host subject UNCONDITIONALLY — there is
+	// no managed-domain coverage skip on that path. Mirror it: such a
+	// route always emits its subject, so it must block. (Reachable only
+	// via a corrupted route state — the API enforces provider existence —
+	// but the mirror must stay exact so an in-use cert never becomes
+	// deletable.)
+	if rt.AuthMode == storage.RouteAuthForwardAuth {
+		if _, ok := knownFwdAuthProviders[rt.ForwardAuth.ProviderName]; !ok {
+			return true
+		}
+	}
+	// A dedicated-cert route always emits its own subject, even when
+	// covered by a wildcard.
+	if rt.UseDedicatedCert {
+		return true
+	}
+	// Otherwise it emits its own subject only when NOT covered by a
+	// managed-domain wildcard (a covered route is served by the wildcard
+	// cert, leaving any prior per-host cert orphaned).
+	_, covered := caddymgr.IsHostCoveredByManagedDomain(domain, mds)
+	return !covered
 }
