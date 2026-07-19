@@ -108,9 +108,66 @@ Si tu supprimes une route mais gardes son certificat, le certificat devient un *
 
 ---
 
+## Certificats externes / uploadés (v2.19.0)
+
+Tout ce qui précède concerne les certificats qu'Arenet **obtient et renouvelle lui-même** via ACME. Depuis la **v2.19.0**, tu peux aussi **uploader un certificat que tu possèdes déjà** — émis par un CA externe (DigiCert, une PKI d'entreprise, un CA non-ACME ou en air-gap) — et le servir sur une route **sans ACME**. C'est le SOCLE de l'histoire cert externe : upload + service + une alerte d'expiration. Il n'y a pas encore de génération de CSR intégrée ni de renouvellement automatique.
+
+### Ce que c'est
+
+Un **certificat externe** est un certificat leaf + sa chaîne + sa clé privée, en PEM, que tu colles dans Arenet. Arenet parse le leaf au moment de l'upload pour afficher son émetteur, son sujet, son numéro de série, ses algorithmes de clé/signature, sa fenêtre de validité (`notBefore`/`notAfter`) et sa liste de SAN, puis stocke le matériel et le sert sur n'importe quelle route que tu pointes dessus. Contrairement aux certs ACME (qui vivent seulement dans le store certmagic sur disque), les certs externes sont un **enregistrement dans la base d'Arenet** — la carte **Certificats externes** de la page `/certs` les liste.
+
+### Comment uploader
+
+1. Barre latérale → **Certificates** (`/certs`) → carte **Certificats externes** → **+ Uploader un certificat**
+2. Donne-lui un **nom** (et une description optionnelle)
+3. Colle les trois blocs PEM :
+   - **Certificat** — le leaf (public)
+   - **Chaîne** — le/les intermédiaire(s) (public ; optionnel si ton leaf est émis directement)
+   - **Clé privée** — la clé correspondante
+4. **Uploader**
+
+Arenet valide le matériel avant de le stocker. Les erreurs **bloquantes** rejettent l'upload : le PEM du leaf ne parse pas, le PEM de la chaîne ne parse pas, ou la **clé privée ne correspond pas au certificat**. Les avertissements **non bloquants** sont remontés mais laissent quand même sauvegarder — le cert est déjà expiré, pas encore valide (tu peux préparer un cert en avance d'une bascule), signé avec un algorithme faible (SHA-1 / MD5), ou la chaîne semble incomplète. Un PEM en CRLF collé depuis un outil Windows est normalisé automatiquement.
+
+> **La clé privée est en écriture seule.** Après l'upload, elle n'est **plus jamais affichée** — les réponses API la masquent, et elle est exclue des snapshots de backup sauf `--include-secrets` explicite. Quand tu édites un cert, laisser le champ clé vide conserve la clé stockée ; le seul moyen de changer la clé est d'en coller une nouvelle.
+
+### Le renouvellement est MANUEL
+
+Arenet ne renouvelle **PAS** automatiquement un certificat uploadé — il n'y a pas de compte ACME derrière, donc rien ne se renouvelle tout seul. C'est **à toi** de ré-uploader un cert frais avant que l'ancien expire.
+
+Pour ne pas être pris de court, configure la règle d'alerting **`cert_manual_expiring`** :
+
+1. **Settings → Alerting → + Règle**
+2. Source : **`cert_manual_expiring`**
+3. Seuil : alerter **N jours** avant `notAfter` (défaut **30**)
+4. Route-la vers ton canal (Discord / webhook / email) comme n'importe quelle règle
+
+La règle se déclenche **une fois par transition** (edge-triggered) quand un cert uploadé passe sous le seuil — pas à chaque poll. Quand ton CA émet le cert renouvelé, **ré-uploade-le** : édite le cert externe et colle le nouveau leaf (+ chaîne + clé). Arenet le re-parse et la nouvelle fenêtre de validité prend effet au reload suivant.
+
+### Lier un certificat à une route
+
+Un cert uploadé n'est servi que si une route le référence :
+
+1. Édite une route → zone **TLS / Cert Source** → **Cert Source = Manual**
+2. Choisis le certificat uploadé dans la liste
+
+Seuls les certificats dont le **SAN couvre le host de la route** sont proposés. Le match est exact ou **wildcard à un label** (RFC 6125) : un cert avec le SAN `*.example.com` couvre `app.example.com` mais **pas** `sub.app.example.com` ni le `example.com` nu. Voir [Routes](Routes-FR#cert-source-acme--internal--manual) pour le sélecteur Cert Source.
+
+### Cert externe wildcard vs wildcard ACME
+
+Un cert **externe** wildcard est juste un cert dont la liste de SAN contient `*.example.com`. Contrairement à un **apex managé ACME** (qui couvre automatiquement chaque route sous-domaine dessous), un wildcard externe n'a **aucune couverture automatique** : chaque route qui le veut doit le référencer **explicitement** via Cert Source = Manual. Un même cert externe (wildcard ou multi-SAN) peut être référencé par autant de routes que ses SAN en couvrent — il n'y a simplement pas de magie « managed domain » ; tu câbles chaque route toi-même.
+
+### Supprimer un certificat externe
+
+Supprime un cert externe depuis sa ligne sur la carte **Certificats externes**.
+
+- **Les certs référencés sont bloqués (409).** Si une route en mode **Manual** pointe encore sur le cert, la suppression est refusée et le dialogue liste le/les host(s) de route qui bloquent. Change d'abord la Cert Source de ces routes (ou supprime-les).
+- **Supprimer ≠ révoquer.** Retirer le cert d'Arenet ne fait que retirer le matériel stocké ; ça ne le **révoque PAS** auprès du CA. Si tu dois faire révoquer le certificat (compromission de clé, mauvaise émission), fais-le sur le **portail de ton CA** — cohérent avec la suppression de cert ACME qui, elle aussi, ne révoque jamais.
+
+---
+
 ## Voir aussi
 
-- [Routes](Routes-FR) — activer TLS + choisir le challenge HTTP-01 / DNS-01
+- [Routes](Routes-FR) — activer TLS + choisir le challenge HTTP-01 / DNS-01, et la Cert Source Manual
 - [DNS Providers](DNS-Providers-FR) — requis pour les certificats DNS-01 / wildcard
 - [Backup & Restore](Backup-Restore-FR) — les fichiers cert ne sont **pas** dans le snapshot JSON ; ils vivent dans le store certmagic sur disque
 - [Troubleshooting](Troubleshooting-FR) — diagnostiquer les échecs de renouvellement / d'émission

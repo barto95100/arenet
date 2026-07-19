@@ -18,13 +18,21 @@ package caddymgr
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log/slog"
+	"math/big"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	// Step I.7 hotfix: side-effect import of coraza-caddy is needed so
@@ -1079,6 +1087,42 @@ func TestBuildConfigJSON_WAF_OffSkipsHandler(t *testing.T) {
 // presence of load_owasp_crs:true + the three Includes, so the
 // missing-rule path is structurally prevented; this Validate test
 // is the runtime safety net on top.
+// genSelfSignedCertPEM returns a freshly-generated self-signed
+// leaf certificate + its private key, both PEM-encoded, valid for the
+// given DNS name. Used by TestBuildConfigJSON_LoadsCleanly to feed a
+// REAL cert into the apps.tls.certificates.load_pem block so
+// caddy.Validate provisions the manual-cert (external certificates
+// SOCLE, v2.19.0) emission shape against material Caddy can actually
+// parse — a fabricated "CERTPEM"/"KEYPEM" string would fail
+// provisioning for the wrong reason.
+func genSelfSignedCertPEM(t *testing.T, dnsName string) (certPEM, keyPEM string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: dnsName},
+		DNSNames:     []string{dnsName},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	keyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	return certPEM, keyPEM
+}
+
 func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 	// First fixture: route engaging every Step I feature so the
 	// emitted chain contains [metrics, authentication, waf, headers,
@@ -1224,6 +1268,37 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 			BypassIPs:         []string{"192.168.1.0/24"},
 		},
 	})
+	// v2.19.0 (external-certificates SOCLE) — fold a manual-cert route
+	// into THIS canonical fixture so caddy.Validate provisions the
+	// apps.tls.certificates.load_pem block against a REAL self-signed
+	// cert (Caddy parses the PEM at Provision time — a fabricated
+	// string would fail for the wrong reason). Same anti-poisoning
+	// rationale as every other fold: one caddy.Validate call per
+	// package, folded here. The host manual.example.com must NOT reach
+	// any ACME policy (it serves the load_pem cert) — the structural
+	// proof of that is in external_cert_emit_test.go; here we only
+	// need Validate to accept the combined load_pem + skip_certificates
+	// shape.
+	manualCertPEM, manualKeyPEM := genSelfSignedCertPEM(t, "manual.example.com")
+	externalCerts := map[string]storage.ExternalCertificate{
+		"ext-cert-1": {
+			ID:       "ext-cert-1",
+			Name:     "manual fixture cert",
+			CertPEM:  manualCertPEM,
+			KeyPEM:   manualKeyPEM,
+			DNSNames: []string{"manual.example.com"},
+		},
+	}
+	routes = append(routes, storage.Route{
+		ID:         "r-manualcert",
+		Host:       "manual.example.com",
+		Upstreams:  []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:   storage.LBPolicyRoundRobin,
+		WAFMode:    "off",
+		TLSEnabled: true,
+		CertSource: storage.RouteCertSourceManual,
+		CertID:     "ext-cert-1",
+	})
 	// Task 1d empirical gate — fold the multi-provider managed-domain
 	// scenarios into THIS canonical caddy.Validate call (rather than
 	// spawning a competing parallel caddy.Validate test, which would
@@ -1270,6 +1345,7 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 		DevMode:        true,
 		DNSProviders:   dnsProviders,
 		ManagedDomains: managedDomains,
+		ExternalCerts:  externalCerts,
 	})
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)

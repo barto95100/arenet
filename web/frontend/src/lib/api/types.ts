@@ -336,6 +336,31 @@ export interface Route {
 	 * disabled takes precedence when both happen to be set.
 	 */
 	maintenanceConfig?: MaintenanceConfig;
+	/**
+	 * v2.19.0 external-certs SOCLE — cert provider selector.
+	 *   - "" / "acme"  → ACME-issued cert (managed-domain wildcard,
+	 *                    per-route http-01/dns-01; the default).
+	 *   - "internal"   → Caddy internal self-signed CA.
+	 *   - "manual"     → an operator-uploaded external cert,
+	 *                    referenced by `cert_id`.
+	 *
+	 * WIRE NAME IS snake_case (`cert_source`) — the sole exception to
+	 * the otherwise-camelCase route wire shape. The API client does
+	 * no case transformation (res.json() cast straight to the type),
+	 * so the TS property MUST be `cert_source` to round-trip; a
+	 * camelCased `certSource` would ship an unknown field and the
+	 * backend's DisallowUnknownFields decoder would 400. omitempty on
+	 * the Go side means a pre-v2.19.0 route reads back with the field
+	 * absent (undefined), which the form treats as "acme".
+	 */
+	cert_source?: string;
+	/**
+	 * v2.19.0 external-certs SOCLE — ExternalCertificate.id the route
+	 * serves when `cert_source === 'manual'`. Empty / absent for any
+	 * other source. snake_case on the wire for the same reason as
+	 * `cert_source` above.
+	 */
+	cert_id?: string;
 }
 
 /**
@@ -687,6 +712,22 @@ export interface RouteRequest {
 	 * exist for changing state without a full-body PUT).
 	 */
 	maintenanceConfig?: MaintenanceConfig;
+	/**
+	 * v2.19.0 external-certs SOCLE — cert provider on the wire.
+	 * The route form ships this full-replacement on every POST/PUT
+	 * ("" / "acme" / "internal" / "manual"). snake_case wire name
+	 * (see Route.cert_source) — the backend routeRequest decodes
+	 * `cert_source` and rejects unknown fields, so this MUST stay
+	 * snake_case to avoid a 400.
+	 */
+	cert_source?: string;
+	/**
+	 * v2.19.0 external-certs SOCLE — referenced external cert id.
+	 * Shipped only when `cert_source === 'manual'` (mirrors the
+	 * acmeChallenge-only-under-tls discipline: don't synthesize a
+	 * manual reference on a non-manual route). snake_case wire name.
+	 */
+	cert_id?: string;
 }
 
 /**
@@ -950,6 +991,72 @@ export interface CertificateDeleteResult {
  */
 export interface ManagedDomainDeleteResponse {
 	mutatedRoutes: number;
+}
+
+/**
+ * v2.19.0 external-certs SOCLE — a non-blocking advisory the backend
+ * attaches to an uploaded certificate at parse time (e.g. "expires
+ * soon", "self-signed", "chain does not verify"). Surfaced verbatim
+ * on the upload response so the operator sees why a cert may not be
+ * ideal without the upload being rejected. `code` is a stable machine
+ * token; `message` is the human-readable text.
+ */
+export interface CertWarning {
+	code: string;
+	message: string;
+}
+
+/**
+ * v2.19.0 external-certs SOCLE — wire shape of a bring-your-own
+ * certificate stored by Arenet (as opposed to an ACME-issued one).
+ * Field-by-field mirror of the backend externalCertResponse
+ * (internal/api/external_certs.go).
+ *
+ * `keyPEM` is ALWAYS redacted to "" on every read path (list + get +
+ * the upload response echo) — the private key never leaves the
+ * backend after upload. The field is kept in the type so the shape
+ * matches the wire, but readers must never rely on it carrying key
+ * material.
+ *
+ * The x509 metadata (issuer/subject/serialNumber/keyAlgorithm/
+ * signatureAlgorithm/notBefore/notAfter/dnsNames) is parsed
+ * server-side from certPEM at upload time and persisted, so the
+ * frontend never parses PEM itself.
+ */
+export interface ExternalCertificate {
+	id: string;
+	name: string;
+	description?: string;
+	certPEM: string;
+	chainPEM: string;
+	/** Always "" on the wire — private key is redacted on every read. */
+	keyPEM: string;
+	issuer: string;
+	subject: string;
+	serialNumber: string;
+	keyAlgorithm: string;
+	signatureAlgorithm: string;
+	notBefore: string;
+	notAfter: string;
+	dnsNames: string[];
+	createdAt: string;
+	updatedAt: string;
+	/** Non-blocking advisories attached at parse time (may be empty). */
+	warnings: CertWarning[];
+}
+
+/**
+ * v2.19.0 external-certs SOCLE — POST /api/v1/certificates/external
+ * request body. `chainPEM` is optional (a leaf cert may already be
+ * self-contained or the operator may omit intermediates); the backend
+ * validates certPEM + keyPEM form a matching pair.
+ */
+export interface ExternalCertUploadRequest {
+	name: string;
+	description?: string;
+	certPEM: string;
+	keyPEM: string;
+	chainPEM?: string;
 }
 
 /**

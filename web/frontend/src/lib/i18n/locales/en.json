@@ -335,6 +335,15 @@
 			"tlsAcmeHTTP01": "HTTP-01 (default, port 80)",
 			"tlsAcmeDNS01": "DNS-01 (required for wildcards)",
 			"tlsAcmeConfigureLink": "configure it under Settings",
+			"certSourceLabel": "Certificate source",
+			"certSourceAcme": "ACME (Let's Encrypt)",
+			"certSourceInternal": "Internal (self-signed)",
+			"certSourceInternalHelper": "Caddy issues a self-signed certificate from its internal CA. Browsers will show a trust warning unless the CA is imported.",
+			"certSourceManual": "Manual (uploaded certificate)",
+			"certSourceManualNone": "No uploaded certificate covers this host yet.",
+			"certSourceManualUploadLink": "Upload one under SSL / Certificates",
+			"certSourceManualPickLabel": "Certificate",
+			"certSourceManualExpiry": "expires",
 			"authSectionLabel": "Authentication",
 			"authNoneOption": "None",
 			"authBasicOption": "Basic auth",
@@ -791,6 +800,7 @@
 			"labelSource": "Source",
 			"sourceWafEventRate": "WAF event rate",
 			"sourceCertExpiry": "Certificate expiry",
+			"sourceCertManualExpiring": "External cert expiring",
 			"sourceCertRenewalFailed": "Certificate renewal failure",
 			"sourceSystemHealth": "System health",
 			"sourceUpdateAvailable": "Update available",
@@ -1399,6 +1409,46 @@
 				"text": "The certificate for {domain} is in use by: {routes}. Delete or disable those route(s) first."
 			},
 			"success": "Certificate for {domain} deleted"
+		}
+	},
+	"certificates": {
+		"external": {
+			"title": "External certificates",
+			"lead": "Upload certificates issued by an external CA (e.g. DigiCert, enterprise PKI). Arenet stores them and makes them available to routes as a manual certificate source.",
+			"loadError": "Could not fetch external certificates (backend returned an error). The rest of this page remains usable.",
+			"empty": "No external certificate uploaded yet.",
+			"colName": "Name",
+			"colSubject": "Subject / Issuer",
+			"colDNS": "DNS names",
+			"colExpiry": "Expiry",
+			"expiryExpired": "expired",
+			"expiryDays": "{days} day{plural}",
+			"upload": {
+				"nameLabel": "Name",
+				"descriptionLabel": "Description (optional)",
+				"certLabel": "Certificate (PEM)",
+				"chainLabel": "Chain (PEM, optional)",
+				"keyLabel": "Private key (PEM)",
+				"submit": "Upload certificate",
+				"submitting": "Uploading…",
+				"requiredError": "Name, certificate and private key are required.",
+				"success": "Certificate \"{name}\" uploaded",
+				"warningsTitle": "Warnings"
+			},
+			"delete": {
+				"action": "Delete certificate",
+				"success": "Certificate \"{name}\" deleted",
+				"confirm": {
+					"title": "Delete external certificate",
+					"text": "Permanently delete the certificate \"{name}\"? This is irreversible.",
+					"revokeNotice": "Removing this certificate from Arenet does NOT revoke it with the issuing CA. If the private key may be compromised, contact your certificate authority directly to request revocation.",
+					"action": "Delete certificate"
+				},
+				"blocked": {
+					"title": "Cannot delete",
+					"text": "The certificate \"{name}\" is in use by: {routes}. Delete or disable those route(s) first."
+				}
+			}
 		}
 	},
 	"waf": {

@@ -220,6 +220,47 @@ describe('RuleModal', () => {
 		expect(screen.queryByLabelText(/Component/i)).toBeNull();
 	});
 
+	it('cert_manual_expiring sends no host source param (backend ignores it)', async () => {
+		// The backend CertManualExpiringParams struct has only
+		// thresholdDays (carried in eval params), no host. The old
+		// buildSourceParams put p.host in here, which the backend
+		// silently dropped — assert we no longer send it.
+		createMock.mockResolvedValue(thresholdRule());
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
+		});
+
+		await waitFor(() => {
+			expect(screen.getByText('ops-webhook')).toBeTruthy();
+		});
+
+		const sourceSelect = screen.getByLabelText(/^Source$/i) as HTMLSelectElement;
+		// First pick cert_expiry and fill its Host field so the shared
+		// certHost state carries a value. The old buggy code leaked this
+		// stale value into cert_manual_expiring's source params.
+		await fireEvent.change(sourceSelect, { target: { value: 'cert_expiry' } });
+		await fireEvent.input(screen.getByLabelText(/Host/i), {
+			target: { value: 'stale.example.com' }
+		});
+		await fireEvent.change(sourceSelect, { target: { value: 'cert_manual_expiring' } });
+
+		await fireEvent.input(screen.getByLabelText(/^Name \(slug\)$/i), {
+			target: { value: 'manual-cert-expiring' }
+		});
+		const opsWh = screen.getByText('ops-webhook').previousElementSibling as HTMLInputElement;
+		await fireEvent.click(opsWh);
+		await fireEvent.click(screen.getByText('Create'));
+
+		await waitFor(() => {
+			expect(createMock).toHaveBeenCalledTimes(1);
+		});
+		const [req] = createMock.mock.calls[0];
+		expect(req.source).toBe('cert_manual_expiring');
+		// The bug: p.host was set for this source. It must be absent.
+		expect(req.sourceParams).not.toHaveProperty('host');
+	});
+
 	it('swaps to State eval form when kind=state', async () => {
 		const Modal = (await import('./RuleModal.svelte')).default;
 		render(Modal, {

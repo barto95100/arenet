@@ -335,6 +335,15 @@
 			"tlsAcmeHTTP01": "HTTP-01 (défaut, port 80)",
 			"tlsAcmeDNS01": "DNS-01 (requis pour les wildcards)",
 			"tlsAcmeConfigureLink": "configure-le dans les Paramètres",
+			"certSourceLabel": "Source du certificat",
+			"certSourceAcme": "ACME (Let's Encrypt)",
+			"certSourceInternal": "Interne (auto-signé)",
+			"certSourceInternalHelper": "Caddy délivre un certificat auto-signé depuis son CA interne. Les navigateurs afficheront un avertissement de confiance tant que ce CA n'est pas importé.",
+			"certSourceManual": "Manuel (certificat importé)",
+			"certSourceManualNone": "Aucun certificat importé ne couvre encore cet hôte.",
+			"certSourceManualUploadLink": "Importez-en un dans SSL / Certificats",
+			"certSourceManualPickLabel": "Certificat",
+			"certSourceManualExpiry": "expire",
 			"authSectionLabel": "Authentification",
 			"authNoneOption": "Aucune",
 			"authBasicOption": "Basic auth",
@@ -791,6 +800,7 @@
 			"labelSource": "Source",
 			"sourceWafEventRate": "Taux d'événements WAF",
 			"sourceCertExpiry": "Expiration de certificat",
+			"sourceCertManualExpiring": "Cert externe expirant",
 			"sourceCertRenewalFailed": "Échec de renouvellement de certificat",
 			"sourceSystemHealth": "État système",
 			"sourceUpdateAvailable": "Mise à jour disponible",
@@ -1399,6 +1409,46 @@
 				"text": "Le certificat de {domain} est utilisé par : {routes}. Supprime ou désactive d'abord ces route(s)."
 			},
 			"success": "Certificat de {domain} supprimé"
+		}
+	},
+	"certificates": {
+		"external": {
+			"title": "Certificats externes",
+			"lead": "Importez des certificats délivrés par un CA externe (ex. DigiCert, PKI d'entreprise). Arenet les stocke et les rend disponibles pour les routes comme source de certificat manuelle.",
+			"loadError": "Impossible de récupérer les certificats externes (erreur retournée par le backend). Le reste de la page reste utilisable.",
+			"empty": "Aucun certificat externe importé pour le moment.",
+			"colName": "Nom",
+			"colSubject": "Sujet / Émetteur",
+			"colDNS": "Noms DNS",
+			"colExpiry": "Expiration",
+			"expiryExpired": "expiré",
+			"expiryDays": "{days} jour{plural}",
+			"upload": {
+				"nameLabel": "Nom",
+				"descriptionLabel": "Description (optionnel)",
+				"certLabel": "Certificat (PEM)",
+				"chainLabel": "Chaîne (PEM, optionnel)",
+				"keyLabel": "Clé privée (PEM)",
+				"submit": "Importer le certificat",
+				"submitting": "Import en cours…",
+				"requiredError": "Le nom, le certificat et la clé privée sont obligatoires.",
+				"success": "Certificat « {name} » importé",
+				"warningsTitle": "Avertissements"
+			},
+			"delete": {
+				"action": "Supprimer le certificat",
+				"success": "Certificat « {name} » supprimé",
+				"confirm": {
+					"title": "Supprimer le certificat externe",
+					"text": "Supprimer définitivement le certificat « {name} » ? Cette action est irréversible.",
+					"revokeNotice": "Supprimer ce certificat d'Arenet ne le révoque PAS auprès du CA émetteur. Si la clé privée peut être compromise, contactez directement votre autorité de certification pour demander sa révocation.",
+					"action": "Supprimer le certificat"
+				},
+				"blocked": {
+					"title": "Suppression impossible",
+					"text": "Le certificat « {name} » est utilisé par : {routes}. Supprime ou désactive d'abord ces route(s)."
+				}
+			}
 		}
 	},
 	"waf": {

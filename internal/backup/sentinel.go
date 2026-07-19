@@ -74,6 +74,13 @@ func redactSnapshotInPlace(s *Snapshot) {
 	if s.MaxMindConfig != nil && s.MaxMindConfig.LicenseKey != "" {
 		s.MaxMindConfig.LicenseKey = SentinelLiteral
 	}
+	for i := range s.ExternalCertificates {
+		// external_certificates[].keyPEM is the private key (SECRET).
+		// CertPEM / ChainPEM / metadata are public and travel verbatim.
+		if s.ExternalCertificates[i].KeyPEM != "" {
+			s.ExternalCertificates[i].KeyPEM = SentinelLiteral
+		}
+	}
 }
 
 // unresolvedSentinel is the dedicated error returned by the
@@ -102,7 +109,7 @@ func (e *unresolvedSentinel) Error() string {
 
 func identityKey(entity string) string {
 	switch entity {
-	case "routes", "users":
+	case "routes", "users", "external_certificates":
 		return "id"
 	case "dns_providers":
 		return "key"

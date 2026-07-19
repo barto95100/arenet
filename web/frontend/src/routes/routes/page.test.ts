@@ -43,8 +43,15 @@ import userEvent from '@testing-library/user-event';
 // vi.hoisted form so we can keep the static `import Page from`
 // at the top of this file).
 
-const { toastMock, apiMock, settingsMock, authMock } = vi.hoisted(() => ({
+const { toastMock, apiMock, settingsMock, authMock, externalCertsMock } = vi.hoisted(() => ({
 	toastMock: { pushToast: vi.fn() },
+	// v2.19.0 external-certs SOCLE (Task 8) — the route form loads
+	// the uploaded external-cert list when the operator picks the
+	// "manual" cert source. Default to an empty list; the manual-cert
+	// tests rebind list() to return covering / non-covering certs.
+	externalCertsMock: {
+		list: vi.fn()
+	},
 	apiMock: {
 		listRoutes: vi.fn(),
 		createRoute: vi.fn(),
@@ -111,6 +118,16 @@ vi.mock('$lib/api/client', () => ({
 vi.mock('$lib/api/settings', () => ({
 	settingsApi: {
 		listDNSProviders: () => settingsMock.listDNSProviders()
+	}
+}));
+
+// $lib/api/external-certs: the Routes page loads the uploaded
+// external-cert list to populate the "manual" cert-source picker.
+// Default (beforeEach) resolves an empty list; manual-cert tests
+// rebind externalCertsMock.list per-scenario.
+vi.mock('$lib/api/external-certs', () => ({
+	externalCertsApi: {
+		list: (...args: unknown[]) => externalCertsMock.list(...args)
 	}
 }));
 
@@ -209,6 +226,7 @@ beforeEach(() => {
 	apiMock.enterMaintenance.mockReset();
 	apiMock.exitMaintenance.mockReset();
 	settingsMock.listDNSProviders.mockReset();
+	externalCertsMock.list.mockReset();
 	// Day 13 — auth store defaults: every test starts in
 	// authenticated state. Tests exercising the lock-screen-
 	// during-save branch flip authMock.state = 'locked' before
@@ -222,6 +240,7 @@ beforeEach(() => {
 	// collection → dnsProviderConfigured=false).
 	apiMock.listRoutes.mockResolvedValue([]);
 	settingsMock.listDNSProviders.mockResolvedValue([]);
+	externalCertsMock.list.mockResolvedValue([]);
 });
 
 // Opens the create form (clicks "+ Add route") and returns after
@@ -3344,5 +3363,174 @@ describe('/routes — 3-state control + maintenance', () => {
 		// and must NOT be present at all (undefined/null) — the route
 		// must stay active.
 		expect(payload.maintenanceConfig == null).toBe(true);
+	});
+});
+
+// --- v2.19.0 external-certs SOCLE (Task 8) — CertSource picker ------
+//
+// The route form's TLS area gains a "cert source" <select> (acme /
+// internal / manual). Picking "manual" loads the uploaded external
+// certs and filters them (RFC 6125 SAN match) to those covering the
+// route host; picking one ships cert_source:'manual' + cert_id in the
+// payload. These tests pin (a) the SAN filter (only covering certs
+// shown), (b) the payload wiring, and (c) the no-eligible-cert
+// warning path.
+
+import type { ExternalCertificate } from '$lib/api/types';
+
+function makeExternalCert(overrides: Partial<ExternalCertificate> = {}): ExternalCertificate {
+	return {
+		id: 'cert-fixture-1',
+		name: 'wildcard-example',
+		description: '',
+		certPEM: '',
+		chainPEM: '',
+		keyPEM: '',
+		issuer: 'CN=Test CA',
+		subject: 'CN=*.example.com',
+		serialNumber: '01',
+		keyAlgorithm: 'ECDSA',
+		signatureAlgorithm: 'ECDSA-SHA256',
+		notBefore: '2026-01-01T00:00:00.000Z',
+		notAfter: '2027-01-01T00:00:00.000Z',
+		dnsNames: ['*.example.com'],
+		createdAt: '2026-01-01T00:00:00.000Z',
+		updatedAt: '2026-01-01T00:00:00.000Z',
+		warnings: [],
+		...overrides
+	};
+}
+
+// The cert-source <select> carries a stable id so tests can target it
+// without depending on the (Task-9-pending) i18n label text.
+function certSourceSelect(): HTMLSelectElement | null {
+	return document.getElementById('route-cert-source') as HTMLSelectElement | null;
+}
+
+describe('Routes page — CertSource picker (manual external certs)', () => {
+	it('lists only certs whose SAN covers the host and ships cert_source:manual + cert_id', async () => {
+		// Two certs: one covers app.example.com via *.example.com, the
+		// other is for an unrelated host and must NOT appear.
+		const covering = makeExternalCert({
+			id: 'cert-covering',
+			name: 'covers-example',
+			dnsNames: ['*.example.com']
+		});
+		const nonCovering = makeExternalCert({
+			id: 'cert-other',
+			name: 'covers-other',
+			dnsNames: ['app.other.test']
+		});
+		externalCertsMock.list.mockResolvedValue([covering, nonCovering]);
+
+		const seeded = makeRoute({
+			id: 'manual-fixture',
+			host: 'app.example.com',
+			tlsEnabled: true
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+
+		render(Page);
+		const hostCell = await screen.findByText('app.example.com');
+		await fireEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		// Switch the cert-source select to "manual".
+		const sel = certSourceSelect();
+		expect(sel).not.toBeNull();
+		await fireEvent.change(sel!, { target: { value: 'manual' } });
+		await tick();
+		// list() is awaited; give the microtask + reactive tick a beat.
+		await waitFor(() => expect(externalCertsMock.list).toHaveBeenCalled());
+		await tick();
+
+		// The covering cert's radio must be present; the non-covering
+		// cert must be filtered out. Each eligible cert renders a radio
+		// input whose value is the cert id.
+		const coveringRadio = document.querySelector<HTMLInputElement>(
+			'input[type="radio"][value="cert-covering"]'
+		);
+		const otherRadio = document.querySelector<HTMLInputElement>(
+			'input[type="radio"][value="cert-other"]'
+		);
+		expect(coveringRadio).not.toBeNull();
+		expect(otherRadio).toBeNull();
+
+		// Pick the covering cert.
+		await fireEvent.click(coveringRadio!);
+		await tick();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		expect(payload.cert_source).toBe('manual');
+		expect(payload.cert_id).toBe('cert-covering');
+	});
+
+	it('shows a warning (and no radios) when no uploaded cert covers the host', async () => {
+		externalCertsMock.list.mockResolvedValue([
+			makeExternalCert({ id: 'cert-other', dnsNames: ['app.other.test'] })
+		]);
+
+		const seeded = makeRoute({
+			id: 'manual-none',
+			host: 'app.example.com',
+			tlsEnabled: true
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+
+		render(Page);
+		const hostCell = await screen.findByText('app.example.com');
+		await fireEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const sel = certSourceSelect();
+		await fireEvent.change(sel!, { target: { value: 'manual' } });
+		await tick();
+		await waitFor(() => expect(externalCertsMock.list).toHaveBeenCalled());
+		await tick();
+
+		// No eligible cert → no radios rendered.
+		expect(document.querySelector('input[type="radio"][value="cert-other"]')).toBeNull();
+		// The warning surface carries a stable testid so the assertion
+		// doesn't depend on the (Task-9-pending) i18n copy.
+		expect(document.querySelector('[data-testid="cert-manual-none"]')).not.toBeNull();
+	});
+
+	it('does not synthesize cert_id on a non-manual (acme) route', async () => {
+		const seeded = makeRoute({
+			id: 'acme-fixture',
+			host: 'app.example.com',
+			tlsEnabled: true
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+
+		render(Page);
+		const hostCell = await screen.findByText('app.example.com');
+		await fireEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		// Leave cert-source at its default (acme). Edit an unrelated
+		// field so the submit is a routine PUT.
+		const upstreamInput = upstreamURLInputs()[0];
+		await userEvent.clear(upstreamInput);
+		await userEvent.type(upstreamInput, 'http://127.0.0.1:9100');
+		await tick();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		expect(payload.cert_source).toBe('acme');
+		// cert_id must NOT be shipped on a non-manual route.
+		expect(payload.cert_id).toBeUndefined();
 	});
 });

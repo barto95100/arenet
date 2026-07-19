@@ -564,6 +564,42 @@ type Route struct {
 	// zero value — pre-feature routes and fresh creates decode with
 	// no maintenance active, no migration needed.
 	MaintenanceConfig *MaintenanceConfig `json:"maintenanceConfig,omitempty"`
+	// CertSource (v2.19.0) selects the cert provider: "" or "acme"
+	// (ACME, default), "internal" (self-signed), "manual" (external
+	// uploaded cert referenced by CertID). Zero value = acme
+	// (migration-free).
+	CertSource string `json:"cert_source,omitempty"`
+	// CertID references an ExternalCertificate.ID; required when
+	// CertSource == "manual".
+	CertID string `json:"cert_id,omitempty"`
+}
+
+// RouteCertSourceManual is the CertSource value selecting an
+// operator-uploaded external certificate (referenced by CertID).
+const RouteCertSourceManual = "manual"
+
+// HostMatchesSAN reports whether host is covered by any SAN, with
+// RFC 6125 single-label wildcard semantics ("*.example.com" covers
+// "app.example.com" but not "sub.app.example.com" nor "example.com").
+// Case-insensitive.
+func HostMatchesSAN(host string, sans []string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, san := range sans {
+		san = strings.ToLower(strings.TrimSuffix(san, "."))
+		if san == host {
+			return true
+		}
+		if strings.HasPrefix(san, "*.") {
+			suffix := san[1:] // ".example.com"
+			if strings.HasSuffix(host, suffix) {
+				label := host[:len(host)-len(suffix)]
+				if label != "" && !strings.Contains(label, ".") {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // RouteRateLimit (Step Q, 2026-06-18) — per-route rate limit

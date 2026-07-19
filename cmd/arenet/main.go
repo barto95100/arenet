@@ -1594,6 +1594,9 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	if err := alertingRegistry.Register(alerting.NewUpdateAvailableSource(updateChecker.Status)); err != nil {
 		logger.Warn("alerting: register update_available source failed", "err", err)
 	}
+	if err := alertingRegistry.Register(alerting.NewCertManualExpiringSource(store)); err != nil {
+		logger.Warn("alerting: register cert_manual_expiring source failed", "err", err)
+	}
 	apiHandler.SetUpdateChecker(updateChecker)
 
 	// updateLoopMu guards the current loop's cancel func so the config

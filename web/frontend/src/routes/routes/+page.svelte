@@ -22,9 +22,12 @@
 		SUPPORTED_ERROR_STATUS_CODES,
 		type ErrorTemplate
 	} from '$lib/api/error-templates';
+	import { externalCertsApi } from '$lib/api/external-certs';
+	import { hostMatchesSAN } from '$lib/utils/san-match';
 	import type {
 		ACMEChallenge,
 		CountryBlockRequest,
+		ExternalCertificate,
 		ForwardAuthProvider,
 		HealthCheck,
 		LBPolicy,
@@ -113,7 +116,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id'> & {
 		healthCheck: HealthCheck;
 		// v2.14.3 — narrowed to a non-optional boolean, same
 		// pattern as insecureSkipVerify/uploadStreamingMode: the
@@ -190,8 +193,30 @@
 		// is the actual on/off switch. Full-replacement on submit,
 		// same shape as the wire's MaintenanceConfig.
 		maintenanceConfig: MaintenanceConfig;
+		// v2.19.0 external-certs SOCLE — narrowed to definite
+		// strings for reactive binding. cert_source defaults to
+		// 'acme' (the wire "" / "acme" default); cert_id is '' unless
+		// cert_source==='manual' AND the operator has picked a cert.
+		// The payload assembler drops cert_id on any non-manual source
+		// (mirrors the acmeChallenge-only-under-tls discipline).
+		cert_source: string;
+		cert_id: string;
 	};
 	let formData = $state<FormData>(emptyFormData());
+	// v2.19.0 external-certs SOCLE — uploaded external certs, loaded
+	// lazily the first time the operator opens a form (openCreate /
+	// openEdit) so the "manual" cert picker can filter them to the
+	// route host. Empty until the load resolves; a failed load leaves
+	// it empty (the picker then shows the no-eligible-cert warning,
+	// which links to the upload surface — a graceful degrade).
+	let externalCerts = $state<ExternalCertificate[]>([]);
+	// Eligible = uploaded certs whose SANs cover the current host
+	// (RFC 6125 single-label wildcard, case-insensitive — same rule
+	// the backend re-checks). Preserves the server's notAfter-ascending
+	// order (externalCertsApi.list already sorts).
+	let eligibleCerts = $derived(
+		externalCerts.filter((c) => hostMatchesSAN(formData.host.trim(), c.dnsNames ?? []))
+	);
 	let healthCheckTouched = $state(false);
 
 	function emptyFormData(): FormData {
@@ -271,6 +296,12 @@
 				bypassIps: [] as string[],
 				message: ''
 			},
+			// v2.19.0 external-certs SOCLE — default to the ACME cert
+			// source (byte-equivalent to the pre-v2.19.0 "" wire
+			// value). cert_id stays empty until the operator picks
+			// "manual" AND selects an eligible uploaded cert.
+			cert_source: 'acme',
+			cert_id: '',
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
 			// further down; operators opting in pick a mode +
@@ -1086,6 +1117,10 @@
 		// have just declared a new apex; the form's contextual
 		// inheritance badge needs the up-to-date list.
 		void loadManagedDomainsForRoutes();
+		// v2.19.0 external-certs SOCLE — load the uploaded certs so
+		// the "manual" cert picker is ready the moment the operator
+		// selects that source.
+		void loadExternalCerts();
 	}
 
 	// Row click semantics (C11 Pack A polish round 3, 2026-06-06):
@@ -1216,6 +1251,14 @@
 						message: r.maintenanceConfig.message ?? ''
 					}
 				: { retryAfterSeconds: 300, bypassIps: [], message: '' },
+			// v2.19.0 external-certs SOCLE — seed the cert source from
+			// the persisted route. The backend emits "" for pre-v2.19.0
+			// rows (omitempty) which we normalise to 'acme' so the
+			// dropdown shows a definite selection. cert_id is only
+			// meaningful under 'manual'; carry it through so an edit of
+			// an unrelated field round-trips the manual reference.
+			cert_source: r.cert_source && r.cert_source !== '' ? r.cert_source : 'acme',
+			cert_id: r.cert_id ?? '',
 			// (subform expansion handled below — needs to fire
 			// AFTER formData assignment so the $effect sees the
 			// new state.)
@@ -1248,6 +1291,9 @@
 		// Step O.4: refresh managed-domains snapshot — see comment
 		// on the create-form openCreate path.
 		void loadManagedDomainsForRoutes();
+		// v2.19.0 external-certs SOCLE — load the uploaded certs so
+		// the "manual" cert picker can filter to the route host.
+		void loadExternalCerts();
 		// Step J.2 preserve-or-replace: the user has not touched the
 		// HC sub-form yet, so a submit without further interaction
 		// omits the block and triggers the preserve path. Any
@@ -1361,6 +1407,20 @@
 			dnsProviderConfigured = list.some((p) => p.configured);
 		} catch {
 			dnsProviderConfigured = false;
+		}
+	}
+
+	// v2.19.0 external-certs SOCLE — refresh the uploaded external-cert
+	// snapshot whenever the form opens, so the "manual" cert picker
+	// sees any cert the operator may have just uploaded on /certs. A
+	// failed load degrades to an empty list (the picker then surfaces
+	// the no-eligible-cert warning + upload link rather than blowing up
+	// the form).
+	async function loadExternalCerts() {
+		try {
+			externalCerts = await externalCertsApi.list();
+		} catch {
+			externalCerts = [];
 		}
 	}
 
@@ -2011,6 +2071,20 @@
 					passes: formData.healthCheck.passes,
 					fails: formData.healthCheck.fails
 				};
+			}
+			// v2.19.0 external-certs SOCLE — cert source is always
+			// shipped full-replacement (POST captures the 'acme'
+			// default; PUT replaces with the operator's selection).
+			// cert_id is shipped ONLY under 'manual' — mirroring the
+			// acmeChallenge-only-under-tls discipline, we never
+			// synthesize a manual cert reference onto a non-manual
+			// route. On a non-manual source the field is omitted so a
+			// stale cert_id from a previous manual selection is dropped
+			// (the backend clears its stored CertID when CertSource
+			// leaves "manual").
+			payload.cert_source = formData.cert_source;
+			if (formData.cert_source === 'manual') {
+				payload.cert_id = formData.cert_id;
 			}
 			if (formMode === 'create') {
 				await createRoute(payload);
@@ -3016,16 +3090,94 @@
 							? 'Automatically redirects HTTP requests to HTTPS with a 301.'
 							: 'Enable TLS to use HTTPS redirect.'}
 					/>
-			
-					<!-- Step J.4 + O.4: ACME challenge selector. Visible only
-					     when TLS is on. Locked to "dns-01" when host or any
-					     alias is a wildcard. Step O.4 (AC #11 + #12): when the
-					     host is covered by a managed domain AND the operator
-					     hasn't opted out via useDedicatedCert, the selector
-					     hides entirely and an inheritance badge takes its
-					     place. When covered + opted out, the selector returns
-					     and the operator picks http-01/dns-01 like J. -->
+
+					<!-- v2.19.0 external-certs SOCLE (Task 8) — cert source
+					     selector. Visible only when TLS is on. Chooses which
+					     provider issues/serves this route's cert: ACME (the
+					     default — managed-domain wildcard or per-route
+					     http-01/dns-01), Caddy internal self-signed CA, or a
+					     manual operator-uploaded external cert. The ACME
+					     challenge sub-selector below only shows under 'acme'. -->
 					{#if formData.tlsEnabled}
+						<div>
+							<label
+								for="route-cert-source"
+								class="text-sm font-medium text-secondary block mb-1"
+							>
+								{language.current && t('routes.form.certSourceLabel')}
+							</label>
+							<select
+								id="route-cert-source"
+								bind:value={formData.cert_source}
+								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+							>
+								<option value="acme">{language.current && t('routes.form.certSourceAcme')}</option>
+								<option value="internal">{language.current && t('routes.form.certSourceInternal')}</option>
+								<option value="manual">{language.current && t('routes.form.certSourceManual')}</option>
+							</select>
+							{#if formData.cert_source === 'internal'}
+								<p class="text-xs text-muted mt-1">
+									{language.current && t('routes.form.certSourceInternalHelper')}
+								</p>
+							{:else if formData.cert_source === 'manual'}
+								<!-- Manual sub-form: the eligible external certs
+								     (those whose SANs cover the route host, RFC
+								     6125). Empty → warning + upload link. -->
+								{#if eligibleCerts.length === 0}
+									<p
+										data-testid="cert-manual-none"
+										class="text-xs text-down mt-2"
+									>
+										{language.current && t('routes.form.certSourceManualNone')}
+										<a href="/certs" class="text-cyan hover:underline"
+											>{language.current && t('routes.form.certSourceManualUploadLink')}</a
+										>
+									</p>
+								{:else}
+									<fieldset class="mt-2 flex flex-col gap-2">
+										<legend class="text-xs text-muted mb-1">
+											{language.current && t('routes.form.certSourceManualPickLabel')}
+										</legend>
+										{#each eligibleCerts as cert (cert.id)}
+											<label
+												class="flex items-start gap-2 text-sm text-secondary cursor-pointer rounded border border-border-default px-3 py-2 hover:bg-surface"
+											>
+												<input
+													type="radio"
+													name="route-manual-cert"
+													value={cert.id}
+													checked={formData.cert_id === cert.id}
+													onchange={() => (formData.cert_id = cert.id)}
+													class="mt-1"
+												/>
+												<span class="flex flex-col">
+													<span class="font-medium text-primary">{cert.name}</span>
+													<span class="font-mono text-xs text-muted"
+														>{(cert.dnsNames ?? []).join(', ')}</span
+													>
+													<span class="text-xs text-muted"
+														>{language.current && t('routes.form.certSourceManualExpiry')}
+														{new Date(cert.notAfter).toLocaleDateString()}</span
+													>
+												</span>
+											</label>
+										{/each}
+									</fieldset>
+								{/if}
+							{/if}
+						</div>
+					{/if}
+
+					<!-- Step J.4 + O.4: ACME challenge selector. Visible only
+					     when TLS is on AND the cert source is ACME. Locked to
+					     "dns-01" when host or any alias is a wildcard. Step O.4
+					     (AC #11 + #12): when the host is covered by a managed
+					     domain AND the operator hasn't opted out via
+					     useDedicatedCert, the selector hides entirely and an
+					     inheritance badge takes its place. When covered + opted
+					     out, the selector returns and the operator picks
+					     http-01/dns-01 like J. -->
+					{#if formData.tlsEnabled && formData.cert_source === 'acme'}
 						{#if coveringManagedDomain && !formData.useDedicatedCert}
 							<!-- AC #11: covered + inheriting. Show the wildcard
 							     badge + the opt-out toggle. The selector is
