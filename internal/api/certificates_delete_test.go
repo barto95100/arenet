@@ -67,11 +67,13 @@ func TestDeleteCertificate_Orphan_200(t *testing.T) {
 func TestDeleteCertificate_BlockedByRouteHost_409(t *testing.T) {
 	env := newTestEnv(t, false)
 	env.handler.SetCertStorageDir(t.TempDir())
-	// A route serves the domain -> not an orphan.
+	// A TLS-enabled route serves the domain -> it emits the cert
+	// subject, so deleting the cert would churn it. Blocked.
 	if _, err := env.store.CreateRoute(context.Background(), storage.Route{
-		Host:      "used.example.com",
-		Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}},
-		LBPolicy:  storage.LBPolicyRoundRobin,
+		Host:       "used.example.com",
+		Upstreams:  []storage.Upstream{{URL: "http://u:1", Weight: 1}},
+		LBPolicy:   storage.LBPolicyRoundRobin,
+		TLSEnabled: true,
 	}); err != nil {
 		t.Fatalf("seed route: %v", err)
 	}
@@ -101,12 +103,16 @@ func TestDeleteCertificate_BlockedByRouteHost_409(t *testing.T) {
 func TestDeleteCertificate_BlockedByDisabledRoute_409(t *testing.T) {
 	env := newTestEnv(t, false)
 	env.handler.SetCertStorageDir(t.TempDir())
-	// A DISABLED route still references the domain -> blocked.
+	// A DISABLED but TLS-enabled route still references the domain:
+	// re-enabling it would re-issue the cert, so deleting now would
+	// churn. Blocked. (A disabled route WITHOUT TLS is covered by
+	// TestDeleteCertificate_NonTLSRoute_NotBlocked_200.)
 	if _, err := env.store.CreateRoute(context.Background(), storage.Route{
-		Host:      "dis.example.com",
-		Upstreams: []storage.Upstream{{URL: "http://u:1", Weight: 1}},
-		LBPolicy:  storage.LBPolicyRoundRobin,
-		Disabled:  true,
+		Host:       "dis.example.com",
+		Upstreams:  []storage.Upstream{{URL: "http://u:1", Weight: 1}},
+		LBPolicy:   storage.LBPolicyRoundRobin,
+		Disabled:   true,
+		TLSEnabled: true,
 	}); err != nil {
 		t.Fatalf("seed route: %v", err)
 	}
@@ -117,6 +123,138 @@ func TestDeleteCertificate_BlockedByDisabledRoute_409(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s; want 409 (disabled route still references domain)", rec.Code, rec.Body)
+	}
+}
+
+// v2.18.2 — a route WITHOUT TLS never emits a cert subject (the
+// emission is gated on r.TLSEnabled, manager.go), so it does not "use"
+// the cert and must NOT block deletion. Previously the block matched on
+// host equality alone, ignoring TLSEnabled — a non-TLS route wrongly
+// blocked deletion of a cert it can't possibly serve.
+func TestDeleteCertificate_NonTLSRoute_NotBlocked_200(t *testing.T) {
+	env := newTestEnv(t, false)
+	dir := t.TempDir()
+	env.handler.SetCertStorageDir(dir)
+	// Put a real cert dir on disk so this is a genuine delete, not a
+	// ghost-row idempotent 200.
+	seedCertOnDisk(t, dir, "local", "notls.example.com")
+
+	if _, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host:       "notls.example.com",
+		Upstreams:  []storage.Upstream{{URL: "http://u:1", Weight: 1}},
+		LBPolicy:   storage.LBPolicyRoundRobin,
+		TLSEnabled: false, // the whole point
+	}); err != nil {
+		t.Fatalf("seed route: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/certificates/notls.example.com", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s; want 200 (non-TLS route must not block cert deletion)", rec.Code, rec.Body)
+	}
+}
+
+// v2.18.2 — a TLS route whose host is COVERED by a managed-domain
+// wildcard (and which did NOT opt into a dedicated cert) is served by
+// the wildcard cert, not its own per-host cert. Its leftover per-host
+// HTTP-01 cert is orphaned and must be deletable — the route no longer
+// emits that subject (manager.go: !UseDedicatedCert && covered → skip).
+func TestDeleteCertificate_WildcardCoveredRoute_NotBlocked_200(t *testing.T) {
+	env := newTestEnv(t, false)
+	dir := t.TempDir()
+	env.handler.SetCertStorageDir(dir)
+	seedCertOnDisk(t, dir, "local", "app.example.com")
+
+	// Managed wildcard *.example.com covers app.example.com.
+	if err := env.store.PutManagedDomain(context.Background(), storage.ManagedDomain{
+		Apex: "example.com",
+	}); err != nil {
+		t.Fatalf("seed managed domain: %v", err)
+	}
+	// TLS route, covered by the wildcard, NOT opting into a dedicated
+	// cert → served by the wildcard, its per-host cert is orphaned.
+	if _, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host:             "app.example.com",
+		Upstreams:        []storage.Upstream{{URL: "http://u:1", Weight: 1}},
+		LBPolicy:         storage.LBPolicyRoundRobin,
+		TLSEnabled:       true,
+		UseDedicatedCert: false,
+	}); err != nil {
+		t.Fatalf("seed route: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/certificates/app.example.com", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s; want 200 (wildcard-covered route must not block deletion of its orphaned per-host cert)", rec.Code, rec.Body)
+	}
+}
+
+// Guard the inverse of the wildcard case: a TLS route covered by a
+// wildcard but which OPTED INTO a dedicated cert (UseDedicatedCert) DOES
+// emit its own subject, so it must still block.
+func TestDeleteCertificate_WildcardCovered_ButDedicated_409(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.handler.SetCertStorageDir(t.TempDir())
+	if err := env.store.PutManagedDomain(context.Background(), storage.ManagedDomain{
+		Apex: "example.com",
+	}); err != nil {
+		t.Fatalf("seed managed domain: %v", err)
+	}
+	if _, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host:             "ded.example.com",
+		Upstreams:        []storage.Upstream{{URL: "http://u:1", Weight: 1}},
+		LBPolicy:         storage.LBPolicyRoundRobin,
+		TLSEnabled:       true,
+		UseDedicatedCert: true, // opts out of wildcard → emits own subject
+	}); err != nil {
+		t.Fatalf("seed route: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/certificates/ded.example.com", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s; want 409 (dedicated-cert route still emits its own subject)", rec.Code, rec.Body)
+	}
+}
+
+// v2.18.2 review finding — the forward-auth fail-closed deny path
+// (manager.go) emits a per-host cert subject UNCONDITIONALLY (no
+// managed-domain coverage skip) when a forward_auth route references an
+// UNKNOWN provider. routeEmitsCertSubject must mirror that: such a route
+// blocks deletion even when wildcard-covered, so an in-use deny-path cert
+// is never freed. (Reachable only via corrupted route state — the API
+// enforces provider existence — but the mirror must stay exact.)
+func TestDeleteCertificate_ForwardAuthMissingProvider_WildcardCovered_409(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.handler.SetCertStorageDir(t.TempDir())
+	if err := env.store.PutManagedDomain(context.Background(), storage.ManagedDomain{
+		Apex: "example.com",
+	}); err != nil {
+		t.Fatalf("seed managed domain: %v", err)
+	}
+	// forward_auth route referencing a provider that does NOT exist,
+	// covered by the wildcard, NOT opting into a dedicated cert. On the
+	// emission side this hits the deny path → emits its own subject.
+	if _, err := env.store.CreateRoute(context.Background(), storage.Route{
+		Host:             "fa.example.com",
+		Upstreams:        []storage.Upstream{{URL: "http://u:1", Weight: 1}},
+		LBPolicy:         storage.LBPolicyRoundRobin,
+		TLSEnabled:       true,
+		UseDedicatedCert: false,
+		AuthMode:         storage.RouteAuthForwardAuth,
+		ForwardAuth:      storage.ForwardAuthRouteConfig{ProviderName: "ghost-provider"},
+	}); err != nil {
+		t.Fatalf("seed route: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/certificates/fa.example.com", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s; want 409 (forward-auth deny path emits its subject unconditionally)", rec.Code, rec.Body)
 	}
 }
 
