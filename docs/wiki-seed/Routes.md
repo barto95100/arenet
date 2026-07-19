@@ -84,6 +84,16 @@ Routes whose host falls under `*.example.com` (e.g. `vault.example.com`, `cloud.
 
 ---
 
+## Cert Source (ACME / Internal / Manual)
+
+When TLS is enabled, the route's **Cert Source** picker decides where its certificate comes from:
+
+- **ACME** (default) — Caddy auto-issues and auto-renews a Let's Encrypt cert via the `http-01` or `dns-01` challenge. This is the behaviour described above; a route created before v2.19.0 keeps it with no migration.
+- **Internal** — Caddy serves a self-signed cert from its internal CA (handy for a purely-internal host where you don't want ACME).
+- **Manual (v2.19.0)** — the route serves an **external certificate you uploaded** (from a non-ACME CA, corporate PKI, etc.), with **no** ACME issuance for that host. Pick **Cert Source = Manual**, then choose the uploaded cert; only certs whose SAN covers the route host are offered (exact or one-label wildcard, RFC 6125). Renewal is **manual** — see [Certificates → External / uploaded certificates](Certificates#external--uploaded-certificates-v2190).
+
+---
+
 ## Health checks
 
 Active health checks monitor each upstream and remove unhealthy ones from the pool. To enable :
