@@ -22,6 +22,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,6 +45,57 @@ const (
 )
 
 func normalizePEM(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+
+// SplitLeafAndChain normalizes an operator upload where the Certificate
+// field may hold a single leaf OR a "fullchain" bundle (leaf +
+// intermediates concatenated — the common download format from most CAs,
+// vendor-agnostic). It returns the leaf-only PEM and the chain PEM.
+//
+// Rules:
+//   - certPEM with 1 CERTIFICATE block → leaf as-is, chain = chainPEM.
+//   - certPEM with >1 block → first block is the leaf, the remaining
+//     blocks become the chain (universal split, no CA-specific logic).
+//   - if certPEM already carries extra blocks AND chainPEM is non-empty,
+//     the chain is specified in two places → reject (ambiguous).
+//
+// It does NOT validate the certs (ParseExternalCert does that on the
+// returned leaf/chain); it only re-partitions PEM blocks.
+func SplitLeafAndChain(certPEM, chainPEM string) (leaf string, chain string, err error) {
+	certPEM = normalizePEM(certPEM)
+	chainPEM = normalizePEM(chainPEM)
+
+	var blocks []*pem.Block
+	rest := []byte(certPEM)
+	for {
+		var b *pem.Block
+		b, rest = pem.Decode(rest)
+		if b == nil {
+			break
+		}
+		if b.Type == "CERTIFICATE" {
+			blocks = append(blocks, b)
+		}
+	}
+	if len(blocks) == 0 {
+		// Let ParseExternalCert produce the actionable invalid_cert_pem
+		// error; return the input unchanged.
+		return certPEM, chainPEM, nil
+	}
+	if len(blocks) == 1 {
+		return certPEM, chainPEM, nil
+	}
+	// >1 block in the cert field = a pasted fullchain.
+	if strings.TrimSpace(chainPEM) != "" {
+		return "", "", errors.New("chain_specified_twice: the Certificate field already contains a chain (" +
+			strconv.Itoa(len(blocks)) + " certificates) and the Chain field is also filled — put the chain in only one place")
+	}
+	leaf = string(pem.EncodeToMemory(blocks[0]))
+	var sb strings.Builder
+	for _, b := range blocks[1:] {
+		sb.Write(pem.EncodeToMemory(b))
+	}
+	return leaf, sb.String(), nil
+}
 
 // ParseExternalCert validates the leaf/key (blocking) and returns
 // parsed metadata + non-blocking warnings. It does NOT verify the

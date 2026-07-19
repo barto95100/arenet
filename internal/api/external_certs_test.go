@@ -17,6 +17,7 @@
 package api
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -176,6 +177,49 @@ func TestExternalCert_Upload_EmptyCertReturnsCertRequired(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "cert_required") {
 		t.Errorf("want cert_required error; body=%s", rec.Body)
+	}
+}
+
+// v2.19.1 — a "fullchain" pasted into the Certificate field (leaf +
+// intermediate concatenated) is split: the stored CertPEM is the leaf,
+// the intermediate moves to ChainPEM. Common CA download format,
+// vendor-agnostic.
+func TestExternalCert_Upload_FullchainSplit(t *testing.T) {
+	env := newTestEnv(t, false)
+	leaf, keyPEM := genSelfSignedAPI(t, "app.example.com", []string{"app.example.com"})
+	inter, _ := genSelfSignedAPI(t, "Intermediate CA", nil)
+	fullchain := leaf + inter
+
+	rec := postExternalCert(t, env, "fullchain", fullchain, keyPEM, "")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s; fullchain upload must succeed", rec.Code, rec.Body)
+	}
+	stored, _ := env.store.ListExternalCertificates(context.Background())
+	if len(stored) != 1 {
+		t.Fatalf("want 1 stored cert; got %d", len(stored))
+	}
+	if strings.Count(stored[0].CertPEM, "BEGIN CERTIFICATE") != 1 {
+		t.Errorf("stored CertPEM should hold only the leaf; got %d blocks", strings.Count(stored[0].CertPEM, "BEGIN CERTIFICATE"))
+	}
+	if strings.Count(stored[0].ChainPEM, "BEGIN CERTIFICATE") != 1 {
+		t.Errorf("stored ChainPEM should hold the intermediate; got %d blocks", strings.Count(stored[0].ChainPEM, "BEGIN CERTIFICATE"))
+	}
+}
+
+// A chain supplied in BOTH the Certificate field (fullchain) AND the
+// Chain field is ambiguous → 400.
+func TestExternalCert_Upload_ChainSpecifiedTwice_400(t *testing.T) {
+	env := newTestEnv(t, false)
+	leaf, keyPEM := genSelfSignedAPI(t, "app.example.com", []string{"app.example.com"})
+	inter, _ := genSelfSignedAPI(t, "Intermediate CA", nil)
+	fullchain := leaf + inter
+
+	rec := postExternalCert(t, env, "twice", fullchain, keyPEM, inter)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s; chain in two places must be 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "chain_specified_twice") {
+		t.Errorf("want chain_specified_twice error; body=%s", rec.Body)
 	}
 }
 
