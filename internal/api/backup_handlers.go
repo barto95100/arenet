@@ -232,7 +232,7 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 	h.appendAudit(r, audit.Event{
 		Action: audit.ActionConfigRestored,
 		Message: fmt.Sprintf(
-			"source_sha256=%s schema_version=%s secrets_included_in_source=%t allow_incomplete_restore=%t routes_imported=%d users_imported=%d dns_providers_imported=%d forward_auth_providers_imported=%d oidc_config_imported=%t maxmind_config_imported=%t sentinels_inherited_total=%d sentinels_unresolved_total=%d",
+			"source_sha256=%s schema_version=%s secrets_included_in_source=%t allow_incomplete_restore=%t routes_imported=%d users_imported=%d dns_providers_imported=%d forward_auth_providers_imported=%d oidc_config_imported=%t maxmind_config_imported=%t external_certificates_imported=%d sentinels_inherited_total=%d sentinels_unresolved_total=%d",
 			sha,
 			report.SchemaVersion,
 			report.SecretsIncludedInSource,
@@ -243,6 +243,7 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 			report.ForwardAuthProvidersImported,
 			report.OIDCConfigImported,
 			report.MaxMindConfigImported,
+			report.ExternalCertificatesImported,
 			report.SentinelsInheritedTotal,
 			report.SentinelsUnresolvedTotal,
 		),
@@ -255,6 +256,7 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 		ForwardAuthProvidersImported: report.ForwardAuthProvidersImported,
 		OIDCConfigImported:           report.OIDCConfigImported,
 		MaxMindConfigImported:        report.MaxMindConfigImported,
+		ExternalCertificatesImported: report.ExternalCertificatesImported,
 		SentinelsInheritedTotal:      report.SentinelsInheritedTotal,
 		SentinelsUnresolvedTotal:     report.SentinelsUnresolvedTotal,
 		IncompleteRows:               len(report.IncompleteRows),
@@ -268,6 +270,7 @@ type restoreResponse struct {
 	ForwardAuthProvidersImported int  `json:"forwardAuthProvidersImported"`
 	OIDCConfigImported           bool `json:"oidcConfigImported"`
 	MaxMindConfigImported        bool `json:"maxmindConfigImported"`
+	ExternalCertificatesImported int  `json:"externalCertificatesImported"`
 	SentinelsInheritedTotal      int  `json:"sentinelsInheritedTotal"`
 	SentinelsUnresolvedTotal     int  `json:"sentinelsUnresolvedTotal"`
 	IncompleteRows               int  `json:"incompleteRows"`
