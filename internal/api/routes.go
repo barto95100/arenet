@@ -176,6 +176,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// the admin-only sub-group below.
 			r.Get("/certificates/external", h.listExternalCerts)
 			r.Get("/certificates/external/{id}", h.getExternalCert)
+			r.Get("/certificates/external/{id}/csr", h.downloadExternalCertCSR)
 			r.Get("/audit", h.listAudit)
 			// Step L L.2 — per-route metrics history.
 			// Read-only; viewer-accessible per AC #17. No

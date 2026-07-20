@@ -127,3 +127,63 @@ func TestCreateExternalCertCSR_InvalidKeyAlgorithm(t *testing.T) {
 		t.Errorf("want invalid_key_algorithm error; body=%s", rec.Body.String())
 	}
 }
+
+// TestDownloadExternalCertCSR drives the download endpoint end to end:
+// generate a CSR via POST, then GET the download route and assert the
+// body is a downloadable CSR PEM. SECURITY: the response must never
+// contain the private key.
+func TestDownloadExternalCertCSR(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	body := `{"name":"x","csrSubject":{"commonName":"app.corp.local","keyAlgorithm":"rsa_4096"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/certificates/external/csr", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("create response has no id: %v", created)
+	}
+
+	dreq := httptest.NewRequest(http.MethodGet, "/api/v1/certificates/external/"+id+"/csr", nil)
+	drec := httptest.NewRecorder()
+	env.router.ServeHTTP(drec, dreq)
+
+	if drec.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body %s", drec.Code, drec.Body.String())
+	}
+	if ct := drec.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", ct)
+	}
+	if cd := drec.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") || !strings.Contains(cd, ".csr") {
+		t.Errorf("Content-Disposition = %q, want attachment with .csr filename", cd)
+	}
+	if !strings.Contains(drec.Body.String(), "CERTIFICATE REQUEST") {
+		t.Fatalf("body is not a CSR PEM: %s", drec.Body.String())
+	}
+	if strings.Contains(drec.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("CSR download leaked the private key")
+	}
+}
+
+// TestDownloadExternalCertCSR_NotFound covers both 404 cases: an
+// unknown id, and an existing cert row with no stored CSR.
+func TestDownloadExternalCertCSR_NotFound(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/certificates/external/does-not-exist/csr", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body %s", rec.Code, rec.Body.String())
+	}
+}

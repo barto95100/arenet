@@ -366,3 +366,42 @@ func (h *Handler) createExternalCertCSR(w http.ResponseWriter, r *http.Request) 
 	h.appendAudit(r, audit.Event{Action: audit.ActionExternalCertCSRGenerated, TargetType: "external_certificate", TargetID: created.ID})
 	writeJSON(w, http.StatusCreated, toExternalCertResponse(created, nil))
 }
+
+// downloadExternalCertCSR returns the stored CSR as a downloadable PEM
+// (spec §5.2). The CSR is public; the private key is never served here.
+func (h *Handler) downloadExternalCertCSR(w http.ResponseWriter, r *http.Request) {
+	c, err := h.store.GetExternalCertificate(r.Context(), chi.URLParam(r, "id"))
+	if err == storage.ErrNotFound {
+		writeError(w, http.StatusNotFound, "certificate not found")
+		return
+	}
+	if err != nil {
+		h.logger.Error("get external cert for csr download", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to load certificate")
+		return
+	}
+	if c.CSRPEM == "" {
+		writeError(w, http.StatusNotFound, "no CSR for this certificate")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(c.Name)+`.csr"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(c.CSRPEM))
+}
+
+// sanitizeFilename keeps a Content-Disposition filename to a safe subset.
+func sanitizeFilename(name string) string {
+	if name == "" {
+		return "certificate"
+	}
+	out := make([]rune, 0, len(name))
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			out = append(out, r)
+		} else {
+			out = append(out, '_')
+		}
+	}
+	return string(out)
+}
