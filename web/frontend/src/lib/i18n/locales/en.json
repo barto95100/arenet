@@ -1484,7 +1484,15 @@
 				"submitting": "Uploading…",
 				"requiredError": "Name, certificate and private key are required.",
 				"success": "Certificate \"{name}\" uploaded",
-				"warningsTitle": "Warnings"
+				"warningsTitle": "Warnings",
+				"errors": {
+					"chainSpecifiedTwice": "The chain is specified twice. You pasted a full chain in the Certificate field AND filled the Chain field. Put the intermediates in only ONE place — clear the Chain field, or paste only the leaf certificate above.",
+					"keyDoesNotMatchCert": "The private key does not match the certificate. Check you pasted the key that was generated with this certificate's CSR.",
+					"invalidCertPem": "The Certificate field is not a valid PEM certificate.",
+					"invalidChainPem": "The Chain field is not a valid PEM certificate.",
+					"certRequired": "The Certificate (PEM) field is required.",
+					"keyRequired": "The Private key (PEM) field is required."
+				}
 			},
 			"delete": {
 				"action": "Delete certificate",

@@ -105,9 +105,45 @@
 	let keyPEM = $state('');
 	let uploading = $state(false);
 	let uploadError = $state<string | null>(null);
+	// Set only for the chain_specified_twice case, so the same friendly
+	// message can ALSO render inline next to the Chain field (Fix B) in
+	// addition to the bottom form-error (Fix A). Cleared alongside
+	// uploadError.
+	let uploadErrorCode = $state<string | null>(null);
 	// Non-blocking advisories from the most recent successful upload.
 	// Cleared on the next upload attempt / form reset.
 	let lastWarnings = $state<CertWarning[]>([]);
+
+	// Backend validation-400 codes (external_cert_parse.go) mapped to
+	// friendly, translated messages. The wire format is
+	// "code: human detail" (English, technical) — split on the first
+	// ": " and look up the leading token here. Unmapped codes fall back
+	// to the raw backend message so unknown errors are never hidden.
+	const UPLOAD_ERROR_CODE_KEYS: Record<string, string> = {
+		chain_specified_twice: 'certificates.external.upload.errors.chainSpecifiedTwice',
+		key_does_not_match_cert: 'certificates.external.upload.errors.keyDoesNotMatchCert',
+		invalid_cert_pem: 'certificates.external.upload.errors.invalidCertPem',
+		invalid_chain_pem: 'certificates.external.upload.errors.invalidChainPem',
+		cert_required: 'certificates.external.upload.errors.certRequired',
+		key_required: 'certificates.external.upload.errors.keyRequired'
+	};
+
+	/**
+	 * Extracts the leading "code" token from a backend error message
+	 * ("code: human detail") and resolves it to a friendly translated
+	 * string via UPLOAD_ERROR_CODE_KEYS. Returns the raw message
+	 * unchanged (and a null code) when the message doesn't match a
+	 * known code, so unrecognized errors are still shown, not hidden.
+	 */
+	function resolveUploadError(rawMessage: string): { message: string; code: string | null } {
+		const sep = rawMessage.indexOf(': ');
+		const code = sep === -1 ? rawMessage : rawMessage.slice(0, sep);
+		const key = UPLOAD_ERROR_CODE_KEYS[code];
+		if (key) {
+			return { message: t(key), code };
+		}
+		return { message: rawMessage, code: null };
+	}
 
 	// Delete-dialog state. deleteTarget holds the cert awaiting
 	// confirmation; blockedDialog holds the 409 outcome (the routes
@@ -190,16 +226,19 @@
 		chainPEM = '';
 		keyPEM = '';
 		uploadError = null;
+		uploadErrorCode = null;
 	}
 
 	async function handleUpload(): Promise<void> {
 		if (uploading) return;
 		if (name.trim() === '' || certPEM.trim() === '' || keyPEM.trim() === '') {
 			uploadError = t('certificates.external.upload.requiredError');
+			uploadErrorCode = null;
 			return;
 		}
 		uploading = true;
 		uploadError = null;
+		uploadErrorCode = null;
 		lastWarnings = [];
 		try {
 			const created = await externalCertsApi.upload({
@@ -214,7 +253,10 @@
 			resetForm();
 			await loadCerts();
 		} catch (err) {
-			uploadError = err instanceof ApiError ? err.message : String(err);
+			const rawMessage = err instanceof ApiError ? err.message : String(err);
+			const resolved = resolveUploadError(rawMessage);
+			uploadError = resolved.message;
+			uploadErrorCode = resolved.code;
 		} finally {
 			uploading = false;
 		}
@@ -401,6 +443,15 @@
 				data-testid="external-cert-chain-pem"
 			></textarea>
 			<p class="field-help">{language.current && t('certificates.external.upload.chainHelp')}</p>
+			{#if uploadErrorCode === 'chain_specified_twice'}
+				<p
+					class="form-error field-error-inline"
+					role="alert"
+					data-testid="external-cert-chain-error-inline"
+				>
+					{uploadError}
+				</p>
+			{/if}
 		</div>
 
 		<div class="field field-full">
@@ -884,6 +935,9 @@
 		color: var(--status-down);
 		font-size: 12.5px;
 		margin: 0;
+	}
+	.field-error-inline {
+		margin-top: 6px;
 	}
 	.form-actions {
 		grid-column: 1 / -1;
