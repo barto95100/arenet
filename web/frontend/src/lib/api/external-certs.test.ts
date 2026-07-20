@@ -72,6 +72,28 @@ describe('externalCertsApi: URL + verb mapping', () => {
 		await externalCertsApi.upload(req);
 		expect(requestMock).toHaveBeenCalledWith('POST', '/certificates/external', req);
 	});
+
+	it('generateCSR POSTs to /certificates/external/csr', async () => {
+		requestMock.mockResolvedValue({
+			...sampleCert,
+			status: 'pending_csr',
+			csrPEM: '---CSR---'
+		});
+		const res = await externalCertsApi.generateCSR({
+			name: 'x',
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		expect(requestMock).toHaveBeenCalledWith(
+			'POST',
+			'/certificates/external/csr',
+			expect.any(Object)
+		);
+		expect(res.status).toBe('pending_csr');
+	});
+
+	it('csrDownloadUrl builds the download path', () => {
+		expect(externalCertsApi.csrDownloadUrl('c1')).toContain('/certificates/external/c1/csr');
+	});
 });
 
 describe('externalCertsApi.remove', () => {

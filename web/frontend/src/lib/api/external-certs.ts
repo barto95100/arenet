@@ -24,13 +24,21 @@
 import { request } from './client';
 import type {
 	CertWarning,
+	CSRSubject,
 	ExternalCertificate,
-	ExternalCertUploadRequest
+	ExternalCertUploadRequest,
+	GenerateCSRRequest
 } from './types';
 
 // Re-export the types so callers can import them alongside the client
 // (mirrors error-templates.ts, which co-locates its types).
-export type { CertWarning, ExternalCertificate, ExternalCertUploadRequest };
+export type {
+	CertWarning,
+	CSRSubject,
+	ExternalCertificate,
+	ExternalCertUploadRequest,
+	GenerateCSRRequest
+};
 
 // Same BASE / `/api/v1` prefix + credentials convention as the shared
 // request() helper in ./client (see client.ts for the DEV vs prod
@@ -91,5 +99,23 @@ export const externalCertsApi = {
 				blockingRoutes: Array.isArray(body.blockingRoutes) ? body.blockingRoutes : []
 			});
 		}
+	},
+
+	/**
+	 * POST /api/v1/certificates/external/csr — generate a key + CSR and
+	 * create a pending_csr row. Returns 201 with csrPEM populated (keyPEM
+	 * redacted). Backend: internal/api/external_certs.go createExternalCertCSR.
+	 */
+	generateCSR(req: GenerateCSRRequest): Promise<ExternalCertificate> {
+		return request<ExternalCertificate>('POST', '/certificates/external/csr', req);
+	},
+
+	/**
+	 * Download URL for the stored CSR PEM (text/plain attachment). The CSR
+	 * is public; the private key is never served. Anchor the <a href> at
+	 * this URL rather than fetching, so the browser handles the download.
+	 */
+	csrDownloadUrl(id: string): string {
+		return `${BASE}/api/v1/certificates/external/${encodeURIComponent(id)}/csr`;
 	}
 };

@@ -1043,6 +1043,63 @@ export interface ExternalCertificate {
 	updatedAt: string;
 	/** Non-blocking advisories attached at parse time (may be empty). */
 	warnings: CertWarning[];
+	/**
+	 * v2.20.0 CSR generation — lifecycle state of this row.
+	 *   - "" / undefined → an ordinary uploaded/imported certificate.
+	 *   - "pending_csr"  → an Arenet-generated keypair awaiting the
+	 *     signed cert to be re-imported (PUT) before it can serve
+	 *     traffic. certPEM/chainPEM are empty in this state; csrPEM
+	 *     carries the CSR to hand to the CA.
+	 *
+	 * CROSS-TASK RULE: `csrSubject` can serialize as a non-empty-looking
+	 * object even on a non-pending row (Go `omitempty` is a no-op on
+	 * struct types) — never infer "is this pending?" from `csrSubject`
+	 * truthiness or key presence. `status === 'pending_csr'` is the
+	 * only authoritative signal.
+	 */
+	status?: '' | 'pending_csr';
+	/**
+	 * v2.20.0 CSR generation — the PEM-encoded PKCS#10 CSR generated
+	 * server-side alongside the private key. Present when status ===
+	 * 'pending_csr'; the private key itself is never on the wire (see
+	 * keyPEM). Also downloadable standalone via
+	 * externalCertsApi.csrDownloadUrl(id).
+	 */
+	csrPEM?: string;
+	/**
+	 * v2.20.0 CSR generation — the subject fields the CSR was
+	 * generated with. See the CROSS-TASK RULE on `status` above: may
+	 * be present (possibly empty-ish) even when status !== 'pending_csr'.
+	 */
+	csrSubject?: CSRSubject;
+}
+
+/**
+ * v2.20.0 CSR generation — the operator-supplied subject fields for a
+ * server-generated CSR. Mirrors the backend's CSRSubject shape
+ * (internal/api/external_certs.go createExternalCertCSR). `commonName`
+ * and `keyAlgorithm` are required; the rest are optional DN components.
+ */
+export interface CSRSubject {
+	commonName: string;
+	sans?: string[];
+	organization?: string;
+	orgUnit?: string;
+	country?: string;
+	locality?: string;
+	state?: string;
+	keyAlgorithm: 'rsa_4096' | 'ecdsa_p256';
+}
+
+/**
+ * v2.20.0 CSR generation — POST /api/v1/certificates/external/csr
+ * request body. Generates a keypair + CSR server-side and stores a
+ * `pending_csr` row; the private key never leaves the backend.
+ */
+export interface GenerateCSRRequest {
+	name: string;
+	description?: string;
+	csrSubject: CSRSubject;
 }
 
 /**
