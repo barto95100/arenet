@@ -34,6 +34,12 @@ export type ParsedCertSource =
 	| { kind: 'managed-domain'; coveringApex: string }
 	| { kind: 'per-route-acme'; challenge: 'dns-01' | 'http-01' }
 	| { kind: 'per-route-internal' }
+	// v2.19.0 external cert — the route is pinned to an operator-uploaded
+	// cert. The wire string is the bare "per-route-manual"; certName is
+	// resolved by the caller (route.cert_id → externalCerts list) and
+	// injected, since the backend string carries no name. It holds the
+	// cert's display name, or "*.<apex>" when the cert is a wildcard.
+	| { kind: 'manual'; certName?: string }
 	| { kind: 'none' };
 
 /**
@@ -70,6 +76,10 @@ export function parseEffectiveCertSource(raw: string | undefined | null): Parsed
 	if (raw === 'per-route-internal') {
 		return { kind: 'per-route-internal' };
 	}
+	if (raw === 'per-route-manual') {
+		// certName is filled in by the caller after resolving cert_id.
+		return { kind: 'manual' };
+	}
 	// Unknown shape — degrade gracefully. A future backend that
 	// adds a fifth source would not crash the route list; the
 	// dashboard would simply omit the badge until the frontend is
@@ -93,6 +103,11 @@ export function certSourceLabel(parsed: ParsedCertSource): string {
 			return parsed.challenge === 'dns-01' ? 'Cert dédié (DNS-01)' : 'Cert dédié (HTTP-01)';
 		case 'per-route-internal':
 			return 'Cert interne';
+		case 'manual':
+			// certName is the cert display name, or "*.<apex>" for a
+			// wildcard cert (resolved by the caller). Fall back to a
+			// bare label when the cert_id could not be resolved.
+			return parsed.certName ? `Cert manuel : ${parsed.certName}` : 'Cert manuel';
 		case 'none':
 			return '';
 	}
@@ -121,6 +136,10 @@ export function certSourceTooltip(parsed: ParsedCertSource): string {
 				"Certificat émis par l'autorité interne de Caddy (auto-signé). " +
 				'Typique des hostnames privés (LAN, *.local) qui ne qualifient pas pour un cert public.'
 			);
+		case 'manual':
+			return parsed.certName
+				? `Cette route sert le certificat manuel « ${parsed.certName} » importé dans SSL / Certificates (pas d'ACME).`
+				: "Cette route sert un certificat manuel importé dans SSL / Certificates (pas d'ACME).";
 		case 'none':
 			return '';
 	}

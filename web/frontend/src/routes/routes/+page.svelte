@@ -24,6 +24,7 @@
 	} from '$lib/api/error-templates';
 	import { externalCertsApi } from '$lib/api/external-certs';
 	import { hostMatchesSAN } from '$lib/utils/san-match';
+	import { manualCertDisplayName } from '$lib/utils/manual-cert-name';
 	import type {
 		ACMEChallenge,
 		CountryBlockRequest,
@@ -2541,7 +2542,10 @@
 										     lands here too. -->
 										<div class="flex flex-wrap items-center gap-1">
 											<Badge variant="tls">{language.current && t('routes.list.tlsBadge')}</Badge>
-											<CertSourceBadge source={r.effectiveCertSource} />
+											<CertSourceBadge
+												source={r.effectiveCertSource}
+												certName={manualCertDisplayName(r.cert_id, externalCerts)}
+											/>
 										</div>
 									{:else}
 										<span class="text-muted">—</span>
