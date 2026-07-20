@@ -90,6 +90,12 @@
 	let reimportChainPEM = $state('');
 	let reimporting = $state(false);
 	let reimportError = $state<string | null>(null);
+	// Non-blocking advisories from the most recent successful re-import
+	// (subject/SANs diff between the requested CSR and the signed cert
+	// the CA returned, e.g. subject_cn_rewritten / sans_missing).
+	// Mirrors lastWarnings from the upload path. Cleared when the
+	// re-import modal (re)opens.
+	let reimportWarnings = $state<CertWarning[]>([]);
 
 	// Upload form state.
 	let name = $state('');
@@ -260,6 +266,7 @@
 		reimportCertPEM = '';
 		reimportChainPEM = '';
 		reimportError = null;
+		reimportWarnings = [];
 	}
 
 	function closeReimport(): void {
@@ -275,7 +282,13 @@
 	 * preserve-on-edit semantics keep the server-generated private key
 	 * (the frontend never has it — it is never returned on the wire).
 	 * On success the backend flips status back to '' and the row moves
-	 * to the Active tab.
+	 * to the Active tab. The response's non-blocking `warnings`
+	 * (subject/SANs diff between the requested CSR and the CA-issued
+	 * cert, e.g. subject_cn_rewritten / sans_missing) are captured into
+	 * reimportWarnings and rendered via the same warn-box notice the
+	 * upload path uses — closeReimport() intentionally does NOT clear
+	 * reimportWarnings, so the notice stays visible on the panel after
+	 * the modal closes.
 	 */
 	async function confirmReimport(): Promise<void> {
 		const target = reimportTarget;
@@ -294,6 +307,7 @@
 				keyPEM: '',
 				chainPEM: reimportChainPEM.trim() || undefined
 			});
+			reimportWarnings = updated.warnings ?? [];
 			pushToast(
 				t('certs.externalCerts.pending.reimportSuccess', { name: updated.name }),
 				'success'
@@ -434,6 +448,20 @@
 			<ul>
 				{#each lastWarnings as w (w.code)}
 					<li data-testid="external-cert-warning">{w.message}</li>
+				{/each}
+			</ul>
+		</div>
+	{/if}
+
+	<!-- Post-re-import warnings notice (non-blocking subject/SANs diff
+	     between the requested CSR and the CA-issued cert). Mirrors the
+	     upload warnings notice above. -->
+	{#if reimportWarnings.length > 0}
+		<div class="warn-box" role="status" data-testid="external-cert-reimport-warnings">
+			<strong>{language.current && t('certs.externalCerts.pending.reimportWarningsTitle')}</strong>
+			<ul>
+				{#each reimportWarnings as w (w.code)}
+					<li data-testid="external-cert-reimport-warning">{w.message}</li>
 				{/each}
 			</ul>
 		</div>

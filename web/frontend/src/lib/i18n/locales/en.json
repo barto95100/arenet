@@ -1409,6 +1409,11 @@
 				"text": "The certificate for {domain} is in use by: {routes}. Delete or disable those route(s) first."
 			},
 			"success": "Certificate for {domain} deleted"
+		},
+		"externalCerts": {
+			"pending": {
+				"reimportWarningsTitle": "Warnings"
+			}
 		}
 	},
 	"certificates": {

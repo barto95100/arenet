@@ -1409,6 +1409,11 @@
 				"text": "Le certificat de {domain} est utilisé par : {routes}. Supprime ou désactive d'abord ces route(s)."
 			},
 			"success": "Certificat de {domain} supprimé"
+		},
+		"externalCerts": {
+			"pending": {
+				"reimportWarningsTitle": "Avertissements"
+			}
 		}
 	},
 	"certificates": {

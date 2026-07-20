@@ -338,6 +338,48 @@ describe('ExternalCertsPanel — Active / Pending CSR tabs', () => {
 		expect(apiMock.externalCertsApi.remove).toHaveBeenCalledWith(pending.id);
 	});
 
+	it('renders response warnings as an inline notice after a successful cert-only re-import', async () => {
+		// Task 10 fix: confirmReimport must surface updated.warnings the
+		// same way the upload path surfaces created.warnings — it must
+		// NOT silently drop them.
+		const pending = extCert({
+			name: 'ReimportMe',
+			status: 'pending_csr',
+			createdAt: daysFromNow(0),
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		apiMock.externalCertsApi.list.mockResolvedValue([pending]);
+		apiMock.externalCertsApi.update.mockResolvedValue(
+			extCert({
+				name: 'ReimportMe',
+				status: '',
+				warnings: [
+					{ code: 'subject_cn_rewritten', message: 'The CA rewrote the subject CN.' },
+					{ code: 'sans_missing', message: 'A requested SAN is missing from the issued cert.' }
+				]
+			})
+		);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-empty');
+		await userEvent.click(screen.getByTestId('external-certs-tab-pending'));
+
+		await userEvent.click(await screen.findByTestId(`external-cert-reimport-${pending.id}`));
+		await userEvent.type(
+			await screen.findByTestId('external-cert-reimport-cert-pem'),
+			'SIGNEDCERTPEM'
+		);
+		await userEvent.click(screen.getByTestId('external-cert-reimport-submit'));
+
+		const notice = await screen.findByTestId('external-cert-reimport-warnings');
+		expect(notice.textContent ?? '').toContain('The CA rewrote the subject CN.');
+		expect(notice.textContent ?? '').toContain('A requested SAN is missing from the issued cert.');
+		expect(apiMock.externalCertsApi.update).toHaveBeenCalledWith(
+			pending.id,
+			expect.objectContaining({ certPEM: 'SIGNEDCERTPEM', keyPEM: '' })
+		);
+	});
+
 	it('shows a "Generate CSR" button that opens GenerateCSRForm; on success refreshes and switches to Pending', async () => {
 		apiMock.externalCertsApi.list.mockResolvedValue([]);
 		const created = extCert({
