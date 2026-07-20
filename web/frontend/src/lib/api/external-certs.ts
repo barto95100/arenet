@@ -79,6 +79,25 @@ export const externalCertsApi = {
 	},
 
 	/**
+	 * PUT /api/v1/certificates/external/{id} — re-import / edit an
+	 * existing certificate. `keyPEM: ''` preserves the stored key
+	 * (secret preserve-on-edit — the frontend never re-sends a private
+	 * key it does not have, e.g. the cert-only re-import onto a
+	 * `pending_csr` row). `certPEM: ''` likewise preserves the stored
+	 * leaf. Re-importing a signed cert onto a `pending_csr` row (the
+	 * stored key matched via `tls.X509KeyPair`) flips `status` back to
+	 * `''` server-side and the response may carry non-blocking
+	 * subject/SANs diff `warnings`.
+	 */
+	update(id: string, req: ExternalCertUploadRequest): Promise<ExternalCertificate> {
+		return request<ExternalCertificate>(
+			'PUT',
+			`/certificates/external/${encodeURIComponent(id)}`,
+			req
+		);
+	},
+
+	/**
 	 * DELETE /api/v1/certificates/external/{id} — removes the uploaded
 	 * certificate from Arenet (does NOT revoke it with the issuing CA).
 	 * On 200 resolves void. On 409 (still referenced by a route),

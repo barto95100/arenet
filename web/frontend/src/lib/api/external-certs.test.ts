@@ -91,6 +91,21 @@ describe('externalCertsApi: URL + verb mapping', () => {
 	it('csrDownloadUrl builds the download path', () => {
 		expect(externalCertsApi.csrDownloadUrl('c1')).toContain('/certificates/external/c1/csr');
 	});
+
+	it('update → PUT /certificates/external/{id} (URL-encoded) with the body', async () => {
+		requestMock.mockResolvedValue({ ...sampleCert, status: '' });
+		const req: ExternalCertUploadRequest = {
+			name: 'DigiCert prod',
+			certPEM: 'CERT',
+			keyPEM: '',
+			chainPEM: 'CHAIN'
+		};
+		await externalCertsApi.update('cert 1', req);
+		const [method, path, body] = requestMock.mock.calls[0];
+		expect(method).toBe('PUT');
+		expect(path).toBe('/certificates/external/cert%201');
+		expect(body).toBe(req);
+	});
 });
 
 describe('externalCertsApi.remove', () => {
