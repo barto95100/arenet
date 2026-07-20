@@ -626,7 +626,7 @@
 		gap: 14px;
 		margin-bottom: 18px;
 	}
-	.main-row { grid-template-columns: 2fr 1fr; }
+	.main-row { grid-template-columns: 1fr 1fr; }
 	.bottom-row { grid-template-columns: 1.4fr 1fr; }
 
 	.seg {
