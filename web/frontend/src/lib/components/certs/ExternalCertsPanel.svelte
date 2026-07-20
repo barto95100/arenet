@@ -3,7 +3,8 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  ExternalCertsPanel (v2.19.0 external-certs SOCLE, Task 7).
+  ExternalCertsPanel (v2.19.0 external-certs SOCLE, Task 7;
+  v2.20.0 CSR generation adds the Active/Pending CSR tabs, Task 10).
 
   Bring-your-own-certificate surface for /certs. Self-contained: owns
   its own data load, upload form, list table, and delete/blocked
@@ -14,14 +15,32 @@
     - Upload form: name (+ optional description) + 3 textareas
       (cert / chain / key PEM) + Upload button. On success the returned
       non-blocking `warnings` render as an inline notice.
-    - List: one row per uploaded cert (name, subject/issuer, DNS names,
-      expiry) with an expiry BADGE — amber when < 30 days to notAfter,
-      red when < 7 days (or already expired). The backend returns the
-      list already sorted soonest-first (notAfter ascending); the panel
-      preserves that order verbatim — no client re-sort.
+    - Active / Pending CSR tabs (v2.20.0): rows split on
+      `status === 'pending_csr'` — NEVER on `csrSubject`
+      truthiness/presence (Go's `omitempty` is a no-op on struct-typed
+      fields, so an active row can carry a non-nil, empty-looking
+      `csrSubject: {}` on the wire).
+    - Active tab: one row per uploaded/active cert (name, subject/
+      issuer, DNS names, expiry) with an expiry BADGE — amber when
+      < 30 days to notAfter, red when < 7 days (or already expired).
+      The backend returns the list already sorted soonest-first
+      (notAfter ascending); the panel preserves that order verbatim —
+      no client re-sort.
+    - Pending tab: one row per `pending_csr` cert (name, requested
+      CN/SANs, a created-age BADGE bucketed by `csrAgeBadge()`) with
+      Download CSR / Upload signed cert (cert-only PUT re-import,
+      keyPEM left empty so the backend's preserve-on-edit semantics
+      keep the server-generated private key) / Delete actions. A
+      pending row is never route-referenced, so its delete never 409s.
+    - Generate CSR: a button opens Task 9's GenerateCSRForm in a
+      modal; its `onCreated` callback prop (NOT a DOM `created` event
+      — this codebase has zero createEventDispatcher usage) refreshes
+      the list and switches to the Pending tab.
     - Delete: a confirm dialog whose copy is explicit that removal is
-      Arenet-local and does NOT revoke the cert with the issuing CA.
-      A 409 opens a blocked dialog listing the offending routes.
+      Arenet-local and does NOT revoke the cert with the issuing CA
+      (active rows) or destroys the generated private key (pending
+      rows). A 409 opens a blocked dialog listing the offending routes
+      (active rows only).
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
@@ -29,21 +48,54 @@
 	import Button from '$lib/components/Button.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import Badge from '$lib/components/Badge.svelte';
+	import Tabs from '$lib/components/Tabs.svelte';
+	import GenerateCSRForm from './GenerateCSRForm.svelte';
 	import { externalCertsApi } from '$lib/api/external-certs';
 	import type { ExternalCertificate, CertWarning } from '$lib/api/external-certs';
 	import { ApiError } from '$lib/api/types';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 	import { pushToast } from '$lib/stores/toast';
+	import { csrAgeBadge } from '$lib/utils/csr-age';
 
 	// Expiry-badge thresholds (days-to-notAfter). Amber inside the
 	// warning window, red inside the danger window OR already expired.
 	const EXPIRY_WARN_DAYS = 30;
 	const EXPIRY_DANGER_DAYS = 7;
 
+	type PanelTab = 'active' | 'pending';
+
 	let loading = $state(true);
 	let loadError = $state(false);
 	let certs = $state<ExternalCertificate[]>([]);
+
+	// v2.20.0 CSR generation — Active / Pending CSR tab split. The
+	// pending signal is EXCLUSIVELY `status === 'pending_csr'`. NEVER
+	// key off `csrSubject` truthiness/presence: Go's `omitempty` is a
+	// no-op on struct-typed fields, so an ACTIVE row re-saved after
+	// this feature shipped can carry a non-nil, empty-looking
+	// `csrSubject: {}` on the wire (see the CROSS-TASK RULE doc comment
+	// on ExternalCertificate.status in lib/api/types.ts).
+	let activeTab = $state<PanelTab>('active');
+	const activeCerts = $derived(certs.filter((c) => c.status !== 'pending_csr'));
+	const pendingCerts = $derived(certs.filter((c) => c.status === 'pending_csr'));
+
+	// Generate-CSR modal.
+	let generateOpen = $state(false);
+
+	// Cert-only re-import ("Upload signed cert") modal, opened from a
+	// pending row. Holds the target row awaiting a signed cert PUT.
+	let reimportTarget = $state<ExternalCertificate | null>(null);
+	let reimportCertPEM = $state('');
+	let reimportChainPEM = $state('');
+	let reimporting = $state(false);
+	let reimportError = $state<string | null>(null);
+	// Non-blocking advisories from the most recent successful re-import
+	// (subject/SANs diff between the requested CSR and the signed cert
+	// the CA returned, e.g. subject_cn_rewritten / sans_missing).
+	// Mirrors lastWarnings from the upload path. Cleared when the
+	// re-import modal (re)opens.
+	let reimportWarnings = $state<CertWarning[]>([]);
 
 	// Upload form state.
 	let name = $state('');
@@ -86,6 +138,35 @@
 		if (days <= EXPIRY_DANGER_DAYS) return 'status-down';
 		if (days <= EXPIRY_WARN_DAYS) return 'status-warn';
 		return 'status-up';
+	}
+
+	/** Badge variant per the CSR age bucket (see csrAgeBadge). */
+	function ageVariant(
+		age: ReturnType<typeof csrAgeBadge>
+	): 'neutral' | 'status-info' | 'status-warn' | 'status-down' {
+		switch (age) {
+			case 'recent':
+				return 'neutral';
+			case 'waiting':
+				return 'status-info';
+			case 'old':
+				return 'status-warn';
+			case 'stale':
+				return 'status-down';
+		}
+	}
+
+	/** i18n label key for the CSR age bucket. */
+	function ageLabelKey(age: ReturnType<typeof csrAgeBadge>): string {
+		return `certs.externalCerts.pending.age${age.charAt(0).toUpperCase()}${age.slice(1)}`;
+	}
+
+	/** "CN, san1, san2" summary of the requested CSR subject. */
+	function csrSubjectSummary(cert: ExternalCertificate): string {
+		const subject = cert.csrSubject;
+		if (!subject || subject.commonName.trim() === '') return '—';
+		const sans = (subject.sans ?? []).filter((s) => s.trim() !== '');
+		return sans.length > 0 ? `${subject.commonName} (${sans.join(', ')})` : subject.commonName;
 	}
 
 	async function loadCerts(): Promise<void> {
@@ -158,6 +239,85 @@
 			} else {
 				pushToast(e?.message ?? t('certificates.external.delete.action'), 'danger');
 			}
+		}
+	}
+
+	/** Opens the "Generate CSR" modal. */
+	function openGenerate(): void {
+		generateOpen = true;
+	}
+
+	/**
+	 * GenerateCSRForm's onCreated callback prop (NOT a DOM `created`
+	 * event — this codebase has zero createEventDispatcher usage; see
+	 * GenerateCSRForm.svelte's header comment). Refreshes the list so
+	 * the new pending_csr row appears, closes the modal, and switches
+	 * to the Pending tab so the operator sees it immediately.
+	 */
+	function handleCSRCreated(): void {
+		generateOpen = false;
+		activeTab = 'pending';
+		void loadCerts();
+	}
+
+	/** Opens the cert-only "Upload signed cert" re-import modal. */
+	function openReimport(cert: ExternalCertificate): void {
+		reimportTarget = cert;
+		reimportCertPEM = '';
+		reimportChainPEM = '';
+		reimportError = null;
+		reimportWarnings = [];
+	}
+
+	function closeReimport(): void {
+		reimportTarget = null;
+		reimportCertPEM = '';
+		reimportChainPEM = '';
+		reimportError = null;
+	}
+
+	/**
+	 * Cert-only re-import onto a pending_csr row: PUT with certPEM (+
+	 * optional chainPEM) but keyPEM left empty so the backend's
+	 * preserve-on-edit semantics keep the server-generated private key
+	 * (the frontend never has it — it is never returned on the wire).
+	 * On success the backend flips status back to '' and the row moves
+	 * to the Active tab. The response's non-blocking `warnings`
+	 * (subject/SANs diff between the requested CSR and the CA-issued
+	 * cert, e.g. subject_cn_rewritten / sans_missing) are captured into
+	 * reimportWarnings and rendered via the same warn-box notice the
+	 * upload path uses — closeReimport() intentionally does NOT clear
+	 * reimportWarnings, so the notice stays visible on the panel after
+	 * the modal closes.
+	 */
+	async function confirmReimport(): Promise<void> {
+		const target = reimportTarget;
+		if (!target || reimporting) return;
+		if (reimportCertPEM.trim() === '') {
+			reimportError = t('certs.externalCerts.pending.certRequiredError');
+			return;
+		}
+		reimporting = true;
+		reimportError = null;
+		try {
+			const updated = await externalCertsApi.update(target.id, {
+				name: target.name,
+				description: target.description,
+				certPEM: reimportCertPEM.trim(),
+				keyPEM: '',
+				chainPEM: reimportChainPEM.trim() || undefined
+			});
+			reimportWarnings = updated.warnings ?? [];
+			pushToast(
+				t('certs.externalCerts.pending.reimportSuccess', { name: updated.name }),
+				'success'
+			);
+			closeReimport();
+			await loadCerts();
+		} catch (err) {
+			reimportError = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			reimporting = false;
 		}
 	}
 
@@ -293,6 +453,50 @@
 		</div>
 	{/if}
 
+	<!-- Post-re-import warnings notice (non-blocking subject/SANs diff
+	     between the requested CSR and the CA-issued cert). Mirrors the
+	     upload warnings notice above. -->
+	{#if reimportWarnings.length > 0}
+		<div class="warn-box" role="status" data-testid="external-cert-reimport-warnings">
+			<strong>{language.current && t('certs.externalCerts.pending.reimportWarningsTitle')}</strong>
+			<ul>
+				{#each reimportWarnings as w (w.code)}
+					<li data-testid="external-cert-reimport-warning">{w.message}</li>
+				{/each}
+			</ul>
+		</div>
+	{/if}
+
+	<!-- Active / Pending CSR tabs. Pending count badge steers the
+	     operator to un-actioned CSRs without opening the tab. -->
+	<div class="tabs-row">
+		<Tabs
+			bind:value={activeTab}
+			ariaLabel={language.current && t('certs.externalCerts.pending.tabsLabel')}
+			tabs={[
+				{
+					id: 'active',
+					label: `${language.current && t('certs.externalCerts.pending.activeTab')} (${activeCerts.length})`,
+					testId: 'external-certs-tab-active'
+				},
+				{
+					id: 'pending',
+					label: `${language.current && t('certs.externalCerts.pending.tab')} (${pendingCerts.length})`,
+					testId: 'external-certs-tab-pending'
+				}
+			]}
+		/>
+		<Button
+			variant="secondary"
+			size="sm"
+			data-testid="external-cert-generate-csr-btn"
+			onclick={openGenerate}
+		>
+			{#snippet children()}{language.current &&
+				t('certs.externalCerts.generate.openButton')}{/snippet}
+		</Button>
+	</div>
+
 	<!-- List -->
 	{#if loading}
 		<div class="loading-wrap"><Spinner /></div>
@@ -300,18 +504,90 @@
 		<div class="empty-row" data-testid="external-certs-error">
 			{language.current && t('certificates.external.loadError')}
 		</div>
-	{:else if certs.length === 0}
-		<div class="empty-row" data-testid="external-certs-empty">
-			{language.current && t('certificates.external.empty')}
+	{:else if activeTab === 'active'}
+		{#if activeCerts.length === 0}
+			<div class="empty-row" data-testid="external-certs-empty">
+				{language.current && t('certificates.external.empty')}
+			</div>
+		{:else}
+			<table data-testid="external-certs-table">
+				<thead>
+					<tr>
+						<th>{language.current && t('certificates.external.colName')}</th>
+						<th>{language.current && t('certificates.external.colSubject')}</th>
+						<th>{language.current && t('certificates.external.colDNS')}</th>
+						<th>{language.current && t('certificates.external.colExpiry')}</th>
+						<th class="col-actions"
+							><span class="visually-hidden"
+								>{language.current && t('certificates.external.delete.action')}</span
+							></th
+						>
+					</tr>
+				</thead>
+				<tbody>
+					{#each activeCerts as cert (cert.id)}
+						{@const days = daysUntil(cert.notAfter)}
+						<tr data-testid="external-cert-row" data-id={cert.id}>
+							<td>
+								<div class="name-cell">{cert.name}</div>
+								{#if cert.description}
+									<div class="dim cell-sub">{cert.description}</div>
+								{/if}
+							</td>
+							<td>
+								<div class="mono">{cert.subject || '—'}</div>
+								<div class="dim cell-sub">{cert.issuer || '—'}</div>
+							</td>
+							<td class="mono">
+								{(cert.dnsNames ?? []).length > 0 ? (cert.dnsNames ?? []).join(', ') : '—'}
+							</td>
+							<td>
+								<Badge variant={expiryVariant(days)}>
+									{#if days === null}
+										—
+									{:else if days <= 0}
+										{language.current && t('certificates.external.expiryExpired')}
+									{:else}
+										{language.current &&
+											t('certificates.external.expiryDays', {
+												days,
+												plural: days === 1 ? '' : 's'
+											})}
+									{/if}
+								</Badge>
+							</td>
+							<td class="col-actions">
+								<button
+									type="button"
+									class="row-delete-btn"
+									data-testid={`external-cert-delete-${cert.id}`}
+									aria-label={language.current && t('certificates.external.delete.action')}
+									onclick={() => (deleteTarget = cert)}
+								>
+									{language.current && t('certificates.external.delete.action')}
+								</button>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		{/if}
+	{:else if pendingCerts.length === 0}
+		<div class="empty-row" data-testid="external-certs-pending-empty">
+			{language.current && t('certs.externalCerts.pending.empty')}
 		</div>
 	{:else}
-		<table data-testid="external-certs-table">
+		{#if pendingCerts.length > 1}
+			<p class="pending-hint" data-testid="external-certs-pending-multi-hint">
+				{language.current && t('certs.externalCerts.pending.multiplePendingHint')}
+			</p>
+		{/if}
+		<table data-testid="external-certs-pending-table">
 			<thead>
 				<tr>
 					<th>{language.current && t('certificates.external.colName')}</th>
-					<th>{language.current && t('certificates.external.colSubject')}</th>
-					<th>{language.current && t('certificates.external.colDNS')}</th>
-					<th>{language.current && t('certificates.external.colExpiry')}</th>
+					<th>{language.current && t('certs.externalCerts.pending.colSubject')}</th>
+					<th>{language.current && t('certs.externalCerts.pending.colAge')}</th>
 					<th class="col-actions"
 						><span class="visually-hidden"
 							>{language.current && t('certificates.external.delete.action')}</span
@@ -320,42 +596,44 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each certs as cert (cert.id)}
-					{@const days = daysUntil(cert.notAfter)}
-					<tr data-testid="external-cert-row" data-id={cert.id}>
+				{#each pendingCerts as cert (cert.id)}
+					{@const age = csrAgeBadge(cert.createdAt)}
+					<tr
+						data-testid={`external-cert-pending-row-${cert.id}`}
+						data-id={cert.id}
+					>
 						<td>
 							<div class="name-cell">{cert.name}</div>
 							{#if cert.description}
 								<div class="dim cell-sub">{cert.description}</div>
 							{/if}
 						</td>
-						<td>
-							<div class="mono">{cert.subject || '—'}</div>
-							<div class="dim cell-sub">{cert.issuer || '—'}</div>
-						</td>
-						<td class="mono">
-							{(cert.dnsNames ?? []).length > 0 ? (cert.dnsNames ?? []).join(', ') : '—'}
-						</td>
-						<td>
-							<Badge variant={expiryVariant(days)}>
-								{#if days === null}
-									—
-								{:else if days <= 0}
-									{language.current && t('certificates.external.expiryExpired')}
-								{:else}
-									{language.current &&
-										t('certificates.external.expiryDays', {
-											days,
-											plural: days === 1 ? '' : 's'
-										})}
-								{/if}
+						<td class="mono">{csrSubjectSummary(cert)}</td>
+						<td data-age={age}>
+							<Badge variant={ageVariant(age)}>
+								{language.current && t(ageLabelKey(age))}
 							</Badge>
 						</td>
-						<td class="col-actions">
+						<td class="col-actions pending-actions">
+							<a
+								href={externalCertsApi.csrDownloadUrl(cert.id)}
+								class="row-link-btn"
+								data-testid={`external-cert-csr-download-${cert.id}`}
+							>
+								{language.current && t('certs.externalCerts.pending.downloadCSR')}
+							</a>
+							<button
+								type="button"
+								class="row-link-btn"
+								data-testid={`external-cert-reimport-${cert.id}`}
+								onclick={() => openReimport(cert)}
+							>
+								{language.current && t('certs.externalCerts.pending.uploadSigned')}
+							</button>
 							<button
 								type="button"
 								class="row-delete-btn"
-								data-testid={`external-cert-delete-${cert.id}`}
+								data-testid={`external-cert-pending-delete-${cert.id}`}
 								aria-label={language.current && t('certificates.external.delete.action')}
 								onclick={() => (deleteTarget = cert)}
 							>
@@ -369,22 +647,40 @@
 	{/if}
 </div>
 
-<!-- Delete confirm dialog. Copy is explicit that removal is Arenet-
-     local and does NOT revoke the cert with the issuing CA. -->
+<!-- Delete confirm dialog. Active-row copy is explicit that removal is
+     Arenet-local and does NOT revoke the cert with the issuing CA. A
+     pending_csr row instead gets the key-destruction warning (Task
+     11): deleting it destroys the server-generated private key, and a
+     CA signing the CSR afterwards can never be imported — a new CSR
+     is required. A pending row is never route-referenced so it never
+     409s / opens the blocked dialog below. -->
 {#if deleteTarget}
+	{@const isPending = deleteTarget.status === 'pending_csr'}
 	<Modal
 		open={deleteTarget !== null}
-		title={language.current && t('certificates.external.delete.confirm.title')}
+		title={language.current &&
+			t(
+				isPending
+					? 'certs.externalCerts.pending.deleteConfirmTitle'
+					: 'certificates.external.delete.confirm.title'
+			)}
 		onClose={() => (deleteTarget = null)}
 	>
 		{#snippet children()}
-			<p class="modal-lead">
-				{language.current &&
-					t('certificates.external.delete.confirm.text', { name: deleteTarget?.name ?? '' })}
-			</p>
-			<p class="modal-warn" role="alert" data-testid="external-cert-revoke-notice">
-				{language.current && t('certificates.external.delete.confirm.revokeNotice')}
-			</p>
+			{#if isPending}
+				<p class="modal-warn" role="alert" data-testid="external-cert-key-destruction-notice">
+					{language.current &&
+						t('certs.externalCerts.pending.deleteConfirmText', { name: deleteTarget?.name ?? '' })}
+				</p>
+			{:else}
+				<p class="modal-lead">
+					{language.current &&
+						t('certificates.external.delete.confirm.text', { name: deleteTarget?.name ?? '' })}
+				</p>
+				<p class="modal-warn" role="alert" data-testid="external-cert-revoke-notice">
+					{language.current && t('certificates.external.delete.confirm.revokeNotice')}
+				</p>
+			{/if}
 		{/snippet}
 		{#snippet footer()}
 			<Button variant="ghost" onclick={() => (deleteTarget = null)}>
@@ -423,6 +719,96 @@
 		{#snippet footer()}
 			<Button variant="ghost" onclick={() => (blockedDialog = null)}>
 				{#snippet children()}{language.current && t('common.confirm')}{/snippet}
+			</Button>
+		{/snippet}
+	</Modal>
+{/if}
+
+<!-- Generate CSR modal (Task 9's GenerateCSRForm). onCreated is a
+     callback PROP, not a DOM `created` event — see the doc comment on
+     handleCSRCreated above. -->
+{#if generateOpen}
+	<Modal
+		open={generateOpen}
+		title={language.current && t('certs.externalCerts.generate.title')}
+		width="lg"
+		onClose={() => (generateOpen = false)}
+	>
+		{#snippet children()}
+			<GenerateCSRForm onCreated={handleCSRCreated} />
+		{/snippet}
+	</Modal>
+{/if}
+
+<!-- Upload signed cert (cert-only re-import onto a pending_csr row).
+     keyPEM is intentionally never collected here — the private key
+     stays server-side and PUT's preserve-on-edit semantics (keyPEM:
+     '') keep it untouched. -->
+{#if reimportTarget}
+	<Modal
+		open={reimportTarget !== null}
+		title={language.current && t('certs.externalCerts.pending.uploadSignedTitle')}
+		onClose={closeReimport}
+	>
+		{#snippet children()}
+			<form
+				class="reimport-form"
+				data-testid="external-cert-reimport-form"
+				onsubmit={(e) => {
+					e.preventDefault();
+					void confirmReimport();
+				}}
+			>
+				<div class="field field-full">
+					<label for="reimport-cert"
+						>{language.current && t('certs.externalCerts.pending.certLabel')}</label
+					>
+					<textarea
+						id="reimport-cert"
+						bind:value={reimportCertPEM}
+						rows="6"
+						class="ext-input mono"
+						placeholder="-----BEGIN CERTIFICATE-----"
+						spellcheck="false"
+						disabled={reimporting}
+						data-testid="external-cert-reimport-cert-pem"
+					></textarea>
+				</div>
+				<div class="field field-full">
+					<label for="reimport-chain"
+						>{language.current && t('certs.externalCerts.pending.chainLabel')}</label
+					>
+					<textarea
+						id="reimport-chain"
+						bind:value={reimportChainPEM}
+						rows="4"
+						class="ext-input mono"
+						placeholder="-----BEGIN CERTIFICATE-----"
+						spellcheck="false"
+						disabled={reimporting}
+						data-testid="external-cert-reimport-chain-pem"
+					></textarea>
+				</div>
+				{#if reimportError}
+					<p class="form-error" role="alert" data-testid="external-cert-reimport-error">
+						{reimportError}
+					</p>
+				{/if}
+			</form>
+		{/snippet}
+		{#snippet footer()}
+			<Button variant="ghost" onclick={closeReimport}>
+				{#snippet children()}{language.current && t('common.cancel')}{/snippet}
+			</Button>
+			<Button
+				variant="primary"
+				loading={reimporting}
+				disabled={reimporting || reimportCertPEM.trim() === ''}
+				data-testid="external-cert-reimport-submit"
+				onclick={() => void confirmReimport()}
+			>
+				{#snippet children()}{language.current &&
+					t('certs.externalCerts.pending.uploadSignedSubmit')}{/snippet}
 			</Button>
 		{/snippet}
 	</Modal>
@@ -631,5 +1017,67 @@
 		clip: rect(0, 0, 0, 0);
 		white-space: nowrap;
 		border: 0;
+	}
+
+	.tabs-row {
+		display: flex;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: 12px;
+		margin-bottom: 4px;
+	}
+	.tabs-row :global(.tabs) {
+		margin-bottom: 0;
+		flex: 1;
+	}
+	.pending-hint {
+		color: var(--fg-muted);
+		font-size: 12px;
+		line-height: 1.5;
+		margin: 0 0 10px 0;
+	}
+	.pending-actions {
+		display: flex;
+		gap: 6px;
+		justify-content: flex-end;
+	}
+	.row-link-btn {
+		appearance: none;
+		background: transparent;
+		border: 1px solid var(--border);
+		color: var(--fg-muted);
+		font-size: 11px;
+		font-family: inherit;
+		text-decoration: none;
+		display: inline-flex;
+		align-items: center;
+		padding: 4px 10px;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		transition:
+			color var(--motion-fast, 120ms),
+			background var(--motion-fast, 120ms),
+			border-color var(--motion-fast, 120ms);
+	}
+	.row-link-btn:hover {
+		color: var(--accent);
+		border-color: var(--accent);
+		background: color-mix(in oklch, var(--accent) 8%, transparent);
+	}
+	.row-link-btn:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+	.reimport-form {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+	.reimport-form label {
+		display: block;
+		color: var(--fg);
+		font-size: 12.5px;
+		font-weight: 500;
+		margin-bottom: 4px;
 	}
 </style>

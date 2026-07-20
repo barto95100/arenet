@@ -27,7 +27,10 @@ const { toastMock, apiMock } = vi.hoisted(() => ({
 			list: vi.fn(),
 			get: vi.fn(),
 			upload: vi.fn(),
-			remove: vi.fn()
+			update: vi.fn(),
+			remove: vi.fn(),
+			generateCSR: vi.fn(),
+			csrDownloadUrl: vi.fn((id: string) => `/api/v1/certificates/external/${id}/csr`)
 		}
 	}
 }));
@@ -72,7 +75,9 @@ beforeEach(() => {
 	toastMock.pushToast.mockReset();
 	apiMock.externalCertsApi.list.mockReset();
 	apiMock.externalCertsApi.upload.mockReset();
+	apiMock.externalCertsApi.update.mockReset();
 	apiMock.externalCertsApi.remove.mockReset();
+	apiMock.externalCertsApi.generateCSR.mockReset();
 	apiMock.externalCertsApi.list.mockResolvedValue([]);
 });
 
@@ -205,5 +210,199 @@ describe('ExternalCertsPanel — upload', () => {
 		expect(apiMock.externalCertsApi.upload).toHaveBeenCalledWith(
 			expect.objectContaining({ name: 'uploaded', certPEM: 'CERTPEM', keyPEM: 'KEYPEM' })
 		);
+	});
+});
+
+// v2.20.0 CSR generation (Task 10) — Pending CSR tab. The pending
+// signal is EXCLUSIVELY `status === 'pending_csr'`; `csrSubject`
+// truthiness/presence must never be consulted (Go's `omitempty` is a
+// no-op on struct-typed fields, so an ACTIVE row can carry a non-nil,
+// empty-looking `csrSubject: {}` on the wire — see the CROSS-TASK RULE
+// doc comment on ExternalCertificate.status in api/types.ts).
+describe('ExternalCertsPanel — Active / Pending CSR tabs', () => {
+	it('splits active and pending_csr rows into tabs', async () => {
+		const active = extCert({ name: 'Active', status: '', notAfter: daysFromNow(60) });
+		const pending = extCert({
+			name: 'Pending',
+			status: 'pending_csr',
+			createdAt: daysFromNow(-1),
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		apiMock.externalCertsApi.list.mockResolvedValue([active, pending]);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-table');
+
+		// Active tab (default) shows only the active row.
+		expect(screen.getByText('Active')).toBeTruthy();
+		expect(screen.queryByText('Pending')).not.toBeInTheDocument();
+
+		const pendingTab = screen.getByTestId('external-certs-tab-pending');
+		expect(pendingTab.getAttribute('role')).toBe('tab');
+		await userEvent.click(pendingTab);
+
+		expect(screen.getByText('Pending')).toBeTruthy();
+		expect(screen.queryByTestId('external-certs-table')).not.toBeInTheDocument();
+	});
+
+	it('treats a legacy row with no status field as Active, not Pending', async () => {
+		const legacy = extCert({ name: 'Legacy' });
+		delete (legacy as { status?: string }).status;
+		apiMock.externalCertsApi.list.mockResolvedValue([legacy]);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-table');
+
+		await userEvent.click(screen.getByTestId('external-certs-tab-pending'));
+		expect(screen.queryByText('Legacy')).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByTestId('external-certs-tab-active'));
+		expect(screen.getByText('Legacy')).toBeTruthy();
+	});
+
+	it('treats an active row with an empty-looking csrSubject {} as Active, not Pending (the whole cross-task risk)', async () => {
+		// Go `omitempty` is a no-op on struct-typed fields, so an active
+		// row re-saved after the CSR feature shipped can carry
+		// `csrSubject: {}` on the wire even though status === ''. The
+		// panel MUST key off status alone.
+		const activeWithEmptyCsrSubject = extCert({
+			name: 'ActiveWithGhostSubject',
+			status: '',
+			csrSubject: {} as never
+		});
+		apiMock.externalCertsApi.list.mockResolvedValue([activeWithEmptyCsrSubject]);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-table');
+
+		expect(screen.getByText('ActiveWithGhostSubject')).toBeTruthy();
+
+		await userEvent.click(screen.getByTestId('external-certs-tab-pending'));
+		expect(screen.queryByText('ActiveWithGhostSubject')).not.toBeInTheDocument();
+	});
+
+	it('renders an age badge on a pending row derived from createdAt', async () => {
+		const pending = extCert({
+			name: 'FreshCSR',
+			status: 'pending_csr',
+			createdAt: daysFromNow(0), // recent
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		apiMock.externalCertsApi.list.mockResolvedValue([pending]);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-empty');
+		await userEvent.click(screen.getByTestId('external-certs-tab-pending'));
+
+		const row = await screen.findByTestId(`external-cert-pending-row-${pending.id}`);
+		const ageCell = row.querySelector('[data-age]');
+		expect(ageCell).toBeTruthy();
+		expect(ageCell?.getAttribute('data-age')).toBe('recent');
+		expect(ageCell?.querySelector('.badge')).toBeTruthy();
+	});
+
+	it('offers a CSR download link pointed at csrDownloadUrl(id)', async () => {
+		const pending = extCert({
+			name: 'DownloadMe',
+			status: 'pending_csr',
+			createdAt: daysFromNow(0),
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		apiMock.externalCertsApi.list.mockResolvedValue([pending]);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-empty');
+		await userEvent.click(screen.getByTestId('external-certs-tab-pending'));
+
+		const link = await screen.findByTestId(`external-cert-csr-download-${pending.id}`);
+		expect(link.getAttribute('href')).toBe(apiMock.externalCertsApi.csrDownloadUrl(pending.id));
+	});
+
+	it('deletes a pending row via remove() and refreshes the list', async () => {
+		const pending = extCert({
+			name: 'ToDelete',
+			status: 'pending_csr',
+			createdAt: daysFromNow(0),
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		apiMock.externalCertsApi.list.mockResolvedValueOnce([pending]).mockResolvedValueOnce([]);
+		apiMock.externalCertsApi.remove.mockResolvedValue(undefined);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-empty');
+		await userEvent.click(screen.getByTestId('external-certs-tab-pending'));
+
+		await userEvent.click(await screen.findByTestId(`external-cert-pending-delete-${pending.id}`));
+		await userEvent.click(await screen.findByTestId('external-cert-delete-confirm'));
+
+		expect(apiMock.externalCertsApi.remove).toHaveBeenCalledWith(pending.id);
+	});
+
+	it('renders response warnings as an inline notice after a successful cert-only re-import', async () => {
+		// Task 10 fix: confirmReimport must surface updated.warnings the
+		// same way the upload path surfaces created.warnings — it must
+		// NOT silently drop them.
+		const pending = extCert({
+			name: 'ReimportMe',
+			status: 'pending_csr',
+			createdAt: daysFromNow(0),
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		apiMock.externalCertsApi.list.mockResolvedValue([pending]);
+		apiMock.externalCertsApi.update.mockResolvedValue(
+			extCert({
+				name: 'ReimportMe',
+				status: '',
+				warnings: [
+					{ code: 'subject_cn_rewritten', message: 'The CA rewrote the subject CN.' },
+					{ code: 'sans_missing', message: 'A requested SAN is missing from the issued cert.' }
+				]
+			})
+		);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-empty');
+		await userEvent.click(screen.getByTestId('external-certs-tab-pending'));
+
+		await userEvent.click(await screen.findByTestId(`external-cert-reimport-${pending.id}`));
+		await userEvent.type(
+			await screen.findByTestId('external-cert-reimport-cert-pem'),
+			'SIGNEDCERTPEM'
+		);
+		await userEvent.click(screen.getByTestId('external-cert-reimport-submit'));
+
+		const notice = await screen.findByTestId('external-cert-reimport-warnings');
+		expect(notice.textContent ?? '').toContain('The CA rewrote the subject CN.');
+		expect(notice.textContent ?? '').toContain('A requested SAN is missing from the issued cert.');
+		expect(apiMock.externalCertsApi.update).toHaveBeenCalledWith(
+			pending.id,
+			expect.objectContaining({ certPEM: 'SIGNEDCERTPEM', keyPEM: '' })
+		);
+	});
+
+	it('shows a "Generate CSR" button that opens GenerateCSRForm; on success refreshes and switches to Pending', async () => {
+		apiMock.externalCertsApi.list.mockResolvedValue([]);
+		const created = extCert({
+			name: 'NewlyGenerated',
+			status: 'pending_csr',
+			createdAt: daysFromNow(0),
+			csrSubject: { commonName: 'new.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		apiMock.externalCertsApi.generateCSR.mockResolvedValue(created);
+		apiMock.externalCertsApi.list.mockResolvedValueOnce([]).mockResolvedValue([created]);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-empty');
+
+		await userEvent.click(await screen.findByTestId('external-cert-generate-csr-btn'));
+		const form = await screen.findByTestId('generate-csr-form');
+		expect(form).toBeInTheDocument();
+
+		await userEvent.type(await screen.findByTestId('csr-common-name'), 'new.corp.local');
+		await userEvent.click(screen.getByTestId('csr-generate-btn'));
+
+		// Refreshed + switched to the Pending tab, where the new row shows.
+		expect(await screen.findByText('NewlyGenerated')).toBeTruthy();
+		expect(apiMock.externalCertsApi.list).toHaveBeenCalled();
 	});
 });

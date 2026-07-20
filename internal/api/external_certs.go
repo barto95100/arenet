@@ -17,7 +17,9 @@
 package api
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"sort"
 
@@ -234,6 +236,23 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// v2.20.0: re-import onto a pending_csr row. ParseExternalCert already
+	// enforced the mandatory public-key match (tls.X509KeyPair →
+	// key_does_not_match_cert) above, so we only reach here with a leaf
+	// that matches the stored key. Add the non-blocking subject/SANs diff
+	// and flip the row to active. Gated on req.CertPEM != "" (not just
+	// the pending status) so a name-only edit of a pending row — which
+	// has no leaf yet — never flips to an invalid "active, no cert" row.
+	clearPending := false
+	if existing.Status == storage.StatusPendingCSR && req.CertPEM != "" {
+		if block, _ := pem.Decode([]byte(certPEM)); block != nil {
+			if leaf, perr := x509.ParseCertificate(block.Bytes); perr == nil {
+				warnings = append(warnings, storage.CompareCSRAndCert(existing.CSRSubject, leaf)...)
+			}
+		}
+		clearPending = true
+	}
+
 	rec := existing
 	rec.Name = req.Name
 	rec.Description = req.Description
@@ -249,6 +268,9 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 		rec.NotBefore = meta.NotBefore
 		rec.NotAfter = meta.NotAfter
 		rec.DNSNames = meta.DNSNames
+	}
+	if clearPending {
+		rec.Status = "" // now active and servable
 	}
 
 	updated, err := h.store.UpdateExternalCertificate(r.Context(), id, rec)
@@ -322,4 +344,86 @@ func (h *Handler) deleteExternalCert(w http.ResponseWriter, r *http.Request) {
 
 	h.appendAudit(r, audit.Event{Action: audit.ActionExternalCertDeleted, TargetType: "external_certificate", TargetID: id})
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
+// externalCertCSRRequest is the wire shape for POST …/external/csr.
+type externalCertCSRRequest struct {
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	CSRSubject  storage.CSRSubject `json:"csrSubject"`
+}
+
+// createExternalCertCSR generates a key + CSR and stores a pending_csr
+// row (spec §5.1). The private key is stored (redacted on the echo); the
+// CSR is returned so the UI can offer immediate download.
+func (h *Handler) createExternalCertCSR(w http.ResponseWriter, r *http.Request) {
+	var req externalCertCSRRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
+		return
+	}
+	keyPEM, csrPEM, err := storage.GenerateKeyAndCSR(req.CSRSubject)
+	if err != nil {
+		// storage sentinels carry actionable codes as their message.
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rec := storage.ExternalCertificate{
+		Name:        req.Name,
+		Description: req.Description,
+		Status:      storage.StatusPendingCSR,
+		KeyPEM:      keyPEM,
+		CSRPEM:      csrPEM,
+		CSRSubject:  req.CSRSubject,
+		DNSNames:    req.CSRSubject.SANs,
+	}
+	created, err := h.store.CreateExternalCertificate(r.Context(), rec)
+	if err != nil {
+		h.logger.Error("create external cert csr", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to save CSR request")
+		return
+	}
+	h.appendAudit(r, audit.Event{Action: audit.ActionExternalCertCSRGenerated, TargetType: "external_certificate", TargetID: created.ID})
+	writeJSON(w, http.StatusCreated, toExternalCertResponse(created, nil))
+}
+
+// downloadExternalCertCSR returns the stored CSR as a downloadable PEM
+// (spec §5.2). The CSR is public; the private key is never served here.
+func (h *Handler) downloadExternalCertCSR(w http.ResponseWriter, r *http.Request) {
+	c, err := h.store.GetExternalCertificate(r.Context(), chi.URLParam(r, "id"))
+	if err == storage.ErrNotFound {
+		writeError(w, http.StatusNotFound, "certificate not found")
+		return
+	}
+	if err != nil {
+		h.logger.Error("get external cert for csr download", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to load certificate")
+		return
+	}
+	if c.CSRPEM == "" {
+		writeError(w, http.StatusNotFound, "no CSR for this certificate")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(c.Name)+`.csr"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(c.CSRPEM))
+}
+
+// sanitizeFilename keeps a Content-Disposition filename to a safe subset.
+func sanitizeFilename(name string) string {
+	if name == "" {
+		return "certificate"
+	}
+	out := make([]rune, 0, len(name))
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			out = append(out, r)
+		} else {
+			out = append(out, '_')
+		}
+	}
+	return string(out)
 }

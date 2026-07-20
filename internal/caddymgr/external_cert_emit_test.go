@@ -68,3 +68,22 @@ func TestBuildConfigJSON_ManualCert_EmitsLoadPemAndSkip(t *testing.T) {
 		t.Error("manual route wrongly emitted an ACME policy")
 	}
 }
+
+// TestBuildLoadPemList_SkipsPendingEmptyLeaf is the Task 7 defensive-skip
+// gate: a pending_csr row carries a generated key + CSR but NO leaf
+// CertPEM yet (issuance hasn't completed). A TLS-enabled manual route
+// wired to such a row must NOT be emitted via load_pem — emitting
+// {"certificate": "", "key": <priv>} would be invalid Caddy JSON.
+func TestBuildLoadPemList_SkipsPendingEmptyLeaf(t *testing.T) {
+	routes := []storage.Route{{
+		Host: "app.corp.local", CertSource: storage.RouteCertSourceManual,
+		CertID: "pending-1", TLSEnabled: true,
+	}}
+	ext := map[string]storage.ExternalCertificate{
+		"pending-1": {ID: "pending-1", Status: storage.StatusPendingCSR, CertPEM: "", KeyPEM: "irrelevant"},
+	}
+	got := buildLoadPemList(routes, ext)
+	if got != nil {
+		t.Fatalf("a pending (empty-leaf) row must not be emitted, got %v", got)
+	}
+}

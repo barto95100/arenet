@@ -24,13 +24,21 @@
 import { request } from './client';
 import type {
 	CertWarning,
+	CSRSubject,
 	ExternalCertificate,
-	ExternalCertUploadRequest
+	ExternalCertUploadRequest,
+	GenerateCSRRequest
 } from './types';
 
 // Re-export the types so callers can import them alongside the client
 // (mirrors error-templates.ts, which co-locates its types).
-export type { CertWarning, ExternalCertificate, ExternalCertUploadRequest };
+export type {
+	CertWarning,
+	CSRSubject,
+	ExternalCertificate,
+	ExternalCertUploadRequest,
+	GenerateCSRRequest
+};
 
 // Same BASE / `/api/v1` prefix + credentials convention as the shared
 // request() helper in ./client (see client.ts for the DEV vs prod
@@ -71,6 +79,25 @@ export const externalCertsApi = {
 	},
 
 	/**
+	 * PUT /api/v1/certificates/external/{id} — re-import / edit an
+	 * existing certificate. `keyPEM: ''` preserves the stored key
+	 * (secret preserve-on-edit — the frontend never re-sends a private
+	 * key it does not have, e.g. the cert-only re-import onto a
+	 * `pending_csr` row). `certPEM: ''` likewise preserves the stored
+	 * leaf. Re-importing a signed cert onto a `pending_csr` row (the
+	 * stored key matched via `tls.X509KeyPair`) flips `status` back to
+	 * `''` server-side and the response may carry non-blocking
+	 * subject/SANs diff `warnings`.
+	 */
+	update(id: string, req: ExternalCertUploadRequest): Promise<ExternalCertificate> {
+		return request<ExternalCertificate>(
+			'PUT',
+			`/certificates/external/${encodeURIComponent(id)}`,
+			req
+		);
+	},
+
+	/**
 	 * DELETE /api/v1/certificates/external/{id} — removes the uploaded
 	 * certificate from Arenet (does NOT revoke it with the issuing CA).
 	 * On 200 resolves void. On 409 (still referenced by a route),
@@ -91,5 +118,23 @@ export const externalCertsApi = {
 				blockingRoutes: Array.isArray(body.blockingRoutes) ? body.blockingRoutes : []
 			});
 		}
+	},
+
+	/**
+	 * POST /api/v1/certificates/external/csr — generate a key + CSR and
+	 * create a pending_csr row. Returns 201 with csrPEM populated (keyPEM
+	 * redacted). Backend: internal/api/external_certs.go createExternalCertCSR.
+	 */
+	generateCSR(req: GenerateCSRRequest): Promise<ExternalCertificate> {
+		return request<ExternalCertificate>('POST', '/certificates/external/csr', req);
+	},
+
+	/**
+	 * Download URL for the stored CSR PEM (text/plain attachment). The CSR
+	 * is public; the private key is never served. Anchor the <a href> at
+	 * this URL rather than fetching, so the browser handles the download.
+	 */
+	csrDownloadUrl(id: string): string {
+		return `${BASE}/api/v1/certificates/external/${encodeURIComponent(id)}/csr`;
 	}
 };

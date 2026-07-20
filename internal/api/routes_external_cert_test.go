@@ -46,6 +46,25 @@ func seedExternalCert(t *testing.T, env *testEnv, name string, dnsNames []string
 	return created.ID
 }
 
+// seedPendingExternalCert inserts a pending_csr ExternalCertificate
+// (empty CertPEM, as createExternalCertCSR leaves it) directly into the
+// store with the chosen DNSNames, returning its generated ID. Used to
+// pin the v2.20.0 cert_not_ready guard: a pending row must never be
+// bindable to a route (empty leaf → silently-broken HTTPS).
+func seedPendingExternalCert(t *testing.T, env *testEnv, name string, dnsNames []string) string {
+	t.Helper()
+	created, err := env.store.CreateExternalCertificate(context.Background(), storage.ExternalCertificate{
+		Name:     name,
+		Status:   storage.StatusPendingCSR,
+		KeyPEM:   "-----BEGIN PRIVATE KEY-----\nseed\n-----END PRIVATE KEY-----\n",
+		DNSNames: dnsNames,
+	})
+	if err != nil {
+		t.Fatalf("seed pending external cert: %v", err)
+	}
+	return created.ID
+}
+
 // jsonBodyManualCert builds a route POST/PUT body selecting the manual
 // cert source referencing certID.
 func jsonBodyManualCert(host, certID string) string {
@@ -145,6 +164,29 @@ func TestCreateRoute_ManualCert_UnknownCertID(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "cert_not_found") {
 		t.Errorf("want cert_not_found; body=%s", rec.Body)
+	}
+}
+
+// TestCreateRoute_ManualCert_PendingCSR_Rejected pins the v2.20.0
+// finding: a manual route referencing a pending_csr cert (no signed
+// leaf yet) is rejected with 400 cert_not_ready, even though the
+// pending row's SANs cover the route host. Without this guard the
+// route would be created TLS-enabled but serve NO certificate (the
+// empty leaf is skipped at Caddy-config emission).
+func TestCreateRoute_ManualCert_PendingCSR_Rejected(t *testing.T) {
+	env := newTestEnv(t, false)
+	certID := seedPendingExternalCert(t, env, "pending", []string{"app.example.com"})
+
+	body := jsonBodyManualCert("app.example.com", certID)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("create status=%d body=%s; want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "cert_not_ready") {
+		t.Errorf("want cert_not_ready; body=%s", rec.Body)
 	}
 }
 

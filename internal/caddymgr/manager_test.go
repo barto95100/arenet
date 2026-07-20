@@ -1546,6 +1546,55 @@ func TestBuildConfigJSON_LoadsCleanly_SkipCertificates(t *testing.T) {
 	}
 }
 
+// TestBuildConfigJSON_LoadsCleanly_PendingCertNotEmitted is the Task 7
+// caddy.Validate counterpart to TestBuildLoadPemList_SkipsPendingEmptyLeaf
+// (external_cert_emit_test.go): a TLS-enabled manual route wired to a
+// pending_csr row (empty leaf CertPEM) must produce a config that (a)
+// still passes a real caddy.Validate Provision, and (b) contains no
+// load_pem entry for that route at all — proving the empty-leaf guard in
+// buildLoadPemList is exercised end-to-end, not just at the unit level.
+// Placed after the TestSyncRegistry tests (per the ordering note above
+// TestBuildConfigJSON_LoadsCleanly_SkipCertificates) to avoid
+// caddy.Validate goroutine-pollution.
+func TestBuildConfigJSON_LoadsCleanly_PendingCertNotEmitted(t *testing.T) {
+	routes := []storage.Route{
+		{
+			ID:         "r-pending",
+			Host:       "app.pending.example.com",
+			Upstreams:  []storage.Upstream{{URL: "http://127.0.0.1:9007", Weight: 1}},
+			LBPolicy:   storage.LBPolicyRoundRobin,
+			TLSEnabled: true,
+			CertSource: storage.RouteCertSourceManual,
+			CertID:     "pending-1",
+			WAFMode:    "off",
+		},
+	}
+	metrics.SetRegistry(metrics.NewRegistry())
+	opts := buildOpts{
+		DevMode: true,
+		ExternalCerts: map[string]storage.ExternalCertificate{
+			"pending-1": {ID: "pending-1", Status: storage.StatusPendingCSR, CertPEM: "", KeyPEM: "irrelevant"},
+		},
+	}
+	raw, err := buildConfigJSON(routes, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, raw)
+	}
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate failed on pending-cert config: %v\n%s", err, raw)
+	}
+
+	compact := strings.Join(strings.Fields(string(raw)), "")
+	if strings.Contains(compact, `"load_pem"`) {
+		t.Errorf("pending (empty-leaf) cert must not be emitted via load_pem\n%s", raw)
+	}
+}
+
 // noopLookup satisfies countryblock.CountryLookup for the
 // caddy.Validate-driven test below. Always returns ""
 // (degraded-lookup path); the matcher's §D5 fail-open

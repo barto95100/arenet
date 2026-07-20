@@ -2568,7 +2568,9 @@ func buildTLSApp(acme acmePartition, opts buildOpts, routes []storage.Route) map
 // Dedup by CertID: a certificate shared by several routes (e.g. a SAN
 // cert covering multiple hostnames) emits ONCE. A route whose CertID is
 // absent from ext (dangling reference — cert deleted between reloads) is
-// skipped defensively rather than emitting a broken half-entry.
+// skipped defensively rather than emitting a broken half-entry. A row
+// with an empty leaf CertPEM (e.g. a pending_csr row awaiting issuance)
+// is likewise skipped — see the guard below.
 func buildLoadPemList(routes []storage.Route, ext map[string]storage.ExternalCertificate) []map[string]any {
 	out := make([]map[string]any, 0)
 	seen := make(map[string]struct{})
@@ -2585,6 +2587,13 @@ func buildLoadPemList(routes []storage.Route, ext map[string]storage.ExternalCer
 		cert, ok := ext[route.CertID]
 		if !ok {
 			// Dangling CertID — skip rather than emit a broken entry.
+			continue
+		}
+		if cert.CertPEM == "" {
+			// A pending_csr row (or any cert missing its leaf) is not
+			// servable — emitting {"certificate":"", ...} yields invalid
+			// Caddy JSON. Skip it defensively; emission is NOT otherwise
+			// guarded on an empty leaf (verified manager.go:2591, v2.20.0).
 			continue
 		}
 		seen[route.CertID] = struct{}{}

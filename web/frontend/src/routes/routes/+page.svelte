@@ -213,9 +213,15 @@
 	// Eligible = uploaded certs whose SANs cover the current host
 	// (RFC 6125 single-label wildcard, case-insensitive — same rule
 	// the backend re-checks). Preserves the server's notAfter-ascending
-	// order (externalCertsApi.list already sorts).
+	// order (externalCertsApi.list already sorts). Pending CSR rows
+	// (status === 'pending_csr') have no leaf yet — picking one would
+	// create a TLS route serving no certificate (spec §6: pending rows
+	// are never selectable here), so they're excluded regardless of
+	// SAN coverage.
 	let eligibleCerts = $derived(
-		externalCerts.filter((c) => hostMatchesSAN(formData.host.trim(), c.dnsNames ?? []))
+		externalCerts.filter(
+			(c) => c.status !== 'pending_csr' && hostMatchesSAN(formData.host.trim(), c.dnsNames ?? [])
+		)
 	);
 	let healthCheckTouched = $state(false);
 

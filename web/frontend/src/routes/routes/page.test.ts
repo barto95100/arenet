@@ -3471,6 +3471,56 @@ describe('Routes page — CertSource picker (manual external certs)', () => {
 		expect(payload.cert_id).toBe('cert-covering');
 	});
 
+	it('excludes a pending_csr cert from the manual picker even when its SANs cover the host', async () => {
+		// v2.20.0 finding: a pending_csr row has no signed leaf yet, so
+		// picking it would create a TLS route serving NO certificate.
+		// Spec §6 promises pending rows are never selectable here — this
+		// pins the eligibleCerts status exclusion (independent of the
+		// SAN-coverage filter, which the pending cert otherwise passes).
+		const active = makeExternalCert({
+			id: 'cert-active',
+			name: 'active-example',
+			dnsNames: ['*.example.com']
+		});
+		const pending = makeExternalCert({
+			id: 'cert-pending',
+			name: 'pending-example',
+			status: 'pending_csr',
+			certPEM: '',
+			dnsNames: ['app.example.com']
+		});
+		externalCertsMock.list.mockResolvedValue([active, pending]);
+
+		const seeded = makeRoute({
+			id: 'manual-pending-fixture',
+			host: 'app.example.com',
+			tlsEnabled: true
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+
+		render(Page);
+		const hostCell = await screen.findByText('app.example.com');
+		await fireEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		const sel = certSourceSelect();
+		expect(sel).not.toBeNull();
+		await fireEvent.change(sel!, { target: { value: 'manual' } });
+		await tick();
+		await waitFor(() => expect(externalCertsMock.list).toHaveBeenCalled());
+		await tick();
+
+		const activeRadio = document.querySelector<HTMLInputElement>(
+			'input[type="radio"][value="cert-active"]'
+		);
+		const pendingRadio = document.querySelector<HTMLInputElement>(
+			'input[type="radio"][value="cert-pending"]'
+		);
+		expect(activeRadio).not.toBeNull();
+		expect(pendingRadio).toBeNull();
+	});
+
 	it('shows a warning (and no radios) when no uploaded cert covers the host', async () => {
 		externalCertsMock.list.mockResolvedValue([
 			makeExternalCert({ id: 'cert-other', dnsNames: ['app.other.test'] })
