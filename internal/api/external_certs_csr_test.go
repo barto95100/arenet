@@ -174,8 +174,9 @@ func TestDownloadExternalCertCSR(t *testing.T) {
 	}
 }
 
-// TestDownloadExternalCertCSR_NotFound covers both 404 cases: an
-// unknown id, and an existing cert row with no stored CSR.
+// TestDownloadExternalCertCSR_NotFound covers the unknown-id 404 case
+// (storage.ErrNotFound). See TestDownloadExternalCertCSR_ExistingRowNoCSR
+// for the distinct existing-row-without-CSR 404 case.
 func TestDownloadExternalCertCSR_NotFound(t *testing.T) {
 	env := newTestEnv(t, false)
 
@@ -185,5 +186,37 @@ func TestDownloadExternalCertCSR_NotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDownloadExternalCertCSR_ExistingRowNoCSR covers the second, distinct
+// 404 branch: the row exists (found in storage) but was created via the
+// plain-upload path (SOCLE bring-your-own-cert), so CSRPEM == "". This
+// guards against a refactor silently turning that branch into a
+// 200-with-empty-body.
+func TestDownloadExternalCertCSR_ExistingRowNoCSR(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	certPEM, keyPEM := genSelfSignedAPI(t, "app.example.com", []string{"app.example.com"})
+	rec := postExternalCert(t, env, "socle-upload", certPEM, keyPEM, "")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST status=%d body=%s", rec.Code, rec.Body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatalf("create response has no id: %s", rec.Body.String())
+	}
+
+	dreq := httptest.NewRequest(http.MethodGet, "/api/v1/certificates/external/"+created.ID+"/csr", nil)
+	drec := httptest.NewRecorder()
+	env.router.ServeHTTP(drec, dreq)
+
+	if drec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (existing row, no CSR), body %s", drec.Code, drec.Body.String())
 	}
 }
