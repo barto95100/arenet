@@ -1411,8 +1411,51 @@
 			"success": "Certificat de {domain} supprimé"
 		},
 		"externalCerts": {
+			"generate": {
+				"title": "Générer une CSR",
+				"openButton": "Générer une CSR",
+				"nameLabel": "Nom",
+				"descriptionLabel": "Description (optionnel)",
+				"commonNameLabel": "Nom commun (CN)",
+				"commonNameRequiredError": "Le nom commun est obligatoire.",
+				"sansLabel": "Noms alternatifs (SAN)",
+				"sansHelp": "Liste de noms DNS additionnels séparés par des virgules (ex. www.example.com, api.example.com).",
+				"organizationLabel": "Organisation (O, optionnel)",
+				"orgUnitLabel": "Unité organisationnelle (OU, optionnel)",
+				"countryLabel": "Pays (C, optionnel)",
+				"localityLabel": "Localité (L, optionnel)",
+				"stateLabel": "État / Province (ST, optionnel)",
+				"keyAlgorithmLegend": "Algorithme de clé",
+				"keyAlgorithmRSA": "RSA 4096",
+				"keyAlgorithmRSAHelp": "Compatible avec tous les CA, y compris les PKI historiques (Windows AD CS).",
+				"keyAlgorithmECDSA": "ECDSA P-256",
+				"keyAlgorithmECDSAHelp": "Négociation plus rapide, clé plus petite. Certains CA historiques refusent l'ECDSA — vérifiez le support au préalable.",
+				"submit": "Générer la CSR",
+				"submitting": "Génération en cours…"
+			},
 			"pending": {
-				"reimportWarningsTitle": "Avertissements"
+				"tab": "CSR en attente",
+				"activeTab": "Actifs",
+				"tabsLabel": "Certificats externes",
+				"colSubject": "Sujet",
+				"colAge": "Âge",
+				"empty": "Aucune CSR en attente d'un certificat signé.",
+				"multiplePendingHint": "Chaque ligne en attente a été générée par une demande « Générer une CSR ». Téléchargez la CSR, soumettez-la à votre CA, puis importez ici le certificat signé.",
+				"downloadCSR": "Télécharger la CSR",
+				"uploadSigned": "Importer le certificat signé",
+				"uploadSignedTitle": "Importer le certificat signé",
+				"certLabel": "Certificat (PEM)",
+				"certRequiredError": "Le certificat est obligatoire.",
+				"chainLabel": "Chaîne (PEM, optionnel)",
+				"uploadSignedSubmit": "Importer le certificat",
+				"reimportSuccess": "Certificat « {name} » importé",
+				"reimportWarningsTitle": "Avertissements",
+				"ageRecent": "Récent",
+				"ageWaiting": "En attente",
+				"ageOld": "Ancien",
+				"ageStale": "Périmé",
+				"deleteConfirmTitle": "Supprimer la CSR en attente",
+				"deleteConfirmText": "Cette action supprime définitivement la clé privée générée. Si votre CA signe le certificat plus tard, vous ne pourrez PAS l'importer — vous devrez générer une nouvelle CSR."
 			}
 		}
 	},
