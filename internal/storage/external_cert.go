@@ -26,6 +26,11 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// StatusPendingCSR marks a row that carries a generated key + CSR and is
+// awaiting its signed certificate. Such a row has an empty CertPEM and is
+// never emitted as load_pem (Task 7). Active certs have Status == "".
+const StatusPendingCSR = "pending_csr"
+
 // ExternalCertificate is an operator-uploaded TLS cert served on a
 // route via load_pem (v2.19.0). KeyPEM is a SECRET — redact-on-GET at
 // the API layer, preserve-on-edit here (empty KeyPEM on update keeps
@@ -48,6 +53,11 @@ type ExternalCertificate struct {
 	NotBefore          time.Time `json:"notBefore"`
 	NotAfter           time.Time `json:"notAfter"`
 	DNSNames           []string  `json:"dnsNames"`
+
+	// v2.20.0 CSR generation. Empty on every SOCLE-uploaded cert.
+	Status     string     `json:"status,omitempty"`     // "" = active | "pending_csr"
+	CSRPEM     string     `json:"csrPEM,omitempty"`     // PUBLIC — re-downloadable
+	CSRSubject CSRSubject `json:"csrSubject,omitempty"` // requested subject (display + diff)
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
