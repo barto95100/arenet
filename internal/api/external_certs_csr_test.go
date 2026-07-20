@@ -466,3 +466,36 @@ func TestReimportSignedCert_NameOnlyEditDoesNotFlipStatus(t *testing.T) {
 		t.Errorf("name was unexpectedly changed on a rejected PUT: %q", stored.Name)
 	}
 }
+
+// TestDeletePendingCSR_NoConflict proves the existing SOCLE DELETE
+// handler already deletes a pending_csr row cleanly (200, not 409): the
+// delete-guard blocks only when a TLS route references the cert, and a
+// pending row (empty CertPEM, no leaf yet) can never be servably
+// route-referenced. Regression test only — no production code change.
+func TestDeletePendingCSR_NoConflict(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	gen := `{"name":"x","csrSubject":{"commonName":"app.corp.local","keyAlgorithm":"rsa_4096"}}`
+	greq := httptest.NewRequest(http.MethodPost, "/api/v1/certificates/external/csr", strings.NewReader(gen))
+	greq.Header.Set("Content-Type", "application/json")
+	grec := httptest.NewRecorder()
+	env.router.ServeHTTP(grec, greq)
+	if grec.Code != http.StatusCreated {
+		t.Fatalf("CSR create status = %d, body %s", grec.Code, grec.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(grec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("create response has no id: %v", created)
+	}
+
+	dreq := httptest.NewRequest(http.MethodDelete, "/api/v1/certificates/external/"+id, nil)
+	drec := httptest.NewRecorder()
+	env.router.ServeHTTP(drec, dreq)
+	if drec.Code != http.StatusOK {
+		t.Fatalf("delete pending = %d, want 200 (a pending row is never route-referenced)", drec.Code)
+	}
+}
