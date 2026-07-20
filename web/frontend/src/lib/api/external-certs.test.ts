@@ -79,15 +79,12 @@ describe('externalCertsApi: URL + verb mapping', () => {
 			status: 'pending_csr',
 			csrPEM: '---CSR---'
 		});
-		const res = await externalCertsApi.generateCSR({
+		const req = {
 			name: 'x',
-			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
-		});
-		expect(requestMock).toHaveBeenCalledWith(
-			'POST',
-			'/certificates/external/csr',
-			expect.any(Object)
-		);
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' as const }
+		};
+		const res = await externalCertsApi.generateCSR(req);
+		expect(requestMock).toHaveBeenCalledWith('POST', '/certificates/external/csr', req);
 		expect(res.status).toBe('pending_csr');
 	});
 
