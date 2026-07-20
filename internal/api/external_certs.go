@@ -17,7 +17,9 @@
 package api
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"sort"
 
@@ -234,6 +236,23 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// v2.20.0: re-import onto a pending_csr row. ParseExternalCert already
+	// enforced the mandatory public-key match (tls.X509KeyPair →
+	// key_does_not_match_cert) above, so we only reach here with a leaf
+	// that matches the stored key. Add the non-blocking subject/SANs diff
+	// and flip the row to active. Gated on req.CertPEM != "" (not just
+	// the pending status) so a name-only edit of a pending row — which
+	// has no leaf yet — never flips to an invalid "active, no cert" row.
+	clearPending := false
+	if existing.Status == storage.StatusPendingCSR && req.CertPEM != "" {
+		if block, _ := pem.Decode([]byte(certPEM)); block != nil {
+			if leaf, perr := x509.ParseCertificate(block.Bytes); perr == nil {
+				warnings = append(warnings, storage.CompareCSRAndCert(existing.CSRSubject, leaf)...)
+			}
+		}
+		clearPending = true
+	}
+
 	rec := existing
 	rec.Name = req.Name
 	rec.Description = req.Description
@@ -249,6 +268,9 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 		rec.NotBefore = meta.NotBefore
 		rec.NotAfter = meta.NotAfter
 		rec.DNSNames = meta.DNSNames
+	}
+	if clearPending {
+		rec.Status = "" // now active and servable
 	}
 
 	updated, err := h.store.UpdateExternalCertificate(r.Context(), id, rec)
