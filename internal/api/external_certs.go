@@ -323,3 +323,46 @@ func (h *Handler) deleteExternalCert(w http.ResponseWriter, r *http.Request) {
 	h.appendAudit(r, audit.Event{Action: audit.ActionExternalCertDeleted, TargetType: "external_certificate", TargetID: id})
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
+
+// externalCertCSRRequest is the wire shape for POST …/external/csr.
+type externalCertCSRRequest struct {
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	CSRSubject  storage.CSRSubject `json:"csrSubject"`
+}
+
+// createExternalCertCSR generates a key + CSR and stores a pending_csr
+// row (spec §5.1). The private key is stored (redacted on the echo); the
+// CSR is returned so the UI can offer immediate download.
+func (h *Handler) createExternalCertCSR(w http.ResponseWriter, r *http.Request) {
+	var req externalCertCSRRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
+		return
+	}
+	keyPEM, csrPEM, err := storage.GenerateKeyAndCSR(req.CSRSubject)
+	if err != nil {
+		// storage sentinels carry actionable codes as their message.
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rec := storage.ExternalCertificate{
+		Name:        req.Name,
+		Description: req.Description,
+		Status:      storage.StatusPendingCSR,
+		KeyPEM:      keyPEM,
+		CSRPEM:      csrPEM,
+		CSRSubject:  req.CSRSubject,
+		DNSNames:    req.CSRSubject.SANs,
+	}
+	created, err := h.store.CreateExternalCertificate(r.Context(), rec)
+	if err != nil {
+		h.logger.Error("create external cert csr", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to save CSR request")
+		return
+	}
+	h.appendAudit(r, audit.Event{Action: audit.ActionExternalCertCSRGenerated, TargetType: "external_certificate", TargetID: created.ID})
+	writeJSON(w, http.StatusCreated, toExternalCertResponse(created, nil))
+}

@@ -251,9 +251,10 @@ const (
 	// SECRET and is NEVER recorded in the audit row — only the
 	// certificate identity (target_id = external cert UUID) lands
 	// here. Uploaded on POST, Updated on PUT, Deleted on DELETE.
-	ActionExternalCertUploaded = "external_cert_uploaded"
-	ActionExternalCertUpdated  = "external_cert_updated"
-	ActionExternalCertDeleted  = "external_cert_deleted"
+	ActionExternalCertUploaded     = "external_cert_uploaded"
+	ActionExternalCertUpdated      = "external_cert_updated"
+	ActionExternalCertDeleted      = "external_cert_deleted"
+	ActionExternalCertCSRGenerated = "external_cert_csr_generated"
 )
 
 // allActions is the canonical set of audit action values for Step D.
@@ -324,6 +325,7 @@ var allActions = []string{
 	ActionExternalCertUploaded,
 	ActionExternalCertUpdated,
 	ActionExternalCertDeleted,
+	ActionExternalCertCSRGenerated,
 }
 
 // AllActions returns a fresh copy of the canonical Step D action set.

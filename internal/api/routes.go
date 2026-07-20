@@ -367,6 +367,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// v2.19.0). GETs are in the viewer section above,
 				// same split as maintenance-page / error-templates.
 				r.Post("/certificates/external", h.createExternalCert)
+				r.Post("/certificates/external/csr", h.createExternalCertCSR)
 				r.Put("/certificates/external/{id}", h.updateExternalCert)
 				r.Delete("/certificates/external/{id}", h.deleteExternalCert)
 				// Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-
