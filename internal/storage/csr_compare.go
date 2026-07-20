@@ -48,16 +48,28 @@ func CompareCSRAndCert(want CSRSubject, cert *x509.Certificate) []CertWarning {
 			"CA rewrote the Country (requested " + want.Country + ")"})
 	}
 
+	// The requested SAN baseline must mirror what GenerateKeyAndCSR
+	// actually put on the wire, not the raw operator input: the CSR
+	// generator auto-adds the CN to the SAN list when absent (a bare-CN
+	// cert with no matching SAN is rejected by modern clients — see
+	// csr.go). Without this fold, a CSR requested with empty/CN-less
+	// SANs but an issued cert whose SAN list (correctly) includes the
+	// CN would report a false-positive sans_extra.
+	wantSANs := want.SANs
+	if want.CommonName != "" && !containsString(wantSANs, want.CommonName) {
+		wantSANs = append([]string{want.CommonName}, wantSANs...)
+	}
+
 	issued := map[string]bool{}
 	for _, s := range cert.DNSNames {
 		issued[s] = true
 	}
 	requested := map[string]bool{}
-	for _, s := range want.SANs {
+	for _, s := range wantSANs {
 		requested[s] = true
 	}
 	var missing []string
-	for _, s := range want.SANs {
+	for _, s := range wantSANs {
 		if !issued[s] {
 			missing = append(missing, s)
 		}

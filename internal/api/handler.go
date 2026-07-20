@@ -1848,6 +1848,10 @@ func computeEffectiveCertSource(r storage.Route, mds []storage.ManagedDomain) st
 // no-op (returns nil). When CertSource == "manual" it requires:
 //   - CertID non-empty (else cert_id_required),
 //   - CertID references an existing external cert (else cert_not_found),
+//   - the referenced cert has a signed leaf, i.e. is not still a
+//     pending_csr row (else cert_not_ready) — a pending row's empty
+//     leaf is skipped at emission, so binding a route to it would
+//     silently serve NO certificate (v2.20.0 finding),
 //   - the referenced cert's SANs cover the route host (else
 //     host_not_covered_by_cert).
 //
@@ -1866,6 +1870,9 @@ func (h *Handler) validateManualCertRef(ctx context.Context, r *storage.Route) e
 	}
 	if err != nil {
 		return err
+	}
+	if cert.CertPEM == "" {
+		return errors.New("cert_not_ready: the selected certificate is still pending its signed certificate (CSR not yet completed)")
 	}
 	if !storage.HostMatchesSAN(r.Host, cert.DNSNames) {
 		return errors.New("host_not_covered_by_cert: the route host is not present in the certificate SANs")

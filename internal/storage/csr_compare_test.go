@@ -69,3 +69,29 @@ func TestCompareCSRAndCert_OrgRewrittenAndSANsExtra(t *testing.T) {
 		t.Fatalf("expected org_rewritten + sans_extra, got %v", c)
 	}
 }
+
+// TestCompareCSRAndCert_EmptySANs_CNAutoAdded_NoFalseSANsExtra pins the
+// v2.20.0 fix: GenerateKeyAndCSR auto-adds the CN to the CSR's SAN list
+// when the operator requested no SANs (or omitted the CN from them),
+// but the stored CSRSubject.SANs kept the raw operator request. Without
+// folding the CN into the comparison baseline here, a CA that issues
+// the (correct, CN-inclusive) SAN list would spuriously trigger
+// sans_extra on every CSR-generated cert with no explicit SANs.
+func TestCompareCSRAndCert_EmptySANs_CNAutoAdded_NoFalseSANsExtra(t *testing.T) {
+	want := CSRSubject{CommonName: "app.corp.local"} // SANs left empty, mirrors GenerateKeyAndCSR's own auto-add input
+	cert := &x509.Certificate{
+		Subject:  pkix.Name{CommonName: "app.corp.local"},
+		DNSNames: []string{"app.corp.local"},
+	}
+	ws := CompareCSRAndCert(want, cert)
+	c := codes(ws)
+	if c[CertWarnSANsExtra] {
+		t.Errorf("unexpected sans_extra for CN-only issued SAN, got %v", ws)
+	}
+	if c[CertWarnSANsMissing] {
+		t.Errorf("unexpected sans_missing for CN-only issued SAN, got %v", ws)
+	}
+	if len(ws) != 0 {
+		t.Errorf("expected no warnings at all, got %v", ws)
+	}
+}
