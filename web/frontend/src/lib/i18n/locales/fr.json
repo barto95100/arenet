@@ -1436,7 +1436,15 @@
 				"submitting": "Import en cours…",
 				"requiredError": "Le nom, le certificat et la clé privée sont obligatoires.",
 				"success": "Certificat « {name} » importé",
-				"warningsTitle": "Avertissements"
+				"warningsTitle": "Avertissements",
+				"errors": {
+					"chainSpecifiedTwice": "La chaîne est spécifiée à deux endroits. Vous avez collé une chaîne complète dans le champ Certificat ET rempli le champ Chaîne. Ne mettez les intermédiaires qu'à UN SEUL endroit — videz le champ Chaîne, ou ne collez que le certificat feuille ci-dessus.",
+					"keyDoesNotMatchCert": "La clé privée ne correspond pas au certificat. Vérifiez que vous avez collé la clé générée avec le CSR de ce certificat.",
+					"invalidCertPem": "Le champ Certificat n'est pas un certificat PEM valide.",
+					"invalidChainPem": "Le champ Chaîne n'est pas un certificat PEM valide.",
+					"certRequired": "Le champ Certificat (PEM) est obligatoire.",
+					"keyRequired": "Le champ Clé privée (PEM) est obligatoire."
+				}
 			},
 			"delete": {
 				"action": "Supprimer le certificat",

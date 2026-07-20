@@ -137,11 +137,13 @@ func (h *Handler) createExternalCert(w http.ResponseWriter, r *http.Request) {
 	// ambiguous case where a chain is supplied in both places.
 	leafPEM, chainPEM, err := storage.SplitLeafAndChain(req.CertPEM, chain)
 	if err != nil {
+		h.logger.Info("external cert upload rejected", "reason", err.Error())
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	meta, warnings, err := storage.ParseExternalCert(leafPEM, req.KeyPEM, chainPEM)
 	if err != nil {
+		h.logger.Info("external cert upload rejected", "reason", err.Error())
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -215,6 +217,7 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 		}
 		leafPEM, splitChain, serr := storage.SplitLeafAndChain(req.CertPEM, suppliedChain)
 		if serr != nil {
+			h.logger.Info("external cert update rejected", "reason", serr.Error())
 			writeError(w, http.StatusBadRequest, serr.Error())
 			return
 		}
@@ -230,6 +233,7 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 	// fresh parse (spec §3.6).
 	meta, warnings, err := storage.ParseExternalCert(certPEM, keyPEM, chainPEM)
 	if err != nil {
+		h.logger.Info("external cert update rejected", "reason", err.Error())
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

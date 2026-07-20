@@ -19,6 +19,7 @@ import { tick } from 'svelte';
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import type { ExternalCertificate } from '$lib/api/external-certs';
+import { ApiError } from '$lib/api/types';
 
 const { toastMock, apiMock } = vi.hoisted(() => ({
 	toastMock: { pushToast: vi.fn() },
@@ -205,5 +206,34 @@ describe('ExternalCertsPanel — upload', () => {
 		expect(apiMock.externalCertsApi.upload).toHaveBeenCalledWith(
 			expect.objectContaining({ name: 'uploaded', certPEM: 'CERTPEM', keyPEM: 'KEYPEM' })
 		);
+	});
+
+	it('renders a friendly message (not the raw backend code) when the chain is specified twice', async () => {
+		apiMock.externalCertsApi.list.mockResolvedValue([]);
+		apiMock.externalCertsApi.upload.mockRejectedValue(
+			new ApiError(
+				'chain_specified_twice: the Certificate field already contains a chain (2 certificates) and the Chain field is also filled — put the chain in only one place',
+				400
+			)
+		);
+
+		render(Panel);
+		await screen.findByTestId('external-cert-upload-form');
+
+		await userEvent.type(screen.getByTestId('external-cert-name'), 'dup-chain');
+		await userEvent.type(screen.getByTestId('external-cert-cert-pem'), 'FULLCHAINPEM');
+		await userEvent.type(screen.getByTestId('external-cert-chain-pem'), 'CHAINPEM');
+		await userEvent.type(screen.getByTestId('external-cert-key-pem'), 'KEYPEM');
+		await userEvent.click(screen.getByTestId('external-cert-upload-btn'));
+
+		const bottomError = await screen.findByTestId('external-cert-upload-error');
+		expect(bottomError.textContent ?? '').not.toContain('chain_specified_twice:');
+		expect(bottomError.textContent ?? '').toContain('chain is specified twice');
+
+		// Fix B: the same friendly message ALSO renders inline, next to
+		// the Chain field.
+		const inlineError = await screen.findByTestId('external-cert-chain-error-inline');
+		expect(inlineError.textContent ?? '').not.toContain('chain_specified_twice:');
+		expect(inlineError.textContent ?? '').toContain('chain is specified twice');
 	});
 });
