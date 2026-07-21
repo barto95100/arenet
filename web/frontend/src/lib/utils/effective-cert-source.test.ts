@@ -70,6 +70,18 @@ describe('parseEffectiveCertSource', () => {
 		});
 	});
 
+	it('parses per-route-manual (v2.19.0 external cert)', () => {
+		// Regression: the backend emits "per-route-manual" for a route
+		// pinned to an operator-uploaded external cert
+		// (computeEffectiveCertSource, handler.go). Before this fix the
+		// parser degraded it to "none" → empty badge → the TLS column
+		// showed a bare "TLS". The certName is resolved by the caller
+		// (route.cert_id → externalCerts) and injected here.
+		expect(parseEffectiveCertSource('per-route-manual')).toEqual({
+			kind: 'manual',
+		});
+	});
+
 	it('degrades to kind "none" on unknown wire shape', () => {
 		// Forward compat : a future backend adding a fifth source
 		// must not crash the route list. The dashboard quietly
@@ -105,6 +117,25 @@ describe('certSourceLabel', () => {
 		expect(certSourceLabel({ kind: 'per-route-internal' })).toBe('Cert interne');
 	});
 
+	it('emits "Cert manuel : <name>" for a named manual cert', () => {
+		expect(certSourceLabel({ kind: 'manual', certName: 'SCCNF' })).toBe('Cert manuel : SCCNF');
+	});
+
+	it('emits "Cert manuel : *.<apex>" when the manual cert is a wildcard', () => {
+		// The caller detects a wildcard SAN and passes "*.worldgeekwide.fr"
+		// as certName so a manual wildcard reads like the ACME wildcard.
+		expect(certSourceLabel({ kind: 'manual', certName: '*.worldgeekwide.fr' })).toBe(
+			'Cert manuel : *.worldgeekwide.fr'
+		);
+	});
+
+	it('emits a bare "Cert manuel" when the cert name is unresolved', () => {
+		// Defensive: an orphaned cert_id (cert deleted) still gets a
+		// meaningful badge instead of falling back to the empty string.
+		expect(certSourceLabel({ kind: 'manual' })).toBe('Cert manuel');
+		expect(certSourceLabel({ kind: 'manual', certName: '' })).toBe('Cert manuel');
+	});
+
 	it('emits empty string for kind "none"', () => {
 		expect(certSourceLabel({ kind: 'none' })).toBe('');
 	});
@@ -131,6 +162,16 @@ describe('certSourceTooltip', () => {
 
 	it('mentions auto-signed for per-route-internal', () => {
 		expect(certSourceTooltip({ kind: 'per-route-internal' })).toContain('auto-signé');
+	});
+
+	it('mentions the uploaded external cert for manual', () => {
+		const tt = certSourceTooltip({ kind: 'manual', certName: 'SCCNF' });
+		expect(tt).toContain('SCCNF');
+		expect(tt.toLowerCase()).toContain('manuel');
+	});
+
+	it('gives a generic manual tooltip when the name is unresolved', () => {
+		expect(certSourceTooltip({ kind: 'manual' }).toLowerCase()).toContain('manuel');
 	});
 
 	it('emits empty string for kind "none"', () => {

@@ -35,11 +35,22 @@
         interface Props {
                 /** Raw wire string from Route.effectiveCertSource. */
                 source: string | undefined | null;
+                /**
+                 * Display name for a manual cert (kind "manual"), resolved by
+                 * the caller from route.cert_id — the cert's name, or
+                 * "*.<apex>" for a wildcard. Ignored for every other kind.
+                 * The backend's effectiveCertSource string carries no name,
+                 * so it must be injected here.
+                 */
+                certName?: string;
         }
 
-        let { source }: Props = $props();
+        let { source, certName }: Props = $props();
 
-        let parsed: ParsedCertSource = $derived(parseEffectiveCertSource(source));
+        let parsed: ParsedCertSource = $derived.by(() => {
+                const p = parseEffectiveCertSource(source);
+                return p.kind === 'manual' ? { ...p, certName } : p;
+        });
         let label = $derived(certSourceLabel(parsed));
         let tooltip = $derived(certSourceTooltip(parsed));
 
