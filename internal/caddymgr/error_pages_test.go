@@ -538,11 +538,19 @@ func TestBuildConfigJSON_ReverseProxy_HandleResponse4xx5xx(t *testing.T) {
 					if !ok {
 						t.Fatal("reverse_proxy missing handle_response — Phase 1.1 FIX 3 regression")
 					}
-					if len(hr) != 1 {
-						t.Fatalf("handle_response len = %d ; want 1", len(hr))
+					// fix/error-template-preserve-json: the proxy now
+					// emits TWO handle_response blocks — [0] application/
+					// json* response pass-through, [1] status-only whose
+					// inner routes are [/api/* → copy_response] then the
+					// branding error handler (fall-through). This test
+					// pins the branding block's status-code contract, so
+					// it reads block [1]'s outer status_code list and its
+					// SECOND inner route (the match-less error fallback).
+					if len(hr) != 2 {
+						t.Fatalf("handle_response len = %d ; want 2 (json passthrough + api-path/branding)", len(hr))
 					}
-					hr0 := hr[0].(map[string]any)
-					match := hr0["match"].(map[string]any)
+					brandingBlock := hr[1].(map[string]any)
+					match := brandingBlock["match"].(map[string]any)
 					statusCodes := match["status_code"].([]any)
 
 					// Build a quick lookup set on the
@@ -574,9 +582,12 @@ func TestBuildConfigJSON_ReverseProxy_HandleResponse4xx5xx(t *testing.T) {
 						}
 					}
 
-					innerRoutes := hr0["routes"].([]any)
-					inner0 := innerRoutes[0].(map[string]any)
-					innerHandlers := inner0["handle"].([]any)
+					// The branding error handler is the SECOND (match-less
+					// fall-through) inner route; route[0] is the /api/*
+					// copy_response pass-through.
+					innerRoutes := brandingBlock["routes"].([]any)
+					brandRoute := innerRoutes[len(innerRoutes)-1].(map[string]any)
+					innerHandlers := brandRoute["handle"].([]any)
 					errHandler := innerHandlers[0].(map[string]any)
 					if errHandler["handler"] != "error" {
 						t.Errorf("inner handler = %v ; want 'error'", errHandler["handler"])
