@@ -87,7 +87,16 @@ vendored source, cited by file:line:
    inner route may carry a `match` with a request **`path`** matcher, which is
    how block A matches `/api/*` (the `ResponseMatcher` alone can't see the path).
 
-## 5. The change — three ordered `handle_response` blocks
+> **⚠️ SUPERSEDED — read §6 E1 first.** The naive three-block sketch below was
+> NOT shipped. The live smoke (§8) proved it drops non-matching responses
+> (200, empty body): a status-only outer `handle_response` "wins" for every
+> error, and Caddy then runs only that block's inner routes — a separate
+> status-only block whose inner route matches nothing loses the response. The
+> **shipped** shape is the §6 E1 fallback: **two** blocks — [0] JSON pass-through,
+> [1] status-only whose inner routes are `[path /api/* → copy_response]` then a
+> match-less `[→ error]` branding fallback. Do NOT restore the three-block form.
+
+## 5. The change — three ordered `handle_response` blocks (SUPERSEDED, see §6 E1)
 
 In `buildConfigJSON` (`manager.go:1521`), replace the single branding block
 with three, in this order. Extract the shared status-code list into a local

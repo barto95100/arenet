@@ -1518,11 +1518,11 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// error_template.go intentionally keeps 401 so operators
 		// can still customise the Arenet-generated 401 body via
 		// the template editor.
-		// Shared status-code list for all three handle_response blocks
-		// below. 401 + 407 are deliberately absent so their upstream
+		// Shared status-code list for both handle_response blocks below.
+		// 401 + 407 are deliberately absent so their upstream
 		// Www-Authenticate / Proxy-Authenticate challenge headers reach
 		// the client verbatim (the 2026-06-24 Harbor / Docker registry
-		// fix). Declared once (DRY) and referenced by blocks A/B/C.
+		// fix). Declared once (DRY) and referenced by both blocks.
 		errorStatusCodes := []int{
 			// 4xx (except 401 + 407)
 			400, 402, 403, 404, 405, 406, 408, 409, 410,
