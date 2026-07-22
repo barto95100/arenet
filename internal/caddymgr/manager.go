@@ -1518,21 +1518,71 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// error_template.go intentionally keeps 401 so operators
 		// can still customise the Arenet-generated 401 body via
 		// the template editor.
+		// Shared status-code list for both handle_response blocks below.
+		// 401 + 407 are deliberately absent so their upstream
+		// Www-Authenticate / Proxy-Authenticate challenge headers reach
+		// the client verbatim (the 2026-06-24 Harbor / Docker registry
+		// fix). Declared once (DRY) and referenced by both blocks.
+		errorStatusCodes := []int{
+			// 4xx (except 401 + 407)
+			400, 402, 403, 404, 405, 406, 408, 409, 410,
+			411, 412, 413, 414, 415, 416, 417, 418, 421,
+			422, 423, 424, 425, 426, 428, 429, 431, 451,
+			// 5xx (full range)
+			500, 501, 502, 503, 504, 505, 506, 507, 508,
+			510, 511,
+		}
+
+		// Preserve-JSON contract (fix/error-template-preserve-json): the
+		// branded HTML error page must NOT replace a proxied upstream's
+		// JSON / API error responses — otherwise an API call through a
+		// reverse-proxy route (e.g. the Arenet admin behind its own FQDN)
+		// receives a text/html 4xx page instead of the real {"error":...}
+		// body, and the frontend can't surface the message.
+		//
+		// Caddy evaluates handle_response entries in order and stops at
+		// the FIRST whose OUTER match passes, then runs THAT block's
+		// inner routes to completion (reverseproxy.go:1113-1173). A
+		// consequence learned from the live smoke (spec §6 E1): a block
+		// whose outer match is status-only "wins" for every error and its
+		// inner routes must therefore handle EVERY case — if an inner
+		// route matches nothing, the response is dropped (200, empty
+		// body). So the /api-path decision and the branding fallback MUST
+		// live in the SAME block's inner routes (with fall-through),
+		// NOT in two separate status-only outer blocks.
+		//
+		// Two blocks:
+		//   B (first) — outer match = status AND Content-Type
+		//      application/json* → copy_response. A JSON error of ANY path
+		//      is sent verbatim. ("*" covers "; charset=utf-8".)
+		//   A/C (second) — outer match = status only; inner routes, in
+		//      order: [path /api/* → copy_response] then [→ error]. A
+		//      non-JSON /api response is copied verbatim; everything else
+		//      falls through to the branded error handler.
+		// copy_response sends the upstream response verbatim to the client
+		// (copyresponse.go); the inner routes fall through on a failed
+		// match (routes.go wrapRoute → next), so the trailing match-less
+		// error route is the guaranteed branding fallback.
 		proxyHandler["handle_response"] = []map[string]any{
-			{
+			{ // B — application/json* response pass-through (any path)
 				"match": map[string]any{
-					"status_code": []int{
-						// 4xx (except 401 + 407)
-						400, 402, 403, 404, 405, 406, 408, 409, 410,
-						411, 412, 413, 414, 415, 416, 417, 418, 421,
-						422, 423, 424, 425, 426, 428, 429, 431, 451,
-						// 5xx (full range)
-						500, 501, 502, 503, 504, 505, 506, 507, 508,
-						510, 511,
-					},
+					"status_code": errorStatusCodes,
+					"headers":     map[string]any{"Content-Type": []string{"application/json*"}},
 				},
 				"routes": []map[string]any{
 					{
+						"handle": []map[string]any{{"handler": "copy_response"}},
+					},
+				},
+			},
+			{ // A/C — /api/* pass-through, else branding (fall-through)
+				"match": map[string]any{"status_code": errorStatusCodes},
+				"routes": []map[string]any{
+					{ // A: non-JSON /api response → verbatim
+						"match":  []map[string]any{{"path": []string{"/api/*"}}},
+						"handle": []map[string]any{{"handler": "copy_response"}},
+					},
+					{ // C: everything else → branded error page
 						"handle": []map[string]any{
 							{
 								"handler":     "error",
