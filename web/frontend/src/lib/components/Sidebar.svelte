@@ -41,13 +41,35 @@
   no collapse button, by design).
 -->
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 	import logoUrl from '$lib/assets/arenet-logo.png';
+	import { systemApi } from '$lib/api/system';
 	import NotificationBell from './NotificationBell.svelte';
+
+	// Brand badge next to the logo. Shows the RUNNING version
+	// (SystemVersion.current) — a release binary reports its tag
+	// (e.g. "v2.20.2"), a local `go build` without ldflags reports the
+	// default "DEV" (main.go var version = "DEV"). Empty until loaded /
+	// on error, so the badge never shows a stale or misleading value
+	// (it previously hard-coded "dev" regardless of the real version).
+	let version = $state('');
+	// True when this is an un-versioned local/dev build, so the badge
+	// can flag it visually instead of blending in like a release tag.
+	let isDevBuild = $derived(version.toUpperCase() === 'DEV');
+
+	onMount(async () => {
+		try {
+			const v = await systemApi.getVersion();
+			version = v.current ?? '';
+		} catch {
+			version = ''; // no badge rather than a wrong one
+		}
+	});
 
 	type IconName =
 		| 'dashboard'
@@ -238,7 +260,11 @@
 	<div class="brand">
 		<img class="brand-logo" src={logoUrl} alt="" aria-hidden="true" width="30" height="30" />
 		<div class="brand-name">AreNET</div>
-		<div class="brand-env">dev</div>
+		{#if version}
+			<div class="brand-env" class:brand-env-dev={isDevBuild} data-testid="brand-version">
+				{version}
+			</div>
+		{/if}
 	</div>
 
 	{#each visibleSections as section (section.labelKey)}
@@ -352,6 +378,13 @@
 		border-radius: 4px;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
+	}
+	/* Un-versioned local/dev build: flag it so a test instance is never
+	   mistaken for a release. A real version tag keeps the neutral style. */
+	.brand-env-dev {
+		color: var(--status-down, #f85149);
+		border-color: var(--status-down, #f85149);
+		background: color-mix(in srgb, var(--status-down, #f85149) 12%, transparent);
 	}
 
 	.nav-section {
