@@ -42,6 +42,28 @@ vi.mock('$app/state', () => ({
 	}
 }));
 
+// systemApi.getVersion backs the brand version badge next to the logo.
+// Default: a release-shaped version. Individual tests override it.
+const getVersionMock = vi.fn();
+vi.mock('$lib/api/system', () => ({
+	systemApi: {
+		getVersion: () => getVersionMock()
+	}
+}));
+
+function sysVersion(over: Record<string, unknown> = {}) {
+	return {
+		current: 'v2.20.2',
+		latest: 'v2.20.2',
+		updateAvailable: false,
+		url: '',
+		lastChecked: '',
+		lastError: '',
+		enabled: true,
+		...over
+	};
+}
+
 vi.mock('$lib/stores/notifications.svelte', () => ({
 	notificationsStore: {
 		recent: [],
@@ -55,7 +77,7 @@ vi.mock('$lib/stores/notifications.svelte', () => ({
 	SYNTHETIC_UPDATE_ID: 'synthetic:update'
 }));
 
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, waitFor } from '@testing-library/svelte';
 import Sidebar from './Sidebar.svelte';
 import { auth } from '$lib/stores/auth.svelte';
 
@@ -64,6 +86,9 @@ describe('Sidebar', () => {
 		// Reset the auth store between tests so admin-visibility
 		// assertions start from a known state.
 		auth.user = null;
+		// Default: a release-shaped version so unrelated tests don't
+		// hit an unresolved getVersion() promise.
+		getVersionMock.mockReset().mockResolvedValue(sysVersion());
 	});
 
 	it('renders the 3 always-visible nav sections + 8 items for an anonymous/viewer user', () => {
@@ -226,5 +251,32 @@ describe('Sidebar', () => {
 		const signOut = screen.getByRole('button', { name: 'Sign out' });
 		expect(signOut).toBeInTheDocument();
 		expect(signOut).not.toBeDisabled();
+	});
+
+	it('shows the running version in the brand badge (release build)', async () => {
+		getVersionMock.mockResolvedValue(sysVersion({ current: 'v2.20.2' }));
+		render(Sidebar);
+		const badge = await screen.findByTestId('brand-version');
+		expect(badge.textContent?.trim()).toBe('v2.20.2');
+		// A release tag is NOT flagged as a dev build.
+		expect(badge).not.toHaveClass('brand-env-dev');
+	});
+
+	it('flags a DEV build in the brand badge', async () => {
+		getVersionMock.mockResolvedValue(sysVersion({ current: 'DEV' }));
+		render(Sidebar);
+		const badge = await screen.findByTestId('brand-version');
+		expect(badge.textContent?.trim()).toBe('DEV');
+		expect(badge).toHaveClass('brand-env-dev');
+	});
+
+	it('renders no brand badge when the version cannot be loaded', async () => {
+		getVersionMock.mockRejectedValue(new Error('boom'));
+		render(Sidebar);
+		// Give onMount's rejected promise a tick to settle, then assert
+		// the badge never appears (no stale / misleading "dev").
+		await waitFor(() => {
+			expect(screen.queryByTestId('brand-version')).toBeNull();
+		});
 	});
 });
