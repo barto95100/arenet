@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -1103,6 +1104,111 @@ type forwardAuthReq struct {
 	ProviderName string `json:"providerName"`
 }
 
+// ipFilterReq is the camelCase wire mirror of storage.IPFilter
+// (v1 path-based-rules). storage uses snake_case tags for BoltDB,
+// so the API layer keeps its own mirror type + mapper — same
+// pattern as countryBlockReq / rateLimitReq. Used both as
+// routeRequest.IPFilter (whole-domain gate) and inside
+// pathRuleReq.IPFilter (per-sub-path gate).
+type ipFilterReq struct {
+	Mode       string   `json:"mode"`
+	CIDRs      []string `json:"cidrs,omitempty"`
+	StatusCode int      `json:"statusCode,omitempty"`
+}
+
+// toStorage maps the wire shape to storage.IPFilter verbatim.
+func (r ipFilterReq) toStorage() storage.IPFilter {
+	return storage.IPFilter{Mode: r.Mode, CIDRs: r.CIDRs, StatusCode: r.StatusCode}
+}
+
+// mapIPFilterReq nil-safely maps a *ipFilterReq to *storage.IPFilter.
+// nil in (field absent from JSON) → nil out, so createRoute /
+// updateRoute never manufacture a spurious zero-value gate.
+func mapIPFilterReq(r *ipFilterReq) *storage.IPFilter {
+	if r == nil {
+		return nil
+	}
+	f := r.toStorage()
+	return &f
+}
+
+// pathRuleBasicAuthReq is the camelCase wire shape for a
+// path-rule's Basic Auth sub-block. Mirrors routeRequest's
+// basicAuthReq: Password is the PLAIN text on the wire —
+// write-only (the response never echoes it; the storage hash is
+// derived from it via auth.HashRoutePassword, same as
+// route-level Basic Auth). Username round-trips normally.
+//
+// Preserve-on-edit: Password empty on PUT keeps the existing
+// hash for that PathPrefix — same UX as route-level BasicAuth
+// (Step I.5 / K.1), see mapPathRuleReqs.
+type pathRuleBasicAuthReq struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// pathRuleReq is the camelCase wire mirror of storage.PathRule.
+type pathRuleReq struct {
+	PathPrefix string                `json:"pathPrefix"`
+	BasicAuth  *pathRuleBasicAuthReq `json:"basicAuth,omitempty"`
+	IPFilter   *ipFilterReq          `json:"ipFilter,omitempty"`
+}
+
+// mapPathRuleReqs nil/empty-safely maps the wire slice to
+// []storage.PathRule. A nil or empty input slice maps to nil (not
+// an empty non-nil slice) so a route with no path rules keeps the
+// pre-existing storage zero-value shape.
+//
+// Password hashing: each path-rule's BasicAuth.Password is a PLAIN
+// password on the wire (matches route-level basicAuthReq) — hashed
+// here via auth.HashRoutePassword, exactly like the route-level
+// create/update paths (routes.go ~1296 / ~1806). Returns an error
+// if the underlying argon2id hash fails; callers must surface that
+// as a 500 (mirrors the route-level hashErr handling).
+//
+// Preserve-on-edit: when a path rule's BasicAuth.Password is empty
+// on PUT, the previously stored hash for that exact PathPrefix is
+// kept rather than wiped — mirrors the route-level BasicAuth
+// empty-password-preserves-hash UX (Step I.5 / K.1). existing is
+// the previous route's PathRules (nil on create).
+func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) ([]storage.PathRule, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	prevByPrefix := make(map[string]storage.PathRule, len(existing))
+	for _, pr := range existing {
+		prevByPrefix[pr.PathPrefix] = pr
+	}
+	out := make([]storage.PathRule, len(reqs))
+	for i, r := range reqs {
+		pr := storage.PathRule{PathPrefix: r.PathPrefix}
+		if r.BasicAuth != nil {
+			hash := ""
+			if r.BasicAuth.Password == "" {
+				if prev, ok := prevByPrefix[r.PathPrefix]; ok && prev.BasicAuth != nil {
+					hash = prev.BasicAuth.PasswordHash
+				}
+			} else {
+				h, hashErr := auth.HashRoutePassword(r.BasicAuth.Password)
+				if hashErr != nil {
+					return nil, fmt.Errorf("hash path-rule basic auth password (prefix %q): %w", r.PathPrefix, hashErr)
+				}
+				hash = h
+			}
+			pr.BasicAuth = &storage.BasicAuthRouteConfig{
+				Username:     r.BasicAuth.Username,
+				PasswordHash: hash,
+			}
+		}
+		if r.IPFilter != nil {
+			f := r.IPFilter.toStorage()
+			pr.IPFilter = &f
+		}
+		out[i] = pr
+	}
+	return out, nil
+}
+
 // routeRequest is the wire shape accepted by POST and PUT /routes. JSON tags
 // are camelCase per the spec.
 type routeRequest struct {
@@ -1347,6 +1453,20 @@ type routeRequest struct {
 	// in storage.SupportedErrorStatusCodes ; storage validation
 	// rejects out-of-set codes.
 	ErrorPageOverrides map[int]string `json:"errorPageOverrides,omitempty"`
+	// IPFilter (v1 path-based-rules) — whole-domain source-IP
+	// gate. Pointer so nil distinguishes "field absent from
+	// JSON" (createRoute: zero-value nil, gate off; updateRoute:
+	// preserve previously stored value) from "field present"
+	// (full replacement) — same preserve-on-omission convention
+	// as CountryBlock / HealthCheck above.
+	IPFilter *ipFilterReq `json:"ipFilter,omitempty"`
+	// PathRules (v1 path-based-rules) — per-sub-path additive
+	// overrides (basic auth and/or IP filter scoped to a URL
+	// prefix). Always a full replacement when present; omitted
+	// or empty on PUT clears the list (no preserve-on-omission
+	// for the list itself — only the per-rule password hash is
+	// preserved, see mapPathRuleReqs).
+	PathRules []pathRuleReq `json:"pathRules,omitempty"`
 }
 
 // rateLimitReq is the wire-side shape of Route.RateLimit.
@@ -1629,6 +1749,15 @@ type routeResponse struct {
 	// CertID (v2.19.0) — the referenced external cert, echoed alongside
 	// CertSource. omitempty for the same byte-identity reason.
 	CertID string `json:"cert_id,omitempty"`
+	// IPFilter (v1 path-based-rules) — whole-domain source-IP
+	// gate, echoed verbatim. nil when not configured; omitempty
+	// keeps pre-existing snapshots byte-identical.
+	IPFilter *ipFilterReq `json:"ipFilter,omitempty"`
+	// PathRules (v1 path-based-rules) — per-sub-path overrides.
+	// Each entry's BasicAuth.Password is REDACTED (blanked) before
+	// serialisation — see toResponse. omitempty keeps pre-existing
+	// snapshots byte-identical for routes without path rules.
+	PathRules []pathRuleReq `json:"pathRules,omitempty"`
 }
 
 // toResponse converts a storage.Route to its API wire form (RFC 3339 with
@@ -1721,7 +1850,49 @@ func toResponse(r storage.Route) routeResponse {
 		MaintenanceConfig:   r.MaintenanceConfig,
 		CertSource:          r.CertSource,
 		CertID:              r.CertID,
+		IPFilter:            toIPFilterResp(r.IPFilter),
+		PathRules:           toPathRulesResp(r.PathRules),
 	}
+}
+
+// toIPFilterResp maps storage.IPFilter to the wire response shape.
+// nil in → nil out (omitempty drops the field for routes without
+// a whole-domain gate).
+func toIPFilterResp(f *storage.IPFilter) *ipFilterReq {
+	if f == nil {
+		return nil
+	}
+	return &ipFilterReq{Mode: f.Mode, CIDRs: f.CIDRs, StatusCode: f.StatusCode}
+}
+
+// toPathRulesResp maps []storage.PathRule to the wire response
+// shape, REDACTING each path-rule's basic-auth password — it must
+// never be echoed back (mirrors the route-level BasicAuth
+// redaction pattern: the response only ever confirms a password
+// is set, never its plaintext or its stored hash). nil/empty in →
+// nil out.
+func toPathRulesResp(rules []storage.PathRule) []pathRuleReq {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]pathRuleReq, len(rules))
+	for i, pr := range rules {
+		out[i] = pathRuleReq{PathPrefix: pr.PathPrefix}
+		if pr.BasicAuth != nil {
+			out[i].BasicAuth = &pathRuleBasicAuthReq{
+				Username: pr.BasicAuth.Username,
+				Password: "", // SECRET — never echoed (plain or hash)
+			}
+		}
+		if pr.IPFilter != nil {
+			out[i].IPFilter = &ipFilterReq{
+				Mode:       pr.IPFilter.Mode,
+				CIDRs:      pr.IPFilter.CIDRs,
+				StatusCode: pr.IPFilter.StatusCode,
+			}
+		}
+	}
+	return out
 }
 
 // toRateLimitResp normalises the storage *RouteRateLimit to

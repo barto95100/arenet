@@ -31,9 +31,11 @@
 		ExternalCertificate,
 		ForwardAuthProvider,
 		HealthCheck,
+		IPFilter,
 		LBPolicy,
 		MaintenanceConfig,
 		ManagedDomain,
+		PathRule,
 		Route,
 		RouteRateLimit,
 		RouteRequest,
@@ -58,6 +60,8 @@
 	import Checkbox from '$lib/components/Checkbox.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import RouteStateControl from '$lib/components/RouteStateControl.svelte';
+	import IPFilterFields from '$lib/components/routes/IPFilterFields.svelte';
+	import PathRulesSection from '$lib/components/routes/PathRulesSection.svelte';
 
 	let routes = $state<Route[]>([]);
 	let loading = $state(true);
@@ -117,7 +121,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
 		healthCheck: HealthCheck;
 		// v2.14.3 — narrowed to a non-optional boolean, same
 		// pattern as insecureSkipVerify/uploadStreamingMode: the
@@ -202,6 +206,19 @@
 		// (mirrors the acmeChallenge-only-under-tls discipline).
 		cert_source: string;
 		cert_id: string;
+		// path-based-rules Task 9 — narrowed to a definite IPFilter
+		// (mode defaults to 'off') so the route-level IPFilterFields
+		// instance always has something to bind to, mirroring
+		// countryBlock's always-present-on-the-form discipline. The
+		// wire-side optionality (RouteRequest.ipFilter?) is re-applied
+		// at payload-assembly time — full-replacement, no preserve-
+		// on-omit ambiguity (same rationale as countryBlock).
+		ipFilter: IPFilter;
+		// path-based-rules Task 9 — narrowed to a definite (possibly
+		// empty) array, mirrors wafExcludeRules/wafExcludeTags. The
+		// PathRulesSection component always has an array to bind to;
+		// full-replacement on submit.
+		pathRules: PathRule[];
 	};
 	let formData = $state<FormData>(emptyFormData());
 	// v2.19.0 external-certs SOCLE — uploaded external certs, loaded
@@ -309,6 +326,12 @@
 			// "manual" AND selects an eligible uploaded cert.
 			cert_source: 'acme',
 			cert_id: '',
+			// path-based-rules Task 9 — no gate by default. Mode 'off'
+			// mirrors countryBlock's disabled default; the operator
+			// opts in via the mode pill toggle in IPFilterFields.
+			ipFilter: { mode: 'off', cidrs: [] as string[], statusCode: 0 },
+			// path-based-rules Task 9 — no path rules by default.
+			pathRules: [] as PathRule[],
 			// W.5 — country-block defaults to disabled. The form
 			// surface lives in the country-block details block
 			// further down; operators opting in pick a mode +
@@ -1266,6 +1289,39 @@
 			// an unrelated field round-trips the manual reference.
 			cert_source: r.cert_source && r.cert_source !== '' ? r.cert_source : 'acme',
 			cert_id: r.cert_id ?? '',
+			// path-based-rules Task 9 — seed the route-level IP filter
+			// from the loaded route. An absent r.ipFilter (pre-Task-6
+			// snapshot) falls back to a definite 'off' default so the
+			// IPFilterFields instance always has something to bind to
+			// (mirrors countryBlock's always-present contract). Clone
+			// cidrs to break the formData ↔ source route reference.
+			ipFilter: r.ipFilter
+				? {
+						mode: r.ipFilter.mode,
+						cidrs: [...(r.ipFilter.cidrs ?? [])],
+						statusCode: r.ipFilter.statusCode ?? 0
+					}
+				: { mode: 'off', cidrs: [], statusCode: 0 },
+			// path-based-rules Task 9 — seed path rules from the loaded
+			// route. Deep-clone each rule (including nested basicAuth/
+			// ipFilter) so formData mutations don't ripple back into
+			// the source route object. The response never echoes the
+			// basic-auth password (server always blanks it — see the
+			// PathRule type doc), so basicAuth.password reloads as ''
+			// (the operator must re-type it to change/keep it set).
+			pathRules: (r.pathRules ?? []).map((rule) => ({
+				pathPrefix: rule.pathPrefix,
+				basicAuth: rule.basicAuth
+					? { username: rule.basicAuth.username, password: '' }
+					: undefined,
+				ipFilter: rule.ipFilter
+					? {
+							mode: rule.ipFilter.mode,
+							cidrs: [...(rule.ipFilter.cidrs ?? [])],
+							statusCode: rule.ipFilter.statusCode ?? 0
+						}
+					: { mode: 'off', cidrs: [], statusCode: 0 }
+			})),
 			// (subform expansion handled below — needs to fire
 			// AFTER formData assignment so the $effect sees the
 			// new state.)
@@ -1948,7 +2004,44 @@
 					mode: formData.countryBlock.mode,
 					countryList: [...formData.countryBlock.countryList],
 					statusCode: formData.countryBlock.statusCode
-				}
+				},
+				// path-based-rules Task 9 — route-level IP filter always
+				// shipped (POST and PUT), same always-shipped/full-
+				// replacement discipline as countryBlock above: the form
+				// shows the current state and "off" is the explicit
+				// disabled state, not "preserve previous".
+				ipFilter: {
+					mode: formData.ipFilter.mode,
+					cidrs: [...(formData.ipFilter.cidrs ?? [])],
+					statusCode: formData.ipFilter.statusCode
+				},
+				// path-based-rules Task 9 — path rules always shipped as
+				// a full-replacement array (possibly empty), mirroring
+				// wafExcludeRules/wafExcludeTags. Blank path-prefix rows
+				// are dropped (mirrors the aliases/header-tuple trim-and-
+				// filter discipline elsewhere in this assembler); the
+				// basic-auth block is included only when the toggle is
+				// on (rule.basicAuth is undefined otherwise) and always
+				// carries a PLAIN password on the wire — the backend
+				// hashes it server-side (never send passwordHash).
+				pathRules: formData.pathRules
+					.filter((rule) => rule.pathPrefix.trim().length > 0)
+					.map((rule) => ({
+						pathPrefix: rule.pathPrefix.trim(),
+						...(rule.basicAuth
+							? {
+									basicAuth: {
+										username: rule.basicAuth.username,
+										password: rule.basicAuth.password ?? ''
+									}
+								}
+							: {}),
+						ipFilter: {
+							mode: rule.ipFilter?.mode ?? 'off',
+							cidrs: [...(rule.ipFilter?.cidrs ?? [])],
+							statusCode: rule.ipFilter?.statusCode ?? 0
+						}
+					}))
 			};
 			// Step #R-PROXMOX-HTTPS-LOOP — only ship
 			// insecureSkipVerify when the pool is https. On an
@@ -4056,6 +4149,24 @@
 							{/if}
 						</div>
 					</details>
+
+					<!-- path-based-rules Task 9 — route-level IP allow/deny
+					     gate. Sits alongside the country-block section
+					     (both are edge-level traffic gates evaluated
+					     before auth/WAF); IPFilterFields is the shared
+					     Task 7 component, also reused per-path-rule
+					     below. -->
+					<div>
+						<span class="text-sm font-medium text-secondary block mb-1">
+							{language.current && t('routes.ipFilter.sectionLabel')}
+						</span>
+						<IPFilterFields bind:value={formData.ipFilter} />
+					</div>
+
+					<!-- path-based-rules Task 9 — collapsed path-scoped
+					     rules editor (Task 8 component): per-prefix basic
+					     auth override + IP filter. -->
+					<PathRulesSection bind:value={formData.pathRules} />
 
 					<!-- Step J.3: active health-check sub-form. Gated by the
 					     enabled checkbox. Sub-fields disabled when off; their

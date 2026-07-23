@@ -3584,3 +3584,51 @@ describe('Routes page — CertSource picker (manual external certs)', () => {
 		expect(payload.cert_id).toBeUndefined();
 	});
 });
+
+// --- Task 9 — route-level IP filter + path rules wiring ------------
+
+describe('Routes page — Task 9 IP filter + path rules wiring', () => {
+	it('includes ipFilter and pathRules in the save payload', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute());
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'secure.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+		// Route-level IP filter: switch to deny mode + type a CIDR.
+		// Only the route-level IPFilterFields instance is mounted at
+		// this point (no path rules added yet), so a single
+		// getByTestId is unambiguous.
+		await userEvent.click(screen.getByTestId('ipfilter-mode-deny'));
+		const cidrsTextarea = screen.getByTestId('ipfilter-cidrs') as HTMLTextAreaElement;
+		await userEvent.type(cidrsTextarea, '10.0.0.0/8');
+		await fireEvent.blur(cidrsTextarea);
+		await tick();
+
+		// Add one path rule scoped to /docs with basic auth.
+		await userEvent.click(screen.getByTestId('path-rules-add'));
+		await tick();
+		const prefixInput = screen.getByTestId('path-rule-prefix-0') as HTMLInputElement;
+		await userEvent.type(prefixInput, '/docs');
+		await userEvent.click(screen.getByTestId('path-rule-basicauth-toggle-0'));
+		await tick();
+		await userEvent.type(screen.getByTestId('path-rule-basicauth-username-0'), 'docsuser');
+		await userEvent.type(screen.getByTestId('path-rule-basicauth-password-0'), 'docspass');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.ipFilter).toMatchObject({ mode: 'deny', cidrs: ['10.0.0.0/8'] });
+		expect(payload.pathRules).toHaveLength(1);
+		expect(payload.pathRules[0].pathPrefix).toBe('/docs');
+		expect(payload.pathRules[0].basicAuth).toMatchObject({
+			username: 'docsuser',
+			password: 'docspass'
+		});
+		// CRITICAL WIRE SHAPE — plain password, never passwordHash.
+		expect(payload.pathRules[0].basicAuth.passwordHash).toBeUndefined();
+	});
+});

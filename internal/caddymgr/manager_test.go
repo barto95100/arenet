@@ -900,6 +900,14 @@ func TestBuildConfigJSON_BasicAuth_EmitsAuthHandler(t *testing.T) {
 	if hash["algorithm"] != "argon2id" {
 		t.Errorf("hash.algorithm = %v; want argon2id", hash["algorithm"])
 	}
+	// realm must be scoped per-vhost ("Arenet route <host>"), not a
+	// fixed global string — the realm scopes the browser's Basic-Auth
+	// credential cache per-vhost. Regression guard for the Task 5
+	// buildBasicAuthHandlerFromConfig extraction, which briefly lost
+	// access to r.Host and fell back to a fixed "Arenet" realm.
+	if want := "Arenet route auth.example.com"; httpBasic["realm"] != want {
+		t.Errorf("http_basic.realm = %v; want %q", httpBasic["realm"], want)
+	}
 	// hash_cache must be emitted so Caddy caches per-credential
 	// verification (avoids re-running the 64 MiB argon2id hash on every
 	// request — catastrophic for SSE-heavy upstreams). Empty object =
@@ -1174,6 +1182,40 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 				Fails:        1,
 			},
 		},
+		// Task 6 — fold path-based-rules coverage into THIS canonical
+		// fixture so caddy.Validate provisions the route-level IPFilter
+		// (client_ip/not matcher) and the PathRules subroute (basic-auth
+		// + per-path IPFilter + catch-all) against a real emitted shape.
+		// Same anti-poisoning rationale as every other fold above: one
+		// caddy.Validate call per package.
+		//
+		// Kept on a SEPARATE route from r-all (rather than folded onto
+		// it) to avoid a real Caddy v2.11.3 internal data race: r-all's
+		// active HealthCheck spawns a background health-check goroutine
+		// during Provision (see healthchecks.go doActiveHealthCheck),
+		// which races (per `go test -race`) against the concurrent
+		// provisioning of this route's PathRules subroutes
+		// (Subroute.Provision -> RouteList.ProvisionHandlers) when both
+		// live under the same route. Splitting them onto distinct
+		// routes — this one has no active health check — keeps both
+		// features covered by the single canonical caddy.Validate call
+		// without the two provisioning paths overlapping in a way that
+		// trips Caddy's own race.
+		{
+			ID:        "r-pathrules",
+			Host:      "pathrules.example.com",
+			Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9010", Weight: 1}},
+			LBPolicy:  storage.LBPolicyRoundRobin,
+			WAFMode:   "off",
+			IPFilter:  &storage.IPFilter{Mode: "deny", CIDRs: []string{"10.0.0.0/8"}},
+			PathRules: []storage.PathRule{
+				{PathPrefix: "/docs", BasicAuth: &storage.BasicAuthRouteConfig{
+					Username:     "doc",
+					PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$U0FMVFNBTFRTQUxUU0FMVA$S0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0U",
+				}},
+				{PathPrefix: "/metrics", IPFilter: &storage.IPFilter{Mode: "allow", CIDRs: []string{"192.168.1.5"}}},
+			},
+		},
 	}
 	// One additional route per non-default LB policy. Each carries a
 	// two-upstream pool so the selection_policy module has something
@@ -1349,6 +1391,24 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	// Light shape assertions confirming both race participants that
+	// were split onto separate routes above are still actually present
+	// in the emitted config (not just that Validate happens not to
+	// error on an accidentally-empty shape): r-all's active health
+	// check block, and r-pathrules' IPFilter/PathRules subroute.
+	if !strings.Contains(string(raw), `"health_checks"`) || !strings.Contains(string(raw), `"active"`) {
+		t.Fatalf("expected active health_checks block in emitted config:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "pathrules.example.com") {
+		t.Fatalf("expected r-pathrules host in emitted config:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), `"client_ip"`) {
+		t.Fatalf("expected IPFilter client_ip matcher in emitted config:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "/docs") || !strings.Contains(string(raw), "/metrics") {
+		t.Fatalf("expected PathRules /docs and /metrics prefixes in emitted config:\n%s", raw)
 	}
 
 	// Unmarshal to *caddy.Config, then run caddy.Validate which
