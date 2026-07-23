@@ -55,6 +55,7 @@
 	import StatCard from '$lib/components/StatCard.svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import CertSourceBadge from '$lib/components/CertSourceBadge.svelte';
+	import Flag from '$lib/components/Flag.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -4034,7 +4035,7 @@
 												data-testid="country-block-chip"
 												title={countryName(code)}
 											>
-												<span class="cb-chip__code">{code}</span>
+												<Flag {code} />
 												<span class="cb-chip__name">{countryName(code)}</span>
 												<button
 													type="button"
@@ -4095,9 +4096,7 @@
 															}}
 															onmouseenter={() => (cbActiveIndex = idx)}
 														>
-															<span class="cb-dropdown__code">
-																{match.code}
-															</span>
+															<Flag code={match.code} />
 															<span class="cb-dropdown__name">
 																{match.name}
 															</span>
@@ -4667,9 +4666,6 @@
 		border-color: color-mix(in oklch, var(--status-down) 45%, var(--border-subtle));
 		color: var(--status-down);
 	}
-	.cb-chip__code {
-		font-weight: 700;
-	}
 	.cb-chip__name {
 		font-family: var(--font-sans);
 		font-weight: 400;
@@ -4744,17 +4740,6 @@
 	.cb-dropdown__item:hover {
 		background: color-mix(in oklch, var(--accent) 12%, transparent);
 		color: var(--text-primary);
-	}
-	.cb-dropdown__code {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		font-weight: 700;
-		padding: 1px 6px;
-		border-radius: 4px;
-		background: color-mix(in oklch, var(--status-meta) 16%, transparent);
-		color: var(--text-primary);
-		min-width: 26px;
-		text-align: center;
 	}
 	.cb-dropdown__name {
 		flex: 1;

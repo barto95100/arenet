@@ -31,6 +31,9 @@
 -->
 <script lang="ts">
 	import '../app.css';
+	// Country flag SVGs (flag-icons) — served locally, no CDN. Used by the
+	// Flag component in the GeoIP / country-block selector.
+	import 'flag-icons/css/flag-icons.min.css';
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';

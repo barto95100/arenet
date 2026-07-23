@@ -1407,11 +1407,11 @@ describe('Routes page — W.5 country-block form section', () => {
 
 		const chips = screen.getAllByTestId('country-block-chip');
 		expect(chips).toHaveLength(1);
-		// W.7 — chip carries the alpha-2 code in the
-		// .cb-chip__code span; the resolved French name
-		// also renders in .cb-chip__name. Both should be
-		// findable.
-		expect(chips[0].textContent).toContain('FR');
+		// v2.22.0 — the raw ISO code was replaced by a flag
+		// (Flag.svelte). The code now lives in the flag's
+		// `fi-fr` class; the resolved French name still renders
+		// in .cb-chip__name.
+		expect(chips[0].querySelector('.fi-fr')).not.toBeNull();
 		// "France" comes from Intl.DisplayNames(fr) which
 		// jsdom + Node ICU both ship.
 		expect(chips[0].textContent).toContain('France');
@@ -1517,10 +1517,10 @@ describe('Routes page — W.7 country-block polish', () => {
 		// "RU" is one of the suggestions (prefix-matched on
 		// the alpha-2 code).
 		const suggestions = screen.getAllByTestId('country-block-suggestion');
-		const codes = suggestions.map(
-			(el) => el.querySelector('.cb-dropdown__code')?.textContent
-		);
-		expect(codes).toContain('RU');
+		// v2.22.0 — the code renders as a flag (Flag.svelte);
+		// the alpha-2 lives in the flag's `fi-{code}` class.
+		const hasRU = suggestions.some((el) => el.querySelector('.fi-ru'));
+		expect(hasRU).toBe(true);
 	});
 
 	it('typing a French name prefix matches the country (russie → RU)', async () => {
@@ -1532,10 +1532,8 @@ describe('Routes page — W.7 country-block polish', () => {
 		await userEvent.type(input, 'russ');
 		await tick();
 		const suggestions = screen.getAllByTestId('country-block-suggestion');
-		const codes = suggestions.map(
-			(el) => el.querySelector('.cb-dropdown__code')?.textContent
-		);
-		expect(codes).toContain('RU');
+		const hasRU = suggestions.some((el) => el.querySelector('.fi-ru'));
+		expect(hasRU).toBe(true);
 	});
 
 	it('clicking a suggestion adds it as a chip with the French name', async () => {
@@ -1548,7 +1546,7 @@ describe('Routes page — W.7 country-block polish', () => {
 		await tick();
 		const suggestion = screen
 			.getAllByTestId('country-block-suggestion')
-			.find((el) => el.querySelector('.cb-dropdown__code')?.textContent === 'FR');
+			.find((el) => el.querySelector('.fi-fr'));
 		expect(suggestion).toBeDefined();
 		// mousedown (not click) because that's what the
 		// onmousedown handler fires on — picked over click
@@ -1558,7 +1556,7 @@ describe('Routes page — W.7 country-block polish', () => {
 		await tick();
 		const chips = screen.getAllByTestId('country-block-chip');
 		expect(chips).toHaveLength(1);
-		expect(chips[0].textContent).toContain('FR');
+		expect(chips[0].querySelector('.fi-fr')).not.toBeNull();
 		expect(chips[0].textContent).toContain('France');
 	});
 
@@ -1641,7 +1639,7 @@ describe('Routes page — W.7 country-block polish', () => {
 		await tick();
 		const chips = screen.getAllByTestId('country-block-chip');
 		expect(chips).toHaveLength(1);
-		expect(chips[0].textContent).toContain('FR');
+		expect(chips[0].querySelector('.fi-fr')).not.toBeNull();
 	});
 });
 
