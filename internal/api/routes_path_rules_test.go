@@ -351,8 +351,12 @@ func TestUpdateRoute_PathRuleNoProtection_Returns400NotServerError(t *testing.T)
 	if putRec.Code != http.StatusBadRequest {
 		t.Fatalf("put status=%d (want 400) body=%s", putRec.Code, putRec.Body)
 	}
-	if !strings.Contains(putRec.Body.String(), "must declare at least one protection") {
+	// v2.23.0 (Q3): the storage validation message was broadened when the
+	// upstream branch was added — a path-rule is now valid with basic-auth,
+	// an active IP filter, OR a non-empty upstream pool. The message wording
+	// changed accordingly (routes.go PathRule.Validate).
+	if !strings.Contains(putRec.Body.String(), "must declare at least one of basic auth, IP filter, or an upstream") {
 		t.Errorf("put body = %s; want it to contain the validation message %q",
-			putRec.Body.String(), "must declare at least one protection")
+			putRec.Body.String(), "must declare at least one of basic auth, IP filter, or an upstream")
 	}
 }
