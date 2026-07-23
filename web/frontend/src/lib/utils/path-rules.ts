@@ -39,12 +39,20 @@ function hasActiveIPFilter(rule: PathRule): boolean {
 	return mode === 'allow' || mode === 'deny';
 }
 
+/** Returns true when `rule.upstreams` is a non-empty pool (pure routing
+ *  counts as active content — v2.23.0). */
+function hasActiveUpstream(rule: PathRule): boolean {
+	return !!rule.upstreams && rule.upstreams.length > 0;
+}
+
 /**
  * sanitizePathRules filters `rules` down to those that carry at least
  * one active protection (basic auth with a non-empty username, or an
- * ipFilter in allow/deny mode), and clears `cidrs` on any kept rule
- * whose ipFilter mode is 'off' (a residual CIDR list under mode "off"
- * is dead weight and confusing on the wire).
+ * ipFilter in allow/deny mode), or a non-empty upstream pool — a pure
+ * routing rule with no auth/IP-filter is legitimate content and must
+ * survive (v2.23.0). Also clears `cidrs` on any kept rule whose
+ * ipFilter mode is 'off' (a residual CIDR list under mode "off" is
+ * dead weight and confusing on the wire).
  *
  * Pure and side-effect-free — does not mutate the input array or its
  * elements — so it's callable directly from the submit payload
@@ -52,7 +60,7 @@ function hasActiveIPFilter(rule: PathRule): boolean {
  */
 export function sanitizePathRules(rules: PathRule[]): PathRule[] {
 	return rules
-		.filter((rule) => hasActiveBasicAuth(rule) || hasActiveIPFilter(rule))
+		.filter((rule) => hasActiveBasicAuth(rule) || hasActiveIPFilter(rule) || hasActiveUpstream(rule))
 		.map((rule) => {
 			if (rule.ipFilter && rule.ipFilter.mode === 'off') {
 				return { ...rule, ipFilter: { ...rule.ipFilter, cidrs: [] } };
