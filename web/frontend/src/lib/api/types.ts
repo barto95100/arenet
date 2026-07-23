@@ -361,6 +361,23 @@ export interface Route {
 	 * `cert_source` above.
 	 */
 	cert_id?: string;
+	/**
+	 * path-based-rules Task 1-6 — per-route IP allow/deny gate.
+	 * Always present on a stored route (storage zero-value reads
+	 * back as `{mode: '', cidrs: [], statusCode: 0}`), mirroring
+	 * countryBlock's always-present contract. mode:
+	 *   - ""     → not yet configured (treated the same as "off").
+	 *   - "off"  → gate disabled, all traffic passes through.
+	 *   - "allow" → only listed CIDRs/IPs may pass.
+	 *   - "deny"  → listed CIDRs/IPs are blocked, everyone else passes.
+	 */
+	ipFilter?: IPFilter;
+	/**
+	 * path-based-rules Task 1-6 — per-path sub-rules (basic auth
+	 * and/or IP filter scoped to a path prefix under this route).
+	 * Always present on a stored route as an array (possibly empty).
+	 */
+	pathRules?: PathRule[];
 }
 
 /**
@@ -728,6 +745,42 @@ export interface RouteRequest {
 	 * manual reference on a non-manual route). snake_case wire name.
 	 */
 	cert_id?: string;
+	/**
+	 * path-based-rules Task 1-6 — per-route IP allow/deny gate on
+	 * the wire. Optional; the form ships this full-replacement on
+	 * every POST/PUT alongside the rest of the security-section
+	 * fields (same discipline as maintenanceConfig — no preserve-
+	 * on-omit ambiguity to reason about at the frontend layer).
+	 */
+	ipFilter?: IPFilter;
+	/**
+	 * path-based-rules Task 1-6 — per-path sub-rules on the wire.
+	 * Optional; full-replacement array when supplied.
+	 */
+	pathRules?: PathRule[];
+}
+
+/**
+ * path-based-rules — API wire is camelCase (matches the backend
+ * routeRequest mirror types). Shared by Route.ipFilter,
+ * RouteRequest.ipFilter, and PathRule.ipFilter.
+ */
+export interface IPFilter {
+	mode: '' | 'off' | 'allow' | 'deny';
+	cidrs?: string[];
+	statusCode?: number;
+}
+
+/**
+ * path-based-rules — a single path-scoped sub-rule: optional basic
+ * auth and/or IP filter, both scoped to requests whose path starts
+ * with `pathPrefix`. camelCase wire, mirrors the backend routeRequest
+ * PathRule mirror type.
+ */
+export interface PathRule {
+	pathPrefix: string;
+	basicAuth?: { username: string; passwordHash?: string; passwordSet?: boolean };
+	ipFilter?: IPFilter;
 }
 
 /**
