@@ -149,8 +149,19 @@ IP-filter et basic-auth existants, une section repliée par défaut :
 ▸ Upstream spécifique (optionnel)          ← FERMÉ par défaut, chevron
 ```
 
-Déplié — **réutilise le composant pool existant** de l'éditeur de route
-principal (widget URLs+poids, sélecteur LB, toggle health-check) :
+**Ajustement Q5-C (constaté à l'écriture du plan) :** le pool d'upstreams de la
+route N'EST PAS un composant réutilisable — il est inline dans
+`routes/+page.svelte` (~500 lignes) et couplé à la machinerie de test d'upstream
+(bouton "Tester", état par index, API `testUpstream`) propre à la route. Décision
+opérateur : construire des **champs légers dans `PathRulesSection.svelte`**
+(URL+poids repeater + select LB + toggle health-check) qui calquent la FORME du
+pool route SANS la machinerie de test d'upstream. Bénéfice : l'éditeur de route
+reste intact (zéro régression sur le chemin critique 100%-trafic), et le
+composant path-rule reste autonome. (Pas d'extraction d'un composant partagé —
+ce serait un gros refactor de l'éditeur de route avec son propre risque.)
+
+Déplié — champs upstream **inline dans `PathRulesSection.svelte`** (URLs+poids,
+sélecteur LB, toggle health-check), calqués sur la forme du pool route :
 
 ```
 ▾ Upstream spécifique (optionnel)
