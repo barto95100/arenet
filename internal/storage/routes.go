@@ -95,11 +95,19 @@ type BasicAuthRouteConfig struct {
 
 // PathRule applies additive protections to a URL sub-tree of a route.
 // PathPrefix "/docs" matches "/docs" and everything under "/docs/*"
-// (emission concern). At least one of BasicAuth / IPFilter must be set.
+// (emission concern). At least one of BasicAuth / IPFilter / Upstreams
+// must be set.
 type PathRule struct {
 	PathPrefix string                `json:"path_prefix"`
 	BasicAuth  *BasicAuthRouteConfig `json:"basic_auth,omitempty"` // PasswordHash is a SECRET
 	IPFilter   *IPFilter             `json:"ip_filter,omitempty"`
+	// Per-path upstream routing (v2.23.0). When Upstreams is non-empty the
+	// matched sub-path proxies to THIS pool instead of the route's. All
+	// omitempty → a rule with no per-path pool stores byte-identically to
+	// the pre-v2.23.0 shape (migration-free).
+	Upstreams   []Upstream   `json:"upstreams,omitempty"`    // own pool; empty = inherit the route's
+	LBPolicy    string       `json:"lb_policy,omitempty"`    // defaults to round_robin when pool non-empty
+	HealthCheck *HealthCheck `json:"health_check,omitempty"` // own active HC for this path pool
 }
 
 // Validate checks that the PathRule is well-formed: PathPrefix is a
@@ -121,8 +129,9 @@ func (p PathRule) Validate() error {
 			return fmt.Errorf("path_rule: path_prefix %q must not contain whitespace", p.PathPrefix)
 		}
 	}
-	if p.BasicAuth == nil && (p.IPFilter == nil || !p.IPFilter.IsActive()) {
-		return fmt.Errorf("path_rule %q: must declare at least one protection (basic auth or IP filter)", p.PathPrefix)
+	hasUpstreams := len(p.Upstreams) > 0
+	if p.BasicAuth == nil && (p.IPFilter == nil || !p.IPFilter.IsActive()) && !hasUpstreams {
+		return fmt.Errorf("path_rule %q: must declare at least one of basic auth, IP filter, or an upstream", p.PathPrefix)
 	}
 	if p.BasicAuth != nil && p.BasicAuth.Username == "" {
 		return fmt.Errorf("path_rule %q: basic auth requires a username", p.PathPrefix)
@@ -132,6 +141,20 @@ func (p PathRule) Validate() error {
 	}
 	if p.IPFilter != nil {
 		if err := p.IPFilter.Validate(); err != nil {
+			return fmt.Errorf("path_rule %q: %w", p.PathPrefix, err)
+		}
+	}
+	if hasUpstreams {
+		// Per-URL syntax validation (validateUpstreamURL) lives only at the
+		// API layer today, not in package storage — see Task 1 brief §Step 4
+		// ambiguity note. Here we enforce what storage CAN check: a positive
+		// weight per upstream, and a same-scheme pool.
+		for i, u := range p.Upstreams {
+			if u.Weight < 1 {
+				return fmt.Errorf("path_rule %q: upstreams[%d].weight must be >= 1", p.PathPrefix, i)
+			}
+		}
+		if err := validateSameSchemePool(p.Upstreams); err != nil {
 			return fmt.Errorf("path_rule %q: %w", p.PathPrefix, err)
 		}
 	}
