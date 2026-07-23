@@ -93,6 +93,56 @@ type BasicAuthRouteConfig struct {
 	PasswordHash string `json:"password_hash"` // SECRET — never echoed
 }
 
+// PathRule applies additive protections to a URL sub-tree of a route.
+// PathPrefix "/docs" matches "/docs" and everything under "/docs/*"
+// (emission concern). At least one of BasicAuth / IPFilter must be set.
+type PathRule struct {
+	PathPrefix string                `json:"path_prefix"`
+	BasicAuth  *BasicAuthRouteConfig `json:"basic_auth,omitempty"` // PasswordHash is a SECRET
+	IPFilter   *IPFilter             `json:"ip_filter,omitempty"`
+}
+
+// Validate checks that the PathRule is well-formed: PathPrefix is a
+// non-empty, whitespace-free, leading-slash path under 256 characters,
+// and at least one protection (basic auth or IP filter) is declared
+// and internally valid.
+func (p PathRule) Validate() error {
+	if p.PathPrefix == "" || p.PathPrefix[0] != '/' {
+		return fmt.Errorf("path_rule: path_prefix %q must start with /", p.PathPrefix)
+	}
+	if len(p.PathPrefix) > 256 {
+		return fmt.Errorf("path_rule: path_prefix exceeds 256 characters")
+	}
+	for _, r := range p.PathPrefix {
+		if r == ' ' || r == '\t' || r == '\n' {
+			return fmt.Errorf("path_rule: path_prefix %q must not contain whitespace", p.PathPrefix)
+		}
+	}
+	if p.BasicAuth == nil && p.IPFilter == nil {
+		return fmt.Errorf("path_rule %q: must declare at least one protection (basic auth or IP filter)", p.PathPrefix)
+	}
+	if p.BasicAuth != nil && p.BasicAuth.Username == "" {
+		return fmt.Errorf("path_rule %q: basic auth requires a username", p.PathPrefix)
+	}
+	if p.IPFilter != nil {
+		if err := p.IPFilter.Validate(); err != nil {
+			return fmt.Errorf("path_rule %q: %w", p.PathPrefix, err)
+		}
+	}
+	return nil
+}
+
+// SortPathRulesByPrefixLenDesc returns the rules ordered longest-prefix
+// first (Q4). Stable so equal-length prefixes keep declaration order.
+func SortPathRulesByPrefixLenDesc(rules []PathRule) []PathRule {
+	out := make([]PathRule, len(rules))
+	copy(out, rules)
+	sort.SliceStable(out, func(i, j int) bool {
+		return len(out[i].PathPrefix) > len(out[j].PathPrefix)
+	})
+	return out
+}
+
 // ForwardAuthRouteConfig is the per-route reference to one of the
 // instance-level forward-auth providers (Step K.1, §5.1). The
 // provider configuration itself lives in the
@@ -319,6 +369,9 @@ type Route struct {
 	// the API layer (W.2 internal/api/routes.go) maps to/from a
 	// camelCase routeRequest.CountryBlock mirror.
 	CountryBlock countryblock.Config `json:"country_block"`
+	// v1 path-based-rules. Empty on pre-v1 routes (migration-free).
+	IPFilter  *IPFilter  `json:"ip_filter,omitempty"`  // whole-domain source-IP gate
+	PathRules []PathRule `json:"path_rules,omitempty"` // per-sub-path overrides (additive)
 	// InsecureSkipVerify (Step #R-PROXMOX-HTTPS-LOOP, 2026-06-10)
 	// opts the route's upstream pool out of TLS certificate
 	// verification when at least one Upstream URL uses the
@@ -855,6 +908,25 @@ func (r *Route) validate() error {
 	// is accepted as a synonym for "off" (no migration needed).
 	if err := r.CountryBlock.Validate(); err != nil {
 		return err
+	}
+	// v1 path-based-rules: whole-domain IPFilter (nil is a no-op) and
+	// each PathRule, plus a duplicate-PathPrefix guard so a hand-
+	// crafted JSON can't declare two overlapping rules for the same
+	// sub-tree (ambiguous emission order).
+	if r.IPFilter != nil {
+		if err := r.IPFilter.Validate(); err != nil {
+			return err
+		}
+	}
+	seenPrefix := make(map[string]struct{}, len(r.PathRules))
+	for _, pr := range r.PathRules {
+		if err := pr.Validate(); err != nil {
+			return err
+		}
+		if _, dup := seenPrefix[pr.PathPrefix]; dup {
+			return fmt.Errorf("path_rules: duplicate path_prefix %q", pr.PathPrefix)
+		}
+		seenPrefix[pr.PathPrefix] = struct{}{}
 	}
 	// Step J.2: active health-check validation, gated by Enabled.
 	// When Enabled is false the sub-fields are inert; storage does
