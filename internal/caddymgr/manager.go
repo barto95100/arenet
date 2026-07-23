@@ -1733,6 +1733,23 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			handlers = append(handlers, cbHandler)
 		}
 
+		// v1 path-based-rules: whole-domain source-IP gate. Sibling of
+		// country-block — cheap static policy before crowdsec/auth/waf.
+		// Emitted as a route (matcher + static_response) so it can be an
+		// inner route of the subroute; wrap accordingly to match the
+		// existing handler-slice shape.
+		if r.IPFilter != nil {
+			if ipRoute := buildIPFilterRoute(*r.IPFilter); ipRoute != nil {
+				// The chain is a handler slice; a matcher+handler pair is
+				// expressed as a `subroute` with one inner route so it
+				// slots into `handlers`. (Matches wrapInSubroute usage.)
+				handlers = append(handlers, map[string]any{
+					"handler": "subroute",
+					"routes":  []map[string]any{ipRoute},
+				})
+			}
+		}
+
 		// Step N.1 — CrowdSec reputation gate. Slot RIGHT AFTER
 		// metrics and BEFORE every other gate (auth, WAF,
 		// headers): the IP-reputation check is the first wall.
