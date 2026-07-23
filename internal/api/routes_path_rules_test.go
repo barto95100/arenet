@@ -294,3 +294,65 @@ func TestUpdateRoute_PathRuleBasicAuth_PreservesHashOnEmptyPassword(t *testing.T
 			originalHash, after[0].PathRules[0].BasicAuth.PasswordHash)
 	}
 }
+
+// TestUpdateRoute_PathRuleNoProtection_Returns400NotServerError pins
+// the fix/path-rule-empty-500 dogfooding bug: an operator edited a
+// route, left a path-rule with ipFilter mode "off" (a residual CIDR
+// but no active gate) and no basic auth — i.e. zero active protection
+// — and PUT returned a raw 500 "failed to update route" instead of an
+// actionable 400. Root cause: updateRoute called h.store.UpdateRoute
+// directly without pre-validating, so storage.Route.validate()'s
+// "must declare at least one protection" rejection fell through to
+// the handler's generic post-store 500 branch.
+//
+// This test drives the exact wire shape from the operator's report
+// (mode "off" + a residual cidrs entry, no basicAuth) through a real
+// PUT and asserts: 400 (not 500), and the body carries the actual
+// validation message so the operator knows what to fix.
+//
+// Note: this pins the BACKEND defense-in-depth path. The frontend fix
+// (sanitizePathRules, web/frontend/src/lib/utils/path-rules.ts) means
+// the UI itself never sends such a rule — but a direct API client (or
+// a future UI regression) must still get a clean 400, not a 500.
+func TestUpdateRoute_PathRuleNoProtection_Returns400NotServerError(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	// 1. Create a route with no path rules.
+	createBody := pathRulesRouteBody("dead-path-rule.example.com", "")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body)
+	}
+	var created routeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	// 2. PUT a path rule with mode "off" and a residual CIDR, no
+	// basicAuth — exactly the operator-reported shape — zero active
+	// protection.
+	putBody := `{
+	  "host":"dead-path-rule.example.com",
+	  "upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],
+	  "lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,
+	  "aliases":[],"authMode":"none","requestHeaders":{},"responseHeaders":{},
+	  "wafMode":"off",
+	  "pathRules":[
+	    {"pathPrefix":"/metrics-zabbix","ipFilter":{"mode":"off","cidrs":["8.8.8.8"]}}
+	  ]}`
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	env.router.ServeHTTP(putRec, putReq)
+
+	if putRec.Code != http.StatusBadRequest {
+		t.Fatalf("put status=%d (want 400) body=%s", putRec.Code, putRec.Body)
+	}
+	if !strings.Contains(putRec.Body.String(), "must declare at least one protection") {
+		t.Errorf("put body = %s; want it to contain the validation message %q",
+			putRec.Body.String(), "must declare at least one protection")
+	}
+}
