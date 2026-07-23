@@ -327,3 +327,59 @@ func materialiseHealthCheck(h healthCheckReq) healthCheckReq {
 	}
 	return h
 }
+
+// validatePathRuleUpstreams runs the same API-layer validation the
+// route-level upstream pool gets (validateUpstreamPool / validateLBPolicy /
+// validateHealthCheck) over each path-rule's OWN upstream pool, before the
+// route write reaches storage.
+//
+// This exists because storage.PathRule.Validate() deliberately does NOT
+// check upstream URL *syntax* (validateUpstreamURL lives only at the API
+// layer — see storage/routes.go PathRule.Validate doc-comment) nor does it
+// validate HealthCheck sub-fields at all. Without this pass, a
+// syntactically broken path-rule upstream URL (e.g. "://broken") or an
+// enabled path-rule health check missing its URI would sail past
+// createRoute/updateRoute and only surface later at Caddy config emission
+// — mirrors the route-level defence-in-depth pattern (routes.go
+// validateUpstreamPool / validateHealthCheck calls).
+//
+// Only path rules carrying a non-empty Upstreams pool are checked — an
+// empty pool means "inherit the route's pool" and has no LB/HC of its own
+// to validate (mirrors mapPathRuleReqs' own "len(r.Upstreams) > 0" gate).
+// Errors are wrapped with the offending PathPrefix so operators can locate
+// the failing rule in a multi-path-rule payload.
+func validatePathRuleUpstreams(reqs []pathRuleReq) error {
+	for _, r := range reqs {
+		if len(r.Upstreams) == 0 {
+			continue
+		}
+		// Materialise Weight defaults before validation, mirroring the
+		// route-level createRoute/updateRoute pre-validation step —
+		// otherwise an omitted weight (validly defaulted to 1 later by
+		// mapPathRuleReqs) would be rejected here as "< 1".
+		pool := make([]upstreamReq, len(r.Upstreams))
+		copy(pool, r.Upstreams)
+		for i := range pool {
+			if pool[i].Weight == 0 {
+				pool[i].Weight = 1
+			}
+		}
+		if err := validateUpstreamPool(pool); err != nil {
+			return fmt.Errorf("path_rule %q: %s", r.PathPrefix, err.Error())
+		}
+		lb := r.LBPolicy
+		if lb == "" {
+			lb = storage.LBPolicyRoundRobin
+		}
+		if err := validateLBPolicy(lb); err != nil {
+			return fmt.Errorf("path_rule %q: %s", r.PathPrefix, err.Error())
+		}
+		if r.HealthCheck != nil && r.HealthCheck.Enabled {
+			hc := materialiseHealthCheck(*r.HealthCheck)
+			if err := validateHealthCheck(hc); err != nil {
+				return fmt.Errorf("path_rule %q: %s", r.PathPrefix, err.Error())
+			}
+		}
+	}
+	return nil
+}

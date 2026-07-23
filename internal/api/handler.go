@@ -1152,6 +1152,11 @@ type pathRuleReq struct {
 	PathPrefix string                `json:"pathPrefix"`
 	BasicAuth  *pathRuleBasicAuthReq `json:"basicAuth,omitempty"`
 	IPFilter   *ipFilterReq          `json:"ipFilter,omitempty"`
+	// Per-path upstream routing (v2.23.0). Empty Upstreams = inherit the
+	// route's pool. LBPolicy/HealthCheck are ignored when Upstreams is empty.
+	Upstreams   []upstreamReq   `json:"upstreams,omitempty"`
+	LBPolicy    string          `json:"lbPolicy,omitempty"`
+	HealthCheck *healthCheckReq `json:"healthCheck,omitempty"`
 }
 
 // mapPathRuleReqs nil/empty-safely maps the wire slice to
@@ -1203,6 +1208,36 @@ func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) ([]storage
 		if r.IPFilter != nil {
 			f := r.IPFilter.toStorage()
 			pr.IPFilter = &f
+		}
+		if len(r.Upstreams) > 0 {
+			pool := make([]storage.Upstream, len(r.Upstreams))
+			for j, u := range r.Upstreams {
+				w := u.Weight
+				if w == 0 {
+					w = 1 // materialise default (storage validate() requires >= 1)
+				}
+				pool[j] = storage.Upstream{URL: u.URL, Weight: w}
+			}
+			pr.Upstreams = pool
+			lb := r.LBPolicy
+			if lb == "" {
+				lb = storage.LBPolicyRoundRobin // default when a pool is present
+			}
+			pr.LBPolicy = lb
+			if r.HealthCheck != nil && r.HealthCheck.Enabled {
+				hc := materialiseHealthCheck(*r.HealthCheck)
+				pr.HealthCheck = &storage.HealthCheck{
+					Enabled:      hc.Enabled,
+					URI:          hc.URI,
+					Method:       hc.Method,
+					Interval:     hc.Interval,
+					Timeout:      hc.Timeout,
+					ExpectStatus: hc.ExpectStatus,
+					ExpectBody:   hc.ExpectBody,
+					Passes:       hc.Passes,
+					Fails:        hc.Fails,
+				}
+			}
 		}
 		out[i] = pr
 	}
@@ -1889,6 +1924,27 @@ func toPathRulesResp(rules []storage.PathRule) []pathRuleReq {
 				Mode:       pr.IPFilter.Mode,
 				CIDRs:      pr.IPFilter.CIDRs,
 				StatusCode: pr.IPFilter.StatusCode,
+			}
+		}
+		if len(pr.Upstreams) > 0 {
+			pool := make([]upstreamReq, len(pr.Upstreams))
+			for j, u := range pr.Upstreams {
+				pool[j] = upstreamReq{URL: u.URL, Weight: u.Weight}
+			}
+			out[i].Upstreams = pool
+			out[i].LBPolicy = pr.LBPolicy
+			if pr.HealthCheck != nil {
+				out[i].HealthCheck = &healthCheckReq{
+					Enabled:      pr.HealthCheck.Enabled,
+					URI:          pr.HealthCheck.URI,
+					Method:       pr.HealthCheck.Method,
+					Interval:     pr.HealthCheck.Interval,
+					Timeout:      pr.HealthCheck.Timeout,
+					ExpectStatus: pr.HealthCheck.ExpectStatus,
+					ExpectBody:   pr.HealthCheck.ExpectBody,
+					Passes:       pr.HealthCheck.Passes,
+					Fails:        pr.HealthCheck.Fails,
+				}
 			}
 		}
 	}
