@@ -2036,6 +2036,19 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Validate BEFORE the store call so a bad-input rejection (e.g. a
+	// path-rule with no active protection) surfaces as a 400 with the
+	// actual message — mirroring createRoute's pre-store validation.
+	// Without this, storage.UpdateRoute's internal validate() failure
+	// fell through to the generic 500 branch below (operator-reported:
+	// editing a route to leave a dead path-rule — ipFilter mode "off"
+	// with a residual CIDR and no basic auth — returned an opaque
+	// "failed to update route" 500 instead of an actionable 400).
+	if err := storage.ValidateRoute(newRoute); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	updated, err := h.store.UpdateRoute(r.Context(), newRoute)
 	if err != nil {
 		h.logger.Error("update route", "err", err)

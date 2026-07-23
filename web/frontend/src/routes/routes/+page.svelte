@@ -24,6 +24,7 @@
 	} from '$lib/api/error-templates';
 	import { externalCertsApi } from '$lib/api/external-certs';
 	import { hostMatchesSAN } from '$lib/utils/san-match';
+	import { sanitizePathRules } from '$lib/utils/path-rules';
 	import { manualCertDisplayName } from '$lib/utils/manual-cert-name';
 	import type {
 		ACMEChallenge,
@@ -2024,24 +2025,34 @@
 				// on (rule.basicAuth is undefined otherwise) and always
 				// carries a PLAIN password on the wire — the backend
 				// hashes it server-side (never send passwordHash).
-				pathRules: formData.pathRules
-					.filter((rule) => rule.pathPrefix.trim().length > 0)
-					.map((rule) => ({
-						pathPrefix: rule.pathPrefix.trim(),
-						...(rule.basicAuth
-							? {
-									basicAuth: {
-										username: rule.basicAuth.username,
-										password: rule.basicAuth.password ?? ''
+				//
+				// fix/path-rule-empty-500 — sanitizePathRules then drops
+				// any rule left with NO active protection (mode "off"
+				// ipFilter + no basic-auth username): removing a rule's
+				// protection reads as removing the rule, and shipping a
+				// dead rule is exactly what the backend 500'd on. It also
+				// clears a kept rule's cidrs when its ipFilter mode is
+				// "off" (residual CIDRs under "off" are meaningless).
+				pathRules: sanitizePathRules(
+					formData.pathRules
+						.filter((rule) => rule.pathPrefix.trim().length > 0)
+						.map((rule) => ({
+							pathPrefix: rule.pathPrefix.trim(),
+							...(rule.basicAuth
+								? {
+										basicAuth: {
+											username: rule.basicAuth.username,
+											password: rule.basicAuth.password ?? ''
+										}
 									}
-								}
-							: {}),
-						ipFilter: {
-							mode: rule.ipFilter?.mode ?? 'off',
-							cidrs: [...(rule.ipFilter?.cidrs ?? [])],
-							statusCode: rule.ipFilter?.statusCode ?? 0
-						}
-					}))
+								: {}),
+							ipFilter: {
+								mode: rule.ipFilter?.mode ?? 'off',
+								cidrs: [...(rule.ipFilter?.cidrs ?? [])],
+								statusCode: rule.ipFilter?.statusCode ?? 0
+							}
+						}))
+				)
 			};
 			// Step #R-PROXMOX-HTTPS-LOOP — only ship
 			// insecureSkipVerify when the pool is https. On an
