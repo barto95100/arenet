@@ -112,11 +112,11 @@ type PathRule struct {
 
 // Validate checks that the PathRule is well-formed: PathPrefix is a
 // non-empty, whitespace-free, leading-slash path under 256 characters,
-// and at least one ACTIVE protection (basic auth, or an IP filter
-// with Mode != "off") is declared and internally valid. An IP filter
-// present but set to Mode "off" does not count — it emits zero
-// protection, so a rule relying on it alone would be a silent
-// passthrough.
+// and at least one ACTIVE protection (basic auth, an IP filter with
+// Mode != "off", or a non-empty upstream pool) is declared and
+// internally valid. An IP filter present but set to Mode "off" does
+// not count — it emits zero protection, so a rule relying on it alone
+// would be a silent passthrough.
 func (p PathRule) Validate() error {
 	if p.PathPrefix == "" || p.PathPrefix[0] != '/' {
 		return fmt.Errorf("path_rule: path_prefix %q must start with /", p.PathPrefix)
@@ -150,12 +150,30 @@ func (p PathRule) Validate() error {
 		// ambiguity note. Here we enforce what storage CAN check: a positive
 		// weight per upstream, and a same-scheme pool.
 		for i, u := range p.Upstreams {
+			if u.URL == "" {
+				return fmt.Errorf("path_rule %q: upstreams[%d].url must not be empty", p.PathPrefix, i)
+			}
 			if u.Weight < 1 {
 				return fmt.Errorf("path_rule %q: upstreams[%d].weight must be >= 1", p.PathPrefix, i)
 			}
 		}
 		if err := validateSameSchemePool(p.Upstreams); err != nil {
 			return fmt.Errorf("path_rule %q: %w", p.PathPrefix, err)
+		}
+		// LBPolicy must be one of the six enum values, mirroring the
+		// route-level validate() check. Only enforced when a pool is
+		// present: an empty pool leaves LBPolicy unused/ignored, so a
+		// blank LBPolicy on a protection-only rule (no upstreams) must
+		// not be rejected.
+		ok := false
+		for _, lp := range LBPolicies {
+			if p.LBPolicy == lp {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return fmt.Errorf("path_rule %q: lb_policy %q is not a valid policy", p.PathPrefix, p.LBPolicy)
 		}
 	}
 	return nil

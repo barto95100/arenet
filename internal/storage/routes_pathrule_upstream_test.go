@@ -69,3 +69,30 @@ func TestPathRule_Validate_HTTPSPoolDifferentFromRouteIsValid(t *testing.T) {
 		t.Fatalf("https path pool should be valid on its own, got: %v", err)
 	}
 }
+
+func TestPathRule_Validate_EmptyUpstreamURLRejected(t *testing.T) {
+	// Mirrors the route-level validate() check (routes.go ~815-821): an
+	// upstream with an empty URL must be rejected, not silently accepted.
+	pr := PathRule{
+		PathPrefix: "/v1",
+		Upstreams:  []Upstream{{URL: "", Weight: 1}},
+		LBPolicy:   LBPolicyRoundRobin,
+	}
+	if err := pr.Validate(); err == nil {
+		t.Fatal("empty upstream URL must be rejected")
+	}
+}
+
+func TestPathRule_Validate_InvalidLBPolicyRejected(t *testing.T) {
+	// Mirrors the route-level validate() check (routes.go ~843-859): an
+	// LBPolicy outside storage.LBPolicies must be rejected when a pool is
+	// present.
+	pr := PathRule{
+		PathPrefix: "/v1",
+		Upstreams:  upstreamPool("http://api-a:8080"),
+		LBPolicy:   "banana",
+	}
+	if err := pr.Validate(); err == nil {
+		t.Fatal("invalid lb_policy must be rejected")
+	}
+}
