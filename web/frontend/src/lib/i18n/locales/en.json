@@ -444,6 +444,31 @@
 			"active": "Active",
 			"maintenance": "Maintenance",
 			"disabled": "Disabled"
+		},
+		"ipFilter": {
+			"sectionLabel": "Source IP filter",
+			"modeLabel": "IP filter mode",
+			"modeOff": "Off",
+			"modeAllow": "Allow-list",
+			"modeDeny": "Deny-list",
+			"offHint": "No gate — traffic is not filtered by source IP.",
+			"cidrsLabel": "IP / CIDR list",
+			"cidrsPlaceholder": "192.168.1.10\n10.0.0.0/8",
+			"cidrsHint": "One IP or CIDR range per line, e.g. 192.168.1.10 or 10.0.0.0/8."
+		},
+		"pathRules": {
+			"sectionLabel": "Path rules",
+			"sectionHelp": "Apply a basic auth override and/or a scoped IP filter to requests under a specific path prefix.",
+			"add": "Add path rule",
+			"remove": "Remove path rule",
+			"prefixLabel": "Path prefix",
+			"prefixPlaceholder": "/docs",
+			"prefixHelp": "/docs matches /docs and everything under it.",
+			"basicAuthLabel": "Basic auth override",
+			"basicAuthUsernameLabel": "Username",
+			"basicAuthUsernamePlaceholder": "username",
+			"basicAuthPasswordLabel": "Password",
+			"ipFilterLabel": "Scoped IP filter"
 		}
 	},
 	"pageTitles": {

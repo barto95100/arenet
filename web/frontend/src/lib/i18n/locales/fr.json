@@ -444,6 +444,31 @@
 			"active": "Active",
 			"maintenance": "Maintenance",
 			"disabled": "Désactivée"
+		},
+		"ipFilter": {
+			"sectionLabel": "Filtrage IP source",
+			"modeLabel": "Mode de filtrage IP",
+			"modeOff": "Désactivé",
+			"modeAllow": "Liste blanche",
+			"modeDeny": "Liste noire",
+			"offHint": "Pas de gate — le trafic n'est pas filtré par IP source.",
+			"cidrsLabel": "Liste d'IP / CIDR",
+			"cidrsPlaceholder": "192.168.1.10\n10.0.0.0/8",
+			"cidrsHint": "Une IP ou plage CIDR par ligne, ex. 192.168.1.10 ou 10.0.0.0/8."
+		},
+		"pathRules": {
+			"sectionLabel": "Règles par chemin",
+			"sectionHelp": "Applique une authentification Basic spécifique et/ou un filtrage IP dédié aux requêtes sous un préfixe de chemin donné.",
+			"add": "Ajouter une règle",
+			"remove": "Supprimer la règle",
+			"prefixLabel": "Préfixe de chemin",
+			"prefixPlaceholder": "/docs",
+			"prefixHelp": "/docs protège /docs et tout ce qui est en dessous.",
+			"basicAuthLabel": "Authentification Basic spécifique",
+			"basicAuthUsernameLabel": "Utilisateur",
+			"basicAuthUsernamePlaceholder": "utilisateur",
+			"basicAuthPasswordLabel": "Mot de passe",
+			"ipFilterLabel": "Filtrage IP dédié"
 		}
 	},
 	"pageTitles": {
