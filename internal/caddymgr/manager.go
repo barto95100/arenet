@@ -1805,7 +1805,11 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			// field (see that function's doc comment for the
 			// RAM-exhaustion rationale). Reusing here guarantees the
 			// route-level and path-level handlers never drift.
-			handlers = append(handlers, buildBasicAuthHandlerFromConfig(r.BasicAuth))
+			// Realm is per-vhost ("Arenet route <host>") — restores
+			// the pre-extraction behaviour (fix for a Task 5 review
+			// regression where the extraction dropped r.Host access
+			// and fell back to a fixed "Arenet" realm).
+			handlers = append(handlers, buildBasicAuthHandlerFromConfig(r.BasicAuth, fmt.Sprintf("Arenet route %s", r.Host)))
 		case storage.RouteAuthForwardAuth:
 			// Step K.1 — forward_auth. Look up the referenced
 			// provider in opts.ForwardAuthProviders (passed in by
@@ -1900,7 +1904,14 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// byte-identical to pre-Q5 (plain proxyHandler append), so
 		// every route without path rules is unaffected.
 		if len(r.PathRules) > 0 {
-			handlers = append(handlers, buildPathRulesSubroute(r.PathRules, proxyHandler, buildBasicAuthHandlerFromConfig))
+			// Per-path basic auth reuses the route's vhost realm too
+			// (per-host, not per-path) — keeps credential scoping
+			// tied to the vhost, consistent with the route-level site
+			// above.
+			pathRealm := fmt.Sprintf("Arenet route %s", r.Host)
+			handlers = append(handlers, buildPathRulesSubroute(r.PathRules, proxyHandler, func(c storage.BasicAuthRouteConfig) map[string]any {
+				return buildBasicAuthHandlerFromConfig(c, pathRealm)
+			}))
 		} else {
 			handlers = append(handlers, proxyHandler)
 		}
@@ -3403,18 +3414,21 @@ func wrapHeaderValues(m map[string]string) map[string][]string {
 // passwords stay in memory a bit longer — acceptable, since Basic
 // Auth receives them per request over the wire regardless.
 //
-// Realm is a fixed "Arenet" string (not per-Host) because this
-// function only receives the BasicAuthRouteConfig — the same shape
-// is shared by the route-level call site (which has a Host) and the
-// per-path call site (which does not); keeping the realm generic
-// avoids a signature split between the two use sites.
-func buildBasicAuthHandlerFromConfig(c storage.BasicAuthRouteConfig) map[string]any {
+// Realm is caller-supplied (per-vhost, e.g. "Arenet route
+// app.example.com") rather than fixed — the realm scopes the
+// browser's Basic-Auth credential cache, so a single global realm
+// across every route/path would make the browser auto-send or
+// suppress re-prompts across unrelated vhosts. This mirrors the
+// pre-Q5-extraction inline behaviour. Both the route-level call site
+// and the per-path call site pass "Arenet route "+r.Host so
+// credential scoping stays tied to the vhost either way.
+func buildBasicAuthHandlerFromConfig(c storage.BasicAuthRouteConfig, realm string) map[string]any {
 	return map[string]any{
 		"handler": "authentication",
 		"providers": map[string]any{
 			"http_basic": map[string]any{
 				"hash":       map[string]any{"algorithm": "argon2id"},
-				"realm":      "Arenet",
+				"realm":      realm,
 				"hash_cache": map[string]any{},
 				"accounts": []map[string]any{
 					{

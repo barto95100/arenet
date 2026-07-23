@@ -32,6 +32,7 @@ func TestPathRule_Validate(t *testing.T) {
 		{"no leading slash", PathRule{PathPrefix: "docs", BasicAuth: ba}, true},
 		{"empty prefix", PathRule{PathPrefix: "", BasicAuth: ba}, true},
 		{"no protection", PathRule{PathPrefix: "/x"}, true},
+		{"ip filter off = no active protection", PathRule{PathPrefix: "/x", IPFilter: &IPFilter{Mode: "off"}}, true},
 		{"basic no user", PathRule{PathPrefix: "/x", BasicAuth: &BasicAuthRouteConfig{}}, true},
 		{"basic no password hash", PathRule{PathPrefix: "/x", BasicAuth: &BasicAuthRouteConfig{Username: "u"}}, true},
 		{"bad ip filter", PathRule{PathPrefix: "/x", IPFilter: &IPFilter{Mode: "allow"}}, true},

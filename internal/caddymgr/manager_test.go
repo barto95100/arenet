@@ -900,6 +900,14 @@ func TestBuildConfigJSON_BasicAuth_EmitsAuthHandler(t *testing.T) {
 	if hash["algorithm"] != "argon2id" {
 		t.Errorf("hash.algorithm = %v; want argon2id", hash["algorithm"])
 	}
+	// realm must be scoped per-vhost ("Arenet route <host>"), not a
+	// fixed global string — the realm scopes the browser's Basic-Auth
+	// credential cache per-vhost. Regression guard for the Task 5
+	// buildBasicAuthHandlerFromConfig extraction, which briefly lost
+	// access to r.Host and fell back to a fixed "Arenet" realm.
+	if want := "Arenet route auth.example.com"; httpBasic["realm"] != want {
+		t.Errorf("http_basic.realm = %v; want %q", httpBasic["realm"], want)
+	}
 	// hash_cache must be emitted so Caddy caches per-credential
 	// verification (avoids re-running the 64 MiB argon2id hash on every
 	// request — catastrophic for SSE-heavy upstreams). Empty object =

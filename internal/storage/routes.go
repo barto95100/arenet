@@ -104,8 +104,11 @@ type PathRule struct {
 
 // Validate checks that the PathRule is well-formed: PathPrefix is a
 // non-empty, whitespace-free, leading-slash path under 256 characters,
-// and at least one protection (basic auth or IP filter) is declared
-// and internally valid.
+// and at least one ACTIVE protection (basic auth, or an IP filter
+// with Mode != "off") is declared and internally valid. An IP filter
+// present but set to Mode "off" does not count — it emits zero
+// protection, so a rule relying on it alone would be a silent
+// passthrough.
 func (p PathRule) Validate() error {
 	if p.PathPrefix == "" || p.PathPrefix[0] != '/' {
 		return fmt.Errorf("path_rule: path_prefix %q must start with /", p.PathPrefix)
@@ -118,7 +121,7 @@ func (p PathRule) Validate() error {
 			return fmt.Errorf("path_rule: path_prefix %q must not contain whitespace", p.PathPrefix)
 		}
 	}
-	if p.BasicAuth == nil && p.IPFilter == nil {
+	if p.BasicAuth == nil && (p.IPFilter == nil || !p.IPFilter.IsActive()) {
 		return fmt.Errorf("path_rule %q: must declare at least one protection (basic auth or IP filter)", p.PathPrefix)
 	}
 	if p.BasicAuth != nil && p.BasicAuth.Username == "" {
