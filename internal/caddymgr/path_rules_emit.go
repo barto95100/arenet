@@ -24,6 +24,23 @@ func pathMatchers(prefix string) []string {
 	return []string{prefix, prefix + "/*"}
 }
 
+// poolUsesHTTPS reports whether a bare upstream pool (a route's or a
+// per-path rule's) requires Caddy to negotiate TLS toward the upstreams.
+// It mirrors storage.Route.PoolUsesHTTPS() for a pool that is not attached
+// to a Route value (the per-path-upstream feature owns pools on
+// storage.PathRule, not on Route). storage.upstreamScheme is package-
+// private to storage, so caddymgr cannot call it; this helper reproduces
+// the same-scheme invariant instead: the storage validator guarantees a
+// same-scheme pool, so inspecting the first upstream is enough. Returns
+// true iff the first upstream URL uses the https:// scheme.
+func poolUsesHTTPS(pool []storage.Upstream) bool {
+	if len(pool) == 0 {
+		return false
+	}
+	url := pool[0].URL
+	return len(url) >= 8 && (url[:8] == "https://" || url[:8] == "HTTPS://")
+}
+
 // buildPathRulesSubroute wraps the proxy in a subroute whose inner
 // routes are the path-rules (sorted longest-prefix first, Q4) each
 // applying its override handlers (path IP filter block, then basic
@@ -39,11 +56,29 @@ func pathMatchers(prefix string) []string {
 // whose path doesn't fall under any PathRule prefix would have no
 // route to fall through to inside this subroute and would be
 // dropped instead of reaching the plain proxy.
+//
+// Per-path upstream (v2.23.0): the TERMINAL proxy of each matched
+// path route is resolved by pathProxyBuilder(pr), not by the shared
+// routeProxy. A rule with its own upstream pool proxies to THAT pool
+// (own load-balancing / health-check / transport, sharing the route's
+// error-branding handle_response — supplied by the caller's closure);
+// a rule with no pool returns the routeProxy verbatim (inherit). The
+// catch-all still appends routeProxy, so any path outside every rule
+// prefix reaches the route's own pool. pathProxyBuilder may fail (a
+// malformed per-path upstream URL) — the error is propagated so the
+// whole config build fails closed rather than emitting a half-built
+// subroute.
+//
+// Ordering is UNCHANGED — [IP-block?] → [basic-auth?] → [proxy] — so
+// a fail-closed IP filter still gates BEFORE the path's own upstream:
+// a blocked client gets its 403 without the request ever reaching the
+// per-path pool.
 func buildPathRulesSubroute(
 	rules []storage.PathRule,
-	proxyHandler map[string]any,
+	routeProxy map[string]any,
 	basicAuthBuilder func(storage.BasicAuthRouteConfig) map[string]any,
-) map[string]any {
+	pathProxyBuilder func(storage.PathRule) (map[string]any, error),
+) (map[string]any, error) {
 	sorted := storage.SortPathRulesByPrefixLenDesc(rules)
 	inner := make([]map[string]any, 0, len(sorted)+1)
 	for _, pr := range sorted {
@@ -62,15 +97,19 @@ func buildPathRulesSubroute(
 		if pr.BasicAuth != nil {
 			handle = append(handle, basicAuthBuilder(*pr.BasicAuth))
 		}
-		handle = append(handle, proxyHandler)
+		proxy, err := pathProxyBuilder(pr)
+		if err != nil {
+			return nil, err
+		}
+		handle = append(handle, proxy)
 		inner = append(inner, map[string]any{
 			"match":  []map[string]any{{"path": pathMatchers(pr.PathPrefix)}},
 			"handle": handle,
 		})
 	}
-	// catch-all: no path match → plain proxy (paths with no rule).
+	// catch-all: no path match → the route's own proxy (paths with no rule).
 	inner = append(inner, map[string]any{
-		"handle": []map[string]any{proxyHandler},
+		"handle": []map[string]any{routeProxy},
 	})
-	return map[string]any{"handler": "subroute", "routes": inner}
+	return map[string]any{"handler": "subroute", "routes": inner}, nil
 }

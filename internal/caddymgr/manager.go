@@ -1637,9 +1637,34 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			// tied to the vhost, consistent with the route-level site
 			// above.
 			pathRealm := fmt.Sprintf("Arenet route %s", r.Host)
-			handlers = append(handlers, buildPathRulesSubroute(r.PathRules, proxyHandler, func(c storage.BasicAuthRouteConfig) map[string]any {
+			// v2.23.0 — per-path upstream. A rule with its own upstream
+			// pool proxies to THAT pool via the shared reverse_proxy
+			// builder (own load-balancing / health-check / transport,
+			// reusing THIS route's sharedHandleResponse so the error
+			// branding is identical across the route pool and every path
+			// pool). A rule with no pool inherits the route's proxyHandler.
+			// DECISION: a path pool inherits the route's InsecureSkipVerify
+			// + UploadStreamingMode posture (no separate per-path toggle —
+			// YAGNI, documented in the spec's "no per-path transport UI").
+			pathProxy := func(pr storage.PathRule) (map[string]any, error) {
+				if len(pr.Upstreams) == 0 {
+					return proxyHandler, nil // inherit the route pool
+				}
+				return buildReverseProxyHandler(proxyPoolParams{
+					Upstreams:          pr.Upstreams,
+					LBPolicy:           pr.LBPolicy,
+					HealthCheck:        pr.HealthCheck, // already a pointer
+					UsesHTTPS:          poolUsesHTTPS(pr.Upstreams),
+					InsecureSkipVerify: r.InsecureSkipVerify,
+				}, sharedHandleResponse, r.UploadStreamingMode)
+			}
+			sub, err := buildPathRulesSubroute(r.PathRules, proxyHandler, func(c storage.BasicAuthRouteConfig) map[string]any {
 				return buildBasicAuthHandlerFromConfig(c, pathRealm)
-			}))
+			}, pathProxy)
+			if err != nil {
+				return nil, fmt.Errorf("route %s (%s) path rules: %w", r.ID, r.Host, err)
+			}
+			handlers = append(handlers, sub)
 		} else {
 			handlers = append(handlers, proxyHandler)
 		}

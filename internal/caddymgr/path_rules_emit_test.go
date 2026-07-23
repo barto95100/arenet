@@ -31,7 +31,14 @@ func TestBuildPathRulesSubroute_LongestFirstPlusCatchAll(t *testing.T) {
 		{PathPrefix: "/docs", BasicAuth: &storage.BasicAuthRouteConfig{Username: "d"}},
 		{PathPrefix: "/docs/admin", IPFilter: &storage.IPFilter{Mode: "allow", CIDRs: []string{"1.2.3.4"}}},
 	}
-	sr := buildPathRulesSubroute(rules, proxy, ba)
+	// Neither rule declares an upstream pool, so pathProxy always
+	// inherits the route proxy (mirrors the manager.go closure's
+	// len(pr.Upstreams)==0 branch).
+	pathProxy := func(pr storage.PathRule) (map[string]any, error) { return proxy, nil }
+	sr, err := buildPathRulesSubroute(rules, proxy, ba, pathProxy)
+	if err != nil {
+		t.Fatalf("buildPathRulesSubroute: %v", err)
+	}
 	routes := sr["routes"].([]map[string]any)
 	// 2 path routes + 1 catch-all = 3
 	if len(routes) != 3 {
