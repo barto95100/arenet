@@ -1799,45 +1799,13 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		switch r.AuthMode {
 		case storage.RouteAuthBasic:
 			// Step I.5 — Basic Auth, preserved verbatim through K.1.
-			// The `authentication` handler with the http_basic
-			// provider gates the route at HTTP layer: missing or
-			// wrong credentials yield a 401 before the request
-			// reaches the proxy chain. argon2id is selected via the
-			// hash module map; Caddy's caddyhttp/caddyauth ships it
-			// in the standard module set so no plugin is needed.
-			//
-			// Realm carries the primary Host so the browser scopes
-			// its cached credentials per virtual host (a switch from
-			// one route to another re-prompts as expected).
-			handlers = append(handlers, map[string]any{
-				"handler": "authentication",
-				"providers": map[string]any{
-					"http_basic": map[string]any{
-						"hash":  map[string]any{"algorithm": "argon2id"},
-						"realm": fmt.Sprintf("Arenet route %s", r.Host),
-						// hash_cache enables Caddy's per-credential
-						// verification cache (caddyauth.Cache). Without
-						// it, Caddy re-runs the full 64 MiB argon2id
-						// derivation on EVERY request; an SSE-heavy
-						// upstream that opens many reconnecting streams
-						// then exhausts RAM+swap. The cache collapses
-						// repeated identical verifications to one hash
-						// (singleflight coalesces concurrent ones). Empty
-						// object = enabled; the cache has no tunable
-						// fields (internal random eviction). Tradeoff:
-						// plaintext passwords stay in memory a bit
-						// longer — acceptable, since Basic Auth receives
-						// them per request over the wire regardless.
-						"hash_cache": map[string]any{},
-						"accounts": []map[string]any{
-							{
-								"username": r.BasicAuth.Username,
-								"password": r.BasicAuth.PasswordHash,
-							},
-						},
-					},
-				},
-			})
+			// Step Q5 — extracted into buildBasicAuthHandlerFromConfig
+			// so path-rules (Q5, per-path basic auth override) can
+			// reuse the SAME shape, in particular the hash_cache
+			// field (see that function's doc comment for the
+			// RAM-exhaustion rationale). Reusing here guarantees the
+			// route-level and path-level handlers never drift.
+			handlers = append(handlers, buildBasicAuthHandlerFromConfig(r.BasicAuth))
 		case storage.RouteAuthForwardAuth:
 			// Step K.1 — forward_auth. Look up the referenced
 			// provider in opts.ForwardAuthProviders (passed in by
@@ -1927,7 +1895,15 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
 			handlers = append(handlers, headersHandler)
 		}
-		handlers = append(handlers, proxyHandler)
+		// Step Q5 — per-path rules (additive overrides on top of the
+		// route-level chain above). When PathRules is empty this is
+		// byte-identical to pre-Q5 (plain proxyHandler append), so
+		// every route without path rules is unaffected.
+		if len(r.PathRules) > 0 {
+			handlers = append(handlers, buildPathRulesSubroute(r.PathRules, proxyHandler, buildBasicAuthHandlerFromConfig))
+		} else {
+			handlers = append(handlers, proxyHandler)
+		}
 
 		// Step I.3: Match.Host carries the full hostname set
 		// (primary + aliases) so Caddy dispatches the same route to
@@ -3406,6 +3382,49 @@ func wrapHeaderValues(m map[string]string) map[string][]string {
 		out[k] = []string{v}
 	}
 	return out
+}
+
+// buildBasicAuthHandlerFromConfig returns the Caddy `authentication`
+// handler config for a Basic Auth gate — Step I.5, extracted in Step
+// Q5 so both the route-level AuthMode==basic case AND the per-path
+// PathRule.BasicAuth override (Q5 path-rules subroute) emit the
+// IDENTICAL shape from one place instead of risking drift between
+// two hand-written copies.
+//
+// hash_cache is REQUIRED here — do not drop it. It enables Caddy's
+// per-credential verification cache (caddyauth.Cache). Without it,
+// Caddy re-runs the full 64 MiB argon2id derivation on EVERY
+// request; an SSE-heavy upstream that opens many reconnecting
+// streams then exhausts RAM+swap (the regression this fixed,
+// memory: route_basic_auth_hash_cache). The cache collapses
+// repeated identical verifications to one hash (singleflight
+// coalesces concurrent ones). Empty object = enabled; the cache has
+// no tunable fields (internal random eviction). Tradeoff: plaintext
+// passwords stay in memory a bit longer — acceptable, since Basic
+// Auth receives them per request over the wire regardless.
+//
+// Realm is a fixed "Arenet" string (not per-Host) because this
+// function only receives the BasicAuthRouteConfig — the same shape
+// is shared by the route-level call site (which has a Host) and the
+// per-path call site (which does not); keeping the realm generic
+// avoids a signature split between the two use sites.
+func buildBasicAuthHandlerFromConfig(c storage.BasicAuthRouteConfig) map[string]any {
+	return map[string]any{
+		"handler": "authentication",
+		"providers": map[string]any{
+			"http_basic": map[string]any{
+				"hash":       map[string]any{"algorithm": "argon2id"},
+				"realm":      "Arenet",
+				"hash_cache": map[string]any{},
+				"accounts": []map[string]any{
+					{
+						"username": c.Username,
+						"password": c.PasswordHash,
+					},
+				},
+			},
+		},
+	}
 }
 
 // buildForwardAuthHandler returns the Caddy handler config for the
