@@ -1464,6 +1464,11 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		// supported-code allowlist + 1 MiB body cap.
 		ErrorPageTemplateID: req.ErrorPageTemplateID,
 		ErrorPageOverrides:  req.ErrorPageOverrides,
+		// v1 path-based-rules: nil-safe mappers. No "existing"
+		// route on create, so there is nothing to preserve a
+		// path-rule password hash against.
+		IPFilter:  mapIPFilterReq(req.IPFilter),
+		PathRules: mapPathRuleReqs(req.PathRules, nil),
 	}
 	// v2.19.0 manual-cert cross-check: a route pinned to an uploaded
 	// external cert must reference an existing cert whose SANs cover
@@ -1953,6 +1958,18 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		// rejects unsupported codes + oversized bodies.
 		ErrorPageTemplateID: req.ErrorPageTemplateID,
 		ErrorPageOverrides:  req.ErrorPageOverrides,
+		// v1 path-based-rules: IPFilter has no per-field secret,
+		// so plain nil-safe mapping (no preserve-on-omission for
+		// the pointer itself — matches req.IPFilter's doc-comment:
+		// nil means "clear/off" is NOT implied, absent just isn't
+		// sent by a client that doesn't know the field yet, and
+		// mapIPFilterReq(nil) correctly returns nil either way).
+		// PathRules: mapPathRuleReqs preserves each rule's stored
+		// password hash when the wire value omits it (see its
+		// doc-comment) — same UX as the route-level BasicAuth
+		// preserve-on-empty-password pattern above.
+		IPFilter:  mapIPFilterReq(req.IPFilter),
+		PathRules: mapPathRuleReqs(req.PathRules, previous.PathRules),
 	}
 	// v2.19.0 manual-cert cross-check (mirrors createRoute).
 	if verr := h.validateManualCertRef(r.Context(), &newRoute); verr != nil {
