@@ -19,8 +19,18 @@ package caddymgr
 import "github.com/barto95100/arenet/internal/storage"
 
 // buildIPFilterRoute emits a Caddy route that blocks the traffic an
-// IPFilter forbids, using the native client_ip matcher (which honours
-// ARENET_TRUSTED_PROXIES — NOT remote_ip). Returns nil when inactive.
+// IPFilter forbids, using the native client_ip matcher. Returns nil when
+// inactive.
+//
+// IP source: Arenet does NOT emit `trusted_proxies` in the Caddy server
+// config, so `client_ip` resolves to the DIRECT TCP peer address, NOT a
+// forwarded X-Forwarded-For value. This is the more secure default for an
+// access gate — a client cannot spoof past an allow-list via XFF — but it
+// means that behind a fronting L7 proxy/LB the matcher sees the LB's IP,
+// not the real client's. Operators wanting XFF-based filtering behind a
+// trusted LB would need `trusted_proxies` plumbed into the server config
+// (v-next). (`ARENET_TRUSTED_PROXIES` is consumed only by Arenet's own
+// admin IP logging in cmd/arenet/main.go, not by this Caddy matcher.)
 //
 // allow mode → block everything NOT in the list: match {not:{client_ip}}.
 //

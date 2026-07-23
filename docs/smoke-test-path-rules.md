@@ -82,7 +82,22 @@ IP filter survive a BoltDB restart and still enforce.
 
 ## Notes
 - Smoke runs LOCAL: native `go build` + `curl` + a trivial test upstream. No
-  Docker/VM. `client_ip` matcher honours `ARENET_TRUSTED_PROXIES`.
+  Docker/VM.
+- **IP source (corrected after the final review):** the `client_ip` matcher
+  resolves the **direct TCP peer**, NOT `X-Forwarded-For`. Arenet emits no
+  `trusted_proxies` in the Caddy config, so XFF is untrusted by default (the
+  more-secure posture — a client can't spoof past an allow-list via XFF).
+  **Consequence:** behind a fronting L7 proxy/LB, the filter sees the LB's IP,
+  not the real client's — an IP allow-list keyed on real client IPs would
+  403 legitimate clients. This smoke only exercised the direct 127.0.0.1 peer;
+  the XFF/trusted-proxy path is NOT wired (v-next if operators need it).
+- **Interaction with maintenance mode:** a route's IP filter is NOT applied
+  while the route is in maintenance mode. Maintenance `BypassIPs` sends bypass
+  clients straight to the upstream, skipping **all** gates (WAF, CrowdSec,
+  country-block, and this IP filter) — this is the pre-existing meaning of
+  "bypass", not specific to path rules. So `ipFilter deny=X` + maintenance
+  `BypassIPs=X` lets X reach the upstream (an operator-authored contradiction,
+  temporary state). Documented, not a fail-open of the filter's own contract.
 - All backend suites (`caddymgr`/`storage`/`api`), the caddy.Validate gate
   (Task 6), the full frontend suite (1060) + svelte-check are green.
 - The dedicated reviews (Task 4 route-IP, Task 5 path-rules) verified the
