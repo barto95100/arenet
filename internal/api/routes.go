@@ -1777,6 +1777,19 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		newCountryBlock = cb
 	}
 
+	// v1 path-based-rules Important-finding fix — per-route
+	// whole-domain IPFilter on PUT. Same preserve-or-replace
+	// semantics as CountryBlock above (driven by the nil-vs-
+	// present distinction on the wire pointer):
+	//   - nil ptr   → preserve previous stored IPFilter verbatim.
+	//                 Operators editing unrelated fields don't
+	//                 need to restate the CIDR list every time.
+	//   - non-nil   → full replacement via mapIPFilterReq.
+	newIPFilter := previous.IPFilter
+	if req.IPFilter != nil {
+		newIPFilter = mapIPFilterReq(req.IPFilter)
+	}
+
 	// Step K.1 password resolution (refactor of the Step I.5 Q5
 	// rule under the new AuthMode enum):
 	//   - AuthMode != "basic"            → no hash stored, fields cleared.
@@ -1958,17 +1971,20 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		// rejects unsupported codes + oversized bodies.
 		ErrorPageTemplateID: req.ErrorPageTemplateID,
 		ErrorPageOverrides:  req.ErrorPageOverrides,
-		// v1 path-based-rules: IPFilter has no per-field secret,
-		// so plain nil-safe mapping (no preserve-on-omission for
-		// the pointer itself — matches req.IPFilter's doc-comment:
-		// nil means "clear/off" is NOT implied, absent just isn't
-		// sent by a client that doesn't know the field yet, and
-		// mapIPFilterReq(nil) correctly returns nil either way).
+		// v1 path-based-rules Important-finding fix: IPFilter on PUT
+		// follows the exact same preserve-or-replace contract as
+		// CountryBlock / HealthCheck above (driven by the nil-vs-
+		// present distinction on the wire pointer):
+		//   - nil ptr   → preserve previous stored IPFilter verbatim.
+		//                 Operators editing unrelated fields don't
+		//                 silently wipe a whole-domain IP allow/deny
+		//                 gate.
+		//   - non-nil   → full replacement via mapIPFilterReq.
 		// PathRules: mapPathRuleReqs preserves each rule's stored
 		// password hash when the wire value omits it (see its
 		// doc-comment) — same UX as the route-level BasicAuth
 		// preserve-on-empty-password pattern above.
-		IPFilter:  mapIPFilterReq(req.IPFilter),
+		IPFilter:  newIPFilter,
 		PathRules: mapPathRuleReqs(req.PathRules, previous.PathRules),
 	}
 	// v2.19.0 manual-cert cross-check (mirrors createRoute).
