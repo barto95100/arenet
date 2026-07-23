@@ -124,6 +124,9 @@ func (p PathRule) Validate() error {
 	if p.BasicAuth != nil && p.BasicAuth.Username == "" {
 		return fmt.Errorf("path_rule %q: basic auth requires a username", p.PathPrefix)
 	}
+	if p.BasicAuth != nil && p.BasicAuth.PasswordHash == "" {
+		return fmt.Errorf("path_rule %q: basic auth requires a password hash", p.PathPrefix)
+	}
 	if p.IPFilter != nil {
 		if err := p.IPFilter.Validate(); err != nil {
 			return fmt.Errorf("path_rule %q: %w", p.PathPrefix, err)
