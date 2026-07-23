@@ -51,7 +51,7 @@
 
 	function toggleBasicAuth(i: number, enabled: boolean): void {
 		if (enabled) {
-			value[i].basicAuth = { username: '', passwordHash: '' };
+			value[i].basicAuth = { username: '', password: '' };
 		} else {
 			value[i].basicAuth = undefined;
 		}
@@ -140,9 +140,9 @@
 									id="path-rule-basicauth-password-{i}"
 									type="password"
 									bind:value={
-										() => rule.basicAuth?.passwordHash ?? '',
+										() => rule.basicAuth?.password ?? '',
 										(v) => {
-											if (rule.basicAuth) rule.basicAuth.passwordHash = v;
+											if (rule.basicAuth) rule.basicAuth.password = v;
 										}
 									}
 									data-testid="path-rule-basicauth-password-{i}"

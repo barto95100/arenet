@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -1132,16 +1133,18 @@ func mapIPFilterReq(r *ipFilterReq) *storage.IPFilter {
 }
 
 // pathRuleBasicAuthReq is the camelCase wire shape for a
-// path-rule's Basic Auth sub-block. Unlike routeRequest's
-// basicAuthReq (which carries a PLAIN password hashed
-// server-side via auth.HashRoutePassword), a path rule accepts
-// the PasswordHash directly on the wire — v1 path-based-rules
-// has no dedicated hashing endpoint yet, so operators supply a
-// pre-computed argon2id PHC string. PasswordHash is still a
-// SECRET: toResponse blanks it on every GET (never echoed back).
+// path-rule's Basic Auth sub-block. Mirrors routeRequest's
+// basicAuthReq: Password is the PLAIN text on the wire —
+// write-only (the response never echoes it; the storage hash is
+// derived from it via auth.HashRoutePassword, same as
+// route-level Basic Auth). Username round-trips normally.
+//
+// Preserve-on-edit: Password empty on PUT keeps the existing
+// hash for that PathPrefix — same UX as route-level BasicAuth
+// (Step I.5 / K.1), see mapPathRuleReqs.
 type pathRuleBasicAuthReq struct {
-	Username     string `json:"username"`
-	PasswordHash string `json:"passwordHash"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // pathRuleReq is the camelCase wire mirror of storage.PathRule.
@@ -1156,14 +1159,21 @@ type pathRuleReq struct {
 // an empty non-nil slice) so a route with no path rules keeps the
 // pre-existing storage zero-value shape.
 //
-// Preserve-on-edit: when a path rule's BasicAuth.PasswordHash is
-// empty on PUT, the previously stored hash for that exact
-// PathPrefix is kept rather than wiped — mirrors the route-level
-// BasicAuth empty-password-preserves-hash UX (Step I.5 / K.1).
-// existing is the previous route's PathRules (nil on create).
-func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) []storage.PathRule {
+// Password hashing: each path-rule's BasicAuth.Password is a PLAIN
+// password on the wire (matches route-level basicAuthReq) — hashed
+// here via auth.HashRoutePassword, exactly like the route-level
+// create/update paths (routes.go ~1296 / ~1806). Returns an error
+// if the underlying argon2id hash fails; callers must surface that
+// as a 500 (mirrors the route-level hashErr handling).
+//
+// Preserve-on-edit: when a path rule's BasicAuth.Password is empty
+// on PUT, the previously stored hash for that exact PathPrefix is
+// kept rather than wiped — mirrors the route-level BasicAuth
+// empty-password-preserves-hash UX (Step I.5 / K.1). existing is
+// the previous route's PathRules (nil on create).
+func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) ([]storage.PathRule, error) {
 	if len(reqs) == 0 {
-		return nil
+		return nil, nil
 	}
 	prevByPrefix := make(map[string]storage.PathRule, len(existing))
 	for _, pr := range existing {
@@ -1173,11 +1183,17 @@ func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) []storage.
 	for i, r := range reqs {
 		pr := storage.PathRule{PathPrefix: r.PathPrefix}
 		if r.BasicAuth != nil {
-			hash := r.BasicAuth.PasswordHash
-			if hash == "" {
+			hash := ""
+			if r.BasicAuth.Password == "" {
 				if prev, ok := prevByPrefix[r.PathPrefix]; ok && prev.BasicAuth != nil {
 					hash = prev.BasicAuth.PasswordHash
 				}
+			} else {
+				h, hashErr := auth.HashRoutePassword(r.BasicAuth.Password)
+				if hashErr != nil {
+					return nil, fmt.Errorf("hash path-rule basic auth password (prefix %q): %w", r.PathPrefix, hashErr)
+				}
+				hash = h
 			}
 			pr.BasicAuth = &storage.BasicAuthRouteConfig{
 				Username:     r.BasicAuth.Username,
@@ -1190,7 +1206,7 @@ func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) []storage.
 		}
 		out[i] = pr
 	}
-	return out
+	return out, nil
 }
 
 // routeRequest is the wire shape accepted by POST and PUT /routes. JSON tags
@@ -1738,10 +1754,9 @@ type routeResponse struct {
 	// keeps pre-existing snapshots byte-identical.
 	IPFilter *ipFilterReq `json:"ipFilter,omitempty"`
 	// PathRules (v1 path-based-rules) — per-sub-path overrides.
-	// Each entry's BasicAuth.PasswordHash is REDACTED (blanked)
-	// before serialisation — see toResponse. omitempty keeps
-	// pre-existing snapshots byte-identical for routes without
-	// path rules.
+	// Each entry's BasicAuth.Password is REDACTED (blanked) before
+	// serialisation — see toResponse. omitempty keeps pre-existing
+	// snapshots byte-identical for routes without path rules.
 	PathRules []pathRuleReq `json:"pathRules,omitempty"`
 }
 
@@ -1851,10 +1866,11 @@ func toIPFilterResp(f *storage.IPFilter) *ipFilterReq {
 }
 
 // toPathRulesResp maps []storage.PathRule to the wire response
-// shape, REDACTING each path-rule's basic-auth password hash —
-// it must never be echoed back (mirrors the route-level BasicAuth
+// shape, REDACTING each path-rule's basic-auth password — it must
+// never be echoed back (mirrors the route-level BasicAuth
 // redaction pattern: the response only ever confirms a password
-// hash is set, never its value). nil/empty in → nil out.
+// is set, never its plaintext or its stored hash). nil/empty in →
+// nil out.
 func toPathRulesResp(rules []storage.PathRule) []pathRuleReq {
 	if len(rules) == 0 {
 		return nil
@@ -1864,8 +1880,8 @@ func toPathRulesResp(rules []storage.PathRule) []pathRuleReq {
 		out[i] = pathRuleReq{PathPrefix: pr.PathPrefix}
 		if pr.BasicAuth != nil {
 			out[i].BasicAuth = &pathRuleBasicAuthReq{
-				Username:     pr.BasicAuth.Username,
-				PasswordHash: "", // SECRET — never echoed
+				Username: pr.BasicAuth.Username,
+				Password: "", // SECRET — never echoed (plain or hash)
 			}
 		}
 		if pr.IPFilter != nil {

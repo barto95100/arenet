@@ -776,10 +776,16 @@ export interface IPFilter {
  * auth and/or IP filter, both scoped to requests whose path starts
  * with `pathPrefix`. camelCase wire, mirrors the backend routeRequest
  * PathRule mirror type.
+ *
+ * basicAuth.password (Task 8) is a PLAIN password on the request
+ * side — mirrors route-level basicAuth.password — hashed
+ * server-side via auth.HashRoutePassword. The response side never
+ * echoes it back (always blanked), so the type keeps it optional
+ * rather than splitting request/response shapes.
  */
 export interface PathRule {
 	pathPrefix: string;
-	basicAuth?: { username: string; passwordHash?: string; passwordSet?: boolean };
+	basicAuth?: { username: string; password?: string };
 	ipFilter?: IPFilter;
 }
 

@@ -1427,6 +1427,17 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// v1 path-based-rules: nil-safe mapper, hashes each path-rule's
+	// plain BasicAuth.Password server-side via auth.HashRoutePassword
+	// (same fix as the route-level basicAuthHash above). No
+	// "existing" route on create, so there is nothing to preserve a
+	// path-rule password hash against.
+	pathRules, pathRulesErr := mapPathRuleReqs(req.PathRules, nil)
+	if pathRulesErr != nil {
+		h.logger.Error("hash path-rule basic auth password", "err", pathRulesErr)
+		writeError(w, http.StatusInternalServerError, "failed to hash path-rule password")
+		return
+	}
 	newRoute := storage.Route{
 		Host:              req.Host,
 		Upstreams:         storeUpstreams,
@@ -1468,7 +1479,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		// route on create, so there is nothing to preserve a
 		// path-rule password hash against.
 		IPFilter:  mapIPFilterReq(req.IPFilter),
-		PathRules: mapPathRuleReqs(req.PathRules, nil),
+		PathRules: pathRules,
 	}
 	// v2.19.0 manual-cert cross-check: a route pinned to an uploaded
 	// external cert must reference an existing cert whose SANs cover
@@ -1933,6 +1944,17 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		rateLimit = next
 	}
+	// v1 path-based-rules: hashes each path-rule's plain
+	// BasicAuth.Password server-side via auth.HashRoutePassword (same
+	// fix as the route-level basicAuthHash above). Preserves the
+	// previously stored hash for a given PathPrefix when the wire
+	// value omits a password — see mapPathRuleReqs doc-comment.
+	pathRules, pathRulesErr := mapPathRuleReqs(req.PathRules, previous.PathRules)
+	if pathRulesErr != nil {
+		h.logger.Error("hash path-rule basic auth password", "err", pathRulesErr)
+		writeError(w, http.StatusInternalServerError, "failed to hash path-rule password")
+		return
+	}
 	newRoute := storage.Route{
 		ID:                id,
 		Host:              req.Host,
@@ -1985,7 +2007,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		// doc-comment) — same UX as the route-level BasicAuth
 		// preserve-on-empty-password pattern above.
 		IPFilter:  newIPFilter,
-		PathRules: mapPathRuleReqs(req.PathRules, previous.PathRules),
+		PathRules: pathRules,
 	}
 	// v2.19.0 manual-cert cross-check (mirrors createRoute).
 	if verr := h.validateManualCertRef(r.Context(), &newRoute); verr != nil {
