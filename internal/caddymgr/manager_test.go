@@ -1181,6 +1181,20 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 				Passes:       1,
 				Fails:        1,
 			},
+			// Task 6 — fold path-based-rules coverage into THIS canonical
+			// fixture so caddy.Validate provisions the route-level
+			// IPFilter (client_ip/not matcher) and the PathRules subroute
+			// (basic-auth + per-path IPFilter + catch-all) against a real
+			// emitted shape. Same anti-poisoning rationale as every other
+			// fold above: one caddy.Validate call per package.
+			IPFilter: &storage.IPFilter{Mode: "deny", CIDRs: []string{"10.0.0.0/8"}},
+			PathRules: []storage.PathRule{
+				{PathPrefix: "/docs", BasicAuth: &storage.BasicAuthRouteConfig{
+					Username:     "doc",
+					PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$U0FMVFNBTFRTQUxUU0FMVA$S0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0U",
+				}},
+				{PathPrefix: "/metrics", IPFilter: &storage.IPFilter{Mode: "allow", CIDRs: []string{"192.168.1.5"}}},
+			},
 		},
 	}
 	// One additional route per non-default LB policy. Each carries a
