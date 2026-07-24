@@ -792,6 +792,9 @@ export interface PathRule {
 	upstreams?: Upstream[];
 	lbPolicy?: LBPolicy;
 	healthCheck?: HealthCheck;
+	/** Per-path TLS skip-verify (v2.23.1). Autonomous — does not inherit the
+	 *  route's posture. Only meaningful when the path pool is https. */
+	insecureSkipVerify?: boolean;
 }
 
 /**

@@ -478,7 +478,8 @@
 			"upstreamLbLabel": "Load balancing",
 			"upstreamHealthCheckLabel": "Active health-check",
 			"upstreamHealthCheckUriPlaceholder": "/health",
-			"upstreamBackendsBadge": "→ {count} backend(s)"
+			"upstreamBackendsBadge": "→ {count} backend(s)",
+			"upstreamSkipVerifyLabel": "Skip TLS verification (self-signed backend)"
 		}
 	},
 	"pageTitles": {

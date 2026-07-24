@@ -1154,9 +1154,10 @@ type pathRuleReq struct {
 	IPFilter   *ipFilterReq          `json:"ipFilter,omitempty"`
 	// Per-path upstream routing (v2.23.0). Empty Upstreams = inherit the
 	// route's pool. LBPolicy/HealthCheck are ignored when Upstreams is empty.
-	Upstreams   []upstreamReq   `json:"upstreams,omitempty"`
-	LBPolicy    string          `json:"lbPolicy,omitempty"`
-	HealthCheck *healthCheckReq `json:"healthCheck,omitempty"`
+	Upstreams          []upstreamReq   `json:"upstreams,omitempty"`
+	LBPolicy           string          `json:"lbPolicy,omitempty"`
+	HealthCheck        *healthCheckReq `json:"healthCheck,omitempty"`
+	InsecureSkipVerify bool            `json:"insecureSkipVerify,omitempty"`
 }
 
 // mapPathRuleReqs nil/empty-safely maps the wire slice to
@@ -1238,6 +1239,7 @@ func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) ([]storage
 					Fails:        hc.Fails,
 				}
 			}
+			pr.InsecureSkipVerify = r.InsecureSkipVerify
 		}
 		out[i] = pr
 	}
@@ -1946,6 +1948,7 @@ func toPathRulesResp(rules []storage.PathRule) []pathRuleReq {
 					Fails:        pr.HealthCheck.Fails,
 				}
 			}
+			out[i].InsecureSkipVerify = pr.InsecureSkipVerify
 		}
 	}
 	return out

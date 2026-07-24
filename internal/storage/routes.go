@@ -108,6 +108,12 @@ type PathRule struct {
 	Upstreams   []Upstream   `json:"upstreams,omitempty"`    // own pool; empty = inherit the route's
 	LBPolicy    string       `json:"lb_policy,omitempty"`    // defaults to round_robin when pool non-empty
 	HealthCheck *HealthCheck `json:"health_check,omitempty"` // own active HC for this path pool
+	// InsecureSkipVerify (v2.23.1) applies ONLY to this path's own pool.
+	// Autonomous: a path pool does NOT inherit the route's skip-verify
+	// posture (Q1). Default false = strict TLS validation. Only consulted
+	// when the pool is https (transport.tls is emitted). omitempty →
+	// migration-free.
+	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
 }
 
 // Validate checks that the PathRule is well-formed: PathPrefix is a

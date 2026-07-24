@@ -43,7 +43,7 @@ func emitPathSubrouteJSON(t *testing.T, rules []storage.PathRule) string {
 			LBPolicy:           pr.LBPolicy,
 			HealthCheck:        pr.HealthCheck,
 			UsesHTTPS:          poolUsesHTTPS(pr.Upstreams),
-			InsecureSkipVerify: false,
+			InsecureSkipVerify: pr.InsecureSkipVerify,
 		}, sharedHandleResponse, false)
 	}
 	sub, err := buildPathRulesSubroute(rules, routeProxy, func(c storage.BasicAuthRouteConfig) map[string]any {
@@ -76,7 +76,7 @@ func firstRuleHandle(t *testing.T, rules []storage.PathRule) []map[string]any {
 			LBPolicy:           pr.LBPolicy,
 			HealthCheck:        pr.HealthCheck,
 			UsesHTTPS:          poolUsesHTTPS(pr.Upstreams),
-			InsecureSkipVerify: false,
+			InsecureSkipVerify: pr.InsecureSkipVerify,
 		}, sharedHandleResponse, false)
 	}
 	sub, err := buildPathRulesSubroute(rules, routeProxy, func(c storage.BasicAuthRouteConfig) map[string]any {
@@ -183,5 +183,72 @@ func TestPathRulesSubroute_IPBlockBeforeOwnUpstream(t *testing.T) {
 	js := emitPathSubrouteJSON(t, rules)
 	if !strings.Contains(js, "m:9090") {
 		t.Fatalf("expected the path's own upstream m:9090; got: %s", js)
+	}
+}
+
+func TestPathRulesSubroute_PathSkipVerifyAutonomous(t *testing.T) {
+	// A path with insecureSkipVerify=true + https pool emits
+	// transport.tls.insecure_skip_verify=true, driven by the PATH's field
+	// (the emitPathSubrouteJSON helper wires InsecureSkipVerify from the
+	// rule, mirroring the manager.go call site after this task).
+	rules := []storage.PathRule{{
+		PathPrefix:         "/legacy",
+		Upstreams:          []storage.Upstream{{URL: "https://old:8443", Weight: 1}},
+		LBPolicy:           storage.LBPolicyRoundRobin,
+		InsecureSkipVerify: true,
+	}}
+	js := emitPathSubrouteJSON(t, rules)
+	if !strings.Contains(js, "insecure_skip_verify") {
+		t.Fatalf("expected insecure_skip_verify for the path pool; got: %s", js)
+	}
+}
+
+func TestPathRulesSubroute_PathStrictByDefault(t *testing.T) {
+	// A path with insecureSkipVerify=false (default) + https pool emits a
+	// strict tls block (no insecure_skip_verify), proving the path does NOT
+	// inherit a route-level insecure posture.
+	rules := []storage.PathRule{{
+		PathPrefix: "/legacy",
+		Upstreams:  []storage.Upstream{{URL: "https://old:8443", Weight: 1}},
+		LBPolicy:   storage.LBPolicyRoundRobin,
+	}}
+	js := emitPathSubrouteJSON(t, rules)
+	if !strings.Contains(js, "\"tls\"") {
+		t.Fatalf("https path pool must still emit a tls block; got: %s", js)
+	}
+	if strings.Contains(js, "insecure_skip_verify") {
+		t.Fatalf("strict path pool must NOT emit insecure_skip_verify; got: %s", js)
+	}
+}
+
+// TestBuildConfigJSON_PathSkipVerifyIndependentOfRoute drives the REAL
+// buildConfigJSON (not the test helper) to guard the manager.go pathProxy
+// source line: the path pool's insecure_skip_verify must come from the PATH
+// rule's own field, NOT the route's. Here the route is STRICT
+// (InsecureSkipVerify=false) but the /legacy path has its own https pool with
+// InsecureSkipVerify=true. If the emission ever reverts to r.InsecureSkipVerify
+// (the pre-v2.23.1 bug), the path would be strict and this test fails — which
+// the helper-based tests above cannot catch (they bypass the manager.go call
+// site). The route's own http pool must stay strict (no tls block at all).
+func TestBuildConfigJSON_PathSkipVerifyIndependentOfRoute(t *testing.T) {
+	routes := []storage.Route{{
+		ID:                 "r-mixed",
+		Host:               "api.example.com",
+		Upstreams:          []storage.Upstream{{URL: "http://route-backend:8080", Weight: 1}},
+		LBPolicy:           storage.LBPolicyRoundRobin,
+		InsecureSkipVerify: false, // route is STRICT
+		PathRules: []storage.PathRule{{
+			PathPrefix:         "/legacy",
+			Upstreams:          []storage.Upstream{{URL: "https://legacy-backend:8443", Weight: 1}},
+			LBPolicy:           storage.LBPolicyRoundRobin,
+			InsecureSkipVerify: true, // but THIS path is insecure
+		}},
+	}}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	if !strings.Contains(string(raw), "insecure_skip_verify") {
+		t.Fatalf("path pool with InsecureSkipVerify=true must emit insecure_skip_verify even though the route is strict; got: %s", raw)
 	}
 }

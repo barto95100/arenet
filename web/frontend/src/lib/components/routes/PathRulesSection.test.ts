@@ -137,8 +137,16 @@ describe('PathRulesSection', () => {
 		// via the DOM element's own `.value` rather than the outer
 		// `value` array — see the note in the "adding a backend..."
 		// test above re: bare-array $bindable props in this harness.
+		// lbPolicy is explicitly weighted_round_robin (v2.23.1) — the
+		// weight input is now gated on that policy (see the
+		// hides/shows-the-weight-input tests below), so this test must
+		// opt in to keep exercising the weight input itself.
 		const value: PathRule[] = [
-			{ pathPrefix: '/api', upstreams: [{ url: 'http://backend:9090', weight: 1 }] }
+			{
+				pathPrefix: '/api',
+				upstreams: [{ url: 'http://backend:9090', weight: 1 }],
+				lbPolicy: 'weighted_round_robin'
+			}
 		];
 		const { getByTestId } = render(PathRulesSection, { value });
 
@@ -187,5 +195,64 @@ describe('PathRulesSection', () => {
 
 		expect(value[0].healthCheck).toBeUndefined();
 		expect(queryByTestId('path-rule-hc-uri-0')).toBeNull();
+	});
+
+	// v2.23.1 — the weight input is only meaningful under
+	// weighted_round_robin (mirrors the route-level weightVisible gate in
+	// routes/+page.svelte); showing it unconditionally is inconsistent
+	// with that pattern and misleading for round_robin/least_conn/etc.
+	it('hides the weight input unless the path LB is weighted_round_robin', () => {
+		const value: PathRule[] = [
+			{
+				pathPrefix: '/v1',
+				upstreams: [{ url: 'http://a:8080', weight: 1 }],
+				lbPolicy: 'round_robin'
+			}
+		];
+		const { queryByTestId } = render(PathRulesSection, { value });
+		expect(queryByTestId('path-rule-upstream-weight-0-0')).toBeNull();
+	});
+
+	it('shows the weight input when the path LB is weighted_round_robin', () => {
+		const value: PathRule[] = [
+			{
+				pathPrefix: '/v1',
+				upstreams: [{ url: 'http://a:8080', weight: 1 }],
+				lbPolicy: 'weighted_round_robin'
+			}
+		];
+		const { getByTestId } = render(PathRulesSection, { value });
+		expect(getByTestId('path-rule-upstream-weight-0-0')).toBeInTheDocument();
+	});
+
+	// v2.23.1 — the skip-TLS-verify checkbox is only meaningful when the
+	// path's own upstream pool has an https:// URL. Rendered as two
+	// separate instances rather than relying on `rerender` — this
+	// harness's $bindable write-back on a bare-array prop is only
+	// reliable across the FIRST prop replacement (see the note in the
+	// "adding a backend..." test above), so a rerender-based assertion
+	// here would be flaky for the same underlying reason.
+	it('hides the skip-TLS-verify checkbox for an http-only pool', () => {
+		const value: PathRule[] = [
+			{
+				pathPrefix: '/v1',
+				upstreams: [{ url: 'http://a:8080', weight: 1 }],
+				lbPolicy: 'round_robin'
+			}
+		];
+		const { queryByTestId } = render(PathRulesSection, { value });
+		expect(queryByTestId('path-rule-skip-verify-0')).toBeNull();
+	});
+
+	it('shows the skip-TLS-verify checkbox when the pool has an https URL', () => {
+		const value: PathRule[] = [
+			{
+				pathPrefix: '/v1',
+				upstreams: [{ url: 'https://a:8443', weight: 1 }],
+				lbPolicy: 'round_robin'
+			}
+		];
+		const { getByTestId } = render(PathRulesSection, { value });
+		expect(getByTestId('path-rule-skip-verify-0')).toBeInTheDocument();
 	});
 });

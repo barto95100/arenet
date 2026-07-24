@@ -96,3 +96,18 @@ func TestPathRule_Validate_InvalidLBPolicyRejected(t *testing.T) {
 		t.Fatal("invalid lb_policy must be rejected")
 	}
 }
+
+func TestPathRule_InsecureSkipVerify_RoundTrips(t *testing.T) {
+	pr := PathRule{
+		PathPrefix:         "/legacy",
+		Upstreams:          upstreamPool("https://old:8443"),
+		LBPolicy:           LBPolicyRoundRobin,
+		InsecureSkipVerify: true,
+	}
+	if err := pr.Validate(); err != nil {
+		t.Fatalf("valid rule rejected: %v", err)
+	}
+	if !pr.InsecureSkipVerify {
+		t.Fatal("InsecureSkipVerify should be true")
+	}
+}
