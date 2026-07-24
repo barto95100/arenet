@@ -63,6 +63,12 @@ export interface TopologyRoute {
         upstreams: TopologyUpstream[];
         lbPolicy: LBPolicy;
 
+        /** Per-path routing branches (v2.24.0). Absent/empty = no per-path
+         *  pool. Each entry with its own pool renders as a separate backend
+         *  cluster labelled by pathPrefix. Optional so pre-v2.24.0 snapshots
+         *  deserialise cleanly during the rolling redeploy window. */
+        pathPools?: TopologyPathPool[];
+
         reqPerSec: number;
         p99LatencyMs: number;
         errorRate5xx: number;            // 0-100
@@ -109,6 +115,17 @@ export interface TopologyAlias {
         reqPerSec: number;
         p99LatencyMs: number;
         errorRate5xx: number;            // 0-100
+}
+
+/** One per-path routing branch (v2.24.0): a path-rule with its own upstream
+ *  pool, the wire shape of backend `internal/api/topology/types.go`
+ *  `PathPool`. Rendered as a separate backend cluster labelled by
+ *  `pathPrefix`. Structure only — no live-traffic fields in v1. */
+export interface TopologyPathPool {
+        pathPrefix: string;
+        upstreams: TopologyUpstream[];
+        lbPolicy: LBPolicy;
+        insecureSkipVerify?: boolean;
 }
 
 export interface TopologyUpstream {
@@ -214,6 +231,10 @@ export type CaddyHubNodeData = {
 export type BackendClusterNodeData = {
         kind: 'backend-cluster';
         clusterLabel: string;
+        /** When set, this cluster is a per-path branch (v2.24.0) and the
+         *  header shows the prefix (e.g. "/v1"). Absent on the route's root
+         *  cluster — its rendering stays unchanged. */
+        pathPrefix?: string;
         runtime?: string;
         lbPolicy: LBPolicy;
         healthyCount: number;
