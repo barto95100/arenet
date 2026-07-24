@@ -74,8 +74,14 @@ camelCase:
 - Gates 5a/5b assume the shared `handle_response` branding wired in Task 3/4
   applies uniformly to both the route-level and path-level reverse-proxy
   handlers — confirm the two 502 pages are visually/structurally identical.
-- `insecureSkipVerify` on a path rule is scoped to that path's pool only; it
-  must not affect the route's own pool's TLS verification posture.
+- **(v2.23.1)** `insecureSkipVerify` is now a PER-PATH toggle, autonomous from
+  the route: a path with an https self-signed backend needs its own "Skip TLS
+  verification" checkbox (shown in the "Upstream spécifique" disclosure only when
+  the path pool has an https URL). It does NOT inherit — and does not affect —
+  the route's own TLS-verify posture. A path pool is strict by default. (Before
+  v2.23.1 a path pool inherited the route's insecure-skip-verify; that coupling
+  is gone.) The per-path weight input likewise appears only when the path's LB
+  is `weighted_round_robin`, mirroring the route pool.
 - All backend suites (`go test ./...`, `-race ./internal/caddymgr/`) and the
   full frontend suite (`vitest` + `svelte-check`) must be green before this
   live smoke is run — see `task-7-report.md` for the automated-gate output.
