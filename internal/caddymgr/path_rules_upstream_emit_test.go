@@ -220,3 +220,35 @@ func TestPathRulesSubroute_PathStrictByDefault(t *testing.T) {
 		t.Fatalf("strict path pool must NOT emit insecure_skip_verify; got: %s", js)
 	}
 }
+
+// TestBuildConfigJSON_PathSkipVerifyIndependentOfRoute drives the REAL
+// buildConfigJSON (not the test helper) to guard the manager.go pathProxy
+// source line: the path pool's insecure_skip_verify must come from the PATH
+// rule's own field, NOT the route's. Here the route is STRICT
+// (InsecureSkipVerify=false) but the /legacy path has its own https pool with
+// InsecureSkipVerify=true. If the emission ever reverts to r.InsecureSkipVerify
+// (the pre-v2.23.1 bug), the path would be strict and this test fails — which
+// the helper-based tests above cannot catch (they bypass the manager.go call
+// site). The route's own http pool must stay strict (no tls block at all).
+func TestBuildConfigJSON_PathSkipVerifyIndependentOfRoute(t *testing.T) {
+	routes := []storage.Route{{
+		ID:                 "r-mixed",
+		Host:               "api.example.com",
+		Upstreams:          []storage.Upstream{{URL: "http://route-backend:8080", Weight: 1}},
+		LBPolicy:           storage.LBPolicyRoundRobin,
+		InsecureSkipVerify: false, // route is STRICT
+		PathRules: []storage.PathRule{{
+			PathPrefix:         "/legacy",
+			Upstreams:          []storage.Upstream{{URL: "https://legacy-backend:8443", Weight: 1}},
+			LBPolicy:           storage.LBPolicyRoundRobin,
+			InsecureSkipVerify: true, // but THIS path is insecure
+		}},
+	}}
+	raw, err := buildConfigJSON(routes, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	if !strings.Contains(string(raw), "insecure_skip_verify") {
+		t.Fatalf("path pool with InsecureSkipVerify=true must emit insecure_skip_verify even though the route is strict; got: %s", raw)
+	}
+}
