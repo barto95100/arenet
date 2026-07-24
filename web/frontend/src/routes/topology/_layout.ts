@@ -29,6 +29,7 @@ import type {
         CaddyHubNodeData,
         FlowEdgeData,
         FQDNNodeData,
+        LBPolicy,
         RouteGroupNodeData,
         TopologyEdge,
         TopologyGraph,
@@ -162,6 +163,28 @@ function routeCol0Height(aliasCount: number): number {
                 + (aliasCount - 1) * ALIAS_TO_ALIAS_GAP
         );
 }
+
+/** v2.24.0 (Task 3): a route no longer maps 1:1 to a backend
+ *  cluster — per-path routing branches (route.pathPools) each
+ *  render as their own cluster alongside the route's root
+ *  cluster. ClusterSpec flattens routes -> a per-CLUSTER list so
+ *  the height/Y-stacking machinery (clusterTotalHeight /
+ *  computeStackYsForHeights) can operate uniformly over root AND
+ *  path clusters together, without overlap.
+ *
+ *  `edgeIdSuffix` mirrors clusterId's naming: '' for the root
+ *  cluster (keeps the pre-Task-3 edge id `e-caddy-cluster-${routeId}`
+ *  byte-identical) and `-path-${k}` for a path-pool cluster. */
+type ClusterSpec = {
+        route: TopologyRoute;
+        clusterId: string;
+        edgeIdSuffix: string;
+        pathPrefix?: string;
+        upstreams: TopologyUpstream[];
+        lbPolicy: LBPolicy;
+        hasHealthCheck: boolean;
+        warning?: string;
+};
 
 // ===========================================================================
 // Public API — buildTopologyGraph
@@ -424,29 +447,68 @@ export function buildTopologyGraph(
         // route has many upstreams. Children carry parentId +
         // extent: 'parent' so Svelte Flow keeps them inside the group
         // when the user drags either the parent or a child.
-        const clusterWarnings = routes.map(deriveClusterWarning);
-        const clusterHeights = routes.map((r, i) =>
-                clusterTotalHeight(r.upstreams.length, clusterWarnings[i] !== undefined),
+        //
+        // v2.24.0 (Task 3): a route no longer maps 1:1 to a cluster.
+        // Per-path routing branches (route.pathPools) each render as
+        // their OWN backend cluster, stacked alongside the route's
+        // root cluster. We flatten routes -> clusterSpecs FIRST (root
+        // spec + one spec per path-pool, in that order per route) so
+        // the height/Y-stacking machinery (clusterTotalHeight /
+        // computeStackYsForHeights) operates uniformly over the full
+        // per-CLUSTER list instead of the per-ROUTE list. This keeps
+        // the non-regression contract exact: a route with zero
+        // pathPools contributes exactly one spec (the root), byte-
+        // identical to the pre-Task-3 shape.
+        const clusterSpecs: ClusterSpec[] = [];
+        routes.forEach((route) => {
+                clusterSpecs.push({
+                        route,
+                        clusterId: `cluster-${route.id}`,
+                        edgeIdSuffix: '',
+                        upstreams: route.upstreams,
+                        lbPolicy: route.lbPolicy,
+                        hasHealthCheck: route.hasHealthCheck,
+                        warning: deriveClusterWarning(route),
+                });
+                (route.pathPools ?? []).forEach((pp, k) => {
+                        clusterSpecs.push({
+                                route,
+                                clusterId: `cluster-${route.id}-path-${k}`,
+                                edgeIdSuffix: `-path-${k}`,
+                                pathPrefix: pp.pathPrefix,
+                                upstreams: pp.upstreams,
+                                lbPolicy: pp.lbPolicy,
+                                // Structural only in v1 — no per-path health-check
+                                // status or warning derivation (no live metrics yet).
+                                hasHealthCheck: false,
+                        });
+                });
+        });
+
+        const clusterHeights = clusterSpecs.map((spec) =>
+                clusterTotalHeight(spec.upstreams.length, spec.warning !== undefined),
         );
         const clusterYs = computeStackYsForHeights(clusterHeights);
-        routes.forEach((route, i) => {
-                const healthyCount = route.upstreams.filter((u) => u.status === 'healthy').length;
-                const unhealthyCount = route.upstreams.filter((u) => u.status === 'unhealthy').length;
-                const totalCount = route.upstreams.length;
-                const clusterId = `cluster-${route.id}`;
+        clusterSpecs.forEach((spec, i) => {
+                const healthyCount = spec.upstreams.filter((u) => u.status === 'healthy').length;
+                const unhealthyCount = spec.upstreams.filter((u) => u.status === 'unhealthy').length;
+                const totalCount = spec.upstreams.length;
                 const clusterData: BackendClusterNodeData = {
                         kind: 'backend-cluster',
-                        clusterLabel: route.clusterLabel ?? deriveClusterLabel(route.host),
-                        runtime: dominantRuntime(route.upstreams),
-                        lbPolicy: route.lbPolicy,
+                        clusterLabel: spec.pathPrefix
+                                ? spec.pathPrefix
+                                : (spec.route.clusterLabel ?? deriveClusterLabel(spec.route.host)),
+                        pathPrefix: spec.pathPrefix,
+                        runtime: dominantRuntime(spec.upstreams),
+                        lbPolicy: spec.lbPolicy,
                         healthyCount,
                         unhealthyCount,
                         totalCount,
-                        hasHealthCheck: route.hasHealthCheck,
-                        warning: clusterWarnings[i],
+                        hasHealthCheck: spec.hasHealthCheck,
+                        warning: spec.warning,
                 };
                 nodes.push({
-                        id: clusterId,
+                        id: spec.clusterId,
                         type: 'backend-cluster',
                         position: { x: COL_X.BACKEND, y: clusterYs[i] },
                         width: CLUSTER_WIDTH,
@@ -455,7 +517,7 @@ export function buildTopologyGraph(
                 });
 
                 // Upstream children. Position is local to the parent.
-                route.upstreams.forEach((upstream, ui) => {
+                spec.upstreams.forEach((upstream, ui) => {
                         const childY = CLUSTER_PADDING_TOP + ui * (UPSTREAM_HEIGHT + UPSTREAM_GAP_Y);
                         const { displayUrl, wasHttps } = formatUpstreamUrl(upstream.url);
                         const loadRatio =
@@ -476,12 +538,12 @@ export function buildTopologyGraph(
                                 loadRatio,
                         };
                         nodes.push({
-                                id: `upstream-${route.id}-${upstream.id}`,
+                                id: `upstream-${spec.route.id}-${upstream.id}`,
                                 type: 'upstream',
                                 position: { x: UPSTREAM_X_INSET, y: childY },
                                 width: UPSTREAM_INNER_WIDTH,
                                 height: UPSTREAM_HEIGHT,
-                                parentId: clusterId,
+                                parentId: spec.clusterId,
                                 extent: 'parent',
                                 draggable: false,
                                 selectable: false,
@@ -584,24 +646,48 @@ export function buildTopologyGraph(
         // don't have per-upstream error rates yet, see Stage B).
         //
         // Falls back to a single edge to the cluster group when the
-        // route has 0 upstreams (degenerate route): the cluster node
-        // still renders its empty-pool warning, and the edge lets the
-        // operator see the route exists.
-        routes.forEach((route) => {
-                if (route.upstreams.length === 0) {
+        // cluster has 0 upstreams (degenerate route/path-pool): the
+        // cluster node still renders its empty-pool warning, and the
+        // edge lets the operator see the route/branch exists.
+        //
+        // v2.24.0 (Task 3): driven off clusterSpecs (root + path-pool
+        // clusters) instead of routes.
+        //
+        // Root clusters keep the exact pre-Task-3 behaviour: fan out
+        // one edge per upstream (so the operator can see per-replica
+        // flow shape), falling back to a single caddy->cluster edge
+        // only when the route has 0 upstreams.
+        //
+        // Path-pool clusters are structure-only in v1 (no live
+        // per-path traffic instrumentation) — they always get exactly
+        // ONE caddy->cluster edge (never a per-upstream fan-out),
+        // carrying zero/nominal flow. Not fabricated: the backend
+        // hasn't wired per-path metrics yet, so there is nothing real
+        // to fan out.
+        clusterSpecs.forEach((spec) => {
+                if (spec.pathPrefix !== undefined) {
                         edges.push(makeFlowEdge(
-                                `e-caddy-cluster-${route.id}`,
+                                `e-caddy-cluster-${spec.route.id}${spec.edgeIdSuffix}`,
                                 'caddy-hub',
-                                `cluster-${route.id}`,
-                                routeFlowData(route),
+                                spec.clusterId,
+                                pathPoolFlowData(),
                         ));
                         return;
                 }
-                route.upstreams.forEach((upstream) => {
+                if (spec.upstreams.length === 0) {
                         edges.push(makeFlowEdge(
-                                `e-caddy-upstream-${route.id}-${upstream.id}`,
+                                `e-caddy-cluster-${spec.route.id}${spec.edgeIdSuffix}`,
                                 'caddy-hub',
-                                `upstream-${route.id}-${upstream.id}`,
+                                spec.clusterId,
+                                routeFlowData(spec.route),
+                        ));
+                        return;
+                }
+                spec.upstreams.forEach((upstream) => {
+                        edges.push(makeFlowEdge(
+                                `e-caddy-upstream-${spec.route.id}-${upstream.id}`,
+                                'caddy-hub',
+                                `upstream-${spec.route.id}-${upstream.id}`,
                                 {
                                         kind: 'flow',
                                         reqPerSec: upstream.reqPerSec,
@@ -611,7 +697,7 @@ export function buildTopologyGraph(
                                         // the closest signal: if the route is bleeding 5xx,
                                         // surfacing it on every upstream edge is honest about
                                         // the lack of per-replica visibility.
-                                        errorRate5xx: route.errorRate5xx,
+                                        errorRate5xx: spec.route.errorRate5xx,
                                 },
                         ));
                 });
@@ -649,6 +735,15 @@ function routeFlowData(route: TopologyRoute): FlowEdgeData {
                 p99LatencyMs: route.p99LatencyMs,
                 errorRate5xx: route.errorRate5xx,
         };
+}
+
+/** Flow data for a path-pool cluster's caddy->cluster edge.
+ *  Path-pools are structure-only in v1 (no per-path traffic
+ *  instrumentation yet) — every path-pool cluster gets exactly one
+ *  such edge carrying nominal/zero flow, never fabricated numbers
+ *  borrowed from the route total. */
+function pathPoolFlowData(): FlowEdgeData {
+        return { kind: 'flow', reqPerSec: 0, p99LatencyMs: 0, errorRate5xx: 0 };
 }
 
 function makeFlowEdge(
