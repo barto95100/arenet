@@ -94,6 +94,9 @@
              relying on a custom handle. -->
         <header class="cluster-header">
                 <div class="cluster-title">
+                        {#if data.pathPrefix}
+                                <span class="cluster-path-prefix" data-testid="cluster-path-prefix">{data.pathPrefix}</span>
+                        {/if}
                         <span class="cluster-label">{data.clusterLabel}</span>
                         {#if data.runtime}
                                 <span class="cluster-runtime">({data.runtime})</span>
@@ -182,6 +185,25 @@
                 font-size: 13px;
                 font-weight: 600;
                 letter-spacing: 0.01em;
+        }
+
+        /* v2.24.0 (Task 3): per-path routing branch chip. Only
+           rendered when the cluster is a path-pool (data.pathPrefix
+           set) — the route's root cluster carries no pathPrefix and
+           renders unchanged (no chip). Monospace + a subtle pill
+           background distinguishes it from the free-text cluster
+           label so the operator reads it as "a path", not part of
+           the label itself. */
+        .cluster-path-prefix {
+                font-family: var(--font-mono, ui-monospace, monospace);
+                font-size: 10.5px;
+                font-weight: 600;
+                color: var(--accent, oklch(68% 0.21 255));
+                background: oklch(68% 0.21 255 / 0.12);
+                border: 1px solid oklch(68% 0.21 255 / 0.3);
+                border-radius: 4px;
+                padding: 1px 5px;
+                line-height: 1.4;
         }
 
         .cluster-runtime {

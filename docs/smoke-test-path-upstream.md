@@ -85,3 +85,9 @@ camelCase:
 - All backend suites (`go test ./...`, `-race ./internal/caddymgr/`) and the
   full frontend suite (`vitest` + `svelte-check`) must be green before this
   live smoke is run — see `task-7-report.md` for the automated-gate output.
+- **(v2.24.0)** A route's per-path pools now appear on the **Topology** graph as
+  SEPARATE backend clusters, each labelled by its prefix in the cluster header
+  (e.g. a root cluster + `/v1` + `/legacy`). A path-rule WITHOUT its own pool
+  (protection-only, e.g. `/docs` that inherits) does NOT add a cluster. Live
+  traffic per branch is not yet split (structure only — metrics stay
+  route-aggregated); per-branch req/s is a backlog item.

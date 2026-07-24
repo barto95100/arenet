@@ -81,6 +81,11 @@ type Route struct {
 	Upstreams []Upstream `json:"upstreams"`
 	LBPolicy  string     `json:"lbPolicy"`
 
+	// PathPools (v2.24.0) are the per-path routing branches — one per
+	// path-rule that declares its own pool. omitempty → a route without
+	// per-path pools serialises exactly as before.
+	PathPools []PathPool `json:"pathPools,omitempty"`
+
 	ReqPerSec    float64 `json:"reqPerSec"`
 	P99LatencyMs int32   `json:"p99LatencyMs"`
 	ErrorRate5xx float64 `json:"errorRate5xx"`
@@ -158,6 +163,19 @@ type Upstream struct {
 	ReqPerSec             float64 `json:"reqPerSec"`
 	P99LatencyMs          int32   `json:"p99LatencyMs"`
 	FairnessRatio         float64 `json:"fairnessRatio"`
+}
+
+// PathPool is one per-path routing branch (v2.24.0): a path-rule that
+// declares its own upstream pool. The frontend renders it as a separate
+// BackendCluster labelled by PathPrefix. Path-rules WITHOUT a pool
+// (protection-only, inherit the route pool) are NOT emitted — v1 shows
+// only branches that change the backend. Structure only: no live traffic
+// fields (per-path metrics are a backlog item).
+type PathPool struct {
+	PathPrefix         string     `json:"pathPrefix"`
+	Upstreams          []Upstream `json:"upstreams"`
+	LBPolicy           string     `json:"lbPolicy"`
+	InsecureSkipVerify bool       `json:"insecureSkipVerify,omitempty"`
 }
 
 // Alias is one entry in Route.AliasMetrics. Topology Plan B

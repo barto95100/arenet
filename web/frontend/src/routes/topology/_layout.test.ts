@@ -29,6 +29,7 @@ import { describe, it, expect } from 'vitest';
 import { buildTopologyGraph } from './_layout';
 import type {
 	AliasNodeData,
+	BackendClusterNodeData,
 	FlowEdgeData,
 	FQDNNodeData,
 	RouteGroupNodeData,
@@ -786,5 +787,104 @@ describe('buildTopologyGraph — alias integration', () => {
 		// route rate (1.48), so primary's share is exactly 0.
 		const primaryEdge = graph.edges.find((e) => e.id === 'e-fqdn-traefik-caddy')!;
 		expect((primaryEdge.data as FlowEdgeData).reqPerSec).toBeCloseTo(0, 5);
+	});
+
+	// -------------------------------------------------------
+	// v2.24.0 — per-path routing branches (pathPools). Task 3:
+	// each path-pool becomes its own backend-cluster (+ upstream
+	// children + caddy->cluster edge), stacked alongside the
+	// route's root cluster without overlap. Non-regression: a
+	// route without pathPools must still emit exactly one
+	// cluster, unchanged.
+	// -------------------------------------------------------
+
+	it('emits one backend cluster per path-pool plus the root cluster', () => {
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r1',
+				host: 'api.example.com',
+				pathPools: [
+					{
+						pathPrefix: '/v1',
+						lbPolicy: 'round_robin',
+						upstreams: [
+							{
+								id: 'r1-path-0-0',
+								url: 'http://v1:8080',
+								status: 'unknown',
+								healthCheckConfigured: false,
+								reqPerSec: 0,
+								p99LatencyMs: 0,
+								fairnessRatio: 1
+							}
+						]
+					},
+					{
+						pathPrefix: '/legacy',
+						lbPolicy: 'round_robin',
+						upstreams: [
+							{
+								id: 'r1-path-1-0',
+								url: 'https://old:8443',
+								status: 'unknown',
+								healthCheckConfigured: false,
+								reqPerSec: 0,
+								p99LatencyMs: 0,
+								fairnessRatio: 1
+							}
+						]
+					}
+				]
+			})
+		]);
+		const clusters = graph.nodes.filter((n) => n.type === 'backend-cluster');
+		expect(clusters.length).toBe(3); // root + /v1 + /legacy
+		const prefixes = clusters.map((c) => (c.data as BackendClusterNodeData).pathPrefix);
+		expect(prefixes).toContain('/v1');
+		expect(prefixes).toContain('/legacy');
+		// root cluster has no pathPrefix
+		expect(prefixes.filter((p) => p === undefined).length).toBe(1);
+	});
+
+	it('a route with no path-pools emits exactly one cluster (non-regression)', () => {
+		const graph = buildTopologyGraph([makeRoute({ id: 'r2', host: 'plain.example.com' })]);
+		expect(graph.nodes.filter((n) => n.type === 'backend-cluster').length).toBe(1);
+		const cluster = graph.nodes.find((n) => n.type === 'backend-cluster')!;
+		expect((cluster.data as BackendClusterNodeData).pathPrefix).toBeUndefined();
+	});
+
+	it('each path-pool cluster has a caddy->cluster edge and parented upstream children', () => {
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r1',
+				host: 'api.example.com',
+				pathPools: [
+					{
+						pathPrefix: '/v1',
+						lbPolicy: 'round_robin',
+						upstreams: [
+							{
+								id: 'r1-path-0-0',
+								url: 'http://v1:8080',
+								status: 'unknown',
+								healthCheckConfigured: false,
+								reqPerSec: 0,
+								p99LatencyMs: 0,
+								fairnessRatio: 1
+							}
+						]
+					}
+				]
+			})
+		]);
+		const v1Cluster = graph.nodes.find(
+			(n) => n.type === 'backend-cluster' && (n.data as BackendClusterNodeData).pathPrefix === '/v1'
+		);
+		expect(v1Cluster).toBeDefined();
+		const child = graph.nodes.find((n) => n.type === 'upstream' && n.parentId === v1Cluster!.id);
+		expect(child).toBeDefined();
+		expect(
+			graph.edges.some((e) => e.target === v1Cluster!.id && e.source === 'caddy-hub')
+		).toBe(true);
 	});
 });
