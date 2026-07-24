@@ -1339,7 +1339,12 @@
 					? rule.upstreams.map((u) => ({ url: u.url, weight: u.weight }))
 					: undefined,
 				lbPolicy: rule.lbPolicy,
-				healthCheck: rule.healthCheck ? { ...rule.healthCheck } : undefined
+				healthCheck: rule.healthCheck ? { ...rule.healthCheck } : undefined,
+				// v2.23.1 — carry the per-path skip-TLS-verify toggle through
+				// hydration alongside upstreams/lbPolicy/healthCheck above, or
+				// editing a route with an https path-pool and clicking Save
+				// would silently reset it.
+				insecureSkipVerify: rule.insecureSkipVerify
 			})),
 			// (subform expansion handled below — needs to fire
 			// AFTER formData assignment so the $effect sees the
@@ -2082,7 +2087,8 @@
 											url: u.url,
 											weight: u.weight
 										})),
-										lbPolicy: rule.lbPolicy ?? 'round_robin'
+										lbPolicy: rule.lbPolicy ?? 'round_robin',
+										insecureSkipVerify: !!rule.insecureSkipVerify
 									}
 								: {}),
 							...(rule.healthCheck ? { healthCheck: { ...rule.healthCheck } } : {})

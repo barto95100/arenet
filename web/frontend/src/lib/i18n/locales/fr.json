@@ -478,7 +478,8 @@
 			"upstreamLbLabel": "Répartition de charge",
 			"upstreamHealthCheckLabel": "Health-check actif",
 			"upstreamHealthCheckUriPlaceholder": "/health",
-			"upstreamBackendsBadge": "→ {count} backend(s)"
+			"upstreamBackendsBadge": "→ {count} backend(s)",
+			"upstreamSkipVerifyLabel": "Ignorer la vérification TLS (backend auto-signé)"
 		}
 	},
 	"pageTitles": {

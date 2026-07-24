@@ -132,6 +132,22 @@
 		touch();
 	}
 
+	// v2.23.1 — mirror the route-level weightVisible gate
+	// (routes/+page.svelte weightVisible) per path-rule card: the weight
+	// input is only meaningful under weighted_round_robin, so hide it
+	// otherwise instead of always showing an ignored field.
+	function weightVisible(rule: PathRule): boolean {
+		return rule.lbPolicy === 'weighted_round_robin';
+	}
+
+	// v2.23.1 — the per-path skip-TLS-verify checkbox is only meaningful
+	// when the path's own upstream pool has at least one https:// URL
+	// (dogfooding finding: showing it unconditionally implied it did
+	// something on an http-only pool, which it doesn't).
+	function poolIsHttps(rule: PathRule): boolean {
+		return !!rule.upstreams?.some((u) => u.url.trim().toLowerCase().startsWith('https://'));
+	}
+
 	// IPFilterFields expects a non-optional IPFilter, but PathRule.ipFilter
 	// is optional (rules loaded from the API may predate the field). This
 	// getter/setter pair lazily materializes an "off" default on first
@@ -283,25 +299,27 @@
 											data-testid="path-rule-upstream-url-{i}-{j}"
 										/>
 									</div>
-									<div class="w-24">
-										<label for="path-rule-upstream-weight-{i}-{j}" class="sr-only">
-											{language.current && t('routes.pathRules.upstreamWeightLabel')}
-										</label>
-										<input
-											id="path-rule-upstream-weight-{i}-{j}"
-											type="number"
-											min="1"
-											value={rule.upstreams?.[j]?.weight ?? 1}
-											oninput={(e) =>
-												updateBackend(i, j, {
-													weight: Number((e.currentTarget as HTMLInputElement).value) || 1
-												})}
-											placeholder={language.current &&
-												t('routes.pathRules.upstreamWeightLabel')}
-											data-testid="path-rule-upstream-weight-{i}-{j}"
-											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-										/>
-									</div>
+									{#if weightVisible(rule)}
+										<div class="w-24">
+											<label for="path-rule-upstream-weight-{i}-{j}" class="sr-only">
+												{language.current && t('routes.pathRules.upstreamWeightLabel')}
+											</label>
+											<input
+												id="path-rule-upstream-weight-{i}-{j}"
+												type="number"
+												min="1"
+												value={rule.upstreams?.[j]?.weight ?? 1}
+												oninput={(e) =>
+													updateBackend(i, j, {
+														weight: Number((e.currentTarget as HTMLInputElement).value) || 1
+													})}
+												placeholder={language.current &&
+													t('routes.pathRules.upstreamWeightLabel')}
+												data-testid="path-rule-upstream-weight-{i}-{j}"
+												class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+											/>
+										</div>
+									{/if}
 									<Button
 										variant="ghost"
 										size="sm"
@@ -384,6 +402,20 @@
 								</div>
 							{/if}
 						</div>
+
+						{#if rule.upstreams && rule.upstreams.length > 0 && poolIsHttps(rule)}
+							<label class="inline-flex items-center gap-2 text-sm text-secondary cursor-pointer">
+								<input
+									type="checkbox"
+									class="accent-cyan"
+									checked={!!rule.insecureSkipVerify}
+									onchange={(e) =>
+										(value[i].insecureSkipVerify = (e.currentTarget as HTMLInputElement).checked)}
+									data-testid="path-rule-skip-verify-{i}"
+								/>
+								{language.current && t('routes.pathRules.upstreamSkipVerifyLabel')}
+							</label>
+						{/if}
 					</div>
 				</details>
 			</div>
