@@ -84,3 +84,32 @@ func TestToPathRulesResp_EchoesUpstreamNotSecrets(t *testing.T) {
 		t.Fatalf("password must never be echoed")
 	}
 }
+
+func TestMapPathRuleReqs_InsecureSkipVerifyMapped(t *testing.T) {
+	reqs := []pathRuleReq{{
+		PathPrefix:         "/legacy",
+		Upstreams:          []upstreamReq{{URL: "https://old:8443", Weight: 1}},
+		LBPolicy:           "round_robin",
+		InsecureSkipVerify: true,
+	}}
+	out, err := mapPathRuleReqs(reqs, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !out[0].InsecureSkipVerify {
+		t.Fatalf("InsecureSkipVerify not mapped: %+v", out[0])
+	}
+}
+
+func TestToPathRulesResp_EchoesInsecureSkipVerify(t *testing.T) {
+	rules := []storage.PathRule{{
+		PathPrefix:         "/legacy",
+		Upstreams:          []storage.Upstream{{URL: "https://old:8443", Weight: 1}},
+		LBPolicy:           "round_robin",
+		InsecureSkipVerify: true,
+	}}
+	out := toPathRulesResp(rules)
+	if !out[0].InsecureSkipVerify {
+		t.Fatalf("InsecureSkipVerify not echoed: %+v", out[0])
+	}
+}
