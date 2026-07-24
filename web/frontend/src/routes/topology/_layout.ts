@@ -55,6 +55,15 @@ const COL_X = {
 
 const ROW_SPACING_Y = 150;
 
+// v2.24.1 Task 2 — contiguous per-route cluster stacking. A
+// route's own clusters (root + its path pools) stack tight
+// (INTRA_ROUTE_GAP); a new route's root cluster keeps the full
+// original spacing (INTER_ROUTE_GAP === the old ROW_SPACING_Y)
+// so paths-less multi-route layouts are pixel-identical to
+// pre-Task-2.
+const INTER_ROUTE_GAP = 150; // == old ROW_SPACING_Y — a new route's root cluster keeps the original spacing (non-regression for paths-less sets)
+const INTRA_ROUTE_GAP = 24;  // tight gap between a route's own clusters (root + its path pools), grouping them like aliases under their FQDN
+
 // Col-0 height model (Sujet 1 Phase 3.b). The FQDN node height
 // is empirically ~70 px (3 text rows at 12-13 px font + 10 px
 // padding × 2 + ~6 px line-spacing); the AliasNode is ~44 px
@@ -184,6 +193,12 @@ type ClusterSpec = {
         lbPolicy: LBPolicy;
         hasHealthCheck: boolean;
         warning?: string;
+        /** v2.24.1 (Task 2): true for a route's root cluster, false
+         *  for a path-pool cluster. Drives the per-block leading gap
+         *  in the cluster stack — a root cluster (start of a new
+         *  route) gets INTER_ROUTE_GAP, a path cluster (continuing
+         *  the same route) gets the tighter INTRA_ROUTE_GAP. */
+        isRoot: boolean;
 };
 
 // ===========================================================================
@@ -469,6 +484,7 @@ export function buildTopologyGraph(
                         lbPolicy: route.lbPolicy,
                         hasHealthCheck: route.hasHealthCheck,
                         warning: deriveClusterWarning(route),
+                        isRoot: true,
                 });
                 (route.pathPools ?? []).forEach((pp, k) => {
                         clusterSpecs.push({
@@ -481,6 +497,7 @@ export function buildTopologyGraph(
                                 // Structural only in v1 — no per-path health-check
                                 // status or warning derivation (no live metrics yet).
                                 hasHealthCheck: false,
+                                isRoot: false,
                         });
                 });
         });
@@ -488,7 +505,14 @@ export function buildTopologyGraph(
         const clusterHeights = clusterSpecs.map((spec) =>
                 clusterTotalHeight(spec.upstreams.length, spec.warning !== undefined),
         );
-        const clusterYs = computeStackYsForHeights(clusterHeights);
+        // v2.24.1 (Task 2): variable per-block gap — a route's own
+        // clusters (root + its path pools) stack tight (INTRA_ROUTE_GAP);
+        // a new route's root cluster gets the full INTER_ROUTE_GAP so
+        // paths-less multi-route sets are unchanged from pre-Task-2.
+        const clusterGaps = clusterSpecs.map((spec, i) =>
+                i === 0 ? 0 : spec.isRoot ? INTER_ROUTE_GAP : INTRA_ROUTE_GAP,
+        );
+        const clusterYs = computeStackYsWithGaps(clusterHeights, clusterGaps);
         clusterSpecs.forEach((spec, i) => {
                 const healthyCount = spec.upstreams.filter((u) => u.status === 'healthy').length;
                 const unhealthyCount = spec.upstreams.filter((u) => u.status === 'unhealthy').length;
@@ -773,6 +797,30 @@ function computeStackYsForHeights(heights: number[]): number[] {
         for (const h of heights) {
                 ys.push(cursor);
                 cursor += h + ROW_SPACING_Y;
+        }
+        return ys;
+}
+
+/** Like computeStackYsForHeights but with a per-block leading gap.
+ *  gaps[i] is the gap BEFORE block i (gaps[0] is ignored — the
+ *  first block has no leading gap). Lets a route's clusters stack
+ *  tight (INTRA) while a new route's root cluster gets the full
+ *  INTER gap.
+ *
+ *  v2.24.1 (Task 2): used for the backend-cluster stack so a
+ *  route's root + path-pool clusters group contiguously instead
+ *  of sitting at a uniform ROW_SPACING_Y like unrelated routes. */
+function computeStackYsWithGaps(heights: number[], gaps: number[]): number[] {
+        if (heights.length === 0) return [];
+        let total = heights.reduce((sum, h) => sum + h, 0);
+        for (let i = 1; i < heights.length; i++) total += gaps[i];
+        const startTop = -total / 2;
+        const ys: number[] = [];
+        let cursor = startTop;
+        for (let i = 0; i < heights.length; i++) {
+                if (i > 0) cursor += gaps[i];
+                ys.push(cursor);
+                cursor += heights[i];
         }
         return ys;
 }
