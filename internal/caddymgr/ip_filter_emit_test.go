@@ -46,9 +46,14 @@ func TestBuildIPFilterRoute_AllowFailsClosed(t *testing.T) {
 	if len(ranges) != 1 || ranges[0] != "192.168.1.5/32" {
 		t.Fatalf("expected client_ip ranges [192.168.1.5/32], got %v", ranges)
 	}
+	// The block must emit a `error` handler (NOT static_response) so the
+	// 403 propagates as a HandlerError through the server's `errors` chain
+	// and renders the branded error page / selected template — same as a
+	// 404/502 (fix/ip-filter-branded-error). A static_response returns a
+	// bare 403 that bypasses the errors chain entirely.
 	sr := r["handle"].([]map[string]any)[0]
-	if sr["handler"] != "static_response" {
-		t.Fatalf("expected static_response, got %v", sr)
+	if sr["handler"] != "error" {
+		t.Fatalf("expected error handler (branded page), got %v", sr)
 	}
 	if int(sr["status_code"].(int)) != 403 {
 		t.Fatalf("default block status must be 403, got %v", sr["status_code"])
@@ -66,7 +71,11 @@ func TestBuildIPFilterRoute_DenyBlocksListed(t *testing.T) {
 	if ranges[0] != "10.0.0.0/8" {
 		t.Fatalf("expected 10.0.0.0/8, got %v", ranges)
 	}
-	if int(r["handle"].([]map[string]any)[0]["status_code"].(int)) != 444 {
+	h := r["handle"].([]map[string]any)[0]
+	if h["handler"] != "error" {
+		t.Fatalf("expected error handler (branded page), got %v", h)
+	}
+	if int(h["status_code"].(int)) != 444 {
 		t.Fatal("status override 444 not applied")
 	}
 }

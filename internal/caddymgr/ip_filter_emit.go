@@ -57,7 +57,16 @@ func buildIPFilterRoute(f storage.IPFilter) map[string]any {
 	return map[string]any{
 		"match": []map[string]any{match},
 		"handle": []map[string]any{
-			{"handler": "static_response", "status_code": status},
+			// Emit an `error` handler, NOT a static_response. static_response
+			// returns a bare status body directly and BYPASSES the server's
+			// `errors` chain, so a blocked client got an unstyled 403. The
+			// `error` handler raises a Caddy HandlerError with this status,
+			// which propagates to apps.http.servers.<srv>.errors and renders
+			// the branded error page / the route's selected error template —
+			// same path as a 404/502 and as Arenet's other pre-proxy gates
+			// (BasicAuth/ForwardAuth 401/403 dispatch via the errors chain
+			// too; see reverse_proxy_emit.go). fix/ip-filter-branded-error.
+			{"handler": "error", "status_code": status},
 		},
 	}
 }
