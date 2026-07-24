@@ -149,7 +149,21 @@
 
         let cfg = $derived(tierConfig(tier));
         let color = $derived(tierColor(tier));
-        let strokeStyle = $derived(tierStrokeStyle(tier));
+
+        // Structural branches (path-pool caddy->cluster edges) carry no
+        // measured traffic in v1 and would otherwise render at the
+        // near-invisible 'dead' tier (stroke-opacity 0.2, gray on black —
+        // the v2.24.0 dogfood finding). Render them as a visible dashed
+        // line instead. This is a pure addition: any edge without the
+        // flag (every real-traffic edge, and a real idle edge with
+        // reqPerSec 0) still renders exactly tierStrokeStyle(tier) as
+        // before.
+        let isStructural = $derived(data?.structural === true);
+        let strokeStyle = $derived(
+                isStructural
+                        ? 'stroke: oklch(62% 0.01 250); stroke-opacity: 0.5; stroke-width: 1.5; stroke-dasharray: 5 4;'
+                        : tierStrokeStyle(tier)
+        );
 </script>
 
 <!-- The path itself; id={id} so our <mpath> below can reference it. -->

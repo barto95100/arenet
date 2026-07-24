@@ -743,7 +743,7 @@ function routeFlowData(route: TopologyRoute): FlowEdgeData {
  *  such edge carrying nominal/zero flow, never fabricated numbers
  *  borrowed from the route total. */
 function pathPoolFlowData(): FlowEdgeData {
-        return { kind: 'flow', reqPerSec: 0, p99LatencyMs: 0, errorRate5xx: 0 };
+        return { kind: 'flow', reqPerSec: 0, p99LatencyMs: 0, errorRate5xx: 0, structural: true };
 }
 
 function makeFlowEdge(

@@ -370,6 +370,11 @@ export type FlowEdgeData = {
         reqPerSec: number;
         p99LatencyMs: number;
         errorRate5xx: number;
+        /** v2.24.1 — a structural routing branch (a path-pool cluster edge):
+         *  no measured traffic in v1, rendered as a dashed visible line rather
+         *  than the near-invisible dead-tier stroke. When per-branch metrics
+         *  land, this flag is dropped and the edge animates like any flow. */
+        structural?: boolean;
 } & Record<string, unknown>;
 
 /** Phase 3.c (2026-06-17): AliasOfEdgeData removed. The Phase

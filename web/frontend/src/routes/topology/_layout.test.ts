@@ -887,4 +887,40 @@ describe('buildTopologyGraph — alias integration', () => {
 			graph.edges.some((e) => e.target === v1Cluster!.id && e.source === 'caddy-hub')
 		).toBe(true);
 	});
+
+	it('marks the hub->path-cluster edge as structural', () => {
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r1',
+				host: 'api.example.com',
+				pathPools: [
+					{
+						pathPrefix: '/v1',
+						lbPolicy: 'round_robin',
+						upstreams: [
+							{
+								id: 'r1-path-0-0',
+								url: 'http://v1:8080',
+								status: 'unknown',
+								healthCheckConfigured: false,
+								reqPerSec: 0,
+								p99LatencyMs: 0,
+								fairnessRatio: 1
+							}
+						]
+					}
+				]
+			})
+		]);
+		const pathEdge = graph.edges.find((e) => e.target === 'cluster-r1-path-0');
+		expect(pathEdge).toBeDefined();
+		expect((pathEdge!.data as FlowEdgeData).structural).toBe(true);
+		// a route/root edge must NOT be structural
+		const rootEdges = graph.edges.filter(
+			(e) => e.source === 'caddy-hub' && e.target !== 'cluster-r1-path-0'
+		);
+		for (const e of rootEdges) {
+			expect((e.data as FlowEdgeData).structural).not.toBe(true);
+		}
+	});
 });
