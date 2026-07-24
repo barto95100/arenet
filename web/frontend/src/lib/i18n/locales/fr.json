@@ -468,7 +468,17 @@
 			"basicAuthUsernameLabel": "Utilisateur",
 			"basicAuthUsernamePlaceholder": "utilisateur",
 			"basicAuthPasswordLabel": "Mot de passe",
-			"ipFilterLabel": "Filtrage IP dédié"
+			"ipFilterLabel": "Filtrage IP dédié",
+			"upstreamLabel": "Upstream spécifique (optionnel)",
+			"upstreamInheritHint": "Par défaut, ce path suit l'upstream de la route.",
+			"upstreamUrlPlaceholder": "http://backend:8080",
+			"upstreamAddBackend": "Ajouter un backend",
+			"upstreamRemoveBackend": "Retirer le backend",
+			"upstreamWeightLabel": "Poids",
+			"upstreamLbLabel": "Répartition de charge",
+			"upstreamHealthCheckLabel": "Health-check actif",
+			"upstreamHealthCheckUriPlaceholder": "/health",
+			"upstreamBackendsBadge": "→ {count} backend(s)"
 		}
 	},
 	"pageTitles": {

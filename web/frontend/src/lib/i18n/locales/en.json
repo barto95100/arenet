@@ -468,7 +468,17 @@
 			"basicAuthUsernameLabel": "Username",
 			"basicAuthUsernamePlaceholder": "username",
 			"basicAuthPasswordLabel": "Password",
-			"ipFilterLabel": "Scoped IP filter"
+			"ipFilterLabel": "Scoped IP filter",
+			"upstreamLabel": "Specific upstream (optional)",
+			"upstreamInheritHint": "By default this path follows the route's upstream.",
+			"upstreamUrlPlaceholder": "http://backend:8080",
+			"upstreamAddBackend": "Add a backend",
+			"upstreamRemoveBackend": "Remove backend",
+			"upstreamWeightLabel": "Weight",
+			"upstreamLbLabel": "Load balancing",
+			"upstreamHealthCheckLabel": "Active health-check",
+			"upstreamHealthCheckUriPlaceholder": "/health",
+			"upstreamBackendsBadge": "→ {count} backend(s)"
 		}
 	},
 	"pageTitles": {
