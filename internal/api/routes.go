@@ -1427,6 +1427,16 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Per-path upstream routing: validate each path-rule's OWN upstream
+	// pool (URL syntax + LB enum + enabled-HC contents) the same way the
+	// route-level pool is validated above — storage.PathRule.Validate()
+	// deliberately skips URL syntax and HealthCheck contents (see
+	// validatePathRuleUpstreams doc-comment), so the API is the only line
+	// of defence against a malformed path-rule upstream reaching Caddy.
+	if err := validatePathRuleUpstreams(req.PathRules); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// v1 path-based-rules: nil-safe mapper, hashes each path-rule's
 	// plain BasicAuth.Password server-side via auth.HashRoutePassword
 	// (same fix as the route-level basicAuthHash above). No
@@ -1943,6 +1953,13 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rateLimit = next
+	}
+	// Per-path upstream routing: same defence-in-depth validation as
+	// createRoute — see validatePathRuleUpstreams doc-comment for why
+	// storage.PathRule.Validate() alone is not sufficient.
+	if err := validatePathRuleUpstreams(req.PathRules); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	// v1 path-based-rules: hashes each path-rule's plain
 	// BasicAuth.Password server-side via auth.HashRoutePassword (same

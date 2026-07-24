@@ -1,0 +1,2409 @@
+{
+  "apps": {
+    "events": {
+      "subscriptions": [
+        {
+          "events": [
+            "healthy",
+            "unhealthy"
+          ],
+          "handlers": [
+            {
+              "handler": "arenet_topology_hc"
+            }
+          ],
+          "modules": [
+            "http.handlers.reverse_proxy"
+          ]
+        },
+        {
+          "events": [
+            "cert_obtaining",
+            "cert_obtained",
+            "cert_failed",
+            "cert_ocsp_revoked"
+          ],
+          "handlers": [
+            {
+              "handler": "arenet_cert_info"
+            }
+          ],
+          "modules": [
+            "tls"
+          ]
+        },
+        {
+          "events": [
+            "rate_limit_exceeded"
+          ],
+          "handlers": [
+            {
+              "handler": "arenet_ratelimit_sink"
+            }
+          ],
+          "modules": [
+            "http.handlers.rate_limit"
+          ]
+        }
+      ]
+    },
+    "http": {
+      "grace_period": "5s",
+      "http_port": 8080,
+      "https_port": 8443,
+      "servers": {
+        "arenet_http": {
+          "listen": [
+            ":8080"
+          ],
+          "routes": [
+            {
+              "match": [
+                {
+                  "host": [
+                    "plain.example.com"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "arenet_routemetrics",
+                          "known_hosts": [
+                            "plain.example.com"
+                          ],
+                          "route_id": "r1"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handle_response": [
+                            {
+                              "match": {
+                                "headers": {
+                                  "Content-Type": [
+                                    "application/json*"
+                                  ]
+                                },
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "match": {
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ],
+                                  "match": [
+                                    {
+                                      "path": [
+                                        "/api/*"
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "error",
+                                      "status_code": "{http.reverse_proxy.status_code}"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ],
+                          "handler": "reverse_proxy",
+                          "headers": {
+                            "request": {
+                              "set": {
+                                "Host": [
+                                  "{http.request.host}"
+                                ]
+                              }
+                            }
+                          },
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "round_robin"
+                            }
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "a:8080"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "multi.example.com"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "arenet_routemetrics",
+                          "known_hosts": [
+                            "multi.example.com"
+                          ],
+                          "route_id": "r2"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handle_response": [
+                            {
+                              "match": {
+                                "headers": {
+                                  "Content-Type": [
+                                    "application/json*"
+                                  ]
+                                },
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "match": {
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ],
+                                  "match": [
+                                    {
+                                      "path": [
+                                        "/api/*"
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "error",
+                                      "status_code": "{http.reverse_proxy.status_code}"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ],
+                          "handler": "reverse_proxy",
+                          "headers": {
+                            "request": {
+                              "set": {
+                                "Host": [
+                                  "{http.request.host}"
+                                ]
+                              }
+                            }
+                          },
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "weighted_round_robin",
+                              "weights": [
+                                2,
+                                3
+                              ]
+                            }
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "a:8080"
+                            },
+                            {
+                              "dial": "b:8080"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "secure.example.com"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "arenet_routemetrics",
+                          "known_hosts": [
+                            "secure.example.com"
+                          ],
+                          "route_id": "r3"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handle_response": [
+                            {
+                              "match": {
+                                "headers": {
+                                  "Content-Type": [
+                                    "application/json*"
+                                  ]
+                                },
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "match": {
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ],
+                                  "match": [
+                                    {
+                                      "path": [
+                                        "/api/*"
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "error",
+                                      "status_code": "{http.reverse_proxy.status_code}"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ],
+                          "handler": "reverse_proxy",
+                          "headers": {
+                            "request": {
+                              "set": {
+                                "Host": [
+                                  "{http.request.host}"
+                                ]
+                              }
+                            }
+                          },
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "round_robin"
+                            }
+                          },
+                          "transport": {
+                            "protocol": "http",
+                            "tls": {}
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "a:8443"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "insecure.example.com"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "arenet_routemetrics",
+                          "known_hosts": [
+                            "insecure.example.com"
+                          ],
+                          "route_id": "r3b"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handle_response": [
+                            {
+                              "match": {
+                                "headers": {
+                                  "Content-Type": [
+                                    "application/json*"
+                                  ]
+                                },
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "match": {
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ],
+                                  "match": [
+                                    {
+                                      "path": [
+                                        "/api/*"
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "error",
+                                      "status_code": "{http.reverse_proxy.status_code}"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ],
+                          "handler": "reverse_proxy",
+                          "headers": {
+                            "request": {
+                              "set": {
+                                "Host": [
+                                  "{http.request.host}"
+                                ]
+                              }
+                            }
+                          },
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "round_robin"
+                            }
+                          },
+                          "transport": {
+                            "protocol": "http",
+                            "tls": {
+                              "insecure_skip_verify": true
+                            }
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "a:8443"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "hc.example.com"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "arenet_routemetrics",
+                          "known_hosts": [
+                            "hc.example.com"
+                          ],
+                          "route_id": "r4"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handle_response": [
+                            {
+                              "match": {
+                                "headers": {
+                                  "Content-Type": [
+                                    "application/json*"
+                                  ]
+                                },
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "match": {
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ],
+                                  "match": [
+                                    {
+                                      "path": [
+                                        "/api/*"
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "error",
+                                      "status_code": "{http.reverse_proxy.status_code}"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ],
+                          "handler": "reverse_proxy",
+                          "headers": {
+                            "request": {
+                              "set": {
+                                "Host": [
+                                  "{http.request.host}"
+                                ]
+                              }
+                            }
+                          },
+                          "health_checks": {
+                            "active": {
+                              "fails": 1,
+                              "interval": "10s",
+                              "method": "GET",
+                              "passes": 1,
+                              "timeout": "5s",
+                              "uri": "/health"
+                            }
+                          },
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "round_robin"
+                            }
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "a:8080"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "upload.example.com"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "arenet_routemetrics",
+                          "known_hosts": [
+                            "upload.example.com"
+                          ],
+                          "route_id": "r5"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "flush_interval": -1,
+                          "handle_response": [
+                            {
+                              "match": {
+                                "headers": {
+                                  "Content-Type": [
+                                    "application/json*"
+                                  ]
+                                },
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "match": {
+                                "status_code": [
+                                  400,
+                                  402,
+                                  403,
+                                  404,
+                                  405,
+                                  406,
+                                  408,
+                                  409,
+                                  410,
+                                  411,
+                                  412,
+                                  413,
+                                  414,
+                                  415,
+                                  416,
+                                  417,
+                                  418,
+                                  421,
+                                  422,
+                                  423,
+                                  424,
+                                  425,
+                                  426,
+                                  428,
+                                  429,
+                                  431,
+                                  451,
+                                  500,
+                                  501,
+                                  502,
+                                  503,
+                                  504,
+                                  505,
+                                  506,
+                                  507,
+                                  508,
+                                  510,
+                                  511
+                                ]
+                              },
+                              "routes": [
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "copy_response"
+                                    }
+                                  ],
+                                  "match": [
+                                    {
+                                      "path": [
+                                        "/api/*"
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "handle": [
+                                    {
+                                      "handler": "error",
+                                      "status_code": "{http.reverse_proxy.status_code}"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ],
+                          "handler": "reverse_proxy",
+                          "headers": {
+                            "request": {
+                              "set": {
+                                "Host": [
+                                  "{http.request.host}"
+                                ]
+                              }
+                            }
+                          },
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "round_robin"
+                            }
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "a:8080"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                  "handler": "static_response",
+                  "headers": {
+                    "Content-Type": [
+                      "text/html; charset=utf-8"
+                    ]
+                  },
+                  "status_code": 404
+                }
+              ]
+            }
+          ],
+          "errors": {
+            "routes": [
+              {
+                "match": [
+                  {
+                    "host": [
+                      "plain.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 401"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "401"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "plain.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 403"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "403"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "plain.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 404"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "404"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "plain.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 429"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "429"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "plain.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 500"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "500"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "plain.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 502"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "502"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "plain.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 503"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "503"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "plain.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 504"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "504"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "plain.example.com"
+                    ]
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "{http.error.status_code}"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "multi.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 401"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "401"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "multi.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 403"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "403"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "multi.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 404"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "404"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "multi.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 429"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "429"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "multi.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 500"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "500"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "multi.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 502"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "502"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "multi.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 503"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "503"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "multi.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 504"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "504"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "multi.example.com"
+                    ]
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "{http.error.status_code}"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "secure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 401"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "401"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "secure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 403"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "403"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "secure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 404"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "404"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "secure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 429"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "429"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "secure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 500"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "500"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "secure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 502"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "502"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "secure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 503"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "503"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "secure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 504"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "504"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "secure.example.com"
+                    ]
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "{http.error.status_code}"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "insecure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 401"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "401"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "insecure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 403"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "403"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "insecure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 404"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "404"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "insecure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 429"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "429"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "insecure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 500"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "500"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "insecure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 502"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "502"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "insecure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 503"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "503"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "insecure.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 504"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "504"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "insecure.example.com"
+                    ]
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "{http.error.status_code}"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "hc.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 401"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "401"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "hc.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 403"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "403"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "hc.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 404"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "404"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "hc.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 429"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "429"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "hc.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 500"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "500"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "hc.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 502"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "502"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "hc.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 503"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "503"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "hc.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 504"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "504"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "hc.example.com"
+                    ]
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "{http.error.status_code}"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "upload.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 401"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e401 Unauthorized\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e401\u003c/p\u003e\n  \u003ch1\u003eUnauthorized\u003c/h1\u003e\n  \u003cp\u003eAuthentication is required to access this resource.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "401"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "upload.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 403"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e403 Forbidden\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e403\u003c/p\u003e\n  \u003ch1\u003eForbidden\u003c/h1\u003e\n  \u003cp\u003eAccess to this resource has been denied.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "403"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "upload.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 404"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e404 Not Found\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e404\u003c/p\u003e\n  \u003ch1\u003eNot Found\u003c/h1\u003e\n  \u003cp\u003eThe requested resource could not be located on this server.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "404"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "upload.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 429"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e429 Too Many Requests\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e429\u003c/p\u003e\n  \u003ch1\u003eToo Many Requests\u003c/h1\u003e\n  \u003cp\u003eRate limit exceeded. Please retry after a short wait.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "429"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "upload.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 500"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e500 Internal Server Error\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e500\u003c/p\u003e\n  \u003ch1\u003eInternal Server Error\u003c/h1\u003e\n  \u003cp\u003eAn unexpected condition was encountered.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "500"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "upload.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 502"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e502 Bad Gateway\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e502\u003c/p\u003e\n  \u003ch1\u003eBad Gateway\u003c/h1\u003e\n  \u003cp\u003eThe upstream service returned an invalid response.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "502"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "upload.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 503"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e503 Service Unavailable\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e503\u003c/p\u003e\n  \u003ch1\u003eService Unavailable\u003c/h1\u003e\n  \u003cp\u003eThe service is temporarily unable to handle the request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "503"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "upload.example.com"
+                    ],
+                    "expression": "{http.error.status_code} == 504"
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e504 Gateway Timeout\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e504\u003c/p\u003e\n  \u003ch1\u003eGateway Timeout\u003c/h1\u003e\n  \u003cp\u003eThe upstream service did not respond in time.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\" rel=\"nofollow\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "504"
+                  }
+                ]
+              },
+              {
+                "match": [
+                  {
+                    "host": [
+                      "upload.example.com"
+                    ]
+                  }
+                ],
+                "handle": [
+                  {
+                    "body": "\u003c!doctype html\u003e\n\u003chtml lang=\"en\"\u003e\n\u003chead\u003e\n\u003cmeta charset=\"utf-8\"\u003e\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n\u003ctitle\u003e{http.error.status_code} · Arenet\u003c/title\u003e\n\u003cstyle\u003e\n  body { background:#0d1117; color:#c9d1d9; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Helvetica,Arial,sans-serif; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }\n  .card { max-width:520px; text-align:center; }\n  .code { font-family:\"SF Mono\",Menlo,Consolas,monospace; font-size:96px; font-weight:600; color:#58a6ff; margin:0; line-height:1; letter-spacing:-2px; }\n  h1 { font-size:24px; font-weight:500; margin:16px 0 8px; color:#f0f6fc; }\n  p { color:#8b949e; line-height:1.5; margin:8px 0; }\n  .meta { margin-top:32px; padding-top:16px; border-top:1px solid #21262d; color:#6e7681; font-size:12px; font-family:\"SF Mono\",Menlo,Consolas,monospace; }\n  a { color:#58a6ff; text-decoration:none; }\n\u003c/style\u003e\n\u003c/head\u003e\n\u003cbody\u003e\n\u003cdiv class=\"card\"\u003e\n  \u003cp class=\"code\"\u003e{http.error.status_code}\u003c/p\u003e\n  \u003ch1\u003eRequest could not be completed\u003c/h1\u003e\n  \u003cp\u003eThe server or an upstream service returned an error for this request.\u003c/p\u003e\n  \u003cdiv class=\"meta\"\u003e\n    {http.request.method} {http.request.uri_escaped} · request id: {http.request.uuid}\u003cbr\u003e\n    \u003ca href=\"https://github.com/barto95100/arenet\"\u003epowered by Arenet\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n\u003c/body\u003e\n\u003c/html\u003e",
+                    "handler": "static_response",
+                    "headers": {
+                      "Content-Type": [
+                        "text/html; charset=utf-8"
+                      ]
+                    },
+                    "status_code": "{http.error.status_code}"
+                  }
+                ]
+              }
+            ]
+          },
+          "automatic_https": {
+            "disable": false,
+            "disable_redirects": true
+          }
+        }
+      }
+    },
+    "pki": {
+      "certificate_authorities": {
+        "local": {
+          "install_trust": false
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "issuers": [
+              {
+                "module": "internal"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

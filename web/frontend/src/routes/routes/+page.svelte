@@ -1322,7 +1322,24 @@
 							cidrs: [...(rule.ipFilter.cidrs ?? [])],
 							statusCode: rule.ipFilter.statusCode ?? 0
 						}
-					: { mode: 'off', cidrs: [], statusCode: 0 }
+					: { mode: 'off', cidrs: [], statusCode: 0 },
+				// Task 7 (per-path upstream routing) — carry the pool /
+				// LB policy / health check through on hydrate. Without
+				// this, editing a route whose path-rule has its own
+				// upstream pool and clicking Save would silently wipe
+				// that pool (the submit payload re-sends pathRules from
+				// formData, which would otherwise never have seen these
+				// fields). Deep-copy upstreams/healthCheck so formData
+				// mutations don't ripple back into the source route
+				// object, mirroring the ipFilter.cidrs clone above.
+				// Absent/empty on the source stays undefined (not an
+				// empty array/object) so a pool-less rule stays
+				// pool-less.
+				upstreams: rule.upstreams
+					? rule.upstreams.map((u) => ({ url: u.url, weight: u.weight }))
+					: undefined,
+				lbPolicy: rule.lbPolicy,
+				healthCheck: rule.healthCheck ? { ...rule.healthCheck } : undefined
 			})),
 			// (subform expansion handled below — needs to fire
 			// AFTER formData assignment so the $effect sees the
@@ -2051,7 +2068,24 @@
 								mode: rule.ipFilter?.mode ?? 'off',
 								cidrs: [...(rule.ipFilter?.cidrs ?? [])],
 								statusCode: rule.ipFilter?.statusCode ?? 0
-							}
+							},
+							// Task 7 (per-path upstream routing) — ship the
+							// pool/LB policy only when a pool is actually
+							// configured (mirrors the basicAuth conditional
+							// spread above), so a pool-less rule doesn't
+							// send an empty upstreams array the backend
+							// would reject. healthCheck ships whenever the
+							// operator has one configured on the rule.
+							...(rule.upstreams && rule.upstreams.length > 0
+								? {
+										upstreams: rule.upstreams.map((u) => ({
+											url: u.url,
+											weight: u.weight
+										})),
+										lbPolicy: rule.lbPolicy ?? 'round_robin'
+									}
+								: {}),
+							...(rule.healthCheck ? { healthCheck: { ...rule.healthCheck } } : {})
 						}))
 				)
 			};

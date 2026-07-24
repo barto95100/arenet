@@ -57,6 +57,81 @@
 		}
 	}
 
+	// Task 6 (per-path upstream routing) — the upstream pool, lbPolicy
+	// and healthCheck are all optional/absent on a PathRule that
+	// inherits the route's upstream. We only materialise them on
+	// first operator interaction so a pool-less rule stays pool-less
+	// on submit (sanitizePathRules on the backend drops empty
+	// upstream pools; we mirror that "don't create until asked"
+	// discipline client-side too).
+	// Each mutator writes through the existing rule object in place
+	// (mirrors toggleBasicAuth/setIpFilterValue above, and keeps the
+	// object identity the parent/test holds intact) and then
+	// reassigns `value = value` — a no-op replacement of the
+	// top-level bindable array — to force Svelte to re-evaluate the
+	// #each block. Plain in-place nested mutation alone triggers a
+	// `binding_property_non_reactive` warning and the DOM does not
+	// update reliably when `value` was not itself created via
+	// `$state` on the caller's side (e.g. a bare array literal passed
+	// in tests), because $bindable does not deep-proxy values it did
+	// not create.
+	function touch(): void {
+		value = [...value];
+	}
+
+	function addBackend(i: number): void {
+		const rule = value[i];
+		if (!rule.upstreams) rule.upstreams = [];
+		rule.upstreams.push({ url: '', weight: 1 });
+		if (!rule.lbPolicy) rule.lbPolicy = 'round_robin';
+		touch();
+	}
+
+	function removeBackend(i: number, j: number): void {
+		const rule = value[i];
+		if (!rule.upstreams) return;
+		rule.upstreams = rule.upstreams.filter((_, idx) => idx !== j);
+		touch();
+	}
+
+	function updateBackend(i: number, j: number, patch: Partial<{ url: string; weight: number }>): void {
+		const rule = value[i];
+		if (!rule.upstreams?.[j]) return;
+		Object.assign(rule.upstreams[j], patch);
+		touch();
+	}
+
+	function setLbPolicy(i: number, lbPolicy: PathRule['lbPolicy']): void {
+		value[i].lbPolicy = lbPolicy;
+		touch();
+	}
+
+	function toggleHealthCheck(i: number, enabled: boolean): void {
+		if (enabled) {
+			value[i].healthCheck = {
+				enabled: true,
+				uri: '',
+				method: 'GET',
+				interval: '10s',
+				timeout: '5s',
+				expectStatus: 0,
+				expectBody: '',
+				passes: 1,
+				fails: 1
+			};
+		} else {
+			value[i].healthCheck = undefined;
+		}
+		touch();
+	}
+
+	function updateHealthCheckUri(i: number, uri: string): void {
+		const rule = value[i];
+		if (!rule.healthCheck) return;
+		rule.healthCheck.uri = uri;
+		touch();
+	}
+
 	// IPFilterFields expects a non-optional IPFilter, but PathRule.ipFilter
 	// is optional (rules loaded from the API may predate the field). This
 	// getter/setter pair lazily materializes an "off" default on first
@@ -164,6 +239,153 @@
 						}
 					/>
 				</div>
+
+				<!-- Task 6 (per-path upstream routing) — collapsed-by-default
+				     disclosure mirroring the route-level health-check <details>
+				     idiom. Only forced open when the rule already carries a
+				     non-empty pool on mount (mirrors open={formData.healthCheck.enabled}
+				     at routes/+page.svelte:4189). -->
+				<details
+					class="rounded border border-border-subtle"
+					open={(rule.upstreams?.length ?? 0) > 0}
+					data-testid="path-rule-upstream-disclosure-{i}"
+				>
+					<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+						{language.current && t('routes.pathRules.upstreamLabel')}
+						{#if rule.upstreams && rule.upstreams.length > 0}
+							<span
+								class="ml-1 text-xs text-muted"
+								data-testid="path-rule-backends-badge-{i}"
+							>
+								{language.current &&
+									t('routes.pathRules.upstreamBackendsBadge', {
+										count: rule.upstreams.length
+									})}
+							</span>
+						{/if}
+					</summary>
+					<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
+						<p class="text-xs text-muted">
+							{language.current && t('routes.pathRules.upstreamInheritHint')}
+						</p>
+
+						{#if rule.upstreams}
+							{#each rule.upstreams as _backend, j (j)}
+								<div class="flex items-start gap-2">
+									<div class="flex-1">
+										<Input
+											bind:value={
+												() => rule.upstreams?.[j]?.url ?? '',
+												(v) => updateBackend(i, j, { url: v })
+											}
+											placeholder={language.current &&
+												t('routes.pathRules.upstreamUrlPlaceholder')}
+											data-testid="path-rule-upstream-url-{i}-{j}"
+										/>
+									</div>
+									<div class="w-24">
+										<label for="path-rule-upstream-weight-{i}-{j}" class="sr-only">
+											{language.current && t('routes.pathRules.upstreamWeightLabel')}
+										</label>
+										<input
+											id="path-rule-upstream-weight-{i}-{j}"
+											type="number"
+											min="1"
+											value={rule.upstreams?.[j]?.weight ?? 1}
+											oninput={(e) =>
+												updateBackend(i, j, {
+													weight: Number((e.currentTarget as HTMLInputElement).value) || 1
+												})}
+											placeholder={language.current &&
+												t('routes.pathRules.upstreamWeightLabel')}
+											data-testid="path-rule-upstream-weight-{i}-{j}"
+											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+										/>
+									</div>
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={() => removeBackend(i, j)}
+										type="button"
+										data-testid="path-rule-upstream-remove-{i}-{j}"
+										aria-label={language.current &&
+											t('routes.pathRules.upstreamRemoveBackend')}
+									>
+										×
+									</Button>
+								</div>
+							{/each}
+						{/if}
+
+						<Button
+							variant="ghost"
+							size="sm"
+							onclick={() => addBackend(i)}
+							type="button"
+							data-testid="path-rule-upstream-add-{i}"
+						>
+							{language.current && t('routes.pathRules.upstreamAddBackend')}
+						</Button>
+
+						{#if rule.upstreams && rule.upstreams.length > 0}
+							<div>
+								<label for="path-rule-lb-{i}" class="text-sm font-medium text-secondary block mb-1">
+									{language.current && t('routes.pathRules.upstreamLbLabel')}
+								</label>
+								<select
+									id="path-rule-lb-{i}"
+									value={rule.lbPolicy ?? 'round_robin'}
+									onchange={(e) =>
+										setLbPolicy(i, (e.currentTarget as HTMLSelectElement).value as PathRule['lbPolicy'])}
+									data-testid="path-rule-lb-{i}"
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+								>
+									<option value="round_robin"
+										>{language.current && t('routes.form.lbRoundRobin')}</option
+									>
+									<option value="weighted_round_robin"
+										>{language.current && t('routes.form.lbWeightedRoundRobin')}</option
+									>
+									<option value="least_conn"
+										>{language.current && t('routes.form.lbLeastConn')}</option
+									>
+									<option value="ip_hash"
+										>{language.current && t('routes.form.lbIPHash')}</option
+									>
+									<option value="random">{language.current && t('routes.form.lbRandom')}</option>
+									<option value="first">{language.current && t('routes.form.lbFirst')}</option>
+								</select>
+							</div>
+						{/if}
+
+						<div class="flex flex-col gap-2">
+							<label class="inline-flex items-center gap-2 text-sm text-secondary cursor-pointer">
+								<input
+									type="checkbox"
+									class="accent-cyan"
+									checked={!!rule.healthCheck?.enabled}
+									onchange={(e) =>
+										toggleHealthCheck(i, (e.currentTarget as HTMLInputElement).checked)}
+									data-testid="path-rule-hc-toggle-{i}"
+								/>
+								{language.current && t('routes.pathRules.upstreamHealthCheckLabel')}
+							</label>
+							{#if rule.healthCheck?.enabled}
+								<div class="ml-6">
+									<Input
+										bind:value={
+											() => rule.healthCheck?.uri ?? '',
+											(v) => updateHealthCheckUri(i, v)
+										}
+										placeholder={language.current &&
+											t('routes.pathRules.upstreamHealthCheckUriPlaceholder')}
+										data-testid="path-rule-hc-uri-{i}"
+									/>
+								</div>
+							{/if}
+						</div>
+					</div>
+				</details>
 			</div>
 		{/each}
 

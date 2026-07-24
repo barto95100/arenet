@@ -1341,6 +1341,55 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 		CertSource: storage.RouteCertSourceManual,
 		CertID:     "ext-cert-1",
 	})
+	// v2.23.0 (per-path upstream) — fold a route carrying a path rule
+	// with its OWN upstream pool into THIS canonical caddy.Validate call
+	// so the nested "reverse_proxy inside a path-rule subroute" shape is
+	// proven provisionable. Same anti-poisoning rationale as every other
+	// fold: one caddy.Validate per package.
+	//
+	// CRITICAL race gate ([[caddymgr_race_test_gate]]): this route's
+	// per-path pool has its health check DISABLED, and it lives on a
+	// SEPARATE host from r-all (the only active-HC route in this fixture).
+	// An active health check spawns a background probe goroutine at
+	// Provision time (healthchecks.go doActiveHealthCheck) which, under
+	// `go test -race`, races against the concurrent provisioning of a
+	// nested Subroute.Provision -> RouteList.ProvisionHandlers — exactly
+	// the active-HC x subroute Caddy-internal data race. Keeping the
+	// per-path pool's HC off (and off r-all) keeps `go test -race` clean
+	// while still exercising the full per-path reverse_proxy shape
+	// (own pool + load_balancing + transport.tls) under a real Validate.
+	// One path rule has an HTTP pool, one an HTTPS pool (transport.tls),
+	// and a protection-only rule (no pool → inherits the route pool)
+	// covers the inherit branch.
+	routes = append(routes, storage.Route{
+		ID:        "r-pathupstream",
+		Host:      "pathupstream.example.com",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9020", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+		WAFMode:   "off",
+		PathRules: []storage.PathRule{
+			// Own HTTP pool, HC DISABLED (nil → no active probe).
+			{
+				PathPrefix: "/v1",
+				Upstreams:  []storage.Upstream{{URL: "http://127.0.0.1:9021", Weight: 1}},
+				LBPolicy:   storage.LBPolicyRoundRobin,
+			},
+			// Own HTTPS pool → transport.tls, HC DISABLED.
+			{
+				PathPrefix: "/legacy",
+				Upstreams:  []storage.Upstream{{URL: "https://127.0.0.1:9022", Weight: 1}},
+				LBPolicy:   storage.LBPolicyRoundRobin,
+			},
+			// Protection-only (no pool) → inherits the route pool.
+			{
+				PathPrefix: "/docs",
+				BasicAuth: &storage.BasicAuthRouteConfig{
+					Username:     "doc",
+					PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$U0FMVFNBTFRTQUxUU0FMVA$S0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0U",
+				},
+			},
+		},
+	})
 	// Task 1d empirical gate — fold the multi-provider managed-domain
 	// scenarios into THIS canonical caddy.Validate call (rather than
 	// spawning a competing parallel caddy.Validate test, which would

@@ -114,4 +114,28 @@ describe('sanitizePathRules', () => {
 			{ pathPrefix: '/alive', ipFilter: { mode: 'deny', cidrs: ['1.2.3.4'] } }
 		]);
 	});
+
+	it('keeps a rule that has ONLY an upstream pool (pure routing)', () => {
+		const rules = [
+			{ pathPrefix: '/v1', upstreams: [{ url: 'http://a:8080', weight: 1 }], lbPolicy: 'round_robin' as const }
+		];
+		const out = sanitizePathRules(rules as any);
+		expect(out).toHaveLength(1);
+		expect(out[0].pathPrefix).toBe('/v1');
+	});
+
+	it('drops a rule with an EMPTY upstream pool and no protection', () => {
+		const rules = [{ pathPrefix: '/v1', upstreams: [] }];
+		const out = sanitizePathRules(rules as any);
+		expect(out).toHaveLength(0);
+	});
+
+	it('keeps a rule with upstream + off-mode ipFilter and clears its residual cidrs', () => {
+		const rules = [
+			{ pathPrefix: '/v1', upstreams: [{ url: 'http://a:8080', weight: 1 }], ipFilter: { mode: 'off' as const, cidrs: ['8.8.8.8'] } }
+		];
+		const out = sanitizePathRules(rules as any);
+		expect(out).toHaveLength(1);
+		expect(out[0].ipFilter?.cidrs).toEqual([]);
+	});
 });

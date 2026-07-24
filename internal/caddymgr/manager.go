@@ -1246,20 +1246,6 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	}
 
 	for _, r := range routes {
-		// Step J.1: build the upstream pool by dialing each Upstream
-		// in declaration order. A one-element pool collapses to the
-		// same shape Step I emitted, plus a load_balancing block
-		// (selection moot but valid — see §3.2). Reject the whole
-		// route if any single upstream URL is malformed.
-		upstreamsJSON := make([]map[string]any, 0, len(r.Upstreams))
-		for i, u := range r.Upstreams {
-			dial, err := upstreamDial(u.URL)
-			if err != nil {
-				return nil, fmt.Errorf("route %s (%s) upstreams[%d]: %w", r.ID, r.Host, i, err)
-			}
-			upstreamsJSON = append(upstreamsJSON, map[string]any{"dial": dial})
-		}
-
 		// Handler chain order (spec §11.5) — the metrics handler MUST
 		// run before reverse_proxy so it observes the upstream's status
 		// code via the deferred Inc. Reversing this order makes the
@@ -1295,303 +1281,45 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		if known := buildKnownHosts(r); len(known) > 0 {
 			metricsHandler["known_hosts"] = known
 		}
-		// Step J.1: emit load_balancing.selection_policy unconditionally
-		// when at least one upstream is present. §3.2 explicitly notes
-		// the policy is harmless on a one-element pool ("selection is
-		// moot but valid"). For weighted_round_robin we also emit the
-		// `weights` array in pool order; other policies need no extra
-		// fields.
-		selectionPolicy := map[string]any{"policy": r.LBPolicy}
-		if r.LBPolicy == storage.LBPolicyWeightedRoundRobin {
-			weights := make([]int, 0, len(r.Upstreams))
-			for _, u := range r.Upstreams {
-				weights = append(weights, u.Weight)
-			}
-			selectionPolicy["weights"] = weights
-		}
-		proxyHandler := map[string]any{
-			"handler":   "reverse_proxy",
-			"upstreams": upstreamsJSON,
-			"load_balancing": map[string]any{
-				"selection_policy": selectionPolicy,
-			},
-			// Preserve the original client Host header on the
-			// upstream request. Caddy's default replaces it with
-			// the upstream URL's host, which breaks every backend
-			// that builds absolute URLs from Host (IdPs like
-			// authentik / Keycloak / Authelia constructing their
-			// OIDC discovery doc, multi-tenant SaaS dispatching
-			// by Host, single-page apps generating canonical
-			// URLs, ...). Traefik and nginx both preserve Host
-			// by default — Arenet aligns with the industry
-			// convention here.
-			//
-			// Day 17 empirical motivation : the authentik OIDC
-			// route at auth.worldgeekwide.fr returned
-			// "issuer": "http://192.168.99.12/application/o/arenet/"
-			// instead of "https://auth.worldgeekwide.fr/..."
-			// because authentik used the upstream-rewritten
-			// Host to build the discovery doc. The X-Forwarded-*
-			// trio is already injected by Caddy's reverse_proxy
-			// (verified empirically against
-			// caddyserver/caddy/v2@v2.11.3 reverseproxy.go:835)
-			// so X-Forwarded-Proto / X-Forwarded-For /
-			// X-Forwarded-Host don't need explicit wiring here.
-			//
-			// {http.request.host} is the Caddy placeholder for
-			// the request's Host header (after the listener's
-			// matcher binding but before any rewrites). Match
-			// behaviour : verified by running
-			// `caddy adapt` on equivalent Caddyfile
-			// `reverse_proxy { header_up Host {host} }`.
-			"headers": map[string]any{
-				"request": map[string]any{
-					"set": map[string][]string{
-						"Host": {"{http.request.host}"},
-					},
-				},
-			},
-		}
+		// Step R Phase 1.1 — upstream 4xx/5xx catch + the preserve-JSON
+		// contract. The shared status-code list (401 + 407 deliberately
+		// absent so their upstream Www-Authenticate / Proxy-Authenticate
+		// challenge headers reach the client verbatim — the 2026-06-24
+		// Harbor / Docker registry fix) and the two-block handle_response
+		// structure (JSON pass-through, /api pass-through, else branded
+		// error page) both live in reverse_proxy_emit.go. See
+		// errorBrandingStatusCodes and buildErrorBrandingHandleResponse
+		// there for the full empirical rationale + Caddy source citations.
+		errorStatusCodes := errorBrandingStatusCodes()
+		sharedHandleResponse := buildErrorBrandingHandleResponse(errorStatusCodes)
 
-		// Step #R-PROXMOX-HTTPS-LOOP (2026-06-10) — emit
-		// transport.tls when the upstream pool is HTTPS.
-		// Caddy's reverse_proxy transport is per-handler,
-		// not per-upstream, so the route-level
-		// PoolUsesHTTPS predicate is the right discriminant
-		// (the storage validator guarantees a same-scheme
-		// pool, so checking one upstream is enough).
+		// Assemble the reverse_proxy handler for this route's pool via the
+		// single shared builder (reverse_proxy_emit.go). It emits
+		// upstreams + load_balancing (+ weights) + the Host-preserving
+		// request header + transport.tls-if-https + flush_interval-if-set
+		// + health_checks-if-enabled + the shared handle_response. The
+		// extraction is byte-identity-guarded by
+		// TestBuildReverseProxyHandler_RouteEmissionByteIdentical: a route
+		// without per-path upstreams emits exactly the JSON the previous
+		// inline construction did.
 		//
-		// Shape mirrors the forward_auth precedent at
-		// manager.go:2298-2302 — same {"protocol":"http",
-		// "tls":{...}} block, just driven by the route's
-		// upstream pool instead of the forward_auth
-		// VerifyURL.
-		//
-		// When r.InsecureSkipVerify is true, the tls block
-		// carries "insecure_skip_verify": true. Empty {}
-		// (the default) uses Caddy's strict cert
-		// validation against the system trust store.
-		//
-		// Pre-fix behaviour for an HTTPS upstream: no
-		// transport block, Caddy proxied plain HTTP to a
-		// TLS-only port, the upstream (e.g. Proxmox)
-		// returned a 301 to https://, Caddy faithfully
-		// re-proxied the redirect back to itself, and the
-		// browser saw a redirect loop. The transport.tls
-		// emission flips Caddy into "speak TLS to the
-		// upstream", breaking the loop.
-		if r.PoolUsesHTTPS() {
-			tlsCfg := map[string]any{}
-			if r.InsecureSkipVerify {
-				tlsCfg["insecure_skip_verify"] = true
-			}
-			proxyHandler["transport"] = map[string]any{
-				"protocol": "http",
-				"tls":      tlsCfg,
-			}
-		}
-
-		// Phase 4.5 (#R-WAF-BUFFER-OOM-ON-LARGE-UPLOADS) —
-		// when the route is in upload-streaming mode, tell
-		// Caddy to flush bytes through as they arrive instead
-		// of buffering the whole request body in RAM. The -1
-		// sentinel maps to httputil.ReverseProxy.FlushInterval
-		// = -1 ("flush immediately after every write"). The
-		// WAF body skip lives in the arenet_waf handler
-		// (emitted via buildWAFHandler below); the two
-		// effects together prevent both buffering surfaces
-		// from staging the upload in RAM. Verified against a
-		// 4 GB-RAM VM under Docker registry push: WAF=detect
-		// without this toggle → 3.5 GB RSS → OOM kill; with
-		// the toggle → 257 MB RSS stable.
-		if r.UploadStreamingMode {
-			proxyHandler["flush_interval"] = -1
-		}
-
-		// Step J.2: active health checks. When the route has them
-		// enabled, emit `health_checks.active` as a sibling of
-		// upstreams and load_balancing inside the reverse_proxy
-		// handler (§3.2, §5.2). When disabled, the whole
-		// health_checks key is omitted — Caddy treats absence as
-		// "no probe runs", which is what we want.
-		//
-		// Emission rules (§5.2):
-		//   - `uri`, `method`, `interval`, `timeout`, `passes`,
-		//     `fails` always emitted when Enabled (the API layer
-		//     materialised the five defaults before the row
-		//     reached storage, so none of them are blank here).
-		//   - `expect_status` only when non-zero (zero = "any 2xx",
-		//     Caddy's documented default).
-		//   - `expect_body` only when non-empty (empty regex =
-		//     "no body check"; emitting "" would be confusing).
+		// Step J.2: the HealthCheck pointer is passed only when Enabled,
+		// so a disabled check omits the whole health_checks key (Caddy
+		// treats absence as "no probe runs").
+		var hcPtr *storage.HealthCheck
 		if r.HealthCheck.Enabled {
-			active := map[string]any{
-				"uri":      r.HealthCheck.URI,
-				"method":   r.HealthCheck.Method,
-				"interval": r.HealthCheck.Interval,
-				"timeout":  r.HealthCheck.Timeout,
-				"passes":   r.HealthCheck.Passes,
-				"fails":    r.HealthCheck.Fails,
-			}
-			if r.HealthCheck.ExpectStatus != 0 {
-				active["expect_status"] = r.HealthCheck.ExpectStatus
-			}
-			if r.HealthCheck.ExpectBody != "" {
-				active["expect_body"] = r.HealthCheck.ExpectBody
-			}
-			proxyHandler["health_checks"] = map[string]any{
-				"active": active,
-			}
+			hc := r.HealthCheck
+			hcPtr = &hc
 		}
-
-		// Step R Phase 1.1 — upstream 4xx/5xx catch.
-		//
-		// Without this block, an upstream returning 404 or 502
-		// (Proxmox 404 on a missing API path ; Jellyfin 502 on
-		// a media-server restart ; ...) streams the upstream's
-		// raw body straight to the client. The server's
-		// apps.http.servers.<*>.errors.routes chain only fires
-		// on Caddy-generated HandlerErrors (verified
-		// empirically against caddy v2.11.3
-		// modules/caddyhttp/server.go:421-423 ; the err arg is
-		// the return of s.serveHTTP, not the upstream status —
-		// modules/caddyhttp/reverseproxy/reverseproxy.go:1229
-		// writes res.StatusCode silently in finalizeResponse).
-		//
-		// Pattern : handle_response with a ResponseMatcher on
-		// status_code [4,5] (1-digit class wildcards per
-		// responsematchers.go:47-57) re-emits the upstream
-		// status as an http.handlers.error which propagates
-		// as the wrapped roundtripSucceededError (line 1165)
-		// — that one IS a HandlerError, so it triggers the
-		// server's errors chain like a native Caddy error.
-		//
-		// {http.reverse_proxy.status_code} placeholder is set
-		// at reverseproxy.go:1081 BEFORE handle_response
-		// evaluates, so it carries the upstream's literal
-		// status into the error handler.
-		//
-		// Buffering : NOT needed. handle_response evaluates
-		// on headers ; the upstream body is closed unconsumed
-		// at line 1159 if the route doesn't read it. This
-		// matters for streaming routes (Jellyfin video,
-		// large file downloads) where buffer_responses=true
-		// would buffer the full body in proxy RAM before any
-		// decision — catastrophic on a 4K stream.
-		// 2026-06-24 — operator-reported Harbor / Docker
-		// registry bug : the wildcard [4, 5] intercept above
-		// converted EVERY upstream 4xx/5xx into a Caddy
-		// HandlerError, which the errors chain then served as
-		// the branded HTML body. That HTML body REPLACED the
-		// upstream's response headers — including
-		// Www-Authenticate (401) and Proxy-Authenticate (407),
-		// both of which transport the auth challenge the
-		// client needs to retry with credentials.
-		//
-		// Without those headers, Docker registry v2's
-		// challenge flow can't discover the token endpoint :
-		//
-		//   docker → Arenet → Harbor 401 + Www-Authenticate: Bearer realm=...
-		//                     Arenet intercept → 401 branded HTML, header lost
-		//   docker ← 401 HTML → "no Www-Authenticate" → docker login fails
-		//
-		// Fix : narrow `match.status_code` to only codes where
-		// serving a branded HTML body is correct (the user is
-		// at a dead end ; the upstream isn't asking them to
-		// authenticate or upgrade protocol).
-		//
-		//   - 401 Unauthorized — auth challenge, MUST pass-through
-		//   - 407 Proxy Authentication Required — same, for proxy
-		//
-		// All other 4xx + 5xx still get the branded body.
-		// Caddy v2's ResponseMatcher has no `not` block (verified
-		// empirically against caddy v2.11.3 responsematchers.go),
-		// so we enumerate the include list rather than negate.
-		//
-		// Note : the branded 401 body remains available for
-		// Arenet's OWN auth handlers (BasicAuth / ForwardAuth
-		// gates that reject BEFORE reverse_proxy). Those 401s
-		// don't traverse this handle_response block — they're
-		// raised by handlers earlier in the chain and dispatch
-		// via apps.http.servers.<srv>.errors directly. The
-		// SupportedErrorStatusCodes set in internal/storage/
-		// error_template.go intentionally keeps 401 so operators
-		// can still customise the Arenet-generated 401 body via
-		// the template editor.
-		// Shared status-code list for both handle_response blocks below.
-		// 401 + 407 are deliberately absent so their upstream
-		// Www-Authenticate / Proxy-Authenticate challenge headers reach
-		// the client verbatim (the 2026-06-24 Harbor / Docker registry
-		// fix). Declared once (DRY) and referenced by both blocks.
-		errorStatusCodes := []int{
-			// 4xx (except 401 + 407)
-			400, 402, 403, 404, 405, 406, 408, 409, 410,
-			411, 412, 413, 414, 415, 416, 417, 418, 421,
-			422, 423, 424, 425, 426, 428, 429, 431, 451,
-			// 5xx (full range)
-			500, 501, 502, 503, 504, 505, 506, 507, 508,
-			510, 511,
-		}
-
-		// Preserve-JSON contract (fix/error-template-preserve-json): the
-		// branded HTML error page must NOT replace a proxied upstream's
-		// JSON / API error responses — otherwise an API call through a
-		// reverse-proxy route (e.g. the Arenet admin behind its own FQDN)
-		// receives a text/html 4xx page instead of the real {"error":...}
-		// body, and the frontend can't surface the message.
-		//
-		// Caddy evaluates handle_response entries in order and stops at
-		// the FIRST whose OUTER match passes, then runs THAT block's
-		// inner routes to completion (reverseproxy.go:1113-1173). A
-		// consequence learned from the live smoke (spec §6 E1): a block
-		// whose outer match is status-only "wins" for every error and its
-		// inner routes must therefore handle EVERY case — if an inner
-		// route matches nothing, the response is dropped (200, empty
-		// body). So the /api-path decision and the branding fallback MUST
-		// live in the SAME block's inner routes (with fall-through),
-		// NOT in two separate status-only outer blocks.
-		//
-		// Two blocks:
-		//   B (first) — outer match = status AND Content-Type
-		//      application/json* → copy_response. A JSON error of ANY path
-		//      is sent verbatim. ("*" covers "; charset=utf-8".)
-		//   A/C (second) — outer match = status only; inner routes, in
-		//      order: [path /api/* → copy_response] then [→ error]. A
-		//      non-JSON /api response is copied verbatim; everything else
-		//      falls through to the branded error handler.
-		// copy_response sends the upstream response verbatim to the client
-		// (copyresponse.go); the inner routes fall through on a failed
-		// match (routes.go wrapRoute → next), so the trailing match-less
-		// error route is the guaranteed branding fallback.
-		proxyHandler["handle_response"] = []map[string]any{
-			{ // B — application/json* response pass-through (any path)
-				"match": map[string]any{
-					"status_code": errorStatusCodes,
-					"headers":     map[string]any{"Content-Type": []string{"application/json*"}},
-				},
-				"routes": []map[string]any{
-					{
-						"handle": []map[string]any{{"handler": "copy_response"}},
-					},
-				},
-			},
-			{ // A/C — /api/* pass-through, else branding (fall-through)
-				"match": map[string]any{"status_code": errorStatusCodes},
-				"routes": []map[string]any{
-					{ // A: non-JSON /api response → verbatim
-						"match":  []map[string]any{{"path": []string{"/api/*"}}},
-						"handle": []map[string]any{{"handler": "copy_response"}},
-					},
-					{ // C: everything else → branded error page
-						"handle": []map[string]any{
-							{
-								"handler":     "error",
-								"status_code": "{http.reverse_proxy.status_code}",
-							},
-						},
-					},
-				},
-			},
+		proxyHandler, err := buildReverseProxyHandler(proxyPoolParams{
+			Upstreams:          r.Upstreams,
+			LBPolicy:           r.LBPolicy,
+			HealthCheck:        hcPtr,
+			UsesHTTPS:          r.PoolUsesHTTPS(),
+			InsecureSkipVerify: r.InsecureSkipVerify,
+		}, sharedHandleResponse, r.UploadStreamingMode)
+		if err != nil {
+			return nil, fmt.Errorf("route %s (%s): %w", r.ID, r.Host, err)
 		}
 
 		// Task 4 — maintenance mode. When the route carries a
@@ -1909,9 +1637,34 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			// tied to the vhost, consistent with the route-level site
 			// above.
 			pathRealm := fmt.Sprintf("Arenet route %s", r.Host)
-			handlers = append(handlers, buildPathRulesSubroute(r.PathRules, proxyHandler, func(c storage.BasicAuthRouteConfig) map[string]any {
+			// v2.23.0 — per-path upstream. A rule with its own upstream
+			// pool proxies to THAT pool via the shared reverse_proxy
+			// builder (own load-balancing / health-check / transport,
+			// reusing THIS route's sharedHandleResponse so the error
+			// branding is identical across the route pool and every path
+			// pool). A rule with no pool inherits the route's proxyHandler.
+			// DECISION: a path pool inherits the route's InsecureSkipVerify
+			// + UploadStreamingMode posture (no separate per-path toggle —
+			// YAGNI, documented in the spec's "no per-path transport UI").
+			pathProxy := func(pr storage.PathRule) (map[string]any, error) {
+				if len(pr.Upstreams) == 0 {
+					return proxyHandler, nil // inherit the route pool
+				}
+				return buildReverseProxyHandler(proxyPoolParams{
+					Upstreams:          pr.Upstreams,
+					LBPolicy:           pr.LBPolicy,
+					HealthCheck:        pr.HealthCheck, // already a pointer
+					UsesHTTPS:          poolUsesHTTPS(pr.Upstreams),
+					InsecureSkipVerify: r.InsecureSkipVerify,
+				}, sharedHandleResponse, r.UploadStreamingMode)
+			}
+			sub, err := buildPathRulesSubroute(r.PathRules, proxyHandler, func(c storage.BasicAuthRouteConfig) map[string]any {
 				return buildBasicAuthHandlerFromConfig(c, pathRealm)
-			}))
+			}, pathProxy)
+			if err != nil {
+				return nil, fmt.Errorf("route %s (%s) path rules: %w", r.ID, r.Host, err)
+			}
+			handlers = append(handlers, sub)
 		} else {
 			handlers = append(handlers, proxyHandler)
 		}

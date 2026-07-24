@@ -787,6 +787,11 @@ export interface PathRule {
 	pathPrefix: string;
 	basicAuth?: { username: string; password?: string };
 	ipFilter?: IPFilter;
+	/** Per-path upstream routing (v2.23.0). Empty/absent = inherit the
+	 *  route's pool. */
+	upstreams?: Upstream[];
+	lbPolicy?: LBPolicy;
+	healthCheck?: HealthCheck;
 }
 
 /**
