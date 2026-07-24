@@ -43,6 +43,7 @@
 	import CaddyHubNode from './_components/nodes/CaddyHubNode.svelte';
 	import BackendClusterNode from './_components/nodes/BackendClusterNode.svelte';
 	import UpstreamNode from './_components/nodes/UpstreamNode.svelte';
+	import PathSectionHeaderNode from './_components/nodes/PathSectionHeaderNode.svelte';
 	import AnimatedFlowEdge from './_components/edges/AnimatedFlowEdge.svelte';
 	import FlowApiBridge from './_components/FlowApiBridge.svelte';
 
@@ -66,6 +67,7 @@
 		caddy: CaddyHubNode,
 		'backend-cluster': BackendClusterNode,
 		upstream: UpstreamNode,
+		'path-section-header': PathSectionHeaderNode,
 	};
 
 	const edgeTypes: EdgeTypes = {
