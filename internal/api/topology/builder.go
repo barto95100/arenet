@@ -130,6 +130,12 @@ func BuildSnapshot(
 // reload and the first probe outcome). The builder maps that
 // path-through transparently — wire shape stays well-typed.
 func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Route {
+	if metrics == nil {
+		metrics = noopMetricsView{}
+	}
+	if status == nil {
+		status = noopStatusLookup{}
+	}
 	agg := metrics.Aggregate(r.ID)
 	aliasMetrics := buildAliasMetrics(r.ID, r.Aliases, metrics)
 	out := Route{
@@ -157,10 +163,37 @@ func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Rout
 		ClusterLabel:   r.Host,
 	}
 
-	// Build the upstream list. weight-split first; status second
-	// (status is independent of the split math).
+	// Build the upstream list via the shared conversion helper (also
+	// used by the path-pool loop below).
+	out.Upstreams = buildUpstreams(r.Upstreams, r.ID, agg, r.HealthCheck.Enabled, status)
+
+	// Path pools (v2.24.0): one branch per path-rule that declares its own
+	// pool (B2 — protection-only rules are skipped). Structure only; the
+	// path pool's upstreams reuse the same conversion but there is no
+	// per-path metric today, so agg is the route aggregate (the frontend
+	// treats path-pool clusters as structural, not traffic-animated).
+	for pi, pr := range r.PathRules {
+		if len(pr.Upstreams) == 0 {
+			continue
+		}
+		out.PathPools = append(out.PathPools, PathPool{
+			PathPrefix:         pr.PathPrefix,
+			Upstreams:          buildUpstreams(pr.Upstreams, fmt.Sprintf("%s-path-%d", r.ID, pi), agg, false, status),
+			LBPolicy:           pr.LBPolicy,
+			InsecureSkipVerify: pr.InsecureSkipVerify,
+		})
+	}
+	return out
+}
+
+// buildUpstreams converts a storage upstream pool into topology.Upstream
+// rows, applying the weight-split reqPerSec share and the HC-gated status.
+// idPrefix namespaces the per-upstream ID (route ID for the root pool,
+// "routeID-path-N" for a path pool). agg is the route-level aggregate the
+// share is computed against; hcEnabled gates status lookup.
+func buildUpstreams(pool []storage.Upstream, idPrefix string, agg Aggregate, hcEnabled bool, status StatusLookup) []Upstream {
 	totalWeight := 0
-	for _, u := range r.Upstreams {
+	for _, u := range pool {
 		w := u.Weight
 		if w <= 0 {
 			w = 1 // storage validation guarantees >=1 but be defensive
@@ -169,33 +202,32 @@ func buildRoute(r *storage.Route, metrics MetricsView, status StatusLookup) Rout
 	}
 	if totalWeight == 0 {
 		// Zero upstreams is forbidden by storage validation, but be
-		// defensive — return the route with an empty upstream slice
-		// rather than divide-by-zero.
-		out.Upstreams = []Upstream{}
-		return out
+		// defensive — return an empty upstream slice rather than
+		// divide-by-zero.
+		return []Upstream{}
 	}
-	out.Upstreams = make([]Upstream, 0, len(r.Upstreams))
-	for i, u := range r.Upstreams {
+	out := make([]Upstream, 0, len(pool))
+	for i, u := range pool {
 		w := u.Weight
 		if w <= 0 {
 			w = 1
 		}
 		share := float64(w) / float64(totalWeight)
-		// Stage B: consult the tracker only when the route has a
+		// Stage B: consult the tracker only when the pool has a
 		// configured probe. The HC-gate avoids the stale-state
 		// misleading-green case described in the buildRoute
 		// docstring.
 		upstreamStatus := StatusUnknown
-		if r.HealthCheck.Enabled {
+		if hcEnabled {
 			if s := status.Status(u.URL); s != "" {
 				upstreamStatus = s
 			}
 		}
-		out.Upstreams = append(out.Upstreams, Upstream{
-			ID:                    fmt.Sprintf("%s-%d", r.ID, i),
+		out = append(out, Upstream{
+			ID:                    fmt.Sprintf("%s-%d", idPrefix, i),
 			URL:                   u.URL,
 			Status:                upstreamStatus,
-			HealthCheckConfigured: r.HealthCheck.Enabled,
+			HealthCheckConfigured: hcEnabled,
 			ReqPerSec:             agg.ReqPerSec * share,
 			P99LatencyMs:          agg.P95LatencyMs,
 			FairnessRatio:         share,
