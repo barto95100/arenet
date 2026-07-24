@@ -1643,9 +1643,12 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			// reusing THIS route's sharedHandleResponse so the error
 			// branding is identical across the route pool and every path
 			// pool). A rule with no pool inherits the route's proxyHandler.
-			// DECISION: a path pool inherits the route's InsecureSkipVerify
-			// + UploadStreamingMode posture (no separate per-path toggle —
-			// YAGNI, documented in the spec's "no per-path transport UI").
+			// DECISION: a path pool is autonomous (v2.23.1): its
+			// InsecureSkipVerify is the path rule's OWN field, NOT the
+			// route's — so a self-signed https backend on one path doesn't
+			// force the whole route insecure (Q1). UploadStreamingMode is
+			// still inherited from the route (no per-path toggle — YAGNI).
+			// A rule with no pool inherits the route's whole proxyHandler.
 			pathProxy := func(pr storage.PathRule) (map[string]any, error) {
 				if len(pr.Upstreams) == 0 {
 					return proxyHandler, nil // inherit the route pool
@@ -1655,7 +1658,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 					LBPolicy:           pr.LBPolicy,
 					HealthCheck:        pr.HealthCheck, // already a pointer
 					UsesHTTPS:          poolUsesHTTPS(pr.Upstreams),
-					InsecureSkipVerify: r.InsecureSkipVerify,
+					InsecureSkipVerify: pr.InsecureSkipVerify,
 				}, sharedHandleResponse, r.UploadStreamingMode)
 			}
 			sub, err := buildPathRulesSubroute(r.PathRules, proxyHandler, func(c storage.BasicAuthRouteConfig) map[string]any {
