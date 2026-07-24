@@ -91,3 +91,8 @@ camelCase:
   (protection-only, e.g. `/docs` that inherits) does NOT add a cluster. Live
   traffic per branch is not yet split (structure only — metrics stay
   route-aggregated); per-branch req/s is a backlog item.
+- **(v2.24.1)** The path-pool branches now render as **dashed lines** from the
+  Caddy hub to each path cluster (visible even at zero traffic — a structural
+  routing branch), and a route's clusters (root + its path pools) are **grouped
+  contiguously** (tight gap between them, full gap before the next route), like
+  aliases under their FQDN. A route without path pools is laid out unchanged.

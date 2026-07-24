@@ -887,4 +887,82 @@ describe('buildTopologyGraph — alias integration', () => {
 			graph.edges.some((e) => e.target === v1Cluster!.id && e.source === 'caddy-hub')
 		).toBe(true);
 	});
+
+	it('marks the hub->path-cluster edge as structural', () => {
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r1',
+				host: 'api.example.com',
+				pathPools: [
+					{
+						pathPrefix: '/v1',
+						lbPolicy: 'round_robin',
+						upstreams: [
+							{
+								id: 'r1-path-0-0',
+								url: 'http://v1:8080',
+								status: 'unknown',
+								healthCheckConfigured: false,
+								reqPerSec: 0,
+								p99LatencyMs: 0,
+								fairnessRatio: 1
+							}
+						]
+					}
+				]
+			})
+		]);
+		const pathEdge = graph.edges.find((e) => e.target === 'cluster-r1-path-0');
+		expect(pathEdge).toBeDefined();
+		expect((pathEdge!.data as FlowEdgeData).structural).toBe(true);
+		// a route/root edge must NOT be structural
+		const rootEdges = graph.edges.filter(
+			(e) => e.source === 'caddy-hub' && e.target !== 'cluster-r1-path-0'
+		);
+		for (const e of rootEdges) {
+			expect((e.data as FlowEdgeData).structural).not.toBe(true);
+		}
+	});
+
+	// -------------------------------------------------------
+	// v2.24.1 Task 2 — contiguous per-route cluster stacking.
+	// A route's own clusters (root + its path pools) must stack
+	// tight (INTRA_ROUTE_GAP); a new route's root cluster keeps
+	// the full original spacing (INTER_ROUTE_GAP === 150, the
+	// old ROW_SPACING_Y) so paths-less layouts are unchanged.
+	// -------------------------------------------------------
+
+	it("stacks a route's clusters contiguously (intra-gap < inter-gap)", () => {
+		const routes = [{
+			id: 'r1', host: 'api.example.com', lbPolicy: 'round_robin',
+			upstreams: [{ id: 'r1-0', url: 'http://route:8080', status: 'unknown', reqPerSec: 0 }],
+			pathPools: [{ pathPrefix: '/v1', lbPolicy: 'round_robin', upstreams: [{ id: 'r1-path-0-0', url: 'http://v1:8080', status: 'unknown', reqPerSec: 0 }] }],
+			reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false,
+		}, {
+			id: 'r2', host: 'other.example.com', lbPolicy: 'round_robin',
+			upstreams: [{ id: 'r2-0', url: 'http://o:8080', status: 'unknown', reqPerSec: 0 }],
+			reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false,
+		}];
+		const { nodes } = buildTopologyGraph(routes as any);
+		const clusters = nodes.filter((n) => n.type === 'backend-cluster');
+		const root1 = clusters.find((c) => c.id === 'cluster-r1')!;
+		const path1 = clusters.find((c) => c.id === 'cluster-r1-path-0')!;
+		const root2 = clusters.find((c) => c.id === 'cluster-r2')!;
+		// gap between r1 root and its /v1 path (intra) < gap between /v1 and r2 root (inter)
+		const intra = path1.position.y - (root1.position.y + (root1.height ?? 0));
+		const inter = root2.position.y - (path1.position.y + (path1.height ?? 0));
+		expect(intra).toBeLessThan(inter);
+	});
+
+	it('a paths-less multi-route set stacks identically to before (inter-gap === 150)', () => {
+		const routes = [
+			{ id: 'r1', host: 'a.example.com', lbPolicy: 'round_robin', upstreams: [{ id: 'r1-0', url: 'http://a:8080', status: 'unknown', reqPerSec: 0 }], reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false },
+			{ id: 'r2', host: 'b.example.com', lbPolicy: 'round_robin', upstreams: [{ id: 'r2-0', url: 'http://b:8080', status: 'unknown', reqPerSec: 0 }], reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false },
+		];
+		const { nodes } = buildTopologyGraph(routes as any);
+		const c1 = nodes.find((n) => n.id === 'cluster-r1')!;
+		const c2 = nodes.find((n) => n.id === 'cluster-r2')!;
+		const gap = c2.position.y - (c1.position.y + (c1.height ?? 0));
+		expect(gap).toBe(150); // INTER_ROUTE_GAP === old ROW_SPACING_Y
+	});
 });
