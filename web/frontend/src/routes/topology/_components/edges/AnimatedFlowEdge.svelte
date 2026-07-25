@@ -158,11 +158,21 @@
         // flag (every real-traffic edge, and a real idle edge with
         // reqPerSec 0) still renders exactly tierStrokeStyle(tier) as
         // before.
+        // v2.25.1: a structural edge follows the SAME tier-driven intensity
+        // as a solid line (color/opacity from tierStrokeStyle(tier)) and only
+        // ADDS a dash — the operator reads "routing branch" from the DASH, not
+        // from a brighter line. At 0 traffic it's as discreet as the solid
+        // lines beside it; with traffic it brightens with the tier. (v2.25.0
+        // forced opacity 0.5 → the dashes over-stood-out vs the solid backend
+        // lines at 0 traffic — the dogfood finding this fixes.) The 'bad' tier
+        // sets its own dasharray, so append ours only when absent to avoid a
+        // double declaration.
         let isStructural = $derived(data?.structural === true);
+        let baseStroke = $derived(tierStrokeStyle(tier));
         let strokeStyle = $derived(
-                isStructural
-                        ? 'stroke: oklch(62% 0.01 250); stroke-opacity: 0.5; stroke-width: 1.5; stroke-dasharray: 5 4;'
-                        : tierStrokeStyle(tier)
+                isStructural && !baseStroke.includes('stroke-dasharray')
+                        ? `${baseStroke} stroke-dasharray: 5 4;`
+                        : baseStroke
         );
 </script>
 
