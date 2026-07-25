@@ -85,14 +85,13 @@ camelCase:
 - All backend suites (`go test ./...`, `-race ./internal/caddymgr/`) and the
   full frontend suite (`vitest` + `svelte-check`) must be green before this
   live smoke is run — see `task-7-report.md` for the automated-gate output.
-- **(v2.24.0)** A route's per-path pools now appear on the **Topology** graph as
-  SEPARATE backend clusters, each labelled by its prefix in the cluster header
-  (e.g. a root cluster + `/v1` + `/legacy`). A path-rule WITHOUT its own pool
-  (protection-only, e.g. `/docs` that inherits) does NOT add a cluster. Live
-  traffic per branch is not yet split (structure only — metrics stay
-  route-aggregated); per-branch req/s is a backlog item.
-- **(v2.24.1)** The path-pool branches now render as **dashed lines** from the
-  Caddy hub to each path cluster (visible even at zero traffic — a structural
-  routing branch), and a route's clusters (root + its path pools) are **grouped
-  contiguously** (tight gap between them, full gap before the next route), like
-  aliases under their FQDN. A route without path pools is laid out unchanged.
+- **(v2.25.0 — supersedes the v2.24.0/1 topology rendering)** A route's per-path
+  pools now appear INSIDE its single backend cluster as **per-prefix sections**:
+  the root pool's upstreams first (no header), then a `── /v1 ──` section header
+  followed by that path's upstreams, `── /legacy ──`, etc. Each path section gets
+  one **dashed line** from the Caddy hub to its section header (a structural
+  routing branch, visible even at zero traffic). A path-rule WITHOUT its own pool
+  (protection-only, e.g. `/docs` that inherits) adds no section. A route WITHOUT
+  path pools renders as a plain single cluster, unchanged. Live traffic per
+  branch is not yet split (structure only — metrics stay route-aggregated); the
+  hub→section lines are in place to carry per-path req/s later (backlog).

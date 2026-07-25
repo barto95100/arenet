@@ -29,7 +29,6 @@ import { describe, it, expect } from 'vitest';
 import { buildTopologyGraph } from './_layout';
 import type {
 	AliasNodeData,
-	BackendClusterNodeData,
 	FlowEdgeData,
 	FQDNNodeData,
 	RouteGroupNodeData,
@@ -790,15 +789,18 @@ describe('buildTopologyGraph — alias integration', () => {
 	});
 
 	// -------------------------------------------------------
-	// v2.24.0 — per-path routing branches (pathPools). Task 3:
-	// each path-pool becomes its own backend-cluster (+ upstream
-	// children + caddy->cluster edge), stacked alongside the
-	// route's root cluster without overlap. Non-regression: a
-	// route without pathPools must still emit exactly one
-	// cluster, unchanged.
+	// v2.24.0 — per-path routing branches (pathPools).
+	// v2.25.0 Task 2 REPLACES the v2.24.0 Task-3 "one cluster
+	// per path-pool" model (and the v2.24.1 dashed-stacked-
+	// clusters model) with a single cluster per route whose
+	// children include per-prefix section headers. The tests
+	// below are rewritten for that model; the old "3 clusters"
+	// / "cluster-r1-path-0" assertions no longer apply — see
+	// the dedicated v2.25.0 Task 2 block further below for the
+	// full single-cluster/section-header coverage.
 	// -------------------------------------------------------
 
-	it('emits one backend cluster per path-pool plus the root cluster', () => {
+	it('a route with a path-pool still emits exactly one cluster (path-pool renders as a section, not a cluster)', () => {
 		const graph = buildTopologyGraph([
 			makeRoute({
 				id: 'r1',
@@ -838,57 +840,49 @@ describe('buildTopologyGraph — alias integration', () => {
 			})
 		]);
 		const clusters = graph.nodes.filter((n) => n.type === 'backend-cluster');
-		expect(clusters.length).toBe(3); // root + /v1 + /legacy
-		const prefixes = clusters.map((c) => (c.data as BackendClusterNodeData).pathPrefix);
-		expect(prefixes).toContain('/v1');
-		expect(prefixes).toContain('/legacy');
-		// root cluster has no pathPrefix
-		expect(prefixes.filter((p) => p === undefined).length).toBe(1);
+		expect(clusters.length).toBe(1);
+		const headers = graph.nodes.filter((n) => n.type === 'path-section-header');
+		expect(headers.map((h) => (h.data as any).pathPrefix).sort()).toEqual(['/legacy', '/v1']);
 	});
 
 	it('a route with no path-pools emits exactly one cluster (non-regression)', () => {
 		const graph = buildTopologyGraph([makeRoute({ id: 'r2', host: 'plain.example.com' })]);
 		expect(graph.nodes.filter((n) => n.type === 'backend-cluster').length).toBe(1);
+	});
+
+	it('a path-pool section has a parented upstream child inside the single cluster', () => {
+		const graph = buildTopologyGraph([
+			makeRoute({
+				id: 'r1',
+				host: 'api.example.com',
+				pathPools: [
+					{
+						pathPrefix: '/v1',
+						lbPolicy: 'round_robin',
+						upstreams: [
+							{
+								id: 'r1-path-0-0',
+								url: 'http://v1:8080',
+								status: 'unknown',
+								healthCheckConfigured: false,
+								reqPerSec: 0,
+								p99LatencyMs: 0,
+								fairnessRatio: 1
+							}
+						]
+					}
+				]
+			})
+		]);
 		const cluster = graph.nodes.find((n) => n.type === 'backend-cluster')!;
-		expect((cluster.data as BackendClusterNodeData).pathPrefix).toBeUndefined();
-	});
-
-	it('each path-pool cluster has a caddy->cluster edge and parented upstream children', () => {
-		const graph = buildTopologyGraph([
-			makeRoute({
-				id: 'r1',
-				host: 'api.example.com',
-				pathPools: [
-					{
-						pathPrefix: '/v1',
-						lbPolicy: 'round_robin',
-						upstreams: [
-							{
-								id: 'r1-path-0-0',
-								url: 'http://v1:8080',
-								status: 'unknown',
-								healthCheckConfigured: false,
-								reqPerSec: 0,
-								p99LatencyMs: 0,
-								fairnessRatio: 1
-							}
-						]
-					}
-				]
-			})
-		]);
-		const v1Cluster = graph.nodes.find(
-			(n) => n.type === 'backend-cluster' && (n.data as BackendClusterNodeData).pathPrefix === '/v1'
+		const child = graph.nodes.find(
+			(n) => n.type === 'upstream' && (n.data as any).upstreamId === 'r1-path-0-0'
 		);
-		expect(v1Cluster).toBeDefined();
-		const child = graph.nodes.find((n) => n.type === 'upstream' && n.parentId === v1Cluster!.id);
 		expect(child).toBeDefined();
-		expect(
-			graph.edges.some((e) => e.target === v1Cluster!.id && e.source === 'caddy-hub')
-		).toBe(true);
+		expect(child!.parentId).toBe(cluster.id);
 	});
 
-	it('marks the hub->path-cluster edge as structural', () => {
+	it('marks the hub->section edge as structural', () => {
 		const graph = buildTopologyGraph([
 			makeRoute({
 				id: 'r1',
@@ -912,12 +906,13 @@ describe('buildTopologyGraph — alias integration', () => {
 				]
 			})
 		]);
-		const pathEdge = graph.edges.find((e) => e.target === 'cluster-r1-path-0');
-		expect(pathEdge).toBeDefined();
-		expect((pathEdge!.data as FlowEdgeData).structural).toBe(true);
+		const header = graph.nodes.find((n) => n.type === 'path-section-header')!;
+		const sectionEdge = graph.edges.find((e) => e.target === header.id);
+		expect(sectionEdge).toBeDefined();
+		expect((sectionEdge!.data as FlowEdgeData).structural).toBe(true);
 		// a route/root edge must NOT be structural
 		const rootEdges = graph.edges.filter(
-			(e) => e.source === 'caddy-hub' && e.target !== 'cluster-r1-path-0'
+			(e) => e.source === 'caddy-hub' && e.target !== header.id
 		);
 		for (const e of rootEdges) {
 			expect((e.data as FlowEdgeData).structural).not.toBe(true);
@@ -932,29 +927,11 @@ describe('buildTopologyGraph — alias integration', () => {
 	// old ROW_SPACING_Y) so paths-less layouts are unchanged.
 	// -------------------------------------------------------
 
-	it("stacks a route's clusters contiguously (intra-gap < inter-gap)", () => {
-		const routes = [{
-			id: 'r1', host: 'api.example.com', lbPolicy: 'round_robin',
-			upstreams: [{ id: 'r1-0', url: 'http://route:8080', status: 'unknown', reqPerSec: 0 }],
-			pathPools: [{ pathPrefix: '/v1', lbPolicy: 'round_robin', upstreams: [{ id: 'r1-path-0-0', url: 'http://v1:8080', status: 'unknown', reqPerSec: 0 }] }],
-			reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false,
-		}, {
-			id: 'r2', host: 'other.example.com', lbPolicy: 'round_robin',
-			upstreams: [{ id: 'r2-0', url: 'http://o:8080', status: 'unknown', reqPerSec: 0 }],
-			reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false,
-		}];
-		const { nodes } = buildTopologyGraph(routes as any);
-		const clusters = nodes.filter((n) => n.type === 'backend-cluster');
-		const root1 = clusters.find((c) => c.id === 'cluster-r1')!;
-		const path1 = clusters.find((c) => c.id === 'cluster-r1-path-0')!;
-		const root2 = clusters.find((c) => c.id === 'cluster-r2')!;
-		// gap between r1 root and its /v1 path (intra) < gap between /v1 and r2 root (inter)
-		const intra = path1.position.y - (root1.position.y + (root1.height ?? 0));
-		const inter = root2.position.y - (path1.position.y + (path1.height ?? 0));
-		expect(intra).toBeLessThan(inter);
-	});
-
-	it('a paths-less multi-route set stacks identically to before (inter-gap === 150)', () => {
+	it('a paths-less multi-route set stacks with the uniform ROW_SPACING_Y gap', () => {
+		// v2.25.0 Task 2: the gap-stacker (computeStackYsWithGaps,
+		// INTER/INTRA_ROUTE_GAP) is gone — routes are back to ONE
+		// cluster each, stacked with the restored uniform
+		// computeStackYsForHeights (ROW_SPACING_Y === 150).
 		const routes = [
 			{ id: 'r1', host: 'a.example.com', lbPolicy: 'round_robin', upstreams: [{ id: 'r1-0', url: 'http://a:8080', status: 'unknown', reqPerSec: 0 }], reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false },
 			{ id: 'r2', host: 'b.example.com', lbPolicy: 'round_robin', upstreams: [{ id: 'r2-0', url: 'http://b:8080', status: 'unknown', reqPerSec: 0 }], reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false },
@@ -963,6 +940,64 @@ describe('buildTopologyGraph — alias integration', () => {
 		const c1 = nodes.find((n) => n.id === 'cluster-r1')!;
 		const c2 = nodes.find((n) => n.id === 'cluster-r2')!;
 		const gap = c2.position.y - (c1.position.y + (c1.height ?? 0));
-		expect(gap).toBe(150); // INTER_ROUTE_GAP === old ROW_SPACING_Y
+		expect(gap).toBe(150); // ROW_SPACING_Y, uniform stacker restored
+	});
+
+	// -------------------------------------------------------
+	// v2.25.0 Task 2 — one cluster per route, per-prefix
+	// sections rendered INSIDE that single cluster. Replaces
+	// the v2.24.0 separate-clusters-per-path model and the
+	// v2.24.1 dashed-stacked-clusters model above.
+	// -------------------------------------------------------
+
+	it('renders ONE cluster per route with a section header per path-pool', () => {
+		const routes = [{
+			id: 'r1', host: 'api.example.com', lbPolicy: 'round_robin',
+			upstreams: [{ id: 'r1-0', url: 'http://route:8080', status: 'unknown', reqPerSec: 0 }],
+			pathPools: [
+				{ pathPrefix: '/v1', lbPolicy: 'round_robin', upstreams: [{ id: 'r1-path-0-0', url: 'http://v1:8080', status: 'unknown', reqPerSec: 0 }] },
+				{ pathPrefix: '/legacy', lbPolicy: 'round_robin', upstreams: [{ id: 'r1-path-1-0', url: 'https://old:8443', status: 'unknown', reqPerSec: 0 }] },
+			],
+			reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false,
+		}];
+		const { nodes } = buildTopologyGraph(routes as any);
+		// exactly ONE cluster
+		expect(nodes.filter((n) => n.type === 'backend-cluster').length).toBe(1);
+		// one section header per path-pool, carrying the prefix
+		const headers = nodes.filter((n) => n.type === 'path-section-header');
+		expect(headers.length).toBe(2);
+		expect(headers.map((h) => (h.data as any).pathPrefix).sort()).toEqual(['/legacy', '/v1']);
+		// all upstreams (root + paths) parented to the single cluster
+		const cluster = nodes.find((n) => n.type === 'backend-cluster')!;
+		const ups = nodes.filter((n) => n.type === 'upstream');
+		expect(ups.length).toBe(3);
+		for (const u of ups) expect(u.parentId).toBe(cluster.id);
+		for (const h of headers) expect(h.parentId).toBe(cluster.id);
+	});
+
+	it('a paths-less route renders one cluster, zero section headers (non-regression)', () => {
+		const routes = [{
+			id: 'r2', host: 'plain.example.com', lbPolicy: 'round_robin',
+			upstreams: [{ id: 'r2-0', url: 'http://a:8080', status: 'unknown', reqPerSec: 0 }],
+			reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false,
+		}];
+		const { nodes } = buildTopologyGraph(routes as any);
+		expect(nodes.filter((n) => n.type === 'backend-cluster').length).toBe(1);
+		expect(nodes.filter((n) => n.type === 'path-section-header').length).toBe(0);
+	});
+
+	it('each path-pool gets one structural hub->section edge; root keeps its fan-out', () => {
+		const routes = [{
+			id: 'r1', host: 'api.example.com', lbPolicy: 'round_robin',
+			upstreams: [{ id: 'r1-0', url: 'http://route:8080', status: 'unknown', reqPerSec: 0 }],
+			pathPools: [{ pathPrefix: '/v1', lbPolicy: 'round_robin', upstreams: [{ id: 'r1-path-0-0', url: 'http://v1:8080', status: 'unknown', reqPerSec: 0 }] }],
+			reqPerSec: 0, tlsEnabled: false, httpRedirect: false, hasHealthCheck: false, disabled: false,
+		}];
+		const { edges } = buildTopologyGraph(routes as any);
+		const structural = edges.filter((e) => (e.data as any)?.structural === true);
+		expect(structural.length).toBe(1); // one per path-pool
+		// root edge(s) exist and are NOT structural
+		const rootEdges = edges.filter((e) => e.source === 'caddy-hub' && (e.data as any)?.structural !== true);
+		expect(rootEdges.length).toBeGreaterThanOrEqual(1);
 	});
 });

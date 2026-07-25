@@ -231,10 +231,6 @@ export type CaddyHubNodeData = {
 export type BackendClusterNodeData = {
         kind: 'backend-cluster';
         clusterLabel: string;
-        /** When set, this cluster is a per-path branch (v2.24.0) and the
-         *  header shows the prefix (e.g. "/v1"). Absent on the route's root
-         *  cluster — its rendering stays unchanged. */
-        pathPrefix?: string;
         runtime?: string;
         lbPolicy: LBPolicy;
         healthyCount: number;
@@ -248,6 +244,14 @@ export type BackendClusterNodeData = {
         // about "sains" because nothing is being probed.
         hasHealthCheck: boolean;
         warning?: string;
+} & Record<string, unknown>;
+
+/** A per-path section header rendered INSIDE a route's single backend
+ *  cluster (v2.25.0). A light child node showing the path prefix, placed
+ *  above that path-pool's upstream rows. */
+export type PathSectionHeaderNodeData = {
+        kind: 'path-section-header';
+        pathPrefix: string;
 } & Record<string, unknown>;
 
 /** Vue B col 3 child — one upstream inside a cluster group.
@@ -357,6 +361,7 @@ export type TopologyNodeData =
         | FQDNNodeData
         | CaddyHubNodeData
         | BackendClusterNodeData
+        | PathSectionHeaderNodeData
         | UpstreamNodeData
         | AliasNodeData
         | RouteGroupNodeData;
