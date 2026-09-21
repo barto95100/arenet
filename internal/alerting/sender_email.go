@@ -17,11 +17,17 @@
 package alerting
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"time"
 )
@@ -79,7 +85,30 @@ func (s *EmailSender) Send(ctx context.Context, evt AlertEvent) error {
 	if err != nil {
 		return fmt.Errorf("email: render: %w", err)
 	}
+	return s.deliver(ctx, []byte(s.buildMessage(subject, body)))
+}
 
+// EmailAttachment is one file attached to an email (v2.33).
+type EmailAttachment struct {
+	Filename    string
+	ContentType string
+	Data        []byte
+}
+
+// SendWithAttachment sends a plain-text email carrying one attachment
+// to the channel's recipients (scheduled backups, v2.33). The channel's
+// subject / body templates are not used: the caller supplies both.
+func (s *EmailSender) SendWithAttachment(ctx context.Context, subject, body string, att EmailAttachment) error {
+	msg, err := s.buildMultipartMessage(subject, body, att, time.Now())
+	if err != nil {
+		return fmt.Errorf("email: build message: %w", err)
+	}
+	return s.deliver(ctx, msg)
+}
+
+// deliver runs one SMTP conversation: dial, optional STARTTLS, AUTH,
+// MAIL / RCPT, DATA. There is no partial-success state.
+func (s *EmailSender) deliver(ctx context.Context, msg []byte) error {
 	dialer := s.dialer
 	if dialer == nil {
 		dialer = productionDialer
@@ -126,8 +155,7 @@ func (s *EmailSender) Send(ctx context.Context, evt AlertEvent) error {
 	if err != nil {
 		return fmt.Errorf("email: DATA: %w", err)
 	}
-	msg := s.buildMessage(subject, body)
-	if _, err := w.Write([]byte(msg)); err != nil {
+	if _, err := w.Write(msg); err != nil {
 		_ = w.Close()
 		return fmt.Errorf("email: write data: %w", err)
 	}
@@ -191,6 +219,67 @@ func (s *EmailSender) buildMessage(subject, body string) string {
 	fmt.Fprintf(&b, "MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&b, "\r\n%s\r\n", body)
 	return b.String()
+}
+
+// attachmentLineLen is the base64 line length of an attachment
+// (RFC 2045 caps lines at 76 characters).
+const attachmentLineLen = 76
+
+// buildMultipartMessage assembles a multipart/mixed message: the
+// plain-text body then the base64 attachment. Headers follow
+// buildMessage (Bcc omitted); the subject is RFC 2047-encoded so
+// non-ASCII text survives.
+func (s *EmailSender) buildMultipartMessage(subject, body string, att EmailAttachment, now time.Time) ([]byte, error) {
+	var b bytes.Buffer
+	mw := multipart.NewWriter(&b)
+	var head strings.Builder
+	fmt.Fprintf(&head, "From: %s\r\n", s.cfg.From)
+	fmt.Fprintf(&head, "To: %s\r\n", strings.Join(s.cfg.To, ", "))
+	if len(s.cfg.CC) > 0 {
+		fmt.Fprintf(&head, "Cc: %s\r\n", strings.Join(s.cfg.CC, ", "))
+	}
+	fmt.Fprintf(&head, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject))
+	fmt.Fprintf(&head, "Date: %s\r\n", now.Format(time.RFC1123Z))
+	fmt.Fprintf(&head, "MIME-Version: 1.0\r\n")
+	fmt.Fprintf(&head, "Content-Type: multipart/mixed; boundary=%q\r\n\r\n", mw.Boundary())
+
+	text, err := mw.CreatePart(textproto.MIMEHeader{
+		"Content-Type":              {"text/plain; charset=UTF-8"},
+		"Content-Transfer-Encoding": {"8bit"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.WriteString(text, strings.ReplaceAll(body, "\n", "\r\n")); err != nil {
+		return nil, err
+	}
+
+	ct := att.ContentType
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	part, err := mw.CreatePart(textproto.MIMEHeader{
+		"Content-Type":              {mime.FormatMediaType(ct, map[string]string{"name": att.Filename})},
+		"Content-Disposition":       {mime.FormatMediaType("attachment", map[string]string{"filename": att.Filename})},
+		"Content-Transfer-Encoding": {"base64"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	enc := base64.StdEncoding.EncodeToString(att.Data)
+	for len(enc) > attachmentLineLen {
+		if _, err := io.WriteString(part, enc[:attachmentLineLen]+"\r\n"); err != nil {
+			return nil, err
+		}
+		enc = enc[attachmentLineLen:]
+	}
+	if _, err := io.WriteString(part, enc+"\r\n"); err != nil {
+		return nil, err
+	}
+	if err := mw.Close(); err != nil {
+		return nil, err
+	}
+	return append([]byte(head.String()), b.Bytes()...), nil
 }
 
 // productionDialer is the default EmailDialer when the

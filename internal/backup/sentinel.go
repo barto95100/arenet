@@ -69,7 +69,7 @@ func identityKey(entity string) string {
 	switch entity {
 	case "routes", "users", "external_certificates", entityAlertChannels, entityAPITokens:
 		return "id"
-	case entityCrowdSec, entityWatcher:
+	case entityCrowdSec, entityWatcher, entityBackupSchedule:
 		return "key"
 	case "dns_providers":
 		return "key"

@@ -151,6 +151,13 @@ func visitExtrasSecrets(ex *SnapshotExtras, apply func(string, *string) error, f
 		}
 		ex.WatcherCredentials = &cp
 	}
+	if ex.BackupSchedule != nil {
+		cp := *ex.BackupSchedule
+		if err := apply(entityBackupSchedule+"/passphrase", &cp.Passphrase); err != nil {
+			return err
+		}
+		ex.BackupSchedule = &cp
+	}
 	tokens := slices.Clone(ex.APITokens)
 	for i := range tokens {
 		if err := apply(entityAPITokens+"/"+tokens[i].ID+"/token_hash", &tokens[i].TokenHash); err != nil {

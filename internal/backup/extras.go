@@ -52,6 +52,9 @@ type SnapshotExtras struct {
 	GeoIPUpdate        *storage.GeoIPUpdateConfig  `json:"geoip_update,omitempty"`
 	// ServerPosition is exported only when set manually.
 	ServerPosition *storage.ServerPositionRecord `json:"server_position,omitempty"`
+	// BackupSchedule (v2.33) is the scheduled-backup config; its
+	// passphrase is a secret. Runtime status is never exported.
+	BackupSchedule *storage.BackupScheduleConfig `json:"backup_schedule,omitempty"`
 	// APITokens are the service-account tokens; token_hash is a secret.
 	APITokens []auth.APIToken `json:"api_tokens"`
 }
@@ -63,6 +66,7 @@ const (
 	entityCrowdSec       = "crowdsec_config"
 	entityWatcher        = "crowdsec_watcher"
 	entityAPITokens      = "api_tokens"
+	entityBackupSchedule = "backup_schedule"
 	singletonIdentity    = "default"
 	serverPositionManual = "manual"
 	// placeholderWebhookURL stands in for a cleared webhook URL during
@@ -146,6 +150,11 @@ func exportExtras(ctx context.Context, store Storer) (*SnapshotExtras, error) {
 	} else if !errors.Is(err, storage.ErrNotFound) {
 		return nil, fmt.Errorf("export: get server position: %w", err)
 	}
+	bs, err := store.GetBackupSchedule(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("export: get backup schedule: %w", err)
+	}
+	ex.BackupSchedule = &bs
 
 	tokens, err := listAPITokens(ctx, store)
 	if err != nil {
@@ -204,6 +213,7 @@ type liveExtras struct {
 	crowdSec     *storage.CrowdSecConfig
 	watcher      *storage.WatcherCredentials
 	tokensByID   map[string]auth.APIToken
+	backupPass   string
 }
 
 func readLiveExtras(ctx context.Context, store Storer) (*liveExtras, error) {
@@ -232,6 +242,11 @@ func readLiveExtras(ctx context.Context, store Storer) (*liveExtras, error) {
 	for _, t := range tokens {
 		le.tokensByID[t.ID] = t
 	}
+	bs, err := store.GetBackupSchedule(ctx)
+	if err != nil {
+		return nil, err
+	}
+	le.backupPass = bs.Passphrase
 	return le, nil
 }
 
@@ -285,6 +300,17 @@ func resolveExtras(ex *SnapshotExtras, live *liveExtras, resolve resolveFunc) (*
 		}
 		cp.Password = v
 		out.WatcherCredentials = &cp
+	}
+	if ex.BackupSchedule != nil {
+		cp := *ex.BackupSchedule
+		v, err := resolve(entityBackupSchedule, singletonIdentity, "passphrase", cp.Passphrase, func() (string, bool) {
+			return live.backupPass, live.backupPass != ""
+		})
+		if err != nil {
+			return nil, err
+		}
+		cp.Passphrase = v
+		out.BackupSchedule = &cp
 	}
 
 	out.APITokens = make([]auth.APIToken, 0, len(ex.APITokens))
@@ -456,6 +482,11 @@ func validateExtras(snap *Snapshot, cleared clearedSet) error {
 			return fmt.Errorf("restore: crowdsec watcher: %w", err)
 		}
 	}
+	if bs := ex.BackupSchedule; bs != nil {
+		if err := validateBackupSchedule(*bs, ex.AlertChannels, cleared); err != nil {
+			return err
+		}
+	}
 	if len(ex.AutomationRules) > 0 {
 		// Stored as the {"rules": RuleSet} envelope the automation
 		// API writes (internal/api/automation_handlers.go putRules).
@@ -562,6 +593,32 @@ func extrasRestoreInput(ex *SnapshotExtras) (*storage.RestoreExtras, error) {
 		UpdateCheck:        ex.UpdateCheck,
 		GeoIPUpdate:        ex.GeoIPUpdate,
 		ServerPosition:     ex.ServerPosition,
+		BackupSchedule:     ex.BackupSchedule,
 		APITokens:          tokens,
 	}, nil
+}
+
+// validateBackupSchedule checks a restored schedule: shape, a
+// passphrase when enabled (unless the restore cleared it), and
+// channels that exist in the snapshot (the email one of kind email).
+func validateBackupSchedule(bs storage.BackupScheduleConfig, channels []storage.Channel, cleared clearedSet) error {
+	if err := storage.ValidateBackupSchedule(bs); err != nil {
+		return fmt.Errorf("restore: %w", err)
+	}
+	if bs.Enabled && bs.Passphrase == "" && !cleared.has(entityBackupSchedule, singletonIdentity, "passphrase") {
+		return errors.New("restore: backup_schedule is enabled without a passphrase")
+	}
+	kinds := make(map[string]string, len(channels))
+	for _, c := range channels {
+		kinds[c.ID] = c.Kind
+	}
+	if bs.EmailMode != storage.BackupEmailNever && kinds[bs.EmailChannelID] != storage.ChannelKindEmail {
+		return fmt.Errorf("restore: backup_schedule email channel %q is not an email channel of the snapshot", bs.EmailChannelID)
+	}
+	for _, id := range bs.AlertChannelIDs {
+		if _, ok := kinds[id]; !ok {
+			return fmt.Errorf("restore: backup_schedule alert channel %q is not in the snapshot", id)
+		}
+	}
+	return nil
 }

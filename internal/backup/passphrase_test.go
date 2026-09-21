@@ -59,7 +59,7 @@ func decodeFile(t *testing.T, body []byte) *Snapshot {
 
 func TestPassphrase_RoundTripOntoFreshInstance(t *testing.T) {
 	body, seeded := sealedFile(t)
-	for _, secret := range []string{extSMTPPassword, extWebhookURL, extWebhookHeader, extCrowdSecKey, extWatcherPass, seeded.token.TokenHash, "cf-token"} {
+	for _, secret := range []string{extSMTPPassword, extWebhookURL, extWebhookHeader, extCrowdSecKey, extWatcherPass, extSchedulePass, seeded.token.TokenHash, "cf-token"} {
 		if strings.Contains(string(body), secret) {
 			t.Errorf("encrypted file leaks %q", secret)
 		}

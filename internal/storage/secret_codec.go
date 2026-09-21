@@ -88,6 +88,7 @@ var secretFields = map[string][]secretField{
 	bucketOIDCConfig:           {{"client_secret", kindString}},
 	bucketForwardAuthProviders: {{"client_secret", kindString}},
 	bucketAlertingChannels:     {{"config", kindRawJSON}},
+	bucketBackupSchedule:       {{"passphrase", kindString}},
 	bucketRoutes: {
 		{"request_headers", kindSensitiveHeaders},
 		{"response_headers", kindSensitiveHeaders},

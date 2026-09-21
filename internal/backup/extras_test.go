@@ -38,6 +38,7 @@ const (
 	extWebhookHeader = "Bearer webhook-header-secret"
 	extCrowdSecKey   = "crowdsec-bouncer-key-secret"
 	extWatcherPass   = "watcher-password-secret"
+	extSchedulePass  = "schedule-passphrase-secret"
 )
 
 type seededExtras struct {
@@ -150,6 +151,13 @@ func seedExtras(t *testing.T, store *storage.Store, us *auth.UserStore) seededEx
 	if err := store.PutGeoIPUpdateConfig(ctx, storage.GeoIPUpdateConfig{Enabled: true}); err != nil {
 		t.Fatalf("geoip update: %v", err)
 	}
+	if err := store.PutBackupSchedule(ctx, storage.BackupScheduleConfig{
+		Enabled: true, Frequency: storage.BackupFrequencyWeekly, Time: "02:30", Weekday: 1, Keep: 7,
+		Dir: "/mnt/nas/arenet", Passphrase: extSchedulePass,
+		EmailMode: storage.BackupEmailWeekly, EmailChannelID: em.ID, AlertChannelIDs: []string{wh.ID},
+	}); err != nil {
+		t.Fatalf("backup schedule: %v", err)
+	}
 	if err := store.PutServerPosition(ctx, storage.ServerPositionRecord{
 		Lat: 48.85, Lon: 2.35, City: "Paris", Country: "FR", Mode: serverPositionManual, UpdatedAt: time.Now().UTC(),
 	}); err != nil {
@@ -232,6 +240,9 @@ func TestExtras_RoundTrip_IncludeSecrets_FreshTarget(t *testing.T) {
 	if sp, err := dst.GetServerPosition(ctx); err != nil || sp.City != "Paris" {
 		t.Errorf("server position: %+v %v", sp, err)
 	}
+	if bs, _ := dst.GetBackupSchedule(ctx); !bs.Enabled || bs.Passphrase != extSchedulePass || bs.Dir != "/mnt/nas/arenet" {
+		t.Errorf("backup schedule: %+v", bs)
+	}
 }
 
 func TestExtras_DefaultExportRedactsEverySecret(t *testing.T) {
@@ -243,7 +254,7 @@ func TestExtras_DefaultExportRedactsEverySecret(t *testing.T) {
 		t.Fatalf("export: %v", err)
 	}
 	body, _ := json.Marshal(snap)
-	for _, secret := range []string{extSMTPPassword, extWebhookURL, extWebhookHeader, extCrowdSecKey, extWatcherPass, seeded.token.TokenHash} {
+	for _, secret := range []string{extSMTPPassword, extWebhookURL, extWebhookHeader, extCrowdSecKey, extWatcherPass, extSchedulePass, seeded.token.TokenHash} {
 		if strings.Contains(string(body), secret) {
 			t.Errorf("REDACTION LEAK: %q in default export", secret)
 		}
