@@ -67,6 +67,8 @@ The command prints an API key — copy it.
 
 Within ~30 seconds the bouncer is active. Any inbound request whose source IP is in CrowdSec's current decision list returns **403 Forbidden** before reaching the WAF / route handlers.
 
+Since **v2.26.0**, blocked visitors get Arenet's **branded error page** instead of an empty response: a `ban` decision serves the route's **403** page, a `throttle` decision its **429** page (with a `Retry-After` header matching the decision duration). The page is the one selected for the route in its error-page settings, or the Arenet default — the same pages as the IP filter and upstream errors (see [Custom error pages](Custom-Error-Pages)).
+
 ---
 
 ## What gets blocked

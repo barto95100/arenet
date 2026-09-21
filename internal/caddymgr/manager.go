@@ -990,6 +990,13 @@ type crowdsecApp struct {
 	TickerInterval  string `json:"ticker_interval"`
 	EnableStreaming bool   `json:"enable_streaming"`
 	EnableHardFails bool   `json:"enable_hard_fails"`
+	// EnableCaddyError (bouncer v0.13.0+) makes a ban / throttle
+	// return a Caddy HandlerError instead of writing a bare
+	// status, so the server's errors chain serves the branded 403
+	// / 429 page (same path as the IP filter's `error` handler).
+	// The bouncer README asks for static error routes (DoS):
+	// Arenet's are static_response handlers (error_pages.go).
+	EnableCaddyError bool `json:"enable_caddy_error,omitempty"`
 }
 
 type httpApp struct {
@@ -2128,11 +2135,12 @@ func buildCrowdSecApp(cfg crowdsecConfig) *crowdsecApp {
 		apiURL = "http://127.0.0.1:8080/"
 	}
 	return &crowdsecApp{
-		APIURL:          apiURL,
-		APIKey:          cfg.apiKey,
-		TickerInterval:  "60s",
-		EnableStreaming: true,
-		EnableHardFails: false,
+		APIURL:           apiURL,
+		APIKey:           cfg.apiKey,
+		TickerInterval:   "60s",
+		EnableStreaming:  true,
+		EnableHardFails:  false,
+		EnableCaddyError: true,
 	}
 }
 
