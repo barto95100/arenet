@@ -59,6 +59,7 @@
 	import ContinentPicker from '$lib/components/routes/ContinentPicker.svelte';
 	import CountryExceptionsPicker from '$lib/components/routes/CountryExceptionsPicker.svelte';
 	import ASNPicker from '$lib/components/routes/ASNPicker.svelte';
+	import GeoRuleSentence from '$lib/components/routes/GeoRuleSentence.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -989,13 +990,13 @@
 	const cbCounterLabel = $derived.by(() => {
 		const n = formData.countryBlock.countryList.length;
 		if (n === 0) return '';
-		if (formData.countryBlock.mode === 'allow') {
-			return `${n} pays autorisé${n > 1 ? 's' : ''}`;
-		}
-		if (formData.countryBlock.mode === 'deny') {
-			return `${n} pays bloqué${n > 1 ? 's' : ''}`;
-		}
-		return `${n} pays`;
+		const key =
+			formData.countryBlock.mode === 'allow'
+				? 'routes.form.geoCountryCounterAllow'
+				: formData.countryBlock.mode === 'deny'
+					? 'routes.form.geoCountryCounterDeny'
+					: 'routes.form.geoCountryCounter';
+		return (language.current && t(key, { count: n })) || '';
 	});
 
 	// v2.27 — section-title summary per rule type, e.g.
@@ -4084,9 +4085,29 @@
 							</div>
 
 							{#if formData.countryBlock.mode !== 'off'}
-								<!-- v2.27 — continents block (validated mockup:
-								     continents, then countries, then exceptions). -->
+								<!-- v2.34 — live sentence: what the filter does, with
+								     the OR between the lists spelled out. -->
+								<GeoRuleSentence
+									mode={formData.countryBlock.mode}
+									continents={formData.countryBlock.continents}
+									countries={formData.countryBlock.countryList}
+									asns={formData.countryBlock.asns}
+									exceptionCountries={formData.countryBlock.exceptions.countries}
+									exceptionAsns={formData.countryBlock.exceptions.asns}
+									{countryName}
+								/>
+								<!-- v2.34 — the three lists form ONE "matches if" group
+								     (continent OR country OR network); each is optional. -->
+								<section class="geo-match-group" data-testid="geo-match-group">
+									<header class="geo-match-group__head">
+										<span class="text-sm font-medium text-primary">
+											{language.current &&
+												t(formData.countryBlock.mode === 'deny' ? 'routes.form.geoMatchTitleDeny' : 'routes.form.geoMatchTitleAllow')}
+										</span>
+										<span class="text-xs text-muted">{language.current && t('routes.form.geoMatchHelper')}</span>
+									</header>
 								<ContinentPicker bind:value={formData.countryBlock.continents} />
+								<div class="geo-or" aria-hidden="true"><span>{language.current && t('routes.form.geoSentenceOr')}</span></div>
 								<!-- Counter + autocomplete combo. The counter
 								     uses mode-meaningful copy + plural agrees
 								     with N; hidden when N=0 so the empty
@@ -4128,7 +4149,7 @@
 												<button
 													type="button"
 													class="cb-chip__remove"
-													aria-label={`Retirer ${countryName(code)}`}
+													aria-label={language.current && t('routes.form.countryBlockRemoveAria', { name: countryName(code) })}
 													onclick={() => cbRemoveCode(code)}
 												>
 													×
@@ -4200,7 +4221,7 @@
 											aria-label={language.current && t('routes.form.countryBlockAddCountryAria')}
 											onclick={cbOpenDropdown}
 										>
-											+ Ajouter
+											{language.current && t('routes.form.countryBlockAddBtn')}
 										</button>
 									</div>
 
@@ -4213,6 +4234,7 @@
 										</p>
 									{/if}
 								</div>
+								<div class="geo-or" aria-hidden="true"><span>{language.current && t('routes.form.geoSentenceOr')}</span></div>
 								<!-- v2.28 — ASN block (spec D1/D3). -->
 								<ASNPicker
 									bind:value={formData.countryBlock.asns}
@@ -4220,18 +4242,28 @@
 									label={(language.current && t('routes.form.geoASNLabel')) || ''}
 									testid="geo-asns"
 								/>
+								</section>
 								{#if formData.countryBlock.mode === 'deny'}
-									<!-- v2.27 — deny-only exceptions (spec D4). -->
-									<CountryExceptionsPicker
-										bind:value={formData.countryBlock.exceptions.countries}
-										blocked={formData.countryBlock.countryList}
-									/>
-									<ASNPicker
-										bind:value={formData.countryBlock.exceptions.asns}
-										exclude={formData.countryBlock.asns}
-										label={(language.current && t('routes.form.geoASNExceptionsLabel')) || ''}
-										testid="geo-exception-asns"
-									/>
+									<!-- v2.27 — deny-only exceptions (spec D4), in their
+									     own box: they win over every rule above. -->
+									<section class="geo-exceptions" data-testid="geo-exceptions-box">
+										<header class="geo-match-group__head">
+											<span class="text-sm font-medium text-primary">
+												{language.current && t('routes.form.geoExceptionsTitle')}
+											</span>
+											<span class="text-xs text-muted">{language.current && t('routes.form.geoExceptionsHelper')}</span>
+										</header>
+										<CountryExceptionsPicker
+											bind:value={formData.countryBlock.exceptions.countries}
+											blocked={formData.countryBlock.countryList}
+										/>
+										<ASNPicker
+											bind:value={formData.countryBlock.exceptions.asns}
+											exclude={formData.countryBlock.asns}
+											label={(language.current && t('routes.form.geoASNExceptionsLabel')) || ''}
+											testid="geo-exception-asns"
+										/>
+									</section>
 								{/if}
 								<div>
 									<label
@@ -4872,5 +4904,40 @@
 	}
 	.cb-add-btn:hover {
 		background: color-mix(in oklch, var(--accent) 22%, transparent);
+	}
+	/* v2.34 — geo filter: one "matches if" group (continent OR country
+	   OR network) and a separate exceptions box. */
+	.geo-match-group,
+	.geo-exceptions {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		padding: 10px 12px;
+		border-radius: 8px;
+		border: 1px solid var(--border-subtle);
+	}
+	.geo-exceptions {
+		border-style: dashed;
+		border-color: color-mix(in oklch, var(--status-up) 45%, var(--border-subtle));
+	}
+	.geo-match-group__head {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.geo-or {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: var(--text-muted);
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+	.geo-or::before,
+	.geo-or::after {
+		content: '';
+		flex: 1;
+		border-top: 1px dashed var(--border-subtle);
 	}
 </style>

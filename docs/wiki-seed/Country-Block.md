@@ -26,6 +26,8 @@ Within 5s the country filter is active. Requests from blocked countries get **40
 
 ## Continents and exceptions (v2.27.0)
 
+> **How the lists combine.** Continents, countries and networks (ASN) are **three optional lists joined by OR**: a request matches as soon as **its continent, OR its country, OR its network** is in one of them. Fill only the ones you need — one is enough. In deny mode, **exceptions** always pass, before anything else. Since v2.34 a sentence at the top of the section states the rule live (e.g. *"Blocked if the visitor comes from Asia or Russia or AS14061 — except Japan"*).
+
 The section is now called **Geo filtering**. Next to countries you can:
 
 - **Tick continents** (Europe, Asia, Africa, North America, South America, Oceania, Antarctica). A continent counts exactly like a country in the list: in **Deny** its visitors are blocked, in **Allow** only listed countries *and* continents get through.
