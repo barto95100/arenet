@@ -66,16 +66,27 @@ Finding: besides Cloudflare (known from the spec), the **Scaleway SDK also
 echoes the secret key** in its error. Both are covered by
 `storage.RedactDNSSecrets`.
 
-## Part B — real OVH smoke (operator, test host)
+## Part B — real OVH smoke (2026-09-21, operator's Mac, Let's Encrypt staging)
 
-Results column left blank — fill in during the live run.
+Run locally: `--dev` mode = ports 8080/8443 + Let's Encrypt **staging**;
+DNS-01 needs no inbound port. v2.25.1 (`main`) started first on a fresh data
+dir, OVH provider + wildcard apex `worldgeekwide.fr` created through its UI,
+then the v2.26.0 binary restarted on the same data dir. The v2.25.1 staging
+certs were moved out of Caddy's storage before the switch so v2.26.0 had to
+issue again. UI served by `vite dev` of the matching tree.
 
 | # | Gate | Result | Evidence |
 |---|------|--------|----------|
-| B1 | Upgrade an instance with an existing OVH provider: boot log shows `migrated DNS provider credentials to multi-type format count=1`; provider still `configured` | | |
-| B2 | Existing OVH wildcard keeps being served; `journalctl -u arenet` shows no ACME error after the reload | | |
-| B3 | ⚡ Test connection on the OVH provider (zone = your apex) → green, record count plausible | | |
-| B4 | Edit the OVH provider label only (secrets blank) → still `configured`, B3 still green | | |
-| B5 | Declare a new wildcard apex on the OVH provider → certificate issued (staging or prod) | | |
-| B6 | Export a backup **without** secrets, restore it on the same instance → OVH credentials inherited, B3 still green | | |
-| B7 | UI: add form switches fields with the type (e.g. Cloudflare shows API token + Zone token), docs link opens the provider page, FR/EN labels | | |
+| B0 | v2.25.1 baseline issues the wildcard via OVH | PASS | `certificate obtained successfully` for `*.worldgeekwide.fr` + `worldgeekwide.fr` (staging) |
+| B1 | Upgrade: boot migration converts the OVH provider; still `configured` | PASS | `migrated DNS provider credentials to multi-type format count=1`; UI shows `configured`, Details `ovh-eu` |
+| B2/B5 | v2.26.0 issues the wildcard via OVH (new emission path) | PASS | both certs re-obtained ~5 s after boot, no ACME error |
+| B3 | ⚡ Test connection on the OVH provider (zone prefilled) | PASS | green, record count shown (operator) |
+| B7 | Add form lists the 9 types; fields change with the type | PASS | operator |
+| B4 | Edit label only (secrets blank) → still `configured` | not run live | covered by `TestDNSProvider_UpdatePreservesBlankSecrets` + UI test "edit flow" |
+| B6 | Backup without secrets → restore → OVH credentials inherited | not run live | covered by `TestImport_DNSProvider_SentinelInheritsByID` |
+| B8 | Production (Let's Encrypt prod, :80/:443) on the test host | pending | at deployment |
+
+Observation (pre-existing, also on v2.25.1, not a regression): after
+declaring a wildcard, the /certs page shows the new cert only at its next
+20 s auto-refresh, with no "issuance in progress" feedback — the operator
+reloaded manually. Tracked separately (`fix/certs-issuance-feedback`).
