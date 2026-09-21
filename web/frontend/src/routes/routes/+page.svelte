@@ -543,11 +543,29 @@
 			disableTarget = null;
 			await loadRoutes();
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : String(err);
-			pushToast(msg, 'danger');
+			if (isConnectionLost(err)) {
+				disableTarget = null;
+				await reportConnectionLost();
+			} else {
+				const msg = err instanceof ApiError ? err.message : String(err);
+				pushToast(msg, 'danger');
+			}
 		} finally {
 			disablingRoute = false;
 		}
+	}
+
+	// v2.35.1 — the browser's connection can die DURING a route
+	// change when the UI is reached through Arenet over HTTP/3: Caddy
+	// closes every open HTTP/3 connection on reload. The server still
+	// finished the change (and its check / rollback), so reload the
+	// list and say so instead of showing a raw network error.
+	function isConnectionLost(err: unknown): boolean {
+		return err instanceof ApiError && err.status === 0 && err.message.startsWith('network error');
+	}
+	async function reportConnectionLost(): Promise<void> {
+		pushToast(t('routes.toasts.connectionLost'), 'info', ROUTE_CHECK_TOAST_MS);
+		await loadRoutes();
 	}
 
 	// v2.35 — post-apply check feedback: a route saved but not
@@ -573,8 +591,12 @@
 			reportRouteCheck(res.check);
 			await loadRoutes();
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : String(err);
-			pushToast(msg, 'danger');
+			if (isConnectionLost(err)) {
+				await reportConnectionLost();
+			} else {
+				const msg = err instanceof ApiError ? err.message : String(err);
+				pushToast(msg, 'danger');
+			}
 		}
 	}
 
@@ -2320,7 +2342,10 @@
 			closePanel();
 			await loadRoutes();
 		} catch (err) {
-			if (err instanceof ApiError && err.code === 'route_check_rolled_back') {
+			if (isConnectionLost(err)) {
+				closePanel();
+				await reportConnectionLost();
+			} else if (err instanceof ApiError && err.code === 'route_check_rolled_back') {
 				// v2.35 — the change broke a working route and was undone:
 				// keep the panel open with the explanation.
 				formError = t('errors.route_check_rolled_back', {
@@ -2363,8 +2388,13 @@
 			confirmTarget = null;
 			await loadRoutes();
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : String(err);
-			pushToast(msg, 'danger');
+			if (isConnectionLost(err)) {
+				confirmTarget = null;
+				await reportConnectionLost();
+			} else {
+				const msg = err instanceof ApiError ? err.message : String(err);
+				pushToast(msg, 'danger');
+			}
 		} finally {
 			deleting = false;
 		}

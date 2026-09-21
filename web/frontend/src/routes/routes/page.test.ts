@@ -3820,3 +3820,27 @@ describe('Routes page — post-apply route check', () => {
 		expect(hostInput()).toBeInTheDocument(); // panel still open
 	});
 });
+
+// v2.35.1 — connection cut by a Caddy reload (UI reached over HTTP/3).
+describe('Routes page — connection lost during a save', () => {
+	it('reloads the list and explains instead of showing a raw network error', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'app.test');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		const listCallsBefore = apiMock.listRoutes.mock.calls.length;
+		apiMock.createRoute.mockRejectedValueOnce(
+			new ApiError('network error: NetworkError when attempting to fetch resource.', 0, 'system')
+		);
+		await fireEvent.submit(document.querySelector('form')!);
+		await waitFor(() =>
+			expect(toastMock.pushToast).toHaveBeenCalledWith(
+				expect.stringContaining('The connection was cut while Caddy reloaded'),
+				'info',
+				12000
+			)
+		);
+		expect(apiMock.listRoutes.mock.calls.length).toBeGreaterThan(listCallsBefore);
+		expect(toastMock.pushToast).not.toHaveBeenCalledWith(expect.stringContaining('NetworkError'), 'danger');
+	});
+});

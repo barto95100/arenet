@@ -40,12 +40,18 @@ type fakeReloader struct {
 	mu      sync.Mutex
 	calls   int
 	nextErr error
+	// onReload, when set, runs on every reload (e.g. to simulate the
+	// client connection dying during a Caddy reload).
+	onReload func()
 }
 
 func (f *fakeReloader) ReloadFromStore(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	if f.onReload != nil {
+		f.onReload()
+	}
 	return f.nextErr
 }
 
