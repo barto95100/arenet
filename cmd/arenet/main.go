@@ -85,6 +85,7 @@ import (
 	"github.com/barto95100/arenet/internal/api/topology"
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
+	"github.com/barto95100/arenet/internal/autobackup"
 	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/caddyhc"
 	"github.com/barto95100/arenet/internal/caddymgr"
@@ -1788,6 +1789,32 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		logger.Warn("geoip auto-update: read config failed; leaving disabled", "err", gcErr)
 	} else {
 		startGeoIPLoop(gc)
+	}
+
+	// v2.33 — scheduled backups. The service re-reads the stored
+	// schedule on every tick; Apply (re)starts or stops its loop and
+	// is called on every PUT and after a restore.
+	autoBackup := autobackup.New(autobackup.Config{
+		Store:      store,
+		Users:      userStore,
+		DataDir:    cfg.DataDir,
+		Version:    version,
+		Dispatcher: alertingDispatcher,
+		Audit:      auditStore,
+		Logger:     logger,
+	})
+	applyBackupSchedule := func(bc storage.BackupScheduleConfig) {
+		autoBackup.Apply(ctx, bc)
+		if bc.Enabled {
+			logger.Info("scheduled backups enabled", "frequency", bc.Frequency, "time", bc.Time,
+				"dir", autoBackup.Dir(bc), "email", bc.EmailMode)
+		}
+	}
+	apiHandler.SetAutoBackup(autoBackup, applyBackupSchedule)
+	if bc, bcErr := store.GetBackupSchedule(ctx); bcErr != nil {
+		logger.Warn("scheduled backups: read config failed; leaving disabled", "err", bcErr)
+	} else {
+		applyBackupSchedule(bc)
 	}
 
 	// Step AL.3b — expose the source registry to the
