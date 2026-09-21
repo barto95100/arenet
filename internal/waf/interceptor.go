@@ -15,7 +15,10 @@
 // along with this program.  If not, see https://www.gnu.org/licenses/.
 
 // This file is heavily adapted from
-//   github.com/corazawaf/coraza-caddy/v2@v2.5.0/interceptor.go
+//   github.com/corazawaf/coraza-caddy/v2@v2.6.1/interceptor.go
+// (v2.26: v2.5.0 → v2.6.1 diff replayed — flush and hijack through
+// the Unwrap chain, 101 header flush, Content-Length: 0 on block;
+// pinned by interceptor_test.go)
 // (Apache-2.0). Per AGPL-3.0 §13 the Apache-2.0 work it derives
 // from is compatible (downstream-only direction), and the
 // modifications are tracked in this header. The original
@@ -32,14 +35,49 @@
 package waf
 
 import (
+	"bufio"
 	"fmt"
 	"io"
-	"log"
+	"net"
 	"net/http"
 
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/corazawaf/coraza/v3/types"
 )
+
+// hijackerTracker wraps an http.Hijacker and marks the interceptor
+// as hijacked once Hijack succeeds, so response processing is
+// skipped on a connection that no longer speaks HTTP (WebSocket).
+type hijackerTracker struct {
+	hijacker    http.Hijacker
+	interceptor *rwInterceptor
+}
+
+// Hijack delegates to the underlying hijacker.
+func (h *hijackerTracker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := h.hijacker.Hijack()
+	if err != nil {
+		return conn, rw, err
+	}
+	h.interceptor.isHijacked = true
+	return conn, rw, nil
+}
+
+// hijackerOf returns the http.Hijacker reachable from w, unwrapping
+// writers that only expose it further down the chain, as Caddy's
+// ResponseWriterWrapper does.
+func hijackerOf(w http.ResponseWriter) (http.Hijacker, bool) {
+	for {
+		if h, ok := w.(http.Hijacker); ok {
+			return h, true
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return nil, false
+		}
+		w = u.Unwrap()
+	}
+}
 
 // rwInterceptor intercepts the ResponseWriter so the WAF can
 // inspect response bytes (phase 4/5 rules). Buffers the body
@@ -53,13 +91,14 @@ type rwInterceptor struct {
 	isWriteHeaderFlush            bool
 	wroteHeader                   bool
 	wroteBufferedBodyToDownstream bool
+	isHijacked                    bool
+	allowFlushing                 bool
 }
 
 // WriteHeader records the status code to be sent right before
 // the body is written.
 func (i *rwInterceptor) WriteHeader(statusCode int) {
 	if i.wroteHeader {
-		log.Println("http: superfluous response.WriteHeader call")
 		return
 	}
 	for k, vv := range i.w.Header() {
@@ -70,11 +109,23 @@ func (i *rwInterceptor) WriteHeader(statusCode int) {
 	i.statusCode = statusCode
 	if it := i.tx.ProcessResponseHeaders(statusCode, i.proto); it != nil {
 		i.cleanHeaders()
+		i.Header().Set("Content-Length", "0")
 		i.statusCode = obtainStatusCodeFromInterruptionOrDefault(it, i.statusCode)
 		i.flushWriteHeader()
 		return
 	}
+	// A 101 Switching Protocols is followed by a hijack for a
+	// bidirectional stream: flush the headers now, there is no HTTP
+	// body to process.
+	if statusCode == http.StatusSwitchingProtocols {
+		i.flushWriteHeader()
+	}
 	i.wroteHeader = true
+	if !i.tx.IsResponseBodyAccessible() || !i.tx.IsResponseBodyProcessable() {
+		// Nothing will be buffered for inspection: flushing is safe
+		// from the first Flush() on.
+		i.allowFlushing = true
+	}
 }
 
 func (i *rwInterceptor) overrideWriteHeader(statusCode int) {
@@ -105,6 +156,7 @@ func (i *rwInterceptor) Write(b []byte) (int, error) {
 		it, n, err := i.tx.WriteResponseBody(b)
 		if it != nil {
 			i.cleanHeaders()
+			i.Header().Set("Content-Length", "0")
 			i.overrideWriteHeader(obtainStatusCodeFromInterruptionOrDefault(it, i.statusCode))
 			i.flushWriteHeader()
 			return len(b), nil
@@ -134,12 +186,13 @@ func (i *rwInterceptor) Flush() {
 	if !i.wroteHeader {
 		i.WriteHeader(http.StatusOK)
 	}
-	if i.tx.IsResponseBodyAccessible() && i.tx.IsResponseBodyProcessable() && !i.wroteBufferedBodyToDownstream {
-		return
-	}
-	i.flushWriteHeader()
-	if f, ok := i.w.(http.Flusher); ok {
-		f.Flush()
+	// While the body is buffered for inspection nothing may reach the
+	// client: a phase-4 rule can still replace status and body.
+	if i.allowFlushing && i.isWriteHeaderFlush {
+		// ResponseController, not an http.Flusher assertion: Caddy's
+		// ResponseWriterWrapper only exposes the flusher further down
+		// the Unwrap chain.
+		_ = http.NewResponseController(i.w).Flush() //nolint:bodyclose
 	}
 }
 
@@ -187,6 +240,10 @@ func wrap(w http.ResponseWriter, r *http.Request, tx types.Transaction) (
 	i := &rwInterceptor{w: w, tx: tx, proto: r.Proto, statusCode: 200}
 
 	responseProcessor := func(tx types.Transaction, r *http.Request) error {
+		// A hijacked connection (WebSocket) must not be written to.
+		if i.isHijacked {
+			return nil
+		}
 		if tx.IsInterrupted() {
 			return nil
 		}
@@ -201,6 +258,7 @@ func wrap(w http.ResponseWriter, r *http.Request, tx types.Transaction) (
 				}
 			} else if it != nil {
 				i.cleanHeaders()
+				i.Header().Set("Content-Length", "0")
 				code := obtainStatusCodeFromInterruptionOrDefault(it, i.statusCode)
 				i.overrideWriteHeader(code)
 				i.flushWriteHeader()
@@ -212,12 +270,13 @@ func wrap(w http.ResponseWriter, r *http.Request, tx types.Transaction) (
 			}
 			return i.writeBufferedResponseBodyToDownstream()
 		}
+		i.allowFlushing = true
 		i.flushWriteHeader()
 		return nil
 	}
 
 	var (
-		hijacker, isHijacker = i.w.(http.Hijacker)
+		hijacker, isHijacker = hijackerOf(i.w)
 		pusher, isPusher     = i.w.(http.Pusher)
 	)
 	switch {
@@ -230,13 +289,13 @@ func wrap(w http.ResponseWriter, r *http.Request, tx types.Transaction) (
 		return struct {
 			responseWriter
 			http.Hijacker
-		}{i, hijacker}, responseProcessor
+		}{i, &hijackerTracker{hijacker: hijacker, interceptor: i}}, responseProcessor
 	case isHijacker && isPusher:
 		return struct {
 			responseWriter
 			http.Hijacker
 			http.Pusher
-		}{i, hijacker, pusher}, responseProcessor
+		}{i, &hijackerTracker{hijacker: hijacker, interceptor: i}, pusher}, responseProcessor
 	default:
 		return struct {
 			responseWriter

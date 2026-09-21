@@ -8,7 +8,7 @@
 #   1. frontend — Node 20 Alpine builds the SvelteKit SPA into
 #      web/frontend/build/. The build is consumed by stage 2 via
 #      COPY --from=frontend.
-#   2. backend — Go 1.25 Alpine compiles the static binary with
+#   2. backend — Go 1.26 Alpine compiles the static binary with
 #      CGO_ENABLED=0 (distroless requires it). The frontend build
 #      is copied INTO the source tree before `go build` so the
 #      //go:embed directive at web/embed.go picks it up.
@@ -50,7 +50,7 @@ RUN npm run build
 # -----------------------------------------------------------------
 # Stage 2 — Go backend build (static, stripped)
 # -----------------------------------------------------------------
-FROM golang:1.25-alpine AS backend
+FROM golang:1.26-alpine AS backend
 WORKDIR /src
 
 # go.mod / go.sum first for layer caching.
