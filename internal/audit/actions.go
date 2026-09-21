@@ -166,6 +166,13 @@ const (
 	ActionConfigRestored         = "config_restored"
 	ActionConfigRestoredRejected = "config_restored_rejected"
 
+	// v2.33 — scheduled backups (2). ScheduleUpdated carries
+	// before/after JSON of the schedule (passphrase redacted);
+	// Deleted carries the removed file name. Scheduled / manual runs
+	// reuse ActionConfigExported with trigger= in the message.
+	ActionBackupScheduleUpdated = "backup_schedule_updated"
+	ActionBackupDeleted         = "backup_deleted"
+
 	// Step O.3 — managed-domain CRUD (2). The Created event
 	// also carries the count of covered routes whose ACMEChallenge
 	// was mutated to "inherited" (D8.A migration), so the audit
@@ -309,6 +316,8 @@ var allActions = []string{
 	ActionConfigExported,
 	ActionConfigRestored,
 	ActionConfigRestoredRejected,
+	ActionBackupScheduleUpdated,
+	ActionBackupDeleted,
 	ActionManagedDomainCreated,
 	ActionManagedDomainDeleted,
 	ActionAutomationDecisionPushed,

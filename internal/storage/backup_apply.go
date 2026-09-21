@@ -85,6 +85,9 @@ type RestoreExtras struct {
 	// ServerPosition nil leaves the live row untouched: only a manual
 	// position is exported, an auto-detected one belongs to the host.
 	ServerPosition *ServerPositionRecord
+	// BackupSchedule (v2.33) nil deletes the config; the runtime status
+	// row is cleared either way.
+	BackupSchedule *BackupScheduleConfig
 	// APITokens are pre-marshalled auth.APIToken rows keyed by token
 	// ID (storage does not import auth). nil leaves the api_tokens
 	// bucket untouched (the exporter had no token store).
@@ -137,7 +140,7 @@ func (e *RestoreExtras) rows() (map[string]map[string][]byte, error) {
 	}
 	for _, b := range []string{bucketManagedDomains, bucketErrorTemplates, bucketMaintenancePage,
 		bucketAlertingChannels, bucketAlertRules, bucketCrowdSecConfig, bucketAutomation,
-		bucketUpdateCheck, bucketGeoIPUpdate} {
+		bucketUpdateCheck, bucketGeoIPUpdate, bucketBackupSchedule} {
 		out[b] = map[string][]byte{}
 	}
 	for _, md := range e.ManagedDomains {
@@ -172,6 +175,7 @@ func (e *RestoreExtras) rows() (map[string]map[string][]byte, error) {
 		{bucketUpdateCheck, updateCheckKey, e.UpdateCheck, e.UpdateCheck != nil},
 		{bucketGeoIPUpdate, geoIPUpdateKey, e.GeoIPUpdate, e.GeoIPUpdate != nil},
 		{bucketServerPosition, serverPositionKey, e.ServerPosition, e.ServerPosition != nil},
+		{bucketBackupSchedule, backupScheduleKey, e.BackupSchedule, e.BackupSchedule != nil},
 	}
 	for _, sg := range singletons {
 		if sg.set {

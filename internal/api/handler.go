@@ -240,6 +240,11 @@ type Handler struct {
 	// Task 5. nil-tolerant (tests don't wire it).
 	onGeoIPConfigChange func(storage.GeoIPUpdateConfig)
 
+	// autoBackup runs scheduled backups (v2.33); nil = endpoints
+	// answer 409. onBackupScheduleChange re-applies the schedule.
+	autoBackup             AutoBackupRunner
+	onBackupScheduleChange func(storage.BackupScheduleConfig)
+
 	// geoIPUpdater (Brick 3, Task 5) powers the
 	// /api/v1/system/geoip/{update,status} endpoints. nil-tolerant:
 	// when nil (build failed at boot, or unit tests that don't wire

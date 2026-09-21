@@ -51,6 +51,7 @@ type Storer interface {
 	GetGeoIPUpdateConfig(ctx context.Context) (storage.GeoIPUpdateConfig, error)
 	GetServerPosition(ctx context.Context) (storage.ServerPositionRecord, error)
 	ListAPITokenRows(ctx context.Context) (map[string][]byte, error)
+	GetBackupSchedule(ctx context.Context) (storage.BackupScheduleConfig, error)
 }
 
 // UserStorer is the userstore subset Export consumes.

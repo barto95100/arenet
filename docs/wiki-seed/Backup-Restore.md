@@ -196,6 +196,28 @@ The pre-snapshot lives in process memory only, discarded as soon as the handler 
 
 ---
 
+## Scheduled backups (v2.33)
+
+**Settings → Backup → Scheduled backups** makes Arenet back itself up on its own:
+
+- **When** — every day or every week, at a time in the **server's time zone** (shown in the card; in Docker it is UTC unless `TZ` is set, e.g. `TZ: Europe/Paris` in `environment:`).
+- **Where** — a folder: by default `<data dir>/backups` (`/var/lib/arenet/backups`). To keep backups **off the machine**, mount a NAS share and enter its path. Arenet write-tests the folder when you save and reports a clear error otherwise; a custom folder that disappears (unmounted NAS) makes the backup fail — it never silently falls back to the local disk.
+- **Retention** — the N most recent backups are kept; older ones are deleted (only files named `arenet-backup-auto-*.json`, nothing else in the folder is touched).
+- **Encryption** — every file is a with-secrets backup **encrypted with the passphrase** you set in the card (stored by Arenet, itself encrypted with `arenet.key`). Keep the passphrase in your password manager: it is all you need to restore a file on another machine.
+- **Email** — never / every backup / once a week, through one of your **email alert channels** (Settings → Alerting). The file is attached (limit 10 MiB; beyond, the email says so and the backup stays in the folder).
+- **Failures** — always shown in the notification bell, and sent to the alert channels you check.
+- **The list** — download, restore (with the stored passphrase — a file encrypted with an older passphrase is restored from *Restore* above with that passphrase) or delete each backup; **Back up now** runs one immediately.
+
+A missed slot (Arenet stopped at that time) runs once at the next start. Enabling the schedule does not back up at once — use *Back up now*.
+
+**NAS, native install:** mount the share (e.g. `/mnt/nas/arenet-backups` in `/etc/fstab`), make it writable by the `arenet` user, enter the path in the card.
+
+**NAS, Docker:** mount the share on the host, `sudo chown 65532:65532 /mnt/nas/arenet-backups`, add `- /mnt/nas/arenet-backups:/backups` under `volumes:` in `docker-compose.yml` (commented example in the reference file), `docker compose up -d`, then enter `/backups` in the card.
+
+Not included: TLS certificates (re-issued automatically), metrics / event history, `arenet.key` (not needed to restore a passphrase-encrypted backup).
+
+---
+
 ## Automation
 
 Schedule periodic exports with a **service account** token (admin UI → **Users** page → Create service account → role=admin):

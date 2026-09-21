@@ -447,6 +447,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Get("/admin/backup", h.getBackup)
 				r.Post("/admin/backup", h.postBackup)
 				r.Post("/admin/restore", h.postRestore)
+				r.Get("/settings/backup-schedule", h.getBackupSchedule)
+				r.Put("/settings/backup-schedule", h.putBackupSchedule)
+				r.Post("/admin/backups/run", h.runBackupNow)
+				r.Get("/admin/backups", h.listBackups)
+				r.Get("/admin/backups/{name}", h.downloadBackup)
+				r.Delete("/admin/backups/{name}", h.deleteBackup)
+				r.Post("/admin/backups/{name}/restore", h.restoreScheduledBackup)
 				// Step O.3 — managed-domain CRUD writes.
 				// POST creates + runs the D8.A migration
 				// atomically. DELETE supports the AC #21

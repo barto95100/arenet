@@ -203,6 +203,15 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
+	h.restoreBytes(w, r, body, "")
+}
+
+// restoreBytes runs the whole restore pipeline on a backup file's
+// bytes: decrypt (header passphrase, else fallbackPassphrase — the
+// scheduled-backup one for files from the list), import, reload with
+// rollback, audit. Shared by POST /admin/restore and the restore of a
+// scheduled backup.
+func (h *Handler) restoreBytes(w http.ResponseWriter, r *http.Request, body []byte, fallbackPassphrase string) {
 	sum := sha256.Sum256(body)
 	sha := hex.EncodeToString(sum[:])
 
@@ -220,6 +229,9 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 	// rest of the pipeline sees a plain with-secrets snapshot.
 	if snap.IsEncrypted() {
 		passphrase, perr := restorePassphrase(r)
+		if perr == nil && passphrase == "" {
+			passphrase = fallbackPassphrase
+		}
 		if perr == nil {
 			perr = backup.OpenSnapshot(&snap, passphrase)
 		}
@@ -475,6 +487,13 @@ func (h *Handler) applyRestoredSettings(ctx context.Context) {
 			h.onGeoIPConfigChange(cfg)
 		} else {
 			h.logger.Warn("backup: read restored geoip update config failed", "err", err)
+		}
+	}
+	if h.onBackupScheduleChange != nil {
+		if cfg, err := h.store.GetBackupSchedule(ctx); err == nil {
+			h.onBackupScheduleChange(cfg)
+		} else {
+			h.logger.Warn("backup: read restored backup schedule failed", "err", err)
 		}
 	}
 }

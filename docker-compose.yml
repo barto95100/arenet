@@ -64,6 +64,11 @@ services:
     # Installation page, "Data directory setup".
     volumes:
       - arenet-data:/var/lib/arenet
+      # Scheduled backups (v2.33) to a NAS: mount the share on the
+      # host, `chown 65532:65532` it, uncomment the line below and
+      # enter /backups as the folder in Settings > Backup. Without
+      # it, backups go to /var/lib/arenet/backups (inside the volume).
+      # - /mnt/nas/arenet-backups:/backups
 
     # Step D5 — env vars override the binary's default flags.
     # Precedence: --flag > env > config-file > default.
@@ -80,6 +85,10 @@ services:
       # Log level: debug | info | warn | error. Production
       # default is info; bump to debug for troubleshooting.
       ARENET_LOG_LEVEL: info
+
+      # Time zone of scheduled backups (and of the logs). The
+      # container runs in UTC unless set.
+      # TZ: Europe/Paris
 
     # Caddy binds :80 and :443 — these are privileged ports on
     # Linux. CAP_NET_BIND_SERVICE lets the nonroot user inside
