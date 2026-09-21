@@ -45,6 +45,9 @@ Chaque connexion (edge) porte des **particules animées** dont la densité est p
 | **FQDN** | Le host primaire d'une route. Color-codé par status (vert=healthy, dim=idle, rouge=upstream down) |
 | **Alias** | Un hostname alias d'une route. Visuellement clusterisé dans un container "RouteGroup" avec son FQDN primaire |
 | **Backend Cluster / Upstream** | Le pool upstream de la route. Un node par URL d'upstream dans le pool ; clusterisé visuellement en "pool" |
+| **Section de chemin** (v2.25.0) | Quand une route a des [règles par chemin](Routes-FR#règles-par-chemin-v2210--v2230) avec un upstream spécifique, leurs backends apparaissent **dans le même cluster**, sous les backends de la route, regroupés sous un en-tête `── /v1 ──` par préfixe |
+
+**Pools par chemin.** Une route avec des upstreams par chemin garde **un seul** cluster de backends : d'abord les backends de la route (sans en-tête), puis une section par préfixe de chemin. Le hub trace une ligne vers les backends de la route (pleine, elle porte le trafic de la route) et une ligne **pointillée** vers chaque section de chemin — pointillée car le trafic n'est pas encore mesuré par chemin ; la ligne montre la branche de routage.
 
 Les nodes idle (pas de trafic dans les N dernières secondes) apparaissent en **dimmed state** — surface toujours rendue, juste visuellement reculée. Assure-toi que tes tokens de thèmes light + dark sont populés (voir [Troubleshooting](Troubleshooting) si les nodes idle apparaissent dark sur thème light — c'était un hotfix v2.8.4).
 

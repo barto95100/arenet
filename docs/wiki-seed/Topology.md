@@ -45,6 +45,9 @@ Each connection (edge) carries **animated particles** whose density is proportio
 | **FQDN** | A route's primary host. Color-coded by status (green=healthy, dim=idle, red=upstream down) |
 | **Alias** | An alias hostname of a route. Visually clustered inside a "RouteGroup" container with its primary FQDN |
 | **Backend Cluster / Upstream** | The route's upstream pool. One node per upstream URL in the pool ; clustered visually as a "pool" |
+| **Path section** (v2.25.0) | When a route has [path rules](Routes#path-rules-v2210--v2230) with a specific upstream, their backends appear **in the same cluster**, below the route's own backends, grouped under a `── /v1 ──` header per prefix |
+
+**Path pools.** A route with path-specific upstreams keeps **one** backend cluster: the route's own backends first (no header), then one section per path prefix. The hub draws one line to the route's backends (solid, carries the route's traffic) and one **dashed** line to each path section — dashed because live traffic is not yet measured per path; the line shows the routing branch.
 
 Idle nodes (no traffic in the last N seconds) appear in a **dimmed state** — surface still rendered, just visually receded. Make sure your light + dark theme tokens are populated (see [Troubleshooting](Troubleshooting) if idle nodes appear dark on light theme — that was a v2.8.4 hotfix).
 

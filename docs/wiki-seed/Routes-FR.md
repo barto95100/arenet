@@ -115,6 +115,49 @@ Les upstreams unhealthy sont skippés par le load balancer ; le dashboard `/topo
 
 ---
 
+## Filtrage IP source (v2.21.0)
+
+Réserve une route entière à certaines IP sources — ou bloque-les — dans la section **Filtrage IP source** de la route :
+
+| Mode | Effet |
+| ---- | ----- |
+| **Désactivé** | Aucun filtrage (défaut) |
+| **Liste blanche** | Seules les IP / CIDR listées passent ; les autres reçoivent **403** |
+| **Liste noire** | Les IP / CIDR listées reçoivent **403** ; les autres passent |
+
+Une IP ou un CIDR par ligne (`192.168.1.10`, `10.0.0.0/8`, IPv6 aussi). Les visiteurs bloqués reçoivent la page d'erreur **403** brandée de la route.
+
+> **Quelle IP est vérifiée ?** Celle du **pair TCP direct** — `X-Forwarded-For` est ignoré, donc un client ne peut pas contourner une liste blanche en le falsifiant. Contrepartie : si Arenet est derrière un autre proxy / CDN / load balancer, le filtre voit l'IP de ce proxy, pas celle du visiteur.
+
+---
+
+## Règles par chemin (v2.21.0 → v2.23.0)
+
+Les **règles par chemin** ajoutent une protection — et au besoin un autre backend — à un sous-chemin d'une route, sans créer de seconde route. Cas typiques : basic auth sur `/docs` (Swagger), `/metrics` accessible depuis une seule IP de supervision, `/api/v1` envoyé vers un autre backend, le reste du site inchangé.
+
+Dans le formulaire de la route → **Règles par chemin** → **Ajouter une règle** :
+
+| Champ | Signification |
+| ----- | ------------- |
+| **Préfixe de chemin** | `/docs` couvre `/docs` **et tout ce qui est en dessous** (`/docs/…`). Préfixe uniquement — pas de regex. |
+| **Authentification Basic spécifique** | Utilisateur + mot de passe exigés pour ce chemin seulement. |
+| **Filtrage IP dédié** | Liste blanche / liste noire pour ce chemin seulement (mêmes règles que le filtrage de la route ci-dessus). |
+| **Upstream spécifique (optionnel)** | Envoie ce chemin vers son propre pool de backends au lieu de celui de la route : URL + poids, répartition de charge, health-check actif, et *Ignorer la vérification TLS* pour un backend HTTPS auto-signé (v2.23.0 / v2.23.1). Laisser vide pour suivre l'upstream de la route. |
+
+Une règle doit contenir au moins : une basic auth, un filtrage IP actif ou un upstream spécifique (une règle avec seulement un upstream sert à router).
+
+**Comment les règles se combinent**
+
+- **Additif** : un chemin garde toutes les protections de la route (WAF, blocage pays, CrowdSec, auth de la route…) et **ajoute** les siennes. Une règle par chemin ne peut jamais désactiver une protection de la route.
+- **Le préfixe le plus long gagne** : avec `/api` et `/api/admin`, une requête vers `/api/admin/users` utilise la règle `/api/admin`. Aucun ordre à régler à la main.
+- **Transport par pool** : le pool d'un chemin peut être en HTTP alors que celui de la route est en HTTPS (ou l'inverse) ; tous les backends d'un même pool doivent partager le même schéma.
+
+La page **Topologie** affiche les pools par chemin comme des sections dans le cluster de backends de la route (voir [Topology](Topology-FR)).
+
+Pas encore disponible par chemin : forward-auth, WAF on/off, rate limit, blocage pays, en-têtes.
+
+---
+
 ## Route states (Active / Maintenance / Disabled)
 
 Chaque route a un **contrôle de cycle de vie à 3 états**, affiché comme un segmented control icon-only sur la liste `/routes` — play (▶, vert) = **Active**, wrench (🔧, ambre) = **Maintenance**, power (⏻, rouge) = **Disabled**. Survole un segment pour son tooltip ; clique dessus pour changer d'état.
