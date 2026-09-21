@@ -26,6 +26,8 @@ En 5s le filtre pays est actif. Les requêtes depuis les pays bloqués reçoiven
 
 ## Continents et exceptions (v2.27.0)
 
+> **Comment les listes se combinent.** Continents, pays et réseaux (ASN) sont **trois listes facultatives reliées par un OU** : une requête correspond dès que **son continent, OU son pays, OU son réseau** figure dans l'une d'elles. Remplis seulement celles dont tu as besoin — une seule suffit. En mode Deny, les **exceptions** passent toujours, avant tout le reste. Depuis la v2.34, une phrase en tête de section résume la règle en direct (ex. *« Bloqué si le visiteur vient de Asie ou Russie ou AS14061 — sauf Japon »*).
+
 La section s'appelle désormais **Filtrage géographique**. À côté des pays, tu peux :
 
 - **Cocher des continents** (Europe, Asie, Afrique, Amérique du Nord, Amérique du Sud, Océanie, Antarctique). Un continent compte exactement comme un pays de la liste : en **Deny** ses visiteurs sont bloqués, en **Allow** seuls les pays *et* continents listés passent.

@@ -1567,7 +1567,7 @@ describe('Routes page — W.7 country-block polish', () => {
 		expect(chips[0].textContent).toContain('France');
 	});
 
-	it('counter shows "{N} pays bloqué(s)" in deny mode + agrees with N', async () => {
+	it('counter shows "{N} country(ies) blocked" in deny mode + agrees with N', async () => {
 		render(Page);
 		await openCreateForm();
 		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
@@ -1576,17 +1576,17 @@ describe('Routes page — W.7 country-block polish', () => {
 		await userEvent.type(input, 'FR{enter}');
 		await tick();
 		expect(screen.getByTestId('country-block-counter')).toHaveTextContent(
-			'1 pays bloqué'
+			'1 country(ies) blocked'
 		);
 		// Second country → plural.
 		await userEvent.type(input, 'DE{enter}');
 		await tick();
 		expect(screen.getByTestId('country-block-counter')).toHaveTextContent(
-			'2 pays bloqués'
+			'2 country(ies) blocked'
 		);
 	});
 
-	it('counter shows "{N} pays autorisé(s)" in allow mode', async () => {
+	it('counter shows "{N} country(ies) allowed" in allow mode', async () => {
 		render(Page);
 		await openCreateForm();
 		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
@@ -1595,7 +1595,7 @@ describe('Routes page — W.7 country-block polish', () => {
 		await userEvent.type(input, 'FR{enter}');
 		await tick();
 		expect(screen.getByTestId('country-block-counter')).toHaveTextContent(
-			'1 pays autorisé'
+			'1 country(ies) allowed'
 		);
 	});
 

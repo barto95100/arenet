@@ -9,23 +9,25 @@ import { flushSync } from 'svelte';
 import ContinentPicker from './ContinentPicker.svelte';
 
 describe('ContinentPicker', () => {
-	it('renders the 7 continents in a labelled fieldset', () => {
+	const pill = (code: string) => screen.getByTestId(`geo-continent-${code}`);
+	const pressed = (code: string) => pill(code).getAttribute('aria-pressed') === 'true';
+
+	it('renders the 7 continents as toggle pills in a labelled fieldset', () => {
 		render(ContinentPicker, { props: { value: [] } });
 		expect(screen.getByRole('group', { name: 'Continents' })).toBeInTheDocument();
-		expect(screen.getAllByRole('checkbox')).toHaveLength(7);
-		expect(screen.getByLabelText('South America')).toBeInTheDocument();
+		expect(screen.getAllByRole('button')).toHaveLength(7);
+		expect(screen.getByRole('button', { name: 'South America' })).toBeInTheDocument();
 	});
 
 	it('reflects the initial value and toggles codes', async () => {
 		render(ContinentPicker, { props: { value: ['AS'] } });
-		const box = (code: string) => screen.getByTestId(`geo-continent-${code}`) as HTMLInputElement;
-		expect(box('AS').checked).toBe(true);
-		expect(box('EU').checked).toBe(false);
-		await userEvent.click(box('EU'));
+		expect(pressed('AS')).toBe(true);
+		expect(pressed('EU')).toBe(false);
+		await userEvent.click(pill('EU'));
 		flushSync();
-		expect(box('EU').checked).toBe(true);
-		await userEvent.click(box('AS'));
+		expect(pressed('EU')).toBe(true);
+		await userEvent.click(pill('AS'));
 		flushSync();
-		expect(box('AS').checked).toBe(false);
+		expect(pressed('AS')).toBe(false);
 	});
 });
