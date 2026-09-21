@@ -58,7 +58,7 @@ sudo mv /tmp/arenet /usr/local/bin/arenet
 
 ### Option B — build from source
 
-Requires Go 1.25+ and Node 20+ on the build host.
+Requires Go 1.26+ and Node 20+ on the build host.
 
 ```bash
 git clone https://github.com/barto95100/arenet.git

@@ -1447,6 +1447,8 @@
 		"dnsUnconfiguredTitle": "DNS provider non configuré.",
 		"dnsUnconfiguredHelper": "L'émission wildcard est désactivée — les routes couvertes serviront des certificats auto-signés depuis le CA interne de Caddy jusqu'à configuration du DNS provider dans",
 		"policiesIncludesApex": "inclut l'apex",
+		"policiesIssuing": "Émission en cours…",
+		"policiesIssuingHint": "Le certificat est en cours de demande (DNS-01). La page se met à jour toute seule.",
 		"policiesDeleteAriaLabel": "Supprimer le domaine managé {apex}",
 		"policiesDeleteButton": "Supprimer",
 		"policiesFoot": "Déclarer un apex marque toutes les routes existantes sous *.<apex> comme couvertes par le wildcard. Le sélecteur ACME par route est masqué dans l'éditeur de routes, et le certificat est provisionné une seule fois pour tous les sous-domaines.",

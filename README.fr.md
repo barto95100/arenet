@@ -10,7 +10,7 @@
 
 [![Release](https://img.shields.io/github/v/release/barto95100/arenet?style=flat-square&color=2563eb)](https://github.com/barto95100/arenet/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg?style=flat-square)](LICENSE)
-[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?style=flat-square&logo=go)](https://go.dev)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?style=flat-square&logo=go)](https://go.dev)
 [![Caddy](https://img.shields.io/badge/caddy-v2.11-1f88c0?style=flat-square)](https://caddyserver.com)
 [![Coraza](https://img.shields.io/badge/coraza-v3.7%20%2B%20CRS%20v4-d62828?style=flat-square)](https://coraza.io)
 
@@ -174,7 +174,7 @@ Caddy est embarqué en tant que **library**, pas exécuté en sidecar — un pro
 - **[caddy-ratelimit](https://github.com/mholt/caddy-ratelimit)** — throttling par route
 - **[BoltDB](https://github.com/etcd-io/bbolt)** — stockage config + audit
 - **[SvelteKit 5](https://kit.svelte.dev)** + **[Tailwind CSS](https://tailwindcss.com)** + **[D3.js](https://d3js.org)** — frontend
-- **Go 1.25+** — toolchain single-binary
+- **Go 1.26+** — toolchain single-binary
 
 ## 🤝 Contribuer
 

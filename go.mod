@@ -1,6 +1,6 @@
 module github.com/barto95100/arenet
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -15,25 +15,24 @@ require (
 	github.com/caddy-dns/route53 v1.6.2
 	github.com/caddy-dns/scaleway v0.2.2
 	github.com/caddyserver/caddy/v2 v2.11.4
-	github.com/caddyserver/certmagic v0.25.3
-	github.com/corazawaf/coraza-caddy/v2 v2.5.0
+	github.com/caddyserver/certmagic v0.25.4
 	github.com/corazawaf/coraza-coreruleset/v4 v4.25.0
 	github.com/corazawaf/coraza/v3 v3.7.0
-	github.com/coreos/go-oidc/v3 v3.17.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/crowdsecurity/crowdsec v1.6.3
 	github.com/crowdsecurity/go-cs-bouncer v0.0.15
-	github.com/go-chi/chi/v5 v5.2.5
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/hslatman/caddy-crowdsec-bouncer v0.12.1
+	github.com/hslatman/caddy-crowdsec-bouncer v0.13.0
 	github.com/jcchavezs/mergefs v0.1.1
 	github.com/libdns/libdns v1.1.1
 	github.com/maxmind/geoipupdate/v8 v8.0.0
 	github.com/mholt/caddy-ratelimit v0.1.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/oschwald/geoip2-golang v1.9.0
-	go.etcd.io/bbolt v1.4.3
+	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0

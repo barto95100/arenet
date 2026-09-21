@@ -36,18 +36,10 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
-	// Step I.7 hotfix: side-effect import of coraza-caddy is needed so
-	// caddy.GetModule("http.handlers.waf") in TestBuildConfigJSON_
-	// HandlersAllResolvable returns a hit. cmd/arenet/main.go has the
-	// same blank import at the binary level; the test binary needs its
-	// own copy because Go's test binary doesn't link cmd/arenet.
-	_ "github.com/corazawaf/coraza-caddy/v2"
-
 	// Step J.4: side-effect import of caddy-dns/ovh so the test
 	// binary can Provision a DNS-01 policy in
 	// TestBuildConfigJSON_LoadsCleanly_DNS01 (mirrors the
-	// coraza-caddy import above and the production binary's blank
-	// import in cmd/arenet/main.go). Without this, caddy.Validate
+	// production binary's blank import in cmd/arenet/main.go). Without this, caddy.Validate
 	// on a payload that references `dns.providers.ovh` fails with
 	// `module not registered: dns.providers.ovh` even when the
 	// production binary is correctly wired.
