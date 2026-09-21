@@ -424,7 +424,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 
 	// Soft-auth middleware guarantees these are set if we got here.
 	if err := h.sessions.Delete(r.Context(), sessionID); err != nil {
-		h.logger.Warn("logout: session delete failed (non-fatal)", "err", err.Error(), "session_id", sessionID)
+		h.logger.Warn("logout: session delete failed (non-fatal)", "err", err.Error(), "session", sessionAuditID(sessionID))
 	}
 	clearSessionCookieOnResponse(w, h.devMode)
 	// Clear the theme cookie too — the "explicit logout" lifecycle path
@@ -437,7 +437,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		ActorUserID:           userID,
 		ActorUsernameSnapshot: auth.UsernameFromContext(r.Context()),
 		TargetType:            "session",
-		TargetID:              sessionID,
+		TargetID:              sessionAuditID(sessionID),
 		Message:               "manual",
 	})
 
@@ -609,7 +609,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 
 	// Success: Touch the session to lift the idle state.
 	if err := h.sessions.Touch(ctx, sessionID); err != nil {
-		h.logger.Warn("unlock: session touch failed (non-fatal)", "err", err.Error(), "session_id", sessionID)
+		h.logger.Warn("unlock: session touch failed (non-fatal)", "err", err.Error(), "session", sessionAuditID(sessionID))
 	}
 
 	// Reset rate-limit counter for this IP (spec §5.3).
@@ -618,7 +618,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 	h.appendAudit(r, audit.Event{
 		Action:     audit.ActionUnlockSuccess,
 		TargetType: "session",
-		TargetID:   sessionID,
+		TargetID:   sessionAuditID(sessionID),
 	})
 
 	writeJSON(w, http.StatusOK, unlockResponse{Unlocked: true})
@@ -653,6 +653,16 @@ type listSessionsResponse struct {
 	Sessions []sessionResponse `json:"sessions"`
 }
 
+// sessionAuditID is the handle logged and audited for a session, ""
+// when there is none (Bearer-authenticated request). The cookie value
+// itself is never logged (v2.30).
+func sessionAuditID(id string) string {
+	if id == "" {
+		return ""
+	}
+	return auth.SessionHandle(id)
+}
+
 // listSessions handles GET /api/v1/auth/sessions (spec §4.8). Group: hard-auth.
 //
 // Returns every non-expired session owned by the current user.
@@ -661,7 +671,11 @@ type listSessionsResponse struct {
 func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := auth.UserIDFromContext(ctx)
-	currentSessionID := auth.SessionIDFromContext(ctx)
+	// Sessions are listed by handle (never the cookie value, v2.30).
+	currentHandle := ""
+	if id := auth.SessionIDFromContext(ctx); id != "" {
+		currentHandle = auth.SessionHandle(id)
+	}
 
 	all, err := h.sessions.ListForUser(ctx, userID)
 	if err != nil {
@@ -685,7 +699,7 @@ func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
 			IP:           s.IP,
 			UserAgent:    s.UserAgent,
 			RememberMe:   s.RememberMe,
-			IsCurrent:    s.ID == currentSessionID,
+			IsCurrent:    s.ID == currentHandle,
 		})
 	}
 
@@ -709,7 +723,8 @@ func (h *Handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	currentUserID := auth.UserIDFromContext(ctx)
 
-	sess, err := h.sessions.Get(ctx, id)
+	// id is the session handle the list endpoint returned.
+	sess, err := h.sessions.GetByHandle(ctx, id)
 	if err != nil {
 		if errors.Is(err, auth.ErrSessionNotFound) || errors.Is(err, auth.ErrSessionExpired) {
 			writeError(w, http.StatusNotFound, "session not found")
@@ -725,7 +740,7 @@ func (h *Handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.sessions.Delete(ctx, id); err != nil {
+	if err := h.sessions.DeleteByHandle(ctx, id); err != nil {
 		h.logger.Error("deleteSession: delete failed", "err", err)
 		writeError(w, http.StatusServiceUnavailable, "authentication service temporarily unavailable")
 		return
