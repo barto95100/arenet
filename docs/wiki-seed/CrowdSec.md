@@ -1,5 +1,7 @@
 # CrowdSec
 
+**🌐 English** · [Français](CrowdSec-FR)
+
 [CrowdSec](https://www.crowdsec.net) is a community-powered IP reputation service : a collaborative IDS that lets your hosts share threat intelligence. Arenet ships a native [CrowdSec bouncer](https://github.com/hslatman/caddy-crowdsec-bouncer) that blocks requests from IPs the CrowdSec community has flagged.
 
 **The CrowdSec agent itself runs separately** (typically as a Docker container or systemd service on the same host). Arenet only embeds the *bouncer* — the component that queries the agent's Local API (LAPI) and enforces decisions.
