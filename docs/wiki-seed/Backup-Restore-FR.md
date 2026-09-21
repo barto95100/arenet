@@ -196,6 +196,28 @@ Le pre-snapshot vit en mémoire process uniquement, discarded dès que le handle
 
 ---
 
+## Sauvegardes automatiques (v2.33)
+
+**Réglages → Backup → Sauvegardes automatiques** fait sauvegarder Arenet tout seul :
+
+- **Quand** — tous les jours ou toutes les semaines, à une heure dans le **fuseau du serveur** (affiché dans la carte ; en Docker c'est UTC sauf si `TZ` est défini, ex. `TZ: Europe/Paris` dans `environment:`).
+- **Où** — un dossier : par défaut `<dossier de données>/backups` (`/var/lib/arenet/backups`). Pour garder les sauvegardes **hors de la machine**, monte un partage NAS et indique son chemin. Arenet teste l'écriture dans le dossier à l'enregistrement et affiche une erreur claire sinon ; un dossier personnalisé qui disparaît (NAS démonté) fait échouer la sauvegarde — jamais de repli silencieux sur le disque local.
+- **Rétention** — les N sauvegardes les plus récentes sont gardées, les plus anciennes supprimées (uniquement les fichiers `arenet-backup-auto-*.json`, rien d'autre dans le dossier n'est touché).
+- **Chiffrement** — chaque fichier est un backup avec secrets **chiffré avec la phrase secrète** définie dans la carte (gardée par Arenet, elle-même chiffrée avec `arenet.key`). Garde la phrase dans ton gestionnaire de mots de passe : c'est tout ce qu'il faut pour restaurer un fichier sur une autre machine.
+- **Email** — jamais / à chaque sauvegarde / une fois par semaine, via un de tes **canaux d'alerte email** (Réglages → Alertes). Le fichier est en pièce jointe (limite 10 Mio ; au-delà, l'email le signale et la sauvegarde reste dans le dossier).
+- **Échecs** — toujours visibles dans la cloche de notifications, et envoyés aux canaux d'alerte cochés.
+- **La liste** — télécharger, restaurer (avec la phrase gardée — un fichier chiffré avec une ancienne phrase se restaure depuis *Restaurer* ci-dessus avec cette phrase) ou supprimer chaque sauvegarde ; **Sauvegarder maintenant** en lance une tout de suite.
+
+Un créneau manqué (Arenet arrêté à ce moment-là) est rattrapé une fois au démarrage suivant. Activer la planification ne sauvegarde pas immédiatement — utilise *Sauvegarder maintenant*.
+
+**NAS, installation native :** monte le partage (ex. `/mnt/nas/arenet-backups` dans `/etc/fstab`), rends-le inscriptible par l'utilisateur `arenet`, indique le chemin dans la carte.
+
+**NAS, Docker :** monte le partage sur l'hôte, `sudo chown 65532:65532 /mnt/nas/arenet-backups`, ajoute `- /mnt/nas/arenet-backups:/backups` sous `volumes:` dans `docker-compose.yml` (exemple commenté dans le fichier de référence), `docker compose up -d`, puis indique `/backups` dans la carte.
+
+Non inclus : certificats TLS (réémis automatiquement), historique des métriques / événements, `arenet.key` (inutile pour restaurer un backup chiffré par phrase).
+
+---
+
 ## Automation
 
 Programme des exports périodiques avec le token d'un **compte de service** (page [Users] → Create service account → role=admin) :

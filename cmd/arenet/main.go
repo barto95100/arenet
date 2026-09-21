@@ -33,6 +33,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	// v2.33: embedded time-zone database so TZ=Europe/Paris works in
+	// the distroless image whatever it ships (scheduled backups run in
+	// server local time).
+	_ "time/tzdata"
 
 	// The WAF is Arenet's own Caddy module (internal/waf,
 	// http.handlers.arenet_waf, Step M.1), built on coraza/v3 +

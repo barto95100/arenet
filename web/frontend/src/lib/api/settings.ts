@@ -234,6 +234,18 @@ export const settingsApi = {
 	// An encrypted backup is restored with the passphrase in the
 	// X-Arenet-Backup-Passphrase header, base64 of its UTF-8 bytes
 	// (fetch rejects non-Latin-1 header values).
+	// v2.33 — scheduled backups.
+	getBackupSchedule: (): Promise<BackupSchedule> =>
+		request<BackupSchedule>('GET', '/settings/backup-schedule'),
+	putBackupSchedule: (r: BackupScheduleRequest): Promise<BackupSchedule> =>
+		request<BackupSchedule>('PUT', '/settings/backup-schedule', r),
+	runBackupNow: (): Promise<BackupRunResult> => request<BackupRunResult>('POST', '/admin/backups/run', {}),
+	listBackups: (): Promise<BackupFileList> => request<BackupFileList>('GET', '/admin/backups'),
+	backupDownloadURL: (name: string): string => `/api/v1/admin/backups/${encodeURIComponent(name)}`,
+	deleteBackup: (name: string): Promise<void> =>
+		request<void>('DELETE', `/admin/backups/${encodeURIComponent(name)}`),
+	restoreBackupFile: (name: string): Promise<RestoreReport> =>
+		request<RestoreReport>('POST', `/admin/backups/${encodeURIComponent(name)}/restore`, {}),
 	exportBackupURL: (): string => '/api/v1/admin/backup',
 	exportEncryptedBackup: (passphrase: string): Promise<Blob> =>
 		request<Blob>('POST', '/admin/backup', { passphrase }, { asBlob: true }),
@@ -252,6 +264,69 @@ export const settingsApi = {
 		return request<RestoreReport>('POST', url, body, { headers });
 	}
 };
+
+/** Scheduled backups (v2.33) — GET/PUT /settings/backup-schedule. */
+export type BackupFrequency = 'daily' | 'weekly';
+export type BackupEmailMode = 'never' | 'each' | 'weekly';
+
+export interface BackupScheduleStatus {
+	lastRunAt?: string;
+	lastStatus?: 'ok' | 'error';
+	lastError?: string;
+	lastFile?: string;
+	lastEmailAt?: string;
+	lastEmailError?: string;
+}
+
+export interface BackupSchedule {
+	enabled: boolean;
+	frequency: BackupFrequency;
+	time: string;
+	weekday: number;
+	keep: number;
+	dir: string;
+	effectiveDir: string;
+	passphraseSet: boolean;
+	emailMode: BackupEmailMode;
+	emailChannelId: string;
+	alertChannelIds: string[];
+	timeZone: string;
+	nextRunAt?: string;
+	status: BackupScheduleStatus;
+}
+
+/** PUT body; an empty passphrase keeps the stored one. */
+export interface BackupScheduleRequest {
+	enabled: boolean;
+	frequency: BackupFrequency;
+	time: string;
+	weekday: number;
+	keep: number;
+	dir: string;
+	passphrase: string;
+	emailMode: BackupEmailMode;
+	emailChannelId: string;
+	alertChannelIds: string[];
+}
+
+export interface BackupRunResult {
+	file?: string;
+	size: number;
+	pruned: number;
+	emailed: boolean;
+	emailError?: string;
+}
+
+export interface BackupFile {
+	name: string;
+	size: number;
+	modTime: string;
+}
+
+export interface BackupFileList {
+	dir: string;
+	files: BackupFile[];
+}
 
 /** Minimum backup passphrase length (mirrors backup.MinPassphraseLen). */
 export const MIN_BACKUP_PASSPHRASE_LEN = 12;

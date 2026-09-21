@@ -59,6 +59,7 @@
 	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
 	import CrowdSecSettingsSection from '$lib/components/CrowdSecSettingsSection.svelte';
 	import BackupSection from '$lib/components/BackupSection.svelte';
+	import ScheduledBackupsSection from '$lib/components/ScheduledBackupsSection.svelte';
 	import ServerPositionSection from '$lib/components/ServerPositionSection.svelte';
 
 	// v2.9.12 i18n Phase 2 — theme toggle options are derived from
@@ -1274,6 +1275,9 @@
 
 	<!-- ROW 2.9 — Backup & restore (Step K.3 §5.3). -->
 	<BackupSection />
+
+	<!-- ROW 2.91 — Scheduled backups (v2.33): folder / NAS / email. -->
+	<ScheduledBackupsSection />
 
 	<!-- ROW 2.95 — Server geographic position (Step V.7 §5.1-§5.3).
 	     Operator-facing UI for the V.4 server-position endpoints:
