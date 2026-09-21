@@ -66,7 +66,7 @@ Guide complet : [docs/install/systemd-native.md](docs/install/systemd-native.md)
 
 ### Routing & TLS
 - 🔀 **Reverse proxy par route** avec load balancing pondéré, hostnames alias, health checks actifs avancés (status code + body regex)
-- 🔒 **Auto-HTTPS** via Caddy ACME (Let's Encrypt + ZeroSSL fallback) — HTTP-01, DNS-01 (provider OVH natif), wildcard via apex managed-domain
+- 🔒 **Auto-HTTPS** via Caddy ACME (Let's Encrypt + ZeroSSL fallback) — HTTP-01, DNS-01 avec 9 providers natifs (OVHcloud, Cloudflare, DigitalOcean, Gandi, Hetzner, Infomaniak, Porkbun, Route 53, Scaleway) + test de connexion, wildcard via apex managed-domain
 - 🌐 **HTTP/3 (QUIC)** actif par défaut sur chaque route HTTPS — zéro config requise
 - 🔄 **Préservation du header Host** par défaut — fonctionne out-of-the-box avec les IdP OIDC, SaaS multi-tenant et tout backend qui construit des URLs depuis `Host:`
 - 🩹 **Hot-reload** de chaque changement de route sans dropper les connexions en cours
