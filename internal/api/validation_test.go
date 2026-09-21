@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -523,5 +524,23 @@ func TestMaterialiseCountryBlock_ContinentsAndExceptions(t *testing.T) {
 	resp := toCountryBlockResp(plain)
 	if resp.Continents == nil || resp.Exceptions.Countries == nil {
 		t.Errorf("response lists must never be null: %+v", resp)
+	}
+}
+
+// v2.28 — ASN lists pass through; empty ones stay nil.
+func TestMaterialiseCountryBlock_ASNs(t *testing.T) {
+	cfg, err := materialiseCountryBlock(countryBlockReq{
+		Mode: "deny", ASNs: []uint32{14061},
+		Exceptions: &countryBlockExceptions{ASNs: []uint32{16276}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ASNs) != 1 || cfg.Exceptions == nil || cfg.Exceptions.ASNs[0] != 16276 || cfg.Exceptions.Countries != nil {
+		t.Errorf("materialised = %+v", cfg)
+	}
+	resp := toCountryBlockResp(countryblock.Config{Mode: countryblock.ModeOff})
+	if resp.ASNs == nil || resp.Exceptions.ASNs == nil {
+		t.Errorf("response ASN lists must never be null: %+v", resp)
 	}
 }

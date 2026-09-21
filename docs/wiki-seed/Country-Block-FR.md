@@ -41,6 +41,17 @@ Règles : les exceptions n'existent qu'en mode Deny (l'API les refuse sinon), un
 
 ---
 
+## Réseaux (ASN) (v2.28.0)
+
+Un **ASN** (numéro de système autonome) identifie un opérateur réseau : FAI, cloud ou hébergeur (AS14061 DigitalOcean, AS16276 OVH, AS15169 Google…). Bloquer par ASN couvre tout l'espace d'adresses d'un fournisseur en une règle — pratique contre les scanners et bots qui tournent sur des VPS cloud.
+
+- Le bloc **ASN** de la section Filtrage géographique cherche par **nom ou numéro** (`ovh`, `digital`, `16276`, `AS16276`). Les ASN comptent comme les pays et continents, dans les deux modes.
+- En mode **Deny**, les **Réseaux en exception (ASN)** sont toujours autorisés — ex. *bloquer l'Europe sauf l'AS29518*, ou *bloquer DigitalOcean sauf l'AS de ton propre hébergeur*.
+- Les données ASN viennent d'une seconde base MaxMind, **GeoLite2-ASN** (gratuite, même compte et même clé de licence). Avec *Réglages → GeoIP* configuré, Arenet la télécharge et la met à jour avec la base City ; en installation manuelle, dépose `GeoLite2-ASN.mmdb` à côté du fichier City (ou définis `ARENET_GEOIP_ASN_MMDB`).
+- **Sans la base ASN**, les autres règles continuent de fonctionner ; les règles ASN ne correspondent simplement à rien, et une liste Allow qui s'appuie sur des ASN laisse passer le trafic plutôt que de bloquer tout le monde (fail-open, comme une base GeoIP absente). Le formulaire affiche un avertissement quand la base manque.
+
+---
+
 ## Quand utiliser Allow vs Deny
 
 | Stratégie | Idéal pour |

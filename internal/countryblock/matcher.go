@@ -18,6 +18,7 @@ package countryblock
 
 import (
 	"net"
+	"slices"
 	"sync"
 )
 
@@ -71,6 +72,9 @@ type GeoInfo struct {
 	// Continent is the MaxMind continent code (AF, AN, AS, EU, NA,
 	// OC, SA).
 	Continent string
+	// ASN is the autonomous system number (v2.28); 0 when the ASN
+	// database is missing or the IP is not in it.
+	ASN uint32
 }
 
 // Evaluate is the pure-Go gate evaluation. No HTTP, no Caddy, no
@@ -159,7 +163,7 @@ func EvaluateGeo(
 	// caller is expected to log a Warn once-per-Provision when
 	// it observes this branch (rate-limited to avoid log
 	// flooding under sustained MMDB outage).
-	if country == "" && geo.Continent == "" {
+	if country == "" && geo.Continent == "" && geo.ASN == 0 {
 		return Decision{
 			Accepted: true,
 			Country:  "",
@@ -168,14 +172,23 @@ func EvaluateGeo(
 	}
 
 	// Layer 4b — ModeDeny exceptions always pass.
-	if config.Mode == ModeDeny && config.Exceptions != nil && country != "" &&
-		containsCountry(config.Exceptions.Countries, country) {
+	if config.Mode == ModeDeny && config.Exceptions != nil &&
+		((country != "" && containsCountry(config.Exceptions.Countries, country)) ||
+			(geo.ASN != 0 && slices.Contains(config.Exceptions.ASNs, geo.ASN))) {
 		return Decision{Accepted: true, Country: country, Reason: ReasonException}
 	}
 
 	// Layer 5/6 — allow/deny match on any configured list.
 	match := (country != "" && containsCountry(config.CountryList, country)) ||
-		(geo.Continent != "" && containsCountry(config.Continents, geo.Continent))
+		(geo.Continent != "" && containsCountry(config.Continents, geo.Continent)) ||
+		(geo.ASN != 0 && slices.Contains(config.ASNs, geo.ASN))
+
+	// Layer 4c — an allow gate with ASN rules must not block traffic
+	// just because the ASN is unknown (ASN database missing, or IP
+	// not in it): the ASN rules fail open, like a missing GeoIP DB.
+	if config.Mode == ModeAllow && !match && len(config.ASNs) > 0 && geo.ASN == 0 {
+		return Decision{Accepted: true, Country: country, Reason: ReasonLookupFailed}
+	}
 	switch config.Mode {
 	case ModeAllow:
 		if match {

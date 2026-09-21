@@ -125,6 +125,12 @@ vi.mock('$lib/api/settings', () => ({
 // external-cert list to populate the "manual" cert-source picker.
 // Default (beforeEach) resolves an empty list; manual-cert tests
 // rebind externalCertsMock.list per-scenario.
+// v2.28 — ASNPicker (geo filtering) searches through $lib/api/security.
+const asnMock = vi.hoisted(() => ({
+	searchASN: vi.fn(),
+	namesASN: vi.fn()
+}));
+vi.mock('$lib/api/security', () => asnMock);
 vi.mock('$lib/api/external-certs', () => ({
 	externalCertsApi: {
 		list: (...args: unknown[]) => externalCertsMock.list(...args)
@@ -184,7 +190,7 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// {mode:"off", countryList:[], statusCode:0}; tests
 		// that need the gate active override via the partial
 		// Route overrides.
-		countryBlock: { mode: 'off', countryList: [], continents: [], exceptions: { countries: [] }, statusCode: 0 },
+		countryBlock: { mode: 'off', countryList: [], continents: [], asns: [], exceptions: { countries: [], asns: [] }, statusCode: 0 },
 		// Step #R-PROXMOX-HTTPS-LOOP — strict default. Tests
 		// exercising the disclosure / toggle override via the
 		// partial Route overrides.
@@ -3709,5 +3715,50 @@ describe('Routes page — v2.27 geo filtering (continents + exceptions)', () => 
 		expect(payload.countryBlock.mode).toBe('allow');
 		expect(payload.countryBlock.continents).toEqual(['EU']);
 		expect(payload.countryBlock.exceptions.countries).toEqual([]);
+	});
+});
+
+// v2.28 — ASN rules and ASN exceptions reach the POST payload.
+describe('Routes page — v2.28 geo filtering (ASN)', () => {
+	function firstURL(): HTMLInputElement {
+		return upstreamURLInputs()[0];
+	}
+
+	it('deny: ASN list + ASN exception are shipped; summary counts them', async () => {
+		asnMock.namesASN.mockResolvedValue({ loaded: true, indexReady: true, results: [] });
+		asnMock.searchASN.mockImplementation(async (q: string) => ({
+			loaded: true,
+			indexReady: true,
+			results: q.includes('digital')
+				? [{ asn: 14061, name: 'DigitalOcean' }]
+				: [{ asn: 16276, name: 'OVH SAS' }]
+		}));
+		apiMock.createRoute.mockResolvedValue(makeRoute({ host: 'asn.example.com' }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'asn.example.com');
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'http://127.0.0.1:8080');
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+
+		await userEvent.type(screen.getByTestId('geo-asns-input'), 'digital');
+		await waitFor(() => expect(screen.getByTestId('geo-asns-suggestion')).toBeInTheDocument());
+		await userEvent.keyboard('{Enter}');
+		await userEvent.type(screen.getByTestId('geo-exception-asns-input'), 'ovh');
+		await waitFor(() => expect(screen.getByTestId('geo-exception-asns-suggestion')).toBeInTheDocument());
+		await userEvent.keyboard('{Enter}');
+		await tick();
+		const summary = screen.getByTestId('country-block-summary').textContent ?? '';
+		expect(summary).toContain('1 ASN');
+		expect(summary).toContain('1 exception(s)');
+
+		await userEvent.click(screen.getByRole('button', { name: /^Create$/i }));
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0] as {
+			countryBlock: { asns: number[]; exceptions: { asns: number[] } };
+		};
+		expect(payload.countryBlock.asns).toEqual([14061]);
+		expect(payload.countryBlock.exceptions.asns).toEqual([16276]);
 	});
 });

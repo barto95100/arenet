@@ -66,3 +66,21 @@ func TestCountryBlockFingerprint_StableAndExtended(t *testing.T) {
 		t.Error("fingerprint mutated the input slice")
 	}
 }
+
+func TestBuildCountryBlockHandler_EmitsASNs(t *testing.T) {
+	h := buildCountryBlockHandler("r1", "", countryblock.Config{
+		Mode: countryblock.ModeDeny, ASNs: []uint32{14061},
+		Exceptions: &countryblock.Exceptions{ASNs: []uint32{16276}},
+	})
+	got, _ := json.Marshal(h)
+	for _, want := range []string{`"asns":[14061]`, `"exceptions":{"asns":[16276]}`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	fp := countryBlockFingerprint(countryblock.Config{Mode: countryblock.ModeDeny, ASNs: []uint32{9, 3},
+		Exceptions: &countryblock.Exceptions{ASNs: []uint32{5}}})
+	if fp != "deny||0|asns=3,9|except-asns=5" {
+		t.Errorf("fingerprint = %q", fp)
+	}
+}

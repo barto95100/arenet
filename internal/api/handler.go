@@ -247,6 +247,8 @@ type Handler struct {
 	// /system/geoip/status reports a zero-value snapshot. Set via
 	// SetGeoIPUpdater.
 	geoIPUpdater geoIPUpdater
+	// asnLookup (v2.28) backs GET /geo/asn; nil = not wired.
+	asnLookup asnSearcher
 
 	// alertingDispatcher (Step AL.1.b) fans an AlertEvent
 	// out to a list of channel IDs, owns the per-channel
@@ -684,6 +686,12 @@ type geoIPUpdater interface {
 // that don't exercise the updater).
 func (h *Handler) SetGeoIPUpdater(u geoIPUpdater) {
 	h.geoIPUpdater = u
+}
+
+// SetASNLookup (v2.28) attaches the GeoLite2-ASN lookup used by
+// GET /geo/asn. nil-tolerant: the endpoint then reports loaded=false.
+func (h *Handler) SetASNLookup(l asnSearcher) {
+	h.asnLookup = l
 }
 
 // SetGeoIPConfigHook (GeoIP auto-update Brick 3, Task 4) registers a
@@ -1528,9 +1536,11 @@ type rateLimitReq struct {
 type countryBlockReq struct {
 	Mode        string   `json:"mode"`
 	CountryList []string `json:"countryList"`
-	// Continents + Exceptions (v2.27): continent codes, and the
-	// countries a deny gate always accepts. Both optional.
+	// Continents + Exceptions (v2.27), ASNs (v2.28): continent
+	// codes, AS numbers, and the countries / ASes a deny gate always
+	// accepts. All optional.
 	Continents []string                `json:"continents,omitempty"`
+	ASNs       []uint32                `json:"asns,omitempty"`
 	Exceptions *countryBlockExceptions `json:"exceptions,omitempty"`
 	StatusCode int                     `json:"statusCode,omitempty"`
 }
@@ -1539,6 +1549,7 @@ type countryBlockReq struct {
 // countryblock.Exceptions (request and response).
 type countryBlockExceptions struct {
 	Countries []string `json:"countries"`
+	ASNs      []uint32 `json:"asns"`
 }
 
 // countryBlockResp is the wire-side response shape of
@@ -1550,6 +1561,7 @@ type countryBlockResp struct {
 	Mode        string                 `json:"mode"`
 	CountryList []string               `json:"countryList"`
 	Continents  []string               `json:"continents"`
+	ASNs        []uint32               `json:"asns"`
 	Exceptions  countryBlockExceptions `json:"exceptions"`
 	StatusCode  int                    `json:"statusCode,omitempty"`
 }
@@ -2022,14 +2034,22 @@ func toCountryBlockResp(c countryblock.Config) countryBlockResp {
 	if continents == nil {
 		continents = []string{}
 	}
-	exceptions := countryBlockExceptions{Countries: []string{}}
+	asns := c.ASNs
+	if asns == nil {
+		asns = []uint32{}
+	}
+	exceptions := countryBlockExceptions{Countries: []string{}, ASNs: []uint32{}}
 	if c.Exceptions != nil && c.Exceptions.Countries != nil {
 		exceptions.Countries = c.Exceptions.Countries
+	}
+	if c.Exceptions != nil && c.Exceptions.ASNs != nil {
+		exceptions.ASNs = c.Exceptions.ASNs
 	}
 	return countryBlockResp{
 		Mode:        mode,
 		CountryList: list,
 		Continents:  continents,
+		ASNs:        asns,
 		Exceptions:  exceptions,
 		StatusCode:  c.StatusCode,
 	}

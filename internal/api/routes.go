@@ -389,6 +389,9 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// before /{id} for readability; chi matches the static
 				// segment first either way.
 				r.Get("/settings/dns-providers/types", h.listDNSProviderTypes)
+				// v2.28 — ASN search / name resolution for the route
+				// form's geo-filtering ASN rules.
+				r.Get("/geo/asn", h.searchASN)
 				r.Post("/settings/dns-providers/{id}/test", h.testDNSProvider)
 				r.Post("/settings/dns-providers", h.createDNSProvider)
 				r.Get("/settings/dns-providers/{id}", h.getDNSProvider)
@@ -1063,8 +1066,17 @@ func materialiseCountryBlock(req countryBlockReq) (countryblock.Config, error) {
 	if len(req.Continents) > 0 {
 		cfg.Continents = normaliseCodes(req.Continents)
 	}
-	if req.Exceptions != nil && len(req.Exceptions.Countries) > 0 {
-		cfg.Exceptions = &countryblock.Exceptions{Countries: normaliseCodes(req.Exceptions.Countries)}
+	if len(req.ASNs) > 0 {
+		cfg.ASNs = req.ASNs
+	}
+	if req.Exceptions != nil && (len(req.Exceptions.Countries) > 0 || len(req.Exceptions.ASNs) > 0) {
+		cfg.Exceptions = &countryblock.Exceptions{}
+		if len(req.Exceptions.Countries) > 0 {
+			cfg.Exceptions.Countries = normaliseCodes(req.Exceptions.Countries)
+		}
+		if len(req.Exceptions.ASNs) > 0 {
+			cfg.Exceptions.ASNs = req.Exceptions.ASNs
+		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return countryblock.Config{}, err
@@ -1297,8 +1309,8 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		// Spec §D2 deny+empty: legal no-op. Surface a Warn so the
 		// operator notices their list became inert (e.g. typo cleared
 		// the chip input). Not blocking; this is intentional behavior.
-		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 && len(cb.Continents) == 0 {
-			h.logger.Warn("country-block: deny mode with empty country and continent lists — no-op",
+		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 && len(cb.Continents) == 0 && len(cb.ASNs) == 0 {
+			h.logger.Warn("country-block: deny mode with empty country, continent and ASN lists — no-op",
 				"host", req.Host)
 		}
 		newCountryBlock = cb
@@ -1809,8 +1821,8 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 && len(cb.Continents) == 0 {
-			h.logger.Warn("country-block: deny mode with empty country and continent lists — no-op",
+		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 && len(cb.Continents) == 0 && len(cb.ASNs) == 0 {
+			h.logger.Warn("country-block: deny mode with empty country, continent and ASN lists — no-op",
 				"host", req.Host, "id", id)
 		}
 		newCountryBlock = cb

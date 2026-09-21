@@ -30,6 +30,7 @@ package countryblock
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // Mode is the per-route country-gate operating mode.
@@ -87,6 +88,10 @@ type Config struct {
 	// pre-v2.27 configs byte-identical on the wire.
 	Continents []string `json:"continents,omitempty"`
 
+	// ASNs (v2.28) are autonomous system numbers (GeoLite2-ASN)
+	// matched like CountryList — e.g. a hosting provider's network.
+	ASNs []uint32 `json:"asns,omitempty"`
+
 	// Exceptions (v2.27, ModeDeny only) are always accepted, before
 	// any list is consulted: "deny Asia except Japan".
 	Exceptions *Exceptions `json:"exceptions,omitempty"`
@@ -106,6 +111,8 @@ type Exceptions struct {
 	// Countries are ISO 3166-1 alpha-2 codes, same format as
 	// Config.CountryList.
 	Countries []string `json:"countries,omitempty"`
+	// ASNs (v2.28) are autonomous system numbers always accepted.
+	ASNs []uint32 `json:"asns,omitempty"`
 }
 
 // continentCodes is the closed set of MaxMind continent codes
@@ -123,7 +130,7 @@ var continentCodes = map[string]struct{}{
 // here ensures a hand-crafted JSON config doesn't sneak past.
 var ErrAllowListEmpty = errors.New(
 	"countryblock: mode=allow requires at least one country in countryList " +
-		"or one continent in continents " +
+		"or one continent in continents or one AS in asns " +
 		"(would otherwise block all non-RFC1918 traffic)",
 )
 
@@ -190,8 +197,26 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if c.Mode == ModeAllow && len(c.CountryList) == 0 && len(c.Continents) == 0 {
+	if err := validateASNs("asns", c.ASNs); err != nil {
+		return err
+	}
+
+	if c.Mode == ModeAllow && len(c.CountryList) == 0 && len(c.Continents) == 0 && len(c.ASNs) == 0 {
 		return ErrAllowListEmpty
+	}
+
+	if c.Exceptions != nil && len(c.Exceptions.ASNs) > 0 {
+		if c.Mode != ModeDeny {
+			return errors.New("countryblock: exceptions are only valid with mode=deny")
+		}
+		if err := validateASNs("exceptions.asns", c.Exceptions.ASNs); err != nil {
+			return err
+		}
+		for _, n := range c.Exceptions.ASNs {
+			if slices.Contains(c.ASNs, n) {
+				return fmt.Errorf("countryblock: AS%d is both blocked and an exception", n)
+			}
+		}
 	}
 
 	if c.Exceptions != nil && len(c.Exceptions.Countries) > 0 {
@@ -217,6 +242,22 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+// validateASNs rejects AS0 (reserved, never a real network) and
+// duplicates.
+func validateASNs(field string, asns []uint32) error {
+	seen := make(map[uint32]struct{}, len(asns))
+	for _, n := range asns {
+		if n == 0 {
+			return fmt.Errorf("countryblock: %s entry 0 is not a valid AS number", field)
+		}
+		if _, dup := seen[n]; dup {
+			return fmt.Errorf("countryblock: %s entry AS%d appears more than once", field, n)
+		}
+		seen[n] = struct{}{}
+	}
 	return nil
 }
 

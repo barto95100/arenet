@@ -882,7 +882,9 @@ export interface CountryBlock {
 	countryList: string[];
 	/** v2.27 — MaxMind continent codes (EU, AS, AF, NA, SA, OC, AN). */
 	continents: string[];
-	/** v2.27 — countries a deny gate always lets through. */
+	/** v2.28 — autonomous system numbers (GeoLite2-ASN). */
+	asns: number[];
+	/** v2.27 — countries (v2.28: and ASes) a deny gate always lets through. */
 	exceptions: CountryBlockExceptions;
 	statusCode: number;
 }
@@ -890,6 +892,8 @@ export interface CountryBlock {
 /** v2.27 — deny-mode exceptions (always-allowed sources). */
 export interface CountryBlockExceptions {
 	countries: string[];
+	/** v2.28 — AS numbers always allowed. */
+	asns: number[];
 }
 
 /**
@@ -904,6 +908,8 @@ export interface CountryBlockRequest {
 	countryList: string[];
 	/** v2.27 — optional; omitted or [] = no continent rule. */
 	continents?: string[];
+	/** v2.28 — optional; omitted or [] = no ASN rule. */
+	asns?: number[];
 	/** v2.27 — only valid with mode 'deny' (the API rejects otherwise). */
 	exceptions?: CountryBlockExceptions;
 	statusCode: number;

@@ -832,6 +832,7 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 			"mode", string(r.CountryBlock.Mode),
 			"country_list_count", len(r.CountryBlock.CountryList),
 			"continents", r.CountryBlock.Continents,
+			"asn_count", len(r.CountryBlock.ASNs),
 			"exception_count", exceptionCount(r.CountryBlock),
 			"status_code", r.CountryBlock.StatusCode,
 		)
@@ -3030,8 +3031,11 @@ func buildCountryBlockHandler(routeID, _ string, cb countryblock.Config) map[str
 	if len(cb.Continents) > 0 {
 		config["continents"] = cb.Continents
 	}
-	if cb.Exceptions != nil && len(cb.Exceptions.Countries) > 0 {
-		config["exceptions"] = map[string]any{"countries": cb.Exceptions.Countries}
+	if len(cb.ASNs) > 0 {
+		config["asns"] = cb.ASNs
+	}
+	if exc := buildCountryBlockExceptions(cb.Exceptions); exc != nil {
+		config["exceptions"] = exc
 	}
 	return map[string]any{
 		"handler": countryblock.HandlerName,
@@ -3127,10 +3131,47 @@ func countryBlockFingerprint(cb countryblock.Config) string {
 	if len(cb.Continents) > 0 {
 		fp += "|continents=" + sortedJoin(cb.Continents)
 	}
+	if len(cb.ASNs) > 0 {
+		fp += "|asns=" + sortedJoinASN(cb.ASNs)
+	}
 	if cb.Exceptions != nil && len(cb.Exceptions.Countries) > 0 {
 		fp += "|except=" + sortedJoin(cb.Exceptions.Countries)
 	}
+	if cb.Exceptions != nil && len(cb.Exceptions.ASNs) > 0 {
+		fp += "|except-asns=" + sortedJoinASN(cb.Exceptions.ASNs)
+	}
 	return fp
+}
+
+// buildCountryBlockExceptions returns the handler's "exceptions"
+// object with only the non-empty lists, or nil when there are none.
+func buildCountryBlockExceptions(e *countryblock.Exceptions) map[string]any {
+	if e == nil {
+		return nil
+	}
+	out := map[string]any{}
+	if len(e.Countries) > 0 {
+		out["countries"] = e.Countries
+	}
+	if len(e.ASNs) > 0 {
+		out["asns"] = e.ASNs
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// sortedJoinASN returns the AS numbers sorted and comma-joined,
+// without mutating the input.
+func sortedJoinASN(asns []uint32) string {
+	list := slices.Clone(asns)
+	slices.Sort(list)
+	parts := make([]string, len(list))
+	for i, n := range list {
+		parts[i] = strconv.FormatUint(uint64(n), 10)
+	}
+	return strings.Join(parts, ",")
 }
 
 // exceptionCount returns the number of deny-mode exceptions.
@@ -3138,7 +3179,7 @@ func exceptionCount(cb countryblock.Config) int {
 	if cb.Exceptions == nil {
 		return 0
 	}
-	return len(cb.Exceptions.Countries)
+	return len(cb.Exceptions.Countries) + len(cb.Exceptions.ASNs)
 }
 
 // sortedJoin returns the codes sorted and comma-joined, without
