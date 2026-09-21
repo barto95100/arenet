@@ -371,16 +371,37 @@ exits.
 
 ### `ARENET_INCLUDE_SECRETS`
 
-- **Purpose**: modifier on `ARENET_EXPORT` — when truthy,
-  plaintext secrets are kept in the export output instead of
-  being redacted.
+- **Purpose**: modifier on `ARENET_EXPORT` — when truthy, the
+  secrets are kept in the export output, **encrypted with the
+  backup passphrase** (v2.31), instead of being redacted.
 - **Default**: `false` (secrets redacted by default).
 - **Format**: boolean.
 - **Example**: `ARENET_INCLUDE_SECRETS=true`
-- **Notes**: prints a security warning to stderr before
-  writing. The export file is written with mode `0o600`
-  (owner-readable only) when secrets are included.
-- **Source**: `internal/config/config.go:285`.
+- **Notes**: requires a passphrase (`ARENET_BACKUP_PASSPHRASE`,
+  `ARENET_BACKUP_PASSPHRASE_FILE` or `--passphrase-file`); the
+  export fails without one. The file is written `0o600`.
+- **Source**: `internal/config/config.go`.
+
+### `ARENET_BACKUP_PASSPHRASE`
+
+- **Purpose**: the passphrase that encrypts the secrets of an
+  `--export --include-secrets`, and decrypts an encrypted
+  `--restore` (v2.31).
+- **Default**: unset.
+- **Format**: string, at least 12 characters.
+- **Notes**: read by the backup CLI only, never stored.
+  `ARENET_BACKUP_PASSPHRASE_FILE` / `--passphrase-file` take
+  precedence and keep it out of the process environment.
+- **Source**: `cmd/arenet/backup_cli.go`.
+
+### `ARENET_BACKUP_PASSPHRASE_FILE`
+
+- **Purpose**: path of a file holding the backup passphrase
+  (trailing newline ignored) — same role as
+  `ARENET_BACKUP_PASSPHRASE`, preferred for cron jobs.
+- **Default**: unset. Flag: `--passphrase-file`.
+- **Example**: `ARENET_BACKUP_PASSPHRASE_FILE=/root/.arenet-backup-pass`
+- **Source**: `internal/config/config.go`.
 
 ### `ARENET_ALLOW_INCOMPLETE_RESTORE`
 
@@ -431,7 +452,7 @@ exits.
 
 ### No defaults missing
 
-All 20 variables documented above have an explicit default in
+All 22 variables documented above have an explicit default in
 the codebase. There are no variables whose default behaviour
 is unclear or undefined.
 

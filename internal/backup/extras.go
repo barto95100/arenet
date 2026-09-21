@@ -183,36 +183,6 @@ func listAPITokens(ctx context.Context, store Storer) ([]auth.APIToken, error) {
 	return out, nil
 }
 
-// redactExtras replaces every extras secret with the sentinel. Slices
-// and configs are rebuilt so the caller's values are never mutated.
-func redactExtras(ex *SnapshotExtras) {
-	if ex == nil {
-		return
-	}
-	channels := slices.Clone(ex.AlertChannels)
-	for i := range channels {
-		channels[i].Config = redactChannelConfig(channels[i].Kind, channels[i].Config)
-	}
-	ex.AlertChannels = channels
-	if ex.CrowdSecConfig != nil && ex.CrowdSecConfig.APIKey != "" {
-		cp := *ex.CrowdSecConfig
-		cp.APIKey = SentinelLiteral
-		ex.CrowdSecConfig = &cp
-	}
-	if ex.WatcherCredentials != nil && ex.WatcherCredentials.Password != "" {
-		cp := *ex.WatcherCredentials
-		cp.Password = SentinelLiteral
-		ex.WatcherCredentials = &cp
-	}
-	tokens := slices.Clone(ex.APITokens)
-	for i := range tokens {
-		if tokens[i].TokenHash != "" {
-			tokens[i].TokenHash = SentinelLiteral
-		}
-	}
-	ex.APITokens = tokens
-}
-
 // decodeConfig decodes a channel config into a generic map, keeping
 // numbers verbatim. A config that is not a JSON object yields nil.
 func decodeConfig(raw json.RawMessage) map[string]any {
@@ -226,43 +196,6 @@ func decodeConfig(raw json.RawMessage) map[string]any {
 		return nil
 	}
 	return m
-}
-
-// redactChannelConfig returns the config with its secret values
-// replaced by the sentinel. An undecodable config is replaced whole
-// by a sentinel string rather than exported as-is.
-func redactChannelConfig(kind string, raw json.RawMessage) json.RawMessage {
-	if len(raw) == 0 {
-		return raw
-	}
-	m := decodeConfig(raw)
-	if m == nil {
-		b, _ := json.Marshal(SentinelLiteral)
-		return b
-	}
-	redact := func(key string) {
-		if s, ok := m[key].(string); ok && s != "" {
-			m[key] = SentinelLiteral
-		}
-	}
-	switch kind {
-	case storage.ChannelKindEmail:
-		redact(cfgKeySMTPPassword)
-	case storage.ChannelKindWebhook:
-		redact(cfgKeyURL)
-		if h, ok := m[cfgKeyHeaders].(map[string]any); ok {
-			for k, v := range h {
-				if s, ok := v.(string); ok && s != "" {
-					h[k] = SentinelLiteral
-				}
-			}
-		}
-	}
-	b, err := json.Marshal(m)
-	if err != nil {
-		b, _ = json.Marshal(SentinelLiteral)
-	}
-	return b
 }
 
 // liveExtras is the live state the extras sentinels inherit from.

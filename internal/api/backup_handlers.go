@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,14 +38,18 @@ import (
 // Step K.3 — backup / restore HTTP surface.
 //
 // Endpoints (admin-only, wired in routes.go under RequireAdmin):
-//   - GET  /api/v1/admin/backup    — export the live config as JSON.
-//                                    Query: include-secrets=true → cleartext.
+//   - GET  /api/v1/admin/backup    — redacted export (sentinels).
+//   - POST /api/v1/admin/backup    — export with secrets, encrypted
+//                                    with {"passphrase": "…"} (v2.31).
 //                                    Header X-Arenet-Secrets-Included: bool
 //                                    on the response, so a downstream tool
 //                                    can read the flag without parsing the
 //                                    body.
 //   - POST /api/v1/admin/restore   — apply an uploaded JSON snapshot.
-//                                    Body is the snapshot JSON.
+//                                    Body is the snapshot JSON; an
+//                                    encrypted one needs the header
+//                                    X-Arenet-Backup-Passphrase
+//                                    (base64 of the passphrase).
 //                                    Query: allow-incomplete-restore=true /
 //                                    allow-empty-users=true → opt-in bypasses.
 //
@@ -60,20 +65,75 @@ import (
 // backup.Export.
 const arenetVersionForBackup = "v0.7.x"
 
-// getBackup handles GET /admin/backup. Builds a Snapshot via
-// internal/backup, writes it as a JSON download. On
-// include-secrets=true, sets the X-Arenet-Secrets-Included header
-// and the audit event flags secrets_included=true.
-func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request) {
-	includeSecrets := r.URL.Query().Get("include-secrets") == "true"
+// Backup encryption wire (v2.31).
+const (
+	// headerBackupPassphrase carries the restore passphrase, base64
+	// (UTF-8) so any character survives the HTTP header.
+	headerBackupPassphrase = "X-Arenet-Backup-Passphrase"
+	codePassphraseRequired = "passphrase_required"
+	codePassphraseInvalid  = "passphrase_invalid"
+	codePassphraseTooShort = "passphrase_too_short"
+	// maxPassphraseBytes bounds the passphrase accepted by the API.
+	maxPassphraseBytes = 1024
+	// maxBackupRequestBytes bounds the POST /admin/backup body.
+	maxBackupRequestBytes = 4096
+)
 
-	snap, err := backup.Export(r.Context(), h.store, h.users, arenetVersionForBackup, includeSecrets)
+// getBackup handles GET /admin/backup: the redacted export (secrets
+// replaced by sentinels). An export WITH secrets must be encrypted —
+// POST /admin/backup with a passphrase (v2.31); the former plaintext
+// include-secrets=true is refused.
+func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("include-secrets") == "true" {
+		writeErrorCode(w, http.StatusBadRequest, codePassphraseRequired,
+			"exports with secrets are encrypted: POST /api/v1/admin/backup with {\"passphrase\": \"…\"}", nil)
+		return
+	}
+	snap, err := backup.Export(r.Context(), h.store, h.users, arenetVersionForBackup, false)
 	if err != nil {
 		h.logger.Error("backup: export failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to export configuration")
 		return
 	}
+	h.writeBackup(w, r, snap)
+}
 
+// exportEncryptedRequest is the body of POST /admin/backup.
+type exportEncryptedRequest struct {
+	Passphrase string `json:"passphrase"`
+}
+
+// postBackup handles POST /admin/backup: the export with secrets,
+// every secret sealed with a key derived from the passphrase.
+func (h *Handler) postBackup(w http.ResponseWriter, r *http.Request) {
+	var req exportEncryptedRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxBackupRequestBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, translateDecodeError(err))
+		return
+	}
+	snap, err := backup.Export(r.Context(), h.store, h.users, arenetVersionForBackup, true)
+	if err != nil {
+		h.logger.Error("backup: export failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to export configuration")
+		return
+	}
+	if err := backup.SealSnapshot(snap, req.Passphrase); err != nil {
+		if errors.Is(err, backup.ErrPassphraseTooShort) {
+			writeErrorCode(w, http.StatusBadRequest, codePassphraseTooShort, err.Error(),
+				map[string]any{"min": backup.MinPassphraseLen})
+			return
+		}
+		h.logger.Error("backup: encrypt failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to encrypt the export")
+		return
+	}
+	h.writeBackup(w, r, snap)
+}
+
+// writeBackup audits the export and writes it as a JSON download.
+func (h *Handler) writeBackup(w http.ResponseWriter, r *http.Request, snap *backup.Snapshot) {
 	body, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		h.logger.Error("backup: marshal failed", "err", err)
@@ -87,8 +147,9 @@ func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request) {
 	h.appendAudit(r, audit.Event{
 		Action: audit.ActionConfigExported,
 		Message: fmt.Sprintf(
-			"secrets_included=%t routes=%d users=%d dns_providers=%d forward_auth_providers=%d oidc_configured=%t",
-			includeSecrets,
+			"secrets_included=%t encrypted=%t routes=%d users=%d dns_providers=%d forward_auth_providers=%d oidc_configured=%t",
+			snap.SecretsIncluded,
+			snap.IsEncrypted(),
 			len(snap.Routes),
 			len(snap.Users),
 			len(snap.DNSProviders),
@@ -100,13 +161,27 @@ func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request) {
 	filename := fmt.Sprintf("arenet-backup-%s.json", time.Now().UTC().Format("20060102-150405"))
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
-	if includeSecrets {
+	if snap.SecretsIncluded {
 		// Spec §5.3 surface (B clarification). Lets a downstream
 		// archiver tag the file without reading it.
 		w.Header().Set("X-Arenet-Secrets-Included", "true")
+		w.Header().Set("X-Arenet-Backup-Encrypted", fmt.Sprint(snap.IsEncrypted()))
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// restorePassphrase decodes the base64 passphrase header ("" if absent).
+func restorePassphrase(r *http.Request) (string, error) {
+	raw := r.Header.Get(headerBackupPassphrase)
+	if raw == "" {
+		return "", nil
+	}
+	b, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || len(b) > maxPassphraseBytes {
+		return "", errors.New("invalid " + headerBackupPassphrase + " header (base64 of the UTF-8 passphrase expected)")
+	}
+	return string(b), nil
 }
 
 // postRestore handles POST /admin/restore. Reads the body as a
@@ -139,6 +214,27 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 		})
 		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
+	}
+
+	// v2.31: a passphrase-encrypted backup is decrypted first; the
+	// rest of the pipeline sees a plain with-secrets snapshot.
+	if snap.IsEncrypted() {
+		passphrase, perr := restorePassphrase(r)
+		if perr == nil {
+			perr = backup.OpenSnapshot(&snap, passphrase)
+		}
+		if perr != nil {
+			code, reason := codePassphraseInvalid, "passphrase_invalid"
+			if errors.Is(perr, backup.ErrPassphraseRequired) {
+				code, reason = codePassphraseRequired, "passphrase_required"
+			}
+			h.appendAudit(r, audit.Event{
+				Action:  audit.ActionConfigRestoredRejected,
+				Message: fmt.Sprintf("reason=%s source_sha256=%s", reason, sha),
+			})
+			writeErrorCode(w, http.StatusBadRequest, code, perr.Error(), nil)
+			return
+		}
 	}
 
 	q := r.URL.Query()

@@ -73,6 +73,16 @@ func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Sna
 		return nil, errors.New("import: nil store")
 	}
 
+	// 0. A passphrase-encrypted snapshot must be opened first
+	// (OpenSnapshot); sealed values outside such a snapshot mean an
+	// altered file — never store ciphertext as a secret.
+	if snap.IsEncrypted() {
+		return nil, ErrPassphraseRequired
+	}
+	if err := checkNoSealedValues(snap); err != nil {
+		return nil, err
+	}
+
 	// 1. Schema major version check.
 	if err := checkSchemaMajor(snap.SchemaVersion); err != nil {
 		return nil, err

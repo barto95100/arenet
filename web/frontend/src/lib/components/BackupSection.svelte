@@ -8,50 +8,129 @@
   Three operations:
 
     1. Export (default redacted)  — single click → JSON download.
-    2. Export with secrets        — confirm-twice modal, warning
-                                   wording about file permissions.
+    2. Export with secrets        — passphrase modal (v2.31): every
+                                   secret of the file is encrypted
+                                   with it; the file is downloaded.
     3. Restore                    — file picker + opt-in checkboxes
                                    for the two bypass flags. The
                                    backend rejects loud on every
                                    failure path; we surface the
                                    reject body verbatim (it carries
                                    the "Two paths forward" wording).
+                                   An encrypted file asks for its
+                                   passphrase.
 -->
 <script lang="ts">
 	import { pushToast } from '$lib/stores/toast';
-	import { settingsApi, type RestoreReport } from '$lib/api/settings';
+	import {
+		settingsApi,
+		isEncryptedBackup,
+		MIN_BACKUP_PASSPHRASE_LEN,
+		type RestoreReport
+	} from '$lib/api/settings';
 	import { ApiError } from '$lib/api/types';
 	import Card from '$lib/components/Card.svelte';
 	import Button from '$lib/components/Button.svelte';
-	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import Modal from '$lib/components/Modal.svelte';
+	import Input from '$lib/components/Input.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 
 	let confirmIncludeSecretsOpen = $state(false);
+	let exportPassphrase = $state('');
+	let exportPassphraseConfirm = $state('');
+	let exportErrors = $state<{ passphrase?: string; confirm?: string }>({});
+	let exporting = $state(false);
 	let restoreFile = $state<File | null>(null);
+	let restoreEncrypted = $state(false);
+	let restorePassphrase = $state('');
 	let allowIncompleteRestore = $state(false);
 	let allowEmptyUsers = $state(false);
 	let restoreError = $state('');
 	let restoreReport = $state<RestoreReport | null>(null);
 	let restoreSubmitting = $state(false);
 
+	const passphraseCodes = ['passphrase_required', 'passphrase_invalid', 'passphrase_too_short'];
+
+	/** Translated message of a passphrase API error, else the raw text. */
+	function apiErrorText(err: ApiError): string {
+		if (err.code && passphraseCodes.includes(err.code)) {
+			return t('errors.' + err.code, { min: MIN_BACKUP_PASSPHRASE_LEN });
+		}
+		return err.message;
+	}
+
 	function exportDefault(): void {
-		window.location.href = settingsApi.exportBackupURL(false);
+		window.location.href = settingsApi.exportBackupURL();
 	}
 
 	function exportIncludeSecrets(): void {
+		exportPassphrase = '';
+		exportPassphraseConfirm = '';
+		exportErrors = {};
 		confirmIncludeSecretsOpen = true;
 	}
 
-	function confirmIncludeSecretsDownload(): void {
-		window.location.href = settingsApi.exportBackupURL(true);
+	function closeExportDialog(): void {
+		if (exporting) return;
+		confirmIncludeSecretsOpen = false;
+		exportPassphrase = '';
+		exportPassphraseConfirm = '';
 	}
 
-	function onFileChange(e: Event): void {
+	async function confirmIncludeSecretsDownload(): Promise<void> {
+		if (exporting) return;
+		exportErrors = {};
+		if ([...exportPassphrase].length < MIN_BACKUP_PASSPHRASE_LEN) {
+			exportErrors = {
+				passphrase: t('backupSection.errPassphraseTooShort', { min: MIN_BACKUP_PASSPHRASE_LEN })
+			};
+			return;
+		}
+		if (exportPassphrase !== exportPassphraseConfirm) {
+			exportErrors = { confirm: t('backupSection.errPassphraseMismatch') };
+			return;
+		}
+		exporting = true;
+		try {
+			const blob = await settingsApi.exportEncryptedBackup(exportPassphrase);
+			const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `arenet-backup-encrypted-${stamp}.json`;
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			URL.revokeObjectURL(url);
+			pushToast(t('backupSection.toastExportEncrypted'), 'success');
+			exporting = false;
+			closeExportDialog();
+		} catch (err) {
+			if (err instanceof ApiError) {
+				exportErrors = { passphrase: apiErrorText(err) };
+			} else {
+				pushToast(t('backupSection.errUnexpected'), 'danger');
+			}
+		} finally {
+			exporting = false;
+		}
+	}
+
+	async function onFileChange(e: Event): Promise<void> {
 		const input = e.target as HTMLInputElement;
 		restoreFile = input.files && input.files.length > 0 ? input.files[0] : null;
 		restoreError = '';
 		restoreReport = null;
+		restorePassphrase = '';
+		restoreEncrypted = false;
+		if (restoreFile) {
+			try {
+				restoreEncrypted = isEncryptedBackup(JSON.parse(await restoreFile.text()));
+			} catch {
+				// Invalid JSON is reported on submit.
+			}
+		}
 	}
 
 	async function submitRestore(): Promise<void> {
@@ -64,7 +143,8 @@
 			const parsed = JSON.parse(text);
 			const report = await settingsApi.postRestore(parsed, {
 				allowIncompleteRestore,
-				allowEmptyUsers
+				allowEmptyUsers,
+				passphrase: restoreEncrypted ? restorePassphrase : undefined
 			});
 			restoreReport = report;
 			pushToast(
@@ -75,7 +155,7 @@
 			// The backend reject body carries the "Two paths
 			// forward" wording verbatim. Surface it as-is.
 			if (err instanceof ApiError) {
-				restoreError = err.message;
+				restoreError = apiErrorText(err);
 			} else if (err instanceof SyntaxError) {
 				restoreError = t('backupSection.errInvalidJson');
 			} else if (err instanceof Error) {
@@ -131,6 +211,21 @@
 				class="block w-full text-sm text-secondary file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-surface file:text-primary hover:file:bg-hover"
 			/>
 
+			{#if restoreEncrypted}
+				<div class="mt-3">
+					<Input
+						bind:value={restorePassphrase}
+						type="password"
+						label={language.current && t('backupSection.restorePassphraseLabel')}
+						autocomplete="off"
+						disabled={restoreSubmitting}
+					/>
+					<p class="text-xs text-muted mt-1">
+						{language.current && t('backupSection.restorePassphraseHelper')}
+					</p>
+				</div>
+			{/if}
+
 			<div class="mt-3 space-y-2 text-sm">
 				<label class="inline-flex items-center gap-2">
 					<input
@@ -164,7 +259,7 @@
 				<Button
 					variant="danger"
 					size="md"
-					disabled={!restoreFile || restoreSubmitting}
+					disabled={!restoreFile || restoreSubmitting || (restoreEncrypted && !restorePassphrase)}
 					onclick={submitRestore}
 				>
 					{language.current && (restoreSubmitting ? t('backupSection.btnRestoring') : t('backupSection.btnRestore'))}
@@ -212,11 +307,45 @@
 	</div>
 </Card>
 
-<ConfirmDialog
-	bind:open={confirmIncludeSecretsOpen}
+<Modal
+	open={confirmIncludeSecretsOpen}
 	title={language.current && t('backupSection.confirmDialogTitle')}
-	message={language.current && t('backupSection.confirmDialogMessage')}
-	confirmLabel={language.current && t('backupSection.confirmDialogConfirm')}
-	confirmVariant="danger"
-	onConfirm={confirmIncludeSecretsDownload}
-/>
+	onClose={closeExportDialog}
+>
+	<p class="text-sm text-secondary mb-4">
+		{language.current && t('backupSection.confirmDialogMessage')}
+	</p>
+	<Input
+		bind:value={exportPassphrase}
+		type="password"
+		label={language.current && t('backupSection.passphraseLabel', { min: MIN_BACKUP_PASSPHRASE_LEN })}
+		autocomplete="new-password"
+		error={exportErrors.passphrase ?? ''}
+		disabled={exporting}
+	/>
+	<div class="mt-4">
+		<Input
+			bind:value={exportPassphraseConfirm}
+			type="password"
+			label={language.current && t('backupSection.passphraseConfirmLabel')}
+			autocomplete="new-password"
+			error={exportErrors.confirm ?? ''}
+			disabled={exporting}
+		/>
+	</div>
+
+	{#snippet footer()}
+		<Button variant="ghost" size="md" onclick={closeExportDialog} disabled={exporting}>
+			{#snippet children()}{language.current && t('backupSection.cancel')}{/snippet}
+		</Button>
+		<Button
+			variant="danger"
+			size="md"
+			onclick={confirmIncludeSecretsDownload}
+			loading={exporting}
+			disabled={exporting}
+		>
+			{#snippet children()}{language.current && t('backupSection.confirmDialogConfirm')}{/snippet}
+		</Button>
+	{/snippet}
+</Modal>

@@ -46,7 +46,10 @@
 		"forbidden": "Forbidden",
 		"notFound": "Not found",
 		"internal": "Internal server error",
-		"networkOffline": "Network unreachable"
+		"networkOffline": "Network unreachable",
+		"passphrase_required": "This backup is encrypted: enter its passphrase.",
+		"passphrase_invalid": "Wrong passphrase (or the file was altered).",
+		"passphrase_too_short": "The passphrase must be at least {min} characters."
 	},
 	"sidebar": {
 		"sectionOverview": "Overview",
@@ -1306,9 +1309,17 @@
 		"reportApiTokensImported": "Service-account tokens imported",
 		"reportSentinelsInherited": "Sentinels inherited",
 		"reportSentinelsUnresolved": "Sentinels unresolved (cleared)",
-		"confirmDialogTitle": "Export with cleartext secrets?",
-		"confirmDialogMessage": "The exported file will contain plaintext admin password hashes, DNS provider credentials, TLS private keys, OIDC and forward-auth client secrets, per-route Basic Auth hashes, alert channel credentials (SMTP password, webhook URLs), CrowdSec keys and service-account token hashes. The browser will save the file with its default permissions — store it to a restricted location and consider encrypting at rest (age / GPG / vault).",
-		"confirmDialogConfirm": "Download with secrets"
+		"confirmDialogTitle": "Export with secrets (encrypted)",
+		"confirmDialogMessage": "Every secret in the file (password hashes, DNS credentials, TLS private keys, OIDC / forward-auth / CrowdSec secrets, alert channel credentials, service-account token hashes) is encrypted with this passphrase. Keep it safe: without it the file can only be restored without its secrets.",
+		"confirmDialogConfirm": "Download encrypted backup",
+		"passphraseLabel": "Passphrase (at least {min} characters)",
+		"passphraseConfirmLabel": "Confirm the passphrase",
+		"errPassphraseTooShort": "At least {min} characters.",
+		"errPassphraseMismatch": "The passphrases do not match.",
+		"cancel": "Cancel",
+		"toastExportEncrypted": "Encrypted backup downloaded.",
+		"restorePassphraseLabel": "Backup passphrase",
+		"restorePassphraseHelper": "This backup is encrypted: enter the passphrase chosen at export."
 	},
 	"serverPosition": {
 		"title": "Server position",

@@ -35,21 +35,18 @@ import userEvent from '@testing-library/user-event';
 import { ApiError } from '$lib/api/types';
 import type { RestoreReport } from '$lib/api/settings';
 
-const exportURLMock = vi.fn<(includeSecrets: boolean) => string>();
-const postRestoreMock = vi.fn<
-	(
-		body: unknown,
-		opts: { allowIncompleteRestore?: boolean; allowEmptyUsers?: boolean }
-	) => Promise<RestoreReport>
->();
+type RestoreOpts = { allowIncompleteRestore?: boolean; allowEmptyUsers?: boolean; passphrase?: string };
+const exportURLMock = vi.fn<() => string>();
+const exportEncryptedMock = vi.fn<(passphrase: string) => Promise<Blob>>();
+const postRestoreMock = vi.fn<(body: unknown, opts: RestoreOpts) => Promise<RestoreReport>>();
 
 vi.mock('$lib/api/settings', () => ({
+	MIN_BACKUP_PASSPHRASE_LEN: 12,
+	isEncryptedBackup: (p: unknown) => typeof p === 'object' && p !== null && 'encryption' in p,
 	settingsApi: {
-		exportBackupURL: (includeSecrets: boolean) => exportURLMock(includeSecrets),
-		postRestore: (
-			body: unknown,
-			opts: { allowIncompleteRestore?: boolean; allowEmptyUsers?: boolean }
-		) => postRestoreMock(body, opts)
+		exportBackupURL: () => exportURLMock(),
+		exportEncryptedBackup: (passphrase: string) => exportEncryptedMock(passphrase),
+		postRestore: (body: unknown, opts: RestoreOpts) => postRestoreMock(body, opts)
 	}
 }));
 
@@ -69,6 +66,7 @@ let assignedHref: string | null = null;
 const originalLocation = window.location;
 beforeEach(() => {
 	exportURLMock.mockReset();
+	exportEncryptedMock.mockReset();
 	postRestoreMock.mockReset();
 	pushToastMock.mockReset();
 	assignedHref = null;
@@ -133,46 +131,54 @@ describe('BackupSection — export', () => {
 		await userEvent.click(btn);
 
 		expect(exportURLMock).toHaveBeenCalledTimes(1);
-		expect(exportURLMock).toHaveBeenCalledWith(false);
 		expect(assignedHref).toBe('/api/v1/admin/backup');
 	});
 
-	it('export-with-secrets gates the download behind a ConfirmDialog', async () => {
-		exportURLMock.mockReturnValue('/api/v1/admin/backup?include-secrets=true');
+	it('export-with-secrets asks for a passphrase before anything is requested', async () => {
 		render(BackupSection);
+		await userEvent.click(screen.getByRole('button', { name: 'Export with secrets…' }));
 
-		const btn = screen.getByRole('button', { name: 'Export with secrets…' });
-		await userEvent.click(btn);
-
-		// At this point the dialog is open but no URL has been
-		// requested yet — the operator must confirm first.
-		expect(exportURLMock).not.toHaveBeenCalled();
+		expect(screen.getByText(/Export with secrets \(encrypted\)/)).toBeInTheDocument();
+		expect(exportEncryptedMock).not.toHaveBeenCalled();
 		expect(assignedHref).toBeNull();
-		expect(
-			screen.getByText(/Export with cleartext secrets/i)
-		).toBeInTheDocument();
 	});
 
-	it('confirming the danger dialog triggers the include-secrets download', async () => {
-		exportURLMock.mockReturnValue('/api/v1/admin/backup?include-secrets=true');
+	it('rejects a short or mismatched passphrase client-side', async () => {
 		render(BackupSection);
+		await userEvent.click(screen.getByRole('button', { name: 'Export with secrets…' }));
+		const [pass, confirm] = screen.getAllByLabelText(/passphrase/i);
 
-		await userEvent.click(
-			screen.getByRole('button', { name: 'Export with secrets…' })
-		);
-		// Confirm by clicking the danger-variant action in the
-		// dialog — labelled "Download with secrets" by the
-		// component (line 211 BackupSection.svelte).
-		const confirmBtn = await screen.findByRole('button', {
-			name: 'Download with secrets'
-		});
-		await userEvent.click(confirmBtn);
+		await userEvent.type(pass, 'short');
+		await userEvent.click(screen.getByRole('button', { name: 'Download encrypted backup' }));
+		expect(await screen.findByText('At least 12 characters.')).toBeInTheDocument();
 
-		expect(exportURLMock).toHaveBeenCalledTimes(1);
-		expect(exportURLMock).toHaveBeenCalledWith(true);
-		expect(assignedHref).toBe(
-			'/api/v1/admin/backup?include-secrets=true'
-		);
+		await userEvent.clear(pass);
+		await userEvent.type(pass, 'a long enough passphrase');
+		await userEvent.type(confirm, 'something else entirely');
+		await userEvent.click(screen.getByRole('button', { name: 'Download encrypted backup' }));
+		expect(await screen.findByText('The passphrases do not match.')).toBeInTheDocument();
+		expect(exportEncryptedMock).not.toHaveBeenCalled();
+	});
+
+	it('downloads the encrypted backup with the passphrase', async () => {
+		exportEncryptedMock.mockResolvedValue(new Blob(['{}'], { type: 'application/json' }));
+		const createURL = vi.fn(() => 'blob:backup');
+		const revokeURL = vi.fn();
+		Object.assign(URL, { createObjectURL: createURL, revokeObjectURL: revokeURL });
+		const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+		render(BackupSection);
+		await userEvent.click(screen.getByRole('button', { name: 'Export with secrets…' }));
+		const [pass, confirm] = screen.getAllByLabelText(/passphrase/i);
+		await userEvent.type(pass, 'a long enough passphrase');
+		await userEvent.type(confirm, 'a long enough passphrase');
+		await userEvent.click(screen.getByRole('button', { name: 'Download encrypted backup' }));
+
+		await waitFor(() => expect(exportEncryptedMock).toHaveBeenCalledWith('a long enough passphrase'));
+		await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+		expect(revokeURL).toHaveBeenCalledWith('blob:backup');
+		expect(pushToastMock).toHaveBeenCalledWith('Encrypted backup downloaded.', 'success');
+		clickSpy.mockRestore();
 	});
 });
 
@@ -304,6 +310,39 @@ describe('BackupSection — restore', () => {
 
 		await waitFor(() => expect(screen.getByText('Routes imported')).toBeInTheDocument());
 		expect(screen.queryByText('Managed domains imported')).not.toBeInTheDocument();
+	});
+
+	it('asks for the passphrase of an encrypted file and sends it', async () => {
+		postRestoreMock.mockResolvedValue(happyReport);
+		render(BackupSection);
+		const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+		await fireEvent.change(fileInput, {
+			target: { files: [pickFile('{"schema_version":"2.0.0","encryption":{"kdf":"argon2id"}}')] }
+		});
+
+		const passField = await screen.findByLabelText('Backup passphrase');
+		const restoreBtn = screen.getByRole('button', { name: 'Restore' });
+		expect(restoreBtn).toBeDisabled();
+		await userEvent.type(passField, 'the backup passphrase');
+		await userEvent.click(restoreBtn);
+
+		await waitFor(() => expect(postRestoreMock).toHaveBeenCalled());
+		expect(postRestoreMock.mock.calls[0][1].passphrase).toBe('the backup passphrase');
+	});
+
+	it('translates a wrong-passphrase rejection', async () => {
+		postRestoreMock.mockRejectedValue(
+			new ApiError('backup: wrong passphrase', 400, 'validation', undefined, 'passphrase_invalid')
+		);
+		render(BackupSection);
+		const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+		await fireEvent.change(fileInput, {
+			target: { files: [pickFile('{"schema_version":"2.0.0","encryption":{"kdf":"argon2id"}}')] }
+		});
+		await userEvent.type(await screen.findByLabelText('Backup passphrase'), 'not the right one');
+		await userEvent.click(screen.getByRole('button', { name: 'Restore' }));
+
+		expect(await screen.findByText('Wrong passphrase (or the file was altered).')).toBeInTheDocument();
 	});
 
 	it('surfaces the ApiError message verbatim on restore rejection', async () => {
