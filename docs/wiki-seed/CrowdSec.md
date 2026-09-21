@@ -1,5 +1,7 @@
 # CrowdSec
 
+**🌐 English** · [Français](CrowdSec-FR)
+
 [CrowdSec](https://www.crowdsec.net) is a community-powered IP reputation service : a collaborative IDS that lets your hosts share threat intelligence. Arenet ships a native [CrowdSec bouncer](https://github.com/hslatman/caddy-crowdsec-bouncer) that blocks requests from IPs the CrowdSec community has flagged.
 
 **The CrowdSec agent itself runs separately** (typically as a Docker container or systemd service on the same host). Arenet only embeds the *bouncer* — the component that queries the agent's Local API (LAPI) and enforces decisions.
@@ -66,6 +68,8 @@ The command prints an API key — copy it.
 7. **Save**
 
 Within ~30 seconds the bouncer is active. Any inbound request whose source IP is in CrowdSec's current decision list returns **403 Forbidden** before reaching the WAF / route handlers.
+
+Since **v2.26.0**, blocked visitors get Arenet's **branded error page** instead of an empty response: a `ban` decision serves the route's **403** page, a `throttle` decision its **429** page (with a `Retry-After` header matching the decision duration). The page is the one selected for the route in its error-page settings, or the Arenet default — the same pages as the IP filter and upstream errors (see [Custom error pages](Custom-Error-Pages)).
 
 ---
 

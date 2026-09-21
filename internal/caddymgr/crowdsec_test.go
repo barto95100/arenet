@@ -17,6 +17,7 @@
 package caddymgr
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
+	crowdsecbouncer "github.com/hslatman/caddy-crowdsec-bouncer/crowdsec"
 
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -327,6 +329,40 @@ func TestBuildConfigJSON_LoadsCleanly_WithCrowdSec(t *testing.T) {
 	}
 	if app := crowdSecAppFromJSON(t, raw); app == nil {
 		t.Errorf("emitted config has no apps.crowdsec block:\n%s", raw)
+	}
+}
+
+// TestBuildConfigJSON_CrowdSecApp_CaddyErrorDecodesStrictly pins the
+// branded-error-page wiring: apps.crowdsec carries
+// enable_caddy_error=true, and the whole block decodes STRICTLY into
+// the bouncer's own app struct — the field-name check caddy.Validate
+// would do, without dialing LAPI on Provision.
+func TestBuildConfigJSON_CrowdSecApp_CaddyErrorDecodesStrictly(t *testing.T) {
+	raw, err := buildConfigJSON(fixtureCrowdSecRoute(), buildOpts{
+		DevMode:  true,
+		CrowdSec: crowdsecConfig{apiKey: "k", apiURL: "http://127.0.0.1:8080/"},
+	})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var cfg struct {
+		Apps map[string]json.RawMessage `json:"apps"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	block, ok := cfg.Apps["crowdsec"]
+	if !ok {
+		t.Fatalf("no apps.crowdsec block:\n%s", raw)
+	}
+	var app crowdsecbouncer.CrowdSec
+	dec := json.NewDecoder(bytes.NewReader(block))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&app); err != nil {
+		t.Fatalf("apps.crowdsec does not decode strictly into the bouncer's struct: %v\n%s", err, block)
+	}
+	if !app.EnableCaddyError {
+		t.Errorf("enable_caddy_error not set: bans would bypass the branded error pages\n%s", block)
 	}
 }
 
