@@ -1495,10 +1495,14 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// at M.5 with 212 WAF blocks + 3 real backend 404s
 		// that "never collide"), not consistent with it.
 		//
-		// Mechanism in M: internal/waf's Caddy module fires a
-		// callback into the request context that sets a
-		// wafBlocked flag; the metrics middleware reads that
-		// flag and skips the 4xx classification.
+		// Mechanism for the WAF (v2.26): internal/waf returns
+		// its block as a HandlerError whose error implements
+		// SecurityBlock(); the metrics middleware
+		// (internal/metrics metricsStatus) records it outside the
+		// 4xx/5xx classes. (Earlier comments described a
+		// context "wafBlocked" flag that was never implemented;
+		// AC #4 only held because every Caddy error used to be
+		// recorded as 200 — fixed in v2.26.)
 		// hslatman/caddy-crowdsec-bouncer v0.12.1 exposes NO
 		// callback hook of any shape (confirmed by source
 		// read of internal/core/core.go and

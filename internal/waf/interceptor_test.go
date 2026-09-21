@@ -199,3 +199,15 @@ func TestInterceptor_PassThroughBodyStillWritten(t *testing.T) {
 		t.Errorf("code=%d body=%d", rec.Code, rec.Body.Len())
 	}
 }
+
+// The WAF's interruption error must be recognised as a security block
+// by the route metrics middleware (matched by behaviour through
+// caddyhttp.HandlerError's Unwrap), so WAF blocks stay out of the 4xx
+// class — Step M spec AC #4.
+func TestInterruptionErrorIsSecurityBlock(t *testing.T) {
+	err := error(caddyhttp.HandlerError{StatusCode: http.StatusForbidden, Err: errInterruptionTriggered})
+	var sb interface{ SecurityBlock() bool }
+	if !errors.As(err, &sb) || !sb.SecurityBlock() {
+		t.Fatal("WAF interruption error is not seen as a security block through HandlerError")
+	}
+}
