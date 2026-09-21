@@ -46,7 +46,10 @@
 		"forbidden": "Interdit",
 		"notFound": "Introuvable",
 		"internal": "Erreur interne du serveur",
-		"networkOffline": "Réseau inaccessible"
+		"networkOffline": "Réseau inaccessible",
+		"passphrase_required": "Ce backup est chiffré : saisis sa phrase secrète.",
+		"passphrase_invalid": "Phrase secrète incorrecte (ou fichier modifié).",
+		"passphrase_too_short": "La phrase secrète doit faire au moins {min} caractères."
 	},
 	"sidebar": {
 		"sectionOverview": "Aperçu",
@@ -1306,9 +1309,17 @@
 		"reportApiTokensImported": "Tokens de comptes de service importés",
 		"reportSentinelsInherited": "Sentinels hérités",
 		"reportSentinelsUnresolved": "Sentinels non résolus (cleared)",
-		"confirmDialogTitle": "Exporter avec secrets en clair ?",
-		"confirmDialogMessage": "Le fichier exporté contiendra en clair les hashes des mots de passe admin, les identifiants DNS, les clés privées TLS, les secrets clients OIDC et forward-auth, les hashes Basic Auth par route, les identifiants des canaux d'alerte (mot de passe SMTP, URL de webhook), les clés CrowdSec et les hashes des tokens de comptes de service. Le navigateur sauvera le fichier avec ses permissions par défaut — stocke-le à un emplacement restreint et envisage de le chiffrer at rest (age / GPG / vault).",
-		"confirmDialogConfirm": "Télécharger avec secrets"
+		"confirmDialogTitle": "Exporter avec les secrets (chiffré)",
+		"confirmDialogMessage": "Tous les secrets du fichier (hashes de mots de passe, identifiants DNS, clés privées TLS, secrets OIDC / forward-auth / CrowdSec, identifiants des canaux d'alerte, hashes des tokens de comptes de service) sont chiffrés avec cette phrase secrète. Conserve-la : sans elle, le fichier ne pourra être restauré que sans ses secrets.",
+		"confirmDialogConfirm": "Télécharger le backup chiffré",
+		"passphraseLabel": "Phrase secrète (au moins {min} caractères)",
+		"passphraseConfirmLabel": "Confirme la phrase secrète",
+		"errPassphraseTooShort": "Au moins {min} caractères.",
+		"errPassphraseMismatch": "Les deux phrases ne correspondent pas.",
+		"cancel": "Annuler",
+		"toastExportEncrypted": "Backup chiffré téléchargé.",
+		"restorePassphraseLabel": "Phrase secrète du backup",
+		"restorePassphraseHelper": "Ce backup est chiffré : saisis la phrase secrète choisie à l'export."
 	},
 	"serverPosition": {
 		"title": "Position du serveur",

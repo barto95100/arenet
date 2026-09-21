@@ -19,8 +19,6 @@ package backup
 import (
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -39,74 +37,8 @@ import (
 // known field paths.
 func redactSnapshotInPlace(s *Snapshot) {
 	s.SecretsIncluded = false
-
-	for i := range s.Routes {
-		r := &s.Routes[i]
-		// routes[].basic_auth.password_hash
-		if r.BasicAuth.PasswordHash != "" {
-			r.BasicAuth.PasswordHash = SentinelLiteral
-		}
-		// routes[].path_rules[].basic_auth.password_hash (v2.29 — was
-		// exported as-is). The slice and its BasicAuth pointers are
-		// cloned so the live route is never mutated.
-		if len(r.PathRules) > 0 {
-			rules := slices.Clone(r.PathRules)
-			for j := range rules {
-				if ba := rules[j].BasicAuth; ba != nil && ba.PasswordHash != "" {
-					cp := *ba
-					cp.PasswordHash = SentinelLiteral
-					rules[j].BasicAuth = &cp
-				}
-			}
-			r.PathRules = rules
-		}
-		// routes[].request_headers / response_headers values of
-		// credential-bearing headers (v2.29, IsSensitiveHeader).
-		r.RequestHeaders = redactHeaders(r.RequestHeaders)
-		r.ResponseHeaders = redactHeaders(r.ResponseHeaders)
-	}
-	for i := range s.Users {
-		// users[].password_hash
-		if s.Users[i].PasswordHash != "" {
-			s.Users[i].PasswordHash = SentinelLiteral
-		}
-	}
-	for i := range s.DNSProviders {
-		// dns_providers[].credentials.<key> for every secret field of
-		// the provider's type (registry-driven, v2.26). The map is
-		// cloned so the caller's config is never mutated.
-		d := &s.DNSProviders[i]
-		d.Credentials = maps.Clone(d.Credentials)
-		for _, k := range storage.SecretKeys(d.Type) {
-			if d.Credentials[k] != "" {
-				d.Credentials[k] = SentinelLiteral
-			}
-		}
-	}
-	for i := range s.ForwardAuthProviders {
-		// forward_auth_providers[].client_secret
-		if s.ForwardAuthProviders[i].ClientSecret != "" {
-			s.ForwardAuthProviders[i].ClientSecret = SentinelLiteral
-		}
-	}
-	// oidc_config.client_secret
-	if s.OIDCConfig.ClientSecret != "" {
-		s.OIDCConfig.ClientSecret = SentinelLiteral
-	}
-	// maxmind_config.license_key
-	if s.MaxMindConfig != nil && s.MaxMindConfig.LicenseKey != "" {
-		s.MaxMindConfig.LicenseKey = SentinelLiteral
-	}
-	for i := range s.ExternalCertificates {
-		// external_certificates[].keyPEM is the private key (SECRET).
-		// CertPEM / ChainPEM / metadata are public and travel verbatim.
-		if s.ExternalCertificates[i].KeyPEM != "" {
-			s.ExternalCertificates[i].KeyPEM = SentinelLiteral
-		}
-	}
-	// extras (v2.29): alert channel config secrets, CrowdSec API key,
-	// watcher password, service-account token hashes.
-	redactExtras(s.Extras)
+	// The sentinel function never fails.
+	_ = visitSecrets(s, func(string, string) (string, error) { return SentinelLiteral, nil })
 }
 
 // unresolvedSentinel is the dedicated error returned by the
@@ -222,22 +154,6 @@ func (e *ErrSchemaMajorMismatch) Error() string {
 // credential that backups must treat as a secret (v2.29). The rule
 // lives in storage, which also seals these values at rest.
 func IsSensitiveHeader(name string) bool { return storage.IsSensitiveHeader(name) }
-
-// redactHeaders returns a copy of h with sensitive values replaced by
-// the sentinel (nil stays nil).
-func redactHeaders(h map[string]string) map[string]string {
-	if h == nil {
-		return nil
-	}
-	out := make(map[string]string, len(h))
-	for k, v := range h {
-		if v != "" && IsSensitiveHeader(k) {
-			v = SentinelLiteral
-		}
-		out[k] = v
-	}
-	return out
-}
 
 // pathRuleHashField is the resolve/cleared identity of a path rule's
 // basic-auth hash within its route.

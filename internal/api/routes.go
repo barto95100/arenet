@@ -445,6 +445,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Delete("/admin/users/service-accounts/{id}", h.deleteServiceAccount)
 				// Step K.3 — backup / restore.
 				r.Get("/admin/backup", h.getBackup)
+				r.Post("/admin/backup", h.postBackup)
 				r.Post("/admin/restore", h.postRestore)
 				// Step O.3 — managed-domain CRUD writes.
 				// POST creates + runs the D8.A migration

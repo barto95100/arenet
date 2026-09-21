@@ -28,7 +28,7 @@ defined it.
 | Config file path | `""` | `ARENET_CONFIG` | (n/a — self-referential) |
 
 Plus the K.3 backup/restore flags (`--export`, `--restore`,
-`--include-secrets`, `--allow-incomplete-restore`,
+`--include-secrets`, `--passphrase-file`, `--allow-incomplete-restore`,
 `--allow-empty-users`) and the S.1 healthcheck flag
 (`--healthcheck`); these all have matching `ARENET_*` env vars
 and TOML keys, see `arenet --help` for the canonical list.

@@ -78,10 +78,17 @@ type Config struct {
 	ExportPath  string `toml:"export"`
 	RestorePath string `toml:"restore"`
 
-	// IncludeSecrets: K.3 flag on --export to keep plaintext
-	// secrets in the output (default redacts them). Prints a
-	// warning to stderr when set.
+	// IncludeSecrets: K.3 flag on --export to keep the secrets in
+	// the output (default redacts them). Since v2.31 the secrets are
+	// encrypted with a passphrase: PassphraseFile or the
+	// ARENET_BACKUP_PASSPHRASE env var is required.
 	IncludeSecrets bool `toml:"include-secrets"`
+
+	// PassphraseFile: v2.31 path of a file holding the backup
+	// passphrase (--export --include-secrets, --restore of an
+	// encrypted backup). The passphrase itself is never a config
+	// field, so it cannot end up in a dumped config.
+	PassphraseFile string `toml:"passphrase-file"`
 
 	// AllowIncompleteRestore: K.3 flag on --restore allowing
 	// imports whose secret sentinels cannot be inherited from
@@ -164,19 +171,20 @@ func Load(args []string) (*Config, error) {
 	// now.
 	flagSet := flag.NewFlagSet("arenet", flag.ContinueOnError)
 	var (
-		fAdminPort   = flagSet.String("admin-port", "", "address:port for the admin API (e.g. :8001). Loopback default per spec D6; override with 0.0.0.0:8001 for LAN admin access.")
-		fDataDir     = flagSet.String("data-dir", "", "directory where Arenet stores its persistent state (arenet.db, metrics.db, audit.db, certmagic/).")
-		fDev         = flagSet.Bool("dev", false, "enable development mode (verbose logging, no TLS auto-issuance).")
-		fInsertTest  = flagSet.Bool("insert-test-route", false, "insert a fixture test route at boot (local smoke only).")
-		fExport      = flagSet.String("export", "", "Step K.3: export the configuration to PATH and exit (default redacts secrets).")
-		fRestore     = flagSet.String("restore", "", "Step K.3: restore the configuration from PATH and exit (before Caddy starts).")
-		fInclSec     = flagSet.Bool("include-secrets", false, "Step K.3: include plaintext secrets in --export output (warning printed to stderr).")
-		fAllowIncRes = flagSet.Bool("allow-incomplete-restore", false, "Step K.3: accept --restore inputs whose sentinels cannot be inherited; affected secret fields are cleared.")
-		fAllowEmptyU = flagSet.Bool("allow-empty-users", false, "Step K.3: accept --restore inputs with zero users (next boot re-triggers the setup-token flow).")
-		fUIOrigin    = flagSet.String("ui-origin", "", "Step K.2 dev: absolute origin of the SPA dev server (e.g. http://localhost:5173); empty in prod (static SPA served by Arenet).")
-		fHealthcheck     = flagSet.String("healthcheck", "", "Step S.1: probe URL (e.g. http://127.0.0.1:8001/healthz) and exit 0 on 2xx, 1 otherwise. Used as the Docker compose healthcheck command since distroless has no curl. Never starts the server.")
-		fTopologyTickMs  = flagSet.Int("topology-tick-ms", 0, "Phase 2 #R-TOPO-v2: emit cadence of the /api/v1/topology/stream WebSocket in milliseconds. Default 2000. Snapped UP to the nearest multiple of 1000 (source metrics tick is 1 Hz).")
-		fConfig          = flagSet.String("config", "", "Step S.3: path to a TOML config file. Optional; env vars + flags override file values (precedence: flag > env > file > default).")
+		fAdminPort      = flagSet.String("admin-port", "", "address:port for the admin API (e.g. :8001). Loopback default per spec D6; override with 0.0.0.0:8001 for LAN admin access.")
+		fDataDir        = flagSet.String("data-dir", "", "directory where Arenet stores its persistent state (arenet.db, metrics.db, audit.db, certmagic/).")
+		fDev            = flagSet.Bool("dev", false, "enable development mode (verbose logging, no TLS auto-issuance).")
+		fInsertTest     = flagSet.Bool("insert-test-route", false, "insert a fixture test route at boot (local smoke only).")
+		fExport         = flagSet.String("export", "", "Step K.3: export the configuration to PATH and exit (default redacts secrets).")
+		fRestore        = flagSet.String("restore", "", "Step K.3: restore the configuration from PATH and exit (before Caddy starts).")
+		fInclSec        = flagSet.Bool("include-secrets", false, "Step K.3: include the secrets in --export output, encrypted with the backup passphrase (--passphrase-file or ARENET_BACKUP_PASSPHRASE).")
+		fPassFile       = flagSet.String("passphrase-file", "", "v2.31: file holding the backup passphrase (--export --include-secrets, --restore of an encrypted backup).")
+		fAllowIncRes    = flagSet.Bool("allow-incomplete-restore", false, "Step K.3: accept --restore inputs whose sentinels cannot be inherited; affected secret fields are cleared.")
+		fAllowEmptyU    = flagSet.Bool("allow-empty-users", false, "Step K.3: accept --restore inputs with zero users (next boot re-triggers the setup-token flow).")
+		fUIOrigin       = flagSet.String("ui-origin", "", "Step K.2 dev: absolute origin of the SPA dev server (e.g. http://localhost:5173); empty in prod (static SPA served by Arenet).")
+		fHealthcheck    = flagSet.String("healthcheck", "", "Step S.1: probe URL (e.g. http://127.0.0.1:8001/healthz) and exit 0 on 2xx, 1 otherwise. Used as the Docker compose healthcheck command since distroless has no curl. Never starts the server.")
+		fTopologyTickMs = flagSet.Int("topology-tick-ms", 0, "Phase 2 #R-TOPO-v2: emit cadence of the /api/v1/topology/stream WebSocket in milliseconds. Default 2000. Snapped UP to the nearest multiple of 1000 (source metrics tick is 1 Hz).")
+		fConfig         = flagSet.String("config", "", "Step S.3: path to a TOML config file. Optional; env vars + flags override file values (precedence: flag > env > file > default).")
 	)
 	// Track which flags were explicitly set so we can apply ONLY
 	// those (vs zero-value defaults that should NOT override file
@@ -235,6 +243,9 @@ func Load(args []string) (*Config, error) {
 	}
 	if wasSet["include-secrets"] {
 		cfg.IncludeSecrets = *fInclSec
+	}
+	if wasSet["passphrase-file"] {
+		cfg.PassphraseFile = *fPassFile
 	}
 	if wasSet["allow-incomplete-restore"] {
 		cfg.AllowIncompleteRestore = *fAllowIncRes
@@ -300,6 +311,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v, ok := os.LookupEnv("ARENET_RESTORE"); ok {
 		cfg.RestorePath = v
+	}
+	if v, ok := os.LookupEnv("ARENET_BACKUP_PASSPHRASE_FILE"); ok {
+		cfg.PassphraseFile = v
 	}
 	if v, ok := os.LookupEnv("ARENET_INCLUDE_SECRETS"); ok {
 		if b, err := strconv.ParseBool(v); err == nil {
