@@ -154,6 +154,23 @@
 	// proportionate without hammering the backend GETs.
 	const CERT_REFRESH_INTERVAL_MS = 20000;
 
+	// Burst polling right after a wildcard apex is declared: DNS-01
+	// issuance typically lands 10-60 s later, so waiting for the 20 s
+	// cadence left the operator staring at an unchanged page (and
+	// reloading by hand). Poll every 3 s for up to 2 min, then fall
+	// back to the normal cadence.
+	const ISSUANCE_POLL_INTERVAL_MS = 3000;
+	const ISSUANCE_POLL_WINDOW_MS = 120000;
+
+	// Apexes declared in this session whose wildcard cert has not
+	// landed yet: apex → declaration time (ms). Drives the burst poll
+	// and the "Issuance in progress…" badge on the policy row. An apex
+	// leaves the map when its cert settles or its window expires (an
+	// OBTAIN_FAILED or stale failure is then surfaced by the Domaines
+	// table's own badges).
+	let issuing = $state<Record<string, number>>({});
+	let issuanceTimer: ReturnType<typeof setInterval> | null = null;
+
 	// Drill-down modal state. drillDownDomain holds the domain
 	// the operator clicked the badge for ; null = closed. The
 	// modal reads certEventsByDomain[drillDownDomain] to render
@@ -340,6 +357,59 @@
 		return `${days}${daySuffix}`;
 	}
 
+	/** True once the apex's wildcard cert is in the list with a real
+	 *  status (issued, renewing, expired or failed). */
+	function wildcardSettled(apex: string): boolean {
+		const cert = certs.find((c) => c.domain === `*.${apex}`);
+		return cert !== undefined && cert.status !== 'UNKNOWN';
+	}
+
+	function isIssuing(apex: string): boolean {
+		return apex in issuing && !wildcardSettled(apex);
+	}
+
+	function stopIssuancePolling(): void {
+		if (issuanceTimer !== null) {
+			clearInterval(issuanceTimer);
+			issuanceTimer = null;
+		}
+	}
+
+	async function issuanceTick(): Promise<void> {
+		await loadCertificates();
+		const now = Date.now();
+		const next: Record<string, number> = {};
+		let settledAny = false;
+		for (const [apex, startedAt] of Object.entries(issuing)) {
+			if (wildcardSettled(apex)) {
+				settledAny = true;
+			} else if (now - startedAt < ISSUANCE_POLL_WINDOW_MS) {
+				next[apex] = startedAt;
+			}
+		}
+		issuing = next;
+		// Same ordering as load(): events after the cert list, so a
+		// cert that just landed gets its badge data this tick.
+		if (settledAny) void loadCertEvents();
+		if (Object.keys(next).length === 0) stopIssuancePolling();
+	}
+
+	/** Wizard onCreated: refresh the policies, mark every newly
+	 *  declared apex as issuing and start the burst poll. */
+	async function onWildcardCreated(): Promise<void> {
+		const before = new Set(domains.map((d) => d.apex));
+		await loadManagedDomains();
+		const now = Date.now();
+		const next = { ...issuing };
+		for (const d of domains) {
+			if (!before.has(d.apex)) next[d.apex] = now;
+		}
+		issuing = next;
+		if (issuanceTimer === null && Object.keys(issuing).length > 0) {
+			issuanceTimer = setInterval(() => void issuanceTick(), ISSUANCE_POLL_INTERVAL_MS);
+		}
+	}
+
 	async function load(): Promise<void> {
 		try {
 			const [rs] = await Promise.all([
@@ -372,6 +442,10 @@
 		mdDeleteError = null;
 		try {
 			await settingsApi.deleteManagedDomain(mdDeleteApex, mdDeleteRevertTo);
+			if (mdDeleteApex in issuing) {
+				const { [mdDeleteApex]: _removed, ...rest } = issuing;
+				issuing = rest;
+			}
 			mdDeleteOpen = false;
 			await loadManagedDomains();
 		} catch (err) {
@@ -422,7 +496,10 @@
 		const id = setInterval(() => {
 			void loadCertificates().then(() => loadCertEvents());
 		}, CERT_REFRESH_INTERVAL_MS);
-		return () => clearInterval(id);
+		return () => {
+			clearInterval(id);
+			stopIssuancePolling();
+		};
 	});
 </script>
 
@@ -760,6 +837,18 @@
 								Provider: <span class="mono">{labelForProvider(md.providerId)}</span>
 								{#if md.includeApex}· {language.current && t('certs.policiesIncludesApex')}{/if}
 							</div>
+							{#if isIssuing(md.apex)}
+								<div
+									class="md-issuing"
+									role="status"
+									data-testid="md-issuing"
+									data-apex={md.apex}
+									title={language.current && t('certs.policiesIssuingHint')}
+								>
+									<Spinner size="sm" />
+									{language.current && t('certs.policiesIssuing')}
+								</div>
+							{/if}
 						</div>
 						<Button
 							variant="ghost"
@@ -790,15 +879,16 @@
 
 <!-- Step T T.5 — wizard mount. Always mounted, gated by `open`
      prop so form state survives reopens within a session.
-     loadManagedDomains is the onCreated callback so the new
-     policy row appears in the list the moment the wizard closes.
+     onWildcardCreated is the onCreated callback: the new policy
+     row appears the moment the wizard closes, flagged "Issuance
+     in progress…" while a 3 s burst poll waits for its cert.
      One-way prop + explicit onClose callback (same pattern as
      the delete-managed-domain Modal above) avoids the
      bidirectional-state surprises of $bindable. -->
 <WildcardApexWizard
 	open={wizardOpen}
 	onClose={() => (wizardOpen = false)}
-	onCreated={loadManagedDomains}
+	onCreated={onWildcardCreated}
 />
 
 <!-- Delete-managed-domain modal — verbatim port of the
@@ -1119,6 +1209,14 @@
 	}
 	.md-meta {
 		min-width: 0;
+	}
+	.md-issuing {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-top: 4px;
+		font-size: 12px;
+		color: var(--fg-muted);
 	}
 	.md-apex {
 		font-size: 13px;

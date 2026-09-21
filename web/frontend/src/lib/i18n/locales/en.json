@@ -1395,6 +1395,8 @@
 		"dnsUnconfiguredTitle": "DNS provider unconfigured.",
 		"dnsUnconfiguredHelper": "Wildcard issuance is disabled — covered routes will serve self-signed certs from Caddy's internal CA until you configure the DNS provider in",
 		"policiesIncludesApex": "includes apex",
+		"policiesIssuing": "Issuance in progress…",
+		"policiesIssuingHint": "The certificate is being requested (DNS-01). This page refreshes on its own.",
 		"policiesDeleteAriaLabel": "Delete managed domain {apex}",
 		"policiesDeleteButton": "Delete",
 		"policiesFoot": "Declaring an apex marks every existing route under *.<apex> as covered by the wildcard. The per-route ACME selector is hidden in the route editor, and the certificate is provisioned once for every subdomain.",
