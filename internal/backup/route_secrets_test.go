@@ -26,7 +26,7 @@ import (
 	"github.com/barto95100/arenet/internal/storage"
 )
 
-// v2.26 — path-rule basic-auth hashes and credential-bearing route
+// v2.29 — path-rule basic-auth hashes and credential-bearing route
 // headers are secrets in backups (were exported as-is).
 
 func secretRoute() storage.Route {

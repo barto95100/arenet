@@ -112,6 +112,13 @@ const happyReport: RestoreReport = {
 	forwardAuthProvidersImported: 0,
 	oidcConfigImported: true,
 	maxmindConfigImported: false,
+	externalCertificatesImported: 0,
+	extrasImported: false,
+	managedDomainsImported: 0,
+	errorTemplatesImported: 0,
+	alertChannelsImported: 0,
+	alertRulesImported: 0,
+	apiTokensImported: 0,
 	sentinelsInheritedTotal: 2,
 	sentinelsUnresolvedTotal: 0,
 	incompleteRows: 0
@@ -256,6 +263,47 @@ describe('BackupSection — restore', () => {
 		expect(screen.getByText('yes')).toBeInTheDocument();
 		// Sentinels inherited count.
 		expect(screen.getByText('2')).toBeInTheDocument();
+	});
+
+	it('shows the extras counts only when the backup carried them', async () => {
+		postRestoreMock.mockResolvedValue({
+			...happyReport,
+			extrasImported: true,
+			managedDomainsImported: 4,
+			apiTokensImported: 7
+		});
+		render(BackupSection);
+
+		const fileInput = document.querySelector(
+			'input[type="file"]'
+		) as HTMLInputElement;
+		await fireEvent.change(fileInput, {
+			target: { files: [pickFile('{"schema_version":"1.0.0"}')] }
+		});
+		await userEvent.click(screen.getByRole('button', { name: 'Restore' }));
+
+		await waitFor(() => {
+			expect(screen.getByText('Managed domains imported')).toBeInTheDocument();
+		});
+		expect(screen.getByText('4')).toBeInTheDocument();
+		expect(screen.getByText('7')).toBeInTheDocument();
+		expect(screen.getByText('Service-account tokens imported')).toBeInTheDocument();
+	});
+
+	it('hides the extras counts for a pre-v2.26 backup', async () => {
+		postRestoreMock.mockResolvedValue(happyReport);
+		render(BackupSection);
+
+		const fileInput = document.querySelector(
+			'input[type="file"]'
+		) as HTMLInputElement;
+		await fireEvent.change(fileInput, {
+			target: { files: [pickFile('{"schema_version":"1.0.0"}')] }
+		});
+		await userEvent.click(screen.getByRole('button', { name: 'Restore' }));
+
+		await waitFor(() => expect(screen.getByText('Routes imported')).toBeInTheDocument());
+		expect(screen.queryByText('Managed domains imported')).not.toBeInTheDocument();
 	});
 
 	it('surfaces the ApiError message verbatim on restore rejection', async () => {

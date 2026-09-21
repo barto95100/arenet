@@ -75,6 +75,56 @@ s'en sert jamais (pas de `--resume`).
    existante de même id.
 4. Doc : wiki Backup-Restore EN/FR (ce qui est inclus), release note.
 
+## PR « backup complet » (ajoutée le 2026-09-21)
+
+Constat : le backup ne contient que routes, utilisateurs, DNS,
+forward-auth, OIDC, MaxMind et certificats externes. **Absents** :
+domaines gérés (wildcards), modèles de pages d'erreur, page de maintenance,
+canaux + règles d'alerte, config CrowdSec, automatisation (identifiants
+watcher + règles), réglages (vérif. mises à jour, mise à jour GeoIP,
+position serveur), tokens des comptes de service (les comptes sont
+restaurés, pas leurs tokens → comptes inutilisables).
+
+- Nouvelle section `extras` (`SnapshotExtras`) : **absente** (backup
+  ≤ v2.25) → aucun de ces buckets n'est touché ; **présente** → chaque
+  bucket est remplacé (un singleton absent = ligne supprimée).
+- État d'exécution non exporté : `last_*` des canaux et règles,
+  `last_used_at` des tokens ; position serveur exportée seulement en mode
+  `manual`.
+- Secrets (sentinelles, héritage par identité à l'import) : mot de passe
+  SMTP, **URL** et en-têtes des webhooks (une URL Discord / Slack est un
+  secret), clé API CrowdSec, mot de passe watcher, `token_hash` (un token
+  non résolu est retiré de la restauration, pas restauré vide).
+- Validation : domaines (+ fournisseur DNS présent), modèles (+ un seul
+  catch-all), canaux (par type), règles (+ canaux présents), CrowdSec,
+  watcher, jeu de règles d'automatisation, tokens (utilisateur = compte de
+  service présent, un seul token actif par compte).
+- Après restauration : rechargement Caddy (existant) + application
+  CrowdSec, automatisation, planification des vérifications de mise à
+  jour et de la mise à jour GeoIP.
+
+Précisions d'implémentation (2026-09-21) :
+
+- Tokens lus en lignes brutes par `storage.ListAPITokenRows` (storage
+  possède le bucket, pas le type) → aucune signature `Export` / `Import`
+  modifiée.
+- Position serveur : absente du backup (mode auto) → la ligne en place est
+  **conservée** (exception à « singleton absent = supprimé »).
+- Règles d'automatisation stockées sous l'enveloppe `{"rules": RuleSet}`
+  (écrite par l'API) : la validation décode cette enveloppe.
+- CrowdSec restauré : `ApplyCrowdSecConfig` remplace le rechargement
+  Caddy (un seul rechargement, couvert par le rollback) ; en cas d'échec,
+  la base est restaurée et les réglages d'avant sont ré-appliqués. Ligne
+  CrowdSec absente du backup → réglages en cours conservés jusqu'au
+  prochain démarrage (repli sur les variables d'environnement).
+- Automatisation, vérif. des mises à jour, GeoIP : appliqués après un
+  rechargement réussi, au mieux (la base reste la référence au boot).
+- Smoke binaire réel (2 instances) : le token d'un compte de service de A
+  authentifie sur B après restauration et après redémarrage ; le bouncer
+  de B bascule à chaud sur la clé restaurée ; export sans secrets sans
+  fuite ; restauration sans secrets sur la même instance → 6 sentinelles
+  héritées, secrets intacts.
+
 ## PR 2 — chiffrement au repos
 
 - **Package** `internal/secrets` (nouveau, justifié : primitive transverse

@@ -91,6 +91,10 @@ type Snapshot struct {
 	// external_certificates key → this field decodes to nil, which
 	// imports cleanly (backward-compat).
 	ExternalCertificates []storage.ExternalCertificate `json:"external_certificates"`
+	// Extras (v2.29) carries every other config area (see
+	// SnapshotExtras). nil in a pre-v2.29 backup → those areas are
+	// left untouched by the restore.
+	Extras *SnapshotExtras `json:"extras,omitempty"`
 }
 
 // ImportOptions controls the two opt-in bypass flags. Both default
@@ -131,6 +135,14 @@ type ImportReport struct {
 	OIDCConfigImported           bool
 	MaxMindConfigImported        bool
 	ExternalCertificatesImported int
+	// ExtrasImported is true when the snapshot carried the v2.29
+	// extras section (and therefore replaced those areas).
+	ExtrasImported         bool
+	ManagedDomainsImported int
+	ErrorTemplatesImported int
+	AlertChannelsImported  int
+	AlertRulesImported     int
+	APITokensImported      int
 	// SentinelsInheritedTotal counts sentinel occurrences resolved
 	// by ID match against the live store.
 	SentinelsInheritedTotal int
@@ -151,7 +163,7 @@ type ImportReport struct {
 // AllowIncompleteRestore. The caller persists the same names in
 // the audit event so a post-mortem can list every affected surface.
 type IncompleteRow struct {
-	Entity   string // "routes", "users", "dns_providers", "forward_auth_providers", "oidc_config", "maxmind_config"
+	Entity   string // "routes", "users", "dns_providers", "forward_auth_providers", "oidc_config", "maxmind_config", "alert_channels", "crowdsec_config", "crowdsec_watcher", "api_tokens"
 	Identity string // route id, user id, "ovh", provider name, or "default"
 	Field    string // "basic_auth.password_hash", "password_hash", "application_key", etc.
 }

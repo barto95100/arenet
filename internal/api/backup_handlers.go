@@ -17,6 +17,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,7 +29,9 @@ import (
 	"time"
 
 	"github.com/barto95100/arenet/internal/audit"
+	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/backup"
+	"github.com/barto95100/arenet/internal/storage"
 )
 
 // Step K.3 — backup / restore HTTP surface.
@@ -201,9 +204,13 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 	// we stay loud (500 + audit) and don't attempt a rollback-of-
 	// rollback. Re-applying a known-good state is the
 	// incompressible edge.
-	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
+	crowdSecSwapped, err := h.reloadAfterRestore(r.Context(), report.ExtrasImported)
+	if err != nil {
 		h.logger.Error("backup: caddy reload after restore failed — rolling back BoltDB", "err", err)
 		rollbackErr := h.store.RestoreSnapshot(r.Context(), rollbackInput)
+		if rollbackErr == nil && crowdSecSwapped {
+			h.restoreCrowdSecAfterRollback(r.Context(), preSnapshot)
+		}
 		if rollbackErr != nil {
 			// Edge incompressible — log + audit, no further attempt.
 			h.logger.Error("backup: ROLLBACK FAILED after caddy reload failure", "rollback_err", rollbackErr, "reload_err", err)
@@ -229,10 +236,14 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if report.ExtrasImported {
+		h.applyRestoredSettings(r.Context())
+	}
+
 	h.appendAudit(r, audit.Event{
 		Action: audit.ActionConfigRestored,
 		Message: fmt.Sprintf(
-			"source_sha256=%s schema_version=%s secrets_included_in_source=%t allow_incomplete_restore=%t routes_imported=%d users_imported=%d dns_providers_imported=%d forward_auth_providers_imported=%d oidc_config_imported=%t maxmind_config_imported=%t external_certificates_imported=%d sentinels_inherited_total=%d sentinels_unresolved_total=%d",
+			"source_sha256=%s schema_version=%s secrets_included_in_source=%t allow_incomplete_restore=%t routes_imported=%d users_imported=%d dns_providers_imported=%d forward_auth_providers_imported=%d oidc_config_imported=%t maxmind_config_imported=%t external_certificates_imported=%d extras_imported=%t managed_domains_imported=%d error_templates_imported=%d alert_channels_imported=%d alert_rules_imported=%d api_tokens_imported=%d sentinels_inherited_total=%d sentinels_unresolved_total=%d",
 			sha,
 			report.SchemaVersion,
 			report.SecretsIncludedInSource,
@@ -244,6 +255,12 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 			report.OIDCConfigImported,
 			report.MaxMindConfigImported,
 			report.ExternalCertificatesImported,
+			report.ExtrasImported,
+			report.ManagedDomainsImported,
+			report.ErrorTemplatesImported,
+			report.AlertChannelsImported,
+			report.AlertRulesImported,
+			report.APITokensImported,
 			report.SentinelsInheritedTotal,
 			report.SentinelsUnresolvedTotal,
 		),
@@ -257,6 +274,12 @@ func (h *Handler) postRestore(w http.ResponseWriter, r *http.Request) {
 		OIDCConfigImported:           report.OIDCConfigImported,
 		MaxMindConfigImported:        report.MaxMindConfigImported,
 		ExternalCertificatesImported: report.ExternalCertificatesImported,
+		ExtrasImported:               report.ExtrasImported,
+		ManagedDomainsImported:       report.ManagedDomainsImported,
+		ErrorTemplatesImported:       report.ErrorTemplatesImported,
+		AlertChannelsImported:        report.AlertChannelsImported,
+		AlertRulesImported:           report.AlertRulesImported,
+		APITokensImported:            report.APITokensImported,
 		SentinelsInheritedTotal:      report.SentinelsInheritedTotal,
 		SentinelsUnresolvedTotal:     report.SentinelsUnresolvedTotal,
 		IncompleteRows:               len(report.IncompleteRows),
@@ -271,9 +294,93 @@ type restoreResponse struct {
 	OIDCConfigImported           bool `json:"oidcConfigImported"`
 	MaxMindConfigImported        bool `json:"maxmindConfigImported"`
 	ExternalCertificatesImported int  `json:"externalCertificatesImported"`
+	ExtrasImported               bool `json:"extrasImported"`
+	ManagedDomainsImported       int  `json:"managedDomainsImported"`
+	ErrorTemplatesImported       int  `json:"errorTemplatesImported"`
+	AlertChannelsImported        int  `json:"alertChannelsImported"`
+	AlertRulesImported           int  `json:"alertRulesImported"`
+	APITokensImported            int  `json:"apiTokensImported"`
 	SentinelsInheritedTotal      int  `json:"sentinelsInheritedTotal"`
 	SentinelsUnresolvedTotal     int  `json:"sentinelsUnresolvedTotal"`
 	IncompleteRows               int  `json:"incompleteRows"`
+}
+
+// reloadAfterRestore rebuilds the Caddy config from the restored
+// store. When the backup carried the extras section and a CrowdSec
+// row, the restored LAPI settings are swapped in with the same single
+// reload (crowdSecSwapped reports it, so a rollback can swap back).
+// A restore that deleted the CrowdSec row keeps the running settings
+// until the next boot, which falls back to the env vars.
+func (h *Handler) reloadAfterRestore(ctx context.Context, extras bool) (crowdSecSwapped bool, err error) {
+	if extras && h.crowdsecApplier != nil {
+		cs, csErr := h.store.GetCrowdSecConfig(ctx)
+		switch {
+		case csErr == nil:
+			return true, h.crowdsecApplier.ApplyCrowdSecConfig(ctx, cs.LAPIURL, cs.APIKey)
+		case !errors.Is(csErr, storage.ErrNotFound):
+			return false, fmt.Errorf("read restored crowdsec config: %w", csErr)
+		}
+	}
+	return false, h.caddy.ReloadFromStore(ctx)
+}
+
+// restoreCrowdSecAfterRollback puts the pre-restore CrowdSec settings
+// back in the manager after a rolled-back restore. The BoltDB is
+// already rolled back, so the reload this triggers serves the
+// pre-restore config. Best effort: failures are logged.
+func (h *Handler) restoreCrowdSecAfterRollback(ctx context.Context, pre *backup.Snapshot) {
+	if pre.Extras == nil || pre.Extras.CrowdSecConfig == nil {
+		h.logger.Warn("backup: rollback — CrowdSec settings were env-driven before the restore; restart Arenet to re-apply them")
+		return
+	}
+	cs := pre.Extras.CrowdSecConfig
+	if err := h.crowdsecApplier.ApplyCrowdSecConfig(ctx, cs.LAPIURL, cs.APIKey); err != nil {
+		h.logger.Error("backup: rollback — re-applying pre-restore CrowdSec settings failed", "err", err)
+	}
+}
+
+// applyRestoredSettings pushes the restored automation rules and
+// credentials, update-check and GeoIP-update settings into the
+// running services (the Caddy-facing areas were applied by the
+// reload). Best effort: the store is the source of truth and the
+// next boot re-reads it, so failures are logged, not returned.
+func (h *Handler) applyRestoredSettings(ctx context.Context) {
+	if mgr := automation.GetManager(); mgr != nil {
+		rules, err := h.loadRules(ctx)
+		if err != nil {
+			h.logger.Warn("backup: reload restored automation rules failed; using defaults", "err", err)
+			rules = automation.DefaultRuleSet()
+		}
+		mgr.SetRules(rules)
+		creds, err := h.store.GetWatcherCredentials(ctx)
+		switch {
+		case err == nil && storage.WatcherCredentialsConfigured(creds):
+			if err := mgr.SetCredentials(automation.WatcherConfig{
+				LAPIURL: creds.LAPIURL, MachineID: creds.MachineID, Password: creds.Password,
+			}); err != nil {
+				h.logger.Warn("backup: restored watcher credentials rejected", "err", err)
+				mgr.ClearCredentials()
+			}
+		case err == nil || errors.Is(err, storage.ErrNotFound):
+			mgr.ClearCredentials()
+		default:
+			h.logger.Warn("backup: read restored watcher credentials failed", "err", err)
+		}
+	}
+	if h.onUpdateConfigChange != nil {
+		if cfg, err := h.store.GetUpdateCheckConfig(ctx); err == nil {
+			h.onUpdateConfigChange(cfg)
+		} else {
+			h.logger.Warn("backup: read restored update-check config failed", "err", err)
+		}
+	}
+	if h.onGeoIPConfigChange != nil {
+		if cfg, err := h.store.GetGeoIPUpdateConfig(ctx); err == nil {
+			h.onGeoIPConfigChange(cfg)
+		} else {
+			h.logger.Warn("backup: read restored geoip update config failed", "err", err)
+		}
+	}
 }
 
 // classifyRestoreError reduces a backup.Import error to a short

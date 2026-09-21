@@ -61,7 +61,7 @@ export const settingsApi = {
 		request<DNSProvider>('PUT', `/settings/dns-providers/${encodeURIComponent(id)}`, r),
 	deleteDNSProvider: (id: string): Promise<void> =>
 		request<void>('DELETE', `/settings/dns-providers/${encodeURIComponent(id)}`),
-	// v2.26 — provider-type registry (drives the form) and the
+	// v2.29 — provider-type registry (drives the form) and the
 	// read-only connection test. An empty zone lets the backend default
 	// to the first wildcard apex bound to the provider.
 	listDNSProviderTypes: (): Promise<DNSProviderType[]> =>
@@ -260,6 +260,14 @@ export interface RestoreReport {
 	forwardAuthProvidersImported: number;
 	oidcConfigImported: boolean;
 	maxmindConfigImported: boolean;
+	externalCertificatesImported: number;
+	// v2.29 extras — false / 0 when restoring a pre-v2.29 backup.
+	extrasImported: boolean;
+	managedDomainsImported: number;
+	errorTemplatesImported: number;
+	alertChannelsImported: number;
+	alertRulesImported: number;
+	apiTokensImported: number;
 	sentinelsInheritedTotal: number;
 	sentinelsUnresolvedTotal: number;
 	incompleteRows: number;

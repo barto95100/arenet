@@ -47,7 +47,7 @@ func redactSnapshotInPlace(s *Snapshot) {
 		if r.BasicAuth.PasswordHash != "" {
 			r.BasicAuth.PasswordHash = SentinelLiteral
 		}
-		// routes[].path_rules[].basic_auth.password_hash (v2.26 — was
+		// routes[].path_rules[].basic_auth.password_hash (v2.29 — was
 		// exported as-is). The slice and its BasicAuth pointers are
 		// cloned so the live route is never mutated.
 		if len(r.PathRules) > 0 {
@@ -62,7 +62,7 @@ func redactSnapshotInPlace(s *Snapshot) {
 			r.PathRules = rules
 		}
 		// routes[].request_headers / response_headers values of
-		// credential-bearing headers (v2.26, IsSensitiveHeader).
+		// credential-bearing headers (v2.29, IsSensitiveHeader).
 		r.RequestHeaders = redactHeaders(r.RequestHeaders)
 		r.ResponseHeaders = redactHeaders(r.ResponseHeaders)
 	}
@@ -105,6 +105,9 @@ func redactSnapshotInPlace(s *Snapshot) {
 			s.ExternalCertificates[i].KeyPEM = SentinelLiteral
 		}
 	}
+	// extras (v2.29): alert channel config secrets, CrowdSec API key,
+	// watcher password, service-account token hashes.
+	redactExtras(s.Extras)
 }
 
 // unresolvedSentinel is the dedicated error returned by the
@@ -133,8 +136,10 @@ func (e *unresolvedSentinel) Error() string {
 
 func identityKey(entity string) string {
 	switch entity {
-	case "routes", "users", "external_certificates":
+	case "routes", "users", "external_certificates", entityAlertChannels, entityAPITokens:
 		return "id"
+	case entityCrowdSec, entityWatcher:
+		return "key"
 	case "dns_providers":
 		return "key"
 	case "forward_auth_providers":
@@ -228,7 +233,7 @@ var sensitiveHeaderNames = map[string]struct{}{
 var sensitiveHeaderFragments = []string{"token", "secret", "password", "api-key", "apikey"}
 
 // IsSensitiveHeader reports whether a route header's value is a
-// credential that backups must treat as a secret (v2.26).
+// credential that backups must treat as a secret (v2.29).
 func IsSensitiveHeader(name string) bool {
 	n := strings.ToLower(strings.TrimSpace(name))
 	if _, ok := sensitiveHeaderNames[n]; ok {

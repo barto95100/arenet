@@ -12,7 +12,7 @@ Les fichiers cert et clés TLS ne sont PAS dans le snapshot — ils vivent dans 
 
 1. Sidebar → **Settings** → section **Backup & restore**
 2. Choisis un :
-   - **Export (redacted)** : télécharge le JSON avec les secrets remplacés par des placeholders sentinel (`"sentinel:..."`)
+   - **Export (redacted)** : télécharge le JSON avec les secrets remplacés par des placeholders sentinel (`"$$ARENET_REDACTED$$"`)
    - **Export with secrets…** : danger-variant ConfirmDialog → confirme → télécharge le JSON avec les secrets en PLAINTEXT
 
 Les deux produisent un fichier nommé `arenet-backup-YYYYMMDD-HHMMSS.json`.
@@ -21,7 +21,7 @@ Les deux produisent un fichier nommé `arenet-backup-YYYYMMDD-HHMMSS.json`.
 
 **Export with-secrets** est la forme disaster-recovery : restore-anywhere, pas d'héritage nécessaire. Stocke ce fichier dans un vault encrypté (age, GPG, attachement de password manager) — le fichier contient des password hashes admin en plaintext (Argon2id résistant mais quand même pas pour des yeux arbitraires), API keys DNS OVH, client secrets OIDC, client secrets forward-auth, password hashes Basic Auth par route.
 
-Depuis la **v2.26.0**, l'export redacted masque aussi les **password hashes Basic Auth des règles par chemin** et les valeurs des **en-têtes de route porteurs d'identifiants** (`Authorization`, `Proxy-Authorization`, `Cookie`, `X-Api-Key`, et tout en-tête dont le nom contient `token`, `secret`, `password` ou `api-key`). À la restauration, ils sont hérités de la route live de même id, comme les autres secrets.
+Depuis la **v2.29.0**, l'export redacted masque aussi les **password hashes Basic Auth des règles par chemin** et les valeurs des **en-têtes de route porteurs d'identifiants** (`Authorization`, `Proxy-Authorization`, `Cookie`, `X-Api-Key`, et tout en-tête dont le nom contient `token`, `secret`, `password` ou `api-key`). À la restauration, ils sont hérités de la route live de même id, comme les autres secrets.
 
 ---
 
@@ -41,50 +41,85 @@ La restauration est **atomique** : all-or-nothing. Les validation failures abort
 
 ## Ce qui est dans le snapshot
 
-JSON schema v1 (`schema_version: "1.0.0"`) :
+Schéma JSON v1 (`schema_version: "1.0.0"`) :
 
 ```json
 {
   "schema_version": "1.0.0",
-  "exported_at": "2026-06-24T07:00:00Z",
+  "exported_at": "2026-09-21T07:00:00Z",
   "secrets_included": false,
-  "arenet_version": "v2.9.3",
-  "routes": [ ... full Route objects ... ],
-  "dns_providers": [ ... DNSProviderConfig objects ... ],
-  "forward_auth_providers": [ ... ForwardAuthProvider objects ... ],
-  "oidc_config": { ... OIDCConfig including allowlist ... },
-  "users": [ ... User objects with PasswordHash ... ]
+  "arenet_version": "v2.29.0",
+  "routes": [ ... ],
+  "dns_providers": [ ... ],
+  "forward_auth_providers": [ ... ],
+  "oidc_config": { ... },
+  "maxmind_config": { ... },
+  "users": [ ... y compris les comptes de service ... ],
+  "external_certificates": [ ... ],
+  "extras": {
+    "managed_domains": [ ... ],
+    "error_templates": [ ... ],
+    "maintenance_page": { ... },
+    "alert_channels": [ ... ],
+    "alert_rules": [ ... ],
+    "crowdsec_config": { ... },
+    "crowdsec_watcher": { ... },
+    "automation_rules": { ... },
+    "update_check": { ... },
+    "geoip_update": { ... },
+    "server_position": { ... },
+    "api_tokens": [ ... ]
+  }
 }
 ```
 
+| Domaine | Section | Secrets (masqués par défaut) |
+| ------- | ------- | ---------------------------- |
+| Routes (règles par chemin, en-têtes compris) | `routes` | hashes Basic Auth, valeurs des en-têtes d'authentification |
+| Utilisateurs (locaux, OIDC, comptes de service) | `users` | hashes des mots de passe |
+| Fournisseurs DNS | `dns_providers` | tous les identifiants secrets du type de fournisseur |
+| Fournisseurs forward-auth, OIDC | `forward_auth_providers`, `oidc_config` | secrets clients |
+| Compte MaxMind | `maxmind_config` | clé de licence |
+| Certificats TLS importés | `external_certificates` | clés privées |
+| Domaines gérés (wildcards) | `extras.managed_domains` | — |
+| Modèles de pages d'erreur, page de maintenance | `extras.error_templates`, `extras.maintenance_page` | — |
+| Canaux et règles d'alerte | `extras.alert_channels`, `extras.alert_rules` | mot de passe SMTP, **URL** des webhooks (une URL Discord / Slack est un identifiant) et valeurs des en-têtes |
+| Bouncer + watcher CrowdSec | `extras.crowdsec_config`, `extras.crowdsec_watcher` | clé API, mot de passe du watcher |
+| Règles d'automatisation | `extras.automation_rules` | — |
+| Vérification des mises à jour, mise à jour GeoIP | `extras.update_check`, `extras.geoip_update` | — |
+| Position du serveur (manuelle uniquement) | `extras.server_position` | — |
+| Tokens API des comptes de service | `extras.api_tokens` | hashes des tokens |
+
+**La section `extras` (v2.29.0).** Les backups antérieurs à v2.29.0 n'ont pas d'`extras` : les restaurer ne touche à aucun de ces domaines. Un backup avec `extras` **remplace** chacun d'eux — y compris vider une liste ou supprimer un réglage absent du fichier. Deux exceptions : une position serveur détectée automatiquement n'est jamais exportée (elle dépend de la machine) et celle en place est conservée ; l'état d'exécution (dernier envoi / dernière erreur des canaux et règles, dernière utilisation des tokens) n'est pas exporté.
+
+Après une restauration, Arenet applique tout sans redémarrage : rechargement de Caddy (routes, certificats, pages d'erreur, page de maintenance, domaines gérés), réglages CrowdSec restaurés, règles et watcher d'automatisation, planification des vérifications de mise à jour et de GeoIP. Les comptes de service continuent de fonctionner avec **leurs tokens existants** — les intégrations (n8n, Home Assistant…) n'ont pas besoin d'un nouveau token.
+
 Champs **NON** dans le snapshot :
-- Filesystem cert Caddy (`/var/lib/arenet/caddy/`) — back up ça séparément si tu veux skip la ré-émission ACME au restore
+- Filesystem cert Caddy (`/var/lib/arenet/caddy/`) — sauvegarde-le séparément si tu veux éviter la ré-émission ACME au restore
 - Audit log (bucket BoltDB `audit`) — événements historiques, pas de la config
 - Tables d'événements SQLite (waf_event, cert_event, throttle_event, ...) — observabilité runtime, pas de la config
-- Position serveur (last-known geo, état de la map du dashboard)
+- Sessions (tout le monde se reconnecte après une restauration sur une autre instance)
 - Cache runtime du manager OIDC (reconstruit au premier usage OIDC)
 
 ---
 
 ## Résolution sentinel expliquée
 
-Quand tu export **redacted**, les secrets sont remplacés par des sentinels :
+Quand tu exportes **sans secrets**, chaque secret est remplacé par la sentinelle littérale `$$ARENET_REDACTED$$` :
 
 ```json
-"clientSecret": "sentinel:oidc-config:default:client_secret"
-"passwordHash": "sentinel:users:alice:password_hash"
-"applicationSecret": "sentinel:dns_providers:ovh:application_secret"
+"client_secret": "$$ARENET_REDACTED$$",
+"password_hash": "$$ARENET_REDACTED$$",
+"config": { "url": "$$ARENET_REDACTED$$", "method": "POST", ... }
 ```
 
-Quand tu restore, le step `resolveSentinels` d'Arenet look up chaque sentinel dans le store LIVE :
+À la restauration, Arenet résout chaque sentinelle depuis la ligne de **même identité** dans le store LIVE (même id de route / utilisateur / canal / token, même id *et* même type de fournisseur DNS, l'unique ligne CrowdSec…) :
 
-- **Restore même instance** : le sentinel résout vers la valeur live → restauré verbatim
-- **Instance différente** : le sentinel n'existe pas dans le live store target → restore fail (loud-fail, AC #15)
-- **Instance différente + `allowIncompleteRestore: true`** : le sentinel est cleared (string vide) → restauré avec valeur vide → le prochain boot print un WARN listant chaque champ cleared pour que l'opérateur le re-save
+- **Restore même instance** : la sentinelle prend la valeur live → restaurée telle quelle
+- **Instance différente** : rien à hériter → la restauration est refusée, rien n'est écrit
+- **Instance différente + `allowIncompleteRestore: true`** : le secret est vidé → restauré avec une valeur vide → le prochain boot affiche un WARN listant chaque champ vidé à ressaisir. Un token de compte de service dont le hash ne peut pas être hérité est **retiré** (un token sans hash ne peut jamais s'authentifier) — émets-en un nouveau depuis la page Utilisateurs.
 
-C'est le wording "two paths forward" que tu vois dans l'erreur de reject :
-
-> Restore rejected: schema_version X is MAJOR-incompatible. Two paths forward: (1) downgrade Arenet to a binary that knows this schema major ; (2) export current config and re-import.
+L'erreur de refus nomme la ligne et le champ, et donne les deux options : ré-exporter la source avec les secrets, ou passer `--allow-incomplete-restore` en connaissance de cause.
 
 ---
 

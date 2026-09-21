@@ -18,6 +18,7 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -36,6 +37,20 @@ type Storer interface {
 	GetOIDCConfig(ctx context.Context) (storage.OIDCConfig, error)
 	GetMaxMindConfig(ctx context.Context) (storage.MaxMindConfig, error)
 	ListExternalCertificates(ctx context.Context) ([]storage.ExternalCertificate, error)
+
+	// v2.29 extras.
+	ListManagedDomains(ctx context.Context) ([]storage.ManagedDomain, error)
+	ListErrorPageTemplates(ctx context.Context) ([]storage.ErrorPageTemplate, error)
+	GetMaintenancePageConfig(ctx context.Context) (storage.MaintenancePageConfig, error)
+	ListAlertChannels(ctx context.Context) ([]storage.Channel, error)
+	ListAlertRules(ctx context.Context) ([]storage.AlertRule, error)
+	GetCrowdSecConfig(ctx context.Context) (storage.CrowdSecConfig, error)
+	GetWatcherCredentials(ctx context.Context) (storage.WatcherCredentials, error)
+	GetAutomationRulesRaw(ctx context.Context) (json.RawMessage, error)
+	GetUpdateCheckConfig(ctx context.Context) (storage.UpdateCheckConfig, error)
+	GetGeoIPUpdateConfig(ctx context.Context) (storage.GeoIPUpdateConfig, error)
+	GetServerPosition(ctx context.Context) (storage.ServerPositionRecord, error)
+	ListAPITokenRows(ctx context.Context) (map[string][]byte, error)
 }
 
 // UserStorer is the userstore subset Export consumes.
@@ -110,6 +125,11 @@ func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion s
 		return nil, fmt.Errorf("export: list external certificates: %w", err)
 	}
 
+	extras, err := exportExtras(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+
 	snap := &Snapshot{
 		SchemaVersion:        SchemaVersion,
 		ExportedAt:           time.Now().UTC(),
@@ -122,6 +142,7 @@ func Export(ctx context.Context, store Storer, users UserStorer, arenetVersion s
 		MaxMindConfig:        maxMindCfg,
 		Users:                usersList,
 		ExternalCertificates: extList,
+		Extras:               extras,
 	}
 	if !includeSecrets {
 		redactSnapshotInPlace(snap)

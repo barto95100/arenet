@@ -286,3 +286,111 @@ func TestBackup_Restore_RejectsAndEmitsRejectedAudit(t *testing.T) {
 		t.Error("NEVER SILENT REGRESSION: config_restored_rejected audit event not emitted on a rejected restore")
 	}
 }
+
+// scriptedCrowdSecApplier returns errs[i] on the i-th call (nil past
+// the end) and records every call.
+type scriptedCrowdSecApplier struct {
+	errs  []error
+	calls []fakeCrowdSecApplierCall
+}
+
+func (s *scriptedCrowdSecApplier) ApplyCrowdSecConfig(_ context.Context, apiURL, apiKey string) error {
+	s.calls = append(s.calls, fakeCrowdSecApplierCall{apiURL: apiURL, apiKey: apiKey})
+	if i := len(s.calls) - 1; i < len(s.errs) {
+		return s.errs[i]
+	}
+	return nil
+}
+
+// extrasRestoreBody builds a restore body carrying the v2.26 extras
+// with a CrowdSec row and enabled update / GeoIP schedules.
+func extrasRestoreBody(t *testing.T, env *testEnv, crowdSecKey string) []byte {
+	t.Helper()
+	us := auth.NewUserStore(env.store.DB())
+	admin, err := us.Create(context.Background(), "extras-admin", "Extras Admin", "", "extras-admin-pw-15c")
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	snap := backup.Snapshot{
+		SchemaVersion:   backup.SchemaVersion,
+		SecretsIncluded: true,
+		Users:           []auth.User{admin},
+		Extras: &backup.SnapshotExtras{
+			CrowdSecConfig: &storage.CrowdSecConfig{LAPIURL: "http://crowdsec:8080/", APIKey: crowdSecKey},
+			UpdateCheck:    &storage.UpdateCheckConfig{Enabled: true},
+			GeoIPUpdate:    &storage.GeoIPUpdateConfig{Enabled: true},
+		},
+	}
+	body, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return body
+}
+
+// TestBackup_Restore_Extras_AppliesRestoredSettings: a restore that
+// carries the extras swaps in the restored CrowdSec settings (single
+// reload) and re-schedules the update / GeoIP checks.
+func TestBackup_Restore_Extras_AppliesRestoredSettings(t *testing.T) {
+	env := newTestEnv(t, false)
+	applier := &scriptedCrowdSecApplier{}
+	env.handler.SetCrowdSecApplier(applier)
+	var gotUpdate, gotGeoIP bool
+	env.handler.SetUpdateConfigHook(func(c storage.UpdateCheckConfig) { gotUpdate = c.Enabled })
+	env.handler.SetGeoIPConfigHook(func(c storage.GeoIPUpdateConfig) { gotGeoIP = c.Enabled })
+
+	body := extrasRestoreBody(t, env, "restored-key")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/restore", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	if len(applier.calls) != 1 || applier.calls[0].apiKey != "restored-key" {
+		t.Errorf("crowdsec applier calls: %+v", applier.calls)
+	}
+	if !gotUpdate || !gotGeoIP {
+		t.Errorf("hooks not fired: update=%t geoip=%t", gotUpdate, gotGeoIP)
+	}
+	var resp restoreResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || !resp.ExtrasImported {
+		t.Errorf("response extrasImported: %+v (%v)", resp, err)
+	}
+}
+
+// TestBackup_Restore_Extras_ReloadFailure_RestoresCrowdSec: when the
+// CrowdSec swap-and-reload fails, the store is rolled back AND the
+// pre-restore CrowdSec settings are swapped back into the manager.
+func TestBackup_Restore_Extras_ReloadFailure_RestoresCrowdSec(t *testing.T) {
+	env := newTestEnv(t, false)
+	if err := env.store.PutCrowdSecConfig(context.Background(), storage.CrowdSecConfig{
+		LAPIURL: "http://old:8080/", APIKey: "old-key",
+	}); err != nil {
+		t.Fatalf("seed crowdsec: %v", err)
+	}
+	applier := &scriptedCrowdSecApplier{errs: []error{errReloadBoom}}
+	env.handler.SetCrowdSecApplier(applier)
+	hookFired := false
+	env.handler.SetUpdateConfigHook(func(storage.UpdateCheckConfig) { hookFired = true })
+
+	body := extrasRestoreBody(t, env, "restored-key")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/restore", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d body=%s", rec.Code, rec.Body)
+	}
+	if len(applier.calls) != 2 || applier.calls[1].apiKey != "old-key" {
+		t.Errorf("want restored key then old key, got %+v", applier.calls)
+	}
+	if cs, _ := env.store.GetCrowdSecConfig(context.Background()); cs.APIKey != "old-key" {
+		t.Errorf("store not rolled back: %+v", cs)
+	}
+	if hookFired {
+		t.Error("settings hooks must not fire on a rolled-back restore")
+	}
+}
