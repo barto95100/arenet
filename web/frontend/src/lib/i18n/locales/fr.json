@@ -92,32 +92,32 @@
 			"table": {
 				"label": "Libellé",
 				"type": "Type",
-				"endpoint": "Endpoint",
 				"status": "Statut",
 				"usedBy": "Utilisé par",
 				"actions": "Actions",
 				"usedByNone": "—",
 				"addButton": "+ Ajouter un fournisseur",
-				"emptyCta": "+ Ajouter votre premier fournisseur"
+				"emptyCta": "+ Ajouter votre premier fournisseur",
+				"details": "Détails",
+				"test": "Tester la connexion"
 			},
 			"modal": {
 				"addTitle": "Ajouter un fournisseur DNS",
 				"editTitle": "Modifier le fournisseur DNS",
 				"labelField": "Libellé",
 				"typeField": "Type",
-				"endpointField": "Endpoint",
-				"appKey": "Application key",
-				"appSecret": "Application secret",
-				"consumerKey": "Consumer key",
 				"secretsKeepHint": "Laisser vide pour conserver la valeur actuelle.",
 				"cancel": "Annuler",
 				"add": "Ajouter",
 				"save": "Enregistrer",
-				"saving": "Enregistrement…"
+				"saving": "Enregistrement…",
+				"docsLink": "Où créer ces identifiants ?",
+				"typeLocked": "Le type ne peut pas être modifié. Supprimez puis recréez le fournisseur pour en changer.",
+				"required": "requis"
 			},
 			"validation": {
 				"labelRequired": "Le libellé est requis.",
-				"endpointRequired": "L'endpoint est requis."
+				"fieldRequired": "{field} est requis."
 			},
 			"delete": {
 				"confirmTitle": "Supprimer le fournisseur DNS",
@@ -138,7 +138,59 @@
 				"notConfigured": "non configuré"
 			},
 			"loadError": "Échec du chargement des fournisseurs DNS : {err}",
-			"loading": "Chargement des fournisseurs DNS…"
+			"loading": "Chargement des fournisseurs DNS…",
+			"test": {
+				"title": "Tester la connexion au fournisseur DNS",
+				"intro": "Liste les enregistrements d'une zone avec les identifiants enregistrés. Lecture seule : rien n'est créé ni modifié.",
+				"zoneField": "Zone",
+				"zonePlaceholder": "exemple.fr",
+				"run": "Lancer le test",
+				"running": "Test en cours…",
+				"close": "Fermer",
+				"ok": "Connexion OK : {records} enregistrements trouvés dans {zone}.",
+				"failed": "Échec de la connexion : {err}",
+				"zoneRequired": "Indiquez la zone (domaine) à tester.",
+				"invalidZone": "Ce n'est pas un nom de domaine valide.",
+				"notConfigured": "Il manque des identifiants obligatoires à ce fournisseur."
+			},
+			"fields": {
+				"ovh": {
+					"endpoint": "Endpoint",
+					"application_key": "Application key",
+					"application_secret": "Application secret",
+					"consumer_key": "Consumer key"
+				},
+				"cloudflare": {
+					"api_token": "Jeton API (Zone.DNS:Edit)",
+					"zone_token": "Jeton de zone (Zone:Read, facultatif)"
+				},
+				"digitalocean": {
+					"auth_token": "Jeton API"
+				},
+				"gandi": {
+					"bearer_token": "Jeton d'accès personnel"
+				},
+				"hetzner": {
+					"api_token": "Jeton API Hetzner Cloud"
+				},
+				"infomaniak": {
+					"api_token": "Jeton API"
+				},
+				"porkbun": {
+					"api_key": "Clé API",
+					"api_secret_key": "Clé API secrète"
+				},
+				"route53": {
+					"region": "Région AWS",
+					"access_key_id": "ID de clé d'accès",
+					"secret_access_key": "Clé d'accès secrète",
+					"hosted_zone_id": "ID de zone hébergée (facultatif)"
+				},
+				"scaleway": {
+					"secret_key": "Clé secrète",
+					"organization_id": "ID d'organisation"
+				}
+			}
 		},
 		"updates": {
 			"title": "Mises à jour",

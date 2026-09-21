@@ -23,6 +23,8 @@ import type {
 	CrowdSecTestResponse,
 	DNSProvider,
 	DNSProviderRequest,
+	DNSProviderTestResult,
+	DNSProviderType,
 	ForwardAuthProvider,
 	ForwardAuthProviderRequest,
 	ManagedDomain,
@@ -59,6 +61,17 @@ export const settingsApi = {
 		request<DNSProvider>('PUT', `/settings/dns-providers/${encodeURIComponent(id)}`, r),
 	deleteDNSProvider: (id: string): Promise<void> =>
 		request<void>('DELETE', `/settings/dns-providers/${encodeURIComponent(id)}`),
+	// v2.26 — provider-type registry (drives the form) and the
+	// read-only connection test. An empty zone lets the backend default
+	// to the first wildcard apex bound to the provider.
+	listDNSProviderTypes: (): Promise<DNSProviderType[]> =>
+		request<DNSProviderType[]>('GET', '/settings/dns-providers/types'),
+	testDNSProvider: (id: string, zone: string): Promise<DNSProviderTestResult> =>
+		request<DNSProviderTestResult>(
+			'POST',
+			`/settings/dns-providers/${encodeURIComponent(id)}/test`,
+			{ zone },
+		),
 
 	// Step K.1 — forward-auth provider CRUD.
 	listForwardAuthProviders: (): Promise<ForwardAuthProvider[]> =>

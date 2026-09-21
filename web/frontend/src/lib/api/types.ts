@@ -899,9 +899,14 @@ export interface CountryBlockRequest {
 /**
  * v2.12 — multi-config DNS provider view (no secrets on the wire).
  * The backend returns one row per configured provider; `configured`
- * reflects whether the secrets are present, and `usedBy` lists the
- * wildcard apexes currently bound to this provider (drives the 409
- * `provider_in_use` guard on delete).
+ * reflects whether every required credential is present, and `usedBy`
+ * lists the wildcard apexes currently bound to this provider (drives
+ * the 409 `provider_in_use` guard on delete).
+ *
+ * v2.26 — multi-type: `fields` carries the NON-secret credential values
+ * (e.g. OVH endpoint, Route53 region) and `secretsSet` one flag per
+ * secret field of the type. `endpoint` is the legacy OVH wire field
+ * (empty for other types).
  */
 export interface DNSProvider {
 	id: string;
@@ -909,39 +914,50 @@ export interface DNSProvider {
 	type: string;
 	endpoint: string;
 	configured: boolean;
+	fields: Record<string, string>;
+	secretsSet: Record<string, boolean>;
 	usedBy: string[];
 }
 
 /**
- * v2.12 — wire shape for POST/PUT /api/v1/settings/dns-providers[/{id}].
- * The three secret fields are optional: on create they configure the
- * provider; on edit, leaving them blank triggers the preserve-on-edit
- * path (the stored value is kept). `type`/`endpoint` are provider
- * identifiers (e.g. "ovh" / "ovh-eu"), not translated strings.
+ * v2.26 — wire shape for POST/PUT /api/v1/settings/dns-providers[/{id}].
+ * `credentials` is keyed by the registry field keys of `type`. On edit,
+ * an absent secret keeps the stored value (preserve-on-edit); an absent
+ * non-secret field is cleared. The backend still accepts the pre-v2.26
+ * OVH camelCase fields, which the UI no longer sends.
  */
 export interface DNSProviderRequest {
 	label: string;
 	type: string;
-	endpoint: string;
-	applicationKey?: string;
-	applicationSecret?: string;
-	consumerKey?: string;
+	credentials: Record<string, string>;
 }
 
-/**
- * Step J.4 — the seven OVH endpoint identifiers accepted by the
- * go-ovh SDK. Mirrors storage.OVHEndpoints; the UI dropdown
- * populates from this list.
- */
-export const OVH_ENDPOINTS: readonly string[] = [
-	'ovh-eu',
-	'ovh-ca',
-	'ovh-us',
-	'kimsufi-eu',
-	'kimsufi-ca',
-	'soyoustart-eu',
-	'soyoustart-ca'
-] as const;
+/** v2.26 — one credential field of a provider type (registry). */
+export interface DNSProviderField {
+	key: string;
+	/** English default label; the UI translates by type + key. */
+	label: string;
+	secret: boolean;
+	required: boolean;
+	enum?: string[];
+	default?: string;
+}
+
+/** v2.26 — GET /settings/dns-providers/types entry. */
+export interface DNSProviderType {
+	type: string;
+	label: string;
+	docsUrl: string;
+	fields: DNSProviderField[];
+}
+
+/** v2.26 — POST /settings/dns-providers/{id}/test response. */
+export interface DNSProviderTestResult {
+	ok: boolean;
+	zone: string;
+	records: number;
+	error?: string;
+}
 
 /**
  * Step O.1 — managed-domain declaration. One row per apex; the

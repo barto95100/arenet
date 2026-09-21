@@ -34,10 +34,12 @@ describe('settingsApi DNS provider collection: method + path + body', () => {
 		const body = {
 			label: 'OVH perso',
 			type: 'ovh',
-			endpoint: 'ovh-eu',
-			applicationKey: 'ak',
-			applicationSecret: 'as',
-			consumerKey: 'ck'
+			credentials: {
+				endpoint: 'ovh-eu',
+				application_key: 'ak',
+				application_secret: 'as',
+				consumer_key: 'ck'
+			}
 		};
 		await settingsApi.createDNSProvider(body);
 		expect(requestMock).toHaveBeenCalledWith('POST', '/settings/dns-providers', body);
@@ -48,12 +50,26 @@ describe('settingsApi DNS provider collection: method + path + body', () => {
 		await settingsApi.updateDNSProvider('id-1', {
 			label: 'x',
 			type: 'ovh',
-			endpoint: 'ovh-eu'
+			credentials: { endpoint: 'ovh-eu' }
 		});
 		expect(requestMock).toHaveBeenCalledWith('PUT', '/settings/dns-providers/id-1', {
 			label: 'x',
 			type: 'ovh',
-			endpoint: 'ovh-eu'
+			credentials: { endpoint: 'ovh-eu' }
+		});
+	});
+
+	it('listDNSProviderTypes GETs the registry', async () => {
+		requestMock.mockResolvedValue([]);
+		await settingsApi.listDNSProviderTypes();
+		expect(requestMock).toHaveBeenCalledWith('GET', '/settings/dns-providers/types');
+	});
+
+	it('testDNSProvider POSTs the zone to the encoded id path', async () => {
+		requestMock.mockResolvedValue({ ok: true, zone: 'example.com', records: 3 });
+		await settingsApi.testDNSProvider('id 1', 'example.com');
+		expect(requestMock).toHaveBeenCalledWith('POST', '/settings/dns-providers/id%201/test', {
+			zone: 'example.com'
 		});
 	});
 
