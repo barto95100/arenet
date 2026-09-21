@@ -327,3 +327,59 @@ func matches(evt Event, f Filter) bool {
 	}
 	return true
 }
+
+// Redact rewrites, in one transaction, every stored event for which fn
+// reports a change: fn receives the event and edits its payloads in
+// place. It exists to remove secrets that older versions wrote into
+// BeforeJSON / AfterJSON (v2.30); IDs, timestamps and actors are
+// never changed. Returns the number of events rewritten.
+func (s *Store) Redact(ctx context.Context, fn func(evt *Event) bool) (int, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, redactTimeout)
+		defer cancel()
+	}
+	rewritten := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(bucketName))
+		if b == nil {
+			return fmt.Errorf("audit: bucket %q missing", bucketName)
+		}
+		type row struct{ k, v []byte }
+		var updates []row
+		err := b.ForEach(func(k, v []byte) error {
+			var evt Event
+			if err := json.Unmarshal(v, &evt); err != nil {
+				return nil // skip malformed rows, as List does
+			}
+			id, ts := evt.ID, evt.Timestamp
+			if !fn(&evt) {
+				return nil
+			}
+			evt.ID, evt.Timestamp = id, ts
+			out, err := json.Marshal(evt)
+			if err != nil {
+				return fmt.Errorf("audit: marshal event %s: %w", id, err)
+			}
+			updates = append(updates, row{append([]byte(nil), k...), out})
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		for _, u := range updates {
+			if err := b.Put(u.k, u.v); err != nil {
+				return fmt.Errorf("audit: rewrite event: %w", err)
+			}
+		}
+		rewritten = len(updates)
+		return nil
+	})
+	return rewritten, err
+}
+
+// redactTimeout bounds a full audit rewrite (the bucket can be large).
+const redactTimeout = 60 * time.Second

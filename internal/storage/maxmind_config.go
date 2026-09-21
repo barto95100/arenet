@@ -18,7 +18,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -75,7 +74,7 @@ func (s *Store) GetMaxMindConfig(ctx context.Context) (MaxMindConfig, error) {
 		if raw == nil {
 			return ErrNotFound
 		}
-		return json.Unmarshal(raw, &out)
+		return s.decodeRow(bucketMaxMindConfig, raw, &out)
 	})
 	if err != nil {
 		return MaxMindConfig{}, err
@@ -107,7 +106,7 @@ func (s *Store) PutMaxMindConfig(ctx context.Context, c MaxMindConfig) error {
 		var existing MaxMindConfig
 		hasExisting := false
 		if raw := b.Get([]byte(maxMindConfigKey)); raw != nil {
-			if err := json.Unmarshal(raw, &existing); err == nil {
+			if err := s.decodeRow(bucketMaxMindConfig, raw, &existing); err == nil {
 				hasExisting = true
 			}
 		}
@@ -133,7 +132,7 @@ func (s *Store) PutMaxMindConfig(ctx context.Context, c MaxMindConfig) error {
 			c.CreatedAt = now
 		}
 
-		buf, err := json.Marshal(c)
+		buf, err := s.encodeRow(bucketMaxMindConfig, c)
 		if err != nil {
 			return fmt.Errorf("marshal maxmind_config: %w", err)
 		}

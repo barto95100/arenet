@@ -18,7 +18,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -68,7 +67,7 @@ func (s *Store) CreateAlertChannel(ctx context.Context, c Channel) (Channel, err
 		var conflict bool
 		_ = b.ForEach(func(_, v []byte) error {
 			var existing Channel
-			if err := json.Unmarshal(v, &existing); err != nil {
+			if err := s.decodeRow(bucketAlertingChannels, v, &existing); err != nil {
 				return nil
 			}
 			if existing.Name == c.Name {
@@ -85,7 +84,7 @@ func (s *Store) CreateAlertChannel(ctx context.Context, c Channel) (Channel, err
 		if existing := b.Get([]byte(c.ID)); existing != nil {
 			return ErrConflict
 		}
-		buf, err := json.Marshal(c)
+		buf, err := s.encodeRow(bucketAlertingChannels, c)
 		if err != nil {
 			return fmt.Errorf("marshal alerting_channel: %w", err)
 		}
@@ -115,7 +114,7 @@ func (s *Store) GetAlertChannel(ctx context.Context, id string) (Channel, error)
 		if raw == nil {
 			return ErrNotFound
 		}
-		return json.Unmarshal(raw, &out)
+		return s.decodeRow(bucketAlertingChannels, raw, &out)
 	})
 	if err != nil {
 		return Channel{}, err
@@ -138,7 +137,7 @@ func (s *Store) ListAlertChannels(ctx context.Context) ([]Channel, error) {
 		}
 		return tx.Bucket([]byte(bucketAlertingChannels)).ForEach(func(_, v []byte) error {
 			var c Channel
-			if err := json.Unmarshal(v, &c); err != nil {
+			if err := s.decodeRow(bucketAlertingChannels, v, &c); err != nil {
 				return fmt.Errorf("unmarshal alerting_channel row: %w", err)
 			}
 			out = append(out, c)
@@ -185,7 +184,7 @@ func (s *Store) UpdateAlertChannel(ctx context.Context, c Channel) (Channel, err
 			return ErrNotFound
 		}
 		var existing Channel
-		if err := json.Unmarshal(raw, &existing); err != nil {
+		if err := s.decodeRow(bucketAlertingChannels, raw, &existing); err != nil {
 			return fmt.Errorf("unmarshal stored alerting_channel: %w", err)
 		}
 		c.CreatedAt = existing.CreatedAt
@@ -197,7 +196,7 @@ func (s *Store) UpdateAlertChannel(ctx context.Context, c Channel) (Channel, err
 				return nil
 			}
 			var other Channel
-			if err := json.Unmarshal(v, &other); err != nil {
+			if err := s.decodeRow(bucketAlertingChannels, v, &other); err != nil {
 				return nil
 			}
 			if other.Name == c.Name {
@@ -209,7 +208,7 @@ func (s *Store) UpdateAlertChannel(ctx context.Context, c Channel) (Channel, err
 			return ErrConflict
 		}
 
-		buf, err := json.Marshal(c)
+		buf, err := s.encodeRow(bucketAlertingChannels, c)
 		if err != nil {
 			return fmt.Errorf("marshal alerting_channel: %w", err)
 		}
@@ -275,7 +274,7 @@ func (s *Store) MarkAlertChannelSendResult(ctx context.Context, id string, sendE
 			return ErrNotFound
 		}
 		var c Channel
-		if err := json.Unmarshal(raw, &c); err != nil {
+		if err := s.decodeRow(bucketAlertingChannels, raw, &c); err != nil {
 			return fmt.Errorf("unmarshal alerting_channel: %w", err)
 		}
 		if sendErr == nil {
@@ -287,7 +286,7 @@ func (s *Store) MarkAlertChannelSendResult(ctx context.Context, id string, sendE
 			c.LastErrorAt = &now
 		}
 		c.UpdatedAt = now
-		buf, err := json.Marshal(c)
+		buf, err := s.encodeRow(bucketAlertingChannels, c)
 		if err != nil {
 			return fmt.Errorf("marshal alerting_channel: %w", err)
 		}

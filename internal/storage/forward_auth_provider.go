@@ -18,7 +18,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -187,7 +186,7 @@ func (s *Store) CreateForwardAuthProvider(ctx context.Context, p ForwardAuthProv
 		if existing := b.Get([]byte(p.Name)); existing != nil {
 			return ErrConflict
 		}
-		buf, err := json.Marshal(p)
+		buf, err := s.encodeRow(bucketForwardAuthProviders, p)
 		if err != nil {
 			return fmt.Errorf("marshal forward_auth_provider: %w", err)
 		}
@@ -217,7 +216,7 @@ func (s *Store) GetForwardAuthProvider(ctx context.Context, name string) (Forwar
 		if raw == nil {
 			return ErrNotFound
 		}
-		return json.Unmarshal(raw, &out)
+		return s.decodeRow(bucketForwardAuthProviders, raw, &out)
 	})
 	if err != nil {
 		return ForwardAuthProvider{}, err
@@ -238,7 +237,7 @@ func (s *Store) ListForwardAuthProviders(ctx context.Context) ([]ForwardAuthProv
 		}
 		return tx.Bucket([]byte(bucketForwardAuthProviders)).ForEach(func(_, v []byte) error {
 			var p ForwardAuthProvider
-			if err := json.Unmarshal(v, &p); err != nil {
+			if err := s.decodeRow(bucketForwardAuthProviders, v, &p); err != nil {
 				return fmt.Errorf("unmarshal forward_auth_provider: %w", err)
 			}
 			out = append(out, p)
@@ -272,12 +271,12 @@ func (s *Store) UpdateForwardAuthProvider(ctx context.Context, p ForwardAuthProv
 			return ErrNotFound
 		}
 		var existing ForwardAuthProvider
-		if err := json.Unmarshal(raw, &existing); err != nil {
+		if err := s.decodeRow(bucketForwardAuthProviders, raw, &existing); err != nil {
 			return fmt.Errorf("unmarshal existing forward_auth_provider: %w", err)
 		}
 		p.CreatedAt = existing.CreatedAt
 		p.UpdatedAt = time.Now().UTC()
-		buf, err := json.Marshal(p)
+		buf, err := s.encodeRow(bucketForwardAuthProviders, p)
 		if err != nil {
 			return fmt.Errorf("marshal forward_auth_provider: %w", err)
 		}

@@ -19,7 +19,9 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -32,7 +34,10 @@ const sessionsBucketName = "sessions"
 
 // SessionStore persists authenticated sessions into the BoltDB
 // "sessions" bucket. The session ID is the cookie value sent to the
-// browser.
+// browser; it is never stored. Rows are keyed by its handle,
+// SessionHandle(id) (v2.30), which is also the ID the sessions API
+// lists and revokes — so neither the database nor the API nor the
+// audit log ever holds a usable cookie value.
 //
 // SessionStore is safe for concurrent use; bbolt serializes writes.
 type SessionStore struct {
@@ -92,16 +97,40 @@ func (s *SessionStore) Create(ctx context.Context, userID string, rememberMe boo
 		if b == nil {
 			return fmt.Errorf("auth: bucket %q missing", sessionsBucketName)
 		}
-		v, err := json.Marshal(sess)
+		stored := sess
+		stored.ID = SessionHandle(sess.ID)
+		v, err := json.Marshal(stored)
 		if err != nil {
 			return fmt.Errorf("auth: marshal session: %w", err)
 		}
-		return b.Put([]byte(sess.ID), v)
+		return b.Put([]byte(stored.ID), v)
 	})
 	if err != nil {
 		return Session{}, err
 	}
 	return sess, nil
+}
+
+// SessionHandle is the non-secret identifier of the session whose
+// cookie value is id: hex SHA-256. The ID has 256 bits of entropy, so
+// a plain hash is enough (same model as API tokens).
+func SessionHandle(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
+}
+
+// isSessionHandle reports whether a bucket key is a handle (64 lowercase
+// hex chars); anything else is a pre-v2.30 row keyed by the raw ID.
+func isSessionHandle(k []byte) bool {
+	if len(k) != sha256.Size*2 {
+		return false
+	}
+	for _, c := range k {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // Get returns the session by ID. If ExpiresAt < now, the session is
@@ -110,13 +139,31 @@ func (s *SessionStore) Create(ctx context.Context, userID string, rememberMe boo
 // middleware (Chunk 2) does it separately so that /auth/me and
 // /auth/unlock can retrieve an idle session.
 func (s *SessionStore) Get(ctx context.Context, id string) (Session, error) {
+	if id == "" {
+		return Session{}, ErrSessionNotFound
+	}
+	sess, err := s.getByHandle(ctx, SessionHandle(id))
+	if err != nil {
+		return Session{}, err
+	}
+	sess.ID = id
+	return sess, nil
+}
+
+// GetByHandle returns the session whose handle is given (the ID the
+// sessions API exposes). The returned Session.ID is the handle.
+func (s *SessionStore) GetByHandle(ctx context.Context, handle string) (Session, error) {
+	if handle == "" {
+		return Session{}, ErrSessionNotFound
+	}
+	return s.getByHandle(ctx, handle)
+}
+
+func (s *SessionStore) getByHandle(ctx context.Context, id string) (Session, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-	}
-	if id == "" {
-		return Session{}, ErrSessionNotFound
 	}
 
 	var sess Session
@@ -167,13 +214,14 @@ func (s *SessionStore) Touch(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrSessionNotFound
 	}
+	key := []byte(SessionHandle(id))
 
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(sessionsBucketName))
 		if b == nil {
 			return fmt.Errorf("auth: bucket %q missing", sessionsBucketName)
 		}
-		v := b.Get([]byte(id))
+		v := b.Get(key)
 		if v == nil {
 			return ErrSessionNotFound
 		}
@@ -192,12 +240,21 @@ func (s *SessionStore) Touch(ctx context.Context, id string) error {
 		if err != nil {
 			return fmt.Errorf("auth: marshal session: %w", err)
 		}
-		return b.Put([]byte(id), out)
+		return b.Put(key, out)
 	})
 }
 
 // Delete removes the session. Idempotent (no error if absent).
 func (s *SessionStore) Delete(ctx context.Context, id string) error {
+	if id == "" {
+		return nil
+	}
+	return s.DeleteByHandle(ctx, SessionHandle(id))
+}
+
+// DeleteByHandle removes the session with the given handle.
+// Idempotent.
+func (s *SessionStore) DeleteByHandle(ctx context.Context, id string) error {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
@@ -292,13 +349,14 @@ func (s *SessionStore) DeleteAllForUserExcept(ctx context.Context, userID, keepS
 		if b == nil {
 			return fmt.Errorf("auth: bucket %q missing", sessionsBucketName)
 		}
+		keep := SessionHandle(keepSessionID)
 		var keys [][]byte
 		err := b.ForEach(func(k, v []byte) error {
 			var sess Session
 			if err := json.Unmarshal(v, &sess); err != nil {
 				return nil
 			}
-			if sess.UserID == userID && sess.ID != keepSessionID {
+			if sess.UserID == userID && string(k) != keep {
 				kc := make([]byte, len(k))
 				copy(kc, k)
 				keys = append(keys, kc)
@@ -324,6 +382,7 @@ func (s *SessionStore) DeleteAllForUserExcept(ctx context.Context, userID, keepS
 
 // ListForUser returns all sessions for userID, including expired ones
 // not yet lazy-purged. The UI filters expired entries client-side.
+// Each Session.ID is the handle, not the cookie value.
 func (s *SessionStore) ListForUser(ctx context.Context, userID string) ([]Session, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -346,6 +405,7 @@ func (s *SessionStore) ListForUser(ctx context.Context, userID string) ([]Sessio
 				return nil // skip malformed
 			}
 			if sess.UserID == userID {
+				sess.ID = string(k)
 				out = append(out, sess)
 			}
 			return nil
@@ -467,6 +527,44 @@ func (s *SessionStore) CleanupExpired(ctx context.Context) (int, error) {
 	return deleted, nil
 }
 
+// PurgeLegacySessions deletes the rows written before v2.30, keyed by
+// the raw session ID: their owners log in once more. Returns the
+// number of rows deleted. Idempotent.
+func (s *SessionStore) PurgeLegacySessions(ctx context.Context) (int, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+	var deleted int
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(sessionsBucketName))
+		if b == nil {
+			return fmt.Errorf("auth: bucket %q missing", sessionsBucketName)
+		}
+		var keys [][]byte
+		if err := b.ForEach(func(k, _ []byte) error {
+			if !isSessionHandle(k) {
+				keys = append(keys, append([]byte(nil), k...))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, k := range keys {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+		}
+		deleted = len(keys)
+		return nil
+	})
+	return deleted, err
+}
+
 // generateSessionID returns 32 bytes from crypto/rand encoded with
 // base64 url-safe encoding without padding (43 characters).
 func generateSessionID() (string, error) {
@@ -497,6 +595,7 @@ func (s *SessionStore) PutForTest(ctx context.Context, sess Session) error {
 		if b == nil {
 			return fmt.Errorf("auth: bucket %q missing", sessionsBucketName)
 		}
+		sess.ID = SessionHandle(sess.ID)
 		buf, err := json.Marshal(sess)
 		if err != nil {
 			return fmt.Errorf("auth: marshal session: %w", err)

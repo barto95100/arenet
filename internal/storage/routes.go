@@ -18,7 +18,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -1102,7 +1101,7 @@ func (s *Store) CreateRoute(ctx context.Context, r Route) (Route, error) {
 			return err
 		}
 		b := tx.Bucket([]byte(bucketRoutes))
-		buf, err := json.Marshal(r)
+		buf, err := s.encodeRow(bucketRoutes, r)
 		if err != nil {
 			return fmt.Errorf("marshal route: %w", err)
 		}
@@ -1131,7 +1130,7 @@ func (s *Store) GetRoute(ctx context.Context, id string) (Route, error) {
 		if raw == nil {
 			return ErrNotFound
 		}
-		return json.Unmarshal(raw, &out)
+		return s.decodeRow(bucketRoutes, raw, &out)
 	})
 	if err != nil {
 		return Route{}, err
@@ -1151,7 +1150,7 @@ func (s *Store) ListRoutes(ctx context.Context) ([]Route, error) {
 		}
 		return tx.Bucket([]byte(bucketRoutes)).ForEach(func(_, v []byte) error {
 			var r Route
-			if err := json.Unmarshal(v, &r); err != nil {
+			if err := s.decodeRow(bucketRoutes, v, &r); err != nil {
 				return fmt.Errorf("unmarshal route: %w", err)
 			}
 			out = append(out, r)
@@ -1188,12 +1187,12 @@ func (s *Store) UpdateRoute(ctx context.Context, r Route) (Route, error) {
 			return ErrNotFound
 		}
 		var existing Route
-		if err := json.Unmarshal(raw, &existing); err != nil {
+		if err := s.decodeRow(bucketRoutes, raw, &existing); err != nil {
 			return fmt.Errorf("unmarshal existing route: %w", err)
 		}
 		r.CreatedAt = existing.CreatedAt
 		r.UpdatedAt = time.Now().UTC()
-		buf, err := json.Marshal(r)
+		buf, err := s.encodeRow(bucketRoutes, r)
 		if err != nil {
 			return fmt.Errorf("marshal route: %w", err)
 		}
@@ -1253,7 +1252,7 @@ func (s *Store) RestoreRoute(ctx context.Context, r Route) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		buf, err := json.Marshal(r)
+		buf, err := s.encodeRow(bucketRoutes, r)
 		if err != nil {
 			return fmt.Errorf("marshal route: %w", err)
 		}

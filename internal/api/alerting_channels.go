@@ -95,7 +95,9 @@ type alertChannelTestResponse struct {
 // AfterJSON.
 //
 // Webhook: Headers map values are redacted (the operator
-// often hides bearer tokens or signing secrets there).
+// often hides bearer tokens or signing secrets there), and
+// the URL keeps only scheme + host (v2.30 — a Discord / Slack
+// webhook URL is itself the credential).
 // Email: SMTPPassword is blanked.
 //
 // On JSON-parse failure (shouldn't happen — Validate ran
@@ -114,9 +116,10 @@ func alertChannelForAudit(c storage.Channel) storage.Channel {
 		// without revealing their secrets.
 		if cfg.Headers != nil {
 			for k := range cfg.Headers {
-				cfg.Headers[k] = "[redacted]"
+				cfg.Headers[k] = auditRedacted
 			}
 		}
+		cfg.URL = redactWebhookURL(cfg.URL)
 		redacted, err := json.Marshal(cfg)
 		if err != nil {
 			return c

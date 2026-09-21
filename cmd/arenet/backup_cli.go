@@ -53,6 +53,9 @@ func runExportCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Confi
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = store.Close() }()
+	if err := secureStoreAtRest(ctx, logger, store, secretKeyPath(os.Getenv, filepath.Dir(dbPath)), false); err != nil {
+		return err
+	}
 	users := auth.NewUserStore(store.DB())
 
 	if cfg.IncludeSecrets {
@@ -123,6 +126,9 @@ func runRestoreCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Conf
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = store.Close() }()
+	if err := secureStoreAtRest(ctx, logger, store, secretKeyPath(os.Getenv, filepath.Dir(dbPath)), true); err != nil {
+		return err
+	}
 	users := auth.NewUserStore(store.DB())
 
 	report, err := backup.Import(ctx, store, users, &snap, backup.ImportOptions{

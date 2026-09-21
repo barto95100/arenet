@@ -3,7 +3,13 @@
 Arenet's state lives in three files inside the data directory
 (`/var/lib/arenet` by default):
 
-- `arenet.db` — BoltDB: routes, users, audit log, secrets.
+- `arenet.db` — BoltDB: routes, users, audit log, secrets
+  (encrypted since v2.30).
+- `arenet.key` — the key those secrets are encrypted with
+  (v2.30; elsewhere if `ARENET_SECRET_KEY_FILE` is set).
+  `arenet.db` cannot be read without it: a snapshot of the data
+  directory holds both, so store it like a secret — or keep the key
+  outside the data directory and back it up separately.
 - `metrics.db` — SQLite: observability counters + WAF/throttle
   event history.
 - `audit.db` — (if present) audit-specific overflow store.

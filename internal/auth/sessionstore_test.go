@@ -167,7 +167,7 @@ func TestSessionStore_Get_LazyPurgeOnExpiry(t *testing.T) {
 	// Backdate ExpiresAt to the past via a direct bbolt write.
 	err = db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(sessionsBucketName))
-		v := b.Get([]byte(created.ID))
+		v := b.Get([]byte(SessionHandle(created.ID)))
 		var sess Session
 		if err := json.Unmarshal(v, &sess); err != nil {
 			return err
@@ -177,7 +177,7 @@ func TestSessionStore_Get_LazyPurgeOnExpiry(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return b.Put([]byte(created.ID), out)
+		return b.Put([]byte(SessionHandle(created.ID)), out)
 	})
 	if err != nil {
 		t.Fatalf("backdate: %v", err)
@@ -191,7 +191,7 @@ func TestSessionStore_Get_LazyPurgeOnExpiry(t *testing.T) {
 	var stillThere bool
 	_ = db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(sessionsBucketName))
-		stillThere = b.Get([]byte(created.ID)) != nil
+		stillThere = b.Get([]byte(SessionHandle(created.ID))) != nil
 		return nil
 	})
 	if stillThere {
@@ -416,14 +416,14 @@ func TestSessionStore_CleanupExpired(t *testing.T) {
 	for _, id := range []string{expired1.ID, expired2.ID} {
 		err := db.Update(func(tx *bolt.Tx) error {
 			b := tx.Bucket([]byte(sessionsBucketName))
-			v := b.Get([]byte(id))
+			v := b.Get([]byte(SessionHandle(id)))
 			var sess Session
 			if err := json.Unmarshal(v, &sess); err != nil {
 				return err
 			}
 			sess.ExpiresAt = time.Now().UTC().Add(-time.Hour)
 			out, _ := json.Marshal(sess)
-			return b.Put([]byte(id), out)
+			return b.Put([]byte(SessionHandle(id)), out)
 		})
 		if err != nil {
 			t.Fatalf("backdate %s: %v", id, err)
@@ -491,12 +491,12 @@ func TestSessionStore_ListAllActive_SkipsExpired(t *testing.T) {
 	// Hand-expire user-c's session.
 	if err := s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(sessionsBucketName))
-		raw := b.Get([]byte(sc.ID))
+		raw := b.Get([]byte(SessionHandle(sc.ID)))
 		var sess Session
 		_ = json.Unmarshal(raw, &sess)
 		sess.ExpiresAt = time.Now().UTC().Add(-time.Hour)
 		v, _ := json.Marshal(sess)
-		return b.Put([]byte(sc.ID), v)
+		return b.Put([]byte(SessionHandle(sc.ID)), v)
 	}); err != nil {
 		t.Fatalf("hand-expire: %v", err)
 	}

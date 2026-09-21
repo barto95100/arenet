@@ -257,7 +257,7 @@ func HardAuthMiddleware(sessions sessionStore, users userStore, tokens APITokenL
 					// the request: the user has already passed auth.
 					slog.Default().Warn("auth: session touch failed",
 						slog.String("err", err.Error()),
-						slog.String("session_id", sessionID),
+						slog.String("session", SessionHandle(sessionID)),
 					)
 				}
 			}

@@ -339,7 +339,7 @@ func (s *Store) PutManagedDomainWithRouteMigration(
 		rb := tx.Bucket([]byte(bucketRoutes))
 		return rb.ForEach(func(k, raw []byte) error {
 			var r Route
-			if err := json.Unmarshal(raw, &r); err != nil {
+			if err := s.decodeRow(bucketRoutes, raw, &r); err != nil {
 				return fmt.Errorf("unmarshal route %q: %w", string(k), err)
 			}
 			if r.UseDedicatedCert {
@@ -364,7 +364,7 @@ func (s *Store) PutManagedDomainWithRouteMigration(
 			}
 			r.ACMEChallenge = ACMEChallengeInherited
 			r.UpdatedAt = time.Now().UTC()
-			newRaw, err := json.Marshal(r)
+			newRaw, err := s.encodeRow(bucketRoutes, r)
 			if err != nil {
 				return fmt.Errorf("marshal route %q: %w", string(k), err)
 			}
@@ -441,7 +441,7 @@ func (s *Store) DeleteManagedDomainWithRouteMigrationRevertTo(
 		rb := tx.Bucket([]byte(bucketRoutes))
 		return rb.ForEach(func(k, raw []byte) error {
 			var r Route
-			if err := json.Unmarshal(raw, &r); err != nil {
+			if err := s.decodeRow(bucketRoutes, raw, &r); err != nil {
 				return fmt.Errorf("unmarshal route %q: %w", string(k), err)
 			}
 			if r.ACMEChallenge != ACMEChallengeInherited {
@@ -459,7 +459,7 @@ func (s *Store) DeleteManagedDomainWithRouteMigrationRevertTo(
 			}
 			r.ACMEChallenge = revertTo
 			r.UpdatedAt = time.Now().UTC()
-			newRaw, err := json.Marshal(r)
+			newRaw, err := s.encodeRow(bucketRoutes, r)
 			if err != nil {
 				return fmt.Errorf("marshal route %q: %w", string(k), err)
 			}

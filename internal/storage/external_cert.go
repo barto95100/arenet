@@ -18,7 +18,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -75,7 +74,7 @@ func (s *Store) ListExternalCertificates(ctx context.Context) ([]ExternalCertifi
 		}
 		return tx.Bucket([]byte(bucketExternalCertificates)).ForEach(func(_, raw []byte) error {
 			var c ExternalCertificate
-			if err := json.Unmarshal(raw, &c); err != nil {
+			if err := s.decodeRow(bucketExternalCertificates, raw, &c); err != nil {
 				return fmt.Errorf("unmarshal external cert: %w", err)
 			}
 			out = append(out, c)
@@ -102,7 +101,7 @@ func (s *Store) GetExternalCertificate(ctx context.Context, id string) (External
 		if raw == nil {
 			return ErrNotFound
 		}
-		return json.Unmarshal(raw, &out)
+		return s.decodeRow(bucketExternalCertificates, raw, &out)
 	})
 	if err != nil {
 		return ExternalCertificate{}, err
@@ -122,7 +121,7 @@ func (s *Store) CreateExternalCertificate(ctx context.Context, c ExternalCertifi
 	now := time.Now().UTC()
 	c.CreatedAt = now
 	c.UpdatedAt = now
-	buf, err := json.Marshal(c)
+	buf, err := s.encodeRow(bucketExternalCertificates, c)
 	if err != nil {
 		return ExternalCertificate{}, fmt.Errorf("marshal external cert: %w", err)
 	}
@@ -156,7 +155,7 @@ func (s *Store) UpdateExternalCertificate(ctx context.Context, id string, c Exte
 			return ErrNotFound
 		}
 		var existing ExternalCertificate
-		if err := json.Unmarshal(raw, &existing); err != nil {
+		if err := s.decodeRow(bucketExternalCertificates, raw, &existing); err != nil {
 			return fmt.Errorf("unmarshal external cert: %w", err)
 		}
 		merged := c
@@ -169,7 +168,7 @@ func (s *Store) UpdateExternalCertificate(ctx context.Context, id string, c Exte
 		if merged.CertPEM == "" {
 			merged.CertPEM = existing.CertPEM
 		}
-		buf, err := json.Marshal(merged)
+		buf, err := s.encodeRow(bucketExternalCertificates, merged)
 		if err != nil {
 			return fmt.Errorf("marshal external cert: %w", err)
 		}

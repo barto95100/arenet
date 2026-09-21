@@ -24,8 +24,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
+	"github.com/barto95100/arenet/internal/secrets"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -130,9 +132,15 @@ var ErrConflict = errors.New("storage: conflict")
 // The API maps it to 409 Conflict.
 var ErrProviderInUse = errors.New("storage: dns provider is referenced by one or more managed domains")
 
+// boltOpenTimeout bounds the wait for the BoltDB file lock.
+const boltOpenTimeout = 3 * time.Second
+
 // Store is the BoltDB-backed persistence layer for Arenet.
 type Store struct {
 	db *bolt.DB
+	// secretsKey seals / opens secret fields (v2.30); nil until
+	// EnableEncryption, in which case secrets stay in clear.
+	secretsKey atomic.Pointer[secrets.Keyring]
 }
 
 // NewStore opens (or creates) a BoltDB database at dbPath and ensures
@@ -159,7 +167,7 @@ func NewStore(dbPath string) (*Store, error) {
 			"data_dir", dataDir, "err", err)
 	}
 
-	db, err := bolt.Open(dbPath, 0o600, &bolt.Options{Timeout: 3 * time.Second})
+	db, err := bolt.Open(dbPath, 0o600, &bolt.Options{Timeout: boltOpenTimeout})
 	if err != nil {
 		return nil, fmt.Errorf("storage: open bbolt %q: %w", dbPath, err)
 	}
@@ -186,6 +194,7 @@ func NewStore(dbPath string) (*Store, error) {
 			[]byte(bucketGeoIPUpdate),          // Brick 3 Task 3
 			[]byte(bucketMaintenancePage),      // Task 2
 			[]byte(bucketExternalCertificates), // v2.19.0
+			[]byte(bucketMeta),                 // v2.30 — secrets key fingerprint
 		} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create bucket %q: %w", name, err)

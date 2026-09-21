@@ -62,6 +62,16 @@ Then grab the setup token: `sudo journalctl -u arenet | grep 'Setup token'`.
 
 Full guide: [docs/install/systemd-native.md](docs/install/systemd-native.md)
 
+### ⚠️ Back up `arenet.key`
+
+On first boot Arenet generates `arenet.key` in its data directory
+(`/var/lib/arenet`). It encrypts every secret stored in `arenet.db`
+(DNS credentials, private keys, CrowdSec / OIDC / MaxMind secrets…).
+**Copy it somewhere safe, away from the server** — without it those
+secrets cannot be recovered and Arenet refuses to start on the
+encrypted database. `ARENET_SECRET_KEY_FILE` moves it (e.g. to a
+Docker secret). Details: [wiki → Updates](https://github.com/barto95100/arenet/wiki/Updates#5-migration-safety).
+
 ## 🎯 Features
 
 ### Routing & TLS
@@ -78,6 +88,7 @@ Full guide: [docs/install/systemd-native.md](docs/install/systemd-native.md)
 - 🛡️ **Integrated WAF** via Coraza v3 + OWASP CRS v4 with per-route opt-out, per-rule exclusion, per-tag exclusion (e.g. exclude all `attack-protocol` rules on a noisy backend)
 - 🚦 **Rate limiting** per route (events/window/key, e.g. "60 req/min per remote IP on /api/login")
 - 🌍 **Country blocking** via embedded MaxMind GeoLite2 (allow-list / deny-list per route)
+- 🔐 **Secrets encrypted at rest** — DNS credentials, private keys and API keys are sealed (AES-256-GCM) inside `arenet.db` with a key kept apart; session IDs are stored hashed
 - 🔥 **CrowdSec integration** for community threat intelligence (LAPI bouncer, auto-ban on community decisions)
 - 🔐 **OIDC SSO** with allowlist (email + sub canonicalisation, accept-unverified-email opt-in, authentik/Keycloak/Authelia tested)
 - 👥 **RBAC** with `viewer` / `admin` roles + local break-glass account preserved when OIDC is wired

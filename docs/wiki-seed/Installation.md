@@ -61,7 +61,7 @@ Click **Submit** → you're in. The setup token is consumed (one-time use), the 
 
 ### Data directory setup (named volume vs bind mount)
 
-The data directory holds `arenet.db` (routes, users, audit, and **secrets** — OIDC client secrets, DNS API keys, the admin password hash) plus the TLS private keys under `certmagic/`. Arenet keeps it **owner-only (`0700`)**, owned by the distroless `nonroot` user (UID **65532**).
+The data directory holds `arenet.db` (routes, users, audit, and **secrets** — OIDC client secrets, DNS API keys, the admin password hash) plus the TLS private keys under `certmagic/`. Since v2.30 those secrets are **encrypted** with `arenet.key`, generated next to the database on first boot — back it up separately (see [Updates → Migration safety](Updates#5-migration-safety); `ARENET_SECRET_KEY_FILE` moves it, e.g. to a Docker secret). Arenet keeps it **owner-only (`0700`)**, owned by the distroless `nonroot` user (UID **65532**).
 
 **Named volume (the default) — nothing to do.** Docker seeds a fresh named volume's ownership and permissions from the image's `/var/lib/arenet`, which ships as `65532:65532` mode `0700`. It just works, and secrets are owner-only from the first boot.
 

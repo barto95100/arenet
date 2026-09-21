@@ -1018,6 +1018,9 @@ func TestListSessions_HappyPath_MarksIsCurrent(t *testing.T) {
 	if isCurrent, _ := resp.Sessions[0]["isCurrent"].(bool); !isCurrent {
 		t.Errorf("isCurrent = false, want true for the calling session")
 	}
+	if id, _ := resp.Sessions[0]["id"].(string); id == sessionCookie || id != auth.SessionHandle(sessionCookie) {
+		t.Errorf("sessions list exposes the cookie value: id=%q", id)
+	}
 }
 
 func TestDeleteSession_HappyPath(t *testing.T) {
@@ -1032,7 +1035,7 @@ func TestDeleteSession_HappyPath(t *testing.T) {
 	}
 	auditCount := len(env.audit.Events())
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/sessions/"+other.ID, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/sessions/"+auth.SessionHandle(other.ID), nil)
 	withSessionCookie(req, sessionCookie)
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -1054,6 +1057,10 @@ func TestDeleteSession_HappyPath(t *testing.T) {
 	if last.Action != audit.ActionSessionRevoked {
 		t.Errorf("Action = %q, want %q", last.Action, audit.ActionSessionRevoked)
 	}
+	// The audit row names the session by handle, never by cookie value.
+	if last.TargetID != auth.SessionHandle(other.ID) || strings.Contains(string(last.BeforeJSON), other.ID) {
+		t.Errorf("audit leaks the session cookie: target=%q before=%s", last.TargetID, last.BeforeJSON)
+	}
 }
 
 func TestDeleteSession_ForeignSession_404(t *testing.T) {
@@ -1067,7 +1074,7 @@ func TestDeleteSession_ForeignSession_404(t *testing.T) {
 		t.Fatalf("create foreign session: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/sessions/"+other.ID, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/sessions/"+auth.SessionHandle(other.ID), nil)
 	withSessionCookie(req, sessionCookie)
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
