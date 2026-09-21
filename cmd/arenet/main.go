@@ -34,14 +34,11 @@ import (
 	"syscall"
 	"time"
 
-	// Step I.4: register the Coraza WAF Caddy module via side-effect
-	// import so its handler ID `coraza` is resolvable when
-	// buildConfigJSON emits a `{"handler":"coraza", ...}` block. The
-	// coraza-caddy v2 package's init() side-effects on caddy.RegisterModule
-	// are what make this work; no symbol from coraza-caddy is referenced
-	// directly anywhere in Arenet. OWASP CRS comes embedded via the
-	// transitive coraza-coreruleset/v4 dep, so the binary is self-contained.
-	_ "github.com/corazawaf/coraza-caddy/v2"
+	// The WAF is Arenet's own Caddy module (internal/waf,
+	// http.handlers.arenet_waf, Step M.1), built on coraza/v3 +
+	// coraza-coreruleset/v4 directly. The former blank import of
+	// coraza-caddy/v2 (legacy http.handlers.waf, Step I.4) was
+	// dropped in the v2.26 dependency refresh: nothing emitted it.
 
 	// Step J.4: register the OVH DNS provider Caddy module via
 	// side-effect import so its module ID `dns.providers.ovh` is
@@ -58,7 +55,7 @@ import (
 
 	// Step Q (2026-06-18) — per-route rate limiting via
 	// mholt/caddy-ratelimit. Same blank-import contract as
-	// coraza-caddy + caddy-dns/ovh above : the package's
+	// caddy-dns/ovh above : the package's
 	// init() registers the http.handlers.rate_limit module
 	// so buildRateLimitHandler's JSON emit (handler:
 	// "rate_limit") resolves at caddy.Load time. No symbol
