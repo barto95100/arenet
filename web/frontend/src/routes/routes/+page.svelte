@@ -58,6 +58,7 @@
 	import Flag from '$lib/components/Flag.svelte';
 	import ContinentPicker from '$lib/components/routes/ContinentPicker.svelte';
 	import CountryExceptionsPicker from '$lib/components/routes/CountryExceptionsPicker.svelte';
+	import ASNPicker from '$lib/components/routes/ASNPicker.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -345,7 +346,8 @@
 				mode: 'off' as 'off' | 'allow' | 'deny',
 				countryList: [] as string[],
 				continents: [] as string[],
-				exceptions: { countries: [] as string[] },
+				asns: [] as number[],
+				exceptions: { countries: [] as string[], asns: [] as number[] },
 				statusCode: 0
 			},
 			healthCheck: {
@@ -1005,8 +1007,10 @@
 		if (cb.continents.length > 0)
 			parts.push(t('routes.form.geoSummaryContinents', { count: cb.continents.length }));
 		parts.push(t('routes.form.geoSummaryCountries', { count: cb.countryList.length }));
-		if (cb.mode === 'deny' && cb.exceptions.countries.length > 0)
-			parts.push(t('routes.form.geoSummaryExceptions', { count: cb.exceptions.countries.length }));
+		if (cb.asns.length > 0) parts.push(t('routes.form.geoSummaryASNs', { count: cb.asns.length }));
+		const nExc = cb.exceptions.countries.length + cb.exceptions.asns.length;
+		if (cb.mode === 'deny' && nExc > 0)
+			parts.push(t('routes.form.geoSummaryExceptions', { count: nExc }));
 		return (language.current && parts.join(', ')) || parts.join(', ');
 	});
 
@@ -1225,7 +1229,11 @@
 				countryList: [...r.countryBlock.countryList],
 				// v2.27 — `?? []`: tolerate a pre-v2.27 API.
 				continents: [...(r.countryBlock.continents ?? [])],
-				exceptions: { countries: [...(r.countryBlock.exceptions?.countries ?? [])] },
+				asns: [...(r.countryBlock.asns ?? [])],
+				exceptions: {
+					countries: [...(r.countryBlock.exceptions?.countries ?? [])],
+					asns: [...(r.countryBlock.exceptions?.asns ?? [])]
+				},
 				statusCode: r.countryBlock.statusCode
 			},
 			// Step O: "inherited" is a server-derived value the
@@ -2050,6 +2058,7 @@
 					mode: formData.countryBlock.mode,
 					countryList: [...formData.countryBlock.countryList],
 					continents: [...formData.countryBlock.continents],
+					asns: [...formData.countryBlock.asns],
 					// v2.27 — exceptions are deny-only (the API rejects
 					// them otherwise); kept in the form state across
 					// mode flips but only shipped for deny.
@@ -2057,6 +2066,10 @@
 						countries:
 							formData.countryBlock.mode === 'deny'
 								? [...formData.countryBlock.exceptions.countries]
+								: [],
+						asns:
+							formData.countryBlock.mode === 'deny'
+								? [...formData.countryBlock.exceptions.asns]
 								: []
 					},
 					statusCode: formData.countryBlock.statusCode
@@ -4191,7 +4204,7 @@
 										</button>
 									</div>
 
-									{#if formData.countryBlock.mode === 'allow' && formData.countryBlock.countryList.length === 0 && formData.countryBlock.continents.length === 0}
+									{#if formData.countryBlock.mode === 'allow' && formData.countryBlock.countryList.length === 0 && formData.countryBlock.continents.length === 0 && formData.countryBlock.asns.length === 0}
 										<p
 											class="text-xs text-down mt-1"
 											data-testid="country-block-allow-empty-error"
@@ -4200,11 +4213,24 @@
 										</p>
 									{/if}
 								</div>
+								<!-- v2.28 — ASN block (spec D1/D3). -->
+								<ASNPicker
+									bind:value={formData.countryBlock.asns}
+									exclude={formData.countryBlock.exceptions.asns}
+									label={(language.current && t('routes.form.geoASNLabel')) || ''}
+									testid="geo-asns"
+								/>
 								{#if formData.countryBlock.mode === 'deny'}
 									<!-- v2.27 — deny-only exceptions (spec D4). -->
 									<CountryExceptionsPicker
 										bind:value={formData.countryBlock.exceptions.countries}
 										blocked={formData.countryBlock.countryList}
+									/>
+									<ASNPicker
+										bind:value={formData.countryBlock.exceptions.asns}
+										exclude={formData.countryBlock.asns}
+										label={(language.current && t('routes.form.geoASNExceptionsLabel')) || ''}
+										testid="geo-exception-asns"
 									/>
 								{/if}
 								<div>

@@ -98,6 +98,7 @@ Toutes optionnelles — chaque variable a un défaut safe. Définis-les de la m�
 | `ARENET_UI_ORIGIN` | _(aucun)_ | Origin du SPA pour les redirects de callback OIDC quand l'UI est servie séparément. |
 | `ARENET_CROWDSEC_API_URL` / `ARENET_CROWDSEC_API_KEY` | _(aucun)_ | Câblage LAPI CrowdSec — voir [CrowdSec](CrowdSec-FR). |
 | `ARENET_GEOIP_MMDB` | `/var/lib/arenet/GeoLite2-City.mmdb` | Chemin vers la base GeoLite2-City fournie par l'opérateur (ou téléchargée automatiquement via *Réglages → GeoIP*). |
+| `ARENET_GEOIP_ASN_MMDB` | `GeoLite2-ASN.mmdb` à côté de la base City | Chemin vers la base GeoLite2-ASN utilisée par les [règles ASN](Country-Block-FR#réseaux-asn-v2280) (téléchargée automatiquement avec la base City). |
 | `ARENET_PUBLIC_IP` | _(auto)_ | Force l'IP publique détectée du serveur (topology / carte geo). |
 | `ARENET_TOPOLOGY_TICK_MS` | `2000` | Intervalle de push WebSocket de la topology, en ms (arrondi à un multiple de 1000). |
 

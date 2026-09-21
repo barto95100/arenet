@@ -249,6 +249,9 @@ func (g geoForwardingCountryBlockSink) Submit(m countryblock.BlockMatch) {
 // matcher's allow/deny comparison and silently never match).
 type countryBlockGeoLookup struct {
 	inner *geo.Lookup
+	// asn resolves the autonomous system (v2.28). nil-safe: without
+	// it ASN rules never match (and fail open in allow mode).
+	asn *geo.ASNLookup
 }
 
 func (a countryBlockGeoLookup) Lookup(srcIP string) string {
@@ -270,7 +273,7 @@ func (a countryBlockGeoLookup) Lookup(srcIP string) string {
 // (countryblock.GeoLookup, v2.27). Same degraded / LAN contract as
 // Lookup: both fields "" when nothing usable was resolved.
 func (a countryBlockGeoLookup) LookupGeo(srcIP string) countryblock.GeoInfo {
-	if a.inner == nil {
+	if a.inner == nil && a.asn == nil {
 		return countryblock.GeoInfo{}
 	}
 	ip := net.ParseIP(srcIP)
@@ -281,7 +284,11 @@ func (a countryBlockGeoLookup) LookupGeo(srcIP string) countryblock.GeoInfo {
 	if loc.Country == "LAN" {
 		return countryblock.GeoInfo{}
 	}
-	return countryblock.GeoInfo{Country: loc.Country, Continent: loc.Continent}
+	return countryblock.GeoInfo{
+		Country:   loc.Country,
+		Continent: loc.Continent,
+		ASN:       a.asn.LookupASN(ip).ASN,
+	}
 }
 
 // Compile-time guards — adapter satisfies the W.1 seam and the

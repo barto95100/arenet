@@ -647,7 +647,26 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// nil, but LookupIP behaves identically to the nil-inner
 	// placeholder set above — always Found:false — so this call
 	// is functionally a no-op until Reload installs a real DB.
-	countryblock.SetGlobalLookup(countryBlockGeoLookup{inner: geoLookup})
+	// v2.28 — GeoLite2-ASN for the country-block ASN rules and the
+	// route form's ASN search. Default path: next to the City DB.
+	// Same degraded contract as geoLookup: an empty *geo.ASNLookup
+	// (no DB) finds nothing, and the updater installs a DB into it
+	// live once credentials are configured.
+	asnMMDBPath := os.Getenv("ARENET_GEOIP_ASN_MMDB")
+	if asnMMDBPath == "" {
+		asnMMDBPath = filepath.Join(filepath.Dir(geoMMDBPath), "GeoLite2-ASN.mmdb")
+	}
+	asnLookup, asnErr := geo.NewASNLookup(asnMMDBPath)
+	if asnErr != nil {
+		asnLookup = &geo.ASNLookup{}
+		logger.Info("geoip ASN database not loaded — ASN rules inactive",
+			"path", asnMMDBPath, "present", false, "err", asnErr)
+	} else {
+		logger.Info("geoip ASN database loaded", "path", asnMMDBPath, "present", true)
+	}
+	defer func() { _ = asnLookup.Close() }()
+
+	countryblock.SetGlobalLookup(countryBlockGeoLookup{inner: geoLookup, asn: asnLookup})
 
 	// Step V.4 — server position resolution. Order of
 	// precedence (spec §5.1):
@@ -1686,6 +1705,26 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	if geoUpdaterErr != nil {
 		logger.Warn("geoip auto-update: build updater failed; feature disabled", "err", geoUpdaterErr)
 	}
+	// v2.28 — the ASN database rides on the same MaxMind credentials
+	// and schedule: a second Updater pinned to GeoLite2-ASN, grouped
+	// with the City one behind the single updater surface.
+	asnUpdater, asnUpdaterErr := geoipupdate.New(geoipupdate.Config{
+		Store:      store,
+		Reloader:   asnLookup,
+		Verify:     geo.VerifyASNMMDB,
+		EditionID:  "GeoLite2-ASN",
+		Kind:       "ASN",
+		MMDBPath:   asnMMDBPath,
+		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
+		Logger:     logger,
+	})
+	if asnUpdaterErr != nil {
+		logger.Warn("geoip auto-update: build ASN updater failed", "err", asnUpdaterErr)
+	}
+	var geoUpdaters *geoipupdate.Group
+	if geoUpdater != nil || asnUpdater != nil {
+		geoUpdaters = geoipupdate.NewGroup(geoUpdater, asnUpdater)
+	}
 
 	// geoipLoopMu guards the current loop's cancel func so the config
 	// hook and shutdown don't race, mirroring updateLoopMu above.
@@ -1698,8 +1737,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 			geoipLoopCancel() // stop a previous loop
 			geoipLoopCancel = nil
 		}
-		if geoUpdater == nil {
-			return // updater failed to build; nothing to (re)start
+		if geoUpdaters == nil {
+			return // updaters failed to build; nothing to (re)start
 		}
 		if !cfg.Enabled {
 			logger.Info("geoip auto-update disabled")
@@ -1708,7 +1747,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		interval := resolveGeoIPInterval(cfg.IntervalOverride, logger)
 		loopCtx, cancel := context.WithCancel(ctx)
 		geoipLoopCancel = cancel
-		go geoUpdater.Run(loopCtx, interval)
+		go geoUpdaters.Run(loopCtx, interval)
 		logger.Info("geoip auto-update enabled", "interval", humanizeDuration(interval))
 	}
 	apiHandler.SetGeoIPConfigHook(startGeoIPLoop)
@@ -1720,9 +1759,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// passing a nil concrete pointer through an interface parameter
 	// produces a non-nil interface value — so guard explicitly to keep
 	// the handler's own nil check meaningful.
-	if geoUpdater != nil {
-		apiHandler.SetGeoIPUpdater(geoUpdater)
+	if geoUpdaters != nil {
+		apiHandler.SetGeoIPUpdater(geoUpdaters)
 	}
+	apiHandler.SetASNLookup(asnLookup)
 	// Kick off according to the persisted opt-in state. Bootstrap is
 	// implicit here: when cfg.Enabled and MaxMind credentials are
 	// configured, the loop's warmup-then-first-run calls UpdateOnce,

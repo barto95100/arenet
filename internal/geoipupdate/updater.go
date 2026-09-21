@@ -121,6 +121,28 @@ type Config struct {
 	// Logger receives operational log lines. Defaults to
 	// slog.Default() when nil. The LicenseKey is NEVER logged.
 	Logger *slog.Logger
+
+	// v2.28 — optional overrides that let one Updater type manage a
+	// second MaxMind edition (GeoLite2-ASN) next to the City one.
+
+	// EditionID, when set, replaces the edition stored with the
+	// credentials (the City edition picked in Settings → GeoIP).
+	EditionID string
+	// Reloader, when set, is reloaded after install instead of
+	// Lookup (Lookup is then not required).
+	Reloader Reloader
+	// Verify, when set, replaces the City edition guard run on the
+	// downloaded file before it is installed.
+	Verify func(path string) error
+	// Kind names the database in logs and operator-facing errors
+	// ("City" when empty).
+	Kind string
+}
+
+// Reloader is what an Updater reloads after installing a database.
+// Satisfied by *geo.Lookup and *geo.ASNLookup.
+type Reloader interface {
+	Reload(path string) error
 }
 
 // defaultWarmup is Config.Warmup's zero-value default — the delay
@@ -147,7 +169,10 @@ type UpdateResult struct {
 // itself is expected to be driven by a single scheduler goroutine.
 type Updater struct {
 	store      CredStore
-	lookup     *geo.Lookup
+	reloader   Reloader
+	verify     func(path string) error
+	edition    string
+	kind       string
 	mmdbPath   string
 	httpClient *http.Client
 	download   DownloadFunc
@@ -164,8 +189,8 @@ func New(cfg Config) (*Updater, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("geoipupdate: Store is required")
 	}
-	if cfg.Lookup == nil {
-		return nil, errors.New("geoipupdate: Lookup is required")
+	if cfg.Lookup == nil && cfg.Reloader == nil {
+		return nil, errors.New("geoipupdate: Lookup or Reloader is required")
 	}
 	if cfg.MMDBPath == "" {
 		return nil, errors.New("geoipupdate: MMDBPath is required")
@@ -186,9 +211,24 @@ func New(cfg Config) (*Updater, error) {
 		warmup = defaultWarmup
 	}
 
+	var reloader Reloader = cfg.Lookup
+	if cfg.Reloader != nil {
+		reloader = cfg.Reloader
+	}
+	verify := cfg.Verify
+	if verify == nil {
+		verify = verifyCityMMDB
+	}
+	kind := cfg.Kind
+	if kind == "" {
+		kind = "City"
+	}
 	u := &Updater{
 		store:      cfg.Store,
-		lookup:     cfg.Lookup,
+		reloader:   reloader,
+		verify:     verify,
+		edition:    cfg.EditionID,
+		kind:       kind,
 		mmdbPath:   cfg.MMDBPath,
 		httpClient: httpClient,
 		warmup:     warmup,
@@ -271,14 +311,18 @@ func (u *Updater) updateOnce(ctx context.Context) UpdateResult {
 	}
 
 	// Step 3: download (only fetches the body if changed).
-	resp, err := u.download(ctx, cfg.AccountID, cfg.LicenseKey, cfg.EditionID, currentMD5)
+	edition := cfg.EditionID
+	if u.edition != "" {
+		edition = u.edition
+	}
+	resp, err := u.download(ctx, cfg.AccountID, cfg.LicenseKey, edition, currentMD5)
 	if err != nil {
 		reason := "download failed"
 		var httpErr client.HTTPError
 		if errors.As(err, &httpErr) {
 			reason = "credentials rejected"
 		}
-		u.logger.ErrorContext(ctx, "geoipupdate: download failed", "reason", reason, "error", err)
+		u.logger.ErrorContext(ctx, "geoipupdate: download failed", "kind", u.kind, "reason", reason, "error", err)
 		return UpdateResult{Status: StatusError, Error: reason, At: now}
 	}
 
@@ -287,7 +331,7 @@ func (u *Updater) updateOnce(ctx context.Context) UpdateResult {
 		if resp.Reader != nil {
 			_ = resp.Reader.Close()
 		}
-		u.logger.InfoContext(ctx, "geoipupdate: database already up to date")
+		u.logger.InfoContext(ctx, "geoipupdate: database already up to date", "kind", u.kind)
 		return UpdateResult{Status: StatusUpToDate, At: now}
 	}
 	defer func() {
@@ -300,15 +344,15 @@ func (u *Updater) updateOnce(ctx context.Context) UpdateResult {
 	if err := u.install(ctx, resp.Reader); err != nil {
 		var editionErr *editionGuardError
 		if errors.As(err, &editionErr) {
-			msg := fmt.Sprintf("downloaded edition %q is not a City database: %v", cfg.EditionID, editionErr.Unwrap())
-			u.logger.ErrorContext(ctx, "geoipupdate: edition guard rejected download", "edition_id", cfg.EditionID, "error", editionErr.Unwrap())
+			msg := fmt.Sprintf("downloaded edition %q is not %s %s database: %v", edition, article(u.kind), u.kind, editionErr.Unwrap())
+			u.logger.ErrorContext(ctx, "geoipupdate: edition guard rejected download", "edition_id", edition, "kind", u.kind, "error", editionErr.Unwrap())
 			return UpdateResult{Status: StatusError, Error: msg, At: now}
 		}
 		u.logger.ErrorContext(ctx, "geoipupdate: install failed", "error", err)
 		return UpdateResult{Status: StatusError, Error: "install failed", At: now}
 	}
 
-	u.logger.InfoContext(ctx, "geoipupdate: database updated", "last_modified", resp.LastModified)
+	u.logger.InfoContext(ctx, "geoipupdate: database updated", "kind", u.kind, "last_modified", resp.LastModified)
 	return UpdateResult{Status: StatusUpdated, LastModified: resp.LastModified, At: now}
 }
 
@@ -348,7 +392,7 @@ func (u *Updater) install(_ context.Context, r io.Reader) error {
 	// map. Verify the freshly-downloaded file is a City database before
 	// installing. On failure, the defer above removes tmpPath; we do NOT
 	// rename or Reload, so the existing on-disk DB (if any) is untouched.
-	if err := verifyCityMMDB(tmpPath); err != nil {
+	if err := u.verify(tmpPath); err != nil {
 		return &editionGuardError{err: err}
 	}
 
@@ -361,7 +405,7 @@ func (u *Updater) install(_ context.Context, r io.Reader) error {
 	// fails below, the returned error still means "installed but reload
 	// failed" — NOT "old DB still active" — callers must not mistake a
 	// StatusError here for the pre-install state.
-	if err := u.lookup.Reload(u.mmdbPath); err != nil {
+	if err := u.reloader.Reload(u.mmdbPath); err != nil {
 		return fmt.Errorf("geoipupdate: reload lookup: %w", err)
 	}
 
@@ -475,4 +519,13 @@ func md5OfFile(path string) (string, error) {
 		return "", fmt.Errorf("geoipupdate: hash %q: %w", path, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// article returns the English indefinite article for word ("an ASN",
+// "a City") so operator-facing messages read correctly.
+func article(word string) string {
+	if word != "" && strings.ContainsRune("AEIOUaeiou", rune(word[0])) {
+		return "an"
+	}
+	return "a"
 }

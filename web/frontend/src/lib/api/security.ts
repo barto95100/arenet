@@ -607,3 +607,30 @@ export interface GeoLookupBatchResponse {
 export function geoLookupBatch(ips: string[]): Promise<GeoLookupBatchResponse> {
 	return request<GeoLookupBatchResponse>('POST', '/geo/lookup-batch', { ips });
 }
+
+/**
+ * v2.28 — GET /api/v1/geo/asn. `loaded` is false when no GeoLite2-ASN
+ * database is installed; `indexReady` false while a freshly loaded
+ * database's name index is still being built.
+ */
+export interface ASNInfo {
+	asn: number;
+	name: string;
+}
+
+export interface ASNSearchResponse {
+	loaded: boolean;
+	indexReady: boolean;
+	results: ASNInfo[];
+}
+
+/** Search ASes by organisation name or number ("ovh", "16276", "AS16276"). */
+export function searchASN(q: string, limit = 20): Promise<ASNSearchResponse> {
+	const params = new URLSearchParams({ q, limit: String(limit) });
+	return request<ASNSearchResponse>('GET', `/geo/asn?${params.toString()}`);
+}
+
+/** Resolve the organisation names of saved AS numbers. */
+export function namesASN(asns: number[]): Promise<ASNSearchResponse> {
+	return request<ASNSearchResponse>('GET', `/geo/asn?ids=${asns.join(',')}`);
+}
