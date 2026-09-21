@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/barto95100/arenet/internal/auth"
@@ -285,6 +286,62 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 			return nil, err
 		}
 		r.BasicAuth.PasswordHash = v
+
+		// v2.26 — path-rule basic-auth hashes and sensitive header
+		// values, resolved from the live route with the same id.
+		liveRoute, liveOK := live.routesByID[r.ID]
+		if len(r.PathRules) > 0 {
+			rules := slices.Clone(r.PathRules)
+			for j := range rules {
+				ba := rules[j].BasicAuth
+				if ba == nil {
+					continue
+				}
+				prefix := rules[j].PathPrefix
+				hv, err := resolve("routes", r.ID, pathRuleHashField(prefix), ba.PasswordHash, func() (string, bool) {
+					if !liveOK {
+						return "", false
+					}
+					for _, lr := range liveRoute.PathRules {
+						if lr.PathPrefix == prefix && lr.BasicAuth != nil {
+							return lr.BasicAuth.PasswordHash, true
+						}
+					}
+					return "", false
+				})
+				if err != nil {
+					return nil, err
+				}
+				cp := *ba
+				cp.PasswordHash = hv
+				rules[j].BasicAuth = &cp
+			}
+			r.PathRules = rules
+		}
+		for _, hdr := range []struct {
+			field string
+			m     *map[string]string
+			live  map[string]string
+		}{
+			{"request_headers", &r.RequestHeaders, liveRoute.RequestHeaders},
+			{"response_headers", &r.ResponseHeaders, liveRoute.ResponseHeaders},
+		} {
+			if *hdr.m == nil {
+				continue
+			}
+			out := make(map[string]string, len(*hdr.m))
+			for k, val := range *hdr.m {
+				liveVal, liveHas := hdr.live[k]
+				rv, err := resolve("routes", r.ID, hdr.field+"["+k+"]", val, func() (string, bool) {
+					return liveVal, liveOK && liveHas
+				})
+				if err != nil {
+					return nil, err
+				}
+				out[k] = rv
+			}
+			*hdr.m = out
+		}
 	}
 
 	// Users — password_hash

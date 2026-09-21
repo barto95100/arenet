@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
@@ -149,6 +150,21 @@ func buildClearedSet(report *ImportReport) clearedSet {
 // carries an empty hash, which is the intended incomplete-restore
 // state.
 func validateRouteWithDerogation(r storage.Route, cleared clearedSet) error {
+	// v2.26 — a path rule whose basic-auth hash was legitimately
+	// cleared validates against a placeholder too (same principle).
+	if len(r.PathRules) > 0 {
+		rules := slices.Clone(r.PathRules)
+		for j := range rules {
+			ba := rules[j].BasicAuth
+			if ba != nil && ba.PasswordHash == "" &&
+				cleared.has("routes", r.ID, pathRuleHashField(rules[j].PathPrefix)) {
+				cp := *ba
+				cp.PasswordHash = "incomplete-restore-placeholder"
+				rules[j].BasicAuth = &cp
+			}
+		}
+		r.PathRules = rules
+	}
 	if r.AuthMode == "basic" &&
 		r.BasicAuth.PasswordHash == "" &&
 		cleared.has("routes", r.ID, "basic_auth.password_hash") {
