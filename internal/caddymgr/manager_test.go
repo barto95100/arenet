@@ -1682,6 +1682,27 @@ func TestBuildConfigJSON_LoadsCleanly_AllDNSProviderTypes(t *testing.T) {
 	}
 }
 
+// TestBuildConfigJSON_AdminAPIDisabledAndNotPersisted pins the v2.26
+// fix: with no admin block Caddy served an unauthenticated admin API
+// on localhost:2019 (full config incl. secrets, POST /load) and wrote
+// the config in plaintext to autosave.json on every load.
+func TestBuildConfigJSON_AdminAPIDisabledAndNotPersisted(t *testing.T) {
+	raw, err := buildConfigJSON(nil, buildOpts{DevMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Admin == nil || !cfg.Admin.Disabled {
+		t.Errorf("admin API not disabled: %+v", cfg.Admin)
+	}
+	if cfg.Admin == nil || cfg.Admin.Config == nil || cfg.Admin.Config.Persist == nil || *cfg.Admin.Config.Persist {
+		t.Errorf("config autosave not disabled: %+v", cfg.Admin)
+	}
+}
+
 // TestBuildACMEPolicy_OVHProviderBlockUnchanged pins OVH non-regression
 // (v2.26 spec §3): the provider block emitted from the Credentials map
 // is byte-identical to the pre-v2.26 flat-field emission.

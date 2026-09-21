@@ -1,4 +1,10 @@
 {
+  "admin": {
+    "config": {
+      "persist": false
+    },
+    "disabled": true
+  },
   "apps": {
     "events": {
       "subscriptions": [
