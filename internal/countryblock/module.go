@@ -60,6 +60,13 @@ type CountryLookup interface {
 	Lookup(srcIP string) string
 }
 
+// GeoLookup is optionally implemented by a CountryLookup that can
+// also resolve the continent (v2.27). Checked by type assertion so
+// existing CountryLookup implementations keep working.
+type GeoLookup interface {
+	LookupGeo(srcIP string) GeoInfo
+}
+
 // BlockMatch is the value type the Handler passes to the
 // BlockSink on every blocked request. W.1 originally
 // shipped a 4-argument Submit; W.4 widened it to a struct
@@ -245,14 +252,20 @@ func (h *Handler) ServeHTTP(
 	// Source IP resolution.
 	srcIP := resolveSrcIP(r)
 
-	// Country resolution — nil-safe.
-	var country string
+	// Geo resolution — nil-safe. A lookup that also resolves the
+	// continent (GeoLookup, v2.27) is preferred; a country-only
+	// CountryLookup still works for country rules.
+	var geo GeoInfo
 	if lookup := GlobalLookup(); lookup != nil {
-		country = lookup.Lookup(srcIP)
+		if gl, ok := lookup.(GeoLookup); ok {
+			geo = gl.LookupGeo(srcIP)
+		} else {
+			geo.Country = lookup.Lookup(srcIP)
+		}
 	}
 
 	// Gate evaluation.
-	decision := Evaluate(h.Config, country, srcIP, GlobalTrustedIPs())
+	decision := EvaluateGeo(h.Config, geo, srcIP, GlobalTrustedIPs())
 	if decision.Accepted {
 		return next.ServeHTTP(w, r)
 	}

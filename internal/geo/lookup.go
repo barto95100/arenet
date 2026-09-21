@@ -42,12 +42,15 @@ import (
 // Lat/Lon are 0.0 when Found=false; callers must check Found before
 // rendering coordinates.
 type Location struct {
-	Country     string  `json:"country"`
-	CountryName string  `json:"countryName"`
-	City        string  `json:"city"`
-	Lat         float64 `json:"lat"`
-	Lon         float64 `json:"lon"`
-	Found       bool    `json:"found"`
+	Country     string `json:"country"`
+	CountryName string `json:"countryName"`
+	City        string `json:"city"`
+	// Continent is the MaxMind continent code (AF, AN, AS, EU, NA,
+	// OC, SA) — v2.27, used by the country-block continent rules.
+	Continent string  `json:"continent,omitempty"`
+	Lat       float64 `json:"lat"`
+	Lon       float64 `json:"lon"`
+	Found     bool    `json:"found"`
 }
 
 // Lookup wraps a MaxMind GeoLite2-City reader. Safe for concurrent
@@ -151,6 +154,7 @@ func (l *Lookup) LookupIP(ip net.IP) Location {
 		Country:     rec.Country.IsoCode,
 		CountryName: rec.Country.Names["en"],
 		City:        rec.City.Names["en"],
+		Continent:   rec.Continent.Code,
 		Lat:         rec.Location.Latitude,
 		Lon:         rec.Location.Longitude,
 	}

@@ -494,3 +494,34 @@ func TestDNSProviderComplete(t *testing.T) {
 		})
 	}
 }
+
+// v2.27 — continents + exceptions are normalised and validated; empty
+// optional lists stay nil so a country-only config stores unchanged.
+func TestMaterialiseCountryBlock_ContinentsAndExceptions(t *testing.T) {
+	cfg, err := materialiseCountryBlock(countryBlockReq{
+		Mode: "deny", Continents: []string{" as "},
+		Exceptions: &countryBlockExceptions{Countries: []string{"jp"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Continents) != 1 || cfg.Continents[0] != "AS" || cfg.Exceptions.Countries[0] != "JP" {
+		t.Errorf("not normalised: %+v", cfg)
+	}
+	plain, err := materialiseCountryBlock(countryBlockReq{Mode: "deny", CountryList: []string{"ru"},
+		Exceptions: &countryBlockExceptions{Countries: []string{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Continents != nil || plain.Exceptions != nil {
+		t.Errorf("empty optional lists must stay nil: %+v", plain)
+	}
+	if _, err := materialiseCountryBlock(countryBlockReq{Mode: "allow", CountryList: []string{"FR"},
+		Exceptions: &countryBlockExceptions{Countries: []string{"DE"}}}); err == nil {
+		t.Error("exceptions outside deny mode must be rejected")
+	}
+	resp := toCountryBlockResp(plain)
+	if resp.Continents == nil || resp.Exceptions.Countries == nil {
+		t.Errorf("response lists must never be null: %+v", resp)
+	}
+}

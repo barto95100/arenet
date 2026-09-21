@@ -1528,7 +1528,17 @@ type rateLimitReq struct {
 type countryBlockReq struct {
 	Mode        string   `json:"mode"`
 	CountryList []string `json:"countryList"`
-	StatusCode  int      `json:"statusCode,omitempty"`
+	// Continents + Exceptions (v2.27): continent codes, and the
+	// countries a deny gate always accepts. Both optional.
+	Continents []string                `json:"continents,omitempty"`
+	Exceptions *countryBlockExceptions `json:"exceptions,omitempty"`
+	StatusCode int                     `json:"statusCode,omitempty"`
+}
+
+// countryBlockExceptions is the wire shape of
+// countryblock.Exceptions (request and response).
+type countryBlockExceptions struct {
+	Countries []string `json:"countries"`
 }
 
 // countryBlockResp is the wire-side response shape of
@@ -1537,9 +1547,11 @@ type countryBlockReq struct {
 // Route — zero-value reads back as Off). camelCase tags
 // mirror countryBlockReq.
 type countryBlockResp struct {
-	Mode        string   `json:"mode"`
-	CountryList []string `json:"countryList"`
-	StatusCode  int      `json:"statusCode,omitempty"`
+	Mode        string                 `json:"mode"`
+	CountryList []string               `json:"countryList"`
+	Continents  []string               `json:"continents"`
+	Exceptions  countryBlockExceptions `json:"exceptions"`
+	StatusCode  int                    `json:"statusCode,omitempty"`
 }
 
 // rateLimitResp (Step Q) — per-route rate-limit on the
@@ -2006,9 +2018,19 @@ func toCountryBlockResp(c countryblock.Config) countryBlockResp {
 	if list == nil {
 		list = []string{}
 	}
+	continents := c.Continents
+	if continents == nil {
+		continents = []string{}
+	}
+	exceptions := countryBlockExceptions{Countries: []string{}}
+	if c.Exceptions != nil && c.Exceptions.Countries != nil {
+		exceptions.Countries = c.Exceptions.Countries
+	}
 	return countryBlockResp{
 		Mode:        mode,
 		CountryList: list,
+		Continents:  continents,
+		Exceptions:  exceptions,
 		StatusCode:  c.StatusCode,
 	}
 }

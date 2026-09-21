@@ -58,7 +58,20 @@ const (
 	ReasonAllowMiss    = "allow-miss"
 	ReasonDenyMatch    = "deny-match"
 	ReasonDenyMiss     = "deny-miss"
+	// ReasonException (v2.27): accepted by Config.Exceptions in
+	// ModeDeny, before any list was consulted.
+	ReasonException = "exception"
 )
+
+// GeoInfo is what the lookup resolved for a source IP. Empty fields
+// mean "not resolved" (IP not in the database, or database missing).
+type GeoInfo struct {
+	// Country is the ISO 3166-1 alpha-2 code.
+	Country string
+	// Continent is the MaxMind continent code (AF, AN, AS, EU, NA,
+	// OC, SA).
+	Continent string
+}
 
 // Evaluate is the pure-Go gate evaluation. No HTTP, no Caddy, no
 // MMDB I/O — the caller (Handler.ServeHTTP, or a test) pre-resolves
@@ -93,6 +106,21 @@ func Evaluate(
 	srcIP string,
 	trustedIPs []*net.IPNet,
 ) Decision {
+	return EvaluateGeo(config, GeoInfo{Country: country}, srcIP, trustedIPs)
+}
+
+// EvaluateGeo is Evaluate with the full resolved GeoInfo (v2.27):
+// continents and exceptions need more than the country. Same layer
+// order as Evaluate; layer 4 (fail-open) triggers only when NOTHING
+// was resolved, and a ModeDeny exception (layer 4b) wins over every
+// list.
+func EvaluateGeo(
+	config Config,
+	geo GeoInfo,
+	srcIP string,
+	trustedIPs []*net.IPNet,
+) Decision {
+	country := geo.Country
 	// Parse srcIP once; reuse for both bypass layers.
 	ip := net.ParseIP(srcIP)
 
@@ -131,7 +159,7 @@ func Evaluate(
 	// caller is expected to log a Warn once-per-Provision when
 	// it observes this branch (rate-limited to avoid log
 	// flooding under sustained MMDB outage).
-	if country == "" {
+	if country == "" && geo.Continent == "" {
 		return Decision{
 			Accepted: true,
 			Country:  "",
@@ -139,8 +167,15 @@ func Evaluate(
 		}
 	}
 
-	// Layer 5/6 — allow/deny match.
-	match := containsCountry(config.CountryList, country)
+	// Layer 4b — ModeDeny exceptions always pass.
+	if config.Mode == ModeDeny && config.Exceptions != nil && country != "" &&
+		containsCountry(config.Exceptions.Countries, country) {
+		return Decision{Accepted: true, Country: country, Reason: ReasonException}
+	}
+
+	// Layer 5/6 — allow/deny match on any configured list.
+	match := (country != "" && containsCountry(config.CountryList, country)) ||
+		(geo.Continent != "" && containsCountry(config.Continents, geo.Continent))
 	switch config.Mode {
 	case ModeAllow:
 		if match {

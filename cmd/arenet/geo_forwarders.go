@@ -266,8 +266,30 @@ func (a countryBlockGeoLookup) Lookup(srcIP string) string {
 	return loc.Country
 }
 
-// Compile-time guard — adapter satisfies the W.1 seam.
-var _ countryblock.CountryLookup = countryBlockGeoLookup{}
+// LookupGeo resolves country and continent in one MMDB read
+// (countryblock.GeoLookup, v2.27). Same degraded / LAN contract as
+// Lookup: both fields "" when nothing usable was resolved.
+func (a countryBlockGeoLookup) LookupGeo(srcIP string) countryblock.GeoInfo {
+	if a.inner == nil {
+		return countryblock.GeoInfo{}
+	}
+	ip := net.ParseIP(srcIP)
+	if ip == nil {
+		return countryblock.GeoInfo{}
+	}
+	loc := a.inner.LookupIP(ip)
+	if loc.Country == "LAN" {
+		return countryblock.GeoInfo{}
+	}
+	return countryblock.GeoInfo{Country: loc.Country, Continent: loc.Continent}
+}
+
+// Compile-time guards — adapter satisfies the W.1 seam and the
+// v2.27 continent-aware extension.
+var (
+	_ countryblock.CountryLookup = countryBlockGeoLookup{}
+	_ countryblock.GeoLookup     = countryBlockGeoLookup{}
+)
 
 // serverPositionRedetector satisfies api.ServerPositionRedetector
 // for V.4's POST :redetect endpoint. Captures the boot-time

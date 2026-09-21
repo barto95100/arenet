@@ -24,6 +24,23 @@ Within 5s the country filter is active. Requests from blocked countries get **40
 
 ---
 
+## Continents and exceptions (v2.27.0)
+
+The section is now called **Geo filtering**. Next to countries you can:
+
+- **Tick continents** (Europe, Asia, Africa, North America, South America, Oceania, Antarctica). A continent counts exactly like a country in the list: in **Deny** its visitors are blocked, in **Allow** only listed countries *and* continents get through.
+- In **Deny** mode, add **exceptions**: countries that are **always allowed**, even inside a blocked continent — e.g. *Deny Asia, except Japan*.
+
+| Setup | Tokyo | Beijing | Paris | New York |
+| ----- | ----- | ------- | ----- | -------- |
+| Deny **Asia** | 403 | 403 | ✓ | ✓ |
+| Deny **Asia**, exception **Japan** | ✓ | 403 | ✓ | ✓ |
+| Allow **Europe** | 403 | 403 | ✓ | 403 |
+
+Rules: exceptions exist only in Deny mode (the API rejects them otherwise), a country can't be both blocked and an exception, and an Allow list needs at least one country **or** continent. The continent comes from the same GeoLite2-City database — nothing extra to install. Blocked requests are logged with the resolved country, as before.
+
+---
+
 ## When to use Allow vs Deny
 
 | Strategy | Best for |

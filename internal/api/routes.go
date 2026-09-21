@@ -1050,23 +1050,35 @@ func materialiseCountryBlock(req countryBlockReq) (countryblock.Config, error) {
 	if mode == "" {
 		mode = string(countryblock.ModeOff)
 	}
-	list := make([]string, 0, len(req.CountryList))
-	for _, code := range req.CountryList {
-		// Trim ASCII whitespace + uppercase. countryblock.Validate
-		// then rejects anything still not matching /^[A-Z]{2}$/.
-		// Done client-side too, but defense in depth.
-		c := strings.ToUpper(strings.TrimSpace(code))
-		list = append(list, c)
-	}
+	// Trim ASCII whitespace + uppercase. countryblock.Validate
+	// then rejects anything still not a valid code. Done
+	// client-side too, but defense in depth.
 	cfg := countryblock.Config{
 		Mode:        countryblock.Mode(mode),
-		CountryList: list,
+		CountryList: normaliseCodes(req.CountryList),
 		StatusCode:  req.StatusCode,
+	}
+	// v2.27 — optional lists stay nil when empty so a pre-v2.27
+	// config stores (and emits to Caddy) byte-identically.
+	if len(req.Continents) > 0 {
+		cfg.Continents = normaliseCodes(req.Continents)
+	}
+	if req.Exceptions != nil && len(req.Exceptions.Countries) > 0 {
+		cfg.Exceptions = &countryblock.Exceptions{Countries: normaliseCodes(req.Exceptions.Countries)}
 	}
 	if err := cfg.Validate(); err != nil {
 		return countryblock.Config{}, err
 	}
 	return cfg, nil
+}
+
+// normaliseCodes trims and uppercases each code; never returns nil.
+func normaliseCodes(codes []string) []string {
+	out := make([]string, 0, len(codes))
+	for _, code := range codes {
+		out = append(out, strings.ToUpper(strings.TrimSpace(code)))
+	}
+	return out
 }
 
 // validateHeaders walks a request- or response-header map and runs
@@ -1285,8 +1297,8 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		// Spec §D2 deny+empty: legal no-op. Surface a Warn so the
 		// operator notices their list became inert (e.g. typo cleared
 		// the chip input). Not blocking; this is intentional behavior.
-		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 {
-			h.logger.Warn("country-block: deny mode with empty country list — no-op",
+		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 && len(cb.Continents) == 0 {
+			h.logger.Warn("country-block: deny mode with empty country and continent lists — no-op",
 				"host", req.Host)
 		}
 		newCountryBlock = cb
@@ -1797,8 +1809,8 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 {
-			h.logger.Warn("country-block: deny mode with empty country list — no-op",
+		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 && len(cb.Continents) == 0 {
+			h.logger.Warn("country-block: deny mode with empty country and continent lists — no-op",
 				"host", req.Host, "id", id)
 		}
 		newCountryBlock = cb

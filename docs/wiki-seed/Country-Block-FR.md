@@ -24,6 +24,23 @@ En 5s le filtre pays est actif. Les requêtes depuis les pays bloqués reçoiven
 
 ---
 
+## Continents et exceptions (v2.27.0)
+
+La section s'appelle désormais **Filtrage géographique**. À côté des pays, tu peux :
+
+- **Cocher des continents** (Europe, Asie, Afrique, Amérique du Nord, Amérique du Sud, Océanie, Antarctique). Un continent compte exactement comme un pays de la liste : en **Deny** ses visiteurs sont bloqués, en **Allow** seuls les pays *et* continents listés passent.
+- En mode **Deny**, ajouter des **exceptions** : des pays **toujours autorisés**, même dans un continent bloqué — ex. *bloquer l'Asie, sauf le Japon*.
+
+| Configuration | Tokyo | Pékin | Paris | New York |
+| ------------- | ----- | ----- | ----- | -------- |
+| Deny **Asie** | 403 | 403 | ✓ | ✓ |
+| Deny **Asie**, exception **Japon** | ✓ | 403 | ✓ | ✓ |
+| Allow **Europe** | 403 | 403 | ✓ | 403 |
+
+Règles : les exceptions n'existent qu'en mode Deny (l'API les refuse sinon), un pays ne peut pas être à la fois bloqué et en exception, et une liste Allow exige au moins un pays **ou** un continent. Le continent vient de la même base GeoLite2-City — rien de plus à installer. Les requêtes bloquées sont journalisées avec le pays résolu, comme avant.
+
+---
+
 ## Quand utiliser Allow vs Deny
 
 | Stratégie | Idéal pour |

@@ -81,6 +81,16 @@ type Config struct {
 	// canonicalize at the API layer (W.2).
 	CountryList []string `json:"countryList"`
 
+	// Continents (v2.27) are MaxMind continent codes (see
+	// continentCodes) matched like CountryList: a request whose IP
+	// resolves to one of them matches the mode. omitempty keeps
+	// pre-v2.27 configs byte-identical on the wire.
+	Continents []string `json:"continents,omitempty"`
+
+	// Exceptions (v2.27, ModeDeny only) are always accepted, before
+	// any list is consulted: "deny Asia except Japan".
+	Exceptions *Exceptions `json:"exceptions,omitempty"`
+
 	// StatusCode is the per-route status override. 0 means "use
 	// the process-wide default" (ARENET_COUNTRY_BLOCK_STATUS,
 	// defaulting to 403). Allowed non-zero values are 403, 451,
@@ -91,6 +101,20 @@ type Config struct {
 	StatusCode int `json:"statusCode,omitempty"`
 }
 
+// Exceptions lists sources a ModeDeny gate always accepts.
+type Exceptions struct {
+	// Countries are ISO 3166-1 alpha-2 codes, same format as
+	// Config.CountryList.
+	Countries []string `json:"countries,omitempty"`
+}
+
+// continentCodes is the closed set of MaxMind continent codes
+// (GeoLite2-City continent.code): Africa, Antarctica, Asia, Europe,
+// North America, Oceania, South America.
+var continentCodes = map[string]struct{}{
+	"AF": {}, "AN": {}, "AS": {}, "EU": {}, "NA": {}, "OC": {}, "SA": {},
+}
+
 // ErrAllowListEmpty is returned by Validate when Mode == ModeAllow
 // and CountryList is empty. Per spec §D2 this is the operator-
 // facing footgun: an empty allow-list would block ALL traffic
@@ -99,6 +123,7 @@ type Config struct {
 // here ensures a hand-crafted JSON config doesn't sneak past.
 var ErrAllowListEmpty = errors.New(
 	"countryblock: mode=allow requires at least one country in countryList " +
+		"or one continent in continents " +
 		"(would otherwise block all non-RFC1918 traffic)",
 )
 
@@ -158,8 +183,29 @@ func (c *Config) Validate() error {
 		seen[code] = struct{}{}
 	}
 
-	if c.Mode == ModeAllow && len(c.CountryList) == 0 {
+	if err := validateUniqueCodes("continents", c.Continents, func(code string) bool {
+		_, ok := continentCodes[code]
+		return ok
+	}); err != nil {
+		return err
+	}
+
+	if c.Mode == ModeAllow && len(c.CountryList) == 0 && len(c.Continents) == 0 {
 		return ErrAllowListEmpty
+	}
+
+	if c.Exceptions != nil && len(c.Exceptions.Countries) > 0 {
+		if c.Mode != ModeDeny {
+			return errors.New("countryblock: exceptions are only valid with mode=deny")
+		}
+		if err := validateUniqueCodes("exceptions.countries", c.Exceptions.Countries, isISOAlpha2Upper); err != nil {
+			return err
+		}
+		for _, code := range c.Exceptions.Countries {
+			if _, listed := seen[code]; listed {
+				return fmt.Errorf("countryblock: country %q is both blocked and an exception", code)
+			}
+		}
 	}
 
 	if c.StatusCode != 0 {
@@ -171,6 +217,22 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+// validateUniqueCodes checks every code with valid and rejects
+// duplicates; field names the offending list in the error.
+func validateUniqueCodes(field string, codes []string, valid func(string) bool) error {
+	seen := make(map[string]struct{}, len(codes))
+	for _, code := range codes {
+		if !valid(code) {
+			return fmt.Errorf("countryblock: %s entry %q is not a valid code", field, code)
+		}
+		if _, dup := seen[code]; dup {
+			return fmt.Errorf("countryblock: %s entry %q appears more than once", field, code)
+		}
+		seen[code] = struct{}{}
+	}
 	return nil
 }
 
