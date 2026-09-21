@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -219,6 +220,17 @@ type CaddyManager struct {
 	mu      sync.Mutex
 	started bool
 
+	// Reload health (v2.26 — replaces the systemhealth probe of
+	// Caddy's admin API, which is now disabled). reloadStartedAt is
+	// the unix-nano start of the apply in flight (0 = none; a hung
+	// caddy.Load keeps it set). reloadTimedOut is set by a
+	// ReloadFromStore timeout and cleared by the next apply that
+	// completes.
+	reloadStartedAt atomic.Int64
+	// startedFlag mirrors started for lock-free reads (ReloadHealth).
+	startedFlag    atomic.Bool
+	reloadTimedOut atomic.Bool
+
 	// applyFn is the seam ReloadFromStore invokes inside its
 	// goroutine + timeout wrapper. Default points to
 	// applyLocked (the real Caddy reload path); tests override
@@ -398,6 +410,7 @@ func (m *CaddyManager) Start(ctx context.Context) error {
 		return fmt.Errorf("initial caddy load: %w", err)
 	}
 	m.started = true
+	m.startedFlag.Store(true)
 	m.logger.Info("Caddy started", "http", m.httpListen(), "https", m.httpsListen(), "dev", m.devMode)
 	return nil
 }
@@ -441,6 +454,7 @@ func (m *CaddyManager) Stop() error {
 		return nil
 	}
 	m.started = false
+	m.startedFlag.Store(false)
 	if err := caddy.Stop(); err != nil {
 		return fmt.Errorf("caddy stop: %w", err)
 	}
@@ -502,7 +516,13 @@ func (m *CaddyManager) ReloadFromStore(ctx context.Context) error {
 	// caddy.Load eventually completes (or fails) in the
 	// background even though we've returned to the caller.
 	done := make(chan error, 1)
-	go func() { done <- m.applyFn(reloadCtx) }()
+	go func() {
+		m.reloadStartedAt.Store(time.Now().UnixNano())
+		err := m.applyFn(reloadCtx)
+		m.reloadStartedAt.Store(0)
+		m.reloadTimedOut.Store(false)
+		done <- err
+	}()
 
 	select {
 	case err := <-done:
@@ -523,9 +543,27 @@ func (m *CaddyManager) ReloadFromStore(ctx context.Context) error {
 				"err", dumpErr,
 			)
 		}
+		m.reloadTimedOut.Store(true)
 		return fmt.Errorf("caddy reload timed out after %s: %w",
 			reloadFromStoreTimeoutForTest, reloadCtx.Err())
 	}
+}
+
+// ReloadHealth reports whether Caddy config reloads are healthy:
+// started is false before Start; inFlight is how long the current
+// reload has been running (0 when none); timedOut is true while the
+// last ReloadFromStore timed out and no reload has completed since.
+// A reload stuck inside caddy.Load (Caddy's config mutex held by a
+// blocking provisioning call, #R-CADDY-ADMIN-DEADLOCK) shows up as a
+// growing inFlight.
+func (m *CaddyManager) ReloadHealth() (started bool, inFlight time.Duration, timedOut bool) {
+	// Lock-free on purpose: ReloadFromStore holds m.mu for the whole
+	// reload, and a health probe must not queue behind it.
+	started = m.startedFlag.Load()
+	if at := m.reloadStartedAt.Load(); at != 0 {
+		inFlight = time.Since(time.Unix(0, at))
+	}
+	return started, inFlight, m.reloadTimedOut.Load()
 }
 
 // applyLocked must be called with m.mu held. It reads routes from the store,
@@ -964,6 +1002,22 @@ type caddyConfig struct {
 
 type adminConfig struct {
 	Disabled bool `json:"disabled"`
+}
+
+// adminBlock returns the top-level Caddy "admin" config (v2.26).
+//
+// Arenet drives Caddy in-process through caddy.Load and never uses
+// Caddy's admin HTTP API, yet with no admin block Caddy starts it on
+// localhost:2019 — unauthenticated, serving the full config (DNS
+// credentials, private keys, CrowdSec key) and accepting POST /load
+// from any local process or SSRF. And with persist unset, every
+// caddy.Load writes the full config in plaintext to autosave.json
+// (caddy@v2.11.4/caddy.go:377-392). Both are turned off.
+func adminBlock() map[string]any {
+	return map[string]any{
+		"disabled": true,
+		"config":   map[string]any{"persist": false},
+	}
 }
 
 type loggingConfig struct {
@@ -2120,7 +2174,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		},
 	}
 
-	full := map[string]any{"apps": apps}
+	full := map[string]any{"apps": apps, "admin": adminBlock()}
 	return json.MarshalIndent(full, "", "  ")
 }
 

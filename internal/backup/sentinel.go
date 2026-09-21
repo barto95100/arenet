@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
+	"strings"
 
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -40,10 +42,29 @@ func redactSnapshotInPlace(s *Snapshot) {
 	s.SecretsIncluded = false
 
 	for i := range s.Routes {
+		r := &s.Routes[i]
 		// routes[].basic_auth.password_hash
-		if s.Routes[i].BasicAuth.PasswordHash != "" {
-			s.Routes[i].BasicAuth.PasswordHash = SentinelLiteral
+		if r.BasicAuth.PasswordHash != "" {
+			r.BasicAuth.PasswordHash = SentinelLiteral
 		}
+		// routes[].path_rules[].basic_auth.password_hash (v2.26 — was
+		// exported as-is). The slice and its BasicAuth pointers are
+		// cloned so the live route is never mutated.
+		if len(r.PathRules) > 0 {
+			rules := slices.Clone(r.PathRules)
+			for j := range rules {
+				if ba := rules[j].BasicAuth; ba != nil && ba.PasswordHash != "" {
+					cp := *ba
+					cp.PasswordHash = SentinelLiteral
+					rules[j].BasicAuth = &cp
+				}
+			}
+			r.PathRules = rules
+		}
+		// routes[].request_headers / response_headers values of
+		// credential-bearing headers (v2.26, IsSensitiveHeader).
+		r.RequestHeaders = redactHeaders(r.RequestHeaders)
+		r.ResponseHeaders = redactHeaders(r.ResponseHeaders)
 	}
 	for i := range s.Users {
 		// users[].password_hash
@@ -191,4 +212,54 @@ func (e *ErrSchemaMajorMismatch) Error() string {
 		e.FileVersion,
 		e.BinaryVersion,
 	)
+}
+
+// sensitiveHeaderNames are header names whose values are credentials.
+var sensitiveHeaderNames = map[string]struct{}{
+	"authorization":       {},
+	"proxy-authorization": {},
+	"cookie":              {},
+	"set-cookie":          {},
+	"x-api-key":           {},
+	"api-key":             {},
+}
+
+// sensitiveHeaderFragments flag any header whose name contains them.
+var sensitiveHeaderFragments = []string{"token", "secret", "password", "api-key", "apikey"}
+
+// IsSensitiveHeader reports whether a route header's value is a
+// credential that backups must treat as a secret (v2.26).
+func IsSensitiveHeader(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if _, ok := sensitiveHeaderNames[n]; ok {
+		return true
+	}
+	for _, f := range sensitiveHeaderFragments {
+		if strings.Contains(n, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactHeaders returns a copy of h with sensitive values replaced by
+// the sentinel (nil stays nil).
+func redactHeaders(h map[string]string) map[string]string {
+	if h == nil {
+		return nil
+	}
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		if v != "" && IsSensitiveHeader(k) {
+			v = SentinelLiteral
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// pathRuleHashField is the resolve/cleared identity of a path rule's
+// basic-auth hash within its route.
+func pathRuleHashField(prefix string) string {
+	return "path_rules[" + prefix + "].basic_auth.password_hash"
 }

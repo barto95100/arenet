@@ -28,43 +28,37 @@ import (
 
 // --- CaddyCheck -----------------------------------------------------------
 
-func TestCaddyCheck_HealthyOn200(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	c := &CaddyCheck{AdminURL: srv.URL}
-	got := c.Check(context.Background())
-	if got.Status != StatusHealthy {
-		t.Errorf("got %q; want healthy (server returned 200)", got.Status)
-	}
+type fakeReloads struct {
+	started  bool
+	inFlight time.Duration
+	timedOut bool
 }
 
-func TestCaddyCheck_UnhealthyOnConnectionRefused(t *testing.T) {
-	// Bind a server briefly to get a free port, then close
-	// it — the subsequent dial will be refused.
-	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
-	url := srv.URL
-	srv.Close()
-
-	c := &CaddyCheck{AdminURL: url}
-	got := c.Check(context.Background())
-	if got.Status != StatusUnhealthy {
-		t.Errorf("got %q; want unhealthy on connection refused", got.Status)
-	}
+func (f fakeReloads) ReloadHealth() (bool, time.Duration, bool) {
+	return f.started, f.inFlight, f.timedOut
 }
 
-func TestCaddyCheck_UnhealthyOnNon2xx(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	c := &CaddyCheck{AdminURL: srv.URL}
-	got := c.Check(context.Background())
-	if got.Status != StatusUnhealthy {
-		t.Errorf("got %q; want unhealthy on HTTP 500", got.Status)
+func TestCaddyCheck_ReloadStates(t *testing.T) {
+	cases := []struct {
+		name string
+		r    ReloadStater
+		want Status
+		msg  string
+	}{
+		{"healthy idle", fakeReloads{started: true}, StatusHealthy, "healthy"},
+		{"short reload in flight", fakeReloads{started: true, inFlight: 2 * time.Second}, StatusHealthy, "healthy"},
+		{"stuck reload", fakeReloads{started: true, inFlight: 40 * time.Second}, StatusUnhealthy, "stuck for 40s"},
+		{"last reload timed out", fakeReloads{started: true, timedOut: true}, StatusDegraded, "timed out"},
+		{"not started", fakeReloads{}, StatusUnhealthy, "not started"},
+		{"not wired", nil, StatusUnhealthy, "not wired"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := (&CaddyCheck{Reloads: tc.r}).Check(context.Background())
+			if got.Status != tc.want || !strings.Contains(got.Message, tc.msg) {
+				t.Errorf("got %q %q; want %q containing %q", got.Status, got.Message, tc.want, tc.msg)
+			}
+		})
 	}
 }
 

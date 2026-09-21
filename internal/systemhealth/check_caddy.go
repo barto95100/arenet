@@ -18,91 +18,55 @@ package systemhealth
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
+	"time"
 )
 
-// CaddyCheck probes Caddy's loopback admin API at
-// /config/. A reachable + 200-OK admin endpoint means
-// caddy.Load (and therefore any future route reload) will
-// work; a deadlocked admin endpoint (see commit cd09a34
-// #R-CADDY-ADMIN-DEADLOCK) surfaces here as StatusUnhealthy.
+// ReloadStater reports the health of Caddy config reloads.
+// Satisfied by *caddymgr.CaddyManager.
+type ReloadStater interface {
+	ReloadHealth() (started bool, inFlight time.Duration, timedOut bool)
+}
+
+// stuckReloadThreshold is how long a config reload may run before the
+// check reports it as stuck. Normal reloads take milliseconds to a few
+// seconds (ACME / DNS provisioning included).
+const stuckReloadThreshold = 15 * time.Second
+
+// CaddyCheck reports whether the embedded Caddy accepts config reloads.
 //
-// Default admin URL is http://127.0.0.1:2019 — Caddy's
-// documented default when no `admin` block is set in the
-// emitted config (which arenet doesn't set). Override via
-// the AdminURL field if a future config tweak relocates the
-// admin endpoint.
+// v2.26: it used to GET Caddy's admin API /config/ on 127.0.0.1:2019
+// to detect a deadlocked config mutex (#R-CADDY-ADMIN-DEADLOCK).
+// That API is now disabled (it exposed every secret, unauthenticated),
+// so the same condition is read from the reload state Arenet keeps:
+// a caddy.Load stuck on that mutex shows up as a reload in flight for
+// too long, or as the last reload having timed out.
 type CaddyCheck struct {
-	// AdminURL is the base URL of Caddy's admin endpoint
-	// (NO trailing /config/). Defaults to "http://127.0.0.1:2019"
-	// when empty.
-	AdminURL string
-	// HTTPClient is the client used for the probe. Tests
-	// override with an in-memory transport; production
-	// leaves it nil and the check uses http.DefaultClient
-	// (the ctx-timeout wrapper from HealthChecker.Run is
-	// the authoritative deadline).
-	HTTPClient *http.Client
+	// Reloads is the reload-state source. nil → unhealthy
+	// ("not wired").
+	Reloads ReloadStater
 }
 
 // Name implements ComponentCheck.
 func (c *CaddyCheck) Name() string { return "caddy" }
 
-// Check implements ComponentCheck. A 2xx response is
-// healthy. Network error → unhealthy ("admin endpoint not
-// reachable"). Non-2xx response → unhealthy (Caddy is
-// running but the admin surface is misbehaving).
-func (c *CaddyCheck) Check(ctx context.Context) ComponentStatus {
-	base := c.AdminURL
-	if base == "" {
-		base = "http://127.0.0.1:2019"
+// Check implements ComponentCheck.
+func (c *CaddyCheck) Check(_ context.Context) ComponentStatus {
+	if c.Reloads == nil {
+		return ComponentStatus{Status: StatusUnhealthy, Message: "caddy manager not wired"}
 	}
-	url := strings.TrimRight(base, "/") + "/config/"
-
-	client := c.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
+	started, inFlight, timedOut := c.Reloads.ReloadHealth()
+	switch {
+	case !started:
+		return ComponentStatus{Status: StatusUnhealthy, Message: "caddy not started"}
+	case inFlight > stuckReloadThreshold:
 		return ComponentStatus{
 			Status:  StatusUnhealthy,
-			Message: "invalid caddy admin URL",
+			Message: fmt.Sprintf("config reload stuck for %s", inFlight.Round(time.Second)),
 		}
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return ComponentStatus{
-				Status:  StatusUnhealthy,
-				Message: "caddy admin check timed out",
-			}
-		}
-		return ComponentStatus{
-			Status:  StatusUnhealthy,
-			Message: "caddy admin endpoint not reachable",
-		}
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ComponentStatus{
-			Status:  StatusUnhealthy,
-			Message: fmt.Sprintf("caddy admin returned HTTP %d", resp.StatusCode),
-		}
-	}
-
-	return ComponentStatus{
-		Status:  StatusHealthy,
-		Message: "admin endpoint reachable",
+	case timedOut:
+		return ComponentStatus{Status: StatusDegraded, Message: "last config reload timed out"}
+	default:
+		return ComponentStatus{Status: StatusHealthy, Message: "config reloads healthy"}
 	}
 }

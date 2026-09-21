@@ -21,6 +21,8 @@ Both produce a file named `arenet-backup-YYYYMMDD-HHMMSS.json`.
 
 **With-secrets export** is the disaster-recovery form : restore-anywhere, no inheritance needed. Store this in an encrypted vault (age, GPG, password manager attachment) — the file contains plaintext admin password hashes (Argon2id resistant but still not for arbitrary eyes), OVH DNS API keys, OIDC client secrets, forward-auth client secrets, per-route Basic Auth password hashes.
 
+Since **v2.26.0** the redacted export also masks the **Basic Auth password hashes of path rules** and the values of **credential-bearing route headers** (`Authorization`, `Proxy-Authorization`, `Cookie`, `X-Api-Key`, and any header whose name contains `token`, `secret`, `password` or `api-key`). On restore they are inherited from the live route with the same id, like the other secrets.
+
 ---
 
 ## Quick start : restore

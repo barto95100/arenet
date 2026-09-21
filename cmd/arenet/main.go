@@ -1331,7 +1331,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		metricsProber = &metricsProberAdapter{store: obsStore}
 	}
 	healthChecker := systemhealth.New(version,
-		&systemhealth.CaddyCheck{},
+		&systemhealth.CaddyCheck{Reloads: mgr},
 		&systemhealth.BoltDBCheck{Counter: &boltdbRoutesCounter{store: store}},
 		&systemhealth.MetricsCheck{Prober: metricsProber},
 		&systemhealth.CrowdSecCheck{Config: &crowdsecConfigAdapter{store: store}},

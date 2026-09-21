@@ -154,3 +154,42 @@ func TestReloadFromStore_Timeout_HappyPathReturnsNil(t *testing.T) {
 		t.Errorf("applyFn never ran")
 	}
 }
+
+// v2.26 — ReloadHealth replaces the systemhealth probe of the (now
+// disabled) Caddy admin API: a hung reload must be visible as an
+// in-flight duration, a timeout as timedOut, and a later completed
+// reload must clear both.
+func TestReloadHealth_TracksStuckAndRecoveredReloads(t *testing.T) {
+	mgr := newReloadTestManager(t)
+	restore := withShortTimeout(t, 50*time.Millisecond)
+	defer restore()
+
+	if started, inFlight, timedOut := mgr.ReloadHealth(); started || inFlight != 0 || timedOut {
+		t.Fatalf("fresh manager: started=%v inFlight=%s timedOut=%v", started, inFlight, timedOut)
+	}
+
+	release := make(chan struct{})
+	mgr.applyFn = func(context.Context) error {
+		<-release // ignore ctx: simulate caddy.Load stuck on its mutex
+		return nil
+	}
+	if err := mgr.ReloadFromStore(context.Background()); err == nil {
+		t.Fatal("want timeout")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, inFlight, timedOut := mgr.ReloadHealth(); inFlight < 50*time.Millisecond || !timedOut {
+		t.Errorf("stuck reload: inFlight=%s timedOut=%v; want >=50ms and true", inFlight, timedOut)
+	}
+
+	close(release) // the stuck caddy.Load eventually returns
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, inFlight, timedOut := mgr.ReloadHealth(); inFlight == 0 && !timedOut {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reload state did not recover after the stuck apply returned")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
