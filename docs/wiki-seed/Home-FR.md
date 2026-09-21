@@ -12,8 +12,8 @@ Si tu débutes : commence par [Installation](Installation-FR), puis suis [Routes
 
 ### Démarrer
 - **[Installation](Installation-FR)** — Docker, systemd natif, wizard de premier boot
-- **[Routes](Routes-FR)** — ta première route de reverse proxy, TLS, upstreams, alias
-- **[DNS Providers](DNS-Providers-FR)** — config OVH multi-comptes pour les certificats wildcard (DNS-01)
+- **[Routes](Routes-FR)** — ta première route de reverse proxy, TLS, upstreams, alias, filtrage IP source, règles par chemin
+- **[DNS Providers](DNS-Providers-FR)** — 9 fournisseurs DNS (OVHcloud, Cloudflare, Hetzner, Route 53…) pour les certificats wildcard (DNS-01), avec test de connexion
 - **[Topology](Topology-FR)** — dashboard live avec visualisation de trafic en temps réel
 
 ### Stack sécurité

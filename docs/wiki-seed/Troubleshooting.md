@@ -1,5 +1,7 @@
 # Troubleshooting
 
+**🌐 English** · [Français](Troubleshooting-FR)
+
 Diagnostic playbook for common Arenet symptoms. Each section names the symptom, the likely cause(s), and the empirical commands to confirm + fix.
 
 For boot-message-specific diagnostics, see [`docs/operations/troubleshooting.md`](https://github.com/barto95100/arenet/blob/main/docs/operations/troubleshooting.md) which covers the "expected-but-surprising" log lines.

@@ -1,5 +1,7 @@
 # WAF (Web Application Firewall)
 
+**🌐 English** · [Français](WAF-FR)
+
 Arenet embeds [Coraza v3.7](https://coraza.io) — a Go-native WAF engine compatible with the ModSecurity rule format — pre-loaded with **OWASP CRS v4.25** (Core Rule Set). Every route can opt into WAF protection at one of three levels :
 
 | Mode | Behaviour |

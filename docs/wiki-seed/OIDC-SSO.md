@@ -1,5 +1,7 @@
 # OIDC SSO
 
+**🌐 English** · [Français](OIDC-SSO-FR)
+
 Arenet supports **OpenID Connect** single sign-on for admin login : delegate the authentication flow to your existing IdP (authentik, Keycloak, Authelia, Dex, Auth0, ...) instead of managing local username/password accounts in Arenet's BoltDB.
 
 After OIDC is wired :

@@ -12,8 +12,8 @@ If you're new : start with [Installation](Installation), then follow [Routes](Ro
 
 ### Get started
 - **[Installation](Installation)** — Docker, native systemd, first-boot wizard
-- **[Routes](Routes)** — your first reverse proxy route, TLS, upstreams, aliases
-- **[DNS Providers](DNS-Providers)** — multi-account OVH config for wildcard (DNS-01) certificates
+- **[Routes](Routes)** — your first reverse proxy route, TLS, upstreams, aliases, source IP filter, path rules
+- **[DNS Providers](DNS-Providers)** — 9 DNS providers (OVHcloud, Cloudflare, Hetzner, Route 53…) for wildcard (DNS-01) certificates, with a connection test
 - **[Topology](Topology)** — live dashboard with real-time traffic visualization
 
 ### Security stack

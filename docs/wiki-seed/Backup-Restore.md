@@ -1,5 +1,7 @@
 # Backup & Restore
 
+**🌐 English** · [Français](Backup-Restore-FR)
+
 Arenet ships a **full-snapshot JSON export/import** of every BoltDB-stored config object : routes, DNS providers, forward-auth providers, OIDC config + allowlist, users (including password hashes), error page templates.
 
 Cert files and TLS keys are NOT in the snapshot — they live in Caddy's filesystem store and are auto-reissued by ACME on the new host (unless you also copy `/var/lib/arenet/.local/share/caddy/` separately). See [Certificates](Certificates) for the on-disk layout.
@@ -169,7 +171,7 @@ curl -H "Cookie: arenet_session=$SESSION_COOKIE" \
 
 Then rotate with `find /var/backups/arenet -mtime +30 -delete`.
 
-For more robustness, use a **service account** ([Users](Users) page → Create service account → role=admin) instead of impersonating a human user.
+For more robustness, use a **service account** (admin UI → **Users** page → Create service account → role=admin) instead of impersonating a human user.
 
 ---
 

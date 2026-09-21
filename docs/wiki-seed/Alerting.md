@@ -1,5 +1,7 @@
 # Alerting
 
+**🌐 English** · [Français](Alerting-FR)
+
 Step AL — Arenet's native alerting subsystem. Configure **rules** that watch a **source** (e.g. WAF event rate, cert expiry, cert renewal failures, system health) ; when the rule's evaluator trips, an alert is dispatched to one or more **channels** (Discord webhook, generic webhook, SMTP email).
 
 A 30-second polling watcher evaluates every rule and respects per-rule cooldowns to prevent alert storms.

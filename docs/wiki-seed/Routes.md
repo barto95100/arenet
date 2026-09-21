@@ -113,6 +113,49 @@ Unhealthy upstreams are skipped by the load balancer ; the `/topology` dashboard
 
 ---
 
+## Source IP filter (v2.21.0)
+
+Restrict a whole route to — or block it from — specific source IPs, in the route's **Source IP filter** section:
+
+| Mode | Effect |
+| ---- | ------ |
+| **Off** | No filtering (default) |
+| **Allow-list** | Only the listed IPs / CIDRs get through ; everyone else gets **403** |
+| **Deny-list** | The listed IPs / CIDRs get **403** ; everyone else passes |
+
+One IP or CIDR per line (`192.168.1.10`, `10.0.0.0/8`, IPv6 too). Blocked visitors get the route's branded **403** error page.
+
+> **Which IP is checked?** The **direct TCP peer** — `X-Forwarded-For` is ignored, so a client can't spoof its way past an allow-list. The flip side: if Arenet sits behind another proxy / CDN / load balancer, the filter sees that proxy's IP, not the visitor's.
+
+---
+
+## Path rules (v2.21.0 → v2.23.0)
+
+**Path rules** apply extra protection — and optionally a different backend — to a URL sub-path of a route, without creating a second route. Typical: basic-auth on `/docs` (Swagger), `/metrics` reachable from one monitoring IP only, `/api/v1` sent to another backend, the rest of the site unchanged.
+
+In the route form → **Path rules** → **Add path rule**:
+
+| Field | Meaning |
+| ----- | ------- |
+| **Path prefix** | `/docs` matches `/docs` **and everything under it** (`/docs/…`). Prefix only — no regex. |
+| **Basic auth override** | Username + password required for this path only. |
+| **Scoped IP filter** | Allow-list / deny-list for this path only (same rules as the route-level filter above). |
+| **Specific upstream (optional)** | Send this path to its own backend pool instead of the route's : URLs + weights, load-balancing policy, active health-check, and *Skip TLS verification* for a self-signed HTTPS backend (v2.23.0 / v2.23.1). Leave empty to follow the route's upstream. |
+
+A rule needs at least one of: basic auth, an active IP filter, or a specific upstream (a rule with only an upstream is pure routing).
+
+**How rules combine**
+
+- **Additive**: a path keeps every protection of the route (WAF, country block, CrowdSec, route-level auth…) and **adds** its own. A path rule can never switch off a protection of the route.
+- **Longest prefix wins**: with `/api` and `/api/admin`, a request to `/api/admin/users` uses the `/api/admin` rule. You never order rules by hand.
+- **Transport per pool**: a path's pool may be HTTP while the route's is HTTPS (or the reverse); all backends inside one pool must share the same scheme.
+
+The **Topology** page shows a route's path pools as sections inside its backend cluster (see [Topology](Topology)).
+
+Not available per path yet: forward-auth, WAF on/off, rate limit, country block, headers.
+
+---
+
 ## Route states (Active / Maintenance / Disabled)
 
 Every route has a **3-state lifecycle control**, shown as an icon-only segmented control on the `/routes` list — play (▶, green) = **Active**, wrench (🔧, amber) = **Maintenance**, power (⏻, red) = **Disabled**. Hover any segment for a tooltip with its name ; click a segment to switch state.
