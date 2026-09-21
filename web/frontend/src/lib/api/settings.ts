@@ -228,27 +228,45 @@ export const settingsApi = {
 	testMaxMind: (r: MaxMindRequest & { useStored?: boolean }): Promise<MaxMindTestResult> =>
 		request<MaxMindTestResult>('POST', '/settings/maxmind/test', r),
 
-	// Step K.3 — backup / restore. The export endpoint streams a
-	// JSON file; we don't go through the typed `request` helper
-	// because we want the raw Response so we can save the file via
-	// blob+anchor. The restore endpoint accepts the JSON body
-	// uploaded by the operator.
-	exportBackupURL: (includeSecrets: boolean): string => {
-		const qp = includeSecrets ? '?include-secrets=true' : '';
-		return `/api/v1/admin/backup${qp}`;
-	},
+	// Step K.3 — backup / restore. The redacted export is a plain
+	// download link. The export WITH secrets (v2.31) is encrypted
+	// with a passphrase: a POST whose response is the file (Blob).
+	// An encrypted backup is restored with the passphrase in the
+	// X-Arenet-Backup-Passphrase header, base64 of its UTF-8 bytes
+	// (fetch rejects non-Latin-1 header values).
+	exportBackupURL: (): string => '/api/v1/admin/backup',
+	exportEncryptedBackup: (passphrase: string): Promise<Blob> =>
+		request<Blob>('POST', '/admin/backup', { passphrase }, { asBlob: true }),
 	postRestore: (
 		body: unknown,
-		opts: { allowIncompleteRestore?: boolean; allowEmptyUsers?: boolean }
+		opts: { allowIncompleteRestore?: boolean; allowEmptyUsers?: boolean; passphrase?: string }
 	): Promise<RestoreReport> => {
 		const params = new URLSearchParams();
 		if (opts.allowIncompleteRestore) params.set('allow-incomplete-restore', 'true');
 		if (opts.allowEmptyUsers) params.set('allow-empty-users', 'true');
 		const qs = params.toString();
 		const url = qs ? `/admin/restore?${qs}` : '/admin/restore';
-		return request<RestoreReport>('POST', url, body);
+		const headers = opts.passphrase
+			? { 'X-Arenet-Backup-Passphrase': utf8ToBase64(opts.passphrase) }
+			: undefined;
+		return request<RestoreReport>('POST', url, body, { headers });
 	}
 };
+
+/** Minimum backup passphrase length (mirrors backup.MinPassphraseLen). */
+export const MIN_BACKUP_PASSPHRASE_LEN = 12;
+
+/** Base64 of the UTF-8 bytes of s (btoa alone only handles Latin-1). */
+export function utf8ToBase64(s: string): string {
+	let bin = '';
+	for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b);
+	return btoa(bin);
+}
+
+/** True when a parsed backup file is passphrase-encrypted (v2.31). */
+export function isEncryptedBackup(parsed: unknown): boolean {
+	return typeof parsed === 'object' && parsed !== null && 'encryption' in parsed;
+}
 
 // RestoreReport is the wire shape returned by POST /admin/restore.
 // Mirrors the Go restoreResponse struct in

@@ -193,6 +193,30 @@ Précisions d'implémentation (2026-09-21) :
   demandé à l'import si nécessaire. CLI `arenet backup` :
   `--passphrase-file` / `ARENET_BACKUP_PASSPHRASE`.
 
+### Précisions d'implémentation PR 3 (2026-09-21)
+
+- **`schema_version` 2.0.0** (et non 1.1.0) pour un export chiffré :
+  un binaire antérieur accepte tout MAJOR 1 et restaurerait les
+  valeurs `enc:v1:` comme des secrets (mots de passe → verrouillage
+  de l'admin). Avec MAJOR 2 il refuse proprement. Les exports sans
+  secrets restent en 1.0.0 ; un fichier ouvert redevient 1.0.0.
+- Une seule liste des champs secrets (`visitSecrets`) sert au
+  masquage, au scellement et à l'ouverture ; AAD = chemin
+  `entité/id/champ` → une valeur ne peut pas changer de ligne.
+- argon2id t=3, m=64 Mio, p=4, sel 16 octets ; bornes à l'import
+  (t ≤ 10, m ≤ 1 Gio, p ≤ 16) contre un fichier piégé ; valeur témoin
+  scellée pour détecter une mauvaise phrase avant tout.
+- `Import` refuse un snapshot encore chiffré et des valeurs scellées
+  sans en-tête (fichier modifié).
+- API : `GET /admin/backup` = sans secrets (l'ancien
+  `include-secrets=true` en clair → 400) ; `POST /admin/backup`
+  `{"passphrase"}` = export chiffré ; restauration avec l'en-tête
+  `X-Arenet-Backup-Passphrase` en base64 (fetch refuse les caractères
+  non Latin-1 dans un en-tête). Codes `passphrase_required`,
+  `passphrase_invalid`, `passphrase_too_short`.
+- CLI : `--include-secrets` exige `--passphrase-file` /
+  `ARENET_BACKUP_PASSPHRASE_FILE` / `ARENET_BACKUP_PASSPHRASE`.
+
 ## Non-goals
 
 - ❌ Chiffrer toute la base BoltDB (seuls les secrets le sont).

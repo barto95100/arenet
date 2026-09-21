@@ -18,6 +18,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -66,21 +67,89 @@ func TestBackup_Export_RedactedAndAuditEmitted(t *testing.T) {
 	}
 }
 
-func TestBackup_Export_IncludeSecretsSetsHeader(t *testing.T) {
+// TestBackup_Export_PlaintextSecretsRefused: the former plaintext
+// export with secrets is gone (v2.31) — it must be encrypted.
+func TestBackup_Export_PlaintextSecretsRefused(t *testing.T) {
 	env := newTestEnv(t, false)
-
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/backup?include-secrets=true", nil)
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), codePassphraseRequired) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
 	}
-	if rec.Header().Get("X-Arenet-Secrets-Included") != "true" {
-		t.Errorf("include-secrets=true should set X-Arenet-Secrets-Included: got %q", rec.Header().Get("X-Arenet-Secrets-Included"))
+}
+
+// postEncryptedExport runs POST /admin/backup with passphrase.
+func postEncryptedExport(t *testing.T, env *testEnv, passphrase string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"passphrase": passphrase})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/backup", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	return rec
+}
+
+func postRestoreWithPassphrase(t *testing.T, env *testEnv, file []byte, passphrase string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/restore", strings.NewReader(string(file)))
+	req.Header.Set("Content-Type", "application/json")
+	if passphrase != "" {
+		req.Header.Set(headerBackupPassphrase, base64.StdEncoding.EncodeToString([]byte(passphrase)))
 	}
-	if !strings.Contains(rec.Body.String(), `"secrets_included": true`) {
-		t.Errorf("include-secrets export should declare secrets_included=true")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestBackup_EncryptedExportAndRestore(t *testing.T) {
+	env := newTestEnv(t, false)
+	ctx := context.Background()
+	if _, err := auth.NewUserStore(env.store.DB()).Create(ctx, "enc-admin", "Enc Admin", "", "enc-admin-pw-15c-xx"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := env.store.PutCrowdSecConfig(ctx, storage.CrowdSecConfig{LAPIURL: "http://c:8080/", APIKey: "API-SECRET-KEY"}); err != nil {
+		t.Fatalf("seed crowdsec: %v", err)
+	}
+	const pass = "une phrase de passe 🔐 longue"
+
+	if rec := postEncryptedExport(t, env, "short"); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), codePassphraseTooShort) {
+		t.Fatalf("short passphrase: %d %s", rec.Code, rec.Body)
+	}
+	rec := postEncryptedExport(t, env, pass)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export: %d %s", rec.Code, rec.Body)
+	}
+	file := rec.Body.Bytes()
+	if strings.Contains(string(file), "API-SECRET-KEY") || !strings.Contains(string(file), `"encryption"`) {
+		t.Fatalf("export not encrypted: %s", file[:200])
+	}
+	if rec.Header().Get("X-Arenet-Backup-Encrypted") != "true" {
+		t.Errorf("missing X-Arenet-Backup-Encrypted header")
+	}
+
+	if rec := postRestoreWithPassphrase(t, env, file, ""); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), codePassphraseRequired) {
+		t.Errorf("no passphrase: %d %s", rec.Code, rec.Body)
+	}
+	if rec := postRestoreWithPassphrase(t, env, file, "wrong passphrase here"); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), codePassphraseInvalid) {
+		t.Errorf("wrong passphrase: %d %s", rec.Code, rec.Body)
+	}
+	// Change the live key, then restore: the backup's value comes back.
+	_ = env.store.PutCrowdSecConfig(ctx, storage.CrowdSecConfig{LAPIURL: "http://c:8080/", APIKey: "CHANGED"})
+	if rec := postRestoreWithPassphrase(t, env, file, pass); rec.Code != http.StatusOK {
+		t.Fatalf("restore: %d %s", rec.Code, rec.Body)
+	}
+	if cs, _ := env.store.GetCrowdSecConfig(ctx); cs.APIKey != "API-SECRET-KEY" {
+		t.Errorf("restored key %q", cs.APIKey)
+	}
+	var rejected int
+	for _, e := range env.audit.Events() {
+		if e.Action == audit.ActionConfigRestoredRejected && strings.Contains(e.Message, "reason=passphrase_") {
+			rejected++
+		}
+	}
+	if rejected != 2 {
+		t.Errorf("want 2 passphrase rejections audited, got %d", rejected)
 	}
 }
 

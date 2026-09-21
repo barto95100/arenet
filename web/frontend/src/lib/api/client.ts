@@ -77,7 +77,20 @@ const REQUEST_TIMEOUT_MS = 30_000;
  * Exported so the new Step D modules (lib/api/auth.ts, lib/api/audit.ts)
  * can compose typed wrappers on top.
  */
-export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** Optional knobs of request(). */
+export interface RequestOptions {
+	/** Extra request headers (merged after Content-Type). */
+	headers?: Record<string, string>;
+	/** Resolve with the response body as a Blob (file downloads). */
+	asBlob?: boolean;
+}
+
+export async function request<T>(
+	method: string,
+	path: string,
+	body?: unknown,
+	opts: RequestOptions = {}
+): Promise<T> {
 	beginRequest();
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -90,6 +103,9 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 		if (body !== undefined) {
 			init.headers = { 'Content-Type': 'application/json' };
 			init.body = JSON.stringify(body);
+		}
+		if (opts.headers) {
+			init.headers = { ...(init.headers as Record<string, string> | undefined), ...opts.headers };
 		}
 		let res: Response;
 		try {
@@ -162,6 +178,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 		}
 
 		if (res.status === 204) return undefined as T;
+		if (opts.asBlob) return (await res.blob()) as T;
 		return (await res.json()) as T;
 	} finally {
 		// Clear the timer regardless of outcome (success, error,

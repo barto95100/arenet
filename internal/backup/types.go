@@ -68,10 +68,14 @@ const SchemaMajor = "1"
 // (Go marshals struct fields in declaration order), so a clean
 // round-trip produces byte-identical output modulo timestamps + IDs.
 type Snapshot struct {
-	SchemaVersion        string                        `json:"schema_version"`
-	ExportedAt           time.Time                     `json:"exported_at"`
-	SecretsIncluded      bool                          `json:"secrets_included"`
-	ArenetVersion        string                        `json:"arenet_version"`
+	SchemaVersion   string    `json:"schema_version"`
+	ExportedAt      time.Time `json:"exported_at"`
+	SecretsIncluded bool      `json:"secrets_included"`
+	ArenetVersion   string    `json:"arenet_version"`
+	// Encryption is set on a passphrase-encrypted export (v2.31,
+	// schema 2.0.0): every secret value is sealed. OpenSnapshot must
+	// run before Import.
+	Encryption           *Encryption                   `json:"encryption,omitempty"`
 	Routes               []storage.Route               `json:"routes"`
 	DNSProviders         []storage.DNSProviderConfig   `json:"dns_providers"`
 	ForwardAuthProviders []storage.ForwardAuthProvider `json:"forward_auth_providers"`

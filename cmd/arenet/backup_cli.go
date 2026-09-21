@@ -19,10 +19,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/backup"
@@ -40,12 +42,28 @@ import (
 // runs at boot, before Caddy starts" — by short-circuiting BEFORE
 // caddymgr.Start the binary never side-effects beyond BoltDB.
 
+// envBackupPassphrase holds the backup passphrase when no
+// --passphrase-file is given (v2.31).
+const envBackupPassphrase = "ARENET_BACKUP_PASSPHRASE"
+
+// backupPassphrase resolves the backup passphrase: the content of
+// --passphrase-file (trailing newline trimmed) or ARENET_BACKUP_PASSPHRASE.
+func backupPassphrase(cfg *appconfig.Config, getenv func(string) string) (string, error) {
+	if cfg.PassphraseFile != "" {
+		raw, err := os.ReadFile(cfg.PassphraseFile)
+		if err != nil {
+			return "", fmt.Errorf("read passphrase file: %w", err)
+		}
+		return strings.TrimRight(string(raw), "\r\n"), nil
+	}
+	return getenv(envBackupPassphrase), nil
+}
+
 // runExportCLI implements --export PATH [--include-secrets].
 //
-// When --include-secrets is set, the file is written with mode
-// 0o600 (owner-readable only) and a warning is printed to stderr
-// BEFORE the file is written. The 0o600 protection is enforced by
-// Arenet at write time — we don't rely on the operator.
+// With --include-secrets the secrets are encrypted with the backup
+// passphrase (required, v2.31); the file is still written 0o600 and
+// a notice is printed to stderr.
 func runExportCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) error {
 	dbPath := dbPathForCLI(cfg)
 	store, err := storage.NewStore(dbPath)
@@ -58,19 +76,28 @@ func runExportCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Confi
 	}
 	users := auth.NewUserStore(store.DB())
 
+	var passphrase string
 	if cfg.IncludeSecrets {
+		if passphrase, err = backupPassphrase(cfg, os.Getenv); err != nil {
+			return err
+		}
+		if passphrase == "" {
+			return fmt.Errorf("--include-secrets needs a backup passphrase: --passphrase-file PATH or %s", envBackupPassphrase)
+		}
 		fmt.Fprintln(os.Stderr,
-			"WARNING: --include-secrets requested. The exported file will\n"+
-				"contain PLAINTEXT secrets (admin password hashes, OVH API\n"+
-				"keys, OIDC client secret, forward-auth provider client\n"+
-				"secrets, per-route Basic Auth hashes). Store the file with\n"+
-				"restricted permissions (chmod 600) and consider encrypting\n"+
-				"at rest (age / GPG / vault).")
+			"NOTICE: --include-secrets requested. The secrets in the exported\n"+
+				"file are encrypted with your passphrase: keep it — without it\n"+
+				"the file can only be restored without its secrets.")
 	}
 
 	snap, err := backup.Export(ctx, store, users, version, cfg.IncludeSecrets)
 	if err != nil {
 		return fmt.Errorf("export: %w", err)
+	}
+	if cfg.IncludeSecrets {
+		if err := backup.SealSnapshot(snap, passphrase); err != nil {
+			return fmt.Errorf("export: %w", err)
+		}
 	}
 	body, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
@@ -90,6 +117,7 @@ func runExportCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Confi
 	logger.Info("config exported",
 		"path", cfg.ExportPath,
 		"secrets_included", cfg.IncludeSecrets,
+		"encrypted", snap.IsEncrypted(),
 		"routes", len(snap.Routes),
 		"users", len(snap.Users),
 		"dns_providers", len(snap.DNSProviders),
@@ -118,6 +146,18 @@ func runRestoreCLI(ctx context.Context, logger *slog.Logger, cfg *appconfig.Conf
 	var snap backup.Snapshot
 	if err := json.Unmarshal(body, &snap); err != nil {
 		return fmt.Errorf("parse %s: %w", cfg.RestorePath, err)
+	}
+	if snap.IsEncrypted() {
+		passphrase, err := backupPassphrase(cfg, os.Getenv)
+		if err != nil {
+			return err
+		}
+		if err := backup.OpenSnapshot(&snap, passphrase); err != nil {
+			if errors.Is(err, backup.ErrPassphraseRequired) {
+				return fmt.Errorf("%s is encrypted: pass --passphrase-file PATH or set %s", cfg.RestorePath, envBackupPassphrase)
+			}
+			return fmt.Errorf("restore: %w", err)
+		}
 	}
 
 	dbPath := dbPathForCLI(cfg)

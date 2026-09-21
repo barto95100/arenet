@@ -13,13 +13,13 @@ Les fichiers cert et clés TLS ne sont PAS dans le snapshot — ils vivent dans 
 1. Sidebar → **Settings** → section **Backup & restore**
 2. Choisis un :
    - **Export (redacted)** : télécharge le JSON avec les secrets remplacés par des placeholders sentinel (`"$$ARENET_REDACTED$$"`)
-   - **Export with secrets…** : danger-variant ConfirmDialog → confirme → télécharge le JSON avec les secrets en PLAINTEXT
+   - **Export with secrets…** : demande une **phrase secrète** (deux fois, au moins 12 caractères) → télécharge le JSON avec tous les secrets **chiffrés** avec elle (v2.31)
 
 Les deux produisent un fichier nommé `arenet-backup-YYYYMMDD-HHMMSS.json`.
 
 **Export redacted** est la forme daily-backup-friendly : safe à stocker en cloud storage, git, n'importe où. La restauration nécessite qu'Arenet hérite des placeholders sentinel depuis son live state (fonctionne pour la restauration in-place sur la même instance ; fail pour la restauration clean-instance sauf si tu utilises le flag `allowIncompleteRestore`).
 
-**Export with-secrets** est la forme disaster-recovery : restore-anywhere, pas d'héritage nécessaire. Stocke ce fichier dans un vault encrypté (age, GPG, attachement de password manager) — le fichier contient des password hashes admin en plaintext (Argon2id résistant mais quand même pas pour des yeux arbitraires), API keys DNS OVH, client secrets OIDC, client secrets forward-auth, password hashes Basic Auth par route.
+**Export with-secrets** est la forme disaster-recovery : restauration n'importe où, sans héritage. Depuis la **v2.31**, tous ses secrets — hashes de mots de passe, identifiants DNS, clés privées TLS, secrets OIDC / forward-auth / CrowdSec, identifiants des canaux d'alerte, hashes des tokens de comptes de service — sont **chiffrés** avec la phrase secrète que tu choisis (clé dérivée par argon2id, AES-256-GCM) ; le reste du fichier reste du JSON lisible. **Conserve la phrase** (gestionnaire de mots de passe) : sans elle, le fichier ne se restaure que sans ses secrets. L'export avec secrets en clair n'existe plus.
 
 Depuis la **v2.29.0**, l'export redacted masque aussi les **password hashes Basic Auth des règles par chemin** et les valeurs des **en-têtes de route porteurs d'identifiants** (`Authorization`, `Proxy-Authorization`, `Cookie`, `X-Api-Key`, et tout en-tête dont le nom contient `token`, `secret`, `password` ou `api-key`). À la restauration, ils sont hérités de la route live de même id, comme les autres secrets.
 
@@ -28,7 +28,7 @@ Depuis la **v2.29.0**, l'export redacted masque aussi les **password hashes Basi
 ## Quick start : restore
 
 1. Sidebar → **Settings** → section **Backup & restore**
-2. **Browse** → choisis un fichier JSON précédemment exporté
+2. **Browse** → choisis un fichier JSON précédemment exporté. Pour un fichier **chiffré**, un champ **phrase secrète** apparaît — saisis celle choisie à l'export (une mauvaise phrase est refusée avant toute écriture)
 3. Review les deux checkboxes opt-in :
    - **Allow incomplete restore** : les sentinels qui ne peuvent pas hériter depuis le live store seront cleared (les secrets affectés doivent être re-saved manuellement post-restore). À utiliser quand tu restaure un export redacted vers une instance fresh.
    - **Allow empty users** : accepte un backup qui a zéro users. Le prochain boot re-déclenchera le wizard setup-token. À utiliser uniquement pour les scénarios "factory reset".
@@ -198,31 +198,44 @@ Le pre-snapshot vit en mémoire process uniquement, discarded dès que le handle
 
 ## Automation
 
-Schedule des exports périodiques via cron + curl :
+Programme des exports périodiques avec le token d'un **compte de service** (page [Users] → Create service account → role=admin) :
 
 ```bash
 #!/bin/bash
 # /etc/cron.daily/arenet-backup
-SESSION_COOKIE=$(curl -s -c - -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"username":"backup-bot","password":"..."}' \
-  http://localhost:8001/api/v1/auth/login \
-  | grep arenet_session | awk '{print $7}')
+TOKEN=$(cat /root/.arenet-backup-token)          # token arn_… du compte de service
+API=http://localhost:8001/api/v1
 
-curl -H "Cookie: arenet_session=$SESSION_COOKIE" \
-  "http://localhost:8001/api/v1/admin/backup?include-secrets=false" \
+# Export sans secrets — stockable n'importe où
+curl -fsS -H "Authorization: Bearer $TOKEN" "$API/admin/backup" \
   > /var/backups/arenet/$(date +%Y%m%d).json
+
+# Export AVEC secrets, chiffré avec une phrase secrète gardée dans un fichier 0600
+jq -n --rawfile p /root/.arenet-backup-pass '{passphrase: ($p | rtrimstr("\n"))}' \
+  | curl -fsS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+      -d @- "$API/admin/backup" > /var/backups/arenet/$(date +%Y%m%d)-full.json
 ```
 
-Puis rotate avec `find /var/backups/arenet -mtime +30 -delete`.
+Puis rotation avec `find /var/backups/arenet -mtime +30 -delete`.
 
-Pour plus de robustness, utilise un **service account** (page [Users] → Create service account → role=admin) au lieu d'impersonate un user humain.
+En ligne de commande (Arenet arrêté — BoltDB n'accepte qu'un seul processus) :
+
+```bash
+arenet --data-dir /var/lib/arenet --export /var/backups/arenet/full.json \
+  --include-secrets --passphrase-file /root/.arenet-backup-pass
+arenet --data-dir /var/lib/arenet --restore /var/backups/arenet/full.json \
+  --passphrase-file /root/.arenet-backup-pass
+```
+
+`ARENET_BACKUP_PASSPHRASE` (la phrase elle-même) ou `ARENET_BACKUP_PASSPHRASE_FILE` fonctionnent aussi.
+
+Restaurer un fichier chiffré par l'API : passe la phrase **encodée en base64** (pour que tout caractère passe dans l'en-tête HTTP) — `curl -H "X-Arenet-Backup-Passphrase: $(printf %s "$PASS" | base64)" --data-binary @full.json "$API/admin/restore"`. Une phrase absente ou fausse renvoie `400` avec le `code` `passphrase_required` / `passphrase_invalid`.
 
 ---
 
 ## Schema versioning
 
-Le snapshot porte `schema_version: "1.0.0"`. Le restore enforce **MAJOR-equal** à l'import : un import avec `schema_version: "2.x.x"` est rejeté par un binaire qui connaît `1.x.x` (et vice versa). Les différences MINOR + PATCH passent (les champs additifs sont tolérés).
+Le snapshot porte `schema_version: "1.0.0"` — **`2.0.0` pour un export chiffré par phrase secrète** (v2.31). Le restore enforce **MAJOR-equal** à l'import : un binaire antérieur à la v2.31 refuse un fichier chiffré avec un message clair au lieu de restaurer les valeurs chiffrées comme si c'étaient les secrets ; la v2.31+ lit les deux. Les différences MINOR + PATCH passent (les champs additifs sont tolérés).
 
 Quand Arenet introduit un breaking schema change, le bump major → les opérateurs voient le loud reject + le message "two paths forward". L'outillage de migration accompagnera tout futur bump MAJOR.
 
