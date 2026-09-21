@@ -171,7 +171,7 @@ curl -H "Cookie: arenet_session=$SESSION_COOKIE" \
 
 Then rotate with `find /var/backups/arenet -mtime +30 -delete`.
 
-For more robustness, use a **service account** ([Users](Users) page → Create service account → role=admin) instead of impersonating a human user.
+For more robustness, use a **service account** (admin UI → **Users** page → Create service account → role=admin) instead of impersonating a human user.
 
 ---
 
