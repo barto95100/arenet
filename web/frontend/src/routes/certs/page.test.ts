@@ -1097,3 +1097,99 @@ describe('/certs — auto-refresh polling', () => {
 		expect(securityMock.fetchCertEvents.mock.calls.length).toBe(eventsAfterUnmount);
 	});
 });
+
+// --- Burst polling after a wildcard declaration ----------------------------
+//
+// Operator feedback (2026-09-21): after "+ Wildcard apex", the new cert only
+// appeared at the next 20 s poll, with no sign that anything was happening,
+// so the page looked stuck and was reloaded by hand. The page now polls every
+// 3 s for up to 2 min after a declaration and flags the policy row "Issuance
+// in progress…" until the wildcard cert lands. Fully faked timers, same
+// constraints as the suite above (fireEvent only, no findBy*/userEvent).
+describe('/certs — burst polling after a wildcard declaration', () => {
+	const wildcardCert = {
+		domain: '*.new.example',
+		sanList: ['*.new.example', 'new.example'],
+		issuer: "Let's Encrypt",
+		notBefore: daysFromNow(0),
+		notAfter: daysFromNow(90),
+		status: 'VALID' as const,
+		source: 'wildcard' as const,
+	};
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(NOW);
+		apiMock.listRoutes.mockResolvedValue([]);
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
+			{
+				id: 'p1',
+				label: 'OVH',
+				type: 'ovh',
+				endpoint: 'ovh-eu',
+				configured: true,
+				usedBy: [],
+			},
+		]);
+		settingsMock.settingsApi.listManagedDomains.mockReset();
+		settingsMock.settingsApi.listManagedDomains
+			.mockResolvedValueOnce({ domains: [] }) // initial load
+			.mockResolvedValue({
+				domains: [{ apex: 'new.example', includeApex: true, providerId: 'p1' }],
+			});
+		settingsMock.settingsApi.createManagedDomain.mockResolvedValue({});
+		certsMock.certificatesApi.list.mockReset();
+		certsMock.certificatesApi.list.mockResolvedValue([]);
+		securityMock.fetchCertEvents.mockResolvedValue({ events: [], total: 0, hasMore: false });
+	});
+
+	async function declareWildcard(): Promise<void> {
+		await fireEvent.click(screen.getByTestId('open-wildcard-wizard'));
+		await vi.advanceTimersByTimeAsync(0); // providers load
+		await fireEvent.input(screen.getByTestId('wizard-apex-input'), {
+			target: { value: 'new.example' },
+		});
+		await fireEvent.submit(screen.getByTestId('wildcard-wizard-form'));
+		await vi.advanceTimersByTimeAsync(0);
+	}
+
+	it('polls every 3 s, shows the issuing badge, and stops once the cert lands', async () => {
+		render(Page);
+		await vi.advanceTimersByTimeAsync(0);
+		await declareWildcard();
+
+		expect(screen.getByTestId('md-issuing')).toHaveAttribute('data-apex', 'new.example');
+		const before = certsMock.certificatesApi.list.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(certsMock.certificatesApi.list.mock.calls.length).toBe(before + 1);
+		expect(screen.getByTestId('md-issuing')).toBeInTheDocument();
+
+		// The cert lands: the next burst tick picks it up and the badge goes.
+		certsMock.certificatesApi.list.mockResolvedValue([wildcardCert]);
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(screen.queryByTestId('md-issuing')).not.toBeInTheDocument();
+		const rows = screen.getAllByTestId('cert-row');
+		expect(rows.map((r) => r.getAttribute('data-domain'))).toContain('*.new.example');
+
+		// Burst stopped: the next 9 s would hold 3 burst ticks, while the
+		// normal 20 s cadence's first tick (t=20 s after mount) is still ahead.
+		const afterSettle = certsMock.certificatesApi.list.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(9000);
+		expect(certsMock.certificatesApi.list.mock.calls.length).toBe(afterSettle);
+	});
+
+	it('gives up after 2 minutes without a cert and drops the badge', async () => {
+		render(Page);
+		await vi.advanceTimersByTimeAsync(0);
+		await declareWildcard();
+		expect(screen.getByTestId('md-issuing')).toBeInTheDocument();
+
+		await vi.advanceTimersByTimeAsync(120000);
+		expect(screen.queryByTestId('md-issuing')).not.toBeInTheDocument();
+
+		// Back to the 20 s cadence only: 3 burst intervals would add 3 calls.
+		const settled = certsMock.certificatesApi.list.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(9000);
+		expect(certsMock.certificatesApi.list.mock.calls.length - settled).toBeLessThanOrEqual(1);
+	});
+});
