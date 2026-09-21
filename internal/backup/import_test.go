@@ -529,15 +529,13 @@ func TestExportImport_DNSProviders_Roundtrip_TwoProviders(t *testing.T) {
 	_ = seedLiveUser(t, srcUS, "admin", "admin-password-15c-x")
 
 	pA, err := srcStore.CreateDNSProvider(ctx, storage.DNSProviderConfig{
-		Label: "OVH perso", Type: "ovh", Endpoint: "ovh-eu",
-		ApplicationKey: "akA", ApplicationSecret: "asA", ConsumerKey: "ckA",
+		Label: "OVH perso", Type: "ovh", Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "akA", "application_secret": "asA", "consumer_key": "ckA"},
 	})
 	if err != nil {
 		t.Fatalf("create provider A: %v", err)
 	}
 	pB, err := srcStore.CreateDNSProvider(ctx, storage.DNSProviderConfig{
-		Label: "OVH pro", Type: "ovh", Endpoint: "ovh-ca",
-		ApplicationKey: "akB", ApplicationSecret: "asB", ConsumerKey: "ckB",
+		Label: "OVH pro", Type: "ovh", Credentials: map[string]string{"endpoint": "ovh-ca", "application_key": "akB", "application_secret": "asB", "consumer_key": "ckB"},
 	})
 	if err != nil {
 		t.Fatalf("create provider B: %v", err)
@@ -572,14 +570,14 @@ func TestExportImport_DNSProviders_Roundtrip_TwoProviders(t *testing.T) {
 	if !ok {
 		t.Fatalf("provider A (id=%s) missing after import; got ids %v", pA.ID, keysOf(byID))
 	}
-	if gotA.Label != "OVH perso" || gotA.Endpoint != "ovh-eu" || gotA.ApplicationKey != "akA" || gotA.ApplicationSecret != "asA" || gotA.ConsumerKey != "ckA" {
+	if gotA.Label != "OVH perso" || gotA.Credentials["endpoint"] != "ovh-eu" || gotA.Credentials["application_key"] != "akA" || gotA.Credentials["application_secret"] != "asA" || gotA.Credentials["consumer_key"] != "ckA" {
 		t.Errorf("provider A round-trip mismatch: %+v", gotA)
 	}
 	gotB, ok := byID[pB.ID]
 	if !ok {
 		t.Fatalf("provider B (id=%s) missing after import; got ids %v", pB.ID, keysOf(byID))
 	}
-	if gotB.Label != "OVH pro" || gotB.Endpoint != "ovh-ca" || gotB.ApplicationKey != "akB" || gotB.ApplicationSecret != "asB" || gotB.ConsumerKey != "ckB" {
+	if gotB.Label != "OVH pro" || gotB.Credentials["endpoint"] != "ovh-ca" || gotB.Credentials["application_key"] != "akB" || gotB.Credentials["application_secret"] != "asB" || gotB.Credentials["consumer_key"] != "ckB" {
 		t.Errorf("provider B round-trip mismatch: %+v", gotB)
 	}
 }
@@ -602,7 +600,7 @@ func TestImport_PreV211Provider_EmptyID_GetsUUIDAndDefaultLabel(t *testing.T) {
 	snap.Users = []auth.User{seedFakeUser("u-1", "$argon2id$hash")}
 	// Old singleton row: no ID, no Label, no Type — just endpoint + secrets.
 	snap.DNSProviders = []storage.DNSProviderConfig{
-		{Endpoint: "ovh-eu", ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck"},
+		{Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "ak", "application_secret": "as", "consumer_key": "ck"}},
 	}
 
 	if _, err := Import(ctx, dstStore, dstUS, snap, ImportOptions{}); err != nil {
@@ -626,7 +624,7 @@ func TestImport_PreV211Provider_EmptyID_GetsUUIDAndDefaultLabel(t *testing.T) {
 	if got.Label != "OVH (default)" || got.Type != "ovh" {
 		t.Errorf("pre-v2.11 provider not defaulted to a valid entry: %+v", got)
 	}
-	if got.ApplicationKey != "ak" || got.ApplicationSecret != "as" || got.ConsumerKey != "ck" {
+	if got.Credentials["application_key"] != "ak" || got.Credentials["application_secret"] != "as" || got.Credentials["consumer_key"] != "ck" {
 		t.Errorf("secrets not carried over: %+v", got)
 	}
 
@@ -672,8 +670,7 @@ func TestImport_DNSProvider_SentinelInheritsByID(t *testing.T) {
 	_ = seedLiveUser(t, us, "admin", "admin-password-15c-x")
 
 	live, err := store.CreateDNSProvider(ctx, storage.DNSProviderConfig{
-		Label: "OVH perso", Type: "ovh", Endpoint: "ovh-eu",
-		ApplicationKey: "live-ak", ApplicationSecret: "live-as", ConsumerKey: "live-ck",
+		Label: "OVH perso", Type: "ovh", Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "live-ak", "application_secret": "live-as", "consumer_key": "live-ck"},
 	})
 	if err != nil {
 		t.Fatalf("seed live provider: %v", err)
@@ -685,8 +682,7 @@ func TestImport_DNSProvider_SentinelInheritsByID(t *testing.T) {
 	snap.SecretsIncluded = false
 	snap.Users = []auth.User{seedFakeUser("u-1", "$argon2id$hash")}
 	snap.DNSProviders = []storage.DNSProviderConfig{
-		{ID: live.ID, Label: "OVH perso", Type: "ovh", Endpoint: "ovh-eu",
-			ApplicationKey: SentinelLiteral, ApplicationSecret: SentinelLiteral, ConsumerKey: SentinelLiteral},
+		{ID: live.ID, Label: "OVH perso", Type: "ovh", Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": SentinelLiteral, "application_secret": SentinelLiteral, "consumer_key": SentinelLiteral}},
 	}
 
 	report, err := Import(ctx, store, us, snap, ImportOptions{})
@@ -701,7 +697,7 @@ func TestImport_DNSProvider_SentinelInheritsByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get after import: %v", err)
 	}
-	if got.ApplicationKey != "live-ak" || got.ApplicationSecret != "live-as" || got.ConsumerKey != "live-ck" {
+	if got.Credentials["application_key"] != "live-ak" || got.Credentials["application_secret"] != "live-as" || got.Credentials["consumer_key"] != "live-ck" {
 		t.Errorf("SENTINEL LEAK/LOSS: secrets not inherited by ID: %+v", got)
 	}
 }
@@ -721,8 +717,7 @@ func TestImport_DNSProvider_SentinelUnresolved_Rejects(t *testing.T) {
 	snap.SecretsIncluded = false
 	snap.Users = []auth.User{seedFakeUser("u-1", "$argon2id$hash")}
 	snap.DNSProviders = []storage.DNSProviderConfig{
-		{ID: uuid.NewString(), Label: "OVH perso", Type: "ovh", Endpoint: "ovh-eu",
-			ApplicationKey: SentinelLiteral, ApplicationSecret: SentinelLiteral, ConsumerKey: SentinelLiteral},
+		{ID: uuid.NewString(), Label: "OVH perso", Type: "ovh", Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": SentinelLiteral, "application_secret": SentinelLiteral, "consumer_key": SentinelLiteral}},
 	}
 
 	_, err := Import(ctx, store, us, snap, ImportOptions{})
@@ -868,8 +863,7 @@ func TestExport_DNSCollection_SchemaVersionUnchanged(t *testing.T) {
 	ctx := context.Background()
 	_ = seedLiveUser(t, srcUS, "admin", "admin-password-15c-x")
 	_, _ = srcStore.CreateDNSProvider(ctx, storage.DNSProviderConfig{
-		Label: "OVH", Type: "ovh", Endpoint: "ovh-eu",
-		ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck",
+		Label: "OVH", Type: "ovh", Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "ak", "application_secret": "as", "consumer_key": "ck"},
 	})
 
 	snap, err := Export(ctx, srcStore, srcUS, "test", true)

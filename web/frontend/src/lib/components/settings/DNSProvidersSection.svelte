@@ -21,12 +21,24 @@
   `params.wildcards` names the offending apexes — surfaced verbatim
   in the danger toast so the operator knows exactly what to detach
   first.
+
+  v2.26 — multi-type: the add/edit form is generated from the
+  provider-type registry (GET /settings/dns-providers/types): one
+  input per credential field, password inputs for secrets, a select
+  for enums. The type is chosen at creation and locked on edit. Each
+  row gets a read-only "Test connection" action (POST …/{id}/test).
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { settingsApi } from '$lib/api/settings';
-	import { ApiError, OVH_ENDPOINTS } from '$lib/api/types';
-	import type { DNSProvider, DNSProviderRequest } from '$lib/api/types';
+	import { ApiError } from '$lib/api/types';
+	import type {
+		DNSProvider,
+		DNSProviderField,
+		DNSProviderRequest,
+		DNSProviderTestResult,
+		DNSProviderType,
+	} from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
@@ -37,42 +49,77 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
-	// v1.0 supports OVH only. The Type field is a <select> (not a
-	// hardcoded label) so a future Cloudflare / Route53 addition is
-	// additive — just extend this list.
-	const DNS_PROVIDER_TYPES: readonly string[] = ['ovh'] as const;
-
 	let providers = $state<DNSProvider[]>([]);
+	let types = $state<DNSProviderType[]>([]);
 	let loading = $state(true);
 	let loadError = $state<string | null>(null);
 
 	// Modal state. editingId === null → add mode (POST); non-null →
-	// edit mode (PUT on /{id}). The three secret fields are
-	// write-only: blank on edit preserves the stored value (the
-	// backend merges against the previous row).
+	// edit mode (PUT on /{id}). Secret fields are write-only: blank on
+	// edit preserves the stored value (the backend merges against the
+	// previous row); editingSecretsSet says which ones are stored.
 	let modalOpen = $state(false);
 	let editingId = $state<string | null>(null);
-	let editingConfigured = $state(false);
+	let editingSecretsSet = $state<Record<string, boolean>>({});
 	let submitting = $state(false);
 	let formError = $state<string | null>(null);
-	let form = $state({
+	let form = $state<{ label: string; type: string; credentials: Record<string, string> }>({
 		label: '',
-		type: 'ovh',
-		endpoint: 'ovh-eu',
-		applicationKey: '',
-		applicationSecret: '',
-		consumerKey: '',
+		type: '',
+		credentials: {},
 	});
+
+	const formType = $derived(types.find((ty) => ty.type === form.type));
 
 	// Delete state.
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<DNSProvider | null>(null);
 
+	// Connection-test state.
+	let testOpen = $state(false);
+	let testTarget = $state<DNSProvider | null>(null);
+	let testZone = $state('');
+	let testRunning = $state(false);
+	let testResult = $state<DNSProviderTestResult | null>(null);
+	let testError = $state<string | null>(null);
+
+	function typeLabel(type: string): string {
+		return types.find((ty) => ty.type === type)?.label ?? type;
+	}
+
+	function fieldLabel(type: string, f: DNSProviderField): string {
+		const key = `settings.dnsProviders.fields.${type}.${f.key}`;
+		const translated = t(key);
+		// A type the UI has no translation for yet falls back to the
+		// backend's English label instead of showing the raw key.
+		return translated === key ? f.label : translated;
+	}
+
+	/** Non-secret credential values shown in the table. */
+	function details(p: DNSProvider): string {
+		return Object.values(p.fields ?? {})
+			.filter((v) => v !== '')
+			.join(' · ');
+	}
+
+	function defaultsFor(type: string): Record<string, string> {
+		const creds: Record<string, string> = {};
+		for (const f of types.find((ty) => ty.type === type)?.fields ?? []) {
+			creds[f.key] = f.default ?? (f.enum?.[0] ?? '');
+		}
+		return creds;
+	}
+
 	async function loadProviders(): Promise<void> {
 		loading = true;
 		loadError = null;
 		try {
-			providers = await settingsApi.listDNSProviders();
+			const [list, registry] = await Promise.all([
+				settingsApi.listDNSProviders(),
+				types.length > 0 ? Promise.resolve(types) : settingsApi.listDNSProviderTypes(),
+			]);
+			providers = list;
+			types = registry;
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : String(err);
 		} finally {
@@ -81,33 +128,28 @@
 	}
 
 	function openAdd(): void {
+		const first = types[0]?.type ?? '';
 		editingId = null;
-		editingConfigured = false;
-		form = {
-			label: '',
-			type: 'ovh',
-			endpoint: 'ovh-eu',
-			applicationKey: '',
-			applicationSecret: '',
-			consumerKey: '',
-		};
+		editingSecretsSet = {};
+		form = { label: '', type: first, credentials: defaultsFor(first) };
 		formError = null;
 		modalOpen = true;
 	}
 
+	function onTypeChange(type: string): void {
+		form.type = type;
+		form.credentials = defaultsFor(type);
+	}
+
 	function openEdit(p: DNSProvider): void {
 		editingId = p.id;
-		editingConfigured = p.configured;
-		form = {
-			label: p.label,
-			type: p.type || 'ovh',
-			endpoint: p.endpoint || 'ovh-eu',
-			// Secrets stay blank on edit — the wire never carries them
-			// and a blank submit preserves the stored value.
-			applicationKey: '',
-			applicationSecret: '',
-			consumerKey: '',
-		};
+		editingSecretsSet = { ...(p.secretsSet ?? {}) };
+		const credentials = defaultsFor(p.type);
+		for (const [k, v] of Object.entries(p.fields ?? {})) credentials[k] = v;
+		// Secrets stay blank on edit — the wire never carries them and a
+		// blank submit preserves the stored value.
+		for (const k of Object.keys(editingSecretsSet)) credentials[k] = '';
+		form = { label: p.label, type: p.type, credentials };
 		formError = null;
 		modalOpen = true;
 	}
@@ -117,6 +159,17 @@
 		modalOpen = false;
 	}
 
+	/** First required field left empty, or null. A stored secret left
+	 *  blank on edit counts as set (preserve-on-edit). */
+	function missingRequired(): DNSProviderField | null {
+		for (const f of formType?.fields ?? []) {
+			if (!f.required || (form.credentials[f.key] ?? '').trim() !== '') continue;
+			if (f.secret && editingId !== null && editingSecretsSet[f.key]) continue;
+			return f;
+		}
+		return null;
+	}
+
 	async function submitForm(): Promise<void> {
 		if (submitting) return;
 		const label = form.label.trim();
@@ -124,24 +177,23 @@
 			formError = t('settings.dnsProviders.validation.labelRequired');
 			return;
 		}
-		if (form.endpoint.trim() === '') {
-			formError = t('settings.dnsProviders.validation.endpointRequired');
+		const missing = missingRequired();
+		if (missing) {
+			formError = t('settings.dnsProviders.validation.fieldRequired', {
+				field: fieldLabel(form.type, missing),
+			});
 			return;
 		}
 		submitting = true;
 		formError = null;
-		// Build the request body. Only send non-empty secret fields so a
-		// blank secret on edit triggers the backend's preserve-on-edit
-		// path (J.4 pattern). On add, blank secrets are sent as absent —
-		// the backend 400s if they're required for the type.
-		const body: DNSProviderRequest = {
-			label,
-			type: form.type,
-			endpoint: form.endpoint,
-		};
-		if (form.applicationKey !== '') body.applicationKey = form.applicationKey;
-		if (form.applicationSecret !== '') body.applicationSecret = form.applicationSecret;
-		if (form.consumerKey !== '') body.consumerKey = form.consumerKey;
+		// Only non-empty values are sent: a blank secret on edit triggers
+		// the backend's preserve-on-edit path, a blank optional field is
+		// cleared.
+		const credentials: Record<string, string> = {};
+		for (const [k, v] of Object.entries(form.credentials)) {
+			if (v.trim() !== '') credentials[k] = v.trim();
+		}
+		const body: DNSProviderRequest = { label, type: form.type, credentials };
 		try {
 			if (editingId === null) {
 				await settingsApi.createDNSProvider(body);
@@ -156,6 +208,42 @@
 			formError = err instanceof ApiError ? err.message : String(err);
 		} finally {
 			submitting = false;
+		}
+	}
+
+	function openTest(p: DNSProvider): void {
+		testTarget = p;
+		testZone = p.usedBy[0] ?? '';
+		testResult = null;
+		testError = null;
+		testOpen = true;
+	}
+
+	function closeTest(): void {
+		if (testRunning) return;
+		testOpen = false;
+	}
+
+	async function runTest(): Promise<void> {
+		const target = testTarget;
+		if (!target || testRunning) return;
+		testRunning = true;
+		testResult = null;
+		testError = null;
+		try {
+			testResult = await settingsApi.testDNSProvider(target.id, testZone.trim());
+		} catch (err) {
+			if (err instanceof ApiError && err.code === 'zone_required') {
+				testError = t('settings.dnsProviders.test.zoneRequired');
+			} else if (err instanceof ApiError && err.code === 'invalid_zone') {
+				testError = t('settings.dnsProviders.test.invalidZone');
+			} else if (err instanceof ApiError && err.code === 'provider_not_configured') {
+				testError = t('settings.dnsProviders.test.notConfigured');
+			} else {
+				testError = err instanceof Error ? err.message : String(err);
+			}
+		} finally {
+			testRunning = false;
 		}
 	}
 
@@ -250,7 +338,7 @@
 						<tr class="text-left text-xs text-secondary uppercase">
 							<th class="py-2 pr-3">{language.current && t('settings.dnsProviders.table.label')}</th>
 							<th class="py-2 px-2">{language.current && t('settings.dnsProviders.table.type')}</th>
-							<th class="py-2 px-2">{language.current && t('settings.dnsProviders.table.endpoint')}</th>
+							<th class="py-2 px-2">{language.current && t('settings.dnsProviders.table.details')}</th>
 							<th class="py-2 px-2">{language.current && t('settings.dnsProviders.table.status')}</th>
 							<th class="py-2 px-2">{language.current && t('settings.dnsProviders.table.usedBy')}</th>
 							<th class="py-2 pl-2 text-right">{language.current && t('settings.dnsProviders.table.actions')}</th>
@@ -260,8 +348,8 @@
 						{#each providers as p (p.id)}
 							<tr class="border-t border-border-subtle" data-testid={`dns-provider-row-${p.id}`}>
 								<td class="py-2 pr-3 text-primary">{p.label}</td>
-								<td class="py-2 px-2 font-mono text-secondary">{p.type}</td>
-								<td class="py-2 px-2 font-mono text-secondary">{p.endpoint}</td>
+								<td class="py-2 px-2 text-secondary">{typeLabel(p.type)}</td>
+								<td class="py-2 px-2 font-mono text-secondary">{details(p)}</td>
 								<td class="py-2 px-2">
 									{#if p.configured}
 										<Badge variant="status-up"
@@ -283,6 +371,16 @@
 									{/if}
 								</td>
 								<td class="py-2 pl-2 text-right whitespace-nowrap">
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={() => openTest(p)}
+										disabled={!p.configured}
+										data-testid={`dns-provider-test-${p.id}`}
+										aria-label={language.current && t('settings.dnsProviders.table.test')}
+									>
+										⚡
+									</Button>
 									<Button
 										variant="ghost"
 										size="sm"
@@ -344,88 +442,76 @@
 			/>
 		</div>
 
-		<div>
+		<div class="md:col-span-2">
 			<label for="dnsp-type" class="text-sm font-medium text-secondary block mb-1">
 				{language.current && t('settings.dnsProviders.modal.typeField')}
 			</label>
 			<select
 				id="dnsp-type"
-				bind:value={form.type}
-				disabled={submitting}
+				value={form.type}
+				onchange={(e) => onTypeChange((e.currentTarget as HTMLSelectElement).value)}
+				disabled={submitting || editingId !== null}
+				data-testid="dns-provider-type"
 				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 			>
-				{#each DNS_PROVIDER_TYPES as ty (ty)}
-					<option value={ty}>{ty}</option>
+				{#each types as ty (ty.type)}
+					<option value={ty.type}>{ty.label}</option>
 				{/each}
 			</select>
+			{#if editingId !== null}
+				<p class="text-xs text-muted mt-1">
+					{language.current && t('settings.dnsProviders.modal.typeLocked')}
+				</p>
+			{/if}
+			{#if formType?.docsUrl}
+				<a
+					href={formType.docsUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					class="text-xs text-cyan hover:underline mt-1 inline-block"
+					data-testid="dns-provider-docs-link"
+				>
+					{language.current && t('settings.dnsProviders.modal.docsLink')} ↗
+				</a>
+			{/if}
 		</div>
 
-		<div>
-			<label for="dnsp-endpoint" class="text-sm font-medium text-secondary block mb-1">
-				{language.current && t('settings.dnsProviders.modal.endpointField')}
-			</label>
-			<select
-				id="dnsp-endpoint"
-				bind:value={form.endpoint}
-				disabled={submitting}
-				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-			>
-				{#each OVH_ENDPOINTS as ep (ep)}
-					<option value={ep}>{ep}</option>
-				{/each}
-			</select>
-		</div>
-
-		<div>
-			<label for="dnsp-app-key" class="text-sm font-medium text-secondary block mb-1">
-				{language.current && t('settings.dnsProviders.modal.appKey')}
-			</label>
-			<input
-				id="dnsp-app-key"
-				type="password"
-				autocomplete="off"
-				bind:value={form.applicationKey}
-				disabled={submitting}
-				placeholder={editingConfigured
-					? (language.current && t('settings.dnsProviders.modal.secretsKeepHint')) || ''
-					: ''}
-				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-			/>
-		</div>
-
-		<div>
-			<label for="dnsp-app-secret" class="text-sm font-medium text-secondary block mb-1">
-				{language.current && t('settings.dnsProviders.modal.appSecret')}
-			</label>
-			<input
-				id="dnsp-app-secret"
-				type="password"
-				autocomplete="off"
-				bind:value={form.applicationSecret}
-				disabled={submitting}
-				placeholder={editingConfigured
-					? (language.current && t('settings.dnsProviders.modal.secretsKeepHint')) || ''
-					: ''}
-				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-			/>
-		</div>
-
-		<div class="md:col-span-2">
-			<label for="dnsp-consumer-key" class="text-sm font-medium text-secondary block mb-1">
-				{language.current && t('settings.dnsProviders.modal.consumerKey')}
-			</label>
-			<input
-				id="dnsp-consumer-key"
-				type="password"
-				autocomplete="off"
-				bind:value={form.consumerKey}
-				disabled={submitting}
-				placeholder={editingConfigured
-					? (language.current && t('settings.dnsProviders.modal.secretsKeepHint')) || ''
-					: ''}
-				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-			/>
-		</div>
+		{#each formType?.fields ?? [] as f (form.type + ':' + f.key)}
+			<div>
+				<label for={`dnsp-f-${f.key}`} class="text-sm font-medium text-secondary block mb-1">
+					{language.current && fieldLabel(form.type, f)}
+					{#if f.required}
+						<span class="text-down" aria-hidden="true">*</span>
+						<span class="sr-only">({language.current && t('settings.dnsProviders.modal.required')})</span>
+					{/if}
+				</label>
+				{#if f.enum && f.enum.length > 0}
+					<select
+						id={`dnsp-f-${f.key}`}
+						bind:value={form.credentials[f.key]}
+						disabled={submitting}
+						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+					>
+						{#each f.enum as opt (opt)}
+							<option value={opt}>{opt}</option>
+						{/each}
+					</select>
+				{:else}
+					<input
+						id={`dnsp-f-${f.key}`}
+						type={f.secret ? 'password' : 'text'}
+						autocomplete="off"
+						bind:value={form.credentials[f.key]}
+						disabled={submitting}
+						aria-required={f.required}
+						placeholder={f.secret && editingId !== null && editingSecretsSet[f.key]
+							? (language.current && t('settings.dnsProviders.modal.secretsKeepHint')) || ''
+							: ''}
+						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+					/>
+				{/if}
+			</div>
+		{/each}
 
 		{#if formError}
 			<p class="text-sm text-down md:col-span-2" role="alert" data-testid="dns-provider-form-error">
@@ -448,6 +534,75 @@
 					: editingId === null
 						? t('settings.dnsProviders.modal.add')
 						: t('settings.dnsProviders.modal.save'))}
+		</Button>
+	{/snippet}
+</Modal>
+
+<Modal
+	open={testOpen}
+	title={language.current && t('settings.dnsProviders.test.title')}
+	onClose={closeTest}
+>
+	<form
+		class="flex flex-col gap-3"
+		data-testid="dns-provider-test-form"
+		onsubmit={(e) => {
+			e.preventDefault();
+			void runTest();
+		}}
+	>
+		<p class="text-sm text-secondary">
+			{testTarget?.label} · {testTarget ? typeLabel(testTarget.type) : ''}
+		</p>
+		<p class="text-xs text-muted">{language.current && t('settings.dnsProviders.test.intro')}</p>
+		<div>
+			<label for="dnsp-test-zone" class="text-sm font-medium text-secondary block mb-1">
+				{language.current && t('settings.dnsProviders.test.zoneField')}
+			</label>
+			<input
+				id="dnsp-test-zone"
+				type="text"
+				autocomplete="off"
+				bind:value={testZone}
+				disabled={testRunning}
+				placeholder={language.current && t('settings.dnsProviders.test.zonePlaceholder')}
+				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+			/>
+		</div>
+		<div aria-live="polite">
+			{#if testResult?.ok}
+				<p class="text-sm text-up" data-testid="dns-provider-test-ok">
+					{language.current &&
+						t('settings.dnsProviders.test.ok', {
+							records: testResult.records,
+							zone: testResult.zone,
+						})}
+				</p>
+			{:else if testResult}
+				<p class="text-sm text-down" role="alert" data-testid="dns-provider-test-failed">
+					{language.current && t('settings.dnsProviders.test.failed', { err: testResult.error ?? '' })}
+				</p>
+			{:else if testError}
+				<p class="text-sm text-down" role="alert" data-testid="dns-provider-test-failed">
+					{testError}
+				</p>
+			{/if}
+		</div>
+		<button type="submit" class="sr-only" tabindex="-1" aria-hidden="true">Submit</button>
+	</form>
+
+	{#snippet footer()}
+		<Button variant="ghost" onclick={closeTest} disabled={testRunning}>
+			{language.current && t('settings.dnsProviders.test.close')}
+		</Button>
+		<Button
+			variant="primary"
+			onclick={() => void runTest()}
+			loading={testRunning}
+			data-testid="dns-provider-test-run"
+		>
+			{language.current &&
+				(testRunning ? t('settings.dnsProviders.test.running') : t('settings.dnsProviders.test.run'))}
 		</Button>
 	{/snippet}
 </Modal>

@@ -890,7 +890,12 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	}
 
 	if err := caddy.Load(cfgJSON, false); err != nil {
-		return fmt.Errorf("caddy.Load: %w", err)
+		// v2.26: DNS provider modules may echo a credential in their
+		// Provision error (caddy-dns/cloudflare does). The error is
+		// logged by every ReloadFromStore caller, so it is rebuilt
+		// from its redacted text — deliberately NOT wrapped, which
+		// would keep the raw secret reachable via errors.Unwrap.
+		return fmt.Errorf("caddy.Load: %s", storage.RedactDNSSecrets(err.Error(), provList...))
 	}
 
 	// v2.9.9 Bug B follow-up — re-prime healthy after every reload.
@@ -2158,14 +2163,14 @@ func buildCrowdSecApp(cfg crowdsecConfig) *crowdsecApp {
 // Step J.4 DNS-01 specifics (§5.4):
 //   - The per-route DNS-01 policy is emitted ONLY when both
 //     `partition.DNS01` is non-empty AND at least one fully-configured
-//     provider exists in opts.DNSProviders (Endpoint + ApplicationKey
-//   - ApplicationSecret + ConsumerKey all non-empty). The default
+//     provider exists in opts.DNSProviders (every registry-required
+//     credential non-empty, see storage.ProviderConfigured). The default
 //     provider is chosen by defaultDNSProvider. The API validates
 //     provider presence at edit time, so reaching this code with
 //     DNS-01 hosts and no configured provider is a programming error —
 //     we defensively skip the DNS-01 policy emission rather than emit
 //     a malformed Caddy config that would fail Validate.
-//   - The provider sub-block always carries `name: "ovh"` so
+//   - The provider sub-block always carries `name: <provider type>` so
 //     Caddy's `caddy:"namespace=dns.providers inline_key=name"` tag
 //     on DNSChallengeConfig.ProviderRaw resolves correctly
 //     (empirically verified during J.4 recon).
@@ -2502,7 +2507,7 @@ func buildSkipList(routes []storage.Route) []string {
 // policy uses HTTP-01 (Caddy's implicit default for the ACME
 // issuer — no `challenges` block needed); when non-nil it adds the
 // DNS-01 `challenges.dns.provider` sub-block sourced from the
-// OVH credentials. Pulled out of buildTLSPolicies so the HTTP-01
+// provider's registry credentials. Pulled out of buildTLSPolicies so the HTTP-01
 // and DNS-01 emission paths share the same issuer-shape code —
 // any future addition (challenge timeouts, alt-name list, ...)
 // lands in one place. Step J.4 §5.4.
@@ -2515,20 +2520,21 @@ func buildACMEPolicy(subjects []string, opts buildOpts, dnsProvider *storage.DNS
 		acmeIssuer["email"] = opts.ACMEEmail
 	}
 	if dnsProvider != nil {
+		// `name` is REQUIRED — without it Caddy's
+		// DNSChallengeConfig.ProviderRaw cannot resolve which
+		// dns.providers.* module to instantiate (empirically observed
+		// failure: `module not registered: dns.providers.ovh`). The
+		// credential keys are the module's own JSON keys (registry,
+		// storage/dns_provider_types.go); Caddy decodes them strictly.
+		provider := map[string]any{"name": dnsProvider.Type}
+		for k, v := range dnsProvider.Credentials {
+			if v != "" {
+				provider[k] = v
+			}
+		}
 		acmeIssuer["challenges"] = map[string]any{
 			"dns": map[string]any{
-				"provider": map[string]any{
-					// `name` is REQUIRED — without it Caddy's
-					// DNSChallengeConfig.ProviderRaw cannot resolve
-					// which dns.providers.* module to instantiate
-					// (empirically observed failure: `module not
-					// registered: dns.providers.ovh`).
-					"name":               "ovh",
-					"endpoint":           dnsProvider.Endpoint,
-					"application_key":    dnsProvider.ApplicationKey,
-					"application_secret": dnsProvider.ApplicationSecret,
-					"consumer_key":       dnsProvider.ConsumerKey,
-				},
+				"provider": provider,
 			},
 		}
 	}
@@ -2538,18 +2544,14 @@ func buildACMEPolicy(subjects []string, opts buildOpts, dnsProvider *storage.DNS
 	}
 }
 
-// dnsProviderConfigured reports whether the four fields of an
-// instance OVH DNS provider config are all non-empty — the bar for
-// emitting a DNS-01 ACME policy that won't fail Caddy's Provision.
-// The API rejects a route create / update that would activate
-// DNS-01 without a complete config, but the generator double-
-// checks here so a programming error doesn't slip through to
-// caddy.Load. Step J.4 §5.4.
+// dnsProviderConfigured reports whether a DNS provider has every
+// registry-required credential — the bar for emitting a DNS-01 ACME
+// policy that won't fail Caddy's Provision. The API rejects a route
+// create / update that would activate DNS-01 without a configured
+// provider, but the generator double-checks here so a programming
+// error doesn't slip through to caddy.Load. Step J.4 §5.4, v2.26.
 func dnsProviderConfigured(c storage.DNSProviderConfig) bool {
-	return c.Endpoint != "" &&
-		c.ApplicationKey != "" &&
-		c.ApplicationSecret != "" &&
-		c.ConsumerKey != ""
+	return storage.ProviderConfigured(c)
 }
 
 // acmeDirectoryURL returns the Let's Encrypt directory URL for the

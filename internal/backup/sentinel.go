@@ -19,6 +19,9 @@ package backup
 import (
 	"errors"
 	"fmt"
+	"maps"
+
+	"github.com/barto95100/arenet/internal/storage"
 )
 
 // redactSnapshotInPlace overwrites every secret field listed in the
@@ -49,15 +52,15 @@ func redactSnapshotInPlace(s *Snapshot) {
 		}
 	}
 	for i := range s.DNSProviders {
-		// dns_providers[].application_key, application_secret, consumer_key
-		if s.DNSProviders[i].ApplicationKey != "" {
-			s.DNSProviders[i].ApplicationKey = SentinelLiteral
-		}
-		if s.DNSProviders[i].ApplicationSecret != "" {
-			s.DNSProviders[i].ApplicationSecret = SentinelLiteral
-		}
-		if s.DNSProviders[i].ConsumerKey != "" {
-			s.DNSProviders[i].ConsumerKey = SentinelLiteral
+		// dns_providers[].credentials.<key> for every secret field of
+		// the provider's type (registry-driven, v2.26). The map is
+		// cloned so the caller's config is never mutated.
+		d := &s.DNSProviders[i]
+		d.Credentials = maps.Clone(d.Credentials)
+		for _, k := range storage.SecretKeys(d.Type) {
+			if d.Credentials[k] != "" {
+				d.Credentials[k] = SentinelLiteral
+			}
 		}
 	}
 	for i := range s.ForwardAuthProviders {

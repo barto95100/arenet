@@ -19,6 +19,7 @@ package backup
 import (
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/storage"
@@ -167,31 +168,24 @@ func validateRouteWithDerogation(r storage.Route, cleared clearedSet) error {
 }
 
 func validateDNSProviderWithDerogation(d storage.DNSProviderConfig, cleared clearedSet) error {
-	// Three secret fields; any of them may be in the cleared set.
+	// Every secret credential of the type may be in the cleared set.
 	// The dérogation identity is the provider's own UUID (v2.11
-	// multi-config), matching the identity the resolver records in
-	// IncompleteRows (resolve("dns_providers", d.ID, ...)). Pre-2.11
-	// empty-ID rows are promoted to a UUID in resolveSentinels before
-	// this runs, so d.ID is always the stable collection key here.
+	// multi-config) and the credential key (v2.26), matching the
+	// identity the resolver records in IncompleteRows
+	// (resolve("dns_providers", d.ID, <key>, ...)). Pre-2.11 empty-ID
+	// rows are promoted to a UUID in resolveSentinels before this
+	// runs, so d.ID is always the stable collection key here.
 	probe := d
-	clearedAny := false
-	if d.ApplicationKey == "" && cleared.has("dns_providers", d.ID, "application_key") {
-		probe.ApplicationKey = "incomplete-restore-placeholder"
-		clearedAny = true
+	probe.Credentials = maps.Clone(d.Credentials)
+	if probe.Credentials == nil {
+		probe.Credentials = map[string]string{}
 	}
-	if d.ApplicationSecret == "" && cleared.has("dns_providers", d.ID, "application_secret") {
-		probe.ApplicationSecret = "incomplete-restore-placeholder"
-		clearedAny = true
+	for _, k := range storage.SecretKeys(d.Type) {
+		if d.Credentials[k] == "" && cleared.has("dns_providers", d.ID, k) {
+			probe.Credentials[k] = "incomplete-restore-placeholder"
+		}
 	}
-	if d.ConsumerKey == "" && cleared.has("dns_providers", d.ID, "consumer_key") {
-		probe.ConsumerKey = "incomplete-restore-placeholder"
-		clearedAny = true
-	}
-	target := d
-	if clearedAny {
-		target = probe
-	}
-	if err := storage.ValidateDNSProvider(target); err != nil {
+	if err := storage.ValidateDNSProvider(probe); err != nil {
 		return fmt.Errorf("restore: dns_provider (id=%s, label=%q): %w", d.ID, d.Label, err)
 	}
 	return nil

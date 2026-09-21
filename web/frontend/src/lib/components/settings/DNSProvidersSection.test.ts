@@ -8,13 +8,16 @@
 // provider_in_use delete path that surfaces the wildcard names in
 // the toast. Mocks $lib/api/settings + $lib/stores/toast in the
 // same shape the sibling settings/certs page tests use.
+//
+// v2.26: the form is generated from the provider-type registry
+// (listDNSProviderTypes), and each row has a connection test.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { ApiError } from '$lib/api/types';
-import type { DNSProvider } from '$lib/api/types';
+import type { DNSProvider, DNSProviderType } from '$lib/api/types';
 
 const { settingsMock, toastMock } = vi.hoisted(() => ({
 	settingsMock: {
@@ -23,6 +26,8 @@ const { settingsMock, toastMock } = vi.hoisted(() => ({
 			createDNSProvider: vi.fn(),
 			updateDNSProvider: vi.fn(),
 			deleteDNSProvider: vi.fn(),
+			listDNSProviderTypes: vi.fn(),
+			testDNSProvider: vi.fn(),
 		},
 	},
 	toastMock: { pushToast: vi.fn() },
@@ -39,28 +44,58 @@ function provider(over: Partial<DNSProvider> = {}): DNSProvider {
 		type: 'ovh',
 		endpoint: 'ovh-eu',
 		configured: true,
+		fields: { endpoint: 'ovh-eu' },
+		secretsSet: { application_key: true, application_secret: true, consumer_key: true },
 		usedBy: [],
 		...over,
 	};
 }
+
+// Registry subset mirroring storage/dns_provider_types.go.
+const TYPES: DNSProviderType[] = [
+	{
+		type: 'ovh',
+		label: 'OVHcloud',
+		docsUrl: 'https://www.ovh.com/auth/api/createToken',
+		fields: [
+			{ key: 'endpoint', label: 'Endpoint', secret: false, required: true, enum: ['ovh-eu', 'ovh-ca'], default: 'ovh-eu' },
+			{ key: 'application_key', label: 'Application key', secret: true, required: true },
+			{ key: 'application_secret', label: 'Application secret', secret: true, required: true },
+			{ key: 'consumer_key', label: 'Consumer key', secret: true, required: true },
+		],
+	},
+	{
+		type: 'cloudflare',
+		label: 'Cloudflare',
+		docsUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+		fields: [
+			{ key: 'api_token', label: 'API token (Zone.DNS:Edit)', secret: true, required: true },
+			{ key: 'zone_token', label: 'Zone token (Zone:Read, optional)', secret: true, required: false },
+		],
+	},
+];
 
 beforeEach(() => {
 	settingsMock.settingsApi.listDNSProviders.mockReset();
 	settingsMock.settingsApi.createDNSProvider.mockReset();
 	settingsMock.settingsApi.updateDNSProvider.mockReset();
 	settingsMock.settingsApi.deleteDNSProvider.mockReset();
+	settingsMock.settingsApi.listDNSProviderTypes.mockReset();
+	settingsMock.settingsApi.testDNSProvider.mockReset();
 	toastMock.pushToast.mockReset();
 	settingsMock.settingsApi.listDNSProviders.mockResolvedValue([]);
+	settingsMock.settingsApi.listDNSProviderTypes.mockResolvedValue(TYPES);
 });
 
 describe('DNSProvidersSection', () => {
-	it('renders a row per provider with label, endpoint, usedBy', async () => {
+	it('renders a row per provider with label, type label, details, usedBy', async () => {
 		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
 			provider({ id: 'id-1', label: 'OVH perso', endpoint: 'ovh-eu', usedBy: ['a.com'] }),
 		]);
 		render(DNSProvidersSection);
 		await waitFor(() => expect(screen.getByText('OVH perso')).toBeInTheDocument());
 		expect(screen.getByText('ovh-eu')).toBeInTheDocument();
+		expect(screen.getByText('OVHcloud')).toBeInTheDocument();
 		expect(screen.getByTestId('dns-provider-row-id-1')).toBeInTheDocument();
 		// usedBy wildcard is surfaced in the row.
 		expect(screen.getByText('a.com')).toBeInTheDocument();
@@ -87,23 +122,25 @@ describe('DNSProvidersSection', () => {
 		await userEvent.click(screen.getByText(/add your first provider/i));
 
 		await userEvent.type(screen.getByLabelText('Label'), 'OVH new');
-		await userEvent.type(screen.getByLabelText('Application key'), 'ak');
-		await userEvent.type(screen.getByLabelText('Application secret'), 'as');
-		await userEvent.type(screen.getByLabelText('Consumer key'), 'ck');
+		await userEvent.type(screen.getByLabelText(/^Application key/), 'ak');
+		await userEvent.type(screen.getByLabelText(/^Application secret/), 'as');
+		await userEvent.type(screen.getByLabelText(/^Consumer key/), 'ck');
 
 		await fireEvent.submit(screen.getByTestId('dns-provider-form'));
 		await tick();
 
 		await waitFor(() =>
 			expect(settingsMock.settingsApi.createDNSProvider).toHaveBeenCalledWith(
-				expect.objectContaining({
+				{
 					label: 'OVH new',
 					type: 'ovh',
-					endpoint: 'ovh-eu',
-					applicationKey: 'ak',
-					applicationSecret: 'as',
-					consumerKey: 'ck',
-				}),
+					credentials: {
+						endpoint: 'ovh-eu',
+						application_key: 'ak',
+						application_secret: 'as',
+						consumer_key: 'ck',
+					},
+				},
 			),
 		);
 		// Refetch after success → the new row appears.
@@ -134,11 +171,113 @@ describe('DNSProvidersSection', () => {
 		const [id, body] = settingsMock.settingsApi.updateDNSProvider.mock.calls[0];
 		expect(id).toBe('id-1');
 		expect(body.label).toBe('OVH renamed');
-		// Blank-secret contract: the three secret fields are omitted or
-		// empty so the backend preserves the stored values.
-		expect(body.applicationKey ?? '').toBe('');
-		expect(body.applicationSecret ?? '').toBe('');
-		expect(body.consumerKey ?? '').toBe('');
+		// Blank-secret contract: the secret fields are omitted so the
+		// backend preserves the stored values; the non-secret endpoint
+		// round-trips.
+		expect(body.type).toBe('ovh');
+		expect(body.credentials).toEqual({ endpoint: 'ovh-eu' });
+		// The type is locked on edit.
+		expect(screen.getByTestId('dns-provider-type')).toBeDisabled();
+	});
+
+	it('add flow: switching the type regenerates the fields (Cloudflare)', async () => {
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([]);
+		settingsMock.settingsApi.createDNSProvider.mockResolvedValue(provider({ type: 'cloudflare' }));
+
+		render(DNSProvidersSection);
+		await waitFor(() => screen.getByTestId('dns-provider-empty-add'));
+		await userEvent.click(screen.getByTestId('dns-provider-empty-add'));
+		await userEvent.selectOptions(screen.getByTestId('dns-provider-type'), 'cloudflare');
+
+		expect(screen.queryByLabelText(/^Application key/)).not.toBeInTheDocument();
+		expect(screen.getByTestId('dns-provider-docs-link')).toHaveAttribute(
+			'href',
+			'https://dash.cloudflare.com/profile/api-tokens',
+		);
+		const token = screen.getByLabelText(/^API token/) as HTMLInputElement;
+		expect(token.type).toBe('password');
+
+		await userEvent.type(screen.getByLabelText('Label'), 'CF');
+		await userEvent.type(token, 'cf-token');
+		await fireEvent.submit(screen.getByTestId('dns-provider-form'));
+		await tick();
+
+		// The empty optional zone_token is not sent.
+		await waitFor(() =>
+			expect(settingsMock.settingsApi.createDNSProvider).toHaveBeenCalledWith({
+				label: 'CF',
+				type: 'cloudflare',
+				credentials: { api_token: 'cf-token' },
+			}),
+		);
+	});
+
+	it('add flow: a missing required credential is caught client-side', async () => {
+		render(DNSProvidersSection);
+		await waitFor(() => screen.getByTestId('dns-provider-empty-add'));
+		await userEvent.click(screen.getByTestId('dns-provider-empty-add'));
+		await userEvent.selectOptions(screen.getByTestId('dns-provider-type'), 'cloudflare');
+		await userEvent.type(screen.getByLabelText('Label'), 'CF');
+		await fireEvent.submit(screen.getByTestId('dns-provider-form'));
+		await tick();
+
+		expect(screen.getByTestId('dns-provider-form-error')).toHaveTextContent(/API token/);
+		expect(settingsMock.settingsApi.createDNSProvider).not.toHaveBeenCalled();
+	});
+
+	it('connection test: prefills the bound zone and shows the record count', async () => {
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
+			provider({ id: 'id-1', usedBy: ['example.com'] }),
+		]);
+		settingsMock.settingsApi.testDNSProvider.mockResolvedValue({
+			ok: true,
+			zone: 'example.com',
+			records: 12,
+		});
+
+		render(DNSProvidersSection);
+		await waitFor(() => screen.getByTestId('dns-provider-test-id-1'));
+		await userEvent.click(screen.getByTestId('dns-provider-test-id-1'));
+		expect((screen.getByLabelText('Zone') as HTMLInputElement).value).toBe('example.com');
+		await userEvent.click(screen.getByTestId('dns-provider-test-run'));
+
+		await waitFor(() =>
+			expect(screen.getByTestId('dns-provider-test-ok')).toHaveTextContent('12'),
+		);
+		expect(settingsMock.settingsApi.testDNSProvider).toHaveBeenCalledWith('id-1', 'example.com');
+	});
+
+	it('connection test: surfaces the provider error and the zone_required code', async () => {
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([provider({ id: 'id-1' })]);
+		settingsMock.settingsApi.testDNSProvider
+			.mockResolvedValueOnce({ ok: false, zone: 'example.com', records: 0, error: '403 Forbidden' })
+			.mockRejectedValueOnce(
+				new ApiError('zone', 400, 'validation', undefined, 'zone_required', {}),
+			);
+
+		render(DNSProvidersSection);
+		await waitFor(() => screen.getByTestId('dns-provider-test-id-1'));
+		await userEvent.click(screen.getByTestId('dns-provider-test-id-1'));
+		await userEvent.type(screen.getByLabelText('Zone'), 'example.com');
+		await userEvent.click(screen.getByTestId('dns-provider-test-run'));
+		await waitFor(() =>
+			expect(screen.getByTestId('dns-provider-test-failed')).toHaveTextContent('403 Forbidden'),
+		);
+
+		await userEvent.clear(screen.getByLabelText('Zone'));
+		await userEvent.click(screen.getByTestId('dns-provider-test-run'));
+		await waitFor(() =>
+			expect(screen.getByTestId('dns-provider-test-failed')).toHaveTextContent(/zone/i),
+		);
+	});
+
+	it('connection test is disabled for a provider missing credentials', async () => {
+		settingsMock.settingsApi.listDNSProviders.mockResolvedValue([
+			provider({ id: 'id-1', configured: false }),
+		]);
+		render(DNSProvidersSection);
+		await waitFor(() => screen.getByTestId('dns-provider-test-id-1'));
+		expect(screen.getByTestId('dns-provider-test-id-1')).toBeDisabled();
 	});
 
 	it('delete-in-use: a 409 provider_in_use surfaces the wildcard names in the toast', async () => {

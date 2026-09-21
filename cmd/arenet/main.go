@@ -53,6 +53,19 @@ import (
 	// which feeds a DNS-01 fixture through caddy.Validate (§5.4).
 	_ "github.com/caddy-dns/ovh"
 
+	// v2.26: the other DNS-01 provider modules of the registry
+	// (internal/storage/dns_provider_types.go). Same blank-import
+	// contract as caddy-dns/ovh; the guard is
+	// TestBuildConfigJSON_LoadsCleanly_AllDNSProviderTypes.
+	_ "github.com/caddy-dns/cloudflare"
+	_ "github.com/caddy-dns/digitalocean"
+	_ "github.com/caddy-dns/gandi"
+	_ "github.com/caddy-dns/hetzner/v2"
+	_ "github.com/caddy-dns/infomaniak"
+	_ "github.com/caddy-dns/porkbun"
+	_ "github.com/caddy-dns/route53"
+	_ "github.com/caddy-dns/scaleway"
+
 	// Step Q (2026-06-18) — per-route rate limiting via
 	// mholt/caddy-ratelimit. Same blank-import contract as
 	// caddy-dns/ovh above : the package's
@@ -264,6 +277,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		logger.Error("dns provider migration failed", "err", err)
 	} else if migrated {
 		logger.Info("migrated legacy OVH DNS provider config to multi-config format")
+	}
+	// v2.26: rewrite pre-v2.26 flat OVH credential fields into the
+	// multi-type Credentials map. Same non-fatal contract as above.
+	if n, err := store.MigrateDNSProviderCredentials(ctx); err != nil {
+		logger.Error("dns provider credentials migration failed", "err", err)
+	} else if n > 0 {
+		logger.Info("migrated DNS provider credentials to multi-type format", "count", n)
 	}
 
 	if cfg.InsertTestRoute {
@@ -1929,10 +1949,7 @@ func storeDNS01Inconsistency(ctx context.Context, store *storage.Store) (bool, b
 	}
 	providerOK := false
 	for _, cfg := range providers {
-		if cfg.Endpoint != "" &&
-			cfg.ApplicationKey != "" &&
-			cfg.ApplicationSecret != "" &&
-			cfg.ConsumerKey != "" {
+		if storage.ProviderConfigured(cfg) {
 			providerOK = true
 			break
 		}

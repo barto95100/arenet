@@ -4,7 +4,7 @@
 
 Arenet issues **wildcard TLS certificates** (`*.example.com`) via the ACME **DNS-01 challenge**, which needs API access to your DNS zone. A *DNS provider* in Arenet is a saved set of credentials for that API. Since **v2.12.0** you can configure **several** providers — for example one OVH account for your personal domains and another for work — and point each wildcard at the one that owns its zone.
 
-> **OVH is the only provider type in v1.** The design is forward-compatible with other types (Cloudflare, Route53) — see [V3 backlog](#v3-backlog).
+> **Since v2.26.0, nine provider types are supported** — OVHcloud, Cloudflare, DigitalOcean, Gandi, Hetzner, Infomaniak, Porkbun, Amazon Route 53 and Scaleway. See [Supported providers](#supported-providers-v2260).
 
 ---
 
@@ -20,26 +20,45 @@ Per-route certificates use the **HTTP-01** challenge by default and need **no** 
 
 ---
 
+## Supported providers (v2.26.0)
+
+| Type | Credentials | Rights the token needs |
+| ---- | ----------- | ---------------------- |
+| **OVHcloud** | Endpoint (region), Application key, Application secret, Consumer key | `GET/PUT/POST/DELETE /domain/zone/*` |
+| **Cloudflare** | API token, optional Zone token | *Zone → DNS → Edit* on the zone(s). If the API token is scoped to specific zones, add a *Zone token* with *Zone → Zone → Read* on all zones |
+| **DigitalOcean** | API token | Read + write (or the `domain` read/create/update/delete scopes) |
+| **Gandi** | Personal access token | *Manage domain name technical configurations* (LiveDNS) on the domain |
+| **Hetzner** | Hetzner **Cloud** API token | Read & Write on the project hosting the zone. Zones must live in the new Hetzner Console DNS — tokens of the legacy DNS Console (dns.hetzner.com) do not work |
+| **Infomaniak** | API token | The *domain* scope |
+| **Porkbun** | API key, Secret API key | *API Access* must be enabled on each domain in the Porkbun dashboard |
+| **Amazon Route 53** | Region, Access key ID, Secret access key, optional Hosted zone ID | `route53:ListHostedZonesByName`, `ListResourceRecordSets`, `ChangeResourceRecordSets`, `GetChange` |
+| **Scaleway** | Secret key (IAM API key), Organization ID | *DomainsDNSFullAccess* |
+
+> **Testing status.** OVHcloud is the reference provider, live-tested by the maintainer. The eight others are **validated automatically** — every build checks that Arenet's credential fields match the real Caddy DNS module of each provider, and the v2.26.0 release smoke confirmed that each module reaches the provider's real API (rejecting dummy credentials cleanly) — but they are **not live-tested end to end by the maintainer** (no accounts there): no real certificate has been issued through them yet. Use the [Test connection](#test-connection-v2260) button to check your own credentials, and please report any issue.
+
+Each provider form links to the page where that provider's credentials are created. Rights evolve on the providers' side — when in doubt, their own documentation wins.
+
+---
+
 ## Multi-config (v2.12.0)
 
 Each provider is an independent entry with:
 
 | Field | Meaning |
 | ----- | ------- |
-| **Label** | A free-text name you choose (e.g. `OVH perso`, `OVH pro`). Shown in the wizard dropdown. |
-| **Type** | `ovh` (the only type in v1). |
-| **Endpoint** | The OVH region: `ovh-eu`, `ovh-ca`, `ovh-us`, `kimsufi-eu`, `kimsufi-ca`, `soyoustart-eu`, `soyoustart-ca`. |
-| **Application key / Application secret / Consumer key** | The three OVH API credentials (kept secret; never shown again after saving). |
+| **Label** | A free-text name you choose (e.g. `OVH perso`, `Cloudflare pro`). Shown in the wizard dropdown. |
+| **Type** | One of the [supported providers](#supported-providers-v2260). Chosen at creation; to switch type, delete and recreate the provider. |
+| **Credentials** | The fields of that type (see the table above). Secret fields are never shown again after saving; non-secret ones (OVH endpoint, Route 53 region, Scaleway organization ID…) are displayed in the list. |
 
-Two providers using different OVH accounts each carry their own credentials, so wildcards on zones owned by different accounts each validate through the right one.
+Two providers — of the same type with different accounts, or of different types — each carry their own credentials, so wildcards on zones owned by different accounts or providers each validate through the right one.
 
 ---
 
 ## Setup, step by step
 
-### 1. Create OVH API credentials
+### 1. Create the API credentials
 
-In the OVH API console (`https://api.ovh.com/createToken/` for `ovh-eu`), create a token with the DNS-zone rights certmagic needs:
+Create a token with the rights listed in [Supported providers](#supported-providers-v2260) (the Arenet form links to the right page for each type). Example for **OVHcloud**: in the OVH API console (`https://api.ovh.com/createToken/` for `ovh-eu`), create a token with the DNS-zone rights certmagic needs:
 
 - `GET /domain/zone/*`
 - `PUT /domain/zone/*`
@@ -48,15 +67,17 @@ In the OVH API console (`https://api.ovh.com/createToken/` for `ovh-eu`), create
 
 You get an **Application key**, **Application secret**, and **Consumer key**. Note them — they are the three secret fields below.
 
+For **Cloudflare**: *My Profile → API Tokens → Create Token*, template *Edit zone DNS*, restricted to your zone.
+
 ### 2. Add the provider in Arenet
 
 Open **Settings → DNS Providers → + Add DNS provider**, then fill in:
 
 - **Label** — a name that means something to you (`OVH perso`).
-- **Endpoint** — your OVH region (`ovh-eu` for most European accounts).
-- **Application key / Application secret / Consumer key** — from step 1.
+- **Type** — your DNS provider. The credential fields below adapt to it (required ones are marked `*`).
+- **Credentials** — from step 1 (for OVH: the endpoint, e.g. `ovh-eu` for most European accounts, and the three keys).
 
-Save. The row shows a `configured` badge. Add a second provider the same way if you manage a second account.
+Save. The row shows a `configured` badge. Click **⚡ Test connection** on the row to check the credentials right away. Add more providers the same way for other accounts.
 
 > Editing a provider later? Leave the secret fields **blank** to keep the stored values (only re-enter a secret if you're rotating it).
 
@@ -72,6 +93,17 @@ Once declared, every route whose host matches `*.example.com` is served by that 
 
 ---
 
+## Test connection (v2.26.0)
+
+The **⚡** button on a configured provider opens *Test connection*. Arenet lists the records of a zone through the provider's API with the stored credentials — the same code path ACME DNS-01 uses — and shows the number of records found, or the provider's error message.
+
+- **Zone** — prefilled with the first wildcard apex bound to the provider; type any zone the account manages otherwise (e.g. `example.com`).
+- **Read-only** — nothing is created or changed in your zone.
+- A green result proves authentication and **read** access. Write access is only exercised at certificate issuance, so if a wildcard still fails, check the token's write rights.
+- Secrets are never included in the result: provider error messages that echo a credential are scrubbed (`[REDACTED]`).
+
+---
+
 ## Migration from the legacy single provider
 
 Before v2.12.0 there was a single global OVH config. On the **first boot of v2.12.0+**, Arenet migrates it automatically:
@@ -80,6 +112,8 @@ Before v2.12.0 there was a single global OVH config. On the **first boot of v2.1
 - Every existing wildcard is re-pointed to it.
 
 The migration is **transparent and idempotent** — no ACME downtime, nothing to do. A restore of a pre-v2.12 backup follows the same path on the next boot.
+
+v2.26.0 changes the storage format of provider credentials (to support several types). Existing OVH providers are converted automatically at boot, and backups taken with earlier versions restore as before. The emitted Caddy configuration of an OVH provider is unchanged.
 
 ---
 
@@ -102,6 +136,9 @@ If a DNS-01 host ever ends up with no configured provider (e.g. via an inconsist
 | `acmeChallenge "dns-01" requires a configured DNS provider` (400 on route save) | Route set to DNS-01 with no provider | Configure a provider first, or use HTTP-01 for that route |
 | Can't delete a provider (409) | It's still referenced by a wildcard or is the last one a DNS-01 route needs | Reassign/remove those wildcards or routes first |
 | Credentials rejected by OVH | Token missing zone rights or wrong region | Recreate the token with the four `/domain/zone/*` rules; check the endpoint matches your account region |
+| *Test connection* fails with 401 / 403 / "invalid token" | Wrong credential, or token without rights on this zone | Recreate the token with the rights in [Supported providers](#supported-providers-v2260); check the zone belongs to this account |
+| *Test connection* OK but the wildcard is not issued | The token can read the zone but not write TXT records | Grant write (edit) rights on DNS records; watch `journalctl -u arenet` for the ACME error |
+| Hetzner: "the token you have provided is invalid" | Legacy DNS Console token, or zone not yet migrated | Use a Hetzner **Cloud** API token and a zone hosted in the Hetzner Console |
 
 More general help: [Troubleshooting](Troubleshooting).
 
@@ -115,10 +152,11 @@ The **enable switch is UI-only** (there is no env toggle — the check stays off
 
 ---
 
-## V3 backlog
+## Backlog
 
-- **Test connection** — a button to validate a provider's OVH credentials without saving a cert.
-- **More provider types** — Cloudflare, Route53. The `Type` field and the wizard's provider icon already prepare for this.
+- **More provider types** — adding one is now a small change (registry entry + Caddy module); open an issue with the provider you need.
+- **Per-route provider selection** for single-host DNS-01 routes (managed domains already pick their provider).
+- **DNS-01 propagation settings** (custom resolvers, propagation timeout) for split-horizon setups.
 
 ---
 

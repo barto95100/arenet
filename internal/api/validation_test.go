@@ -17,6 +17,7 @@
 package api
 
 import (
+	"maps"
 	"strings"
 	"testing"
 
@@ -465,10 +466,8 @@ func TestIsWildcardHost(t *testing.T) {
 // "configured") silently relaxes the edit-time guard. Pin it.
 func TestDNSProviderComplete(t *testing.T) {
 	full := storage.DNSProviderConfig{
-		Endpoint:          "ovh-eu",
-		ApplicationKey:    "k",
-		ApplicationSecret: "s",
-		ConsumerKey:       "c",
+		Type:        storage.DNSProviderTypeOVH,
+		Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "k", "application_secret": "s", "consumer_key": "c"},
 	}
 	if !dnsProviderComplete(full) {
 		t.Errorf("complete config rejected: %+v", full)
@@ -480,13 +479,14 @@ func TestDNSProviderComplete(t *testing.T) {
 		name  string
 		blank func(c *storage.DNSProviderConfig)
 	}{
-		{"endpoint blank", func(c *storage.DNSProviderConfig) { c.Endpoint = "" }},
-		{"applicationKey blank", func(c *storage.DNSProviderConfig) { c.ApplicationKey = "" }},
-		{"applicationSecret blank", func(c *storage.DNSProviderConfig) { c.ApplicationSecret = "" }},
-		{"consumerKey blank", func(c *storage.DNSProviderConfig) { c.ConsumerKey = "" }},
+		{"endpoint blank", func(c *storage.DNSProviderConfig) { c.Credentials["endpoint"] = "" }},
+		{"applicationKey blank", func(c *storage.DNSProviderConfig) { c.Credentials["application_key"] = "" }},
+		{"applicationSecret blank", func(c *storage.DNSProviderConfig) { c.Credentials["application_secret"] = "" }},
+		{"consumerKey blank", func(c *storage.DNSProviderConfig) { c.Credentials["consumer_key"] = "" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := full
+			c.Credentials = maps.Clone(full.Credentials)
 			tc.blank(&c)
 			if dnsProviderComplete(c) {
 				t.Errorf("predicate true with %s: %+v", tc.name, c)

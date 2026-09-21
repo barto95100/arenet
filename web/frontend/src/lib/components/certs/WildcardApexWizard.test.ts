@@ -41,6 +41,8 @@ function provider(over: Partial<DNSProvider> = {}): DNSProvider {
 		type: 'ovh',
 		endpoint: 'ovh-eu',
 		configured: true,
+		fields: { endpoint: 'ovh-eu' },
+		secretsSet: { application_key: true, application_secret: true, consumer_key: true },
 		usedBy: [],
 		...over,
 	};

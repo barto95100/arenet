@@ -92,32 +92,32 @@
 			"table": {
 				"label": "Label",
 				"type": "Type",
-				"endpoint": "Endpoint",
 				"status": "Status",
 				"usedBy": "Used by",
 				"actions": "Actions",
 				"usedByNone": "—",
 				"addButton": "+ Add provider",
-				"emptyCta": "+ Add your first provider"
+				"emptyCta": "+ Add your first provider",
+				"details": "Details",
+				"test": "Test connection"
 			},
 			"modal": {
 				"addTitle": "Add DNS provider",
 				"editTitle": "Edit DNS provider",
 				"labelField": "Label",
 				"typeField": "Type",
-				"endpointField": "Endpoint",
-				"appKey": "Application key",
-				"appSecret": "Application secret",
-				"consumerKey": "Consumer key",
 				"secretsKeepHint": "Leave blank to keep the current value.",
 				"cancel": "Cancel",
 				"add": "Add",
 				"save": "Save",
-				"saving": "Saving…"
+				"saving": "Saving…",
+				"docsLink": "Where do I create these credentials?",
+				"typeLocked": "The type cannot be changed. Delete and recreate the provider to switch.",
+				"required": "required"
 			},
 			"validation": {
 				"labelRequired": "Label is required.",
-				"endpointRequired": "Endpoint is required."
+				"fieldRequired": "{field} is required."
 			},
 			"delete": {
 				"confirmTitle": "Delete DNS provider",
@@ -138,7 +138,59 @@
 				"notConfigured": "not configured"
 			},
 			"loadError": "Failed to load DNS providers: {err}",
-			"loading": "Loading DNS providers…"
+			"loading": "Loading DNS providers…",
+			"test": {
+				"title": "Test DNS provider connection",
+				"intro": "Lists the records of a zone with the stored credentials. Read-only: nothing is created or changed.",
+				"zoneField": "Zone",
+				"zonePlaceholder": "example.com",
+				"run": "Run test",
+				"running": "Testing…",
+				"close": "Close",
+				"ok": "Connection OK: {records} records found in {zone}.",
+				"failed": "Connection failed: {err}",
+				"zoneRequired": "Enter the zone (domain) to test.",
+				"invalidZone": "This is not a valid domain name.",
+				"notConfigured": "This provider is missing required credentials."
+			},
+			"fields": {
+				"ovh": {
+					"endpoint": "Endpoint",
+					"application_key": "Application key",
+					"application_secret": "Application secret",
+					"consumer_key": "Consumer key"
+				},
+				"cloudflare": {
+					"api_token": "API token (Zone.DNS:Edit)",
+					"zone_token": "Zone token (Zone:Read, optional)"
+				},
+				"digitalocean": {
+					"auth_token": "API token"
+				},
+				"gandi": {
+					"bearer_token": "Personal access token"
+				},
+				"hetzner": {
+					"api_token": "Hetzner Cloud API token"
+				},
+				"infomaniak": {
+					"api_token": "API token"
+				},
+				"porkbun": {
+					"api_key": "API key",
+					"api_secret_key": "Secret API key"
+				},
+				"route53": {
+					"region": "AWS region",
+					"access_key_id": "Access key ID",
+					"secret_access_key": "Secret access key",
+					"hosted_zone_id": "Hosted zone ID (optional)"
+				},
+				"scaleway": {
+					"secret_key": "Secret key",
+					"organization_id": "Organization ID"
+				}
+			}
 		},
 		"updates": {
 			"title": "Updates",
