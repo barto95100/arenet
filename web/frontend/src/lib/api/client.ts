@@ -9,7 +9,11 @@
 //   2. 401 → auth.clear() + redirect to /login (unless already there).
 //   3. 403 with body "session locked" → auth.setLocked().
 //   4. 429 → toast notification with Retry-After.
-//   5. Successful responses (status < 500) reset the idle timer.
+//   5. Successful responses (status < 500) reset the idle timer —
+//      only for requests made after a user interaction (v2.32).
+//      Others (polling, heartbeat, auto-refresh) carry the
+//      X-Arenet-Background header: the server still enforces the
+//      lock but does not refresh the session's LastActivity.
 //
 // The signature request(method, path, body?) is unchanged from Step C
 // so existing call sites in lib/api/client.ts and beyond keep working.
@@ -85,6 +89,9 @@ export interface RequestOptions {
 	asBlob?: boolean;
 }
 
+/** Header marking a request the user did not trigger (v2.32). */
+export const BACKGROUND_HEADER = 'X-Arenet-Background';
+
 export async function request<T>(
 	method: string,
 	path: string,
@@ -94,6 +101,10 @@ export async function request<T>(
 	beginRequest();
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+	// Decided when the request starts: a poll tick with no user
+	// interaction since the last activity must not keep the session
+	// awake.
+	const background = !idle.userActiveSinceReset;
 	try {
 		const init: RequestInit = {
 			method,
@@ -106,6 +117,9 @@ export async function request<T>(
 		}
 		if (opts.headers) {
 			init.headers = { ...(init.headers as Record<string, string> | undefined), ...opts.headers };
+		}
+		if (background) {
+			init.headers = { ...(init.headers as Record<string, string> | undefined), [BACKGROUND_HEADER]: '1' };
 		}
 		let res: Response;
 		try {
@@ -156,9 +170,10 @@ export async function request<T>(
 			throw new ApiError(msg, 429, 'rate_limited', retryAfter);
 		}
 
-		// Idle reset gate: any response < 500 counts as server interaction.
-		// 5xx and network errors (status 0) do not reset (spec §6.4).
-		if (res.status < 500) {
+		// Idle reset gate: a user-triggered response < 500 counts as
+		// server interaction. 5xx and network errors (status 0) do not
+		// reset (spec §6.4), nor do background requests (v2.32).
+		if (res.status < 500 && !background) {
 			idle.reset();
 		}
 

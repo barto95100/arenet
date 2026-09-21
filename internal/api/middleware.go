@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/barto95100/arenet/internal/auth"
 	chimw "github.com/go-chi/chi/v5/middleware"
 )
 
@@ -82,7 +83,7 @@ func devCORS(allowOrigin string) func(http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, "+headerBackupPassphrase)
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, "+headerBackupPassphrase+", "+auth.BackgroundRequestHeader)
 			w.Header().Set("Access-Control-Max-Age", "3600")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

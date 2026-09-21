@@ -15,7 +15,7 @@ const authMock = {
 vi.mock('$lib/stores/auth.svelte', () => ({ auth: authMock }));
 
 // Mock $lib/stores/idle to spy on idle.reset() invocations.
-const idleMock = { reset: vi.fn() };
+const idleMock = { reset: vi.fn(), userActiveSinceReset: true };
 vi.mock('$lib/stores/idle.svelte', () => ({ idle: idleMock }));
 
 // Mock $lib/stores/toast (pushToast) for 429 toast tests.
@@ -51,6 +51,7 @@ beforeEach(() => {
 	authMock.clear.mockReset();
 	authMock.setLocked.mockReset();
 	idleMock.reset.mockReset();
+	idleMock.userActiveSinceReset = true;
 	toastMock.pushToast.mockReset();
 	(goto as ReturnType<typeof vi.fn>).mockReset();
 	// Default to a path that is not /login or /setup so 401 triggers goto.
@@ -156,6 +157,42 @@ describe('request: 429 interceptor', () => {
 		}
 		expect(err?.status).toBe(429);
 		expect(err?.retryAfterSeconds).toBe(0);
+	});
+});
+
+describe('request: background requests (v2.32)', () => {
+	function spyFetch() {
+		const spy = vi.fn(
+			async (_input: RequestInfo | URL, _init?: RequestInit) =>
+				new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
+		);
+		(globalThis as { fetch?: unknown }).fetch = spy;
+		return spy;
+	}
+	const sentHeaders = (spy: ReturnType<typeof spyFetch>) =>
+		(spy.mock.calls[0][1]?.headers ?? {}) as Record<string, string>;
+
+	it('marks a request made without user interaction and does not reset the idle timer', async () => {
+		idleMock.userActiveSinceReset = false;
+		const spy = spyFetch();
+		await request('GET', '/system/version');
+		expect(sentHeaders(spy)['X-Arenet-Background']).toBe('1');
+		expect(idleMock.reset).not.toHaveBeenCalled();
+	});
+
+	it('keeps the JSON content type when a background request has a body', async () => {
+		idleMock.userActiveSinceReset = false;
+		const spy = spyFetch();
+		await request('POST', '/auth/heartbeat', {});
+		expect(sentHeaders(spy)).toMatchObject({ 'Content-Type': 'application/json', 'X-Arenet-Background': '1' });
+	});
+
+	it('sends a user-triggered request as activity', async () => {
+		idleMock.userActiveSinceReset = true;
+		const spy = spyFetch();
+		await request('GET', '/routes');
+		expect(sentHeaders(spy)['X-Arenet-Background']).toBeUndefined();
+		expect(idleMock.reset).toHaveBeenCalledTimes(1);
 	});
 });
 

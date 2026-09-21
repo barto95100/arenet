@@ -215,6 +215,18 @@ func withAuthIdentity(ctx context.Context, user User, sessionID string, isLocked
 	return ctx
 }
 
+// BackgroundRequestHeader marks a request the user did not trigger
+// (polling, heartbeat, auto-refresh — v2.32). HardAuthMiddleware still
+// refuses it when the session is locked, but does not Touch the
+// session: only user-triggered requests keep a session awake, so an
+// unattended open tab locks after SessionIdleTimeout.
+const BackgroundRequestHeader = "X-Arenet-Background"
+
+// isBackgroundRequest reports whether r carries BackgroundRequestHeader.
+func isBackgroundRequest(r *http.Request) bool {
+	return r.Header.Get(BackgroundRequestHeader) == "1"
+}
+
 // HardAuthMiddleware returns a chi-compatible middleware that
 // validates the session AND refuses idle sessions.
 //
@@ -251,7 +263,7 @@ func HardAuthMiddleware(sessions sessionStore, users userStore, tokens APITokenL
 			// silently no-op depending on the store implementation —
 			// either way it's misleading in logs.
 			sessionID, _ := r.Context().Value(SessionIDKey).(string)
-			if sessionID != "" {
+			if sessionID != "" && !isBackgroundRequest(r) {
 				if err := sessions.Touch(r.Context(), sessionID); err != nil {
 					// Touch is best-effort. Log a warning but do not fail
 					// the request: the user has already passed auth.

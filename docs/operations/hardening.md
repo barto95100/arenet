@@ -193,6 +193,14 @@ sudo journalctl -u arenet --since "5 min ago" | grep -i "dev=true"
 In compose, make sure your environment block does NOT contain
 `ARENET_DEV=true`.
 
+## 11. Idle lock
+
+Sessions lock after **15 minutes without user activity** (password or SSO
+sign-in to resume). Since v2.32 only user-triggered requests count:
+automatic polling carries `X-Arenet-Background: 1`, and the server still
+enforces the lock on it but does not refresh the session. Nothing to
+configure — just don't expect an open, untouched tab to stay unlocked.
+
 ---
 
 ## Quick scorecard

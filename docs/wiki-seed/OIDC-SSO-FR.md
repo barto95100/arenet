@@ -128,6 +128,14 @@ Fix : dans authentik, **Applications → Providers → ton provider → Issuer m
 
 ---
 
+## Sessions et verrouillage
+
+- Une session dure **24 h** (30 jours avec *Se souvenir de moi*), prolongée par l'activité.
+- Après **15 minutes sans activité**, la session est **verrouillée** : l'écran de verrouillage redemande le mot de passe — ou, pour un compte OIDC, de se reconnecter via le fournisseur d'identité.
+- **Activité = une action de ta part** (clic ou frappe qui atteint le serveur). Depuis la **v2.32**, les requêtes que l'interface envoie seule — cloche de notifications chaque minute, heartbeat, rafraîchissement automatique des pages Logs / Certificats / CrowdSec en direct — **ne comptent plus** : un onglet Arenet resté ouvert sur un poste sans surveillance se verrouille au bout de 15 minutes. Avant la v2.32, ces requêtes maintenaient la session éveillée indéfiniment.
+
+---
+
 ## Opérationnel : le compte break-glass
 
 Le premier admin que tu as créé pendant le wizard de setup est un **compte local** (username + password stocké dans BoltDB, hashé Argon2id). Ce compte survit à toute breakage côté OIDC :
