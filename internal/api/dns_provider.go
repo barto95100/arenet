@@ -32,45 +32,79 @@ import (
 // v2.11 — the pre-v2.11 singleton OVH DNS provider (GET/PUT
 // /settings/dns-providers/ovh) became a UUID-keyed collection. This
 // file serves the standard 5-verb collection API mirroring
-// managed-domains. Secrets (ApplicationKey / ApplicationSecret /
-// ConsumerKey) are NEVER serialized in any response or audit row.
+// managed-domains, plus (v2.26) the provider-type registry and a
+// read-only connection test. Secret credential values (registry
+// Field.Secret) are NEVER serialized in any response or audit row.
 
 // dnsProviderView is the wire shape returned by every read/write on the
-// collection. The three OVH secret fields are DELIBERATELY absent from
-// this struct — they can never leak over HTTP. `configured` is the
-// single boolean the UI binds to (true when all three stored secrets
-// are non-empty); `usedBy` lists the apexes of the managed domains that
-// reference this provider (for the delete-in-use guard + UI badge).
+// collection. Secret values are DELIBERATELY absent: `fields` carries
+// only the non-secret credential values (e.g. OVH endpoint, Route53
+// region) and `secretsSet` one boolean per secret field of the type.
+// `configured` is true when every registry-required field is set;
+// `usedBy` lists the apexes of the managed domains that reference this
+// provider (for the delete-in-use guard + UI badge). `endpoint` is the
+// pre-v2.26 OVH wire field, kept for API clients (empty for other
+// types).
 type dnsProviderView struct {
-	ID         string   `json:"id"`
-	Label      string   `json:"label"`
-	Type       string   `json:"type"`
-	Endpoint   string   `json:"endpoint"`
-	Configured bool     `json:"configured"`
-	UsedBy     []string `json:"usedBy"`
+	ID         string            `json:"id"`
+	Label      string            `json:"label"`
+	Type       string            `json:"type"`
+	Endpoint   string            `json:"endpoint"`
+	Configured bool              `json:"configured"`
+	Fields     map[string]string `json:"fields"`
+	SecretsSet map[string]bool   `json:"secretsSet"`
+	UsedBy     []string          `json:"usedBy"`
 }
 
-// dnsProviderRequest is the wire shape accepted by POST and PUT. Empty
-// secret fields on PUT trigger the storage preserve-on-edit path (the
-// stored value is kept); non-empty secrets overwrite.
+// dnsProviderRequest is the wire shape accepted by POST and PUT. A
+// secret credential left empty (or absent) on PUT keeps the stored
+// value (storage preserve-on-edit); a non-empty one overwrites.
+//
+// The four camelCase OVH fields are the pre-v2.26 wire shape, still
+// accepted for API clients: when the type is OVH (or empty) they are
+// folded into Credentials, an explicit Credentials entry winning.
 type dnsProviderRequest struct {
-	Label             string `json:"label"`
-	Type              string `json:"type"`
+	Label       string            `json:"label"`
+	Type        string            `json:"type"`
+	Credentials map[string]string `json:"credentials"`
+
 	Endpoint          string `json:"endpoint"`
 	ApplicationKey    string `json:"applicationKey"`
 	ApplicationSecret string `json:"applicationSecret"`
 	ConsumerKey       string `json:"consumerKey"`
 }
 
-// dnsProviderComplete reports whether all four credential-bearing
-// fields of an OVH DNS provider config are non-empty. Used by the
-// route edit-time DNS-01 guard (createRoute / updateRoute) AND by the
-// view's `configured` flag.
+// toConfig maps the request to the storage shape, applying the legacy
+// OVH fold-in.
+func (req dnsProviderRequest) toConfig() storage.DNSProviderConfig {
+	creds := make(map[string]string, len(req.Credentials)+4)
+	for k, v := range req.Credentials {
+		creds[k] = strings.TrimSpace(v)
+	}
+	if req.Type == "" || req.Type == storage.DNSProviderTypeOVH {
+		for k, v := range map[string]string{
+			"endpoint":           req.Endpoint,
+			"application_key":    req.ApplicationKey,
+			"application_secret": req.ApplicationSecret,
+			"consumer_key":       req.ConsumerKey,
+		} {
+			if _, explicit := creds[k]; !explicit && v != "" {
+				creds[k] = strings.TrimSpace(v)
+			}
+		}
+	}
+	return storage.DNSProviderConfig{
+		Label:       strings.TrimSpace(req.Label),
+		Type:        req.Type,
+		Credentials: creds,
+	}
+}
+
+// dnsProviderComplete reports whether every registry-required field of
+// a DNS provider is set. Used by the route edit-time DNS-01 guard
+// (createRoute / updateRoute) AND by the view's `configured` flag.
 func dnsProviderComplete(c storage.DNSProviderConfig) bool {
-	return c.Endpoint != "" &&
-		c.ApplicationKey != "" &&
-		c.ApplicationSecret != "" &&
-		c.ConsumerKey != ""
+	return storage.ProviderConfigured(c)
 }
 
 // anyDNSProviderConfigured reports whether at least one fully-configured
@@ -90,15 +124,12 @@ func (h *Handler) anyDNSProviderConfigured(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// dnsProviderForAudit returns a copy of c with the three secret fields
-// blanked. Applied to every storage.DNSProviderConfig passed into an
-// audit event's BeforeJSON / AfterJSON — the audit log holds the
-// endpoint + label, never the secret payload.
+// dnsProviderForAudit returns a copy of c with every secret credential
+// removed. Applied to every storage.DNSProviderConfig passed into an
+// audit event's BeforeJSON / AfterJSON — the audit log holds the label
+// and non-secret fields, never the secret payload.
 func dnsProviderForAudit(c storage.DNSProviderConfig) storage.DNSProviderConfig {
-	c.ApplicationKey = ""
-	c.ApplicationSecret = ""
-	c.ConsumerKey = ""
-	return c
+	return storage.WithoutSecrets(c)
 }
 
 // toDNSProviderView maps a stored config + its usedBy apexes to the
@@ -107,14 +138,30 @@ func toDNSProviderView(c storage.DNSProviderConfig, usedBy []string) dnsProvider
 	if usedBy == nil {
 		usedBy = []string{}
 	}
-	return dnsProviderView{
+	secretsSet := map[string]bool{}
+	for _, k := range storage.SecretKeys(c.Type) {
+		secretsSet[k] = c.Credentials[k] != ""
+	}
+	v := dnsProviderView{
 		ID:         c.ID,
 		Label:      c.Label,
 		Type:       c.Type,
-		Endpoint:   c.Endpoint,
 		Configured: dnsProviderComplete(c),
+		Fields:     storage.WithoutSecrets(c).Credentials,
+		SecretsSet: secretsSet,
 		UsedBy:     usedBy,
 	}
+	if c.Type == storage.DNSProviderTypeOVH {
+		v.Endpoint = c.Credentials["endpoint"]
+	}
+	return v
+}
+
+// listDNSProviderTypes serves GET /api/v1/settings/dns-providers/types:
+// the provider-type registry the settings form is generated from. No
+// values, only field metadata.
+func (h *Handler) listDNSProviderTypes(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, storage.DNSProviderTypesList())
 }
 
 // usedByIndex builds providerID -> [apex...] from the managed domains,
@@ -195,14 +242,7 @@ func (h *Handler) createDNSProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
-	cfg := storage.DNSProviderConfig{
-		Label:             strings.TrimSpace(req.Label),
-		Type:              req.Type,
-		Endpoint:          req.Endpoint,
-		ApplicationKey:    req.ApplicationKey,
-		ApplicationSecret: req.ApplicationSecret,
-		ConsumerKey:       req.ConsumerKey,
-	}
+	cfg := req.toConfig()
 	created, err := h.store.CreateDNSProvider(r.Context(), cfg)
 	if err != nil {
 		writeDNSProviderValidationError(w, err)
@@ -248,14 +288,7 @@ func (h *Handler) updateDNSProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load dns provider")
 		return
 	}
-	cfg := storage.DNSProviderConfig{
-		Label:             strings.TrimSpace(req.Label),
-		Type:              req.Type,
-		Endpoint:          req.Endpoint,
-		ApplicationKey:    req.ApplicationKey,
-		ApplicationSecret: req.ApplicationSecret,
-		ConsumerKey:       req.ConsumerKey,
-	}
+	cfg := req.toConfig()
 	updated, err := h.store.UpdateDNSProvider(r.Context(), id, cfg)
 	if errors.Is(err, storage.ErrNotFound) {
 		writeErrorCode(w, http.StatusNotFound, "provider_not_found",
@@ -417,19 +450,24 @@ func (h *Handler) dns01RoutesOrphanedByProviderDelete(ctx context.Context, delet
 
 // writeDNSProviderValidationError maps a storage.validate() error to a
 // structured 400. storage.validate returns generic errors, so we detect
-// the failing field cheaply by substring and pick the most specific
+// the failing check cheaply by substring and pick the most specific
 // code; the always-present EN `error` string is the fallback. The
-// baseline code is "invalid_dns_provider" with a {reason} param.
+// baseline code is "invalid_dns_provider" with a {reason} param. The
+// messages carry field keys and enum values only, never secret values.
 func writeDNSProviderValidationError(w http.ResponseWriter, err error) {
 	msg := err.Error()
 	code := "invalid_dns_provider"
 	switch {
-	case strings.Contains(msg, "label"):
+	case strings.Contains(msg, "label must not be empty"):
 		code = "invalid_label"
-	case strings.Contains(msg, "type"):
+	case strings.Contains(msg, "not a recognised provider type"):
 		code = "invalid_type"
 	case strings.Contains(msg, "endpoint"):
 		code = "invalid_endpoint"
+	case strings.Contains(msg, "must not be empty"):
+		code = "missing_credential"
+	case strings.Contains(msg, "is not valid for type"):
+		code = "invalid_credential_field"
 	}
 	writeErrorCode(w, http.StatusBadRequest, code, msg, map[string]any{"reason": msg})
 }

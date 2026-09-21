@@ -30,6 +30,7 @@ import (
 	"math/big"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,19 @@ import (
 	// `module not registered: dns.providers.ovh` even when the
 	// production binary is correctly wired.
 	_ "github.com/caddy-dns/ovh"
+
+	// v2.26: the other DNS-01 provider modules of the registry
+	// (internal/storage/dns_provider_types.go). Same blank-import
+	// contract as caddy-dns/ovh; the guard is
+	// TestBuildConfigJSON_LoadsCleanly_AllDNSProviderTypes.
+	_ "github.com/caddy-dns/cloudflare"
+	_ "github.com/caddy-dns/digitalocean"
+	_ "github.com/caddy-dns/gandi"
+	_ "github.com/caddy-dns/hetzner/v2"
+	_ "github.com/caddy-dns/infomaniak"
+	_ "github.com/caddy-dns/porkbun"
+	_ "github.com/caddy-dns/route53"
+	_ "github.com/caddy-dns/scaleway"
 
 	"github.com/barto95100/arenet/internal/countryblock"
 	"github.com/barto95100/arenet/internal/metrics"
@@ -1408,11 +1422,11 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 	dnsProviders := map[string]storage.DNSProviderConfig{
 		"prov-a": {
 			ID: "prov-a", Label: "OVH A", Type: storage.DNSProviderTypeOVH,
-			Endpoint: "ovh-eu", ApplicationKey: "ak-a", ApplicationSecret: "as-a", ConsumerKey: "ck-a",
+			Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "ak-a", "application_secret": "as-a", "consumer_key": "ck-a"},
 		},
 		"prov-b": {
 			ID: "prov-b", Label: "OVH B", Type: storage.DNSProviderTypeOVH,
-			Endpoint: "ovh-ca", ApplicationKey: "ak-b", ApplicationSecret: "as-b", ConsumerKey: "ck-b",
+			Credentials: map[string]string{"endpoint": "ovh-ca", "application_key": "ak-b", "application_secret": "as-b", "consumer_key": "ck-b"},
 		},
 	}
 	managedDomains := []storage.ManagedDomain{
@@ -1521,13 +1535,10 @@ func TestBuildConfigJSON_LoadsCleanly_DNS01(t *testing.T) {
 		ACMEEmail: "ops@example.com",
 		DNSProviders: map[string]storage.DNSProviderConfig{
 			"prov-1": {
-				ID:                "prov-1",
-				Label:             "OVH",
-				Type:              storage.DNSProviderTypeOVH,
-				Endpoint:          "ovh-eu",
-				ApplicationKey:    "fixture-app-key",
-				ApplicationSecret: "fixture-app-secret",
-				ConsumerKey:       "fixture-consumer-key",
+				ID:          "prov-1",
+				Label:       "OVH",
+				Type:        storage.DNSProviderTypeOVH,
+				Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "fixture-app-key", "application_secret": "fixture-app-secret", "consumer_key": "fixture-consumer-key"},
 			},
 		},
 	}
@@ -1580,6 +1591,143 @@ func TestBuildConfigJSON_LoadsCleanly_DNS01(t *testing.T) {
 	}
 }
 
+// dnsFixtureValues returns a well-formed dummy value for every
+// credential field of a registry type: enum fields take their first
+// value, Cloudflare tokens match the module's token regexp
+// (caddy-dns/cloudflare@v0.2.4/cloudflare.go:27-30, checked in
+// Provision), everything else a plain marker.
+func dnsFixtureValues(pt storage.DNSProviderType) map[string]string {
+	creds := map[string]string{}
+	for _, f := range pt.Fields {
+		switch {
+		case len(f.Enum) > 0:
+			creds[f.Key] = f.Enum[0]
+		case pt.Type == storage.DNSProviderTypeCloudflare:
+			creds[f.Key] = "cfut_" + strings.Repeat("x", 40)
+		default:
+			creds[f.Key] = "fixture-" + pt.Type + "-" + f.Key
+		}
+	}
+	return creds
+}
+
+// TestBuildConfigJSON_LoadsCleanly_AllDNSProviderTypes is the registry ↔
+// Caddy guard (v2.26 spec §8.1): one managed domain per registry type,
+// every credential field (optional ones included) filled, the whole
+// config through a single caddy.Validate. Caddy provisions each
+// dns.providers.<type> module and decodes its config STRICTLY, so a
+// registry Key that drifts from the upstream module's JSON tag fails
+// here with `unknown field` — this is what stands in for live smoke
+// tests of providers the maintainer has no account with. No active
+// health check in this fixture (see the ordering note above).
+func TestBuildConfigJSON_LoadsCleanly_AllDNSProviderTypes(t *testing.T) {
+	metrics.SetRegistry(metrics.NewRegistry())
+	opts := buildOpts{
+		DevMode:      true,
+		ACMEEmail:    "ops@example.com",
+		DNSProviders: map[string]storage.DNSProviderConfig{},
+	}
+	for _, pt := range storage.DNSProviderTypesList() {
+		id := "prov-" + pt.Type
+		opts.DNSProviders[id] = storage.DNSProviderConfig{
+			ID: id, Label: pt.Label, Type: pt.Type, Credentials: dnsFixtureValues(pt),
+		}
+		opts.ManagedDomains = append(opts.ManagedDomains, storage.ManagedDomain{
+			Apex: pt.Type + ".example.com", IncludeApex: true, ProviderID: id,
+		})
+	}
+	raw, err := buildConfigJSON(nil, opts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+	var cfg caddy.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy.Validate failed — a registry field no longer matches its "+
+			"caddy-dns module, or a module import is missing: %v", err)
+	}
+
+	// Every registry type must have produced its own DNS-01 policy.
+	for _, pt := range storage.DNSProviderTypesList() {
+		want := regexp.MustCompile(`"name":\s*"` + pt.Type + `"`)
+		if !want.Match(raw) {
+			t.Errorf("no DNS-01 provider block for %s in emitted config", pt.Type)
+		}
+	}
+
+	// Redaction (spec §4): the Cloudflare module echoes an invalid
+	// token in its Provision error; RedactDNSSecrets must scrub it.
+	// Spaces and "!" fail both Cloudflare token regexps.
+	const leaked = "not a valid token SECRET-MARKER!"
+	bad := storage.DNSProviderConfig{
+		ID: "prov-bad", Label: "bad", Type: storage.DNSProviderTypeCloudflare,
+		Credentials: map[string]string{"api_token": leaked},
+	}
+	badOpts := buildOpts{
+		DevMode:        true,
+		DNSProviders:   map[string]storage.DNSProviderConfig{bad.ID: bad},
+		ManagedDomains: []storage.ManagedDomain{{Apex: "bad.example.com", ProviderID: bad.ID}},
+	}
+	raw, err = buildConfigJSON(nil, badOpts)
+	if err != nil {
+		t.Fatalf("buildConfigJSON (bad token): %v", err)
+	}
+	var badCfg caddy.Config
+	if err := json.Unmarshal(raw, &badCfg); err != nil {
+		t.Fatalf("unmarshal bad config: %v", err)
+	}
+	vErr := caddy.Validate(&badCfg)
+	if vErr == nil {
+		t.Fatal("expected Cloudflare Provision to reject the malformed token")
+	}
+	if !strings.Contains(vErr.Error(), leaked) {
+		t.Skipf("upstream no longer echoes the token (%v); redaction still applies but this probe is moot", vErr)
+	}
+	if red := storage.RedactDNSSecrets(vErr.Error(), bad); strings.Contains(red, leaked) {
+		t.Errorf("redacted error still contains the secret: %s", red)
+	}
+}
+
+// TestBuildACMEPolicy_OVHProviderBlockUnchanged pins OVH non-regression
+// (v2.26 spec §3): the provider block emitted from the Credentials map
+// is byte-identical to the pre-v2.26 flat-field emission.
+func TestBuildACMEPolicy_OVHProviderBlockUnchanged(t *testing.T) {
+	prov := storage.DNSProviderConfig{
+		ID: "p", Label: "OVH", Type: storage.DNSProviderTypeOVH,
+		Credentials: map[string]string{
+			"endpoint": "ovh-eu", "application_key": "ak",
+			"application_secret": "as", "consumer_key": "ck",
+		},
+	}
+	policy := buildACMEPolicy([]string{"*.example.com"}, buildOpts{}, &prov)
+	issuer := policy["issuers"].([]map[string]any)[0]
+	block := issuer["challenges"].(map[string]any)["dns"].(map[string]any)["provider"]
+	got, err := json.Marshal(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"application_key":"ak","application_secret":"as","consumer_key":"ck","endpoint":"ovh-eu","name":"ovh"}`
+	if string(got) != want {
+		t.Errorf("OVH provider block changed:\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestBuildACMEPolicy_OmitsEmptyOptionalCredential checks that an empty
+// optional field is not emitted (it would reach the module as "").
+func TestBuildACMEPolicy_OmitsEmptyOptionalCredential(t *testing.T) {
+	prov := storage.DNSProviderConfig{
+		Type:        storage.DNSProviderTypeCloudflare,
+		Credentials: map[string]string{"api_token": "t", "zone_token": ""},
+	}
+	policy := buildACMEPolicy([]string{"*.example.com"}, buildOpts{}, &prov)
+	got, _ := json.Marshal(policy)
+	if strings.Contains(string(got), "zone_token") {
+		t.Errorf("empty zone_token emitted: %s", got)
+	}
+}
+
 // TestBuildConfigJSON_LoadsCleanly_SkipCertificates feeds a config with a
 // managed-domain-covered route (ACMEChallenge "inherited") through
 // caddy.Validate so the emitted automatic_https.skip_certificates field is
@@ -1608,13 +1756,10 @@ func TestBuildConfigJSON_LoadsCleanly_SkipCertificates(t *testing.T) {
 		ACMEEmail: "ops@example.com",
 		DNSProviders: map[string]storage.DNSProviderConfig{
 			"prov-1": {
-				ID:                "prov-1",
-				Label:             "OVH",
-				Type:              storage.DNSProviderTypeOVH,
-				Endpoint:          "ovh-eu",
-				ApplicationKey:    "fixture-app-key",
-				ApplicationSecret: "fixture-app-secret",
-				ConsumerKey:       "fixture-consumer-key",
+				ID:          "prov-1",
+				Label:       "OVH",
+				Type:        storage.DNSProviderTypeOVH,
+				Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "fixture-app-key", "application_secret": "fixture-app-secret", "consumer_key": "fixture-consumer-key"},
 			},
 		},
 		ManagedDomains: []storage.ManagedDomain{
@@ -3728,8 +3873,8 @@ func TestBuildConfigJSON_GracePeriod_Bounded(t *testing.T) {
 // every managed domain shared it; here each md.ProviderID looks up its
 // own config in opts.DNSProviders.
 func TestBuildManagedDomainPolicies_PerProviderDispatch(t *testing.T) {
-	p1 := storage.DNSProviderConfig{ID: "id-1", Label: "A", Type: "ovh", Endpoint: "ovh-eu", ApplicationKey: "k1", ApplicationSecret: "s1", ConsumerKey: "c1"}
-	p2 := storage.DNSProviderConfig{ID: "id-2", Label: "B", Type: "ovh", Endpoint: "ovh-ca", ApplicationKey: "k2", ApplicationSecret: "s2", ConsumerKey: "c2"}
+	p1 := storage.DNSProviderConfig{ID: "id-1", Label: "A", Type: "ovh", Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "k1", "application_secret": "s1", "consumer_key": "c1"}}
+	p2 := storage.DNSProviderConfig{ID: "id-2", Label: "B", Type: "ovh", Credentials: map[string]string{"endpoint": "ovh-ca", "application_key": "k2", "application_secret": "s2", "consumer_key": "c2"}}
 	opts := buildOpts{
 		DNSProviders: map[string]storage.DNSProviderConfig{"id-1": p1, "id-2": p2},
 		ManagedDomains: []storage.ManagedDomain{

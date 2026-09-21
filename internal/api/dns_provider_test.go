@@ -74,12 +74,9 @@ func createProviderViaAPI(t *testing.T, env *testEnv, label string) map[string]a
 func seedDNSProvider(t *testing.T, store *storage.Store) storage.DNSProviderConfig {
 	t.Helper()
 	created, err := store.CreateDNSProvider(context.Background(), storage.DNSProviderConfig{
-		Label:             "OVH fixture",
-		Type:              storage.DNSProviderTypeOVH,
-		Endpoint:          "ovh-eu",
-		ApplicationKey:    "AK-fixture-1234567890",
-		ApplicationSecret: "AS-fixture-secret-value",
-		ConsumerKey:       "CK-fixture-consumer",
+		Label:       "OVH fixture",
+		Type:        storage.DNSProviderTypeOVH,
+		Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "AK-fixture-1234567890", "application_secret": "AS-fixture-secret-value", "consumer_key": "CK-fixture-consumer"},
 	})
 	if err != nil {
 		t.Fatalf("seedDNSProvider: %v", err)
@@ -220,7 +217,7 @@ func TestDNSProviders_UpdatePreservesBlankSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDNSProvider: %v", err)
 	}
-	if got.ApplicationKey != "SECRET_AK" || got.ConsumerKey != "SECRET_CK" {
+	if got.Credentials["application_key"] != "SECRET_AK" || got.Credentials["consumer_key"] != "SECRET_CK" {
 		t.Errorf("storage secrets not preserved: %+v", got)
 	}
 }
@@ -298,12 +295,13 @@ func TestDNSProviders_DeleteUnused_Succeeds(t *testing.T) {
 // --- validation error codes -----------------------------------------------
 
 // TestDNSProviders_CreateInvalid_Returns400Code pins the structured
-// validation error contract (bad type → invalid_type, always with a
-// reason param + EN fallback).
+// validation error contract (unknown type → invalid_type, always with
+// a reason param + EN fallback). "cloudflare" was the unknown type
+// before v2.26 made it a supported one.
 func TestDNSProviders_CreateInvalid_Returns400Code(t *testing.T) {
 	env := newTestEnv(t, false)
 	body := map[string]string{
-		"label": "X", "type": "cloudflare", "endpoint": "ovh-eu",
+		"label": "X", "type": "bind9", "endpoint": "ovh-eu",
 		"applicationKey": "a", "applicationSecret": "b", "consumerKey": "c",
 	}
 	rec := postJSON(t, env.router, "/api/v1/settings/dns-providers", body)

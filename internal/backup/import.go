@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/barto95100/arenet/internal/auth"
@@ -325,38 +326,37 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 				d.Type = storage.DNSProviderTypeOVH
 			}
 		}
-		liveDNS, ok := live.dnsByKey[d.ID]
-		liveExists := ok
-		ak, err := resolve("dns_providers", d.ID, "application_key", d.ApplicationKey, func() (string, bool) {
-			if liveExists {
-				return liveDNS.ApplicationKey, true
-			}
-			return "", false
-		})
-		if err != nil {
-			return nil, err
+		// A snapshot decoded from JSON already has Type defaulted by
+		// DNSProviderConfig.UnmarshalJSON; an in-memory one may not.
+		if d.Type == "" {
+			d.Type = storage.DNSProviderTypeOVH
 		}
-		d.ApplicationKey = ak
-		as, err := resolve("dns_providers", d.ID, "application_secret", d.ApplicationSecret, func() (string, bool) {
-			if liveExists {
-				return liveDNS.ApplicationSecret, true
-			}
-			return "", false
-		})
-		if err != nil {
-			return nil, err
+		// v2.26: one sentinel per secret credential of the type. The
+		// live value is inherited only from a live provider with the
+		// same id AND the same type — a same-named key of another
+		// type is a different credential.
+		liveDNS, liveExists := live.dnsByKey[d.ID]
+		liveExists = liveExists && liveDNS.Type == d.Type
+		d.Credentials = maps.Clone(d.Credentials)
+		if d.Credentials == nil {
+			d.Credentials = map[string]string{}
 		}
-		d.ApplicationSecret = as
-		ck, err := resolve("dns_providers", d.ID, "consumer_key", d.ConsumerKey, func() (string, bool) {
-			if liveExists {
-				return liveDNS.ConsumerKey, true
+		for _, k := range storage.SecretKeys(d.Type) {
+			v, err := resolve("dns_providers", d.ID, k, d.Credentials[k], func() (string, bool) {
+				if liveExists {
+					return liveDNS.Credentials[k], true
+				}
+				return "", false
+			})
+			if err != nil {
+				return nil, err
 			}
-			return "", false
-		})
-		if err != nil {
-			return nil, err
+			if v == "" {
+				delete(d.Credentials, k)
+			} else {
+				d.Credentials[k] = v
+			}
 		}
-		d.ConsumerKey = ck
 	}
 
 	// Forward-auth providers — keyed by name.

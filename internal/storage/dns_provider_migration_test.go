@@ -18,7 +18,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	bolt "go.etcd.io/bbolt"
@@ -29,16 +28,8 @@ import (
 // looks on disk before migration.
 func seedLegacyProvider(t *testing.T, s *Store) {
 	t.Helper()
-	legacy := DNSProviderConfig{
-		Endpoint:          "ovh-eu",
-		ApplicationKey:    "ak",
-		ApplicationSecret: "as",
-		ConsumerKey:       "ck",
-	}
-	buf, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatalf("marshal legacy: %v", err)
-	}
+	// Raw pre-v2.11 shape: flat OVH fields, no id/label/type.
+	buf := []byte(`{"endpoint":"ovh-eu","application_key":"ak","application_secret":"as","consumer_key":"ck"}`)
 	if err := s.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket([]byte(bucketDNSProviders)).Put([]byte("ovh"), buf)
 	}); err != nil {
@@ -93,7 +84,7 @@ func TestMigrateLegacyDNSProvider_ConvertsAndRepoints(t *testing.T) {
 	if list[0].Label != "OVH (default)" || list[0].Type != "ovh" {
 		t.Errorf("migrated provider = %+v", list[0])
 	}
-	if list[0].ApplicationKey != "ak" || list[0].ApplicationSecret != "as" || list[0].ConsumerKey != "ck" {
+	if list[0].Credentials["application_key"] != "ak" || list[0].Credentials["application_secret"] != "as" || list[0].Credentials["consumer_key"] != "ck" {
 		t.Errorf("secrets not carried over: %+v", list[0])
 	}
 

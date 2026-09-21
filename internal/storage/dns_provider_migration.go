@@ -127,3 +127,62 @@ func (s *Store) MigrateLegacyDNSProvider(ctx context.Context) (bool, error) {
 	}
 	return migrated, nil
 }
+
+// MigrateDNSProviderCredentials is the v2.26 boot migration: it rewrites
+// every DNS provider row still carrying the pre-v2.26 flat OVH fields
+// (endpoint / application_key / application_secret / consumer_key) into
+// the Credentials-map shape. The fold itself lives in
+// DNSProviderConfig.UnmarshalJSON, so this only persists what every read
+// already sees; it exists to keep the on-disk format uniform.
+//
+// Idempotent by state: rows without legacy keys are left untouched, so
+// later boots return (0, nil). Runs in one bbolt transaction — any
+// error rolls the whole rewrite back.
+func (s *Store) MigrateDNSProviderCredentials(ctx context.Context) (int, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	rewritten := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := tx.Bucket([]byte(bucketDNSProviders))
+		type row struct{ key, val []byte }
+		var pending []row
+		err := b.ForEach(func(k, v []byte) error {
+			legacy, err := hasLegacyDNSProviderFields(v)
+			if err != nil {
+				return fmt.Errorf("inspect dns provider %q: %w", string(k), err)
+			}
+			if !legacy {
+				return nil
+			}
+			var c DNSProviderConfig
+			if err := json.Unmarshal(v, &c); err != nil {
+				return fmt.Errorf("unmarshal dns provider %q: %w", string(k), err)
+			}
+			buf, err := json.Marshal(c)
+			if err != nil {
+				return fmt.Errorf("marshal dns provider %q: %w", string(k), err)
+			}
+			pending = append(pending, row{key: append([]byte(nil), k...), val: buf})
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		// bbolt forbids mutating a bucket while iterating it.
+		for _, r := range pending {
+			if err := b.Put(r.key, r.val); err != nil {
+				return err
+			}
+		}
+		rewritten = len(pending)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return rewritten, nil
+}

@@ -37,13 +37,10 @@ const ovhProviderFixtureID = "ovh-fixture-id"
 // shape land in one place across O.2 tests.
 func ovhProviderFixture() storage.DNSProviderConfig {
 	return storage.DNSProviderConfig{
-		ID:                ovhProviderFixtureID,
-		Label:             "OVH fixture",
-		Type:              storage.DNSProviderTypeOVH,
-		Endpoint:          "ovh-eu",
-		ApplicationKey:    "ak",
-		ApplicationSecret: "as",
-		ConsumerKey:       "ck",
+		ID:          ovhProviderFixtureID,
+		Label:       "OVH fixture",
+		Type:        storage.DNSProviderTypeOVH,
+		Credentials: map[string]string{"endpoint": "ovh-eu", "application_key": "ak", "application_secret": "as", "consumer_key": "ck"},
 	}
 }
 

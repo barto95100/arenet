@@ -22,17 +22,24 @@ import (
 	"testing"
 )
 
+// ovhTestCreds returns a complete, valid OVH credential set.
+func ovhTestCreds() map[string]string {
+	return map[string]string{
+		"endpoint":           "ovh-eu",
+		"application_key":    "ak",
+		"application_secret": "as",
+		"consumer_key":       "ck",
+	}
+}
+
 func TestDNSProvider_CreateGetList(t *testing.T) {
 	s := newStoreForTest(t)
 	ctx := context.Background()
 
 	in := DNSProviderConfig{
-		Label:             "OVH perso",
-		Type:              DNSProviderTypeOVH,
-		Endpoint:          "ovh-eu",
-		ApplicationKey:    "ak",
-		ApplicationSecret: "as",
-		ConsumerKey:       "ck",
+		Label:       "OVH perso",
+		Type:        DNSProviderTypeOVH,
+		Credentials: ovhTestCreds(),
 	}
 	created, err := s.CreateDNSProvider(ctx, in)
 	if err != nil {
@@ -49,7 +56,7 @@ func TestDNSProvider_CreateGetList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDNSProvider: %v", err)
 	}
-	if got.ApplicationKey != "ak" {
+	if got.Credentials["application_key"] != "ak" {
 		t.Errorf("secret not persisted: %+v", got)
 	}
 
@@ -73,15 +80,14 @@ func TestDNSProvider_UpdatePreservesBlankSecrets(t *testing.T) {
 	s := newStoreForTest(t)
 	ctx := context.Background()
 	created, err := s.CreateDNSProvider(ctx, DNSProviderConfig{
-		Label: "OVH", Type: "ovh", Endpoint: "ovh-eu",
-		ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck",
+		Label: "OVH", Type: "ovh", Credentials: ovhTestCreds(),
 	})
 	if err != nil {
 		t.Fatalf("CreateDNSProvider: %v", err)
 	}
 	// Edit label only; leave all secrets blank.
 	updated, err := s.UpdateDNSProvider(ctx, created.ID, DNSProviderConfig{
-		Label: "OVH renamed", Type: "ovh", Endpoint: "ovh-eu",
+		Label: "OVH renamed", Type: "ovh", Credentials: map[string]string{"endpoint": "ovh-eu"},
 	})
 	if err != nil {
 		t.Fatalf("UpdateDNSProvider: %v", err)
@@ -89,7 +95,7 @@ func TestDNSProvider_UpdatePreservesBlankSecrets(t *testing.T) {
 	if updated.Label != "OVH renamed" {
 		t.Errorf("label = %q", updated.Label)
 	}
-	if updated.ApplicationKey != "ak" || updated.ConsumerKey != "ck" {
+	if updated.Credentials["application_key"] != "ak" || updated.Credentials["consumer_key"] != "ck" {
 		t.Errorf("blank secrets were not preserved: %+v", updated)
 	}
 }
@@ -97,8 +103,7 @@ func TestDNSProvider_UpdatePreservesBlankSecrets(t *testing.T) {
 func TestDNSProvider_UpdateMissing_ReturnsErrNotFound(t *testing.T) {
 	s := newStoreForTest(t)
 	_, err := s.UpdateDNSProvider(context.Background(), "nope", DNSProviderConfig{
-		Label: "OVH", Type: "ovh", Endpoint: "ovh-eu",
-		ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck",
+		Label: "OVH", Type: "ovh", Credentials: ovhTestCreds(),
 	})
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
@@ -109,8 +114,7 @@ func TestDNSProvider_DeleteInUse_ReturnsErrProviderInUse(t *testing.T) {
 	s := newStoreForTest(t)
 	ctx := context.Background()
 	p, err := s.CreateDNSProvider(ctx, DNSProviderConfig{
-		Label: "OVH", Type: "ovh", Endpoint: "ovh-eu",
-		ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck",
+		Label: "OVH", Type: "ovh", Credentials: ovhTestCreds(),
 	})
 	if err != nil {
 		t.Fatalf("CreateDNSProvider: %v", err)
@@ -134,8 +138,7 @@ func TestDNSProvider_DeleteNotInUse_Succeeds(t *testing.T) {
 	s := newStoreForTest(t)
 	ctx := context.Background()
 	p, err := s.CreateDNSProvider(ctx, DNSProviderConfig{
-		Label: "OVH", Type: "ovh", Endpoint: "ovh-eu",
-		ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck",
+		Label: "OVH", Type: "ovh", Credentials: ovhTestCreds(),
 	})
 	if err != nil {
 		t.Fatalf("CreateDNSProvider: %v", err)
@@ -151,8 +154,7 @@ func TestDNSProvider_DeleteNotInUse_Succeeds(t *testing.T) {
 func TestDNSProvider_CreateRejectsBadType(t *testing.T) {
 	s := newStoreForTest(t)
 	_, err := s.CreateDNSProvider(context.Background(), DNSProviderConfig{
-		Label: "X", Type: "cloudflare", Endpoint: "ovh-eu",
-		ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck",
+		Label: "X", Type: "bind9", Credentials: ovhTestCreds(),
 	})
 	if err == nil {
 		t.Fatal("expected validation error for unknown type, got nil")
@@ -162,8 +164,7 @@ func TestDNSProvider_CreateRejectsBadType(t *testing.T) {
 func TestDNSProvider_CreateRejectsEmptyLabel(t *testing.T) {
 	s := newStoreForTest(t)
 	_, err := s.CreateDNSProvider(context.Background(), DNSProviderConfig{
-		Label: "", Type: "ovh", Endpoint: "ovh-eu",
-		ApplicationKey: "ak", ApplicationSecret: "as", ConsumerKey: "ck",
+		Label: "", Type: "ovh", Credentials: ovhTestCreds(),
 	})
 	if err == nil {
 		t.Fatal("expected validation error for empty label, got nil")

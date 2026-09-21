@@ -384,6 +384,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// multi-config). Replaces the pre-v2.11 singleton
 				// /settings/dns-providers/ovh GET/PUT.
 				r.Get("/settings/dns-providers", h.listDNSProviders)
+				// v2.26 — provider-type registry (form metadata) and
+				// read-only connection test. /types is registered
+				// before /{id} for readability; chi matches the static
+				// segment first either way.
+				r.Get("/settings/dns-providers/types", h.listDNSProviderTypes)
+				r.Post("/settings/dns-providers/{id}/test", h.testDNSProvider)
 				r.Post("/settings/dns-providers", h.createDNSProvider)
 				r.Get("/settings/dns-providers/{id}", h.getDNSProvider)
 				r.Put("/settings/dns-providers/{id}", h.updateDNSProvider)
