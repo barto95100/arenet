@@ -17,11 +17,14 @@ let nextId = 1;
 
 export const toasts = writable<ToastEntry[]>([]);
 
-/** Push a toast onto the queue. Auto-dismisses after TOAST_TTL_MS. */
-export function pushToast(message: string, variant: ToastVariant = 'info'): void {
+/**
+ * Push a toast onto the queue. Auto-dismisses after ttlMs (default
+ * TOAST_TTL_MS); longer for messages the operator must read.
+ */
+export function pushToast(message: string, variant: ToastVariant = 'info', ttlMs: number = TOAST_TTL_MS): void {
 	const id = nextId++;
 	toasts.update((list) => [...list, { id, message, variant }]);
-	setTimeout(() => dismissToast(id), TOAST_TTL_MS);
+	setTimeout(() => dismissToast(id), ttlMs);
 }
 
 /** Remove a toast from the queue immediately. Safe to call on unknown ids. */

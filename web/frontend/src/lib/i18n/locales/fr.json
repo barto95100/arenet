@@ -51,7 +51,8 @@
 		"passphrase_invalid": "Phrase secrète incorrecte (ou fichier modifié).",
 		"passphrase_too_short": "La phrase secrète doit faire au moins {min} caractères.",
 		"backup_dir_unwritable": "Arenet ne peut pas écrire dans {dir} : vérifie le montage et les droits (UID 65532 en Docker). Détail : {detail}",
-		"backup_failed": "La sauvegarde a échoué : {detail}"
+		"backup_failed": "La sauvegarde a échoué : {detail}",
+		"route_check_rolled_back": "Modification annulée : {host} répondait avant cette modification et ne répondait plus après ({detail}). L'ancienne version est remise en place — corrige la modification (adresse de l'upstream, port…) et enregistre à nouveau."
 	},
 	"sidebar": {
 		"sectionOverview": "Aperçu",
@@ -230,6 +231,10 @@
 		"languageChanged": "Langue mise à jour"
 	},
 	"routes": {
+		"check": {
+			"failed": "{host} est enregistrée mais ne répond pas : {detail}. Vérifie que son backend est démarré.",
+			"pendingCertificate": "{host} est enregistrée ; son certificat TLS est en cours d'émission — réessaie la route dans une minute."
+		},
 		"pageEyebrow": "Trafic · Routes",
 		"pageTitle": "Routes",
 		"pageSubtitle": "Gère les routes du reverse-proxy — hôtes, upstreams, TLS, WAF, authentification.",
@@ -1398,6 +1403,14 @@
 		"errPassphraseRequired": "Définis une phrase secrète pour activer les sauvegardes automatiques.",
 		"errOldPassphrase": "Ce fichier a été chiffré avec une ancienne phrase secrète : télécharge-le et restaure-le depuis Backup & restauration avec cette phrase.",
 		"errUnexpected": "Erreur inattendue."
+	},
+	"routeCheck": {
+		"title": "Vérification des routes",
+		"subtitle": "Après chaque enregistrement, Arenet envoie une vraie requête à la route à travers son propre proxy.",
+		"enabledLabel": "Vérifier les routes après enregistrement",
+		"enabledHelper": "Une modification qui fait tomber une route qui marchait (502 / 503 / 504) est annulée automatiquement ; une route qui ne répondait pas non plus avant est gardée, avec un avertissement. Les créations et réactivations ne sont jamais annulées. Un enregistrement peut prendre jusqu'à ~10 s quand la route ne répond pas.",
+		"toastSaved": "Réglage de vérification enregistré.",
+		"errSave": "Impossible d'enregistrer le réglage."
 	},
 	"serverPosition": {
 		"title": "Position du serveur",

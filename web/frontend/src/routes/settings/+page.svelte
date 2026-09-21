@@ -60,6 +60,7 @@
 	import CrowdSecSettingsSection from '$lib/components/CrowdSecSettingsSection.svelte';
 	import BackupSection from '$lib/components/BackupSection.svelte';
 	import ScheduledBackupsSection from '$lib/components/ScheduledBackupsSection.svelte';
+	import RouteCheckSection from '$lib/components/RouteCheckSection.svelte';
 	import ServerPositionSection from '$lib/components/ServerPositionSection.svelte';
 
 	// v2.9.12 i18n Phase 2 — theme toggle options are derived from
@@ -1272,6 +1273,9 @@
 	     position #2 implication (country_block fires first)
 	     is documented in docs/setup/crowdsec.md. -->
 	<CrowdSecSettingsSection />
+
+	<!-- ROW 2.85 — Post-apply route check (v2.35). -->
+	<RouteCheckSection />
 
 	<!-- ROW 2.9 — Backup & restore (Step K.3 §5.3). -->
 	<BackupSection />

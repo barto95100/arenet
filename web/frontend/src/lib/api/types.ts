@@ -54,9 +54,19 @@ export interface HealthCheck {
 	fails: number;
 }
 
+/** v2.35 — post-apply probe of a create / update / enable. */
+export interface RouteCheck {
+	status: 'ok' | 'failed' | 'pending_certificate' | 'skipped';
+	host?: string;
+	httpStatus?: number;
+	detail?: string;
+}
+
 export interface Route {
 	id: string;
 	host: string;
+	/** Present on create / update / enable responses only (v2.35). */
+	check?: RouteCheck;
 	/**
 	 * Step J.1: pool of backends. Always non-empty (the backend's
 	 * storage.validate() guarantees it). A migrated pre-J.1 route

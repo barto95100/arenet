@@ -51,7 +51,8 @@
 		"passphrase_invalid": "Wrong passphrase (or the file was altered).",
 		"passphrase_too_short": "The passphrase must be at least {min} characters.",
 		"backup_dir_unwritable": "Arenet cannot write in {dir}: check the mount and the permissions (UID 65532 in Docker). Details: {detail}",
-		"backup_failed": "The backup failed: {detail}"
+		"backup_failed": "The backup failed: {detail}",
+		"route_check_rolled_back": "Change undone: {host} answered before this change and stopped answering after it ({detail}). The previous version is back in place — fix the change (upstream address, port…) and save again."
 	},
 	"sidebar": {
 		"sectionOverview": "Overview",
@@ -230,6 +231,10 @@
 		"languageChanged": "Language updated"
 	},
 	"routes": {
+		"check": {
+			"failed": "{host} is saved but does not answer: {detail}. Check that its backend is running.",
+			"pendingCertificate": "{host} is saved; its TLS certificate is still being issued — try the route again in a minute."
+		},
 		"pageEyebrow": "Traffic · Routes",
 		"pageTitle": "Routes",
 		"pageSubtitle": "Manage reverse proxy routes — hosts, upstreams, TLS, WAF, authentication.",
@@ -1398,6 +1403,14 @@
 		"errPassphraseRequired": "Set a passphrase to enable scheduled backups.",
 		"errOldPassphrase": "This file was encrypted with a previous passphrase: download it and restore it from Backup & restore with that passphrase.",
 		"errUnexpected": "Unexpected error."
+	},
+	"routeCheck": {
+		"title": "Route check after save",
+		"subtitle": "After every save, Arenet sends one real request to the route through its own proxy.",
+		"enabledLabel": "Check routes after saving",
+		"enabledHelper": "A change that makes a working route stop answering (502 / 503 / 504) is undone automatically; a route that did not answer before either is kept, with a warning. New and re-enabled routes are never undone. A save may take up to ~10 s when the route does not answer.",
+		"toastSaved": "Route check setting saved.",
+		"errSave": "Could not save the setting."
 	},
 	"serverPosition": {
 		"title": "Server position",

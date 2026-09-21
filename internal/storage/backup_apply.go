@@ -88,6 +88,9 @@ type RestoreExtras struct {
 	// BackupSchedule (v2.33) nil deletes the config; the runtime status
 	// row is cleared either way.
 	BackupSchedule *BackupScheduleConfig
+	// RouteCheck (v2.35) nil deletes the row (back to the enabled
+	// default).
+	RouteCheck *RouteCheckConfig
 	// APITokens are pre-marshalled auth.APIToken rows keyed by token
 	// ID (storage does not import auth). nil leaves the api_tokens
 	// bucket untouched (the exporter had no token store).
@@ -140,7 +143,7 @@ func (e *RestoreExtras) rows() (map[string]map[string][]byte, error) {
 	}
 	for _, b := range []string{bucketManagedDomains, bucketErrorTemplates, bucketMaintenancePage,
 		bucketAlertingChannels, bucketAlertRules, bucketCrowdSecConfig, bucketAutomation,
-		bucketUpdateCheck, bucketGeoIPUpdate, bucketBackupSchedule} {
+		bucketUpdateCheck, bucketGeoIPUpdate, bucketBackupSchedule, bucketRouteCheck} {
 		out[b] = map[string][]byte{}
 	}
 	for _, md := range e.ManagedDomains {
@@ -176,6 +179,7 @@ func (e *RestoreExtras) rows() (map[string]map[string][]byte, error) {
 		{bucketGeoIPUpdate, geoIPUpdateKey, e.GeoIPUpdate, e.GeoIPUpdate != nil},
 		{bucketServerPosition, serverPositionKey, e.ServerPosition, e.ServerPosition != nil},
 		{bucketBackupSchedule, backupScheduleKey, e.BackupSchedule, e.BackupSchedule != nil},
+		{bucketRouteCheck, routeCheckKey, e.RouteCheck, e.RouteCheck != nil},
 	}
 	for _, sg := range singletons {
 		if sg.set {

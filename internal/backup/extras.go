@@ -55,6 +55,8 @@ type SnapshotExtras struct {
 	// BackupSchedule (v2.33) is the scheduled-backup config; its
 	// passphrase is a secret. Runtime status is never exported.
 	BackupSchedule *storage.BackupScheduleConfig `json:"backup_schedule,omitempty"`
+	// RouteCheck (v2.35) is the post-apply route check toggle.
+	RouteCheck *storage.RouteCheckConfig `json:"route_check,omitempty"`
 	// APITokens are the service-account tokens; token_hash is a secret.
 	APITokens []auth.APIToken `json:"api_tokens"`
 }
@@ -155,6 +157,11 @@ func exportExtras(ctx context.Context, store Storer) (*SnapshotExtras, error) {
 		return nil, fmt.Errorf("export: get backup schedule: %w", err)
 	}
 	ex.BackupSchedule = &bs
+	rc, err := store.GetRouteCheckConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("export: get route check config: %w", err)
+	}
+	ex.RouteCheck = &rc
 
 	tokens, err := listAPITokens(ctx, store)
 	if err != nil {
@@ -594,6 +601,7 @@ func extrasRestoreInput(ex *SnapshotExtras) (*storage.RestoreExtras, error) {
 		GeoIPUpdate:        ex.GeoIPUpdate,
 		ServerPosition:     ex.ServerPosition,
 		BackupSchedule:     ex.BackupSchedule,
+		RouteCheck:         ex.RouteCheck,
 		APITokens:          tokens,
 	}, nil
 }

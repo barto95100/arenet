@@ -234,6 +234,10 @@ export const settingsApi = {
 	// An encrypted backup is restored with the passphrase in the
 	// X-Arenet-Backup-Passphrase header, base64 of its UTF-8 bytes
 	// (fetch rejects non-Latin-1 header values).
+	// v2.35 — post-apply route check toggle.
+	getRouteCheck: (): Promise<{ enabled: boolean }> => request<{ enabled: boolean }>('GET', '/settings/route-check'),
+	putRouteCheck: (enabled: boolean): Promise<{ enabled: boolean }> =>
+		request<{ enabled: boolean }>('PUT', '/settings/route-check', { enabled }),
 	// v2.33 — scheduled backups.
 	getBackupSchedule: (): Promise<BackupSchedule> =>
 		request<BackupSchedule>('GET', '/settings/backup-schedule'),
