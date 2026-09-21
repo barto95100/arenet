@@ -22,7 +22,6 @@
 package waf
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -38,7 +37,19 @@ import (
 // Coraza's transaction is interrupted by a rule action (deny,
 // drop). The caller in module.go translates it into the
 // final HTTP status the client sees.
-var errInterruptionTriggered = errors.New("waf rule interruption triggered")
+var errInterruptionTriggered error = wafInterruption{}
+
+// wafInterruption is the type of errInterruptionTriggered.
+type wafInterruption struct{}
+
+// Error implements error.
+func (wafInterruption) Error() string { return "waf rule interruption triggered" }
+
+// SecurityBlock marks a WAF block for the route metrics middleware
+// (internal/metrics, matched by behaviour): the block is counted by
+// the WAF pipeline (waf_block_count) and must stay out of the 4xx
+// class — Step M spec AC #4.
+func (wafInterruption) SecurityBlock() bool { return true }
 
 // processRequest runs the request through the Coraza
 // transaction phases: connection → URI → request headers →

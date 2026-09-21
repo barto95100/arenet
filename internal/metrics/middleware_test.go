@@ -230,11 +230,11 @@ func TestRouteMetrics_Increments_ImplicitWriteOK(t *testing.T) {
 }
 
 func TestRouteMetrics_Increments_OnNextError(t *testing.T) {
-	// next.ServeHTTP returns an error WITHOUT writing the header.
-	// statusRecorder still has its default 200; the defer closure
-	// observes that and increments reqs. This matches §11.6: a
-	// handler that errors before writing is recorded as 200 (which
-	// matches Caddy's implicit-OK behavior on the wire).
+	// next.ServeHTTP returns a plain error WITHOUT writing the header.
+	// Caddy answers such an error with a 500 (caddyhttp/server.go
+	// :448-451) after this middleware has returned, so the request is
+	// recorded as a 5xx — v2.26 fix, superseding Step E spec §11.6's
+	// "implicit 200".
 	reg := NewRegistry()
 	reg.Sync([]string{"r1"})
 	h := newTestHandler(t, reg, "r1")
@@ -255,8 +255,98 @@ func TestRouteMetrics_Increments_OnNextError(t *testing.T) {
 	if snap["r1"].Reqs != 1 {
 		t.Errorf("delta=%+v want Reqs=1 even on next-error", snap["r1"])
 	}
-	if snap["r1"].Errs != 0 {
-		t.Errorf("delta=%+v want Errs=0 (status defaulted to 200 per §11.6)", snap["r1"])
+	if snap["r1"].Errs != 1 {
+		t.Errorf("delta=%+v want Errs=1 (plain error → Caddy 500)", snap["r1"])
+	}
+}
+
+// wafBlockErr mimics internal/waf's interruption error (matched by
+// behaviour through the securityBlock interface).
+type wafBlockErr struct{}
+
+func (wafBlockErr) Error() string       { return "waf rule interruption triggered" }
+func (wafBlockErr) SecurityBlock() bool { return true }
+
+func TestRouteMetrics_ErrorStatusClassification(t *testing.T) {
+	cases := []struct {
+		name            string
+		next            caddyhttp.HandlerFunc
+		wantErrs        uint64
+		wantErrs4xx     uint64
+		wantNormalCalls int
+	}{
+		{
+			name: "reverse_proxy 502 on a dead upstream → 5xx",
+			next: func(http.ResponseWriter, *http.Request) error {
+				return caddyhttp.Error(http.StatusBadGateway, errors.New("dial tcp: connection refused"))
+			},
+			wantErrs: 1,
+		},
+		{
+			name: "IP filter / CrowdSec 403 raised as a Caddy error → 4xx",
+			next: func(http.ResponseWriter, *http.Request) error {
+				return caddyhttp.Error(http.StatusForbidden, errors.New("blocked"))
+			},
+			wantErrs4xx: 1,
+		},
+		{
+			name: "rate limit 429 → 4xx",
+			next: func(http.ResponseWriter, *http.Request) error {
+				return caddyhttp.Error(http.StatusTooManyRequests, errors.New("rate limited"))
+			},
+			wantErrs4xx: 1,
+		},
+		{
+			name: "WAF request-phase block → neither class (Step M AC #4)",
+			next: func(http.ResponseWriter, *http.Request) error {
+				return caddyhttp.HandlerError{StatusCode: http.StatusForbidden, Err: wafBlockErr{}}
+			},
+		},
+		{
+			name: "WAF response-phase block, 403 already written → neither class",
+			next: func(w http.ResponseWriter, _ *http.Request) error {
+				w.WriteHeader(http.StatusForbidden)
+				return caddyhttp.HandlerError{StatusCode: http.StatusForbidden, Err: wafBlockErr{}}
+			},
+		},
+		{
+			name: "error after the header was written keeps the written status",
+			next: func(w http.ResponseWriter, _ *http.Request) error {
+				w.WriteHeader(http.StatusOK)
+				return errors.New("client went away mid-body")
+			},
+			wantNormalCalls: 1,
+		},
+		{
+			name: "HandlerError without StatusCode → 500",
+			next: func(http.ResponseWriter, *http.Request) error {
+				return caddyhttp.HandlerError{Err: errors.New("boom")}
+			},
+			wantErrs: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(ResetForTest)
+			ResetForTest()
+			sink := &recordingNormalSink{}
+			SetNormalSubmitter(sink)
+			SetClientIPFn(func(*http.Request) string { return "203.0.113.42" })
+
+			reg := NewRegistry()
+			reg.Sync([]string{"r1"})
+			h := newTestHandler(t, reg, "r1")
+			_ = h.ServeHTTP(httptest.NewRecorder(), newReqForGate(http.MethodGet, "/api/x"), tc.next)
+
+			got := reg.Snapshot()["r1"]
+			if got.Reqs != 1 || got.Errs != tc.wantErrs || got.Errs4xx != tc.wantErrs4xx {
+				t.Errorf("delta=%+v want Reqs=1 Errs=%d Errs4xx=%d", got, tc.wantErrs, tc.wantErrs4xx)
+			}
+			// A blocked or failed request is never "normal traffic".
+			if n := len(sink.snapshot()); n != tc.wantNormalCalls {
+				t.Errorf("normal-traffic Submit calls = %d, want %d", n, tc.wantNormalCalls)
+			}
+		})
 	}
 }
 

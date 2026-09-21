@@ -261,12 +261,15 @@ func (h *RouteMetricsHandler) Validate() error {
 // `defer h.registry.Inc(h.RouteID, rec.status)` would capture the
 // default 200 at defer time, losing every non-200 status.
 //
-// Status code 0 (handler returned an error before any WriteHeader
-// or Write call) is recorded as 200 per spec §11.6 — matches
-// Caddy's implicit-OK semantics for empty responses.
+// The recorded status comes from metricsStatus: when next returns
+// an error before writing (reverse_proxy 502 on a dead upstream,
+// IP filter / basic auth / rate limit / CrowdSec blocks), it is the
+// status Caddy will send for that error — NOT the recorder's
+// default 200 (v2.26 fix; this supersedes Step E spec §11.6, whose
+// "implicit 200" premise does not hold once Caddy serves the error).
 func (h *RouteMetricsHandler) ServeHTTP(
 	w http.ResponseWriter, r *http.Request, next caddyhttp.Handler,
-) error {
+) (err error) {
 	rec := newStatusRecorder(w)
 	start := time.Now()
 	// Phase 1 — capture r.Host now (before next.ServeHTTP
@@ -277,6 +280,7 @@ func (h *RouteMetricsHandler) ServeHTTP(
 	// the per-host bump only happens for recognised hosts.
 	matchedHost := h.resolveHost(r)
 	defer func() {
+		status := metricsStatus(rec, err)
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		// Phase 1 — IncByHost replaces Inc. When matchedHost
 		// is "" (legacy KnownHosts-empty path OR host header
@@ -284,7 +288,7 @@ func (h *RouteMetricsHandler) ServeHTTP(
 		// counter only — identical to the pre-Phase-1 Inc
 		// behavior. So this swap is wire-compatible for every
 		// route that doesn't yet have KnownHosts emitted.
-		h.registry.IncByHost(h.RouteID, matchedHost, rec.status, durMs)
+		h.registry.IncByHost(h.RouteID, matchedHost, status, durMs)
 
 		// V.1.2 / V.1.3 — normal-traffic geo emission. Read
 		// the sink LIVE from the global atomic pointer; a
@@ -295,11 +299,58 @@ func (h *RouteMetricsHandler) ServeHTTP(
 		// effectively zero-cost. Gates here are SHORT-
 		// CIRCUITS (status / method / path); the sink owns
 		// the D2 LAN + D9 sampling/cooldown decisions.
-		if sink := GlobalNormalSubmitter(); sink != nil && h.eligibleForNormal(r, rec.status) {
-			sink.Submit(rec.status, GlobalClientIPFn()(r), h.RouteID)
+		if sink := GlobalNormalSubmitter(); sink != nil && h.eligibleForNormal(r, status) {
+			sink.Submit(status, GlobalClientIPFn()(r), h.RouteID)
 		}
 	}()
 	return next.ServeHTTP(rec, r)
+}
+
+// statusSecurityBlock is the status recorded for a request ended by a
+// security block that owns its own counter (WAF): it counts in reqs
+// but in neither the 4xx nor the 5xx class (IncByHost classifies
+// only >= 400), and fails the normal-traffic gate (< 200).
+const statusSecurityBlock = 0
+
+// securityBlock is implemented by errors of security gates whose
+// blocks are counted by their own pipeline and must stay out of the
+// 4xx/5xx classes — the WAF (Step M spec AC #4: a WAF block
+// increments waf_block_count and req_count only). Matched by
+// behaviour so this package imports none of those gates.
+type securityBlock interface {
+	SecurityBlock() bool
+}
+
+// metricsStatus returns the status to record for a request, given
+// what the recorder saw and the error next returned.
+//
+//   - A securityBlock error → statusSecurityBlock, even when the
+//     block status was already written (WAF response-phase blocks).
+//   - Any other error before anything was written → the status Caddy
+//     sends for it: HandlerError.StatusCode, 500 otherwise (caddy
+//     v2.11.4 modules/caddyhttp/server.go:448-451, and errors.go
+//     Error() for the StatusCode default). Caddy serves the error
+//     response AFTER this middleware returns (server.go:421), so the
+//     recorder never sees that status itself.
+//   - Otherwise → the recorded status (implicit 200 when the handler
+//     wrote a body without WriteHeader, or wrote nothing and
+//     returned nil).
+func metricsStatus(rec *statusRecorder, err error) int {
+	if err == nil {
+		return rec.status
+	}
+	var sb securityBlock
+	if errors.As(err, &sb) && sb.SecurityBlock() {
+		return statusSecurityBlock
+	}
+	if rec.headerWritten {
+		return rec.status
+	}
+	var he caddyhttp.HandlerError
+	if errors.As(err, &he) && he.StatusCode != 0 {
+		return he.StatusCode
+	}
+	return http.StatusInternalServerError
 }
 
 // eligibleForNormal applies the spec §D1 + §D3 gates that
