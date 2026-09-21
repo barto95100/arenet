@@ -1,5 +1,7 @@
 # Country Block
 
+**🌐 English** · [Français](Country-Block-FR)
+
 Per-route geographic filtering using the **MaxMind GeoLite2-City** database. Allow-list or deny-list any combination of ISO 3166 country codes for any route.
 
 Use when : your homelab's intended audience is geographically bounded (e.g. France-only family services) and you want to drop traffic from outside the bubble before it ever reaches the WAF or your backend.
@@ -14,7 +16,7 @@ Use when : your homelab's intended audience is geographically bounded (e.g. Fran
    - **Désactivé** (off) — default, no filtering
    - **Allow** — only the listed countries can access
    - **Deny** — the listed countries are blocked, everyone else passes
-4. Type a country name in the autocomplete (e.g. `France`, `Brazil`) — picks resolve to ISO codes (`FR`, `BR`)
+4. Type a country name in the autocomplete (e.g. `France`, `Brazil`) — picks resolve to ISO codes (`FR`, `BR`) ; each suggestion and chip shows the country's flag (v2.22.0)
 5. Click each entry to add it to the chip list ; click the chip's ✕ to remove
 6. **Save**
 
@@ -124,4 +126,4 @@ If you'd rather manage the file yourself (no MaxMind account, air-gapped host, e
 - [WAF](WAF) — layer 7 attack detection after country + CrowdSec pass-through
 - [MaxMind GeoLite2](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data) — the upstream database
 - `internal/countryblock/` — Arenet's implementation
-- `internal/geo/` — embedded MaxMind DB + IP lookup
+- `internal/geo/` — MaxMind reader (hot-swappable) + IP lookup

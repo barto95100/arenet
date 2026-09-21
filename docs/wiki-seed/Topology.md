@@ -1,5 +1,7 @@
 # Topology
 
+**🌐 English** · [Français](Topology-FR)
+
 The `/topology` page renders your routes as a **live force-directed graph** with real-time traffic particles flowing from clients to upstreams. SvelteKit + [Svelte Flow](https://svelteflow.dev) for the graph, D3.js for the particle physics, WebSocket for the live data feed.
 
 Useful for : at-a-glance verification that every route is healthy, visual debugging of traffic patterns, demos to non-technical stakeholders.

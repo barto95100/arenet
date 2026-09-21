@@ -1,5 +1,7 @@
 # Rate Limit
 
+**🌐 English** · [Français](Rate-Limit-FR)
+
 Per-route request throttling via the [caddy-ratelimit](https://github.com/mholt/caddy-ratelimit) module. Each route can declare its own rate-limit policy : `N events per time window keyed by X`.
 
 Use when : protecting brute-force-prone endpoints (`/api/login`, `/admin`), throttling abusive scrapers, or enforcing per-API-key quotas on public APIs.
