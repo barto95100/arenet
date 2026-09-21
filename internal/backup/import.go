@@ -134,6 +134,14 @@ func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Sna
 	report.OIDCConfigImported = resolved.OIDCConfig.IssuerURL != "" || resolved.OIDCConfig.ClientID != ""
 	report.MaxMindConfigImported = resolved.MaxMindConfig != nil
 	report.ExternalCertificatesImported = len(resolved.ExternalCertificates)
+	if ex := resolved.Extras; ex != nil {
+		report.ExtrasImported = true
+		report.ManagedDomainsImported = len(ex.ManagedDomains)
+		report.ErrorTemplatesImported = len(ex.ErrorTemplates)
+		report.AlertChannelsImported = len(ex.AlertChannels)
+		report.AlertRulesImported = len(ex.AlertRules)
+		report.APITokensImported = len(ex.APITokens)
+	}
 	return report, nil
 }
 
@@ -149,6 +157,7 @@ type liveSnapshot struct {
 	maxMind       storage.MaxMindConfig
 	maxMindExists bool
 	extCertsByID  map[string]storage.ExternalCertificate
+	extras        *liveExtras
 }
 
 func (ls *liveSnapshot) isFresh() bool {
@@ -230,6 +239,9 @@ func readLive(ctx context.Context, store Storer, users UserStorer) (*liveSnapsho
 	for _, c := range extCerts {
 		ls.extCertsByID[c.ID] = c
 	}
+	if ls.extras, err = readLiveExtras(ctx, store); err != nil {
+		return nil, err
+	}
 	return ls, nil
 }
 
@@ -287,7 +299,7 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 		}
 		r.BasicAuth.PasswordHash = v
 
-		// v2.26 — path-rule basic-auth hashes and sensitive header
+		// v2.29 — path-rule basic-auth hashes and sensitive header
 		// values, resolved from the live route with the same id.
 		liveRoute, liveOK := live.routesByID[r.ID]
 		if len(r.PathRules) > 0 {
@@ -474,6 +486,14 @@ func resolveSentinels(snap *Snapshot, live *liveSnapshot, opts ImportOptions, re
 		out.MaxMindConfig.LicenseKey = mv
 	}
 
+	if snap.Extras != nil {
+		ex, err := resolveExtras(snap.Extras, live.extras, resolve)
+		if err != nil {
+			return nil, err
+		}
+		out.Extras = ex
+	}
+
 	return &out, nil
 }
 
@@ -565,6 +585,11 @@ func buildRestoreInput(snap *Snapshot) (storage.RestoreSnapshotInput, error) {
 		}
 		out.MaxMindConfig = b
 	}
+	extras, err := extrasRestoreInput(snap.Extras)
+	if err != nil {
+		return out, err
+	}
+	out.Extras = extras
 	return out, nil
 }
 

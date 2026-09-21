@@ -190,6 +190,18 @@
 					<dd class="font-mono">{restoreReport.forwardAuthProvidersImported}</dd>
 					<dt class="text-secondary">{language.current && t('backupSection.reportOidcImported')}</dt>
 					<dd class="font-mono">{language.current && (restoreReport.oidcConfigImported ? t('backupSection.yes') : t('backupSection.no'))}</dd>
+					{#if restoreReport.extrasImported}
+						<dt class="text-secondary">{language.current && t('backupSection.reportManagedDomainsImported')}</dt>
+						<dd class="font-mono">{restoreReport.managedDomainsImported}</dd>
+						<dt class="text-secondary">{language.current && t('backupSection.reportErrorTemplatesImported')}</dt>
+						<dd class="font-mono">{restoreReport.errorTemplatesImported}</dd>
+						<dt class="text-secondary">{language.current && t('backupSection.reportAlertChannelsImported')}</dt>
+						<dd class="font-mono">{restoreReport.alertChannelsImported}</dd>
+						<dt class="text-secondary">{language.current && t('backupSection.reportAlertRulesImported')}</dt>
+						<dd class="font-mono">{restoreReport.alertRulesImported}</dd>
+						<dt class="text-secondary">{language.current && t('backupSection.reportApiTokensImported')}</dt>
+						<dd class="font-mono">{restoreReport.apiTokensImported}</dd>
+					{/if}
 					<dt class="text-secondary">{language.current && t('backupSection.reportSentinelsInherited')}</dt>
 					<dd class="font-mono">{restoreReport.sentinelsInheritedTotal}</dd>
 					<dt class="text-secondary">{language.current && t('backupSection.reportSentinelsUnresolved')}</dt>

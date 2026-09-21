@@ -1299,10 +1299,15 @@
 		"reportOidcImported": "OIDC config imported",
 		"yes": "yes",
 		"no": "no",
+		"reportManagedDomainsImported": "Managed domains imported",
+		"reportErrorTemplatesImported": "Error page templates imported",
+		"reportAlertChannelsImported": "Alert channels imported",
+		"reportAlertRulesImported": "Alert rules imported",
+		"reportApiTokensImported": "Service-account tokens imported",
 		"reportSentinelsInherited": "Sentinels inherited",
 		"reportSentinelsUnresolved": "Sentinels unresolved (cleared)",
 		"confirmDialogTitle": "Export with cleartext secrets?",
-		"confirmDialogMessage": "The exported file will contain plaintext admin password hashes, OVH API keys, OIDC client secret, forward-auth client secrets, and per-route Basic Auth hashes. The browser will save the file with its default permissions — store it to a restricted location and consider encrypting at rest (age / GPG / vault).",
+		"confirmDialogMessage": "The exported file will contain plaintext admin password hashes, DNS provider credentials, TLS private keys, OIDC and forward-auth client secrets, per-route Basic Auth hashes, alert channel credentials (SMTP password, webhook URLs), CrowdSec keys and service-account token hashes. The browser will save the file with its default permissions — store it to a restricted location and consider encrypting at rest (age / GPG / vault).",
 		"confirmDialogConfirm": "Download with secrets"
 	},
 	"serverPosition": {

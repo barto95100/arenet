@@ -119,6 +119,10 @@ func validateResolvedSnapshot(snap *Snapshot, report *ImportReport, opts ImportO
 		return err
 	}
 
+	if err := validateExtras(snap, cleared); err != nil {
+		return err
+	}
+
 	_ = opts // reserved for future invariants
 	return nil
 }
@@ -150,7 +154,7 @@ func buildClearedSet(report *ImportReport) clearedSet {
 // carries an empty hash, which is the intended incomplete-restore
 // state.
 func validateRouteWithDerogation(r storage.Route, cleared clearedSet) error {
-	// v2.26 — a path rule whose basic-auth hash was legitimately
+	// v2.29 — a path rule whose basic-auth hash was legitimately
 	// cleared validates against a placeholder too (same principle).
 	if len(r.PathRules) > 0 {
 		rules := slices.Clone(r.PathRules)

@@ -103,6 +103,28 @@ restaurés, pas leurs tokens → comptes inutilisables).
   CrowdSec, automatisation, planification des vérifications de mise à
   jour et de la mise à jour GeoIP.
 
+Précisions d'implémentation (2026-09-21) :
+
+- Tokens lus en lignes brutes par `storage.ListAPITokenRows` (storage
+  possède le bucket, pas le type) → aucune signature `Export` / `Import`
+  modifiée.
+- Position serveur : absente du backup (mode auto) → la ligne en place est
+  **conservée** (exception à « singleton absent = supprimé »).
+- Règles d'automatisation stockées sous l'enveloppe `{"rules": RuleSet}`
+  (écrite par l'API) : la validation décode cette enveloppe.
+- CrowdSec restauré : `ApplyCrowdSecConfig` remplace le rechargement
+  Caddy (un seul rechargement, couvert par le rollback) ; en cas d'échec,
+  la base est restaurée et les réglages d'avant sont ré-appliqués. Ligne
+  CrowdSec absente du backup → réglages en cours conservés jusqu'au
+  prochain démarrage (repli sur les variables d'environnement).
+- Automatisation, vérif. des mises à jour, GeoIP : appliqués après un
+  rechargement réussi, au mieux (la base reste la référence au boot).
+- Smoke binaire réel (2 instances) : le token d'un compte de service de A
+  authentifie sur B après restauration et après redémarrage ; le bouncer
+  de B bascule à chaud sur la clé restaurée ; export sans secrets sans
+  fuite ; restauration sans secrets sur la même instance → 6 sentinelles
+  héritées, secrets intacts.
+
 ## PR 2 — chiffrement au repos
 
 - **Package** `internal/secrets` (nouveau, justifié : primitive transverse

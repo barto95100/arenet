@@ -12,7 +12,7 @@ Cert files and TLS keys are NOT in the snapshot — they live in Caddy's filesys
 
 1. Sidebar → **Settings** → **Backup & restore** section
 2. Pick one :
-   - **Export (redacted)** : downloads the JSON with secrets replaced by sentinel placeholders (`"sentinel:..."`)
+   - **Export (redacted)** : downloads the JSON with secrets replaced by sentinel placeholders (`"$$ARENET_REDACTED$$"`)
    - **Export with secrets…** : danger-variant ConfirmDialog → confirm → downloads JSON with PLAINTEXT secrets
 
 Both produce a file named `arenet-backup-YYYYMMDD-HHMMSS.json`.
@@ -21,7 +21,7 @@ Both produce a file named `arenet-backup-YYYYMMDD-HHMMSS.json`.
 
 **With-secrets export** is the disaster-recovery form : restore-anywhere, no inheritance needed. Store this in an encrypted vault (age, GPG, password manager attachment) — the file contains plaintext admin password hashes (Argon2id resistant but still not for arbitrary eyes), OVH DNS API keys, OIDC client secrets, forward-auth client secrets, per-route Basic Auth password hashes.
 
-Since **v2.26.0** the redacted export also masks the **Basic Auth password hashes of path rules** and the values of **credential-bearing route headers** (`Authorization`, `Proxy-Authorization`, `Cookie`, `X-Api-Key`, and any header whose name contains `token`, `secret`, `password` or `api-key`). On restore they are inherited from the live route with the same id, like the other secrets.
+Since **v2.29.0** the redacted export also masks the **Basic Auth password hashes of path rules** and the values of **credential-bearing route headers** (`Authorization`, `Proxy-Authorization`, `Cookie`, `X-Api-Key`, and any header whose name contains `token`, `secret`, `password` or `api-key`). On restore they are inherited from the live route with the same id, like the other secrets.
 
 ---
 
@@ -46,45 +46,80 @@ JSON schema v1 (`schema_version: "1.0.0"`) :
 ```json
 {
   "schema_version": "1.0.0",
-  "exported_at": "2026-06-24T07:00:00Z",
+  "exported_at": "2026-09-21T07:00:00Z",
   "secrets_included": false,
-  "arenet_version": "v2.9.3",
-  "routes": [ ... full Route objects ... ],
-  "dns_providers": [ ... DNSProviderConfig objects ... ],
-  "forward_auth_providers": [ ... ForwardAuthProvider objects ... ],
-  "oidc_config": { ... OIDCConfig including allowlist ... },
-  "users": [ ... User objects with PasswordHash ... ]
+  "arenet_version": "v2.29.0",
+  "routes": [ ... ],
+  "dns_providers": [ ... ],
+  "forward_auth_providers": [ ... ],
+  "oidc_config": { ... },
+  "maxmind_config": { ... },
+  "users": [ ... including service accounts ... ],
+  "external_certificates": [ ... ],
+  "extras": {
+    "managed_domains": [ ... ],
+    "error_templates": [ ... ],
+    "maintenance_page": { ... },
+    "alert_channels": [ ... ],
+    "alert_rules": [ ... ],
+    "crowdsec_config": { ... },
+    "crowdsec_watcher": { ... },
+    "automation_rules": { ... },
+    "update_check": { ... },
+    "geoip_update": { ... },
+    "server_position": { ... },
+    "api_tokens": [ ... ]
+  }
 }
 ```
+
+| Area | Section | Secrets (redacted by default) |
+| ---- | ------- | ----------------------------- |
+| Routes (incl. path rules, headers) | `routes` | Basic Auth hashes, credential-bearing header values |
+| Users (local, OIDC, service accounts) | `users` | password hashes |
+| DNS providers | `dns_providers` | every secret credential of the provider type |
+| Forward-auth providers, OIDC | `forward_auth_providers`, `oidc_config` | client secrets |
+| MaxMind account | `maxmind_config` | license key |
+| Uploaded TLS certificates | `external_certificates` | private keys |
+| Wildcard managed domains | `extras.managed_domains` | — |
+| Error page templates, maintenance page | `extras.error_templates`, `extras.maintenance_page` | — |
+| Alert channels and rules | `extras.alert_channels`, `extras.alert_rules` | SMTP password, webhook **URL** (a Discord / Slack URL is a credential) and header values |
+| CrowdSec bouncer + watcher | `extras.crowdsec_config`, `extras.crowdsec_watcher` | API key, watcher password |
+| Automation rules | `extras.automation_rules` | — |
+| Update check, GeoIP auto-update | `extras.update_check`, `extras.geoip_update` | — |
+| Server position (manual only) | `extras.server_position` | — |
+| Service-account API tokens | `extras.api_tokens` | token hashes |
+
+**The `extras` section (v2.29.0).** Backups made before v2.29.0 have no `extras` : restoring one leaves all those areas untouched. A backup with `extras` **replaces** each of them — including emptying a list or removing a setting absent from the file. Two exceptions : an auto-detected server position is never exported (it belongs to the host) and the live one is kept ; runtime state (last send / last error of channels and rules, token last use) is not exported.
+
+After a restore, Arenet applies everything without a restart : Caddy reload (routes, certificates, error pages, maintenance page, managed domains), the restored CrowdSec settings, automation rules and watcher, and the update-check / GeoIP schedules. Service accounts keep working with **their existing tokens** — integrations (n8n, Home Assistant…) need no new token.
 
 Fields **NOT** in the snapshot :
 - Caddy cert filesystem (`/var/lib/arenet/.local/share/caddy/`) — back this up separately if you want to skip ACME re-issuance on restore
 - Audit log (BoltDB `audit` bucket) — historical events, not config
 - SQLite event tables (waf_event, cert_event, throttle_event, ...) — runtime observability, not config
-- Server position (last-known geo, dashboard map state)
+- Sessions (everyone logs in again after a restore onto another instance)
 - OIDC manager runtime cache (rebuilt at first OIDC use)
 
 ---
 
 ## Sentinel resolution explained
 
-When you export **redacted**, secrets are replaced by sentinels :
+When you export **redacted**, every secret is replaced by the literal sentinel `$$ARENET_REDACTED$$` :
 
 ```json
-"clientSecret": "sentinel:oidc-config:default:client_secret"
-"passwordHash": "sentinel:users:alice:password_hash"
-"applicationSecret": "sentinel:dns_providers:ovh:application_secret"
+"client_secret": "$$ARENET_REDACTED$$",
+"password_hash": "$$ARENET_REDACTED$$",
+"config": { "url": "$$ARENET_REDACTED$$", "method": "POST", ... }
 ```
 
-When you restore, Arenet's `resolveSentinels` step looks up each sentinel in the LIVE store :
+When you restore, Arenet resolves each sentinel against the row of the **same identity** in the LIVE store (same route / user / channel / token id, same DNS provider id *and* type, the single CrowdSec row…) :
 
 - **Same instance restore** : the sentinel resolves to the live value → restored verbatim
-- **Different instance** : the sentinel doesn't exist in the target's live store → restore fails (loud-fail, AC #15)
-- **Different instance + `allowIncompleteRestore: true`** : the sentinel is cleared (empty string) → restored with empty value → next boot prints a WARN listing every cleared field for the operator to re-save
+- **Different instance** : nothing to inherit → the restore is rejected, nothing is written
+- **Different instance + `allowIncompleteRestore: true`** : the secret is cleared → restored with an empty value → the next boot prints a WARN listing every cleared field to re-save by hand. A service-account token whose hash cannot be inherited is **dropped** (a token without its hash can never authenticate) — issue a new one from the Users page.
 
-This is the "two paths forward" wording you see in the reject error :
-
-> Restore rejected: schema_version X is MAJOR-incompatible. Two paths forward: (1) downgrade Arenet to a binary that knows this schema major ; (2) export current config and re-import.
+The reject error names the row and field and gives the two paths forward : re-export the source with secrets included, or pass `--allow-incomplete-restore` knowingly.
 
 ---
 

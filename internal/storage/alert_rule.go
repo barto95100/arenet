@@ -85,6 +85,12 @@ type AlertRule struct {
 // source registry lookup, channel existence) is the API
 // CRUD layer's job — the storage layer only catches
 // shape drift that would corrupt the bucket scan.
+// ValidateAlertRule is the exported shim — internal/backup
+// re-validates a snapshot's rules before commit.
+func ValidateAlertRule(r AlertRule) error {
+	return r.validate()
+}
+
 func (r *AlertRule) validate() error {
 	if r.ID == "" {
 		return errors.New("alert_rule: id must not be empty")
