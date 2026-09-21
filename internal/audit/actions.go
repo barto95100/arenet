@@ -173,6 +173,12 @@ const (
 	ActionBackupScheduleUpdated = "backup_schedule_updated"
 	ActionBackupDeleted         = "backup_deleted"
 
+	// v2.35 — post-apply route check (2). UpdateRolledBack: an update
+	// broke a working route and was undone (before = the change,
+	// after = the restored route). CheckUpdated: the setting toggled.
+	ActionRouteUpdateRolledBack = "route_update_rolled_back"
+	ActionRouteCheckUpdated     = "route_check_updated"
+
 	// Step O.3 — managed-domain CRUD (2). The Created event
 	// also carries the count of covered routes whose ACMEChallenge
 	// was mutated to "inherited" (D8.A migration), so the audit
@@ -318,6 +324,8 @@ var allActions = []string{
 	ActionConfigRestoredRejected,
 	ActionBackupScheduleUpdated,
 	ActionBackupDeleted,
+	ActionRouteUpdateRolledBack,
+	ActionRouteCheckUpdated,
 	ActionManagedDomainCreated,
 	ActionManagedDomainDeleted,
 	ActionAutomationDecisionPushed,

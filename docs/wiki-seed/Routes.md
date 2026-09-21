@@ -283,6 +283,26 @@ For each intercepted code, Arenet returns its own response built from the route'
 
 ---
 
+## Check after save (v2.35)
+
+After every save, Arenet sends **one real request to the route through its own proxy** (to `127.0.0.1` with the route's host name, like a visitor):
+
+| Result | Meaning | What happens |
+| --- | --- | --- |
+| **ok** | Caddy routed the request (any answer except 502 / 503 / 504 — a 401 or 404 from the app is fine) | nothing |
+| **does not answer** | 502 / 503 / 504 (backend unreachable, timeout, no healthy upstream) | see below |
+| **certificate being issued** | a new HTTPS route whose Let's Encrypt certificate is not ready yet | info message — not a failure |
+
+When a route **does not answer**:
+
+- **Modification** — Arenet puts the **previous version back** and checks it. If the previous version answered, **your change is undone** and the form explains why (typically a wrong upstream address or port). If the previous version did not answer either (the backend is simply down), your change is **kept** with a warning — undoing it would fix nothing.
+- **Creation and re-activation** are **never undone** (you often create the route before starting the service): you get a warning only.
+- Disabling, maintenance and deletion are not checked.
+
+The check makes up to 3 attempts 2 s apart, so a save can take ~10 s when the route does not answer. Wildcard-only routes are not checked. Turn it off in **Settings → Route check after save**. Undone changes appear in the audit log as `route_update_rolled_back`.
+
+---
+
 ## Hot-reload
 
 Every route change applies in **< 5 seconds** without dropping in-flight connections. Caddy keeps the old config serving until the new one is fully provisioned, then swaps atomically.

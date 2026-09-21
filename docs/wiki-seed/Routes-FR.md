@@ -285,6 +285,26 @@ Pour chaque code intercepté, Arenet renvoie sa propre réponse construite depui
 
 ---
 
+## Vérification après enregistrement (v2.35)
+
+Après chaque enregistrement, Arenet envoie **une vraie requête à la route à travers son propre proxy** (vers `127.0.0.1` avec le nom d'hôte de la route, comme un visiteur) :
+
+| Résultat | Signification | Ce qui se passe |
+| --- | --- | --- |
+| **ok** | Caddy a routé la requête (toute réponse sauf 502 / 503 / 504 — un 401 ou 404 de l'application convient) | rien |
+| **ne répond pas** | 502 / 503 / 504 (backend injoignable, délai dépassé, aucun upstream sain) | voir ci-dessous |
+| **certificat en cours d'émission** | une nouvelle route HTTPS dont le certificat Let's Encrypt n'est pas encore prêt | message d'information — pas un échec |
+
+Quand une route **ne répond pas** :
+
+- **Modification** — Arenet **remet l'ancienne version** et la vérifie. Si l'ancienne répondait, **ta modification est annulée** et le formulaire explique pourquoi (typiquement une mauvaise adresse ou un mauvais port d'upstream). Si l'ancienne ne répondait pas non plus (le backend est simplement arrêté), ta modification est **gardée** avec un avertissement — l'annuler ne réparerait rien.
+- **Création et réactivation** ne sont **jamais annulées** (on crée souvent la route avant de démarrer le service) : avertissement seulement.
+- Désactivation, maintenance et suppression ne sont pas vérifiées.
+
+La vérification fait jusqu'à 3 essais espacés de 2 s : un enregistrement peut prendre ~10 s quand la route ne répond pas. Les routes uniquement en wildcard ne sont pas vérifiées. Désactivable dans **Réglages → Vérification des routes**. Les modifications annulées apparaissent dans l'audit sous `route_update_rolled_back`.
+
+---
+
 ## Hot-reload
 
 Chaque changement de route s'applique en **< 5 secondes** sans couper les connexions en cours. Caddy garde l'ancienne config active jusqu'à ce que la nouvelle soit entièrement provisionnée, puis bascule de façon atomique.

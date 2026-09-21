@@ -33,6 +33,7 @@ import (
 	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/geoipupdate"
 	"github.com/barto95100/arenet/internal/observability"
+	"github.com/barto95100/arenet/internal/routecheck"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/internal/updatecheck"
 )
@@ -244,6 +245,10 @@ type Handler struct {
 	// answer 409. onBackupScheduleChange re-applies the schedule.
 	autoBackup             AutoBackupRunner
 	onBackupScheduleChange func(storage.BackupScheduleConfig)
+
+	// routeProber runs the post-apply route check (v2.35); nil =
+	// skipped.
+	routeProber RouteProber
 
 	// geoIPUpdater (Brick 3, Task 5) powers the
 	// /api/v1/system/geoip/{update,status} endpoints. nil-tolerant:
@@ -1656,8 +1661,11 @@ type forwardAuthResp struct {
 // routeResponse is the wire shape returned by GET / POST / PUT /routes. The
 // JSON tags must match routeRequest's camelCase scheme.
 type routeResponse struct {
-	ID   string `json:"id"`
-	Host string `json:"host"`
+	// Check (v2.35) is the post-apply probe of a create / update /
+	// enable; absent on reads.
+	Check *routecheck.Result `json:"check,omitempty"`
+	ID    string             `json:"id"`
+	Host  string             `json:"host"`
 	// Step J.1 — pool surfaced on the wire. Always at least one
 	// element on a stored route (storage.validate guarantees it).
 	Upstreams []upstreamResp `json:"upstreams"`

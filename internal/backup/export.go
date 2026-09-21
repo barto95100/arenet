@@ -52,6 +52,7 @@ type Storer interface {
 	GetServerPosition(ctx context.Context) (storage.ServerPositionRecord, error)
 	ListAPITokenRows(ctx context.Context) (map[string][]byte, error)
 	GetBackupSchedule(ctx context.Context) (storage.BackupScheduleConfig, error)
+	GetRouteCheckConfig(ctx context.Context) (storage.RouteCheckConfig, error)
 }
 
 // UserStorer is the userstore subset Export consumes.

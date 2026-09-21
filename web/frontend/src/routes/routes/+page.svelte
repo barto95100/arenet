@@ -38,6 +38,7 @@
 		ManagedDomain,
 		PathRule,
 		Route,
+		RouteCheck,
 		RouteRateLimit,
 		RouteRequest,
 		TestUpstreamResponse,
@@ -549,10 +550,27 @@
 		}
 	}
 
+	// v2.35 — post-apply check feedback: a route saved but not
+	// answering stays on screen long enough to be read.
+	const ROUTE_CHECK_TOAST_MS = 12_000;
+	function reportRouteCheck(check: RouteCheck | undefined): void {
+		if (!check) return;
+		if (check.status === 'failed') {
+			pushToast(
+				t('routes.check.failed', { host: check.host ?? '', detail: check.detail ?? '' }),
+				'danger',
+				ROUTE_CHECK_TOAST_MS
+			);
+		} else if (check.status === 'pending_certificate') {
+			pushToast(t('routes.check.pendingCertificate', { host: check.host ?? '' }), 'info', ROUTE_CHECK_TOAST_MS);
+		}
+	}
+
 	async function handleEnableRoute(r: Route) {
 		try {
-			await enableRoute(r.id);
+			const res = await enableRoute(r.id);
 			pushToast(t('routes.enable.action'), 'success');
+			reportRouteCheck(res.check);
 			await loadRoutes();
 		} catch (err) {
 			const msg = err instanceof ApiError ? err.message : String(err);
@@ -2285,11 +2303,13 @@
 				payload.cert_id = formData.cert_id;
 			}
 			if (formMode === 'create') {
-				await createRoute(payload);
+				const saved = await createRoute(payload);
 				pushToast(t('routes.toasts.created'), 'success');
+				reportRouteCheck(saved.check);
 			} else if (editingId) {
-				await updateRoute(editingId, payload);
+				const saved = await updateRoute(editingId, payload);
 				pushToast(t('routes.toasts.updated'), 'success');
+				reportRouteCheck(saved.check);
 			}
 			// Bug 1 fix (C11 Pack A polish round 3, 2026-06-06):
 			// Save MUST clear editingId so the route-row-selected
@@ -2300,7 +2320,14 @@
 			closePanel();
 			await loadRoutes();
 		} catch (err) {
-			if (err instanceof ApiError && err.kind === 'validation') {
+			if (err instanceof ApiError && err.code === 'route_check_rolled_back') {
+				// v2.35 — the change broke a working route and was undone:
+				// keep the panel open with the explanation.
+				formError = t('errors.route_check_rolled_back', {
+					host: String(err.params?.host ?? ''),
+					detail: String(err.params?.detail ?? err.message)
+				});
+			} else if (err instanceof ApiError && err.kind === 'validation') {
 				const field = fieldFromMessage(err.message);
 				if (field) {
 					errors = { ...errors, [field]: err.message };

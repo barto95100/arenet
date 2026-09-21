@@ -3762,3 +3762,61 @@ describe('Routes page — v2.28 geo filtering (ASN)', () => {
 		expect(payload.countryBlock.exceptions.asns).toEqual([16276]);
 	});
 });
+
+// v2.35 — post-apply route check feedback.
+describe('Routes page — post-apply route check', () => {
+	async function fillAndSubmit() {
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'app.test');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+	}
+
+	it('warns (long toast) when the saved route does not answer, and creates it once', async () => {
+		apiMock.createRoute.mockResolvedValueOnce({
+			id: 'r1',
+			host: 'app.test',
+			check: { status: 'failed', host: 'app.test', httpStatus: 502, detail: 'the route answered 502 Bad Gateway' }
+		});
+		await fillAndSubmit();
+		await waitFor(() => expect(apiMock.createRoute).toHaveBeenCalledTimes(1));
+		expect(toastMock.pushToast).toHaveBeenCalledWith(
+			'app.test is saved but does not answer: the route answered 502 Bad Gateway. Check that its backend is running.',
+			'danger',
+			12000
+		);
+	});
+
+	it('explains a pending certificate without calling it a failure', async () => {
+		apiMock.createRoute.mockResolvedValueOnce({
+			id: 'r1',
+			host: 'app.test',
+			check: { status: 'pending_certificate', host: 'app.test' }
+		});
+		await fillAndSubmit();
+		await waitFor(() =>
+			expect(toastMock.pushToast).toHaveBeenCalledWith(
+				expect.stringContaining('certificate is still being issued'),
+				'info',
+				12000
+			)
+		);
+	});
+
+	it('keeps the panel open with the explanation when the change was undone (409)', async () => {
+		apiMock.createRoute.mockRejectedValueOnce(
+			new ApiError('undone', 409, 'validation', undefined, 'route_check_rolled_back', {
+				host: 'app.test',
+				detail: 'the route answered 502 Bad Gateway'
+			})
+		);
+		await fillAndSubmit();
+		expect(
+			await screen.findByText(/Change undone: app\.test answered before this change and stopped answering after it/)
+		).toBeInTheDocument();
+		expect(hostInput()).toBeInTheDocument(); // panel still open
+	});
+});

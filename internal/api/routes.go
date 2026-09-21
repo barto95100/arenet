@@ -447,6 +447,8 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Get("/admin/backup", h.getBackup)
 				r.Post("/admin/backup", h.postBackup)
 				r.Post("/admin/restore", h.postRestore)
+				r.Get("/settings/route-check", h.getRouteCheckConfig)
+				r.Put("/settings/route-check", h.putRouteCheckConfig)
 				r.Get("/settings/backup-schedule", h.getBackupSchedule)
 				r.Put("/settings/backup-schedule", h.putBackupSchedule)
 				r.Post("/admin/backups/run", h.runBackupNow)
@@ -1607,6 +1609,10 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	// re-querying.
 	resp := toResponse(created)
 	resp.EffectiveCertSource = computeEffectiveCertSource(created, mds)
+	// v2.35 — post-apply check. A creation is never undone (the
+	// service is often started after its route): report only.
+	check := h.checkRoute(r.Context(), created)
+	resp.Check = &check
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -2152,10 +2158,26 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		AfterJSON:  mustMarshalForAudit(routeForAudit(updated)),
 	})
 
+	// v2.35 — post-apply check: a change that broke a WORKING route is
+	// undone (409); if the previous version fails too, the change stays
+	// and the check is reported as a warning.
+	check := h.checkRoute(r.Context(), updated)
+	if check.Failed() {
+		rolledBack, rbErr := h.rollbackIfItFixes(r.Context(), previous, updated, check)
+		if rbErr != nil {
+			h.logger.Error("route check: rollback / re-apply failed, DB and Caddy may diverge", "err", rbErr, "id", id)
+		}
+		if rolledBack {
+			h.writeRolledBack(w, r, previous, updated, check)
+			return
+		}
+	}
+
 	// Step O.3: enrich the response with effectiveCertSource
 	// (AC #4). `mds` was fetched earlier for the reconcile pass.
 	resp := toResponse(updated)
 	resp.EffectiveCertSource = computeEffectiveCertSource(updated, mds)
+	resp.Check = &check
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -2234,6 +2256,12 @@ func (h *Handler) toggleRouteDisabled(w http.ResponseWriter, r *http.Request, di
 	})
 
 	resp := toResponse(updated)
+	if !disabled {
+		// v2.35 — re-enabling is reported, never undone (like a
+		// creation: the backend may come up later).
+		check := h.checkRoute(r.Context(), updated)
+		resp.Check = &check
+	}
 	// Attach the hint on the disable path so the frontend can pre-warn.
 	writeJSONWithHint(w, resp, disabled && lastHTTPS)
 }

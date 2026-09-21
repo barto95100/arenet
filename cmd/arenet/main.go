@@ -102,6 +102,7 @@ import (
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/ratelimit"
+	"github.com/barto95100/arenet/internal/routecheck"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/internal/systemhealth"
 	"github.com/barto95100/arenet/internal/throttle"
@@ -1815,6 +1816,9 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		}
 	}
 	apiHandler.SetAutoBackup(autoBackup, applyBackupSchedule)
+	// v2.35 — post-apply route check: probes go to Caddy's own
+	// listeners on the loopback.
+	apiHandler.SetRouteProber(routecheck.New(mgr.HTTPListen, mgr.HTTPSListen))
 	if bc, bcErr := store.GetBackupSchedule(ctx); bcErr != nil {
 		logger.Warn("scheduled backups: read config failed; leaving disabled", "err", bcErr)
 	} else {
