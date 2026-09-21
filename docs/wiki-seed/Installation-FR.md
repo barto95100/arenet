@@ -61,7 +61,7 @@ Clique **Submit** → tu es dedans. Le setup token est consommé (usage one-time
 
 ### Setup du répertoire de données (volume nommé vs bind mount)
 
-Le répertoire de données contient `arenet.db` (routes, users, audit, et **secrets** — client secrets OIDC, clés API DNS, le hash du password admin) plus les clés privées TLS sous `certmagic/`. Arenet le garde **owner-only (`0700`)**, appartenant à l'utilisateur distroless `nonroot` (UID **65532**).
+Le répertoire de données contient `arenet.db` (routes, users, audit, et **secrets** — client secrets OIDC, clés API DNS, le hash du password admin) plus les clés privées TLS sous `certmagic/`. Depuis la v2.30 ces secrets sont **chiffrés** avec `arenet.key`, généré à côté de la base au premier démarrage — sauvegarde-le à part (voir [Updates → Sûreté de migration](Updates-FR#5-sûreté-de-migration) ; `ARENET_SECRET_KEY_FILE` le déplace, par exemple vers un secret Docker). Arenet le garde **owner-only (`0700`)**, appartenant à l'utilisateur distroless `nonroot` (UID **65532**).
 
 **Volume nommé (le défaut) — rien à faire.** Docker seed l'ownership et les permissions d'un volume nommé neuf depuis le `/var/lib/arenet` de l'image, qui ship en `65532:65532` mode `0700`. Ça marche direct, et les secrets sont owner-only dès le premier boot.
 

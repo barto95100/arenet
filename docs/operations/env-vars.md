@@ -59,7 +59,7 @@ rationale).
 
 ## Runtime config (always-on)
 
-These 10 variables shape every Arenet boot. Most have sensible
+These 11 variables shape every Arenet boot. Most have sensible
 defaults; you'll typically touch 2–3 on a real install.
 
 ### `ARENET_DEV`
@@ -90,6 +90,25 @@ defaults; you'll typically touch 2–3 on a real install.
   database is silently created — watch the boot log for the
   "Initialised new database" line.
 - **Source**: `internal/config/config.go:266`.
+
+### `ARENET_SECRET_KEY_FILE`
+
+- **Purpose**: path of the key that encrypts the secrets stored
+  in `arenet.db` (DNS credentials, private keys of uploaded
+  certificates, CrowdSec / MaxMind / OIDC / forward-auth secrets,
+  alert channel credentials, sensitive route headers) — v2.30.
+- **Default**: `<data dir>/arenet.key`, generated on first boot
+  (32 random bytes, base64, mode 0600).
+- **Format**: file path. The file holds the base64 encoding of a
+  32-byte key (`openssl rand -base64 32` produces one).
+- **Example**: `ARENET_SECRET_KEY_FILE=/run/secrets/arenet_key`
+- **Notes**: **back the key up, separately from `arenet.db`** —
+  without it the encrypted secrets cannot be recovered. Arenet
+  refuses to start when the database is encrypted and the key is
+  missing or different; it never generates a new key over
+  encrypted data. Pointing this at a Docker secret or another
+  disk keeps a copied data directory from carrying its own key.
+- **Source**: `cmd/arenet/secrets_wiring.go`.
 
 ### `ARENET_CONFIG`
 
@@ -412,7 +431,7 @@ exits.
 
 ### No defaults missing
 
-All 19 variables documented above have an explicit default in
+All 20 variables documented above have an explicit default in
 the codebase. There are no variables whose default behaviour
 is unclear or undefined.
 

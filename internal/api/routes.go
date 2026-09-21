@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -749,8 +750,24 @@ func validateBasicAuth(req routeRequest, existingHash string) error {
 // audit bucket. Apply to every storage.Route passed into
 // appendAudit's AfterJSON / BeforeJSON since Step I.5 — refactored
 // in K.1 to read through the nested BasicAuth struct.
+//
+// v2.30: also blanks path-rule Basic Auth hashes and redacts the
+// values of credential-bearing request / response headers.
 func routeForAudit(r storage.Route) storage.Route {
 	r.BasicAuth.PasswordHash = ""
+	if len(r.PathRules) > 0 {
+		rules := slices.Clone(r.PathRules)
+		for i := range rules {
+			if ba := rules[i].BasicAuth; ba != nil && ba.PasswordHash != "" {
+				cp := *ba
+				cp.PasswordHash = ""
+				rules[i].BasicAuth = &cp
+			}
+		}
+		r.PathRules = rules
+	}
+	r.RequestHeaders = redactSensitiveHeaders(r.RequestHeaders)
+	r.ResponseHeaders = redactSensitiveHeaders(r.ResponseHeaders)
 	return r
 }
 

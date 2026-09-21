@@ -56,6 +56,7 @@ func effectiveConfigLogAttrs(
 		"crowdsec_api_key", setUnset("ARENET_CROWDSEC_API_KEY"),
 		"geoip_mmdb", setUnset("ARENET_GEOIP_MMDB"),
 		"geoip_asn_mmdb", setUnset("ARENET_GEOIP_ASN_MMDB"),
+		"secret_key_file", setUnset(envSecretKeyFile),
 	}
 	return attrs
 }

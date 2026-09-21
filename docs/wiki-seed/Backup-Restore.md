@@ -178,6 +178,14 @@ docker logs arenet | grep "setup token"
 
 ---
 
+## Encryption key (v2.30)
+
+Since v2.30 the secrets inside `arenet.db` are encrypted with `arenet.key` (see [Updates → Migration safety](Updates#5-migration-safety)). This changes nothing for the JSON backups on this page: the export decrypts, so a **with-secrets** export is plaintext (protect it) and a **redacted** one carries sentinels, exactly as before; a restore encrypts again with the target's own key. The key itself is **never** in a JSON backup.
+
+It matters for **file-level** backups (tar of the data directory): `arenet.db` is useless without the matching `arenet.key`. A tarball of the whole data directory holds both — store it like a secret, or keep the key elsewhere with `ARENET_SECRET_KEY_FILE` and back it up on its own.
+
+---
+
 ## Pre-snapshot rollback safety
 
 Before each restore, Arenet **export-snapshots the current state in-memory** (`backup.Export(secrets=true)`). If the Caddy reload AFTER the import fails (rare), Arenet immediately re-applies the pre-snapshot to BoltDB → you stay on the known-good config.

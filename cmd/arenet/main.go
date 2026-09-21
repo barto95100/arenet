@@ -286,6 +286,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		logger.Info("migrated DNS provider credentials to multi-type format", "count", n)
 	}
 
+	// v2.30: secrets at rest. Runs after the DNS migrations (they
+	// rewrite legacy rows) and BEFORE store.DB() is handed out below:
+	// the first run compacts, i.e. replaces, the database file.
+	// Fatal: a missing or wrong key must stop Arenet, not let it run
+	// with unreadable secrets.
+	if err := secureStoreAtRest(ctx, logger, store, secretKeyPath(os.Getenv, cfg.DataDir), true); err != nil {
+		return err
+	}
+
 	if cfg.InsertTestRoute {
 		if err := ensureTestRoute(ctx, logger, store); err != nil {
 			return err
@@ -1256,6 +1265,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	auditStore := audit.NewStore(store.DB())
 	userStore := auth.NewUserStore(store.DB())
 	sessionStore := auth.NewSessionStore(store.DB())
+	// v2.30: sessions are keyed by handle; rows keyed by the raw
+	// cookie value (pre-v2.30) are dropped → one re-login.
+	if n, err := sessionStore.PurgeLegacySessions(ctx); err != nil {
+		logger.Error("purge pre-v2.30 sessions failed", "err", err)
+	} else if n > 0 {
+		logger.Info("signed out pre-v2.30 sessions (session IDs are now stored hashed)", "sessions", n)
+	}
 	apiTokenStore := auth.NewAPITokenStore(store.DB())
 	hibpClient := auth.NewHIBPClient()
 	rateLimiter := auth.NewRateLimiter(logger)

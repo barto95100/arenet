@@ -207,6 +207,9 @@ func TestEncryption_MigratesExistingAndSealsNewWrites(t *testing.T) {
 	if n != 9 { // dns, ext, crowdsec, watcher, maxmind, oidc, fwd, channel, route
 		t.Errorf("rewritten rows = %d, want 9", n)
 	}
+	if err := s.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
 	assertSecretsReadable(t, s, ids)
 	assertFileHoldsNoSecret(t, path)
 	if fp, _ := s.SecretsKeyFingerprint(ctx); fp != keyringForTest(t, 1).Fingerprint() {

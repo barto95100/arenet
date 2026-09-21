@@ -290,6 +290,9 @@ func (s *Store) SecretsKeyFingerprint(ctx context.Context) (string, error) {
 // key other than the one recorded in the database, then seals every
 // secret still stored in clear and records the key fingerprint, all in
 // one transaction. Returns the number of rows rewritten. Idempotent.
+//
+// bbolt is copy-on-write: the pages that held the plaintext are only
+// freed, not wiped. When rows were rewritten the caller must Compact.
 func (s *Store) EnableEncryption(ctx context.Context, kr *secrets.Keyring) (int, error) {
 	if kr == nil {
 		return 0, errors.New("storage: nil secrets key")
@@ -340,23 +343,17 @@ func (s *Store) EnableEncryption(ctx context.Context, kr *secrets.Keyring) (int,
 		return 0, err
 	}
 	s.secretsKey.Store(kr)
-	if rewritten > 0 {
-		// bbolt is copy-on-write: the pages that held the plaintext
-		// are only freed, not wiped. Rewrite the file so they are gone.
-		if err := s.compact(); err != nil {
-			return rewritten, fmt.Errorf("storage: compact after sealing secrets: %w", err)
-		}
-	}
 	return rewritten, nil
 }
 
 // compactTxMaxSize bounds each copy transaction of compact.
 const compactTxMaxSize = 64 << 20
 
-// compact copies the database into a fresh file and swaps it in, so no
-// freed page survives. It replaces s.db: callers must run it before
-// the store's *bolt.DB is handed to anyone (boot only).
-func (s *Store) compact() error {
+// Compact copies the database into a fresh file and swaps it in, so no
+// freed page — e.g. one that held a secret before it was sealed —
+// survives in the file. It replaces the store's *bolt.DB: call it at
+// boot only, before DB() is handed to anyone.
+func (s *Store) Compact() error {
 	path := s.db.Path()
 	tmp := path + ".compact"
 	_ = os.Remove(tmp)

@@ -156,6 +156,30 @@ Précisions d'implémentation (2026-09-21) :
   garde-fou clé absente / différente, aucune valeur en clair dans le fichier
   BoltDB après migration (lecture binaire du fichier).
 
+### Constats d'implémentation (2026-09-21)
+
+- **bbolt ne nettoie pas les pages libérées** : sceller une ligne en
+  place laisse l'ancienne version en clair dans une page libre du
+  fichier (prouvé par test). D'où `Store.Compact()` (copie dans un
+  fichier neuf puis remplacement atomique) après toute passe qui a
+  réécrit des lignes — au boot seulement, avant de partager `DB()`.
+- **Journal d'audit** (même fichier) : les créations / modifications
+  gardaient l'URL des webhooks, les en-têtes sensibles des routes et
+  les hashes Basic Auth des règles par chemin — visibles aussi dans
+  l'UI d'audit. Rédaction complétée pour les nouveaux événements +
+  nettoyage unique des anciens (`ScrubAuditSecrets`, JSON brut, id et
+  horodatage conservés).
+- **Sessions** : `GET /auth/sessions` renvoyait les identifiants bruts
+  (= cookies) de tous les navigateurs de l'utilisateur, et l'audit /
+  les logs les enregistraient. L'API liste et révoque désormais par
+  *handle*.
+- Démarrage : clé absente ou différente sur une base chiffrée → refus
+  explicite (code 1), jamais de nouvelle clé. L'export CLI ne crée pas
+  de clé sur une base jamais chiffrée.
+- Hors périmètre, documenté : blocs disque de l'ancien fichier après
+  remplacement (niveau système de fichiers), anciennes sauvegardes
+  fichier de `arenet.db` prises avant la mise à niveau.
+
 ## PR 3 — backups chiffrés par phrase
 
 - Export « avec secrets » : phrase obligatoire (≥ 12 caractères) ; clé de
