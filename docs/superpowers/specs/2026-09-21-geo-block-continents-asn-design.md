@@ -97,9 +97,12 @@ L'IP est résolue une seule fois en `{country, continent, asn}`. Couches :
    s'appliquer ; seules les règles ASN tombent en fail-open (log WARN une
    fois).
 
-La raison du blocage précise ce qui a correspondu (`continent:AS`,
-`country:RU`, `asn:14061`) dans l'événement country-block → visible dans
-**Logs** sans changement de schéma (le champ `reason` existe déjà).
+Les valeurs de `reason` restent **inchangées** (`deny-match`,
+`allow-miss`… — enum déclarée stable dans `matcher.go`, lue par les Logs) ;
+un blocage par continent reste lisible car l'événement porte déjà le
+**pays** résolu. Une nouvelle raison `exception` (acceptation) est ajoutée,
+rétro-compatible. (Détail « ce qui a correspondu » dans les Logs →
+backlog, demande un champ d'événement.)
 
 ## 3. Interface (maquette validée)
 

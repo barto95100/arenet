@@ -880,7 +880,16 @@ export interface TestUpstreamResponse {
 export interface CountryBlock {
 	mode: 'off' | 'allow' | 'deny';
 	countryList: string[];
+	/** v2.27 — MaxMind continent codes (EU, AS, AF, NA, SA, OC, AN). */
+	continents: string[];
+	/** v2.27 — countries a deny gate always lets through. */
+	exceptions: CountryBlockExceptions;
 	statusCode: number;
+}
+
+/** v2.27 — deny-mode exceptions (always-allowed sources). */
+export interface CountryBlockExceptions {
+	countries: string[];
 }
 
 /**
@@ -893,6 +902,10 @@ export interface CountryBlock {
 export interface CountryBlockRequest {
 	mode: 'off' | 'allow' | 'deny';
 	countryList: string[];
+	/** v2.27 — optional; omitted or [] = no continent rule. */
+	continents?: string[];
+	/** v2.27 — only valid with mode 'deny' (the API rejects otherwise). */
+	exceptions?: CountryBlockExceptions;
 	statusCode: number;
 }
 

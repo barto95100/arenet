@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"runtime/pprof"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -830,6 +831,8 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 			"host", r.Host,
 			"mode", string(r.CountryBlock.Mode),
 			"country_list_count", len(r.CountryBlock.CountryList),
+			"continents", r.CountryBlock.Continents,
+			"exception_count", exceptionCount(r.CountryBlock),
 			"status_code", r.CountryBlock.StatusCode,
 		)
 	}
@@ -3016,14 +3019,24 @@ func buildCountryBlockHandler(routeID, _ string, cb countryblock.Config) map[str
 	if cb.Mode == "" || cb.Mode == countryblock.ModeOff {
 		return nil
 	}
+	config := map[string]any{
+		"mode":        string(cb.Mode),
+		"countryList": cb.CountryList,
+		"statusCode":  cb.StatusCode,
+	}
+	// v2.27 — emitted only when set, so a country-only route keeps a
+	// byte-identical handler block. Without these keys the module
+	// would silently ignore continents and exceptions.
+	if len(cb.Continents) > 0 {
+		config["continents"] = cb.Continents
+	}
+	if cb.Exceptions != nil && len(cb.Exceptions.Countries) > 0 {
+		config["exceptions"] = map[string]any{"countries": cb.Exceptions.Countries}
+	}
 	return map[string]any{
 		"handler": countryblock.HandlerName,
 		"routeID": routeID,
-		"config": map[string]any{
-			"mode":        string(cb.Mode),
-			"countryList": cb.CountryList,
-			"statusCode":  cb.StatusCode,
-		},
+		"config":  config,
 	}
 }
 
@@ -3104,20 +3117,36 @@ func countryBlockFingerprint(cb countryblock.Config) string {
 	if mode == "" {
 		mode = countryblock.ModeOff
 	}
-	list := make([]string, len(cb.CountryList))
-	copy(list, cb.CountryList)
 	// Stable order so [FR, DE] and [DE, FR] don't generate a
 	// false diff. Operator's input order isn't load-bearing
 	// for the gate decision (containsCountry is a linear
 	// scan), so the canonicalisation is safe here.
-	for i := 0; i < len(list); i++ {
-		for j := i + 1; j < len(list); j++ {
-			if list[j] < list[i] {
-				list[i], list[j] = list[j], list[i]
-			}
-		}
+	fp := fmt.Sprintf("%s|%s|%d", string(mode), sortedJoin(cb.CountryList), cb.StatusCode)
+	// v2.27 — appended only when set so pre-v2.27 fingerprints are
+	// unchanged (no spurious "changed" log after an upgrade).
+	if len(cb.Continents) > 0 {
+		fp += "|continents=" + sortedJoin(cb.Continents)
 	}
-	return fmt.Sprintf("%s|%s|%d", string(mode), strings.Join(list, ","), cb.StatusCode)
+	if cb.Exceptions != nil && len(cb.Exceptions.Countries) > 0 {
+		fp += "|except=" + sortedJoin(cb.Exceptions.Countries)
+	}
+	return fp
+}
+
+// exceptionCount returns the number of deny-mode exceptions.
+func exceptionCount(cb countryblock.Config) int {
+	if cb.Exceptions == nil {
+		return 0
+	}
+	return len(cb.Exceptions.Countries)
+}
+
+// sortedJoin returns the codes sorted and comma-joined, without
+// mutating the input.
+func sortedJoin(codes []string) string {
+	list := slices.Clone(codes)
+	slices.Sort(list)
+	return strings.Join(list, ",")
 }
 
 // buildHeadersHandler returns the Caddy `headers` handler config for

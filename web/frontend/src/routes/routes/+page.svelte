@@ -56,6 +56,8 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import CertSourceBadge from '$lib/components/CertSourceBadge.svelte';
 	import Flag from '$lib/components/Flag.svelte';
+	import ContinentPicker from '$lib/components/routes/ContinentPicker.svelte';
+	import CountryExceptionsPicker from '$lib/components/routes/CountryExceptionsPicker.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -137,7 +139,8 @@
 		// when disabled); the wire optionality lives on
 		// the RouteRequest side for callers that want
 		// preserve-previous semantics.
-		countryBlock: CountryBlockRequest;
+		// v2.27 — the form always carries the optional lists.
+		countryBlock: Required<CountryBlockRequest>;
 		// Step #R-PROXMOX-HTTPS-LOOP — narrowed to a non-
 		// optional boolean. The form always carries a
 		// definite value; the on-wire optionality
@@ -341,6 +344,8 @@
 			countryBlock: {
 				mode: 'off' as 'off' | 'allow' | 'deny',
 				countryList: [] as string[],
+				continents: [] as string[],
+				exceptions: { countries: [] as string[] },
 				statusCode: 0
 			},
 			healthCheck: {
@@ -991,6 +996,20 @@
 		return `${n} pays`;
 	});
 
+	// v2.27 — section-title summary per rule type, e.g.
+	// "2 continent(s), 1 country(ies), 1 exception(s)". Empty
+	// lists are omitted; exceptions count only in deny mode.
+	const geoSummary = $derived.by(() => {
+		const cb = formData.countryBlock;
+		const parts: string[] = [];
+		if (cb.continents.length > 0)
+			parts.push(t('routes.form.geoSummaryContinents', { count: cb.continents.length }));
+		parts.push(t('routes.form.geoSummaryCountries', { count: cb.countryList.length }));
+		if (cb.mode === 'deny' && cb.exceptions.countries.length > 0)
+			parts.push(t('routes.form.geoSummaryExceptions', { count: cb.exceptions.countries.length }));
+		return (language.current && parts.join(', ')) || parts.join(', ');
+	});
+
 	// W.7 — add a country code to the list if not already
 	// present + close the dropdown. Shared by the keyboard
 	// Enter handler, the click-on-suggestion handler, and
@@ -1204,6 +1223,9 @@
 			countryBlock: {
 				mode: r.countryBlock.mode,
 				countryList: [...r.countryBlock.countryList],
+				// v2.27 — `?? []`: tolerate a pre-v2.27 API.
+				continents: [...(r.countryBlock.continents ?? [])],
+				exceptions: { countries: [...(r.countryBlock.exceptions?.countries ?? [])] },
 				statusCode: r.countryBlock.statusCode
 			},
 			// Step O: "inherited" is a server-derived value the
@@ -2027,6 +2049,16 @@
 				countryBlock: {
 					mode: formData.countryBlock.mode,
 					countryList: [...formData.countryBlock.countryList],
+					continents: [...formData.countryBlock.continents],
+					// v2.27 — exceptions are deny-only (the API rejects
+					// them otherwise); kept in the form state across
+					// mode flips but only shipped for deny.
+					exceptions: {
+						countries:
+							formData.countryBlock.mode === 'deny'
+								? [...formData.countryBlock.exceptions.countries]
+								: []
+					},
 					statusCode: formData.countryBlock.statusCode
 				},
 				// path-based-rules Task 9 — route-level IP filter always
@@ -3969,8 +4001,8 @@
 						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
 							{language.current && t('routes.form.countryBlockBlockedListLabel')}
 							{#if formData.countryBlock.mode !== 'off'}
-								<span class="ml-1 text-xs text-muted">
-									({formData.countryBlock.mode} · {formData.countryBlock.countryList.length})
+								<span class="ml-1 text-xs text-muted" data-testid="country-block-summary">
+									({formData.countryBlock.mode} · {geoSummary})
 								</span>
 							{:else}
 								<!-- W.7 follow-up: surface the "off" state in
@@ -4039,6 +4071,9 @@
 							</div>
 
 							{#if formData.countryBlock.mode !== 'off'}
+								<!-- v2.27 — continents block (validated mockup:
+								     continents, then countries, then exceptions). -->
+								<ContinentPicker bind:value={formData.countryBlock.continents} />
 								<!-- Counter + autocomplete combo. The counter
 								     uses mode-meaningful copy + plural agrees
 								     with N; hidden when N=0 so the empty
@@ -4156,16 +4191,22 @@
 										</button>
 									</div>
 
-									{#if formData.countryBlock.mode === 'allow' && formData.countryBlock.countryList.length === 0}
+									{#if formData.countryBlock.mode === 'allow' && formData.countryBlock.countryList.length === 0 && formData.countryBlock.continents.length === 0}
 										<p
 											class="text-xs text-down mt-1"
 											data-testid="country-block-allow-empty-error"
 										>
-											ALLOW exige au moins un pays — sinon tout le trafic
-											public serait bloqué.
+											{language.current && t('routes.form.geoAllowEmptyError')}
 										</p>
 									{/if}
 								</div>
+								{#if formData.countryBlock.mode === 'deny'}
+									<!-- v2.27 — deny-only exceptions (spec D4). -->
+									<CountryExceptionsPicker
+										bind:value={formData.countryBlock.exceptions.countries}
+										blocked={formData.countryBlock.countryList}
+									/>
+								{/if}
 								<div>
 									<label
 										for="route-country-block-status"

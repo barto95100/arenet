@@ -184,7 +184,7 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// {mode:"off", countryList:[], statusCode:0}; tests
 		// that need the gate active override via the partial
 		// Route overrides.
-		countryBlock: { mode: 'off', countryList: [], statusCode: 0 },
+		countryBlock: { mode: 'off', countryList: [], continents: [], exceptions: { countries: [] }, statusCode: 0 },
 		// Step #R-PROXMOX-HTTPS-LOOP — strict default. Tests
 		// exercising the disclosure / toggle override via the
 		// partial Route overrides.
@@ -1370,9 +1370,10 @@ describe('Routes page — W.5 country-block form section', () => {
 		await openCreateForm();
 		// The <summary> for the country-block <details> is
 		// the canonical anchor.
-		// v2.9.17 i18n hotfix — "Pays bloqués" migrated to t()
-		// → "Blocked countries" in the EN bundle (test boot default).
-		expect(screen.getByText('Blocked countries')).toBeInTheDocument();
+		// v2.9.17 i18n hotfix — "Pays bloqués" migrated to t();
+		// v2.27 renamed the section → "Geo filtering" in the EN
+		// bundle (test boot default).
+		expect(screen.getByText('Geo filtering')).toBeInTheDocument();
 	});
 
 	it('mode=off hides the country-list + status-code sub-fields', async () => {
@@ -3628,5 +3629,85 @@ describe('Routes page — Task 9 IP filter + path rules wiring', () => {
 		});
 		// CRITICAL WIRE SHAPE — plain password, never passwordHash.
 		expect(payload.pathRules[0].basicAuth.passwordHash).toBeUndefined();
+	});
+});
+
+// v2.27 — geo filtering: continents + deny-only exceptions.
+describe('Routes page — v2.27 geo filtering (continents + exceptions)', () => {
+	function firstURL(): HTMLInputElement {
+		return upstreamURLInputs()[0];
+	}
+
+	it('continents are shown for allow and deny; exceptions only for deny', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
+		await tick();
+		expect(screen.getByTestId('geo-continents')).toBeInTheDocument();
+		expect(screen.queryByTestId('geo-exceptions')).not.toBeInTheDocument();
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		expect(screen.getByTestId('geo-exceptions')).toBeInTheDocument();
+	});
+
+	it('a continent satisfies the allow-list footgun guard', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
+		await tick();
+		expect(screen.getByTestId('country-block-allow-empty-error')).toBeInTheDocument();
+		await userEvent.click(screen.getByTestId('geo-continent-EU'));
+		await tick();
+		expect(screen.queryByTestId('country-block-allow-empty-error')).not.toBeInTheDocument();
+	});
+
+	it('deny: continents + exceptions reach the POST payload and the summary', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({ host: 'geo.example.com' }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'geo.example.com');
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'http://127.0.0.1:8080');
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		await userEvent.click(screen.getByTestId('geo-continent-AS'));
+		await userEvent.type(screen.getByTestId('geo-exceptions-input'), 'JP{enter}');
+		await tick();
+		expect(screen.getAllByTestId('geo-exception-chip')).toHaveLength(1);
+		expect(screen.getByTestId('country-block-summary').textContent).toContain('1 continent(s)');
+		expect(screen.getByTestId('country-block-summary').textContent).toContain('1 exception(s)');
+
+		await userEvent.click(screen.getByRole('button', { name: /^Create$/i }));
+		await tick();
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
+		const payload = apiMock.createRoute.mock.calls[0][0] as {
+			countryBlock: { mode: string; continents: string[]; exceptions: { countries: string[] } };
+		};
+		expect(payload.countryBlock.mode).toBe('deny');
+		expect(payload.countryBlock.continents).toEqual(['AS']);
+		expect(payload.countryBlock.exceptions.countries).toEqual(['JP']);
+	});
+
+	it('exceptions are not shipped once the mode leaves deny', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({ host: 'geo2.example.com' }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'geo2.example.com');
+		await userEvent.clear(firstURL());
+		await userEvent.type(firstURL(), 'http://127.0.0.1:8080');
+		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
+		await tick();
+		await userEvent.click(screen.getByTestId('geo-continent-EU'));
+		await userEvent.type(screen.getByTestId('geo-exceptions-input'), 'FR{enter}');
+		await userEvent.click(screen.getByTestId('country-block-mode-allow'));
+		await tick();
+		await userEvent.click(screen.getByRole('button', { name: /^Create$/i }));
+		await tick();
+		const payload = apiMock.createRoute.mock.calls[0][0] as {
+			countryBlock: { mode: string; continents: string[]; exceptions: { countries: string[] } };
+		};
+		expect(payload.countryBlock.mode).toBe('allow');
+		expect(payload.countryBlock.continents).toEqual(['EU']);
+		expect(payload.countryBlock.exceptions.countries).toEqual([]);
 	});
 });
