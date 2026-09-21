@@ -121,7 +121,7 @@ func (s *Store) GetWatcherCredentials(ctx context.Context) (WatcherCredentials, 
 		if raw == nil {
 			return ErrNotFound
 		}
-		return json.Unmarshal(raw, &out)
+		return s.decodeRow(bucketAutomation, raw, &out)
 	})
 	if err != nil {
 		return WatcherCredentials{}, err
@@ -149,7 +149,7 @@ func (s *Store) PutWatcherCredentials(ctx context.Context, c WatcherCredentials)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		buf, err := json.Marshal(c)
+		buf, err := s.encodeRow(bucketAutomation, c)
 		if err != nil {
 			return fmt.Errorf("marshal watcher_credentials: %w", err)
 		}

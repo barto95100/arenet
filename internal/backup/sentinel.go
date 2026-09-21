@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -219,33 +218,10 @@ func (e *ErrSchemaMajorMismatch) Error() string {
 	)
 }
 
-// sensitiveHeaderNames are header names whose values are credentials.
-var sensitiveHeaderNames = map[string]struct{}{
-	"authorization":       {},
-	"proxy-authorization": {},
-	"cookie":              {},
-	"set-cookie":          {},
-	"x-api-key":           {},
-	"api-key":             {},
-}
-
-// sensitiveHeaderFragments flag any header whose name contains them.
-var sensitiveHeaderFragments = []string{"token", "secret", "password", "api-key", "apikey"}
-
 // IsSensitiveHeader reports whether a route header's value is a
-// credential that backups must treat as a secret (v2.29).
-func IsSensitiveHeader(name string) bool {
-	n := strings.ToLower(strings.TrimSpace(name))
-	if _, ok := sensitiveHeaderNames[n]; ok {
-		return true
-	}
-	for _, f := range sensitiveHeaderFragments {
-		if strings.Contains(n, f) {
-			return true
-		}
-	}
-	return false
-}
+// credential that backups must treat as a secret (v2.29). The rule
+// lives in storage, which also seals these values at rest.
+func IsSensitiveHeader(name string) bool { return storage.IsSensitiveHeader(name) }
 
 // redactHeaders returns a copy of h with sensitive values replaced by
 // the sentinel (nil stays nil).

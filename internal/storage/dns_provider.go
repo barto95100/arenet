@@ -177,7 +177,7 @@ func (s *Store) ListDNSProviders(ctx context.Context) ([]DNSProviderConfig, erro
 		b := tx.Bucket([]byte(bucketDNSProviders))
 		return b.ForEach(func(_, raw []byte) error {
 			var c DNSProviderConfig
-			if err := json.Unmarshal(raw, &c); err != nil {
+			if err := s.decodeRow(bucketDNSProviders, raw, &c); err != nil {
 				return fmt.Errorf("unmarshal dns provider: %w", err)
 			}
 			out = append(out, c)
@@ -205,7 +205,7 @@ func (s *Store) GetDNSProvider(ctx context.Context, id string) (DNSProviderConfi
 		if raw == nil {
 			return ErrNotFound
 		}
-		return json.Unmarshal(raw, &out)
+		return s.decodeRow(bucketDNSProviders, raw, &out)
 	})
 	if err != nil {
 		return DNSProviderConfig{}, err
@@ -226,7 +226,7 @@ func (s *Store) CreateDNSProvider(ctx context.Context, c DNSProviderConfig) (DNS
 	if err := c.validate(); err != nil {
 		return DNSProviderConfig{}, err
 	}
-	buf, err := json.Marshal(c)
+	buf, err := s.encodeRow(bucketDNSProviders, c)
 	if err != nil {
 		return DNSProviderConfig{}, fmt.Errorf("marshal dns provider: %w", err)
 	}
@@ -263,7 +263,7 @@ func (s *Store) UpdateDNSProvider(ctx context.Context, id string, c DNSProviderC
 			return ErrNotFound
 		}
 		var existing DNSProviderConfig
-		if err := json.Unmarshal(raw, &existing); err != nil {
+		if err := s.decodeRow(bucketDNSProviders, raw, &existing); err != nil {
 			return fmt.Errorf("unmarshal dns provider: %w", err)
 		}
 		merged := c
@@ -282,7 +282,7 @@ func (s *Store) UpdateDNSProvider(ctx context.Context, id string, c DNSProviderC
 		if err := merged.validate(); err != nil {
 			return err
 		}
-		buf, err := json.Marshal(merged)
+		buf, err := s.encodeRow(bucketDNSProviders, merged)
 		if err != nil {
 			return fmt.Errorf("marshal dns provider: %w", err)
 		}

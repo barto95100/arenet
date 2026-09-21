@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/barto95100/arenet/internal/secrets"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -211,42 +212,43 @@ func (s *Store) RestoreSnapshot(ctx context.Context, in RestoreSnapshotInput) er
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 
+	kr := s.keyring()
 	return s.db.Update(func(tx *bolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := resetAndFill(tx, bucketRoutes, in.Routes); err != nil {
+		if err := resetAndFill(tx, kr, bucketRoutes, in.Routes); err != nil {
 			return fmt.Errorf("restore routes: %w", err)
 		}
-		if err := resetAndFill(tx, bucketUsers, in.Users); err != nil {
+		if err := resetAndFill(tx, kr, bucketUsers, in.Users); err != nil {
 			return fmt.Errorf("restore users: %w", err)
 		}
-		if err := resetAndFill(tx, bucketDNSProviders, in.DNSProviders); err != nil {
+		if err := resetAndFill(tx, kr, bucketDNSProviders, in.DNSProviders); err != nil {
 			return fmt.Errorf("restore dns_providers: %w", err)
 		}
-		if err := resetAndFill(tx, bucketForwardAuthProviders, in.ForwardAuthProviders); err != nil {
+		if err := resetAndFill(tx, kr, bucketForwardAuthProviders, in.ForwardAuthProviders); err != nil {
 			return fmt.Errorf("restore forward_auth_providers: %w", err)
 		}
 		oidcRows := map[string][]byte{}
 		if len(in.OIDCConfig) > 0 {
 			oidcRows["default"] = in.OIDCConfig
 		}
-		if err := resetAndFill(tx, bucketOIDCConfig, oidcRows); err != nil {
+		if err := resetAndFill(tx, kr, bucketOIDCConfig, oidcRows); err != nil {
 			return fmt.Errorf("restore oidc_config: %w", err)
 		}
 		maxMindRows := map[string][]byte{}
 		if len(in.MaxMindConfig) > 0 {
 			maxMindRows[maxMindConfigKey] = in.MaxMindConfig
 		}
-		if err := resetAndFill(tx, bucketMaxMindConfig, maxMindRows); err != nil {
+		if err := resetAndFill(tx, kr, bucketMaxMindConfig, maxMindRows); err != nil {
 			return fmt.Errorf("restore maxmind_config: %w", err)
 		}
-		if err := resetAndFill(tx, bucketExternalCertificates, in.ExternalCertificates); err != nil {
+		if err := resetAndFill(tx, kr, bucketExternalCertificates, in.ExternalCertificates); err != nil {
 			return fmt.Errorf("restore external_certificates: %w", err)
 		}
 		if in.Extras != nil {
 			for bucket, rows := range extraRows {
-				if err := resetAndFill(tx, bucket, rows); err != nil {
+				if err := resetAndFill(tx, kr, bucket, rows); err != nil {
 					return fmt.Errorf("restore %s: %w", bucket, err)
 				}
 			}
@@ -259,7 +261,9 @@ func (s *Store) RestoreSnapshot(ctx context.Context, in RestoreSnapshotInput) er
 // row in rows. Bucket must already exist (NewStore creates them).
 // Done inside the caller's transaction so the reset + fill are
 // atomic with the rest of the restore.
-func resetAndFill(tx *bolt.Tx, bucketName string, rows map[string][]byte) error {
+// Secret fields are sealed with kr on the way in (nil = encryption
+// off), so a restore never writes a secret in clear.
+func resetAndFill(tx *bolt.Tx, kr *secrets.Keyring, bucketName string, rows map[string][]byte) error {
 	b := tx.Bucket([]byte(bucketName))
 	if b == nil {
 		return fmt.Errorf("bucket %q missing", bucketName)
@@ -281,6 +285,10 @@ func resetAndFill(tx *bolt.Tx, bucketName string, rows map[string][]byte) error 
 		}
 	}
 	for k, v := range rows {
+		v, _, err := sealRow(kr, bucketName, v)
+		if err != nil {
+			return fmt.Errorf("seal %q: %w", k, err)
+		}
 		if err := b.Put([]byte(k), v); err != nil {
 			return fmt.Errorf("put %q: %w", k, err)
 		}

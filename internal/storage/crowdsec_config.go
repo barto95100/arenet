@@ -18,7 +18,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -206,7 +205,7 @@ func (s *Store) GetCrowdSecConfig(ctx context.Context) (CrowdSecConfig, error) {
 		if raw == nil {
 			return ErrNotFound
 		}
-		return json.Unmarshal(raw, &out)
+		return s.decodeRow(bucketCrowdSecConfig, raw, &out)
 	})
 	if err != nil {
 		return CrowdSecConfig{}, err
@@ -271,11 +270,11 @@ func (s *Store) PutCrowdSecConfig(ctx context.Context, c CrowdSecConfig) error {
 		b := tx.Bucket([]byte(bucketCrowdSecConfig))
 		if raw := b.Get([]byte(crowdSecConfigKey)); raw != nil {
 			var existing CrowdSecConfig
-			if err := json.Unmarshal(raw, &existing); err == nil && !existing.CreatedAt.IsZero() {
+			if err := s.decodeRow(bucketCrowdSecConfig, raw, &existing); err == nil && !existing.CreatedAt.IsZero() {
 				c.CreatedAt = existing.CreatedAt
 			}
 		}
-		buf, err := json.Marshal(c)
+		buf, err := s.encodeRow(bucketCrowdSecConfig, c)
 		if err != nil {
 			return fmt.Errorf("marshal crowdsec_config: %w", err)
 		}

@@ -18,7 +18,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -204,7 +203,7 @@ func (s *Store) GetOIDCConfig(ctx context.Context) (OIDCConfig, error) {
 		if raw == nil {
 			return ErrNotFound
 		}
-		return json.Unmarshal(raw, &out)
+		return s.decodeRow(bucketOIDCConfig, raw, &out)
 	})
 	if err != nil {
 		return OIDCConfig{}, err
@@ -244,11 +243,11 @@ func (s *Store) PutOIDCConfig(ctx context.Context, c OIDCConfig) error {
 		// Preserve CreatedAt from the existing row if present.
 		if raw := b.Get([]byte(oidcConfigKey)); raw != nil {
 			var existing OIDCConfig
-			if err := json.Unmarshal(raw, &existing); err == nil && !existing.CreatedAt.IsZero() {
+			if err := s.decodeRow(bucketOIDCConfig, raw, &existing); err == nil && !existing.CreatedAt.IsZero() {
 				c.CreatedAt = existing.CreatedAt
 			}
 		}
-		buf, err := json.Marshal(c)
+		buf, err := s.encodeRow(bucketOIDCConfig, c)
 		if err != nil {
 			return fmt.Errorf("marshal oidc_config: %w", err)
 		}
