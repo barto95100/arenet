@@ -128,6 +128,14 @@ Fix : in authentik, **Applications → Providers → your provider → Issuer mo
 
 ---
 
+## Sessions and the idle lock
+
+- A session lasts **24 h** (30 days with *Remember me*), extended by activity.
+- After **15 minutes without activity** the session is **locked**: the lock screen asks for your password again — or, for an OIDC account, to sign in again through your identity provider.
+- **Activity = something you did** (a click or keystroke that reaches the server). Since **v2.32**, the requests the UI sends on its own — notification bell every minute, heartbeat, auto-refresh of Logs / Certificates / CrowdSec live — **no longer count**: an Arenet tab left open on an unattended computer locks after 15 minutes. Before v2.32 those requests kept the session awake indefinitely.
+
+---
+
 ## Operational : the break-glass account
 
 The first admin you created during the setup wizard is a **local account** (username + password stored in BoltDB, Argon2id-hashed). This account survives any OIDC-side breakage :

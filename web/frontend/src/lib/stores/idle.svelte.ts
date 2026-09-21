@@ -16,15 +16,39 @@ import { auth } from './auth.svelte';
 
 export const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 
+/**
+ * User interactions that prove someone is at the keyboard. They do not
+ * reset the timer themselves (activity = server action, decision
+ * Q3bis); they decide whether the NEXT server action counts.
+ */
+const INTERACTION_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'] as const;
+
 class IdleStore {
 	private timerId: ReturnType<typeof setTimeout> | null = null;
 	lastReset = $state(Date.now());
+	private lastInteraction = 0;
 
 	start(): void {
 		this.reset();
 		if (typeof document !== 'undefined') {
 			document.addEventListener('visibilitychange', this.onVisibilityChange);
 		}
+		if (typeof window !== 'undefined') {
+			for (const ev of INTERACTION_EVENTS) {
+				window.addEventListener(ev, this.onInteraction, { passive: true, capture: true });
+			}
+		}
+	}
+
+	/**
+	 * True when the user interacted with the page since the last reset.
+	 * The API client sends requests made without such an interaction —
+	 * polling, heartbeat, auto-refresh — as background requests: they
+	 * neither reset this timer nor the server's LastActivity, so an
+	 * unattended open tab locks after IDLE_TIMEOUT_MS (v2.32).
+	 */
+	get userActiveSinceReset(): boolean {
+		return this.lastInteraction > this.lastReset;
 	}
 
 	stop(): void {
@@ -34,6 +58,11 @@ class IdleStore {
 		}
 		if (typeof document !== 'undefined') {
 			document.removeEventListener('visibilitychange', this.onVisibilityChange);
+		}
+		if (typeof window !== 'undefined') {
+			for (const ev of INTERACTION_EVENTS) {
+				window.removeEventListener(ev, this.onInteraction, { capture: true });
+			}
 		}
 	}
 
@@ -59,6 +88,10 @@ class IdleStore {
 			this.timerId = null;
 		}, IDLE_TIMEOUT_MS);
 	}
+
+	private onInteraction = (): void => {
+		this.lastInteraction = Date.now();
+	};
 
 	private onVisibilityChange = (): void => {
 		// Tab visibility transition does not reset the timer. If the tab

@@ -91,3 +91,37 @@ describe('IdleStore.start / stop', () => {
 		expect(auth.state).toBe('authenticated');
 	});
 });
+
+describe('IdleStore.userActiveSinceReset (v2.32)', () => {
+	it('is false until the user interacts after a reset, true after', () => {
+		auth.state = 'authenticated';
+		idle.start();
+		vi.advanceTimersByTime(10);
+		expect(idle.userActiveSinceReset).toBe(false);
+		window.dispatchEvent(new Event('keydown'));
+		expect(idle.userActiveSinceReset).toBe(true);
+		vi.advanceTimersByTime(10);
+		idle.reset();
+		expect(idle.userActiveSinceReset).toBe(false);
+	});
+
+	it('an unattended tab locks even though polling keeps answering', () => {
+		auth.state = 'authenticated';
+		idle.start();
+		// Polling responses are background: the API client never calls
+		// reset() for them, so the countdown runs out.
+		vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+		expect(auth.state).toBe('locked');
+	});
+
+	it('stop() removes the interaction listeners', () => {
+		auth.state = 'authenticated';
+		idle.start();
+		idle.stop();
+		vi.advanceTimersByTime(10);
+		idle.reset();
+		vi.advanceTimersByTime(10);
+		window.dispatchEvent(new Event('pointerdown'));
+		expect(idle.userActiveSinceReset).toBe(false);
+	});
+});
