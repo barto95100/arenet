@@ -25,6 +25,33 @@ Within ~5 seconds, Caddy reloads and the route is live :
 
 ---
 
+## Import a Caddyfile (v2.40)
+
+Coming from plain Caddy? **Routes → Import a Caddyfile** reads your file with Caddy's own parser and turns each site block into a route.
+
+1. Paste the Caddyfile (or drop the file) and click **Analyse**. Nothing is written yet.
+2. The preview lists one line per site block: the host and its aliases, the upstreams, badges (HTTP, path rules, **already exists**) and, folded, everything that could not be translated — each with its line number.
+3. Tick what you want and click **Import**. Caddy is reloaded once; if it refuses the result, every imported route is removed and the call fails, so you never end up half-imported.
+
+What is imported:
+
+| Caddyfile | Route |
+|---|---|
+| the block's addresses | host + aliases; `http://` → TLS off |
+| `reverse_proxy` | upstreams, `lb_policy`, `health_uri` / `health_interval` / `health_timeout` / `health_status`, `header_up` / `header_down`, `transport http { tls_insecure_skip_verify }` |
+| `reverse_proxy /path/*`, `handle_path`, `handle`, `route` with a `reverse_proxy` | a path rule with its own upstreams |
+| `tls <email>` or nothing | ACME HTTP-01 |
+| `tls { dns … }` | ACME DNS-01 (configure the provider in Arenet — credentials are never imported) |
+| `encode`, `log` | ignored silently (Arenet handles them) |
+
+What is reported instead of guessed: `basic_auth` (Caddy stores a bcrypt hash, set the password again), `tls internal` and explicit certificates (upload them in Certificates), `file_server`, `php_fastcgi`, `redir`, `respond`, `rewrite`, named matchers, unix-socket and placeholder upstreams, ports other than 80/443, global options and named routes.
+
+A block with no `reverse_proxy` cannot be imported; it is listed with the reason.
+
+Two safety rules: a host already served by a route is **skipped** unless you tick **replace** (which overwrites that route — its WAF, geo and rate-limit settings are lost), and imported routes start with **WAF in detect mode** so you see what the CRS would block before enforcing.
+
+---
+
 ## Anatomy of a route
 
 Every route stores the following fields (BoltDB `routes` bucket) :

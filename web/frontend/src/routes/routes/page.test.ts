@@ -69,6 +69,8 @@ const { toastMock, apiMock, settingsMock, authMock, externalCertsMock } = vi.hoi
 		exitMaintenance: vi.fn(),
 		// v2.38 — SecLang live check / guided → SecLang / WAF tester.
 		validateSecLang: vi.fn(),
+		previewCaddyfileImport: vi.fn(),
+		importCaddyfile: vi.fn(),
 		secLangFromGuided: vi.fn(),
 		testRouteWaf: vi.fn()
 	},
@@ -114,6 +116,8 @@ vi.mock('$lib/api/client', () => ({
 	enterMaintenance: (...args: unknown[]) => apiMock.enterMaintenance(...args),
 	exitMaintenance: (...args: unknown[]) => apiMock.exitMaintenance(...args),
 	validateSecLang: (...args: unknown[]) => apiMock.validateSecLang(...args),
+	previewCaddyfileImport: (...args: unknown[]) => apiMock.previewCaddyfileImport(...args),
+	importCaddyfile: (...args: unknown[]) => apiMock.importCaddyfile(...args),
 	secLangFromGuided: (...args: unknown[]) => apiMock.secLangFromGuided(...args),
 	testRouteWaf: (...args: unknown[]) => apiMock.testRouteWaf(...args)
 }));
@@ -3983,5 +3987,20 @@ describe('Routes page — v2.38 SecLang', () => {
 		await waitFor(() => expect(screen.getByTestId('seclang-problems')).toBeInTheDocument());
 		expect(screen.getByTestId('seclang-problems').textContent).toContain('include');
 		expect(document.querySelector('form')).not.toBeNull();
+	});
+});
+
+// --- v2.40 — Caddyfile import -----------------------------------------
+
+describe('Routes page — v2.40 Caddyfile import', () => {
+	it('the import button is enabled and opens the modal', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await tick();
+		const btn = screen.getByTestId('import-caddyfile-open') as HTMLButtonElement;
+		expect(btn.disabled).toBe(false);
+		expect(screen.queryByTestId('import-caddyfile')).toBeNull();
+		await userEvent.click(btn);
+		expect(screen.getByTestId('import-caddyfile')).toBeInTheDocument();
 	});
 });
