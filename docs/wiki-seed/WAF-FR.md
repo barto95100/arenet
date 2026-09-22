@@ -107,6 +107,31 @@ Toute la famille de tags est exclue. Les règles avec ce tag sont retirées de l
 
 ---
 
+## Règles personnalisées (guidées)
+
+Bloque les requêtes qui correspondent à **tes propres critères**, sans écrire de SecLang. Formulaire de route → section **WAF** → **Règles personnalisées**.
+
+Une règle a un nom et 1 à 8 conditions qui doivent **toutes** correspondre. Chaque condition accepte plusieurs valeurs (une par ligne — **l'une ou l'autre** suffit) :
+
+| Critère | Opérateurs | Exemple |
+|---|---|---|
+| Chemin | commence par · est · contient | commence par `/wp-admin` |
+| Méthode | est · n'est pas | n'est pas `GET` / `HEAD` / `POST` |
+| User-Agent | contient · est · est absent ou vide | contient `sqlmap` / `nikto` (sans tenir compte des majuscules) |
+| En-tête (par nom) | est absent · est présent · contient · est | `X-Admin-Token` est absent |
+
+L'éditeur affiche la règle en phrase pendant la saisie (*« Bloquer si la méthode est POST et le chemin commence par /login et le User-Agent est absent ou vide »*). Trois modèles la pré-remplissent : **Fichiers sensibles** (`/.env`, `/.git`…), **Scanners connus** (User-Agents), **Méthodes limitées**.
+
+Fonctionnement :
+
+- Une règle suit le mode WAF de la route : **Block** → 403, **Detect** → la requête passe et la correspondance est journalisée. Les règles n'ont pas d'effet quand le WAF est **off** (elles sont conservées).
+- Les règles personnalisées passent avant l'OWASP CRS et fonctionnent aussi quand le CRS est désactivé sur la route.
+- Chaque règle peut être désactivée sans être supprimée. Les règles sont enregistrées avec la route (**Enregistrer**).
+- Dans l'historique WAF (Journaux, page Sécurité de la route), les événements ont la catégorie **CUSTOM** et le nom de la règle. Les IDs de règles sont `120000–129999` et ne changent pas quand tu modifies une règle.
+- L'IP source / le réseau n'est pas un critère : utilise pour cela le **filtrage IP** des [règles par chemin](Routes-FR).
+
+---
+
 ## CRS paranoia levels
 
 OWASP CRS supporte quatre paranoia levels (PL1–PL4) qui contrôlent la strictness :

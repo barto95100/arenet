@@ -107,6 +107,31 @@ The whole tag family is excluded. Rules with that tag are removed from this rout
 
 ---
 
+## Custom rules (guided)
+
+Block requests that match **your own criteria**, without writing SecLang. Route form → **WAF** section → **Custom rules**.
+
+A rule has a name and 1 to 8 conditions that must **all** match. Each condition accepts several values (one per line — **any** of them matches):
+
+| Criterion | Operators | Example |
+|---|---|---|
+| Path | begins with · is · contains | begins with `/wp-admin` |
+| Method | is · is not | is not `GET` / `HEAD` / `POST` |
+| User-Agent | contains · is · is absent or empty | contains `sqlmap` / `nikto` (case-insensitive) |
+| Header (by name) | is absent · is present · contains · is | `X-Admin-Token` is absent |
+
+The editor shows the rule as a sentence while you type (*"Block when the method is POST and the path begins with /login and the User-Agent is absent or empty"*). Three presets prefill it: **Sensitive files** (`/.env`, `/.git`…), **Known scanners** (User-Agents), **Limited methods**.
+
+Behaviour :
+
+- A rule follows the route's WAF mode: **Block** → 403, **Detect** → the request passes and the match is logged. Rules do nothing when the WAF is **off** (they are kept).
+- Custom rules run before the OWASP CRS and still run when the CRS is disabled on the route.
+- Each rule can be switched off without deleting it. Rules are saved with the route (**Save**).
+- In the WAF history (Logs, route Security page) the events show the **CUSTOM** category and the rule's name. Rule IDs are `120000–129999` and stay stable when you edit a rule.
+- Source IP / network is not a criterion: use the per-path **IP filter** of [path rules](Routes) for that.
+
+---
+
 ## CRS paranoia levels
 
 OWASP CRS supports four paranoia levels (PL1–PL4) controlling the strictness :
