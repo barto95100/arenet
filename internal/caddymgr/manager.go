@@ -1695,7 +1695,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//     mutations would otherwise confuse the rules);
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
-		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions, r.WAFCustomRules); wafHandler != nil {
+		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions, r.WAFCustomRules, r.WAFSecLang); wafHandler != nil {
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -2891,7 +2891,7 @@ func normalizeKnownHost(h string) string {
 	return strings.ToLower(h)
 }
 
-func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excludeRules []int, excludeTags []string, targeted []storage.WAFTargetedExclusion, custom []storage.WAFCustomRule) map[string]any {
+func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excludeRules []int, excludeTags []string, targeted []storage.WAFTargetedExclusion, custom []storage.WAFCustomRule, secLang string) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
 	}
@@ -3034,6 +3034,14 @@ func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excl
 			preCRSDirectives += "\n"
 		}
 		preCRSDirectives += d
+	}
+	// v2.38 — the route's expert SecLang (validated by the API with
+	// waf.CheckSecLang), last before the CRS.
+	if strings.TrimSpace(secLang) != "" {
+		if preCRSDirectives != "" {
+			preCRSDirectives += "\n"
+		}
+		preCRSDirectives += strings.TrimSpace(secLang)
 	}
 
 	directives := preCRSDirectives

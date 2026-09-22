@@ -352,6 +352,9 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Post("/routes/{id}/disable", h.disableRoute)
 				r.Post("/routes/{id}/enable", h.enableRoute)
 				r.Post("/routes/{id}/waf-exclusions", h.addWAFExclusion)
+				r.Post("/routes/{id}/waf-test", h.testRouteWAF)
+				r.Post("/waf/seclang/validate", h.validateSecLang)
+				r.Post("/waf/seclang/from-guided", h.secLangFromGuided)
 				r.Post("/routes/{id}/maintenance", h.enterMaintenance)
 				r.Post("/routes/{id}/maintenance/off", h.exitMaintenance)
 				r.Delete("/certificates/{domain}", h.deleteCertificate)
@@ -1481,6 +1484,15 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		customRules = normalised
 	}
+	var secLang string
+	if req.WAFSecLang != nil {
+		normalised, validationErr := normalizeSecLang(*req.WAFSecLang)
+		if validationErr != nil {
+			writeSecLangError(w, validationErr)
+			return
+		}
+		secLang = normalised
+	}
 	// Step Q (2026-06-18) — RateLimit on POST : nil pointer
 	// = no rate limit (pre-Q byte-equivalent) ; non-nil
 	// supplied → validated by materialiseRateLimit which
@@ -1557,6 +1569,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		WAFExcludeTags:        excludeTags,
 		WAFTargetedExclusions: targeted,
 		WAFCustomRules:        customRules,
+		WAFSecLang:            secLang,
 		RateLimit:             rateLimit,
 		// Step R — error-page wiring. Both fields are
 		// pass-through ; storage.validate() enforces the
@@ -2029,6 +2042,17 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		customRules = normalised
 	}
+	// v2.38 — WAFSecLang on PUT: preserve on nil, replace (checked)
+	// otherwise.
+	secLang := previous.WAFSecLang
+	if req.WAFSecLang != nil {
+		normalised, validationErr := normalizeSecLang(*req.WAFSecLang)
+		if validationErr != nil {
+			writeSecLangError(w, validationErr)
+			return
+		}
+		secLang = normalised
+	}
 	// Step Q (2026-06-18) — RateLimit on PUT.
 	// v2.9.13 Phase Q.2 — clearRateLimit sentinel shipped.
 	//
@@ -2112,6 +2136,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		WAFExcludeTags:        excludeTags,
 		WAFTargetedExclusions: targeted,
 		WAFCustomRules:        customRules,
+		WAFSecLang:            secLang,
 		RateLimit:             rateLimit,
 		// Step R — error-page wiring (update path mirrors
 		// create). Pass-through both fields ; storage.validate()

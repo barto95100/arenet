@@ -65,9 +65,9 @@ func CategoryForRule(ruleID string) OwaspCategory {
 	// the same CRS file (the upstream convention reserves
 	// the full prefix block for one file).
 	switch {
-	// v2.37 — Arenet guided rules (per-route custom rules).
-	case id >= CustomRuleMinID && id <= CustomRuleMaxID:
-		return CategoryCustom
+	// v2.37 / v2.38 — Arenet per-route custom rules.
+	case id >= CustomRuleMinID && id <= SecLangMaxID:
+		return CategoryCustom // guided rules + per-route SecLang (v2.38)
 	// --- Request attacks ---
 	case id >= 942000 && id < 943000:
 		return CategorySQLi // 942 SQL injection

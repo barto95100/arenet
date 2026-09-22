@@ -121,3 +121,39 @@ func conditionParts(c storage.WAFRuleCondition) (target, operator, transform str
 	}
 	return target, operator, transform
 }
+
+// WAFDirectivesForRoute returns the Coraza directives and CRS flag the
+// route's WAF handler is built with, as if the WAF were on (the tester
+// works on routes still in "off"). secLang replaces the stored SecLang
+// (a draft from the editor); nil keeps the stored one.
+func WAFDirectivesForRoute(r storage.Route, secLang *string) (directives string, loadCRS bool) {
+	sl := r.WAFSecLang
+	if secLang != nil {
+		sl = *secLang
+	}
+	h := buildWAFHandler(r.ID, r.Host, "block", r.UploadStreamingMode, r.WAFDisableCRS,
+		r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions, r.WAFCustomRules, sl)
+	directives, _ = h["directives"].(string)
+	loadCRS, _ = h["load_owasp_crs"].(bool)
+	return directives, loadCRS
+}
+
+// GuidedRuleSecLang renders a guided rule as commented, indented
+// SecLang with the given ID (v2.38 "convert to SecLang"): the same
+// chain the rule compiles to, with msg set to the rule name so the WAF
+// history keeps showing it.
+func GuidedRuleSecLang(rule storage.WAFCustomRule, id int) string {
+	rule.ID = id
+	rule.Disabled = false
+	d := customRuleDirectives([]storage.WAFCustomRule{rule})
+	if len(d) == 0 {
+		return ""
+	}
+	links := strings.Split(d[0], "\n")
+	links[0] = strings.Replace(links[0], fmt.Sprintf("msg:'Arenet custom rule %d'", id),
+		fmt.Sprintf("msg:'%s'", rule.Name), 1)
+	for i := 1; i < len(links); i++ {
+		links[i] = "    " + links[i]
+	}
+	return "# " + rule.Name + " (converted from a guided rule)\n" + strings.Join(links, "\n") + "\n"
+}
