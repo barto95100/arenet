@@ -18,6 +18,13 @@ package waf
 
 import "strconv"
 
+// CustomRuleMinID and CustomRuleMaxID bound the rule IDs of the
+// per-route guided rules (v2.37), inside the Arenet range.
+const (
+	CustomRuleMinID = 120000
+	CustomRuleMaxID = 129999
+)
+
 // CategoryForRule maps an OWASP CRS rule ID to an OwaspCategory
 // for the dashboard's category distribution strip + the
 // per-category counts on /api/v1/metrics/summary.
@@ -58,6 +65,9 @@ func CategoryForRule(ruleID string) OwaspCategory {
 	// the same CRS file (the upstream convention reserves
 	// the full prefix block for one file).
 	switch {
+	// v2.37 — Arenet guided rules (per-route custom rules).
+	case id >= CustomRuleMinID && id <= CustomRuleMaxID:
+		return CategoryCustom
 	// --- Request attacks ---
 	case id >= 942000 && id < 943000:
 		return CategorySQLi // 942 SQL injection

@@ -116,6 +116,8 @@ const (
 	CategoryWebShell      OwaspCategory = "WEBSHELL"      // 955xxx
 	CategoryAnomalyResp   OwaspCategory = "ANOMALY_RESP"  // 959xxx
 	CategoryCorrelation   OwaspCategory = "CORRELATION"   // 980xxx
+	// CategoryCustom (v2.37) — the route's guided rules, 120000-129999.
+	CategoryCustom OwaspCategory = "CUSTOM"
 )
 
 // AllCategories lists the categories in dashboard-display order.
@@ -159,6 +161,7 @@ var AllCategories = []OwaspCategory{
 	// Infrastructure / catch-all
 	CategoryInit,
 	CategoryCommonExcept,
+	CategoryCustom,
 	CategoryOther,
 }
 

@@ -1504,6 +1504,89 @@
 		"toastTokenCopied": "Token copied to clipboard",
 		"toastCopyFailed": "Copy failed — select the text manually"
 	},
+	"wafRules": {
+		"title": "Custom rules",
+		"hint": "Block requests that match your own criteria (path, method, User-Agent, header). A rule follows the route's WAF mode: blocked (403) in Block mode, only logged in Detect mode. Saved with the route.",
+		"wafOff": "The WAF is off on this route: rules are kept but do nothing until you choose Detect or Block.",
+		"empty": "No custom rule.",
+		"add": "Add a rule",
+		"presetsLabel": "Or start from:",
+		"presets": {
+			"sensitiveFiles": "Sensitive files",
+			"scanners": "Known scanners",
+			"methods": "Limited methods"
+		},
+		"edit": "Edit",
+		"delete": "Delete",
+		"deleteAria": "Delete rule {name}",
+		"editAria": "Edit rule {name}",
+		"enabledAria": "Rule {name} enabled",
+		"disabledBadge": "disabled",
+		"nameLabel": "Rule name",
+		"namePlaceholder": "e.g. Block the WordPress login",
+		"conditionsLabel": "Block when ALL these conditions match",
+		"addCondition": "+ Add a condition",
+		"removeCondition": "Remove this condition",
+		"fieldLabel": "Criterion",
+		"operatorLabel": "Operator",
+		"valuesLabel": "Values (one per line — any of them)",
+		"headerLabel": "Header name",
+		"fields": {
+			"path": "Path",
+			"method": "Method",
+			"user_agent": "User-Agent",
+			"header": "Header"
+		},
+		"operators": {
+			"is": "is",
+			"is_not": "is not",
+			"begins_with": "begins with",
+			"contains": "contains",
+			"missing": "is absent or empty",
+			"present": "is present",
+			"absent": "is absent"
+		},
+		"saveRule": "OK",
+		"cancel": "Cancel",
+		"preview": "Preview",
+		"or": "or",
+		"and": "and",
+		"sentence": {
+			"block": "Block when {conditions}",
+			"path": {
+				"is": "the path is {values}",
+				"begins_with": "the path begins with {values}",
+				"contains": "the path contains {values}"
+			},
+			"method": {
+				"is": "the method is {values}",
+				"is_not": "the method is not {values}"
+			},
+			"user_agent": {
+				"contains": "the User-Agent contains {values}",
+				"is": "the User-Agent is {values}",
+				"missing": "the User-Agent is absent or empty"
+			},
+			"header": {
+				"absent": "the header {header} is absent",
+				"present": "the header {header} is present",
+				"contains": "the header {header} contains {values}",
+				"is": "the header {header} is {values}"
+			}
+		},
+		"errors": {
+			"name": "Give the rule a name (up to 64 characters, no quotes or backslash).",
+			"noCondition": "Add at least one condition.",
+			"tooManyConditions": "At most 8 conditions per rule.",
+			"headerName": "Header name: letters, digits, - or _ only.",
+			"noValue": "Enter at least one value.",
+			"tooManyValues": "Too many values for one condition.",
+			"value": "Values can't contain a double quote, a backslash or line breaks, and are at most 256 characters.",
+			"method": "Methods are letters only (GET, POST…).",
+			"path": "A path must start with / (use “contains” otherwise)."
+		},
+		"historyName": "Custom rule “{name}”"
+	},
 	"wafExclude": {
 		"action": "Exclude…",
 		"actionAria": "Exclude rule {rule} on this route",

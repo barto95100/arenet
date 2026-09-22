@@ -1287,6 +1287,20 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 			{RuleID: 942100, Target: "ARGS:content", Path: "/api/save"},
 			{RuleID: 942100, Target: "ARGS:content", Path: "/api/", PathPrefix: true},
 		},
+		// v2.37 — guided rules (chained SecRules, every operator
+		// family) validated against the real CRS.
+		WAFCustomRules: []storage.WAFCustomRule{
+			{ID: 120000, Name: "sensitive", Conditions: []storage.WAFRuleCondition{
+				{Field: storage.WAFFieldPath, Operator: storage.WAFOpContains, Values: []string{"/.env", "/.git"}},
+			}},
+			{ID: 120001, Name: "login bots", Conditions: []storage.WAFRuleCondition{
+				{Field: storage.WAFFieldMethod, Operator: storage.WAFOpIsNot, Values: []string{"GET", "HEAD"}},
+				{Field: storage.WAFFieldPath, Operator: storage.WAFOpBeginsWith, Values: []string{"/login"}},
+				{Field: storage.WAFFieldUserAgent, Operator: storage.WAFOpMissing},
+				{Field: storage.WAFFieldHeader, Header: "X-Api-Key", Operator: storage.WAFOpAbsent},
+				{Field: storage.WAFFieldHeader, Header: "Referer", Operator: storage.WAFOpContains, Values: []string{"spam.example"}},
+			}},
+		},
 	})
 	// Task 4 — fold the maintenance-mode route into THIS canonical
 	// fixture so caddy.Validate provisions the maintenance subroute

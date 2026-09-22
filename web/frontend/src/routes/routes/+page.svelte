@@ -27,6 +27,7 @@
 	import { sanitizePathRules } from '$lib/utils/path-rules';
 	import { manualCertDisplayName } from '$lib/utils/manual-cert-name';
 	import type {
+		WafCustomRule,
 		WafTargetedExclusion,
 		ACMEChallenge,
 		CountryBlockRequest,
@@ -63,6 +64,7 @@
 	import ASNPicker from '$lib/components/routes/ASNPicker.svelte';
 	import GeoRuleSentence from '$lib/components/routes/GeoRuleSentence.svelte';
 	import WafTargetedExclusionsEditor from '$lib/components/routes/WafTargetedExclusionsEditor.svelte';
+	import WafCustomRulesEditor from '$lib/components/routes/WafCustomRulesEditor.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -130,7 +132,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'wafTargetedExclusions' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'wafTargetedExclusions' | 'wafCustomRules' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
 		healthCheck: HealthCheck;
 		// v2.14.3 — narrowed to a non-optional boolean, same
 		// pattern as insecureSkipVerify/uploadStreamingMode: the
@@ -182,6 +184,8 @@
 		// v2.36 — targeted exclusions (edited by
 		// WafTargetedExclusionsEditor, shipped full-replace).
 		wafTargetedExclusions: WafTargetedExclusion[];
+		// v2.37 — guided WAF rules (WafCustomRulesEditor), full-replace.
+		wafCustomRules: WafCustomRule[];
 		// Step Q — rate-limit holds the object when the
 		// toggle is on, null when off. Distinct from the
 		// wire shape's optional (undefined) because the
@@ -310,6 +314,7 @@
 			// default ; mirrors wafExcludeRules.
 			wafExcludeTags: [] as string[],
 			wafTargetedExclusions: [] as WafTargetedExclusion[],
+			wafCustomRules: [] as WafCustomRule[],
 			// Step Q — rate limit OFF by default. Toggle in
 			// the form's "Limitation de débit" section flips
 			// to a default-seeded RouteRateLimit on. Operator
@@ -1334,6 +1339,10 @@
 			// exclusion list (server-canonicalised).
 			wafExcludeTags: [...(r.wafExcludeTags ?? [])],
 			wafTargetedExclusions: (r.wafTargetedExclusions ?? []).map((e) => ({ ...e })),
+			wafCustomRules: (r.wafCustomRules ?? []).map((rule) => ({
+				...rule,
+				conditions: rule.conditions.map((c) => ({ ...c, values: [...(c.values ?? [])] }))
+			})),
 			// Step Q — load the persisted rate-limit. Clone
 			// to break the formData ↔ source route reference
 			// so toggling the form section doesn't ripple
@@ -2226,6 +2235,8 @@
 			payload.wafExcludeTags = formData.wafExcludeTags;
 			// v2.36 — targeted exclusions, same full-replace semantic.
 			payload.wafTargetedExclusions = formData.wafTargetedExclusions;
+			// v2.37 — guided rules, same full-replace semantic.
+			payload.wafCustomRules = formData.wafCustomRules;
 			// Step Q + v2.9.13 Phase Q.2 — rate limit.
 			//
 			// Toggle ON  → ship the rateLimit object (POST = new,
@@ -3865,6 +3876,11 @@
 								bind:value={formData.wafTargetedExclusions}
 								crsDisabled={formData.wafDisableCRS}
 							/>
+						</div>
+						<!-- v2.37 — guided WAF rules (block when every
+						     condition matches, follows the route mode). -->
+						<div class="mt-4">
+							<WafCustomRulesEditor bind:value={formData.wafCustomRules} wafMode={formData.wafMode} />
 						</div>
 					</div>
 

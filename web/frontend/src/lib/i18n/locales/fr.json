@@ -1504,6 +1504,89 @@
 		"toastTokenCopied": "Token copié dans le presse-papier",
 		"toastCopyFailed": "Copie échouée — sélectionne le texte manuellement"
 	},
+	"wafRules": {
+		"title": "Règles personnalisées",
+		"hint": "Bloque les requêtes qui correspondent à tes propres critères (chemin, méthode, User-Agent, en-tête). Une règle suit le mode WAF de la route : bloquée (403) en mode Block, seulement journalisée en mode Detect. Enregistrée avec la route.",
+		"wafOff": "Le WAF est désactivé sur cette route : les règles sont conservées mais sans effet tant que tu ne choisis pas Detect ou Block.",
+		"empty": "Aucune règle personnalisée.",
+		"add": "Ajouter une règle",
+		"presetsLabel": "Ou partir de :",
+		"presets": {
+			"sensitiveFiles": "Fichiers sensibles",
+			"scanners": "Scanners connus",
+			"methods": "Méthodes limitées"
+		},
+		"edit": "Modifier",
+		"delete": "Supprimer",
+		"deleteAria": "Supprimer la règle {name}",
+		"editAria": "Modifier la règle {name}",
+		"enabledAria": "Règle {name} active",
+		"disabledBadge": "désactivée",
+		"nameLabel": "Nom de la règle",
+		"namePlaceholder": "ex. Bloquer la connexion WordPress",
+		"conditionsLabel": "Bloquer quand TOUTES ces conditions correspondent",
+		"addCondition": "+ Ajouter une condition",
+		"removeCondition": "Retirer cette condition",
+		"fieldLabel": "Critère",
+		"operatorLabel": "Opérateur",
+		"valuesLabel": "Valeurs (une par ligne — l'une ou l'autre)",
+		"headerLabel": "Nom de l'en-tête",
+		"fields": {
+			"path": "Chemin",
+			"method": "Méthode",
+			"user_agent": "User-Agent",
+			"header": "En-tête"
+		},
+		"operators": {
+			"is": "est",
+			"is_not": "n'est pas",
+			"begins_with": "commence par",
+			"contains": "contient",
+			"missing": "est absent ou vide",
+			"present": "est présent",
+			"absent": "est absent"
+		},
+		"saveRule": "OK",
+		"cancel": "Annuler",
+		"preview": "Aperçu",
+		"or": "ou",
+		"and": "et",
+		"sentence": {
+			"block": "Bloquer si {conditions}",
+			"path": {
+				"is": "le chemin est {values}",
+				"begins_with": "le chemin commence par {values}",
+				"contains": "le chemin contient {values}"
+			},
+			"method": {
+				"is": "la méthode est {values}",
+				"is_not": "la méthode n'est pas {values}"
+			},
+			"user_agent": {
+				"contains": "le User-Agent contient {values}",
+				"is": "le User-Agent est {values}",
+				"missing": "le User-Agent est absent ou vide"
+			},
+			"header": {
+				"absent": "l'en-tête {header} est absent",
+				"present": "l'en-tête {header} est présent",
+				"contains": "l'en-tête {header} contient {values}",
+				"is": "l'en-tête {header} est {values}"
+			}
+		},
+		"errors": {
+			"name": "Donne un nom à la règle (64 caractères max, sans guillemet ni antislash).",
+			"noCondition": "Ajoute au moins une condition.",
+			"tooManyConditions": "8 conditions maximum par règle.",
+			"headerName": "Nom d'en-tête : lettres, chiffres, - ou _ uniquement.",
+			"noValue": "Saisis au moins une valeur.",
+			"tooManyValues": "Trop de valeurs pour une condition.",
+			"value": "Les valeurs ne peuvent contenir ni guillemet double, ni antislash, ni retour à la ligne, et font 256 caractères maximum.",
+			"method": "Les méthodes ne contiennent que des lettres (GET, POST…).",
+			"path": "Un chemin commence par / (sinon utilise « contient »)."
+		},
+		"historyName": "Règle personnalisée « {name} »"
+	},
 	"wafExclude": {
 		"action": "Exclure…",
 		"actionAria": "Exclure la règle {rule} sur cette route",

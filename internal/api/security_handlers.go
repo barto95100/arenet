@@ -57,6 +57,9 @@ type securityEvent struct {
 	// MatchedVar (v2.36) — "VARIABLE:key" of the triggering field,
 	// the target of a targeted exclusion; "" when unknown.
 	MatchedVar string `json:"matchedVar"`
+	// RuleName (v2.37) — the name of the route's guided rule for
+	// rule IDs in the custom range; omitted otherwise.
+	RuleName string `json:"ruleName,omitempty"`
 }
 
 // securityEventsResponse is the wire shape of
@@ -127,6 +130,7 @@ func (h *Handler) securityEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	names := h.newCustomRuleNames()
 	resp.Events = make([]securityEvent, 0, len(events))
 	for _, e := range events {
 		resp.Events = append(resp.Events, securityEvent{
@@ -143,6 +147,7 @@ func (h *Handler) securityEvents(w http.ResponseWriter, r *http.Request) {
 			Action:        e.Action,
 			StatusCode:    e.StatusCode,
 			MatchedVar:    e.MatchedVar,
+			RuleName:      names.lookup(r.Context(), e.RouteID, e.RuleID),
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)

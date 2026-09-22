@@ -218,6 +218,12 @@ export const CATEGORY_META: Record<OwaspCategory, CategoryMeta> = {
 		color: 'var(--text-muted)',
 		family: 'infrastructure'
 	},
+	CUSTOM: {
+		label: 'Règles personnalisées',
+		description: 'Arenet 120000–129999 — règles guidées définies sur la route.',
+		color: 'var(--accent-cyan)',
+		family: 'infrastructure'
+	},
 	OTHER: {
 		label: 'Autres règles Coraza',
 		description:
