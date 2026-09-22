@@ -132,6 +132,28 @@ Behaviour :
 
 ---
 
+## SecLang (advanced)
+
+For needs the guided rules can't express, each route has a **SecLang** editor (route form → **WAF** → **SecLang (advanced)**, collapsed until used). It is real Coraza / ModSecurity syntax, with guard rails and help:
+
+- **Editor**: syntax highlighting, completion (directives, variables, `@operators`, actions, `ctl:` and `t:` values — only what is allowed), live check with the problem shown **on its line**.
+- **Templates**, commented line by line in your language, inserted with the next free rule ID: JSON-only API, allowed methods, `/admin` from the LAN only, require an API-key header, block bots by User-Agent, limit parameter length, exception for one field.
+- **→ SecLang** on a guided rule: replaces it by the SecLang it compiles to (a good way to learn, then go further).
+- **Test a request** (saved routes): method, path, headers, body → *"Blocked (405) by rule 130000 Method not allowed"* or *"Accepted"*, with every rule that matched (OWASP CRS included). It uses the **unsaved** editor content and sends nothing to the backend; nothing is logged.
+
+What is allowed (checked when you save; a refusal names the line):
+
+- Directives `SecRule`, `SecAction`, `SecMarker` only — no `Include`, no engine settings (`SecRuleEngine`, `SecRequestBodyLimit`…), no audit log, no data files.
+- Rule IDs **130000–139999**, one per rule (chained links have none), unique.
+- Operators: `@rx @streq @beginsWith @endsWith @contains @pm @within @eq @ge @gt @le @lt @ipMatch @detectSQLi @detectXSS @validateByteRange @validateUrlEncoding @validateUtf8Encoding @strmatch @unconditionalMatch @noMatch`. Refused among others: `@inspectFile` (runs a program), `*FromFile` (reads host files), `@rbl` (network), `@geoLookup`, `@validateSchema`.
+- Actions: `id phase chain deny block drop pass allow status redirect log nolog auditlog noauditlog msg logdata tag severity rev ver maturity capture multiMatch setvar expirevar skip skipAfter t ctl`. Refused: `exec`, `setenv`, `initcol`. `ctl:` limited to the `ruleRemove…` family, `requestBodyProcessor` and `forceRequestBodyVariable` (no `ctl:ruleEngine`, no body-limit changes).
+- The `ENV` collection and `%{ENV.…}` macros are refused (the process environment may hold secrets).
+- At most 64 KiB and 200 rules.
+
+SecLang runs **after** the targeted exclusions and guided rules and **before** the CRS, follows the route's mode (the `SecRuleEngine` line stays Arenet's), and still runs when the CRS is disabled. Events show the **CUSTOM** category and the rule's `msg` as its name. Prefer the guided rules when they are enough: they can't be written wrong.
+
+---
+
 ## CRS paranoia levels
 
 OWASP CRS supports four paranoia levels (PL1–PL4) controlling the strictness :

@@ -1504,6 +1504,46 @@
 		"toastTokenCopied": "Token copié dans le presse-papier",
 		"toastCopyFailed": "Copie échouée — sélectionne le texte manuellement"
 	},
+	"wafSecLang": {
+		"title": "SecLang (avancé)",
+		"hint": "Écris tes propres règles Coraza pour cette route. Par sécurité, seules SecRule, SecAction et SecMarker sont acceptées, avec des IDs 130000–139999, et rien qui lise des fichiers, lance des programmes ou coupe le WAF. Les règles passent avant l'OWASP CRS et suivent le mode WAF de la route. Enregistré avec la route.",
+		"editorLabel": "Éditeur SecLang",
+		"templateLabel": "Modèle",
+		"insert": "Insérer",
+		"templates": {
+			"jsonOnly": "API en JSON uniquement",
+			"allowedMethods": "Méthodes autorisées",
+			"adminFromLan": "/admin depuis le réseau local seulement",
+			"requireApiKey": "Exiger un en-tête de clé API",
+			"badBots": "Bloquer des robots par User-Agent",
+			"argLength": "Limiter la longueur des paramètres",
+			"fieldException": "Exception pour un champ (faux positif)"
+		},
+		"checking": "Vérification…",
+		"valid": "✓ SecLang valide",
+		"problems": "{count} problème(s) — corrige-les avant d'enregistrer",
+		"line": "Ligne {line} :",
+		"convert": "→ SecLang",
+		"convertAria": "Convertir la règle {name} en SecLang",
+		"convertFailed": "Conversion impossible : {error}",
+		"saveRefused": "Le SecLang a été refusé — voir les problèmes sous l'éditeur.",
+		"tester": {
+			"title": "Tester une requête",
+			"saveFirst": "Enregistre d'abord la route pour pouvoir tester des requêtes.",
+			"method": "Méthode",
+			"path": "Chemin (avec la query string)",
+			"headers": "En-têtes — un « Nom: valeur » par ligne",
+			"body": "Corps (optionnel)",
+			"run": "Tester",
+			"blocked": "Bloquée ({status}) par la règle {rule} {msg}",
+			"accepted": "Acceptée — aucune règle ne bloque cette requête",
+			"noMatch": "Aucune règle ne correspond.",
+			"mode": {
+				"detect": "La route est en mode Detect : la requête serait seulement journalisée.",
+				"off": "Le WAF est désactivé sur cette route : il ne se passerait rien."
+			}
+		}
+	},
 	"wafRules": {
 		"title": "Règles personnalisées",
 		"hint": "Bloque les requêtes qui correspondent à tes propres critères (chemin, méthode, User-Agent, en-tête). Une règle suit le mode WAF de la route : bloquée (403) en mode Block, seulement journalisée en mode Detect. Enregistrée avec la route.",

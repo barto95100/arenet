@@ -21,6 +21,10 @@
 import type {
 	Route,
 	AddWafExclusionRequest,
+	SecLangValidateResponse,
+	WafCustomRule,
+	WafTestRequest,
+	WafTestResponse,
 	RouteRequest,
 	TestUpstreamRequest,
 	TestUpstreamResponse
@@ -245,6 +249,15 @@ export const exitMaintenance = (id: string): Promise<Route> =>
 // excluded on the whole route. 409 = already present.
 export const addWafExclusion = (id: string, body: AddWafExclusionRequest): Promise<Route> =>
 	request('POST', `/routes/${id}/waf-exclusions`, body);
+
+// v2.38 — per-route SecLang: live check (+ next free rule ID), guided
+// rule → SecLang, and the WAF tester (sample request, no traffic).
+export const validateSecLang = (seclang: string): Promise<SecLangValidateResponse> =>
+	request('POST', '/waf/seclang/validate', { seclang });
+export const secLangFromGuided = (rule: WafCustomRule, id: number): Promise<{ seclang: string }> =>
+	request('POST', '/waf/seclang/from-guided', { rule, id });
+export const testRouteWaf = (id: string, body: WafTestRequest): Promise<WafTestResponse> =>
+	request('POST', `/routes/${id}/waf-test`, body);
 
 // Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-triggered
 // upstream probe. Backend is per-URL; the route-form UI

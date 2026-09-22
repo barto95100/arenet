@@ -55,7 +55,7 @@ func TestTargetedExclusionDirectives_Shapes(t *testing.T) {
 
 func TestBuildWAFHandler_TargetedExclusions_BeforeCRSAfterSecAction(t *testing.T) {
 	got := buildWAFHandler("r-1", "example.com", "block", false, false, []int{920170}, nil,
-		[]storage.WAFTargetedExclusion{{RuleID: 942100, Target: "ARGS:content"}}, nil)
+		[]storage.WAFTargetedExclusion{{RuleID: 942100, Target: "ARGS:content"}}, nil, "")
 	dirs, _ := got["directives"].(string)
 	iSecAction := strings.Index(dirs, "id:999001")
 	iTargeted := strings.Index(dirs, "id:110000")
@@ -66,8 +66,8 @@ func TestBuildWAFHandler_TargetedExclusions_BeforeCRSAfterSecAction(t *testing.T
 }
 
 func TestBuildWAFHandler_NoTargeted_Unchanged(t *testing.T) {
-	a := buildWAFHandler("r-1", "example.com", "block", false, false, []int{942100}, nil, nil, nil)
-	b := buildWAFHandler("r-1", "example.com", "block", false, false, []int{942100}, nil, []storage.WAFTargetedExclusion{}, nil)
+	a := buildWAFHandler("r-1", "example.com", "block", false, false, []int{942100}, nil, nil, nil, "")
+	b := buildWAFHandler("r-1", "example.com", "block", false, false, []int{942100}, nil, []storage.WAFTargetedExclusion{}, nil, "")
 	if a["directives"] != b["directives"] {
 		t.Fatalf("empty targeted list changed the directives: %q vs %q", a["directives"], b["directives"])
 	}
@@ -79,8 +79,8 @@ func TestBuildWAFHandler_NoTargeted_Unchanged(t *testing.T) {
 func TestBuildWAFHandler_TargetedOrderIndependent(t *testing.T) {
 	x := storage.WAFTargetedExclusion{RuleID: 942100, Target: "ARGS:a"}
 	y := storage.WAFTargetedExclusion{RuleID: 941100, Target: "ARGS:b", Path: "/p"}
-	a := buildWAFHandler("r-1", "h", "block", false, false, nil, nil, []storage.WAFTargetedExclusion{x, y}, nil)
-	b := buildWAFHandler("r-1", "h", "block", false, false, nil, nil, []storage.WAFTargetedExclusion{y, x}, nil)
+	a := buildWAFHandler("r-1", "h", "block", false, false, nil, nil, []storage.WAFTargetedExclusion{x, y}, nil, "")
+	b := buildWAFHandler("r-1", "h", "block", false, false, nil, nil, []storage.WAFTargetedExclusion{y, x}, nil, "")
 	if a["directives"] != b["directives"] {
 		t.Fatalf("input order changed the directives (pool key churn)")
 	}
@@ -118,7 +118,7 @@ const sqliPayload = "1%27%20OR%20%271%27=%271"
 // captured events.
 func runTargeted(t *testing.T, targeted []storage.WAFTargetedExclusion, url string) *targetedCaptureSink {
 	t.Helper()
-	cfg := buildWAFHandler("r-e2e", "example.com", "block", false, false, nil, nil, targeted, nil)
+	cfg := buildWAFHandler("r-e2e", "example.com", "block", false, false, nil, nil, targeted, nil, "")
 	h := &waf.ArenetWafHandler{
 		RouteID:      "r-e2e",
 		Mode:         "block",

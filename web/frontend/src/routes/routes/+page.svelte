@@ -8,6 +8,8 @@
 	import {
 		listRoutes,
 		createRoute,
+		secLangFromGuided,
+		validateSecLang,
 		updateRoute,
 		deleteRoute,
 		testUpstream,
@@ -27,6 +29,7 @@
 	import { sanitizePathRules } from '$lib/utils/path-rules';
 	import { manualCertDisplayName } from '$lib/utils/manual-cert-name';
 	import type {
+		SecLangError,
 		WafCustomRule,
 		WafTargetedExclusion,
 		ACMEChallenge,
@@ -65,6 +68,7 @@
 	import GeoRuleSentence from '$lib/components/routes/GeoRuleSentence.svelte';
 	import WafTargetedExclusionsEditor from '$lib/components/routes/WafTargetedExclusionsEditor.svelte';
 	import WafCustomRulesEditor from '$lib/components/routes/WafCustomRulesEditor.svelte';
+	import WafSecLangSection from '$lib/components/routes/WafSecLangSection.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -82,6 +86,24 @@
 	let formOpen = $state(false);
 	let formMode = $state<FormMode>('create');
 	let editingId = $state<string | null>(null);
+	// v2.38 — SecLang problems returned by a refused save.
+	let secLangSaveErrors = $state<SecLangError[]>([]);
+
+	// v2.38 — "→ SecLang" on a guided rule: append its SecLang (next
+	// free ID) to the route's SecLang and drop the guided rule.
+	async function convertGuidedRule(index: number): Promise<void> {
+		const rule = formData.wafCustomRules[index];
+		if (!rule) return;
+		try {
+			const { nextId } = await validateSecLang(formData.wafSecLang);
+			const { seclang } = await secLangFromGuided(rule, nextId);
+			const current = formData.wafSecLang.trimEnd();
+			formData.wafSecLang = (current === '' ? '' : current + '\n\n') + seclang;
+			formData.wafCustomRules = formData.wafCustomRules.filter((_, i) => i !== index);
+		} catch (err) {
+			pushToast(t('wafSecLang.convertFailed', { error: err instanceof Error ? err.message : String(err) }), 'danger');
+		}
+	}
 	let submitting = $state(false);
 	let formError = $state<string | null>(null);
 
@@ -132,7 +154,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'wafTargetedExclusions' | 'wafCustomRules' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'wafTargetedExclusions' | 'wafCustomRules' | 'wafSecLang' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
 		healthCheck: HealthCheck;
 		// v2.14.3 — narrowed to a non-optional boolean, same
 		// pattern as insecureSkipVerify/uploadStreamingMode: the
@@ -186,6 +208,8 @@
 		wafTargetedExclusions: WafTargetedExclusion[];
 		// v2.37 — guided WAF rules (WafCustomRulesEditor), full-replace.
 		wafCustomRules: WafCustomRule[];
+		// v2.38 — expert SecLang (WafSecLangSection), shipped as is.
+		wafSecLang: string;
 		// Step Q — rate-limit holds the object when the
 		// toggle is on, null when off. Distinct from the
 		// wire shape's optional (undefined) because the
@@ -315,6 +339,7 @@
 			wafExcludeTags: [] as string[],
 			wafTargetedExclusions: [] as WafTargetedExclusion[],
 			wafCustomRules: [] as WafCustomRule[],
+			wafSecLang: '',
 			// Step Q — rate limit OFF by default. Toggle in
 			// the form's "Limitation de débit" section flips
 			// to a default-seeded RouteRateLimit on. Operator
@@ -1189,6 +1214,7 @@
 	}
 
 	function openCreate() {
+		secLangSaveErrors = [];
 		formMode = 'create';
 		editingId = null;
 		formData = emptyFormData();
@@ -1245,6 +1271,7 @@
 	}
 
 	function openEdit(r: Route) {
+		secLangSaveErrors = [];
 		formMode = 'edit';
 		editingId = r.id;
 		// Step J.3: populate the pool from the stored route as-is.
@@ -1339,6 +1366,7 @@
 			// exclusion list (server-canonicalised).
 			wafExcludeTags: [...(r.wafExcludeTags ?? [])],
 			wafTargetedExclusions: (r.wafTargetedExclusions ?? []).map((e) => ({ ...e })),
+			wafSecLang: r.wafSecLang ?? '',
 			wafCustomRules: (r.wafCustomRules ?? []).map((rule) => ({
 				...rule,
 				conditions: rule.conditions.map((c) => ({ ...c, values: [...(c.values ?? [])] }))
@@ -2237,6 +2265,8 @@
 			payload.wafTargetedExclusions = formData.wafTargetedExclusions;
 			// v2.37 — guided rules, same full-replace semantic.
 			payload.wafCustomRules = formData.wafCustomRules;
+			// v2.38 — expert SecLang ("" clears).
+			payload.wafSecLang = formData.wafSecLang;
 			// Step Q + v2.9.13 Phase Q.2 — rate limit.
 			//
 			// Toggle ON  → ship the rateLimit object (POST = new,
@@ -2365,6 +2395,11 @@
 			if (isConnectionLost(err)) {
 				closePanel();
 				await reportConnectionLost();
+			} else if (err instanceof ApiError && err.code === 'seclang_invalid') {
+				// v2.38 — refused SecLang: keep the panel open, show the
+				// problems on their line under the editor.
+				secLangSaveErrors = (err.params?.errors as SecLangError[] | undefined) ?? [];
+				formError = t('wafSecLang.saveRefused');
 			} else if (err instanceof ApiError && err.code === 'route_check_rolled_back') {
 				// v2.35 — the change broke a working route and was undone:
 				// keep the panel open with the explanation.
@@ -3880,7 +3915,20 @@
 						<!-- v2.37 — guided WAF rules (block when every
 						     condition matches, follows the route mode). -->
 						<div class="mt-4">
-							<WafCustomRulesEditor bind:value={formData.wafCustomRules} wafMode={formData.wafMode} />
+							<WafCustomRulesEditor
+								bind:value={formData.wafCustomRules}
+								wafMode={formData.wafMode}
+								onConvert={convertGuidedRule}
+							/>
+						</div>
+						<!-- v2.38 — expert SecLang + templates + request tester. -->
+						<div class="mt-4">
+							<WafSecLangSection
+								bind:value={formData.wafSecLang}
+								routeId={formMode === 'edit' ? editingId : null}
+								wafMode={formData.wafMode}
+								saveErrors={secLangSaveErrors}
+							/>
 						</div>
 					</div>
 

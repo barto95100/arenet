@@ -612,6 +612,10 @@ type Route struct {
 	// WAFCustomRules (v2.37) are the route's guided WAF rules (block
 	// when every condition matches). Empty = no extra directives.
 	WAFCustomRules []WAFCustomRule `json:"waf_custom_rules,omitempty"`
+	// WAFSecLang (v2.38) is the route's expert SecLang, checked by
+	// waf.CheckSecLang (allowlist, rule IDs 130000-139999) and emitted
+	// before the CRS. Empty = no extra directives.
+	WAFSecLang string `json:"waf_seclang,omitempty"`
 	// RateLimit (Step Q, 2026-06-18) is the per-route rate
 	// limiting configuration that gates inbound requests
 	// BEFORE the WAF / country-block / CrowdSec chain runs.

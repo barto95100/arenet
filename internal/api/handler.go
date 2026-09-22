@@ -1465,6 +1465,9 @@ type routeRequest struct {
 	// WAFCustomRules (v2.37) — guided rules; nil preserves on PUT, a
 	// slice replaces (validated + IDs allocated by normalizeCustomRules).
 	WAFCustomRules *[]wafCustomRuleWire `json:"wafCustomRules,omitempty"`
+	// WAFSecLang (v2.38) — expert SecLang; nil preserves on PUT, a
+	// string replaces ("" clears), checked by waf.CheckSecLang.
+	WAFSecLang *string `json:"wafSecLang,omitempty"`
 	// RateLimit (Step Q, 2026-06-18) is the per-route rate
 	// limiter config. Triple-state pointer per the Phase
 	// 4.5 + Step X.1 conventions :
@@ -1783,6 +1786,8 @@ type routeResponse struct {
 	WAFTargetedExclusions []wafTargetedExclusionWire `json:"wafTargetedExclusions"`
 	// WAFCustomRules (v2.37) — always present ([] when none).
 	WAFCustomRules []wafCustomRuleWire `json:"wafCustomRules"`
+	// WAFSecLang (v2.38) — "" when none.
+	WAFSecLang string `json:"wafSecLang"`
 	// RateLimit (Step Q) — per-route rate-limit config
 	// echoed on every GET. nil when the route has no rate
 	// limit configured (the frontend toggle reads the nil
@@ -1925,6 +1930,7 @@ func toResponse(r storage.Route) routeResponse {
 		WAFExcludeTags:        emptyStringSliceIfNil(r.WAFExcludeTags),
 		WAFTargetedExclusions: toTargetedExclusionsWire(r.WAFTargetedExclusions),
 		WAFCustomRules:        toCustomRulesWire(r.WAFCustomRules),
+		WAFSecLang:            r.WAFSecLang,
 		RateLimit:             toRateLimitResp(r.RateLimit),
 		// Step R — error-page wiring pass-through (omitempty
 		// on the response struct so pre-R routes still emit

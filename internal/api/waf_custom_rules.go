@@ -217,11 +217,12 @@ func (h *Handler) newCustomRuleNames() *customRuleNames {
 	return &customRuleNames{h: h, byRule: map[string]map[int]string{}}
 }
 
-// lookup returns the name of rule ruleID on route routeID, or "" when
-// the ID is not a guided rule or the route / rule no longer exists.
+// lookup returns the name of rule ruleID on route routeID (guided rule
+// name, or the msg of a SecLang rule), or "" when the ID is not a
+// custom rule or the route / rule no longer exists.
 func (n *customRuleNames) lookup(ctx context.Context, routeID, ruleID string) string {
 	id, err := strconv.Atoi(ruleID)
-	if err != nil || id < waf.CustomRuleMinID || id > waf.CustomRuleMaxID {
+	if err != nil || id < waf.CustomRuleMinID || id > waf.SecLangMaxID {
 		return ""
 	}
 	names, ok := n.byRule[routeID]
@@ -230,6 +231,11 @@ func (n *customRuleNames) lookup(ctx context.Context, routeID, ruleID string) st
 		if route, err := n.h.store.GetRoute(ctx, routeID); err == nil {
 			for _, r := range route.WAFCustomRules {
 				names[r.ID] = r.Name
+			}
+			// v2.38 — SecLang rules are named by their msg.
+			rules, _ := waf.CheckSecLang(route.WAFSecLang)
+			for _, r := range rules {
+				names[r.ID] = r.Msg
 			}
 		}
 		n.byRule[routeID] = names

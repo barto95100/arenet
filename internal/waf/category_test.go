@@ -241,12 +241,12 @@ func TestAllCategories_ContainsEveryPhaseYCategory(t *testing.T) {
 }
 
 func TestCategoryForRule_CustomRules(t *testing.T) {
-	for _, id := range []string{"120000", "125000", "129999"} {
+	for _, id := range []string{"120000", "125000", "129999", "130000", "139999"} {
 		if got := CategoryForRule(id); got != CategoryCustom {
 			t.Errorf("CategoryForRule(%s) = %q, want CUSTOM", id, got)
 		}
 	}
-	for _, id := range []string{"119999", "130000", "100001"} {
+	for _, id := range []string{"119999", "140000", "100001"} {
 		if got := CategoryForRule(id); got == CategoryCustom {
 			t.Errorf("CategoryForRule(%s) = CUSTOM, want another category", id)
 		}

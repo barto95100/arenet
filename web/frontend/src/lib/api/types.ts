@@ -301,6 +301,8 @@ export interface Route {
 	wafTargetedExclusions: WafTargetedExclusion[];
 	/** v2.37 — guided rules. Always present ([] when none). */
 	wafCustomRules: WafCustomRule[];
+	/** v2.38 — expert SecLang ("" when none). */
+	wafSecLang: string;
 	/**
 	 * Step Q (2026-06-18) — per-route rate-limit config.
 	 * null when no rate limit configured ; non-null
@@ -695,6 +697,8 @@ export interface RouteRequest {
 	wafTargetedExclusions?: WafTargetedExclusion[];
 	/** v2.37 — guided rules; omit = keep, [] = clear. */
 	wafCustomRules?: WafCustomRule[];
+	/** v2.38 — expert SecLang; omit = keep, "" = clear. */
+	wafSecLang?: string;
 	/**
 	 * Step Q (2026-06-18) — per-route rate limit on the wire.
 	 * Preserve-on-omit on PUT (omit → keep stored value),
@@ -2004,6 +2008,37 @@ export interface WafTargetedExclusion {
 	target: string;
 	path?: string;
 	pathPrefix?: boolean;
+}
+
+/** v2.38 — one SecLang problem, 1-based line. */
+export interface SecLangError {
+	line: number;
+	message: string;
+}
+
+/** v2.38 — POST /waf/seclang/validate response. */
+export interface SecLangValidateResponse {
+	errors: SecLangError[];
+	nextId: number;
+}
+
+/** v2.38 — sample request for POST /routes/{id}/waf-test. */
+export interface WafTestRequest {
+	method: string;
+	path: string;
+	headers: { name: string; value: string }[];
+	body: string;
+	/** Unsaved SecLang draft; omitted = the stored one. */
+	seclang?: string;
+}
+
+/** v2.38 — WAF tester result (engine On: "would it be blocked"). */
+export interface WafTestResponse {
+	blocked: boolean;
+	status?: number;
+	blockedBy?: number;
+	matches: { id: number; msg: string; severity: string; data?: string }[];
+	mode: 'off' | 'detect' | 'block';
 }
 
 /** v2.36 — body of POST /routes/{id}/waf-exclusions (no target = whole route). */

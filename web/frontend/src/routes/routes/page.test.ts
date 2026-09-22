@@ -66,7 +66,11 @@ const { toastMock, apiMock, settingsMock, authMock, externalCertsMock } = vi.hoi
 		enableRoute: vi.fn(),
 		// Task 8/9 — route maintenance mode dedicated endpoints.
 		enterMaintenance: vi.fn(),
-		exitMaintenance: vi.fn()
+		exitMaintenance: vi.fn(),
+		// v2.38 — SecLang live check / guided → SecLang / WAF tester.
+		validateSecLang: vi.fn(),
+		secLangFromGuided: vi.fn(),
+		testRouteWaf: vi.fn()
 	},
 	settingsMock: {
 		listDNSProviders: vi.fn()
@@ -108,7 +112,10 @@ vi.mock('$lib/api/client', () => ({
 	disableRoute: (...args: unknown[]) => apiMock.disableRoute(...args),
 	enableRoute: (...args: unknown[]) => apiMock.enableRoute(...args),
 	enterMaintenance: (...args: unknown[]) => apiMock.enterMaintenance(...args),
-	exitMaintenance: (...args: unknown[]) => apiMock.exitMaintenance(...args)
+	exitMaintenance: (...args: unknown[]) => apiMock.exitMaintenance(...args),
+	validateSecLang: (...args: unknown[]) => apiMock.validateSecLang(...args),
+	secLangFromGuided: (...args: unknown[]) => apiMock.secLangFromGuided(...args),
+	testRouteWaf: (...args: unknown[]) => apiMock.testRouteWaf(...args)
 }));
 
 // $lib/api/settings: listDNSProviders is called in openCreate /
@@ -213,6 +220,7 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		wafExcludeTags: [],
 		wafTargetedExclusions: [],
 		wafCustomRules: [],
+		wafSecLang: '',
 		// Step Q — strict default no rate limit ; tests
 		// exercising the rate-limit section override via the
 		// partial Route overrides parameter set a non-null
@@ -3919,5 +3927,61 @@ describe('Routes page — v2.37 guided WAF rules', () => {
 			operator: 'is_not',
 			values: ['GET', 'HEAD', 'POST', 'OPTIONS']
 		});
+	});
+});
+
+// --- v2.38 — SecLang (advanced) ---------------------------------------
+
+describe('Routes page — v2.38 SecLang', () => {
+	beforeEach(() => {
+		apiMock.validateSecLang.mockResolvedValue({ errors: [], nextId: 130003 });
+	});
+
+	it('converts a guided rule to SecLang and ships both fields', async () => {
+		const seeded = makeRoute({
+			id: 'convert',
+			host: 'convert.local',
+			wafMode: 'block',
+			wafSecLang: 'SecAction "id:130000,phase:1,pass,nolog"',
+			wafCustomRules: [
+				{ id: 120000, name: 'Admin', conditions: [{ field: 'path', operator: 'begins_with', values: ['/admin'] }] }
+			]
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		apiMock.secLangFromGuided.mockResolvedValue({ seclang: '# Admin\nSecRule REQUEST_FILENAME "@rx ^(?:/admin)" "id:130003"\n' });
+		render(Page);
+		await userEvent.click((await screen.findByText('convert.local')).closest('tr')!);
+		await tick();
+
+		await userEvent.click(screen.getByTestId('waf-rule-convert'));
+		await waitFor(() => expect(screen.queryAllByTestId('waf-rule-row')).toHaveLength(0));
+		expect(apiMock.secLangFromGuided).toHaveBeenCalledWith(seeded.wafCustomRules[0], 130003);
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.updateRoute.mock.calls[0][1];
+		expect(payload.wafCustomRules).toEqual([]);
+		expect(payload.wafSecLang).toBe(
+			'SecAction "id:130000,phase:1,pass,nolog"\n\n# Admin\nSecRule REQUEST_FILENAME "@rx ^(?:/admin)" "id:130003"\n'
+		);
+	});
+
+	it('keeps the panel open and shows the problems when the save refuses the SecLang', async () => {
+		const seeded = makeRoute({ id: 'refused', host: 'refused.local', wafMode: 'block', wafSecLang: 'Include /etc/passwd' });
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockRejectedValue(
+			new ApiError('wafSecLang: line 1: directive "include" is not allowed', 400, 'validation', undefined, 'seclang_invalid', {
+				errors: [{ line: 1, message: 'directive "include" is not allowed' }]
+			})
+		);
+		render(Page);
+		await userEvent.click((await screen.findByText('refused.local')).closest('tr')!);
+		await tick();
+		await fireEvent.submit(document.querySelector('form')!);
+		await waitFor(() => expect(screen.getByTestId('seclang-problems')).toBeInTheDocument());
+		expect(screen.getByTestId('seclang-problems').textContent).toContain('include');
+		expect(document.querySelector('form')).not.toBeNull();
 	});
 });

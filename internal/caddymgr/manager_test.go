@@ -1301,6 +1301,10 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 				{Field: storage.WAFFieldHeader, Header: "Referer", Operator: storage.WAFOpContains, Values: []string{"spam.example"}},
 			}},
 		},
+		// v2.38 — expert SecLang (allowlisted) validated with the CRS.
+		WAFSecLang: "SecRule REQUEST_FILENAME \"@beginsWith /api/\" \"id:130000,phase:1,deny,status:415,msg:'JSON only',chain\"\n" +
+			"    SecRule REQUEST_HEADERS:Content-Type \"!@beginsWith application/json\" \"t:none,t:lowercase\"\n" +
+			"SecAction \"id:130001,phase:1,pass,nolog,ctl:ruleRemoveTargetById=942100;ARGS:content\"\n",
 	})
 	// Task 4 — fold the maintenance-mode route into THIS canonical
 	// fixture so caddy.Validate provisions the maintenance subroute
