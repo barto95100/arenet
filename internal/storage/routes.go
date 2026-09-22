@@ -609,6 +609,9 @@ type Route struct {
 	// by hand in the route form. Empty = no extra directives, so
 	// routes without it keep byte-identical Caddy config.
 	WAFTargetedExclusions []WAFTargetedExclusion `json:"waf_targeted_exclusions,omitempty"`
+	// WAFCustomRules (v2.37) are the route's guided WAF rules (block
+	// when every condition matches). Empty = no extra directives.
+	WAFCustomRules []WAFCustomRule `json:"waf_custom_rules,omitempty"`
 	// RateLimit (Step Q, 2026-06-18) is the per-route rate
 	// limiting configuration that gates inbound requests
 	// BEFORE the WAF / country-block / CrowdSec chain runs.

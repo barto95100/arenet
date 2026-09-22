@@ -123,6 +123,7 @@ func TestAllCategories_DashboardDisplayOrder(t *testing.T) {
 		// Infrastructure / catch-all
 		CategoryInit,
 		CategoryCommonExcept,
+		CategoryCustom,
 		CategoryOther,
 	}
 	if len(AllCategories) != len(want) {

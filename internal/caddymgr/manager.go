@@ -1695,7 +1695,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//     mutations would otherwise confuse the rules);
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
-		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions); wafHandler != nil {
+		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions, r.WAFCustomRules); wafHandler != nil {
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -2891,7 +2891,7 @@ func normalizeKnownHost(h string) string {
 	return strings.ToLower(h)
 }
 
-func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excludeRules []int, excludeTags []string, targeted []storage.WAFTargetedExclusion) map[string]any {
+func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excludeRules []int, excludeTags []string, targeted []storage.WAFTargetedExclusion, custom []storage.WAFCustomRule) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
 	}
@@ -3022,6 +3022,14 @@ func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excl
 	// field, optionally on one path). Same placement constraint as
 	// the SecAction above: before the CRS Includes.
 	for _, d := range targetedExclusionDirectives(targeted) {
+		if preCRSDirectives != "" {
+			preCRSDirectives += "\n"
+		}
+		preCRSDirectives += d
+	}
+	// v2.37 — guided rules (block when every condition matches),
+	// after the exclusions and before the CRS so they decide early.
+	for _, d := range customRuleDirectives(custom) {
 		if preCRSDirectives != "" {
 			preCRSDirectives += "\n"
 		}

@@ -1472,6 +1472,15 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		targeted = normalised
 	}
+	var customRules []storage.WAFCustomRule
+	if req.WAFCustomRules != nil {
+		normalised, validationErr := normalizeCustomRules(*req.WAFCustomRules, nil)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		customRules = normalised
+	}
 	// Step Q (2026-06-18) — RateLimit on POST : nil pointer
 	// = no rate limit (pre-Q byte-equivalent) ; non-nil
 	// supplied → validated by materialiseRateLimit which
@@ -1547,6 +1556,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		WAFExcludeRules:       excludeRules,
 		WAFExcludeTags:        excludeTags,
 		WAFTargetedExclusions: targeted,
+		WAFCustomRules:        customRules,
 		RateLimit:             rateLimit,
 		// Step R — error-page wiring. Both fields are
 		// pass-through ; storage.validate() enforces the
@@ -2008,6 +2018,17 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		targeted = normalised
 	}
+	// v2.37 — WAFCustomRules on PUT: preserve on nil, replace
+	// (validated, IDs kept or allocated) otherwise.
+	customRules := previous.WAFCustomRules
+	if req.WAFCustomRules != nil {
+		normalised, validationErr := normalizeCustomRules(*req.WAFCustomRules, previous.WAFCustomRules)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		customRules = normalised
+	}
 	// Step Q (2026-06-18) — RateLimit on PUT.
 	// v2.9.13 Phase Q.2 — clearRateLimit sentinel shipped.
 	//
@@ -2090,6 +2111,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		WAFExcludeRules:       excludeRules,
 		WAFExcludeTags:        excludeTags,
 		WAFTargetedExclusions: targeted,
+		WAFCustomRules:        customRules,
 		RateLimit:             rateLimit,
 		// Step R — error-page wiring (update path mirrors
 		// create). Pass-through both fields ; storage.validate()
