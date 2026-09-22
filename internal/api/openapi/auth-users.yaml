@@ -258,11 +258,14 @@ paths:
       description: |
         Re-enters the password to lift the idle lock of the current session
         (sessions idle > 15 minutes get `403 {"error":"session locked"}` on
-        every other signed-in endpoint). On success the session's activity
+        every other signed-in endpoint; since v2.39 that 403 no longer
+        counts toward the rate limiter). On success the session's activity
         is refreshed and the IP's rate-limit counter reset.
 
         Errors:
         - `401` `invalid password` (counts toward the auth rate limiter);
+        - `400` with code `no_local_password` for accounts without one
+          (service accounts; it used to be a 500);
         - `400` with code `oidc_unlock_unsupported` for SSO users, who have
           no local password and must sign in again via OIDC.
       tags: [Auth]
@@ -413,7 +416,9 @@ paths:
         the current session stays signed in.
 
         Errors: `401 current password is incorrect` (counts toward the auth
-        rate limiter), `400` for missing fields or policy violations
+        rate limiter), `400` with code `no_local_password` for accounts
+        without one (OIDC users, service accounts; it used to be a 500),
+        `400` for missing fields or policy violations
         (`password must be at least 15 characters`, `… at most 128
         characters`, `password is in the list of common compromised
         passwords`).

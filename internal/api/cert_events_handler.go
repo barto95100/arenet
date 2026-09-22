@@ -310,8 +310,13 @@ func parseDurationParam(raw string, defaultVal, minVal, maxVal time.Duration) (t
 	if strings.HasSuffix(raw, "d") {
 		nStr := strings.TrimSuffix(raw, "d")
 		n, err := strconv.Atoi(nStr)
-		if err != nil || n <= 0 {
+		if err != nil {
 			return 0, err
+		}
+		// "0d" / "-1d" used to return (0, nil): the caller then divided
+		// by a zero interval and the request died as a 500.
+		if n <= 0 {
+			return 0, fmt.Errorf("must be positive")
 		}
 		return clampDuration(time.Duration(n)*24*time.Hour, minVal, maxVal), nil
 	}

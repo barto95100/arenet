@@ -1301,7 +1301,10 @@ type routeRequest struct {
 	// rejects every POST/PUT that carries "disabled" with a 400. On
 	// create/update the value is applied directly: absent or false =
 	// enabled (the legacy zero-value), true = created/left disabled.
-	Disabled bool `json:"disabled,omitempty"`
+	// v2.39: a pointer, so PUT preserves the stored value when the
+	// field is omitted. It used to be a bool: a partial PUT (a script
+	// sending only the fields it changes) re-enabled a disabled route.
+	Disabled *bool `json:"disabled,omitempty"`
 	// MaintenanceConfig (v2.16.0 maintenance-mode feature) mirrors
 	// Disabled's wire-field pattern: the dedicated /maintenance +
 	// /maintenance/off endpoints are the primary toggle, but the

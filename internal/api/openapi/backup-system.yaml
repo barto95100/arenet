@@ -675,7 +675,7 @@ components:
         schema_version: { type: string, enum: ['1.0.0', '2.0.0'] }
         exported_at: { type: string, format: date-time }
         secrets_included: { type: boolean }
-        arenet_version: { type: string }
+        arenet_version: { type: string, description: 'Version of the binary that produced the export (before v2.39 the API exports carried a hard-coded "v0.7.x").' }
         encryption: { $ref: '#/components/schemas/BackupEncryption' }
         routes: { type: [array, 'null'], items: { type: object } }
         dns_providers: { type: [array, 'null'], items: { type: object } }

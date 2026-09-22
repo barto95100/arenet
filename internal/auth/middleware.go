@@ -253,6 +253,9 @@ func HardAuthMiddleware(sessions sessionStore, users userStore, tokens APITokenL
 		hard := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if locked, _ := r.Context().Value(IsLockedKey).(bool); locked {
 				// CRITICAL: return BEFORE calling Touch.
+				// Tell the rate limiter this 403 is the idle lock, not
+				// a failed authentication (v2.39).
+				MarkSessionLocked(r.Context())
 				writeForbidden(w, "session locked")
 				return
 			}
