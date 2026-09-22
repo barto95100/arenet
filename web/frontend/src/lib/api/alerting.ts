@@ -61,6 +61,12 @@ export interface AlertChannel {
 	lastErrorAt?: string;
 	createdAt: string;
 	updatedAt: string;
+	/**
+	 * v2.39 — true when the stored webhook URL is the redaction
+	 * placeholder: an edit made before the fix overwrote it, so the
+	 * channel cannot send until the URL is retyped.
+	 */
+	secretsLost?: boolean;
 }
 
 export interface AlertChannelRequest {
