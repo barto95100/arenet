@@ -84,7 +84,8 @@
 		| 'settings'
 		| 'audit'
 		| 'alerting'
-		| 'error-pages';
+		| 'error-pages'
+		| 'api';
 
 	// v2.9.12 i18n Phase 2 — section / nav structures now carry
 	// bundle KEYS (labelKey) instead of literal labels. Resolution
@@ -143,7 +144,9 @@
 					icon: 'error-pages',
 					adminOnly: true
 				},
-				{ href: '/audit', labelKey: 'sidebar.navAuditLog', icon: 'audit', adminOnly: true }
+				{ href: '/audit', labelKey: 'sidebar.navAuditLog', icon: 'audit', adminOnly: true },
+				// v2.39 — OpenAPI documentation of the admin API.
+				{ href: '/api-docs', labelKey: 'sidebar.navApiDocs', icon: 'api', adminOnly: true }
 			]
 		}
 	];
@@ -252,6 +255,10 @@
 			<path d="M9.5 2v3h3" />
 			<path d="M8 8v3" />
 			<circle cx="8" cy="12.7" r="0.5" fill="currentColor" stroke="none" />
+		{:else if icon === 'api'}
+			<!-- Braces glyph "{ }": the API / code documentation. v2.39. -->
+			<path d="M5.5 2.5c-1.5 0-2 .7-2 2v1.5c0 1-.5 1.5-1.5 2 1 .5 1.5 1 1.5 2v1.5c0 1.3.5 2 2 2" />
+			<path d="M10.5 2.5c1.5 0 2 .7 2 2v1.5c0 1 .5 1.5 1.5 2-1 .5-1.5 1-1.5 2v1.5c0 1.3-.5 2-2 2" />
 		{/if}
 	</svg>
 {/snippet}

@@ -71,7 +71,8 @@
 		"navUsers": "Utilisateurs",
 		"navSettings": "Paramètres",
 		"navErrorPages": "Pages d'erreur",
-		"navAuditLog": "Journal d'audit"
+		"navAuditLog": "Journal d'audit",
+		"navApiDocs": "Documentation API"
 	},
 	"topbar": {
 		"statusAriaLabel": "État de la passerelle",
@@ -586,6 +587,7 @@
 		}
 	},
 	"pageTitles": {
+		"apiDocs": "Documentation de l'API",
 		"alerting": "Alertes",
 		"alertingSubtitle": "Canaux de notification, règles, historique des envois",
 		"audit": "Journal d'audit",
@@ -1503,6 +1505,33 @@
 		"toastSubmitFailed": "Échec : {err}",
 		"toastTokenCopied": "Token copié dans le presse-papier",
 		"toastCopyFailed": "Copie échouée — sélectionne le texte manuellement"
+	},
+	"apiDocs": {
+		"operations": "opérations",
+		"navLabel": "Opérations de l'API",
+		"search": "Rechercher (chemin, méthode, résumé)",
+		"download": "Télécharger openapi.json",
+		"noMatch": "Aucune opération ne correspond.",
+		"roleTitle": "Rôle minimum",
+		"roles": {
+			"public": "public",
+			"viewer": "lecteur",
+			"admin": "admin"
+		},
+		"parameters": "Paramètres",
+		"requestBody": "Corps de la requête",
+		"responses": "Réponses",
+		"example": "Exemple",
+		"required": "obligatoire",
+		"readOnly": "lecture seule",
+		"writeOnly": "écriture seule",
+		"oneOf": "L'un de :",
+		"tryIt": "Essayer",
+		"body": "Corps JSON",
+		"send": "Envoyer",
+		"confirmSend": "Oui, envoyer",
+		"cancel": "Annuler",
+		"confirmMutating": "Cette requête modifie la configuration réelle de cet Arenet (même effet que depuis l'interface). L'envoyer ?"
 	},
 	"wafSecLang": {
 		"title": "SecLang (avancé)",

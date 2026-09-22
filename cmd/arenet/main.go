@@ -1649,6 +1649,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// cancelable context; the version-config PUT hook restarts/stops it
 	// to match the new enabled/interval without a reboot.
 	updateChecker := updatecheck.New(version, nil)
+	apiHandler.SetVersion(version)
 	if err := alertingRegistry.Register(alerting.NewUpdateAvailableSource(updateChecker.Status)); err != nil {
 		logger.Warn("alerting: register update_available source failed", "err", err)
 	}

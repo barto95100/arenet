@@ -227,6 +227,9 @@ type Handler struct {
 	// boot), the version endpoint reports enabled=false and no update.
 	// Set via SetUpdateChecker.
 	updateChecker updateChecker
+	// version (v2.39) is the running binary's version, reported as
+	// info.version of /api/v1/openapi.json. "" keeps the file's value.
+	version string
 
 	// onUpdateConfigChange (v2.12.3) is invoked after a successful
 	// version-config PUT so the boot wiring can start/stop the poll
@@ -667,6 +670,12 @@ func (h *Handler) SetSystemHealthChecker(s SystemHealthChecker) {
 type updateChecker interface {
 	Status() updatecheck.Status
 	Check(ctx context.Context) updatecheck.Status
+}
+
+// SetVersion (v2.39) records the running binary's version for the
+// OpenAPI document.
+func (h *Handler) SetVersion(v string) {
+	h.version = v
 }
 
 // SetUpdateChecker (v2.12.3) attaches the update checker. Pass nil to

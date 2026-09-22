@@ -1,0 +1,1217 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# OpenAPI fragment: authentication (/auth/*: first-admin setup, local
+# login, OIDC SSO, sessions, idle lock, own preferences), user and
+# service-account administration (/admin/users*), and the OpenAPI
+# document itself (/openapi.json).
+paths:
+  /auth/setup/status:
+    get:
+      summary: Is first-admin setup available
+      description: |
+        Anonymous hint read by the login page. `available` is true only when
+        no user exists yet (so `POST /auth/setup` is reachable). A storage
+        read failure is reported as `available: false`.
+
+        Like every `/auth/*` endpoint it sits behind the per-IP auth rate
+        limiter (see `POST /auth/login`).
+      tags: [Auth]
+      x-arenet-role: public
+      security: []
+      responses:
+        '200':
+          description: Setup availability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSetupStatus' }
+              example: { available: true }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/setup:
+    post:
+      summary: Create the first admin
+      description: |
+        One-shot creation of the first **local admin** on a fresh install.
+        Requires the **setup token** printed once in the server log at boot
+        (`Setup token: <hex>`) while the user database is empty. The token is
+        kept in memory only: a restart before setup prints a new one, and it
+        is invalidated after a successful setup.
+
+        On success the new admin is signed in: `Set-Cookie: arenet_session`
+        (24 h, no remember-me, `HttpOnly`, `SameSite=Strict`, `Secure` over
+        HTTPS) plus the UI bootstrap cookies `arenet_theme` and
+        `arenet_language`.
+
+        Password policy: 15–128 characters, not in the embedded top-10k
+        common-password list; also checked against Have I Been Pwned
+        (k-anonymity) when reachable.
+
+        Errors:
+        - `404` once any user exists (`setup unavailable: an admin already
+          exists`) — deliberately 404, not 409.
+        - `403` `setup token invalid or expired`.
+        - `400` invalid body (unknown fields rejected), username not
+          `[a-z0-9_-]{3,32}` (`username must be lowercase`), displayName
+          > 64 chars, malformed email, password policy.
+
+        A 403 counts as a failure for the auth rate limiter.
+      tags: [Auth]
+      x-arenet-role: public
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthSetupRequest' }
+            example:
+              setupToken: 3f9c1e7a0b8d4c2e9f6a1b3c5d7e9f00
+              username: admin
+              displayName: Administrator
+              password: correct-horse-battery-staple
+      responses:
+        '201':
+          description: First admin created and signed in.
+          headers:
+            Set-Cookie:
+              description: '`arenet_session` (plus `arenet_theme`, `arenet_language`).'
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSetupResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403':
+          description: Setup token invalid or expired.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /auth/login:
+    post:
+      summary: Sign in with a local account
+      description: |
+        Verifies a local username / password and opens a browser session.
+
+        **Cookie**: `Set-Cookie: arenet_session=<opaque>; Path=/; HttpOnly;
+        SameSite=Strict` (+ `Secure` when served over HTTPS). Lifetime is
+        sliding: 24 h, or 30 days with `rememberMe: true`. A session idle for
+        more than 15 minutes is **locked** (see `POST /auth/unlock`). The
+        response also sets `arenet_theme` and `arenet_language` (readable
+        by JS, used for the first paint).
+
+        Wrong username and wrong password both return the same
+        `401 {"error":"invalid credentials"}` (no user enumeration).
+
+        **Rate limiting** (per client IP, shared by every `/auth/*`
+        endpoint; every 401 or 403 response counts as a failure):
+        - 5 failures within 5 minutes → blocked 15 minutes;
+        - 10 failures within 1 hour → blocked 1 hour.
+
+        While blocked, every `/auth/*` request gets `429` with a
+        `Retry-After` header (seconds) and
+        `{"error":"too many attempts, retry after 15 minutes"}` (or
+        `1 hour`). A successful login or unlock resets the counter for
+        the IP.
+
+        Scripts should not log in: use a service-account token
+        (`Authorization: Bearer <token>`) instead.
+      tags: [Auth]
+      x-arenet-role: public
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthLoginRequest' }
+            example:
+              username: admin
+              password: correct-horse-battery-staple
+              rememberMe: false
+      responses:
+        '200':
+          description: Signed in; session cookie set.
+          headers:
+            Set-Cookie:
+              description: '`arenet_session` (plus `arenet_theme`, `arenet_language`).'
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthLoginResponse' }
+              example:
+                id: 01J9ZK3Q6V1XQ2N8R4T5W7Y9AB
+                username: admin
+                displayName: Administrator
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401':
+          description: Invalid credentials (`invalid credentials`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: 'too many attempts, retry after 15 minutes' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503':
+          description: User store unavailable (`authentication service temporarily unavailable`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/logout:
+    post:
+      summary: Sign out
+      description: |
+        Deletes the current session and clears the `arenet_session` and
+        `arenet_theme` cookies. Works on a locked session. No body.
+        A missing or expired session returns 401, which clients can treat
+        as "already signed out".
+      tags: [Auth]
+      x-arenet-role: viewer
+      responses:
+        '204':
+          description: Signed out; cookies cleared.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/me:
+    get:
+      summary: Current user
+      description: |
+        Identity, role and preferences of the caller (session or service
+        account). Works on a locked session (`locked: true`) and never
+        extends the idle timer, so polling it cannot keep a session awake.
+        Useful from a script to check which service account a token
+        belongs to.
+      tags: [Auth]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: The signed-in user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthMe' }
+              example:
+                id: 01J9ZK3Q6V1XQ2N8R4T5W7Y9AB
+                username: admin
+                displayName: Administrator
+                locked: false
+                passwordCompromised: false
+                hibpCheckStatus: clean
+                themePreference: dark
+                languagePreference: en
+                role: admin
+                authSource: local
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: User store unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/unlock:
+    post:
+      summary: Unlock an idle session
+      description: |
+        Re-enters the password to lift the idle lock of the current session
+        (sessions idle > 15 minutes get `403 {"error":"session locked"}` on
+        every other signed-in endpoint). On success the session's activity
+        is refreshed and the IP's rate-limit counter reset.
+
+        Errors:
+        - `401` `invalid password` (counts toward the auth rate limiter);
+        - `400` with code `oidc_unlock_unsupported` for SSO users, who have
+          no local password and must sign in again via OIDC.
+      tags: [Auth]
+      x-arenet-role: viewer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthUnlockRequest' }
+      responses:
+        '200':
+          description: Session unlocked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthUnlockResponse' }
+              example: { unlocked: true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503':
+          description: User store unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/heartbeat:
+    post:
+      summary: Keep the session alive
+      description: |
+        No-op that refreshes the session's idle timer (the refresh is done
+        by the auth layer). Requests carrying `X-Arenet-Background: 1` do
+        not refresh it. Returns `403 session locked` once the session is
+        idle-locked.
+      tags: [Auth]
+      x-arenet-role: viewer
+      responses:
+        '204':
+          description: Session refreshed.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Session idle-locked (`session locked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/sessions:
+    get:
+      summary: List my sessions
+      description: |
+        The caller's own non-expired browser sessions. `id` is a session
+        handle (never the cookie value); `isCurrent` marks the session of
+        this request (always false when called with a Bearer token).
+      tags: [Auth]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Active sessions of the caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSessionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Session idle-locked (`session locked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: Session store unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/sessions/{id}:
+    delete:
+      summary: Revoke one of my sessions
+      description: |
+        Signs out one of the caller's sessions (e.g. a forgotten device).
+        A session belonging to another user returns the same 404 as an
+        unknown one. Revoking the current session signs this client out.
+      tags: [Auth]
+      x-arenet-role: viewer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Session handle from `GET /auth/sessions`.
+          schema: { type: string }
+      responses:
+        '204':
+          description: Session revoked.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Session idle-locked (`session locked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: Session store unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/me/password:
+    post:
+      summary: Change my password
+      description: |
+        Local accounts only (SSO users change their password at the IdP).
+        Verifies `currentPassword`, applies the password policy to
+        `newPassword` (15–128 characters, not a common password, HIBP check
+        when reachable), then **revokes every other session** of the user;
+        the current session stays signed in.
+
+        Errors: `401 current password is incorrect` (counts toward the auth
+        rate limiter), `400` for missing fields or policy violations
+        (`password must be at least 15 characters`, `… at most 128
+        characters`, `password is in the list of common compromised
+        passwords`).
+      tags: [Auth]
+      x-arenet-role: viewer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthChangePasswordRequest' }
+      responses:
+        '204':
+          description: Password changed; other sessions revoked.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Session idle-locked (`session locked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /auth/me/theme:
+    post:
+      summary: Set my UI theme
+      description: Stores the caller's theme and refreshes the `arenet_theme` cookie.
+      tags: [Auth]
+      x-arenet-role: viewer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthThemeRequest' }
+            example: { theme: light }
+      responses:
+        '204':
+          description: Theme saved.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Session idle-locked (`session locked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /auth/me/language:
+    post:
+      summary: Set my UI language
+      description: Stores the caller's UI language and refreshes the `arenet_language` cookie.
+      tags: [Auth]
+      x-arenet-role: viewer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthLanguageRequest' }
+            example: { language: fr }
+      responses:
+        '204':
+          description: Language saved.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Session idle-locked (`session locked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /auth/oidc/status:
+    get:
+      summary: Is OIDC SSO enabled
+      description: |
+        Anonymous hint for the login page: whether the "Sign in with SSO"
+        button should show, and which provider logo to use. Issuer, client
+        ID and allowlist are never exposed. A read failure reports
+        `enabled: false`.
+      tags: [Auth]
+      x-arenet-role: public
+      security: []
+      responses:
+        '200':
+          description: SSO availability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthOIDCStatus' }
+              example: { enabled: true, kind: authentik }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/oidc/login:
+    get:
+      summary: Start OIDC sign-in
+      description: |
+        Browser navigation (not an XHR). Generates a random `state` and
+        `nonce`, stores them in the short-lived cookies `arenet_oidc_state`
+        and `arenet_oidc_nonce` (5 minutes, `HttpOnly`, `SameSite=Lax`), and
+        redirects (`302`) to the identity provider's authorization endpoint
+        (authorization-code flow). The IdP then redirects back to
+        `GET /auth/oidc/callback`.
+
+        `503` when SSO is disabled (`oidc sso is not enabled on this
+        instance`), when the IdP discovery document cannot be fetched
+        (`oidc identity provider unreachable`) or the client is being
+        rebuilt (`oidc client not ready, retry shortly`).
+      tags: [Auth]
+      x-arenet-role: public
+      security: []
+      responses:
+        '302':
+          description: Redirect to the IdP authorization endpoint.
+          headers:
+            Location:
+              description: IdP authorization URL (with `state`, `nonce`, `client_id`, `redirect_uri`, `scope`).
+              schema: { type: string }
+            Set-Cookie:
+              description: '`arenet_oidc_state` and `arenet_oidc_nonce`.'
+              schema: { type: string }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503':
+          description: SSO disabled or IdP unreachable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/oidc/callback:
+    get:
+      summary: OIDC redirect target
+      description: |
+        Called by the browser when the IdP redirects back; not meant to be
+        called directly. Validates `state` against the `arenet_oidc_state`
+        cookie, exchanges `code` for tokens, verifies the ID token
+        (signature, issuer, audience, expiry, `nonce`), and matches the
+        identity against the SSO allowlist (by `sub`, or on first login by
+        verified email). A matching identity without an Arenet account gets
+        one auto-created with role **viewer**.
+
+        Always answers `302`:
+        - success → session cookie set (same as local login, 24 h) and
+          redirect to `/routes`;
+        - failure → redirect to `/login?error=<reason>` with `reason` one of
+          `idp_error` (IdP returned `error`), `invalid_state` (missing or
+          mismatched state/nonce cookie, missing code, invalid ID token or
+          claims), `idp_unreachable` (SSO disabled, discovery or code
+          exchange failed), `not_authorized` (identity not in the
+          allowlist), `internal`.
+
+        Redirect targets are prefixed with the configured UI origin when
+        one is set.
+      tags: [Auth]
+      x-arenet-role: public
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          description: Authorization code issued by the IdP.
+          schema: { type: string }
+        - name: state
+          in: query
+          required: false
+          description: Must equal the `arenet_oidc_state` cookie.
+          schema: { type: string }
+        - name: error
+          in: query
+          required: false
+          description: Set by the IdP when authentication failed or was cancelled.
+          schema: { type: string }
+      responses:
+        '302':
+          description: Redirect to `/routes` (signed in) or `/login?error=<reason>`.
+          headers:
+            Location:
+              description: '`/routes` or `/login?error=idp_error|invalid_state|idp_unreachable|not_authorized|internal`.'
+              schema: { type: string }
+            Set-Cookie:
+              description: On success `arenet_session` (plus theme / language cookies); the flow cookies are cleared.
+              schema: { type: string }
+        '429':
+          description: IP blocked by the auth rate limiter.
+          headers:
+            Retry-After:
+              description: Seconds until the block expires.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/users:
+    get:
+      summary: List users
+      description: |
+        Every account — local, OIDC and **service accounts**
+        (`authSource: service`) — oldest first. This is also how service
+        accounts are listed: filter on `authSource`. Password hashes, OIDC
+        subjects and API tokens are never returned. `lastActivityAt` /
+        `activeSessionCount` drive the online indicator (omitted / 0 when
+        the user has no live session, or when session data is unavailable).
+      tags: [Users]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: All users.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UsersUser' }
+              example:
+                - id: 01J9ZK3Q6V1XQ2N8R4T5W7Y9AB
+                  username: admin
+                  displayName: Administrator
+                  authSource: local
+                  oidcLinked: false
+                  role: admin
+                  createdAt: '2026-06-02T09:12:44.123Z'
+                  updatedAt: '2026-06-02T09:12:44.123Z'
+                  lastLoginAt: '2026-09-22T07:58:01.5Z'
+                  lastActivityAt: '2026-09-22T08:14:30Z'
+                  activeSessionCount: 1
+                - id: 01JAB2C3D4E5F6G7H8J9K0M1NP
+                  username: backup-bot
+                  displayName: backup-bot
+                  authSource: service
+                  oidcLinked: false
+                  role: viewer
+                  createdAt: '2026-09-01T10:00:00Z'
+                  updatedAt: '2026-09-01T10:00:00Z'
+                  activeSessionCount: 0
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /admin/users/{id}/role:
+    post:
+      summary: Change a user's role
+      description: |
+        Promotes or demotes a user (`viewer` ↔ `admin`); also applies to
+        service accounts. Takes effect on the user's next request.
+
+        Last-admin guard: demoting the last **local** admin is refused with
+        `400` (`cannot demote the last local admin — break-glass channel
+        must remain`); OIDC and service-account admins do not count.
+      tags: [Users]
+      x-arenet-role: admin
+      parameters:
+        - $ref: '#/components/parameters/UsersUserID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsersRoleRequest' }
+            example: { role: admin }
+      responses:
+        '200':
+          description: The updated user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsersUser' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /admin/users/{id}:
+    delete:
+      summary: Delete a user
+      description: |
+        Deletes an account and signs it out everywhere (all its sessions are
+        purged). Deleting yourself is allowed if another local admin
+        remains. Last-admin guard: the last **local** admin cannot be
+        deleted (`400`, `cannot delete the last local admin — break-glass
+        channel must remain`).
+
+        For service accounts prefer `DELETE /admin/users/service-accounts/{id}`,
+        which also revokes their tokens explicitly.
+      tags: [Users]
+      x-arenet-role: admin
+      parameters:
+        - $ref: '#/components/parameters/UsersUserID'
+      responses:
+        '204':
+          description: User deleted.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /admin/users/service-accounts:
+    post:
+      summary: Create a service account
+      description: |
+        Creates a machine account for scripts and issues its API token.
+
+        **The token is returned only in this response** — it is stored
+        hashed and can never be read again. Copy it now; if it is lost,
+        rotate it (`POST /admin/users/service-accounts/{id}/rotate-token`).
+
+        Tokens look like `arn_<base64url>`. Use them on any endpoint:
+
+        ```
+        curl -H "Authorization: Bearer arn_Xq3…" https://arenet.lan:8001/api/v1/routes
+        ```
+
+        The service account acts with the chosen `role` (`viewer`: read
+        only; `admin`: everything). Bearer requests have no idle lock and
+        no session; a session cookie, when also present and valid, takes
+        precedence. A revoked, expired or unknown token gets `401`.
+
+        List service accounts with `GET /admin/users` (`authSource:
+        service`).
+
+        Errors: `400` for an empty or invalid `name`
+        (`[a-z0-9_-]{3,32}`), an invalid `role` or a past `expiresAt`;
+        `409 name already taken` (names share the username namespace);
+        `503` when the token store is not configured.
+      tags: [Users]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsersServiceAccountCreateRequest' }
+            example:
+              name: backup-bot
+              role: viewer
+              expiresAt: '2027-09-22T00:00:00Z'
+      responses:
+        '201':
+          description: Service account created. `token` is shown this one time only.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsersServiceAccountCreated' }
+              example:
+                user:
+                  id: 01JAB2C3D4E5F6G7H8J9K0M1NP
+                  username: backup-bot
+                  displayName: backup-bot
+                  authSource: service
+                  oidcLinked: false
+                  role: viewer
+                  createdAt: '2026-09-22T08:30:00Z'
+                  updatedAt: '2026-09-22T08:30:00Z'
+                  activeSessionCount: 0
+                token: arn_Xq3vN8kPz2bT7mW1cR5yH9dL4fJ6gS0aE2uK8oQ1iVw
+                tokenId: 01JAB2C3D4E5F6G7H8J9K0M1NQ
+                expiresAt: '2027-09-22T00:00:00Z'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503':
+          description: API token store not configured.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/users/service-accounts/{id}/rotate-token:
+    post:
+      summary: Rotate a service account's token
+      description: |
+        Revokes the service account's active token and issues a new one,
+        returned **only in this response**. Clients using the old token get
+        `401` immediately; there is a brief window where neither token is
+        valid.
+
+        The body is optional: send `{"expiresAt": "…"}` to set an expiry on
+        the new token, or no body for a token that never expires.
+
+        Errors: `404` unknown id, `400` if the id is not a service account
+        (`user is not a service account`) or `expiresAt` is in the past,
+        `503` when the token store is not configured.
+      tags: [Users]
+      x-arenet-role: admin
+      parameters:
+        - $ref: '#/components/parameters/UsersUserID'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsersServiceAccountRotateRequest' }
+            example: { expiresAt: '2027-09-22T00:00:00Z' }
+      responses:
+        '200':
+          description: New token issued. `token` is shown this one time only.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsersServiceAccountToken' }
+              example:
+                token: arn_7hGf2Kq9LmN3pR8sT1vW4xY6zA0bC5dE2fG7hJ9kL3m
+                tokenId: 01JAB9Z8Y7X6W5V4T3S2R1Q0PN
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503':
+          description: API token store not configured.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/users/service-accounts/{id}:
+    delete:
+      summary: Delete a service account
+      description: |
+        Revokes every token of the service account (first, so they stop
+        working even if the next step fails), then deletes the account.
+
+        Errors: `404` unknown id, `400` if the id is not a service account
+        (`user is not a service account` — use `DELETE /admin/users/{id}`
+        for humans), `503` when the token store is not configured.
+      tags: [Users]
+      x-arenet-role: admin
+      parameters:
+        - $ref: '#/components/parameters/UsersUserID'
+      responses:
+        '204':
+          description: Tokens revoked and account deleted.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503':
+          description: API token store not configured.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /openapi.json:
+    get:
+      summary: This OpenAPI document
+      description: |
+        The OpenAPI 3.1 description of the admin API (this document), as
+        JSON. `info.version` is the running Arenet version. Available to
+        any signed-in user or service account.
+      tags: [System]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: OpenAPI 3.1 document.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Session idle-locked (`session locked`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+components:
+  parameters:
+    UsersUserID:
+      name: id
+      in: path
+      required: true
+      description: User ID (from `GET /admin/users`).
+      schema: { type: string }
+
+  schemas:
+    AuthSetupStatus:
+      type: object
+      required: [available]
+      properties:
+        available:
+          type: boolean
+          description: True when no user exists and `POST /auth/setup` can be used.
+
+    AuthSetupRequest:
+      type: object
+      additionalProperties: false
+      required: [setupToken, username, password]
+      properties:
+        setupToken:
+          type: string
+          writeOnly: true
+          description: One-time token printed in the server log at boot (hex).
+        username:
+          type: string
+          pattern: '^[a-z0-9_-]{3,32}$'
+          description: Login name (lowercase letters, digits, `_`, `-`).
+        displayName:
+          type: string
+          maxLength: 64
+        email:
+          type: string
+          maxLength: 320
+          description: Optional contact address (must contain `@`). Not a login key.
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          minLength: 15
+          maxLength: 128
+
+    AuthSetupResponse:
+      type: object
+      required: [id, username, displayName, createdAt]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        displayName: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    AuthLoginRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password:
+          type: string
+          format: password
+          writeOnly: true
+        rememberMe:
+          type: boolean
+          default: false
+          description: 30-day session instead of 24 h.
+
+    AuthLoginResponse:
+      type: object
+      required: [id, username, displayName]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        displayName: { type: string }
+
+    AuthMe:
+      type: object
+      required: [id, username, displayName, locked, passwordCompromised, hibpCheckStatus,
+        themePreference, languagePreference, role, authSource]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        displayName: { type: string }
+        locked:
+          type: boolean
+          description: Session is idle-locked (always false for Bearer tokens).
+        passwordCompromised:
+          type: boolean
+          description: The password was found in Have I Been Pwned.
+        hibpCheckStatus:
+          type: string
+          description: HIBP check state of the password (empty for accounts without a local password).
+          enum: [pending, clean, compromised, skipped, '']
+        themePreference:
+          type: string
+          enum: [dark, light, '']
+          description: Empty = never set (UI uses dark).
+        languagePreference:
+          type: string
+          enum: [en, fr, '']
+          description: Empty = never set (UI uses en).
+        role:
+          type: string
+          enum: [viewer, admin]
+        authSource:
+          type: string
+          enum: [local, oidc, service]
+
+    AuthUnlockRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password:
+          type: string
+          format: password
+          writeOnly: true
+
+    AuthUnlockResponse:
+      type: object
+      required: [unlocked]
+      properties:
+        unlocked: { type: boolean, const: true }
+
+    AuthSession:
+      type: object
+      required: [id, issuedAt, lastActivity, expiresAt, ip, userAgent, rememberMe, isCurrent]
+      properties:
+        id:
+          type: string
+          description: Session handle (not the cookie value); use it with `DELETE /auth/sessions/{id}`.
+        issuedAt: { type: string, format: date-time }
+        lastActivity: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        ip: { type: string }
+        userAgent: { type: string }
+        rememberMe: { type: boolean }
+        isCurrent:
+          type: boolean
+          description: This is the session making the request.
+
+    AuthSessionList:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items: { $ref: '#/components/schemas/AuthSession' }
+
+    AuthChangePasswordRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type: string
+          format: password
+          writeOnly: true
+        newPassword:
+          type: string
+          format: password
+          writeOnly: true
+          minLength: 15
+          maxLength: 128
+
+    AuthThemeRequest:
+      type: object
+      additionalProperties: false
+      required: [theme]
+      properties:
+        theme:
+          type: string
+          enum: [dark, light]
+
+    AuthLanguageRequest:
+      type: object
+      additionalProperties: false
+      required: [language]
+      properties:
+        language:
+          type: string
+          enum: [en, fr]
+
+    AuthOIDCStatus:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        kind:
+          type: string
+          description: Provider kind for the login button logo; omitted when SSO is disabled or the kind is unset.
+          enum: [authentik, keycloak, authelia, generic]
+
+    UsersUser:
+      type: object
+      required: [id, username, displayName, authSource, oidcLinked, role, createdAt, updatedAt,
+        activeSessionCount]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        displayName: { type: string }
+        email:
+          type: string
+          description: Contact address; omitted when unknown.
+        authSource:
+          type: string
+          enum: [local, oidc, service]
+          description: '`service` = service account (API token).'
+        oidcLinked:
+          type: boolean
+          description: The account is bound to an OIDC subject (the subject itself is never returned).
+        role:
+          type: string
+          enum: [viewer, admin]
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastLoginAt:
+          type: string
+          format: date-time
+          description: Omitted if the user never signed in.
+        lastActivityAt:
+          type: string
+          format: date-time
+          description: Latest activity across live sessions; omitted when offline.
+        activeSessionCount:
+          type: integer
+          minimum: 0
+
+    UsersRoleRequest:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [viewer, admin]
+
+    UsersServiceAccountCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, role]
+      properties:
+        name:
+          type: string
+          pattern: '^[a-z0-9_-]{3,32}$'
+          description: Account name (also its username; must not collide with an existing user).
+        role:
+          type: string
+          enum: [viewer, admin]
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+          description: Token expiry (RFC 3339, must be in the future). Omit or null for a token that never expires.
+
+    UsersServiceAccountRotateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+          description: Expiry of the new token (future RFC 3339). Omit or null for no expiry.
+
+    UsersServiceAccountToken:
+      type: object
+      required: [token, tokenId]
+      properties:
+        token:
+          type: string
+          readOnly: true
+          description: |
+            Plain API token (`arn_…`). Returned once, never retrievable
+            again. Send it as `Authorization: Bearer <token>`.
+        tokenId:
+          type: string
+          description: ID of the token record (as referenced in the audit log).
+        expiresAt:
+          type: string
+          format: date-time
+          description: Token expiry; omitted when the token never expires.
+
+    UsersServiceAccountCreated:
+      type: object
+      required: [user, token, tokenId]
+      properties:
+        user: { $ref: '#/components/schemas/UsersUser' }
+        token:
+          type: string
+          readOnly: true
+          description: |
+            Plain API token (`arn_…`). Returned once, never retrievable
+            again. Send it as `Authorization: Bearer <token>`.
+        tokenId: { type: string }
+        expiresAt:
+          type: string
+          format: date-time
+          description: Token expiry; omitted when the token never expires.
