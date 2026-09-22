@@ -81,11 +81,12 @@ Docker secret). Details: [wiki → Updates](https://github.com/barto95100/arenet
 - 🔄 **Host header preservation** by default — works out of the box with OIDC IdPs, multi-tenant SaaS, and any backend that builds URLs from `Host:`
 - 🩹 **Hot-reload** every route change without dropping in-flight connections
 - 📦 **HTTPS-to-HTTPS upstream support** with optional TLS verification skip for self-signed internal backends
+- 📥 **Import a Caddyfile** — paste it, preview what would be created (with every directive that could not be translated, and its line), pick the hosts, import
 - 🎨 **Custom error pages** per route via HTML templates (401/403/404/429/500/502/503/504), with optional **branded catch-all** for unmatched hosts (template-promotable via a single checkbox)
 - 🚦 **3-state route lifecycle** — one control per route toggles **Active / Maintenance / Disabled**. Maintenance serves a branded 503 page + `Retry-After` (friendly number+unit input) + an optional global message, with a per-route **client-IP bypass allow-list** so you can verify the app is back before flipping everyone over ; Disabled parks the route (config preserved) and drops it from Caddy
 
 ### Security
-- 🛡️ **Integrated WAF** via Coraza v3 + OWASP CRS v4 with per-route opt-out, per-rule exclusion, per-tag exclusion (e.g. exclude all `attack-protocol` rules on a noisy backend)
+- 🛡️ **Integrated WAF** via Coraza v3 + OWASP CRS v4 with per-route opt-out, per-rule and per-tag exclusion, **targeted exclusions** created from a WAF event (one rule stops inspecting one field, on one path), **guided rules** (block on path / method / User-Agent / header without writing SecLang) and a **SecLang editor** with commented templates and a request tester — all checked against a strict allowlist
 - 🚦 **Rate limiting** per route (events/window/key, e.g. "60 req/min per remote IP on /api/login")
 - 🌍 **Country blocking** via embedded MaxMind GeoLite2 (allow-list / deny-list per route)
 - 🔐 **Secrets encrypted at rest** — DNS credentials, private keys and API keys are sealed (AES-256-GCM) inside `arenet.db` with a key kept apart; session IDs are stored hashed
@@ -94,6 +95,10 @@ Docker secret). Details: [wiki → Updates](https://github.com/barto95100/arenet
 - 👥 **RBAC** with `viewer` / `admin` roles + local break-glass account preserved when OIDC is wired
 - 🚪 **Forward auth** (Authelia / oauth2-proxy / Authentik external auth) wired per route
 - 🔒 **Basic auth** per route (Argon2id, preserve-on-edit secret semantic)
+
+### API
+- 📗 **OpenAPI 3.1 description** of the whole admin API, served at `/api/v1/openapi.json` and browsable in the UI (**API docs** page) with schemas, examples and a **Try it** button
+- 🔑 **Service accounts** — API tokens (`Authorization: Bearer …`) with a role and an optional expiry, for scripts and CI
 
 ### Observability
 - 📊 **Live topology dashboard** (SvelteKit + D3.js) with real-time req/s particles, per-route metrics, alias clustering
@@ -151,7 +156,7 @@ Arenet's positioning : **production-grade security + observability that ships in
 | Alerting subsystem (channels, rules, watcher) | [docs/alerting.md](docs/alerting.md) |
 | Troubleshooting | [docs/operations/troubleshooting.md](docs/operations/troubleshooting.md) |
 | **User Wiki** (how-to guides) | [GitHub Wiki](https://github.com/barto95100/arenet/wiki) |
-| API reference | [docs/api/](docs/api/) |
+| API reference | in-app **API docs** page, `/api/v1/openapi.json`, [wiki: API](https://github.com/barto95100/arenet/wiki/API) |
 | Engineering practices | [docs/ENGINEERING-PRACTICES.md](docs/ENGINEERING-PRACTICES.md) |
 
 ## 🏗️ Architecture

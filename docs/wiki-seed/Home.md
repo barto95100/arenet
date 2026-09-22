@@ -12,12 +12,12 @@ If you're new : start with [Installation](Installation), then follow [Routes](Ro
 
 ### Get started
 - **[Installation](Installation)** — Docker, native systemd, first-boot wizard
-- **[Routes](Routes)** — your first reverse proxy route, TLS, upstreams, aliases, source IP filter, path rules
+- **[Routes](Routes)** — your first reverse proxy route, TLS, upstreams, aliases, source IP filter, path rules, Caddyfile import
 - **[DNS Providers](DNS-Providers)** — 9 DNS providers (OVHcloud, Cloudflare, Hetzner, Route 53…) for wildcard (DNS-01) certificates, with a connection test
 - **[Topology](Topology)** — live dashboard with real-time traffic visualization
 
 ### Security stack
-- **[WAF](WAF)** — Coraza + OWASP CRS, per-route opt-out, rule/tag exclusion
+- **[WAF](WAF)** — Coraza + OWASP CRS, per-route opt-out, targeted exclusions from an event, guided rules, SecLang editor with a request tester
 - **[CrowdSec](CrowdSec)** — community IP reputation, LAPI bouncer setup
 - **[Country Block](Country-Block)** — GeoIP-based allow/deny lists per route
 - **[Rate Limit](Rate-Limit)** — events/window throttling per route
@@ -28,6 +28,7 @@ If you're new : start with [Installation](Installation), then follow [Routes](Ro
 - **[Backup & Restore](Backup-Restore)** — full config export, sentinel-resolution import, disaster recovery
 - **[Alerting](Alerting)** — channels, threshold + state rules, Discord/email/webhook
 - **[Custom Error Pages](Custom-Error-Pages)** — per-route HTML templates with Caddy placeholders
+- **[API (OpenAPI)](API)** — the admin API, service-account tokens, the in-app docs page
 - **[Troubleshooting](Troubleshooting)** — symptoms diagnostic, common pitfalls, log decoding
 
 ---
@@ -59,7 +60,7 @@ If you find a gap or want to contribute a page, [open an issue](https://github.c
 
 ## Version coverage
 
-This wiki tracks **Arenet v2.12.x** (the current stable release line). Older versions may differ in feature surface ; check the [release notes](https://github.com/barto95100/arenet/releases) when in doubt.
+This wiki tracks **Arenet v2.40.x** (the current stable release line). Older versions may differ in feature surface ; check the [release notes](https://github.com/barto95100/arenet/releases) when in doubt.
 
 ## Where things live (cheat sheet)
 

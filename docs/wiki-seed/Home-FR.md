@@ -12,12 +12,12 @@ Si tu débutes : commence par [Installation](Installation-FR), puis suis [Routes
 
 ### Démarrer
 - **[Installation](Installation-FR)** — Docker, systemd natif, wizard de premier boot
-- **[Routes](Routes-FR)** — ta première route de reverse proxy, TLS, upstreams, alias, filtrage IP source, règles par chemin
+- **[Routes](Routes-FR)** — ta première route de reverse proxy, TLS, upstreams, alias, filtrage IP source, règles par chemin, import d'un Caddyfile
 - **[DNS Providers](DNS-Providers-FR)** — 9 fournisseurs DNS (OVHcloud, Cloudflare, Hetzner, Route 53…) pour les certificats wildcard (DNS-01), avec test de connexion
 - **[Topology](Topology-FR)** — dashboard live avec visualisation de trafic en temps réel
 
 ### Stack sécurité
-- **[WAF](WAF-FR)** — Coraza + OWASP CRS, opt-out par route, exclusion par règle/tag
+- **[WAF](WAF-FR)** — Coraza + OWASP CRS, opt-out par route, exclusions ciblées depuis un événement, règles guidées, éditeur SecLang avec testeur
 - **[CrowdSec](CrowdSec-FR)** — réputation IP communautaire, setup bouncer LAPI
 - **[Country Block](Country-Block-FR)** — listes allow/deny basées GeoIP par route
 - **[Rate Limit](Rate-Limit-FR)** — throttling événements/fenêtre par route
@@ -28,6 +28,7 @@ Si tu débutes : commence par [Installation](Installation-FR), puis suis [Routes
 - **[Backup & Restore](Backup-Restore-FR)** — export config complète, import avec résolution sentinel, disaster recovery
 - **[Alerting](Alerting-FR)** — channels, règles threshold + state, Discord/email/webhook
 - **[Custom Error Pages](Custom-Error-Pages-FR)** — templates HTML par route avec placeholders Caddy
+- **[API (OpenAPI)](API-FR)** — l'API d'administration, les jetons de compte de service, la page de doc intégrée
 - **[Troubleshooting](Troubleshooting-FR)** — diagnostic des symptômes, pièges communs, décodage des logs
 
 ---
@@ -59,7 +60,7 @@ Si tu trouves un trou ou veux contribuer à une page, [ouvre une issue](https://
 
 ## Couverture des versions
 
-Ce wiki suit **Arenet v2.12.x** (la ligne de release stable courante). Les versions plus anciennes peuvent différer en surface de feature ; consulte les [release notes](https://github.com/barto95100/arenet/releases) en cas de doute.
+Ce wiki suit **Arenet v2.40.x** (la ligne de release stable courante). Les versions plus anciennes peuvent différer en surface de feature ; consulte les [release notes](https://github.com/barto95100/arenet/releases) en cas de doute.
 
 ## Où vivent les choses (cheat sheet)
 
