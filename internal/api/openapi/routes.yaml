@@ -182,8 +182,10 @@ paths:
         Everything else is taken as sent: omitting `aliases`,
         `requestHeaders`, `pathRules`, `errorPageTemplateId`,
         `errorPageOverrides`, `cert_source`, `useDedicatedCert` or
-        `tlsEnabled` clears it, and omitting `disabled` /
-        `maintenanceConfig` re-enables the route / ends maintenance.
+        `tlsEnabled` clears it. Since v2.39, omitting `disabled` or
+        `maintenanceConfig` KEEPS the stored state (sending
+        `disabled: false` without a maintenance block leaves maintenance,
+        the three states being exclusive).
         `acmeChallenge` "" becomes `http-01` (no preserve). The safe
         pattern is GET → modify → PUT.
 
@@ -1290,7 +1292,7 @@ components:
             - { type: string, const: '' }
         tlsEnabled: { type: boolean }
         redirectToHttps: { type: boolean, description: Forced to false when tlsEnabled is false. }
-        disabled: { type: boolean, description: 'Out of service. Prefer POST /routes/{id}/disable|enable. Omitted on PUT = enabled.' }
+        disabled: { type: boolean, description: 'Out of service. Prefer POST /routes/{id}/disable|enable. Omitted on PUT = keep the stored state (v2.39); omitted on POST = enabled.' }
         maintenanceConfig:
           description: 'Maintenance state. Prefer POST /routes/{id}/maintenance[/off]. Omitted on PUT = not in maintenance.'
           $ref: '#/components/schemas/RoutesMaintenanceConfig'

@@ -592,6 +592,14 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 	    return
 	}
 	
+	// An account without a local password (a service account used with
+	// a bearer token) has an empty hash: the compare below used to fail
+	// and answer 500 (v2.39).
+	if user.PasswordHash == "" {
+		writeErrorCode(w, http.StatusBadRequest, "no_local_password",
+			"this account has no local password — sign in again instead", nil)
+		return
+	}
 	match, err := argon2id.ComparePasswordAndHash(req.Password, user.PasswordHash)
 	if err != nil {
 		h.logger.Error("unlock: argon2id compare failed", "err", err, "user_id", userID)
@@ -806,6 +814,13 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Same guard as unlock: OIDC users and service accounts have no
+	// local password to compare against (v2.39).
+	if user.PasswordHash == "" {
+		writeErrorCode(w, http.StatusBadRequest, "no_local_password",
+			"this account has no local password to change", nil)
+		return
+	}
 	match, err := argon2id.ComparePasswordAndHash(req.CurrentPassword, user.PasswordHash)
 	if err != nil {
 		h.logger.Error("changePassword: argon2id compare failed", "err", err, "user_id", userID)

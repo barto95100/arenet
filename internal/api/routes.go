@@ -1544,7 +1544,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		LBPolicy:          req.LBPolicy,
 		TLSEnabled:        req.TLSEnabled,
 		RedirectToHTTPS:   req.RedirectToHTTPS,
-		Disabled:          req.Disabled,
+		Disabled:          req.Disabled != nil && *req.Disabled,
 		MaintenanceConfig: req.MaintenanceConfig,
 		CertSource:        req.CertSource,
 		CertID:            req.CertID,
@@ -2044,6 +2044,25 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		customRules = normalised
 	}
+	// v2.39 — Disabled / MaintenanceConfig on PUT: preserve when the
+	// field is omitted. The UI always ships them; a script sending a
+	// partial PUT used to re-enable a disabled route and take one out
+	// of maintenance. The dedicated /disable, /enable, /maintenance and
+	// /maintenance/off endpoints stay the primary toggles.
+	disabled := previous.Disabled
+	if req.Disabled != nil {
+		disabled = *req.Disabled
+	}
+	maintenance := previous.MaintenanceConfig
+	if req.MaintenanceConfig != nil {
+		maintenance = req.MaintenanceConfig
+	}
+	// The three states are exclusive (routeState): a route explicitly
+	// enabled in this PUT leaves maintenance unless the request also
+	// carries a maintenance block.
+	if req.Disabled != nil && !*req.Disabled && req.MaintenanceConfig == nil {
+		maintenance = nil
+	}
 	// v2.38 — WAFSecLang on PUT: preserve on nil, replace (checked)
 	// otherwise.
 	secLang := previous.WAFSecLang
@@ -2111,8 +2130,8 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		LBPolicy:          req.LBPolicy,
 		TLSEnabled:        req.TLSEnabled,
 		RedirectToHTTPS:   req.RedirectToHTTPS,
-		Disabled:          req.Disabled,
-		MaintenanceConfig: req.MaintenanceConfig,
+		Disabled:          disabled,
+		MaintenanceConfig: maintenance,
 		CertSource:        req.CertSource,
 		CertID:            req.CertID,
 		Aliases:           req.Aliases,

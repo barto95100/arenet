@@ -32,7 +32,7 @@ Port de l'API d'administration : `8001` (sur `127.0.0.1` par défaut — voir [I
 - **Rôles** — chaque opération indique son rôle minimum : `public`, `viewer` ou `admin`. Un viewer qui appelle une opération admin reçoit `403 {"error":"admin role required"}`.
 - **Erreurs** — `{"error": "...", "code"?: "...", "params"?: {...}}` ; `code` est stable quand il est présent (ex. `route_check_rolled_back`, `seclang_invalid`).
 - **Les modifications rechargent Caddy** — une configuration refusée par Caddy est annulée et renvoyée en erreur.
-- **`PUT /routes/{id}` remplace la route** : les champs omis ne sont pas tous conservés (par exemple `disabled`, `maintenanceConfig`, `aliases`, en-têtes, règles par chemin). Fais **GET → modifier → PUT** avec l'objet complet.
+- **`PUT /routes/{id}` remplace la route** : les champs omis ne sont pas tous conservés (`aliases`, en-têtes, règles par chemin, pages d'erreur…). Depuis la v2.39, `disabled` et `maintenanceConfig` sont conservés s'ils sont omis. La méthode sûre reste **GET → modifier → PUT** avec l'objet complet.
 - **Limitation** sur `/auth/*` par IP : 5 échecs en 5 min bloquent 15 min.
 
 ## Essayer

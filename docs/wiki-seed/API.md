@@ -32,7 +32,7 @@ Good to know:
 - **Roles** — each operation shows its minimum role: `public`, `viewer` or `admin`. A viewer calling an admin operation gets `403 {"error":"admin role required"}`.
 - **Errors** — `{"error": "...", "code"?: "...", "params"?: {...}}`; `code` is stable when present (e.g. `route_check_rolled_back`, `seclang_invalid`).
 - **Changes reload Caddy** — a configuration Caddy refuses is rolled back and returned as an error.
-- **`PUT /routes/{id}` replaces the route**: fields you omit are not all kept (for example `disabled`, `maintenanceConfig`, `aliases`, headers, path rules). Do **GET → change → PUT** with the whole object.
+- **`PUT /routes/{id}` replaces the route**: fields you omit are not all kept (`aliases`, headers, path rules, error pages…). Since v2.39, `disabled` and `maintenanceConfig` are kept when omitted. The safe pattern stays **GET → change → PUT** with the whole object.
 - **Rate limit** on `/auth/*` per client IP: 5 failures in 5 min block 15 min.
 
 ## Try it

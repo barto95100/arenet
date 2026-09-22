@@ -609,3 +609,41 @@ func TestRateLimiter_NoGlobalSink_DoesNotPanic(t *testing.T) {
 	}
 	// Test passes if Hit didn't panic.
 }
+
+// v2.39 — the idle lock answers 403 "session locked". Counting it as a
+// failed authentication let a locked tab polling /auth/heartbeat block
+// its own IP for 15 minutes, login included.
+func TestRateLimiter_Middleware_IgnoresTheIdleLock403(t *testing.T) {
+	rl := NewRateLimiter(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	locked := rl.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		MarkSessionLocked(r.Context())
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	plain403 := rl.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	call := func(h http.Handler, ip string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/heartbeat", nil)
+		req = req.WithContext(context.WithValue(req.Context(), ClientIPKey, ip))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	for i := 0; i < Tier1Threshold+2; i++ {
+		if code := call(locked, "203.0.113.7"); code != http.StatusForbidden {
+			t.Fatalf("locked call %d: status = %d, want 403 (never rate-limited)", i, code)
+		}
+	}
+	if allowed, _, _ := rl.Allow("203.0.113.7"); !allowed {
+		t.Error("a locked session must not block its own IP")
+	}
+
+	// A real 403 (wrong role, bad credentials) still counts.
+	for i := 0; i < Tier1Threshold; i++ {
+		call(plain403, "203.0.113.8")
+	}
+	if allowed, _, _ := rl.Allow("203.0.113.8"); allowed {
+		t.Error("repeated genuine 403s must still block the IP")
+	}
+}

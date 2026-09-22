@@ -58,11 +58,20 @@ import (
 // rejected restore is the kind of event an operator wants to trace
 // post-mortem.
 
-// arenetVersionForBackup is the version string baked into every
-// export. The cmd/arenet/main.go const "version" is the source of
-// truth; we shadow it here so the api package doesn't have to import
-// cmd. The CLI export path passes its own version directly to
-// backup.Export.
+// backupVersion is the version string baked into an export: the
+// running binary's version (SetVersion, wired in main), or the legacy
+// placeholder when it is unknown (tests). It used to be the hard-coded
+// "v0.7.x", so every API export claimed that version whatever the
+// binary was; the CLI and scheduled-backup paths always passed the real
+// one.
+func (h *Handler) backupVersion() string {
+	if h.version != "" {
+		return h.version
+	}
+	return arenetVersionForBackup
+}
+
+// arenetVersionForBackup is the fallback when the version is unknown.
 const arenetVersionForBackup = "v0.7.x"
 
 // Backup encryption wire (v2.31).
@@ -89,7 +98,7 @@ func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request) {
 			"exports with secrets are encrypted: POST /api/v1/admin/backup with {\"passphrase\": \"…\"}", nil)
 		return
 	}
-	snap, err := backup.Export(r.Context(), h.store, h.users, arenetVersionForBackup, false)
+	snap, err := backup.Export(r.Context(), h.store, h.users, h.backupVersion(), false)
 	if err != nil {
 		h.logger.Error("backup: export failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to export configuration")
@@ -113,7 +122,7 @@ func (h *Handler) postBackup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
-	snap, err := backup.Export(r.Context(), h.store, h.users, arenetVersionForBackup, true)
+	snap, err := backup.Export(r.Context(), h.store, h.users, h.backupVersion(), true)
 	if err != nil {
 		h.logger.Error("backup: export failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to export configuration")
@@ -263,7 +272,7 @@ func (h *Handler) restoreBytes(w http.ResponseWriter, r *http.Request, body []by
 	//     resolution pass needed for the rollback re-apply),
 	//   - the input survives in process memory only and is
 	//     discarded before this handler returns.
-	preSnapshot, err := backup.Export(r.Context(), h.store, h.users, arenetVersionForBackup, true)
+	preSnapshot, err := backup.Export(r.Context(), h.store, h.users, h.backupVersion(), true)
 	if err != nil {
 		h.appendAudit(r, audit.Event{
 			Action:  audit.ActionConfigRestoredRejected,

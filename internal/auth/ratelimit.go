@@ -361,10 +361,32 @@ func (rl *RateLimiter) sweep() {
 	}
 }
 
+// sessionLockedFlag is set by the hard-auth middleware when it answers
+// 403 "session locked" (idle lock). The rate limiter must not count
+// that as a failed authentication attempt.
+type sessionLockedFlag struct{ locked bool }
+
+// sessionLockedKey carries the flag for the duration of one request.
+type sessionLockedKeyType struct{}
+
+// sessionLockedKey is the context key of sessionLockedFlag.
+var sessionLockedKey = sessionLockedKeyType{}
+
+// MarkSessionLocked records that this request was refused because the
+// session is locked (see RateLimiter.Middleware).
+func MarkSessionLocked(ctx context.Context) {
+	if f, ok := ctx.Value(sessionLockedKey).(*sessionLockedFlag); ok {
+		f.locked = true
+	}
+}
+
 // Middleware returns a chi-compatible HTTP middleware that:
 //  1. Rejects requests from blocked IPs with 429 + Retry-After.
 //  2. Lets the handler run and observes the response status.
-//  3. Increments the failure counter on 401 or 403 responses.
+//  3. Increments the failure counter on 401 or 403 responses, except
+//     the idle-lock 403: a locked tab still polling /auth/heartbeat
+//     used to block its own IP for 15 minutes, login included
+//     (found while writing the OpenAPI documentation, v2.39).
 //
 // The IP is read from the request context (populated by
 // IPExtractMiddleware, Section 8). Empty IPs are not rate-limited.
@@ -380,9 +402,10 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 				return
 			}
 			ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
-			next.ServeHTTP(ww, r)
+			flag := &sessionLockedFlag{}
+			next.ServeHTTP(ww, r.WithContext(context.WithValue(r.Context(), sessionLockedKey, flag)))
 			status := ww.Status()
-			if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			if (status == http.StatusUnauthorized || status == http.StatusForbidden) && !flag.locked {
 				rl.Hit(ip, AttemptedUsernameFromContext(r.Context()))
 			}
 		})
