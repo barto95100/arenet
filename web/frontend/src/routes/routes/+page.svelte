@@ -69,6 +69,7 @@
 	import WafTargetedExclusionsEditor from '$lib/components/routes/WafTargetedExclusionsEditor.svelte';
 	import WafCustomRulesEditor from '$lib/components/routes/WafCustomRulesEditor.svelte';
 	import WafSecLangSection from '$lib/components/routes/WafSecLangSection.svelte';
+	import RouteSection from '$lib/components/routes/RouteSection.svelte';
 	import ImportCaddyfileModal from '$lib/components/routes/ImportCaddyfileModal.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -990,6 +991,7 @@
 
 	function closePanel() {
 		formOpen = false;
+		formSnapshot = '';
 		formMode = 'create';
 		editingId = null;
 		formError = null;
@@ -1245,6 +1247,8 @@
 		// seeded seconds (create default is 300 → "5 minutes").
 		seedRetryParts();
 		formOpen = true;
+		// v2.41 — reference point for the "unsaved changes" marker.
+		snapshotForm();
 		// Step J.4: refresh provider status whenever the form opens
 		// so the inline hint reflects any provider changes the
 		// operator may have just made in Settings.
@@ -1526,6 +1530,8 @@
 		// route's stored seconds (shows the largest round unit).
 		seedRetryParts();
 		formOpen = true;
+		// v2.41 — reference point for the "unsaved changes" marker.
+		snapshotForm();
 	}
 
 	// Step J.2 preserve-or-replace: any user interaction with the
@@ -1787,6 +1793,188 @@
 	// admin who picked weighted_round_robin, removed an upstream,
 	// then re-added one keeps the choice.
 	const lbSelectorVisible = $derived(formData.upstreams.length >= 2);
+
+	// v2.41 — "unsaved changes" marker: the panel snapshots the form when
+	// it opens; anything different afterwards is unsaved work. Compared as
+	// JSON because formData is a plain object of plain values.
+	let formSnapshot = $state('');
+	const formDirty = $derived(formSnapshot !== '' && JSON.stringify(formData) !== formSnapshot);
+
+	function snapshotForm(): void {
+		formSnapshot = JSON.stringify(formData);
+	}
+
+	// v2.41 — one-line state summary per collapsible section, so the
+	// closed form still reads as the route's configuration. Each
+	// summary is derived from formData, never from the stored route:
+	// it must follow what the operator is editing.
+	type SectionBadge = { badge: string; posture: 'allow' | 'block' | 'watch' | 'off' | undefined };
+
+	const summaryEssentials = $derived(
+		[
+			t('routes.form.summaryUpstreams', { count: formData.upstreams.filter((u) => u.url.trim() !== '').length }),
+			formData.aliases.filter((a) => a.trim() !== '').length > 0
+				? t('routes.form.summaryAliases', { count: formData.aliases.filter((a) => a.trim() !== '').length })
+				: ''
+		]
+			.filter(Boolean)
+			.join(' · ')
+	);
+
+	const summaryTLS = $derived(
+		!formData.tlsEnabled
+			? t('routes.form.summaryTLSOff')
+			: [
+					formData.cert_source === 'manual'
+						? t('routes.form.summaryCertManual')
+						: t('routes.form.summaryCertAcme'),
+					formData.acmeChallenge === 'dns-01' ? 'DNS-01' : 'HTTP-01',
+					formData.redirectToHttps ? t('routes.form.summaryRedirect') : ''
+				]
+					.filter(Boolean)
+					.join(' · ')
+	);
+
+	const summaryAuth = $derived(
+		formData.authMode === 'basic'
+			? t('routes.form.summaryAuthBasic', { user: formData.basicAuth.username || '—' })
+			: formData.authMode === 'forward_auth'
+				? t('routes.form.summaryAuthForward', { provider: formData.forwardAuth.providerName || '—' })
+				: t('routes.form.summaryAuthNone')
+	);
+	const authBadge = $derived<SectionBadge>(
+		formData.authMode === 'none'
+			? { badge: t('routes.form.badgeOff'), posture: 'off' }
+			: { badge: t('routes.form.badgeOn'), posture: 'allow' }
+	);
+
+	const summaryWAF = $derived(
+		formData.wafMode === 'off'
+			? t('routes.form.summaryWAFOff')
+			: [
+					formData.wafDisableCRS ? t('routes.form.summaryCRSOff') : t('routes.form.summaryCRSOn'),
+					formData.wafTargetedExclusions.length + formData.wafExcludeRules.length + formData.wafExcludeTags.length > 0
+						? t('routes.form.summaryExclusions', {
+								count:
+									formData.wafTargetedExclusions.length +
+									formData.wafExcludeRules.length +
+									formData.wafExcludeTags.length
+							})
+						: '',
+					formData.wafCustomRules.length > 0
+						? t('routes.form.summaryCustomRules', { count: formData.wafCustomRules.length })
+						: '',
+					formData.wafSecLang.trim() !== '' ? 'SecLang' : ''
+				]
+					.filter(Boolean)
+					.join(' · ')
+	);
+	const wafBadge = $derived<SectionBadge>(
+		formData.wafMode === 'block'
+			? { badge: 'block', posture: 'block' }
+			: formData.wafMode === 'detect'
+				? { badge: 'detect', posture: 'watch' }
+				: { badge: t('routes.form.badgeOff'), posture: 'off' }
+	);
+
+	const summaryRateLimit = $derived(
+		formData.rateLimit === null
+			? t('routes.form.summaryRateLimitOff')
+			: t('routes.form.summaryRateLimitOn', {
+					events: formData.rateLimit.events,
+					window: formData.rateLimit.window,
+					key: formData.rateLimit.key ?? 'remote_ip'
+				})
+	);
+	const rateLimitBadge = $derived<SectionBadge>(
+		formData.rateLimit === null
+			? { badge: t('routes.form.badgeOff'), posture: 'off' }
+			: { badge: t('routes.form.badgeOn'), posture: 'block' }
+	);
+
+	const geoActive = $derived(formData.countryBlock.mode === 'allow' || formData.countryBlock.mode === 'deny');
+	const ipActive = $derived(formData.ipFilter.mode === 'allow' || formData.ipFilter.mode === 'deny');
+	const summaryGeoIP = $derived(
+		[
+			geoActive
+				? t(
+						formData.countryBlock.mode === 'allow'
+							? 'routes.form.summaryGeoAllow'
+							: 'routes.form.summaryGeoDeny',
+						{
+							count:
+								formData.countryBlock.countryList.length +
+								formData.countryBlock.continents.length +
+								formData.countryBlock.asns.length
+						}
+					)
+				: '',
+			ipActive
+				? t(formData.ipFilter.mode === 'allow' ? 'routes.form.summaryIPAllow' : 'routes.form.summaryIPDeny', {
+						count: (formData.ipFilter.cidrs ?? []).filter((c) => c.trim() !== '').length
+					})
+				: ''
+		]
+			.filter(Boolean)
+			.join(' · ') || t('routes.form.summaryGeoIPOff')
+	);
+	const geoIPBadge = $derived<SectionBadge>(
+		!geoActive && !ipActive
+			? { badge: t('routes.form.badgeOff'), posture: 'off' }
+			: formData.countryBlock.mode === 'deny' || formData.ipFilter.mode === 'deny'
+				? { badge: t('routes.form.badgeDeny'), posture: 'block' }
+				: { badge: t('routes.form.badgeAllow'), posture: 'allow' }
+	);
+
+	const summaryHealthCheck = $derived(
+		formData.healthCheck.enabled
+			? t('routes.form.summaryHealthCheckOn', {
+					uri: formData.healthCheck.uri || '/',
+					interval: formData.healthCheck.interval || '30s'
+				})
+			: t('routes.form.summaryHealthCheckOff')
+	);
+
+	const namedHeaderCount = $derived(
+		requestHeaderRows.filter(([k]) => k.trim() !== '').length +
+			responseHeaderRows.filter(([k]) => k.trim() !== '').length
+	);
+	const summaryPathsHeaders = $derived(
+		[
+			formData.pathRules.length > 0 ? t('routes.form.summaryPathRules', { count: formData.pathRules.length }) : '',
+			namedHeaderCount > 0 ? t('routes.form.summaryHeaders', { count: namedHeaderCount }) : ''
+		]
+			.filter(Boolean)
+			.join(' · ') || t('routes.form.summaryPathsHeadersOff')
+	);
+
+	const summaryErrorPages = $derived(
+		formData.errorPageTemplateId
+			? t('routes.form.summaryErrorPagesTemplate')
+			: t('routes.form.summaryErrorPagesDefault')
+	);
+
+	// In maintenance only when the STORED route is (the 3-state control
+	// owns that transition); the form's maintenanceConfig always exists.
+	const editedRouteInMaintenance = $derived.by(() => {
+		if (formMode !== 'edit' || !editingId) return false;
+		const stored = routes.find((r) => r.id === editingId);
+		return stored ? routeState(stored) === 'maintenance' : false;
+	});
+	const summaryState = $derived(
+		formData.disabled
+			? t('routes.form.summaryStateDisabled')
+			: editedRouteInMaintenance
+				? t('routes.form.summaryStateMaintenance')
+				: t('routes.form.summaryStateActive')
+	);
+	const stateBadge = $derived<SectionBadge>(
+		formData.disabled
+			? { badge: t('routes.form.badgeDisabled'), posture: 'off' }
+			: editedRouteInMaintenance
+				? { badge: t('routes.form.badgeMaintenance'), posture: 'watch' }
+				: { badge: t('routes.form.badgeActive'), posture: 'allow' }
+	);
 
 	// Step J.3: derive whether the weight column is visible.
 	// Shown only for weighted_round_robin; per-row Weight value is
@@ -2964,15 +3152,22 @@
 				     which Tailwind v4 was resolving to a default-gray
 				     fallback (reading as a white-ish outline on dark
 				     mode and clashing visually with the cyan text). -->
-				<div class="px-5 py-4 border-b border-border-subtle flex items-center gap-3">
+				<!-- v2.41 — the panel header sticks while the sections scroll,
+				     and says when there is something to save. -->
+				<div class="sticky top-0 z-10 bg-elevated px-5 py-4 border-b border-border-subtle flex items-center gap-3">
 					<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-mono bg-accent-soft text-cyan border border-cyan">
 						{language.current && (formMode === 'create' ? t('routes.panel.pillNew') : t('routes.panel.pillEdit'))}
 					</span>
 					<h3 class="text-base font-semibold text-primary truncate">
 						{language.current && (formMode === 'create' ? t('routes.panel.titleNew') : (formData.host || t('routes.panel.titleEdit')))}
 					</h3>
+					{#if formDirty}
+						<span class="ml-auto text-xs text-warn shrink-0" data-testid="form-dirty">
+							{language.current && t('routes.panel.unsaved')}
+						</span>
+					{/if}
 					{#if formMode === 'edit' && editingId}
-						<span class="ml-auto text-xs text-muted font-mono shrink-0">{language.current && t('routes.panel.idLabel')} <span class="text-secondary">{editingId.slice(0, 7)}</span></span>
+						<span class="text-xs text-muted font-mono shrink-0" class:ml-auto={!formDirty}>{language.current && t('routes.panel.idLabel')} <span class="text-secondary">{editingId.slice(0, 7)}</span></span>
 					{/if}
 				</div>
 
@@ -3042,1655 +3237,1683 @@
 							{formError}
 						</p>
 					{/if}
-					<Input
-						label={language.current && t('routes.form.hostLabel')}
-						bind:value={formData.host}
-						placeholder={language.current && t('routes.form.hostPlaceholder')}
-						error={errors['host'] ?? undefined}
-					/>
-					<!-- v2.14.3 — Disabled checkbox. Default unchecked
-					     (enabled) for new routes; loads the persisted
-					     value on edit (openEdit). A disabled route
-					     keeps its config but is excluded from the
-					     emitted Caddy config (serves no traffic). This
-					     is the same underlying flag as the row-level
-					     toggle action in the table — the PUT here
-					     ships it full-replacement alongside the rest
-					     of the form. -->
-					<div class="flex flex-col gap-1">
-						<Checkbox
-							label={language.current && t('routes.form.disabledLabel')}
-							bind:checked={formData.disabled}
+					<!-- v2.41 — the form is read as one collapsible section per concern;
+					     each closed row carries the state it holds (see RouteSection). -->
+					<RouteSection name={language.current && t('routes.form.sectionEssentials')} summary={summaryEssentials} open testid="section-essentials">
+						<Input
+							label={language.current && t('routes.form.hostLabel')}
+							bind:value={formData.host}
+							placeholder={language.current && t('routes.form.hostPlaceholder')}
+							error={errors['host'] ?? undefined}
 						/>
-						<p class="text-xs text-muted ml-6">
-							{language.current && t('routes.form.disabledHelper')}
-						</p>
-					</div>
-					<!-- Task 9 — Maintenance section. Shown always (not
-					     gated behind the route's current state) so an
-					     operator can pre-configure retryAfter / bypass
-					     IPs before switching the row's 3-state control
-					     to "Maintenance", and can still tune them while
-					     already in maintenance. The section itself
-					     doesn't turn maintenance on/off — that's the
-					     RouteStateControl's job via the dedicated
-					     enterMaintenance/exitMaintenance endpoints; this
-					     is config-only, shipped full-replacement on every
-					     submit (see payload.maintenanceConfig above). -->
-					<div class="flex flex-col gap-2 p-3 rounded-md border border-border-subtle">
-						<span class="text-sm font-medium text-secondary">
-							{language.current && t('routes.form.maintenance.sectionTitle')}
-						</span>
-						<!-- v2.18.0 — friendly Retry-After: number + unit
-						     selector. The wire value (retryAfterSeconds,
-						     recomputed via syncRetryAfterSeconds) stays in
-						     seconds; the operator picks e.g. "5 minutes"
-						     instead of typing "300". -->
-						<div class="flex flex-col gap-1">
-							<span class="text-sm text-secondary">
-								{language.current && t('routes.form.maintenance.retryAfter')}
-							</span>
-							<div class="flex items-center gap-2">
-								<div class="w-28">
-									<Input
-										type="number"
-										min="0"
-										value={String(retryValue)}
-										aria-label={language.current &&
-											t('routes.form.maintenance.retryAfterValueAria')}
-										oninput={(e: Event) => {
-											const raw = (e.target as HTMLInputElement).value;
-											const n = parseInt(raw, 10);
-											retryValue = Number.isNaN(n) || n < 0 ? 0 : n;
-											syncRetryAfterSeconds();
-										}}
-									/>
-								</div>
-								<select
-									class="h-9 rounded-md border border-border-subtle bg-surface px-2 text-sm text-primary"
-									aria-label={language.current &&
-										t('routes.form.maintenance.retryAfterUnitAria')}
-									bind:value={retryUnit}
-									onchange={syncRetryAfterSeconds}
-								>
-									{#each RETRY_UNITS as u (u)}
-										<option value={u}>{language.current && t(`routes.form.maintenance.unit.${u}`)}</option>
-									{/each}
-								</select>
-							</div>
-							<span class="text-xs text-muted">
-								{language.current &&
-									t('routes.form.maintenance.retryAfterHelp', {
-										seconds: String(formData.maintenanceConfig.retryAfterSeconds)
-									})}
-							</span>
-						</div>
-						<!-- v2.18.1 — per-route maintenance message. Empty → the
-						     global message (Settings → Error Pages → Maintenance)
-						     is used instead. -->
-						<div class="flex flex-col gap-1">
-							<span class="text-sm text-secondary">
-								{language.current && t('routes.form.maintenance.message')}
-							</span>
-							<textarea
-								class="w-full box-border resize-y rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-primary"
-								rows="2"
-								bind:value={formData.maintenanceConfig.message}
-								placeholder={t('routes.form.maintenance.messagePlaceholder')}
-								aria-label={language.current && t('routes.form.maintenance.message')}
-							></textarea>
-							<span class="text-xs text-muted">
-								{language.current && t('routes.form.maintenance.messageHelp')}
-							</span>
-						</div>
+						<!-- Step I.3: alias hostnames repeater. Auto-fit grid so
+						     multiple aliases sit side by side and wrap to width
+						     instead of stacking and pushing the form down. -->
 						<div class="flex flex-col gap-2">
 							<div class="flex items-center justify-between">
-								<span class="text-sm text-secondary">
-									{language.current && t('routes.form.maintenance.bypassIps')}
-								</span>
-								<Button variant="ghost" size="sm" onclick={addBypassIp} type="button"
-									>{language.current && t('routes.form.maintenance.bypassIpsAdd')}</Button
-								>
+								<span class="text-sm text-secondary">{language.current && t('routes.form.aliasesLabel')}</span>
+								<Button variant="ghost" size="sm" onclick={addAlias} type="button">{language.current && t('routes.form.aliasesAdd')}</Button>
 							</div>
-							<div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2" data-testid="maintenance-bypass-ip-grid">
-								{#each formData.maintenanceConfig.bypassIps as _, i (i)}
+							<div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2" data-testid="alias-grid">
+								{#each formData.aliases as _, i (i)}
 									<div class="flex items-center gap-2">
 										<div class="flex-1">
-											<Input
-												bind:value={formData.maintenanceConfig.bypassIps[i]}
-												placeholder="10.0.0.5 or 192.168.1.0/24"
-											/>
+											<Input bind:value={formData.aliases[i]} placeholder={language.current && t('routes.form.aliasesPlaceholder')} />
 										</div>
-										<Button variant="ghost" size="sm" onclick={() => removeBypassIp(i)} type="button">×</Button>
+										<Button variant="ghost" size="sm" onclick={() => removeAlias(i)} type="button">×</Button>
 									</div>
 								{/each}
 							</div>
 						</div>
-					</div>
-					<!-- Step I.3: alias hostnames repeater. Auto-fit grid so
-					     multiple aliases sit side by side and wrap to width
-					     instead of stacking and pushing the form down. -->
-					<div class="flex flex-col gap-2">
-						<div class="flex items-center justify-between">
-							<span class="text-sm text-secondary">{language.current && t('routes.form.aliasesLabel')}</span>
-							<Button variant="ghost" size="sm" onclick={addAlias} type="button">{language.current && t('routes.form.aliasesAdd')}</Button>
-						</div>
-						<div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2" data-testid="alias-grid">
-							{#each formData.aliases as _, i (i)}
+						<!-- Step J.3: upstream pool repeater (replaces the Step I single
+						     Upstream URL input). Each row binds to one pool element.
+						     The weight column is hidden unless lbPolicy is
+						     weighted_round_robin. Per-row state is preserved across
+						     visibility flips. -->
+						<div class="flex flex-col gap-2">
+							<div class="flex items-center justify-between">
+								<span class="text-sm font-medium text-secondary">{language.current && t('routes.form.upstreamsLabel')}</span>
 								<div class="flex items-center gap-2">
-									<div class="flex-1">
-										<Input bind:value={formData.aliases[i]} placeholder={language.current && t('routes.form.aliasesPlaceholder')} />
-									</div>
-									<Button variant="ghost" size="sm" onclick={() => removeAlias(i)} type="button">×</Button>
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={runAllUpstreamTests}
+										type="button"
+										disabled={formData.upstreams.every((u) => u.url.trim() === '')}
+										data-testid="test-all-upstreams"
+									>
+										{language.current && t('routes.form.upstreamsTestAll')}
+									</Button>
+									<Button variant="ghost" size="sm" onclick={addUpstream} type="button"
+										>{language.current && t('routes.form.upstreamsAdd')}</Button
+									>
 								</div>
-							{/each}
-						</div>
-					</div>
-			
-					<!-- Step J.3: upstream pool repeater (replaces the Step I single
-					     Upstream URL input). Each row binds to one pool element.
-					     The weight column is hidden unless lbPolicy is
-					     weighted_round_robin. Per-row state is preserved across
-					     visibility flips. -->
-					<div class="flex flex-col gap-2">
-						<div class="flex items-center justify-between">
-							<span class="text-sm font-medium text-secondary">{language.current && t('routes.form.upstreamsLabel')}</span>
-							<div class="flex items-center gap-2">
-								<Button
-									variant="ghost"
-									size="sm"
-									onclick={runAllUpstreamTests}
-									type="button"
-									disabled={formData.upstreams.every((u) => u.url.trim() === '')}
-									data-testid="test-all-upstreams"
-								>
-									{language.current && t('routes.form.upstreamsTestAll')}
-								</Button>
-								<Button variant="ghost" size="sm" onclick={addUpstream} type="button"
-									>{language.current && t('routes.form.upstreamsAdd')}</Button
-								>
 							</div>
-						</div>
-						{#if errors['upstreams']}
-							<p class="text-xs text-down">{errors['upstreams']}</p>
-						{/if}
-						{#each formData.upstreams as _, i (i)}
-							<div class="flex items-start gap-2">
-								<div class="flex-1 flex flex-col gap-1">
-									<Input
-										bind:value={formData.upstreams[i].url}
-										placeholder={language.current && t('routes.form.upstreamsPlaceholder')}
-										error={errors[`upstreams[${i}].url`] ?? undefined}
-									/>
-									<!--
-										Step #R-PROXMOX-HTTPS-LOOP — per-row UX
-										advisories. Path warning + private-IP
-										hint are non-blocking; the URL value is
-										preserved (operator may want to fix the
-										URL themselves rather than have the form
-										strip it).
-									-->
-									{#if nonRootPath(formData.upstreams[i].url)}
-										<p
-											class="text-xs text-amber-700 dark:text-amber-300"
-											data-testid="upstream-path-warning"
-										>
-											Le chemin <code class="font-mono"
-												>{nonRootPath(formData.upstreams[i].url)}</code
-											> sera ignoré — Caddy proxyfie uniquement vers <code class="font-mono"
-												>host:port</code
-											>.
-										</p>
-									{/if}
-									{#if showPrivateIPHint(formData.upstreams[i].url)}
-										<p
-											class="text-xs text-amber-700 dark:text-amber-300"
-											data-testid="upstream-private-ip-hint"
-										>
-											{language.current && t('routes.form.upstreamPrivateIPHint')}
-										</p>
-									{/if}
-									<!--
-										Step #R-PROXMOX-HTTPS-LOOP commit 3 — per-row
-										probe result chip. Three states: hidden
-										(undefined), spinner (running), outcome
-										(reachable✓ or error✗). Outcome chip shows
-										status code + latency for reachable, error
-										text otherwise.
-									-->
-									{#if upstreamTests[i]}
-										{@const ts = upstreamTests[i]}
-										<div
-											class="text-xs flex items-center gap-2 flex-wrap"
-											data-testid="upstream-test-chip-{i}"
-										>
-											{#if ts.running}
-												<span class="text-secondary">⏳ {language.current && t('routes.form.upstreamTestRunning')}</span>
-											{:else if ts.error}
-												<span class="text-down">✗ {ts.error}</span>
-											{:else if ts.result}
-												{#if ts.result.reachable}
-													<span class="text-up">
-														✓ HTTP {ts.result.statusCode} ({ts.result.latencyMs}ms)
-													</span>
-													{#if ts.result.serverHeader}
-														<span class="text-muted font-mono">
-															{ts.result.serverHeader}
+							{#if errors['upstreams']}
+								<p class="text-xs text-down">{errors['upstreams']}</p>
+							{/if}
+							{#each formData.upstreams as _, i (i)}
+								<div class="flex items-start gap-2">
+									<div class="flex-1 flex flex-col gap-1">
+										<Input
+											bind:value={formData.upstreams[i].url}
+											placeholder={language.current && t('routes.form.upstreamsPlaceholder')}
+											error={errors[`upstreams[${i}].url`] ?? undefined}
+										/>
+										<!--
+											Step #R-PROXMOX-HTTPS-LOOP — per-row UX
+											advisories. Path warning + private-IP
+											hint are non-blocking; the URL value is
+											preserved (operator may want to fix the
+											URL themselves rather than have the form
+											strip it).
+										-->
+										{#if nonRootPath(formData.upstreams[i].url)}
+											<p
+												class="text-xs text-amber-700 dark:text-amber-300"
+												data-testid="upstream-path-warning"
+											>
+												Le chemin <code class="font-mono"
+													>{nonRootPath(formData.upstreams[i].url)}</code
+												> sera ignoré — Caddy proxyfie uniquement vers <code class="font-mono"
+													>host:port</code
+												>.
+											</p>
+										{/if}
+										{#if showPrivateIPHint(formData.upstreams[i].url)}
+											<p
+												class="text-xs text-amber-700 dark:text-amber-300"
+												data-testid="upstream-private-ip-hint"
+											>
+												{language.current && t('routes.form.upstreamPrivateIPHint')}
+											</p>
+										{/if}
+										<!--
+											Step #R-PROXMOX-HTTPS-LOOP commit 3 — per-row
+											probe result chip. Three states: hidden
+											(undefined), spinner (running), outcome
+											(reachable✓ or error✗). Outcome chip shows
+											status code + latency for reachable, error
+											text otherwise.
+										-->
+										{#if upstreamTests[i]}
+											{@const ts = upstreamTests[i]}
+											<div
+												class="text-xs flex items-center gap-2 flex-wrap"
+												data-testid="upstream-test-chip-{i}"
+											>
+												{#if ts.running}
+													<span class="text-secondary">⏳ {language.current && t('routes.form.upstreamTestRunning')}</span>
+												{:else if ts.error}
+													<span class="text-down">✗ {ts.error}</span>
+												{:else if ts.result}
+													{#if ts.result.reachable}
+														<span class="text-up">
+															✓ HTTP {ts.result.statusCode} ({ts.result.latencyMs}ms)
 														</span>
-													{/if}
-													{#if ts.result.cert?.selfSigned}
-														<span
-															class="text-amber-700 dark:text-amber-300"
-															title={language.current && t('routes.form.upstreamTestSelfSignedTooltip')}
-														>
-															⚠ self-signed
+														{#if ts.result.serverHeader}
+															<span class="text-muted font-mono">
+																{ts.result.serverHeader}
+															</span>
+														{/if}
+														{#if ts.result.cert?.selfSigned}
+															<span
+																class="text-amber-700 dark:text-amber-300"
+																title={language.current && t('routes.form.upstreamTestSelfSignedTooltip')}
+															>
+																⚠ self-signed
+															</span>
+														{/if}
+													{:else}
+														<span class="text-down">
+															✗ {ts.result.error || (language.current && t('routes.form.upstreamTestConnectionFailed'))}
 														</span>
-													{/if}
-												{:else}
-													<span class="text-down">
-														✗ {ts.result.error || (language.current && t('routes.form.upstreamTestConnectionFailed'))}
-													</span>
-													{#if ts.result.cert?.commonName}
-														<span class="text-muted font-mono">
-															cert CN={ts.result.cert.commonName}
-														</span>
+														{#if ts.result.cert?.commonName}
+															<span class="text-muted font-mono">
+																cert CN={ts.result.cert.commonName}
+															</span>
+														{/if}
 													{/if}
 												{/if}
+											</div>
+										{/if}
+									</div>
+									<!--
+										Step #R-PROXMOX-HTTPS-LOOP commit 3 — per-row
+										"Tester" button. Disabled when the URL is
+										empty (no probe target) or while the row is
+										already running. Spinner is in the chip below.
+									-->
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={() => runUpstreamTest(i)}
+										type="button"
+										disabled={formData.upstreams[i].url.trim() === '' ||
+											!!(upstreamTests[i] && (upstreamTests[i] as { running?: boolean }).running)}
+										data-testid="test-upstream-{i}"
+									>
+										{language.current && t('routes.form.upstreamTestButton')}
+									</Button>
+									{#if weightVisible}
+										<div class="w-24 flex flex-col gap-1.5">
+											<input
+												type="number"
+												min="1"
+												bind:value={formData.upstreams[i].weight}
+												placeholder={language.current && t('routes.form.upstreamsWeightPlaceholder')}
+												class="bg-surface border rounded-md px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+												class:border-down={!!errors[`upstreams[${i}].weight`]}
+												class:border-border-default={!errors[`upstreams[${i}].weight`]}
+											/>
+											{#if errors[`upstreams[${i}].weight`]}
+												<p class="text-xs text-down">{errors[`upstreams[${i}].weight`]}</p>
 											{/if}
 										</div>
 									{/if}
-								</div>
-								<!--
-									Step #R-PROXMOX-HTTPS-LOOP commit 3 — per-row
-									"Tester" button. Disabled when the URL is
-									empty (no probe target) or while the row is
-									already running. Spinner is in the chip below.
-								-->
-								<Button
-									variant="ghost"
-									size="sm"
-									onclick={() => runUpstreamTest(i)}
-									type="button"
-									disabled={formData.upstreams[i].url.trim() === '' ||
-										!!(upstreamTests[i] && (upstreamTests[i] as { running?: boolean }).running)}
-									data-testid="test-upstream-{i}"
-								>
-									{language.current && t('routes.form.upstreamTestButton')}
-								</Button>
-								{#if weightVisible}
-									<div class="w-24 flex flex-col gap-1.5">
-										<input
-											type="number"
-											min="1"
-											bind:value={formData.upstreams[i].weight}
-											placeholder={language.current && t('routes.form.upstreamsWeightPlaceholder')}
-											class="bg-surface border rounded-md px-3 py-2 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
-											class:border-down={!!errors[`upstreams[${i}].weight`]}
-											class:border-border-default={!errors[`upstreams[${i}].weight`]}
-										/>
-										{#if errors[`upstreams[${i}].weight`]}
-											<p class="text-xs text-down">{errors[`upstreams[${i}].weight`]}</p>
-										{/if}
-									</div>
-								{/if}
-								<Button
-									variant="ghost"
-									size="sm"
-									onclick={() => removeUpstream(i)}
-									disabled={formData.upstreams.length <= 1}
-									type="button">×</Button
-								>
-							</div>
-						{/each}
-					</div>
-
-					<!--
-						Step #R-PROXMOX-HTTPS-LOOP — advanced TLS options
-						disclosure. Mounted ONLY when the pool is a clean
-						all-https; the entire block leaves the DOM on http
-						/ mixed / empty pools so the operator can't set a
-						meaningless flag. The scheme-transition $effect
-						resets formData.insecureSkipVerify to false on
-						https→http so the toggle state stays aligned with
-						both the on-screen disclosure visibility and the
-						storage row.
-					-->
-					{#if tlsAdvancedVisible}
-						<details
-							class="rounded-md border border-border-default bg-surface px-3 py-2"
-							data-testid="tls-advanced-disclosure"
-						>
-							<summary class="text-sm font-medium text-secondary cursor-pointer">
-								{language.current && t('routes.form.tlsAdvancedSummary')}
-							</summary>
-							<div class="mt-2 flex flex-col gap-1">
-								<Checkbox
-									label={language.current && t('routes.form.upstreamsInsecureSkipVerifyLabel')}
-									bind:checked={formData.insecureSkipVerify}
-								/>
-								<p class="text-xs text-muted ml-6">
-									{language.current && t('routes.form.tlsAdvancedHelper')}
-								</p>
-							</div>
-						</details>
-					{/if}
-			
-					<!-- Step J.3: LB policy selector. Hidden when the pool has
-					     one upstream (selection is moot). formData.lbPolicy is
-					     preserved across visibility flips. -->
-					{#if lbSelectorVisible}
-						<div>
-							<label
-								for="route-lb-policy"
-								class="text-sm font-medium text-secondary block mb-1"
-							>
-								{language.current && t('routes.form.lbSectionLabel')}
-							</label>
-							<select
-								id="route-lb-policy"
-								bind:value={formData.lbPolicy}
-								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-							>
-								<option value="round_robin">{language.current && t('routes.form.lbRoundRobin')}</option>
-								<option value="weighted_round_robin">{language.current && t('routes.form.lbWeightedRoundRobin')}</option>
-								<option value="least_conn">{language.current && t('routes.form.lbLeastConn')}</option>
-								<option value="ip_hash">{language.current && t('routes.form.lbIPHash')}</option>
-								<option value="random">{language.current && t('routes.form.lbRandom')}</option>
-								<option value="first">{language.current && t('routes.form.lbFirst')}</option>
-							</select>
-						</div>
-					{/if}
-			
-					<div class="flex flex-col gap-1">
-						<Checkbox label={language.current && t('routes.form.tlsEnabledLabel')} bind:checked={formData.tlsEnabled} />
-						<p class="text-xs text-muted ml-6">
-							{language.current && t('routes.form.tlsEnableHelper')}
-						</p>
-					</div>
-					<Checkbox
-						label={language.current && t('routes.form.tlsRedirectLabel')}
-						bind:checked={formData.redirectToHttps}
-						disabled={!formData.tlsEnabled}
-						title={formData.tlsEnabled
-							? 'Automatically redirects HTTP requests to HTTPS with a 301.'
-							: 'Enable TLS to use HTTPS redirect.'}
-					/>
-
-					<!-- v2.19.0 external-certs SOCLE (Task 8) — cert source
-					     selector. Visible only when TLS is on. Chooses which
-					     provider issues/serves this route's cert: ACME (the
-					     default — managed-domain wildcard or per-route
-					     http-01/dns-01), Caddy internal self-signed CA, or a
-					     manual operator-uploaded external cert. The ACME
-					     challenge sub-selector below only shows under 'acme'. -->
-					{#if formData.tlsEnabled}
-						<div>
-							<label
-								for="route-cert-source"
-								class="text-sm font-medium text-secondary block mb-1"
-							>
-								{language.current && t('routes.form.certSourceLabel')}
-							</label>
-							<select
-								id="route-cert-source"
-								bind:value={formData.cert_source}
-								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-							>
-								<option value="acme">{language.current && t('routes.form.certSourceAcme')}</option>
-								<option value="internal">{language.current && t('routes.form.certSourceInternal')}</option>
-								<option value="manual">{language.current && t('routes.form.certSourceManual')}</option>
-							</select>
-							{#if formData.cert_source === 'internal'}
-								<p class="text-xs text-muted mt-1">
-									{language.current && t('routes.form.certSourceInternalHelper')}
-								</p>
-							{:else if formData.cert_source === 'manual'}
-								<!-- Manual sub-form: the eligible external certs
-								     (those whose SANs cover the route host, RFC
-								     6125). Empty → warning + upload link. -->
-								{#if eligibleCerts.length === 0}
-									<p
-										data-testid="cert-manual-none"
-										class="text-xs text-down mt-2"
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={() => removeUpstream(i)}
+										disabled={formData.upstreams.length <= 1}
+										type="button">×</Button
 									>
-										{language.current && t('routes.form.certSourceManualNone')}
-										<a href="/certs" class="text-cyan hover:underline"
-											>{language.current && t('routes.form.certSourceManualUploadLink')}</a
-										>
-									</p>
-								{:else}
-									<fieldset class="mt-2 flex flex-col gap-2">
-										<legend class="text-xs text-muted mb-1">
-											{language.current && t('routes.form.certSourceManualPickLabel')}
-										</legend>
-										{#each eligibleCerts as cert (cert.id)}
-											<label
-												class="flex items-start gap-2 text-sm text-secondary cursor-pointer rounded border border-border-default px-3 py-2 hover:bg-surface"
-											>
-												<input
-													type="radio"
-													name="route-manual-cert"
-													value={cert.id}
-													checked={formData.cert_id === cert.id}
-													onchange={() => (formData.cert_id = cert.id)}
-													class="mt-1"
-												/>
-												<span class="flex flex-col">
-													<span class="font-medium text-primary">{cert.name}</span>
-													<span class="font-mono text-xs text-muted"
-														>{(cert.dnsNames ?? []).join(', ')}</span
-													>
-													<span class="text-xs text-muted"
-														>{language.current && t('routes.form.certSourceManualExpiry')}
-														{new Date(cert.notAfter).toLocaleDateString()}</span
-													>
-												</span>
-											</label>
-										{/each}
-									</fieldset>
-								{/if}
-							{/if}
-						</div>
-					{/if}
-
-					<!-- Step J.4 + O.4: ACME challenge selector. Visible only
-					     when TLS is on AND the cert source is ACME. Locked to
-					     "dns-01" when host or any alias is a wildcard. Step O.4
-					     (AC #11 + #12): when the host is covered by a managed
-					     domain AND the operator hasn't opted out via
-					     useDedicatedCert, the selector hides entirely and an
-					     inheritance badge takes its place. When covered + opted
-					     out, the selector returns and the operator picks
-					     http-01/dns-01 like J. -->
-					{#if formData.tlsEnabled && formData.cert_source === 'acme'}
-						{#if coveringManagedDomain && !formData.useDedicatedCert}
-							<!-- AC #11: covered + inheriting. Show the wildcard
-							     badge + the opt-out toggle. The selector is
-							     gone — the wildcard cert serves this route. -->
-							<div>
-								<span class="text-sm font-medium text-secondary block mb-1"
-									>{language.current && t('routes.form.tlsCertificateLabel')}</span
-								>
-								<!--
-									v2.9.16 i18n hotfix — the "Inherits wildcard from
-									X (managed via Y)" line mixes a code span, a
-									settings link, and parenthetical chrome. Rather
-									than weave a single template literal through all
-									three, render the static prefix via t() and keep
-									the dynamic <code> + <a> as inline JSX. Same
-									pattern used by the dns01Banner above.
-								-->
-								<div
-									class="rounded border border-info/40 bg-info/10 px-3 py-2 text-sm"
-								>
-									<span class="font-medium">{language.current && t('routes.form.tlsCertificateInherits')}</span>
-									<code class="font-mono">*.{coveringManagedDomain.apex}</code>
-									<span class="text-muted">
-										({language.current && t('routes.form.tlsCertificateInheritsManagedVia')} <a href="/settings" class="text-cyan hover:underline"
-											>{language.current && t('routes.form.tlsCertificateLink')}</a
-										>)
-									</span>
 								</div>
-								<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
-									<input
-										type="checkbox"
-										checked={formData.useDedicatedCert}
-										onchange={(e) =>
-											onUseDedicatedCertToggle((e.target as HTMLInputElement).checked)}
+							{/each}
+						</div>
+						<!--
+							Step #R-PROXMOX-HTTPS-LOOP — advanced TLS options
+							disclosure. Mounted ONLY when the pool is a clean
+							all-https; the entire block leaves the DOM on http
+							/ mixed / empty pools so the operator can't set a
+							meaningless flag. The scheme-transition $effect
+							resets formData.insecureSkipVerify to false on
+							https→http so the toggle state stays aligned with
+							both the on-screen disclosure visibility and the
+							storage row.
+						-->
+						{#if tlsAdvancedVisible}
+							<details
+								class="rounded-md border border-border-default bg-surface px-3 py-2"
+								data-testid="tls-advanced-disclosure"
+							>
+								<summary class="text-sm font-medium text-secondary cursor-pointer">
+									{language.current && t('routes.form.tlsAdvancedSummary')}
+								</summary>
+								<div class="mt-2 flex flex-col gap-1">
+									<Checkbox
+										label={language.current && t('routes.form.upstreamsInsecureSkipVerifyLabel')}
+										bind:checked={formData.insecureSkipVerify}
 									/>
-									{language.current && t('routes.form.tlsUseDedicatedCertLabel')}
-								</label>
-								<p class="text-xs text-muted mt-1">
-									{language.current && t('routes.form.tlsUseDedicatedCertHelper')}
-								</p>
-							</div>
-						{:else}
+									<p class="text-xs text-muted ml-6">
+										{language.current && t('routes.form.tlsAdvancedHelper')}
+									</p>
+								</div>
+							</details>
+						{/if}
+						<!-- Step J.3: LB policy selector. Hidden when the pool has
+						     one upstream (selection is moot). formData.lbPolicy is
+						     preserved across visibility flips. -->
+						{#if lbSelectorVisible}
 							<div>
 								<label
-									for="route-acme-challenge"
+									for="route-lb-policy"
 									class="text-sm font-medium text-secondary block mb-1"
 								>
-									ACME challenge
+									{language.current && t('routes.form.lbSectionLabel')}
 								</label>
 								<select
-									id="route-acme-challenge"
-									bind:value={formData.acmeChallenge}
-									disabled={acmeLockedToDNS01}
-									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-60 disabled:cursor-not-allowed"
+									id="route-lb-policy"
+									bind:value={formData.lbPolicy}
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 								>
-									{#if dedicatedOptOutPendingChoice}
-										<!-- #O.4-2 force-explicit-choice — empty value
-										     is the unselected state forced by the
-										     toggle handler. The placeholder option
-										     renders the empty selection clearly to
-										     the operator (otherwise the browser
-										     would silently render the first option
-										     as visually selected without it being
-										     the bound value). -->
-										<option value="" disabled>— pick one —</option>
-									{/if}
-									<option value="http-01">{language.current && t('routes.form.tlsAcmeHTTP01')}</option>
-									<option value="dns-01">{language.current && t('routes.form.tlsAcmeDNS01')}</option>
+									<option value="round_robin">{language.current && t('routes.form.lbRoundRobin')}</option>
+									<option value="weighted_round_robin">{language.current && t('routes.form.lbWeightedRoundRobin')}</option>
+									<option value="least_conn">{language.current && t('routes.form.lbLeastConn')}</option>
+									<option value="ip_hash">{language.current && t('routes.form.lbIPHash')}</option>
+									<option value="random">{language.current && t('routes.form.lbRandom')}</option>
+									<option value="first">{language.current && t('routes.form.lbFirst')}</option>
 								</select>
-								{#if coveringManagedDomain && formData.useDedicatedCert}
-									<!-- AC #11 opt-out path: show the per-route
-									     selector AND the toggle (checked) so the
-									     operator can flip back to inheritance. -->
+							</div>
+						{/if}
+					</RouteSection>
+
+					<!-- TLS: HTTPS, redirection, certificate source and ACME challenge. -->
+					<RouteSection name={language.current && t('routes.form.sectionTLS')} summary={summaryTLS} badge={formData.tlsEnabled ? 'https' : 'http'} testid="section-tls">
+						<div class="flex flex-col gap-1">
+							<Checkbox label={language.current && t('routes.form.tlsEnabledLabel')} bind:checked={formData.tlsEnabled} />
+							<p class="text-xs text-muted ml-6">
+								{language.current && t('routes.form.tlsEnableHelper')}
+							</p>
+						</div>
+						<Checkbox
+							label={language.current && t('routes.form.tlsRedirectLabel')}
+							bind:checked={formData.redirectToHttps}
+							disabled={!formData.tlsEnabled}
+							title={formData.tlsEnabled
+								? 'Automatically redirects HTTP requests to HTTPS with a 301.'
+								: 'Enable TLS to use HTTPS redirect.'}
+						/>
+
+						<!-- v2.19.0 external-certs SOCLE (Task 8) — cert source
+						     selector. Visible only when TLS is on. Chooses which
+						     provider issues/serves this route's cert: ACME (the
+						     default — managed-domain wildcard or per-route
+						     http-01/dns-01), Caddy internal self-signed CA, or a
+						     manual operator-uploaded external cert. The ACME
+						     challenge sub-selector below only shows under 'acme'. -->
+						{#if formData.tlsEnabled}
+							<div>
+								<label
+									for="route-cert-source"
+									class="text-sm font-medium text-secondary block mb-1"
+								>
+									{language.current && t('routes.form.certSourceLabel')}
+								</label>
+								<select
+									id="route-cert-source"
+									bind:value={formData.cert_source}
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+								>
+									<option value="acme">{language.current && t('routes.form.certSourceAcme')}</option>
+									<option value="internal">{language.current && t('routes.form.certSourceInternal')}</option>
+									<option value="manual">{language.current && t('routes.form.certSourceManual')}</option>
+								</select>
+								{#if formData.cert_source === 'internal'}
+									<p class="text-xs text-muted mt-1">
+										{language.current && t('routes.form.certSourceInternalHelper')}
+									</p>
+								{:else if formData.cert_source === 'manual'}
+									<!-- Manual sub-form: the eligible external certs
+									     (those whose SANs cover the route host, RFC
+									     6125). Empty → warning + upload link. -->
+									{#if eligibleCerts.length === 0}
+										<p
+											data-testid="cert-manual-none"
+											class="text-xs text-down mt-2"
+										>
+											{language.current && t('routes.form.certSourceManualNone')}
+											<a href="/certs" class="text-cyan hover:underline"
+												>{language.current && t('routes.form.certSourceManualUploadLink')}</a
+											>
+										</p>
+									{:else}
+										<fieldset class="mt-2 flex flex-col gap-2">
+											<legend class="text-xs text-muted mb-1">
+												{language.current && t('routes.form.certSourceManualPickLabel')}
+											</legend>
+											{#each eligibleCerts as cert (cert.id)}
+												<label
+													class="flex items-start gap-2 text-sm text-secondary cursor-pointer rounded border border-border-default px-3 py-2 hover:bg-surface"
+												>
+													<input
+														type="radio"
+														name="route-manual-cert"
+														value={cert.id}
+														checked={formData.cert_id === cert.id}
+														onchange={() => (formData.cert_id = cert.id)}
+														class="mt-1"
+													/>
+													<span class="flex flex-col">
+														<span class="font-medium text-primary">{cert.name}</span>
+														<span class="font-mono text-xs text-muted"
+															>{(cert.dnsNames ?? []).join(', ')}</span
+														>
+														<span class="text-xs text-muted"
+															>{language.current && t('routes.form.certSourceManualExpiry')}
+															{new Date(cert.notAfter).toLocaleDateString()}</span
+														>
+													</span>
+												</label>
+											{/each}
+										</fieldset>
+									{/if}
+								{/if}
+							</div>
+						{/if}
+						<!-- Step J.4 + O.4: ACME challenge selector. Visible only
+						     when TLS is on AND the cert source is ACME. Locked to
+						     "dns-01" when host or any alias is a wildcard. Step O.4
+						     (AC #11 + #12): when the host is covered by a managed
+						     domain AND the operator hasn't opted out via
+						     useDedicatedCert, the selector hides entirely and an
+						     inheritance badge takes its place. When covered + opted
+						     out, the selector returns and the operator picks
+						     http-01/dns-01 like J. -->
+						{#if formData.tlsEnabled && formData.cert_source === 'acme'}
+							{#if coveringManagedDomain && !formData.useDedicatedCert}
+								<!-- AC #11: covered + inheriting. Show the wildcard
+								     badge + the opt-out toggle. The selector is
+								     gone — the wildcard cert serves this route. -->
+								<div>
+									<span class="text-sm font-medium text-secondary block mb-1"
+										>{language.current && t('routes.form.tlsCertificateLabel')}</span
+									>
+									<!--
+										v2.9.16 i18n hotfix — the "Inherits wildcard from
+										X (managed via Y)" line mixes a code span, a
+										settings link, and parenthetical chrome. Rather
+										than weave a single template literal through all
+										three, render the static prefix via t() and keep
+										the dynamic <code> + <a> as inline JSX. Same
+										pattern used by the dns01Banner above.
+									-->
+									<div
+										class="rounded border border-info/40 bg-info/10 px-3 py-2 text-sm"
+									>
+										<span class="font-medium">{language.current && t('routes.form.tlsCertificateInherits')}</span>
+										<code class="font-mono">*.{coveringManagedDomain.apex}</code>
+										<span class="text-muted">
+											({language.current && t('routes.form.tlsCertificateInheritsManagedVia')} <a href="/settings" class="text-cyan hover:underline"
+												>{language.current && t('routes.form.tlsCertificateLink')}</a
+											>)
+										</span>
+									</div>
 									<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
 										<input
 											type="checkbox"
 											checked={formData.useDedicatedCert}
 											onchange={(e) =>
-												onUseDedicatedCertToggle(
-													(e.target as HTMLInputElement).checked
-												)}
+												onUseDedicatedCertToggle((e.target as HTMLInputElement).checked)}
 										/>
-										Use a dedicated cert (inherits <code class="font-mono"
-											>*.{coveringManagedDomain.apex}</code
-										> when unchecked)
+										{language.current && t('routes.form.tlsUseDedicatedCertLabel')}
 									</label>
-								{/if}
-								{#if dedicatedOptOutPendingChoice}
-									<!-- #O.4-2 force-explicit-choice — submit is
-									     disabled until the operator picks. The
-									     hint sits next to the now-unselected
-									     dropdown so the cause is obvious. -->
-									<p class="text-xs text-warn mt-1">
-										Pick HTTP-01 or DNS-01 above — opting out of the wildcard
-										requires an explicit per-route ACME challenge.
-									</p>
-								{/if}
-								{#if acmeLockedToDNS01}
 									<p class="text-xs text-muted mt-1">
-										Wildcard hosts require DNS-01.
+										{language.current && t('routes.form.tlsUseDedicatedCertHelper')}
 									</p>
-								{:else if formData.acmeChallenge === 'dns-01' && !dnsProviderConfigured}
-									<p class="text-xs text-down mt-1">
-										DNS-01 requires a configured DNS provider —
-										<a href="/settings" class="text-cyan hover:underline"
-											>configure it under Settings</a
-										>.
-									</p>
-								{:else}
-									<p class="text-xs text-muted mt-1">
-										HTTP-01 proves control via port 80. DNS-01 proves it
-										via a `_acme-challenge` TXT record and is the only
-										option for wildcard certs.
-									</p>
-								{/if}
-							</div>
-						{/if}
-					{/if}
-			
-					<!-- Step K.1 — per-route auth: radio group (none / basic /
-					     forward_auth). Replaces the Step I.5 "Require Basic Auth"
-					     checkbox with an explicit three-way choice. Mutual
-					     exclusion enforced by the radio shape; the server
-					     re-checks (validateAuthFieldsMutex) as defence in depth. -->
-					<div class="flex flex-col gap-2">
-						<span class="text-sm font-medium text-secondary">{language.current && t('routes.form.authSectionLabel')}</span>
-						<div class="flex flex-col gap-1 ml-1">
-							<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
-								<input
-									type="radio"
-									name="route-auth-mode"
-									value="none"
-									bind:group={formData.authMode}
-									class="accent-cyan"
-								/>
-								{language.current && t('routes.form.authNoneOption')}
-							</label>
-							<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
-								<input
-									type="radio"
-									name="route-auth-mode"
-									value="basic"
-									bind:group={formData.authMode}
-									class="accent-cyan"
-								/>
-								{language.current && t('routes.form.authBasicRadioLabel')}
-							</label>
-							<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
-								<input
-									type="radio"
-									name="route-auth-mode"
-									value="forward_auth"
-									bind:group={formData.authMode}
-									class="accent-cyan"
-								/>
-								{language.current && t('routes.form.authForwardRadioLabel')}
-							</label>
-						</div>
-			
-						{#if formData.authMode === 'basic'}
-							<div class="ml-6 flex flex-col gap-2">
-								<Input
-									label={language.current && t('routes.form.authBasicUsernameLabel')}
-									bind:value={formData.basicAuth.username}
-									placeholder={language.current && t('routes.form.authBasicUsernamePlaceholder')}
-								/>
+								</div>
+							{:else}
 								<div>
 									<label
-										for="basic-auth-password"
+										for="route-acme-challenge"
 										class="text-sm font-medium text-secondary block mb-1"
 									>
-										{language.current && t('routes.form.authBasicPasswordLabel')}
+										ACME challenge
 									</label>
-									<input
-										id="basic-auth-password"
-										type="password"
-										bind:value={formData.basicAuth.password}
-										placeholder={formMode === 'edit' && basicAuthPasswordSet
-											? (language.current && t('routes.form.authBasicPasswordPlaceholderSet'))
-											: ''}
-										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-									/>
-								</div>
-							</div>
-						{:else if formData.authMode === 'forward_auth'}
-							<div class="ml-6 flex flex-col gap-2">
-								<label
-									for="route-forward-auth-provider"
-									class="text-sm font-medium text-secondary block"
-								>
-									{language.current && t('routes.form.authForwardProviderLabel')}
-								</label>
-								{#if forwardAuthProviders.length === 0}
-									<p class="text-xs text-down">
-										{language.current && t('routes.form.authForwardNoProvider')}
-										<a href="/settings" class="text-cyan hover:underline">{language.current && t('routes.form.authForwardConfigureLink')}</a>.
-									</p>
-								{:else}
 									<select
-										id="route-forward-auth-provider"
-										bind:value={formData.forwardAuth.providerName}
-										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+										id="route-acme-challenge"
+										bind:value={formData.acmeChallenge}
+										disabled={acmeLockedToDNS01}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-60 disabled:cursor-not-allowed"
 									>
-										<option value="" disabled>{language.current && t('routes.form.authForwardSelectPlaceholder')}</option>
-										{#each forwardAuthProviders as p (p.name)}
-											<option value={p.name}>{p.name} ({p.kind})</option>
-										{/each}
-									</select>
-									<p class="text-xs text-muted">
-										The route's auth gate delegates to the IdP at
-										<code>{forwardAuthProviders.find((p) => p.name === formData.forwardAuth.providerName)?.verifyUrl ?? '...'}</code>
-										via Caddy <code>forward_auth</code>.
-									</p>
-								{/if}
-							</div>
-						{/if}
-					</div>
-					<!-- Step I.4: WAF mode. -->
-					<div>
-						<label
-							for="route-waf-mode"
-							class="text-sm font-medium text-secondary block mb-1"
-						>
-							WAF (Coraza + OWASP CRS)
-						</label>
-						<select
-							id="route-waf-mode"
-							bind:value={formData.wafMode}
-							class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-						>
-							<option value="off">{language.current && t('routes.form.wafModeOff')}</option>
-							<option value="detect">{language.current && t('routes.form.wafModeDetect')}</option>
-							<option value="block">{language.current && t('routes.form.wafModeBlock')}</option>
-						</select>
-						<p class="text-xs text-muted mt-1">
-							Start with Detect to spot false positives before enforcing.
-						</p>
-
-						<!-- Phase 4.5 (#R-WAF-BUFFER-OOM-ON-LARGE-UPLOADS)
-						     — upload-streaming toggle. Sits inside the
-						     WAF block on purpose: it modulates the WAF
-						     body-inspection behaviour, so the operator
-						     reads it as a WAF-adjacent knob, not as an
-						     advanced-TLS bolt-on. Independent of
-						     wafMode — even with WAF=off the toggle
-						     still controls Caddy's flush_interval. -->
-						<label
-							class="inline-flex items-start gap-2 text-sm text-secondary mt-3 cursor-pointer"
-							data-testid="upload-streaming-toggle-label"
-						>
-							<input
-								type="checkbox"
-								bind:checked={formData.uploadStreamingMode}
-								class="mt-0.5"
-								data-testid="upload-streaming-toggle"
-							/>
-							<span>
-								{language.current && t('routes.form.uploadStreamingToggleLabel')}
-							</span>
-						</label>
-						<p class="text-xs text-muted mt-1 max-w-prose">
-							{language.current && t('routes.form.uploadStreamingHelper')}
-						</p>
-
-						<!-- Step X.2 — wafDisableCRS toggle. Sits in
-						     the same WAF block as wafMode +
-						     uploadStreamingMode so the three knobs
-						     read as one consolidated WAF surface. The
-						     change is mediated by onWAFDisableCRSChange
-						     instead of a direct bind so the false →
-						     true direction can be gated behind the
-						     ADR-D4 confirm dialog ; the visual checked
-						     state still reflects formData.wafDisableCRS
-						     so an operator who cancels the dialog
-						     sees the box flip back to its previous
-						     unchecked state. -->
-						<label
-							class="inline-flex items-start gap-2 text-sm text-secondary mt-3 cursor-pointer"
-							data-testid="waf-disable-crs-toggle-label"
-						>
-							<input
-								type="checkbox"
-								checked={formData.wafDisableCRS}
-								onchange={onWAFDisableCRSChange}
-								class="mt-0.5"
-								data-testid="waf-disable-crs-toggle"
-							/>
-							<span>
-								{language.current && t('routes.form.wafDisableCRSLabel')}
-							</span>
-						</label>
-						<p class="text-xs text-muted mt-1 max-w-prose">
-							{language.current && t('routes.form.wafDisableCRSHelper')}
-						</p>
-
-						<!-- Step X Option (c) — granular per-rule
-						     exclusion list. Sits under the WAFDisableCRS
-						     toggle on purpose : the operator's natural
-						     reading order is "disable everything → just
-						     these → just these rules". Disabled when
-						     wafDisableCRS is true (the entire CRS is
-						     unloaded, so per-rule exclusions are no-ops),
-						     but the stored values are NOT cleared — the
-						     operator may toggle CRS back on later. -->
-						<div class="mt-4">
-							<label
-								for="route-waf-exclude-rules"
-								class="text-sm font-medium text-secondary block mb-1"
-							>
-								{language.current && t('routes.form.wafExcludeRulesLabelFull')}
-								<span class="text-muted text-xs">{language.current && t('routes.form.wafExcludeRulesLabelHint')}</span>
-							</label>
-							<textarea
-								id="route-waf-exclude-rules"
-								data-testid="waf-exclude-rules-input"
-								value={wafExcludeRulesInput}
-								onchange={onExcludeRulesInputChange}
-								oninput={onExcludeRulesInputChange}
-								disabled={formData.wafDisableCRS}
-								placeholder={language.current && t('routes.form.wafExcludeRulesPlaceholder')}
-								rows="2"
-								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
-							></textarea>
-							{#if errors.wafExcludeRules}
-								<p
-									class="text-xs text-status-down mt-1"
-									data-testid="waf-exclude-rules-error"
-								>
-									{errors.wafExcludeRules}
-								</p>
-							{/if}
-							<p class="text-xs text-muted mt-1 max-w-prose">
-								{language.current && t('routes.form.wafExcludeRulesHelper')}
-								{#if formMode === 'edit' && editingId}
-									{language.current && t('routes.form.wafExcludeRulesIdentifyRules')}
-									<a
-										href="/security/{editingId}"
-										class="text-cyan hover:underline"
-										data-testid="waf-exclude-rules-security-link"
-										>{language.current && t('routes.form.wafExcludeRulesWAFHistory')}</a
-									>.
-								{:else}
-									{language.current && t('routes.form.wafExcludeRulesIdentifyRulesGeneric')}
-									<a href="/security" class="text-cyan hover:underline"
-										>{language.current && t('routes.form.wafExcludeRulesSecurityPage')}</a
-									>.
-								{/if}
-								{#if formData.wafDisableCRS}
-									<br />
-									<span class="text-status-warn"
-										>{language.current && t('routes.form.wafExcludeRulesCRSDisabledWarning')}</span
-									>
-								{/if}
-							</p>
-						</div>
-
-						<!-- Step X Option (e) — tag-based exclusion list.
-						     Sibling of the rule-ID exclusion above ; more
-						     operator-friendly because one tag covers a
-						     whole family of CRS rules (and survives CRS
-						     updates that add new rules to that family).
-						     The HTML5 <datalist> below seeds an
-						     autocomplete-lite UX without dragging in a
-						     custom multi-select component — operators
-						     get suggestions from the curated 24-tag
-						     catalog when they focus the textarea, but
-						     can also type any custom tag (CRS v4 has
-						     114 distinct ; we surface the high-traffic
-						     subset). Gated when wafDisableCRS=true for
-						     the same reason as the rule list. -->
-						<div class="mt-4">
-							<label
-								for="route-waf-exclude-tags"
-								class="text-sm font-medium text-secondary block mb-1"
-							>
-								{language.current && t('routes.form.wafExcludeTagsLabelFull')}
-								<span class="text-muted text-xs">{language.current && t('routes.form.wafExcludeTagsLabelHint')}</span>
-							</label>
-							<textarea
-								id="route-waf-exclude-tags"
-								data-testid="waf-exclude-tags-input"
-								value={wafExcludeTagsInput}
-								onchange={onExcludeTagsInputChange}
-								oninput={onExcludeTagsInputChange}
-								disabled={formData.wafDisableCRS}
-								placeholder={language.current && t('routes.form.wafExcludeTagsPlaceholder')}
-								rows="2"
-								{...{ list: 'waf-exclude-tags-catalog' }}
-								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
-							></textarea>
-							<datalist id="waf-exclude-tags-catalog">
-								{#each CRS_TAG_CATALOG as tag (tag)}
-									<option value={tag}></option>
-								{/each}
-							</datalist>
-							{#if errors.wafExcludeTags}
-								<p
-									class="text-xs text-status-down mt-1"
-									data-testid="waf-exclude-tags-error"
-								>
-									{errors.wafExcludeTags}
-								</p>
-							{/if}
-							<p class="text-xs text-muted mt-1 max-w-prose">
-								{language.current && t('routes.form.wafExcludeTagsHelper')}
-								{#if formData.wafDisableCRS}
-									<br />
-									<span class="text-status-warn"
-										>{language.current && t('routes.form.wafExcludeRulesCRSDisabledWarning')}</span
-									>
-								{/if}
-							</p>
-						</div>
-						<!-- v2.36 — targeted exclusions (one rule stops
-						     inspecting one field, optionally on one path). -->
-						<div class="mt-4">
-							<WafTargetedExclusionsEditor
-								bind:value={formData.wafTargetedExclusions}
-								crsDisabled={formData.wafDisableCRS}
-							/>
-						</div>
-						<!-- v2.37 — guided WAF rules (block when every
-						     condition matches, follows the route mode). -->
-						<div class="mt-4">
-							<WafCustomRulesEditor
-								bind:value={formData.wafCustomRules}
-								wafMode={formData.wafMode}
-								onConvert={convertGuidedRule}
-							/>
-						</div>
-						<!-- v2.38 — expert SecLang + templates + request tester. -->
-						<div class="mt-4">
-							<WafSecLangSection
-								bind:value={formData.wafSecLang}
-								routeId={formMode === 'edit' ? editingId : null}
-								wafMode={formData.wafMode}
-								saveErrors={secLangSaveErrors}
-							/>
-						</div>
-					</div>
-
-					<!-- Step Q (2026-06-18) — per-route rate limit
-					     section. Lives in its own block (not inside
-					     the WAF section) because rate limiting is
-					     orthogonal to the WAF posture : a route can
-					     have WAF=off + rate limit on (trusted internal
-					     LAN with brute-force protection on /login),
-					     or WAF=block + no rate limit (public API
-					     where the WAF is the only gate). The
-					     "Limitation de débit" framing matches the
-					     operator's mental model better than burying
-					     it under WAF. -->
-					<div>
-						<label
-							class="text-sm font-medium text-secondary block mb-1"
-							for="route-rate-limit-toggle"
-						>
-							{language.current && t('routes.form.rateLimitSection')}
-						</label>
-						<label
-							class="inline-flex items-start gap-2 text-sm text-secondary mt-1 cursor-pointer"
-							data-testid="rate-limit-toggle-label"
-						>
-							<input
-								id="route-rate-limit-toggle"
-								type="checkbox"
-								checked={formData.rateLimit !== null}
-								onchange={onRateLimitToggle}
-								class="mt-0.5"
-								data-testid="rate-limit-toggle"
-							/>
-							<span>
-								{language.current && t('routes.form.rateLimitToggleLabelFull')}
-							</span>
-						</label>
-
-						{#if formData.rateLimit !== null}
-							<div class="mt-3 grid gap-3 sm:grid-cols-2">
-								<div>
-									<label
-										for="route-rl-events"
-										class="text-xs font-medium text-secondary block mb-1"
-									>
-										{language.current && t('routes.form.rateLimitMaxRequestsLabel')}
-									</label>
-									<input
-										id="route-rl-events"
-										data-testid="rate-limit-events-input"
-										type="number"
-										min="1"
-										step="1"
-										bind:value={formData.rateLimit.events}
-										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-									/>
-								</div>
-								<div>
-									<label
-										for="route-rl-window"
-										class="text-xs font-medium text-secondary block mb-1"
-									>
-										{language.current && t('routes.form.rateLimitPeriodLabel')} <span class="text-muted">{language.current && t('routes.form.rateLimitPeriodHint')}</span>
-									</label>
-									<input
-										id="route-rl-window"
-										data-testid="rate-limit-window-input"
-										type="text"
-										placeholder={language.current && t('routes.form.rateLimitWindowPlaceholder')}
-										bind:value={formData.rateLimit.window}
-										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-									/>
-								</div>
-								<div class="sm:col-span-2">
-									<label
-										for="route-rl-key"
-										class="text-xs font-medium text-secondary block mb-1"
-									>
-										{language.current && t('routes.form.rateLimitKeyLabelFull')}
-									</label>
-									<input
-										id="route-rl-key"
-										data-testid="rate-limit-key-input"
-										type="text"
-										placeholder="{'{http.request.remote.host}'}"
-										bind:value={formData.rateLimit.key}
-										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-									/>
-								</div>
-							</div>
-							<p class="text-xs text-muted mt-2 max-w-prose">
-								{language.current && t('routes.form.rateLimitHelper')}
-							</p>
-						{/if}
-					</div>
-
-					<!--
-					  Step R Phase 2.b — error pages section.
-					  Sits between Rate Limit and Country Block
-					  to match the operator's mental model :
-					  "what happens when this route returns
-					  something the client shouldn't normally
-					  see". The built-in Arenet branded default
-					  applies AUTOMATICALLY (Phase 1.1 FIX 1)
-					  for every code on every route ; the
-					  template dropdown lets the operator
-					  override the visual branding ; the per-
-					  route overrides sub-form lets the operator
-					  override individual codes (highest
-					  precedence in the 3-layer resolution).
-					-->
-					<div>
-						<label
-							class="text-sm font-medium text-secondary block mb-1"
-							for="route-error-template"
-						>
-							{language.current && t('routes.form.errorPagesSection')}
-						</label>
-						<div class="mt-2 flex items-center gap-2">
-							<select
-								id="route-error-template"
-								bind:value={formData.errorPageTemplateId}
-								class="flex-1 bg-surface border border-default rounded text-sm px-2 py-1.5 text-primary"
-								data-testid="error-template-select"
-							>
-								<option value="">{language.current && t('routes.form.errorPagesTemplateNoneOption')}</option>
-								{#each errorTemplates as t (t.id)}
-									<option value={t.id}>{t.name}</option>
-								{/each}
-							</select>
-							<a
-								href="/settings/error-pages"
-								class="text-xs text-cyan whitespace-nowrap"
-								title={language.current && t('routes.form.errorPagesTemplateManageTooltip')}
-							>
-								{language.current && t('routes.form.errorPagesTemplateManageLink')}
-							</a>
-						</div>
-						<p class="text-xs text-muted mt-1">
-							{language.current && t('routes.form.errorPagesTemplateHelper')}
-						</p>
-
-						<!-- Per-route overrides : highest precedence
-						     in the 3-layer resolution (override →
-						     template → default). Collapsed by default ;
-						     auto-expanded when the loaded route has
-						     overrides. -->
-						<details
-							class="mt-3"
-							bind:open={errorOverridesExpanded}
-							data-testid="error-overrides-details"
-						>
-							<summary class="text-xs text-secondary cursor-pointer">
-								{language.current && t('routes.form.errorPagesOverrideSection')}
-							</summary>
-							<div class="mt-2 grid gap-2">
-								{#each SUPPORTED_ERROR_STATUS_CODES as code (code)}
-									<div>
-										<label
-											for="route-err-override-{code}"
-											class="text-xs font-medium text-secondary block mb-1"
-										>
-											HTTP {code}
-										</label>
-										<textarea
-											id="route-err-override-{code}"
-											rows="2"
-											placeholder={language.current && t('routes.form.errorPagesOverridePlaceholder', { code })}
-											value={formData.errorPageOverrides[code] ?? ''}
-											oninput={(e) => {
-												const v = (e.target as HTMLTextAreaElement).value;
-												if (v) {
-													formData.errorPageOverrides = {
-														...formData.errorPageOverrides,
-														[code]: v
-													};
-												} else {
-													const next = { ...formData.errorPageOverrides };
-													delete next[code];
-													formData.errorPageOverrides = next;
-												}
-											}}
-											class="w-full bg-surface border border-default rounded text-xs px-2 py-1 font-mono text-primary"
-											data-testid="error-override-{code}"
-										></textarea>
-									</div>
-								{/each}
-								<p class="text-xs text-muted">
-									{language.current && t('routes.form.errorPagesOverrideHelper')}
-								</p>
-							</div>
-						</details>
-					</div>
-
-					<!-- W.5 — country-block per-route gate. Operator
-					     picks mode + countries; the W.1 Caddy module
-					     short-circuits at the edge before the request
-					     reaches crowdsec/auth/waf. ALLOW mode + empty
-					     list is rejected by the API (and surfaced here
-					     as a red error) — it would block all
-					     non-RFC1918 traffic. DENY mode + empty list is
-					     accepted (legal no-op; server logs a Warn).
-					     The "Add country" input takes ISO 3166-1
-					     alpha-2 codes (2 uppercase letters); Enter or
-					     comma adds the chip. -->
-					<!-- W.7 polish: pill-style mode toggle (Off / Allow /
-					     Deny) replaces the dropdown so operators see the
-					     three states at a glance; the active button picks
-					     up the mode-colored border (slate / green / red).
-					     Chips recolor to match the active mode. Counter
-					     "{N} pays autorisé(s) / bloqué(s)" surfaces the
-					     count + mode-meaningful pluralization. Autocomplete
-					     dropdown matches by alpha-2 code OR French name
-					     prefix (Intl.DisplayNames) — operator types "russ"
-					     to find RU/Russie. "+ Ajouter un pays" CTA improves
-					     discoverability over the previous bare input. -->
-					<details
-						class="rounded border border-border-subtle cb-section cb-mode-{formData.countryBlock.mode}"
-						bind:open={cbSectionOpen}
-						data-testid="country-block-section"
-					>
-						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-							{language.current && t('routes.form.countryBlockBlockedListLabel')}
-							{#if formData.countryBlock.mode !== 'off'}
-								<span class="ml-1 text-xs text-muted" data-testid="country-block-summary">
-									({formData.countryBlock.mode} · {geoSummary})
-								</span>
-							{:else}
-								<!-- W.7 follow-up: surface the "off" state in
-								     the summary too, so when the operator
-								     manually collapses the section after
-								     picking Désactivé the closed-state
-								     header isn't ambiguous. -->
-								<span
-									class="ml-1 text-xs text-muted"
-									data-testid="country-block-summary-off"
-								>
-									{language.current && t('routes.form.countryBlockDisabledLabel')}
-								</span>
-							{/if}
-						</summary>
-						<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
-							<!-- Mode pill toggle — 3 buttons in a segmented group.
-							     The "Mode" caption is a <span> rather than a
-							     <label> because the toggle has no single control
-							     to bind to (group's aria-label carries the
-							     accessible name). -->
-							<div>
-								<span class="text-sm font-medium text-secondary block mb-1">
-									Mode
-								</span>
-								<div
-									class="cb-mode-toggle"
-									role="group"
-									aria-label={language.current && t('routes.form.countryBlockModeLabel')}
-									data-testid="country-block-mode-toggle"
-								>
-									<button
-										type="button"
-										class="cb-mode-btn cb-mode-btn--off"
-										class:active={formData.countryBlock.mode === 'off'}
-										data-testid="country-block-mode-off"
-										aria-pressed={formData.countryBlock.mode === 'off'}
-										onclick={() => cbPickMode('off')}
-									>
-										<span class="cb-mode-btn__label">{language.current && t('routes.form.countryBlockModeOff')}</span>
-										<span class="cb-mode-btn__hint">{language.current && t('routes.form.countryBlockModeOffHint')}</span>
-									</button>
-									<button
-										type="button"
-										class="cb-mode-btn cb-mode-btn--allow"
-										class:active={formData.countryBlock.mode === 'allow'}
-										data-testid="country-block-mode-allow"
-										aria-pressed={formData.countryBlock.mode === 'allow'}
-										onclick={() => cbPickMode('allow')}
-									>
-										<span class="cb-mode-btn__label">{language.current && t('routes.form.countryBlockModeAllow')}</span>
-										<span class="cb-mode-btn__hint">{language.current && t('routes.form.countryBlockModeAllowHint')}</span>
-									</button>
-									<button
-										type="button"
-										class="cb-mode-btn cb-mode-btn--deny"
-										class:active={formData.countryBlock.mode === 'deny'}
-										data-testid="country-block-mode-deny"
-										aria-pressed={formData.countryBlock.mode === 'deny'}
-										onclick={() => cbPickMode('deny')}
-									>
-										<span class="cb-mode-btn__label">{language.current && t('routes.form.countryBlockModeDeny')}</span>
-										<span class="cb-mode-btn__hint">{language.current && t('routes.form.countryBlockModeDenyHint')}</span>
-									</button>
-								</div>
-							</div>
-
-							{#if formData.countryBlock.mode !== 'off'}
-								<!-- v2.34 — live sentence: what the filter does, with
-								     the OR between the lists spelled out. -->
-								<GeoRuleSentence
-									mode={formData.countryBlock.mode}
-									continents={formData.countryBlock.continents}
-									countries={formData.countryBlock.countryList}
-									asns={formData.countryBlock.asns}
-									exceptionCountries={formData.countryBlock.exceptions.countries}
-									exceptionAsns={formData.countryBlock.exceptions.asns}
-									{countryName}
-								/>
-								<!-- v2.34 — the three lists form ONE "matches if" group
-								     (continent OR country OR network); each is optional. -->
-								<section class="geo-match-group" data-testid="geo-match-group">
-									<header class="geo-match-group__head">
-										<span class="text-sm font-medium text-primary">
-											{language.current &&
-												t(formData.countryBlock.mode === 'deny' ? 'routes.form.geoMatchTitleDeny' : 'routes.form.geoMatchTitleAllow')}
-										</span>
-										<span class="text-xs text-muted">{language.current && t('routes.form.geoMatchHelper')}</span>
-									</header>
-								<ContinentPicker bind:value={formData.countryBlock.continents} />
-								<div class="geo-or" aria-hidden="true"><span>{language.current && t('routes.form.geoSentenceOr')}</span></div>
-								<!-- Counter + autocomplete combo. The counter
-								     uses mode-meaningful copy + plural agrees
-								     with N; hidden when N=0 so the empty
-								     state stays uncluttered. -->
-								<div>
-									<div class="flex items-baseline justify-between mb-1">
-										<label
-											for="route-country-block-list-input"
-											class="text-sm font-medium text-secondary"
-										>
-											{language.current && t('routes.form.countryBlockAddCountryLabel')}
-										</label>
-										{#if cbCounterLabel}
-											<span
-												class="text-xs text-muted"
-												data-testid="country-block-counter"
-											>
-												{cbCounterLabel}
-											</span>
+										{#if dedicatedOptOutPendingChoice}
+											<!-- #O.4-2 force-explicit-choice — empty value
+											     is the unselected state forced by the
+											     toggle handler. The placeholder option
+											     renders the empty selection clearly to
+											     the operator (otherwise the browser
+											     would silently render the first option
+											     as visually selected without it being
+											     the bound value). -->
+											<option value="" disabled>— pick one —</option>
 										{/if}
-									</div>
-
-									<!-- Chip list — rendered above the input so
-									     the operator's "what's in" is the
-									     primary visual focus, with the
-									     "add more" affordance below. -->
-									<div
-										class="flex flex-wrap gap-2 mb-2"
-										data-testid="country-block-chip-list"
-									>
-										{#each formData.countryBlock.countryList as code, i (code + i)}
-											<span
-												class="cb-chip"
-												data-testid="country-block-chip"
-												title={countryName(code)}
-											>
-												<Flag {code} />
-												<span class="cb-chip__name">{countryName(code)}</span>
-												<button
-													type="button"
-													class="cb-chip__remove"
-													aria-label={language.current && t('routes.form.countryBlockRemoveAria', { name: countryName(code) })}
-													onclick={() => cbRemoveCode(code)}
-												>
-													×
-												</button>
-											</span>
-										{/each}
-									</div>
-
-									<!-- Input + CTA row. The input is wrapped in
-									     a positioned container so the
-									     suggestion dropdown can float below it
-									     without disturbing the form layout. -->
-									<div class="flex gap-2">
-										<div class="cb-input-wrap flex-1">
+										<option value="http-01">{language.current && t('routes.form.tlsAcmeHTTP01')}</option>
+										<option value="dns-01">{language.current && t('routes.form.tlsAcmeDNS01')}</option>
+									</select>
+									{#if coveringManagedDomain && formData.useDedicatedCert}
+										<!-- AC #11 opt-out path: show the per-route
+										     selector AND the toggle (checked) so the
+										     operator can flip back to inheritance. -->
+										<label class="inline-flex items-center gap-2 text-sm text-secondary mt-2 cursor-pointer">
 											<input
-												id="route-country-block-list-input"
-												type="text"
-												placeholder={language.current && t('routes.form.countryBlockSearchPlaceholder')}
-												data-testid="country-block-input"
-												autocomplete="off"
-												bind:this={cbInputEl}
-												value={cbInputValue}
-												oninput={cbInputOnInput}
-												onfocus={() => (cbDropdownOpen = true)}
-												onblur={() => {
-													// Defer close so a click on a
-													// suggestion fires its onclick
-													// BEFORE the dropdown unmounts.
-													setTimeout(() => (cbDropdownOpen = false), 120);
-												}}
-												onkeydown={cbInputKeydown}
-												class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+												type="checkbox"
+												checked={formData.useDedicatedCert}
+												onchange={(e) =>
+													onUseDedicatedCertToggle(
+														(e.target as HTMLInputElement).checked
+													)}
 											/>
-											{#if cbDropdownOpen && cbSuggestions.length > 0}
-												<ul
-													class="cb-dropdown"
-													role="listbox"
-													data-testid="country-block-dropdown"
-												>
-													{#each cbSuggestions as match, idx (match.code)}
-														<li
-															role="option"
-															class="cb-dropdown__item"
-															class:active={idx === cbActiveIndex}
-															data-testid="country-block-suggestion"
-															aria-selected={idx === cbActiveIndex}
-															onmousedown={(e) => {
-																// onmousedown (not onclick) so it
-																// fires BEFORE the input's onblur
-																// closes the dropdown.
-																e.preventDefault();
-																cbAddCode(match.code);
-															}}
-															onmouseenter={() => (cbActiveIndex = idx)}
-														>
-															<Flag code={match.code} />
-															<span class="cb-dropdown__name">
-																{match.name}
-															</span>
-														</li>
-													{/each}
-												</ul>
-											{/if}
-										</div>
-										<button
-											type="button"
-											class="cb-add-btn"
-											data-testid="country-block-add-cta"
-											aria-label={language.current && t('routes.form.countryBlockAddCountryAria')}
-											onclick={cbOpenDropdown}
-										>
-											{language.current && t('routes.form.countryBlockAddBtn')}
-										</button>
-									</div>
-
-									{#if formData.countryBlock.mode === 'allow' && formData.countryBlock.countryList.length === 0 && formData.countryBlock.continents.length === 0 && formData.countryBlock.asns.length === 0}
-										<p
-											class="text-xs text-down mt-1"
-											data-testid="country-block-allow-empty-error"
-										>
-											{language.current && t('routes.form.geoAllowEmptyError')}
+											Use a dedicated cert (inherits <code class="font-mono"
+												>*.{coveringManagedDomain.apex}</code
+											> when unchecked)
+										</label>
+									{/if}
+									{#if dedicatedOptOutPendingChoice}
+										<!-- #O.4-2 force-explicit-choice — submit is
+										     disabled until the operator picks. The
+										     hint sits next to the now-unselected
+										     dropdown so the cause is obvious. -->
+										<p class="text-xs text-warn mt-1">
+											Pick HTTP-01 or DNS-01 above — opting out of the wildcard
+											requires an explicit per-route ACME challenge.
+										</p>
+									{/if}
+									{#if acmeLockedToDNS01}
+										<p class="text-xs text-muted mt-1">
+											Wildcard hosts require DNS-01.
+										</p>
+									{:else if formData.acmeChallenge === 'dns-01' && !dnsProviderConfigured}
+										<p class="text-xs text-down mt-1">
+											DNS-01 requires a configured DNS provider —
+											<a href="/settings" class="text-cyan hover:underline"
+												>configure it under Settings</a
+											>.
+										</p>
+									{:else}
+										<p class="text-xs text-muted mt-1">
+											HTTP-01 proves control via port 80. DNS-01 proves it
+											via a `_acme-challenge` TXT record and is the only
+											option for wildcard certs.
 										</p>
 									{/if}
 								</div>
-								<div class="geo-or" aria-hidden="true"><span>{language.current && t('routes.form.geoSentenceOr')}</span></div>
-								<!-- v2.28 — ASN block (spec D1/D3). -->
-								<ASNPicker
-									bind:value={formData.countryBlock.asns}
-									exclude={formData.countryBlock.exceptions.asns}
-									label={(language.current && t('routes.form.geoASNLabel')) || ''}
-									testid="geo-asns"
-								/>
-								</section>
-								{#if formData.countryBlock.mode === 'deny'}
-									<!-- v2.27 — deny-only exceptions (spec D4), in their
-									     own box: they win over every rule above. -->
-									<section class="geo-exceptions" data-testid="geo-exceptions-box">
-										<header class="geo-match-group__head">
-											<span class="text-sm font-medium text-primary">
-												{language.current && t('routes.form.geoExceptionsTitle')}
-											</span>
-											<span class="text-xs text-muted">{language.current && t('routes.form.geoExceptionsHelper')}</span>
-										</header>
-										<CountryExceptionsPicker
-											bind:value={formData.countryBlock.exceptions.countries}
-											blocked={formData.countryBlock.countryList}
+							{/if}
+						{/if}
+					</RouteSection>
+
+					<!-- Authentication in front of the backend. -->
+					<RouteSection name={language.current && t('routes.form.sectionAuth')} summary={summaryAuth} badge={authBadge.badge} posture={authBadge.posture} testid="section-auth">
+						<!-- Step K.1 — per-route auth: radio group (none / basic /
+						     forward_auth). Replaces the Step I.5 "Require Basic Auth"
+						     checkbox with an explicit three-way choice. Mutual
+						     exclusion enforced by the radio shape; the server
+						     re-checks (validateAuthFieldsMutex) as defence in depth. -->
+						<div class="flex flex-col gap-2">
+							<span class="text-sm font-medium text-secondary">{language.current && t('routes.form.authSectionLabel')}</span>
+							<div class="flex flex-col gap-1 ml-1">
+								<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
+									<input
+										type="radio"
+										name="route-auth-mode"
+										value="none"
+										bind:group={formData.authMode}
+										class="accent-cyan"
+									/>
+									{language.current && t('routes.form.authNoneOption')}
+								</label>
+								<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
+									<input
+										type="radio"
+										name="route-auth-mode"
+										value="basic"
+										bind:group={formData.authMode}
+										class="accent-cyan"
+									/>
+									{language.current && t('routes.form.authBasicRadioLabel')}
+								</label>
+								<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
+									<input
+										type="radio"
+										name="route-auth-mode"
+										value="forward_auth"
+										bind:group={formData.authMode}
+										class="accent-cyan"
+									/>
+									{language.current && t('routes.form.authForwardRadioLabel')}
+								</label>
+							</div>
+			
+							{#if formData.authMode === 'basic'}
+								<div class="ml-6 flex flex-col gap-2">
+									<Input
+										label={language.current && t('routes.form.authBasicUsernameLabel')}
+										bind:value={formData.basicAuth.username}
+										placeholder={language.current && t('routes.form.authBasicUsernamePlaceholder')}
+									/>
+									<div>
+										<label
+											for="basic-auth-password"
+											class="text-sm font-medium text-secondary block mb-1"
+										>
+											{language.current && t('routes.form.authBasicPasswordLabel')}
+										</label>
+										<input
+											id="basic-auth-password"
+											type="password"
+											bind:value={formData.basicAuth.password}
+											placeholder={formMode === 'edit' && basicAuthPasswordSet
+												? (language.current && t('routes.form.authBasicPasswordPlaceholderSet'))
+												: ''}
+											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 										/>
-										<ASNPicker
-											bind:value={formData.countryBlock.exceptions.asns}
-											exclude={formData.countryBlock.asns}
-											label={(language.current && t('routes.form.geoASNExceptionsLabel')) || ''}
-											testid="geo-exception-asns"
-										/>
-									</section>
-								{/if}
-								<div>
-									<label
-										for="route-country-block-status"
-										class="text-sm font-medium text-secondary block mb-1"
-									>
-										{language.current && t('routes.form.countryBlockStatusCodeLabelFull')}
-									</label>
-									<select
-										id="route-country-block-status"
-										bind:value={formData.countryBlock.statusCode}
-										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-									>
-										<option value={0}>{language.current && t('routes.form.countryBlockStatusDefault')}</option>
-										<option value={403}>403 Forbidden</option>
-										<option value={451}>451 Unavailable For Legal Reasons</option>
-										<option value={444}>{language.current && t('routes.form.countryBlockStatusCode444')}</option>
-									</select>
+									</div>
 								</div>
-							{:else}
-								<!-- mode=off — muted hint so the operator
-								     understands what happens when they pick
-								     a mode (rather than seeing an empty
-								     section that looks broken). -->
-								<p
-									class="text-xs text-muted"
-									data-testid="country-block-off-hint"
+							{:else if formData.authMode === 'forward_auth'}
+								<div class="ml-6 flex flex-col gap-2">
+									<label
+										for="route-forward-auth-provider"
+										class="text-sm font-medium text-secondary block"
+									>
+										{language.current && t('routes.form.authForwardProviderLabel')}
+									</label>
+									{#if forwardAuthProviders.length === 0}
+										<p class="text-xs text-down">
+											{language.current && t('routes.form.authForwardNoProvider')}
+											<a href="/settings" class="text-cyan hover:underline">{language.current && t('routes.form.authForwardConfigureLink')}</a>.
+										</p>
+									{:else}
+										<select
+											id="route-forward-auth-provider"
+											bind:value={formData.forwardAuth.providerName}
+											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+										>
+											<option value="" disabled>{language.current && t('routes.form.authForwardSelectPlaceholder')}</option>
+											{#each forwardAuthProviders as p (p.name)}
+												<option value={p.name}>{p.name} ({p.kind})</option>
+											{/each}
+										</select>
+										<p class="text-xs text-muted">
+											The route's auth gate delegates to the IdP at
+											<code>{forwardAuthProviders.find((p) => p.name === formData.forwardAuth.providerName)?.verifyUrl ?? '...'}</code>
+											via Caddy <code>forward_auth</code>.
+										</p>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					</RouteSection>
+
+					<!-- WAF: mode, CRS, exclusions, guided rules and SecLang. -->
+					<RouteSection name={language.current && t('routes.form.sectionWAF')} summary={summaryWAF} badge={wafBadge.badge} posture={wafBadge.posture} testid="section-waf">
+						<!-- Step I.4: WAF mode. -->
+						<div>
+							<label
+								for="route-waf-mode"
+								class="text-sm font-medium text-secondary block mb-1"
+							>
+								WAF (Coraza + OWASP CRS)
+							</label>
+							<select
+								id="route-waf-mode"
+								bind:value={formData.wafMode}
+								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+							>
+								<option value="off">{language.current && t('routes.form.wafModeOff')}</option>
+								<option value="detect">{language.current && t('routes.form.wafModeDetect')}</option>
+								<option value="block">{language.current && t('routes.form.wafModeBlock')}</option>
+							</select>
+							<p class="text-xs text-muted mt-1">
+								Start with Detect to spot false positives before enforcing.
+							</p>
+
+							<!-- Phase 4.5 (#R-WAF-BUFFER-OOM-ON-LARGE-UPLOADS)
+							     — upload-streaming toggle. Sits inside the
+							     WAF block on purpose: it modulates the WAF
+							     body-inspection behaviour, so the operator
+							     reads it as a WAF-adjacent knob, not as an
+							     advanced-TLS bolt-on. Independent of
+							     wafMode — even with WAF=off the toggle
+							     still controls Caddy's flush_interval. -->
+							<label
+								class="inline-flex items-start gap-2 text-sm text-secondary mt-3 cursor-pointer"
+								data-testid="upload-streaming-toggle-label"
+							>
+								<input
+									type="checkbox"
+									bind:checked={formData.uploadStreamingMode}
+									class="mt-0.5"
+									data-testid="upload-streaming-toggle"
+								/>
+								<span>
+									{language.current && t('routes.form.uploadStreamingToggleLabel')}
+								</span>
+							</label>
+							<p class="text-xs text-muted mt-1 max-w-prose">
+								{language.current && t('routes.form.uploadStreamingHelper')}
+							</p>
+
+							<!-- Step X.2 — wafDisableCRS toggle. Sits in
+							     the same WAF block as wafMode +
+							     uploadStreamingMode so the three knobs
+							     read as one consolidated WAF surface. The
+							     change is mediated by onWAFDisableCRSChange
+							     instead of a direct bind so the false →
+							     true direction can be gated behind the
+							     ADR-D4 confirm dialog ; the visual checked
+							     state still reflects formData.wafDisableCRS
+							     so an operator who cancels the dialog
+							     sees the box flip back to its previous
+							     unchecked state. -->
+							<label
+								class="inline-flex items-start gap-2 text-sm text-secondary mt-3 cursor-pointer"
+								data-testid="waf-disable-crs-toggle-label"
+							>
+								<input
+									type="checkbox"
+									checked={formData.wafDisableCRS}
+									onchange={onWAFDisableCRSChange}
+									class="mt-0.5"
+									data-testid="waf-disable-crs-toggle"
+								/>
+								<span>
+									{language.current && t('routes.form.wafDisableCRSLabel')}
+								</span>
+							</label>
+							<p class="text-xs text-muted mt-1 max-w-prose">
+								{language.current && t('routes.form.wafDisableCRSHelper')}
+							</p>
+
+							<!-- Step X Option (c) — granular per-rule
+							     exclusion list. Sits under the WAFDisableCRS
+							     toggle on purpose : the operator's natural
+							     reading order is "disable everything → just
+							     these → just these rules". Disabled when
+							     wafDisableCRS is true (the entire CRS is
+							     unloaded, so per-rule exclusions are no-ops),
+							     but the stored values are NOT cleared — the
+							     operator may toggle CRS back on later. -->
+							<div class="mt-4">
+								<label
+									for="route-waf-exclude-rules"
+									class="text-sm font-medium text-secondary block mb-1"
 								>
-									Aucun gate par pays. Choisissez Allow-list ou Deny-list
-									pour activer.
+									{language.current && t('routes.form.wafExcludeRulesLabelFull')}
+									<span class="text-muted text-xs">{language.current && t('routes.form.wafExcludeRulesLabelHint')}</span>
+								</label>
+								<textarea
+									id="route-waf-exclude-rules"
+									data-testid="waf-exclude-rules-input"
+									value={wafExcludeRulesInput}
+									onchange={onExcludeRulesInputChange}
+									oninput={onExcludeRulesInputChange}
+									disabled={formData.wafDisableCRS}
+									placeholder={language.current && t('routes.form.wafExcludeRulesPlaceholder')}
+									rows="2"
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+								></textarea>
+								{#if errors.wafExcludeRules}
+									<p
+										class="text-xs text-status-down mt-1"
+										data-testid="waf-exclude-rules-error"
+									>
+										{errors.wafExcludeRules}
+									</p>
+								{/if}
+								<p class="text-xs text-muted mt-1 max-w-prose">
+									{language.current && t('routes.form.wafExcludeRulesHelper')}
+									{#if formMode === 'edit' && editingId}
+										{language.current && t('routes.form.wafExcludeRulesIdentifyRules')}
+										<a
+											href="/security/{editingId}"
+											class="text-cyan hover:underline"
+											data-testid="waf-exclude-rules-security-link"
+											>{language.current && t('routes.form.wafExcludeRulesWAFHistory')}</a
+										>.
+									{:else}
+										{language.current && t('routes.form.wafExcludeRulesIdentifyRulesGeneric')}
+										<a href="/security" class="text-cyan hover:underline"
+											>{language.current && t('routes.form.wafExcludeRulesSecurityPage')}</a
+										>.
+									{/if}
+									{#if formData.wafDisableCRS}
+										<br />
+										<span class="text-status-warn"
+											>{language.current && t('routes.form.wafExcludeRulesCRSDisabledWarning')}</span
+										>
+									{/if}
+								</p>
+							</div>
+
+							<!-- Step X Option (e) — tag-based exclusion list.
+							     Sibling of the rule-ID exclusion above ; more
+							     operator-friendly because one tag covers a
+							     whole family of CRS rules (and survives CRS
+							     updates that add new rules to that family).
+							     The HTML5 <datalist> below seeds an
+							     autocomplete-lite UX without dragging in a
+							     custom multi-select component — operators
+							     get suggestions from the curated 24-tag
+							     catalog when they focus the textarea, but
+							     can also type any custom tag (CRS v4 has
+							     114 distinct ; we surface the high-traffic
+							     subset). Gated when wafDisableCRS=true for
+							     the same reason as the rule list. -->
+							<div class="mt-4">
+								<label
+									for="route-waf-exclude-tags"
+									class="text-sm font-medium text-secondary block mb-1"
+								>
+									{language.current && t('routes.form.wafExcludeTagsLabelFull')}
+									<span class="text-muted text-xs">{language.current && t('routes.form.wafExcludeTagsLabelHint')}</span>
+								</label>
+								<textarea
+									id="route-waf-exclude-tags"
+									data-testid="waf-exclude-tags-input"
+									value={wafExcludeTagsInput}
+									onchange={onExcludeTagsInputChange}
+									oninput={onExcludeTagsInputChange}
+									disabled={formData.wafDisableCRS}
+									placeholder={language.current && t('routes.form.wafExcludeTagsPlaceholder')}
+									rows="2"
+									{...{ list: 'waf-exclude-tags-catalog' }}
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+								></textarea>
+								<datalist id="waf-exclude-tags-catalog">
+									{#each CRS_TAG_CATALOG as tag (tag)}
+										<option value={tag}></option>
+									{/each}
+								</datalist>
+								{#if errors.wafExcludeTags}
+									<p
+										class="text-xs text-status-down mt-1"
+										data-testid="waf-exclude-tags-error"
+									>
+										{errors.wafExcludeTags}
+									</p>
+								{/if}
+								<p class="text-xs text-muted mt-1 max-w-prose">
+									{language.current && t('routes.form.wafExcludeTagsHelper')}
+									{#if formData.wafDisableCRS}
+										<br />
+										<span class="text-status-warn"
+											>{language.current && t('routes.form.wafExcludeRulesCRSDisabledWarning')}</span
+										>
+									{/if}
+								</p>
+							</div>
+							<!-- v2.36 — targeted exclusions (one rule stops
+							     inspecting one field, optionally on one path). -->
+							<div class="mt-4">
+								<WafTargetedExclusionsEditor
+									bind:value={formData.wafTargetedExclusions}
+									crsDisabled={formData.wafDisableCRS}
+								/>
+							</div>
+							<!-- v2.37 — guided WAF rules (block when every
+							     condition matches, follows the route mode). -->
+							<div class="mt-4">
+								<WafCustomRulesEditor
+									bind:value={formData.wafCustomRules}
+									wafMode={formData.wafMode}
+									onConvert={convertGuidedRule}
+								/>
+							</div>
+							<!-- v2.38 — expert SecLang + templates + request tester. -->
+							<div class="mt-4">
+								<WafSecLangSection
+									bind:value={formData.wafSecLang}
+									routeId={formMode === 'edit' ? editingId : null}
+									wafMode={formData.wafMode}
+									saveErrors={secLangSaveErrors}
+								/>
+							</div>
+						</div>
+					</RouteSection>
+
+					<!-- Rate limit. -->
+					<RouteSection name={language.current && t('routes.form.sectionRateLimit')} summary={summaryRateLimit} badge={rateLimitBadge.badge} posture={rateLimitBadge.posture} testid="section-rate-limit">
+						<!-- Step Q (2026-06-18) — per-route rate limit
+						     section. Lives in its own block (not inside
+						     the WAF section) because rate limiting is
+						     orthogonal to the WAF posture : a route can
+						     have WAF=off + rate limit on (trusted internal
+						     LAN with brute-force protection on /login),
+						     or WAF=block + no rate limit (public API
+						     where the WAF is the only gate). The
+						     "Limitation de débit" framing matches the
+						     operator's mental model better than burying
+						     it under WAF. -->
+						<div>
+							<label
+								class="text-sm font-medium text-secondary block mb-1"
+								for="route-rate-limit-toggle"
+							>
+								{language.current && t('routes.form.rateLimitSection')}
+							</label>
+							<label
+								class="inline-flex items-start gap-2 text-sm text-secondary mt-1 cursor-pointer"
+								data-testid="rate-limit-toggle-label"
+							>
+								<input
+									id="route-rate-limit-toggle"
+									type="checkbox"
+									checked={formData.rateLimit !== null}
+									onchange={onRateLimitToggle}
+									class="mt-0.5"
+									data-testid="rate-limit-toggle"
+								/>
+								<span>
+									{language.current && t('routes.form.rateLimitToggleLabelFull')}
+								</span>
+							</label>
+
+							{#if formData.rateLimit !== null}
+								<div class="mt-3 grid gap-3 sm:grid-cols-2">
+									<div>
+										<label
+											for="route-rl-events"
+											class="text-xs font-medium text-secondary block mb-1"
+										>
+											{language.current && t('routes.form.rateLimitMaxRequestsLabel')}
+										</label>
+										<input
+											id="route-rl-events"
+											data-testid="rate-limit-events-input"
+											type="number"
+											min="1"
+											step="1"
+											bind:value={formData.rateLimit.events}
+											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+										/>
+									</div>
+									<div>
+										<label
+											for="route-rl-window"
+											class="text-xs font-medium text-secondary block mb-1"
+										>
+											{language.current && t('routes.form.rateLimitPeriodLabel')} <span class="text-muted">{language.current && t('routes.form.rateLimitPeriodHint')}</span>
+										</label>
+										<input
+											id="route-rl-window"
+											data-testid="rate-limit-window-input"
+											type="text"
+											placeholder={language.current && t('routes.form.rateLimitWindowPlaceholder')}
+											bind:value={formData.rateLimit.window}
+											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+										/>
+									</div>
+									<div class="sm:col-span-2">
+										<label
+											for="route-rl-key"
+											class="text-xs font-medium text-secondary block mb-1"
+										>
+											{language.current && t('routes.form.rateLimitKeyLabelFull')}
+										</label>
+										<input
+											id="route-rl-key"
+											data-testid="rate-limit-key-input"
+											type="text"
+											placeholder="{'{http.request.remote.host}'}"
+											bind:value={formData.rateLimit.key}
+											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+										/>
+									</div>
+								</div>
+								<p class="text-xs text-muted mt-2 max-w-prose">
+									{language.current && t('routes.form.rateLimitHelper')}
 								</p>
 							{/if}
 						</div>
-					</details>
+					</RouteSection>
 
-					<!-- path-based-rules Task 9 — route-level IP allow/deny
-					     gate. Sits alongside the country-block section
-					     (both are edge-level traffic gates evaluated
-					     before auth/WAF); IPFilterFields is the shared
-					     Task 7 component, also reused per-path-rule
-					     below. -->
-					<div>
-						<span class="text-sm font-medium text-secondary block mb-1">
-							{language.current && t('routes.ipFilter.sectionLabel')}
-						</span>
-						<IPFilterFields bind:value={formData.ipFilter} />
-					</div>
-
-					<!-- path-based-rules Task 9 — collapsed path-scoped
-					     rules editor (Task 8 component): per-prefix basic
-					     auth override + IP filter. -->
-					<PathRulesSection bind:value={formData.pathRules} />
-
-					<!-- Step J.3: active health-check sub-form. Gated by the
-					     enabled checkbox. Sub-fields disabled when off; their
-					     state is PRESERVED across the toggle so a user who
-					     flips off-and-on keeps their typed values.
-					     Any interaction marks healthCheckTouched so submit ships
-					     the complete 9-field block (J.2 preserve-or-replace). -->
-					<details
-						class="rounded border border-border-subtle"
-						open={formData.healthCheck.enabled}
-					>
-						<summary
-							class="px-3 py-2 text-sm text-secondary cursor-pointer select-none"
-							onclick={markHealthCheckTouched}
+					<!-- Country and source-IP filtering: both must accept the request. -->
+					<RouteSection name={language.current && t('routes.form.sectionGeoIP')} summary={summaryGeoIP} badge={geoIPBadge.badge} posture={geoIPBadge.posture} testid="section-geo-ip">
+						<!-- W.5 — country-block per-route gate. Operator
+						     picks mode + countries; the W.1 Caddy module
+						     short-circuits at the edge before the request
+						     reaches crowdsec/auth/waf. ALLOW mode + empty
+						     list is rejected by the API (and surfaced here
+						     as a red error) — it would block all
+						     non-RFC1918 traffic. DENY mode + empty list is
+						     accepted (legal no-op; server logs a Warn).
+						     The "Add country" input takes ISO 3166-1
+						     alpha-2 codes (2 uppercase letters); Enter or
+						     comma adds the chip. -->
+						<!-- W.7 polish: pill-style mode toggle (Off / Allow /
+						     Deny) replaces the dropdown so operators see the
+						     three states at a glance; the active button picks
+						     up the mode-colored border (slate / green / red).
+						     Chips recolor to match the active mode. Counter
+						     "{N} pays autorisé(s) / bloqué(s)" surfaces the
+						     count + mode-meaningful pluralization. Autocomplete
+						     dropdown matches by alpha-2 code OR French name
+						     prefix (Intl.DisplayNames) — operator types "russ"
+						     to find RU/Russie. "+ Ajouter un pays" CTA improves
+						     discoverability over the previous bare input. -->
+						<details
+							class="rounded border border-border-subtle cb-section cb-mode-{formData.countryBlock.mode}"
+							bind:open={cbSectionOpen}
+							data-testid="country-block-section"
 						>
-							{language.current && t('routes.form.healthCheckActiveSection')}
-							{#if formData.healthCheck.enabled}
-								<span class="ml-1 text-xs text-muted">{language.current && t('routes.form.healthCheckOnSuffix')}</span>
-							{/if}
-						</summary>
-						<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
-							<!-- Capture click on the wrapper so toggling the
-							     checkbox marks the HC block as touched (drives
-							     the J.2 preserve-or-replace decision). Checkbox
-							     does not expose an onchange prop; the wrapper
-							     handler runs whether the user clicks the box or
-							     its label. -->
-							<div onclick={markHealthCheckTouched} onkeydown={markHealthCheckTouched} role="none">
-								<Checkbox
-									label={language.current && t('routes.form.healthCheckEnableLabel')}
-									bind:checked={formData.healthCheck.enabled}
-								/>
-							</div>
-							<div>
-								<label
-									for="hc-uri"
-									class="text-sm font-medium text-secondary block mb-1"
-								>
-									URI <span class="text-down" aria-hidden="true">*</span>
-								</label>
-								<input
-									id="hc-uri"
-									type="text"
-									bind:value={formData.healthCheck.uri}
-									placeholder={language.current && t('routes.form.healthCheckURIPlaceholder')}
-									disabled={!formData.healthCheck.enabled}
-									aria-required="true"
-									oninput={markHealthCheckTouched}
-									class="w-full bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
-									class:border-down={!!errors['healthCheck.uri']}
-									class:border-border-default={!errors['healthCheck.uri']}
-								/>
-								{#if errors['healthCheck.uri']}
-									<p class="text-xs text-down mt-1">{errors['healthCheck.uri']}</p>
+							<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+								{language.current && t('routes.form.countryBlockBlockedListLabel')}
+								{#if formData.countryBlock.mode !== 'off'}
+									<span class="ml-1 text-xs text-muted" data-testid="country-block-summary">
+										({formData.countryBlock.mode} · {geoSummary})
+									</span>
+								{:else}
+									<!-- W.7 follow-up: surface the "off" state in
+									     the summary too, so when the operator
+									     manually collapses the section after
+									     picking Désactivé the closed-state
+									     header isn't ambiguous. -->
+									<span
+										class="ml-1 text-xs text-muted"
+										data-testid="country-block-summary-off"
+									>
+										{language.current && t('routes.form.countryBlockDisabledLabel')}
+									</span>
+								{/if}
+							</summary>
+							<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
+								<!-- Mode pill toggle — 3 buttons in a segmented group.
+								     The "Mode" caption is a <span> rather than a
+								     <label> because the toggle has no single control
+								     to bind to (group's aria-label carries the
+								     accessible name). -->
+								<div>
+									<span class="text-sm font-medium text-secondary block mb-1">
+										Mode
+									</span>
+									<div
+										class="cb-mode-toggle"
+										role="group"
+										aria-label={language.current && t('routes.form.countryBlockModeLabel')}
+										data-testid="country-block-mode-toggle"
+									>
+										<button
+											type="button"
+											class="cb-mode-btn cb-mode-btn--off"
+											class:active={formData.countryBlock.mode === 'off'}
+											data-testid="country-block-mode-off"
+											aria-pressed={formData.countryBlock.mode === 'off'}
+											onclick={() => cbPickMode('off')}
+										>
+											<span class="cb-mode-btn__label">{language.current && t('routes.form.countryBlockModeOff')}</span>
+											<span class="cb-mode-btn__hint">{language.current && t('routes.form.countryBlockModeOffHint')}</span>
+										</button>
+										<button
+											type="button"
+											class="cb-mode-btn cb-mode-btn--allow"
+											class:active={formData.countryBlock.mode === 'allow'}
+											data-testid="country-block-mode-allow"
+											aria-pressed={formData.countryBlock.mode === 'allow'}
+											onclick={() => cbPickMode('allow')}
+										>
+											<span class="cb-mode-btn__label">{language.current && t('routes.form.countryBlockModeAllow')}</span>
+											<span class="cb-mode-btn__hint">{language.current && t('routes.form.countryBlockModeAllowHint')}</span>
+										</button>
+										<button
+											type="button"
+											class="cb-mode-btn cb-mode-btn--deny"
+											class:active={formData.countryBlock.mode === 'deny'}
+											data-testid="country-block-mode-deny"
+											aria-pressed={formData.countryBlock.mode === 'deny'}
+											onclick={() => cbPickMode('deny')}
+										>
+											<span class="cb-mode-btn__label">{language.current && t('routes.form.countryBlockModeDeny')}</span>
+											<span class="cb-mode-btn__hint">{language.current && t('routes.form.countryBlockModeDenyHint')}</span>
+										</button>
+									</div>
+								</div>
+
+								{#if formData.countryBlock.mode !== 'off'}
+									<!-- v2.34 — live sentence: what the filter does, with
+									     the OR between the lists spelled out. -->
+									<GeoRuleSentence
+										mode={formData.countryBlock.mode}
+										continents={formData.countryBlock.continents}
+										countries={formData.countryBlock.countryList}
+										asns={formData.countryBlock.asns}
+										exceptionCountries={formData.countryBlock.exceptions.countries}
+										exceptionAsns={formData.countryBlock.exceptions.asns}
+										{countryName}
+									/>
+									<!-- v2.34 — the three lists form ONE "matches if" group
+									     (continent OR country OR network); each is optional. -->
+									<section class="geo-match-group" data-testid="geo-match-group">
+										<header class="geo-match-group__head">
+											<span class="text-sm font-medium text-primary">
+												{language.current &&
+													t(formData.countryBlock.mode === 'deny' ? 'routes.form.geoMatchTitleDeny' : 'routes.form.geoMatchTitleAllow')}
+											</span>
+											<span class="text-xs text-muted">{language.current && t('routes.form.geoMatchHelper')}</span>
+										</header>
+									<ContinentPicker bind:value={formData.countryBlock.continents} />
+									<div class="geo-or" aria-hidden="true"><span>{language.current && t('routes.form.geoSentenceOr')}</span></div>
+									<!-- Counter + autocomplete combo. The counter
+									     uses mode-meaningful copy + plural agrees
+									     with N; hidden when N=0 so the empty
+									     state stays uncluttered. -->
+									<div>
+										<div class="flex items-baseline justify-between mb-1">
+											<label
+												for="route-country-block-list-input"
+												class="text-sm font-medium text-secondary"
+											>
+												{language.current && t('routes.form.countryBlockAddCountryLabel')}
+											</label>
+											{#if cbCounterLabel}
+												<span
+													class="text-xs text-muted"
+													data-testid="country-block-counter"
+												>
+													{cbCounterLabel}
+												</span>
+											{/if}
+										</div>
+
+										<!-- Chip list — rendered above the input so
+										     the operator's "what's in" is the
+										     primary visual focus, with the
+										     "add more" affordance below. -->
+										<div
+											class="flex flex-wrap gap-2 mb-2"
+											data-testid="country-block-chip-list"
+										>
+											{#each formData.countryBlock.countryList as code, i (code + i)}
+												<span
+													class="cb-chip"
+													data-testid="country-block-chip"
+													title={countryName(code)}
+												>
+													<Flag {code} />
+													<span class="cb-chip__name">{countryName(code)}</span>
+													<button
+														type="button"
+														class="cb-chip__remove"
+														aria-label={language.current && t('routes.form.countryBlockRemoveAria', { name: countryName(code) })}
+														onclick={() => cbRemoveCode(code)}
+													>
+														×
+													</button>
+												</span>
+											{/each}
+										</div>
+
+										<!-- Input + CTA row. The input is wrapped in
+										     a positioned container so the
+										     suggestion dropdown can float below it
+										     without disturbing the form layout. -->
+										<div class="flex gap-2">
+											<div class="cb-input-wrap flex-1">
+												<input
+													id="route-country-block-list-input"
+													type="text"
+													placeholder={language.current && t('routes.form.countryBlockSearchPlaceholder')}
+													data-testid="country-block-input"
+													autocomplete="off"
+													bind:this={cbInputEl}
+													value={cbInputValue}
+													oninput={cbInputOnInput}
+													onfocus={() => (cbDropdownOpen = true)}
+													onblur={() => {
+														// Defer close so a click on a
+														// suggestion fires its onclick
+														// BEFORE the dropdown unmounts.
+														setTimeout(() => (cbDropdownOpen = false), 120);
+													}}
+													onkeydown={cbInputKeydown}
+													class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+												/>
+												{#if cbDropdownOpen && cbSuggestions.length > 0}
+													<ul
+														class="cb-dropdown"
+														role="listbox"
+														data-testid="country-block-dropdown"
+													>
+														{#each cbSuggestions as match, idx (match.code)}
+															<li
+																role="option"
+																class="cb-dropdown__item"
+																class:active={idx === cbActiveIndex}
+																data-testid="country-block-suggestion"
+																aria-selected={idx === cbActiveIndex}
+																onmousedown={(e) => {
+																	// onmousedown (not onclick) so it
+																	// fires BEFORE the input's onblur
+																	// closes the dropdown.
+																	e.preventDefault();
+																	cbAddCode(match.code);
+																}}
+																onmouseenter={() => (cbActiveIndex = idx)}
+															>
+																<Flag code={match.code} />
+																<span class="cb-dropdown__name">
+																	{match.name}
+																</span>
+															</li>
+														{/each}
+													</ul>
+												{/if}
+											</div>
+											<button
+												type="button"
+												class="cb-add-btn"
+												data-testid="country-block-add-cta"
+												aria-label={language.current && t('routes.form.countryBlockAddCountryAria')}
+												onclick={cbOpenDropdown}
+											>
+												{language.current && t('routes.form.countryBlockAddBtn')}
+											</button>
+										</div>
+
+										{#if formData.countryBlock.mode === 'allow' && formData.countryBlock.countryList.length === 0 && formData.countryBlock.continents.length === 0 && formData.countryBlock.asns.length === 0}
+											<p
+												class="text-xs text-down mt-1"
+												data-testid="country-block-allow-empty-error"
+											>
+												{language.current && t('routes.form.geoAllowEmptyError')}
+											</p>
+										{/if}
+									</div>
+									<div class="geo-or" aria-hidden="true"><span>{language.current && t('routes.form.geoSentenceOr')}</span></div>
+									<!-- v2.28 — ASN block (spec D1/D3). -->
+									<ASNPicker
+										bind:value={formData.countryBlock.asns}
+										exclude={formData.countryBlock.exceptions.asns}
+										label={(language.current && t('routes.form.geoASNLabel')) || ''}
+										testid="geo-asns"
+									/>
+									</section>
+									{#if formData.countryBlock.mode === 'deny'}
+										<!-- v2.27 — deny-only exceptions (spec D4), in their
+										     own box: they win over every rule above. -->
+										<section class="geo-exceptions" data-testid="geo-exceptions-box">
+											<header class="geo-match-group__head">
+												<span class="text-sm font-medium text-primary">
+													{language.current && t('routes.form.geoExceptionsTitle')}
+												</span>
+												<span class="text-xs text-muted">{language.current && t('routes.form.geoExceptionsHelper')}</span>
+											</header>
+											<CountryExceptionsPicker
+												bind:value={formData.countryBlock.exceptions.countries}
+												blocked={formData.countryBlock.countryList}
+											/>
+											<ASNPicker
+												bind:value={formData.countryBlock.exceptions.asns}
+												exclude={formData.countryBlock.asns}
+												label={(language.current && t('routes.form.geoASNExceptionsLabel')) || ''}
+												testid="geo-exception-asns"
+											/>
+										</section>
+									{/if}
+									<div>
+										<label
+											for="route-country-block-status"
+											class="text-sm font-medium text-secondary block mb-1"
+										>
+											{language.current && t('routes.form.countryBlockStatusCodeLabelFull')}
+										</label>
+										<select
+											id="route-country-block-status"
+											bind:value={formData.countryBlock.statusCode}
+											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+										>
+											<option value={0}>{language.current && t('routes.form.countryBlockStatusDefault')}</option>
+											<option value={403}>403 Forbidden</option>
+											<option value={451}>451 Unavailable For Legal Reasons</option>
+											<option value={444}>{language.current && t('routes.form.countryBlockStatusCode444')}</option>
+										</select>
+									</div>
+								{:else}
+									<!-- mode=off — muted hint so the operator
+									     understands what happens when they pick
+									     a mode (rather than seeing an empty
+									     section that looks broken). -->
+									<p
+										class="text-xs text-muted"
+										data-testid="country-block-off-hint"
+									>
+										Aucun gate par pays. Choisissez Allow-list ou Deny-list
+										pour activer.
+									</p>
 								{/if}
 							</div>
-							<div>
-								<label
-									for="hc-method"
-									class="text-sm font-medium text-secondary block mb-1"
+						</details>
+						<!-- path-based-rules Task 9 — route-level IP allow/deny
+						     gate. Sits alongside the country-block section
+						     (both are edge-level traffic gates evaluated
+						     before auth/WAF); IPFilterFields is the shared
+						     Task 7 component, also reused per-path-rule
+						     below. -->
+						<div>
+							<span class="text-sm font-medium text-secondary block mb-1">
+								{language.current && t('routes.ipFilter.sectionLabel')}
+							</span>
+							<IPFilterFields bind:value={formData.ipFilter} />
+						</div>
+					</RouteSection>
+
+					<!-- Health check of the upstream pool. -->
+					<RouteSection name={language.current && t('routes.form.sectionHealthCheck')} summary={summaryHealthCheck} testid="section-health-check">
+						<!-- Step J.3: active health-check sub-form. Gated by the
+						     enabled checkbox. Sub-fields disabled when off; their
+						     state is PRESERVED across the toggle so a user who
+						     flips off-and-on keeps their typed values.
+						     Any interaction marks healthCheckTouched so submit ships
+						     the complete 9-field block (J.2 preserve-or-replace). -->
+						<details
+							class="rounded border border-border-subtle"
+							open={formData.healthCheck.enabled}
+						>
+							<summary
+								class="px-3 py-2 text-sm text-secondary cursor-pointer select-none"
+								onclick={markHealthCheckTouched}
+							>
+								{language.current && t('routes.form.healthCheckActiveSection')}
+								{#if formData.healthCheck.enabled}
+									<span class="ml-1 text-xs text-muted">{language.current && t('routes.form.healthCheckOnSuffix')}</span>
+								{/if}
+							</summary>
+							<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
+								<!-- Capture click on the wrapper so toggling the
+								     checkbox marks the HC block as touched (drives
+								     the J.2 preserve-or-replace decision). Checkbox
+								     does not expose an onchange prop; the wrapper
+								     handler runs whether the user clicks the box or
+								     its label. -->
+								<div onclick={markHealthCheckTouched} onkeydown={markHealthCheckTouched} role="none">
+									<Checkbox
+										label={language.current && t('routes.form.healthCheckEnableLabel')}
+										bind:checked={formData.healthCheck.enabled}
+									/>
+								</div>
+								<div>
+									<label
+										for="hc-uri"
+										class="text-sm font-medium text-secondary block mb-1"
+									>
+										URI <span class="text-down" aria-hidden="true">*</span>
+									</label>
+									<input
+										id="hc-uri"
+										type="text"
+										bind:value={formData.healthCheck.uri}
+										placeholder={language.current && t('routes.form.healthCheckURIPlaceholder')}
+										disabled={!formData.healthCheck.enabled}
+										aria-required="true"
+										oninput={markHealthCheckTouched}
+										class="w-full bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+										class:border-down={!!errors['healthCheck.uri']}
+										class:border-border-default={!errors['healthCheck.uri']}
+									/>
+									{#if errors['healthCheck.uri']}
+										<p class="text-xs text-down mt-1">{errors['healthCheck.uri']}</p>
+									{/if}
+								</div>
+								<div>
+									<label
+										for="hc-method"
+										class="text-sm font-medium text-secondary block mb-1"
+									>
+										Method
+									</label>
+									<select
+										id="hc-method"
+										bind:value={formData.healthCheck.method}
+										disabled={!formData.healthCheck.enabled}
+										onchange={markHealthCheckTouched}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+									>
+										<option value="GET">GET</option>
+										<option value="HEAD">HEAD</option>
+									</select>
+									{#if errors['healthCheck.method']}
+										<p class="text-xs text-down mt-1">{errors['healthCheck.method']}</p>
+									{/if}
+								</div>
+								<div class="grid grid-cols-2 gap-3">
+									<Input
+										label={language.current && t('routes.form.healthCheckIntervalLabel')}
+										bind:value={formData.healthCheck.interval}
+										placeholder={HEALTH_CHECK_DEFAULTS.interval}
+										disabled={!formData.healthCheck.enabled}
+										oninput={markHealthCheckTouched}
+										error={errors['healthCheck.interval'] ?? undefined}
+									/>
+									<Input
+										label={language.current && t('routes.form.healthCheckTimeoutLabel')}
+										bind:value={formData.healthCheck.timeout}
+										placeholder={HEALTH_CHECK_DEFAULTS.timeout}
+										disabled={!formData.healthCheck.enabled}
+										oninput={markHealthCheckTouched}
+										error={errors['healthCheck.timeout'] ?? undefined}
+									/>
+								</div>
+								<div class="grid grid-cols-2 gap-3">
+									<div class="flex flex-col gap-1.5">
+										<label
+											for="hc-passes"
+											class="text-sm font-medium text-secondary">Passes</label
+										>
+										<input
+											id="hc-passes"
+											type="number"
+											min="1"
+											bind:value={formData.healthCheck.passes}
+											placeholder={String(HEALTH_CHECK_DEFAULTS.passes)}
+											disabled={!formData.healthCheck.enabled}
+											oninput={markHealthCheckTouched}
+											class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+											class:border-down={!!errors['healthCheck.passes']}
+											class:border-border-default={!errors['healthCheck.passes']}
+										/>
+										{#if errors['healthCheck.passes']}
+											<p class="text-xs text-down">{errors['healthCheck.passes']}</p>
+										{/if}
+									</div>
+									<div class="flex flex-col gap-1.5">
+										<label
+											for="hc-fails"
+											class="text-sm font-medium text-secondary">Fails</label
+										>
+										<input
+											id="hc-fails"
+											type="number"
+											min="1"
+											bind:value={formData.healthCheck.fails}
+											placeholder={String(HEALTH_CHECK_DEFAULTS.fails)}
+											disabled={!formData.healthCheck.enabled}
+											oninput={markHealthCheckTouched}
+											class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+											class:border-down={!!errors['healthCheck.fails']}
+											class:border-border-default={!errors['healthCheck.fails']}
+										/>
+										{#if errors['healthCheck.fails']}
+											<p class="text-xs text-down">{errors['healthCheck.fails']}</p>
+										{/if}
+									</div>
+								</div>
+								<div class="flex flex-col gap-1.5">
+									<label
+										for="hc-expect-status"
+										class="text-sm font-medium text-secondary">{language.current && t('routes.form.healthCheckExpectStatusLabelHTTP')}</label
+									>
+									<input
+										id="hc-expect-status"
+										type="number"
+										min="0"
+										max="599"
+										bind:value={formData.healthCheck.expectStatus}
+										placeholder={language.current && t('routes.form.healthCheckExpectStatusPlaceholder')}
+										disabled={!formData.healthCheck.enabled}
+										oninput={markHealthCheckTouched}
+										class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
+										class:border-down={!!errors['healthCheck.expectStatus']}
+										class:border-border-default={!errors['healthCheck.expectStatus']}
+									/>
+									{#if errors['healthCheck.expectStatus']}
+										<p class="text-xs text-down">{errors['healthCheck.expectStatus']}</p>
+									{/if}
+								</div>
+								<Input
+									label={language.current && t('routes.form.healthCheckExpectBodyLabel')}
+									bind:value={formData.healthCheck.expectBody}
+									disabled={!formData.healthCheck.enabled}
+									oninput={markHealthCheckTouched}
+									error={errors['healthCheck.expectBody'] ?? undefined}
+								/>
+								<p class="text-xs text-muted">
+									{language.current && t('routes.form.healthCheckHelper')}
+								</p>
+							</div>
+						</details>
+					</RouteSection>
+
+					<!-- Path rules and custom headers. -->
+					<RouteSection name={language.current && t('routes.form.sectionPathsHeaders')} summary={summaryPathsHeaders} testid="section-paths-headers">
+						<!-- path-based-rules Task 9 — collapsed path-scoped
+						     rules editor (Task 8 component): per-prefix basic
+						     auth override + IP filter. -->
+						<PathRulesSection bind:value={formData.pathRules} />
+						<!-- Step I.6: custom request / response headers. -->
+						<details class="rounded border border-border-subtle">
+							<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+								{language.current && t('routes.form.requestHeadersLabel')}
+								{#if requestHeaderRows.length > 0}
+									<span class="ml-1 text-xs text-muted">({requestHeaderRows.length})</span>
+								{/if}
+							</summary>
+							<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
+								{#each requestHeaderRows as _, i (i)}
+									<div class="flex items-center gap-2">
+										<Input bind:value={requestHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
+										<Input bind:value={requestHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
+										<Button
+											variant="ghost"
+											size="sm"
+											onclick={() => removeRequestHeader(i)}
+											type="button">×</Button
+										>
+									</div>
+								{/each}
+								<Button variant="ghost" size="sm" onclick={addRequestHeader} type="button"
+									>{language.current && t('routes.form.requestHeadersAdd')}</Button
 								>
-									Method
-								</label>
+							</div>
+						</details>
+						<details class="rounded border border-border-subtle">
+							<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+								{language.current && t('routes.form.responseHeadersLabel')}
+								{#if responseHeaderRows.length > 0}
+									<span class="ml-1 text-xs text-muted">({responseHeaderRows.length})</span>
+								{/if}
+							</summary>
+							<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
+								{#each responseHeaderRows as _, i (i)}
+									<div class="flex items-center gap-2">
+										<Input bind:value={responseHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
+										<Input bind:value={responseHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
+										<Button
+											variant="ghost"
+											size="sm"
+											onclick={() => removeResponseHeader(i)}
+											type="button">×</Button
+										>
+									</div>
+								{/each}
+								<Button variant="ghost" size="sm" onclick={addResponseHeader} type="button"
+									>{language.current && t('routes.form.responseHeadersAdd')}</Button
+								>
+							</div>
+						</details>
+					</RouteSection>
+
+					<!-- Error pages. -->
+					<RouteSection name={language.current && t('routes.form.sectionErrorPages')} summary={summaryErrorPages} testid="section-error-pages">
+						<!--
+						  Step R Phase 2.b — error pages section.
+						  Sits between Rate Limit and Country Block
+						  to match the operator's mental model :
+						  "what happens when this route returns
+						  something the client shouldn't normally
+						  see". The built-in Arenet branded default
+						  applies AUTOMATICALLY (Phase 1.1 FIX 1)
+						  for every code on every route ; the
+						  template dropdown lets the operator
+						  override the visual branding ; the per-
+						  route overrides sub-form lets the operator
+						  override individual codes (highest
+						  precedence in the 3-layer resolution).
+						-->
+						<div>
+							<label
+								class="text-sm font-medium text-secondary block mb-1"
+								for="route-error-template"
+							>
+								{language.current && t('routes.form.errorPagesSection')}
+							</label>
+							<div class="mt-2 flex items-center gap-2">
 								<select
-									id="hc-method"
-									bind:value={formData.healthCheck.method}
-									disabled={!formData.healthCheck.enabled}
-									onchange={markHealthCheckTouched}
-									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+									id="route-error-template"
+									bind:value={formData.errorPageTemplateId}
+									class="flex-1 bg-surface border border-default rounded text-sm px-2 py-1.5 text-primary"
+									data-testid="error-template-select"
 								>
-									<option value="GET">GET</option>
-									<option value="HEAD">HEAD</option>
+									<option value="">{language.current && t('routes.form.errorPagesTemplateNoneOption')}</option>
+									{#each errorTemplates as t (t.id)}
+										<option value={t.id}>{t.name}</option>
+									{/each}
 								</select>
-								{#if errors['healthCheck.method']}
-									<p class="text-xs text-down mt-1">{errors['healthCheck.method']}</p>
-								{/if}
-							</div>
-							<div class="grid grid-cols-2 gap-3">
-								<Input
-									label={language.current && t('routes.form.healthCheckIntervalLabel')}
-									bind:value={formData.healthCheck.interval}
-									placeholder={HEALTH_CHECK_DEFAULTS.interval}
-									disabled={!formData.healthCheck.enabled}
-									oninput={markHealthCheckTouched}
-									error={errors['healthCheck.interval'] ?? undefined}
-								/>
-								<Input
-									label={language.current && t('routes.form.healthCheckTimeoutLabel')}
-									bind:value={formData.healthCheck.timeout}
-									placeholder={HEALTH_CHECK_DEFAULTS.timeout}
-									disabled={!formData.healthCheck.enabled}
-									oninput={markHealthCheckTouched}
-									error={errors['healthCheck.timeout'] ?? undefined}
-								/>
-							</div>
-							<div class="grid grid-cols-2 gap-3">
-								<div class="flex flex-col gap-1.5">
-									<label
-										for="hc-passes"
-										class="text-sm font-medium text-secondary">Passes</label
-									>
-									<input
-										id="hc-passes"
-										type="number"
-										min="1"
-										bind:value={formData.healthCheck.passes}
-										placeholder={String(HEALTH_CHECK_DEFAULTS.passes)}
-										disabled={!formData.healthCheck.enabled}
-										oninput={markHealthCheckTouched}
-										class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
-										class:border-down={!!errors['healthCheck.passes']}
-										class:border-border-default={!errors['healthCheck.passes']}
-									/>
-									{#if errors['healthCheck.passes']}
-										<p class="text-xs text-down">{errors['healthCheck.passes']}</p>
-									{/if}
-								</div>
-								<div class="flex flex-col gap-1.5">
-									<label
-										for="hc-fails"
-										class="text-sm font-medium text-secondary">Fails</label
-									>
-									<input
-										id="hc-fails"
-										type="number"
-										min="1"
-										bind:value={formData.healthCheck.fails}
-										placeholder={String(HEALTH_CHECK_DEFAULTS.fails)}
-										disabled={!formData.healthCheck.enabled}
-										oninput={markHealthCheckTouched}
-										class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
-										class:border-down={!!errors['healthCheck.fails']}
-										class:border-border-default={!errors['healthCheck.fails']}
-									/>
-									{#if errors['healthCheck.fails']}
-										<p class="text-xs text-down">{errors['healthCheck.fails']}</p>
-									{/if}
-								</div>
-							</div>
-							<div class="flex flex-col gap-1.5">
-								<label
-									for="hc-expect-status"
-									class="text-sm font-medium text-secondary">{language.current && t('routes.form.healthCheckExpectStatusLabelHTTP')}</label
+								<a
+									href="/settings/error-pages"
+									class="text-xs text-cyan whitespace-nowrap"
+									title={language.current && t('routes.form.errorPagesTemplateManageTooltip')}
 								>
-								<input
-									id="hc-expect-status"
-									type="number"
-									min="0"
-									max="599"
-									bind:value={formData.healthCheck.expectStatus}
-									placeholder={language.current && t('routes.form.healthCheckExpectStatusPlaceholder')}
-									disabled={!formData.healthCheck.enabled}
-									oninput={markHealthCheckTouched}
-									class="bg-surface border rounded-md px-3 py-2 text-sm text-primary disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan focus:shadow-glow-cyan transition-shadow"
-									class:border-down={!!errors['healthCheck.expectStatus']}
-									class:border-border-default={!errors['healthCheck.expectStatus']}
-								/>
-								{#if errors['healthCheck.expectStatus']}
-									<p class="text-xs text-down">{errors['healthCheck.expectStatus']}</p>
-								{/if}
+									{language.current && t('routes.form.errorPagesTemplateManageLink')}
+								</a>
 							</div>
-							<Input
-								label={language.current && t('routes.form.healthCheckExpectBodyLabel')}
-								bind:value={formData.healthCheck.expectBody}
-								disabled={!formData.healthCheck.enabled}
-								oninput={markHealthCheckTouched}
-								error={errors['healthCheck.expectBody'] ?? undefined}
+							<p class="text-xs text-muted mt-1">
+								{language.current && t('routes.form.errorPagesTemplateHelper')}
+							</p>
+
+							<!-- Per-route overrides : highest precedence
+							     in the 3-layer resolution (override →
+							     template → default). Collapsed by default ;
+							     auto-expanded when the loaded route has
+							     overrides. -->
+							<details
+								class="mt-3"
+								bind:open={errorOverridesExpanded}
+								data-testid="error-overrides-details"
+							>
+								<summary class="text-xs text-secondary cursor-pointer">
+									{language.current && t('routes.form.errorPagesOverrideSection')}
+								</summary>
+								<div class="mt-2 grid gap-2">
+									{#each SUPPORTED_ERROR_STATUS_CODES as code (code)}
+										<div>
+											<label
+												for="route-err-override-{code}"
+												class="text-xs font-medium text-secondary block mb-1"
+											>
+												HTTP {code}
+											</label>
+											<textarea
+												id="route-err-override-{code}"
+												rows="2"
+												placeholder={language.current && t('routes.form.errorPagesOverridePlaceholder', { code })}
+												value={formData.errorPageOverrides[code] ?? ''}
+												oninput={(e) => {
+													const v = (e.target as HTMLTextAreaElement).value;
+													if (v) {
+														formData.errorPageOverrides = {
+															...formData.errorPageOverrides,
+															[code]: v
+														};
+													} else {
+														const next = { ...formData.errorPageOverrides };
+														delete next[code];
+														formData.errorPageOverrides = next;
+													}
+												}}
+												class="w-full bg-surface border border-default rounded text-xs px-2 py-1 font-mono text-primary"
+												data-testid="error-override-{code}"
+											></textarea>
+										</div>
+									{/each}
+									<p class="text-xs text-muted">
+										{language.current && t('routes.form.errorPagesOverrideHelper')}
+									</p>
+								</div>
+							</details>
+						</div>
+					</RouteSection>
+
+					<!-- Route state: disabled and maintenance. -->
+					<RouteSection name={language.current && t('routes.form.sectionState')} summary={summaryState} badge={stateBadge.badge} posture={stateBadge.posture} testid="section-state">
+						<!-- v2.14.3 — Disabled checkbox. Default unchecked
+						     (enabled) for new routes; loads the persisted
+						     value on edit (openEdit). A disabled route
+						     keeps its config but is excluded from the
+						     emitted Caddy config (serves no traffic). This
+						     is the same underlying flag as the row-level
+						     toggle action in the table — the PUT here
+						     ships it full-replacement alongside the rest
+						     of the form. -->
+						<div class="flex flex-col gap-1">
+							<Checkbox
+								label={language.current && t('routes.form.disabledLabel')}
+								bind:checked={formData.disabled}
 							/>
-							<p class="text-xs text-muted">
-								{language.current && t('routes.form.healthCheckHelper')}
+							<p class="text-xs text-muted ml-6">
+								{language.current && t('routes.form.disabledHelper')}
 							</p>
 						</div>
-					</details>
-			
-					<!-- Step I.6: custom request / response headers. -->
-					<details class="rounded border border-border-subtle">
-						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-							{language.current && t('routes.form.requestHeadersLabel')}
-							{#if requestHeaderRows.length > 0}
-								<span class="ml-1 text-xs text-muted">({requestHeaderRows.length})</span>
-							{/if}
-						</summary>
-						<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
-							{#each requestHeaderRows as _, i (i)}
+						<!-- Task 9 — Maintenance section. Shown always (not
+						     gated behind the route's current state) so an
+						     operator can pre-configure retryAfter / bypass
+						     IPs before switching the row's 3-state control
+						     to "Maintenance", and can still tune them while
+						     already in maintenance. The section itself
+						     doesn't turn maintenance on/off — that's the
+						     RouteStateControl's job via the dedicated
+						     enterMaintenance/exitMaintenance endpoints; this
+						     is config-only, shipped full-replacement on every
+						     submit (see payload.maintenanceConfig above). -->
+						<div class="flex flex-col gap-2 p-3 rounded-md border border-border-subtle">
+							<span class="text-sm font-medium text-secondary">
+								{language.current && t('routes.form.maintenance.sectionTitle')}
+							</span>
+							<!-- v2.18.0 — friendly Retry-After: number + unit
+							     selector. The wire value (retryAfterSeconds,
+							     recomputed via syncRetryAfterSeconds) stays in
+							     seconds; the operator picks e.g. "5 minutes"
+							     instead of typing "300". -->
+							<div class="flex flex-col gap-1">
+								<span class="text-sm text-secondary">
+									{language.current && t('routes.form.maintenance.retryAfter')}
+								</span>
 								<div class="flex items-center gap-2">
-									<Input bind:value={requestHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
-									<Input bind:value={requestHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
-									<Button
-										variant="ghost"
-										size="sm"
-										onclick={() => removeRequestHeader(i)}
-										type="button">×</Button
+									<div class="w-28">
+										<Input
+											type="number"
+											min="0"
+											value={String(retryValue)}
+											aria-label={language.current &&
+												t('routes.form.maintenance.retryAfterValueAria')}
+											oninput={(e: Event) => {
+												const raw = (e.target as HTMLInputElement).value;
+												const n = parseInt(raw, 10);
+												retryValue = Number.isNaN(n) || n < 0 ? 0 : n;
+												syncRetryAfterSeconds();
+											}}
+										/>
+									</div>
+									<select
+										class="h-9 rounded-md border border-border-subtle bg-surface px-2 text-sm text-primary"
+										aria-label={language.current &&
+											t('routes.form.maintenance.retryAfterUnitAria')}
+										bind:value={retryUnit}
+										onchange={syncRetryAfterSeconds}
+									>
+										{#each RETRY_UNITS as u (u)}
+											<option value={u}>{language.current && t(`routes.form.maintenance.unit.${u}`)}</option>
+										{/each}
+									</select>
+								</div>
+								<span class="text-xs text-muted">
+									{language.current &&
+										t('routes.form.maintenance.retryAfterHelp', {
+											seconds: String(formData.maintenanceConfig.retryAfterSeconds)
+										})}
+								</span>
+							</div>
+							<!-- v2.18.1 — per-route maintenance message. Empty → the
+							     global message (Settings → Error Pages → Maintenance)
+							     is used instead. -->
+							<div class="flex flex-col gap-1">
+								<span class="text-sm text-secondary">
+									{language.current && t('routes.form.maintenance.message')}
+								</span>
+								<textarea
+									class="w-full box-border resize-y rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-primary"
+									rows="2"
+									bind:value={formData.maintenanceConfig.message}
+									placeholder={t('routes.form.maintenance.messagePlaceholder')}
+									aria-label={language.current && t('routes.form.maintenance.message')}
+								></textarea>
+								<span class="text-xs text-muted">
+									{language.current && t('routes.form.maintenance.messageHelp')}
+								</span>
+							</div>
+							<div class="flex flex-col gap-2">
+								<div class="flex items-center justify-between">
+									<span class="text-sm text-secondary">
+										{language.current && t('routes.form.maintenance.bypassIps')}
+									</span>
+									<Button variant="ghost" size="sm" onclick={addBypassIp} type="button"
+										>{language.current && t('routes.form.maintenance.bypassIpsAdd')}</Button
 									>
 								</div>
-							{/each}
-							<Button variant="ghost" size="sm" onclick={addRequestHeader} type="button"
-								>{language.current && t('routes.form.requestHeadersAdd')}</Button
-							>
-						</div>
-					</details>
-					<details class="rounded border border-border-subtle">
-						<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-							{language.current && t('routes.form.responseHeadersLabel')}
-							{#if responseHeaderRows.length > 0}
-								<span class="ml-1 text-xs text-muted">({responseHeaderRows.length})</span>
-							{/if}
-						</summary>
-						<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
-							{#each responseHeaderRows as _, i (i)}
-								<div class="flex items-center gap-2">
-									<Input bind:value={responseHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
-									<Input bind:value={responseHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
-									<Button
-										variant="ghost"
-										size="sm"
-										onclick={() => removeResponseHeader(i)}
-										type="button">×</Button
-									>
+								<div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2" data-testid="maintenance-bypass-ip-grid">
+									{#each formData.maintenanceConfig.bypassIps as _, i (i)}
+										<div class="flex items-center gap-2">
+											<div class="flex-1">
+												<Input
+													bind:value={formData.maintenanceConfig.bypassIps[i]}
+													placeholder="10.0.0.5 or 192.168.1.0/24"
+												/>
+											</div>
+											<Button variant="ghost" size="sm" onclick={() => removeBypassIp(i)} type="button">×</Button>
+										</div>
+									{/each}
 								</div>
-							{/each}
-							<Button variant="ghost" size="sm" onclick={addResponseHeader} type="button"
-								>{language.current && t('routes.form.responseHeadersAdd')}</Button
-							>
+							</div>
 						</div>
-					</details>
+					</RouteSection>
+
 					<button type="submit" class="hidden" aria-hidden="true"></button>
 				</form>
 
