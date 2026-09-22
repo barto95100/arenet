@@ -354,6 +354,9 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Post("/routes/{id}/disable", h.disableRoute)
 				r.Post("/routes/{id}/enable", h.enableRoute)
 				r.Post("/routes/{id}/waf-exclusions", h.addWAFExclusion)
+				// v2.40 — Caddyfile import (preview writes nothing).
+				r.Post("/routes/import/caddyfile/preview", h.previewCaddyfileImport)
+				r.Post("/routes/import/caddyfile", h.importCaddyfile)
 				r.Post("/routes/{id}/waf-test", h.testRouteWAF)
 				r.Post("/waf/seclang/validate", h.validateSecLang)
 				r.Post("/waf/seclang/from-guided", h.secLangFromGuided)

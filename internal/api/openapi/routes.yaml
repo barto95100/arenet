@@ -363,6 +363,72 @@ paths:
   # ------------------------------------------------------------------
   # WAF
   # ------------------------------------------------------------------
+  /routes/import/caddyfile/preview:
+    post:
+      summary: Preview a Caddyfile import
+      operationId: previewCaddyfileImport
+      tags: [Routes]
+      x-arenet-role: admin
+      description: |
+        Parses a Caddyfile with Caddy's own parser and returns one candidate
+        per site block: the route Arenet would create, whether it can be
+        imported, whether a route already serves that host (`conflict`), and
+        every directive that could not be translated with its line.
+
+        Writes nothing. Limits: 64 KiB, 200 site blocks. A Caddyfile Caddy
+        itself rejects returns 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoutesCaddyfileRequest' }
+            example:
+              caddyfile: |
+                app.example.com {
+                  reverse_proxy 10.0.0.10:8080
+                }
+      responses:
+        '200':
+          description: Parsed candidates.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesCaddyfilePreview' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /routes/import/caddyfile:
+    post:
+      summary: Import routes from a Caddyfile
+      operationId: importCaddyfile
+      tags: [Routes]
+      x-arenet-role: admin
+      description: |
+        Re-parses the Caddyfile and creates the routes listed in `hosts`
+        (use the `host` of a preview candidate). A host already served by a
+        route is skipped unless it is also listed in `replace`, which
+        overwrites that route — its Arenet-only settings (WAF, geo, rate
+        limit) are lost.
+
+        Imported routes start with `wafMode: detect`. Caddy is reloaded once
+        at the end; if it refuses the result, every created route is deleted,
+        every replaced one restored, and the call returns 500. Each created or
+        replaced route is audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoutesCaddyfileImportRequest' }
+      responses:
+        '200':
+          description: What was imported; `skipped` says why a host was left out.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesCaddyfileImportResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
   /routes/{id}/waf-exclusions:
     parameters:
       - $ref: '#/components/parameters/RoutesRouteId'
@@ -1052,6 +1118,71 @@ components:
       schema: { type: string }
 
   schemas:
+    RoutesCaddyfileRequest:
+      type: object
+      required: [caddyfile]
+      properties:
+        caddyfile: { type: string, description: The Caddyfile text (64 KiB max). }
+    RoutesCaddyfileImportRequest:
+      type: object
+      required: [caddyfile, hosts]
+      properties:
+        caddyfile: { type: string }
+        hosts:
+          type: array
+          items: { type: string }
+          description: Hosts to import, as returned by the preview.
+        replace:
+          type: array
+          items: { type: string }
+          description: Subset of `hosts` whose existing route may be overwritten.
+    RoutesCaddyfileWarning:
+      type: object
+      properties:
+        line: { type: integer, description: 'Caddyfile line (0 for a whole-file remark).' }
+        text: { type: string }
+    RoutesCaddyfileCandidate:
+      type: object
+      properties:
+        host: { type: string }
+        aliases: { type: array, items: { type: string } }
+        importable: { type: boolean, description: False when the block has nothing to proxy. }
+        reason: { type: string, description: Why it cannot be imported. }
+        conflict: { type: boolean, description: A route already serves this host or one of its aliases. }
+        warnings: { type: array, items: { $ref: '#/components/schemas/RoutesCaddyfileWarning' } }
+        route:
+          type: object
+          description: The route Arenet would create (subset of the route shape).
+          properties:
+            host: { type: string }
+            aliases: { type: array, items: { type: string } }
+            upstreams: { type: array, items: { $ref: '#/components/schemas/RoutesUpstream' } }
+            lbPolicy: { type: string }
+            tlsEnabled: { type: boolean }
+            acmeChallenge: { type: string }
+            insecureSkipVerify: { type: boolean }
+            requestHeaders: { type: object, additionalProperties: { type: string } }
+            responseHeaders: { type: object, additionalProperties: { type: string } }
+            healthCheck: { $ref: '#/components/schemas/RoutesHealthCheck' }
+            pathRules: { type: array, items: { $ref: '#/components/schemas/RoutesPathRule' } }
+    RoutesCaddyfilePreview:
+      type: object
+      properties:
+        globalWarnings: { type: array, items: { $ref: '#/components/schemas/RoutesCaddyfileWarning' } }
+        candidates: { type: array, items: { $ref: '#/components/schemas/RoutesCaddyfileCandidate' } }
+    RoutesCaddyfileImportResult:
+      type: object
+      properties:
+        created: { type: array, items: { type: string } }
+        replaced: { type: array, items: { type: string } }
+        warnings: { type: array, items: { $ref: '#/components/schemas/RoutesCaddyfileWarning' } }
+        skipped:
+          type: array
+          items:
+            type: object
+            properties:
+              host: { type: string }
+              reason: { type: string }
     # ---------------- Route building blocks ----------------
     RoutesUpstream:
       type: object
