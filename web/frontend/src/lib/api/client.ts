@@ -250,6 +250,28 @@ export const exitMaintenance = (id: string): Promise<Route> =>
 export const addWafExclusion = (id: string, body: AddWafExclusionRequest): Promise<Route> =>
 	request('POST', `/routes/${id}/waf-exclusions`, body);
 
+// v2.39 — OpenAPI document of this API, and the raw call used by the
+// API docs "Try it" (status + body as returned, errors included, the
+// session cookie is sent like any UI call).
+export const getOpenAPI = (): Promise<Record<string, unknown>> => request('GET', '/openapi.json');
+
+/** Raw response of a "Try it" call. */
+export interface RawResponse {
+	status: number;
+	body: string;
+	contentType: string;
+}
+
+export async function rawRequest(method: string, fullPath: string, body?: string): Promise<RawResponse> {
+	const init: RequestInit = { method: method.toUpperCase(), credentials: 'include' };
+	if (body !== undefined && body.trim() !== '') {
+		init.headers = { 'Content-Type': 'application/json' };
+		init.body = body;
+	}
+	const res = await fetch(`${BASE}${fullPath}`, init);
+	return { status: res.status, body: await res.text(), contentType: res.headers.get('Content-Type') ?? '' };
+}
+
 // v2.38 — per-route SecLang: live check (+ next free rule ID), guided
 // rule → SecLang, and the WAF tester (sample request, no traffic).
 export const validateSecLang = (seclang: string): Promise<SecLangValidateResponse> =>

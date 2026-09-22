@@ -71,7 +71,8 @@
 		"navUsers": "Users",
 		"navSettings": "Settings",
 		"navErrorPages": "Error pages",
-		"navAuditLog": "Audit log"
+		"navAuditLog": "Audit log",
+		"navApiDocs": "API docs"
 	},
 	"topbar": {
 		"statusAriaLabel": "Gateway status",
@@ -586,6 +587,7 @@
 		}
 	},
 	"pageTitles": {
+		"apiDocs": "API documentation",
 		"alerting": "Alerting",
 		"alertingSubtitle": "Notification channels, rules, delivery history",
 		"audit": "Audit log",
@@ -1503,6 +1505,33 @@
 		"toastSubmitFailed": "Failed: {err}",
 		"toastTokenCopied": "Token copied to clipboard",
 		"toastCopyFailed": "Copy failed — select the text manually"
+	},
+	"apiDocs": {
+		"operations": "operations",
+		"navLabel": "API operations",
+		"search": "Search (path, method, summary)",
+		"download": "Download openapi.json",
+		"noMatch": "No operation matches.",
+		"roleTitle": "Minimum role",
+		"roles": {
+			"public": "public",
+			"viewer": "viewer",
+			"admin": "admin"
+		},
+		"parameters": "Parameters",
+		"requestBody": "Request body",
+		"responses": "Responses",
+		"example": "Example",
+		"required": "required",
+		"readOnly": "read-only",
+		"writeOnly": "write-only",
+		"oneOf": "One of:",
+		"tryIt": "Try it",
+		"body": "JSON body",
+		"send": "Send",
+		"confirmSend": "Yes, send it",
+		"cancel": "Cancel",
+		"confirmMutating": "This request changes the real configuration of this Arenet (same effect as from the UI). Send it?"
 	},
 	"wafSecLang": {
 		"title": "SecLang (advanced)",
