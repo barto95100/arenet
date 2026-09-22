@@ -33,9 +33,11 @@
 		value: WafCustomRule[];
 		/** Route WAF mode; rules do nothing when "off". */
 		wafMode?: string;
+		/** v2.38 — "→ SecLang": convert rule `index` (parent handles it). */
+		onConvert?: (index: number) => void;
 	}
 
-	let { value = $bindable(), wafMode = 'detect' }: Props = $props();
+	let { value = $bindable(), wafMode = 'detect', onConvert }: Props = $props();
 
 	// Editor state: index of the rule being edited (-1 = new rule),
 	// the draft, and one textarea string per condition.
@@ -166,6 +168,15 @@
 							aria-label={language.current && t('wafRules.editAria', { name: rule.name })}
 							data-testid="waf-rule-edit">{language.current && t('wafRules.edit')}</button
 						>
+						{#if onConvert}
+							<button
+								type="button"
+								class="btn"
+								onclick={() => onConvert(i)}
+								aria-label={language.current && t('wafSecLang.convertAria', { name: rule.name })}
+								data-testid="waf-rule-convert">{language.current && t('wafSecLang.convert')}</button
+							>
+						{/if}
 						<button
 							type="button"
 							class="btn danger"

@@ -1504,6 +1504,46 @@
 		"toastTokenCopied": "Token copied to clipboard",
 		"toastCopyFailed": "Copy failed — select the text manually"
 	},
+	"wafSecLang": {
+		"title": "SecLang (advanced)",
+		"hint": "Write your own Coraza rules for this route. For safety only SecRule, SecAction and SecMarker are accepted, with rule IDs 130000–139999, and nothing that reads files, runs programs or turns the WAF off. Rules run before the OWASP CRS and follow the route's WAF mode. Saved with the route.",
+		"editorLabel": "SecLang editor",
+		"templateLabel": "Template",
+		"insert": "Insert",
+		"templates": {
+			"jsonOnly": "JSON-only API",
+			"allowedMethods": "Allowed methods",
+			"adminFromLan": "/admin from the LAN only",
+			"requireApiKey": "Require an API key header",
+			"badBots": "Block bots by User-Agent",
+			"argLength": "Limit parameter length",
+			"fieldException": "Exception for one field (false positive)"
+		},
+		"checking": "Checking…",
+		"valid": "✓ Valid SecLang",
+		"problems": "{count} problem(s) — fix them before saving",
+		"line": "Line {line}:",
+		"convert": "→ SecLang",
+		"convertAria": "Convert rule {name} to SecLang",
+		"convertFailed": "Could not convert the rule: {error}",
+		"saveRefused": "The SecLang was refused — see the problems under the editor.",
+		"tester": {
+			"title": "Test a request",
+			"saveFirst": "Save the route first to test requests against it.",
+			"method": "Method",
+			"path": "Path (with query string)",
+			"headers": "Headers — one \"Name: value\" per line",
+			"body": "Body (optional)",
+			"run": "Test",
+			"blocked": "Blocked ({status}) by rule {rule} {msg}",
+			"accepted": "Accepted — no rule blocks this request",
+			"noMatch": "No rule matched.",
+			"mode": {
+				"detect": "The route is in Detect mode: the request would only be logged.",
+				"off": "The WAF is off on this route: nothing would happen."
+			}
+		}
+	},
 	"wafRules": {
 		"title": "Custom rules",
 		"hint": "Block requests that match your own criteria (path, method, User-Agent, header). A rule follows the route's WAF mode: blocked (403) in Block mode, only logged in Detect mode. Saved with the route.",
