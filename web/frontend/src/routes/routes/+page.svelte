@@ -69,6 +69,7 @@
 	import WafTargetedExclusionsEditor from '$lib/components/routes/WafTargetedExclusionsEditor.svelte';
 	import WafCustomRulesEditor from '$lib/components/routes/WafCustomRulesEditor.svelte';
 	import WafSecLangSection from '$lib/components/routes/WafSecLangSection.svelte';
+	import ImportCaddyfileModal from '$lib/components/routes/ImportCaddyfileModal.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -86,6 +87,9 @@
 	let formOpen = $state(false);
 	let formMode = $state<FormMode>('create');
 	let editingId = $state<string | null>(null);
+	// v2.40 — Caddyfile import modal.
+	let importOpen = $state(false);
+
 	// v2.38 — SecLang problems returned by a refused save.
 	let secLangSaveErrors = $state<SecLangError[]>([]);
 
@@ -2590,12 +2594,20 @@
 	subtitle={language.current && t('routes.pageSubtitle')}
 >
 	{#snippet actions()}
-		<Button variant="ghost" disabled title={language.current && t('routes.importCaddyfileTooltip')}
+		<!-- v2.40 — the button is finally wired (it was a disabled
+		     placeholder since the first versions). -->
+		<Button variant="ghost" onclick={() => (importOpen = true)} data-testid="import-caddyfile-open"
 			>{language.current && t('routes.importCaddyfile')}</Button
 		>
 		<Button onclick={openCreate}>{language.current && t('routes.addButton')}</Button>
 	{/snippet}
 </PageHeader>
+
+<ImportCaddyfileModal
+	open={importOpen}
+	onClose={() => (importOpen = false)}
+	onImported={() => void loadRoutes()}
+/>
 
 <!-- Step J.4 (β) bandeau: at least one persisted route uses
      DNS-01 ACME but the OVH DNS provider is not configured (or is

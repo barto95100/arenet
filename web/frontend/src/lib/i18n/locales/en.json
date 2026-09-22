@@ -241,7 +241,6 @@
 		"pageSubtitle": "Manage reverse proxy routes — hosts, upstreams, TLS, WAF, authentication.",
 		"addButton": "+ Add route",
 		"importCaddyfile": "Import Caddyfile",
-		"importCaddyfileTooltip": "Phase 2 — Caddyfile import not yet wired",
 		"loadingLabel": "Loading routes…",
 		"loadFailed": "Failed to load routes: {err}",
 		"emptyState": "No routes configured yet.",
@@ -1572,6 +1571,23 @@
 				"off": "The WAF is off on this route: nothing would happen."
 			}
 		}
+	},
+	"importCaddyfile": {
+		"title": "Import a Caddyfile",
+		"hint": "Paste your Caddyfile (or drop the file). Arenet reads it with Caddy's own parser, shows what it would create, and writes nothing until you confirm.",
+		"placeholder": "app.example.com {\n\treverse_proxy 10.0.0.10:8080\n}",
+		"file": "Choose a file",
+		"analyse": "Analyse",
+		"back": "Back",
+		"cancel": "Cancel",
+		"import": "Import {count} route(s)",
+		"conflict": "already exists",
+		"replace": "replace the existing route (its WAF, geo and rate-limit settings are lost)",
+		"warnings": "{count} thing(s) not imported",
+		"line": "line {line}:",
+		"pathRules": "{count} path rule(s)",
+		"toastDone": "{count} route(s) imported.",
+		"toastSkipped": "Left out: {list}"
 	},
 	"wafRules": {
 		"title": "Custom rules",

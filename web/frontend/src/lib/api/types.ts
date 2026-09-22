@@ -2010,6 +2010,52 @@ export interface WafTargetedExclusion {
 	pathPrefix?: boolean;
 }
 
+/** v2.40 — one thing the Caddyfile import could not translate. */
+export interface CaddyfileWarning {
+	line: number;
+	text: string;
+}
+
+/** v2.40 — the route the import would create (subset of Route). */
+export interface CaddyfileRoute {
+	host: string;
+	aliases: string[];
+	upstreams: Upstream[];
+	lbPolicy: string;
+	tlsEnabled: boolean;
+	acmeChallenge: string;
+	insecureSkipVerify: boolean;
+	requestHeaders?: Record<string, string>;
+	responseHeaders?: Record<string, string>;
+	healthCheck?: HealthCheck;
+	pathRules?: PathRule[];
+}
+
+/** v2.40 — one site block of the previewed Caddyfile. */
+export interface CaddyfileCandidate {
+	host: string;
+	aliases: string[];
+	route?: CaddyfileRoute;
+	importable: boolean;
+	reason?: string;
+	conflict: boolean;
+	warnings: CaddyfileWarning[];
+}
+
+/** v2.40 — POST /routes/import/caddyfile/preview response. */
+export interface CaddyfilePreview {
+	globalWarnings: CaddyfileWarning[];
+	candidates: CaddyfileCandidate[];
+}
+
+/** v2.40 — POST /routes/import/caddyfile response. */
+export interface CaddyfileImportResult {
+	created: string[];
+	replaced: string[];
+	skipped: { host: string; reason: string }[];
+	warnings: CaddyfileWarning[];
+}
+
 /** v2.38 — one SecLang problem, 1-based line. */
 export interface SecLangError {
 	line: number;

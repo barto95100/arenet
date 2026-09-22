@@ -21,6 +21,8 @@
 import type {
 	Route,
 	AddWafExclusionRequest,
+	CaddyfileImportResult,
+	CaddyfilePreview,
 	SecLangValidateResponse,
 	WafCustomRule,
 	WafTestRequest,
@@ -249,6 +251,18 @@ export const exitMaintenance = (id: string): Promise<Route> =>
 // excluded on the whole route. 409 = already present.
 export const addWafExclusion = (id: string, body: AddWafExclusionRequest): Promise<Route> =>
 	request('POST', `/routes/${id}/waf-exclusions`, body);
+
+// v2.40 — Caddyfile import: the preview writes nothing; the import
+// creates the hosts listed (replace = those whose existing route may be
+// overwritten).
+export const previewCaddyfileImport = (caddyfile: string): Promise<CaddyfilePreview> =>
+	request('POST', '/routes/import/caddyfile/preview', { caddyfile });
+export const importCaddyfile = (
+	caddyfile: string,
+	hosts: string[],
+	replace: string[]
+): Promise<CaddyfileImportResult> =>
+	request('POST', '/routes/import/caddyfile', { caddyfile, hosts, replace });
 
 // v2.39 — OpenAPI document of this API, and the raw call used by the
 // API docs "Try it" (status + body as returned, errors included, the

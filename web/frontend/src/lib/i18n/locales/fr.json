@@ -241,7 +241,6 @@
 		"pageSubtitle": "Gère les routes du reverse-proxy — hôtes, upstreams, TLS, WAF, authentification.",
 		"addButton": "+ Ajouter une route",
 		"importCaddyfile": "Importer un Caddyfile",
-		"importCaddyfileTooltip": "Phase 2 — l'import de Caddyfile n'est pas encore branché",
 		"loadingLabel": "Chargement des routes…",
 		"loadFailed": "Échec du chargement des routes : {err}",
 		"emptyState": "Aucune route configurée pour le moment.",
@@ -1572,6 +1571,23 @@
 				"off": "Le WAF est désactivé sur cette route : il ne se passerait rien."
 			}
 		}
+	},
+	"importCaddyfile": {
+		"title": "Importer un Caddyfile",
+		"hint": "Colle ton Caddyfile (ou dépose le fichier). Arenet le lit avec le parseur de Caddy, montre ce qu'il créerait, et n'écrit rien tant que tu n'as pas confirmé.",
+		"placeholder": "app.example.com {\n\treverse_proxy 10.0.0.10:8080\n}",
+		"file": "Choisir un fichier",
+		"analyse": "Analyser",
+		"back": "Retour",
+		"cancel": "Annuler",
+		"import": "Importer {count} route(s)",
+		"conflict": "déjà présente",
+		"replace": "remplacer la route existante (ses réglages WAF, géo et limites sont perdus)",
+		"warnings": "{count} élément(s) non importé(s)",
+		"line": "ligne {line} :",
+		"pathRules": "{count} règle(s) par chemin",
+		"toastDone": "{count} route(s) importée(s).",
+		"toastSkipped": "Laissées de côté : {list}"
 	},
 	"wafRules": {
 		"title": "Règles personnalisées",
