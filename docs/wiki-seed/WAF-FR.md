@@ -45,14 +45,35 @@ Chaque match émet une ligne dans la table SQLite `waf_event` avec :
 - `payload_sample` — premiers 256 chars de la data qui a matché
 - `action` — `BLOCK` (block mode + score ≥ threshold) ou `DETECT` (detect mode OU block mode + score < threshold)
 - `status_code` — `403` pour blocked, `200` pour detect/observed
+- `matched_var` (v2.36+) — le champ qui a déclenché la règle, sous la forme `VARIABLE:nom` (ex. `ARGS:content`, `REQUEST_HEADERS:referer`). Vide pour les événements enregistrés avant la v2.36 et pour les règles qui regardent l'URL elle-même.
 
-La page `/security` rend ces événements avec filtre par route + catégorie + niveau. Le drilldown `/security/<routeId>` ajoute les liens de doc des règles CRS + une affordance "Exclude this rule on this route" pour le triage de faux positifs.
+La page **Journaux** et le détail `/security/<routeId>` listent ces événements. Pour les admins, chaque événement excluable a un bouton **Exclure…** (voir [Exclusion ciblée](#option-0--exclusion-ciblée-depuis-un-événement-recommandé) plus bas).
+
+Les répétitions d'un même trio route + IP source + règle dans les 60 s ne sont enregistrées qu'une fois (les compteurs du tableau de bord comptent quand même chaque requête).
 
 ---
 
 ## Gérer les faux positifs
 
-Quand le WAF bloque une requête légitime (un faux positif connu), tu as **trois portes de sortie** à appliquer par route, par scope croissant :
+Quand le WAF bloque une requête légitime (un faux positif connu), tu as **quatre portes de sortie** à appliquer par route, de la plus étroite à la plus large :
+
+### Option (0) — Exclusion ciblée depuis un événement (recommandé)
+
+À utiliser quand : une règle se déclenche sur un champ légitime précis — le paramètre `content` d'un éditeur de texte qui déclenche la règle SQLi `942100`, un en-tête `Referer` long qui déclenche une règle XSS…
+
+1. Ouvre **Journaux** (ou la page **Sécurité** de la route) et repère l'événement.
+2. Clique sur **Exclure…**. La fenêtre dit en clair ce qui va se passer : *« La règle 942100 n'inspectera plus le paramètre « content ». Elle continue de protéger tous les autres champs de la route. »*
+3. **Seulement sur ce chemin** est coché par défaut, avec le chemin de l'événement (ex. `/api/save`). Modifie-le si besoin, coche **et tout ce qui est en dessous** pour toute une arborescence (`/api` couvre `/api` et `/api/…`, pas `/apix`), ou décoche pour couvrir tous les chemins de la route.
+4. **Exclure**. Caddy recharge ; la même requête passe, alors que la même charge dans un autre champ, ou sur un autre chemin, reste inspectée.
+
+C'est la méthode recommandée par OWASP : la règle reste active, seul ce champ est ignoré (`ctl:ruleRemoveTargetById`).
+
+À savoir :
+
+- Quand l'événement n'indique pas le champ (événements enregistrés avant la v2.36, ou règle qui inspecte l'URL elle-même), la fenêtre te prévient et exclut la règle sur **toute la route** (comme l'option (c)).
+- Les règles d'évaluation du blocage du CRS (`949xxx`, `959xxx`), d'initialisation (`901xxx`) et de corrélation (`980xxx`) n'ont pas de bouton : les exclure désactiverait le blocage lui-même. Exclus plutôt la règle listée à côté (ex. `942100`). Les règles propres à Arenet (`1xxxxx`) n'en ont pas non plus.
+- La section **WAF** du formulaire de route liste les exclusions ciblées (**Exclusions ciblées**), une ligne lisible chacune, avec **Supprimer** et un petit formulaire pour en ajouter une à la main (ID de règle, type de champ, nom du champ, chemin optionnel).
+- Réservé aux admins. Chaque ajout est inscrit au journal d'audit comme une modification de route.
 
 ### Option (a) — Désactiver CRS entièrement sur la route
 
@@ -66,7 +87,7 @@ Le handler WAF reste dans la chain (le dashboard compte toujours les événement
 
 ### Option (c) — Exclure des IDs de règles CRS spécifiques
 
-À utiliser quand : une règle précise (ex. `942100` SQLi libinjection) fire sur un payload légitime.
+À utiliser quand : une règle précise (ex. `942100` SQLi libinjection) fire sur un payload légitime dans beaucoup de champs différents — sinon préfère l'option (0).
 
 1. Édite la route → **WAF exclusions** → **Excluded rule IDs**
 2. Liste séparée par virgules : `942100, 920170, 911100`
