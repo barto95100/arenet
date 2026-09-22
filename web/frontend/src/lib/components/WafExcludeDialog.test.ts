@@ -29,7 +29,7 @@ function makeEvent(overrides: Partial<WafEvent> = {}): WafEvent {
 		ts: new Date().toISOString(),
 		routeId: 'route-1',
 		ruleId: '942100',
-		category: 'SQLI',
+		category: 'SQLi',
 		severity: 2,
 		srcIp: '203.0.113.9',
 		requestMethod: '',
