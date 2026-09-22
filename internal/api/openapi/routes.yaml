@@ -1,0 +1,1742 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# OpenAPI fragment: routes (CRUD, enable/disable, maintenance, upstream
+# probe), per-route WAF (exclusions, SecLang, tester), certificates
+# (ACME tracker + uploaded / CSR external certificates), error-page
+# templates, managed domains, the global maintenance page and the
+# post-apply route-check setting.
+paths:
+  # ------------------------------------------------------------------
+  # Routes
+  # ------------------------------------------------------------------
+  /routes:
+    get:
+      summary: List routes
+      description: |
+        Every configured route, with the derived `effectiveCertSource` and
+        the health-check rollup (`aggregateStatus`, `healthyUpstreamCount`,
+        `totalUpstreamCount`). Secrets are redacted (`basicAuth.passwordSet`,
+        path-rule passwords blanked). No pagination.
+      tags: [Routes]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: All routes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RoutesRoute' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Create a route
+      description: |
+        Creates a route and reloads Caddy. If Caddy refuses the new
+        configuration the route is deleted again and a 500
+        (`caddy reload failed: ...`) is returned.
+
+        Defaults applied on create: `lbPolicy` → `round_robin`,
+        `authMode` → `none`, `wafMode` → `detect`, `acmeChallenge` →
+        `http-01` (rewritten to `inherited` when a managed domain covers the
+        host and `useDedicatedCert` is false), upstream `weight` 0 → 1,
+        health-check defaults (GET, 30s, 5s, 1, 1). `redirectToHttps` is
+        forced to false when `tlsEnabled` is false; `insecureSkipVerify` is
+        forced to false on an http-only pool.
+
+        Unknown JSON fields are rejected (400).
+
+        After the apply, the route is probed through the local Caddy
+        listener and the result is returned in `check` (report only — a
+        creation is never undone because of the probe).
+
+        Errors: 400 for any validation failure (message names the field);
+        a refused `wafSecLang` returns `code: seclang_invalid` with
+        `params.errors: [{line, message}]`; a manual certificate problem
+        returns a message prefixed with `cert_id_required`, `cert_not_found`,
+        `cert_not_ready` or `host_not_covered_by_cert`. 409 when a hostname
+        (host or alias) is already configured on another route.
+      tags: [Routes]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoutesRouteRequest' }
+            examples:
+              simple:
+                summary: HTTPS route with WAF in block mode and a health check
+                value:
+                  host: nextcloud.example.com
+                  aliases: [cloud.example.com]
+                  upstreams:
+                    - { url: 'http://192.168.1.20:8080', weight: 1 }
+                  lbPolicy: round_robin
+                  tlsEnabled: true
+                  redirectToHttps: true
+                  acmeChallenge: http-01
+                  authMode: none
+                  wafMode: block
+                  wafExcludeTags: [attack-protocol]
+                  healthCheck:
+                    enabled: true
+                    uri: /status.php
+                    method: GET
+                    interval: 30s
+                    timeout: 5s
+                    expectStatus: 200
+                  countryBlock:
+                    mode: deny
+                    countryList: [RU, CN]
+                  rateLimit: { events: 100, window: 1m }
+                  requestHeaders: { X-Forwarded-Proto: https }
+              basicAuthPool:
+                summary: Two-upstream pool behind Basic Auth, restricted to the LAN
+                value:
+                  host: grafana.example.com
+                  upstreams:
+                    - { url: 'https://10.0.0.11:3000', weight: 2 }
+                    - { url: 'https://10.0.0.12:3000', weight: 1 }
+                  lbPolicy: weighted_round_robin
+                  insecureSkipVerify: true
+                  tlsEnabled: true
+                  redirectToHttps: true
+                  authMode: basic
+                  basicAuth: { username: admin, password: 'correct horse battery staple' }
+                  ipFilter: { mode: allow, cidrs: [192.168.1.0/24] }
+                  wafMode: detect
+      responses:
+        '201':
+          description: Created. `check` carries the post-apply probe.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesRoute' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /routes/test-upstream:
+    post:
+      summary: Probe an upstream URL
+      description: |
+        Sends one `GET` to the URL from Arenet (5 s deadline, redirects not
+        followed, body preview capped at 200 chars of the first 4 KiB) so
+        the form can check a backend before saving. Private / loopback
+        addresses are allowed on purpose (homelab). A failed probe is still
+        a 200 with `reachable: false` and `error`. Unknown JSON fields are
+        rejected.
+      tags: [Routes]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoutesTestUpstreamRequest' }
+            example: { url: 'https://192.168.1.60:8006', insecureSkipVerify: true }
+      responses:
+        '200':
+          description: Probe result (reachable or not).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesTestUpstreamResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /routes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/RoutesRouteId'
+    get:
+      summary: Get a route
+      tags: [Routes]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: The route (secrets redacted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesRoute' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Update a route
+      description: |
+        Replaces the route and reloads Caddy (rolled back to the previous
+        version with a 500 if Caddy refuses it).
+
+        **PUT is a replacement, except for these preserve-on-omit fields**
+        (absent / empty keeps the stored value):
+        `lbPolicy` (""), `authMode` (""), `wafMode` (""),
+        `basicAuth.password` ("" keeps the stored hash; same per path rule,
+        matched by `pathPrefix`), and the pointer fields `healthCheck`,
+        `countryBlock`, `ipFilter`, `insecureSkipVerify`,
+        `uploadStreamingMode`, `wafDisableCRS`, `wafExcludeRules`,
+        `wafExcludeTags`, `wafTargetedExclusions`, `wafCustomRules`,
+        `wafSecLang`, `rateLimit` (omitted = keep; present = replace; an
+        empty list / `""` clears). To remove a rate limit send
+        `clearRateLimit: true`.
+
+        Everything else is taken as sent: omitting `aliases`,
+        `requestHeaders`, `pathRules`, `errorPageTemplateId`,
+        `errorPageOverrides`, `cert_source`, `useDedicatedCert` or
+        `tlsEnabled` clears it, and omitting `disabled` /
+        `maintenanceConfig` re-enables the route / ends maintenance.
+        `acmeChallenge` "" becomes `http-01` (no preserve). The safe
+        pattern is GET → modify → PUT.
+
+        **Post-apply check**: the updated route is probed. If it fails and
+        the previous version answered, the change is undone and the call
+        returns **409 `route_check_rolled_back`** with
+        `params: {host, httpStatus, detail}`. If the previous version did
+        not answer either, the change is kept and the failed `check` is
+        returned with 200.
+
+        Errors: 400 validation (see POST, incl. `seclang_invalid` with
+        `params.errors`); 404 unknown id; 409 hostname taken by another
+        route or `route_check_rolled_back`.
+      tags: [Routes]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoutesRouteRequest' }
+            examples:
+              switchWafToBlock:
+                summary: Full body (as read by GET) with WAF switched to block and a targeted exclusion
+                value:
+                  host: nextcloud.example.com
+                  aliases: [cloud.example.com]
+                  upstreams:
+                    - { url: 'http://192.168.1.20:8080', weight: 1 }
+                  lbPolicy: round_robin
+                  tlsEnabled: true
+                  redirectToHttps: true
+                  acmeChallenge: http-01
+                  authMode: none
+                  requestHeaders: {}
+                  responseHeaders: {}
+                  wafMode: block
+                  wafTargetedExclusions:
+                    - { ruleId: 942100, target: 'ARGS:content', path: /apps/text/, pathPrefix: true }
+                  wafCustomRules:
+                    - id: 0
+                      name: Block wp-admin probes
+                      conditions:
+                        - { field: path, operator: begins_with, values: [/wp-admin, /wp-login.php] }
+                  wafSecLang: |
+                    SecRule REQUEST_HEADERS:User-Agent "@contains sqlmap" "id:130000,phase:1,deny,status:403,msg:'sqlmap'"
+              changeUpstreamOnly:
+                summary: Move the backend, keep WAF / health check / country block as stored (fields omitted)
+                value:
+                  host: nextcloud.example.com
+                  aliases: [cloud.example.com]
+                  upstreams:
+                    - { url: 'http://192.168.1.21:8080' }
+                  tlsEnabled: true
+                  redirectToHttps: true
+      responses:
+        '200':
+          description: Updated. `check` carries the post-apply probe (may be `failed` when the route was not answering before either).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesRoute' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            Hostname already configured on another route, or
+            `route_check_rolled_back` (the change broke a working route and
+            was undone).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: 'the change was undone: the route answered before and stopped answering after it (the route answered 502 Bad Gateway)'
+                code: route_check_rolled_back
+                params: { host: nextcloud.example.com, httpStatus: 502, detail: the route answered 502 Bad Gateway }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Delete a route
+      description: Deletes the route and reloads Caddy (restored with a 500 if Caddy refuses).
+      tags: [Routes]
+      x-arenet-role: admin
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /routes/{id}/disable:
+    parameters:
+      - $ref: '#/components/parameters/RoutesRouteId'
+    post:
+      summary: Disable a route
+      description: |
+        Takes the route out of service without deleting it (also ends
+        maintenance). Idempotent. Reloads Caddy (rolled back on refusal).
+        `lastHttpsRouteAffected` is true when this was the last enabled TLS
+        route. No post-apply check.
+      tags: [Routes]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: The updated route.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesToggleResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /routes/{id}/enable:
+    parameters:
+      - $ref: '#/components/parameters/RoutesRouteId'
+    post:
+      summary: Enable a route
+      description: |
+        Puts the route back in service (also ends maintenance). Idempotent.
+        Reloads Caddy (rolled back on refusal). The route is then probed and
+        the result returned in `check` (report only, never undone).
+        `lastHttpsRouteAffected` is always false here.
+      tags: [Routes]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: The updated route with `check`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesToggleResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /routes/{id}/maintenance:
+    parameters:
+      - $ref: '#/components/parameters/RoutesRouteId'
+    post:
+      summary: Put a route in maintenance
+      description: |
+        Serves the maintenance page (503) instead of the upstream. Keeps an
+        existing `maintenanceConfig`, otherwise starts from
+        `{retryAfterSeconds: 300}`; also clears `disabled`. Idempotent.
+        Reloads Caddy (rolled back on refusal). No body.
+      tags: [Routes]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: The updated route.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesRoute' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /routes/{id}/maintenance/off:
+    parameters:
+      - $ref: '#/components/parameters/RoutesRouteId'
+    post:
+      summary: End maintenance on a route
+      description: |
+        Clears `maintenanceConfig` (a later maintenance starts from the
+        defaults again). Idempotent. Reloads Caddy (rolled back on refusal).
+      tags: [Routes]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: The updated route.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesRoute' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ------------------------------------------------------------------
+  # WAF
+  # ------------------------------------------------------------------
+  /routes/{id}/waf-exclusions:
+    parameters:
+      - $ref: '#/components/parameters/RoutesRouteId'
+    post:
+      summary: Add one WAF exclusion to a route
+      description: |
+        Adds a single exclusion, typically from a WAF event. Without
+        `target` the rule is excluded on the whole route (appended to
+        `wafExcludeRules`); with `target` it becomes a targeted exclusion
+        (`wafTargetedExclusions`). Rule IDs must be CRS IDs in
+        200000..999999; the CRS families 901, 949, 959, 980 are refused.
+        Reloads Caddy (rolled back on refusal). Unknown JSON fields are
+        rejected.
+      tags: [WAF]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WafExclusionRequest' }
+            examples:
+              wholeRoute:
+                summary: Exclude a rule on the whole route
+                value: { ruleId: 920350 }
+              targeted:
+                summary: Exclude a rule for one argument under a path prefix
+                value: { ruleId: 942100, target: 'ARGS:content', path: /api/notes, pathPrefix: true }
+      responses:
+        '200':
+          description: The updated route.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesRoute' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: This exclusion already exists on the route.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /routes/{id}/waf-test:
+    parameters:
+      - $ref: '#/components/parameters/RoutesRouteId'
+    post:
+      summary: Dry-run a request through the route's WAF
+      description: |
+        Evaluates a sample request against a WAF built like the route's
+        (CRS per `wafDisableCRS`, exclusions, guided rules, SecLang) with
+        the engine forced on. No traffic, no event recorded. `seclang`,
+        when present, replaces the stored SecLang (test an unsaved draft).
+        `mode` reports the route's real WAF mode: in `detect` a blocked
+        result would only be logged, in `off` nothing happens.
+        Limits: 50 headers, 64 KiB body. A refused draft returns 400
+        `seclang_invalid` with `params.errors`.
+      tags: [WAF]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WafTestRequest' }
+            example:
+              method: GET
+              path: "/search?q=1' OR '1'='1"
+              headers:
+                - { name: User-Agent, value: Mozilla/5.0 }
+              body: ''
+      responses:
+        '200':
+          description: Dry-run result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WafTestResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /waf/seclang/validate:
+    post:
+      summary: Validate SecLang text
+      description: |
+        Checks SecLang against the allowlist (directives SecRule /
+        SecAction / SecMarker, rule IDs 130000..139999, max 64 KiB and 200
+        rules, no file / exec / env / network features). Always 200 for
+        well-formed JSON: problems are listed in `errors` (empty when
+        valid). `nextId` is the first free rule ID after those found.
+      tags: [WAF]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WafSecLangValidateRequest' }
+            example:
+              seclang: |
+                SecRule REQUEST_URI "@beginsWith /admin" "id:130000,phase:1,deny,status:403,msg:'admin blocked'"
+      responses:
+        '200':
+          description: Validation result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WafSecLangValidateResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /waf/seclang/from-guided:
+    post:
+      summary: Convert a guided rule to SecLang
+      description: |
+        Returns the commented SecLang a guided rule compiles to, with the
+        given rule ID (130000..139999) — used to move a guided rule into the
+        expert editor. The guided rule is validated like `wafCustomRules`
+        (its own `id` is ignored).
+      tags: [WAF]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WafFromGuidedRequest' }
+            example:
+              id: 130001
+              rule:
+                id: 0
+                name: Block empty user agents
+                conditions:
+                  - { field: user_agent, operator: missing }
+      responses:
+        '200':
+          description: Generated SecLang.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [seclang]
+                properties:
+                  seclang: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ------------------------------------------------------------------
+  # Certificates
+  # ------------------------------------------------------------------
+  /certificates:
+    get:
+      summary: List ACME / managed certificates
+      description: |
+        Runtime snapshot of every certificate the tracker knows (per-route
+        ACME, managed-domain wildcard and apex), soonest expiry first.
+        Returns `[]` when the tracker is unavailable.
+      tags: [Certificates]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Certificates.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CertRuntimeInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /certificates/{domain}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        description: Certificate subject; URL-encode wildcards (`%2A.example.com`).
+        schema: { type: string }
+    delete:
+      summary: Delete an orphan certificate
+      description: |
+        Removes the certificate's files from disk (all issuers) and its
+        tracker entry, then reloads Caddy (best effort). Only orphans:
+        409 with `blockingRoutes` when a TLS route still emits this subject
+        or a managed domain issues it. No ACME revocation. Idempotent for a
+        domain with no files.
+      tags: [Certificates]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Deleted; `deleted` is the number of files removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domain, deleted]
+                properties:
+                  domain: { type: string }
+                  deleted: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Certificate in use.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CertBlockedResponse' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /certificates/external:
+    get:
+      summary: List uploaded certificates
+      description: Uploaded and CSR-pending certificates, soonest expiry first. `keyPEM` is always "".
+      tags: [Certificates]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: External certificates.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CertExternal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Upload a certificate
+      description: |
+        Stores a certificate + private key for routes with
+        `cert_source: manual`. A pasted fullchain in `certPEM` is split into
+        leaf + chain. Errors (400, message = code): `cert_required`,
+        `key_required`, `chain_specified_twice`, `invalid_cert_pem`,
+        `invalid_chain_pem`, `key_does_not_match_cert`. Non-blocking
+        `warnings`: `cert_expired`, `cert_not_yet_valid`,
+        `signature_algorithm_weak`, `chain_incomplete`. Unknown fields are
+        rejected.
+      tags: [Certificates]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CertExternalRequest' }
+            example:
+              name: wildcard-corp
+              description: Corporate CA wildcard
+              certPEM: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+              keyPEM: "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+              chainPEM: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+      responses:
+        '201':
+          description: Created (key redacted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CertExternal' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /certificates/external/csr:
+    post:
+      summary: Generate a key and CSR
+      description: |
+        Generates a private key (kept server-side) and a CSR, stored as a
+        `pending_csr` certificate. Download the CSR with
+        `GET /certificates/external/{id}/csr`, get it signed, then send the
+        signed certificate with `PUT /certificates/external/{id}` (only
+        `certPEM`; the stored key is kept). Errors (400): `cn_required`,
+        `invalid_country`, `invalid_key_algorithm`.
+      tags: [Certificates]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CertCSRRequest' }
+            example:
+              name: intranet
+              csrSubject:
+                commonName: intranet.corp.example
+                sans: [intranet.corp.example, wiki.corp.example]
+                organization: Example
+                country: FR
+                keyAlgorithm: ecdsa_p256
+      responses:
+        '201':
+          description: Pending certificate with its `csrPEM`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CertExternal' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /certificates/external/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CertExternalId'
+    get:
+      summary: Get an uploaded certificate
+      tags: [Certificates]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: The certificate (key redacted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CertExternal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Update an uploaded certificate
+      description: |
+        `name` / `description` are replaced as sent. `certPEM` "" keeps the
+        stored leaf; `keyPEM` "" keeps the stored key; `chainPEM` absent or
+        null keeps the stored chain, "" clears it, a value replaces it. A
+        new `certPEM` is split like on upload (a leaf alone replaces the
+        stored chain with nothing unless `chainPEM` is sent). The key pair
+        is always re-validated. On a `pending_csr` certificate, a signed
+        `certPEM` activates it (subject / SAN differences from the CSR come
+        back as `warnings`). Reloads Caddy (best effort, no rollback).
+      tags: [Certificates]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CertExternalRequest' }
+      responses:
+        '200':
+          description: Updated (key redacted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CertExternal' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Delete an uploaded certificate
+      description: |
+        409 with `blockingRoutes` while a TLS route with
+        `cert_source: manual` references it. Reloads Caddy (best effort).
+      tags: [Certificates]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Certificate referenced by routes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CertBlockedResponse' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /certificates/external/{id}/csr:
+    parameters:
+      - $ref: '#/components/parameters/CertExternalId'
+    get:
+      summary: Download the CSR
+      description: The stored CSR as a PEM attachment (`<name>.csr`). 404 when the certificate has no CSR.
+      tags: [Certificates]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: PEM certificate request.
+          content:
+            text/plain:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ------------------------------------------------------------------
+  # Error pages
+  # ------------------------------------------------------------------
+  /error-templates:
+    get:
+      summary: List error-page templates
+      description: "The read-only built-in `arenet-default` (`isBuiltin: true`) first, then stored templates."
+      tags: [Error pages]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Templates.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ErrorPageTemplate' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Create an error-page template
+      description: |
+        Stores raw HTML per status code (sanitized when emitted to Caddy).
+        Setting `isCatchallDefault` clears it on every other template.
+        Reloads Caddy (best effort). Storage validation errors are 400.
+      tags: [Error pages]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ErrorPageTemplateRequest' }
+            example:
+              name: Dark
+              description: Dark theme pages
+              pages:
+                '404': '<h1>{http.error.status_code} — {http.request.host}{http.request.uri}</h1>'
+                '502': '<h1>Backend down</h1><p>ID {http.error.id}</p>'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorPageTemplate' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /error-templates/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ErrorPageTemplateId'
+    get:
+      summary: Get an error-page template
+      tags: [Error pages]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: The template.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorPageTemplate' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Update an error-page template
+      description: Full replacement. 403 on the built-in `arenet-default`. Reloads Caddy (best effort).
+      tags: [Error pages]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ErrorPageTemplateRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorPageTemplate' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Delete an error-page template
+      description: Routes still referencing it fall back to the built-in default. 403 on `arenet-default`. Reloads Caddy (best effort).
+      tags: [Error pages]
+      x-arenet-role: admin
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /error-templates/{id}/preview:
+    parameters:
+      - $ref: '#/components/parameters/ErrorPageTemplateId'
+      - name: statusCode
+        in: query
+        required: true
+        description: One of 401, 403, 404, 429, 500, 502, 503, 504.
+        schema: { type: integer, enum: [401, 403, 404, 429, 500, 502, 503, 504] }
+    get:
+      summary: Preview one error page
+      description: |
+        The page as it will be served: placeholders replaced by sample
+        values, then sanitized like at emission. Served with a sandboxing
+        Content-Security-Policy. 404 when the template has no body for the
+        code.
+      tags: [Error pages]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Rendered HTML.
+          content:
+            text/html:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ------------------------------------------------------------------
+  # Settings tied to routes
+  # ------------------------------------------------------------------
+  /settings/maintenance-page:
+    get:
+      summary: Get the maintenance page
+      description: "The global 503 page for routes in maintenance. Returns the built-in HTML with `isDefault: true` when none is customised."
+      tags: [Settings]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Maintenance page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesMaintenancePage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Set the maintenance page
+      description: |
+        `html` is sanitized before storage ("" resets to the built-in
+        page); `message` is plain text (trimmed, HTML-escaped at emission,
+        substituted for `{arenet.maintenance.message}` when a route has no
+        message of its own). Reloads Caddy (best effort). Unknown fields
+        are rejected.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                html: { type: string }
+                message: { type: string }
+            example: { html: '', message: Back around 22:00. }
+      responses:
+        '200':
+          description: The stored page (as the next GET would return it).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesMaintenancePage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/managed-domains:
+    get:
+      summary: List managed domains
+      description: Wildcard certificates (`*.apex`, optionally the apex) issued by DNS-01; covered routes use them unless `useDedicatedCert`.
+      tags: [Settings]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Managed domains.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domains]
+                properties:
+                  domains:
+                    type: array
+                    items: { $ref: '#/components/schemas/RoutesManagedDomain' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Add a managed domain
+      description: |
+        `apex` is lower-cased, trailing dot removed. Covered routes are
+        migrated to `acmeChallenge: inherited` in the same write. Reloads
+        Caddy (undone with a 500 on refusal). 400 `invalid_provider_id`
+        when `providerId` is unknown; 409 when the apex exists, would cover
+        or is covered by another managed domain. Unknown fields are
+        rejected.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoutesManagedDomainRequest' }
+            example: { apex: example.com, includeApex: true, providerId: 3f0c9a4e-5b1d-4c47-9d0e-2a6b8c1f7e21 }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesManagedDomain' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/managed-domains/{apex}:
+    parameters:
+      - name: apex
+        in: path
+        required: true
+        schema: { type: string }
+      - name: revertTo
+        in: query
+        required: false
+        description: |
+          ACME challenge given to the routes the domain covered: "" (default,
+          HTTP-01 behaviour), `http-01` or `dns-01`.
+        schema: { type: string, enum: ['', http-01, dns-01] }
+    delete:
+      summary: Remove a managed domain
+      description: Reverts covered routes to `revertTo`, reloads Caddy (restored with a 500 on refusal) and purges the wildcard / apex tracker entries.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Number of routes reverted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mutatedRoutes]
+                properties:
+                  mutatedRoutes: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/route-check:
+    get:
+      summary: Get the post-apply route check setting
+      description: Whether routes are probed after create / update / enable. Enabled on a fresh install.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Setting.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesRouteCheckConfig' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Set the post-apply route check setting
+      description: When disabled, `check` comes back as `skipped` and updates are never rolled back by the probe. Unknown fields are rejected.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoutesRouteCheckConfig' }
+            example: { enabled: false }
+      responses:
+        '200':
+          description: Stored setting.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoutesRouteCheckConfig' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+components:
+  parameters:
+    RoutesRouteId:
+      name: id
+      in: path
+      required: true
+      description: Route ID (UUID).
+      schema: { type: string }
+    CertExternalId:
+      name: id
+      in: path
+      required: true
+      description: External certificate ID.
+      schema: { type: string }
+    ErrorPageTemplateId:
+      name: id
+      in: path
+      required: true
+      description: Template ID (UUID) or `arenet-default` for the built-in.
+      schema: { type: string }
+
+  schemas:
+    # ---------------- Route building blocks ----------------
+    RoutesUpstream:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: Backend URL, `http://` or `https://`.
+          examples: ['http://192.168.1.20:8080']
+        weight:
+          type: integer
+          minimum: 0
+          description: Weight for `weighted_round_robin`; 0 / omitted → 1.
+    RoutesLBPolicy:
+      type: string
+      enum: [round_robin, weighted_round_robin, least_conn, ip_hash, random, first]
+    RoutesHealthCheck:
+      type: object
+      description: |
+        Active health check. When `enabled`, empty fields get defaults
+        (method GET, interval 30s, timeout 5s, passes 1, fails 1); `uri` is
+        required and must start with `/`; timeout < interval.
+      properties:
+        enabled: { type: boolean }
+        uri: { type: string, examples: [/healthz] }
+        method: { type: string, enum: [GET, HEAD, ''], description: Case-insensitive on input. }
+        interval: { type: string, description: 'Go duration, e.g. "30s".' }
+        timeout: { type: string, description: 'Go duration, e.g. "5s".' }
+        expectStatus: { type: integer, description: 0 (any 2xx) or 100..599. }
+        expectBody: { type: string, description: Regular expression the body must match. }
+        passes: { type: integer, minimum: 0 }
+        fails: { type: integer, minimum: 0 }
+    RoutesCountryBlockExceptions:
+      type: object
+      properties:
+        countries:
+          type: array
+          items: { type: string }
+          description: ISO 3166-1 alpha-2 codes always accepted by a deny gate.
+        asns:
+          type: array
+          items: { type: integer, minimum: 0 }
+          description: AS numbers always accepted by a deny gate.
+    RoutesCountryBlockRequest:
+      type: object
+      description: |
+        GeoIP gate. `allow` passes only matching requests, `deny` blocks
+        them. `allow` needs at least one country, continent or ASN. Codes
+        are upper-cased server-side.
+      properties:
+        mode: { type: string, enum: ['', 'off', allow, deny] }
+        countryList:
+          type: array
+          items: { type: string }
+          description: ISO 3166-1 alpha-2 codes.
+        continents:
+          type: array
+          items: { type: string, enum: [AF, AN, AS, EU, NA, OC, SA] }
+        asns:
+          type: array
+          items: { type: integer, minimum: 0 }
+        exceptions: { $ref: '#/components/schemas/RoutesCountryBlockExceptions' }
+        statusCode:
+          type: integer
+          enum: [0, 403, 444, 451]
+          description: 0 = the ARENET_COUNTRY_BLOCK_STATUS default.
+    RoutesCountryBlock:
+      type: object
+      description: Country-block state as stored (`mode` "off" when unset; lists never null).
+      required: [mode, countryList, continents, asns, exceptions]
+      properties:
+        mode: { type: string, enum: ['off', allow, deny] }
+        countryList: { type: array, items: { type: string } }
+        continents: { type: array, items: { type: string } }
+        asns: { type: array, items: { type: integer } }
+        exceptions: { $ref: '#/components/schemas/RoutesCountryBlockExceptions' }
+        statusCode: { type: integer, enum: [403, 444, 451] }
+    RoutesIPFilter:
+      type: object
+      description: Source-IP gate (honours trusted proxies). `allow` passes only the listed entries, `deny` blocks them; both need at least one entry.
+      required: [mode]
+      properties:
+        mode: { type: string, enum: ['', 'off', allow, deny] }
+        cidrs:
+          type: array
+          items: { type: string }
+          description: IPs or CIDRs, no duplicates.
+          examples: [[192.168.1.0/24, 10.0.0.5]]
+        statusCode:
+          type: integer
+          enum: [0, 403, 444, 451]
+          description: 0 = 403.
+    RoutesPathRule:
+      type: object
+      description: |
+        Override for a URL prefix: its own Basic Auth and / or IP filter,
+        and optionally its own upstream pool (empty `upstreams` = the
+        route's pool; `lbPolicy` / `healthCheck` / `insecureSkipVerify` only
+        apply with a pool). On responses `basicAuth.password` is always "".
+      required: [pathPrefix]
+      properties:
+        pathPrefix: { type: string, examples: [/admin] }
+        basicAuth:
+          type: object
+          properties:
+            username: { type: string }
+            password:
+              type: string
+              description: Plain password, write-only. "" on PUT keeps the stored hash of the rule with the same `pathPrefix`. Always "" in responses.
+        ipFilter: { $ref: '#/components/schemas/RoutesIPFilter' }
+        upstreams:
+          type: array
+          items: { $ref: '#/components/schemas/RoutesUpstream' }
+        lbPolicy:
+          $ref: '#/components/schemas/RoutesLBPolicy'
+        healthCheck: { $ref: '#/components/schemas/RoutesHealthCheck' }
+        insecureSkipVerify: { type: boolean }
+    RoutesRateLimit:
+      type: object
+      required: [events, window]
+      properties:
+        events: { type: integer, minimum: 1, description: Requests allowed per window. }
+        window: { type: string, description: 'Go duration > 0, e.g. "1m".' }
+        key:
+          type: string
+          description: Caddy placeholder the limit is keyed on; default `{http.request.remote.host}`.
+    RoutesMaintenanceConfig:
+      type: object
+      description: Present = the route is in maintenance (serves the 503 page).
+      properties:
+        retryAfterSeconds: { type: integer, minimum: 0, description: Retry-After header; 0 = none. }
+        bypassIps:
+          type: array
+          items: { type: string }
+          description: IPs / CIDRs that still reach the upstream.
+        message:
+          type: string
+          description: Per-route message (plain text); "" = the global one.
+    RoutesRouteCheck:
+      type: object
+      description: |
+        Post-apply probe through the local Caddy listener (3 attempts).
+        `ok`: answered (any status except 502 / 503 / 504); `failed`:
+        502 / 503 / 504, refused or timeout; `pending_certificate`: TLS
+        handshake failed (certificate probably still being issued);
+        `skipped`: check disabled or unavailable (see `detail`).
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, failed, pending_certificate, skipped] }
+        host: { type: string }
+        httpStatus: { type: integer }
+        detail: { type: string }
+
+    # ---------------- WAF building blocks ----------------
+    WafMode:
+      type: string
+      enum: ['off', detect, block]
+      description: '`detect` logs matches, `block` answers 403.'
+    WafTargetedExclusion:
+      type: object
+      description: |
+        Removes one variable from one CRS rule (optionally only under a
+        path). Rule ID 200000..999999, not in families 901 / 949 / 959 /
+        980. Max 100 per route; deduplicated and sorted.
+      required: [ruleId, target]
+      properties:
+        ruleId: { type: integer, examples: [942100] }
+        target:
+          type: string
+          description: |
+            `VARIABLE:name`, VARIABLE one of ARGS, ARGS_GET, ARGS_POST,
+            ARGS_NAMES, REQUEST_COOKIES, REQUEST_COOKIES_NAMES,
+            REQUEST_HEADERS, REQUEST_HEADERS_NAMES, FILES, FILES_NAMES (no
+            regex, no spaces / quotes / , ; | \).
+          examples: ['ARGS:content']
+        path: { type: string, description: 'Exact path (or prefix), must start with /.' }
+        pathPrefix: { type: boolean, description: Treat `path` as a prefix. }
+    WafRuleCondition:
+      type: object
+      description: |
+        One condition; `values` are alternatives. Operators per field:
+        path is / begins_with / contains; method is / is_not; user_agent
+        contains / is / missing; header present / absent / contains / is.
+        `missing` / `present` / `absent` take no values; others take 1..20
+        (method 1..10), each 1..256 chars without `"` or `\`.
+      required: [field, operator]
+      properties:
+        field: { type: string, enum: [path, method, user_agent, header] }
+        header: { type: string, description: 'Header name when field is header (letters, digits, - _; max 64).' }
+        operator: { type: string, enum: [is, is_not, begins_with, contains, missing, present, absent] }
+        values: { type: array, items: { type: string } }
+    WafCustomRule:
+      type: object
+      description: |
+        Guided rule: when all conditions match, the request is blocked
+        (403 in block mode, logged in detect). IDs 120000..129999; send
+        `id: 0` for a new rule (an ID is allocated), keep the ID of an
+        existing one. Max 50 rules, 1..8 conditions.
+      required: [id, name, conditions]
+      properties:
+        id: { type: integer }
+        name: { type: string, maxLength: 64 }
+        disabled: { type: boolean, description: Stored but not emitted. }
+        conditions:
+          type: array
+          items: { $ref: '#/components/schemas/WafRuleCondition' }
+    WafSecLangError:
+      type: object
+      required: [line, message]
+      properties:
+        line: { type: integer }
+        message: { type: string }
+
+    # ---------------- Route request / response ----------------
+    RoutesRouteRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        Body of POST and PUT /routes. Unknown fields are rejected. See the
+        PUT operation for which fields are preserved when omitted.
+      required: [host, upstreams]
+      properties:
+        host: { type: string, examples: [app.example.com] }
+        aliases:
+          type: array
+          items: { type: string }
+          description: Extra hostnames (unique across all routes).
+        upstreams:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/RoutesUpstream' }
+        lbPolicy:
+          description: 'POST: "" → round_robin. PUT: "" keeps.'
+          anyOf:
+            - $ref: '#/components/schemas/RoutesLBPolicy'
+            - { type: string, const: '' }
+        tlsEnabled: { type: boolean }
+        redirectToHttps: { type: boolean, description: Forced to false when tlsEnabled is false. }
+        disabled: { type: boolean, description: 'Out of service. Prefer POST /routes/{id}/disable|enable. Omitted on PUT = enabled.' }
+        maintenanceConfig:
+          description: 'Maintenance state. Prefer POST /routes/{id}/maintenance[/off]. Omitted on PUT = not in maintenance.'
+          $ref: '#/components/schemas/RoutesMaintenanceConfig'
+        cert_source:
+          type: string
+          description: '"" / `acme` (default) or `manual` (uploaded certificate `cert_id`, whose SANs must cover `host`).'
+          examples: [manual]
+        cert_id: { type: string, description: 'External certificate ID; required with cert_source manual.' }
+        acmeChallenge:
+          type: string
+          enum: ['', http-01, dns-01, inherited]
+          description: |
+            "" → http-01. Rewritten to `inherited` when a managed domain
+            covers the host and `useDedicatedCert` is false. `dns-01` needs
+            a configured DNS provider; wildcard hosts need `dns-01`.
+        useDedicatedCert:
+          type: boolean
+          description: Own certificate despite a covering managed domain (400 if no managed domain covers the host).
+        authMode:
+          type: string
+          enum: ['', none, basic, forward_auth]
+          description: 'POST: "" → none. PUT: "" keeps. The sub-object of the other modes must be empty.'
+        basicAuth:
+          type: object
+          description: Used when authMode is basic.
+          properties:
+            username: { type: string, description: 'No ":", whitespace or control characters.' }
+            password:
+              type: string
+              writeOnly: true
+              description: Plain password (hashed with argon2id). Required when no password is stored yet; "" on PUT keeps the stored hash. Never returned — see `basicAuth.passwordSet`.
+        forwardAuth:
+          type: object
+          description: Used when authMode is forward_auth.
+          properties:
+            providerName: { type: string, description: A configured forward-auth provider (Settings). }
+        requestHeaders:
+          type: object
+          additionalProperties: { type: string }
+          description: Headers set on the proxied request (no hop-by-hop / framing headers, no CR/LF).
+        responseHeaders:
+          type: object
+          additionalProperties: { type: string }
+          description: Headers set on the response.
+        healthCheck:
+          description: 'Omitted on PUT = keep; present = replace (`{"enabled": false}` disables).'
+          $ref: '#/components/schemas/RoutesHealthCheck'
+        countryBlock:
+          description: Omitted on PUT = keep; present = replace.
+          $ref: '#/components/schemas/RoutesCountryBlockRequest'
+        ipFilter:
+          description: Whole-route source-IP gate. Omitted on PUT = keep; present = replace.
+          $ref: '#/components/schemas/RoutesIPFilter'
+        pathRules:
+          type: array
+          items: { $ref: '#/components/schemas/RoutesPathRule' }
+          description: Full replacement; omitted or [] clears.
+        insecureSkipVerify:
+          type: boolean
+          description: Skip upstream certificate verification (https pools only; forced false otherwise). Omitted on PUT = keep.
+        uploadStreamingMode:
+          type: boolean
+          description: Stream request bodies (skips WAF body inspection, no buffering). Omitted on PUT = keep.
+        wafMode:
+          description: 'POST: "" → detect. PUT: "" keeps.'
+          anyOf:
+            - $ref: '#/components/schemas/WafMode'
+            - { type: string, const: '' }
+        wafDisableCRS:
+          type: boolean
+          description: Do not load the OWASP CRS on this route (custom rules / SecLang still apply). Omitted on PUT = keep.
+        wafExcludeRules:
+          type: array
+          items: { type: integer, minimum: 200000, maximum: 999999 }
+          description: CRS rule IDs excluded on the whole route (deduplicated, sorted). Omitted on PUT = keep; [] clears.
+        wafExcludeTags:
+          type: array
+          maxItems: 64
+          items: { type: string, maxLength: 128 }
+          description: CRS tags excluded (lower-cased, deduplicated; no whitespace, comma or quote). Omitted on PUT = keep; [] clears.
+        wafTargetedExclusions:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/WafTargetedExclusion' }
+          description: Omitted on PUT = keep; [] clears.
+        wafCustomRules:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/WafCustomRule' }
+          description: Guided rules. Omitted on PUT = keep; [] clears. Unknown non-zero IDs are refused.
+        wafSecLang:
+          type: string
+          maxLength: 65536
+          description: |
+            Expert SecLang (rule IDs 130000..139999, allowlisted directives /
+            operators / actions). Omitted on PUT = keep; "" clears. Refused
+            text → 400 `seclang_invalid`, `params.errors: [{line, message}]`.
+        rateLimit:
+          description: Omitted on PUT = keep; present = replace. Use `clearRateLimit` to remove.
+          $ref: '#/components/schemas/RoutesRateLimit'
+        clearRateLimit:
+          type: boolean
+          description: true removes the rate limit (wins over `rateLimit`).
+        errorPageTemplateId:
+          type: string
+          description: Error-page template ID; "" = built-in default. Not checked for existence (falls back to default).
+        errorPageOverrides:
+          type: object
+          description: Per-route HTML per status code (keys 401, 403, 404, 429, 500, 502, 503, 504), layered over the template.
+          additionalProperties: { type: string }
+    RoutesRoute:
+      type: object
+      description: A route as returned by the API. Secrets are never returned.
+      required: [id, host, upstreams, lbPolicy, tlsEnabled, redirectToHttps, aliases, authMode, basicAuth, forwardAuth,
+        requestHeaders, responseHeaders, wafMode, acmeChallenge, healthCheck, countryBlock, insecureSkipVerify,
+        uploadStreamingMode, wafDisableCRS, wafExcludeRules, wafExcludeTags, wafTargetedExclusions, wafCustomRules,
+        wafSecLang, aggregateStatus, healthyUpstreamCount, totalUpstreamCount, createdAt, updatedAt]
+      properties:
+        check:
+          description: Post-apply probe; only on POST / PUT / enable responses.
+          $ref: '#/components/schemas/RoutesRouteCheck'
+        id: { type: string }
+        host: { type: string }
+        upstreams:
+          type: array
+          items: { $ref: '#/components/schemas/RoutesUpstream' }
+        lbPolicy: { $ref: '#/components/schemas/RoutesLBPolicy' }
+        tlsEnabled: { type: boolean }
+        redirectToHttps: { type: boolean }
+        aliases: { type: array, items: { type: string } }
+        authMode: { type: string, enum: [none, basic, forward_auth] }
+        basicAuth:
+          type: object
+          required: [username, passwordSet]
+          properties:
+            username: { type: string }
+            passwordSet: { type: boolean, description: A password hash is stored. }
+        forwardAuth:
+          type: object
+          required: [providerName]
+          properties:
+            providerName: { type: string }
+        requestHeaders: { type: object, additionalProperties: { type: string } }
+        responseHeaders: { type: object, additionalProperties: { type: string } }
+        wafMode: { $ref: '#/components/schemas/WafMode' }
+        acmeChallenge: { type: string, enum: [http-01, dns-01, inherited] }
+        useDedicatedCert: { type: boolean }
+        effectiveCertSource:
+          type: string
+          description: |
+            Which policy serves the certificate: `managed-domain:<apex>`,
+            `per-route-acme:http-01`, `per-route-acme:dns-01`,
+            `per-route-manual`. Absent when TLS is off (and on
+            maintenance / disable / waf-exclusion responses).
+        healthCheck: { $ref: '#/components/schemas/RoutesHealthCheck' }
+        countryBlock: { $ref: '#/components/schemas/RoutesCountryBlock' }
+        insecureSkipVerify: { type: boolean }
+        uploadStreamingMode: { type: boolean }
+        wafDisableCRS: { type: boolean }
+        wafExcludeRules: { type: array, items: { type: integer } }
+        wafExcludeTags: { type: array, items: { type: string } }
+        wafTargetedExclusions:
+          type: array
+          items: { $ref: '#/components/schemas/WafTargetedExclusion' }
+        wafCustomRules:
+          type: array
+          items: { $ref: '#/components/schemas/WafCustomRule' }
+        wafSecLang: { type: string }
+        rateLimit: { $ref: '#/components/schemas/RoutesRateLimit' }
+        errorPageTemplateId: { type: string }
+        errorPageOverrides: { type: object, additionalProperties: { type: string } }
+        aggregateStatus:
+          type: string
+          enum: [healthy, degraded, down, unknown, '']
+          description: |
+            Health-check rollup (GET only; "" on write responses):
+            `unknown` when the health check is off or an upstream is not
+            observed yet.
+        healthyUpstreamCount: { type: integer, description: GET only (0 on write responses). }
+        totalUpstreamCount: { type: integer, description: GET only (0 on write responses). }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        disabled: { type: boolean, description: Absent when enabled. }
+        maintenanceConfig: { $ref: '#/components/schemas/RoutesMaintenanceConfig' }
+        cert_source: { type: string }
+        cert_id: { type: string }
+        ipFilter: { $ref: '#/components/schemas/RoutesIPFilter' }
+        pathRules:
+          type: array
+          items: { $ref: '#/components/schemas/RoutesPathRule' }
+    RoutesToggleResponse:
+      description: A route plus the last-HTTPS hint.
+      allOf:
+        - $ref: '#/components/schemas/RoutesRoute'
+        - type: object
+          required: [lastHttpsRouteAffected]
+          properties:
+            lastHttpsRouteAffected:
+              type: boolean
+              description: True when disabling the last enabled TLS route.
+
+    # ---------------- Upstream probe ----------------
+    RoutesTestUpstreamRequest:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url: { type: string, maxLength: 2048, description: http:// or https:// URL. }
+        insecureSkipVerify: { type: boolean }
+    RoutesTestUpstreamResponse:
+      type: object
+      required: [reachable]
+      properties:
+        reachable: { type: boolean, description: An HTTP status came back (any code). }
+        statusCode: { type: integer }
+        latencyMs: { type: integer }
+        tlsHandshakeMs: { type: integer, description: Approximation (time to first byte) on https. }
+        cert:
+          type: object
+          description: Leaf certificate presented (https only, also on verification errors).
+          properties:
+            commonName: { type: string }
+            issuer: { type: string }
+            selfSigned: { type: boolean }
+        serverHeader: { type: string }
+        bodyPreview: { type: string, description: First 200 printable chars. }
+        error: { type: string, description: Operator-readable failure reason. }
+
+    # ---------------- WAF operations ----------------
+    WafExclusionRequest:
+      type: object
+      additionalProperties: false
+      required: [ruleId]
+      properties:
+        ruleId: { type: integer, minimum: 200000, maximum: 999999 }
+        target: { type: string, description: 'VARIABLE:name; omit to exclude the rule on the whole route.' }
+        path: { type: string }
+        pathPrefix: { type: boolean }
+    WafTestRequest:
+      type: object
+      properties:
+        method: { type: string, examples: [POST] }
+        path: { type: string, description: Path plus optional query string. }
+        headers:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              value: { type: string }
+        body: { type: string, maxLength: 65536 }
+        seclang: { type: string, description: Unsaved SecLang draft replacing the stored one for this test. }
+    WafTestResponse:
+      type: object
+      required: [blocked, matches, mode]
+      properties:
+        blocked: { type: boolean, description: The request would be interrupted with the engine on. }
+        status: { type: integer, description: Status of the interruption. }
+        blockedBy: { type: integer, description: Rule ID that interrupted. }
+        matches:
+          type: array
+          items:
+            type: object
+            required: [id, msg, severity]
+            properties:
+              id: { type: integer }
+              msg: { type: string }
+              severity: { type: string }
+              data: { type: string }
+        mode: { $ref: '#/components/schemas/WafMode' }
+    WafSecLangValidateRequest:
+      type: object
+      required: [seclang]
+      properties:
+        seclang: { type: string }
+    WafSecLangValidateResponse:
+      type: object
+      required: [errors, nextId]
+      properties:
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/WafSecLangError' }
+        nextId: { type: integer, description: First free rule ID (≥ 130000). }
+    WafFromGuidedRequest:
+      type: object
+      required: [rule, id]
+      properties:
+        rule: { $ref: '#/components/schemas/WafCustomRule' }
+        id: { type: integer, minimum: 130000, maximum: 139999 }
+
+    # ---------------- Certificates ----------------
+    CertRuntimeInfo:
+      type: object
+      required: [domain, sanList, issuer, notBefore, notAfter, status, source]
+      properties:
+        domain: { type: string }
+        sanList: { type: array, items: { type: string } }
+        issuer: { type: string }
+        notBefore: { type: string, format: date-time }
+        notAfter: { type: string, format: date-time }
+        status: { type: string, enum: [VALID, RENEWAL_PENDING, EXPIRED, OBTAIN_FAILED, UNKNOWN] }
+        source: { type: string, enum: [wildcard, apex, specific] }
+        lastError: { type: string }
+        lastErrorAt: { type: string, format: date-time }
+    CertBlockedResponse:
+      type: object
+      required: [error, blockingRoutes]
+      properties:
+        error: { type: string }
+        blockingRoutes:
+          type: array
+          items: { type: string }
+          description: Hosts (or `*.apex (managed domain)`) still using the certificate.
+    CertCSRSubject:
+      type: object
+      required: [commonName, keyAlgorithm]
+      properties:
+        commonName: { type: string }
+        sans: { type: array, items: { type: string }, description: The CN is added when missing. }
+        organization: { type: string }
+        orgUnit: { type: string }
+        country: { type: string, minLength: 2, maxLength: 2 }
+        locality: { type: string }
+        state: { type: string }
+        keyAlgorithm: { type: string, enum: [rsa_4096, ecdsa_p256] }
+    CertWarning:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, examples: [chain_incomplete] }
+        message: { type: string }
+    CertExternal:
+      type: object
+      description: Uploaded certificate. `keyPEM` is always "" (the key never leaves the server).
+      required: [id, name, certPEM, keyPEM, chainPEM, issuer, subject, serialNumber, keyAlgorithm, signatureAlgorithm,
+        notBefore, notAfter, dnsNames, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        certPEM: { type: string }
+        keyPEM: { type: string, const: '' }
+        chainPEM: { type: string }
+        issuer: { type: string }
+        subject: { type: string }
+        serialNumber: { type: string }
+        keyAlgorithm: { type: string }
+        signatureAlgorithm: { type: string }
+        notBefore: { type: string, format: date-time }
+        notAfter: { type: string, format: date-time }
+        dnsNames: { type: [array, "null"], items: { type: string } }
+        status: { type: string, enum: [pending_csr], description: Absent when active. }
+        csrPEM: { type: string }
+        csrSubject: { $ref: '#/components/schemas/CertCSRSubject' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/CertWarning' }
+          description: Parse warnings; only on POST / PUT.
+    CertExternalRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        description: { type: string }
+        certPEM: { type: string, description: "Leaf, or leaf + intermediates (split automatically)." }
+        keyPEM:
+          type: string
+          writeOnly: true
+          description: Private key PEM. Required on POST; "" on PUT keeps the stored key.
+        chainPEM:
+          type: [string, "null"]
+          description: Intermediates. PUT — absent / null keeps, "" clears.
+    CertCSRRequest:
+      type: object
+      additionalProperties: false
+      required: [csrSubject]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        csrSubject: { $ref: '#/components/schemas/CertCSRSubject' }
+
+    # ---------------- Error pages ----------------
+    ErrorPageTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 500 }
+        pages:
+          type: object
+          description: |
+            HTML per status code (keys 401, 403, 404, 429, 500, 502, 503,
+            504; max 1 MiB each). Caddy placeholders such as
+            `{http.error.status_code}` or `{http.request.host}` are expanded
+            at serve time.
+          additionalProperties: { type: string }
+        isCatchallDefault:
+          type: boolean
+          description: Use this template's 404 for hosts no route serves (at most one template).
+    ErrorPageTemplate:
+      type: object
+      required: [id, name, pages, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        pages: { type: object, additionalProperties: { type: string } }
+        createdAt: { type: string, format: date-time, description: Zero time on the built-in. }
+        updatedAt: { type: string, format: date-time }
+        isBuiltin: { type: boolean, description: True on the read-only `arenet-default`. }
+        isCatchallDefault: { type: boolean }
+
+    # ---------------- Settings tied to routes ----------------
+    RoutesMaintenancePage:
+      type: object
+      required: [html, isDefault, message]
+      properties:
+        html: { type: string }
+        isDefault: { type: boolean, description: '`html` is the built-in page.' }
+        message: { type: string, description: Global maintenance message (plain text). }
+    RoutesManagedDomain:
+      type: object
+      required: [apex, includeApex, providerId]
+      properties:
+        apex: { type: string, examples: [example.com] }
+        includeApex: { type: boolean, description: Also cover the bare apex. }
+        providerId: { type: string, description: DNS provider ID used for DNS-01. }
+    RoutesManagedDomainRequest:
+      type: object
+      additionalProperties: false
+      required: [apex]
+      properties:
+        apex: { type: string }
+        includeApex: { type: boolean, description: Default true. }
+        providerId: { type: string, description: A configured DNS provider ID. }
+        provider:
+          type: string
+          deprecated: true
+          description: Legacy (pre-v2.11). `ovh` without `providerId` picks the only configured provider.
+    RoutesRouteCheckConfig:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }

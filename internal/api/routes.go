@@ -156,6 +156,8 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 		// role gate for write endpoints + settings + admin users.
 		r.Group(func(r chi.Router) {
 			r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.tokenLookup(), h.devMode))
+			// v2.39 — OpenAPI description of this API (any signed-in user).
+			r.Get("/openapi.json", h.getOpenAPI)
 			r.Get("/routes", h.listRoutes)
 			r.Get("/routes/{id}", h.getRoute)
 			// Step R — custom error pages read-side (viewer-

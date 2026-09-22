@@ -1,0 +1,1721 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# OpenAPI fragment: global settings (DNS providers, forward-auth providers,
+# OIDC + allowlist, CrowdSec bouncer, MaxMind GeoIP credentials, security
+# automation) and alerting (channels, rules).
+paths:
+  # ---------------------------------------------------------------- DNS providers
+  /settings/dns-providers:
+    get:
+      summary: List DNS providers
+      description: |
+        All DNS-01 providers, sorted by label. Secret credentials are never
+        returned: `fields` holds only non-secret values and `secretsSet`
+        tells, per secret field, whether a value is stored. Empty list on a
+        fresh install.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Providers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SettingsDNSProvider' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Create a DNS provider
+      description: |
+        Creates a provider (new UUID) and reloads Caddy so DNS-01 routes can
+        use it immediately. `type` defaults to `ovh` when empty. Validation
+        errors are 400 with a `code`: `invalid_label`, `invalid_type`,
+        `invalid_endpoint`, `missing_credential`, `invalid_credential_field`
+        or `invalid_dns_provider` (all with `params.reason`). If the Caddy
+        reload fails the provider stays stored and a 500
+        `provider created but caddy reload failed` is returned (no rollback).
+        Audited as `dns_provider_created` (secrets scrubbed).
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsDNSProviderRequest' }
+            example:
+              label: Cloudflare main
+              type: cloudflare
+              credentials:
+                api_token: cf-xxxxxxxx
+      responses:
+        '201':
+          description: Created (secret-free view; `usedBy` is empty).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsDNSProvider' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/dns-providers/types:
+    get:
+      summary: List supported DNS provider types
+      description: |
+        The provider-type registry the settings form is generated from:
+        each type with its credential fields (key, label, secret, required,
+        enum, default). Metadata only, no stored values.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Registry, OVH first then alphabetical.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SettingsDNSProviderType' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /settings/dns-providers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/SettingsDNSProviderId'
+    get:
+      summary: Get a DNS provider
+      description: Secret-free view. 404 with code `provider_not_found` (params.id) when unknown.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Provider.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsDNSProvider' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Update a DNS provider
+      description: |
+        Full replace of label/type/credentials with preserve-on-edit for
+        secrets: a secret credential omitted from `credentials` keeps its
+        stored value **when the type is unchanged**; changing `type`
+        preserves nothing. Non-secret fields always overwrite. An empty
+        `type` keeps the stored type. Reloads Caddy (500
+        `provider updated but caddy reload failed` on failure, no rollback).
+        Errors: 404 `provider_not_found`; 400 with the same validation codes
+        as create. Audited as `dns_provider_updated`.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsDNSProviderRequest' }
+      responses:
+        '200':
+          description: Updated (secret-free view; `usedBy` is always empty in this response).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsDNSProvider' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Delete a DNS provider
+      description: |
+        Deletes the provider and reloads Caddy. Refused with 409:
+        - `provider_in_use` (`params.wildcards`: apexes of the managed
+          domains referencing it);
+        - `provider_in_use_by_routes` (`params.routes`: hosts of DNS-01
+          routes) when it is the last configured provider and DNS-01 routes
+          exist.
+
+        404 `provider_not_found` when unknown. Audited as `dns_provider_deleted`.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/dns-providers/{id}/test:
+    parameters:
+      - $ref: '#/components/parameters/SettingsDNSProviderId'
+    post:
+      summary: Test a saved DNS provider
+      description: |
+        Read-only probe of the **saved** credentials: instantiates the
+        provider's Caddy DNS module (the same code path ACME DNS-01 uses) and
+        lists the records of one zone. No record is created or changed.
+        15 s deadline. The body is optional; without `zone` the first
+        managed domain using this provider is used.
+
+        Once the request is well-formed the answer is always 200 with
+        `{ok, zone, records, error}`; a provider rejection is `ok:false` with
+        an error text scrubbed of this provider's secrets.
+
+        400 codes: `provider_not_configured` (a required credential is
+        missing), `zone_required` (no zone given and no managed domain uses
+        the provider), `invalid_zone`. 404 `provider_not_found`.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsDNSProviderTestRequest' }
+      responses:
+        '200':
+          description: Probe result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsDNSProviderTestResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ------------------------------------------------------ Forward-auth providers
+  /settings/forward-auth/providers:
+    get:
+      summary: List forward-auth providers
+      description: |
+        Forward-auth (Authelia / Authentik / Keycloak / generic) providers
+        referenced by routes with `authMode: forward_auth`. `clientSecret`
+        is always `""`; `clientSecretSet` tells whether one is stored.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Providers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SettingsForwardAuthProvider' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Create a forward-auth provider
+      description: |
+        Creates the provider and reloads Caddy; if Caddy refuses, the
+        provider is deleted again and 500 `caddy reload failed: …` is
+        returned. 409 when the name already exists. Audited (secret scrubbed).
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsForwardAuthProviderRequest' }
+            example:
+              name: authentik
+              kind: authentik
+              verifyUrl: http://authentik:9000
+              authRequestUri: /outpost.goauthentik.io/auth/caddy
+              copyHeaders: [X-Authentik-Username, X-Authentik-Email]
+              authPassthroughPrefix: /outpost.goauthentik.io
+              rewriteVerifyHost: true
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsForwardAuthProvider' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/forward-auth/providers/{name}:
+    parameters:
+      - $ref: '#/components/parameters/SettingsForwardAuthProviderName'
+    get:
+      summary: Get a forward-auth provider
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Provider (secret redacted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsForwardAuthProvider' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Update a forward-auth provider
+      description: |
+        Full replace. The path name wins over any `name` in the body (the
+        provider cannot be renamed). An empty `clientSecret` keeps the stored
+        secret. Reloads Caddy; the previous row is restored if Caddy refuses
+        (500 `caddy reload failed: …`).
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsForwardAuthProviderRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsForwardAuthProvider' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Delete a forward-auth provider
+      description: |
+        409 when at least one route (authMode `forward_auth`) references the
+        provider; the message lists the route IDs. Reloads Caddy; the
+        provider is re-created if Caddy refuses (500).
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ---------------------------------------------------------------------- OIDC
+  /settings/oidc:
+    get:
+      summary: Get the OIDC SSO configuration
+      description: |
+        Admin SSO login settings plus the allowlist. `clientSecret` is always
+        `""` (`clientSecretSet` flags a stored secret). On a fresh install
+        returns an empty shape with `configured: false`. The local login is
+        never affected by OIDC (break-glass).
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Configuration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsOIDC' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Save the OIDC SSO configuration
+      description: |
+        Full replace of the settings; the allowlist is preserved (it has its
+        own endpoints). An empty `clientSecret` keeps the stored one. A
+        trailing `/.well-known/openid-configuration` pasted into `issuerUrl`
+        is stripped.
+
+        When `enabled` is true the IdP discovery document is fetched
+        **before** saving (10 s timeout); an unreachable IdP or bad config is
+        a 400 `oidc config rejected: …`. Also 400 when enabled and
+        `issuerUrl` (http/https), `clientId`, `clientSecret`, `redirectUrl`
+        or `scopes` is missing, or `kind` is not a known value. A disabled
+        config is stored without these checks. Audited as `oidc_configured`
+        (first save) or `oidc_updated`.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsOIDCRequest' }
+      responses:
+        '200':
+          description: "Saved configuration (`configured: true`)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsOIDC' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/oidc/test:
+    post:
+      summary: Test the saved OIDC issuer
+      description: |
+        No body. Fetches `{issuerUrl}/.well-known/openid-configuration` of the
+        **saved** config (5 s deadline, redirects not followed, 64 KiB cap)
+        and compares `scopes_supported` with the saved scopes. Always 200
+        with `reachable:false` + `error` on a probe failure (including
+        `oidc not configured` when the saved issuer is empty).
+        A never-saved config currently answers 500 (`load oidc config: …`).
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Probe result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsOIDCTestResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/oidc/allowlist:
+    get:
+      summary: List the OIDC allowlist
+      description: Identities allowed to sign in through OIDC. Empty list when OIDC was never configured.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Allowlist.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SettingsOIDCAllowedIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Add an identity to the OIDC allowlist
+      description: |
+        Adds an entry. Without `sub`, the entry is *pending*: the first
+        login matches by email and requires the IdP to assert
+        `email_verified=true` (unless `acceptUnverifiedEmail` is set), then
+        pins the IdP `sub`. With `sub`, the entry matches by subject from
+        the first login (for IdPs that don't emit `email_verified`).
+
+        400: empty email, email > 320 chars or without `@`, `sub` > 256
+        chars. 409: email already present (case-insensitive) or `sub`
+        already used by another entry.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsOIDCAllowlistAddRequest' }
+      responses:
+        '201':
+          description: Added.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsOIDCAllowedIdentity' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/oidc/allowlist/{email}:
+    parameters:
+      - name: email
+        in: path
+        required: true
+        description: Email of the entry (URL-encoded; matched case-insensitively).
+        schema: { type: string }
+    delete:
+      summary: Remove an identity from the OIDC allowlist
+      description: 404 when OIDC was never configured (`oidc not configured`) or the email is not in the list.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '204':
+          description: Removed.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ------------------------------------------------------------------ CrowdSec
+  /settings/crowdsec:
+    get:
+      summary: Get the CrowdSec bouncer settings
+      description: |
+        LAPI connection of the embedded CrowdSec bouncer. `apiKey` is always
+        `""`; `configured` is true when a key is stored. With no saved row
+        the defaults are returned (`http://127.0.0.1:8080`, bouncer `arenet`,
+        5 s) with `configured: false`.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsCrowdSec' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Save the CrowdSec bouncer settings
+      description: |
+        Persists the settings and hot-reloads Caddy with the new bouncer
+        credentials. An empty `apiKey` keeps the stored key. When a key is
+        set, blank `lapiUrl` / `bouncerName` / `timeoutSeconds` fall back to
+        the defaults. 400 on an invalid URL (http/https only), a timeout
+        outside 1–60 s, or a bouncer name that is not 1–64 chars of
+        `[A-Za-z0-9._-]`. If Caddy refuses, the previous row is restored and
+        500 `caddy reload failed: …` is returned. Audited as
+        `crowdsec_configured` / `crowdsec_updated` (key scrubbed).
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsCrowdSecRequest' }
+      responses:
+        '200':
+          description: Persisted settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsCrowdSec' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Reset the CrowdSec bouncer settings
+      description: |
+        Deletes the saved row and hot-reloads Caddy without the bouncer
+        (IP-reputation gate off; WAF and rate limits unaffected). Idempotent.
+        Returns the not-configured shape. Rolled back if Caddy refuses (500).
+        Audited as `crowdsec_reset` when a row existed.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Not-configured settings (defaults, `configured:false`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsCrowdSec' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/crowdsec/test:
+    post:
+      summary: Test the CrowdSec LAPI connection
+      description: |
+        Calls `GET {lapiUrl}/v1/decisions` with the `X-Api-Key` header. No
+        state change. Values come from the body, each empty field falling
+        back to the saved row (then to the defaults); `useStored: true`
+        ignores the body fields. A JSON body is required (`{}` is fine).
+        400 `api key required to test connection` when no key is available.
+        Otherwise always 200: `ok` is true on HTTP 200/204; 401/403 gives
+        `authentication failed (invalid bouncer API key)`. Error texts never
+        contain the key.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsCrowdSecTestRequest' }
+      responses:
+        '200':
+          description: Probe result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsCrowdSecTestResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ------------------------------------------------------------------- MaxMind
+  /settings/maxmind:
+    get:
+      summary: Get the MaxMind GeoIP credentials
+      description: |
+        Account used by the GeoIP auto-updater. The license key is never
+        returned (no field at all); `configured` is true when an account ID
+        and a key are stored.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsMaxMind' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Save the MaxMind GeoIP credentials
+      description: |
+        An empty `licenseKey` keeps the stored key. `editionId` defaults to
+        `GeoLite2-City`. 400 when `accountId` ≤ 0 or no key is available.
+        No Caddy reload. Audited (key scrubbed).
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsMaxMindRequest' }
+      responses:
+        '200':
+          description: Persisted settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsMaxMind' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Delete the MaxMind GeoIP credentials
+      description: Wipes the saved row (idempotent) and returns the not-configured shape. Audited when a row existed.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Not-configured settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsMaxMind' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/maxmind/test:
+    post:
+      summary: Test MaxMind credentials
+      description: |
+        Makes a real authenticated request to MaxMind (12 s deadline)
+        without downloading the database. Values come from the body, each
+        empty field falling back to the saved row; `useStored: true` ignores
+        the body fields. A JSON body is required (`{}` is fine). Always 200:
+        `reachable:false` with `no credentials`, `credentials rejected: …` or
+        `could not reach MaxMind: …`.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsMaxMindTestRequest' }
+      responses:
+        '200':
+          description: Probe result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsMaxMindTestResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ---------------------------------------------------------------- Automation
+  /settings/automation:
+    get:
+      summary: Get security automation settings
+      description: |
+        CrowdSec auto-classify: the per-source ban rules and the LAPI
+        watcher credentials (password never returned). Rules default to all
+        disabled on a fresh install.
+      tags: [Settings]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Rules and credential status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsAutomation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/automation/rules:
+    put:
+      summary: Replace security automation rules
+      description: |
+        Validates, persists and applies the rule set to the running engine.
+        The body mirrors the `rules` object of the GET response. 400 on an
+        unknown source or, for an enabled rule, threshold < 1, window or
+        duration ≤ 0, or a negative cooldown. Returns the stored envelope.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsAutomationRulesEnvelope' }
+      responses:
+        '200':
+          description: Stored rules.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsAutomationRulesEnvelope' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/automation/credentials:
+    put:
+      summary: Save LAPI watcher credentials
+      description: |
+        Stores the machine credentials used to push decisions to LAPI and
+        swaps them into the running engine. An empty `password` keeps the
+        stored one (required on first save). All three fields empty erases
+        the credentials. The credentials are not checked against LAPI here.
+        400 when a field is missing.
+      tags: [Settings]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsAutomationCredentialsRequest' }
+      responses:
+        '200':
+          description: Credential status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsAutomationCredentials' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Reset LAPI watcher credentials
+      description: Wipes the credentials (rules are kept) and stops LAPI write-back. Idempotent; audited as `automation_reset` when a row existed.
+      tags: [Settings]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Empty credential status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsAutomationCredentials' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ------------------------------------------------------- Alerting — channels
+  /settings/alerting/channels:
+    get:
+      summary: List alert channels
+      description: |
+        Channels with secrets redacted in `config`: webhook URL reduced to
+        `scheme://host/[redacted]`, every webhook header value replaced by
+        `[redacted]`, email `smtpPassword` returned as `""`.
+      tags: [Alerting]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Channels.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AlertChannel' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Create an alert channel
+      description: |
+        `config` is validated for the `kind` (see AlertWebhookConfig /
+        AlertEmailConfig; templates must compile). 409 when the name is
+        taken. Audited with secrets redacted.
+      tags: [Alerting]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertChannelRequest' }
+            examples:
+              discord:
+                summary: Discord through a webhook channel
+                value:
+                  name: discord-ops
+                  kind: webhook
+                  enabled: true
+                  minSeverity: 1
+                  config:
+                    url: https://discord.com/api/webhooks/123/abc
+                    method: POST
+                    timeoutSeconds: 10
+                    bodyTemplate: '{"content": "[{{.Severity}}] {{.Subject}}"}'
+              email:
+                summary: SMTP with STARTTLS
+                value:
+                  name: mail-admin
+                  kind: email
+                  enabled: true
+                  minSeverity: 2
+                  config:
+                    smtpHost: smtp.example.com
+                    smtpPort: 587
+                    smtpUsername: arenet
+                    smtpPassword: secret
+                    from: arenet@example.com
+                    to: [admin@example.com]
+                    useTLS: false
+                    useStartTLS: true
+      responses:
+        '201':
+          description: Created (redacted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertChannel' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /settings/alerting/channels/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AlertChannelId'
+    get:
+      summary: Get an alert channel
+      tags: [Alerting]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Channel (redacted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertChannel' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Update an alert channel
+      description: |
+        Full replace. Preserve-on-edit secrets: an empty `smtpPassword`
+        keeps the stored password; a webhook header sent with an empty value
+        keeps its stored value. The webhook `url` is **not** preserved —
+        send the full URL (the GET value is redacted). Delivery telemetry
+        (`lastSentAt`, `lastError…`) is kept. 409 on a name clash.
+      tags: [Alerting]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertChannelRequest' }
+      responses:
+        '200':
+          description: Updated (redacted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertChannel' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Delete an alert channel
+      description: Rules referencing the channel are not modified.
+      tags: [Alerting]
+      x-arenet-role: admin
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/alerting/channels/{id}/test:
+    parameters:
+      - $ref: '#/components/parameters/AlertChannelId'
+    post:
+      summary: Send a test alert through a channel
+      description: |
+        No body. Sends a synthetic `info` event (category `system`) through
+        the dispatcher (15 s ceiling). The channel's `enabled` and
+        `minSeverity` gates apply, so a disabled channel answers
+        `ok:false` with the skip reason. Always 200 once the channel exists.
+      tags: [Alerting]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Send outcome.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertChannelTestResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  # ---------------------------------------------------------- Alerting — rules
+  /settings/alerting/rules:
+    get:
+      summary: List alert rules
+      description: Rules with their watcher telemetry (`lastEvalAt`, `lastFiredAt`, `lastError`). No secrets.
+      tags: [Alerting]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Rules.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AlertRule' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Create an alert rule
+      description: |
+        Validated against the source registry (`source` must exist and
+        accept `sourceParams`), the evaluator for `kind` (`evalParams`) and
+        the channel store (every `channels` ID must exist). `cooldownSecs`
+        0 means 300. Templates must compile. 409 when the name is taken.
+      tags: [Alerting]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertRuleRequest' }
+            examples:
+              wafRate:
+                summary: WAF blocks above 50 in 5 minutes
+                value:
+                  name: waf-block-burst
+                  enabled: true
+                  kind: threshold
+                  severity: 2
+                  category: waf
+                  source: waf_event_rate
+                  sourceParams: { action: BLOCK, windowSecs: 300 }
+                  evalParams: { operator: '>', value: 50 }
+                  channels: [3f2b1c9e-0000-4000-8000-000000000001]
+                  cooldownSecs: 900
+              crowdsecDegraded:
+                summary: CrowdSec component degraded
+                value:
+                  name: crowdsec-degraded
+                  enabled: true
+                  kind: state
+                  severity: 1
+                  category: system
+                  source: system_health
+                  sourceParams: { component: crowdsec }
+                  evalParams: { expected: degraded }
+                  channels: [3f2b1c9e-0000-4000-8000-000000000001]
+                  cooldownSecs: 3600
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertRule' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /settings/alerting/rules/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AlertRuleId'
+    get:
+      summary: Get an alert rule
+      tags: [Alerting]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Rule.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertRule' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Update an alert rule
+      description: Full replace with the same validation as create. Watcher telemetry is kept. 409 on a name clash.
+      tags: [Alerting]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlertRuleRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertRule' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Delete an alert rule
+      tags: [Alerting]
+      x-arenet-role: admin
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+  /settings/alerting/rules/{id}/test:
+    parameters:
+      - $ref: '#/components/parameters/AlertRuleId'
+    post:
+      summary: Fire a test alert for a rule
+      description: |
+        No body. Dispatches a synthetic `[TEST]` event with the rule's
+        severity and category to the rule's channels, **bypassing the
+        cooldown**; the source and evaluator are not consulted. Channel
+        `enabled` / `minSeverity` gates apply. 15 s ceiling.
+        200 with `sent:true` only when every channel fired; otherwise **502**
+        with the same body (`errors`, `skipped` per channel ID). 503 when
+        the dispatcher is not wired.
+      tags: [Alerting]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Delivered to every channel.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertRuleTestResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '502':
+          description: At least one channel failed or was skipped, or the rule has no channel.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertRuleTestResult' }
+        '503':
+          description: Alerting dispatcher not wired (`alerting dispatcher not wired`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  parameters:
+    SettingsDNSProviderId:
+      name: id
+      in: path
+      required: true
+      description: DNS provider UUID.
+      schema: { type: string, format: uuid }
+    SettingsForwardAuthProviderName:
+      name: name
+      in: path
+      required: true
+      description: Provider name (slug, `^[a-z0-9-]{1,32}$`).
+      schema: { type: string, pattern: '^[a-z0-9-]{1,32}$' }
+    AlertChannelId:
+      name: id
+      in: path
+      required: true
+      description: Channel UUID.
+      schema: { type: string, format: uuid }
+    AlertRuleId:
+      name: id
+      in: path
+      required: true
+      description: Rule UUID.
+      schema: { type: string, format: uuid }
+
+  schemas:
+    # ---------------------------------------------------------- DNS providers
+    SettingsDNSProvider:
+      type: object
+      description: DNS provider as returned by the API. Secret credentials are never included.
+      required: [id, label, type, endpoint, configured, fields, secretsSet, usedBy]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string }
+        type:
+          $ref: '#/components/schemas/SettingsDNSProviderTypeName'
+        endpoint:
+          type: string
+          description: Legacy OVH field (the OVH `endpoint` credential); empty for other types.
+        configured:
+          type: boolean
+          description: True when every required field of the type is set.
+        fields:
+          type: object
+          additionalProperties: { type: string }
+          description: Non-secret credential values by key (e.g. OVH `endpoint`, Route 53 `region`, `access_key_id`).
+        secretsSet:
+          type: object
+          additionalProperties: { type: boolean }
+          description: One entry per secret field of the type — true when a value is stored.
+        usedBy:
+          type: array
+          items: { type: string }
+          description: Apexes of the managed (wildcard) domains using this provider.
+    SettingsDNSProviderTypeName:
+      type: string
+      enum: [ovh, cloudflare, digitalocean, gandi, hetzner, infomaniak, porkbun, route53, scaleway]
+      description: Provider type = suffix of the Caddy module `dns.providers.<type>`.
+    SettingsDNSProviderRequest:
+      type: object
+      description: |
+        Body of POST / PUT. `credentials` keys depend on `type` (* = secret,
+        write-only; R = required):
+
+        | type | keys |
+        |---|---|
+        | `ovh` | `endpoint` R (one of `ovh-eu`, `ovh-ca`, `ovh-us`, `kimsufi-eu`, `kimsufi-ca`, `soyoustart-eu`, `soyoustart-ca`; default `ovh-eu`), `application_key`* R, `application_secret`* R, `consumer_key`* R |
+        | `cloudflare` | `api_token`* R (Zone.DNS:Edit), `zone_token`* (Zone:Read) |
+        | `digitalocean` | `auth_token`* R |
+        | `gandi` | `bearer_token`* R (personal access token) |
+        | `hetzner` | `api_token`* R (Hetzner Cloud API token) |
+        | `infomaniak` | `api_token`* R |
+        | `porkbun` | `api_key`* R, `api_secret_key`* R |
+        | `route53` | `region` R (default `us-east-1`), `access_key_id` R, `secret_access_key`* R, `hosted_zone_id` |
+        | `scaleway` | `secret_key`* R, `organization_id` R |
+
+        A key not listed for the type is rejected (`invalid_credential_field`).
+        The authoritative list is `GET /settings/dns-providers/types`.
+      additionalProperties: false
+      properties:
+        label:
+          type: string
+          description: Display name (required, non-empty).
+        type:
+          description: Provider type. Empty = `ovh` on create, unchanged on update.
+          anyOf:
+            - $ref: '#/components/schemas/SettingsDNSProviderTypeName'
+            - { type: string, const: '' }
+        credentials:
+          type: object
+          additionalProperties: { type: string }
+          writeOnly: true
+          description: Credential values by key. On PUT, an omitted secret keeps its stored value (same type only).
+        endpoint:
+          type: string
+          deprecated: true
+          description: Legacy OVH shape (pre-v2.26), folded into `credentials.endpoint` when type is `ovh`/empty.
+        applicationKey:
+          type: string
+          writeOnly: true
+          deprecated: true
+          description: Legacy OVH shape → `credentials.application_key`.
+        applicationSecret:
+          type: string
+          writeOnly: true
+          deprecated: true
+          description: Legacy OVH shape → `credentials.application_secret`.
+        consumerKey:
+          type: string
+          writeOnly: true
+          deprecated: true
+          description: Legacy OVH shape → `credentials.consumer_key`.
+    SettingsDNSProviderType:
+      type: object
+      required: [type, label, docsUrl, fields]
+      properties:
+        type: { $ref: '#/components/schemas/SettingsDNSProviderTypeName' }
+        label: { type: string, description: 'Display name, e.g. "OVHcloud".' }
+        docsUrl: { type: string, format: uri, description: "Where to create the credentials." }
+        fields:
+          type: array
+          items: { $ref: '#/components/schemas/SettingsDNSProviderField' }
+    SettingsDNSProviderField:
+      type: object
+      required: [key, label, secret, required]
+      properties:
+        key: { type: string, description: "Credential key (JSON key of the Caddy module)." }
+        label: { type: string, description: "Default English form label." }
+        secret: { type: boolean, description: "Never returned by the API; redacted in audit, backups and errors." }
+        required: { type: boolean }
+        enum:
+          type: array
+          items: { type: string }
+          description: Closed set of accepted values, when present.
+        default: { type: string, description: "Value pre-filled on create, when present." }
+    SettingsDNSProviderTestRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        zone:
+          type: string
+          description: Zone (bare domain) to list. Default = first managed domain using the provider.
+    SettingsDNSProviderTestResult:
+      type: object
+      required: [ok, zone, records]
+      properties:
+        ok: { type: boolean }
+        zone: { type: string, description: "Zone actually probed." }
+        records: { type: integer, description: "Number of records listed (0 when ok is false)." }
+        error: { type: string, description: "Provider error, scrubbed of secrets (only when ok is false)." }
+
+    # ------------------------------------------------- Forward-auth providers
+    SettingsForwardAuthProviderKind:
+      type: string
+      enum: [authelia, authentik, keycloak, generic]
+    SettingsForwardAuthProvider:
+      type: object
+      required: [name, kind, verifyUrl, authRequestUri, copyHeaders, clientSecret, clientSecretSet, authPassthroughPrefix, rewriteVerifyHost, createdAt, updatedAt]
+      properties:
+        name: { type: string }
+        kind: { $ref: '#/components/schemas/SettingsForwardAuthProviderKind' }
+        verifyUrl: { type: string }
+        authRequestUri: { type: string }
+        copyHeaders:
+          type: array
+          items: { type: string }
+        clientSecret:
+          type: string
+          const: ''
+          description: Always empty (redacted).
+        clientSecretSet: { type: boolean, description: "True when a client secret is stored." }
+        authPassthroughPrefix: { type: string }
+        rewriteVerifyHost: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    SettingsForwardAuthProviderRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, verifyUrl, authRequestUri]
+      properties:
+        name:
+          type: string
+          pattern: '^[a-z0-9-]{1,32}$'
+          description: Unique slug (required on POST; ignored on PUT — the path wins).
+        kind: { $ref: '#/components/schemas/SettingsForwardAuthProviderKind' }
+        verifyUrl:
+          type: string
+          description: http(s) URL of the IdP verification endpoint (host required).
+        authRequestUri:
+          type: string
+          description: Path of the auth request on the IdP, must start with `/`.
+        copyHeaders:
+          type: array
+          items: { type: string }
+          description: Response headers copied from the IdP to the upstream request (valid header names).
+        clientSecret:
+          type: string
+          writeOnly: true
+          description: IdP-issued secret. Empty on PUT keeps the stored value.
+        authPassthroughPrefix:
+          type: string
+          maxLength: 256
+          description: |
+            Optional path prefix served by the IdP on the application host
+            (e.g. `/outpost.goauthentik.io`, `/oauth2`), proxied without the
+            forward-auth gate. Must start with `/`, no whitespace.
+        rewriteVerifyHost:
+          type: boolean
+          description: Rewrite the Host of the verification sub-request to the verifyUrl host (needed by Authentik embedded outpost).
+
+    # ---------------------------------------------------------------- OIDC
+    SettingsOIDCKind:
+      type: string
+      enum: [authentik, keycloak, authelia, generic, '']
+      description: Provider kind (login-button hint). Empty = generic.
+    SettingsOIDC:
+      type: object
+      required: [enabled, issuerUrl, clientId, clientSecret, clientSecretSet, scopes, redirectUrl, acceptUnverifiedEmail, kind, allowedIdentities, configured]
+      properties:
+        enabled: { type: boolean }
+        issuerUrl: { type: string }
+        clientId: { type: string }
+        clientSecret:
+          type: string
+          const: ''
+          description: Always empty (redacted).
+        clientSecretSet: { type: boolean }
+        scopes:
+          type: array
+          items: { type: string }
+        redirectUrl: { type: string }
+        acceptUnverifiedEmail: { type: boolean }
+        kind: { $ref: '#/components/schemas/SettingsOIDCKind' }
+        allowedIdentities:
+          type: array
+          items: { $ref: '#/components/schemas/SettingsOIDCAllowedIdentity' }
+        configured:
+          type: boolean
+          description: False only when OIDC was never saved.
+    SettingsOIDCRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+          description: When true, all other fields except kind are required and the IdP must be reachable.
+        issuerUrl:
+          type: string
+          description: Issuer URL (http/https). A trailing `/.well-known/openid-configuration` is stripped.
+        clientId: { type: string }
+        clientSecret:
+          type: string
+          writeOnly: true
+          description: Empty keeps the stored secret.
+        scopes:
+          type: array
+          items: { type: string }
+          examples: [[openid, email, profile]]
+        redirectUrl:
+          type: string
+          description: Callback URL registered at the IdP (`…/api/v1/auth/oidc/callback`).
+        acceptUnverifiedEmail:
+          type: boolean
+          description: |
+            Allow the email bootstrap of pending allowlist entries without
+            `email_verified=true`. Only for self-hosted IdPs you control.
+        kind: { $ref: '#/components/schemas/SettingsOIDCKind' }
+    SettingsOIDCAllowedIdentity:
+      type: object
+      required: [email, displayName, sub, addedAt]
+      properties:
+        email: { type: string }
+        displayName: { type: string }
+        sub:
+          type: string
+          description: IdP subject. Empty = pending (first login not done yet and no sub pre-filled).
+        addedAt: { type: string, format: date-time }
+        firstLoginAt:
+          type: string
+          format: date-time
+          description: Present once the identity has signed in.
+    SettingsOIDCAllowlistAddRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email: { type: string, maxLength: 320, description: "Must contain `@`." }
+        displayName: { type: string }
+        sub:
+          type: string
+          maxLength: 256
+          description: Optional IdP subject to pre-fill (skips the email bootstrap).
+    SettingsOIDCTestResult:
+      type: object
+      required: [reachable, scopesMatch, latencyMs]
+      properties:
+        reachable: { type: boolean }
+        issuer:
+          type: string
+          description: Issuer advertised by the discovery document (may differ from the saved one).
+        supportedScopes:
+          type: array
+          items: { type: string }
+          description: Sorted `scopes_supported`.
+        scopesMatch: { type: boolean, description: "Every saved scope is advertised." }
+        missingScopes:
+          type: array
+          items: { type: string }
+          description: Saved scopes the IdP doesn't advertise (only when scopesMatch is false).
+        latencyMs: { type: integer }
+        error: { type: string, description: "Present when reachable is false." }
+
+    # ------------------------------------------------------------- CrowdSec
+    SettingsCrowdSec:
+      type: object
+      required: [lapiUrl, apiKey, bouncerName, timeoutSeconds, configured]
+      properties:
+        lapiUrl: { type: string, examples: ['http://127.0.0.1:8080'] }
+        apiKey:
+          type: string
+          const: ''
+          description: Always empty (redacted).
+        bouncerName: { type: string }
+        timeoutSeconds: { type: integer }
+        configured: { type: boolean, description: "True when a bouncer API key is stored." }
+        updatedAt: { type: string, format: date-time }
+    SettingsCrowdSecRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        lapiUrl:
+          type: string
+          description: LAPI base URL (http/https). Empty = `http://127.0.0.1:8080`.
+        apiKey:
+          type: string
+          writeOnly: true
+          description: Bouncer API key (`cscli bouncers add`). Empty keeps the stored key.
+        bouncerName:
+          type: string
+          maxLength: 64
+          description: '`[A-Za-z0-9._-]`. Empty = `arenet`.'
+        timeoutSeconds:
+          type: integer
+          minimum: 0
+          maximum: 60
+          description: 1–60; 0 = default 5.
+    SettingsCrowdSecTestRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        lapiUrl: { type: string }
+        apiKey: { type: string, writeOnly: true }
+        timeoutSeconds: { type: integer, description: "Probe timeout (values outside 1–60 use 5 s)." }
+        useStored: { type: boolean, description: "Ignore the other fields and test the saved settings." }
+    SettingsCrowdSecTestResult:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        statusCode: { type: integer, description: "HTTP status returned by LAPI." }
+        version: { type: string, description: "LAPI version (`X-Crowdsec-Version` header) when ok." }
+        error: { type: string }
+        effectiveUrl: { type: string, description: "LAPI URL actually probed." }
+
+    # -------------------------------------------------------------- MaxMind
+    SettingsMaxMind:
+      type: object
+      required: [accountId, editionId, configured]
+      properties:
+        accountId: { type: integer }
+        editionId: { type: string, examples: [GeoLite2-City] }
+        configured: { type: boolean, description: "Account ID and license key are stored." }
+    SettingsMaxMindRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        accountId: { type: integer, minimum: 1 }
+        licenseKey:
+          type: string
+          writeOnly: true
+          description: Empty keeps the stored key.
+        editionId:
+          type: string
+          description: Database edition. Empty = `GeoLite2-City`.
+    SettingsMaxMindTestRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        accountId: { type: integer }
+        licenseKey: { type: string, writeOnly: true }
+        editionId: { type: string }
+        useStored: { type: boolean }
+    SettingsMaxMindTestResult:
+      type: object
+      required: [reachable]
+      properties:
+        reachable: { type: boolean }
+        error: { type: string }
+
+    # ----------------------------------------------------------- Automation
+    SettingsAutomation:
+      type: object
+      required: [rules, credentials]
+      properties:
+        rules: { $ref: '#/components/schemas/SettingsAutomationRuleSet' }
+        credentials: { $ref: '#/components/schemas/SettingsAutomationCredentials' }
+    SettingsAutomationRulesEnvelope:
+      type: object
+      additionalProperties: false
+      required: [rules]
+      properties:
+        rules: { $ref: '#/components/schemas/SettingsAutomationRuleSet' }
+    SettingsAutomationRuleSet:
+      type: object
+      required: [rules]
+      properties:
+        rules:
+          type: object
+          description: |
+            Rule per event source. Keys: `waf-sqli`, `waf-xss`, `waf-rce`,
+            `waf-lfi`, `waf-protocol`, `waf-other`, `throttle-tier1`,
+            `throttle-tier2`, `auth-burst`.
+          propertyNames:
+            enum: [waf-sqli, waf-xss, waf-rce, waf-lfi, waf-protocol, waf-other, throttle-tier1, throttle-tier2, auth-burst]
+          additionalProperties: { $ref: '#/components/schemas/SettingsAutomationRule' }
+    SettingsAutomationRule:
+      type: object
+      description: Ban an IP in CrowdSec once it produced `threshold` events within `window_ns`. Durations are in nanoseconds.
+      properties:
+        enabled: { type: boolean }
+        threshold: { type: integer, description: "Events from one IP (≥ 1 when enabled)." }
+        window_ns: { type: integer, format: int64, description: "Sliding window (ns, > 0 when enabled)." }
+        duration_ns: { type: integer, format: int64, description: "Ban duration (ns, > 0 when enabled)." }
+        cooldown_ns: { type: integer, format: int64, description: "Honour window after an operator removes the ban (ns, ≥ 0)." }
+    SettingsAutomationCredentials:
+      type: object
+      required: [lapiUrl, machineId, configured]
+      properties:
+        lapiUrl: { type: string }
+        machineId: { type: string }
+        configured: { type: boolean, description: "Credentials are stored (live engine state when running)." }
+    SettingsAutomationCredentialsRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        lapiUrl: { type: string }
+        machineId: { type: string, description: "Machine registered with `cscli machines add`." }
+        password:
+          type: string
+          writeOnly: true
+          description: Empty keeps the stored password.
+
+    # ----------------------------------------------------- Alerting channels
+    AlertSeverity:
+      type: integer
+      enum: [0, 1, 2, 3]
+      description: 0 info, 1 warning, 2 critical, 3 emergency.
+    AlertChannel:
+      type: object
+      required: [id, name, kind, enabled, minSeverity, config, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        kind: { type: string, enum: [webhook, email] }
+        enabled: { type: boolean }
+        minSeverity: { $ref: '#/components/schemas/AlertSeverity' }
+        config:
+          description: Kind-specific config, secrets redacted (see list operation).
+          oneOf:
+            - $ref: '#/components/schemas/AlertWebhookConfig'
+            - $ref: '#/components/schemas/AlertEmailConfig'
+        lastSentAt: { type: string, format: date-time }
+        lastError: { type: string }
+        lastErrorAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AlertChannelRequest:
+      type: object
+      additionalProperties: false
+      required: [name, kind, config]
+      properties:
+        name:
+          type: string
+          pattern: '^[a-z0-9-]{1,64}$'
+          description: Unique slug.
+        kind:
+          type: string
+          enum: [webhook, email]
+          description: Discord, Slack, ntfy, Gotify… are `webhook` channels with a `bodyTemplate`.
+        enabled: { type: boolean }
+        minSeverity:
+          $ref: '#/components/schemas/AlertSeverity'
+        config:
+          oneOf:
+            - $ref: '#/components/schemas/AlertWebhookConfig'
+            - $ref: '#/components/schemas/AlertEmailConfig'
+    AlertWebhookConfig:
+      type: object
+      title: webhook
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: http(s) URL. Treated as a secret — GET returns `scheme://host/[redacted]`.
+        method:
+          type: string
+          enum: [POST, '']
+          description: Only POST is supported (empty = POST).
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: Extra request headers. GET returns every value as `[redacted]`; on PUT an empty value keeps the stored one.
+        timeoutSeconds:
+          type: integer
+          minimum: 0
+          maximum: 60
+          description: 1–60; 0 = 10.
+        bodyTemplate:
+          type: string
+          description: |
+            Go text/template rendered with the alert event (`.Subject`,
+            `.Severity`, `.Body`, `.Category`, `.RuleName`, `.Timestamp`,
+            `.Labels`…). Empty = the event as JSON.
+    AlertEmailConfig:
+      type: object
+      title: email
+      required: [smtpHost, smtpPort, from, to]
+      properties:
+        smtpHost: { type: string, description: "Host only (no port)." }
+        smtpPort: { type: integer, minimum: 1, maximum: 65535 }
+        smtpUsername: { type: string }
+        smtpPassword:
+          type: string
+          writeOnly: true
+          description: GET returns `""`; empty on PUT keeps the stored password.
+        from: { type: string, description: "RFC 5322 address." }
+        to:
+          type: array
+          minItems: 1
+          items: { type: string }
+        cc:
+          type: array
+          items: { type: string }
+        bcc:
+          type: array
+          items: { type: string }
+        useTLS: { type: boolean, description: "Implicit TLS (port 465). Exclusive with useStartTLS." }
+        useStartTLS: { type: boolean, description: "STARTTLS upgrade (port 587)." }
+        subjectTemplate:
+          type: string
+          description: 'Go text/template. Default `[{{.Severity}}] {{.Subject}}`.'
+        bodyTemplate:
+          type: string
+          description: Go text/template. Default = plain-text summary.
+    AlertChannelTestResult:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        error: { type: string, description: "Send error or skip reason (e.g. channel disabled)." }
+
+    # -------------------------------------------------------- Alerting rules
+    AlertRule:
+      type: object
+      required: [id, name, enabled, kind, severity, category, source, sourceParams, evalParams, channels, cooldownSecs, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        enabled: { type: boolean }
+        kind: { type: string, enum: [threshold, state] }
+        severity: { $ref: '#/components/schemas/AlertSeverity' }
+        category: { type: string }
+        source: { $ref: '#/components/schemas/AlertRuleSource' }
+        sourceParams: { $ref: '#/components/schemas/AlertRuleSourceParams' }
+        evalParams: { $ref: '#/components/schemas/AlertRuleEvalParams' }
+        channels:
+          type: array
+          items: { type: string, format: uuid }
+        cooldownSecs: { type: integer }
+        subjectTemplate: { type: string }
+        bodyTemplate: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastFiredAt: { type: string, format: date-time }
+        lastEvalAt: { type: string, format: date-time }
+        lastError: { type: string }
+        lastErrorAt: { type: string, format: date-time }
+    AlertRuleRequest:
+      type: object
+      additionalProperties: false
+      required: [name, kind, source, sourceParams, evalParams, channels]
+      properties:
+        name:
+          type: string
+          pattern: '^[a-z0-9-]{1,64}$'
+          description: Unique slug.
+        enabled: { type: boolean }
+        kind:
+          type: string
+          enum: [threshold, state]
+          description: '`threshold` compares a numeric source value; `state` matches a string value.'
+        severity: { $ref: '#/components/schemas/AlertSeverity' }
+        category:
+          type: string
+          description: Free-form label carried by the alert event (e.g. `waf`, `cert`, `system`).
+        source: { $ref: '#/components/schemas/AlertRuleSource' }
+        sourceParams: { $ref: '#/components/schemas/AlertRuleSourceParams' }
+        evalParams: { $ref: '#/components/schemas/AlertRuleEvalParams' }
+        channels:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+          description: IDs of existing channels.
+        cooldownSecs:
+          type: integer
+          minimum: 0
+          maximum: 86400
+          description: Silence after a fire, 30–86400 s; 0 = 300.
+        subjectTemplate: { type: string, description: "Go text/template; empty = default." }
+        bodyTemplate: { type: string, description: "Go text/template; empty = default." }
+    AlertRuleSource:
+      type: string
+      enum: [waf_event_rate, cert_expiry, cert_renewal_failed, cert_manual_expiring, system_health, update_available]
+      description: |
+        Value read each tick:
+        - `waf_event_rate` (number): WAF events in the window.
+        - `cert_expiry` (number): days until expiry of `host`, or of the earliest-expiring cert.
+        - `cert_renewal_failed` (number): failed renewals in the window.
+        - `cert_manual_expiring` (number): uploaded certificates expiring within `thresholdDays`.
+        - `system_health` (string): `healthy` / `degraded` / `unhealthy` of a component or overall.
+        - `update_available` (string): `available` or `up_to_date`.
+
+        Sources whose backing store is disabled are not registered.
+    AlertRuleSourceParams:
+      description: Source parameters (use `{}` when none).
+      anyOf:
+        - $ref: '#/components/schemas/AlertWafEventRateParams'
+        - $ref: '#/components/schemas/AlertCertExpiryParams'
+        - $ref: '#/components/schemas/AlertCertRenewalFailedParams'
+        - $ref: '#/components/schemas/AlertCertManualExpiringParams'
+        - $ref: '#/components/schemas/AlertSystemHealthParams'
+        - { type: object, title: update_available (no params) }
+    AlertWafEventRateParams:
+      type: object
+      title: waf_event_rate
+      properties:
+        routeId: { type: string, description: "Empty = all routes." }
+        category: { type: string, description: "CRS category (e.g. `sqli`); empty = all." }
+        action: { type: string, enum: ['', BLOCK, DETECT] }
+        windowSecs: { type: integer, minimum: 0, maximum: 86400, description: "60–86400; 0 = 300." }
+    AlertCertExpiryParams:
+      type: object
+      title: cert_expiry
+      properties:
+        host: { type: string, description: "Empty = earliest-expiring certificate." }
+    AlertCertRenewalFailedParams:
+      type: object
+      title: cert_renewal_failed
+      properties:
+        domain: { type: string, description: "Empty = all domains." }
+        windowSecs: { type: integer, minimum: 0, maximum: 604800, description: "60–604800; 0 = 86400." }
+    AlertCertManualExpiringParams:
+      type: object
+      title: cert_manual_expiring
+      properties:
+        thresholdDays: { type: integer, description: "Window in days; ≤ 0 = 30." }
+    AlertSystemHealthParams:
+      type: object
+      title: system_health
+      properties:
+        component:
+          type: string
+          description: '`caddy`, `boltdb`, `metrics`, `crowdsec`, `certmagic`; empty = overall status.'
+    AlertRuleEvalParams:
+      description: Evaluator parameters for `kind`.
+      oneOf:
+        - $ref: '#/components/schemas/AlertThresholdParams'
+        - $ref: '#/components/schemas/AlertStateParams'
+    AlertThresholdParams:
+      type: object
+      title: threshold
+      required: [operator, value]
+      properties:
+        operator: { type: string, enum: ['>', '>=', '<', '<=', '==', '!='] }
+        value: { type: number }
+    AlertStateParams:
+      type: object
+      title: state
+      required: [expected]
+      properties:
+        expected: { type: string, description: "Exact, case-sensitive value that fires the rule." }
+    AlertRuleTestResult:
+      type: object
+      required: [sent, channelsFired]
+      properties:
+        sent: { type: boolean, description: "Every channel of the rule fired." }
+        channelsFired:
+          type: array
+          items: { type: string }
+        errors:
+          type: object
+          additionalProperties: { type: string }
+          description: Send error by channel ID.
+        skipped:
+          type: object
+          additionalProperties: { type: string }
+          description: Gate reason by channel ID (disabled, below minSeverity).

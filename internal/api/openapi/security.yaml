@@ -1,0 +1,1431 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# OpenAPI fragment: security events (WAF, login throttle, rate limit,
+# country block, CrowdSec decisions / manual bans / scenarios, attackers
+# summary), observability feeds (cert / alert / geo events, server
+# position, metrics), topology and WebSocket streams, GeoIP helpers and
+# the audit log.
+paths:
+  # ---------------------------------------------------------------- Security
+  /security/events:
+    get:
+      summary: List recent WAF events
+      description: |
+        Most recent Coraza WAF events (newest first), in both block and
+        detect-only mode. `ruleName` is filled for the route's guided custom
+        rules (ID range 120000-129999).
+
+        Degraded mode: when the observability store failed at boot the
+        response is `200 {"disabled": true, "events": []}`. A query failure
+        returns 503.
+      tags: [Security]
+      x-arenet-role: viewer
+      parameters:
+        - name: limit
+          in: query
+          description: Rows to return. Default and maximum 100 (larger values are clamped silently).
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        - $ref: '#/components/parameters/SecRouteFilter'
+        - name: category
+          in: query
+          description: Filter to one WAF category (see `SecWafEvent.category`). Unknown values match nothing.
+          schema: { type: string }
+      responses:
+        '200':
+          description: WAF events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  disabled:
+                    type: boolean
+                    description: Present and true when the observability subsystem is unavailable.
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/SecWafEvent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Event store query failed (`security events unavailable`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /security/events/by-rule:
+    get:
+      summary: Aggregate WAF events per rule
+      description: |
+        Counts WAF events per (ruleId, category) over a rolling window,
+        sorted by count descending. At least one of `route` or `category`
+        is required. Degraded mode: `200 {"disabled": true, "rows": []}`.
+      tags: [Security]
+      x-arenet-role: viewer
+      parameters:
+        - $ref: '#/components/parameters/SecRouteFilter'
+        - name: category
+          in: query
+          description: Filter to one WAF category. Required when `route` is absent.
+          schema: { type: string }
+        - $ref: '#/components/parameters/SecWindow'
+      responses:
+        '200':
+          description: Per-rule aggregates.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rows]
+                properties:
+                  disabled: { type: boolean }
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      required: [ruleId, category, count, lastSeen]
+                      properties:
+                        ruleId: { type: string }
+                        category: { type: string }
+                        count: { type: integer, format: int64 }
+                        lastSeen: { type: string, format: date-time }
+        '400':
+          description: '`route or category is required` or `window must be 24h or 30d`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Event store query failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /security/auth-failures:
+    get:
+      summary: Admin-login failures over a window
+      description: |
+        Projection of the audit log's authentication-failure actions
+        (failed logins, failed unlocks, rejected OIDC logins...). Returns a
+        per-minute time series (gap-filled with 0) and the 100 most recent
+        failures. The audit scan is capped at 200 events; `partial: true`
+        signals the cap was hit. Degraded mode: `disabled: true`.
+      tags: [Security]
+      x-arenet-role: viewer
+      parameters:
+        - $ref: '#/components/parameters/SecWindow'
+      responses:
+        '200':
+          description: Time series and recent failures.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [window, timeseries, recent]
+                properties:
+                  disabled: { type: boolean }
+                  window: { type: string, description: Echo of the `window` parameter. }
+                  partial:
+                    type: boolean
+                    description: True when the underlying audit scan hit its 200-event cap.
+                  timeseries:
+                    type: array
+                    description: One point per minute of the window.
+                    items: { $ref: '#/components/schemas/SecCountPoint' }
+                  recent:
+                    type: array
+                    maxItems: 100
+                    items:
+                      type: object
+                      required: [ts, action]
+                      properties:
+                        ts: { type: string, format: date-time }
+                        action: { type: string, description: 'Audit action, e.g. `login_failure`.' }
+                        username: { type: string, description: Attempted username. }
+                        srcIp: { type: string }
+                        message: { type: string }
+        '400':
+          description: '`window must be 24h or 30d`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Audit scan failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /security/throttle-events:
+    get:
+      summary: List admin-login throttle blocks
+      description: |
+        Blocks issued by the admin-login rate limiter, newest first.
+        Tier 1 = 5 failures in 5 min, tier 2 = 10 failures in 1 h.
+        Degraded mode: `200 {"disabled": true, "events": []}`.
+      tags: [Security]
+      x-arenet-role: viewer
+      parameters:
+        - name: limit
+          in: query
+          description: Rows to return. Default and maximum 100 (clamped silently).
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        - name: tier
+          in: query
+          description: Filter to one tier.
+          schema: { type: integer, enum: [1, 2] }
+        - name: srcIp
+          in: query
+          description: Filter to one source IP.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Throttle events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  disabled: { type: boolean }
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/SecThrottleEvent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Event store query failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /security/rate-limit-events:
+    get:
+      summary: List per-route rate-limit (429) events
+      description: |
+        Requests rejected by a route's rate limit (caddy-ratelimit), newest
+        first. `total` is the number of rows returned; `hasMore` is true when
+        the page is full and `limit` is below the 1000 cap. Degraded mode:
+        `200 {"degraded": true, "events": []}`.
+      tags: [Security]
+      x-arenet-role: viewer
+      parameters:
+        - name: limit
+          in: query
+          description: Rows to return. Default 100, maximum 1000 (clamped silently).
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - $ref: '#/components/parameters/SecRouteFilter'
+        - name: remoteIp
+          in: query
+          description: Filter to one client IP.
+          schema: { type: string }
+        - $ref: '#/components/parameters/SecSince'
+        - $ref: '#/components/parameters/SecUntil'
+      responses:
+        '200':
+          description: Rate-limit events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, total, hasMore]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/SecRateLimitEvent' }
+                  total: { type: integer, format: int64 }
+                  hasMore: { type: boolean }
+                  degraded: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Event store query failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /security/attackers-summary:
+    get:
+      summary: Count unique attacking IPs
+      description: |
+        Number of distinct source IPs seen over the window across WAF
+        events, login throttle blocks, audit auth failures and CrowdSec
+        decisions, with the per-source breakdown. `partial: true` when some
+        sources are unavailable; `disabled: true` when all are.
+      tags: [Security]
+      x-arenet-role: viewer
+      parameters:
+        - $ref: '#/components/parameters/SecWindow'
+      responses:
+        '200':
+          description: Attackers summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [window, uniqueIps, byBucketSource]
+                properties:
+                  disabled: { type: boolean }
+                  partial: { type: boolean }
+                  window: { type: string }
+                  uniqueIps:
+                    type: integer
+                    description: Size of the union of all sources.
+                  byBucketSource:
+                    type: object
+                    required: [waf, throttle, audit, crowdsec]
+                    description: Distinct IPs per source (a single IP may count in several).
+                    properties:
+                      waf: { type: integer }
+                      throttle: { type: integer }
+                      audit: { type: integer }
+                      crowdsec: { type: integer }
+        '400':
+          description: '`window must be 24h or 30d`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: A source query failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /security/decisions:
+    get:
+      summary: List CrowdSec decisions seen by the bouncer
+      description: |
+        Local, persisted history of the CrowdSec decisions received by the
+        embedded bouncer (newest first). For what LAPI enforces right now,
+        use `GET /security/crowdsec/decisions`. Degraded mode:
+        `200 {"disabled": true, "events": []}`.
+      tags: [Security]
+      x-arenet-role: viewer
+      parameters:
+        - name: limit
+          in: query
+          description: Rows to return. Default and maximum 100 (clamped silently).
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        - name: scope
+          in: query
+          description: Filter on decision scope (e.g. `Ip`, `Range`).
+          schema: { type: string }
+        - name: srcIp
+          in: query
+          description: Filter on the decision value (IP / range).
+          schema: { type: string }
+        - name: scenario
+          in: query
+          description: Filter on the scenario name.
+          schema: { type: string }
+        - name: onlyActive
+          in: query
+          description: '`true` keeps only decisions that have not expired yet.'
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Decisions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  disabled: { type: boolean }
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/SecDecision' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Event store query failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /security/crowdsec/decisions:
+    get:
+      summary: List decisions live from CrowdSec LAPI
+      description: |
+        Pass-through to LAPI `GET /v1/decisions` using the bouncer
+        credentials: what LAPI enforces right now. `scope` and `type` are
+        forwarded to LAPI; `source` (origin) is filtered by Arenet, then the
+        result is paginated. `meta.totalByOrigin` counts the full, unfiltered
+        LAPI response.
+
+        Errors: 404 `crowdsec bouncer not configured`; 502 when LAPI is
+        unreachable, rejects the bouncer key or answers unexpectedly.
+      tags: [Security]
+      x-arenet-role: admin
+      parameters:
+        - name: scope
+          in: query
+          description: Forwarded to LAPI (e.g. `ip`, `range`, `country`, `as`).
+          schema: { type: string }
+        - name: type
+          in: query
+          description: Forwarded to LAPI (`ban`, `captcha`, `throttle`).
+          schema: { type: string }
+        - name: source
+          in: query
+          description: Exact match on the decision origin (`CAPI`, `crowdsec`, `cscli`, `manual`, `lists:<name>`...).
+          schema: { type: string }
+        - name: limit
+          in: query
+          description: Page size, 1..100 (out of range is a 400, not clamped).
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        - name: offset
+          in: query
+          description: Page offset. Past the end returns an empty page.
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: One page of live decisions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decisions, meta]
+                properties:
+                  decisions:
+                    type: array
+                    items: { $ref: '#/components/schemas/SecLapiDecision' }
+                  meta:
+                    type: object
+                    required: [total, totalByOrigin, limit, offset]
+                    properties:
+                      total:
+                        type: integer
+                        description: Count after the `source` filter, before pagination.
+                      totalByOrigin:
+                        type: object
+                        additionalProperties: { type: integer }
+                        description: Origin → count over the whole LAPI response (empty origin reported as `unknown`).
+                      limit: { type: integer }
+                      offset: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '502':
+          description: LAPI unreachable, bouncer key rejected, or malformed LAPI response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    post:
+      summary: Ban an IP or range (manual CrowdSec decision)
+      description: |
+        Pushes a manual decision to LAPI (`POST /v1/alerts`) with the
+        Security Automation machine credentials. The decision's scenario is
+        `manual:<username>|<reason>` and its origin `manual`. A bare IP gets
+        scope `Ip`, a CIDR scope `Range` (normalised, e.g. `10.0.0.1/8` →
+        `10.0.0.0/8`). Recorded in the audit log (`crowdsec_decision_create`).
+        There is no un-ban endpoint in the API; remove the decision with
+        `cscli decisions delete`.
+
+        Errors: 400 validation; 412 Security Automation (machine
+        credentials) not configured; 502 LAPI unreachable or credentials
+        rejected.
+      tags: [Security]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [value, duration, type, reason]
+              properties:
+                value:
+                  type: string
+                  description: IPv4 / IPv6 address or CIDR.
+                  examples: ['203.0.113.7', '198.51.100.0/24']
+                duration:
+                  type: string
+                  description: Positive Go duration, `d` suffix accepted (`1h`, `24h`, `7d`).
+                type:
+                  type: string
+                  enum: [ban, captcha, throttle]
+                reason:
+                  type: string
+                  maxLength: 256
+                  description: Free text, required, no control characters (tab allowed).
+      responses:
+        '201':
+          description: Decision accepted by LAPI.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scenario, scope, value, type, duration, origin]
+                properties:
+                  scenario: { type: string, description: '`manual:<username>|<reason>`.' }
+                  scope: { type: string, enum: [Ip, Range] }
+                  value: { type: string }
+                  type: { type: string, enum: [ban, captcha, throttle] }
+                  duration: { type: string }
+                  origin: { type: string, const: manual }
+                  expiresAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '412':
+          description: Security Automation machine credentials not configured.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '502':
+          description: LAPI unreachable or machine credentials rejected.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /security/crowdsec/scenarios:
+    get:
+      summary: CrowdSec alerts per scenario (last 24 h)
+      description: |
+        Reads LAPI `GET /v1/alerts?since=24h&limit=100` with the Security
+        Automation machine credentials (JWT, cached) and aggregates the
+        alerts per scenario, sorted by count. Because LAPI is asked for at
+        most 100 alerts, counts cover at most the 100 most recent alerts.
+
+        Errors: 412 machine credentials not configured; 502 LAPI unreachable
+        or credentials rejected.
+      tags: [Security]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: Scenario aggregates.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scenarios, meta]
+                properties:
+                  scenarios:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, alerts24h]
+                      properties:
+                        name: { type: string, description: 'Scenario name, `(unknown)` when LAPI gave none.' }
+                        alerts24h: { type: integer }
+                        lastSeen: { type: string, format: date-time }
+                        sampleScope: { type: string, description: Source scope of the most recent alert. }
+                        sampleValue: { type: string, description: Source value (IP...) of the most recent alert. }
+                  meta:
+                    type: object
+                    required: [totalAlerts, windowHours]
+                    properties:
+                      totalAlerts: { type: integer }
+                      windowHours: { type: integer, const: 24 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '412':
+          description: Security Automation machine credentials not configured.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '502':
+          description: LAPI unreachable or machine credentials rejected.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ----------------------------------------------------------- Observability
+  /observability/country-block-events:
+    get:
+      summary: List country-block events
+      description: |
+        Requests refused by a route's country filter, newest first. `total`
+        is the number of rows returned; `hasMore` is true when the page is
+        full and `limit` is below the 1000 cap. Degraded mode:
+        `200 {"degraded": true, "events": []}`.
+      tags: [Security]
+      x-arenet-role: viewer
+      parameters:
+        - name: limit
+          in: query
+          description: Rows to return. Default 100, maximum 1000 (clamped silently).
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - $ref: '#/components/parameters/SecRouteFilter'
+        - name: srcIp
+          in: query
+          schema: { type: string }
+        - name: country
+          in: query
+          description: ISO 3166-1 alpha-2 code.
+          schema: { type: string }
+        - name: mode
+          in: query
+          schema: { type: string, enum: [allow, deny] }
+        - $ref: '#/components/parameters/SecSince'
+        - $ref: '#/components/parameters/SecUntil'
+      responses:
+        '200':
+          description: Country-block events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, total, hasMore]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/SecCountryBlockEvent' }
+                  total: { type: integer, format: int64 }
+                  hasMore: { type: boolean }
+                  degraded: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Event store query failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /observability/cert-events:
+    get:
+      summary: List certificate lifecycle events
+      description: |
+        Certificate obtain / failure / OCSP-revoked events (newest first).
+        `total` is the full match count; `hasMore` = `total` > returned rows.
+        Degraded mode: `200 {"degraded": true, "events": []}`.
+      tags: [Observability]
+      x-arenet-role: viewer
+      parameters:
+        - name: limit
+          in: query
+          description: Rows to return. Default 100, maximum 1000 (clamped silently).
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - $ref: '#/components/parameters/SecSince'
+        - $ref: '#/components/parameters/SecUntil'
+        - name: level
+          in: query
+          description: Comma-separated subset of `INFO,ERROR`. Unknown token → 400.
+          schema: { type: string, examples: ['ERROR', 'INFO,ERROR'] }
+        - name: search
+          in: query
+          description: Case-insensitive substring over domain, issuer, error and details.
+          schema: { type: string }
+        - name: domain
+          in: query
+          description: Exact domain match.
+          schema: { type: string }
+        - name: type
+          in: query
+          description: Exact event type (`cert_obtained`, `cert_failed`, `cert_ocsp_revoked`). Unknown values return no rows.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Certificate events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, total, hasMore]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/ObsCertEvent' }
+                  total: { type: integer, format: int64 }
+                  hasMore: { type: boolean }
+                  degraded: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Event store query failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /observability/cert-events/aggregate:
+    get:
+      summary: Certificate events per time bucket
+      description: |
+        Issued / renewed / failed counts per bucket, one bucket per interval
+        over the window (empty buckets have zero counts). Durations accept
+        Go syntax plus a `d` suffix; values are clamped silently (window
+        1h..90d, interval 1h..7d). Degraded mode: `degraded: true`, empty
+        buckets.
+      tags: [Observability]
+      x-arenet-role: viewer
+      parameters:
+        - name: window
+          in: query
+          schema: { type: string, default: 30d, examples: ['30d', '168h'] }
+        - name: interval
+          in: query
+          schema: { type: string, default: 24h, examples: ['1d', '1h'] }
+      responses:
+        '200':
+          description: Buckets, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [buckets]
+                properties:
+                  degraded: { type: boolean }
+                  buckets:
+                    type: array
+                    items:
+                      type: object
+                      required: [bucketStart, issued, renewed, failed]
+                      properties:
+                        bucketStart: { type: string, format: date-time }
+                        issued: { type: integer, format: int64 }
+                        renewed: { type: integer, format: int64 }
+                        failed: { type: integer, format: int64 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Aggregate query failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /observability/alert-events:
+    get:
+      summary: List fired alerts (history)
+      description: |
+        Alerts fired by the alerting subsystem, newest first, with the
+        channels that delivered or failed. Cursor pagination: pass
+        `nextCursor` back as `cursor`; it is `""` on the last page.
+        Degraded mode: `degraded: true`, empty list.
+      tags: [Observability]
+      x-arenet-role: viewer
+      parameters:
+        - name: rule_id
+          in: query
+          schema: { type: string }
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: severity
+          in: query
+          description: 0 info, 1 warning, 2 critical, 3 emergency.
+          schema: { type: integer, minimum: 0, maximum: 3 }
+        - $ref: '#/components/parameters/SecSince'
+        - $ref: '#/components/parameters/SecUntil'
+        - name: limit
+          in: query
+          description: Page size. Default 50, maximum 200 (clamped silently).
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: cursor
+          in: query
+          description: Opaque cursor from the previous page. Invalid → 400 `invalid cursor`.
+          schema: { type: string }
+      responses:
+        '200':
+          description: One page of alert events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, nextCursor]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/ObsAlertEvent' }
+                  nextCursor: { type: string }
+                  degraded: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Query failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /observability/geo-events:
+    get:
+      summary: Recent geolocated security events (map)
+      description: |
+        In-memory ring buffer (not persisted) of recent events with source
+        geolocation, used for the initial paint of the threat map; the
+        `/ws/geo-events` WebSocket then streams new ones. `total` is the
+        number of events returned. `degraded: true` when GeoIP is not loaded
+        (coordinates / country empty) or the event bus is unavailable.
+      tags: [Observability]
+      x-arenet-role: viewer
+      parameters:
+        - name: limit
+          in: query
+          description: Events to return. Default 100, maximum 500 (clamped silently).
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: Geo events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, total]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/ObsGeoEvent' }
+                  total: { type: integer }
+                  degraded: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /observability/server-position:
+    get:
+      summary: Get the server's map position
+      description: |
+        Position used as the arrival point on the threat map: the operator's
+        manual choice if saved, else the boot-time auto-detection (public IP
+        + GeoIP), else a degraded empty shape (`degraded: true`, lat/lon 0).
+        Never fails with 5xx.
+      tags: [Observability]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Server position.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObsServerPosition' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      summary: Set the server's map position manually
+      description: |
+        Saves a manual position (`mode` becomes `manual`, `sourceIp`
+        cleared). Unknown fields are rejected. Audited
+        (`server_position_updated`).
+      tags: [Observability]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [lat, lon]
+              properties:
+                lat: { type: number, minimum: -90, maximum: 90 }
+                lon: { type: number, minimum: -180, maximum: 180 }
+                city: { type: string, description: 'Display label, may be empty.' }
+                country: { type: string, description: 'Display label, may be empty.' }
+      responses:
+        '200':
+          description: Saved position.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObsServerPosition' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503':
+          description: Position store not available.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /observability/server-position:redetect:
+    post:
+      summary: Re-detect the server's map position
+      description: |
+        Re-runs the public-IP + GeoIP detection. On success the result is
+        saved with `mode: auto` and audited (`server_position_redetected`);
+        on failure returns `200` with the degraded shape and changes
+        nothing.
+      tags: [Observability]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: New (or degraded) position.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ObsServerPosition' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503':
+          description: Redetection not available.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ----------------------------------------------------------------- Metrics
+  /metrics/timeseries:
+    get:
+      summary: Metric time series for a route or all routes
+      description: |
+        Gap-filled series for the dashboards: 1-minute buckets over 24h or
+        1-hour buckets over 30d. Values are counts per bucket, except
+        `p95_latency_ms` (null for buckets without traffic).
+        `throttle_block_rate`, `auth_failure_rate` and
+        `crowdsec_decision_rate` are global: meaningful with `route=all`
+        only. `disabled: true` when the metrics store is unavailable.
+      tags: [Observability]
+      x-arenet-role: viewer
+      parameters:
+        - name: route
+          in: query
+          required: true
+          description: Route ID, or `all` for the global aggregate. Unknown route → 404.
+          schema: { type: string }
+        - name: metric
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [req_per_sec, four_xx_rate, five_xx_rate, p95_latency_ms, waf_block_rate, throttle_block_rate, auth_failure_rate, crowdsec_decision_rate, rate_limit_rate]
+        - $ref: '#/components/parameters/SecWindow'
+      responses:
+        '200':
+          description: Time series.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [routeId, metric, window, bucketSizeSeconds, points]
+                properties:
+                  routeId: { type: string }
+                  metric: { type: string }
+                  window: { type: string }
+                  bucketSizeSeconds: { type: integer, enum: [60, 3600] }
+                  disabled: { type: boolean }
+                  points:
+                    type: array
+                    items:
+                      type: object
+                      required: [ts, value]
+                      properties:
+                        ts: { type: string, format: date-time }
+                        value: { type: [number, 'null'] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503':
+          description: Storage or metrics history unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /metrics/summary:
+    get:
+      summary: Dashboard summary over the last 24 h
+      description: |
+        Totals for the dashboard over the last 24 full hours: requests,
+        4xx/5xx, WAF blocks/detections (total and per category), login
+        throttle blocks, rate-limit rejections, auth failures, CrowdSec
+        decisions, unique attacker IPs, weighted global p95 latency (null
+        without traffic), the top 5 routes by requests and the most-attacked
+        route. `disabled: true` when the metrics store is unavailable.
+      tags: [Observability]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  generatedAt: { type: string, format: date-time }
+                  windowSeconds: { type: integer }
+                  disabled: { type: boolean }
+                  totalReq: { type: integer }
+                  totalFourXx: { type: integer }
+                  totalFiveXx: { type: integer }
+                  totalWafBlocked: { type: integer }
+                  totalWafDetected: { type: integer }
+                  totalThrottle: { type: integer }
+                  totalRateLimitExceeded: { type: integer }
+                  totalAuthFailures: { type: integer }
+                  attackerIpsUnique: { type: integer }
+                  totalCrowdSecDecisions: { type: integer }
+                  activeCrowdSecIpsUnique: { type: integer }
+                  globalP95LatencyMs: { type: [number, 'null'] }
+                  activeRouteCount: { type: integer }
+                  topRoutes:
+                    type: array
+                    items: { $ref: '#/components/schemas/ObsSummaryRoute' }
+                  topAttackedRoute:
+                    oneOf:
+                      - { $ref: '#/components/schemas/ObsSummaryRoute' }
+                      - { type: 'null' }
+                  wafBlocksByCategory:
+                    type: object
+                    additionalProperties: { type: integer }
+                  wafDetectsByCategory:
+                    type: object
+                    additionalProperties: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Storage or metrics history unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # --------------------------------------------------------------------- Geo
+  /geo/lookup-batch:
+    post:
+      summary: Resolve countries for a batch of IPs
+      description: |
+        Maps each IP to its ISO country code via GeoIP (`""` for invalid or
+        unknown IPs). At most 256 IPs per call. `degraded: true` (all
+        results empty) when the GeoIP database is not loaded.
+      tags: [Security]
+      x-arenet-role: viewer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ips:
+                  type: array
+                  maxItems: 256
+                  items: { type: string }
+      responses:
+        '200':
+          description: IP → country code.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: object
+                    additionalProperties: { type: string }
+                  degraded: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /geo/asn:
+    get:
+      summary: Search autonomous systems (GeoLite2-ASN)
+      description: |
+        Used by the route form's ASN rules. `?q=` searches by organisation
+        name (substring) or AS number (prefix), up to `limit` results;
+        `?ids=` resolves the names of up to 200 AS numbers (`AS` prefix
+        accepted) and takes precedence over `q`. `loaded: false` when no
+        ASN database is installed; `indexReady: false` while its name index
+        is being built.
+      tags: [Security]
+      x-arenet-role: admin
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          description: Maximum results for `q`. Default and maximum 50.
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+        - name: ids
+          in: query
+          description: Comma-separated AS numbers, e.g. `14061,AS16276`.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Matches.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [loaded, indexReady, results]
+                properties:
+                  loaded: { type: boolean }
+                  indexReady: { type: boolean }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required: [asn, name]
+                      properties:
+                        asn: { type: integer }
+                        name: { type: string }
+        '400':
+          description: '`too many ids` or `invalid AS number: ...`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------- Topology
+  /topology/snapshot:
+    get:
+      summary: Topology graph snapshot
+      description: |
+        Current topology for the UI graph: every route with its aliases,
+        upstreams (health status, configured weight share), path pools,
+        protections and recent traffic (req/s, p99 latency, 5xx rate). See
+        docs/api/topology.md for the full contract; some per-upstream
+        figures are estimates.
+      tags: [Topology]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generatedAt, routes]
+                properties:
+                  generatedAt: { type: string, format: date-time }
+                  routes:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                      description: Topology route (id, host, upstreams, lbPolicy, reqPerSec, p99LatencyMs, errorRate5xx, tlsEnabled, ...).
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500':
+          description: Route listing failed (plain-text body).
+
+  /topology/stream:
+    get:
+      summary: Topology snapshot stream (WebSocket)
+      description: |
+        WebSocket upgrade. Sends the same payload as `GET /topology/snapshot`
+        immediately on connect, then every ~2 s (`ARENET_TOPOLOGY_TICK_MS`).
+        Authentication is checked before the upgrade (401 is a plain HTTP
+        response). Same-origin only.
+      tags: [Topology]
+      x-arenet-role: viewer
+      responses:
+        '101':
+          description: Switching protocols; server-to-client JSON frames.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /ws/topology:
+    get:
+      summary: Live per-route metrics (WebSocket)
+      description: |
+        WebSocket upgrade. One JSON frame per metrics tick (1 s):
+        `{"t": "<RFC 3339>", "routes": [{id, host, upstream, reqs, errs,
+        reqPerSec, errRate5xx}]}` listing every route. Authentication is
+        checked before the upgrade. Same-origin only.
+      tags: [Topology]
+      x-arenet-role: viewer
+      responses:
+        '101':
+          description: Switching protocols; server-to-client JSON frames.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /ws/geo-events:
+    get:
+      summary: Live geolocated security events (WebSocket)
+      description: |
+        WebSocket upgrade. One JSON frame per event, shaped like
+        `ObsGeoEvent` (no envelope). Slow clients silently drop events.
+        503 when the event bus is unavailable. Same-origin only.
+      tags: [Observability]
+      x-arenet-role: viewer
+      responses:
+        '101':
+          description: Switching protocols; server-to-client JSON frames.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503':
+          description: Geo event bus unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ------------------------------------------------------------------- Audit
+  /audit:
+    get:
+      summary: List audit log events
+      description: |
+        Configuration-change and authentication audit log, newest first.
+        Cursor pagination: pass `nextCursor` back as `cursor`; it is `""`
+        on the last page. Each call is itself audited (`audit_viewed`, with
+        the filters used).
+      tags: [Audit]
+      x-arenet-role: viewer
+      parameters:
+        - name: actor_user_id
+          in: query
+          schema: { type: string }
+        - name: action
+          in: query
+          description: 'Exact action, e.g. `route_updated`, `login_failure`, `config_restored`, `crowdsec_decision_create`.'
+          schema: { type: string }
+        - name: target_type
+          in: query
+          description: 'e.g. `route`, `user`, `session`, `crowdsec_decision`, `server_position`.'
+          schema: { type: string }
+        - name: target_id
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          description: RFC 3339 lower bound (inclusive).
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: RFC 3339 upper bound (exclusive).
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          description: Page size. Default 50 (also for 0), maximum 200 (clamped silently).
+          schema: { type: integer, minimum: 0, maximum: 200, default: 50 }
+        - name: cursor
+          in: query
+          description: Opaque cursor from the previous page. Invalid → 400 `invalid cursor`.
+          schema: { type: string }
+      responses:
+        '200':
+          description: One page of audit events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, nextCursor]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditEvent' }
+                  nextCursor: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+components:
+  parameters:
+    SecRouteFilter:
+      name: route
+      in: query
+      description: Filter to one route ID.
+      schema: { type: string }
+    SecWindow:
+      name: window
+      in: query
+      required: true
+      description: Rolling window ending now.
+      schema: { type: string, enum: [24h, 30d] }
+    SecSince:
+      name: since
+      in: query
+      description: RFC 3339 lower bound on the event time (inclusive).
+      schema: { type: string, format: date-time }
+    SecUntil:
+      name: until
+      in: query
+      description: RFC 3339 upper bound (exclusive); must be after `since`.
+      schema: { type: string, format: date-time }
+
+  schemas:
+    SecCountPoint:
+      type: object
+      required: [ts, value]
+      properties:
+        ts: { type: string, format: date-time }
+        value: { type: integer }
+
+    SecWafEvent:
+      type: object
+      required: [id, ts, routeId, ruleId, category, severity, srcIp, requestMethod, requestPath, payloadSample, action, statusCode, matchedVar]
+      properties:
+        id: { type: integer, format: int64 }
+        ts: { type: string, format: date-time }
+        routeId: { type: string }
+        ruleId: { type: string, description: CRS or custom rule ID. }
+        category:
+          type: string
+          description: |
+            Rule family derived from the rule ID: `INIT`, `COMMON_EXCEPT`,
+            `METHOD`, `SCANNER`, `PROTOCOL_ATK`, `MULTIPART`, `LFI`, `RFI`,
+            `RCE`, `PHP`, `GENERIC`, `XSS`, `SQLi`, `SESSION`, `JAVA`,
+            `ANOMALY_REQ`, `DATA_LEAK*`, `WEBSHELL`, `ANOMALY_RESP`,
+            `CORRELATION`, `CUSTOM`, `OTHER` (older rows may carry `PROTOCOL`).
+        severity: { type: integer }
+        srcIp: { type: string }
+        requestMethod: { type: string }
+        requestPath: { type: string }
+        payloadSample: { type: string, description: Truncated sample of the matched data. }
+        action:
+          type: string
+          enum: [BLOCK, DETECT]
+          description: '`DETECT` for detect-only routes (request not blocked).'
+        statusCode: { type: integer }
+        matchedVar:
+          type: string
+          description: '`VARIABLE:key` that triggered the rule (target for a targeted exclusion); `""` when unknown.'
+        ruleName:
+          type: string
+          description: Name of the route's guided custom rule; omitted for other rules.
+
+    SecThrottleEvent:
+      type: object
+      required: [id, ts, tier, srcIp, attemptedUsername, blockedUntil, blockDurationSeconds]
+      properties:
+        id: { type: integer, format: int64 }
+        ts: { type: string, format: date-time }
+        tier: { type: integer, enum: [1, 2] }
+        srcIp: { type: string }
+        attemptedUsername: { type: string }
+        blockedUntil: { type: string, format: date-time }
+        blockDurationSeconds: { type: integer }
+
+    SecRateLimitEvent:
+      type: object
+      required: [id, ts, routeId, zone, remoteIp, waitMs]
+      properties:
+        id: { type: integer, format: int64 }
+        ts: { type: string, format: date-time }
+        routeId: { type: string }
+        zone: { type: string, description: Rate-limit zone name. }
+        remoteIp: { type: string }
+        waitMs: { type: integer, format: int64, description: Retry-after hint in milliseconds. }
+
+    SecCountryBlockEvent:
+      type: object
+      required: [id, ts, routeId, srcIp, country, mode, statusCode, reason]
+      properties:
+        id: { type: integer, format: int64 }
+        ts: { type: string, format: date-time }
+        routeId: { type: string }
+        srcIp: { type: string }
+        country: { type: string, description: ISO 3166-1 alpha-2 code. }
+        mode: { type: string, enum: [allow, deny], description: The route's filter mode. }
+        statusCode: { type: integer }
+        reason:
+          type: string
+          description: 'Matcher outcome, e.g. `allow-miss`, `deny-match`, `lookup-failed`.'
+
+    SecDecision:
+      type: object
+      required: [id, uuid, ts, scope, value, type, scenario, expiresAt, durationSeconds]
+      properties:
+        id: { type: integer, format: int64 }
+        uuid: { type: string }
+        ts: { type: string, format: date-time }
+        scope: { type: string }
+        value: { type: string }
+        type: { type: string, description: '`ban`, `captcha`, ...' }
+        scenario: { type: string }
+        expiresAt: { type: string, format: date-time }
+        durationSeconds: { type: integer }
+
+    SecLapiDecision:
+      type: object
+      required: [id, duration, origin, scenario, scope, type, value]
+      properties:
+        id: { type: integer, format: int64, description: LAPI row ID (not stable across LAPI restarts). }
+        duration: { type: string, description: 'Duration as reported by LAPI, e.g. `167h52m`.' }
+        origin: { type: string, description: '`CAPI`, `crowdsec`, `cscli`, `manual`, `lists:<name>`...' }
+        scenario:
+          type: string
+          description: 'Scenario name; manual bans use `manual:<username>|<reason>`.'
+        scope: { type: string }
+        type: { type: string }
+        value: { type: string }
+        expiresAt: { type: string, format: date-time }
+
+    ObsCertEvent:
+      type: object
+      required: [timestamp, level, eventType, domain]
+      properties:
+        timestamp: { type: string, format: date-time }
+        level: { type: string, enum: [INFO, ERROR] }
+        eventType: { type: string, description: '`cert_obtained`, `cert_failed`, `cert_ocsp_revoked`.' }
+        domain: { type: string }
+        issuer: { type: string }
+        challenge: { type: string }
+        renewal: { type: boolean, description: Present and true for renewals. }
+        error: { type: string }
+        details: { type: string }
+
+    ObsAlertEvent:
+      type: object
+      required: [eventId, timestamp, ruleId, ruleName, severity, category, subject, channelsFired]
+      properties:
+        eventId: { type: string }
+        timestamp: { type: string, format: date-time }
+        ruleId: { type: string }
+        ruleName: { type: string }
+        severity: { type: integer, minimum: 0, maximum: 3, description: '0 info, 1 warning, 2 critical, 3 emergency.' }
+        category: { type: string }
+        subject: { type: string }
+        body: { type: string }
+        context: { type: object, additionalProperties: true }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        channelsFired:
+          type: array
+          items: { type: string }
+        channelsFailed:
+          type: object
+          additionalProperties: { type: string }
+          description: Channel → delivery error.
+
+    ObsGeoEvent:
+      type: object
+      required: [timestamp, category, sourceIp, sourceLat, sourceLon, sourceCountry, sourceCity, isLan, details]
+      properties:
+        timestamp: { type: string, format: date-time }
+        category:
+          type: string
+          enum: [normal, throttle, waf, crowdsec, auth, country_block]
+        sourceIp: { type: string }
+        sourceLat: { type: number }
+        sourceLon: { type: number }
+        sourceCountry: { type: string, description: 'ISO code, `UNK` when unknown.' }
+        sourceCity: { type: string }
+        isLan: { type: boolean }
+        statusCode: { type: integer }
+        routeId: { type: string }
+        details: { type: string, maxLength: 256 }
+
+    ObsServerPosition:
+      type: object
+      required: [lat, lon, city, country, mode]
+      properties:
+        lat: { type: number }
+        lon: { type: number }
+        city: { type: string }
+        country: { type: string }
+        mode: { type: string, enum: [auto, manual] }
+        sourceIp: { type: string, description: Public IP used by auto-detection. }
+        detectedAt: { type: string, format: date-time }
+        degraded: { type: boolean, description: No position available. }
+
+    ObsSummaryRoute:
+      type: object
+      required: [routeId, host, reqs, fourxx, fivexx, wafBlocked, wafDetected]
+      properties:
+        routeId: { type: string }
+        host: { type: string }
+        reqs: { type: integer }
+        fourxx: { type: integer }
+        fivexx: { type: integer }
+        wafBlocked: { type: integer }
+        wafDetected: { type: integer }
+
+    AuditEvent:
+      type: object
+      required: [id, timestamp, action, beforeJson, afterJson]
+      properties:
+        id: { type: string, description: UUID v7. }
+        timestamp: { type: string, format: date-time }
+        actorUserId: { type: string, description: Omitted for unauthenticated events. }
+        actorUsernameSnapshot: { type: string, description: Username at the time of the event. }
+        action: { type: string }
+        targetType: { type: string }
+        targetId: { type: string }
+        beforeJson:
+          description: State before the change (secrets redacted); null for creations, logins...
+        afterJson:
+          description: State after the change (secrets redacted); null for deletions, failed logins...
+        message: { type: string }
+        ip: { type: string }
+        userAgent: { type: string }

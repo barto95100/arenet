@@ -1,0 +1,125 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# OpenAPI base document (v2.39). Domain fragments in this directory add
+# `paths` and `components.schemas`; internal/api/openapi.go merges them
+# and serves the result as /api/v1/openapi.json. TestOpenAPI_* keeps the
+# document in sync with the registered routes and their access level.
+openapi: 3.1.0
+info:
+  title: Arenet admin API
+  version: dev
+  summary: Homelab-friendly reverse proxy with integrated security.
+  description: |
+    The REST API behind Arenet's web UI, usable from scripts.
+
+    **Authentication**
+    - Scripts: create a **service account** (Users → Service accounts) and send
+      its token as `Authorization: Bearer <token>`.
+    - Browser: the `arenet_session` cookie set by `POST /auth/login`.
+
+    **Roles** — `x-arenet-role` on each operation: `public` (no session),
+    `viewer` (any signed-in user) or `admin`. A viewer calling an admin
+    operation gets `403 {"error":"admin role required"}`.
+
+    **Errors** — non-2xx responses carry `{"error": "...", "code"?: "...", "params"?: {...}}`.
+    `code` is a stable machine-readable identifier when present.
+
+    Changing operations reload the embedded Caddy; a configuration Caddy
+    refuses is rolled back and reported as an error.
+  license:
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
+servers:
+  - url: /api/v1
+security:
+  - bearerToken: []
+  - sessionCookie: []
+tags:
+  - name: Routes
+    description: Proxied hosts, their upstreams and per-route protections.
+  - name: WAF
+    description: Coraza WAF — exclusions, custom rules, SecLang, tester.
+  - name: Certificates
+    description: TLS certificates (ACME and uploaded).
+  - name: Error pages
+    description: Custom error page templates.
+  - name: Security
+    description: WAF / rate-limit / CrowdSec / geo events and decisions.
+  - name: Observability
+    description: Metrics and time series.
+  - name: Topology
+    description: Live topology graph (UI).
+  - name: Auth
+    description: Login, sessions, current user, OIDC.
+  - name: Users
+    description: Users, roles and service accounts (API tokens).
+  - name: Backup
+    description: Backups, scheduled backups and restore.
+  - name: Settings
+    description: Global settings.
+  - name: Alerting
+    description: Alert channels and rules.
+  - name: System
+    description: Health, version, GeoIP.
+  - name: Audit
+    description: Configuration-change audit log.
+components:
+  securitySchemes:
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: Service-account token (Users → Service accounts).
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: arenet_session
+      description: Browser session set by POST /auth/login.
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable message.
+        code:
+          type: string
+          description: Stable machine-readable code, when the error has one.
+        params:
+          type: object
+          additionalProperties: true
+          description: Structured details for `code`.
+  responses:
+    BadRequest:
+      description: Invalid input.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: No valid session or token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Role too low (`admin role required`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Conflict with the current state.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServerError:
+      description: Internal error (including a Caddy reload refused and rolled back).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+paths: {}

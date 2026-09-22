@@ -1,0 +1,848 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# OpenAPI fragment: backup export / restore, scheduled backups, system
+# (version + update check, GeoIP auto-update) and the public health probes.
+paths:
+  /admin/backup:
+    get:
+      operationId: exportBackup
+      summary: Export the configuration (secrets redacted)
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Downloads a plain JSON snapshot of the whole configuration (schema
+        `1.0.0`, `secrets_included: false`). Every secret (passwords
+        hashes, API keys, DNS credentials, private keys, tokens…) is
+        replaced by the sentinel `$$ARENET_REDACTED$$`; on restore a
+        sentinel inherits the value of the matching live row.
+
+        An export **with** secrets must be encrypted: use
+        `POST /admin/backup`. `?include-secrets=true` is refused with
+        `400 code=passphrase_required`.
+
+        Audited (`config_exported`).
+      parameters:
+        - name: include-secrets
+          in: query
+          required: false
+          description: Legacy plaintext-secrets export. `true` is refused (400 `passphrase_required`); any other value is ignored.
+          schema: { type: string }
+      responses:
+        '200':
+          description: |
+            The snapshot, as a download (`Content-Type: application/json`,
+            `Content-Disposition: attachment; filename="arenet-backup-YYYYMMDD-HHMMSS.json"`, UTC).
+          headers:
+            Content-Disposition:
+              description: '`attachment; filename="arenet-backup-<UTC timestamp>.json"`'
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupSnapshot' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      operationId: exportBackupEncrypted
+      summary: Export the configuration with secrets, passphrase-encrypted
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Downloads a snapshot that includes every secret, each one sealed
+        (AES-256-GCM) with a key derived from `passphrase` (argon2id).
+        The rest of the file stays readable JSON. The file carries
+        `schema_version: "2.0.0"` (a different major on purpose, so
+        pre-v2.31 binaries refuse it) and an `encryption` header.
+
+        The passphrase is never stored; it is needed again to restore.
+        Body limited to 4 KiB, unknown fields rejected.
+
+        Errors: `400 code=passphrase_too_short` (`params.min` = 12
+        characters). Audited (`config_exported`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupExportRequest' }
+      responses:
+        '200':
+          description: |
+            The encrypted snapshot, as a download (same `Content-Disposition`
+            as GET). Response headers `X-Arenet-Secrets-Included: true` and
+            `X-Arenet-Backup-Encrypted: true` let a tool tag the file
+            without parsing it.
+          headers:
+            Content-Disposition:
+              description: '`attachment; filename="arenet-backup-<UTC timestamp>.json"`'
+              schema: { type: string }
+            X-Arenet-Secrets-Included:
+              description: Always `true` on this operation.
+              schema: { type: string, enum: ['true'] }
+            X-Arenet-Backup-Encrypted:
+              description: Always `true` on this operation.
+              schema: { type: string, enum: ['true', 'false'] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupSnapshot' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /admin/restore:
+    post:
+      operationId: restoreBackup
+      summary: Restore an uploaded backup
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Replaces the configuration with the uploaded snapshot. The body is
+        the backup file itself (raw JSON, **not** multipart), up to 64 MiB.
+
+        - Encrypted backup (schema `2.0.0`): send the passphrase in the
+          `X-Arenet-Backup-Passphrase` header, **base64 of the UTF-8
+          passphrase** (max 1024 bytes decoded). Missing → `400
+          code=passphrase_required`; wrong passphrase, altered file or
+          malformed header → `400 code=passphrase_invalid`.
+        - Redacted backup (schema `1.0.0`): each `$$ARENET_REDACTED$$`
+          sentinel inherits the secret of the matching live row. A
+          sentinel with no match (e.g. restoring onto a fresh instance)
+          is refused unless `allow-incomplete-restore=true`, which clears
+          the secret instead (to be re-entered by hand).
+
+        What is restored: routes, DNS providers, forward-auth providers,
+        OIDC and MaxMind settings, users, uploaded certificates, and — for
+        backups from v2.29+ (`extras` section) — managed domains, error
+        templates, maintenance page, alert channels and rules, CrowdSec
+        LAPI and watcher settings, automation rules, update-check and
+        GeoIP-update settings, server position, backup schedule, route
+        check settings and service-account tokens. A pre-v2.29 backup
+        leaves those areas untouched.
+
+        Side effects: Caddy is reloaded with the restored configuration;
+        if Caddy refuses it, the database is rolled back to the
+        pre-restore state and `500` is returned. Restored background
+        settings (automation, update check, GeoIP update, backup
+        schedule) are applied live. Audited on success
+        (`config_restored`) and on every rejection
+        (`config_restored_rejected`).
+
+        Other `400`s: invalid JSON, schema major mismatch, empty users
+        list (unless `allow-empty-users=true`), unresolved sentinel — the
+        message explains the paths forward.
+      parameters:
+        - $ref: '#/components/parameters/BackupPassphraseHeader'
+        - $ref: '#/components/parameters/BackupAllowIncompleteRestore'
+        - $ref: '#/components/parameters/BackupAllowEmptyUsers'
+      requestBody:
+        required: true
+        description: The backup file as exported (plain or encrypted).
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupSnapshot' }
+      responses:
+        '200':
+          description: Restore applied and Caddy reloaded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupRestoreReport' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /settings/backup-schedule:
+    get:
+      operationId: getBackupSchedule
+      summary: Get the scheduled-backup configuration and status
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Returns the schedule, the resolved directory, the next run and the
+        last-run status. The passphrase is never returned (`passphraseSet`).
+        A fresh instance returns the defaults (disabled, daily 03:00, keep
+        14, email never). `409 code=backup_schedule_unavailable` when the
+        scheduled-backup service is not wired.
+      responses:
+        '200':
+          description: Current schedule.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupSchedule' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    put:
+      operationId: putBackupSchedule
+      summary: Update the scheduled-backup configuration
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Replaces the whole schedule (every field except `passphrase` is
+        taken as sent). An empty or omitted `passphrase` keeps the stored
+        one. The new schedule is applied immediately. Body limited to
+        16 KiB, unknown fields rejected. Audited
+        (`backup_schedule_updated`, passphrase redacted).
+
+        Errors (`400`):
+        - `code=passphrase_too_short` (`params.min` = 12);
+        - `code=passphrase_required` — enabling needs a passphrase (sent
+          now or already stored);
+        - `code=backup_dir_unwritable` (`params.dir`) — Arenet cannot
+          create/write the directory (the default `<data-dir>/backups` is
+          created; a custom directory must exist);
+        - validation: `frequency`, `time` (HH:MM), `weekday` 0–6, `keep`
+          1–365, `dir` absolute, `emailMode`, email channel required and
+          of kind `email`, alert channels must exist.
+
+        `409 code=backup_schedule_unavailable` when the service is not wired.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupScheduleUpdate' }
+      responses:
+        '200':
+          description: Saved schedule (same shape as GET).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupSchedule' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /admin/backups:
+    get:
+      operationId: listBackups
+      summary: List stored scheduled backups
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Lists the backup files in the schedule's directory, newest first.
+        Only files named `arenet-backup-auto-YYYYMMDD-HHMMSS[-N].json` are
+        listed. A missing directory yields an empty list; an unreadable one
+        `500 code=backup_dir_unwritable`. `409
+        code=backup_schedule_unavailable` when the service is not wired.
+      responses:
+        '200':
+          description: Directory and files.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupFileList' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /admin/backups/run:
+    post:
+      operationId: runBackupNow
+      summary: Run a scheduled backup now
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Writes one encrypted backup (stored passphrase) into the backup
+        directory now, whether or not the schedule is enabled, prunes old
+        files beyond `keep`, and emails it when the email mode says so
+        (`each`, or `weekly` when a week has passed). Updates the last-run
+        status, audits the run and alerts the configured channels on
+        failure. No request body.
+
+        `500 code=backup_failed` (`params.file` = the written file, empty
+        if none) covers every failed step: no passphrase stored, directory
+        not writable, export/encrypt error, pruning or email failure (the
+        file may still have been saved). `409
+        code=backup_schedule_unavailable` when the service is not wired.
+      responses:
+        '200':
+          description: Backup written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupRunResult' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /admin/backups/{name}:
+    parameters:
+      - $ref: '#/components/parameters/BackupFileName'
+    get:
+      operationId: downloadBackup
+      summary: Download a stored scheduled backup
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Streams the file as a download (`Content-Disposition: attachment;
+        filename="<name>"`). The file is encrypted with the schedule
+        passphrase in force when it was written. A name that does not
+        match the scheduled-backup pattern returns `404` (no path
+        traversal). `409 code=backup_schedule_unavailable` when the service
+        is not wired.
+      responses:
+        '200':
+          description: The encrypted backup file.
+          headers:
+            Content-Disposition:
+              description: '`attachment; filename="<name>"`'
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupSnapshot' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    delete:
+      operationId: deleteBackup
+      summary: Delete a stored scheduled backup
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Removes the file from the backup directory. Audited
+        (`backup_deleted`). `404` for an unknown or invalid name; `409
+        code=backup_schedule_unavailable` when the service is not wired.
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /admin/backups/{name}/restore:
+    parameters:
+      - $ref: '#/components/parameters/BackupFileName'
+    post:
+      operationId: restoreStoredBackup
+      summary: Restore a stored scheduled backup
+      tags: [Backup]
+      x-arenet-role: admin
+      description: |
+        Runs the same pipeline as `POST /admin/restore` on a file of the
+        backup directory (no request body). It is decrypted with the
+        **stored** schedule passphrase, unless the request carries
+        `X-Arenet-Backup-Passphrase` (for a file written before the
+        passphrase was changed). Same query flags, side effects (Caddy
+        reload, rollback on refusal, audit) and error codes
+        (`passphrase_required`, `passphrase_invalid`). `404` for an
+        unknown or invalid name; `409 code=backup_schedule_unavailable`
+        when the service is not wired.
+      parameters:
+        - $ref: '#/components/parameters/BackupPassphraseHeader'
+        - $ref: '#/components/parameters/BackupAllowIncompleteRestore'
+        - $ref: '#/components/parameters/BackupAllowEmptyUsers'
+      responses:
+        '200':
+          description: Restore applied and Caddy reloaded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupRestoreReport' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /system/version:
+    get:
+      operationId: getSystemVersion
+      summary: Get the running version and update-check state
+      tags: [System]
+      x-arenet-role: admin
+      description: |
+        Returns the running version and the last result of the opt-in
+        update checker (GitHub latest stable release). Does not contact
+        GitHub. When the checker is not wired, every field is zero except
+        `enabled: false`.
+      responses:
+        '200':
+          description: Version state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemVersion' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /system/version/check:
+    post:
+      operationId: checkSystemVersion
+      summary: Check for a newer release now
+      tags: [System]
+      x-arenet-role: admin
+      description: |
+        Queries the GitHub releases API immediately (works even when the
+        periodic check is disabled) and returns the refreshed state. A
+        network/API failure is reported in `lastError` with `200`. `409`
+        when the update checker is not available. No request body.
+      responses:
+        '200':
+          description: Refreshed version state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemVersion' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /system/version/config:
+    put:
+      operationId: putSystemVersionConfig
+      summary: Configure the periodic update check
+      tags: [System]
+      x-arenet-role: admin
+      description: |
+        Enables/disables the periodic update check and sets its interval;
+        applied immediately. Unknown fields rejected. There is no GET for
+        this config: `enabled` is reported by `GET /system/version`, the
+        interval is not read back.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SystemVersionConfig' }
+      responses:
+        '200':
+          description: Saved; current version state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemVersion' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /system/geoip/update-config:
+    get:
+      operationId: getGeoIPUpdateConfig
+      summary: Get the GeoIP auto-update configuration
+      tags: [System]
+      x-arenet-role: admin
+      description: |
+        Opt-in periodic download of the MaxMind GeoLite2 databases (City
+        and ASN) with the MaxMind account configured in Settings.
+        `intervalHours` reports 168 (weekly) when no override is stored.
+      responses:
+        '200':
+          description: Current configuration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemGeoIPUpdateConfig' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    put:
+      operationId: putGeoIPUpdateConfig
+      summary: Update the GeoIP auto-update configuration
+      tags: [System]
+      x-arenet-role: admin
+      description: |
+        Saves and applies the schedule immediately. `intervalHours: 0`
+        means the default (168 h, or `ARENET_GEOIP_UPDATE_INTERVAL`);
+        negative values are refused. Values under 1 h are raised to 1 h by
+        the scheduler. Unknown fields rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SystemGeoIPUpdateConfig' }
+      responses:
+        '200':
+          description: Saved configuration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemGeoIPUpdateConfig' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /system/geoip/update:
+    post:
+      operationId: runGeoIPUpdate
+      summary: Update the GeoIP databases now
+      tags: [System]
+      x-arenet-role: admin
+      description: |
+        Downloads the City and ASN databases from MaxMind now (whether or
+        not auto-update is enabled) and hot-swaps them in place. The
+        combined result is returned with `200` even on failure
+        (`status: error`, errors prefixed by database kind). `409` when the
+        updater is not available. No request body.
+      responses:
+        '200':
+          description: Combined update result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemGeoIPUpdateResult' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /system/geoip/status:
+    get:
+      operationId: getGeoIPStatus
+      summary: Get the last GeoIP update result
+      tags: [System]
+      x-arenet-role: admin
+      description: |
+        Combined last result of the City and ASN updaters. Empty
+        `lastStatus` when no update ran since start or the updater is not
+        available.
+      responses:
+        '200':
+          description: Last update status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemGeoIPStatus' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /healthz:
+    servers:
+      - url: /
+    get:
+      operationId: healthz
+      summary: Liveness probe
+      tags: [System]
+      x-arenet-role: public
+      security: []
+      description: |
+        Served at the root (`/healthz`, not under `/api/v1`), without
+        authentication — for Docker / orchestrator liveness probes. Always
+        `200` while the process serves HTTP.
+      responses:
+        '200':
+          description: Alive.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemHealthz' }
+  /system/health:
+    servers:
+      - url: /
+    get:
+      operationId: systemHealth
+      summary: Component health report
+      tags: [System]
+      x-arenet-role: public
+      security: []
+      description: |
+        Served at the root (`/system/health`, not under `/api/v1`), without
+        authentication — for Uptime Kuma, blackbox_exporter, readiness
+        probes. Checks, in a fixed order: `caddy`, `db`, `metrics`,
+        `crowdsec`, `certmagic` (2 s timeout each). No secrets in the
+        response; `Cache-Control: no-store`.
+
+        HTTP status: `200` when `healthy` or `degraded`, `503` when
+        `unhealthy`. If the checker is not wired the response is `200
+        degraded` with an empty component list.
+      responses:
+        '200':
+          description: Healthy or degraded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemHealthReport' }
+        '503':
+          description: At least one component is unhealthy.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemHealthReport' }
+components:
+  parameters:
+    BackupFileName:
+      name: name
+      in: path
+      required: true
+      description: File name from `GET /admin/backups` (`arenet-backup-auto-YYYYMMDD-HHMMSS[-N].json`).
+      schema:
+        type: string
+        pattern: '^arenet-backup-auto-\d{8}-\d{6}(-\d+)?\.json$'
+    BackupPassphraseHeader:
+      name: X-Arenet-Backup-Passphrase
+      in: header
+      required: false
+      description: Passphrase of an encrypted backup, base64-encoded (UTF-8, at most 1024 bytes once decoded). Ignored for a plain backup.
+      schema: { type: string, format: byte }
+    BackupAllowIncompleteRestore:
+      name: allow-incomplete-restore
+      in: query
+      required: false
+      description: '`true` accepts redaction sentinels that match no live row: the secret is cleared and must be re-entered (the next boot logs every such row).'
+      schema: { type: string, enum: ['true', 'false'], default: 'false' }
+    BackupAllowEmptyUsers:
+      name: allow-empty-users
+      in: query
+      required: false
+      description: '`true` accepts a backup with no users (re-triggers the boot setup-token flow).'
+      schema: { type: string, enum: ['true', 'false'], default: 'false' }
+  schemas:
+    BackupExportRequest:
+      type: object
+      additionalProperties: false
+      required: [passphrase]
+      properties:
+        passphrase:
+          type: string
+          minLength: 12
+          writeOnly: true
+          description: Encryption passphrase (at least 12 characters). Not stored — keep it to restore.
+    BackupEncryption:
+      type: object
+      description: Key-derivation header of a passphrase-encrypted backup (schema 2.0.0).
+      properties:
+        kdf: { type: string, enum: [argon2id] }
+        salt: { type: string, description: Base64 salt. }
+        time: { type: integer, description: argon2id passes. }
+        memory_kib: { type: integer, description: 'argon2id memory, KiB.' }
+        threads: { type: integer, description: argon2id lanes. }
+        check: { type: string, description: 'Sealed check value, proves the passphrase before any secret is opened.' }
+    BackupSnapshot:
+      type: object
+      description: |
+        A configuration backup. Plain export: `schema_version: "1.0.0"`,
+        `secrets_included: false`, secrets replaced by `$$ARENET_REDACTED$$`.
+        Encrypted export: `schema_version: "2.0.0"`, `secrets_included:
+        true`, `encryption` set, each secret value sealed. Row shapes follow
+        the corresponding API/storage objects and are not detailed here.
+      required: [schema_version, exported_at, secrets_included, arenet_version]
+      properties:
+        schema_version: { type: string, enum: ['1.0.0', '2.0.0'] }
+        exported_at: { type: string, format: date-time }
+        secrets_included: { type: boolean }
+        arenet_version: { type: string }
+        encryption: { $ref: '#/components/schemas/BackupEncryption' }
+        routes: { type: [array, 'null'], items: { type: object } }
+        dns_providers: { type: [array, 'null'], items: { type: object } }
+        forward_auth_providers: { type: [array, 'null'], items: { type: object } }
+        oidc_config: { type: object }
+        maxmind_config: { type: object, description: Absent when MaxMind was never configured. }
+        users: { type: [array, 'null'], items: { type: object } }
+        external_certificates: { type: [array, 'null'], items: { type: object } }
+        extras:
+          type: object
+          description: Other config areas (v2.29+). Absent in older backups — those areas are then left untouched on restore.
+          properties:
+            managed_domains: { type: [array, 'null'], items: { type: object } }
+            error_templates: { type: [array, 'null'], items: { type: object } }
+            maintenance_page: { type: object }
+            alert_channels: { type: [array, 'null'], items: { type: object } }
+            alert_rules: { type: [array, 'null'], items: { type: object } }
+            crowdsec_config: { type: object }
+            crowdsec_watcher: { type: object }
+            automation_rules: { description: Automation rule set (opaque JSON). }
+            update_check: { type: object }
+            geoip_update: { type: object }
+            server_position: { type: object }
+            backup_schedule: { type: object }
+            route_check: { type: object }
+            api_tokens: { type: [array, 'null'], items: { type: object } }
+    BackupRestoreReport:
+      type: object
+      description: Counts of what the restore imported.
+      properties:
+        routesImported: { type: integer }
+        usersImported: { type: integer }
+        dnsProvidersImported: { type: integer }
+        forwardAuthProvidersImported: { type: integer }
+        oidcConfigImported: { type: boolean }
+        maxmindConfigImported: { type: boolean }
+        externalCertificatesImported: { type: integer }
+        extrasImported: { type: boolean, description: The backup carried the v2.29+ `extras` section. }
+        managedDomainsImported: { type: integer }
+        errorTemplatesImported: { type: integer }
+        alertChannelsImported: { type: integer }
+        alertRulesImported: { type: integer }
+        apiTokensImported: { type: integer }
+        sentinelsInheritedTotal: { type: integer, description: Redacted secrets that inherited the live value. }
+        sentinelsUnresolvedTotal: { type: integer, description: Redacted secrets cleared (allow-incomplete-restore). }
+        incompleteRows: { type: integer, description: Rows whose secret must be re-entered. }
+    BackupScheduleStatus:
+      type: object
+      description: Result of the last run (fields omitted until they have a value).
+      properties:
+        lastRunAt: { type: string, format: date-time }
+        lastStatus: { type: string, enum: [ok, error] }
+        lastError: { type: string }
+        lastFile: { type: string }
+        lastEmailAt: { type: string, format: date-time }
+        lastEmailError: { type: string }
+    BackupSchedule:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        frequency: { type: string, enum: [daily, weekly] }
+        time: { type: string, pattern: '^\d{2}:\d{2}$', description: 'HH:MM in the server time zone (see `timeZone`).' }
+        weekday: { type: integer, minimum: 0, maximum: 6, description: '0 = Sunday; used by `weekly` only.' }
+        keep: { type: integer, minimum: 1, maximum: 365, description: Files kept in the directory (older ones pruned). }
+        dir: { type: string, description: 'Configured absolute directory; empty = `<data-dir>/backups`.' }
+        effectiveDir: { type: string, description: Directory actually used. }
+        passphraseSet: { type: boolean, description: A passphrase is stored (never returned). }
+        emailMode: { type: string, enum: [never, each, weekly], description: 'Email the backup: never, after each run, or at most once a week.' }
+        emailChannelId: { type: string, description: Alert channel of kind `email` used for the attachment. }
+        alertChannelIds: { type: array, items: { type: string }, description: Alert channels notified when a backup fails. }
+        timeZone: { type: string, description: 'Server time zone, e.g. `UTC+02:00 (CEST)`.' }
+        nextRunAt: { type: string, format: date-time, description: Next scheduled run; omitted when disabled. }
+        status: { $ref: '#/components/schemas/BackupScheduleStatus' }
+    BackupScheduleUpdate:
+      type: object
+      additionalProperties: false
+      description: Full replacement; omitted fields take their zero value (except `passphrase`).
+      properties:
+        enabled: { type: boolean }
+        frequency: { type: string, enum: [daily, weekly] }
+        time: { type: string, pattern: '^\d{2}:\d{2}$', description: 'HH:MM, server time zone.' }
+        weekday: { type: integer, minimum: 0, maximum: 6 }
+        keep: { type: integer, minimum: 1, maximum: 365 }
+        dir: { type: string, description: 'Absolute directory, or empty for `<data-dir>/backups`. Must be writable by Arenet (UID 65532 in Docker).' }
+        passphrase:
+          type: string
+          writeOnly: true
+          description: New passphrase (at least 12 characters). Empty or omitted keeps the stored one. Required (sent or stored) to enable.
+        emailMode: { type: string, enum: [never, each, weekly] }
+        emailChannelId: { type: string, description: Required unless emailMode is `never`; must be an `email` channel. }
+        alertChannelIds: { type: [array, 'null'], items: { type: string } }
+    BackupFile:
+      type: object
+      properties:
+        name: { type: string }
+        size: { type: integer, description: Bytes. }
+        modTime: { type: string, format: date-time }
+    BackupFileList:
+      type: object
+      properties:
+        dir: { type: string, description: Directory listed. }
+        files:
+          type: array
+          description: Newest first.
+          items: { $ref: '#/components/schemas/BackupFile' }
+    BackupRunResult:
+      type: object
+      properties:
+        file: { type: string, description: Name of the written file. }
+        size: { type: integer, description: Bytes written. }
+        pruned: { type: integer, description: Old files removed. }
+        emailed: { type: boolean }
+        emailError: { type: string }
+    SystemVersion:
+      type: object
+      properties:
+        current: { type: string, description: Running version. }
+        latest: { type: string, description: Latest stable release seen (empty before the first check). }
+        updateAvailable: { type: boolean }
+        url: { type: string, description: Release page of `latest`. }
+        lastChecked: { type: string, format: date-time, description: 'Zero time (`0001-01-01T00:00:00Z`) before the first check.' }
+        lastError: { type: string, description: 'Error of the last check, empty on success.' }
+        enabled: { type: boolean, description: Periodic check enabled. }
+    SystemVersionConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        intervalOverride:
+          type: string
+          description: 'Go duration (e.g. `24h`), at least `1h`. Empty = `ARENET_UPDATE_CHECK_INTERVAL` or 24h.'
+    SystemGeoIPUpdateConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        intervalHours: { type: integer, minimum: 0, description: 'Hours between updates; 0 on PUT = default (168).' }
+    SystemGeoIPUpdateResult:
+      type: object
+      properties:
+        status: { type: string, enum: [updated, up_to_date, no_credentials, error] }
+        error: { type: string, description: 'Set on `error` ("city: …; asn: …").' }
+        lastModified: { type: string, format: date-time, description: MaxMind Last-Modified of the newest database. }
+    SystemGeoIPStatus:
+      type: object
+      properties:
+        lastStatus: { type: string, enum: ['', updated, up_to_date, no_credentials, error] }
+        lastError: { type: string }
+        lastUpdated: { type: string, format: date-time, description: Time of the last attempt. }
+    SystemHealthz:
+      type: object
+      properties:
+        status: { type: string, enum: [ok] }
+        uptime_seconds: { type: integer }
+    SystemHealthComponent:
+      type: object
+      properties:
+        name: { type: string, enum: [caddy, db, metrics, crowdsec, certmagic] }
+        status: { type: string, enum: [healthy, degraded, unhealthy] }
+        latency_ms: { type: integer, description: Omitted when the check has no latency. }
+        message: { type: string }
+    SystemHealthReport:
+      type: object
+      properties:
+        status: { type: string, enum: [healthy, degraded, unhealthy] }
+        timestamp: { type: string, format: date-time }
+        version: { type: string }
+        components:
+          type: array
+          items: { $ref: '#/components/schemas/SystemHealthComponent' }
