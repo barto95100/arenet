@@ -41,6 +41,9 @@ const MaxRequestPathBytes = 512
 // without retaining unbounded request bodies. See spec §1.6.1.
 const MaxPayloadSampleBytes = 256
 
+// MaxMatchedVarBytes caps Event.MatchedVar ("VARIABLE:key").
+const MaxMatchedVarBytes = 256
+
 // OwaspCategory is the rolled-up classification surfaced on
 // the dashboard. Each CRS rule maps to exactly one category
 // via CategoryForRule (see category.go).
@@ -203,6 +206,12 @@ type Event struct {
 	// status is not visible at WAF callback time. Frontend
 	// renders "—" for the zero value.
 	StatusCode int
+
+	// MatchedVar (v2.36) is the "VARIABLE:key" of the field that
+	// triggered the rule (e.g. "ARGS:content") — exactly the target
+	// a ctl:ruleRemoveTargetById exclusion needs. Empty when the
+	// variable has no key (REQUEST_FILENAME, REQUEST_URI…).
+	MatchedVar string
 }
 
 // Action enum (W.bugfix Fix #1 — mode-aware labels).

@@ -603,6 +603,12 @@ type Route struct {
 	// JSON omitempty so pre-X(e) routes stay byte-equal with
 	// pre-X(e) snapshots on disk + in backup/restore exports.
 	WAFExcludeTags []string `json:"waf_exclude_tags,omitempty"`
+	// WAFTargetedExclusions (v2.36) narrows a CRS rule instead of
+	// removing it: the rule stops inspecting one field, optionally
+	// on one path only. Created from a WAF event ("Exclude…") or
+	// by hand in the route form. Empty = no extra directives, so
+	// routes without it keep byte-identical Caddy config.
+	WAFTargetedExclusions []WAFTargetedExclusion `json:"waf_targeted_exclusions,omitempty"`
 	// RateLimit (Step Q, 2026-06-18) is the per-route rate
 	// limiting configuration that gates inbound requests
 	// BEFORE the WAF / country-block / CrowdSec chain runs.

@@ -54,6 +54,9 @@ type securityEvent struct {
 	// "BLOCK 403" assumption.
 	Action     string `json:"action"`
 	StatusCode int    `json:"statusCode"`
+	// MatchedVar (v2.36) — "VARIABLE:key" of the triggering field,
+	// the target of a targeted exclusion; "" when unknown.
+	MatchedVar string `json:"matchedVar"`
 }
 
 // securityEventsResponse is the wire shape of
@@ -139,6 +142,7 @@ func (h *Handler) securityEvents(w http.ResponseWriter, r *http.Request) {
 			PayloadSample: e.PayloadSample,
 			Action:        e.Action,
 			StatusCode:    e.StatusCode,
+			MatchedVar:    e.MatchedVar,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
