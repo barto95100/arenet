@@ -21,6 +21,7 @@
 - [Backup & Restore](Backup-Restore) · [Backup & Restore 🇫🇷](Backup-Restore-FR)
 - [Alerting](Alerting) · [Alerting 🇫🇷](Alerting-FR)
 - [Custom Error Pages](Custom-Error-Pages) · [Custom Error Pages 🇫🇷](Custom-Error-Pages-FR)
+- [API (OpenAPI)](API) · [API (OpenAPI) 🇫🇷](API-FR)
 - [Troubleshooting](Troubleshooting) · [Troubleshooting 🇫🇷](Troubleshooting-FR)
 
 ---
