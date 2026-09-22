@@ -132,6 +132,28 @@ Fonctionnement :
 
 ---
 
+## SecLang (avancé)
+
+Pour ce que les règles guidées ne savent pas exprimer, chaque route a un éditeur **SecLang** (formulaire de route → **WAF** → **SecLang (avancé)**, replié tant qu'il est vide). C'est la vraie syntaxe Coraza / ModSecurity, avec des garde-fous et de l'aide :
+
+- **Éditeur** : coloration, autocomplétion (directives, variables, `@opérateurs`, actions, valeurs de `ctl:` et `t:` — uniquement ce qui est autorisé), vérification en direct avec le problème affiché **sur sa ligne**.
+- **Modèles**, commentés ligne par ligne dans ta langue, insérés avec le prochain ID libre : API en JSON uniquement, méthodes autorisées, `/admin` depuis le réseau local seulement, exiger un en-tête de clé API, bloquer des robots par User-Agent, limiter la longueur des paramètres, exception pour un champ.
+- **→ SecLang** sur une règle guidée : la remplace par le SecLang qu'elle génère (bonne façon d'apprendre, puis d'aller plus loin).
+- **Tester une requête** (routes enregistrées) : méthode, chemin, en-têtes, corps → *« Bloquée (405) par la règle 130000 Méthode non autorisée »* ou *« Acceptée »*, avec toutes les règles déclenchées (OWASP CRS compris). Utilise le contenu **non enregistré** de l'éditeur, n'envoie rien au backend et ne journalise rien.
+
+Ce qui est autorisé (vérifié à l'enregistrement ; un refus indique la ligne) :
+
+- Directives `SecRule`, `SecAction`, `SecMarker` uniquement — pas d'`Include`, pas de réglage du moteur (`SecRuleEngine`, `SecRequestBodyLimit`…), pas de journal d'audit, pas de fichiers de données.
+- IDs de règles **130000–139999**, un par règle (les maillons d'une chaîne n'en ont pas), uniques.
+- Opérateurs : `@rx @streq @beginsWith @endsWith @contains @pm @within @eq @ge @gt @le @lt @ipMatch @detectSQLi @detectXSS @validateByteRange @validateUrlEncoding @validateUtf8Encoding @strmatch @unconditionalMatch @noMatch`. Refusés entre autres : `@inspectFile` (lance un programme), `*FromFile` (lit des fichiers de l'hôte), `@rbl` (réseau), `@geoLookup`, `@validateSchema`.
+- Actions : `id phase chain deny block drop pass allow status redirect log nolog auditlog noauditlog msg logdata tag severity rev ver maturity capture multiMatch setvar expirevar skip skipAfter t ctl`. Refusées : `exec`, `setenv`, `initcol`. `ctl:` limité à la famille `ruleRemove…`, `requestBodyProcessor` et `forceRequestBodyVariable` (pas de `ctl:ruleEngine`, pas de changement des limites de corps).
+- La collection `ENV` et les macros `%{ENV.…}` sont refusées (l'environnement du processus peut contenir des secrets).
+- 64 Kio et 200 règles maximum.
+
+Le SecLang s'exécute **après** les exclusions ciblées et les règles guidées et **avant** le CRS, suit le mode de la route (la ligne `SecRuleEngine` reste celle d'Arenet) et fonctionne aussi quand le CRS est désactivé. Les événements ont la catégorie **CUSTOM** et le `msg` de la règle comme nom. Préfère les règles guidées quand elles suffisent : elles ne peuvent pas être mal écrites.
+
+---
+
 ## CRS paranoia levels
 
 OWASP CRS supporte quatre paranoia levels (PL1–PL4) qui contrôlent la strictness :
