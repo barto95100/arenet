@@ -251,3 +251,25 @@ describe('ChannelModal', () => {
 		expect(req.config.smtpPassword).toBe('');
 	});
 });
+
+// v2.39 — a channel whose stored webhook URL was overwritten by the
+// redaction placeholder is flagged by the backend: warn and force the
+// operator to retype it (an empty field, not the masked value).
+describe('ChannelModal — lost webhook URL', () => {
+	it('warns and clears the URL when secretsLost is set', async () => {
+		const Modal = (await import('./ChannelModal.svelte')).default;
+		const broken = { ...webhookFixture(), secretsLost: true };
+		render(Modal, { props: { open: true, channel: broken, onClose: () => {}, onSaved: () => {} } });
+
+		expect(screen.getByTestId('channel-secrets-lost')).toBeTruthy();
+		expect((screen.getByLabelText(/URL/i) as HTMLInputElement).value).toBe('');
+	});
+
+	it('keeps the redacted URL for a healthy channel (the backend restores it)', async () => {
+		const Modal = (await import('./ChannelModal.svelte')).default;
+		render(Modal, { props: { open: true, channel: webhookFixture(), onClose: () => {}, onSaved: () => {} } });
+
+		expect(screen.queryByTestId('channel-secrets-lost')).toBeNull();
+		expect((screen.getByLabelText(/URL/i) as HTMLInputElement).value).not.toBe('');
+	});
+});

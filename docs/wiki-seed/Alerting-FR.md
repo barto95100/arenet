@@ -185,6 +185,14 @@ Open https://arenet.example.com/certs to investigate
 
 ---
 
+## URL de webhook et secrets
+
+Une URL de webhook est elle-même un identifiant (une URL Discord ou Slack contient le jeton), donc `GET` la renvoie masquée (`https://hôte/[redacted]`), comme les valeurs d'en-têtes. Enregistrer un canal sans les retaper conserve les valeurs stockées — Arenet les restaure.
+
+**Avant la v2.39**, cette restauration manquait pour l'URL : modifier un canal webhook sans retaper l'URL enregistrait la valeur masquée, et le canal cessait d'envoyer sans erreur visible. Un canal dans ce cas est maintenant signalé à l'ouverture (« l'URL du webhook a été perdue… »), avec le champ URL vide : retape l'URL et enregistre pour le réparer.
+
+---
+
 ## Historique des alertes
 
 Sidebar → **Alerting** → onglet **History** — liste chronologique de chaque alerte fired, avec nom de rule, severity, valeur source au fire-time, channels notifiés, et delivery status (succès par channel).

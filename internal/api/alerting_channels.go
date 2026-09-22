@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -78,6 +79,11 @@ type alertChannelResponse struct {
 	LastErrorAt *time.Time      `json:"lastErrorAt,omitempty"`
 	CreatedAt   string          `json:"createdAt"`
 	UpdatedAt   string          `json:"updatedAt"`
+	// SecretsLost (v2.39) flags a webhook channel whose stored URL is
+	// the redacted placeholder: an edit made before the fix above
+	// overwrote it, so the channel cannot send until the operator
+	// retypes the URL.
+	SecretsLost bool `json:"secretsLost,omitempty"`
 }
 
 // alertChannelTestResponse reports the outcome of a
@@ -142,6 +148,20 @@ func alertChannelForAudit(c storage.Channel) storage.Channel {
 	return c
 }
 
+// webhookURLLost reports a webhook channel whose stored URL carries the
+// redaction placeholder — the channel is broken until the URL is
+// retyped (see mergeAlertChannelSecrets).
+func webhookURLLost(c storage.Channel) bool {
+	if c.Kind != storage.ChannelKindWebhook {
+		return false
+	}
+	var cfg alerting.WebhookConfig
+	if err := json.Unmarshal(c.Config, &cfg); err != nil {
+		return false
+	}
+	return strings.Contains(cfg.URL, auditRedacted)
+}
+
 // alertChannelToResponse builds the GET wire shape with
 // secrets blanked. Mirrors alertChannelForAudit's
 // behaviour but emits the redacted JSON as the operator-
@@ -151,6 +171,7 @@ func alertChannelToResponse(c storage.Channel) alertChannelResponse {
 	// rules, same per-kind dispatch.
 	redacted := alertChannelForAudit(c)
 	return alertChannelResponse{
+		SecretsLost: webhookURLLost(c),
 		ID:          c.ID,
 		Name:        c.Name,
 		Kind:        c.Kind,
@@ -233,11 +254,20 @@ func mergeAlertChannelSecrets(reqConfig json.RawMessage, kind string, previous s
 			incoming.Headers = map[string]string{}
 		}
 		for k, v := range incoming.Headers {
-			if v == "" {
+			if v == "" || v == auditRedacted {
 				if storedV, ok := stored.Headers[k]; ok {
 					incoming.Headers[k] = storedV
 				}
 			}
+		}
+		// The URL is a secret too (a Discord / Slack webhook URL IS
+		// the credential), so GET returns it redacted. The UI sends
+		// back what it was shown: without this, editing a channel
+		// without retyping the URL stored "https://host/[redacted]"
+		// and the channel silently stopped sending (found while
+		// writing the OpenAPI doc, v2.39).
+		if incoming.URL == "" || incoming.URL == auditRedacted || incoming.URL == redactWebhookURL(stored.URL) {
+			incoming.URL = stored.URL
 		}
 		return json.Marshal(incoming)
 	case storage.ChannelKindEmail:

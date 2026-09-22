@@ -185,6 +185,14 @@ Open https://arenet.example.com/certs to investigate
 
 ---
 
+## Webhook URL and secrets
+
+A webhook URL is itself a credential (a Discord or Slack URL contains the token), so `GET` returns it masked (`https://host/[redacted]`), as it does for header values. Saving a channel without retyping them keeps the stored values — Arenet restores them.
+
+**Before v2.39** that restore was missing for the URL: editing a webhook channel without retyping the URL saved the masked value, and the channel stopped sending silently. Such a channel is now flagged when you open it ("the webhook URL was lost…"), with an empty URL field: retype the URL and save to repair it.
+
+---
+
 ## Alert history
 
 Sidebar → **Alerting** → **History** tab — chronological list of every alert fired, with rule name, severity, source value at fire-time, channels notified, and delivery status (success per channel).

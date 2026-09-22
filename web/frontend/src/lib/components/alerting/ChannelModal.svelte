@@ -101,7 +101,10 @@
 			minSeverity = channel.minSeverity;
 			if (channel.kind === 'webhook') {
 				const cfg = channel.config as WebhookConfig;
-				webhookUrl = cfg.url ?? '';
+				// v2.39 — a channel whose stored URL was overwritten by the
+				// redaction placeholder starts empty: the operator must
+				// retype it (the warning below says so).
+				webhookUrl = channel.secretsLost ? '' : (cfg.url ?? '');
 				webhookMethod = 'POST';
 				webhookTimeout = cfg.timeoutSeconds ?? 10;
 				webhookHeaders = cfg.headers
@@ -358,6 +361,11 @@
 
 		<!-- Webhook fields -->
 		{#if kind === 'webhook'}
+			{#if channel?.secretsLost}
+				<p class="text-xs text-status-warn" role="alert" data-testid="channel-secrets-lost">
+					{language.current && t('alerting.channelModal.secretsLost')}
+				</p>
+			{/if}
 			<Input
 				bind:value={webhookUrl}
 				label={language.current && t('alerting.channelModal.labelWebhookUrl')}
