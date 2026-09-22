@@ -27,6 +27,33 @@ En ~5 secondes, Caddy recharge et la route est live :
 
 ---
 
+## Importer un Caddyfile (v2.40)
+
+Tu viens de Caddy « nu » ? **Routes → Importer un Caddyfile** lit ton fichier avec le parseur de Caddy et transforme chaque bloc de site en route.
+
+1. Colle le Caddyfile (ou dépose le fichier) et clique sur **Analyser**. Rien n'est encore écrit.
+2. L'aperçu affiche une ligne par bloc : l'hôte et ses alias, les backends, des badges (HTTP, règles par chemin, **déjà présente**) et, repliés, tous les éléments non repris — chacun avec son numéro de ligne.
+3. Coche ce que tu veux et clique sur **Importer**. Caddy est rechargé une seule fois ; s'il refuse le résultat, toutes les routes importées sont retirées et l'appel échoue, donc jamais d'import à moitié fait.
+
+Ce qui est importé :
+
+| Caddyfile | Route |
+|---|---|
+| les adresses du bloc | hôte + alias ; `http://` → TLS désactivé |
+| `reverse_proxy` | backends, `lb_policy`, `health_uri` / `health_interval` / `health_timeout` / `health_status`, `header_up` / `header_down`, `transport http { tls_insecure_skip_verify }` |
+| `reverse_proxy /chemin/*`, `handle_path`, `handle`, `route` contenant un `reverse_proxy` | une règle par chemin avec ses propres backends |
+| `tls <email>` ou rien | ACME HTTP-01 |
+| `tls { dns … }` | ACME DNS-01 (configure le fournisseur dans Arenet — les identifiants ne sont jamais importés) |
+| `encode`, `log` | ignorés en silence (Arenet s'en charge) |
+
+Ce qui est signalé plutôt que deviné : `basic_auth` (Caddy stocke un hachage bcrypt, ressaisis le mot de passe), `tls internal` et les certificats explicites (téléverse-les dans Certificats), `file_server`, `php_fastcgi`, `redir`, `respond`, `rewrite`, les matchers nommés, les backends en socket unix ou avec des variables, les ports autres que 80/443, les options globales et les routes nommées.
+
+Un bloc sans `reverse_proxy` n'est pas importable : il est listé avec la raison.
+
+Deux garde-fous : un hôte déjà servi par une route est **ignoré**, sauf si tu coches **remplacer** (ce qui écrase cette route : ses réglages WAF, géo et limites sont perdus), et les routes importées démarrent avec le **WAF en mode detect**, pour que tu voies ce que le CRS bloquerait avant de l'appliquer.
+
+---
+
 ## Anatomie d'une route
 
 Chaque route stocke les champs suivants (bucket BoltDB `routes`) :
