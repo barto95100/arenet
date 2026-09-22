@@ -3845,14 +3845,14 @@ func findRouteByHost(t *testing.T, routes []any, host string) map[string]any {
 	return nil
 }
 
-// TestBuildConfigJSON_GracePeriod_Bounded — #R-CADDY-graceful-
-// shutdown-too-long. Caddy's apps.http.grace_period defaults
-// to 0 (eternal) in modules/caddyhttp/app.go:132, which made
-// SIGTERM hang the embedded Caddy for ~90 s waiting on long-
-// poll dashboard tabs before systemd SIGKILL'd it. Pin the
-// emitted JSON to the operator-friendly bounded value so the
-// next config rewrite can't silently regress.
-func TestBuildConfigJSON_GracePeriod_Bounded(t *testing.T) {
+// TestBuildConfigJSON_GracePeriod_Eternal — v2.35.1. A finite
+// apps.http.grace_period is cancelled as soon as Caddy's App.Stop
+// returns on a reload (deferred cancel, caddyhttp/app.go:655-800),
+// which makes quic-go close every open HTTP/3 connection: in-flight
+// HTTP/3 requests (e.g. the admin UI's own save) failed on each
+// reload. The field must stay absent (Caddy default: eternal). SIGTERM
+// does not wait for it (Arenet uses caddy.Stop, not the exit path).
+func TestBuildConfigJSON_GracePeriod_Eternal(t *testing.T) {
 	routes := []storage.Route{
 		{ID: "r1", Host: "x.example.com", Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}}, LBPolicy: storage.LBPolicyRoundRobin},
 	}
@@ -3868,13 +3868,8 @@ func TestBuildConfigJSON_GracePeriod_Bounded(t *testing.T) {
 	if !ok {
 		t.Fatal("apps.http missing in emitted config")
 	}
-	got, ok := httpApp["grace_period"].(string)
-	if !ok {
-		t.Fatalf("apps.http.grace_period missing or not a string; got %T: %v\n%s",
-			httpApp["grace_period"], httpApp["grace_period"], raw)
-	}
-	if got != "5s" {
-		t.Errorf("apps.http.grace_period = %q; want %q", got, "5s")
+	if v, present := httpApp["grace_period"]; present {
+		t.Errorf("apps.http.grace_period = %v; must be absent (a finite grace period kills in-flight HTTP/3 requests on every reload)", v)
 	}
 }
 

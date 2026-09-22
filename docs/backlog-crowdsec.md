@@ -33,6 +33,19 @@ que d'aborter — graceful degradation, l'écriture est de
 toute façon persistée.
 
 ## #R-CADDY-graceful-shutdown-too-long — RESOLVED 2026-06-11
+
+> **Superseded 2026-09-22 (v2.35.1):** the 5s grace period was removed.
+> On every config reload Caddy's `App.Stop` cancels the grace context
+> as soon as it returns (deferred cancel, `caddyhttp/app.go:655-800`),
+> and quic-go then closes every open HTTP/3 connection
+> (`http3/server.go:632-643`): any in-flight HTTP/3 request — including
+> the admin UI's own save when reached through Arenet — failed on each
+> reload. Measured on a real binary: a 3 s HTTP/3 request across a
+> reload fails at 0.64 s with 5s, completes (200) with the eternal
+> default. The SIGTERM hang below no longer reproduces: Arenet stops
+> Caddy with `caddy.Stop` (not the exit path), so `App.Stop` never waits
+> for the grace period — exit measured at 0.02-0.03 s with an HTTP/1.1
+> or HTTP/3 request in flight. Test: `TestBuildConfigJSON_GracePeriod_Eternal`.
 Arenet's embedded Caddy uses "eternal grace period" pour les 
 HTTP/2 streaming connections during shutdown. Combiné avec les 
 browser tabs actifs (polling /security?tab=crowdsec every 30s, 

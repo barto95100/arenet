@@ -2033,21 +2033,24 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		"http": map[string]any{
 			"http_port":  httpPortFor(opts.DevMode),
 			"https_port": httpsPortFor(opts.DevMode),
-			// #R-CADDY-graceful-shutdown-too-long — bound the
-			// grace period so SIGTERM doesn't hang for the
-			// systemd 90s timeout when there's a long-poll or
-			// WebSocket open (dashboard tabs polling
-			// /security?tab=crowdsec every 30s, metrics WS, etc).
-			// Caddy's default is 0 = eternal grace period
-			// (modules/caddyhttp/app.go:132); reading "servers
-			// shutting down with eternal grace period" in the
-			// logs and then watching the process linger was the
-			// operator-visible symptom during CS.3 smoke
-			// redeploys. 5s is large enough to drain a normal
-			// HTTP/1.1 request but small enough that idle
-			// long-poll connections lose at most one tick before
-			// the process exits.
-			"grace_period": "5s",
+			// No grace_period (Caddy default 0 = eternal) — v2.35.1.
+			// A finite value (5s since #R-CADDY-graceful-shutdown-
+			// too-long) killed every in-flight HTTP/3 request on
+			// each config reload: App.Stop builds the grace context
+			// with a deferred cancel and returns at once when the
+			// process is not exiting (caddyhttp/app.go:655-800), so
+			// quic-go's http3 Server.Shutdown sees it done and
+			// closes all open HTTP/3 connections (http3/
+			// server.go:632-643). An admin UI reached through
+			// Arenet over HTTP/3 lost the response of every save.
+			// With the eternal default the old server drains:
+			// measured on a real binary, a 3 s HTTP/3 request
+			// across a reload now completes (200) instead of
+			// failing at 0.64 s. SIGTERM is unaffected — Arenet
+			// stops Caddy with caddy.Stop (not caddy's exit path),
+			// so App.Stop never waits for the grace period:
+			// measured exit 0.02-0.03 s with an HTTP/1.1 or
+			// HTTP/3 request in flight.
 			"servers":      cfg.Apps.HTTP.Servers,
 		},
 		"tls": buildTLSApp(acme, opts, routes),

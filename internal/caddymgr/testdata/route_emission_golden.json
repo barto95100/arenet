@@ -54,7 +54,6 @@
       ]
     },
     "http": {
-      "grace_period": "5s",
       "http_port": 8080,
       "https_port": 8443,
       "servers": {
