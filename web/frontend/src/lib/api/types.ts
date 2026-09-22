@@ -295,6 +295,11 @@ export interface Route {
 	 */
 	wafExcludeTags: string[];
 	/**
+	 * v2.36 — targeted exclusions: one CRS rule stops inspecting one
+	 * field (optionally on one path). Always present ([] when none).
+	 */
+	wafTargetedExclusions: WafTargetedExclusion[];
+	/**
 	 * Step Q (2026-06-18) — per-route rate-limit config.
 	 * null when no rate limit configured ; non-null
 	 * carries the operator-supplied (events, window, key)
@@ -684,6 +689,8 @@ export interface RouteRequest {
 	 * (comma, whitespace, double-quote).
 	 */
 	wafExcludeTags?: string[];
+	/** v2.36 — targeted exclusions; omit = keep, [] = clear. */
+	wafTargetedExclusions?: WafTargetedExclusion[];
 	/**
 	 * Step Q (2026-06-18) — per-route rate limit on the wire.
 	 * Preserve-on-omit on PUT (omit → keep stored value),
@@ -1951,6 +1958,32 @@ export interface WafEvent {
 	// in the legacy schema are backfilled to ("BLOCK", 403).
 	action: 'BLOCK' | 'DETECT';
 	statusCode: number;
+	/**
+	 * v2.36 — "VARIABLE:key" of the field that triggered the rule
+	 * (e.g. "ARGS:content"); empty for older events or keyless
+	 * variables. Absent on pre-v2.36 servers.
+	 */
+	matchedVar?: string;
+}
+
+/**
+ * v2.36 — targeted WAF exclusion: rule `ruleId` no longer inspects
+ * `target` ("VARIABLE:key"), on `path` only when set (and below it
+ * when `pathPrefix`).
+ */
+export interface WafTargetedExclusion {
+	ruleId: number;
+	target: string;
+	path?: string;
+	pathPrefix?: boolean;
+}
+
+/** v2.36 — body of POST /routes/{id}/waf-exclusions (no target = whole route). */
+export interface AddWafExclusionRequest {
+	ruleId: number;
+	target?: string;
+	path?: string;
+	pathPrefix?: boolean;
 }
 
 export interface WafEventsResponse {

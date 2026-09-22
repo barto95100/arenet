@@ -30,6 +30,11 @@ selected route.
 
 <script lang="ts">
 	import type { OwaspCategory, WafEvent } from '$lib/api/types';
+	import WafExcludeDialog from '$lib/components/WafExcludeDialog.svelte';
+	import { auth } from '$lib/stores/auth.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
+	import { isExcludableRule } from '$lib/utils/waf-exclusion';
 
 	interface Props {
 		events: WafEvent[];
@@ -45,8 +50,20 @@ selected route.
 		 * page sets this true (every row is the same route).
 		 */
 		compact?: boolean;
+		/**
+		 * v2.36 — host shown in the "Exclude…" dialog when the
+		 * map has no entry (drill-down page: one route).
+		 */
+		host?: string;
+		/** v2.36 — called after an exclusion was added. */
+		onExcluded?: () => void;
 	}
-	let { events, hostByRouteId = {}, compact = false }: Props = $props();
+	let { events, hostByRouteId = {}, compact = false, host = '', onExcluded }: Props = $props();
+
+	// v2.36 — "Exclude…" on a row (admins only; the backend is the
+	// authoritative gate). Protected / Arenet rules get no button.
+	const isAdmin = $derived(auth.user?.role === 'admin');
+	let excludeEvent = $state<WafEvent | null>(null);
 
 	// Category badge colours mirror CategoryDistribution.
 	// Phase Y — colour mapping moved to lib/utils/waf-category
@@ -99,6 +116,9 @@ selected route.
 				<th>Rule</th>
 				<th>Source IP</th>
 				<th>Payload</th>
+				{#if isAdmin}
+					<th><span class="sr-only">{language.current && t('wafExclude.action')}</span></th>
+				{/if}
 			</tr>
 		</thead>
 		<tbody>
@@ -120,11 +140,34 @@ selected route.
 					<td class="payload mono" title={e.payloadSample || '(empty)'}>
 						{payloadPreview(e.payloadSample) || '—'}
 					</td>
+					{#if isAdmin}
+						<td class="actions">
+							{#if isExcludableRule(e.ruleId)}
+								<button
+									type="button"
+									class="exclude-btn"
+									onclick={() => (excludeEvent = e)}
+									aria-label={language.current && t('wafExclude.actionAria', { rule: e.ruleId })}
+									data-testid="waf-exclude-open"
+								>
+									{language.current && t('wafExclude.action')}
+								</button>
+							{/if}
+						</td>
+					{/if}
 				</tr>
 			{/each}
 		</tbody>
 	</table>
 {/if}
+
+<WafExcludeDialog
+	open={excludeEvent !== null}
+	event={excludeEvent}
+	host={excludeEvent ? (hostByRouteId[excludeEvent.routeId] ?? host) : ''}
+	onClose={() => (excludeEvent = null)}
+	onSuccess={() => onExcluded?.()}
+/>
 
 <style>
 	table {
@@ -175,6 +218,35 @@ selected route.
 		font-size: var(--text-xs, 11px);
 		font-weight: 600;
 		letter-spacing: 0.04em;
+	}
+	.actions {
+		text-align: right;
+		white-space: nowrap;
+	}
+	.exclude-btn {
+		background: var(--bg-surface);
+		color: var(--text-secondary);
+		border: 1px solid var(--border-subtle, var(--bg-hover));
+		padding: 0.15rem 0.5rem;
+		border-radius: 4px;
+		font-size: var(--text-xs, 11px);
+		cursor: pointer;
+	}
+	.exclude-btn:hover {
+		color: var(--accent-cyan);
+		border-color: var(--accent-cyan);
+	}
+	.exclude-btn:focus-visible {
+		outline: 2px solid var(--accent-cyan);
+		outline-offset: 1px;
+	}
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
 	}
 	.empty {
 		padding: 1rem;

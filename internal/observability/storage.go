@@ -381,6 +381,11 @@ type WafEvent struct {
 	// suppressed at the sink). See migrateV6toV7.
 	Action     string
 	StatusCode int
+
+	// MatchedVar (v2.36) is the "VARIABLE:key" of the field that
+	// triggered the rule ("ARGS:content"); empty when the variable
+	// has no key or the row predates v13.
+	MatchedVar string
 }
 
 // WafEventFilter narrows a QueryWafEvents call. All fields
@@ -419,8 +424,8 @@ func (s *Store) InsertWafEventBatch(ctx context.Context, events []WafEvent) erro
 		return fmt.Errorf("observability: begin waf_event tx: %w", err)
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO waf_event (ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample, action, status_code)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO waf_event (ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample, action, status_code, matched_var)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `)
 	if err != nil {
 		_ = tx.Rollback()
@@ -447,6 +452,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			e.PayloadSample,
 			action,
 			e.StatusCode,
+			e.MatchedVar,
 		); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("observability: insert waf_event (route=%s rule=%s): %w", e.RouteID, e.RuleID, err)
@@ -475,7 +481,7 @@ func (s *Store) QueryWafEvents(ctx context.Context, filter WafEventFilter) ([]Wa
 	if limit <= 0 || limit > wafEventLimitCap {
 		limit = wafEventLimitCap
 	}
-	q := `SELECT id, ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample, action, status_code
+	q := `SELECT id, ts, route_id, rule_id, category, severity, src_ip, request_method, request_path, payload_sample, action, status_code, matched_var
 	      FROM waf_event WHERE 1=1`
 	args := []any{}
 	if filter.RouteID != "" {
@@ -509,7 +515,7 @@ func (s *Store) QueryWafEvents(ctx context.Context, filter WafEventFilter) ([]Wa
 		if err := rows.Scan(
 			&e.ID, &tsUnix, &e.RouteID, &e.RuleID, &e.Category, &e.Severity,
 			&e.SrcIP, &e.RequestMethod, &e.RequestPath, &e.PayloadSample,
-			&e.Action, &e.StatusCode,
+			&e.Action, &e.StatusCode, &e.MatchedVar,
 		); err != nil {
 			return nil, fmt.Errorf("observability: scan waf_event: %w", err)
 		}

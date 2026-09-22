@@ -45,14 +45,35 @@ Each match emits one row in the SQLite `waf_event` table with :
 - `payload_sample` — first 256 chars of the matched data
 - `action` — `BLOCK` (block mode + score ≥ threshold) or `DETECT` (detect mode OR block mode + score < threshold)
 - `status_code` — `403` for blocked, `200` for detect/observed
+- `matched_var` (v2.36+) — the field that triggered the rule, as `VARIABLE:name` (e.g. `ARGS:content`, `REQUEST_HEADERS:referer`). Empty for events recorded before v2.36 and for rules that look at the URL itself.
 
-The `/security` page renders these with filter by route + category + level. The `/security/<routeId>` drilldown adds the CRS rule documentation links + a "Exclude this rule on this route" affordance for false-positive triage.
+The **Logs** page and the `/security/<routeId>` drilldown list these events. For admins, each excludable event carries an **Exclude…** button (see [Targeted exclusion](#option-0--targeted-exclusion-from-an-event-recommended) below).
+
+Repeats of the same route + source IP + rule within 60 s are recorded once (the dashboard counters still count every hit).
 
 ---
 
 ## Handling false positives
 
-When the WAF blocks a legitimate request (a known false positive), you have **three escape hatches** to apply per-route, in increasing scope :
+When the WAF blocks a legitimate request (a known false positive), you have **four escape hatches** to apply per-route, from the narrowest to the widest :
+
+### Option (0) — Targeted exclusion from an event (recommended)
+
+Use when : a rule fires on one legitimate field — a rich-text editor's `content` parameter tripping the SQLi rule `942100`, a long `Referer` header tripping an XSS rule…
+
+1. Open **Logs** (or the route's **Security** page) and find the event.
+2. Click **Exclude…**. The dialog says in plain words what will happen: *"Rule 942100 will stop inspecting the parameter “content”. It keeps protecting every other field of the route."*
+3. **Only on this path** is ticked by default, with the event's path (e.g. `/api/save`). Edit it if needed, tick **and everything below it** for a whole sub-tree (`/api` covers `/api` and `/api/…`, not `/apix`), or untick it to cover every path of the route.
+4. **Exclude**. Caddy reloads; the next identical request passes, while the same payload in any other field, or on another path, is still inspected.
+
+This is the OWASP-recommended way: the rule stays active, only the one field is skipped (`ctl:ruleRemoveTargetById`).
+
+Notes :
+
+- When the event doesn't name a field (events recorded before v2.36, or a rule that inspects the URL itself), the dialog warns you and excludes the rule on the **whole route** instead (same as option (c)).
+- CRS blocking-evaluation rules (`949xxx`, `959xxx`), initialization (`901xxx`) and correlation (`980xxx`) have no button: excluding them would disable the blocking itself. Exclude the rule listed next to them (e.g. `942100`) instead. Arenet's own rules (`1xxxxx`) have no button either.
+- The route form's **WAF** section lists the targeted exclusions (**Targeted exclusions**), one readable line each, with **Remove** and a small form to add one by hand (rule ID, field type, field name, optional path).
+- Admins only. Each addition is recorded in the audit log as a route update.
 
 ### Option (a) — Disable CRS entirely on the route
 
@@ -66,7 +87,7 @@ The WAF handler stays in the chain (the dashboard still counts events as 0), but
 
 ### Option (c) — Exclude specific CRS rule IDs
 
-Use when : a precise rule (e.g. `942100` SQLi libinjection) fires on a legitimate payload.
+Use when : a precise rule (e.g. `942100` SQLi libinjection) fires on a legitimate payload in many different fields — otherwise prefer option (0).
 
 1. Edit route → **WAF exclusions** → **Excluded rule IDs**
 2. Comma-separated list : `942100, 920170, 911100`

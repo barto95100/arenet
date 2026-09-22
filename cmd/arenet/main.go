@@ -2183,6 +2183,7 @@ func (a wafInserterAdapter) InsertWafEventBatch(ctx context.Context, events []wa
 			PayloadSample: e.PayloadSample,
 			Action:        e.Action,
 			StatusCode:    e.StatusCode,
+			MatchedVar:    e.MatchedVar,
 		}
 	}
 	return a.store.InsertWafEventBatch(ctx, rows)

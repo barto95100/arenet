@@ -1280,6 +1280,13 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 		WAFMode:         "detect",
 		WAFExcludeRules: []int{942100},
 		WAFExcludeTags:  []string{"attack-protocol", "paranoia-level/3"},
+		// v2.36 — targeted exclusions (SecAction + SecRule
+		// REQUEST_FILENAME shapes) validated against the real CRS.
+		WAFTargetedExclusions: []storage.WAFTargetedExclusion{
+			{RuleID: 941100, Target: "REQUEST_HEADERS:referer"},
+			{RuleID: 942100, Target: "ARGS:content", Path: "/api/save"},
+			{RuleID: 942100, Target: "ARGS:content", Path: "/api/", PathPrefix: true},
+		},
 	})
 	// Task 4 — fold the maintenance-mode route into THIS canonical
 	// fixture so caddy.Validate provisions the maintenance subroute

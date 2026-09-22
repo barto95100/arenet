@@ -1458,6 +1458,10 @@ type routeRequest struct {
 	// the tag exclusions become no-ops at runtime but are
 	// still persisted + emitted (caddymgr pool-key stability).
 	WAFExcludeTags *[]string `json:"wafExcludeTags,omitempty"`
+	// WAFTargetedExclusions (v2.36) — nil preserves on PUT, a
+	// slice (even empty) replaces; validated by
+	// normalizeTargetedExclusions.
+	WAFTargetedExclusions *[]wafTargetedExclusionWire `json:"wafTargetedExclusions,omitempty"`
 	// RateLimit (Step Q, 2026-06-18) is the per-route rate
 	// limiter config. Triple-state pointer per the Phase
 	// 4.5 + Step X.1 conventions :
@@ -1772,6 +1776,8 @@ type routeResponse struct {
 	// the same GET→PUT round-trip safety reason as
 	// WAFExcludeRules above.
 	WAFExcludeTags []string `json:"wafExcludeTags"`
+	// WAFTargetedExclusions (v2.36) — always present ([] when none).
+	WAFTargetedExclusions []wafTargetedExclusionWire `json:"wafTargetedExclusions"`
 	// RateLimit (Step Q) — per-route rate-limit config
 	// echoed on every GET. nil when the route has no rate
 	// limit configured (the frontend toggle reads the nil
@@ -1906,13 +1912,14 @@ func toResponse(r storage.Route) routeResponse {
 			Passes:       r.HealthCheck.Passes,
 			Fails:        r.HealthCheck.Fails,
 		},
-		CountryBlock:        toCountryBlockResp(r.CountryBlock),
-		InsecureSkipVerify:  r.InsecureSkipVerify,
-		UploadStreamingMode: r.UploadStreamingMode,
-		WAFDisableCRS:       r.WAFDisableCRS,
-		WAFExcludeRules:     emptyIntSliceIfNil(r.WAFExcludeRules),
-		WAFExcludeTags:      emptyStringSliceIfNil(r.WAFExcludeTags),
-		RateLimit:           toRateLimitResp(r.RateLimit),
+		CountryBlock:          toCountryBlockResp(r.CountryBlock),
+		InsecureSkipVerify:    r.InsecureSkipVerify,
+		UploadStreamingMode:   r.UploadStreamingMode,
+		WAFDisableCRS:         r.WAFDisableCRS,
+		WAFExcludeRules:       emptyIntSliceIfNil(r.WAFExcludeRules),
+		WAFExcludeTags:        emptyStringSliceIfNil(r.WAFExcludeTags),
+		WAFTargetedExclusions: toTargetedExclusionsWire(r.WAFTargetedExclusions),
+		RateLimit:             toRateLimitResp(r.RateLimit),
 		// Step R — error-page wiring pass-through (omitempty
 		// on the response struct so pre-R routes still emit
 		// byte-identical JSON).

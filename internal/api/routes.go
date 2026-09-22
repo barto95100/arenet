@@ -351,6 +351,7 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Delete("/routes/{id}", h.deleteRoute)
 				r.Post("/routes/{id}/disable", h.disableRoute)
 				r.Post("/routes/{id}/enable", h.enableRoute)
+				r.Post("/routes/{id}/waf-exclusions", h.addWAFExclusion)
 				r.Post("/routes/{id}/maintenance", h.enterMaintenance)
 				r.Post("/routes/{id}/maintenance/off", h.exitMaintenance)
 				r.Delete("/certificates/{domain}", h.deleteCertificate)
@@ -1462,6 +1463,15 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		excludeTags = normalised
 	}
+	var targeted []storage.WAFTargetedExclusion
+	if req.WAFTargetedExclusions != nil {
+		normalised, validationErr := normalizeTargetedExclusions(*req.WAFTargetedExclusions)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		targeted = normalised
+	}
 	// Step Q (2026-06-18) — RateLimit on POST : nil pointer
 	// = no rate limit (pre-Q byte-equivalent) ; non-nil
 	// supplied → validated by materialiseRateLimit which
@@ -1524,19 +1534,20 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		ForwardAuth: storage.ForwardAuthRouteConfig{
 			ProviderName: req.ForwardAuth.ProviderName,
 		},
-		RequestHeaders:      req.RequestHeaders,
-		ResponseHeaders:     req.ResponseHeaders,
-		WAFMode:             req.WAFMode,
-		ACMEChallenge:       req.ACMEChallenge,
-		UseDedicatedCert:    req.UseDedicatedCert,
-		HealthCheck:         storeHC,
-		CountryBlock:        newCountryBlock,
-		InsecureSkipVerify:  skipVerify,
-		UploadStreamingMode: streamingMode,
-		WAFDisableCRS:       disableCRS,
-		WAFExcludeRules:     excludeRules,
-		WAFExcludeTags:      excludeTags,
-		RateLimit:           rateLimit,
+		RequestHeaders:        req.RequestHeaders,
+		ResponseHeaders:       req.ResponseHeaders,
+		WAFMode:               req.WAFMode,
+		ACMEChallenge:         req.ACMEChallenge,
+		UseDedicatedCert:      req.UseDedicatedCert,
+		HealthCheck:           storeHC,
+		CountryBlock:          newCountryBlock,
+		InsecureSkipVerify:    skipVerify,
+		UploadStreamingMode:   streamingMode,
+		WAFDisableCRS:         disableCRS,
+		WAFExcludeRules:       excludeRules,
+		WAFExcludeTags:        excludeTags,
+		WAFTargetedExclusions: targeted,
+		RateLimit:             rateLimit,
 		// Step R — error-page wiring. Both fields are
 		// pass-through ; storage.validate() enforces the
 		// supported-code allowlist + 1 MiB body cap.
@@ -1986,6 +1997,17 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		excludeTags = normalised
 	}
+	// v2.36 — WAFTargetedExclusions on PUT: preserve on nil,
+	// replace (validated) otherwise.
+	targeted := previous.WAFTargetedExclusions
+	if req.WAFTargetedExclusions != nil {
+		normalised, validationErr := normalizeTargetedExclusions(*req.WAFTargetedExclusions)
+		if validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		targeted = normalised
+	}
 	// Step Q (2026-06-18) — RateLimit on PUT.
 	// v2.9.13 Phase Q.2 — clearRateLimit sentinel shipped.
 	//
@@ -2055,19 +2077,20 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		ForwardAuth: storage.ForwardAuthRouteConfig{
 			ProviderName: req.ForwardAuth.ProviderName,
 		},
-		RequestHeaders:      req.RequestHeaders,
-		ResponseHeaders:     req.ResponseHeaders,
-		WAFMode:             req.WAFMode,
-		ACMEChallenge:       req.ACMEChallenge,
-		UseDedicatedCert:    req.UseDedicatedCert,
-		HealthCheck:         storeHC,
-		CountryBlock:        newCountryBlock,
-		InsecureSkipVerify:  skipVerify,
-		UploadStreamingMode: streamingMode,
-		WAFDisableCRS:       disableCRS,
-		WAFExcludeRules:     excludeRules,
-		WAFExcludeTags:      excludeTags,
-		RateLimit:           rateLimit,
+		RequestHeaders:        req.RequestHeaders,
+		ResponseHeaders:       req.ResponseHeaders,
+		WAFMode:               req.WAFMode,
+		ACMEChallenge:         req.ACMEChallenge,
+		UseDedicatedCert:      req.UseDedicatedCert,
+		HealthCheck:           storeHC,
+		CountryBlock:          newCountryBlock,
+		InsecureSkipVerify:    skipVerify,
+		UploadStreamingMode:   streamingMode,
+		WAFDisableCRS:         disableCRS,
+		WAFExcludeRules:       excludeRules,
+		WAFExcludeTags:        excludeTags,
+		WAFTargetedExclusions: targeted,
+		RateLimit:             rateLimit,
 		// Step R — error-page wiring (update path mirrors
 		// create). Pass-through both fields ; storage.validate()
 		// rejects unsupported codes + oversized bodies.

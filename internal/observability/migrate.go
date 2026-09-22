@@ -45,8 +45,11 @@ import (
 //     surface in the dashboard counters as a sibling to
 //     waf_block_count).
 //
+//   - v13: v2.36 targeted WAF exclusions (matched_var column
+//     on waf_event: the "VARIABLE:key" that triggered the rule).
+//
 // Downgrade is not supported.
-const currentSchemaVersion = 12
+const currentSchemaVersion = 13
 
 // migrate brings db from currentVersion to currentSchemaVersion
 // by replaying every intervening migration step in a single
@@ -112,6 +115,7 @@ var migrateSteps = map[int]func(context.Context, *sql.Tx) error{
 	9:  migrateV9toV10,
 	10: migrateV10toV11,
 	11: migrateV11toV12,
+	12: migrateV12toV13,
 }
 
 // migrateV1toV2 — Step M. Adds the waf_block_count column on
@@ -563,6 +567,18 @@ func migrateV11toV12(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, s); err != nil {
 			return fmt.Errorf("exec %q: %w", firstLine(s), err)
 		}
+	}
+	return nil
+}
+
+// migrateV12toV13 — v2.36 (2026-09-22). Adds matched_var to
+// waf_event: the "VARIABLE:key" of the field that triggered the
+// rule (e.g. "ARGS:content"), used to offer a targeted exclusion
+// from the event. Pre-v13 rows get '' — the field was not recorded.
+func migrateV12toV13(ctx context.Context, tx *sql.Tx) error {
+	const stmt = `ALTER TABLE waf_event ADD COLUMN matched_var TEXT NOT NULL DEFAULT ''`
+	if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("exec %q: %w", stmt, err)
 	}
 	return nil
 }

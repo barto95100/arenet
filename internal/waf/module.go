@@ -528,7 +528,7 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 	buf := bufRaw.(*txEventBuffer)
 
 	ruleID := strconv.Itoa(rule.ID())
-	method, path, payload := requestSnippetFromMatch(mr)
+	method, path, payload, matchedVar := requestSnippetFromMatch(mr)
 	buf.events = append(buf.events, Event{
 		Ts: time.Now().UTC(),
 		// Step Z — read the buffer's RouteID (runtime-correct,
@@ -544,6 +544,7 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 		RequestMethod: method,
 		RequestPath:   Truncate(Redact(path), MaxRequestPathBytes),
 		PayloadSample: Truncate(Redact(payload), MaxPayloadSampleBytes),
+		MatchedVar:    Truncate(matchedVar, MaxMatchedVarBytes),
 		// Action + StatusCode left as zero values — set by
 		// flushTxBuffer based on the final tx verdict.
 	})
@@ -563,7 +564,7 @@ func fallbackEmit(routeID, mode string, mr types.MatchedRule, rule types.RuleMet
 		return
 	}
 	ruleID := strconv.Itoa(rule.ID())
-	method, path, payload := requestSnippetFromMatch(mr)
+	method, path, payload, matchedVar := requestSnippetFromMatch(mr)
 	action := ActionDetect
 	statusCode := 0
 	if mode == "block" {
@@ -580,6 +581,7 @@ func fallbackEmit(routeID, mode string, mr types.MatchedRule, rule types.RuleMet
 		RequestMethod: method,
 		RequestPath:   Truncate(Redact(path), MaxRequestPathBytes),
 		PayloadSample: Truncate(Redact(payload), MaxPayloadSampleBytes),
+		MatchedVar:    Truncate(matchedVar, MaxMatchedVarBytes),
 		Action:        action,
 		StatusCode:    statusCode,
 	})
@@ -651,7 +653,11 @@ func (h *ArenetWafHandler) flushTxBuffer(buf *txEventBuffer, interruption *types
 // the first MatchData (the variable that triggered the rule).
 // CRS rules typically populate Data with the offending bytes;
 // for non-CRS rules it may be empty.
-func requestSnippetFromMatch(mr types.MatchedRule) (method, path, payload string) {
+//
+// matchedVar (v2.36) is "VARIABLE:key" of that same MatchData (the
+// rule's own variable, see coraza transaction.go GetField), or "" when
+// the variable has no key.
+func requestSnippetFromMatch(mr types.MatchedRule) (method, path, payload, matchedVar string) {
 	path = mr.URI()
 	// Method isn't on the rule; the request lives in the
 	// transaction. Coraza doesn't expose it through the
@@ -662,6 +668,9 @@ func requestSnippetFromMatch(mr types.MatchedRule) (method, path, payload string
 	for _, md := range mr.MatchedDatas() {
 		if v := md.Value(); v != "" {
 			payload = v
+			if k := md.Key(); k != "" {
+				matchedVar = md.Variable().Name() + ":" + k
+			}
 			break
 		}
 	}

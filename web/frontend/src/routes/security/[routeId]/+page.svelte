@@ -386,7 +386,7 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	<Card>
 		<div class="block">
 			<h3>Événements WAF récents</h3>
-			<WafEventList events={recentEvents} compact />
+			<WafEventList events={recentEvents} compact host={route?.host ?? routeId} onExcluded={() => void load()} />
 		</div>
 	</Card>
 

@@ -27,6 +27,7 @@
 	import { sanitizePathRules } from '$lib/utils/path-rules';
 	import { manualCertDisplayName } from '$lib/utils/manual-cert-name';
 	import type {
+		WafTargetedExclusion,
 		ACMEChallenge,
 		CountryBlockRequest,
 		ExternalCertificate,
@@ -61,6 +62,7 @@
 	import CountryExceptionsPicker from '$lib/components/routes/CountryExceptionsPicker.svelte';
 	import ASNPicker from '$lib/components/routes/ASNPicker.svelte';
 	import GeoRuleSentence from '$lib/components/routes/GeoRuleSentence.svelte';
+	import WafTargetedExclusionsEditor from '$lib/components/routes/WafTargetedExclusionsEditor.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -128,7 +130,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'wafTargetedExclusions' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
 		healthCheck: HealthCheck;
 		// v2.14.3 — narrowed to a non-optional boolean, same
 		// pattern as insecureSkipVerify/uploadStreamingMode: the
@@ -177,6 +179,9 @@
 		// assembly. Frontend doesn't apply lowercase/dedup
 		// (server canonicalises on write).
 		wafExcludeTags: string[];
+		// v2.36 — targeted exclusions (edited by
+		// WafTargetedExclusionsEditor, shipped full-replace).
+		wafTargetedExclusions: WafTargetedExclusion[];
 		// Step Q — rate-limit holds the object when the
 		// toggle is on, null when off. Distinct from the
 		// wire shape's optional (undefined) because the
@@ -304,6 +309,7 @@
 			// Step X Option (e) — empty tag exclusion list by
 			// default ; mirrors wafExcludeRules.
 			wafExcludeTags: [] as string[],
+			wafTargetedExclusions: [] as WafTargetedExclusion[],
 			// Step Q — rate limit OFF by default. Toggle in
 			// the form's "Limitation de débit" section flips
 			// to a default-seeded RouteRateLimit on. Operator
@@ -1327,6 +1333,7 @@
 			// Step X Option (e) — load the persisted tag
 			// exclusion list (server-canonicalised).
 			wafExcludeTags: [...(r.wafExcludeTags ?? [])],
+			wafTargetedExclusions: (r.wafTargetedExclusions ?? []).map((e) => ({ ...e })),
 			// Step Q — load the persisted rate-limit. Clone
 			// to break the formData ↔ source route reference
 			// so toggling the form section doesn't ripple
@@ -2217,6 +2224,8 @@
 			// Step X Option (e) — always ship the tag
 			// exclusion list, same full-replace semantic.
 			payload.wafExcludeTags = formData.wafExcludeTags;
+			// v2.36 — targeted exclusions, same full-replace semantic.
+			payload.wafTargetedExclusions = formData.wafTargetedExclusions;
 			// Step Q + v2.9.13 Phase Q.2 — rate limit.
 			//
 			// Toggle ON  → ship the rateLimit object (POST = new,
@@ -3848,6 +3857,14 @@
 									>
 								{/if}
 							</p>
+						</div>
+						<!-- v2.36 — targeted exclusions (one rule stops
+						     inspecting one field, optionally on one path). -->
+						<div class="mt-4">
+							<WafTargetedExclusionsEditor
+								bind:value={formData.wafTargetedExclusions}
+								crsDisabled={formData.wafDisableCRS}
+							/>
 						</div>
 					</div>
 
