@@ -65,6 +65,9 @@
 	import { levelMeta } from '$lib/utils/levelMeta';
 	import { formatSourceIP } from '$lib/utils/ipClass';
 	import ActivityHistogram from '$lib/components/ActivityHistogram.svelte';
+	import WafExcludeDialog from '$lib/components/WafExcludeDialog.svelte';
+	import { auth } from '$lib/stores/auth.svelte';
+	import { isExcludableRule } from '$lib/utils/waf-exclusion';
 
 	// W.bugfix Fix #1 — the WAF event source now distinguishes
 	// 'block' (request short-circuited by the WAF, status 403)
@@ -107,6 +110,8 @@
 		// hidden behind the humanized French label.
 		// Unset on other sources (no tooltip).
 		detailTitle?: string;
+		// v2.36 — the source WAF event, for the "Exclude…" action.
+		wafEvent?: WafEvent;
 	}
 
 	const REFRESH_MS = 10_000;
@@ -153,6 +158,10 @@
 	// block time and page load fall back to the truncated
 	// UUID in <RouteHost> — defensive, never blank.
 	let routeMap = $state(new Map<string, string>());
+	// v2.36 — "Exclude…" on a WAF row (admins only; the backend is
+	// the authoritative gate).
+	const isAdmin = $derived(auth.user?.role === 'admin');
+	let excludeEvent = $state<WafEvent | null>(null);
 
 	// Phase Z.5.3 — IP → country code cache, populated by
 	// the lookup-batch endpoint after each event load. A
@@ -286,7 +295,8 @@
 			// host badge resolves the operator-visible
 			// hostname (e.g. "ha.worldgeekwide.fr" instead
 			// of grep'ing a UUID).
-			routeId: e.routeId
+			routeId: e.routeId,
+			wafEvent: e
 		};
 	}
 	function mapThrottle(e: ThrottleEvent): UnifiedRow {
@@ -795,6 +805,18 @@
 						{/if}
 						<span class="k">·</span>
 						<span title={r.detailTitle ?? ''}>{r.detail}</span>
+						{#if isAdmin && r.wafEvent && isExcludableRule(r.wafEvent.ruleId)}
+							{@const ev = r.wafEvent}
+							<button
+								type="button"
+								class="exclude-btn"
+								onclick={() => (excludeEvent = ev)}
+								aria-label={language.current && t('wafExclude.actionAria', { rule: ev.ruleId })}
+								data-testid="waf-exclude-open"
+							>
+								{language.current && t('wafExclude.action')}
+							</button>
+						{/if}
 					</span>
 					<!--
 					  Phase Z.5.3 — SOURCE IP enriched with the
@@ -813,6 +835,13 @@
 		</div>
 	{/if}
 </div>
+
+<WafExcludeDialog
+	open={excludeEvent !== null}
+	event={excludeEvent}
+	host={excludeEvent ? (routeMap.get(excludeEvent.routeId) ?? '') : ''}
+	onClose={() => (excludeEvent = null)}
+/>
 
 <!--
   Phase Z.5.4 — activity histogram. Stacked bars per
@@ -1165,6 +1194,22 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.log-row:last-child { border-bottom: none; }
+	.exclude-btn {
+		margin-left: 8px;
+		background: transparent;
+		color: var(--fg-muted, var(--text-muted));
+		border: 1px solid var(--border);
+		padding: 0 6px;
+		border-radius: 4px;
+		font-size: 11px;
+		cursor: pointer;
+	}
+	.exclude-btn:hover,
+	.exclude-btn:focus-visible {
+		color: var(--accent-cyan);
+		border-color: var(--accent-cyan);
+		outline: none;
+	}
 	/* Phase Z.5.1 — row tints dialed down to ~5%
 	   (rgba 0.05 mock target). The Z.4 tints at 8% were
 	   too punchy on long scrolls — the operator's eye

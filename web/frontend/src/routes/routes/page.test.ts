@@ -211,6 +211,7 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// list ; tests exercising the per-tag input override via
 		// the partial Route overrides parameter.
 		wafExcludeTags: [],
+		wafTargetedExclusions: [],
 		// Step Q — strict default no rate limit ; tests
 		// exercising the rate-limit section override via the
 		// partial Route overrides parameter set a non-null
@@ -3842,5 +3843,38 @@ describe('Routes page — connection lost during a save', () => {
 		);
 		expect(apiMock.listRoutes.mock.calls.length).toBeGreaterThan(listCallsBefore);
 		expect(toastMock.pushToast).not.toHaveBeenCalledWith(expect.stringContaining('NetworkError'), 'danger');
+	});
+});
+
+// --- v2.36 — targeted WAF exclusions editor ---------------------------
+
+describe('Routes page — v2.36 targeted WAF exclusions', () => {
+	it('loads the persisted exclusions on edit and ships the edited list', async () => {
+		const seeded = makeRoute({
+			id: 'targeted-edit',
+			host: 'targeted.local',
+			wafMode: 'block',
+			wafTargetedExclusions: [{ ruleId: 942100, target: 'ARGS:content', path: '/api/save' }]
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+		const hostCell = await screen.findByText('targeted.local');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		expect(screen.getAllByTestId('waf-targeted-row')).toHaveLength(1);
+		await userEvent.type(screen.getByTestId('waf-targeted-rule'), '941100');
+		await userEvent.type(screen.getByTestId('waf-targeted-name'), 'body');
+		await userEvent.click(screen.getByTestId('waf-targeted-add'));
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.updateRoute.mock.calls[0][1];
+		expect(payload.wafTargetedExclusions).toEqual([
+			{ ruleId: 942100, target: 'ARGS:content', path: '/api/save' },
+			{ ruleId: 941100, target: 'ARGS:body' }
+		]);
 	});
 });

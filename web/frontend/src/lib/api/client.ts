@@ -20,6 +20,7 @@
 
 import type {
 	Route,
+	AddWafExclusionRequest,
 	RouteRequest,
 	TestUpstreamRequest,
 	TestUpstreamResponse
@@ -238,6 +239,12 @@ export const enterMaintenance = (id: string): Promise<Route> =>
 	request('POST', `/routes/${id}/maintenance`);
 export const exitMaintenance = (id: string): Promise<Route> =>
 	request('POST', `/routes/${id}/maintenance/off`);
+
+// v2.36 — add one WAF exclusion to a route (usually from a WAF event).
+// With `target` it is a targeted exclusion, without it the rule is
+// excluded on the whole route. 409 = already present.
+export const addWafExclusion = (id: string, body: AddWafExclusionRequest): Promise<Route> =>
+	request('POST', `/routes/${id}/waf-exclusions`, body);
 
 // Step #R-PROXMOX-HTTPS-LOOP commit 3 — operator-triggered
 // upstream probe. Backend is per-URL; the route-form UI
