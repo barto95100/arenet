@@ -310,7 +310,8 @@
 		"toasts": {
 			"created": "Route créée",
 			"updated": "Route mise à jour",
-			"deleted": "Route supprimée"
+			"deleted": "Route supprimée",
+			"connectionLost": "La connexion a été coupée pendant le rechargement de Caddy (ça arrive en HTTP/3). Le serveur a quand même appliqué la modification et sa vérification — la liste ci-dessous montre l'état réel. Si ta modification n'y est pas, la vérification l'a annulée (voir le journal d'audit)."
 		},
 		"form": {
 			"create": "Créer",

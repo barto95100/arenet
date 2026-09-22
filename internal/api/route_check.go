@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/routecheck"
@@ -33,6 +34,21 @@ import (
 // codeRouteCheckRolledBack: an update broke a working route and was
 // undone.
 const codeRouteCheckRolledBack = "route_check_rolled_back"
+
+// routeCheckTimeout bounds the check + rollback work once detached
+// from the request (two probe series + two reloads, worst case).
+const routeCheckTimeout = 60 * time.Second
+
+// detachedCheckContext returns a context that survives the client
+// connection: the change is already applied, so the check — and a
+// rollback — must finish even when the browser's connection died.
+// That happens on every reload for a UI reached through Arenet over
+// HTTP/3: Caddy's App.Stop cancels the grace context as soon as it
+// returns, and quic-go then closes every open HTTP/3 connection
+// (caddyhttp/app.go Stop, quic-go http3 Server.Shutdown).
+func detachedCheckContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), routeCheckTimeout)
+}
 
 // RouteProber probes a route through the local Caddy listener.
 type RouteProber interface {

@@ -1611,7 +1611,9 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	resp.EffectiveCertSource = computeEffectiveCertSource(created, mds)
 	// v2.35 — post-apply check. A creation is never undone (the
 	// service is often started after its route): report only.
-	check := h.checkRoute(r.Context(), created)
+	checkCtx, cancelCheck := detachedCheckContext(r.Context())
+	defer cancelCheck()
+	check := h.checkRoute(checkCtx, created)
 	resp.Check = &check
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -2161,9 +2163,11 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	// v2.35 — post-apply check: a change that broke a WORKING route is
 	// undone (409); if the previous version fails too, the change stays
 	// and the check is reported as a warning.
-	check := h.checkRoute(r.Context(), updated)
+	checkCtx, cancelCheck := detachedCheckContext(r.Context())
+	defer cancelCheck()
+	check := h.checkRoute(checkCtx, updated)
 	if check.Failed() {
-		rolledBack, rbErr := h.rollbackIfItFixes(r.Context(), previous, updated, check)
+		rolledBack, rbErr := h.rollbackIfItFixes(checkCtx, previous, updated, check)
 		if rbErr != nil {
 			h.logger.Error("route check: rollback / re-apply failed, DB and Caddy may diverge", "err", rbErr, "id", id)
 		}
@@ -2259,7 +2263,9 @@ func (h *Handler) toggleRouteDisabled(w http.ResponseWriter, r *http.Request, di
 	if !disabled {
 		// v2.35 — re-enabling is reported, never undone (like a
 		// creation: the backend may come up later).
-		check := h.checkRoute(r.Context(), updated)
+		checkCtx, cancelCheck := detachedCheckContext(r.Context())
+		defer cancelCheck()
+		check := h.checkRoute(checkCtx, updated)
 		resp.Check = &check
 	}
 	// Attach the hint on the disable path so the frontend can pre-warn.

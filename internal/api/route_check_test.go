@@ -189,3 +189,30 @@ func TestRouteCheck_NoProberSkips(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }
+
+// TestRouteCheck_ClientGoneDuringReload reproduces the field report: a
+// UI reached through Arenet over HTTP/3 loses its connection on every
+// Caddy reload (the request context is canceled mid-save). The check
+// and the rollback must still run to completion.
+func TestRouteCheck_ClientGoneDuringReload(t *testing.T) {
+	env := newTestEnv(t, false)
+	prober := &upstreamProber{broken: map[string]bool{upB: true}}
+	env.handler.SetRouteProber(prober)
+	seeded := seedRoute(t, env, upA)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env.caddy.onReload = cancel // the connection dies during the first reload
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+seeded.ID, strings.NewReader(routeJSON(upB))).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(httptest.NewRecorder(), req)
+	env.caddy.onReload = nil
+
+	if len(prober.calls) != 2 {
+		t.Fatalf("the check must run despite the dead connection, probes: %v", prober.calls)
+	}
+	if got, _ := env.store.GetRoute(context.Background(), seeded.ID); got.Upstreams[0].URL != upA {
+		t.Errorf("the broken change was not undone: stored %s", got.Upstreams[0].URL)
+	}
+}

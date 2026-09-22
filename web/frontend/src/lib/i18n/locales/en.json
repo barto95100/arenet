@@ -310,7 +310,8 @@
 		"toasts": {
 			"created": "Route created",
 			"updated": "Route updated",
-			"deleted": "Route deleted"
+			"deleted": "Route deleted",
+			"connectionLost": "The connection was cut while Caddy reloaded (this happens over HTTP/3). The server still applied the change and its check — the list below shows the real state. If your change is missing, the check undid it (see the audit log)."
 		},
 		"form": {
 			"create": "Create",
