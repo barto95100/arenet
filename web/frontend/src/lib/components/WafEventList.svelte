@@ -135,7 +135,12 @@ selected route.
 							{e.category}
 						</span>
 					</td>
-					<td class="mono">{e.ruleId}</td>
+					<td class="mono" title={e.ruleName ?? ''}>
+						{e.ruleId}
+						{#if e.ruleName}
+							<span class="rule-name">{e.ruleName}</span>
+						{/if}
+					</td>
 					<td class="mono">{e.srcIp}</td>
 					<td class="payload mono" title={e.payloadSample || '(empty)'}>
 						{payloadPreview(e.payloadSample) || '—'}
@@ -218,6 +223,12 @@ selected route.
 		font-size: var(--text-xs, 11px);
 		font-weight: 600;
 		letter-spacing: 0.04em;
+	}
+	.rule-name {
+		display: block;
+		font-family: var(--font-body, inherit);
+		color: var(--text-secondary);
+		font-size: var(--text-xs, 11px);
 	}
 	.actions {
 		text-align: right;

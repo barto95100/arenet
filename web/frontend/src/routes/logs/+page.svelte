@@ -289,7 +289,10 @@
 			source: 'waf',
 			method: e.requestMethod,
 			path: e.requestPath,
-			detail: `WAF rule ${e.ruleId} · ${e.category}`,
+			// v2.37 — guided rules show their name.
+			detail: e.ruleName
+				? `WAF · ${t('wafRules.historyName', { name: e.ruleName })}`
+				: `WAF rule ${e.ruleId} · ${e.category}`,
 			srcIp: e.srcIp,
 			// W.7 follow-up — WAF rows carry routeId so the
 			// host badge resolves the operator-visible

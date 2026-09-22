@@ -299,6 +299,8 @@ export interface Route {
 	 * field (optionally on one path). Always present ([] when none).
 	 */
 	wafTargetedExclusions: WafTargetedExclusion[];
+	/** v2.37 — guided rules. Always present ([] when none). */
+	wafCustomRules: WafCustomRule[];
 	/**
 	 * Step Q (2026-06-18) — per-route rate-limit config.
 	 * null when no rate limit configured ; non-null
@@ -691,6 +693,8 @@ export interface RouteRequest {
 	wafExcludeTags?: string[];
 	/** v2.36 — targeted exclusions; omit = keep, [] = clear. */
 	wafTargetedExclusions?: WafTargetedExclusion[];
+	/** v2.37 — guided rules; omit = keep, [] = clear. */
+	wafCustomRules?: WafCustomRule[];
 	/**
 	 * Step Q (2026-06-18) — per-route rate limit on the wire.
 	 * Preserve-on-omit on PUT (omit → keep stored value),
@@ -1892,7 +1896,9 @@ export type OwaspCategory =
 	| 'DATA_LEAK_JAVA'
 	| 'DATA_LEAK_PHP'
 	| 'DATA_LEAK_IIS'
-	| 'WEBSHELL';
+	| 'WEBSHELL'
+	// v2.37 — the route's guided rules (120000-129999)
+	| 'CUSTOM';
 
 // All categories in dashboard-display order. Frontend uses
 // this to render the CategoryDistribution strip with stable
@@ -1933,6 +1939,7 @@ export const ALL_OWASP_CATEGORIES: readonly OwaspCategory[] = [
 	// Infrastructure / catch-all
 	'INIT',
 	'COMMON_EXCEPT',
+	'CUSTOM',
 	'OTHER'
 ];
 
@@ -1964,6 +1971,27 @@ export interface WafEvent {
 	 * variables. Absent on pre-v2.36 servers.
 	 */
 	matchedVar?: string;
+	/** v2.37 — name of the route's guided rule (custom range only). */
+	ruleName?: string;
+}
+
+/** v2.37 — one criterion of a guided WAF rule; `values` are alternatives. */
+export interface WafRuleCondition {
+	field: 'path' | 'method' | 'user_agent' | 'header';
+	header?: string;
+	operator: 'is' | 'is_not' | 'begins_with' | 'contains' | 'missing' | 'present' | 'absent';
+	values?: string[];
+}
+
+/**
+ * v2.37 — guided WAF rule of a route: blocks (403 in block mode,
+ * logged in detect mode) when every condition matches. `id` 0 = new.
+ */
+export interface WafCustomRule {
+	id: number;
+	name: string;
+	disabled?: boolean;
+	conditions: WafRuleCondition[];
 }
 
 /**

@@ -212,6 +212,7 @@ function makeRoute(overrides: Partial<Route> = {}): Route {
 		// the partial Route overrides parameter.
 		wafExcludeTags: [],
 		wafTargetedExclusions: [],
+		wafCustomRules: [],
 		// Step Q — strict default no rate limit ; tests
 		// exercising the rate-limit section override via the
 		// partial Route overrides parameter set a non-null
@@ -3876,5 +3877,47 @@ describe('Routes page — v2.36 targeted WAF exclusions', () => {
 			{ ruleId: 942100, target: 'ARGS:content', path: '/api/save' },
 			{ ruleId: 941100, target: 'ARGS:body' }
 		]);
+	});
+});
+
+// --- v2.37 — guided WAF rules editor ------------------------------------
+
+describe('Routes page — v2.37 guided WAF rules', () => {
+	it('loads the persisted rules on edit and ships them, with a new preset rule', async () => {
+		const seeded = makeRoute({
+			id: 'rules-edit',
+			host: 'rules.local',
+			wafMode: 'block',
+			wafCustomRules: [
+				{ id: 120000, name: 'Admin', conditions: [{ field: 'path', operator: 'begins_with', values: ['/admin'] }] }
+			]
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+		const hostCell = await screen.findByText('rules.local');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+
+		expect(screen.getAllByTestId('waf-rule-row')).toHaveLength(1);
+		await userEvent.click(screen.getByTestId('waf-rule-preset-methods'));
+		await userEvent.click(screen.getByTestId('waf-rule-ok'));
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		const payload = apiMock.updateRoute.mock.calls[0][1];
+		expect(payload.wafCustomRules).toHaveLength(2);
+		expect(payload.wafCustomRules[0]).toEqual({
+			id: 120000,
+			name: 'Admin',
+			conditions: [{ field: 'path', operator: 'begins_with', values: ['/admin'] }]
+		});
+		expect(payload.wafCustomRules[1].id).toBe(0);
+		expect(payload.wafCustomRules[1].conditions[0]).toEqual({
+			field: 'method',
+			operator: 'is_not',
+			values: ['GET', 'HEAD', 'POST', 'OPTIONS']
+		});
 	});
 });
