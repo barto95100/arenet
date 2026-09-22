@@ -71,11 +71,12 @@ Guide complet : [docs/install/systemd-native.md](docs/install/systemd-native.md)
 - 🔄 **Préservation du header Host** par défaut — fonctionne out-of-the-box avec les IdP OIDC, SaaS multi-tenant et tout backend qui construit des URLs depuis `Host:`
 - 🩹 **Hot-reload** de chaque changement de route sans dropper les connexions en cours
 - 📦 **Support HTTPS-to-HTTPS upstream** avec skip optionnel de la vérification TLS pour backends internes auto-signés
+- 📥 **Import d'un Caddyfile** — colle-le, vois d'abord ce qui serait créé (avec chaque directive non reprise et sa ligne), coche les hôtes, importe
 - 🎨 **Pages d'erreur personnalisées** par route via templates HTML (401/403/404/429/500/502/503/504), avec **catch-all brandé** optionnel pour les hosts non matchés (template promotable via une seule checkbox)
 - 🚦 **Cycle de vie à 3 états** — un contrôle par route bascule **Active / Maintenance / Désactivée**. La maintenance sert une page 503 brandée + `Retry-After` (saisie conviviale nombre+unité) + un message global optionnel, avec une **liste d'IP de contournement** par route pour vérifier que l'app est de retour avant de rebasculer tout le monde ; Désactivée met la route en pause (config préservée) et la retire de Caddy
 
 ### Sécurité
-- 🛡️ **WAF intégré** via Coraza v3 + OWASP CRS v4 avec opt-out par route, exclusion par règle, exclusion par tag (ex. exclure toutes les règles `attack-protocol` sur un backend bruyant)
+- 🛡️ **WAF intégré** via Coraza v3 + OWASP CRS v4 avec opt-out par route, exclusion par règle et par tag, **exclusions ciblées** créées depuis un événement WAF (une règle cesse d'inspecter un champ, sur un chemin), **règles guidées** (bloquer sur chemin / méthode / User-Agent / en-tête sans écrire de SecLang) et un **éditeur SecLang** avec modèles commentés et testeur de requête — le tout contrôlé par une liste blanche stricte
 - 🚦 **Rate limiting** par route (événements/fenêtre/clé, ex. "60 req/min par IP distante sur /api/login")
 - 🌍 **Blocage par pays** via MaxMind GeoLite2 embarqué (liste blanche / liste noire par route)
 - 🔥 **Intégration CrowdSec** pour le threat intelligence communautaire (bouncer LAPI, auto-ban sur décisions communautaires)
@@ -83,6 +84,10 @@ Guide complet : [docs/install/systemd-native.md](docs/install/systemd-native.md)
 - 👥 **RBAC** avec rôles `viewer` / `admin` + compte local break-glass préservé quand OIDC est câblé
 - 🚪 **Forward auth** (Authelia / oauth2-proxy / Authentik external auth) câblé par route
 - 🔒 **Basic auth** par route (Argon2id, sémantique preserve-on-edit pour les secrets)
+
+### API
+- 📗 **Description OpenAPI 3.1** de toute l'API d'administration, servie sur `/api/v1/openapi.json` et consultable dans l'interface (page **Documentation API**) avec schémas, exemples et bouton **Essayer**
+- 🔑 **Comptes de service** — jetons d'API (`Authorization: Bearer …`) avec rôle et expiration optionnelle, pour tes scripts et ta CI
 
 ### Observabilité
 - 📊 **Dashboard topologie live** (SvelteKit + D3.js) avec particules req/s en temps réel, métriques par route, clustering par alias
@@ -140,7 +145,7 @@ Le positionnement d'Arenet : **sécurité + observabilité production-grade qui 
 | Sous-système d'alerting (channels, rules, watcher) | [docs/alerting.md](docs/alerting.md) |
 | Troubleshooting | [docs/operations/troubleshooting.md](docs/operations/troubleshooting.md) |
 | **Wiki utilisateur** (guides how-to) | [GitHub Wiki](https://github.com/barto95100/arenet/wiki) |
-| Référence API | [docs/api/](docs/api/) |
+| Référence API | page **Documentation API** dans l'interface, `/api/v1/openapi.json`, [wiki : API](https://github.com/barto95100/arenet/wiki/API-FR) |
 | Pratiques d'ingénierie | [docs/ENGINEERING-PRACTICES.md](docs/ENGINEERING-PRACTICES.md) |
 
 ## 🏗️ Architecture
