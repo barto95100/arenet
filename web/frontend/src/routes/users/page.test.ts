@@ -532,3 +532,29 @@ describe('/utilisateurs — Phase 2 visual polish', () => {
 		expect(dot).not.toBeNull();
 	});
 });
+
+// --- v2.41 — the empty state is a way out, not a dead end -------
+
+describe('/utilisateurs — empty state', () => {
+	it('explains an over-narrow filter and clears it on demand', async () => {
+		settingsMock.listAdminUsers.mockResolvedValue([
+			user({ id: 'u1', username: 'alice', role: 'admin' })
+		]);
+		render(Page);
+		await tick();
+		await tick();
+		await tick();
+		expect(screen.getByTestId('user-row-u1')).toBeInTheDocument();
+
+		const search = screen.getByLabelText('Filter users');
+		await userEvent.type(search, 'zzzzz');
+		await tick();
+		expect(screen.getByTestId('users-empty')).toBeInTheDocument();
+		expect(screen.getByTestId('users-empty').textContent ?? '').toMatch(/filter/i);
+
+		await userEvent.click(screen.getByText('Clear the filters'));
+		await tick();
+		expect(screen.getByTestId('user-row-u1')).toBeInTheDocument();
+		expect((search as HTMLInputElement).value).toBe('');
+	});
+});

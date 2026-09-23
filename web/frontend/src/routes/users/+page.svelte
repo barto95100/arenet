@@ -34,6 +34,7 @@
 		type UserRole
 	} from '$lib/api/types';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -137,6 +138,13 @@
 	);
 
 	// --- Filtering --------------------------------------------
+
+	// The way out of an over-narrow filter, offered by the empty state.
+	function clearUserFilters(): void {
+		search = '';
+		roleFilter = 'all';
+		sourceFilter = 'all';
+	}
 
 	const filteredUsers = $derived.by(() => {
 		const q = search.trim().toLowerCase();
@@ -419,7 +427,17 @@
 			</div>
 
 			{#if filteredUsers.length === 0}
-				<div class="p-6 text-sm text-muted">{language.current && t('users.emptyFiltered')}</div>
+				<!-- v2.41 — was a single muted line; an operator who
+				     filters everything out needs to be told the filter
+				     is why, and how to get back. -->
+				<EmptyState
+					tone="filter"
+					testid="users-empty"
+					title={language.current && t('users.emptyFilteredTitle')}
+					body={language.current && t('users.emptyFilteredBody')}
+					actionLabel={language.current && t('users.emptyFilteredAction')}
+					onAction={clearUserFilters}
+				/>
 			{:else}
 				<table class="w-full">
 					<thead>

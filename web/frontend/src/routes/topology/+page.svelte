@@ -51,6 +51,7 @@
 	import TopologySidebar from './_components/TopologySidebar.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
@@ -435,6 +436,18 @@
 					{language.current && t('topology.errorRetry')}
 				</Button>
 			</div>
+		</div>
+	{:else if routes.length === 0}
+		<!-- v2.41 — the page had no empty state at all: a fresh
+		     install showed an empty canvas with no explanation. -->
+		<div class="topo-state-wrap">
+			<EmptyState
+				testid="topology-empty"
+				title={language.current && t('topology.emptyTitle')}
+				body={language.current && t('topology.emptyBody')}
+				actionLabel={language.current && t('topology.emptyAction')}
+				actionHref="/routes"
+			/>
 		</div>
 	{:else}
 		<div class="topo-content">

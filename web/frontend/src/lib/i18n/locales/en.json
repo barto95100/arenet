@@ -744,6 +744,9 @@
 		"perRouteAfter": "detail"
 	},
 	"map": {
+		"emptyTitle": "No security event yet",
+		"emptyBody": "Arcs are drawn as WAF, rate-limit, CrowdSec and authentication decisions happen. A quiet map means nothing has been blocked since this page was opened.",
+
 		"eyebrow": "Traffic · Map",
 		"subtitle": "Real-time geographic view of traffic sources and security decisions. WAF, throttle, CrowdSec and auth failures are drawn as coloured arcs from the source to this Arenet instance.",
 		"loading": "Loading the server position…",
@@ -860,6 +863,9 @@
 		"filterViewers": "Viewers",
 		"filterLocal": "Local",
 		"filterOIDC": "OIDC",
+		"emptyFilteredTitle": "No user matches",
+		"emptyFilteredBody": "No account matches the current search and filters. Widen them to see the others.",
+		"emptyFilteredAction": "Clear the filters",
 		"emptyFiltered": "No user matches the filters.",
 		"colUser": "User",
 		"colSource": "Source",
@@ -1213,6 +1219,9 @@
 		"ariaRemoveFilterTo": "Remove filter: to={value}",
 		"loadErr": "⚠ Failed to load audit events: {err}",
 		"btnRetry": "Retry",
+		"emptyFilteredTitle": "No matching audit event",
+		"emptyNoFiltersTitle": "Nothing recorded yet",
+		"emptyNoFiltersBody": "Every configuration change — a route created, a certificate uploaded, a user added — is recorded here with its author and its before/after values.",
 		"emptyFiltered": "No audit events match the current filters.",
 		"emptyNoFilters": "No audit events recorded yet.",
 		"btnLoadMore": "Load more",
@@ -2175,6 +2184,10 @@
 		"ipEnforcementHelper": "The full timeline of blocked IPs (auto + manual). Manual list management is deferred (see backlog)."
 	},
 	"topology": {
+		"emptyTitle": "Nothing to draw yet",
+		"emptyBody": "The graph shows your hostnames, the Arenet hub and the backends behind it, with live traffic on the links. Create a route and it appears here within seconds.",
+		"emptyAction": "Create a route",
+
 		"headTitle": "Topology v2 — Arenet",
 		"eyebrow": "TRAFFIC · FLOW VIEW",
 		"title": "Topology",
@@ -2231,6 +2244,10 @@
 		"colCode": "Code",
 		"colRequest": "Request",
 		"colSourceIP": "Source IP",
+		"emptyNoEventsTitle": "No event in this window",
+		"emptyNoEventsBody": "Requests, WAF decisions, rate-limit hits and authentication failures land here as they happen. Widen the window, or send some traffic through a route.",
+		"emptyNoMatchTitle": "No event matches",
+		"emptyClearFilters": "Clear the filters",
 		"emptyNoEvents": "No events in the current window.",
 		"emptyNoMatch": "No events match the filters.",
 		"histogramHeader": "Activity timeline · 24h · 5m buckets",
