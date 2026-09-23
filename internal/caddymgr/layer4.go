@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"syscall"
 
 	"github.com/barto95100/arenet/internal/storage"
@@ -191,6 +192,20 @@ func ReservedTCPPorts(httpPort, httpsPort, adminPort int) map[int]string {
 		adminPort: "the Arenet admin interface",
 		2019:      "Caddy's admin endpoint",
 	}
+}
+
+// ReservedTCPPortsFor resolves the reserved set from the running
+// mode and the admin listen address as configured ("127.0.0.1:8001",
+// ":8001"…). An unparseable admin address only costs that one entry:
+// the HTTP, HTTPS and Caddy-admin guards still stand.
+func ReservedTCPPortsFor(devMode bool, adminListen string) map[int]string {
+	adminPort := 0
+	if _, portStr, err := net.SplitHostPort(adminListen); err == nil {
+		if p, convErr := strconv.Atoi(portStr); convErr == nil {
+			adminPort = p
+		}
+	}
+	return ReservedTCPPorts(httpPortFor(devMode), httpsPortFor(devMode), adminPort)
 }
 
 // ValidateTCPListen refuses, BEFORE anything is stored or applied, a

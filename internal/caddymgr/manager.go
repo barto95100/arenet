@@ -159,6 +159,12 @@ type CaddyManager struct {
 	devMode   bool
 	acmeEmail string
 
+	// adminListen (v2.42) is the admin interface's bind address, set
+	// at boot via SetAdminListen. The TCP-service port guard reads it
+	// so a relay can never take the port the operator manages Arenet
+	// through. Empty only costs that one guard.
+	adminListen string
+
 	// crowdsec (Step N.1) holds the LAPI connection config. Both
 	// fields are read from env vars at boot by main.go and pushed
 	// via SetCrowdSecConfig BEFORE Start; once set they are
@@ -345,6 +351,12 @@ func (m *CaddyManager) SetCrowdSecConfig(apiURL, apiKey string) {
 	defer m.mu.Unlock()
 	m.crowdsec.apiURL = strings.TrimSpace(apiURL)
 	m.crowdsec.apiKey = strings.TrimSpace(apiKey)
+}
+
+// SetAdminListen records the admin interface's bind address for the
+// TCP-service port guard. Called at boot, before Start.
+func (m *CaddyManager) SetAdminListen(addr string) {
+	m.adminListen = addr
 }
 
 // ApplyCrowdSecConfig (Step CS.1) atomically swaps the LAPI
@@ -700,6 +712,31 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		extCertsMap[c.ID] = c
 	}
 
+	// v2.42 — TCP (layer 4) services. A store that cannot be read is
+	// a hard failure like the routes above; an individual service
+	// that would fight over a socket is refused HERE rather than
+	// after Caddy has already been handed the config, so the HTTP
+	// routes keep reloading and the operator gets the reason.
+	tcpServices, err := m.store.ListTCPServices(ctx)
+	if err != nil {
+		return fmt.Errorf("list tcp services: %w", err)
+	}
+	if err := ValidateTCPListen(tcpServices, ReservedTCPPortsFor(m.devMode, m.adminListen)); err != nil {
+		return fmt.Errorf("tcp services: %w", err)
+	}
+	activeTCP := 0
+	for _, svc := range tcpServices {
+		if svc.Disabled {
+			m.logger.Info("tcp service skipped: disabled", "service_id", svc.ID, "name", svc.Name)
+			continue
+		}
+		activeTCP++
+		m.logger.Info("tcp service mounted",
+			"service_id", svc.ID, "name", svc.Name,
+			"listen", svc.ListenHostPort(), "backends", len(svc.Upstreams),
+			"proxy_protocol", svc.ProxyProtocol)
+	}
+
 	cfgJSON, err := buildConfigJSON(routes, buildOpts{
 		DevMode:                   m.devMode,
 		ACMEEmail:                 m.acmeEmail,
@@ -712,12 +749,14 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		MaintenancePageHTML:       maintenancePage.HTML,
 		MaintenanceMessage:        maintenancePage.Message,
 		ExternalCerts:             extCertsMap,
+		TCPServices:               tcpServices,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
 	}
 
-	m.logger.Debug("applying caddy config", "routes", len(routes), "bytes", len(cfgJSON))
+	m.logger.Debug("applying caddy config",
+		"routes", len(routes), "tcp_services", activeTCP, "bytes", len(cfgJSON))
 
 	// W.bugfix Fix #3 — emit a "waf config diff applied"
 	// summary when this pass adds / removes / changes the

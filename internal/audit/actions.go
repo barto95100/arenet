@@ -48,6 +48,14 @@ const (
 	ActionRouteUpdated = "route_updated"
 	ActionRouteDeleted = "route_deleted"
 
+	// v2.42 — TCP (layer 4) services. Same three verbs as routes:
+	// a relay that exposes a port deserves the same trail as an HTTP
+	// route, and for the same reason — it is a change to what this
+	// host answers on the network.
+	ActionTCPServiceCreated = "tcp_service_created"
+	ActionTCPServiceUpdated = "tcp_service_updated"
+	ActionTCPServiceDeleted = "tcp_service_deleted"
+
 	// v2.14.3 — per-route enable/disable toggle. Emitted AFTER the
 	// Caddy reload succeeds, mirroring route_updated. Distinct from
 	// route_updated so operators see "took the route down" vs a
@@ -285,6 +293,9 @@ var allActions = []string{
 	ActionRouteCreated,
 	ActionRouteUpdated,
 	ActionRouteDeleted,
+	ActionTCPServiceCreated,
+	ActionTCPServiceUpdated,
+	ActionTCPServiceDeleted,
 	ActionRouteDisabled,
 	ActionRouteEnabled,
 	ActionCertDeleted,

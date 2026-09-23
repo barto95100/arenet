@@ -407,6 +407,9 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 			"err", csErr)
 	}
 	mgr.SetCrowdSecConfig(csURL, csKey)
+	// v2.42 — the TCP-service port guard must know which port the
+	// admin interface holds, so a relay can never take it.
+	mgr.SetAdminListen(cfg.AdminPort)
 	if csKey != "" {
 		effURL := csURL
 		if effURL == "" {
@@ -1343,6 +1346,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		userStore, sessionStore, hibpClient, rateLimiter, setupTokenHolder,
 		cfg.Dev, logger,
 	)
+	apiHandler.SetAdminListen(cfg.AdminPort)
 	if cfg.UIOrigin != "" {
 		apiHandler.SetUIOrigin(cfg.UIOrigin)
 		logger.Info("OIDC callback redirects will target SPA origin", "ui_origin", cfg.UIOrigin)
