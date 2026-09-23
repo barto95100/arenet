@@ -1533,7 +1533,6 @@
 		// overrides sub-form if the loaded route already
 		// has any. The operator returning to a mid-edit
 		// should see what's there immediately.
-		errorOverridesExpanded = Object.keys(r.errorPageOverrides ?? {}).length > 0;
 		resetFormErrors();
 		// v2.18.0 — sync the friendly Retry-After input from the loaded
 		// route's stored seconds (shows the largest round unit).
@@ -1674,7 +1673,6 @@
 	// Collapsed by default ; auto-expands on edit when the
 	// loaded route already has overrides (operator returns
 	// to a form mid-edit, expects to see what's there).
-	let errorOverridesExpanded = $state(false);
 
 	async function loadManagedDomainsForRoutes() {
 		try {
@@ -2073,6 +2071,8 @@
 			.join(' · ') || tl('routes.form.summaryPathsHeadersOff')
 	);
 
+	const errorOverrideCount = $derived(Object.keys(formData.errorPageOverrides ?? {}).length);
+
 	const summaryErrorPages = $derived(
 		formData.errorPageTemplateId
 			? tl('routes.form.summaryErrorPagesTemplate')
@@ -2093,6 +2093,64 @@
 				? tl('routes.form.summaryStateMaintenance')
 				: tl('routes.form.summaryStateActive')
 	);
+	// v2.41.1 — the form's state control. Same contract as the
+	// routes list: picking a state APPLIES it through the dedicated
+	// endpoints (onRouteStateChange), which keeps the disable
+	// confirm dialog and its last-HTTPS warning. stateChoice is
+	// optimistic; the effect below re-syncs it from the stored
+	// route, so a cancelled confirm snaps the control back.
+	let stateChoice = $state<'active' | 'maintenance' | 'disabled'>('active');
+
+	$effect(() => {
+		if (formMode !== 'edit' || !editingId) {
+			stateChoice = formData.disabled ? 'disabled' : 'active';
+			return;
+		}
+		const stored = routes.find((r) => r.id === editingId);
+		if (stored) stateChoice = routeState(stored);
+	});
+
+	const stateOptions = $derived(
+		[
+			{
+				value: 'active' as const,
+				label: tl('routes.state.active'),
+				hint: tl('routes.form.stateActiveHint'),
+				tone: 'allow' as const
+			},
+			// Maintenance needs a saved route: it is a transition on an
+			// existing route, not a birth state.
+			...(formMode === 'edit'
+				? [
+						{
+							value: 'maintenance' as const,
+							label: tl('routes.state.maintenance'),
+							hint: tl('routes.form.stateMaintenanceHint'),
+							tone: 'watch' as const
+						}
+					]
+				: []),
+			{
+				value: 'disabled' as const,
+				label: tl('routes.state.disabled'),
+				hint: tl('routes.form.stateDisabledHint'),
+				tone: 'neutral' as const
+			}
+		]
+	);
+
+	function onFormStateChange(next: string): void {
+		const target = next as 'active' | 'maintenance' | 'disabled';
+		if (formMode !== 'edit' || !editingId) {
+			// Create: only the disabled flag exists yet, and it ships
+			// with the POST like any other field.
+			formData.disabled = target === 'disabled';
+			return;
+		}
+		const stored = routes.find((r) => r.id === editingId);
+		if (stored) onRouteStateChange(stored, target);
+	}
+
 	const stateBadge = $derived<SectionBadge>(
 		formData.disabled
 			? { badge: tl('routes.form.badgeDisabled'), posture: 'off' }
@@ -3279,7 +3337,8 @@
 				     mode and clashing visually with the cyan text). -->
 				<!-- v2.41 — the panel header sticks while the sections scroll,
 				     and says when there is something to save. -->
-				<div class="sticky top-0 z-10 bg-elevated px-5 py-4 border-b border-border-subtle flex items-center gap-3">
+				<div class="sticky top-0 z-10 bg-elevated px-5 py-4 border-b border-border-subtle flex flex-col gap-2">
+					<div class="flex items-center gap-3">
 					<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-mono bg-accent-soft text-cyan border border-cyan">
 						{language.current && (formMode === 'create' ? t('routes.panel.pillNew') : t('routes.panel.pillEdit'))}
 					</span>
@@ -3294,19 +3353,16 @@
 					{#if formMode === 'edit' && editingId}
 						<span class="text-xs text-muted font-mono shrink-0" class:ml-auto={!formDirty}>{language.current && t('routes.panel.idLabel')} <span class="text-secondary">{editingId.slice(0, 7)}</span></span>
 					{/if}
-				</div>
-
-				<!-- D8 entry links (per-route observability + security
-				     drill-downs). Visible only in edit mode — these
-				     are sub-routes keyed by route id, so they're
-				     meaningless for the create flow. The Delete
-				     button moved here too: the per-row Delete action
-				     of the prior DataTable layout is gone (clicking a
-				     row now opens the panel, not the delete dialog),
-				     so the delete trigger lives on the selected
-				     route's own detail panel. -->
+					</div>
+				<!-- v2.41.1 — the two drill-down links used to sit in a row
+				     BELOW the sticky header, so they scrolled out of sight as
+				     soon as the operator moved down the form. They belong to
+				     the route's identity, so they live in the header itself
+				     and stay reachable. Delete moved to the footer, away from
+				     Save: a destructive action does not share a row with the
+				     links you click to read a chart. -->
 				{#if formMode === 'edit' && editingId}
-					<div class="px-5 pt-4 flex flex-wrap gap-2">
+					<div class="flex flex-wrap gap-2" data-testid="panel-pivots">
 						<a
 							href={`/observability/${editingId}`}
 							class="inline-flex items-center gap-1.5 rounded-md border border-border-default bg-surface px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-hover transition-colors"
@@ -3327,18 +3383,9 @@
 							</svg>
 							{language.current && t('routes.panel.securityLink')}
 						</a>
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={() => {
-								if (editingId) {
-									const target = routes.find((r) => r.id === editingId);
-									if (target) confirmTarget = target;
-								}
-							}}
-						>{language.current && t('routes.panel.deleteButton')}</Button>
 					</div>
 				{/if}
+				</div>
 
 				<!-- Form body — moved verbatim out of the prior Modal
 				     wrapper. All field bindings, validation, and
@@ -3364,6 +3411,139 @@
 					{/if}
 					<!-- v2.41 — the form is read as one collapsible section per concern;
 					     each closed row carries the state it holds (see RouteSection). -->
+					<!-- v2.41.1 — State first: what the route does right now is
+					     read before anything else, and the operator asked for it
+					     at the top. The three states are exclusive, so they are a
+					     segmented control like the country filter's — and, like
+					     the icons in the routes list, picking one APPLIES it
+					     through the dedicated endpoints (disable keeps its
+					     confirm dialog and its last-HTTPS warning). The
+					     maintenance settings appear only under Maintenance,
+					     because that is the only state they describe. -->
+					<RouteSection
+						name={language.current && t('routes.form.sectionState')}
+						summary={summaryState}
+						badge={stateBadge.badge}
+						posture={stateBadge.posture}
+						testid="section-state"
+					>
+						<ModeSelector
+							id="route-state"
+							bind:value={stateChoice}
+							options={stateOptions}
+							onchange={onFormStateChange}
+							ariaLabel={language.current && t('routes.form.sectionState')}
+						/>
+						{#if formMode !== 'edit'}
+							<p class="text-xs text-muted" data-testid="state-create-hint">
+								{language.current && t('routes.form.stateCreateHint')}
+							</p>
+						{/if}
+						{#if stateChoice === 'maintenance'}
+						<!-- Task 9 — Maintenance section. Shown always (not
+						     gated behind the route's current state) so an
+						     operator can pre-configure retryAfter / bypass
+						     IPs before switching the row's 3-state control
+						     to "Maintenance", and can still tune them while
+						     already in maintenance. The section itself
+						     doesn't turn maintenance on/off — that's the
+						     RouteStateControl's job via the dedicated
+						     enterMaintenance/exitMaintenance endpoints; this
+						     is config-only, shipped full-replacement on every
+						     submit (see payload.maintenanceConfig above). -->
+						<div class="flex flex-col gap-2 p-3 rounded-md border border-border-subtle">
+							<span class="text-sm font-medium text-secondary">
+								{language.current && t('routes.form.maintenance.sectionTitle')}
+							</span>
+							<!-- v2.18.0 — friendly Retry-After: number + unit
+							     selector. The wire value (retryAfterSeconds,
+							     recomputed via syncRetryAfterSeconds) stays in
+							     seconds; the operator picks e.g. "5 minutes"
+							     instead of typing "300". -->
+							<div class="flex flex-col gap-1">
+								<span class="text-sm text-secondary">
+									{language.current && t('routes.form.maintenance.retryAfter')}
+								</span>
+								<div class="flex items-center gap-2">
+									<div class="w-28">
+										<Input
+											type="number"
+											min="0"
+											value={String(retryValue)}
+											aria-label={language.current &&
+												t('routes.form.maintenance.retryAfterValueAria')}
+											oninput={(e: Event) => {
+												const raw = (e.target as HTMLInputElement).value;
+												const n = parseInt(raw, 10);
+												retryValue = Number.isNaN(n) || n < 0 ? 0 : n;
+												syncRetryAfterSeconds();
+											}}
+										/>
+									</div>
+									<select
+										class="h-9 rounded-md border border-border-subtle bg-surface px-2 text-sm text-primary"
+										aria-label={language.current &&
+											t('routes.form.maintenance.retryAfterUnitAria')}
+										bind:value={retryUnit}
+										onchange={syncRetryAfterSeconds}
+									>
+										{#each RETRY_UNITS as u (u)}
+											<option value={u}>{language.current && t(`routes.form.maintenance.unit.${u}`)}</option>
+										{/each}
+									</select>
+								</div>
+								<span class="text-xs text-muted">
+									{language.current &&
+										t('routes.form.maintenance.retryAfterHelp', {
+											seconds: String(formData.maintenanceConfig.retryAfterSeconds)
+										})}
+								</span>
+							</div>
+							<!-- v2.18.1 — per-route maintenance message. Empty → the
+							     global message (Settings → Error Pages → Maintenance)
+							     is used instead. -->
+							<div class="flex flex-col gap-1">
+								<span class="text-sm text-secondary">
+									{language.current && t('routes.form.maintenance.message')}
+								</span>
+								<textarea
+									class="w-full box-border resize-y rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-primary"
+									rows="2"
+									bind:value={formData.maintenanceConfig.message}
+									placeholder={t('routes.form.maintenance.messagePlaceholder')}
+									aria-label={language.current && t('routes.form.maintenance.message')}
+								></textarea>
+								<span class="text-xs text-muted">
+									{language.current && t('routes.form.maintenance.messageHelp')}
+								</span>
+							</div>
+							<div class="flex flex-col gap-2">
+								<div class="flex items-center justify-between">
+									<span class="text-sm text-secondary">
+										{language.current && t('routes.form.maintenance.bypassIps')}
+									</span>
+									<Button variant="ghost" size="sm" onclick={addBypassIp} type="button"
+										>{language.current && t('routes.form.maintenance.bypassIpsAdd')}</Button
+									>
+								</div>
+								<div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2" data-testid="maintenance-bypass-ip-grid">
+									{#each formData.maintenanceConfig.bypassIps as _, i (i)}
+										<div class="flex items-center gap-2">
+											<div class="flex-1">
+												<Input
+													bind:value={formData.maintenanceConfig.bypassIps[i]}
+													placeholder="10.0.0.5 or 192.168.1.0/24"
+												/>
+											</div>
+											<Button variant="ghost" size="sm" onclick={() => removeBypassIp(i)} type="button">×</Button>
+										</div>
+									{/each}
+								</div>
+							</div>
+						</div>
+						{/if}
+					</RouteSection>
+
 					<RouteSection name={language.current && t('routes.form.sectionEssentials')} summary={summaryEssentials} open testid="section-essentials">
 						<Input
 							label={language.current && t('routes.form.hostLabel')}
@@ -4772,181 +4952,25 @@
 								{language.current && t('routes.form.errorPagesTemplateHelper')}
 							</p>
 
-							<!-- Per-route overrides : highest precedence
-							     in the 3-layer resolution (override →
-							     template → default). Collapsed by default ;
-							     auto-expanded when the loaded route has
-							     overrides. -->
-							<details
-								class="mt-3"
-								bind:open={errorOverridesExpanded}
-								data-testid="error-overrides-details"
-							>
-								<summary class="text-xs text-secondary cursor-pointer">
-									{language.current && t('routes.form.errorPagesOverrideSection')}
-								</summary>
-								<div class="mt-2 grid gap-2">
-									{#each SUPPORTED_ERROR_STATUS_CODES as code (code)}
-										<div>
-											<label
-												for="route-err-override-{code}"
-												class="text-xs font-medium text-secondary block mb-1"
-											>
-												HTTP {code}
-											</label>
-											<textarea
-												id="route-err-override-{code}"
-												rows="2"
-												placeholder={language.current && t('routes.form.errorPagesOverridePlaceholder', { code })}
-												value={formData.errorPageOverrides[code] ?? ''}
-												oninput={(e) => {
-													const v = (e.target as HTMLTextAreaElement).value;
-													if (v) {
-														formData.errorPageOverrides = {
-															...formData.errorPageOverrides,
-															[code]: v
-														};
-													} else {
-														const next = { ...formData.errorPageOverrides };
-														delete next[code];
-														formData.errorPageOverrides = next;
-													}
-												}}
-												class="w-full bg-surface border border-default rounded text-xs px-2 py-1 font-mono text-primary"
-												data-testid="error-override-{code}"
-											></textarea>
-										</div>
-									{/each}
-									<p class="text-xs text-muted">
-										{language.current && t('routes.form.errorPagesOverrideHelper')}
-									</p>
-								</div>
-							</details>
+							<!-- v2.41.1 — the per-code override editor was a second
+							     collapse level inside an already-collapsible section
+							     for something an operator sets once, if ever. It
+							     lives in Settings → Error pages now. Overrides
+							     already stored on a route keep applying and are
+							     preserved on save; the line below exists so they are
+							     never silently invisible. -->
+							{#if errorOverrideCount > 0}
+								<p class="text-xs text-muted mt-2" data-testid="error-overrides-notice">
+									{language.current &&
+										t('routes.form.errorPagesOverrideNotice', { count: errorOverrideCount })}
+									<a href="/settings/error-pages" class="text-cyan hover:underline"
+										>{language.current && t('routes.form.errorPagesTemplateManageLink')}</a
+									>
+								</p>
+							{/if}
 						</div>
 					</RouteSection>
 
-					<!-- Route state: disabled and maintenance. -->
-					<RouteSection name={language.current && t('routes.form.sectionState')} summary={summaryState} badge={stateBadge.badge} posture={stateBadge.posture} testid="section-state">
-						<!-- v2.14.3 — Disabled checkbox. Default unchecked
-						     (enabled) for new routes; loads the persisted
-						     value on edit (openEdit). A disabled route
-						     keeps its config but is excluded from the
-						     emitted Caddy config (serves no traffic). This
-						     is the same underlying flag as the row-level
-						     toggle action in the table — the PUT here
-						     ships it full-replacement alongside the rest
-						     of the form. -->
-						<div class="flex flex-col gap-1">
-							<Checkbox
-								label={language.current && t('routes.form.disabledLabel')}
-								bind:checked={formData.disabled}
-							/>
-							<p class="text-xs text-muted ml-6">
-								{language.current && t('routes.form.disabledHelper')}
-							</p>
-						</div>
-						<!-- Task 9 — Maintenance section. Shown always (not
-						     gated behind the route's current state) so an
-						     operator can pre-configure retryAfter / bypass
-						     IPs before switching the row's 3-state control
-						     to "Maintenance", and can still tune them while
-						     already in maintenance. The section itself
-						     doesn't turn maintenance on/off — that's the
-						     RouteStateControl's job via the dedicated
-						     enterMaintenance/exitMaintenance endpoints; this
-						     is config-only, shipped full-replacement on every
-						     submit (see payload.maintenanceConfig above). -->
-						<div class="flex flex-col gap-2 p-3 rounded-md border border-border-subtle">
-							<span class="text-sm font-medium text-secondary">
-								{language.current && t('routes.form.maintenance.sectionTitle')}
-							</span>
-							<!-- v2.18.0 — friendly Retry-After: number + unit
-							     selector. The wire value (retryAfterSeconds,
-							     recomputed via syncRetryAfterSeconds) stays in
-							     seconds; the operator picks e.g. "5 minutes"
-							     instead of typing "300". -->
-							<div class="flex flex-col gap-1">
-								<span class="text-sm text-secondary">
-									{language.current && t('routes.form.maintenance.retryAfter')}
-								</span>
-								<div class="flex items-center gap-2">
-									<div class="w-28">
-										<Input
-											type="number"
-											min="0"
-											value={String(retryValue)}
-											aria-label={language.current &&
-												t('routes.form.maintenance.retryAfterValueAria')}
-											oninput={(e: Event) => {
-												const raw = (e.target as HTMLInputElement).value;
-												const n = parseInt(raw, 10);
-												retryValue = Number.isNaN(n) || n < 0 ? 0 : n;
-												syncRetryAfterSeconds();
-											}}
-										/>
-									</div>
-									<select
-										class="h-9 rounded-md border border-border-subtle bg-surface px-2 text-sm text-primary"
-										aria-label={language.current &&
-											t('routes.form.maintenance.retryAfterUnitAria')}
-										bind:value={retryUnit}
-										onchange={syncRetryAfterSeconds}
-									>
-										{#each RETRY_UNITS as u (u)}
-											<option value={u}>{language.current && t(`routes.form.maintenance.unit.${u}`)}</option>
-										{/each}
-									</select>
-								</div>
-								<span class="text-xs text-muted">
-									{language.current &&
-										t('routes.form.maintenance.retryAfterHelp', {
-											seconds: String(formData.maintenanceConfig.retryAfterSeconds)
-										})}
-								</span>
-							</div>
-							<!-- v2.18.1 — per-route maintenance message. Empty → the
-							     global message (Settings → Error Pages → Maintenance)
-							     is used instead. -->
-							<div class="flex flex-col gap-1">
-								<span class="text-sm text-secondary">
-									{language.current && t('routes.form.maintenance.message')}
-								</span>
-								<textarea
-									class="w-full box-border resize-y rounded-md border border-border-subtle bg-surface px-3 py-2 text-sm text-primary"
-									rows="2"
-									bind:value={formData.maintenanceConfig.message}
-									placeholder={t('routes.form.maintenance.messagePlaceholder')}
-									aria-label={language.current && t('routes.form.maintenance.message')}
-								></textarea>
-								<span class="text-xs text-muted">
-									{language.current && t('routes.form.maintenance.messageHelp')}
-								</span>
-							</div>
-							<div class="flex flex-col gap-2">
-								<div class="flex items-center justify-between">
-									<span class="text-sm text-secondary">
-										{language.current && t('routes.form.maintenance.bypassIps')}
-									</span>
-									<Button variant="ghost" size="sm" onclick={addBypassIp} type="button"
-										>{language.current && t('routes.form.maintenance.bypassIpsAdd')}</Button
-									>
-								</div>
-								<div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2" data-testid="maintenance-bypass-ip-grid">
-									{#each formData.maintenanceConfig.bypassIps as _, i (i)}
-										<div class="flex items-center gap-2">
-											<div class="flex-1">
-												<Input
-													bind:value={formData.maintenanceConfig.bypassIps[i]}
-													placeholder="10.0.0.5 or 192.168.1.0/24"
-												/>
-											</div>
-											<Button variant="ghost" size="sm" onclick={() => removeBypassIp(i)} type="button">×</Button>
-										</div>
-									{/each}
-								</div>
-							</div>
-						</div>
-					</RouteSection>
 
 					<button type="submit" class="hidden" aria-hidden="true"></button>
 				</form>
@@ -4958,7 +4982,23 @@
 				     formOpen via the existing path; on validation
 				     errors the panel stays open with field-level
 				     messages. -->
-				<div class="px-5 pb-5 pt-2 flex justify-end gap-2 border-t border-border-subtle">
+				<div class="px-5 pb-5 pt-2 flex items-center justify-between gap-2 border-t border-border-subtle">
+					{#if formMode === 'edit' && editingId}
+						<div class="delete-slot">
+							<Button
+								variant="ghost"
+								onclick={() => {
+									if (editingId) {
+										const target = routes.find((r) => r.id === editingId);
+										if (target) confirmTarget = target;
+									}
+								}}>{language.current && t('routes.panel.deleteButton')}</Button
+							>
+						</div>
+					{:else}
+						<span></span>
+					{/if}
+					<div class="flex gap-2">
 					<Button variant="ghost" onclick={() => guardUnsaved(closePanel)}
 						>{language.current && t('routes.form.cancel')}</Button
 					>
@@ -4969,6 +5009,7 @@
 					>
 						{language.current && (formMode === 'create' ? t('routes.form.create') : t('routes.form.save'))}
 					</Button>
+					</div>
 				</div>
 			{/if}
 
@@ -5094,6 +5135,17 @@
 </Modal>
 
 <style>
+	/* v2.41.1 — Delete sits in the footer, left, away from Save.
+	   Ghost shape so it doesn't compete with the primary action,
+	   red text so it is unmistakably the destructive one. */
+	.delete-slot :global(button) {
+		color: var(--status-down);
+	}
+	.delete-slot :global(button:hover) {
+		color: var(--status-down);
+		background: color-mix(in oklch, var(--status-down) 12%, transparent);
+	}
+
 	/* Selected-row visual state for the Routes table (C11 Pack A
 	   polish, 2026-06-06). The Tailwind classes on the row carry
 	   the base + hover styles; this block layers the

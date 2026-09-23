@@ -9,9 +9,11 @@
   keyboard and the form semantics stay exactly what they were) painted
   as a switch through `appearance: none`.
 
-  `danger` frames the row in red: for a setting that removes a
-  protection, the frame is the warning, so the helper text does not
-  have to shout. It is what "Disable the OWASP CRS" wears.
+  `danger` marks a setting that removes a protection. The red frame
+  only paints once the setting is actually ON — a red box around an
+  untouched switch reads as an error the operator has to fix, which
+  is exactly what it is not. Off, the row is ordinary; on, the frame
+  is the warning, so the helper text does not have to shout.
 
   Controlled on purpose (`checked` + `onchange`, no bind): the CRS row
   has to intercept the false → true direction behind a confirm dialog
@@ -52,7 +54,7 @@
 	}: Props = $props();
 </script>
 
-<div class="row" class:danger>
+<div class="row" class:danger={danger && checked}>
 	<label class="head" data-testid={labelTestid}>
 		<input
 			type="checkbox"
@@ -86,6 +88,9 @@
 	.row.danger {
 		border-color: var(--badge-danger-border);
 		background: var(--badge-danger-bg);
+	}
+	.row.danger .lbl {
+		color: var(--status-down);
 	}
 	.head {
 		display: flex;
