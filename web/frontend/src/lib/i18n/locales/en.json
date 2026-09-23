@@ -689,6 +689,13 @@
 		"wafRules": "WAF rules"
 	},
 	"dashboard": {
+		"subtitle": "Real-time traffic across your {count} routes, recent WAF events and upstream services. Window {window}.",
+		"disabledTitle": "Metrics unavailable",
+		"disabledBody": "The observability subsystem failed to start. The proxy is still serving traffic; only the metric history is missing. Check the Arenet logs for the root cause.",
+		"noRoutesTitle": "No routes configured yet",
+		"noRoutesBodyBefore": "Add one from the",
+		"noRoutesBodyLink": "Routes",
+		"noRoutesBodyAfter": "page to start collecting metrics.",
 		"eyebrow": "Overview · Dashboard",
 		"kpiReqPerSec": "Requests / s",
 		"kpiReqPerSecFoot": "{total} req / 24h · {routes} active routes",

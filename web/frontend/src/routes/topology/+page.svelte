@@ -50,6 +50,8 @@
 	// Page-level UI
 	import TopologySidebar from './_components/TopologySidebar.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Button from '$lib/components/Button.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 
@@ -408,13 +410,16 @@
 </svelte:head>
 
 <div class="topo-page">
-	<header class="topo-header">
-		<div class="eyebrow">{language.current && t('topology.eyebrow')}</div>
-		<h1>{language.current && t('topology.title')}</h1>
-		<p class="lede">
-			{language.current && t('topology.lede')}
-		</p>
-	</header>
+	<!-- v2.41 — was a hand-rolled copy of PageHeader (whose own doc
+	     comment already listed this page as a consumer). The wrapper
+	     keeps the flex sizing the page layout depends on. -->
+	<div class="topo-header">
+		<PageHeader
+			eyebrow={language.current && t('topology.eyebrow')}
+			title={language.current && t('topology.title')}
+			subtitle={language.current && t('topology.lede')}
+		/>
+	</div>
 
 	{#if pageStatus === 'loading'}
 		<div class="topo-state-wrap">
@@ -426,9 +431,9 @@
 			<div class="error-box">
 				<div class="error-title">{language.current && t('topology.errorTitle')}</div>
 				<div class="error-msg">{pageError}</div>
-				<button class="retry-btn" type="button" onclick={() => void loadInitial()}>
+				<Button variant="secondary" size="sm" onclick={() => void loadInitial()}>
 					{language.current && t('topology.errorRetry')}
-				</button>
+				</Button>
 			</div>
 		</div>
 	{:else}
@@ -482,27 +487,6 @@
 		flex: 0 0 auto;
 	}
 
-	.eyebrow {
-		font-family: var(--font-mono, ui-monospace, monospace);
-		font-size: 11px;
-		color: var(--accent, oklch(68% 0.21 255));
-		letter-spacing: 0.06em;
-		margin-bottom: 8px;
-	}
-
-	h1 {
-		font-size: 28px;
-		font-weight: 600;
-		margin: 0 0 4px 0;
-	}
-
-	.lede {
-		color: var(--fg-muted, oklch(68% 0.012 250));
-		font-size: 13px;
-		margin: 0;
-		max-width: 720px;
-		line-height: 1.5;
-	}
 
 	.topo-content {
 		flex: 1 1 auto;
@@ -584,20 +568,6 @@
 		word-break: break-word;
 	}
 
-	.retry-btn {
-		padding: 6px 14px;
-		font-size: 12.5px;
-		font-weight: 500;
-		color: var(--fg, oklch(96% 0.005 250));
-		background: var(--surface-2, oklch(22% 0.007 250));
-		border: 1px solid var(--border-hi, oklch(34% 0.011 250));
-		border-radius: 6px;
-		cursor: pointer;
-	}
-
-	.retry-btn:hover {
-		background: var(--surface-hi, oklch(26% 0.008 250));
-	}
 
 	/* Live indicator — small pill. Used to be absolute-positioned
 	   to coexist with a centered ViewToggle; C6b-i dropped the
