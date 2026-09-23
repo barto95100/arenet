@@ -86,6 +86,16 @@
 		"themeDark": "Dark",
 		"themeLight": "Light",
 		"appearanceSection": "Appearance",
+		"tabsAria": "Settings categories",
+		"eyebrow": "Administration · Settings",
+		"subtitle": "Your account, the security integrations, the network and certificate settings, backups and system information.",
+		"tab": {
+			"account": "Account & session",
+			"security": "Security",
+			"network": "Network & certificates",
+			"backups": "Backups",
+			"system": "System"
+		},
 		"accountSection": "Account",
 		"sessionsSection": "Sessions",
 		"reduceMotion": "Reduce motion",
