@@ -86,6 +86,16 @@
 		"themeDark": "Sombre",
 		"themeLight": "Clair",
 		"appearanceSection": "Apparence",
+		"tabsAria": "Catégories de réglages",
+		"eyebrow": "Administration · Réglages",
+		"subtitle": "Ton compte, les intégrations de sécurité, les réglages réseau et certificats, les sauvegardes et les informations système.",
+		"tab": {
+			"account": "Compte & session",
+			"security": "Sécurité",
+			"network": "Réseau & certificats",
+			"backups": "Sauvegardes",
+			"system": "Système"
+		},
 		"accountSection": "Compte",
 		"sessionsSection": "Sessions",
 		"reduceMotion": "Réduire les animations",
