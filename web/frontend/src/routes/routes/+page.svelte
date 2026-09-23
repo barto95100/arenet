@@ -1253,6 +1253,7 @@
 		// v2.18.0 — sync the friendly Retry-After input from the
 		// seeded seconds (create default is 300 → "5 minutes").
 		seedRetryParts();
+		stateChoice = 'active';
 		formOpen = true;
 		// v2.41 — reference point for the "unsaved changes" marker.
 		snapshotForm();
@@ -1537,6 +1538,7 @@
 		// v2.18.0 — sync the friendly Retry-After input from the loaded
 		// route's stored seconds (shows the largest round unit).
 		seedRetryParts();
+		stateChoice = routeState(r);
 		formOpen = true;
 		// v2.41 — reference point for the "unsaved changes" marker.
 		snapshotForm();
@@ -1801,11 +1803,27 @@
 	// then re-added one keeps the choice.
 	const lbSelectorVisible = $derived(formData.upstreams.length >= 2);
 
+	// v2.41.2 — the state is a form field like any other: picking it
+	// changes nothing until Save. (v2.41.1 applied it on click, which
+	// the operator rightly refused — a form where one control commits
+	// and the others wait is a trap.) It is seeded from the stored
+	// route when the panel opens and shipped in the payload: the PUT
+	// carries all three states, since `disabled:false` with no
+	// maintenance block clears maintenance server-side
+	// (internal/api/routes.go, v2.39 preserve-or-replace rules).
+	// The icons in the routes list keep applying immediately — there,
+	// the click IS the action.
+	let stateChoice = $state<'active' | 'maintenance' | 'disabled'>('active');
+	let stateSnapshot = $state<'active' | 'maintenance' | 'disabled'>('active');
+
 	// v2.41 — "unsaved changes" marker: the panel snapshots the form when
 	// it opens; anything different afterwards is unsaved work. Compared as
 	// JSON because formData is a plain object of plain values.
 	let formSnapshot = $state('');
-	const formDirty = $derived(formSnapshot !== '' && JSON.stringify(formData) !== formSnapshot);
+	const formDirty = $derived(
+		formSnapshot !== '' &&
+			(JSON.stringify(formData) !== formSnapshot || stateChoice !== stateSnapshot)
+	);
 
 	// v2.41 — the unsaved marker now protects something: any path
 	// that would drop the edits (Cancel, a click outside the panel,
@@ -1843,7 +1861,9 @@
 
 	function snapshotForm(): void {
 		formSnapshot = JSON.stringify(formData);
+		stateSnapshot = stateChoice;
 	}
+
 
 	// v2.41 — one-line state summary per collapsible section, so the
 	// closed form still reads as the route's configuration. Each
@@ -1937,6 +1957,22 @@
 		}
 	]);
 
+	// v2.41.2 — TLS and the health check had a summary but no badge,
+	// so the badge column stopped halfway down the form. They are
+	// on/off facts rather than traffic decisions: green when on, grey
+	// when off.
+	const tlsBadge = $derived<SectionBadge>(
+		formData.tlsEnabled
+			? { badge: 'https', posture: 'allow' }
+			: { badge: 'http', posture: 'off' }
+	);
+
+	const healthCheckBadge = $derived<SectionBadge>(
+		formData.healthCheck.enabled
+			? { badge: tl('routes.form.badgeOn'), posture: 'allow' }
+			: { badge: tl('routes.form.badgeOff'), posture: 'off' }
+	);
+
 	const summaryAuth = $derived(
 		formData.authMode === 'basic'
 			? tl('routes.form.summaryAuthBasic', { user: formData.basicAuth.username || '—' })
@@ -2009,10 +2045,13 @@
 		});
 	});
 
+	// v2.41.2 — green, not red: a rate limit does not turn a category
+	// of traffic away, it caps abuse while everyone else goes through.
+	// Same reading as authentication.
 	const rateLimitBadge = $derived<SectionBadge>(
 		formData.rateLimit === null
 			? { badge: tl('routes.form.badgeOff'), posture: 'off' }
-			: { badge: tl('routes.form.badgeOn'), posture: 'block' }
+			: { badge: tl('routes.form.badgeOn'), posture: 'allow' }
 	);
 
 	const geoActive = $derived(formData.countryBlock.mode === 'allow' || formData.countryBlock.mode === 'deny');
@@ -2079,36 +2118,13 @@
 			: tl('routes.form.summaryErrorPagesDefault')
 	);
 
-	// In maintenance only when the STORED route is (the 3-state control
-	// owns that transition); the form's maintenanceConfig always exists.
-	const editedRouteInMaintenance = $derived.by(() => {
-		if (formMode !== 'edit' || !editingId) return false;
-		const stored = routes.find((r) => r.id === editingId);
-		return stored ? routeState(stored) === 'maintenance' : false;
-	});
 	const summaryState = $derived(
-		formData.disabled
+		stateChoice === 'disabled'
 			? tl('routes.form.summaryStateDisabled')
-			: editedRouteInMaintenance
+			: stateChoice === 'maintenance'
 				? tl('routes.form.summaryStateMaintenance')
 				: tl('routes.form.summaryStateActive')
 	);
-	// v2.41.1 — the form's state control. Same contract as the
-	// routes list: picking a state APPLIES it through the dedicated
-	// endpoints (onRouteStateChange), which keeps the disable
-	// confirm dialog and its last-HTTPS warning. stateChoice is
-	// optimistic; the effect below re-syncs it from the stored
-	// route, so a cancelled confirm snaps the control back.
-	let stateChoice = $state<'active' | 'maintenance' | 'disabled'>('active');
-
-	$effect(() => {
-		if (formMode !== 'edit' || !editingId) {
-			stateChoice = formData.disabled ? 'disabled' : 'active';
-			return;
-		}
-		const stored = routes.find((r) => r.id === editingId);
-		if (stored) stateChoice = routeState(stored);
-	});
 
 	const stateOptions = $derived(
 		[
@@ -2140,21 +2156,16 @@
 	);
 
 	function onFormStateChange(next: string): void {
-		const target = next as 'active' | 'maintenance' | 'disabled';
-		if (formMode !== 'edit' || !editingId) {
-			// Create: only the disabled flag exists yet, and it ships
-			// with the POST like any other field.
-			formData.disabled = target === 'disabled';
-			return;
-		}
-		const stored = routes.find((r) => r.id === editingId);
-		if (stored) onRouteStateChange(stored, target);
+		// Kept in sync so anything still reading formData.disabled
+		// (the payload's other branches, the summary) agrees with the
+		// control. The transition itself happens on submit.
+		formData.disabled = next === 'disabled';
 	}
 
 	const stateBadge = $derived<SectionBadge>(
-		formData.disabled
+		stateChoice === 'disabled'
 			? { badge: tl('routes.form.badgeDisabled'), posture: 'off' }
-			: editedRouteInMaintenance
+			: stateChoice === 'maintenance'
 				? { badge: tl('routes.form.badgeMaintenance'), posture: 'watch' }
 				: { badge: tl('routes.form.badgeActive'), posture: 'allow' }
 	);
@@ -2683,29 +2694,16 @@
 					payload.errorPageOverrides = clean;
 				}
 			}
-			// Task 9 / Final-review Finding #1 fix — maintenanceConfig
-			// is shipped ONLY when the route being saved is ACTUALLY
-			// in maintenance. openEdit seeds formData.maintenanceConfig
-			// with a synthetic default ({retryAfterSeconds:300,
-			// bypassIps:[]}) for a route that has NEVER been put into
-			// maintenance, so formData.maintenanceConfig being
-			// "truthy" tells us nothing about the route's real state.
-			// The route's real state (routeState()/the 3-state
-			// control) is the source of truth — NOT the form's
-			// default. Ship the block full-replacement (bypass IPs
-			// trimmed + blanks dropped) only when the edited route is
-			// currently in maintenance; otherwise omit it (undefined
-			// on the wire → backend maps to nil → not in maintenance,
-			// same preserve/clear semantic as the dedicated
-			// maintenance endpoints). This also covers 'create', where
-			// there is no prior route and a brand-new route must
-			// never be born into maintenance via this form.
-			const editingRouteForMaintenance =
-				formMode === 'edit' && editingId ? routes.find((r) => r.id === editingId) : undefined;
-			const isActuallyInMaintenance = editingRouteForMaintenance
-				? routeState(editingRouteForMaintenance) === 'maintenance'
-				: false;
-			if (isActuallyInMaintenance) {
+			// v2.41.2 — the state section's choice is what ships, and
+			// it ships only on save. The PUT expresses all three
+			// states: `disabled` carries active vs disabled, and a
+			// maintenance block carries maintenance. Sending
+			// `disabled:false` with no block clears maintenance
+			// server-side (internal/api/routes.go, v2.39 rules), so
+			// leaving maintenance is simply not shipping the block. A
+			// route being created can only be born active or disabled
+			// — the control offers nothing else.
+			if (stateChoice === 'maintenance') {
 				payload.maintenanceConfig = {
 					retryAfterSeconds: formData.maintenanceConfig.retryAfterSeconds,
 					bypassIps: formData.maintenanceConfig.bypassIps
@@ -3784,7 +3782,13 @@
 					</RouteSection>
 
 					<!-- TLS: HTTPS, redirection, certificate source and ACME challenge. -->
-					<RouteSection name={language.current && t('routes.form.sectionTLS')} summary={summaryTLS} badge={formData.tlsEnabled ? 'https' : 'http'} testid="section-tls">
+					<RouteSection
+						name={language.current && t('routes.form.sectionTLS')}
+						summary={summaryTLS}
+						badge={tlsBadge.badge}
+						posture={tlsBadge.posture}
+						testid="section-tls"
+					>
 						<div class="flex flex-col gap-1">
 							<Checkbox label={language.current && t('routes.form.tlsEnabledLabel')} bind:checked={formData.tlsEnabled} />
 							<p class="text-xs text-muted ml-6">
@@ -4669,7 +4673,13 @@
 					</RouteSection>
 
 					<!-- Health check of the upstream pool. -->
-					<RouteSection name={language.current && t('routes.form.sectionHealthCheck')} summary={summaryHealthCheck} testid="section-health-check">
+					<RouteSection
+						name={language.current && t('routes.form.sectionHealthCheck')}
+						summary={summaryHealthCheck}
+						badge={healthCheckBadge.badge}
+						posture={healthCheckBadge.posture}
+						testid="section-health-check"
+					>
 						<!-- Step J.3: active health-check sub-form. Gated by the
 						     enabled checkbox. Sub-fields disabled when off; their
 						     state is PRESERVED across the toggle so a user who
