@@ -22,8 +22,8 @@ Cible : **v2.42.0**. Cas de validation : Stalwart sur une VM d'un autre réseau.
       ID, Name        string
       ListenAddr      string   // "0.0.0.0" | "192.168.1.10" | "::"
       ListenPort      int
-      Upstreams       []TCPUpstream // Host, Port, Weight
-      LBPolicy        string   // round_robin | weighted_round_robin | least_conn
+      Upstreams       []TCPUpstream // Host, Port, MaxConnections (caddy-l4 ne pondère pas)
+      LBPolicy        string   // round_robin | least_conn | ip_hash | first | random
       HealthCheck     *TCPHealthCheck // Enabled, Interval, Timeout
       ProxyProtocol   string   // "" | "v1" | "v2"
       IPFilter        *IPFilter // réutilisé tel quel depuis routes.go
@@ -66,19 +66,19 @@ Cible : **v2.42.0**. Cas de validation : Stalwart sur une VM d'un autre réseau.
 
 ## Tâches
 
-1. **Stockage** — `TCPService` + CRUD + `Validate()` (port 1–65535, au moins un
-   backend, `ProxyProtocol` ∈ {"", v1, v2}, CIDR du filtre parsables, poids ≥ 0)
+1. **Stockage** *(fait — PR 1)* — `TCPService` + CRUD + `Validate()` (port 1–65535, au moins un
+   backend, `ProxyProtocol` ∈ {"", v1, v2}, CIDR du filtre parsables, pas de doublon de backend)
    + tests table-driven. Inclusion dans backup/restore (`internal/backup`) et
    dans le snapshot de la topologie plus tard (tâche 8).
-2. **Émission Caddy** — `buildLayer4App` + tests : JSON attendu pour un service
+2. **Émission Caddy** *(fait — PR 1)* — `buildLayer4App` + tests : JSON attendu pour un service
    nu, avec PROXY protocol, avec filtre IP, avec CrowdSec, avec health check ;
    **non-régression** : zéro service → config byte-identique (assert sur le
    JSON complet, pattern `TestBuildConfigJSON_*` existant) ; `caddy.Validate()`
    sur la config émise avec services, et résolvabilité des handlers/matchers
    (le pattern qui a rattrapé cinq bugs au Step I.7).
-3. **Garde-fou de ports** — `ReservedPorts` / `CheckListen` / `CanBindPrivileged`
+3. **Garde-fou de ports** *(fait — PR 1)* — `ReservedTCPPorts` / `ValidateTCPListen` / `CanBindTCP`
    + tests (conflit réservé, conflit entre deux services, message EACCES).
-4. **Modules + build** — import `caddy-l4`, `go.mod` en dépendance directe,
+4. **Modules + build** *(fait — PR 1 : v0.1.1, binaire 111,1 → 111,4 Mo)* — import `caddy-l4`, `go.mod` en dépendance directe,
    `go build` et `go vet` verts, vérification que la taille du binaire reste
    raisonnable (le module est déjà dans l'arbre, l'ajout doit être marginal).
 5. **API** — handlers CRUD + `/test`, rattachement au routeur, audit, rôles
