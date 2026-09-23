@@ -3093,7 +3093,11 @@ describe('/routes — disable/enable', () => {
 		expect(screen.queryByTestId('route-disable-confirm')).not.toBeInTheDocument();
 	});
 
-	it('RouteForm exposes a Disabled checkbox that round-trips into the update payload', async () => {
+	// v2.41.1 — the form's state control replaced the Disabled
+	// checkbox. On an existing route it applies the state through
+	// the same endpoints as the list's icons, confirm dialog
+	// included — it no longer round-trips through the PUT payload.
+	it('RouteForm state control disables an existing route through the dedicated endpoint', async () => {
 		const seeded = makeRoute({
 			id: 'edit-disable',
 			host: 'edit-disable.example.com',
@@ -3101,32 +3105,26 @@ describe('/routes — disable/enable', () => {
 			disabled: false
 		});
 		apiMock.listRoutes.mockResolvedValue([seeded]);
-		apiMock.updateRoute.mockResolvedValue(seeded);
+		apiMock.disableRoute.mockResolvedValue({ ...seeded, disabled: true });
 		render(Page);
 
 		const hostCell = await screen.findByText('edit-disable.example.com');
 		await fireEvent.click(hostCell.closest('tr')!);
 		await tick();
 
-		// Scope to the <form> — v2.17.1 Item A gave the row-level
-		// RouteStateControl segment an aria-label="Disabled" too
-		// (title/aria-label now carry the label instead of visible
-		// text), so an unscoped getByLabelText('Disabled') matches
-		// both it and the form's checkbox.
 		const form = document.querySelector('form')!;
-		const disabledCheckbox = within(form).getByLabelText('Disabled') as HTMLInputElement;
-		expect(disabledCheckbox.checked).toBe(false);
-		await userEvent.click(disabledCheckbox);
-		await tick();
-		expect(disabledCheckbox.checked).toBe(true);
+		expect(within(form).getByTestId('route-state-active').getAttribute('aria-checked')).toBe('true');
 
-		await fireEvent.submit(document.querySelector('form')!);
+		await userEvent.click(within(form).getByTestId('route-state-disabled'));
+		await tick();
+		// Disable is destructive: the confirm dialog stands in the way.
+		const confirm = screen.getAllByRole('button', { name: /^(Disable|Désactiver)$/ });
+		await userEvent.click(confirm[confirm.length - 1]);
 		await tick();
 		await tick();
 
-		expect(apiMock.updateRoute).toHaveBeenCalledTimes(1);
-		const [, payload] = apiMock.updateRoute.mock.calls[0];
-		expect(payload.disabled).toBe(true);
+		expect(apiMock.disableRoute).toHaveBeenCalledWith('edit-disable');
+		expect(apiMock.updateRoute).not.toHaveBeenCalled();
 	});
 });
 
@@ -4387,5 +4385,111 @@ describe('Routes page — v2.41 authentication interior', () => {
 		const payload = apiMock.createRoute.mock.calls[0][0];
 		expect(payload.authMode).toBe('basic');
 		expect(payload.basicAuth.username).toBe('ops');
+	});
+});
+
+// --- v2.41.1 — a section must not close under the operator ------
+//
+// `open` used to be passed straight through to <details>, so any
+// parent re-render re-applied open={false}: picking an auth mode or
+// a WAF mode changed the summary and snapped the section shut.
+
+describe('Routes page — v2.41.1 sections stay open while editing', () => {
+	it('keeps a section open when a choice inside it changes the summary', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+
+		const auth = screen.getByTestId('section-auth') as HTMLDetailsElement;
+		auth.open = true;
+		await tick();
+
+		await userEvent.click(screen.getByTestId('route-auth-mode-basic'));
+		await tick();
+		expect(auth.open).toBe(true);
+		expect(document.getElementById('basic-auth-password')).not.toBeNull();
+
+		// And the WAF section, whose summary also follows its mode.
+		const waf = screen.getByTestId('section-waf') as HTMLDetailsElement;
+		waf.open = true;
+		await tick();
+		await setWafMode('block');
+		expect(waf.open).toBe(true);
+	});
+});
+
+// --- v2.41.1 — state control, panel chrome, error overrides ------
+
+describe('Routes page — v2.41.1 state section', () => {
+	it('sits first, and puts an existing route into maintenance through the endpoint', async () => {
+		const seeded = makeRoute({ id: 'st', host: 'st.example.com' });
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.enterMaintenance.mockResolvedValue({
+			...seeded,
+			maintenanceConfig: { retryAfterSeconds: 300, bypassIps: [] }
+		});
+		render(Page);
+		await userEvent.click((await screen.findByText('st.example.com')).closest('tr')!);
+		await tick();
+
+		// First section of the form.
+		const sections = Array.from(document.querySelectorAll('[data-testid^="section-"]'));
+		expect(sections[0].getAttribute('data-testid')).toBe('section-state');
+
+		// Maintenance settings only show under Maintenance.
+		const state = screen.getByTestId('section-state') as HTMLDetailsElement;
+		state.open = true;
+		await tick();
+		expect(screen.queryByTestId('maintenance-bypass-ip-grid')).toBeNull();
+
+		await userEvent.click(screen.getByTestId('route-state-maintenance'));
+		await tick();
+		expect(apiMock.enterMaintenance).toHaveBeenCalledWith('st');
+	});
+
+	it('offers only active and disabled on a route that does not exist yet', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		expect(screen.getByTestId('route-state-active')).toBeInTheDocument();
+		expect(screen.getByTestId('route-state-disabled')).toBeInTheDocument();
+		expect(screen.queryByTestId('route-state-maintenance')).toBeNull();
+		expect(screen.getByTestId('state-create-hint')).toBeInTheDocument();
+	});
+});
+
+describe('Routes page — v2.41.1 panel chrome', () => {
+	it('keeps the metrics and security links in the sticky header', async () => {
+		const seeded = makeRoute({ id: 'piv', host: 'piv.example.com' });
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		await userEvent.click((await screen.findByText('piv.example.com')).closest('tr')!);
+		await tick();
+
+		const pivots = screen.getByTestId('panel-pivots');
+		// The sticky header is the pivots' ancestor — they no longer
+		// scroll out of sight with the form body.
+		expect(pivots.closest('.sticky')).not.toBeNull();
+		expect(pivots.querySelector('a[href="/observability/piv"]')).not.toBeNull();
+		expect(pivots.querySelector('a[href="/security/piv"]')).not.toBeNull();
+		// Delete is no longer next to them.
+		expect(pivots.textContent ?? '').not.toMatch(/delete|supprimer/i);
+	});
+});
+
+describe('Routes page — v2.41.1 error-page overrides', () => {
+	it('drops the per-code editor but says when overrides are applied', async () => {
+		const seeded = makeRoute({
+			id: 'ovr',
+			host: 'ovr.example.com',
+			errorPageOverrides: { '502': '<html>down</html>' }
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		await userEvent.click((await screen.findByText('ovr.example.com')).closest('tr')!);
+		await tick();
+
+		expect(screen.queryByTestId('error-override-502')).toBeNull();
+		expect(screen.getByTestId('error-overrides-notice').textContent ?? '').toContain('1');
 	});
 });

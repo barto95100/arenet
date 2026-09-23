@@ -18,6 +18,7 @@
   posture and stay neutral, so the colour keeps its meaning.
 -->
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import type { Snippet } from 'svelte';
 
 	/** What the section does to traffic; undefined = not an authorisation decision. */
@@ -38,9 +39,17 @@
 	}
 
 	let { name, summary = '', badge = '', posture, open = false, testid, children }: Props = $props();
+
+	// The open state must live HERE, bound to the element. Passing
+	// `open` straight through as an attribute made every section
+	// snap shut on any parent re-render: picking an auth mode or a
+	// WAF mode changes the summary, Svelte re-applies open={false},
+	// and the operator's section closed under their cursor.
+	// `open` is only the initial value.
+	let isOpen = $state(untrack(() => open));
 </script>
 
-<details class="section" data-posture={posture} {open} data-testid={testid}>
+<details class="section" data-posture={posture} bind:open={isOpen} data-testid={testid}>
 	<summary>
 		<span class="name">{name}</span>
 		<span class="summary">{summary}</span>
