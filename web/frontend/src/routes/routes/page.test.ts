@@ -3093,11 +3093,9 @@ describe('/routes — disable/enable', () => {
 		expect(screen.queryByTestId('route-disable-confirm')).not.toBeInTheDocument();
 	});
 
-	// v2.41.1 — the form's state control replaced the Disabled
-	// checkbox. On an existing route it applies the state through
-	// the same endpoints as the list's icons, confirm dialog
-	// included — it no longer round-trips through the PUT payload.
-	it('RouteForm state control disables an existing route through the dedicated endpoint', async () => {
+	// v2.41.2 — the state control is a form field: picking Disabled
+	// changes nothing until Save, and then it ships in the PUT.
+	it('RouteForm state control ships the picked state with the save', async () => {
 		const seeded = makeRoute({
 			id: 'edit-disable',
 			host: 'edit-disable.example.com',
@@ -3105,7 +3103,7 @@ describe('/routes — disable/enable', () => {
 			disabled: false
 		});
 		apiMock.listRoutes.mockResolvedValue([seeded]);
-		apiMock.disableRoute.mockResolvedValue({ ...seeded, disabled: true });
+		apiMock.updateRoute.mockResolvedValue({ ...seeded, disabled: true });
 		render(Page);
 
 		const hostCell = await screen.findByText('edit-disable.example.com');
@@ -3117,14 +3115,18 @@ describe('/routes — disable/enable', () => {
 
 		await userEvent.click(within(form).getByTestId('route-state-disabled'));
 		await tick();
-		// Disable is destructive: the confirm dialog stands in the way.
-		const confirm = screen.getAllByRole('button', { name: /^(Disable|Désactiver)$/ });
-		await userEvent.click(confirm[confirm.length - 1]);
-		await tick();
-		await tick();
-
-		expect(apiMock.disableRoute).toHaveBeenCalledWith('edit-disable');
+		// Nothing committed yet — no endpoint, no PUT.
+		expect(apiMock.disableRoute).not.toHaveBeenCalled();
 		expect(apiMock.updateRoute).not.toHaveBeenCalled();
+		// …and the form knows it has unsaved work.
+		expect(screen.getByTestId('form-dirty')).toBeInTheDocument();
+
+		await fireEvent.submit(form);
+		await tick();
+		await tick();
+		expect(apiMock.disableRoute).not.toHaveBeenCalled();
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		expect(payload.disabled).toBe(true);
 	});
 });
 
@@ -4421,13 +4423,10 @@ describe('Routes page — v2.41.1 sections stay open while editing', () => {
 // --- v2.41.1 — state control, panel chrome, error overrides ------
 
 describe('Routes page — v2.41.1 state section', () => {
-	it('sits first, and puts an existing route into maintenance through the endpoint', async () => {
+	it('sits first, and ships maintenance with the save — not on click', async () => {
 		const seeded = makeRoute({ id: 'st', host: 'st.example.com' });
 		apiMock.listRoutes.mockResolvedValue([seeded]);
-		apiMock.enterMaintenance.mockResolvedValue({
-			...seeded,
-			maintenanceConfig: { retryAfterSeconds: 300, bypassIps: [] }
-		});
+		apiMock.updateRoute.mockResolvedValue(seeded);
 		render(Page);
 		await userEvent.click((await screen.findByText('st.example.com')).closest('tr')!);
 		await tick();
@@ -4444,7 +4443,16 @@ describe('Routes page — v2.41.1 state section', () => {
 
 		await userEvent.click(screen.getByTestId('route-state-maintenance'));
 		await tick();
-		expect(apiMock.enterMaintenance).toHaveBeenCalledWith('st');
+		expect(screen.getByTestId('maintenance-bypass-ip-grid')).toBeInTheDocument();
+		expect(apiMock.enterMaintenance).not.toHaveBeenCalled();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		expect(apiMock.enterMaintenance).not.toHaveBeenCalled();
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		expect(payload.disabled).toBe(false);
+		expect(payload.maintenanceConfig).toMatchObject({ retryAfterSeconds: 300 });
 	});
 
 	it('offers only active and disabled on a route that does not exist yet', async () => {
@@ -4491,5 +4499,52 @@ describe('Routes page — v2.41.1 error-page overrides', () => {
 
 		expect(screen.queryByTestId('error-override-502')).toBeNull();
 		expect(screen.getByTestId('error-overrides-notice').textContent ?? '').toContain('1');
+	});
+});
+
+// --- v2.41.2 — every section says on/off, and the rate limit is
+// a protection in force (green), not traffic turned away (red).
+
+describe('Routes page — v2.41.2 section badges', () => {
+	it('badges TLS and the health check, and greens the rate limit', async () => {
+		const seeded = makeRoute({
+			id: 'badges',
+			host: 'badges.example.com',
+			tlsEnabled: true,
+			rateLimit: { events: 60, window: '1m', key: '{http.request.remote.host}' },
+			healthCheck: {
+				enabled: true,
+				uri: '/health',
+				method: 'GET',
+				interval: '30s',
+				timeout: '5s',
+				passes: 1,
+				fails: 3,
+				expectStatus: 200,
+				expectBody: ''
+			}
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		await userEvent.click((await screen.findByText('badges.example.com')).closest('tr')!);
+		await tick();
+
+		const row = (id: string) => screen.getByTestId(id).querySelector('summary')!;
+		expect(row('section-tls').textContent).toContain('https');
+		expect(screen.getByTestId('section-tls').getAttribute('data-posture')).toBe('allow');
+
+		expect(row('section-health-check').textContent).toMatch(/on/i);
+		expect(screen.getByTestId('section-health-check').getAttribute('data-posture')).toBe('allow');
+
+		// A cap on abuse reads as a protection in force, like auth.
+		expect(screen.getByTestId('section-rate-limit').getAttribute('data-posture')).toBe('allow');
+	});
+
+	it('greys them when off', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		expect(screen.getByTestId('section-health-check').getAttribute('data-posture')).toBe('off');
+		expect(screen.getByTestId('section-rate-limit').getAttribute('data-posture')).toBe('off');
 	});
 });
