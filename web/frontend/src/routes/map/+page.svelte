@@ -256,6 +256,16 @@
 			{/if}
 		</div>
 		</div>
+		{#if events.length === 0}
+			<!-- v2.41 — the map had no empty state: a quiet install
+			     showed a world with no arcs and no explanation. The
+			     note sits over the map rather than replacing it, so
+			     the map itself stays visible. -->
+			<div class="map-empty-note" role="status" data-testid="map-empty">
+				<strong>{language.current && t('map.emptyTitle')}</strong>
+				<span>{language.current && t('map.emptyBody')}</span>
+			</div>
+		{/if}
 		<WorldMap
 			arenetLat={degraded ? null : position.lat}
 			arenetLon={degraded ? null : position.lon}
@@ -271,6 +281,30 @@
 <LicenseFooter />
 
 <style>
+	.map-empty-note {
+		position: absolute;
+		left: 50%;
+		bottom: 18px;
+		transform: translateX(-50%);
+		z-index: 2;
+		max-width: 46ch;
+		padding: 10px 14px;
+		border-radius: 8px;
+		border: 1px solid var(--border-subtle);
+		background: color-mix(in oklch, var(--bg-elevated) 88%, transparent);
+		backdrop-filter: blur(4px);
+		text-align: center;
+		font-size: 12.5px;
+		line-height: 1.5;
+		color: var(--text-secondary);
+		pointer-events: none;
+	}
+	.map-empty-note strong {
+		display: block;
+		color: var(--text-primary);
+		margin-bottom: 2px;
+	}
+
 	.map-state {
 		padding: 18px 20px;
 		margin-bottom: 16px;

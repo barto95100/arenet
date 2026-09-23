@@ -25,6 +25,7 @@
 	import AuditRow from '$lib/components/AuditRow.svelte';
 	import AuditExpandedDetails from '$lib/components/AuditExpandedDetails.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	// 15 action values per D7 (canonical list lives in
 	// docs/superpowers/decisions/2026-05-17-step-d-design-decisions-final.md).
@@ -301,7 +302,26 @@
 			<Spinner size="lg" />
 		</div>
 	{:else if events.length === 0 && didInitialLoad && !loadError}
-		<p class="text-secondary text-center mt-12">{emptyStateMessage}</p>
+		<!-- v2.41 — was a single centred line. Two distinct empty
+		     situations deserve two answers: a filter that matched
+		     nothing (clear it) and a log that has recorded nothing
+		     yet (say what will land here). -->
+		{#if hasAnyFilter}
+			<EmptyState
+				tone="filter"
+				testid="audit-empty-filtered"
+				title={language.current && t('audit.emptyFilteredTitle')}
+				body={language.current && t('audit.emptyFiltered')}
+				actionLabel={language.current && t('audit.btnClearFilters')}
+				onAction={clearAllFilters}
+			/>
+		{:else}
+			<EmptyState
+				testid="audit-empty"
+				title={language.current && t('audit.emptyNoFiltersTitle')}
+				body={language.current && t('audit.emptyNoFiltersBody')}
+			/>
+		{/if}
 	{:else if events.length > 0}
 		<DataTable
 			items={events}

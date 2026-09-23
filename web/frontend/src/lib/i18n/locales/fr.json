@@ -744,6 +744,9 @@
 		"perRouteAfter": ""
 	},
 	"map": {
+		"emptyTitle": "Aucun événement de sécurité",
+		"emptyBody": "Les arcs se tracent au fil des décisions WAF, limitation de débit, CrowdSec et authentification. Une carte calme signifie que rien n'a été bloqué depuis l'ouverture de la page.",
+
 		"eyebrow": "Trafic · Carte",
 		"subtitle": "Visualisation géographique en temps réel des sources de trafic et des décisions de sécurité. WAF, throttle, CrowdSec et échecs d'authentification sont rendus sous forme d'arcs colorés depuis la source jusqu'à cette instance Arenet.",
 		"loading": "Chargement de la position du serveur…",
@@ -860,6 +863,9 @@
 		"filterViewers": "Viewers",
 		"filterLocal": "Local",
 		"filterOIDC": "OIDC",
+		"emptyFilteredTitle": "Aucun utilisateur ne correspond",
+		"emptyFilteredBody": "Aucun compte ne correspond à la recherche et aux filtres en cours. Élargis-les pour voir les autres.",
+		"emptyFilteredAction": "Effacer les filtres",
 		"emptyFiltered": "Aucun utilisateur ne correspond aux filtres.",
 		"colUser": "Utilisateur",
 		"colSource": "Source",
@@ -1213,6 +1219,9 @@
 		"ariaRemoveFilterTo": "Retirer le filtre : jusqu'à={value}",
 		"loadErr": "⚠ Échec du chargement des événements d'audit : {err}",
 		"btnRetry": "Réessayer",
+		"emptyFilteredTitle": "Aucun événement ne correspond",
+		"emptyNoFiltersTitle": "Rien de consigné pour le moment",
+		"emptyNoFiltersBody": "Chaque changement de configuration — route créée, certificat importé, utilisateur ajouté — est consigné ici avec son auteur et ses valeurs avant/après.",
 		"emptyFiltered": "Aucun événement d'audit ne correspond aux filtres actuels.",
 		"emptyNoFilters": "Aucun événement d'audit enregistré pour le moment.",
 		"btnLoadMore": "Charger plus",
@@ -2175,6 +2184,10 @@
 		"ipEnforcementHelper": "Timeline complète des IPs bloquées (auto + manuel). La gestion manuelle de la liste est différée (voir backlog)."
 	},
 	"topology": {
+		"emptyTitle": "Rien à afficher pour le moment",
+		"emptyBody": "Le graphe montre tes noms d'hôtes, le hub Arenet et les backends derrière lui, avec le trafic en direct sur les liens. Crée une route et elle apparaît ici en quelques secondes.",
+		"emptyAction": "Créer une route",
+
 		"headTitle": "Topology v2 — Arenet",
 		"eyebrow": "TRAFIC · VUE FLUX",
 		"title": "Topologie",
@@ -2231,6 +2244,10 @@
 		"colCode": "Code",
 		"colRequest": "Requête",
 		"colSourceIP": "IP source",
+		"emptyNoEventsTitle": "Aucun événement dans cette fenêtre",
+		"emptyNoEventsBody": "Requêtes, décisions WAF, dépassements de débit et échecs d'authentification arrivent ici au fil de l'eau. Élargis la fenêtre, ou fais passer du trafic par une route.",
+		"emptyNoMatchTitle": "Aucun événement ne correspond",
+		"emptyClearFilters": "Effacer les filtres",
 		"emptyNoEvents": "Aucun événement dans la fenêtre actuelle.",
 		"emptyNoMatch": "Aucun événement ne correspond aux filtres.",
 		"histogramHeader": "Chronologie d'activité · 24h · buckets 5 min",

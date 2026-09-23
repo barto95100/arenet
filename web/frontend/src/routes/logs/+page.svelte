@@ -38,6 +38,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import RouteHost from '$lib/components/RouteHost.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { listRoutes } from '$lib/api/client';
@@ -128,6 +129,14 @@
 	// exist in the codebase yet).
 	let routeFilter = $state('');
 	let codeFilter = $state('');
+
+	// The way out of an over-narrow filter, offered by the empty state.
+	function clearLogFilters(): void {
+		search = '';
+		levelFilter = 'all';
+		routeFilter = '';
+		codeFilter = '';
+	}
 	// Phase Z.5.2 — static HTTP status code enum surfaced as
 	// the codeFilter dropdown options. Order is operator-
 	// triage descending (5xx errors first, 4xx attacks
@@ -756,12 +765,25 @@
 	{:else if loadError && rows.length === 0}
 		<div class="empty-row">{loadError}</div>
 	{:else if filteredRows.length === 0}
-		<div class="empty-row">
-			{language.current &&
-				(rows.length === 0
-					? t('logs.emptyNoEvents')
-					: t('logs.emptyNoMatch'))}
-		</div>
+		<!-- v2.41 — was one italic line for two different situations.
+		     A filter that matched nothing offers a way back; a window
+		     with no traffic says what will appear here. -->
+		{#if rows.length === 0}
+			<EmptyState
+				testid="logs-empty"
+				title={language.current && t('logs.emptyNoEventsTitle')}
+				body={language.current && t('logs.emptyNoEventsBody')}
+			/>
+		{:else}
+			<EmptyState
+				tone="filter"
+				testid="logs-empty-filtered"
+				title={language.current && t('logs.emptyNoMatchTitle')}
+				body={language.current && t('logs.emptyNoMatch')}
+				actionLabel={language.current && t('logs.emptyClearFilters')}
+				onAction={clearLogFilters}
+			/>
+		{/if}
 	{:else}
 		<div class="logs">
 			{#each filteredRows as r (r.key)}
