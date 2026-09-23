@@ -160,6 +160,10 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			r.Get("/openapi.json", h.getOpenAPI)
 			r.Get("/routes", h.listRoutes)
 			r.Get("/routes/{id}", h.getRoute)
+			// v2.42 — TCP (layer 4) services, read side. Same
+			// posture as routes: any signed-in user may look.
+			r.Get("/tcp-services", h.listTCPServices)
+			r.Get("/tcp-services/{id}", h.getTCPService)
 			// Step R — custom error pages read-side (viewer-
 			// accessible so the RouteForm dropdown can list
 			// templates without admin scope ; the preview pane
@@ -358,6 +362,12 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Post("/routes/import/caddyfile/preview", h.previewCaddyfileImport)
 				r.Post("/routes/import/caddyfile", h.importCaddyfile)
 				r.Post("/routes/{id}/waf-test", h.testRouteWAF)
+				// v2.42 — TCP services, write side + the backend
+				// dial test. Admin only, audited.
+				r.Post("/tcp-services", h.createTCPService)
+				r.Put("/tcp-services/{id}", h.updateTCPService)
+				r.Delete("/tcp-services/{id}", h.deleteTCPService)
+				r.Post("/tcp-services/{id}/test", h.testTCPService)
 				r.Post("/waf/seclang/validate", h.validateSecLang)
 				r.Post("/waf/seclang/from-guided", h.secLangFromGuided)
 				r.Post("/routes/{id}/maintenance", h.enterMaintenance)

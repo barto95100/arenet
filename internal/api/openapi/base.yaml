@@ -39,6 +39,8 @@ security:
 tags:
   - name: Routes
     description: Proxied hosts, their upstreams and per-route protections.
+  - name: TCP services
+    description: Layer-4 relays (raw TCP), with their source-IP and CrowdSec gates.
   - name: WAF
     description: Coraza WAF — exclusions, custom rules, SecLang, tester.
   - name: Certificates

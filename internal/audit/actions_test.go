@@ -25,9 +25,9 @@ import "testing"
 // Adding or removing actions without updating the spec / decisions
 // doc is a process violation; this test forces the conversation.
 func TestAllActions_Count(t *testing.T) {
-	const wantCount = 69
+	const wantCount = 72
 	if got := len(AllActions()); got != wantCount {
-		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + v2.11-dns=2 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3 + R=3 + MaxMind=2 + route-toggle=2 + route-maintenance=2 + cert-delete=1 + external-cert=3 + external-cert-csr=1 + scheduled-backups=2 + route-check=2)", got, wantCount)
+		t.Fatalf("AllActions count drift: got %d, want %d (D7=15 + J.4=1 + v2.11-dns=2 + K.1=2 + K.2=7 + K.3=3 + O.3=2 + P.3=2 + V.4=2 + CS.1=2 + CS.2=1 + CS.3=1 + CS.3-fu=1 + users-page=1 + Phase4=3 + AL.1.a=3 + AL.3b=3 + R=3 + MaxMind=2 + route-toggle=2 + route-maintenance=2 + cert-delete=1 + external-cert=3 + external-cert-csr=1 + scheduled-backups=2 + route-check=2 + tcp-services=3)", got, wantCount)
 	}
 }
 
@@ -200,6 +200,12 @@ func TestAllActions_ExactSet(t *testing.T) {
 		"backup_deleted":              true,
 		"route_update_rolled_back":    true,
 		"route_check_updated":         true,
+		// TCP (layer 4) services (+3) — v2.42. A relay exposes a
+		// port on this host, which is as much a change to what the
+		// machine answers on the network as an HTTP route is.
+		"tcp_service_created": true,
+		"tcp_service_updated": true,
+		"tcp_service_deleted": true,
 	}
 	for _, a := range AllActions() {
 		if !want[a] {

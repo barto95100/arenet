@@ -1,0 +1,231 @@
+# Arenet - Homelab-friendly reverse proxy with integrated security
+# Copyright (C) 2026  Ludovic Ramos
+# Licensed under the GNU AGPL v3 or later. See LICENSE.
+#
+# OpenAPI fragment: TCP (layer 4) services — raw TCP relays with the
+# gates that apply before the bytes flow. Arenet never decrypts this
+# traffic: the client and the backend negotiate TLS end to end.
+paths:
+  /tcp-services:
+    get:
+      summary: List TCP services
+      description: |
+        Every configured layer-4 relay, ordered by name. No secret is
+        involved, so nothing is redacted.
+      tags: [TCP services]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: All TCP services.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TCPService' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    post:
+      summary: Create a TCP service
+      description: |
+        Creates a relay and reloads Caddy. If Caddy refuses the new
+        configuration the service is deleted again and a 500
+        (`caddy reload failed: ...`) is returned.
+
+        The listen address is checked before anything is stored: a port
+        Arenet needs for itself (HTTP, HTTPS, the admin interface,
+        Caddy's 2019) is refused by name, as is a port another service
+        already listens on, and the process attempts a real bind — a
+        port below 1024 that cannot be bound is refused with the
+        systemd line to add, rather than failing at the next reload.
+
+        Errors: 400 for any validation failure or listen conflict.
+      tags: [TCP services]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TCPServiceInput' }
+      responses:
+        '201':
+          description: The created service.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TCPService' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /tcp-services/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get a TCP service
+      tags: [TCP services]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: The service.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TCPService' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    put:
+      summary: Replace a TCP service
+      description: |
+        Full replacement, with the same listen checks as creation. If
+        Caddy refuses the result the previous version is put back and a
+        500 is returned.
+      tags: [TCP services]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TCPServiceInput' }
+      responses:
+        '200':
+          description: The updated service.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TCPService' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+    delete:
+      summary: Delete a TCP service
+      description: |
+        Removes the relay and reloads Caddy. If Caddy refuses, the
+        service is restored and a 500 is returned.
+      tags: [TCP services]
+      x-arenet-role: admin
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /tcp-services/{id}/test:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Dial the backends of a TCP service
+      description: |
+        Opens a TCP connection to each backend (3 s timeout) and reports
+        what happened, without sending any data. Nothing is changed.
+
+        A successful dial proves the backend accepts connections. It
+        does **not** prove the backend expects the PROXY protocol
+        header: when the service sends one, the response repeats what
+        must be configured on the other side, because a mismatch breaks
+        connections silently.
+      tags: [TCP services]
+      x-arenet-role: admin
+      responses:
+        '200':
+          description: One result per backend.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TCPServiceTestResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+components:
+  schemas:
+    TCPUpstream:
+      type: object
+      required: [host, port]
+      properties:
+        host: { type: string, example: '10.20.0.5' }
+        port: { type: integer, minimum: 1, maximum: 65535, example: 993 }
+        maxConnections:
+          type: integer
+          minimum: 0
+          description: Cap on simultaneous connections to this backend. 0 = unlimited.
+
+    TCPHealthCheck:
+      type: object
+      required: [enabled]
+      description: |
+        Active check. At layer 4 there is no request to send: connecting
+        to the backend IS the check.
+      properties:
+        enabled: { type: boolean }
+        interval: { type: string, example: '30s', description: 'Go duration; default 30s.' }
+        timeout: { type: string, example: '5s', description: 'Go duration; default 5s.' }
+
+    TCPServiceInput:
+      type: object
+      required: [name, listenPort, upstreams]
+      properties:
+        name: { type: string, maxLength: 64, example: 'stalwart-imaps' }
+        listenAddr:
+          type: string
+          description: Interface to listen on. Empty means every interface.
+          example: '0.0.0.0'
+        listenPort: { type: integer, minimum: 1, maximum: 65535, example: 993 }
+        upstreams:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/TCPUpstream' }
+        lbPolicy:
+          type: string
+          enum: [round_robin, least_conn, ip_hash, first, random]
+          description: 'Default: round_robin. caddy-l4 has no weighted policy.'
+        healthCheck: { $ref: '#/components/schemas/TCPHealthCheck' }
+        proxyProtocol:
+          type: string
+          enum: ['', v1, v2]
+          description: |
+            Prepends the PROXY header so the backend sees the real client
+            IP. The backend must be configured to expect it from this
+            host; on Stalwart that is proxyTrustedNetworks.
+        ipFilter: { $ref: '#/components/schemas/RoutesIPFilter' }
+        crowdSecEnabled:
+          type: boolean
+          description: |
+            Applies the instance's CrowdSec decisions to this service.
+            Ignored when no bouncer is configured.
+        disabled: { type: boolean }
+
+    TCPService:
+      allOf:
+        - $ref: '#/components/schemas/TCPServiceInput'
+        - type: object
+          required: [id, createdAt, updatedAt]
+          properties:
+            id: { type: string }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+
+    TCPServiceTestResult:
+      type: object
+      required: [backends]
+      properties:
+        backends:
+          type: array
+          items:
+            type: object
+            required: [backend, ok, elapsedMs]
+            properties:
+              backend: { type: string, example: '10.20.0.5:993' }
+              ok: { type: boolean }
+              error: { type: string }
+              elapsedMs: { type: integer }
+        proxyProtocolNote:
+          type: string
+          description: Present when the service sends a PROXY header.

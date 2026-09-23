@@ -306,7 +306,11 @@ type Handler struct {
 	// touches it.
 	oidc    *OIDCManager
 	devMode bool
-	logger  *slog.Logger
+	// adminListen (v2.42) is the admin interface's bind address, set
+	// at boot via SetAdminListen and read by the TCP-service port
+	// guard. Empty only costs that one guard.
+	adminListen string
+	logger      *slog.Logger
 	// uiOrigin (Step K.2 dev) — when non-empty, the OIDC
 	// callback's redirects are emitted as absolute URLs
 	// against this origin (e.g. http://localhost:5173) so the
@@ -683,6 +687,18 @@ func (h *Handler) SetVersion(v string) {
 // (handler tests that don't exercise the checker).
 func (h *Handler) SetUpdateChecker(c updateChecker) {
 	h.updateChecker = c
+}
+
+// SetAdminListen records the address the admin interface is bound to
+// (v2.42). The TCP-service port guard needs it: a relay must not be
+// allowed to take the port the operator manages Arenet through.
+func (h *Handler) SetAdminListen(addr string) {
+	h.adminListen = addr
+}
+
+// reservedTCPPorts is what a TCP service may not listen on.
+func (h *Handler) reservedTCPPorts() map[int]string {
+	return caddymgr.ReservedTCPPortsFor(h.devMode, h.adminListen)
 }
 
 // SetUpdateConfigHook (v2.12.3) registers a callback invoked after the
