@@ -1275,6 +1275,11 @@ type buildOpts struct {
 	// ACME-issue a host it already serves a manual cert for. A nil /
 	// empty map is the common case (no manual-cert routes).
 	ExternalCerts map[string]storage.ExternalCertificate
+	// TCPServices (v2.42) are the layer-4 relays to emit alongside the
+	// HTTP app. Empty — the case of every installation that has not
+	// created one — emits no `layer4` key at all, so the config stays
+	// byte-identical to the pre-v2.42 one.
+	TCPServices []storage.TCPService
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -2051,7 +2056,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			// so App.Stop never waits for the grace period:
 			// measured exit 0.02-0.03 s with an HTTP/1.1 or
 			// HTTP/3 request in flight.
-			"servers":      cfg.Apps.HTTP.Servers,
+			"servers": cfg.Apps.HTTP.Servers,
 		},
 		"tls": buildTLSApp(acme, opts, routes),
 	}
@@ -2083,8 +2088,18 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 	// emitted config or the bouncer is silently removed from
 	// the running Caddy instance. Pinned by
 	// TestBuildConfigJSON_WithCrowdSec_ReloadPreserves.
-	if app := buildCrowdSecApp(opts.CrowdSec); app != nil {
-		apps["crowdsec"] = app
+	crowdSecApp := buildCrowdSecApp(opts.CrowdSec)
+	if crowdSecApp != nil {
+		apps["crowdsec"] = crowdSecApp
+	}
+
+	// v2.42 — layer-4 services. Absent when there is none to serve,
+	// which is what keeps the emitted config unchanged for every
+	// installation that does not use them. The CrowdSec matcher is
+	// only wired when the bouncer app is actually in this config:
+	// referencing an app that is not there fails provisioning.
+	if l4 := buildLayer4App(opts.TCPServices, crowdSecApp != nil); l4 != nil {
+		apps["layer4"] = l4
 	}
 
 	// #R-TOPO-real-health-probe (Stage B, 2026-06-04): subscribe

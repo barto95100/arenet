@@ -82,6 +82,18 @@ import (
 	// rate-limit fixture through caddy.Validate.
 	_ "github.com/mholt/caddy-ratelimit"
 
+	// v2.42 — layer-4 (raw TCP) services. Only the modules Arenet
+	// actually emits are registered: the relay, the explicit close
+	// used to refuse a gated connection, and the subroute/TLS pair
+	// the l4 app pulls for its own wiring. The matchers used
+	// (remote_ip) live in the layer4 package itself, which these
+	// imports bring in; the CrowdSec layer-4 matcher comes from the
+	// bouncer already imported above.
+	_ "github.com/mholt/caddy-l4/modules/l4close"
+	_ "github.com/mholt/caddy-l4/modules/l4proxy"
+	_ "github.com/mholt/caddy-l4/modules/l4subroute"
+	_ "github.com/mholt/caddy-l4/modules/l4tls"
+
 	"github.com/caddyserver/caddy/v2"
 
 	"github.com/barto95100/arenet/internal/alerting"

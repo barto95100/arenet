@@ -29,6 +29,7 @@ require (
 	github.com/jcchavezs/mergefs v0.1.1
 	github.com/libdns/libdns v1.1.1
 	github.com/maxmind/geoipupdate/v8 v8.0.0
+	github.com/mholt/caddy-l4 v0.1.1
 	github.com/mholt/caddy-ratelimit v0.1.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/oschwald/geoip2-golang v1.9.0
@@ -163,7 +164,6 @@ require (
 	github.com/maxatome/go-testdeep v1.14.0 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
 	github.com/mholt/acmez/v3 v3.1.6 // indirect
-	github.com/mholt/caddy-l4 v0.0.0-20231016112149-a362a1fbf652 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
@@ -176,7 +176,7 @@ require (
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
 	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745 // indirect
-	github.com/pires/go-proxyproto v0.12.0 // indirect
+	github.com/pires/go-proxyproto v0.13.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect

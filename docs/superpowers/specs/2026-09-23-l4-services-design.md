@@ -29,6 +29,9 @@ rien à compiler.
 | Affirmation | Vérifié où |
 |---|---|
 | `caddy-l4` expose un proxy TCP/UDP avec health checks, LB, `max_connections` | `modules/l4proxy/proxy.go`, `upstream.go` (champs JSON `upstreams`, `health_checks`, `load_balancing`, `proxy_protocol`) |
+| **Correction PR 1** : aucune politique pondérée, et un backend ne porte pas de poids | `modules/l4proxy/loadbalancing.go` — policies : `round_robin`, `least_conn`, `ip_hash`, `first`, `random`, `random_choose` |
+| **Correction PR 1** : le champ est `selection` avec une clé `policy` en ligne, pas `selection_policy` | `modules/l4proxy/loadbalancing.go:37` — `caddy.Validate` a refusé la première version |
+| **Correction PR 1** : la version indirecte (2023) n'avait ni `handlers.close` ni `matchers.not`, et nommait son matcher IP `ip` | comparaison v0.0.0-2023 / v0.1.1 ; dépendance désormais **directe, épinglée v0.1.1** (v0.1.2 ferait monter quic-go 0.59.1 → 0.60.0, donc la pile HTTP/3) |
 | Le PROXY protocol émis est `v1` ou `v2`, refus sinon | `modules/l4proxy/proxy.go:82-83` (Validate) |
 | Filtrage d'IP source natif en CIDR | `layer4/matchers.go` (`layer4.matchers.ip`, champ `ranges`) |
 | Les décisions CrowdSec s'appliquent au niveau 4 | `caddy-crowdsec-bouncer@v0.13.0/layer4/l4.go:44` → `layer4.matchers.crowdsec` |
@@ -45,7 +48,7 @@ rien à compiler.
 | L3 | **Passthrough uniquement en v1** : Arenet ne déchiffre rien. Pas de terminaison TLS, pas de routage SNI. | Sur le 25, TLS se négocie par STARTTLS *après* le début du dialogue SMTP : un proxy L4 ne peut pas s'en mêler. Sur 465/993, terminer obligerait à parler en clair au backend. Stalwart garde ses certificats. |
 | L4 | **PROXY protocol v2 proposé par défaut**, réglable (aucun / v1 / v2). L'UI affiche la valeur exacte à reporter dans `proxyTrustedNetworks` côté backend. | Sans lui, le backend voit l'IP d'Arenet : SPF cassé, antispam aveugle, limites par IP inopérantes. La doc de Stalwart prévient qu'un réglage dépareillé **casse les connexions en silence** — d'où le couplage explicite dans l'UI. |
 | L5 | **CrowdSec activé par défaut** sur un service quand le bouncer est configuré, désactivable par service. | Le matcher niveau 4 existe et partage l'app CrowdSec déjà provisionnée. Le port 25 est la cible la plus martelée d'une installation mail. |
-| L6 | **Filtrage d'IP source** par service (liste d'autorisation / de refus, en CIDR), même vocabulaire que les routes. | Natif (`layer4.matchers.ip`). Indispensable pour 4190 / 993 qu'on restreint souvent au LAN ou au VPN. |
+| L6 | **Filtrage d'IP source** par service (liste d'autorisation / de refus, en CIDR), même vocabulaire que les routes. Un refus est un `handlers.close` **explicite**, jamais l'abandon implicite de caddy-l4. | Natif (`layer4.matchers.remote_ip`). Indispensable pour 4190 / 993 qu'on restreint souvent au LAN ou au VPN. |
 | L7 | **Garde-fou de ports** : refus *avant* application pour 80, 443, le port d'admin et 2019 ; refus d'un port déjà pris par un autre service ; détection de l'absence de `CAP_NET_BIND_SERVICE` pour un port < 1024 avec le message d'action exact. | Un échec de rechargement Caddy est bien pire qu'un refus de validation : la config live peut rester en plan. |
 | L8 | **Avertissement Docker** : si Arenet tourne en conteneur, l'UI affiche la ligne `ports:` à ajouter au compose. | Sinon tout est vert dans l'interface et rien ne fonctionne — le port n'est pas publié. |
 | L9 | **Ce qui ne s'applique pas est écrit dans l'UI** : pas de WAF, pas de pages d'erreur, pas de blocage par pays, pas d'authentification. | Ne pas laisser croire qu'un service Postgres est protégé par le CRS. |
@@ -68,7 +71,7 @@ rien à compiler.
 type TCPService struct {
     ID, Name        string
     Listen          string   // "0.0.0.0:465" ; l'interface est explicite
-    Upstreams       []Upstream // host:port + poids
+    Upstreams       []TCPUpstream // host:port + max_connections (pas de poids)
     LBPolicy        string
     HealthCheck     *L4HealthCheck // connexion TCP, intervalle, timeout
     ProxyProtocol   string   // "", "v1", "v2"
