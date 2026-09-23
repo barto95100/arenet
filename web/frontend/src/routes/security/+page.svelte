@@ -55,10 +55,12 @@
 
 	let activeTab = $state<ParentTab>(parseTabFromURL());
 
-	const parentTabDescriptors: ReadonlyArray<{ id: ParentTab; label: string; testId: string }> = [
-		{ id: 'overview', label: "Vue d'ensemble", testId: 'tab-overview' },
+	const parentTabDescriptors = $derived<
+		ReadonlyArray<{ id: ParentTab; label: string; testId: string }>
+	>([
+		{ id: 'overview', label: tl('security.tabOverview'), testId: 'tab-overview' },
 		{ id: 'crowdsec', label: 'CrowdSec', testId: 'tab-crowdsec' }
-	];
+	]);
 
 	function onTabChange(next: ParentTab): void {
 		activeTab = next;
@@ -97,8 +99,20 @@
 		void load();
 	});
 
+	// v2.41 — this page had three t() calls; every card title, the
+	// TLS grid and the security-header empty state were hard-coded
+	// English (one of them even quoted a repo path at the operator).
+	function tl(key: string): string {
+		void language.current;
+		return t(key);
+	}
+
 	const oidcStatusLabel = $derived(
-		oidc?.enabled ? 'Enabled' : oidc?.configured ? 'Configured · disabled' : 'Not configured'
+		oidc?.enabled
+			? tl('security.oidcEnabled')
+			: oidc?.configured
+				? tl('security.oidcConfiguredDisabled')
+				: tl('security.oidcNotConfigured')
 	);
 </script>
 
@@ -107,15 +121,15 @@
 </svelte:head>
 
 <PageHeader
-	eyebrow="Sécurité · Posture"
+	eyebrow={tl('security.eyebrow')}
 	title={language.current && t('pageTitles.security')}
-	subtitle="Posture overview + CrowdSec drill-down (snapshot, live LAPI, scenarios)."
+	subtitle={tl('security.subtitle')}
 />
 
 <Tabs
 	bind:value={activeTab}
 	tabs={parentTabDescriptors}
-	ariaLabel="Security parent tabs"
+	ariaLabel={tl('security.tabsAria')}
 	onChange={onTabChange}
 />
 
@@ -127,37 +141,37 @@
 		<div class="card">
 			<div class="card-h">
 				<h3>TLS</h3>
-				<div class="meta">Caddy defaults · read-only in v1.4</div>
+				<div class="meta">{tl('security.tlsMeta')}</div>
 			</div>
 			<div class="ro-banner">
 				<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
 					<circle cx="8" cy="8" r="6.5" />
 					<path d="M8 5v3.5M8 11v.5" />
 				</svg>
-				<span>Granular TLS configuration (min version, curves, ciphers, HTTP/3, OCSP, session tickets) is deferred to a future step. Caddy's defaults are shown below.</span>
+				<span>{tl('security.tlsBanner')}</span>
 			</div>
 			<div class="kv-grid">
-				<div class="kv"><span class="k">Minimum version</span><span class="v">TLS 1.2</span></div>
-				<div class="kv"><span class="k">HTTP/3 (QUIC)</span><span class="v">Enabled by default</span></div>
-				<div class="kv"><span class="k">OCSP stapling</span><span class="v">Enabled</span></div>
-				<div class="kv"><span class="k">Session tickets</span><span class="v">Auto-rotated</span></div>
-				<div class="kv"><span class="k">Cipher selection</span><span class="v">Caddy auto</span></div>
-				<div class="kv"><span class="k">Curves</span><span class="v">Caddy auto</span></div>
+				<div class="kv"><span class="k">{tl('security.tlsMinVersion')}</span><span class="v">TLS 1.2</span></div>
+				<div class="kv"><span class="k">HTTP/3 (QUIC)</span><span class="v">{tl('security.tlsHttp3')}</span></div>
+				<div class="kv"><span class="k">OCSP stapling</span><span class="v">{tl('security.tlsEnabled')}</span></div>
+				<div class="kv"><span class="k">{tl('security.tlsSessionTickets')}</span><span class="v">{tl('security.tlsAutoRotated')}</span></div>
+				<div class="kv"><span class="k">{tl('security.tlsCiphers')}</span><span class="v">{tl('security.tlsCaddyAuto')}</span></div>
+				<div class="kv"><span class="k">{tl('security.tlsCurves')}</span><span class="v">{tl('security.tlsCaddyAuto')}</span></div>
 			</div>
 		</div>
 
 		<!-- Security headers placeholder -->
 		<div class="card">
 			<div class="card-h">
-				<h3>Security headers</h3>
+				<h3>{tl('security.headersTitle')}</h3>
 				<div class="meta">HSTS · X-Frame · CSP · Referrer-Policy</div>
 			</div>
 			<div class="empty">
-				<p>Centralised security-header policy is not yet exposed by Arenet.</p>
+				<p>{tl('security.headersEmptyTitle')}</p>
 				<p class="dim">
-					Today, individual headers can be injected per-route via the route detail's <a href="/routes">custom headers</a>
-					textarea. A global policy controller (HSTS / X-Frame-Options / CSP with nonce / Referrer-Policy /
-					Permissions-Policy) is deferred to a future step. Tracked in <span class="mono">docs/backlog-step-r.md</span>.
+					{tl('security.headersEmptyBodyBefore')}
+					<a href="/routes">{tl('security.headersEmptyBodyLink')}</a>
+					{tl('security.headersEmptyBodyAfter')}
 				</p>
 			</div>
 		</div>
@@ -165,8 +179,8 @@
 		<!-- Auth providers summary -->
 		<div class="card">
 			<div class="card-h">
-				<h3>Authentication providers</h3>
-				<a href="/settings" class="meta-link">Configure →</a>
+				<h3>{tl('security.authProvidersTitle')}</h3>
+				<a href="/settings" class="meta-link">{tl('security.configureLink')}</a>
 			</div>
 			<div class="kv-grid">
 				<div class="kv">
@@ -179,25 +193,36 @@
 				</div>
 				{#if oidc?.enabled}
 					<div class="kv">
-						<span class="k">Issuer</span>
+						<span class="k">{tl('security.issuer')}</span>
 						<span class="v mono">{oidc.issuerUrl || '—'}</span>
 					</div>
 					<div class="kv">
-						<span class="k">Provider kind</span>
+						<span class="k">{tl('security.providerKind')}</span>
 						<span class="v mono">{oidc.kind || 'generic'}</span>
 					</div>
 					<div class="kv">
-						<span class="k">Allowlist</span>
-						<span class="v mono">{oidc.allowedIdentities?.length ?? 0} entries</span>
+						<span class="k">{tl('security.allowlist')}</span>
+						<span class="v mono"
+							>{language.current &&
+								t('security.allowlistEntries', {
+									count: oidc.allowedIdentities?.length ?? 0
+								})}</span
+						>
 					</div>
 				{/if}
 				<div class="kv">
 					<span class="k">Forward-auth</span>
-					<span class="v dim">Per-route — see <a href="/routes">/routes</a> detail</span>
+					<span class="v dim"
+						>{tl('security.perRouteBefore')} <a href="/routes">/routes</a>
+						{tl('security.perRouteAfter')}</span
+					>
 				</div>
 				<div class="kv">
 					<span class="k">Basic auth</span>
-					<span class="v dim">Per-route — see <a href="/routes">/routes</a> detail</span>
+					<span class="v dim"
+						>{tl('security.perRouteBefore')} <a href="/routes">/routes</a>
+						{tl('security.perRouteAfter')}</span
+					>
 				</div>
 			</div>
 		</div>

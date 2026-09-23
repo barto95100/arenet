@@ -101,6 +101,7 @@ beforeEach(() => {
 	);
 });
 
+const { language } = await import('$lib/stores/language.svelte');
 const { default: MapPage } = await import('./+page.svelte');
 
 describe('/map page — V.5 state machine', () => {
@@ -342,24 +343,32 @@ describe('/map page — V.7 LAN counter', () => {
 		});
 	});
 
+	// v2.41 — the label goes through t() now; the French agreement
+	// this pins lives in the fr bundle, so the test drives the page
+	// in French instead of matching a hard-coded string.
 	it('uses singular "interne" for count=1 and plural "internes" for >1', async () => {
 		fetchServerPositionMock.mockResolvedValue(happyPosition);
 		fetchGeoEventsReplayMock.mockResolvedValue({
 			events: [mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 })],
 			total: 1
 		});
-		render(MapPage);
-		await waitFor(() => {
-			const pill = screen.getByTestId('map-lan-pill');
-			expect(pill.textContent ?? '').toContain('interne');
-			expect(pill.textContent ?? '').not.toContain('internes');
-		});
+		language.applyLocally('fr');
+		try {
+			render(MapPage);
+			await waitFor(() => {
+				const pill = screen.getByTestId('map-lan-pill');
+				expect(pill.textContent ?? '').toContain('interne');
+				expect(pill.textContent ?? '').not.toContain('internes');
+			});
 
-		streamCapture.onEvent?.(mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 }));
-		await waitFor(() => {
-			const pill = screen.getByTestId('map-lan-pill');
-			expect(pill.textContent ?? '').toContain('internes');
-		});
+			streamCapture.onEvent?.(mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 }));
+			await waitFor(() => {
+				const pill = screen.getByTestId('map-lan-pill');
+				expect(pill.textContent ?? '').toContain('internes');
+			});
+		} finally {
+			language.applyLocally('en');
+		}
 	});
 
 	it('mounts the MapLegend inside the map frame', async () => {
