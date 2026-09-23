@@ -40,6 +40,7 @@
 	import { pushToast } from '$lib/stores/toast';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import StatCard from '$lib/components/StatCard.svelte';
 	import TimelineChart from '$lib/components/TimelineChart.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
@@ -297,79 +298,71 @@
 	/>
 
 	<!-- KPIs -->
+	<!-- v2.41 — the eight tiles were a scoped-CSS copy of StatCard,
+	     which now carries this exact treatment plus the unit and the
+	     foot line the copy had and it lacked. -->
 	<div class="kpis">
-		<div class="kpi">
-			<div class="kpi-label">{language.current && t('dashboard.kpiReqPerSec')}</div>
-			<div class="kpi-val">{kpiReqPerSec}<span class="unit">req/s</span></div>
-			<div class="kpi-foot">
-				{language.current && t('dashboard.kpiReqPerSecFoot', { total: summary?.totalReq ?? 0, routes: summary?.activeRouteCount ?? 0 })}
-			</div>
-		</div>
-		<div class="kpi">
-			<div class="kpi-label">{language.current && t('dashboard.kpiP95')}</div>
-			<div class="kpi-val">{fmtP95(kpiP95)}<span class="unit">ms</span></div>
-			<div class="kpi-foot">
-				{language.current && (kpiP95 === null ? t('dashboard.kpiP95FootNoData') : t('dashboard.kpiP95FootData'))}
-			</div>
-		</div>
-		<div class="kpi">
-			<div class="kpi-label">{language.current && t('dashboard.kpi5xxRate')}</div>
-			<div class="kpi-val">{kpi5xxPct}<span class="unit">%</span></div>
-			<div class="kpi-foot">
-				{language.current && t('dashboard.kpi5xxRateFoot', { five: summary?.totalFiveXx ?? 0, four: summary?.totalFourXx ?? 0 })}
-			</div>
-		</div>
+		<StatCard
+			label={language.current && t('dashboard.kpiReqPerSec')}
+			value={kpiReqPerSec}
+			unit="req/s"
+			hint={language.current && t('dashboard.kpiReqPerSecFoot', { total: summary?.totalReq ?? 0, routes: summary?.activeRouteCount ?? 0 })}
+		/>
+		<StatCard
+			label={language.current && t('dashboard.kpiP95')}
+			value={fmtP95(kpiP95)}
+			unit="ms"
+			hint={language.current && (kpiP95 === null ? t('dashboard.kpiP95FootNoData') : t('dashboard.kpiP95FootData'))}
+		/>
+		<StatCard
+			label={language.current && t('dashboard.kpi5xxRate')}
+			value={kpi5xxPct}
+			unit="%"
+			hint={language.current && t('dashboard.kpi5xxRateFoot', { five: summary?.totalFiveXx ?? 0, four: summary?.totalFourXx ?? 0 })}
+		/>
 		<!--
 			#R-DASHBOARD-WAF-COUNTERS-ZERO + #R-WAF-METRICS-
-			WINDOW-1MIN-PROJECTION — two parallel tiles
-			showing 24h absolute counts. BLOQUÉ (red) reads
-			the canonical block counter; DÉTECTÉ (amber)
-			reads the new detect counter so detect-mode
-			activity is visible on homelab routes using the
-			wafMode=detect default.
+			WINDOW-1MIN-PROJECTION — two parallel tiles showing
+			24h absolute counts. Blocked reads the canonical
+			block counter; Detected reads the detect counter so
+			detect-mode activity stays visible on homelab routes
+			using the wafMode=detect default.
 		-->
-		<div class="kpi" data-testid="kpi-waf-blocked">
-			<div class="kpi-label">{language.current && t('dashboard.kpiWafBlocked')}</div>
-			<div class="kpi-val">{kpiWafBlocked24h}</div>
-			<div class="kpi-foot">
-				{language.current && t('dashboard.kpiWafBlockedFoot', { ips: summary?.attackerIpsUnique ?? 0, throttle: summary?.totalThrottle ?? 0, rl: summary?.totalRateLimitExceeded ?? 0 })}
-			</div>
-		</div>
-		<div class="kpi" data-testid="kpi-waf-detected">
-			<div class="kpi-label">{language.current && t('dashboard.kpiWafDetected')}</div>
-			<div class="kpi-val">{kpiWafDetected24h}</div>
-			<div class="kpi-foot">
-				{language.current && t('dashboard.kpiWafDetectedFoot')}
-			</div>
-		</div>
-
+		<StatCard
+			testid="kpi-waf-blocked"
+			label={language.current && t('dashboard.kpiWafBlocked')}
+			value={kpiWafBlocked24h}
+			hint={language.current && t('dashboard.kpiWafBlockedFoot', { ips: summary?.attackerIpsUnique ?? 0, throttle: summary?.totalThrottle ?? 0, rl: summary?.totalRateLimitExceeded ?? 0 })}
+		/>
+		<StatCard
+			testid="kpi-waf-detected"
+			label={language.current && t('dashboard.kpiWafDetected')}
+			value={kpiWafDetected24h}
+			hint={language.current && t('dashboard.kpiWafDetectedFoot')}
+		/>
 		<!--
 			Phase 5 — cert KPIs. The three tiles split the cert
-			lifecycle into a "what's deployed", "what's expiring",
-			"what's failing" triad — matches the operator brief.
-			Markup mirrors the bespoke .kpi shape of the existing
-			tiles for visual consistency (dashboard hasn't
-			migrated to StatCard yet).
+			lifecycle into "what's deployed", "what's expiring",
+			"what's failing" — the operator brief's triad.
 		-->
-		<div class="kpi" data-testid="kpi-cert-total">
-			<div class="kpi-label">{language.current && t('dashboard.kpiCertTotal')}</div>
-			<div class="kpi-val">{kpiCertTotal}</div>
-			<div class="kpi-foot">{language.current && t('dashboard.kpiCertTotalFoot')}</div>
-		</div>
-		<div class="kpi" data-testid="kpi-cert-expiring">
-			<div class="kpi-label">{language.current && t('dashboard.kpiCertExpiring')}</div>
-			<div class="kpi-val">{kpiCertExpiringSoon}</div>
-			<div class="kpi-foot">
-				{language.current && (kpiCertExpiringSoon === 0 ? t('dashboard.kpiCertExpiringFootZero') : t('dashboard.kpiCertExpiringFootWatch'))}
-			</div>
-		</div>
-		<div class="kpi" data-testid="kpi-cert-failed-7d">
-			<div class="kpi-label">{language.current && t('dashboard.kpiCertFailed7d')}</div>
-			<div class="kpi-val">{kpiCertFailed7d}</div>
-			<div class="kpi-foot">
-				{language.current && (kpiCertFailed7d === 0 ? t('dashboard.kpiCertFailedFootZero') : t('dashboard.kpiCertFailedFootInvestigate'))}
-			</div>
-		</div>
+		<StatCard
+			testid="kpi-cert-total"
+			label={language.current && t('dashboard.kpiCertTotal')}
+			value={kpiCertTotal}
+			hint={language.current && t('dashboard.kpiCertTotalFoot')}
+		/>
+		<StatCard
+			testid="kpi-cert-expiring"
+			label={language.current && t('dashboard.kpiCertExpiring')}
+			value={kpiCertExpiringSoon}
+			hint={language.current && (kpiCertExpiringSoon === 0 ? t('dashboard.kpiCertExpiringFootZero') : t('dashboard.kpiCertExpiringFootWatch'))}
+		/>
+		<StatCard
+			testid="kpi-cert-failed-7d"
+			label={language.current && t('dashboard.kpiCertFailed7d')}
+			value={kpiCertFailed7d}
+			hint={language.current && (kpiCertFailed7d === 0 ? t('dashboard.kpiCertFailedFootZero') : t('dashboard.kpiCertFailedFootInvestigate'))}
+		/>
 	</div>
 
 	<!-- Main row: traffic chart + WAF events recent -->
@@ -595,16 +588,8 @@
 		gap: 12px;
 		margin-bottom: 18px;
 	}
-	.kpi {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		padding: 14px 16px;
-	}
-	.kpi-label { color: var(--fg-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-family: var(--font-mono); margin-bottom: 6px; }
-	.kpi-val { color: var(--fg); font-size: 28px; font-weight: 500; letter-spacing: -0.02em; }
-	.kpi-val .unit { color: var(--fg-dim); font-size: 13px; margin-left: 4px; font-weight: 400; }
-	.kpi-foot { color: var(--fg-muted); font-size: 11.5px; margin-top: 8px; font-family: var(--font-mono); }
+	/* v2.41 — the .kpi / .kpi-label / .kpi-val / .kpi-foot rules
+	   moved into StatCard.svelte; only the grid stays here. */
 
 	.two-col {
 		display: grid;

@@ -36,6 +36,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import StatCard from '$lib/components/StatCard.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { t } from '$lib/i18n';
@@ -225,41 +226,45 @@
 		<p>{language.current && t('waf.disabledHelper')}</p>
 	</div>
 {:else}
-	<!-- KPIs -->
+	<!-- KPIs. v2.41 — third copy of StatCard, now the component. -->
 	<div class="kpis">
-		<div class="kpi">
-			<div class="kpi-label">{language.current && t('waf.kpiRequestsInspected')}</div>
-			<div class="kpi-val">{totalInspected24h.toLocaleString()}<span class="unit">/ 24h</span></div>
-			<div class="kpi-foot">{language.current && t('waf.kpiRequestsInspectedFoot')}</div>
-		</div>
+		<StatCard
+			label={language.current && t('waf.kpiRequestsInspected')}
+			value={totalInspected24h.toLocaleString()}
+			unit="/ 24h"
+			hint={language.current && t('waf.kpiRequestsInspectedFoot')}
+		/>
 		<!--
-			#R-DASHBOARD-WAF-COUNTERS-ZERO — Blocked and
-			Detected reported as parallel tiles. On a homelab
-			with every route in wafMode=detect (the
-			recommended I.4 default), the Blocked tile stays
-			at zero while Detected carries the real attack
-			volume.
+			#R-DASHBOARD-WAF-COUNTERS-ZERO — Blocked and Detected
+			reported as parallel tiles. On a homelab with every
+			route in wafMode=detect (the recommended I.4 default),
+			the Blocked tile stays at zero while Detected carries
+			the real attack volume.
 		-->
-		<div class="kpi" data-testid="kpi-blocked">
-			<div class="kpi-label">{language.current && t('waf.kpiBlocked')}</div>
-			<div class="kpi-val">{totalBlocked24h.toLocaleString()}</div>
-			<div class="kpi-foot">{language.current && t('waf.kpiBlockedFoot', { pct: blockRatioPct })}</div>
-		</div>
-		<div class="kpi" data-testid="kpi-detected">
-			<div class="kpi-label">{language.current && t('waf.kpiDetected')}</div>
-			<div class="kpi-val">{totalDetected24h.toLocaleString()}</div>
-			<div class="kpi-foot">{language.current && t('waf.kpiDetectedFoot')}</div>
-		</div>
-		<div class="kpi">
-			<div class="kpi-label">{language.current && t('waf.kpiMode')}</div>
-			<div class="kpi-val mode">{language.current && t('waf.kpiModeBlocking')}</div>
-			<div class="kpi-foot">{language.current && t('waf.kpiModeFoot')}</div>
-		</div>
-		<div class="kpi">
-			<div class="kpi-label">{language.current && t('waf.kpiParanoiaLevel')}</div>
-			<div class="kpi-val">2<span class="unit">/ 4</span></div>
-			<div class="kpi-foot">{language.current && t('waf.kpiParanoiaLevelFoot')}</div>
-		</div>
+		<StatCard
+			testid="kpi-blocked"
+			label={language.current && t('waf.kpiBlocked')}
+			value={totalBlocked24h.toLocaleString()}
+			hint={language.current && t('waf.kpiBlockedFoot', { pct: blockRatioPct })}
+		/>
+		<StatCard
+			testid="kpi-detected"
+			label={language.current && t('waf.kpiDetected')}
+			value={totalDetected24h.toLocaleString()}
+			hint={language.current && t('waf.kpiDetectedFoot')}
+		/>
+		<StatCard
+			label={language.current && t('waf.kpiMode')}
+			value={language.current && t('waf.kpiModeBlocking')}
+			variant="text"
+			hint={language.current && t('waf.kpiModeFoot')}
+		/>
+		<StatCard
+			label={language.current && t('waf.kpiParanoiaLevel')}
+			value={2}
+			unit="/ 4"
+			hint={language.current && t('waf.kpiParanoiaLevelFoot')}
+		/>
 	</div>
 
 	<!-- OWASP CRS categories — read-only event-count tiles -->
@@ -444,17 +449,7 @@
 		gap: 12px;
 		margin-bottom: 18px;
 	}
-	.kpi {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		padding: 14px 16px;
-	}
-	.kpi-label { color: var(--fg-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-family: var(--font-mono); margin-bottom: 6px; }
-	.kpi-val { color: var(--fg); font-size: 24px; font-weight: 500; letter-spacing: -0.02em; }
-	.kpi-val.mode { font-size: 20px; }
-	.kpi-val .unit { color: var(--fg-dim); font-size: 12px; margin-left: 4px; font-weight: 400; }
-	.kpi-foot { color: var(--fg-muted); font-size: 11.5px; margin-top: 8px; font-family: var(--font-mono); }
+	/* v2.41 — the tile rules live in StatCard.svelte now. */
 
 	.ro-notice {
 		display: flex;
