@@ -4004,3 +4004,110 @@ describe('Routes page — v2.40 Caddyfile import', () => {
 		expect(screen.getByTestId('import-caddyfile')).toBeInTheDocument();
 	});
 });
+
+// --- v2.41 — the form as collapsible sections ---------------------------
+
+describe('Routes page — v2.41 route form sections', () => {
+	it('groups the form into sections and keeps every field reachable', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+
+		for (const id of [
+			'section-essentials',
+			'section-tls',
+			'section-auth',
+			'section-waf',
+			'section-rate-limit',
+			'section-geo-ip',
+			'section-health-check',
+			'section-paths-headers',
+			'section-error-pages',
+			'section-state'
+		]) {
+			expect(screen.getByTestId(id)).toBeInTheDocument();
+		}
+		// Essentials is the only one open on arrival.
+		expect((screen.getByTestId('section-essentials') as HTMLDetailsElement).open).toBe(true);
+		expect((screen.getByTestId('section-waf') as HTMLDetailsElement).open).toBe(false);
+
+		// Fields of a closed section stay in the DOM (the panel is one form).
+		expect(document.getElementById('route-waf-mode')).not.toBeNull();
+		expect(hostInput()).toBeInTheDocument();
+	});
+
+	it('summarises each section from what is being edited', async () => {
+		const seeded = makeRoute({
+			id: 'summary',
+			host: 'summary.local',
+			aliases: ['alias.local'],
+			upstreams: [
+				{ url: 'http://10.0.0.1:8080', weight: 1 },
+				{ url: 'http://10.0.0.2:8080', weight: 1 }
+			],
+			tlsEnabled: true,
+			redirectToHttps: true,
+			wafMode: 'block',
+			wafCustomRules: [
+				{ id: 120000, name: 'r', conditions: [{ field: 'path', operator: 'is', values: ['/x'] }] }
+			],
+			countryBlock: {
+				mode: 'deny',
+				countryList: ['RU'],
+				continents: [],
+				asns: [],
+				exceptions: { countries: [], asns: [] },
+				statusCode: 403
+			}
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		await userEvent.click((await screen.findByText('summary.local')).closest('tr')!);
+		await tick();
+
+		const row = (id: string) => screen.getByTestId(id).querySelector('summary')!.textContent ?? '';
+		expect(row('section-essentials')).toContain('2 backend');
+		expect(row('section-essentials')).toContain('1 alias');
+		expect(row('section-tls')).toContain("Let's Encrypt");
+		expect(row('section-waf')).toContain('block');
+		expect(row('section-waf')).toContain('OWASP CRS');
+		expect(row('section-waf')).toContain('1 custom rule');
+		expect(row('section-geo-ip')).toContain('deny');
+		expect(row('section-state')).toMatch(/active/i);
+	});
+
+	it('follows the edits live: switching the WAF mode updates its summary row', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		// The closed row is what must follow the edit, not the body.
+		const row = () => screen.getByTestId('section-waf').querySelector('summary')!.textContent ?? '';
+		expect(row()).toContain('detect');
+
+		await fireEvent.change(document.getElementById('route-waf-mode')!, { target: { value: 'block' } });
+		await tick();
+		expect(row()).toContain('block');
+		expect(row()).not.toContain('detect');
+
+		await fireEvent.change(document.getElementById('route-waf-mode')!, { target: { value: 'off' } });
+		await tick();
+		expect(row()).toContain('no inspection');
+	});
+});
+
+describe('Routes page — v2.41 unsaved-changes marker', () => {
+	it('appears once the form is touched and goes with the panel', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		expect(screen.queryByTestId('form-dirty')).toBeNull();
+
+		await userEvent.type(hostInput(), 'dirty.example.com');
+		await tick();
+		expect(screen.getByTestId('form-dirty')).toBeInTheDocument();
+
+		await userEvent.click(screen.getByText(/^Annuler$|^Cancel$/));
+		await tick();
+		expect(screen.queryByTestId('form-dirty')).toBeNull();
+	});
+});

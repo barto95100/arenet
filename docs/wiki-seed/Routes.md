@@ -25,6 +25,25 @@ Within ~5 seconds, Caddy reloads and the route is live :
 
 ---
 
+## The route form (v2.41)
+
+A route carries a lot of settings, so the form groups them into **collapsible sections**. Only **Essentials** (host, aliases, upstreams, LB policy) is open when the panel opens; everything else is folded.
+
+You do not have to open a section to know what is inside: each closed row shows a **one-line summary** of its current state — `WAF — OWASP CRS · 2 exclusions` with a `block` badge, `Country & IP filtering — 3 country/ASN blocked`, `Rate limit — no limit`. Sections that decide what happens to traffic also carry a **badge and a coloured left rail**, with the same code as the country-block sentence:
+
+| Colour | Meaning |
+|---|---|
+| green | lets traffic through on a criterion (allow-list, authentication required) |
+| red | blocks traffic (WAF in block mode, country block, IP deny-list) |
+| amber | watches without blocking (WAF in detect mode) |
+| grey | configured but inactive |
+
+Sections that do not decide (TLS, health check, headers, error pages) stay neutral, so the colour keeps its meaning.
+
+The panel header stays visible while you scroll and shows an **unsaved changes** marker as soon as you touch a field.
+
+---
+
 ## Import a Caddyfile (v2.40)
 
 Coming from plain Caddy? **Routes → Import a Caddyfile** reads your file with Caddy's own parser and turns each site block into a route.

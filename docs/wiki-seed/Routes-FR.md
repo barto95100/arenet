@@ -27,6 +27,25 @@ En ~5 secondes, Caddy recharge et la route est live :
 
 ---
 
+## Le formulaire de route (v2.41)
+
+Une route porte beaucoup de réglages : le formulaire les regroupe donc en **sections repliables**. Seule la section **Essentiel** (hôte, alias, backends, policy LB) est ouverte à l'ouverture du panneau ; tout le reste est replié.
+
+Pas besoin d'ouvrir une section pour savoir ce qu'elle contient : chaque ligne repliée affiche un **résumé d'état sur une ligne** — `WAF — OWASP CRS · 2 exclusions` avec une pastille `block`, `Filtrage géo & IP — 3 pays/ASN bloqués`, `Limitation de débit — aucune limite`. Les sections qui décident du sort du trafic portent en plus une **pastille et un liseré coloré à gauche**, avec le même code que la phrase du blocage par pays :
+
+| Couleur | Sens |
+|---|---|
+| vert | laisse passer le trafic sur un critère (liste d'autorisation, authentification exigée) |
+| rouge | bloque le trafic (WAF en mode block, blocage par pays, liste de refus d'IP) |
+| ambre | observe sans bloquer (WAF en mode detect) |
+| gris | configuré mais inactif |
+
+Les sections qui ne décident de rien (TLS, health check, en-têtes, pages d'erreur) restent neutres, pour que la couleur garde son sens.
+
+L'en-tête du panneau reste visible pendant le défilement et affiche un marqueur **modifications non enregistrées** dès que tu touches un champ.
+
+---
+
 ## Importer un Caddyfile (v2.40)
 
 Tu viens de Caddy « nu » ? **Routes → Importer un Caddyfile** lit ton fichier avec le parseur de Caddy et transforme chaque bloc de site en route.
