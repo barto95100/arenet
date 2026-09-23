@@ -268,6 +268,14 @@
 			"colHost": "Host / path",
 			"colUpstream": "Upstream",
 			"colTLS": "TLS",
+			"colSecurity": "Security",
+			"geoChip": "Geo",
+			"ipChip": "IP",
+			"geoDenyTooltip": "Country filter: {count} country/ASN blocked",
+			"geoAllowTooltip": "Country filter: only {count} country/ASN allowed",
+			"ipDenyTooltip": "IP filter: {count} range(s) blocked",
+			"ipAllowTooltip": "IP filter: only {count} range(s) allowed",
+			"rateLimitTooltip": "Rate limit: {events} requests per {window}",
 			"colWAF": "WAF",
 			"colState": "State",
 			"colActions": "Actions",
@@ -301,6 +309,12 @@
 			"warning": "Caddy will be reloaded immediately. This action cannot be undone.",
 			"cancel": "Cancel",
 			"confirm": "Delete"
+		},
+		"discardDialog": {
+			"title": "Discard your changes?",
+			"message": "This route has unsaved changes. Leaving now drops them.",
+			"confirmLabel": "Discard changes",
+			"cancelLabel": "Keep editing"
 		},
 		"wafCRSDialog": {
 			"title": "Disable the OWASP CRS rules?",
@@ -560,6 +574,8 @@
 			"requestHeadersAdd": "+ Add header",
 			"responseHeadersLabel": "Response headers",
 			"responseHeadersAdd": "+ Add header",
+			"headersEmptyResponse": "None — the response is returned as the backend sends it.",
+			"headersEmpty": "None — the request is forwarded as it arrives.",
 			"headerNamePlaceholder": "X-Custom-Header",
 			"headerValuePlaceholder": "value",
 			"errorPagesTemplateLabel": "Error page template",

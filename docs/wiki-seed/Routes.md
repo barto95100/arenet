@@ -42,7 +42,9 @@ Sections that do not decide (TLS, health check, headers, error pages) stay neutr
 
 Inside a section, a setting with a few exclusive modes — WAF inspection, authentication, country filtering — is a **segmented control**: every mode stays visible, wears its colour, and the selected one prints what it does underneath (`Requests are inspected and logged, never blocked.`). On/off settings are switches carrying their own helper line, and one that removes a protection (**Disable the OWASP CRS**) is framed in red. Where several fields add up to one rule, the form states the rule: the rate limit reads `Beyond 60 requests per 1m from the same client IP, requests are refused with a 429.`
 
-The panel header stays visible while you scroll and shows an **unsaved changes** marker as soon as you touch a field.
+The panel header stays visible while you scroll and shows an **unsaved changes** marker as soon as you touch a field. Leaving with changes pending — Cancel, a click outside the panel, or picking another route — asks first; **Keep editing** puts you back where you were.
+
+In the routes list, the **Security** column now shows everything that guards a route, not just the WAF: the WAF mode, a `Geo` chip when country filtering is on, an `IP` chip for the source-IP filter, and the rate limit as `60/1m`. Green lets through on a criterion, red blocks; hover a chip for the counts.
 
 ---
 

@@ -44,7 +44,9 @@ Les sections qui ne décident de rien (TLS, health check, en-têtes, pages d'err
 
 À l'intérieur d'une section, un réglage à quelques modes exclusifs — inspection WAF, authentification, filtrage par pays — est un **contrôle segmenté** : tous les modes restent visibles, portent leur couleur, et le mode sélectionné affiche en dessous ce qu'il fait (`Les requêtes sont inspectées et journalisées, jamais bloquées.`). Les réglages oui/non sont des interrupteurs avec leur ligne d'aide, et celui qui retire une protection (**Désactiver le CRS OWASP**) est encadré en rouge. Quand plusieurs champs forment une seule règle, le formulaire énonce la règle : la limitation de débit affiche `Au-delà de 60 requêtes par 1m depuis la même IP du client, les requêtes sont refusées avec un 429.`
 
-L'en-tête du panneau reste visible pendant le défilement et affiche un marqueur **modifications non enregistrées** dès que tu touches un champ.
+L'en-tête du panneau reste visible pendant le défilement et affiche un marqueur **modifications non enregistrées** dès que tu touches un champ. Partir avec des modifications en attente — Annuler, un clic hors du panneau, ou sélectionner une autre route — demande confirmation ; **Continuer à modifier** te remet où tu étais.
+
+Dans la liste des routes, la colonne **Sécurité** montre désormais tout ce qui garde une route, pas seulement le WAF : le mode WAF, une pastille `Géo` quand le filtrage par pays est actif, une pastille `IP` pour le filtrage par IP source, et la limitation de débit sous la forme `60/1m`. Vert = laisse passer sur un critère, rouge = bloque ; survole une pastille pour les compteurs.
 
 ---
 

@@ -4109,9 +4109,115 @@ describe('Routes page — v2.41 unsaved-changes marker', () => {
 		await tick();
 		expect(screen.getByTestId('form-dirty')).toBeInTheDocument();
 
+		// v2.41 step 3 — Cancel now asks before dropping the edits.
 		await userEvent.click(screen.getByText(/^Annuler$|^Cancel$/));
+		await userEvent.click(screen.getByText('Discard changes'));
 		await tick();
 		expect(screen.queryByTestId('form-dirty')).toBeNull();
+	});
+});
+
+// --- v2.41 step 3 — the unsaved marker now protects something ----
+//
+// Every path that would drop the edits asks first: Cancel, a click
+// outside the panel, and picking another row. Confirming replays the
+// action that was interrupted ; declining leaves the form exactly as
+// it was. A form with no edits never asks.
+
+describe('Routes page — v2.41 discard guard', () => {
+	it('keeps the form when the operator declines, drops it when they confirm', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'guard.example.com');
+		await tick();
+
+		await userEvent.click(screen.getByText(/^Annuler$|^Cancel$/));
+		expect(screen.getByText('Discard your changes?')).toBeInTheDocument();
+
+		await userEvent.click(screen.getByText('Keep editing'));
+		await tick();
+		expect(hostInput().value).toBe('guard.example.com');
+		expect(screen.getByTestId('form-dirty')).toBeInTheDocument();
+
+		await userEvent.click(screen.getByText(/^Annuler$|^Cancel$/));
+		await userEvent.click(screen.getByText('Discard changes'));
+		await tick();
+		expect(document.querySelector('form')).toBeNull();
+	});
+
+	it('asks before switching to another route, then opens the one that was picked', async () => {
+		const a = makeRoute({ id: 'a', host: 'a.example.com' });
+		const b = makeRoute({ id: 'b', host: 'b.example.com' });
+		apiMock.listRoutes.mockResolvedValue([a, b]);
+		render(Page);
+
+		await userEvent.click((await screen.findByText('a.example.com')).closest('tr')!);
+		await tick();
+		await userEvent.type(hostInput(), '-edited');
+		await tick();
+
+		await userEvent.click(screen.getByText('b.example.com').closest('tr')!);
+		expect(screen.getByText('Discard your changes?')).toBeInTheDocument();
+		// Declining leaves the edited route in the form.
+		await userEvent.click(screen.getByText('Keep editing'));
+		await tick();
+		expect(hostInput().value).toBe('a.example.com-edited');
+
+		await userEvent.click(screen.getByText('b.example.com').closest('tr')!);
+		await userEvent.click(screen.getByText('Discard changes'));
+		await tick();
+		expect(hostInput().value).toBe('b.example.com');
+	});
+
+	it('does not ask when nothing was edited', async () => {
+		const a = makeRoute({ id: 'a', host: 'a.example.com' });
+		apiMock.listRoutes.mockResolvedValue([a]);
+		render(Page);
+
+		await userEvent.click((await screen.findByText('a.example.com')).closest('tr')!);
+		await tick();
+		await userEvent.click(screen.getByText(/^Annuler$|^Cancel$/));
+		await tick();
+		expect(screen.queryByText('Discard your changes?')).toBeNull();
+		expect(document.querySelector('form')).toBeNull();
+	});
+});
+
+// --- v2.41 step 3 — posture chips in the routes list -------------
+
+describe('Routes page — v2.41 posture chips', () => {
+	it('shows what guards each route, and a dash when nothing does', async () => {
+		const guarded = makeRoute({
+			id: 'guarded',
+			host: 'guarded.example.com',
+			wafMode: 'block',
+			rateLimit: { events: 60, window: '1m', key: '{http.request.remote.host}' },
+			countryBlock: {
+				mode: 'deny',
+				countryList: ['RU', 'CN'],
+				continents: [],
+				asns: [],
+				exceptions: { countries: [], asns: [] },
+				statusCode: 403
+			},
+			ipFilter: { mode: 'allow', cidrs: ['192.168.1.0/24'] }
+		});
+		const open = makeRoute({ id: 'open', host: 'open.example.com' });
+		apiMock.listRoutes.mockResolvedValue([guarded, open]);
+		render(Page);
+
+		const row = (await screen.findByText('guarded.example.com')).closest('tr')!;
+		expect(row.textContent).toContain('Block');
+		expect(row.querySelector('[data-testid="posture-geo"]')!.getAttribute('title')).toContain('2');
+		expect(row.querySelector('[data-testid="posture-ip"]')!.getAttribute('title')).toContain(
+			'only 1'
+		);
+		expect(row.querySelector('[data-testid="posture-rate-limit"]')!.textContent).toContain('60/1m');
+
+		const bare = screen.getByText('open.example.com').closest('tr')!;
+		expect(bare.querySelector('[data-testid="posture-geo"]')).toBeNull();
+		expect(bare.querySelector('[data-testid="posture-rate-limit"]')).toBeNull();
 	});
 });
 
