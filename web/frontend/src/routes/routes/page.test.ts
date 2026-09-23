@@ -298,6 +298,13 @@ function upstreamURLInputs(): HTMLInputElement[] {
 	return screen.getAllByPlaceholderText('http://127.0.0.1:8080') as HTMLInputElement[];
 }
 
+// v2.41 — the WAF mode is a segmented control (ModeSelector), not a
+// <select>: pick a mode by clicking its segment.
+async function setWafMode(mode: 'off' | 'detect' | 'block'): Promise<void> {
+	await userEvent.click(screen.getByTestId(`route-waf-mode-${mode}`));
+	await tick();
+}
+
 // --- 1. Upstream-pool repeater ------------------------------------
 
 describe('Routes page — upstream-pool repeater', () => {
@@ -2274,9 +2281,8 @@ describe('Routes page — Phase 4.5 uploadStreamingMode toggle', () => {
 		await userEvent.click(toggle);
 		expect(toggle.checked).toBe(true);
 
-		const wafSelect = document.getElementById('route-waf-mode') as HTMLSelectElement;
-		await userEvent.selectOptions(wafSelect, 'block');
-		// Toggle still checked after WAF dropdown interaction.
+		await setWafMode('block');
+		// Toggle still checked after the WAF mode change.
 		expect(toggle.checked).toBe(true);
 
 		await fireEvent.submit(document.querySelector('form')!);
@@ -2531,9 +2537,8 @@ describe('Routes page — Step X.2 wafDisableCRS toggle + confirm dialog', () =>
 		await tick();
 		expect(toggle.checked).toBe(true);
 
-		const wafSelect = document.getElementById('route-waf-mode') as HTMLSelectElement;
-		await userEvent.selectOptions(wafSelect, 'block');
-		// Toggle survives the dropdown change.
+		await setWafMode('block');
+		// Toggle survives the mode change.
 		expect(toggle.checked).toBe(true);
 
 		await fireEvent.submit(document.querySelector('form')!);
@@ -4084,13 +4089,11 @@ describe('Routes page — v2.41 route form sections', () => {
 		const row = () => screen.getByTestId('section-waf').querySelector('summary')!.textContent ?? '';
 		expect(row()).toContain('detect');
 
-		await fireEvent.change(document.getElementById('route-waf-mode')!, { target: { value: 'block' } });
-		await tick();
+		await setWafMode('block');
 		expect(row()).toContain('block');
 		expect(row()).not.toContain('detect');
 
-		await fireEvent.change(document.getElementById('route-waf-mode')!, { target: { value: 'off' } });
-		await tick();
+		await setWafMode('off');
 		expect(row()).toContain('no inspection');
 	});
 });
@@ -4109,5 +4112,174 @@ describe('Routes page — v2.41 unsaved-changes marker', () => {
 		await userEvent.click(screen.getByText(/^Annuler$|^Cancel$/));
 		await tick();
 		expect(screen.queryByTestId('form-dirty')).toBeNull();
+	});
+});
+
+// --- v2.41 step 2 — WAF section interior -------------------------
+//
+// The WAF block moved from "a dropdown plus a stack of checkboxes"
+// to a segmented control, switch rows and a two-column exceptions
+// sub-group. What is pinned here is what the operator reads, not
+// the markup: every mode is visible at once, the selected one
+// states its consequence, the CRS-off warning is stated once for
+// both exclusion lists, and the sub-group counts what it holds.
+
+describe('Routes page — v2.41 WAF section interior', () => {
+	it('offers the three modes at once and marks the selected one', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+
+		const seg = (m: string) => screen.getByTestId(`route-waf-mode-${m}`);
+		expect(seg('off')).toBeInTheDocument();
+		expect(seg('detect').getAttribute('aria-checked')).toBe('true');
+		expect(seg('block').getAttribute('aria-checked')).toBe('false');
+
+		await setWafMode('block');
+		expect(seg('block').getAttribute('aria-checked')).toBe('true');
+		expect(seg('detect').getAttribute('aria-checked')).toBe('false');
+	});
+
+	it('states the consequence of the selected mode', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+
+		const waf = () => screen.getByTestId('section-waf').textContent ?? '';
+		expect(waf()).toMatch(/never blocked/i);
+
+		await setWafMode('block');
+		expect(waf()).toMatch(/403/);
+
+		await setWafMode('off');
+		expect(waf()).toMatch(/straight to the backend/i);
+	});
+
+	it('ships the mode picked on the segmented control', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({ wafMode: 'block' }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'seg.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:8080');
+		await setWafMode('block');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		expect(apiMock.createRoute.mock.calls[0][0].wafMode).toBe('block');
+	});
+
+	it('counts what the CRS exceptions sub-group holds', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		expect(screen.queryByTestId('waf-exceptions-count')).toBeNull();
+
+		await userEvent.type(screen.getByTestId('waf-exclude-rules-input'), '942100, 920420');
+		await userEvent.type(screen.getByTestId('waf-exclude-tags-input'), 'attack-sqli');
+		await tick();
+		expect(screen.getByTestId('waf-exceptions-count').textContent).toContain('3');
+	});
+
+	it('states the CRS-off warning once and disables both exclusion lists', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		expect(screen.queryByTestId('waf-exceptions-crs-off')).toBeNull();
+
+		await userEvent.click(screen.getByTestId('waf-disable-crs-toggle'));
+		await userEvent.click(screen.getByText('Disable CRS'));
+		await tick();
+
+		expect(screen.getAllByTestId('waf-exceptions-crs-off')).toHaveLength(1);
+		expect((screen.getByTestId('waf-exclude-rules-input') as HTMLTextAreaElement).disabled).toBe(true);
+		expect((screen.getByTestId('waf-exclude-tags-input') as HTMLTextAreaElement).disabled).toBe(true);
+	});
+});
+
+// --- v2.41 step 2 — rate limit + authentication interiors --------
+
+describe('Routes page — v2.41 rate limit interior', () => {
+	it('states the rule the three fields add up to, and follows them', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		expect(screen.queryByTestId('rate-limit-sentence')).toBeNull();
+
+		await userEvent.click(screen.getByTestId('rate-limit-toggle'));
+		await tick();
+		const sentence = () => screen.getByTestId('rate-limit-sentence').textContent ?? '';
+		// Defaults: 60 requests / 1m, keyed on the peer IP — the raw
+		// Caddy placeholder is spelled out, not printed.
+		expect(sentence()).toContain('60');
+		expect(sentence()).toContain('1m');
+		expect(sentence()).toContain('client IP');
+		expect(sentence()).toContain('429');
+		expect(sentence()).not.toContain('http.request');
+
+		const events = screen.getByTestId('rate-limit-events-input') as HTMLInputElement;
+		await userEvent.clear(events);
+		await userEvent.type(events, '5');
+		await tick();
+		expect(sentence()).toContain('5');
+	});
+
+	it('names a custom key as the operator typed it', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('rate-limit-toggle'));
+		await tick();
+
+		const key = screen.getByTestId('rate-limit-key-input') as HTMLInputElement;
+		await userEvent.clear(key);
+		await userEvent.type(key, '{{http.request.header.X-Forwarded-For}');
+		await tick();
+		expect(screen.getByTestId('rate-limit-sentence').textContent).toContain('X-Forwarded-For');
+	});
+});
+
+describe('Routes page — v2.41 authentication interior', () => {
+	it('offers the three auth modes and reveals the fields of the one picked', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+
+		expect(screen.getByTestId('route-auth-mode-none').getAttribute('aria-checked')).toBe('true');
+		expect(document.getElementById('basic-auth-password')).toBeNull();
+
+		await userEvent.click(screen.getByTestId('route-auth-mode-basic'));
+		await tick();
+		expect(document.getElementById('basic-auth-password')).not.toBeNull();
+		expect(screen.getByTestId('section-auth').querySelector('summary')!.textContent).toContain(
+			'basic auth'
+		);
+
+		// forward_auth with no provider configured: say where to make one.
+		await userEvent.click(screen.getByTestId('route-auth-mode-forward_auth'));
+		await tick();
+		expect(document.getElementById('basic-auth-password')).toBeNull();
+		expect(screen.getByTestId('forward-auth-no-provider')).toBeInTheDocument();
+	});
+
+	it('ships the picked auth mode in the payload', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({ authMode: 'basic' }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'auth.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:8080');
+
+		await userEvent.click(screen.getByTestId('route-auth-mode-basic'));
+		await tick();
+		await userEvent.type(screen.getByPlaceholderText('admin'), 'ops');
+		await userEvent.type(document.getElementById('basic-auth-password') as HTMLInputElement, 'sekret');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.authMode).toBe('basic');
+		expect(payload.basicAuth.username).toBe('ops');
 	});
 });
