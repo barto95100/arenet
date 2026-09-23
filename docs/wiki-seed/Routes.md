@@ -40,6 +40,8 @@ You do not have to open a section to know what is inside: each closed row shows 
 
 Sections that do not decide (TLS, health check, headers, error pages) stay neutral, so the colour keeps its meaning.
 
+Inside a section, a setting with a few exclusive modes — WAF inspection, authentication, country filtering — is a **segmented control**: every mode stays visible, wears its colour, and the selected one prints what it does underneath (`Requests are inspected and logged, never blocked.`). On/off settings are switches carrying their own helper line, and one that removes a protection (**Disable the OWASP CRS**) is framed in red. Where several fields add up to one rule, the form states the rule: the rate limit reads `Beyond 60 requests per 1m from the same client IP, requests are refused with a 429.`
+
 The panel header stays visible while you scroll and shows an **unsaved changes** marker as soon as you touch a field.
 
 ---

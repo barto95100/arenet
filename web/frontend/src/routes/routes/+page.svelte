@@ -70,6 +70,9 @@
 	import WafCustomRulesEditor from '$lib/components/routes/WafCustomRulesEditor.svelte';
 	import WafSecLangSection from '$lib/components/routes/WafSecLangSection.svelte';
 	import RouteSection from '$lib/components/routes/RouteSection.svelte';
+	import ModeSelector from '$lib/components/form/ModeSelector.svelte';
+	import SwitchRow from '$lib/components/form/SwitchRow.svelte';
+	import PostureSentence from '$lib/components/form/PostureSentence.svelte';
 	import ImportCaddyfileModal from '$lib/components/routes/ImportCaddyfileModal.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -1808,13 +1811,51 @@
 	// closed form still reads as the route's configuration. Each
 	// summary is derived from formData, never from the stored route:
 	// it must follow what the operator is editing.
+	// t() is a plain function, so a $derived that calls it only
+	// recomputes on a language switch if it READS language.current
+	// (lib/i18n/index.ts). tl() does that read for every derived
+	// label below, instead of repeating `language.current &&`.
+	function tl(key: string, params?: Record<string, string | number>): string {
+		void language.current;
+		return t(key, params);
+	}
+
+	// v2.41 — WAF mode as a segmented control: all three modes stay
+	// visible and each one states its consequence when selected.
+	const wafModeOptions = $derived([
+		{
+			value: 'off' as const,
+			label: tl('routes.form.wafModeOff'),
+			hint: tl('routes.form.wafModeOffHint'),
+			tone: 'neutral' as const
+		},
+		{
+			value: 'detect' as const,
+			label: tl('routes.form.wafModeDetect'),
+			hint: tl('routes.form.wafModeDetectHint'),
+			tone: 'watch' as const
+		},
+		{
+			value: 'block' as const,
+			label: tl('routes.form.wafModeBlock'),
+			hint: tl('routes.form.wafModeBlockHint'),
+			tone: 'block' as const
+		}
+	]);
+
+	// What the "CRS exceptions" sub-group holds (the targeted
+	// exclusions below carry their own count).
+	const wafExceptionCount = $derived(
+		formData.wafExcludeRules.length + formData.wafExcludeTags.length
+	);
+
 	type SectionBadge = { badge: string; posture: 'allow' | 'block' | 'watch' | 'off' | undefined };
 
 	const summaryEssentials = $derived(
 		[
-			t('routes.form.summaryUpstreams', { count: formData.upstreams.filter((u) => u.url.trim() !== '').length }),
+			tl('routes.form.summaryUpstreams', { count: formData.upstreams.filter((u) => u.url.trim() !== '').length }),
 			formData.aliases.filter((a) => a.trim() !== '').length > 0
-				? t('routes.form.summaryAliases', { count: formData.aliases.filter((a) => a.trim() !== '').length })
+				? tl('routes.form.summaryAliases', { count: formData.aliases.filter((a) => a.trim() !== '').length })
 				: ''
 		]
 			.filter(Boolean)
@@ -1823,38 +1864,61 @@
 
 	const summaryTLS = $derived(
 		!formData.tlsEnabled
-			? t('routes.form.summaryTLSOff')
+			? tl('routes.form.summaryTLSOff')
 			: [
 					formData.cert_source === 'manual'
-						? t('routes.form.summaryCertManual')
-						: t('routes.form.summaryCertAcme'),
+						? tl('routes.form.summaryCertManual')
+						: tl('routes.form.summaryCertAcme'),
 					formData.acmeChallenge === 'dns-01' ? 'DNS-01' : 'HTTP-01',
-					formData.redirectToHttps ? t('routes.form.summaryRedirect') : ''
+					formData.redirectToHttps ? tl('routes.form.summaryRedirect') : ''
 				]
 					.filter(Boolean)
 					.join(' · ')
 	);
 
+	// v2.41 — auth as a segmented control: the three choices are
+	// exclusive, and each states what it asks of the visitor.
+	const authModeOptions = $derived([
+		{
+			value: 'none' as const,
+			label: tl('routes.form.authNoneOption'),
+			hint: tl('routes.form.authNoneHint'),
+			tone: 'neutral' as const
+		},
+		{
+			value: 'basic' as const,
+			label: tl('routes.form.authBasicRadioLabel'),
+			hint: tl('routes.form.authBasicHint'),
+			tone: 'allow' as const
+		},
+		{
+			value: 'forward_auth' as const,
+			label: tl('routes.form.authForwardRadioLabel'),
+			hint: tl('routes.form.authForwardHint'),
+			tone: 'allow' as const
+		}
+	]);
+
 	const summaryAuth = $derived(
 		formData.authMode === 'basic'
-			? t('routes.form.summaryAuthBasic', { user: formData.basicAuth.username || '—' })
+			? tl('routes.form.summaryAuthBasic', { user: formData.basicAuth.username || '—' })
 			: formData.authMode === 'forward_auth'
-				? t('routes.form.summaryAuthForward', { provider: formData.forwardAuth.providerName || '—' })
-				: t('routes.form.summaryAuthNone')
+				? tl('routes.form.summaryAuthForward', { provider: formData.forwardAuth.providerName || '—' })
+				: tl('routes.form.summaryAuthNone')
 	);
 	const authBadge = $derived<SectionBadge>(
 		formData.authMode === 'none'
-			? { badge: t('routes.form.badgeOff'), posture: 'off' }
-			: { badge: t('routes.form.badgeOn'), posture: 'allow' }
+			? { badge: tl('routes.form.badgeOff'), posture: 'off' }
+			: { badge: tl('routes.form.badgeOn'), posture: 'allow' }
 	);
 
 	const summaryWAF = $derived(
 		formData.wafMode === 'off'
-			? t('routes.form.summaryWAFOff')
+			? tl('routes.form.summaryWAFOff')
 			: [
-					formData.wafDisableCRS ? t('routes.form.summaryCRSOff') : t('routes.form.summaryCRSOn'),
+					formData.wafDisableCRS ? tl('routes.form.summaryCRSOff') : tl('routes.form.summaryCRSOn'),
 					formData.wafTargetedExclusions.length + formData.wafExcludeRules.length + formData.wafExcludeTags.length > 0
-						? t('routes.form.summaryExclusions', {
+						? tl('routes.form.summaryExclusions', {
 								count:
 									formData.wafTargetedExclusions.length +
 									formData.wafExcludeRules.length +
@@ -1862,7 +1926,7 @@
 							})
 						: '',
 					formData.wafCustomRules.length > 0
-						? t('routes.form.summaryCustomRules', { count: formData.wafCustomRules.length })
+						? tl('routes.form.summaryCustomRules', { count: formData.wafCustomRules.length })
 						: '',
 					formData.wafSecLang.trim() !== '' ? 'SecLang' : ''
 				]
@@ -1874,22 +1938,43 @@
 			? { badge: 'block', posture: 'block' }
 			: formData.wafMode === 'detect'
 				? { badge: 'detect', posture: 'watch' }
-				: { badge: t('routes.form.badgeOff'), posture: 'off' }
+				: { badge: tl('routes.form.badgeOff'), posture: 'off' }
 	);
+
+	// The stored key is a Caddy placeholder ; the form says what it
+	// means. Anything custom is shown as the operator typed it.
+	const rateLimitKeyLabel = $derived.by(() => {
+		const key = (formData.rateLimit?.key ?? '').trim();
+		return key === '' || key === 'remote_ip' || key === '{http.request.remote.host}'
+			? tl('routes.form.rateLimitKeyDefault')
+			: key;
+	});
 
 	const summaryRateLimit = $derived(
 		formData.rateLimit === null
-			? t('routes.form.summaryRateLimitOff')
-			: t('routes.form.summaryRateLimitOn', {
+			? tl('routes.form.summaryRateLimitOff')
+			: tl('routes.form.summaryRateLimitOn', {
 					events: formData.rateLimit.events,
 					window: formData.rateLimit.window,
-					key: formData.rateLimit.key ?? 'remote_ip'
+					key: rateLimitKeyLabel
 				})
 	);
+	// v2.41 — the three rate-limit fields only mean something as the
+	// rule they add up to; the sentence says it in one line.
+	const rateLimitSentence = $derived.by(() => {
+		const rl = formData.rateLimit;
+		if (rl === null) return '';
+		return tl('routes.form.rateLimitSentence', {
+			events: rl.events,
+			window: rl.window || '—',
+			key: rateLimitKeyLabel
+		});
+	});
+
 	const rateLimitBadge = $derived<SectionBadge>(
 		formData.rateLimit === null
-			? { badge: t('routes.form.badgeOff'), posture: 'off' }
-			: { badge: t('routes.form.badgeOn'), posture: 'block' }
+			? { badge: tl('routes.form.badgeOff'), posture: 'off' }
+			: { badge: tl('routes.form.badgeOn'), posture: 'block' }
 	);
 
 	const geoActive = $derived(formData.countryBlock.mode === 'allow' || formData.countryBlock.mode === 'deny');
@@ -1916,23 +2001,23 @@
 				: ''
 		]
 			.filter(Boolean)
-			.join(' · ') || t('routes.form.summaryGeoIPOff')
+			.join(' · ') || tl('routes.form.summaryGeoIPOff')
 	);
 	const geoIPBadge = $derived<SectionBadge>(
 		!geoActive && !ipActive
-			? { badge: t('routes.form.badgeOff'), posture: 'off' }
+			? { badge: tl('routes.form.badgeOff'), posture: 'off' }
 			: formData.countryBlock.mode === 'deny' || formData.ipFilter.mode === 'deny'
-				? { badge: t('routes.form.badgeDeny'), posture: 'block' }
-				: { badge: t('routes.form.badgeAllow'), posture: 'allow' }
+				? { badge: tl('routes.form.badgeDeny'), posture: 'block' }
+				: { badge: tl('routes.form.badgeAllow'), posture: 'allow' }
 	);
 
 	const summaryHealthCheck = $derived(
 		formData.healthCheck.enabled
-			? t('routes.form.summaryHealthCheckOn', {
+			? tl('routes.form.summaryHealthCheckOn', {
 					uri: formData.healthCheck.uri || '/',
 					interval: formData.healthCheck.interval || '30s'
 				})
-			: t('routes.form.summaryHealthCheckOff')
+			: tl('routes.form.summaryHealthCheckOff')
 	);
 
 	const namedHeaderCount = $derived(
@@ -1941,17 +2026,17 @@
 	);
 	const summaryPathsHeaders = $derived(
 		[
-			formData.pathRules.length > 0 ? t('routes.form.summaryPathRules', { count: formData.pathRules.length }) : '',
-			namedHeaderCount > 0 ? t('routes.form.summaryHeaders', { count: namedHeaderCount }) : ''
+			formData.pathRules.length > 0 ? tl('routes.form.summaryPathRules', { count: formData.pathRules.length }) : '',
+			namedHeaderCount > 0 ? tl('routes.form.summaryHeaders', { count: namedHeaderCount }) : ''
 		]
 			.filter(Boolean)
-			.join(' · ') || t('routes.form.summaryPathsHeadersOff')
+			.join(' · ') || tl('routes.form.summaryPathsHeadersOff')
 	);
 
 	const summaryErrorPages = $derived(
 		formData.errorPageTemplateId
-			? t('routes.form.summaryErrorPagesTemplate')
-			: t('routes.form.summaryErrorPagesDefault')
+			? tl('routes.form.summaryErrorPagesTemplate')
+			: tl('routes.form.summaryErrorPagesDefault')
 	);
 
 	// In maintenance only when the STORED route is (the 3-state control
@@ -1963,17 +2048,17 @@
 	});
 	const summaryState = $derived(
 		formData.disabled
-			? t('routes.form.summaryStateDisabled')
+			? tl('routes.form.summaryStateDisabled')
 			: editedRouteInMaintenance
-				? t('routes.form.summaryStateMaintenance')
-				: t('routes.form.summaryStateActive')
+				? tl('routes.form.summaryStateMaintenance')
+				: tl('routes.form.summaryStateActive')
 	);
 	const stateBadge = $derived<SectionBadge>(
 		formData.disabled
-			? { badge: t('routes.form.badgeDisabled'), posture: 'off' }
+			? { badge: tl('routes.form.badgeDisabled'), posture: 'off' }
 			: editedRouteInMaintenance
-				? { badge: t('routes.form.badgeMaintenance'), posture: 'watch' }
-				: { badge: t('routes.form.badgeActive'), posture: 'allow' }
+				? { badge: tl('routes.form.badgeMaintenance'), posture: 'watch' }
+				: { badge: tl('routes.form.badgeActive'), posture: 'allow' }
 	);
 
 	// Step J.3: derive whether the weight column is visible.
@@ -3703,427 +3788,335 @@
 
 					<!-- Authentication in front of the backend. -->
 					<RouteSection name={language.current && t('routes.form.sectionAuth')} summary={summaryAuth} badge={authBadge.badge} posture={authBadge.posture} testid="section-auth">
-						<!-- Step K.1 — per-route auth: radio group (none / basic /
-						     forward_auth). Replaces the Step I.5 "Require Basic Auth"
-						     checkbox with an explicit three-way choice. Mutual
-						     exclusion enforced by the radio shape; the server
-						     re-checks (validateAuthFieldsMutex) as defence in depth. -->
+						<!-- Step K.1 — per-route auth: none / basic / forward_auth,
+						     mutually exclusive by shape (the server re-checks with
+						     validateAuthFieldsMutex as defence in depth).
+						     v2.41 — the three-way choice is a segmented control like
+						     the other modes, and each option states what it asks of
+						     the visitor. -->
 						<div class="flex flex-col gap-2">
-							<span class="text-sm font-medium text-secondary">{language.current && t('routes.form.authSectionLabel')}</span>
-							<div class="flex flex-col gap-1 ml-1">
-								<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
-									<input
-										type="radio"
-										name="route-auth-mode"
-										value="none"
-										bind:group={formData.authMode}
-										class="accent-cyan"
-									/>
-									{language.current && t('routes.form.authNoneOption')}
-								</label>
-								<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
-									<input
-										type="radio"
-										name="route-auth-mode"
-										value="basic"
-										bind:group={formData.authMode}
-										class="accent-cyan"
-									/>
-									{language.current && t('routes.form.authBasicRadioLabel')}
-								</label>
-								<label class="inline-flex items-center gap-2 text-sm text-primary cursor-pointer">
-									<input
-										type="radio"
-										name="route-auth-mode"
-										value="forward_auth"
-										bind:group={formData.authMode}
-										class="accent-cyan"
-									/>
-									{language.current && t('routes.form.authForwardRadioLabel')}
-								</label>
-							</div>
-			
-							{#if formData.authMode === 'basic'}
-								<div class="ml-6 flex flex-col gap-2">
-									<Input
-										label={language.current && t('routes.form.authBasicUsernameLabel')}
-										bind:value={formData.basicAuth.username}
-										placeholder={language.current && t('routes.form.authBasicUsernamePlaceholder')}
-									/>
-									<div>
-										<label
-											for="basic-auth-password"
-											class="text-sm font-medium text-secondary block mb-1"
-										>
-											{language.current && t('routes.form.authBasicPasswordLabel')}
-										</label>
-										<input
-											id="basic-auth-password"
-											type="password"
-											bind:value={formData.basicAuth.password}
-											placeholder={formMode === 'edit' && basicAuthPasswordSet
-												? (language.current && t('routes.form.authBasicPasswordPlaceholderSet'))
-												: ''}
-											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-										/>
-									</div>
-								</div>
-							{:else if formData.authMode === 'forward_auth'}
-								<div class="ml-6 flex flex-col gap-2">
-									<label
-										for="route-forward-auth-provider"
-										class="text-sm font-medium text-secondary block"
-									>
-										{language.current && t('routes.form.authForwardProviderLabel')}
-									</label>
-									{#if forwardAuthProviders.length === 0}
-										<p class="text-xs text-down">
-											{language.current && t('routes.form.authForwardNoProvider')}
-											<a href="/settings" class="text-cyan hover:underline">{language.current && t('routes.form.authForwardConfigureLink')}</a>.
-										</p>
-									{:else}
-										<select
-											id="route-forward-auth-provider"
-											bind:value={formData.forwardAuth.providerName}
-											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-										>
-											<option value="" disabled>{language.current && t('routes.form.authForwardSelectPlaceholder')}</option>
-											{#each forwardAuthProviders as p (p.name)}
-												<option value={p.name}>{p.name} ({p.kind})</option>
-											{/each}
-										</select>
-										<p class="text-xs text-muted">
-											The route's auth gate delegates to the IdP at
-											<code>{forwardAuthProviders.find((p) => p.name === formData.forwardAuth.providerName)?.verifyUrl ?? '...'}</code>
-											via Caddy <code>forward_auth</code>.
-										</p>
-									{/if}
-								</div>
-							{/if}
+							<span class="text-sm font-medium text-secondary"
+								>{language.current && t('routes.form.authSectionLabel')}</span
+							>
+							<ModeSelector
+								id="route-auth-mode"
+								bind:value={formData.authMode}
+								options={authModeOptions}
+								ariaLabel={language.current && t('routes.form.authSectionLabel')}
+							/>
 						</div>
+
+						{#if formData.authMode === 'basic'}
+							<div class="rounded-md border border-border-subtle bg-surface p-3 flex flex-col gap-2">
+								<Input
+									label={language.current && t('routes.form.authBasicUsernameLabel')}
+									bind:value={formData.basicAuth.username}
+									placeholder={language.current && t('routes.form.authBasicUsernamePlaceholder')}
+								/>
+								<div>
+									<label for="basic-auth-password" class="text-sm font-medium text-secondary block mb-1">
+										{language.current && t('routes.form.authBasicPasswordLabel')}
+									</label>
+									<input
+										id="basic-auth-password"
+										type="password"
+										bind:value={formData.basicAuth.password}
+										placeholder={formMode === 'edit' && basicAuthPasswordSet
+											? language.current && t('routes.form.authBasicPasswordPlaceholderSet')
+											: ''}
+										class="w-full bg-elevated border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+									/>
+								</div>
+							</div>
+						{:else if formData.authMode === 'forward_auth'}
+							<div class="rounded-md border border-border-subtle bg-surface p-3 flex flex-col gap-2">
+								<label for="route-forward-auth-provider" class="text-sm font-medium text-secondary block">
+									{language.current && t('routes.form.authForwardProviderLabel')}
+								</label>
+								{#if forwardAuthProviders.length === 0}
+									<!-- Empty state: the choice is unusable until a provider
+									     exists, so say where to create one. -->
+									<p class="text-xs text-down" data-testid="forward-auth-no-provider">
+										{language.current && t('routes.form.authForwardNoProvider')}
+										<a href="/settings" class="text-cyan hover:underline"
+											>{language.current && t('routes.form.authForwardConfigureLink')}</a
+										>.
+									</p>
+								{:else}
+									<select
+										id="route-forward-auth-provider"
+										bind:value={formData.forwardAuth.providerName}
+										class="w-full bg-elevated border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+									>
+										<option value="" disabled
+											>{language.current && t('routes.form.authForwardSelectPlaceholder')}</option
+										>
+										{#each forwardAuthProviders as p (p.name)}
+											<option value={p.name}>{p.name} ({p.kind})</option>
+										{/each}
+									</select>
+									<p class="text-xs text-muted">
+										{language.current && t('routes.form.authForwardDelegatesTo')}
+										<code
+											>{forwardAuthProviders.find((p) => p.name === formData.forwardAuth.providerName)
+												?.verifyUrl ?? '...'}</code
+										>
+										{language.current && t('routes.form.authForwardViaCaddy')}
+									</p>
+								{/if}
+							</div>
+						{/if}
 					</RouteSection>
 
 					<!-- WAF: mode, CRS, exclusions, guided rules and SecLang. -->
 					<RouteSection name={language.current && t('routes.form.sectionWAF')} summary={summaryWAF} badge={wafBadge.badge} posture={wafBadge.posture} testid="section-waf">
-						<!-- Step I.4: WAF mode. -->
-						<div>
-							<label
-								for="route-waf-mode"
-								class="text-sm font-medium text-secondary block mb-1"
-							>
+						<!-- v2.41 — WAF interior. Reading order is deliberate and
+						     unchanged: what inspects (mode), how the body is read
+						     (streaming), turning the whole CRS off, then the three
+						     narrowing escape hatches (rule/tag exclusions, targeted
+						     exclusions), then the rules the operator adds (guided,
+						     SecLang). What changed is the treatment: a segmented
+						     control instead of a dropdown, switches that carry their
+						     helper line, and the exclusion lists side by side. -->
+						<div class="flex flex-col gap-2">
+							<span class="text-sm font-medium text-secondary" id="route-waf-mode-label">
 								WAF (Coraza + OWASP CRS)
-							</label>
-							<select
+							</span>
+							<ModeSelector
 								id="route-waf-mode"
 								bind:value={formData.wafMode}
-								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-							>
-								<option value="off">{language.current && t('routes.form.wafModeOff')}</option>
-								<option value="detect">{language.current && t('routes.form.wafModeDetect')}</option>
-								<option value="block">{language.current && t('routes.form.wafModeBlock')}</option>
-							</select>
-							<p class="text-xs text-muted mt-1">
-								Start with Detect to spot false positives before enforcing.
-							</p>
+								options={wafModeOptions}
+								ariaLabel={language.current && t('routes.form.wafModeAria')}
+							/>
+						</div>
 
-							<!-- Phase 4.5 (#R-WAF-BUFFER-OOM-ON-LARGE-UPLOADS)
-							     — upload-streaming toggle. Sits inside the
-							     WAF block on purpose: it modulates the WAF
-							     body-inspection behaviour, so the operator
-							     reads it as a WAF-adjacent knob, not as an
-							     advanced-TLS bolt-on. Independent of
-							     wafMode — even with WAF=off the toggle
-							     still controls Caddy's flush_interval. -->
-							<label
-								class="inline-flex items-start gap-2 text-sm text-secondary mt-3 cursor-pointer"
-								data-testid="upload-streaming-toggle-label"
-							>
-								<input
-									type="checkbox"
-									bind:checked={formData.uploadStreamingMode}
-									class="mt-0.5"
-									data-testid="upload-streaming-toggle"
-								/>
-								<span>
-									{language.current && t('routes.form.uploadStreamingToggleLabel')}
-								</span>
-							</label>
-							<p class="text-xs text-muted mt-1 max-w-prose">
-								{language.current && t('routes.form.uploadStreamingHelper')}
-							</p>
+						<!-- Phase 4.5 (#R-WAF-BUFFER-OOM-ON-LARGE-UPLOADS)
+						     — upload-streaming toggle. Sits inside the WAF block
+						     on purpose: it modulates the WAF body-inspection
+						     behaviour, so the operator reads it as a WAF-adjacent
+						     knob, not as an advanced-TLS bolt-on. Independent of
+						     wafMode — even with WAF=off the toggle still controls
+						     Caddy's flush_interval. -->
+						<SwitchRow
+							checked={formData.uploadStreamingMode}
+							onchange={(v) => (formData.uploadStreamingMode = v)}
+							label={language.current && t('routes.form.uploadStreamingToggleLabel')}
+							helper={language.current && t('routes.form.uploadStreamingHelper')}
+							testid="upload-streaming-toggle"
+							labelTestid="upload-streaming-toggle-label"
+						/>
 
-							<!-- Step X.2 — wafDisableCRS toggle. Sits in
-							     the same WAF block as wafMode +
-							     uploadStreamingMode so the three knobs
-							     read as one consolidated WAF surface. The
-							     change is mediated by onWAFDisableCRSChange
-							     instead of a direct bind so the false →
-							     true direction can be gated behind the
-							     ADR-D4 confirm dialog ; the visual checked
-							     state still reflects formData.wafDisableCRS
-							     so an operator who cancels the dialog
-							     sees the box flip back to its previous
-							     unchecked state. -->
-							<label
-								class="inline-flex items-start gap-2 text-sm text-secondary mt-3 cursor-pointer"
-								data-testid="waf-disable-crs-toggle-label"
-							>
-								<input
-									type="checkbox"
-									checked={formData.wafDisableCRS}
-									onchange={onWAFDisableCRSChange}
-									class="mt-0.5"
-									data-testid="waf-disable-crs-toggle"
-								/>
-								<span>
-									{language.current && t('routes.form.wafDisableCRSLabel')}
-								</span>
-							</label>
-							<p class="text-xs text-muted mt-1 max-w-prose">
-								{language.current && t('routes.form.wafDisableCRSHelper')}
-							</p>
+						<!-- Step X.2 — wafDisableCRS toggle. The change is mediated
+						     by onWAFDisableCRSChange instead of a direct bind so the
+						     false → true direction can be gated behind the ADR-D4
+						     confirm dialog ; the visual checked state still reflects
+						     formData.wafDisableCRS so an operator who cancels the
+						     dialog sees the switch flip back. v2.41 dresses it as a
+						     danger row — it removes a protection. -->
+						<SwitchRow
+							danger
+							checked={formData.wafDisableCRS}
+							onchange={(_v, e) => onWAFDisableCRSChange(e)}
+							label={language.current && t('routes.form.wafDisableCRSLabel')}
+							helper={language.current && t('routes.form.wafDisableCRSHelper')}
+							testid="waf-disable-crs-toggle"
+							labelTestid="waf-disable-crs-toggle-label"
+						/>
 
-							<!-- Step X Option (c) — granular per-rule
-							     exclusion list. Sits under the WAFDisableCRS
-							     toggle on purpose : the operator's natural
-							     reading order is "disable everything → just
-							     these → just these rules". Disabled when
-							     wafDisableCRS is true (the entire CRS is
-							     unloaded, so per-rule exclusions are no-ops),
-							     but the stored values are NOT cleared — the
-							     operator may toggle CRS back on later. -->
-							<div class="mt-4">
-								<label
-									for="route-waf-exclude-rules"
-									class="text-sm font-medium text-secondary block mb-1"
+						<!-- Step X options (c) + (e) — the two list-shaped escape
+						     hatches, side by side: "just these rule IDs" and "just
+						     these tags". Both are no-ops when the whole CRS is
+						     unloaded, so both are disabled (never cleared — the
+						     operator may put the CRS back) and the sub-group says
+						     so once, instead of each list repeating the warning. -->
+						<div class="rounded-md border border-border-subtle bg-surface p-3">
+							<div class="flex items-baseline justify-between gap-3 mb-2">
+								<span class="text-sm font-medium text-secondary"
+									>{language.current && t('routes.form.wafExceptionsTitle')}</span
 								>
-									{language.current && t('routes.form.wafExcludeRulesLabelFull')}
-									<span class="text-muted text-xs">{language.current && t('routes.form.wafExcludeRulesLabelHint')}</span>
-								</label>
-								<textarea
-									id="route-waf-exclude-rules"
-									data-testid="waf-exclude-rules-input"
-									value={wafExcludeRulesInput}
-									onchange={onExcludeRulesInputChange}
-									oninput={onExcludeRulesInputChange}
-									disabled={formData.wafDisableCRS}
-									placeholder={language.current && t('routes.form.wafExcludeRulesPlaceholder')}
-									rows="2"
-									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
-								></textarea>
-								{#if errors.wafExcludeRules}
-									<p
-										class="text-xs text-status-down mt-1"
-										data-testid="waf-exclude-rules-error"
+								{#if wafExceptionCount > 0}
+									<span class="text-xs text-muted" data-testid="waf-exceptions-count"
+										>{language.current && t('routes.form.summaryExclusions', { count: wafExceptionCount })}</span
 									>
-										{errors.wafExcludeRules}
-									</p>
 								{/if}
-								<p class="text-xs text-muted mt-1 max-w-prose">
-									{language.current && t('routes.form.wafExcludeRulesHelper')}
-									{#if formMode === 'edit' && editingId}
-										{language.current && t('routes.form.wafExcludeRulesIdentifyRules')}
-										<a
-											href="/security/{editingId}"
-											class="text-cyan hover:underline"
-											data-testid="waf-exclude-rules-security-link"
-											>{language.current && t('routes.form.wafExcludeRulesWAFHistory')}</a
-										>.
-									{:else}
-										{language.current && t('routes.form.wafExcludeRulesIdentifyRulesGeneric')}
-										<a href="/security" class="text-cyan hover:underline"
-											>{language.current && t('routes.form.wafExcludeRulesSecurityPage')}</a
-										>.
-									{/if}
-									{#if formData.wafDisableCRS}
-										<br />
-										<span class="text-status-warn"
-											>{language.current && t('routes.form.wafExcludeRulesCRSDisabledWarning')}</span
-										>
-									{/if}
-								</p>
 							</div>
+							{#if formData.wafDisableCRS}
+								<p class="text-xs text-status-warn mb-2" data-testid="waf-exceptions-crs-off">
+									{language.current && t('routes.form.wafExcludeRulesCRSDisabledWarning')}
+								</p>
+							{/if}
+							<div class="grid gap-3 md:grid-cols-2">
+								<div>
+									<label for="route-waf-exclude-rules" class="text-sm font-medium text-secondary block mb-1">
+										{language.current && t('routes.form.wafExcludeRulesLabelFull')}
+										<span class="text-muted text-xs"
+											>{language.current && t('routes.form.wafExcludeRulesLabelHint')}</span
+										>
+									</label>
+									<textarea
+										id="route-waf-exclude-rules"
+										data-testid="waf-exclude-rules-input"
+										value={wafExcludeRulesInput}
+										onchange={onExcludeRulesInputChange}
+										oninput={onExcludeRulesInputChange}
+										disabled={formData.wafDisableCRS}
+										placeholder={language.current && t('routes.form.wafExcludeRulesPlaceholder')}
+										rows="2"
+										class="w-full bg-elevated border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+									></textarea>
+									{#if errors.wafExcludeRules}
+										<p class="text-xs text-status-down mt-1" data-testid="waf-exclude-rules-error">
+											{errors.wafExcludeRules}
+										</p>
+									{/if}
+									<p class="text-xs text-muted mt-1 max-w-prose">
+										{language.current && t('routes.form.wafExcludeRulesHelper')}
+										{#if formMode === 'edit' && editingId}
+											{language.current && t('routes.form.wafExcludeRulesIdentifyRules')}
+											<a
+												href="/security/{editingId}"
+												class="text-cyan hover:underline"
+												data-testid="waf-exclude-rules-security-link"
+												>{language.current && t('routes.form.wafExcludeRulesWAFHistory')}</a
+											>.
+										{:else}
+											{language.current && t('routes.form.wafExcludeRulesIdentifyRulesGeneric')}
+											<a href="/security" class="text-cyan hover:underline"
+												>{language.current && t('routes.form.wafExcludeRulesSecurityPage')}</a
+											>.
+										{/if}
+									</p>
+								</div>
 
-							<!-- Step X Option (e) — tag-based exclusion list.
-							     Sibling of the rule-ID exclusion above ; more
-							     operator-friendly because one tag covers a
-							     whole family of CRS rules (and survives CRS
-							     updates that add new rules to that family).
-							     The HTML5 <datalist> below seeds an
-							     autocomplete-lite UX without dragging in a
-							     custom multi-select component — operators
-							     get suggestions from the curated 24-tag
-							     catalog when they focus the textarea, but
-							     can also type any custom tag (CRS v4 has
-							     114 distinct ; we surface the high-traffic
-							     subset). Gated when wafDisableCRS=true for
-							     the same reason as the rule list. -->
-							<div class="mt-4">
-								<label
-									for="route-waf-exclude-tags"
-									class="text-sm font-medium text-secondary block mb-1"
-								>
-									{language.current && t('routes.form.wafExcludeTagsLabelFull')}
-									<span class="text-muted text-xs">{language.current && t('routes.form.wafExcludeTagsLabelHint')}</span>
-								</label>
-								<textarea
-									id="route-waf-exclude-tags"
-									data-testid="waf-exclude-tags-input"
-									value={wafExcludeTagsInput}
-									onchange={onExcludeTagsInputChange}
-									oninput={onExcludeTagsInputChange}
-									disabled={formData.wafDisableCRS}
-									placeholder={language.current && t('routes.form.wafExcludeTagsPlaceholder')}
-									rows="2"
-									{...{ list: 'waf-exclude-tags-catalog' }}
-									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
-								></textarea>
-								<datalist id="waf-exclude-tags-catalog">
-									{#each CRS_TAG_CATALOG as tag (tag)}
-										<option value={tag}></option>
-									{/each}
-								</datalist>
-								{#if errors.wafExcludeTags}
-									<p
-										class="text-xs text-status-down mt-1"
-										data-testid="waf-exclude-tags-error"
-									>
-										{errors.wafExcludeTags}
-									</p>
-								{/if}
-								<p class="text-xs text-muted mt-1 max-w-prose">
-									{language.current && t('routes.form.wafExcludeTagsHelper')}
-									{#if formData.wafDisableCRS}
-										<br />
-										<span class="text-status-warn"
-											>{language.current && t('routes.form.wafExcludeRulesCRSDisabledWarning')}</span
+								<div>
+									<label for="route-waf-exclude-tags" class="text-sm font-medium text-secondary block mb-1">
+										{language.current && t('routes.form.wafExcludeTagsLabelFull')}
+										<span class="text-muted text-xs"
+											>{language.current && t('routes.form.wafExcludeTagsLabelHint')}</span
 										>
+									</label>
+									<textarea
+										id="route-waf-exclude-tags"
+										data-testid="waf-exclude-tags-input"
+										value={wafExcludeTagsInput}
+										onchange={onExcludeTagsInputChange}
+										oninput={onExcludeTagsInputChange}
+										disabled={formData.wafDisableCRS}
+										placeholder={language.current && t('routes.form.wafExcludeTagsPlaceholder')}
+										rows="2"
+										{...{ list: 'waf-exclude-tags-catalog' }}
+										class="w-full bg-elevated border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+									></textarea>
+									<datalist id="waf-exclude-tags-catalog">
+										{#each CRS_TAG_CATALOG as tag (tag)}
+											<option value={tag}></option>
+										{/each}
+									</datalist>
+									{#if errors.wafExcludeTags}
+										<p class="text-xs text-status-down mt-1" data-testid="waf-exclude-tags-error">
+											{errors.wafExcludeTags}
+										</p>
 									{/if}
-								</p>
-							</div>
-							<!-- v2.36 — targeted exclusions (one rule stops
-							     inspecting one field, optionally on one path). -->
-							<div class="mt-4">
-								<WafTargetedExclusionsEditor
-									bind:value={formData.wafTargetedExclusions}
-									crsDisabled={formData.wafDisableCRS}
-								/>
-							</div>
-							<!-- v2.37 — guided WAF rules (block when every
-							     condition matches, follows the route mode). -->
-							<div class="mt-4">
-								<WafCustomRulesEditor
-									bind:value={formData.wafCustomRules}
-									wafMode={formData.wafMode}
-									onConvert={convertGuidedRule}
-								/>
-							</div>
-							<!-- v2.38 — expert SecLang + templates + request tester. -->
-							<div class="mt-4">
-								<WafSecLangSection
-									bind:value={formData.wafSecLang}
-									routeId={formMode === 'edit' ? editingId : null}
-									wafMode={formData.wafMode}
-									saveErrors={secLangSaveErrors}
-								/>
+									<p class="text-xs text-muted mt-1 max-w-prose">
+										{language.current && t('routes.form.wafExcludeTagsHelper')}
+									</p>
+								</div>
 							</div>
 						</div>
+
+						<!-- v2.36 — targeted exclusions (one rule stops inspecting
+						     one field, optionally on one path). -->
+						<WafTargetedExclusionsEditor
+							bind:value={formData.wafTargetedExclusions}
+							crsDisabled={formData.wafDisableCRS}
+						/>
+						<!-- v2.37 — guided WAF rules (block when every condition
+						     matches, follows the route mode). -->
+						<WafCustomRulesEditor
+							bind:value={formData.wafCustomRules}
+							wafMode={formData.wafMode}
+							onConvert={convertGuidedRule}
+						/>
+						<!-- v2.38 — expert SecLang + templates + request tester. -->
+						<WafSecLangSection
+							bind:value={formData.wafSecLang}
+							routeId={formMode === 'edit' ? editingId : null}
+							wafMode={formData.wafMode}
+							saveErrors={secLangSaveErrors}
+						/>
 					</RouteSection>
 
 					<!-- Rate limit. -->
 					<RouteSection name={language.current && t('routes.form.sectionRateLimit')} summary={summaryRateLimit} badge={rateLimitBadge.badge} posture={rateLimitBadge.posture} testid="section-rate-limit">
-						<!-- Step Q (2026-06-18) — per-route rate limit
-						     section. Lives in its own block (not inside
-						     the WAF section) because rate limiting is
-						     orthogonal to the WAF posture : a route can
-						     have WAF=off + rate limit on (trusted internal
-						     LAN with brute-force protection on /login),
-						     or WAF=block + no rate limit (public API
-						     where the WAF is the only gate). The
-						     "Limitation de débit" framing matches the
-						     operator's mental model better than burying
-						     it under WAF. -->
-						<div>
-							<label
-								class="text-sm font-medium text-secondary block mb-1"
-								for="route-rate-limit-toggle"
-							>
-								{language.current && t('routes.form.rateLimitSection')}
-							</label>
-							<label
-								class="inline-flex items-start gap-2 text-sm text-secondary mt-1 cursor-pointer"
-								data-testid="rate-limit-toggle-label"
-							>
-								<input
-									id="route-rate-limit-toggle"
-									type="checkbox"
-									checked={formData.rateLimit !== null}
-									onchange={onRateLimitToggle}
-									class="mt-0.5"
-									data-testid="rate-limit-toggle"
-								/>
-								<span>
-									{language.current && t('routes.form.rateLimitToggleLabelFull')}
-								</span>
-							</label>
+						<!-- Step Q (2026-06-18) — per-route rate limit section.
+						     Lives in its own block (not inside the WAF section)
+						     because rate limiting is orthogonal to the WAF
+						     posture : a route can have WAF=off + rate limit on
+						     (trusted internal LAN with brute-force protection on
+						     /login), or WAF=block + no rate limit (public API
+						     where the WAF is the only gate).
+						     v2.41 — switch row + a live sentence: the numbers are
+						     only meaningful as the rule they add up to. -->
+						<SwitchRow
+							checked={formData.rateLimit !== null}
+							onchange={(_v, e) => onRateLimitToggle(e)}
+							label={language.current && t('routes.form.rateLimitToggleLabelFull')}
+							inputId="route-rate-limit-toggle"
+							testid="rate-limit-toggle"
+							labelTestid="rate-limit-toggle-label"
+						/>
 
-							{#if formData.rateLimit !== null}
-								<div class="mt-3 grid gap-3 sm:grid-cols-2">
-									<div>
-										<label
-											for="route-rl-events"
-											class="text-xs font-medium text-secondary block mb-1"
-										>
-											{language.current && t('routes.form.rateLimitMaxRequestsLabel')}
-										</label>
-										<input
-											id="route-rl-events"
-											data-testid="rate-limit-events-input"
-											type="number"
-											min="1"
-											step="1"
-											bind:value={formData.rateLimit.events}
-											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-										/>
-									</div>
-									<div>
-										<label
-											for="route-rl-window"
-											class="text-xs font-medium text-secondary block mb-1"
-										>
-											{language.current && t('routes.form.rateLimitPeriodLabel')} <span class="text-muted">{language.current && t('routes.form.rateLimitPeriodHint')}</span>
-										</label>
-										<input
-											id="route-rl-window"
-											data-testid="rate-limit-window-input"
-											type="text"
-											placeholder={language.current && t('routes.form.rateLimitWindowPlaceholder')}
-											bind:value={formData.rateLimit.window}
-											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-										/>
-									</div>
-									<div class="sm:col-span-2">
-										<label
-											for="route-rl-key"
-											class="text-xs font-medium text-secondary block mb-1"
-										>
-											{language.current && t('routes.form.rateLimitKeyLabelFull')}
-										</label>
-										<input
-											id="route-rl-key"
-											data-testid="rate-limit-key-input"
-											type="text"
-											placeholder="{'{http.request.remote.host}'}"
-											bind:value={formData.rateLimit.key}
-											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-										/>
-									</div>
+						{#if formData.rateLimit !== null}
+							<PostureSentence posture="block" testid="rate-limit-sentence">
+								{rateLimitSentence}
+							</PostureSentence>
+							<div class="grid gap-3 sm:grid-cols-2">
+								<div>
+									<label for="route-rl-events" class="text-xs font-medium text-secondary block mb-1">
+										{language.current && t('routes.form.rateLimitMaxRequestsLabel')}
+									</label>
+									<input
+										id="route-rl-events"
+										data-testid="rate-limit-events-input"
+										type="number"
+										min="1"
+										step="1"
+										bind:value={formData.rateLimit.events}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+									/>
 								</div>
-								<p class="text-xs text-muted mt-2 max-w-prose">
-									{language.current && t('routes.form.rateLimitHelper')}
-								</p>
-							{/if}
-						</div>
+								<div>
+									<label for="route-rl-window" class="text-xs font-medium text-secondary block mb-1">
+										{language.current && t('routes.form.rateLimitPeriodLabel')}
+										<span class="text-muted">{language.current && t('routes.form.rateLimitPeriodHint')}</span>
+									</label>
+									<input
+										id="route-rl-window"
+										data-testid="rate-limit-window-input"
+										type="text"
+										placeholder={language.current && t('routes.form.rateLimitWindowPlaceholder')}
+										bind:value={formData.rateLimit.window}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+									/>
+								</div>
+								<div class="sm:col-span-2">
+									<label for="route-rl-key" class="text-xs font-medium text-secondary block mb-1">
+										{language.current && t('routes.form.rateLimitKeyLabelFull')}
+									</label>
+									<input
+										id="route-rl-key"
+										data-testid="rate-limit-key-input"
+										type="text"
+										placeholder="{'{http.request.remote.host}'}"
+										bind:value={formData.rateLimit.key}
+										class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+									/>
+								</div>
+							</div>
+							<p class="text-xs text-muted max-w-prose">
+								{language.current && t('routes.form.rateLimitHelper')}
+							</p>
+						{/if}
 					</RouteSection>
 
 					<!-- Country and source-IP filtering: both must accept the request. -->

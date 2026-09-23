@@ -42,6 +42,8 @@ Pas besoin d'ouvrir une section pour savoir ce qu'elle contient : chaque ligne r
 
 Les sections qui ne décident de rien (TLS, health check, en-têtes, pages d'erreur) restent neutres, pour que la couleur garde son sens.
 
+À l'intérieur d'une section, un réglage à quelques modes exclusifs — inspection WAF, authentification, filtrage par pays — est un **contrôle segmenté** : tous les modes restent visibles, portent leur couleur, et le mode sélectionné affiche en dessous ce qu'il fait (`Les requêtes sont inspectées et journalisées, jamais bloquées.`). Les réglages oui/non sont des interrupteurs avec leur ligne d'aide, et celui qui retire une protection (**Désactiver le CRS OWASP**) est encadré en rouge. Quand plusieurs champs forment une seule règle, le formulaire énonce la règle : la limitation de débit affiche `Au-delà de 60 requêtes par 1m depuis la même IP du client, les requêtes sont refusées avec un 429.`
+
 L'en-tête du panneau reste visible pendant le défilement et affiche un marqueur **modifications non enregistrées** dès que tu touches un champ.
 
 ---
