@@ -61,6 +61,7 @@
 	import StatCard from '$lib/components/StatCard.svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import CertSourceBadge from '$lib/components/CertSourceBadge.svelte';
+	import RoutePostureChips from '$lib/components/routes/RoutePostureChips.svelte';
 	import Flag from '$lib/components/Flag.svelte';
 	import ContinentPicker from '$lib/components/routes/ContinentPicker.svelte';
 	import CountryExceptionsPicker from '$lib/components/routes/CountryExceptionsPicker.svelte';
@@ -1208,11 +1209,14 @@
 			// Modal pattern would benefit from if more dialogs
 			// are wired in the future.
 			if (confirmDisableCRSOpen) return;
+			// v2.41 — same reasoning for the discard confirm: it is
+			// portalled to body, so its own buttons are "outside".
+			if (confirmDiscardOpen) return;
 			const target = event.target;
 			if (!(target instanceof Node)) return;
 			if (node.contains(target)) return;
 			if (tableEl?.contains(target)) return;
-			closePanel();
+			guardUnsaved(closePanel);
 		}
 		document.addEventListener('mousedown', handle, true);
 		return {
@@ -1274,11 +1278,13 @@
 	// against it via openEdit. The keyboard Enter/Space path uses
 	// the same helper so the toggle is reachable without a mouse.
 	function selectOrToggleRoute(r: Route) {
-		if (editingId === r.id && formOpen) {
-			closePanel();
-			return;
-		}
-		openEdit(r);
+		guardUnsaved(() => {
+			if (editingId === r.id && formOpen) {
+				closePanel();
+				return;
+			}
+			openEdit(r);
+		});
 	}
 
 	function openEdit(r: Route) {
@@ -1802,6 +1808,40 @@
 	// JSON because formData is a plain object of plain values.
 	let formSnapshot = $state('');
 	const formDirty = $derived(formSnapshot !== '' && JSON.stringify(formData) !== formSnapshot);
+
+	// v2.41 — the unsaved marker now protects something: any path
+	// that would drop the edits (Cancel, a click outside the panel,
+	// picking another row, opening a create form) goes through
+	// guardUnsaved, which asks first and replays the action only if
+	// the operator confirms. Saving is NOT guarded — it keeps the
+	// edits by definition — and neither is a close that follows a
+	// successful save (formDirty is false by then).
+	let confirmDiscardOpen = $state(false);
+	let pendingAfterDiscard: (() => void) | null = null;
+
+	function guardUnsaved(action: () => void): void {
+		if (formOpen && formDirty) {
+			pendingAfterDiscard = action;
+			confirmDiscardOpen = true;
+			return;
+		}
+		action();
+	}
+
+	function onConfirmDiscard(): void {
+		confirmDiscardOpen = false;
+		const action = pendingAfterDiscard;
+		pendingAfterDiscard = null;
+		action?.();
+	}
+
+	// ConfirmDialog only reports the affirmative answer; its cancel
+	// path just flips `open` through the bind. onConfirmDiscard
+	// clears the pending action before running it, so a dialog that
+	// closed any other way leaves nothing armed.
+	$effect(() => {
+		if (!confirmDiscardOpen) pendingAfterDiscard = null;
+	});
 
 	function snapshotForm(): void {
 		formSnapshot = JSON.stringify(formData);
@@ -2872,7 +2912,7 @@
 		<Button variant="ghost" onclick={() => (importOpen = true)} data-testid="import-caddyfile-open"
 			>{language.current && t('routes.importCaddyfile')}</Button
 		>
-		<Button onclick={openCreate}>{language.current && t('routes.addButton')}</Button>
+		<Button onclick={() => guardUnsaved(openCreate)}>{language.current && t('routes.addButton')}</Button>
 	{/snippet}
 </PageHeader>
 
@@ -2914,7 +2954,9 @@
 	<div class="mt-16 flex flex-col items-center text-center gap-4">
 		<div class="text-6xl text-muted">◉</div>
 		<p class="text-secondary">{language.current && t('routes.emptyState')}</p>
-		<Button onclick={openCreate}>{language.current && t('routes.emptyStateAddFirst')}</Button>
+		<Button onclick={() => guardUnsaved(openCreate)}
+			>{language.current && t('routes.emptyStateAddFirst')}</Button
+		>
 	</div>
 {:else}
 	<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
@@ -3000,7 +3042,7 @@
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colHost')}</th>
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colUpstream')}</th>
 							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colTLS')}</th>
-							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colWAF')}</th>
+							<th class="px-4 py-3 font-medium">{language.current && t('routes.list.colSecurity')}</th>
 							<th class="px-4 py-3 font-medium text-center">{language.current && t('routes.list.colState')}</th>
 							<!-- Task 9 — was sr-only (icon-only ghost button
 							     needed no visible header); now a visible
@@ -3140,13 +3182,11 @@
 									{/if}
 								</td>
 								<td class="px-4 py-3">
-									{#if r.wafMode === 'detect'}
-										<Badge variant="status-warn">{language.current && t('routes.list.wafDetect')}</Badge>
-									{:else if r.wafMode === 'block'}
-										<Badge variant="status-down">{language.current && t('routes.list.wafBlock')}</Badge>
-									{:else}
-										<span class="text-muted">—</span>
-									{/if}
+									<!-- v2.41 — the column answers "what guards this
+									     route?", not just "is the WAF on?": the geo,
+									     IP-filter and rate-limit postures were
+									     invisible from the list until now. -->
+									<RoutePostureChips route={r} />
 								</td>
 								<td class="px-4 py-3 text-center">
 									<!-- Critique 11 Pack A (2026-06-05): per-route
@@ -4456,32 +4496,23 @@
 						     flips off-and-on keeps their typed values.
 						     Any interaction marks healthCheckTouched so submit ships
 						     the complete 9-field block (J.2 preserve-or-replace). -->
-						<details
-							class="rounded border border-border-subtle"
-							open={formData.healthCheck.enabled}
-						>
-							<summary
-								class="px-3 py-2 text-sm text-secondary cursor-pointer select-none"
-								onclick={markHealthCheckTouched}
-							>
-								{language.current && t('routes.form.healthCheckActiveSection')}
-								{#if formData.healthCheck.enabled}
-									<span class="ml-1 text-xs text-muted">{language.current && t('routes.form.healthCheckOnSuffix')}</span>
-								{/if}
-							</summary>
-							<div class="p-3 flex flex-col gap-3 border-t border-border-subtle">
-								<!-- Capture click on the wrapper so toggling the
-								     checkbox marks the HC block as touched (drives
-								     the J.2 preserve-or-replace decision). Checkbox
-								     does not expose an onchange prop; the wrapper
-								     handler runs whether the user clicks the box or
-								     its label. -->
-								<div onclick={markHealthCheckTouched} onkeydown={markHealthCheckTouched} role="none">
-									<Checkbox
-										label={language.current && t('routes.form.healthCheckEnableLabel')}
-										bind:checked={formData.healthCheck.enabled}
-									/>
-								</div>
+						<!-- v2.41 — the <details> that used to wrap this block
+						     is gone: the section itself collapses, and two
+						     levels of the same affordance is exactly the
+						     inconsistency the redesign is removing. The enable
+						     switch marks the block as touched, which drives the
+						     J.2 preserve-or-replace decision on submit. -->
+						<div class="flex flex-col gap-3">
+								<SwitchRow
+									checked={formData.healthCheck.enabled}
+									onchange={(v) => {
+										formData.healthCheck.enabled = v;
+										markHealthCheckTouched();
+									}}
+									label={language.current && t('routes.form.healthCheckEnableLabel')}
+									testid="health-check-toggle"
+									labelTestid="health-check-toggle-label"
+								/>
 								<div>
 									<label
 										for="hc-uri"
@@ -4620,8 +4651,7 @@
 								<p class="text-xs text-muted">
 									{language.current && t('routes.form.healthCheckHelper')}
 								</p>
-							</div>
-						</details>
+						</div>
 					</RouteSection>
 
 					<!-- Path rules and custom headers. -->
@@ -4630,57 +4660,68 @@
 						     rules editor (Task 8 component): per-prefix basic
 						     auth override + IP filter. -->
 						<PathRulesSection bind:value={formData.pathRules} />
-						<!-- Step I.6: custom request / response headers. -->
-						<details class="rounded border border-border-subtle">
-							<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-								{language.current && t('routes.form.requestHeadersLabel')}
+						<!-- Step I.6: custom request headers. v2.41 — one
+						     labelled group instead of a second collapse level
+						     inside an already-collapsible section, with an
+						     empty state that says what the group is for. -->
+						<div class="rounded-md border border-border-subtle bg-surface p-3 flex flex-col gap-2">
+							<div class="flex items-baseline justify-between gap-3">
+								<span class="text-sm font-medium text-secondary"
+									>{language.current && t('routes.form.requestHeadersLabel')}</span
+								>
 								{#if requestHeaderRows.length > 0}
-									<span class="ml-1 text-xs text-muted">({requestHeaderRows.length})</span>
+									<span class="text-xs text-muted">({requestHeaderRows.length})</span>
 								{/if}
-							</summary>
-							<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
-								{#each requestHeaderRows as _, i (i)}
-									<div class="flex items-center gap-2">
-										<Input bind:value={requestHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
-										<Input bind:value={requestHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
-										<Button
-											variant="ghost"
-											size="sm"
-											onclick={() => removeRequestHeader(i)}
-											type="button">×</Button
-										>
-									</div>
-								{/each}
+							</div>
+							{#if requestHeaderRows.length === 0}
+								<p class="text-xs text-muted" data-testid="request-headers-empty">
+									{language.current && t('routes.form.headersEmpty')}
+								</p>
+							{/if}
+							{#each requestHeaderRows as _, i (i)}
+								<div class="flex items-center gap-2">
+									<Input bind:value={requestHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
+									<Input bind:value={requestHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
+									<Button variant="ghost" size="sm" onclick={() => removeRequestHeader(i)} type="button">×</Button>
+								</div>
+							{/each}
+							<div>
 								<Button variant="ghost" size="sm" onclick={addRequestHeader} type="button"
 									>{language.current && t('routes.form.requestHeadersAdd')}</Button
 								>
 							</div>
-						</details>
-						<details class="rounded border border-border-subtle">
-							<summary class="px-3 py-2 text-sm text-secondary cursor-pointer select-none">
-								{language.current && t('routes.form.responseHeadersLabel')}
+						</div>
+						<!-- Step I.6: custom response headers. v2.41 — one
+						     labelled group instead of a second collapse level
+						     inside an already-collapsible section, with an
+						     empty state that says what the group is for. -->
+						<div class="rounded-md border border-border-subtle bg-surface p-3 flex flex-col gap-2">
+							<div class="flex items-baseline justify-between gap-3">
+								<span class="text-sm font-medium text-secondary"
+									>{language.current && t('routes.form.responseHeadersLabel')}</span
+								>
 								{#if responseHeaderRows.length > 0}
-									<span class="ml-1 text-xs text-muted">({responseHeaderRows.length})</span>
+									<span class="text-xs text-muted">({responseHeaderRows.length})</span>
 								{/if}
-							</summary>
-							<div class="p-3 flex flex-col gap-2 border-t border-border-subtle">
-								{#each responseHeaderRows as _, i (i)}
-									<div class="flex items-center gap-2">
-										<Input bind:value={responseHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
-										<Input bind:value={responseHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
-										<Button
-											variant="ghost"
-											size="sm"
-											onclick={() => removeResponseHeader(i)}
-											type="button">×</Button
-										>
-									</div>
-								{/each}
+							</div>
+							{#if responseHeaderRows.length === 0}
+								<p class="text-xs text-muted" data-testid="response-headers-empty">
+									{language.current && t('routes.form.headersEmptyResponse')}
+								</p>
+							{/if}
+							{#each responseHeaderRows as _, i (i)}
+								<div class="flex items-center gap-2">
+									<Input bind:value={responseHeaderRows[i][0]} placeholder={language.current && t('routes.form.headerNamePlaceholder')} />
+									<Input bind:value={responseHeaderRows[i][1]} placeholder={language.current && t('routes.form.headerValuePlaceholder')} />
+									<Button variant="ghost" size="sm" onclick={() => removeResponseHeader(i)} type="button">×</Button>
+								</div>
+							{/each}
+							<div>
 								<Button variant="ghost" size="sm" onclick={addResponseHeader} type="button"
 									>{language.current && t('routes.form.responseHeadersAdd')}</Button
 								>
 							</div>
-						</details>
+						</div>
 					</RouteSection>
 
 					<!-- Error pages. -->
@@ -4918,7 +4959,9 @@
 				     errors the panel stays open with field-level
 				     messages. -->
 				<div class="px-5 pb-5 pt-2 flex justify-end gap-2 border-t border-border-subtle">
-					<Button variant="ghost" onclick={closePanel}>{language.current && t('routes.form.cancel')}</Button>
+					<Button variant="ghost" onclick={() => guardUnsaved(closePanel)}
+						>{language.current && t('routes.form.cancel')}</Button
+					>
 					<Button
 						onclick={submitForm}
 						loading={submitting}
@@ -4989,6 +5032,17 @@
      formData.wafDisableCRS at false ; the checkbox's visual
      state reflects formData via the `checked` prop so the tick
      reverts automatically. -->
+<!-- v2.41 — leaving the form with unsaved changes asks first. -->
+<ConfirmDialog
+	bind:open={confirmDiscardOpen}
+	title={language.current && t('routes.discardDialog.title')}
+	message={language.current && t('routes.discardDialog.message')}
+	confirmLabel={language.current && t('routes.discardDialog.confirmLabel')}
+	cancelLabel={language.current && t('routes.discardDialog.cancelLabel')}
+	confirmVariant="danger"
+	onConfirm={onConfirmDiscard}
+/>
+
 <ConfirmDialog
 	bind:open={confirmDisableCRSOpen}
 	title={language.current && t('routes.wafCRSDialog.title')}
