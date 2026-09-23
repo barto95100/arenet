@@ -15,6 +15,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Tabs from '$lib/components/Tabs.svelte';
 	import ChannelsTab from '$lib/components/alerting/ChannelsTab.svelte';
 	import RulesTab from '$lib/components/alerting/RulesTab.svelte';
 	import HistoryTab from '$lib/components/alerting/HistoryTab.svelte';
@@ -23,6 +24,11 @@
 
 	type TabKey = 'channels' | 'rules' | 'history';
 
+	// v2.41 — the page used to carry its own tab bar, a near-verbatim
+	// copy of Tabs.svelte that had drifted on accessibility
+	// (aria-current="page" instead of role="tab"/aria-selected). It
+	// now uses the shared component; the hash deep-links and the
+	// hashchange listener are unchanged.
 	const TABS: { key: TabKey; labelKey: string }[] = [
 		{ key: 'channels', labelKey: 'alerting.tabChannels' },
 		{ key: 'rules', labelKey: 'alerting.tabRules' },
@@ -31,6 +37,14 @@
 
 	let active = $state<TabKey>('channels');
 
+	const tabDescriptors = $derived(
+		TABS.map((tab) => ({
+			id: tab.key,
+			label: (language.current && t(tab.labelKey)) as string,
+			testId: `alerting-tab-${tab.key}`
+		}))
+	);
+
 	function readHash(): TabKey {
 		const raw = (typeof window !== 'undefined' ? window.location.hash : '').replace(/^#/, '');
 		if (raw === 'channels' || raw === 'rules' || raw === 'history') return raw;
@@ -38,6 +52,8 @@
 	}
 
 	function selectTab(key: TabKey) {
+		// Tabs writes `active` through the bind; this only records
+		// the choice in the URL.
 		active = key;
 		if (typeof window !== 'undefined') {
 			// Replace the hash without scrolling the page or
@@ -63,19 +79,12 @@
 <PageHeader title={language.current && t('pageTitles.alerting')} subtitle={language.current && t('pageTitles.alertingSubtitle')} />
 
 <div class="mt-4">
-	<nav class="tab-bar" aria-label={language.current && t('alerting.tabsAria')}>
-		{#each TABS as tab (tab.key)}
-			<button
-				type="button"
-				class="tab"
-				class:active={active === tab.key}
-				aria-current={active === tab.key ? 'page' : undefined}
-				onclick={() => selectTab(tab.key)}
-			>
-				{language.current && t(tab.labelKey)}
-			</button>
-		{/each}
-	</nav>
+	<Tabs
+		bind:value={active}
+		tabs={tabDescriptors}
+		ariaLabel={language.current && t('alerting.tabsAria')}
+		onChange={selectTab}
+	/>
 
 	<div class="tab-panel mt-6">
 		{#if active === 'channels'}
@@ -87,35 +96,3 @@
 		{/if}
 	</div>
 </div>
-
-<style>
-	.tab-bar {
-		display: flex;
-		gap: var(--space-1);
-		border-bottom: 1px solid var(--border-subtle);
-	}
-	.tab {
-		appearance: none;
-		background: transparent;
-		border: 0;
-		padding: var(--space-2) var(--space-4);
-		margin-bottom: -1px;
-		color: var(--text-secondary);
-		font-weight: 500;
-		font-size: var(--text-sm);
-		border-bottom: 2px solid transparent;
-		cursor: pointer;
-		transition: color var(--motion-fast), border-color var(--motion-fast);
-	}
-	.tab:hover {
-		color: var(--text-primary);
-	}
-	.tab.active {
-		color: var(--accent-cyan);
-		border-bottom-color: var(--accent-cyan);
-	}
-	.tab:focus-visible {
-		outline: 2px solid var(--accent-cyan);
-		outline-offset: 2px;
-	}
-</style>

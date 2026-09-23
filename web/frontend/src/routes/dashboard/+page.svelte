@@ -39,6 +39,7 @@
 	import { ApiError } from '$lib/api/types';
 	import { pushToast } from '$lib/stores/toast';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import TimelineChart from '$lib/components/TimelineChart.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
@@ -267,45 +268,33 @@
 {:else if loadError}
 	<div class="card error">{loadError}</div>
 {:else if disabled}
-	<div class="screen-head">
-		<div>
-			<div class="eyebrow">{language.current && t('dashboard.eyebrow')}</div>
-			<h1>{language.current && t('pageTitles.dashboard')}</h1>
-		</div>
-	</div>
+	<PageHeader
+		eyebrow={language.current && t('dashboard.eyebrow')}
+		title={language.current && t('pageTitles.dashboard')}
+	/>
 	<div class="card empty">
-		<h3>Metrics unavailable</h3>
-		<p>
-			The observability subsystem failed to start. The proxy is still serving
-			traffic; only the metric history is missing. Check the Arenet logs for the
-			root cause.
-		</p>
+		<h3>{language.current && t('dashboard.disabledTitle')}</h3>
+		<p>{language.current && t('dashboard.disabledBody')}</p>
 	</div>
 {:else if noRoutes}
-	<div class="screen-head">
-		<div>
-			<div class="eyebrow">{language.current && t('dashboard.eyebrow')}</div>
-			<h1>{language.current && t('pageTitles.dashboard')}</h1>
-		</div>
-	</div>
+	<PageHeader
+		eyebrow={language.current && t('dashboard.eyebrow')}
+		title={language.current && t('pageTitles.dashboard')}
+	/>
 	<div class="card empty">
-		<h3>No routes configured yet</h3>
+		<h3>{language.current && t('dashboard.noRoutesTitle')}</h3>
 		<p>
-			Add one from the <a href="/routes">Routes</a> page to start collecting
-			metrics.
+			{language.current && t('dashboard.noRoutesBodyBefore')}
+			<a href="/routes">{language.current && t('dashboard.noRoutesBodyLink')}</a>
+			{language.current && t('dashboard.noRoutesBodyAfter')}
 		</p>
 	</div>
 {:else}
-	<div class="screen-head">
-		<div>
-			<div class="eyebrow">{language.current && t('dashboard.eyebrow')}</div>
-			<h1>{language.current && t('pageTitles.dashboard')}</h1>
-			<div class="sub">
-				Real-time traffic across your {routes.length} routes, recent WAF events,
-				and upstream services. Window {window}.
-			</div>
-		</div>
-	</div>
+	<PageHeader
+		eyebrow={language.current && t('dashboard.eyebrow')}
+		title={language.current && t('pageTitles.dashboard')}
+		subtitle={language.current && t('dashboard.subtitle', { count: routes.length, window })}
+	/>
 
 	<!-- KPIs -->
 	<div class="kpis">
@@ -574,13 +563,9 @@
 	.loading-wrap { display: flex; justify-content: center; padding: 48px; }
 	.card.error { padding: 16px; color: var(--status-down); border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
 
-	.screen-head {
-		display: flex; align-items: flex-start; justify-content: space-between;
-		margin-bottom: 18px;
-	}
-	.eyebrow { color: var(--fg-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; font-family: var(--font-mono); }
-	h1 { color: var(--fg); font-size: 22px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
-	.sub { color: var(--fg-muted); font-size: 13px; max-width: 640px; line-height: 1.5; }
+	/* v2.41 — .screen-head / .eyebrow / h1 / .sub used to live here as
+	   a copy of PageHeader (which was itself modelled on this very
+	   block, see PageHeader.svelte). The page now uses the component. */
 
 	.card {
 		background: var(--surface);

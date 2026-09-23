@@ -37,6 +37,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Button from '$lib/components/Button.svelte';
 	import RouteHost from '$lib/components/RouteHost.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { listRoutes } from '$lib/api/client';
@@ -659,10 +660,13 @@
 	subtitle={language.current && t('logs.pageSubtitle')}
 >
 	{#snippet actions()}
-		<button class="tb-btn" onclick={togglePause}>
+		<!-- v2.41 — was a page-local .tb-btn copy of Button. -->
+		<Button variant="secondary" size="sm" onclick={togglePause}>
 			{language.current && (paused ? t('logs.btnResume') : t('logs.btnPause'))}
-		</button>
-		<button class="tb-btn" disabled title={language.current && t('logs.btnExportTooltip')}>{language.current && t('logs.btnExport')}</button>
+		</Button>
+		<Button variant="secondary" size="sm" disabled title={language.current && t('logs.btnExportTooltip')}
+			>{language.current && t('logs.btnExport')}</Button
+		>
 	{/snippet}
 </PageHeader>
 
@@ -996,26 +1000,6 @@
 	}
 	.status-pill.paused .dot { box-shadow: none; }
 
-	.tb-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 5px 10px;
-		border-radius: var(--radius-sm);
-		font-size: 12.5px;
-		color: var(--fg-muted);
-		border: 1px solid var(--border);
-		background: var(--surface);
-		cursor: pointer;
-	}
-	.tb-btn:hover:not(:disabled) {
-		color: var(--fg);
-		background: var(--surface-2);
-	}
-	.tb-btn:disabled {
-		cursor: not-allowed;
-		opacity: 0.5;
-	}
 
 	.log-card { padding: 0; overflow: hidden; }
 

@@ -36,6 +36,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Button from '$lib/components/Button.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
@@ -204,8 +205,13 @@
 	subtitle={language.current && t('waf.pageSubtitle')}
 >
 	{#snippet actions()}
-		<a href="/security?tab=crowdsec" class="tb-btn">{language.current && t('waf.actionHistory')}</a>
-		<button class="tb-btn primary" disabled title={language.current && t('waf.actionApplyTooltip')}>{language.current && t('waf.actionApply')}</button>
+		<!-- v2.41 — the .tb-btn copies of Button are gone. The history
+		     entry stays an <a> (it navigates) and borrows Button's
+		     secondary shape through the shared .btn-link class. -->
+		<a href="/security?tab=crowdsec" class="btn-link">{language.current && t('waf.actionHistory')}</a>
+		<Button size="sm" disabled title={language.current && t('waf.actionApplyTooltip')}
+			>{language.current && t('waf.actionApply')}</Button
+		>
 	{/snippet}
 </PageHeader>
 
@@ -627,34 +633,25 @@
 	.link-row span { color: var(--fg-muted); font-size: 12px; line-height: 1.5; }
 	.arrow { color: var(--accent); font-size: 18px; flex: none; }
 
-	.tb-btn {
+	/* A link, not a button: keeps <a> semantics while wearing the
+	   same shape as Button's secondary variant. */
+	.btn-link {
 		display: inline-flex;
 		align-items: center;
-		gap: 6px;
-		padding: 5px 10px;
-		border-radius: var(--radius-sm);
-		font-size: 12.5px;
-		color: var(--fg-muted);
-		border: 1px solid var(--border);
-		background: var(--surface);
-		cursor: pointer;
-		text-decoration: none;
-	}
-	.tb-btn:hover:not(:disabled) {
-		color: var(--fg);
-		background: var(--surface-2);
-	}
-	.tb-btn.primary {
-		background: var(--accent);
-		color: #fff;
-		border-color: transparent;
+		gap: 8px;
+		padding: 6px 12px;
+		border-radius: var(--radius-md, 8px);
+		font-size: 13px;
 		font-weight: 500;
+		text-decoration: none;
+		color: var(--text-primary);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-default);
+		transition: background 0.15s ease;
 	}
-	.tb-btn.primary:disabled {
-		filter: saturate(0.6);
-		cursor: not-allowed;
+	.btn-link:hover {
+		background: var(--bg-hover);
 	}
-	.tb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 	.loading-wrap { display: flex; justify-content: center; padding: 48px; }
 </style>

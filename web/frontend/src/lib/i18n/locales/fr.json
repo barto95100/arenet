@@ -689,6 +689,13 @@
 		"wafRules": "Règles WAF"
 	},
 	"dashboard": {
+		"subtitle": "Trafic en temps réel sur tes {count} routes, événements WAF récents et services en amont. Fenêtre {window}.",
+		"disabledTitle": "Métriques indisponibles",
+		"disabledBody": "Le sous-système d'observabilité n'a pas démarré. Le proxy sert toujours le trafic ; seul l'historique des métriques manque. Regarde les journaux d'Arenet pour la cause.",
+		"noRoutesTitle": "Aucune route configurée",
+		"noRoutesBodyBefore": "Ajoute-en une depuis la page",
+		"noRoutesBodyLink": "Routes",
+		"noRoutesBodyAfter": "pour commencer à collecter des métriques.",
 		"eyebrow": "Aperçu · Dashboard",
 		"kpiReqPerSec": "Requêtes / s",
 		"kpiReqPerSecFoot": "{total} req / 24h · {routes} routes actives",
