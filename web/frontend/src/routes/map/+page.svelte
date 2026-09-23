@@ -168,31 +168,31 @@
 </svelte:head>
 
 <PageHeader
-	eyebrow="Trafic · Map"
+	eyebrow={language.current && t('map.eyebrow')}
 	title={language.current && t('pageTitles.map')}
-	subtitle="Visualisation géographique en temps réel des sources de trafic et des décisions sécurité. WAF, throttle, CrowdSec et auth-failures sont rendus sous forme d'arcs colorés depuis la source jusqu'à l'instance Arenet."
+	subtitle={language.current && t('map.subtitle')}
 />
 
 {#if loading}
 	<div class="map-state map-state--loading" data-testid="map-loading">
-		Chargement de la position serveur…
+		{language.current && t('map.loading')}
 	</div>
 {:else if loadError}
 	<div class="map-state map-state--error" role="alert" data-testid="map-error">
-		<strong>Erreur de chargement.</strong>
+		<strong>{language.current && t('map.errorTitle')}</strong>
 		<span>{loadError}</span>
 	</div>
 {:else if position}
 	{@const degraded = position.degraded === true}
 	{#if degraded}
 		<div class="map-state map-state--degraded" role="status" data-testid="map-degraded">
-			<strong>GeoIP indisponible.</strong>
+			<strong>{language.current && t('map.degradedTitle')}</strong>
 			<span>
-				La position du serveur n'a pas pu être détectée automatiquement. Vérifiez que la base
-				GeoLite2-City est présente à <code>/var/lib/arenet/GeoLite2-City.mmdb</code> (ou
-				configurez <code>ARENET_GEOIP_MMDB</code>), puis redémarrez. Une position manuelle peut
-				aussi être enregistrée via l'API
-				<code>PUT /api/v1/observability/server-position</code> (UI de Paramètres en V.7).
+				{language.current && t('map.degradedBody1')}
+				<code>/var/lib/arenet/GeoLite2-City.mmdb</code>
+				{language.current && t('map.degradedBody2')}
+				<code>ARENET_GEOIP_MMDB</code>
+				{language.current && t('map.degradedBody3')}
 			</span>
 		</div>
 	{/if}
@@ -204,11 +204,14 @@
 				data-testid="map-lan-pill"
 				data-lan-count={lanCount}
 				role="status"
-				title="Trafic interne (LAN/RFC1918) reçu depuis l'ouverture de la page. Ces événements ne sont pas affichés sur la carte mondiale car leur origine est l'instance Arenet elle-même."
+				title={language.current && t('map.lanPillTitle')}
 			>
 				<span class="lan-pill__icon" aria-hidden="true">⌂</span>
 				<span data-testid="map-lan-pill-count">{lanCount}</span>
-				<span class="lan-pill__label">interne{lanCount > 1 ? 's' : ''} (LAN)</span>
+				<span class="lan-pill__label"
+					>{language.current &&
+						t(lanCount > 1 ? 'map.lanPillLabelMany' : 'map.lanPillLabelOne')}</span
+				>
 			</div>
 		{/if}
 		{#if countryBlockCount > 0}
@@ -225,12 +228,13 @@
 				data-testid="map-country-block-pill"
 				data-country-block-count={countryBlockCount}
 				role="status"
-				title="Requêtes bloquées par la règle de pays par-route depuis l'ouverture de la page. Le compteur reflète les arcs gris sur la carte (mêmes événements)."
+				title={language.current && t('map.countryPillTitle')}
 			>
 				<span class="lan-pill__icon" aria-hidden="true">🛡</span>
 				<span data-testid="map-country-block-pill-count">{countryBlockCount}</span>
 				<span class="lan-pill__label">
-					bloqué{countryBlockCount > 1 ? 's' : ''} (pays)
+					{language.current &&
+						t(countryBlockCount > 1 ? 'map.countryPillLabelMany' : 'map.countryPillLabelOne')}
 				</span>
 			</div>
 		{/if}
@@ -242,13 +246,13 @@
 		>
 			<span class="ws-pill__dot" aria-hidden="true"></span>
 			{#if wsState === 'open'}
-				Live
+				{language.current && t('map.wsLive')}
 			{:else if wsState === 'connecting'}
-				Connexion…
+				{language.current && t('map.wsConnecting')}
 			{:else if wsState === 'reconnecting'}
-				Reconnexion…
+				{language.current && t('map.wsReconnecting')}
 			{:else}
-				Hors ligne
+				{language.current && t('map.wsOffline')}
 			{/if}
 		</div>
 		</div>

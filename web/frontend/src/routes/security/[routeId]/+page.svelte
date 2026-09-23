@@ -202,12 +202,19 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	// category visually identified on /security stays the same
 	// colour here.
 	import { categoryMeta } from '$lib/utils/waf-category';
+
+	// v2.41 — this page mixed French empty states with English chart
+	// headings; every operator-visible string now goes through t().
+	function tl(key: string, params?: Record<string, string | number>): string {
+		void language.current;
+		return t(key, params);
+	}
 </script>
 
 <PageHeader title={language.current && t('pageTitles.securityRoute')} subtitle={route?.host ?? routeId} />
 
 <div class="back-link">
-	<a href="/security">← Vue globale</a>
+	<a href="/security">{tl('securityRoute.backLink')}</a>
 </div>
 
 {#if loading}
@@ -221,11 +228,14 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 {:else if routeNotFound}
 	<Card>
 		<div class="empty-wrap">
-			<h3>Route introuvable</h3>
+			<h3>{tl('securityRoute.notFoundTitle')}</h3>
 			<p>
-				La route <code>{routeId}</code> n'existe pas (ou plus).
-				Retournez à la <a href="/security">vue globale</a> ou à la
-				liste des <a href="/routes">routes</a>.
+				{tl('securityRoute.notFoundBefore')}
+				<code>{routeId}</code>
+				{tl('securityRoute.notFoundMiddle')}
+				<a href="/security">{tl('securityRoute.notFoundOverviewLink')}</a>
+				{tl('securityRoute.notFoundOr')}
+				<a href="/routes">{tl('securityRoute.notFoundRoutesLink')}</a>.
 			</p>
 		</div>
 	</Card>
@@ -233,27 +243,21 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	<!-- AC #10 dedicated empty state for a WAF-off route. -->
 	<Card>
 		<div class="empty-wrap">
-			<h3>WAF non activé pour cette route</h3>
+			<h3>{tl('securityRoute.wafOffTitle')}</h3>
 			<p>
-				La route <strong>{route?.host}</strong> existe mais le WAF est
-				en mode <code>off</code>. Aucun événement de sécurité n'est
-				collecté pour cette route. Modifiez la route depuis la page
-				<a href="/routes">Routes</a> et passez <code>wafMode</code> à
-				<code>detect</code> ou <code>block</code> pour commencer la
-				collecte.
+				{tl('securityRoute.wafOffBefore')}
+				<strong>{route?.host}</strong>
+				{tl('securityRoute.wafOffMiddle')}
+				<a href="/routes">{tl('securityRoute.wafOffRoutesLink')}</a>
+				{tl('securityRoute.wafOffAfter')}
 			</p>
 		</div>
 	</Card>
 {:else if disabled}
 	<Card>
 		<div class="empty-wrap">
-			<h3>Métriques de sécurité indisponibles</h3>
-			<p>
-				Le sous-système d'observabilité n'a pas pu démarrer, donc
-				l'historique des événements WAF est manquant. Le proxy continue
-				de bloquer les requêtes malveillantes selon les règles
-				configurées ; seul ce tableau de bord est temporairement vide.
-			</p>
+			<h3>{tl('securityRoute.disabledTitle')}</h3>
+			<p>{tl('securityRoute.disabledBody')}</p>
 		</div>
 	</Card>
 {:else}
@@ -268,7 +272,7 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 			<button
 				type="button"
 				class:active={window === '30d'}
-				onclick={() => switchWindow('30d')}>30j</button
+				onclick={() => switchWindow('30d')}>{tl('securityRoute.window30d')}</button
 			>
 		</div>
 		<div class="waf-badge waf-{route?.wafMode ?? 'off'}">
@@ -280,45 +284,45 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	<div class="chart-grid">
 		<Card>
 			<div class="chart-block">
-				<h3>WAF blocks / minute</h3>
+				<h3>{tl('securityRoute.chartWafBlocks')}</h3>
 				<TimelineChart
 					points={wafSeries}
 					color="var(--status-down)"
 					formatValue={fmtCount}
-					label="WAF blocks per minute for this route"
+					label={tl('securityRoute.chartWafBlocksAria')}
 				/>
 			</div>
 		</Card>
 		<Card>
 			<div class="chart-block">
-				<h3>4xx / minute (context)</h3>
+				<h3>{tl('securityRoute.chart4xx')}</h3>
 				<TimelineChart
 					points={fourxxSeries}
 					color="var(--status-warn)"
 					formatValue={fmtCount}
-					label="4xx responses per minute for this route"
+					label={tl('securityRoute.chart4xxAria')}
 				/>
 			</div>
 		</Card>
 		<Card>
 			<div class="chart-block">
-				<h3>5xx / minute (context)</h3>
+				<h3>{tl('securityRoute.chart5xx')}</h3>
 				<TimelineChart
 					points={fivexxSeries}
 					color="var(--status-down)"
 					formatValue={fmtCount}
-					label="5xx responses per minute for this route"
+					label={tl('securityRoute.chart5xxAria')}
 				/>
 			</div>
 		</Card>
 		<Card>
 			<div class="chart-block">
-				<h3>Requêtes / minute (context)</h3>
+				<h3>{tl('securityRoute.chartRequests')}</h3>
 				<TimelineChart
 					points={reqSeries}
 					color="var(--accent-cyan)"
 					formatValue={fmtCount}
-					label="Requests per minute for this route"
+					label={tl('securityRoute.chartRequestsAria')}
 				/>
 			</div>
 		</Card>
@@ -330,12 +334,12 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 		     enforcement signals above. -->
 		<Card>
 			<div class="chart-block">
-				<h3>Rate-limit (429) / minute</h3>
+				<h3>{tl('securityRoute.chartRateLimit')}</h3>
 				<TimelineChart
 					points={rateLimitSeries}
 					color="var(--status-warn)"
 					formatValue={fmtCount}
-					label="HTTP 429 rate-limit responses per minute for this route"
+					label={tl('securityRoute.chartRateLimitAria')}
 				/>
 			</div>
 		</Card>
@@ -344,20 +348,17 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	<!-- Per-rule breakdown table (M.4 step 2) -->
 	<Card>
 		<div class="block">
-			<h3>Règles déclenchées (fenêtre récente)</h3>
+			<h3>{tl('securityRoute.rulesTitle')}</h3>
 			{#if ruleBreakdown.length === 0}
-				<div class="empty-inline">
-					Aucun événement WAF dans la fenêtre récente pour cette
-					route.
-				</div>
+				<div class="empty-inline">{tl('securityRoute.rulesEmpty')}</div>
 			{:else}
 				<table>
 					<thead>
 						<tr>
-							<th>Rule</th>
-							<th>Category</th>
-							<th class="num">Count</th>
-							<th>Last seen</th>
+							<th>{tl('securityRoute.colRule')}</th>
+							<th>{tl('securityRoute.colCategory')}</th>
+							<th class="num">{tl('securityRoute.colCount')}</th>
+							<th>{tl('securityRoute.colLastSeen')}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -385,7 +386,7 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	<!-- Recent events (route-scoped, compact = no route column) -->
 	<Card>
 		<div class="block">
-			<h3>Événements WAF récents</h3>
+			<h3>{tl('securityRoute.recentTitle')}</h3>
 			<WafEventList events={recentEvents} compact host={route?.host ?? routeId} onExcluded={() => void load()} />
 		</div>
 	</Card>
@@ -394,13 +395,13 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 	{#if route}
 		<Card>
 			<div class="meta-block">
-				<h3>Route</h3>
+				<h3>{tl('securityRoute.routeTitle')}</h3>
 				<dl>
-					<dt>Host</dt>
+					<dt>{tl('securityRoute.routeHost')}</dt>
 					<dd>{route.host}</dd>
-					<dt>WAF mode</dt>
+					<dt>{tl('securityRoute.routeWafMode')}</dt>
 					<dd><code>{route.wafMode}</code></dd>
-					<dt>Upstreams</dt>
+					<dt>{tl('securityRoute.routeUpstreams')}</dt>
 					<dd>
 						{#each route.upstreams as up, i (i)}
 							<code>{up.url}</code
@@ -412,9 +413,7 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 					<dd><code>{routeId}</code></dd>
 				</dl>
 				<div class="pivot">
-					<a href="/observability/{routeId}">
-						View performance drill-down (req / latency) →
-					</a>
+					<a href="/observability/{routeId}">{tl('securityRoute.perfPivot')}</a>
 				</div>
 			</div>
 		</Card>
