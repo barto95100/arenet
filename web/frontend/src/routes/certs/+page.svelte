@@ -34,6 +34,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import StatCard from '$lib/components/StatCard.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
@@ -516,31 +517,35 @@
 {#if loading}
 	<div class="loading-wrap"><Spinner /></div>
 {:else}
+	<!-- v2.41 — these four tiles were a scoped-CSS copy of StatCard;
+	     the component now carries the same treatment, with variant
+	     "text" for the two readings that are words, not numbers. -->
 	<div class="kpis">
-		<div class="kpi" data-testid="kpi-certs-actifs">
-			<div class="kpi-label">{language.current && t('certs.kpiActiveCertsLabel')}</div>
-			<div class="kpi-val">{certsTotal}</div>
-			<div class="kpi-foot">
-				{language.current && t('certs.kpiActiveCertsFoot', { wildcard: certsWildcard, specific: certsSpecific })}{certsSpecific === 1 ? '' : 's'}
-			</div>
-		</div>
-		<div class="kpi" data-testid="kpi-expirent-bientot">
-			<div class="kpi-label">{language.current && t('certs.kpiExpiringLabel', { days: RENEWAL_WINDOW_DAYS })}</div>
-			<div class="kpi-val">{certsExpiringSoon}</div>
-			<div class="kpi-foot">
-				{language.current && (certsExpiringSoon > 0 ? t('certs.kpiExpiringFootAuto') : '—')}
-			</div>
-		</div>
-		<div class="kpi" data-testid="kpi-emetteur">
-			<div class="kpi-label">{language.current && t('certs.kpiIssuerLabel')}</div>
-			<div class="kpi-val mode">{principalIssuer}</div>
-			<div class="kpi-foot">&nbsp;</div>
-		</div>
-		<div class="kpi" data-testid="kpi-methode">
-			<div class="kpi-label">{language.current && t('certs.kpiACMEMethodLabel')}</div>
-			<div class="kpi-val mode">{acmeMethodLabel}</div>
-			<div class="kpi-foot">{acmeMethodSub}</div>
-		</div>
+		<StatCard
+			testid="kpi-certs-actifs"
+			label={language.current && t('certs.kpiActiveCertsLabel')}
+			value={certsTotal}
+			hint={language.current && `${t('certs.kpiActiveCertsFoot', { wildcard: certsWildcard, specific: certsSpecific })}${certsSpecific === 1 ? '' : 's'}`}
+		/>
+		<StatCard
+			testid="kpi-expirent-bientot"
+			label={language.current && t('certs.kpiExpiringLabel', { days: RENEWAL_WINDOW_DAYS })}
+			value={certsExpiringSoon}
+			hint={language.current && (certsExpiringSoon > 0 ? t('certs.kpiExpiringFootAuto') : '—')}
+		/>
+		<StatCard
+			testid="kpi-emetteur"
+			label={language.current && t('certs.kpiIssuerLabel')}
+			value={principalIssuer}
+			variant="text"
+		/>
+		<StatCard
+			testid="kpi-methode"
+			label={language.current && t('certs.kpiACMEMethodLabel')}
+			value={acmeMethodLabel}
+			variant="text"
+			hint={acmeMethodSub}
+		/>
 	</div>
 
 	<!-- Auto-renewal info card (Pack A).
@@ -1109,35 +1114,7 @@
 		gap: 12px;
 		margin-bottom: 14px;
 	}
-	.kpi {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		padding: 14px 16px;
-	}
-	.kpi-label {
-		color: var(--fg-muted);
-		font-size: 11px;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		font-family: var(--font-mono);
-		margin-bottom: 6px;
-	}
-	.kpi-val {
-		color: var(--fg);
-		font-size: 24px;
-		font-weight: 500;
-		letter-spacing: -0.02em;
-	}
-	.kpi-val.mode {
-		font-size: 18px;
-	}
-	.kpi-foot {
-		color: var(--fg-muted);
-		font-size: 11.5px;
-		margin-top: 8px;
-		font-family: var(--font-mono);
-	}
+	/* v2.41 — the tile rules live in StatCard.svelte now. */
 
 	/* Auto-renewal info card. Uses the accent token for the
 	   border + a soft accent tint for the background so the
