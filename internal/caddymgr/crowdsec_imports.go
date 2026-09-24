@@ -23,11 +23,20 @@ package caddymgr
 // via blank imports so Caddy's module registry knows about both
 // IDs before our emitted JSON config asks for them.
 //
-// The bouncer also registers `appsec` and `layer4` modules; we
-// import the umbrella package to mirror the upstream
-// recommendation, even though Step N v1.0 does NOT exercise AppSec
-// or layer4 (see Step N spec §8 out-of-scope). Future Step N
-// revisions that add AppSec would not need an import change.
+// The bouncer also registers `appsec` and `layer4` modules. Step N
+// v1.0 exercised neither, but v2.42 emits `layer4.matchers.crowdsec`
+// for TCP services with CrowdSec armed — and each of the bouncer's
+// subpackages registers ONLY its own module in its own `init()`, so
+// importing `crowdsec` + `http` did not bring the layer-4 matcher in.
+//
+// The miss survived the test suite because the CrowdSec paths are
+// the one family deliberately kept away from `caddy.Validate` (a
+// provision dials LAPI, see crowdsec_test.go:301). The guard is
+// therefore a registry lookup rather than a validate:
+// TestLayer4ModuleIDs_AllRegistered in layer4_test.go asserts every
+// module ID buildLayer4App can emit resolves in Caddy's registry,
+// which is exactly the check that would have caught this at build
+// time instead of at the operator's first save.
 //
 // File kept separate from manager.go so the dependency direction
 // is obvious in a single `git grep` for the import path. This
@@ -44,4 +53,7 @@ import (
 	// enforces decisions (403 ban / 429 throttle / 403
 	// captcha-fallback per the bouncer's writeResponse switch).
 	_ "github.com/hslatman/caddy-crowdsec-bouncer/http"
+	// layer4.matchers.crowdsec — the same decisions, applied to a
+	// raw connection before the relay dials the backend (v2.42).
+	_ "github.com/hslatman/caddy-crowdsec-bouncer/layer4"
 )
