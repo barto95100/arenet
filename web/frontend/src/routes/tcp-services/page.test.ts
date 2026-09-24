@@ -259,7 +259,13 @@ describe('/tcp-services — empty state layout', () => {
 		// The diagram explains what the sentence says.
 		const diagram = empty.querySelector('[role="img"]');
 		expect(diagram).not.toBeNull();
-		expect(diagram?.getAttribute('aria-label') ?? '').toMatch(/without reading/i);
+		const described = diagram?.getAttribute('aria-label') ?? '';
+		expect(described).toMatch(/without reading/i);
+		expect(described).toMatch(/client IP/i);
+		// v2.42.2 — one row. The HTTP route drawn above for contrast
+		// only made the row that matters harder to read.
+		expect(diagram?.querySelectorAll('.node').length).toBe(3);
+		expect(described).not.toMatch(/inspect/i);
 	});
 
 	it('steps aside once the form is open, so the form is not pushed off screen', async () => {
