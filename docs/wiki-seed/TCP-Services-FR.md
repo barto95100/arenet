@@ -57,7 +57,11 @@ Arenet envoie l'en-tête quand tu choisis **v2** (ou v1, en TCP seulement — la
 | Postfix | `postscreen_upstream_proxy_protocol = haproxy` |
 | Dovecot | `haproxy_trusted_networks` + `haproxy = yes` sur l'écouteur |
 
-Le formulaire affiche l'adresse à déclarer, et le bouton **Tester les backends** ouvre une vraie connexion pour vérifier l'autre bout avant de faire confiance au relais. Un test réussi prouve que le backend accepte les connexions — il ne peut pas prouver qu'il attend l'en-tête, d'où la note qui reste affichée.
+Le formulaire affiche l'adresse à déclarer, et le bouton **Tester les backends** vérifie l'autre bout avant que tu fasses confiance au relais.
+
+Depuis la v2.43, le test envoie un **vrai en-tête PROXY** — le même que celui du relais — puis observe ce que le backend en fait. Ce qui marque un refus, c'est la fermeture, pas le silence ni les octets : un backend qui n'est pas configuré pour cet en-tête le lit comme son propre protocole, n'y comprend rien et raccroche, parfois après avoir répondu quelque chose. Un backend qui l'attend, lui, le consomme et attend que le client parle — ce qui, sur un port en TLS implicite, revient à ne rien dire du tout. Le verdict est donc **en-tête non refusé** ou **en-tête refusé**, jamais « accepté » : une seule connexion ne peut pas prouver que l'autre bout l'a analysé, seulement qu'il ne l'a pas rejeté.
+
+Un relais **UDP** est signalé comme *non testable*. Il n'y a aucune connexion à ouvrir, donc la réponse honnête est que la question n'a pas de réponse ; avant la v2.43 le test ouvrait une connexion TCP quel que soit le protocole, et déclarait en panne tout relais UDP parfaitement sain.
 
 ---
 
@@ -78,6 +82,8 @@ ports:
 ## Le surveiller
 
 Le trafic de niveau 4 ne traverse aucune chaîne HTTP : il n'apparaît dans aucune métrique de route, aucune ligne de journal, aucune tuile du tableau de bord. La colonne **Trafic** de la liste est la vue : connexions acceptées, connexions ouvertes en ce moment, octets dans chaque sens, et connexions que le relais n'a pas pu mener à bien — presque toujours un backend qui refuse ou qui ne répond pas.
+
+Depuis la v2.43, cette colonne **se rafraîchit toute seule**, toutes les cinq secondes, et les octets avancent **pendant qu'une connexion est ouverte**. Auparavant ils n'étaient ajoutés qu'à la fermeture : une session IMAP de téléphone, qui reste ouverte des heures, affichait 0 o pour un relais occupé en permanence.
 
 Les mêmes compteurs sont disponibles sur `GET /api/v1/tcp-services/metrics`.
 

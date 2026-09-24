@@ -280,3 +280,136 @@ describe('/tcp-services — empty state layout', () => {
 		expect(screen.getByTestId('tcp-empty-compact')).toBeInTheDocument();
 	});
 });
+
+// --- v2.43 — the test proves the pairing, the list moves on its own
+//
+// Two things the page could not do before. The test button opened a
+// connection and closed it, which said nothing about the PROXY
+// pairing — the failure that actually breaks relays, and the one the
+// operator hit in production. And the traffic column only moved on a
+// manual reload, which for a feature whose traffic appears nowhere
+// else in the UI turned a live view into a snapshot.
+
+describe('/tcp-services — the PROXY verdict', () => {
+	it('shows that the backend did not refuse the header', async () => {
+		api.listTCPServices.mockResolvedValue([service()]);
+		api.testTCPService.mockResolvedValue({
+			backends: [
+				{ backend: '10.20.0.5:993', ok: true, elapsedMs: 3, proxyProtocol: 'not-refused' }
+			],
+			proxyProtocolNote: 'On Stalwart, that is proxyTrustedNetworks.'
+		});
+		render(Page);
+
+		await userEvent.click(await screen.findByTestId('tcp-row-svc1'));
+		await tick();
+		await userEvent.click(screen.getByText('Test the backends'));
+
+		await waitFor(() => expect(screen.getByTestId('tcp-test-result')).toBeInTheDocument());
+		const text = screen.getByTestId('tcp-test-result').textContent ?? '';
+		expect(text).toMatch(/not refused/i);
+		// The wording must not overclaim: one connection cannot prove
+		// the far side parsed the header, only that it did not hang up.
+		expect(text).not.toMatch(/accepted/i);
+	});
+
+	it('names the refusal when the backend hangs up', async () => {
+		api.listTCPServices.mockResolvedValue([service()]);
+		api.testTCPService.mockResolvedValue({
+			backends: [{ backend: '10.20.0.5:993', ok: true, elapsedMs: 2, proxyProtocol: 'refused' }]
+		});
+		render(Page);
+
+		await userEvent.click(await screen.findByTestId('tcp-row-svc1'));
+		await tick();
+		await userEvent.click(screen.getByText('Test the backends'));
+
+		await waitFor(() => expect(screen.getByTestId('tcp-test-result')).toBeInTheDocument());
+		const text = screen.getByTestId('tcp-test-result').textContent ?? '';
+		// The dial succeeded, so the row is not an error — the verdict
+		// on the header is the separate, useful part.
+		expect(text).toContain('10.20.0.5:993');
+		expect(text).toMatch(/refused/i);
+		expect(text).toMatch(/not expecting it/i);
+	});
+
+	it('reports a UDP backend as untestable rather than broken', async () => {
+		api.listTCPServices.mockResolvedValue([
+			service({ protocol: 'udp', listenPort: 51820, name: 'wireguard' })
+		]);
+		api.testTCPService.mockResolvedValue({
+			backends: [
+				{
+					backend: '10.20.0.9:51820',
+					ok: false,
+					skipped: true,
+					elapsedMs: 0,
+					error: 'UDP is connectionless: there is no handshake to attempt.'
+				}
+			]
+		});
+		render(Page);
+
+		await userEvent.click(await screen.findByTestId('tcp-row-svc1'));
+		await tick();
+		await userEvent.click(screen.getByText('Test the backends'));
+
+		await waitFor(() => expect(screen.getByTestId('tcp-test-result')).toBeInTheDocument());
+		const text = screen.getByTestId('tcp-test-result').textContent ?? '';
+		expect(text).toMatch(/not testable/i);
+		expect(text).toMatch(/connectionless/i);
+		// Not a failure: the cross would read as "your relay is broken".
+		expect(text).not.toContain('✕');
+	});
+});
+
+describe('/tcp-services — live counters', () => {
+	it('refreshes the traffic column without a reload', async () => {
+		vi.useFakeTimers();
+		try {
+			api.listTCPServices.mockResolvedValue([service()]);
+			api.tcpServicesMetrics.mockResolvedValue({
+				svc1: { connections: 1, active: 1, bytesIn: 100, bytesOut: 200, errors: 0 }
+			});
+			render(Page);
+			await vi.waitFor(() => expect(screen.getByTestId('tcp-traffic-svc1')).toBeInTheDocument());
+			expect(screen.getByTestId('tcp-traffic-svc1').textContent).toContain('100');
+
+			// The session carries on: the counters must move on their
+			// own, which is the whole point for a long-lived relay.
+			api.tcpServicesMetrics.mockResolvedValue({
+				svc1: { connections: 1, active: 1, bytesIn: 4096, bytesOut: 200, errors: 0 }
+			});
+			await vi.advanceTimersByTimeAsync(5000);
+			await vi.waitFor(() =>
+				expect(screen.getByTestId('tcp-traffic-svc1').textContent).toContain('4.0 kB')
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('keeps the last good values when a tick fails', async () => {
+		vi.useFakeTimers();
+		try {
+			api.listTCPServices.mockResolvedValue([service()]);
+			api.tcpServicesMetrics.mockResolvedValue({
+				svc1: { connections: 7, active: 0, bytesIn: 100, bytesOut: 200, errors: 0 }
+			});
+			render(Page);
+			await vi.waitFor(() => expect(screen.getByTestId('tcp-row-svc1')).toBeInTheDocument());
+
+			api.listTCPServices.mockRejectedValue(new Error('network down'));
+			api.tcpServicesMetrics.mockRejectedValue(new Error('network down'));
+			await vi.advanceTimersByTimeAsync(5000);
+
+			// A failed poll must not blank the page the operator is
+			// looking at, nor raise an error banner over stale-but-true
+			// numbers.
+			expect(screen.getByTestId('tcp-row-svc1')).toBeInTheDocument();
+			expect(screen.getByTestId('tcp-traffic-svc1').textContent).toContain('7');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});

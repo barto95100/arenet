@@ -19,7 +19,6 @@ package l4metrics
 import (
 	"net"
 	"sync"
-	"sync/atomic"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/mholt/caddy-l4/layer4"
@@ -67,12 +66,13 @@ func (h Handler) Handle(cx *layer4.Connection, next layer4.Handler) error {
 	}
 
 	reg.Opened(h.ServiceID)
-	counted := &countingConn{Conn: cx.Conn}
-	// Report once, whatever happens below — a handler that panicked
-	// or returned early must not leave the active gauge climbing.
-	defer func() {
-		reg.Closed(h.ServiceID, counted.read.Load(), counted.written.Load())
-	}()
+	counted := &countingConn{Conn: cx.Conn, rec: reg.RecorderFor(h.ServiceID)}
+	// Close the gauge once, whatever happens below — a handler that
+	// panicked or returned early must not leave it climbing. The
+	// bytes are already in: countingConn records them as they cross,
+	// so a session that stays open for hours is visible while it is
+	// open rather than only once it ends.
+	defer reg.Closed(h.ServiceID)
 
 	err := next.Handle(cx.Wrap(counted))
 	if err != nil {
@@ -81,18 +81,17 @@ func (h Handler) Handle(cx *layer4.Connection, next layer4.Handler) error {
 	return err
 }
 
-// countingConn counts what crosses it. Reads are what the client
-// sent, writes are what it received.
+// countingConn counts what crosses it, into the registry as it goes.
+// Reads are what the client sent, writes are what it received.
 type countingConn struct {
 	net.Conn
-	read    atomic.Uint64
-	written atomic.Uint64
+	rec *Recorder
 }
 
 func (c *countingConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
-		c.read.Add(uint64(n))
+		c.rec.AddIn(uint64(n))
 	}
 	return n, err
 }
@@ -100,7 +99,7 @@ func (c *countingConn) Read(p []byte) (int, error) {
 func (c *countingConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n > 0 {
-		c.written.Add(uint64(n))
+		c.rec.AddOut(uint64(n))
 	}
 	return n, err
 }

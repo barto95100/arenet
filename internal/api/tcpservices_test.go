@@ -17,13 +17,16 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/storage"
@@ -330,4 +333,192 @@ func auditHasAction(env *testEnv, action string) bool {
 		}
 	}
 	return false
+}
+
+// --- v2.43 — the test sends the header it claims to send ---------
+//
+// Until now the test opened a connection and closed it. That proved
+// the backend accepts connections, which is rarely the thing in
+// doubt, and said nothing about the pairing that actually breaks
+// relays — the operator could watch a green tick while every real
+// connection was being refused. Worse, against a backend that *is*
+// configured, the bare dial writes a "proxy protocol error / end of
+// stream" line into its log on every click.
+
+// proxyProbeServer accepts one connection, records the first bytes it
+// receives, and then either lingers or hangs up — the two behaviours
+// that separate a backend expecting the header from one that is not.
+func proxyProbeServer(t *testing.T, hangUp bool) (host string, port int, first func() []byte) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	var mu sync.Mutex
+	var got []byte
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 64)
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, _ := conn.Read(buf)
+		mu.Lock()
+		got = append(got, buf[:n]...)
+		mu.Unlock()
+		if hangUp {
+			return
+		}
+		// Expecting the header: consume it and wait for the real
+		// client to speak, which an implicit-TLS port never does
+		// until the client sends its ClientHello.
+		time.Sleep(1500 * time.Millisecond)
+	}()
+
+	h, p, _ := net.SplitHostPort(ln.Addr().String())
+	return h, atoiForTest(t, p), func() []byte {
+		<-done
+		mu.Lock()
+		defer mu.Unlock()
+		return got
+	}
+}
+
+func tcpTestReport(t *testing.T, env *testEnv, id string) tcpServiceTestResponse {
+	t.Helper()
+	rec := tcpDo(t, env, http.MethodPost, "/api/v1/tcp-services/"+id+"/test", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test: want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var report tcpServiceTestResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	return report
+}
+
+func createTCPServiceForTest(t *testing.T, env *testEnv, over map[string]any) storage.TCPService {
+	t.Helper()
+	rec := tcpDo(t, env, http.MethodPost, "/api/v1/tcp-services", tcpServiceBody(t, over))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var created storage.TCPService
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created: %v", err)
+	}
+	return created
+}
+
+func TestTCPService_TestSendsARealProxyHeader(t *testing.T) {
+	env := newTestEnv(t, false)
+	host, port, first := proxyProbeServer(t, false)
+
+	created := createTCPServiceForTest(t, env, map[string]any{
+		"proxyProtocol": "v2",
+		"upstreams":     []map[string]any{{"host": host, "port": port}},
+	})
+
+	report := tcpTestReport(t, env, created.ID)
+	if len(report.Backends) != 1 || !report.Backends[0].OK {
+		t.Fatalf("backend must answer: %+v", report.Backends)
+	}
+	if report.Backends[0].ProxyProtocol != proxyProbeNotRefused {
+		t.Fatalf("a backend that lingers must read as not refused: %+v", report.Backends[0])
+	}
+
+	// The bytes on the wire, not the claim: PROXY v2 opens with a
+	// fixed 12-byte signature, then 0x21 for version 2 / PROXY, then
+	// 0x11 for TCP over IPv4. 16 bytes of header + 12 of addresses.
+	sig := []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
+	got := first()
+	if len(got) != 28 {
+		t.Fatalf("want a 28-byte v2 header for IPv4/TCP, got %d bytes: %x", len(got), got)
+	}
+	if !bytes.Equal(got[:12], sig) {
+		t.Fatalf("PROXY v2 signature missing: %x", got[:12])
+	}
+	if got[12] != 0x21 || got[13] != 0x11 {
+		t.Fatalf("want version/command 0x21 and family 0x11, got %#x %#x", got[12], got[13])
+	}
+}
+
+func TestTCPService_TestReportsARefusedHeader(t *testing.T) {
+	env := newTestEnv(t, false)
+	host, port, _ := proxyProbeServer(t, true)
+
+	created := createTCPServiceForTest(t, env, map[string]any{
+		"proxyProtocol": "v2",
+		"upstreams":     []map[string]any{{"host": host, "port": port}},
+	})
+
+	report := tcpTestReport(t, env, created.ID)
+	// The dial succeeded — the backend is up. What it did with the
+	// header is the separate verdict, and it is the one that matters.
+	if !report.Backends[0].OK {
+		t.Fatalf("the backend was reachable: %+v", report.Backends[0])
+	}
+	if report.Backends[0].ProxyProtocol != proxyProbeRefused {
+		t.Fatalf("a backend that hangs up must read as refused: %+v", report.Backends[0])
+	}
+}
+
+// Without a PROXY protocol configured there is nothing to probe, and
+// the result must not pretend otherwise.
+func TestTCPService_TestSaysNothingWhenNoHeaderIsSent(t *testing.T) {
+	env := newTestEnv(t, false)
+	host, port, _ := proxyProbeServer(t, false)
+
+	created := createTCPServiceForTest(t, env, map[string]any{
+		"upstreams": []map[string]any{{"host": host, "port": port}},
+	})
+
+	report := tcpTestReport(t, env, created.ID)
+	if report.Backends[0].ProxyProtocol != "" {
+		t.Fatalf("no header sent, no verdict: %+v", report.Backends[0])
+	}
+	if report.ProxyProtocolNote != "" {
+		t.Fatalf("no note either: %q", report.ProxyProtocolNote)
+	}
+}
+
+// A UDP relay has no connection to open. The previous version dialled
+// TCP whatever the protocol said, so a healthy WireGuard or DNS relay
+// was reported broken — a confident wrong answer, which is worse than
+// admitting the question cannot be answered.
+func TestTCPService_TestSkipsUDPInsteadOfFailingIt(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	created := createTCPServiceForTest(t, env, map[string]any{
+		"name":          "wireguard",
+		"protocol":      "udp",
+		"proxyProtocol": "v2",
+		"upstreams":     []map[string]any{{"host": "127.0.0.1", "port": freePort(t)}},
+	})
+
+	report := tcpTestReport(t, env, created.ID)
+	if len(report.Backends) != 1 {
+		t.Fatalf("one result per backend: %+v", report.Backends)
+	}
+	res := report.Backends[0]
+	if !res.Skipped {
+		t.Fatalf("a UDP backend must be reported as skipped: %+v", res)
+	}
+	if res.OK {
+		t.Fatalf("skipped is not success: %+v", res)
+	}
+	if !strings.Contains(res.Error, "connectionless") {
+		t.Fatalf("the reason must say why, not just that it failed: %q", res.Error)
+	}
+	// v2 over UDP is legal, so the pairing note still applies.
+	if !strings.Contains(report.ProxyProtocolNote, "proxyTrustedNetworks") {
+		t.Fatalf("the note must survive the UDP path: %q", report.ProxyProtocolNote)
+	}
 }

@@ -57,7 +57,11 @@ Arenet sends the header when you pick **v2** (or v1, TCP only — v1 carries no 
 | Postfix | `postscreen_upstream_proxy_protocol = haproxy` |
 | Dovecot | `haproxy_trusted_networks` + `haproxy = yes` on the listener |
 
-The form prints the address to trust, and the **Test the backends** button opens a real connection so you can check the far side before trusting the relay. A successful dial proves the backend accepts connections — it cannot prove it expects the header, which is why the note stays on screen.
+The form prints the address to trust, and the **Test the backends** button checks the far side before you trust the relay.
+
+Since v2.43 the test sends a **real PROXY header** — the same one the relay sends — and then watches what the backend does with it. What marks a refusal is the close, not the silence and not the bytes: a backend that is not configured for the header reads it as its own protocol, fails to parse it and hangs up, sometimes after answering something first. A backend that *is* configured consumes the header and waits for the client to speak, which on an implicit-TLS port means saying nothing at all. So the verdict is **header not refused** or **header refused**, never "accepted" — one connection cannot prove the far side parsed it, only that it did not reject it.
+
+A **UDP** relay is reported as *not testable*. There is no connection to open, so the honest answer is that the question cannot be answered; before v2.43 the test dialled TCP regardless and reported every healthy UDP relay as broken.
 
 ---
 
@@ -78,6 +82,8 @@ ports:
 ## Watching it
 
 Layer-4 traffic crosses no HTTP chain, so it appears in no route metric, no log line and no dashboard tile. The **Traffic** column of the services list is the view: connections accepted, how many are open right now, bytes each way, and connections the relay could not complete — almost always a backend that refused or timed out.
+
+Since v2.43 the column **refreshes on its own**, every five seconds, and the bytes move **while a connection is open**. Before that they were only added when a connection closed, so a phone's IMAP session — which stays open for hours — showed 0 B for a relay that was busy the whole time.
 
 The same counters are available at `GET /api/v1/tcp-services/metrics`.
 
