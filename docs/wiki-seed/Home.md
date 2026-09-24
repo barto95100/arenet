@@ -13,6 +13,7 @@ If you're new : start with [Installation](Installation), then follow [Routes](Ro
 ### Get started
 - **[Installation](Installation)** — Docker, native systemd, first-boot wizard
 - **[Routes](Routes)** — your first reverse proxy route, TLS, upstreams, aliases, source IP filter, path rules, Caddyfile import
+- **[TCP / UDP services](TCP-Services)** — relay raw TCP or UDP (mail, databases, SSH, WireGuard) with the real client IP preserved
 - **[DNS Providers](DNS-Providers)** — 9 DNS providers (OVHcloud, Cloudflare, Hetzner, Route 53…) for wildcard (DNS-01) certificates, with a connection test
 - **[Topology](Topology)** — live dashboard with real-time traffic visualization
 
@@ -67,6 +68,7 @@ This wiki tracks **Arenet v2.40.x** (the current stable release line). Older ver
 | Concept | UI path | API path | Storage |
 | ------- | ------- | -------- | ------- |
 | Routes | `/routes` | `/api/v1/routes` | BoltDB `routes` bucket |
+| TCP / UDP services | `/tcp-services` | `/api/v1/tcp-services` | BoltDB `tcp_services` bucket |
 | Certificates | `/certs` | `/api/v1/certificates` | Caddy storage + cert tracker |
 | DNS providers | `/settings` (DNS Providers) | `/api/v1/settings/dns-providers` | BoltDB `dns_providers` bucket |
 | WAF events | `/security` | `/api/v1/security/events` | SQLite `waf_event` table |

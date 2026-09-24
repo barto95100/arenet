@@ -13,6 +13,7 @@ Si tu débutes : commence par [Installation](Installation-FR), puis suis [Routes
 ### Démarrer
 - **[Installation](Installation-FR)** — Docker, systemd natif, wizard de premier boot
 - **[Routes](Routes-FR)** — ta première route de reverse proxy, TLS, upstreams, alias, filtrage IP source, règles par chemin, import d'un Caddyfile
+- **[Services TCP / UDP](TCP-Services-FR)** — relayer du TCP ou de l'UDP brut (messagerie, bases de données, SSH, WireGuard) en préservant l'IP réelle du client
 - **[DNS Providers](DNS-Providers-FR)** — 9 fournisseurs DNS (OVHcloud, Cloudflare, Hetzner, Route 53…) pour les certificats wildcard (DNS-01), avec test de connexion
 - **[Topology](Topology-FR)** — dashboard live avec visualisation de trafic en temps réel
 
@@ -67,6 +68,7 @@ Ce wiki suit **Arenet v2.40.x** (la ligne de release stable courante). Les versi
 | Concept | Chemin UI | Chemin API | Stockage |
 | ------- | --------- | ---------- | -------- |
 | Routes | `/routes` | `/api/v1/routes` | BoltDB bucket `routes` |
+| Services TCP / UDP | `/tcp-services` | `/api/v1/tcp-services` | BoltDB bucket `tcp_services` |
 | Certificats | `/certs` | `/api/v1/certificates` | Caddy storage + cert tracker |
 | DNS providers | `/settings` (DNS Providers) | `/api/v1/settings/dns-providers` | BoltDB `dns_providers` bucket |
 | Événements WAF | `/security` | `/api/v1/security/events` | SQLite table `waf_event` |

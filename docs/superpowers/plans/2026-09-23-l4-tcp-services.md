@@ -81,13 +81,13 @@ Cible : **v2.42.0**. Cas de validation : Stalwart sur une VM d'un autre réseau.
 4. **Modules + build** *(fait — PR 1 : v0.1.1, binaire 111,1 → 111,4 Mo)* — import `caddy-l4`, `go.mod` en dépendance directe,
    `go build` et `go vet` verts, vérification que la taille du binaire reste
    raisonnable (le module est déjà dans l'arbre, l'ajout doit être marginal).
-5. **API** — handlers CRUD + `/test`, rattachement au routeur, audit, rôles
+5. **API** *(fait — PR 2)* — handlers CRUD + `/test`, rattachement au routeur, audit, rôles
    (admin uniquement), fragment **OpenAPI** (le test de couverture des deux
    sens échouera tant qu'il manque).
-6. **Rechargement** — `ReloadFromStore` prend les services en compte ; un
+6. **Rechargement** *(fait — PR 2)* — `ReloadFromStore` prend les services en compte ; un
    service invalide n'empêche pas les routes HTTP de se recharger (L10) ;
    journalisation `slog` du nombre de services montés et des ports écoutés.
-7. **Frontend** — page liste (pastilles : CrowdSec, filtrage IP, limite),
+7. **Frontend** *(fait — PR 3, plus les compteurs en PR « métriques »)* — page liste (pastilles : CrowdSec, filtrage IP, limite),
    panneau d'édition en sections, avertissement Docker quand
    `ARENET_IN_CONTAINER`/détection `/.dockerenv`, encart PROXY protocol
    affichant l'IP d'Arenet à reporter dans `proxyTrustedNetworks`, bouton
@@ -95,15 +95,15 @@ Cible : **v2.42.0**. Cas de validation : Stalwart sur une VM d'un autre réseau.
    i18n FR + EN, tests Vitest.
 8. **Topologie** — les services TCP apparaissent à côté des routes (nœud
    service → backends), en lecture seule.
-9. **Packaging** — `AmbientCapabilities=CAP_NET_BIND_SERVICE` +
+9. **Packaging** *(fait — la capability était déjà dans l'unité ; commentaire élargi aux ports L4, exemple Docker complété)* — `AmbientCapabilities=CAP_NET_BIND_SERVICE` +
    `NoNewPrivileges` compatible dans `packaging/systemd/arenet.service`,
    mention dans l'installeur ; `docker-compose.yml` d'exemple avec les ports
    mail commentés.
-10. **Docs** — page wiki **Services TCP** (EN + FR) avec le cas Stalwart de bout
+10. **Docs** *(fait)* — page wiki **Services TCP** (EN + FR) avec le cas Stalwart de bout
     en bout : ports 25/465/587/993 (+4190 restreint), `proxyTrustedNetworks`,
     l'avertissement « un seul côté = casse silencieuse », le rappel SPF/rDNS
     sortant, et la route de relais ACME `/.well-known/acme-challenge/*`.
-11. **Smoke binaire réel** — service vers un `nc -l` : connexion relayée,
+11. **Smoke binaire réel** *(fait à chaque PR : bannière PROXY v2 en TCP puis en UDP, compteurs exacts)* — service vers un `nc -l` : connexion relayée,
     **bannière PROXY v2 lue en tête de flux**, filtre IP qui refuse une source
     hors plage, port réservé refusé avant application, et zéro service →
     config identique.
@@ -135,3 +135,18 @@ Smoke (tâche 11) à la fin de la PR 2 **et** rejoué à la fin de la PR 4.
 `npm run build` verts ; non-régression byte-identique prouvée ; smoke binaire
 réel joué ; wiki EN + FR ; et le cas Stalwart de l'opérateur fonctionne avec
 l'IP client réelle visible dans les journaux de Stalwart.
+
+## Écarts par rapport au plan, et pourquoi
+
+- **8. Topologie : non fait.** Le plan la prévoyait en PR 4. Les compteurs de la
+  PR « métriques » donnent déjà la visibilité qui manquait, et représenter un
+  relais dans un graphe pensé pour des hôtes HTTP demande un vrai travail de
+  conception — à traiter séparément plutôt qu'à bâcler ici.
+- **UDP : avancé en amont.** Prévu en v2, ajouté juste après la PR 1 parce que
+  l'opérateur a recadré le périmètre (« pas seulement Stalwart ») et qu'un champ
+  de protocole coûte une heure sur un modèle jeune contre une migration après
+  l'interface.
+- **Sauvegarde des services : lacune.** La tâche 1 la mentionnait, la PR 1 l'a
+  oubliée. Rattrapée avec l'UDP.
+- **Métriques L4 : ajoutées au plan.** Elles n'y figuraient pas ; sans elles un
+  relais est la seule partie de l'installation que personne ne peut surveiller.

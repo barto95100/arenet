@@ -5,6 +5,7 @@
 - [Home](Home) · [Accueil](Home-FR)
 - [Installation](Installation) · [Installation 🇫🇷](Installation-FR)
 - [Routes](Routes) · [Routes 🇫🇷](Routes-FR)
+- [TCP / UDP services](TCP-Services) · [Services TCP / UDP 🇫🇷](TCP-Services-FR)
 - [DNS Providers](DNS-Providers) · [DNS Providers 🇫🇷](DNS-Providers-FR)
 - [Topology](Topology) · [Topology 🇫🇷](Topology-FR)
 
