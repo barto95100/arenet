@@ -144,9 +144,11 @@ type ImportReport struct {
 	ExtrasImported         bool
 	ManagedDomainsImported int
 	ErrorTemplatesImported int
-	AlertChannelsImported  int
-	AlertRulesImported     int
-	APITokensImported      int
+	// TCPServicesImported (v2.42) counts the restored layer-4 relays.
+	TCPServicesImported   int
+	AlertChannelsImported int
+	AlertRulesImported    int
+	APITokensImported     int
 	// SentinelsInheritedTotal counts sentinel occurrences resolved
 	// by ID match against the live store.
 	SentinelsInheritedTotal int

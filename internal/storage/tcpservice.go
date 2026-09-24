@@ -65,6 +65,14 @@ const (
 	TCPLBRandom     = "random"
 )
 
+// Transport protocols a service can relay. caddy-l4 addresses carry
+// the network as a prefix ("tcp/host:port", "udp/host:port"), which
+// is how this reaches the emitted config.
+const (
+	TCPServiceProtocolTCP = "tcp"
+	TCPServiceProtocolUDP = "udp"
+)
+
 // PROXY protocol versions a service may prepend to the backend
 // connection. Empty means the header is not sent at all.
 const (
@@ -118,6 +126,12 @@ type TCPService struct {
 	ListenAddr string `json:"listenAddr,omitempty"`
 	ListenPort int    `json:"listenPort"`
 
+	// Protocol is "tcp" (the default, and what an empty value means)
+	// or "udp". UDP is what WireGuard, DNS, syslog and most game
+	// servers need; a layer-4 relay that only did TCP would not be
+	// one.
+	Protocol string `json:"protocol,omitempty"`
+
 	Upstreams []TCPUpstream `json:"upstreams"`
 	LBPolicy  string        `json:"lbPolicy,omitempty"`
 
@@ -144,13 +158,33 @@ type TCPService struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// ListenHostPort renders the listen address as caddy-l4 expects it.
+// Network returns the transport to use, resolving the empty default.
+func (s TCPService) Network() string {
+	if s.Protocol == TCPServiceProtocolUDP {
+		return TCPServiceProtocolUDP
+	}
+	return TCPServiceProtocolTCP
+}
+
+// ListenHostPort renders the listen address without its network.
 func (s TCPService) ListenHostPort() string {
 	addr := s.ListenAddr
 	if addr == "" {
 		addr = "0.0.0.0"
 	}
 	return net.JoinHostPort(addr, fmt.Sprint(s.ListenPort))
+}
+
+// ListenAddress renders the listen address as caddy-l4 expects it,
+// network prefix included.
+func (s TCPService) ListenAddress() string {
+	return s.Network() + "/" + s.ListenHostPort()
+}
+
+// DialAddress renders a backend as caddy-l4 expects it: the relay's
+// network followed by the address.
+func (s TCPService) DialAddress(u TCPUpstream) string {
+	return s.Network() + "/" + u.Dial()
 }
 
 // Validate enforces the invariants of a TCP service. Returns the
@@ -170,6 +204,13 @@ func (s *TCPService) Validate() error {
 	}
 	if s.ListenPort < 1 || s.ListenPort > 65535 {
 		return fmt.Errorf("tcp service: listen_port %d out of range 1-65535", s.ListenPort)
+	}
+
+	switch s.Protocol {
+	case "", TCPServiceProtocolTCP, TCPServiceProtocolUDP:
+	default:
+		return fmt.Errorf("tcp service: protocol %q must be %q or %q",
+			s.Protocol, TCPServiceProtocolTCP, TCPServiceProtocolUDP)
 	}
 
 	if len(s.Upstreams) == 0 {
@@ -207,8 +248,22 @@ func (s *TCPService) Validate() error {
 		return fmt.Errorf("tcp service: proxy_protocol %q must be empty, %q or %q",
 			s.ProxyProtocol, ProxyProtocolV1, ProxyProtocolV2)
 	}
+	// Version 1 of the PROXY protocol has no UDP address family
+	// (modules/l4proxy/proxy.go:318 — "only v2 supports UDP
+	// addresses"), so the pair is refused here rather than producing
+	// a relay whose header the backend cannot read.
+	if s.Network() == TCPServiceProtocolUDP && s.ProxyProtocol == ProxyProtocolV1 {
+		return errors.New("tcp service: the PROXY protocol v1 carries no UDP address; use v2 or none")
+	}
 
 	if hc := s.HealthCheck; hc != nil && hc.Enabled {
+		// A UDP "connection" is a local socket: dialing one always
+		// succeeds, so an active check would report every backend
+		// healthy for ever. Refusing is more honest than emitting a
+		// check that cannot fail.
+		if s.Network() == TCPServiceProtocolUDP {
+			return errors.New("tcp service: an active health check needs a real connection; UDP has none")
+		}
 		if err := validateOptionalDuration("health_check.interval", hc.Interval); err != nil {
 			return err
 		}

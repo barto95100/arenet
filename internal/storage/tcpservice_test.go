@@ -259,3 +259,51 @@ func TestTCPService_ListenHostPort(t *testing.T) {
 		t.Fatalf("ListenHostPort: IPv6 must be bracketed, got %q", got)
 	}
 }
+
+// v2.42 — UDP. The guards are the interesting part: two pairings are
+// refused because caddy-l4 cannot honour them, and saying so beats
+// emitting a relay that silently does nothing useful.
+func TestTCPService_UDP(t *testing.T) {
+	svc := validTCPService()
+	svc.Protocol = TCPServiceProtocolUDP
+	svc.ListenPort = 51820
+	svc.ProxyProtocol = ProxyProtocolV2
+	if err := svc.Validate(); err != nil {
+		t.Fatalf("a UDP relay with PROXY v2 is valid: %v", err)
+	}
+	if svc.Network() != TCPServiceProtocolUDP {
+		t.Fatalf("Network: got %q", svc.Network())
+	}
+	if got := svc.ListenAddress(); got != "udp/0.0.0.0:51820" {
+		t.Fatalf("ListenAddress: got %q", got)
+	}
+	if got := svc.DialAddress(svc.Upstreams[0]); got != "udp/10.20.0.5:993" {
+		t.Fatalf("DialAddress: got %q", got)
+	}
+
+	// PROXY v1 has no UDP address family.
+	v1 := svc
+	v1.ProxyProtocol = ProxyProtocolV1
+	if err := v1.Validate(); err == nil || !strings.Contains(err.Error(), "v1") {
+		t.Fatalf("PROXY v1 over UDP must be refused, got %v", err)
+	}
+
+	// An active health check over UDP would never fail.
+	hc := svc
+	hc.HealthCheck = &TCPHealthCheck{Enabled: true, Interval: "30s"}
+	if err := hc.Validate(); err == nil || !strings.Contains(err.Error(), "UDP") {
+		t.Fatalf("an active health check over UDP must be refused, got %v", err)
+	}
+
+	bad := validTCPService()
+	bad.Protocol = "sctp"
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "protocol") {
+		t.Fatalf("an unknown protocol must be refused, got %v", err)
+	}
+
+	// Default: an empty protocol is TCP, and TCP keeps its prefix.
+	def := validTCPService()
+	if def.Network() != TCPServiceProtocolTCP || def.ListenAddress() != "tcp/0.0.0.0:993" {
+		t.Fatalf("empty protocol must mean tcp: %q / %q", def.Network(), def.ListenAddress())
+	}
+}
