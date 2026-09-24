@@ -104,6 +104,42 @@ func (h *Handler) reapply(ctx context.Context, updated storage.Route) error {
 	return h.caddy.ReloadFromStore(ctx)
 }
 
+// causeHealthCheck marks a rollback whose 503 came from the route's
+// own active health check having just marked its upstreams down.
+const causeHealthCheck = "health_check"
+
+// rollbackCause names what actually broke the route, so the operator
+// is sent to the field that is wrong.
+//
+// v2.43.1 — a 503 on a route whose upstreams the active health check
+// has just marked down is NOT an upstream-address mistake. The
+// address is fine; the probe disagrees with the backend. Sending the
+// operator to "fix the upstream address, port…" points them at the
+// one screen where nothing is wrong. That is the wrong turn the
+// 2026-09-24 session took, with the real cause — an expected-body
+// regex that did not match the backend's JSON — three fields away.
+//
+// Why the change can look like the culprit when it is not: the fail
+// counter lives on Caddy's pooled Host and survives config reloads
+// (reverseproxy/hosts.go:176-181), while the unhealthy flag lives on
+// Upstream and is rebuilt from JSON on every reload (hosts.go:65). A
+// probe that was already failing before the change therefore starts
+// from a nearly-full counter and can tip the upstream over on its
+// very first run after it. The route genuinely answered before and
+// genuinely stops after, and nothing about the change looks wrong.
+func (h *Handler) rollbackCause(r storage.Route, failed routecheck.Result) string {
+	if failed.HTTPStatus != http.StatusServiceUnavailable || !r.HealthCheck.Enabled {
+		return ""
+	}
+	// h.hcStatus may be nil; computeRouteAggregateHealth treats that
+	// as "unknown", which correctly declines to blame the probe.
+	status, _, _ := computeRouteAggregateHealth(r, h.hcStatus)
+	if status == routeStatusDown || status == routeStatusDegraded {
+		return causeHealthCheck
+	}
+	return ""
+}
+
 // writeRolledBack answers the 409 of an undone update and audits it.
 func (h *Handler) writeRolledBack(w http.ResponseWriter, r *http.Request, previous, updated storage.Route, failed routecheck.Result) {
 	h.appendAudit(r, audit.Event{
@@ -114,9 +150,13 @@ func (h *Handler) writeRolledBack(w http.ResponseWriter, r *http.Request, previo
 		AfterJSON:  mustMarshalForAudit(routeForAudit(previous)),
 		Message:    "status=" + string(failed.Status) + " detail=" + truncate(failed.Detail, 200),
 	})
-	writeErrorCode(w, http.StatusConflict, codeRouteCheckRolledBack,
-		"the change was undone: the route answered before and stopped answering after it ("+failed.Detail+")",
-		map[string]any{"host": failed.Host, "httpStatus": failed.HTTPStatus, "detail": failed.Detail})
+	details := map[string]any{"host": failed.Host, "httpStatus": failed.HTTPStatus, "detail": failed.Detail}
+	message := "the change was undone: the route answered before and stopped answering after it (" + failed.Detail + ")"
+	if cause := h.rollbackCause(updated, failed); cause != "" {
+		details["cause"] = cause
+		message += "; the active health check has marked the upstreams down — check its URI, expected status and expected body rather than the upstream address"
+	}
+	writeErrorCode(w, http.StatusConflict, codeRouteCheckRolledBack, message, details)
 }
 
 // getRouteCheckConfig handles GET /settings/route-check.
