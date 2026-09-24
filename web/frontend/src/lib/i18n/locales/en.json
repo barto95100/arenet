@@ -759,6 +759,15 @@
 		"deleted": "Service deleted",
 		"emptyTitle": "No relay yet",
 		"emptyBody": "A layer-4 service forwards a port to a backend — a mail server, a database, SSH, WireGuard. Unlike a route, nothing is read on the way: no WAF, no error pages, and the encryption stays end to end.",
+		"diagram": {
+			"client": "Client",
+			"route": "HTTP route",
+			"service": "TCP / UDP",
+			"backend": "Backend",
+			"routeNote": "reads and inspects",
+			"serviceNote": "forwards without reading",
+			"proxyNote": "+ client IP"
+		},
 		"colName": "Name",
 		"colListen": "Listening on",
 		"colBackend": "Backend",

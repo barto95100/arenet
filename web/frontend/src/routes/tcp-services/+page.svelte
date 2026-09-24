@@ -48,6 +48,7 @@
 		type TCPServiceCounters
 	} from '$lib/api/tcp-services';
 	import { PRESET_GROUPS, presetsOf, type ServicePreset } from '$lib/components/tcp/presets';
+	import TCPFlowDiagram from '$lib/components/tcp/TCPFlowDiagram.svelte';
 
 	function tl(key: string, params?: Record<string, string | number>): string {
 		void language.current;
@@ -285,15 +286,42 @@
 		{loadError}
 	</div>
 {:else}
+	<!-- v2.42.1 — with nothing configured there is no list to sit
+	     beside, so the empty state takes the whole width instead of
+	     being squeezed into the column a future list would occupy.
+	     It also gets the diagram: the sentence says a relay forwards
+	     bytes without reading them, the drawing shows what that
+	     means next to an HTTP route. -->
+	{#if services.length === 0 && !formOpen}
+		<div class="rounded-lg border border-border-subtle bg-elevated overflow-hidden mt-6">
+			<EmptyState
+				testid="tcp-empty"
+				title={tl('tcpServices.emptyTitle')}
+				body={tl('tcpServices.emptyBody')}
+				actionLabel={tl('tcpServices.addButton')}
+				onAction={openCreate}
+			>
+				<TCPFlowDiagram
+					labels={{
+						client: tl('tcpServices.diagram.client'),
+						route: tl('tcpServices.diagram.route'),
+						service: tl('tcpServices.diagram.service'),
+						backend: tl('tcpServices.diagram.backend'),
+						routeNote: tl('tcpServices.diagram.routeNote'),
+						serviceNote: tl('tcpServices.diagram.serviceNote'),
+						proxyNote: tl('tcpServices.diagram.proxyNote')
+					}}
+				/>
+			</EmptyState>
+		</div>
+	{:else}
 	<div class="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-4 mt-6 items-start">
 		<div class="rounded-lg border border-border-subtle bg-elevated overflow-hidden">
 			{#if services.length === 0}
 				<EmptyState
-					testid="tcp-empty"
+					testid="tcp-empty-compact"
 					title={tl('tcpServices.emptyTitle')}
 					body={tl('tcpServices.emptyBody')}
-					actionLabel={tl('tcpServices.addButton')}
-					onAction={openCreate}
 				/>
 			{:else}
 				<table class="w-full text-sm">
@@ -608,6 +636,7 @@
 			</div>
 		{/if}
 	</div>
+	{/if}
 {/if}
 
 <ConfirmDialog
