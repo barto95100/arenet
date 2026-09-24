@@ -33,9 +33,9 @@ Le formulaire le dit aussi. Un relais n'est pas une route avec moins d'options :
 
 ## En créer un
 
-**Services TCP / UDP → + Nouveau service**. Pars d'un modèle : il remplit le protocole, le port standard, et — c'est ce qui compte — **si le service doit être joignable de partout**.
+**Services TCP / UDP → + Nouveau service**. Nomme-le, choisis le transport, donne le port d'écoute et le backend vers lequel il relaie.
 
-PostgreSQL, MySQL, Redis, MongoDB, SSH, RDP, VNC, DNS et syslog arrivent avec le **filtrage d'IP source déjà armé** : une base de données ouverte sur Internet est exactement l'erreur que ces modèles existent pour empêcher. Le courrier entrant arrive avec le filtre **désactivé**, parce que le restreindre reviendrait à refuser le courrier des autres serveurs.
+Le formulaire te prend au mot. **Rien n'est restreint tant que tu ne le restreins pas** — si le relais porte une base de données, un protocole d'administration ou quoi que ce soit qui n'a pas à être joignable depuis Internet, le filtrage d'IP source est à toi de le poser. Arenet ne devine pas ce qu'un numéro de port signifie.
 
 Renseigne ensuite le backend (`hôte:port`) et enregistre. L'adresse d'écoute est vérifiée **avant** tout enregistrement : un port dont Arenet a besoin est refusé nommément, un port déjà pris par un autre service est refusé en nommant les deux, et un port sous 1024 que le processus ne peut pas ouvrir est refusé avec la ligne exacte à ajouter à l'unité systemd.
 
@@ -105,7 +105,7 @@ Stalwart (ou Postfix + Dovecot) sur une VM d'un autre réseau, Arenet devant.
 
 PostgreSQL sur une autre machine, atteignable depuis ton poste à travers Arenet.
 
-Prends le modèle : il arrive avec le filtrage armé. Mets-y ta plage LAN (`192.168.1.0/24`). Laisse le PROXY protocol désactivé, sauf si ton PostgreSQL est configuré pour — contrairement au mail, rien ici ne dépend de voir l'IP du client.
+Arme le filtrage d'IP source et mets-y ta plage LAN (`192.168.1.0/24`). Rien ne le fait à ta place, et un relais PostgreSQL sans filtre est joignable depuis Internet. Laisse le PROXY protocol désactivé, sauf si ton PostgreSQL est configuré pour — contrairement au mail, rien ici ne dépend de voir l'IP du client.
 
 Active le contrôle de santé : au niveau 4 c'est une connexion TCP, et c'est exactement comme ça que tu apprendras que la base ne répond plus.
 

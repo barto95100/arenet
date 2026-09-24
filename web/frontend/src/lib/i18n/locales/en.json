@@ -809,16 +809,9 @@
 		"badgeIPAllow": "ip: {count} range(s)",
 		"badgeIPDeny": "ip: {count} blocked",
 		"badgeDisabled": "disabled",
-		"presetGroup": {
-			"mail": "Mail",
-			"data": "Databases & caches",
-			"remote": "Remote access",
-			"network": "Network services"
-		},
 		"form": {
 			"titleNew": "New service",
 			"titleEdit": "Edit service",
-			"presetsLabel": "Start from a known service",
 			"name": "Name",
 			"listenPort": "Listening port",
 			"listenAddr": "Interface (empty = all)",

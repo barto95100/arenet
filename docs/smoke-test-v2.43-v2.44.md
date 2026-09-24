@@ -43,7 +43,7 @@ real connection was being refused with a TLS decode error.
 
 ## 2. UDP is untestable, not broken (v2.43)
 
-**Do.** Create a UDP service (the WireGuard preset will do), point it
+**Do.** Create a UDP service — protocol UDP, port 51820 — and point it
 anywhere, and press **Test the backends**.
 
 **Expect.** *not testable*, with the reason: UDP is connectionless,

@@ -33,9 +33,9 @@ The form says this too. A relay is not a route with fewer options — it is a di
 
 ## Creating one
 
-**Services TCP / UDP → + New service**. Start from a preset: it fills the protocol, the standard port, and — the part that matters — **whether the service should be reachable from anywhere**.
+**Services TCP / UDP → + New service**. Name it, pick the transport, give the port it listens on and the backend it forwards to.
 
-PostgreSQL, MySQL, Redis, MongoDB, SSH, RDP, VNC, DNS and syslog arrive with the **source filter already armed**: a database open to the internet is the mistake presets exist to prevent. Inbound mail arrives with it **off**, because restricting it would mean refusing mail from other servers.
+The form takes you at your word. **Nothing is restricted unless you restrict it** — if the relay carries a database, an admin protocol or anything else that should not be reachable from the internet, the source-IP filter is yours to set. Arenet does not guess what a port number means.
 
 Then fill the backend (`host:port`) and save. The listen address is checked *before* anything is stored: a port Arenet needs for itself is refused by name, a port another service holds is refused with both names, and a port below 1024 the process cannot bind is refused with the exact line to add to the systemd unit.
 
@@ -105,7 +105,7 @@ Stalwart (or Postfix + Dovecot) on a VM in another network, Arenet in front.
 
 PostgreSQL on another host, reachable from your workstation through Arenet.
 
-Take the preset — it arrives with the source filter armed. Put your LAN range in it (`192.168.1.0/24`). Leave the PROXY protocol off unless your PostgreSQL is configured for it; unlike mail, nothing here depends on seeing the client IP.
+Arm the source-IP filter and put your LAN range in it (`192.168.1.0/24`). Nothing does this for you, and a PostgreSQL relay without it is reachable from the internet. Leave the PROXY protocol off unless your PostgreSQL is configured for it; unlike mail, nothing here depends on seeing the client IP.
 
 Turn the health check on: at layer 4 it is a TCP connection, which is exactly how you learn the database stopped answering.
 
