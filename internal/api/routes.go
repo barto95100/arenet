@@ -163,6 +163,9 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// v2.42 — TCP (layer 4) services, read side. Same
 			// posture as routes: any signed-in user may look.
 			r.Get("/tcp-services", h.listTCPServices)
+			// Counters live under a fixed path, declared BEFORE the
+			// {id} route so chi does not read "metrics" as an id.
+			r.Get("/tcp-services/metrics", h.tcpServicesMetrics)
 			r.Get("/tcp-services/{id}", h.getTCPService)
 			// Step R — custom error pages read-side (viewer-
 			// accessible so the RouteForm dropdown can list

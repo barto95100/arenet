@@ -28,6 +28,7 @@ import (
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/caddymgr"
+	"github.com/barto95100/arenet/internal/l4metrics"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -74,6 +75,23 @@ func (h *Handler) listTCPServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, services)
+}
+
+// tcpServicesMetrics reports what each relay has carried since the
+// process started. v2.42 — layer-4 traffic never crosses the HTTP
+// chain, so without this endpoint a relay is a service nobody can
+// watch: no dashboard row, no counter, no way to tell whether anyone
+// ever connected.
+func (h *Handler) tcpServicesMetrics(w http.ResponseWriter, r *http.Request) {
+	reg := l4metrics.GlobalRegistry()
+	if reg == nil {
+		// No registry installed (a unit-test binary, or a boot that
+		// has not reached the wiring yet): an empty object is the
+		// honest answer, not a 500.
+		writeJSON(w, http.StatusOK, map[string]l4metrics.ServiceCounters{})
+		return
+	}
+	writeJSON(w, http.StatusOK, reg.Snapshot())
 }
 
 func (h *Handler) getTCPService(w http.ResponseWriter, r *http.Request) {

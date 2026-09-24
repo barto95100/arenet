@@ -42,8 +42,10 @@
 		type TCPService,
 		type TCPServiceRequest,
 		type TCPServiceTestResult,
+		tcpServicesMetrics,
 		type TCPServiceProtocol,
-		type ProxyProtocolVersion
+		type ProxyProtocolVersion,
+		type TCPServiceCounters
 	} from '$lib/api/tcp-services';
 	import { PRESET_GROUPS, presetsOf, type ServicePreset } from '$lib/components/tcp/presets';
 
@@ -53,6 +55,10 @@
 	}
 
 	let services = $state<TCPService[]>([]);
+	// v2.42 — the counters. A relay whose traffic nobody can see is a
+	// relay nobody watches, so the list carries them next to the name
+	// rather than hiding them behind a click.
+	let counters = $state<Record<string, TCPServiceCounters>>({});
 	let loading = $state(true);
 	let loadError = $state<string | null>(null);
 
@@ -109,6 +115,9 @@
 		loadError = null;
 		try {
 			services = await listTCPServices();
+			// Counters are a nicety: a failure here must not hide the
+			// services themselves.
+			counters = await tcpServicesMetrics().catch(() => ({}));
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : String(err);
 		} finally {
@@ -236,6 +245,20 @@
 		}
 	}
 
+	// Bytes in a shape an operator reads at a glance rather than
+	// counting digits.
+	function formatBytes(n: number): string {
+		if (n < 1024) return `${n} B`;
+		const units = ['kB', 'MB', 'GB', 'TB'];
+		let value = n / 1024;
+		let unit = 0;
+		while (value >= 1024 && unit < units.length - 1) {
+			value /= 1024;
+			unit++;
+		}
+		return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+	}
+
 	function listenOf(svc: TCPService): string {
 		return `${svc.protocol === 'udp' ? 'udp' : 'tcp'}/${svc.listenAddr || '0.0.0.0'}:${svc.listenPort}`;
 	}
@@ -280,6 +303,7 @@
 							<th class="px-4 py-3 font-medium">{tl('tcpServices.colListen')}</th>
 							<th class="px-4 py-3 font-medium">{tl('tcpServices.colBackend')}</th>
 							<th class="px-4 py-3 font-medium">{tl('tcpServices.colGuards')}</th>
+							<th class="px-4 py-3 font-medium">{tl('tcpServices.colTraffic')}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -326,6 +350,22 @@
 											<Badge variant="neutral">{tl('tcpServices.badgeDisabled')}</Badge>
 										{/if}
 									</div>
+								</td>
+								<td class="px-4 py-3 font-mono text-xs text-secondary" data-testid="tcp-traffic-{svc.id}">
+									{#if counters[svc.id]}
+										{@const c = counters[svc.id]}
+										<span class="text-primary">{c.connections}</span>
+										{tl('tcpServices.connShort')}
+										{#if c.active > 0}
+											<span class="text-up">· {c.active} {tl('tcpServices.activeShort')}</span>
+										{/if}
+										{#if c.errors > 0}
+											<span class="text-down">· {c.errors} {tl('tcpServices.errShort')}</span>
+										{/if}
+										<div class="text-muted">{formatBytes(c.bytesIn)} ↓ · {formatBytes(c.bytesOut)} ↑</div>
+									{:else}
+										<span class="text-muted">—</span>
+									{/if}
 								</td>
 							</tr>
 						{/each}

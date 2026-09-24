@@ -19,6 +19,7 @@ import { tick } from 'svelte';
 const { api } = vi.hoisted(() => ({
 	api: {
 		listTCPServices: vi.fn(),
+		tcpServicesMetrics: vi.fn(),
 		createTCPService: vi.fn(),
 		updateTCPService: vi.fn(),
 		deleteTCPService: vi.fn(),
@@ -29,6 +30,7 @@ const { api } = vi.hoisted(() => ({
 vi.mock('$lib/api/tcp-services', async (importOriginal) => ({
 	...((await importOriginal()) as Record<string, unknown>),
 	listTCPServices: (...a: unknown[]) => api.listTCPServices(...a),
+	tcpServicesMetrics: (...a: unknown[]) => api.tcpServicesMetrics(...a),
 	createTCPService: (...a: unknown[]) => api.createTCPService(...a),
 	updateTCPService: (...a: unknown[]) => api.updateTCPService(...a),
 	deleteTCPService: (...a: unknown[]) => api.deleteTCPService(...a),
@@ -56,6 +58,7 @@ function service(over: Record<string, unknown> = {}) {
 beforeEach(() => {
 	Object.values(api).forEach((fn) => fn.mockReset());
 	api.listTCPServices.mockResolvedValue([]);
+	api.tcpServicesMetrics.mockResolvedValue({});
 });
 
 describe('/tcp-services — list', () => {
@@ -204,5 +207,40 @@ describe('/tcp-services — saving', () => {
 
 		await waitFor(() => expect(screen.getByTestId('tcp-form-error')).toBeInTheDocument());
 		expect(screen.getByTestId('tcp-form-error').textContent).toContain('Arenet HTTPS routes');
+	});
+});
+
+// v2.42 — the counters. Layer-4 traffic crosses no HTTP chain, so
+// this column is the only place an operator can see that a relay is
+// carrying anything at all.
+describe('/tcp-services — traffic', () => {
+	it('shows connections, open ones, failures and bytes', async () => {
+		api.listTCPServices.mockResolvedValue([service()]);
+		api.tcpServicesMetrics.mockResolvedValue({
+			svc1: { connections: 42, active: 3, bytesIn: 2048, bytesOut: 5_242_880, errors: 2 }
+		});
+		render(Page);
+
+		const cell = await screen.findByTestId('tcp-traffic-svc1');
+		const text = cell.textContent ?? '';
+		expect(text).toContain('42');
+		expect(text).toContain('3');
+		expect(text).toContain('2');
+		expect(text).toContain('2.0 kB');
+		expect(text).toContain('5.0 MB');
+	});
+
+	it('shows a dash for a service that has carried nothing yet', async () => {
+		api.listTCPServices.mockResolvedValue([service()]);
+		api.tcpServicesMetrics.mockResolvedValue({});
+		render(Page);
+		expect((await screen.findByTestId('tcp-traffic-svc1')).textContent).toContain('—');
+	});
+
+	it('still lists the services when the counters cannot be read', async () => {
+		api.listTCPServices.mockResolvedValue([service()]);
+		api.tcpServicesMetrics.mockRejectedValue(new Error('nope'));
+		render(Page);
+		expect(await screen.findByTestId('tcp-row-svc1')).toBeInTheDocument();
 	});
 });

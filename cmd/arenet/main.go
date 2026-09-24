@@ -111,6 +111,7 @@ import (
 	"github.com/barto95100/arenet/internal/crowdsec"
 	"github.com/barto95100/arenet/internal/geo"
 	"github.com/barto95100/arenet/internal/geoipupdate"
+	"github.com/barto95100/arenet/internal/l4metrics"
 	"github.com/barto95100/arenet/internal/metrics"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/ratelimit"
@@ -332,6 +333,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	//                                sees a populated registry (spec §4.3)
 	metricsRegistry := metrics.NewRegistry()
 	metrics.SetRegistry(metricsRegistry)
+
+	// v2.42 — the layer-4 counters. Installed before Caddy starts,
+	// like the HTTP registry: the module reads the singleton at
+	// connection time and counts nothing if it is missing, so this
+	// must be in place before any relay can accept a connection.
+	l4Registry := l4metrics.NewRegistry()
+	l4metrics.SetRegistry(l4Registry)
 	metricsBroadcaster := metrics.NewBroadcaster(logger)
 
 	// Step I.1: propagate dev mode + ACME contact email to the
