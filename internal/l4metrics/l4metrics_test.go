@@ -37,7 +37,12 @@ func TestRegistry_CountsAConnection(t *testing.T) {
 		t.Fatal("the first connection must set lastConnectionAt")
 	}
 
-	reg.Closed("svc1", 120, 4096)
+	// v2.43 — bytes land as they cross, not in a lump at close.
+	rec := reg.RecorderFor("svc1")
+	rec.AddIn(120)
+	rec.AddOut(4096)
+
+	reg.Closed("svc1")
 	snap = reg.Snapshot()
 	got := snap["svc1"]
 	if got.Active != 0 {
@@ -61,8 +66,13 @@ func TestRegistry_UnknownServiceIsIgnored(t *testing.T) {
 	reg.Sync([]string{"svc1"})
 
 	reg.Opened("ghost")
-	reg.Closed("ghost", 10, 10)
+	reg.Closed("ghost")
 	reg.Failed("ghost")
+	// A nil Recorder must be usable, not a panic: that is the path a
+	// connection takes between an apply and the Sync that follows it.
+	ghost := reg.RecorderFor("ghost")
+	ghost.AddIn(10)
+	ghost.AddOut(10)
 
 	if _, exists := reg.Snapshot()["ghost"]; exists {
 		t.Fatal("an unknown service must not create a cell")
@@ -200,5 +210,42 @@ func TestHandler_FailureIsRecorded(t *testing.T) {
 	}
 	if got.Active != 0 {
 		t.Fatalf("the gauge must come back down after a failure: %+v", got)
+	}
+}
+
+// --- v2.43 — bytes are visible while the connection is open ------
+//
+// The regression this pins: the counters used to be accumulated in
+// the connection wrapper and reported once, at close. A phone's IMAP
+// session stays open for hours, so the traffic column read 0 B for a
+// relay that was busy the whole time — the operator saw an idle
+// service and a working one as the same thing.
+func TestRecorder_BytesVisibleBeforeClose(t *testing.T) {
+	reg := NewRegistry()
+	reg.Sync([]string{"svc1"})
+	reg.Opened("svc1")
+
+	rec := reg.RecorderFor("svc1")
+	rec.AddIn(64)
+	rec.AddOut(1024)
+
+	// Still open: the gauge says so, and the bytes are already there.
+	snap := reg.Snapshot()["svc1"]
+	if snap.Active != 1 {
+		t.Fatalf("the connection must still count as open: %+v", snap)
+	}
+	if snap.BytesIn != 64 || snap.BytesOut != 1024 {
+		t.Fatalf("bytes must be visible before close: %+v", snap)
+	}
+
+	// More traffic on the same live connection keeps accumulating.
+	rec.AddIn(36)
+	if got := reg.Snapshot()["svc1"].BytesIn; got != 100 {
+		t.Fatalf("bytesIn after a second read: got %d, want 100", got)
+	}
+
+	reg.Closed("svc1")
+	if got := reg.Snapshot()["svc1"]; got.Active != 0 || got.BytesIn != 100 {
+		t.Fatalf("close must only move the gauge: %+v", got)
 	}
 }

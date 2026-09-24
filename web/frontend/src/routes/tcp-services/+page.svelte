@@ -20,7 +20,7 @@
   check before they trust the relay.
 -->
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Badge from '$lib/components/Badge.svelte';
@@ -126,7 +126,57 @@
 		}
 	}
 
-	onMount(load);
+	// v2.43 — the counters move on their own.
+	//
+	// Layer-4 traffic appears nowhere else in the UI, so this column
+	// is the only way to see that a relay is carrying anything; having
+	// to reload the page to find out turned a live view into a
+	// snapshot. A tick keeps the last good data on failure and never
+	// raises the spinner — a row that blinks every five seconds is
+	// worse than a stale number.
+	//
+	// The idle lock is not at risk: the API client tags a request as
+	// background whenever the operator has not interacted since the
+	// last reset, and a background request does not push the lock out.
+	const REFRESH_MS = 5000;
+	let pollId: ReturnType<typeof setInterval> | null = null;
+
+	async function refresh() {
+		try {
+			const [list, metrics] = await Promise.all([
+				listTCPServices(),
+				tcpServicesMetrics().catch(() => counters)
+			]);
+			services = list;
+			counters = metrics;
+			loadError = null;
+		} catch {
+			// A tick that fails changes nothing on screen: the previous
+			// values stay, and the next tick will correct them.
+		}
+	}
+
+	function startPolling(): void {
+		if (pollId !== null) return;
+		pollId = setInterval(() => {
+			if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+			void refresh();
+		}, REFRESH_MS);
+	}
+
+	function stopPolling(): void {
+		if (pollId !== null) {
+			clearInterval(pollId);
+			pollId = null;
+		}
+	}
+
+	onMount(() => {
+		void load();
+		startPolling();
+	});
+
+	onDestroy(stopPolling);
 
 	function resetForm() {
 		fName = '';
@@ -598,12 +648,33 @@
 						{#if testResult}
 							<div class="rounded-md border border-border-subtle bg-surface p-3 text-xs" data-testid="tcp-test-result">
 								{#each testResult.backends as b (b.backend)}
-									<div class="flex items-center gap-2 py-0.5">
-										<span class:text-up={b.ok} class:text-down={!b.ok}>{b.ok ? '✓' : '✕'}</span>
+									<div class="flex flex-wrap items-center gap-2 py-0.5">
+										{#if b.skipped}
+											<span class="text-muted">–</span>
+										{:else}
+											<span class:text-up={b.ok} class:text-down={!b.ok}>{b.ok ? '✓' : '✕'}</span>
+										{/if}
 										<span class="font-mono text-primary">{b.backend}</span>
-										<span class="text-muted">{b.ok ? `${b.elapsedMs} ms` : b.error}</span>
+										{#if b.skipped}
+											<span class="text-muted">{tl('tcpServices.form.testSkipped')}</span>
+										{:else}
+											<span class="text-muted">{b.ok ? `${b.elapsedMs} ms` : b.error}</span>
+										{/if}
+										<!-- v2.43 — the verdict on the pairing, which is the
+										     question a dial never answered. -->
+										{#if b.proxyProtocol === 'not-refused'}
+											<Badge variant="status-up">{tl('tcpServices.form.testProxyNotRefused')}</Badge>
+										{:else if b.proxyProtocol === 'refused'}
+											<Badge variant="status-down">{tl('tcpServices.form.testProxyRefused')}</Badge>
+										{/if}
 									</div>
+									{#if b.skipped && b.error}
+										<p class="text-muted pb-1 pl-5">{b.error}</p>
+									{/if}
 								{/each}
+								{#if testResult.backends.some((b) => b.proxyProtocol)}
+									<p class="text-muted mt-2">{tl('tcpServices.form.testProxyExplain')}</p>
+								{/if}
 								{#if testResult.proxyProtocolNote}
 									<p class="text-muted mt-2">{testResult.proxyProtocolNote}</p>
 								{/if}

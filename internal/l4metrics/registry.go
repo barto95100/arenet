@@ -115,12 +115,49 @@ func (r *Registry) Opened(serviceID string) {
 	}
 }
 
-// Closed records a finished connection and what it carried.
-func (r *Registry) Closed(serviceID string, bytesIn, bytesOut uint64) {
+// Closed records a finished connection.
+//
+// v2.43 — the bytes used to be reported here, accumulated in the
+// connection wrapper and handed over in one lump at close. That read
+// correctly for a short relay and wrongly for everything else: an
+// IMAP session from a phone stays open for hours, so the traffic
+// column showed 0 B for a service that was busy the whole time. Bytes
+// now go straight into the cell as they cross (see Recorder), and
+// this only closes the gauge.
+func (r *Registry) Closed(serviceID string) {
 	if c := r.cellFor(serviceID); c != nil {
 		c.active.Add(-1)
-		c.bytesIn.Add(bytesIn)
-		c.bytesOut.Add(bytesOut)
+	}
+}
+
+// Recorder is a direct handle to one service's byte counters, taken
+// once when a connection opens.
+//
+// Going through the registry on every read and write would mean a map
+// lookup under a lock per syscall; the cell pointer costs two atomic
+// adds instead. A nil Recorder counts nothing, which is what an
+// unknown service — or no registry at all — must cost a relay.
+type Recorder struct{ c *cell }
+
+// RecorderFor returns a handle for the service, nil when unknown.
+func (r *Registry) RecorderFor(serviceID string) *Recorder {
+	if c := r.cellFor(serviceID); c != nil {
+		return &Recorder{c: c}
+	}
+	return nil
+}
+
+// AddIn counts bytes the client sent.
+func (rec *Recorder) AddIn(n uint64) {
+	if rec != nil && rec.c != nil {
+		rec.c.bytesIn.Add(n)
+	}
+}
+
+// AddOut counts bytes the client received.
+func (rec *Recorder) AddOut(n uint64) {
+	if rec != nil && rec.c != nil {
+		rec.c.bytesOut.Add(n)
 	}
 }
 

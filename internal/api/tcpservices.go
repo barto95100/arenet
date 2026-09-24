@@ -22,9 +22,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/pires/go-proxyproto"
 
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/caddymgr"
@@ -46,24 +48,48 @@ import (
 // backends cannot hold a request open for a minute.
 const tcpServiceTestTimeout = 3 * time.Second
 
+// tcpProxyProbeTimeout bounds the read that follows the PROXY header.
+// Long enough for a backend on the other side of a LAN to refuse,
+// short enough that a protocol which waits for the client to speak
+// first does not stall the report.
+const tcpProxyProbeTimeout = time.Second
+
+// What the far side did with the header we sent. Reported verbatim
+// so the UI can phrase each outcome in the operator's language.
+const (
+	// proxyProbeNotRefused: the connection was still open when the
+	// probe window closed. This is the good outcome, and it is
+	// deliberately not called "accepted" — see tcpProxyProbe.
+	proxyProbeNotRefused = "not-refused"
+	// proxyProbeRefused: the backend hung up after reading the
+	// header. It is not configured to expect one.
+	proxyProbeRefused = "refused"
+)
+
 // tcpBackendResult is one line of the test report.
 type tcpBackendResult struct {
 	Backend string `json:"backend"`
 	OK      bool   `json:"ok"`
 	// Error is the dial failure, already readable; empty when OK.
+	// On a skipped backend it carries the reason instead.
 	Error string `json:"error,omitempty"`
 	// ElapsedMs is how long the dial took, so a backend that answers
 	// but slowly is visible rather than merely "ok".
 	ElapsedMs int64 `json:"elapsedMs"`
+	// Skipped marks a backend this test cannot speak to at all —
+	// UDP, where there is no connection to open. Distinct from a
+	// failure: nothing is wrong, the question is unanswerable.
+	Skipped bool `json:"skipped,omitempty"`
+	// ProxyProtocol is proxyProbeNotRefused or proxyProbeRefused,
+	// empty when the service sends no header.
+	ProxyProtocol string `json:"proxyProtocol,omitempty"`
 }
 
 type tcpServiceTestResponse struct {
 	Backends []tcpBackendResult `json:"backends"`
 	// ProxyProtocolNote repeats, at the moment the operator tests,
-	// what has to be true on the other side. A dial proves the
-	// backend accepts connections; it cannot prove it expects the
-	// PROXY header, and that mismatch is the failure mode of this
-	// feature.
+	// what has to be true on the other side — the pairing whose
+	// mismatch is the silent failure mode of this feature.
 	ProxyProtocolNote string `json:"proxyProtocolNote,omitempty"`
 }
 
@@ -252,27 +278,147 @@ func (h *Handler) testTCPService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := tcpServiceTestResponse{Backends: make([]tcpBackendResult, 0, len(svc.Upstreams))}
-	for _, u := range svc.Upstreams {
-		addr := u.Dial()
-		start := time.Now()
-		conn, dialErr := net.DialTimeout("tcp", addr, tcpServiceTestTimeout)
-		res := tcpBackendResult{Backend: addr, ElapsedMs: time.Since(start).Milliseconds()}
-		if dialErr != nil {
-			res.Error = dialErr.Error()
-		} else {
-			res.OK = true
-			_ = conn.Close()
-		}
-		resp.Backends = append(resp.Backends, res)
-	}
-
 	if svc.ProxyProtocol != storage.ProxyProtocolOff {
 		resp.ProxyProtocolNote = fmt.Sprintf(
 			"This service prepends the PROXY protocol %s header. The backend must be configured to "+
 				"expect it from this host, otherwise connections fail silently. On Stalwart, that is "+
 				"proxyTrustedNetworks.", svc.ProxyProtocol)
 	}
+
+	// UDP has no connection to open. The previous version dialled TCP
+	// regardless of the service's protocol, so every UDP relay was
+	// reported broken while working perfectly — a wrong answer is
+	// worse than no answer, and this says so instead.
+	if svc.Network() == storage.TCPServiceProtocolUDP {
+		for _, u := range svc.Upstreams {
+			resp.Backends = append(resp.Backends, tcpBackendResult{
+				Backend: u.Dial(),
+				Skipped: true,
+				Error: "UDP is connectionless: there is no handshake to attempt, so Arenet cannot " +
+					"prove this backend is reachable without speaking its protocol.",
+			})
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	src, dst := tcpProbeAddrs(r, svc)
+	for _, u := range svc.Upstreams {
+		resp.Backends = append(resp.Backends, tcpProbeBackend(svc, u, src, dst))
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// tcpProbeBackend dials one backend and, when the service is
+// configured to prepend a PROXY header, sends a real one and watches
+// what comes back.
+//
+// v2.43 — the dial alone was the weaker half of this feature. It
+// proved the backend accepts connections, which is rarely the thing
+// in doubt, and stayed silent about the pairing that actually breaks
+// relays. Worse, once a backend is configured to expect the header,
+// the bare dial writes a "proxy protocol error / end of stream" line
+// into its log on every click.
+func tcpProbeBackend(svc storage.TCPService, u storage.TCPUpstream, src, dst net.Addr) tcpBackendResult {
+	addr := u.Dial()
+	start := time.Now()
+	conn, dialErr := net.DialTimeout("tcp", addr, tcpServiceTestTimeout)
+	res := tcpBackendResult{Backend: addr, ElapsedMs: time.Since(start).Milliseconds()}
+	if dialErr != nil {
+		res.Error = dialErr.Error()
+		return res
+	}
+	defer func() { _ = conn.Close() }()
+	res.OK = true
+
+	if svc.ProxyProtocol == storage.ProxyProtocolOff {
+		return res
+	}
+
+	version := byte(2)
+	if svc.ProxyProtocol == storage.ProxyProtocolV1 {
+		version = 1
+	}
+	// A nil header means the two addresses are not a pair this
+	// version can express (mixed families). Say nothing rather than
+	// report an outcome we did not measure.
+	header := proxyproto.HeaderProxyFromAddrs(version, src, dst)
+	if header == nil {
+		return res
+	}
+	header.Command = proxyproto.PROXY
+	// A write that fails here means the far side hung up while the
+	// header was going out, which is the same answer as hanging up
+	// just after — a refusal, not a broken backend. The dial already
+	// proved the backend is up, so OK stays true.
+	if _, err := header.WriteTo(conn); err != nil {
+		res.ProxyProtocol = proxyProbeRefused
+		return res
+	}
+	res.ProxyProtocol = tcpProxyProbe(conn)
+	return res
+}
+
+// tcpProxyProbe asks the one question a dial cannot: did the backend
+// refuse the header?
+//
+// What marks a refusal is the close, not the silence and not the
+// bytes. A backend that does not expect the header reads it as its
+// own protocol, fails to parse it, and hangs up — often after sending
+// something first, the way Stalwart answers a 7-byte TLS alert on an
+// implicit-TLS port. A backend that does expect it consumes the
+// header and waits for the real client to speak, which on that same
+// port means saying nothing at all. So bytes received prove nothing
+// either way; the connection still being open is what matters.
+//
+// Hence proxyProbeNotRefused rather than "accepted": this establishes
+// that the far side did not reject the header, which is as much as a
+// single connection can honestly establish.
+func tcpProxyProbe(conn net.Conn) string {
+	_ = conn.SetReadDeadline(time.Now().Add(tcpProxyProbeTimeout))
+	buf := make([]byte, 512)
+	for {
+		if _, err := conn.Read(buf); err != nil {
+			var nerr net.Error
+			if errors.As(err, &nerr) && nerr.Timeout() {
+				return proxyProbeNotRefused
+			}
+			return proxyProbeRefused
+		}
+		// Data is not an answer — keep reading until the deadline
+		// decides, or the far side hangs up.
+	}
+}
+
+// tcpProbeAddrs builds the pair of addresses the PROXY header will
+// carry: the operator's own address as the client, and the service's
+// listen address as the destination.
+//
+// Claiming the operator's address is both true and useful — the line
+// this test leaves in the backend's log names whoever pressed the
+// button, instead of an invented address nobody can trace.
+func tcpProbeAddrs(r *http.Request, svc storage.TCPService) (net.Addr, net.Addr) {
+	host, portStr, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		ip = net.IPv4(127, 0, 0, 1)
+	}
+	port, _ := strconv.Atoi(portStr)
+
+	listen := net.ParseIP(svc.ListenAddr)
+	// The header's two addresses must share a family, so the
+	// destination follows the source rather than the configuration.
+	if listen == nil || listen.IsUnspecified() || (listen.To4() != nil) != (ip.To4() != nil) {
+		if ip.To4() != nil {
+			listen = net.IPv4zero
+		} else {
+			listen = net.IPv6zero
+		}
+	}
+	return &net.TCPAddr{IP: ip, Port: port}, &net.TCPAddr{IP: listen, Port: svc.ListenPort}
 }
 
 // checkTCPListen refuses a listen address that would fight with Arenet

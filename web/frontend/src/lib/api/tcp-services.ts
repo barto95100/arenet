@@ -87,11 +87,25 @@ export interface TCPService {
 /** What a create / update sends; the server assigns id and dates. */
 export type TCPServiceRequest = Omit<TCPService, 'id' | 'createdAt' | 'updatedAt'>;
 
+/**
+ * What the backend did with the PROXY header the test sent it.
+ *
+ * 'not-refused' rather than 'accepted' on purpose: a single
+ * connection can establish that the far side did not hang up, not
+ * that it parsed the header. See tcpProxyProbe in the Go handler.
+ */
+export type ProxyProbeVerdict = 'not-refused' | 'refused';
+
 export interface TCPBackendResult {
 	backend: string;
 	ok: boolean;
+	/** The dial failure, or the reason a backend was skipped. */
 	error?: string;
 	elapsedMs: number;
+	/** UDP: there is no connection to open, so nothing was measured. */
+	skipped?: boolean;
+	/** Absent when the service sends no header. */
+	proxyProtocol?: ProxyProbeVerdict;
 }
 
 export interface TCPServiceTestResult {
