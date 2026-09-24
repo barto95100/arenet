@@ -50,6 +50,25 @@ services:
       - "80:80"
       - "443:443"
       - "127.0.0.1:8001:8001"
+      #
+      # TCP / UDP services (v2.42). A layer-4 relay listens INSIDE
+      # the container, so its port must be published here too —
+      # otherwise the service shows up green in the UI and nothing
+      # ever reaches it. Add one line per service you create, with
+      # the same number on both sides, and remember /udp for UDP.
+      #
+      # Mail (Stalwart, Postfix, Dovecot…):
+      # - "25:25"        # SMTP, inbound from other servers
+      # - "465:465"      # submission over implicit TLS
+      # - "587:587"      # submission with STARTTLS
+      # - "993:993"      # IMAPS
+      # - "4190:4190"    # ManageSieve (restrict the source IPs)
+      #
+      # Other common ones:
+      # - "5432:5432"        # PostgreSQL — restrict the source IPs
+      # - "22222:22"         # SSH on a non-standard host port
+      # - "51820:51820/udp"  # WireGuard
+      # - "53:53/udp"        # DNS
 
     # Persistent state. The named volume holds:
     #   - arenet.db   (BoltDB: routes, users, audit, secrets)

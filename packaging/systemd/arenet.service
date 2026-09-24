@@ -44,7 +44,11 @@ ExecStart=/usr/local/bin/arenet --data-dir=/var/lib/arenet
 
 WorkingDirectory=/var/lib/arenet
 
-# Bind privileged ports (:80 / :443) as the nonroot arenet user.
+# Bind privileged ports as the nonroot arenet user: :80 and :443
+# for the HTTP routes, and any port below 1024 a v2.42 TCP/UDP
+# service listens on (25, 465, 587, 993… for a mail relay).
+# Without this capability the service is refused at validation
+# time with the exact line to add — this is that line.
 # CapabilityBoundingSet restricts the binary to ONLY this
 # capability — no chroot, no audit, no sysadmin.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
