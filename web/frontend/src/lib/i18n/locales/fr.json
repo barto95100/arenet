@@ -1103,6 +1103,8 @@
 			"encryptionNone": "Aucun",
 			"encryptionStartTLS": "STARTTLS (port 587)",
 			"encryptionTLS": "TLS implicite (port 465)",
+			"labelHeloName": "Nom EHLO (optionnel)",
+			"helpHeloName": "Le nom qu'Arenet annonce au serveur de messagerie. Laisse vide pour utiliser le nom de cette machine, ou à défaut le domaine de l'adresse d'expédition. Un serveur strict refuse un nom qui n'est pas pleinement qualifié.",
 			"labelSubjectTemplate": "Template du sujet (optionnel)",
 			"labelEmailBodyTemplate": "Template du corps (optionnel)",
 			"btnSendTest": "Envoyer un test",
