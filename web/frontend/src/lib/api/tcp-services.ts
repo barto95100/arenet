@@ -118,3 +118,24 @@ export const deleteTCPService = (id: string): Promise<void> =>
 /** Dials every backend and reports what happened. Changes nothing. */
 export const testTCPService = (id: string): Promise<TCPServiceTestResult> =>
 	request<TCPServiceTestResult>('POST', `/tcp-services/${id}/test`);
+
+/**
+ * What a relay has carried since the process started. Layer-4
+ * traffic does not cross the HTTP chain, so these counters are the
+ * only view of it — they appear in no route metric and no log.
+ */
+export interface TCPServiceCounters {
+	connections: number;
+	/** Open right now. */
+	active: number;
+	bytesIn: number;
+	bytesOut: number;
+	/** Connections the relay could not complete. */
+	errors: number;
+	lastConnectionAt?: string;
+}
+
+/** Counters keyed by service id. A service absent from the map has
+ *  not been mounted since the last apply. */
+export const tcpServicesMetrics = (): Promise<Record<string, TCPServiceCounters>> =>
+	request<Record<string, TCPServiceCounters>>('GET', '/tcp-services/metrics');

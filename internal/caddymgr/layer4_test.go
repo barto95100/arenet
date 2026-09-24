@@ -38,6 +38,20 @@ import (
 	_ "github.com/mholt/caddy-l4/modules/l4tls"
 )
 
+// proxyOf returns the proxy handler of a route, skipping the metrics
+// handler the emitter puts in front of it.
+func proxyOf(t *testing.T, route map[string]any) map[string]any {
+	t.Helper()
+	handle, _ := route["handle"].([]map[string]any)
+	for _, h := range handle {
+		if h["handler"] == l4HandlerProxy {
+			return h
+		}
+	}
+	t.Fatalf("no proxy handler in %v", handle)
+	return nil
+}
+
 func imapsService() storage.TCPService {
 	return storage.TCPService{
 		ID:         "svc1",
@@ -119,19 +133,21 @@ func TestBuildLayer4App_BareService(t *testing.T) {
 		t.Fatal("a service with no gate must not emit a matcher")
 	}
 	handle, _ := routes[0]["handle"].([]map[string]any)
-	if len(handle) != 1 || handle[0]["handler"] != l4HandlerProxy {
-		t.Fatalf("handle: got %v", handle)
+	// v2.42 — metrics first, then the relay.
+	if len(handle) != 2 || handle[0]["handler"] != "arenet_l4metrics" || handle[0]["service_id"] != "svc1" {
+		t.Fatalf("handle: want the metrics handler then the proxy, got %v", handle)
 	}
+	proxy := proxyOf(t, routes[0])
 	// dial is a LIST in caddy-l4, not a string.
-	ups, _ := handle[0]["upstreams"].([]map[string]any)
+	ups, _ := proxy["upstreams"].([]map[string]any)
 	dial, _ := ups[0]["dial"].([]string)
 	if len(dial) != 1 || dial[0] != "tcp/10.20.0.5:993" {
 		t.Fatalf("dial: got %v", ups[0]["dial"])
 	}
-	if _, hasPP := handle[0]["proxy_protocol"]; hasPP {
+	if _, hasPP := proxy["proxy_protocol"]; hasPP {
 		t.Fatal("proxy_protocol must be absent when the service does not send it")
 	}
-	if _, hasLB := handle[0]["load_balancing"]; hasLB {
+	if _, hasLB := proxy["load_balancing"]; hasLB {
 		t.Fatal("round_robin is the default; it must not be emitted")
 	}
 }
@@ -145,7 +161,7 @@ func TestBuildLayer4App_ProxyProtocolAndHealthCheck(t *testing.T) {
 
 	app := buildLayer4App([]storage.TCPService{svc}, false)
 	srv := app["servers"].(map[string]any)["svc_svc1"].(map[string]any)
-	proxy := srv["routes"].([]map[string]any)[0]["handle"].([]map[string]any)[0]
+	proxy := proxyOf(t, srv["routes"].([]map[string]any)[0])
 
 	if proxy["proxy_protocol"] != storage.ProxyProtocolV2 {
 		t.Fatalf("proxy_protocol: got %v", proxy["proxy_protocol"])
@@ -185,7 +201,7 @@ func TestBuildLayer4App_IPFilterAllow(t *testing.T) {
 	if len(ranges) != 1 || ranges[0] != "192.168.1.0/24" {
 		t.Fatalf("remote_ip ranges: got %v", match)
 	}
-	if routes[0]["handle"].([]map[string]any)[0]["handler"] != l4HandlerProxy {
+	if proxyOf(t, routes[0])["handler"] != l4HandlerProxy {
 		t.Fatal("the gated route must relay")
 	}
 	if routes[1]["handle"].([]map[string]any)[0]["handler"] != l4HandlerClose {
@@ -210,7 +226,7 @@ func TestBuildLayer4App_IPFilterDeny(t *testing.T) {
 	if routes[0]["handle"].([]map[string]any)[0]["handler"] != l4HandlerClose {
 		t.Fatalf("denied sources must be closed first, got %v", routes[0])
 	}
-	if routes[1]["handle"].([]map[string]any)[0]["handler"] != l4HandlerProxy {
+	if proxyOf(t, routes[1])["handler"] != l4HandlerProxy {
 		t.Fatalf("the rest must relay, got %v", routes[1])
 	}
 	if _, hasMatch := routes[1]["match"]; hasMatch {
@@ -390,7 +406,7 @@ func TestBuildLayer4App_UDPService(t *testing.T) {
 	if len(listen) != 1 || listen[0] != "udp/0.0.0.0:51820" {
 		t.Fatalf("listen: got %v", listen)
 	}
-	proxy := srv["routes"].([]map[string]any)[0]["handle"].([]map[string]any)[0]
+	proxy := proxyOf(t, srv["routes"].([]map[string]any)[0])
 	dial, _ := proxy["upstreams"].([]map[string]any)[0]["dial"].([]string)
 	if len(dial) != 1 || dial[0] != "udp/10.20.0.9:51820" {
 		t.Fatalf("dial: got %v", dial)

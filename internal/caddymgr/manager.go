@@ -46,6 +46,7 @@ import (
 	// Side-effect import: registers the arenet_routemetrics module so
 	// the JSON config produced by buildConfigJSON (referencing it as
 	// a handler) is accepted by caddy.Load. Step E spec §3.
+	"github.com/barto95100/arenet/internal/l4metrics"
 	"github.com/barto95100/arenet/internal/metrics"
 
 	// Step M.1 — side-effect import: registers the arenet_waf
@@ -1014,7 +1015,27 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	// (TestApplyLocked_SyncCalledAfterSuccess) can exercise the
 	// Sync path directly without spinning up an embedded Caddy.
 	m.syncRegistry(routes)
+	// v2.42 — same for the layer-4 counters, so a service that was
+	// deleted stops being reported and a new one starts from zero.
+	syncL4Registry(tcpServices)
 	return nil
+}
+
+// syncL4Registry reconciles the layer-4 counters with the services
+// that are actually mounted. Disabled services are excluded: they
+// serve nothing, so reporting a cell for them would be noise.
+func syncL4Registry(services []storage.TCPService) {
+	reg := l4metrics.GlobalRegistry()
+	if reg == nil {
+		return
+	}
+	ids := make([]string, 0, len(services))
+	for _, svc := range services {
+		if !svc.Disabled {
+			ids = append(ids, svc.ID)
+		}
+	}
+	reg.Sync(ids)
 }
 
 // syncRegistry reconciles the metrics registry's cells with the

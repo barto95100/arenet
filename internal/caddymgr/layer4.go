@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/barto95100/arenet/internal/l4metrics"
 	"github.com/barto95100/arenet/internal/storage"
 )
 
@@ -120,7 +121,14 @@ func buildLayer4Routes(svc storage.TCPService, crowdSecAvailable bool) []map[str
 		match[l4MatcherRemoteIP] = map[string]any{"ranges": f.CIDRs}
 	}
 
-	relay := map[string]any{"handle": []map[string]any{buildLayer4Proxy(svc)}}
+	// The metrics handler goes FIRST in the chain: it wraps the
+	// connection so everything the proxy then reads and writes is
+	// counted. It never refuses a connection — a relay that stopped
+	// relaying because of a counter would be a poor trade.
+	relay := map[string]any{"handle": []map[string]any{
+		{"handler": l4metrics.HandlerName, "service_id": svc.ID},
+		buildLayer4Proxy(svc),
+	}}
 	if len(match) > 0 {
 		relay["match"] = []map[string]any{match}
 	}

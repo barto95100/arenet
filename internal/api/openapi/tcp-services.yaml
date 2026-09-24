@@ -57,6 +57,34 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '500': { $ref: '#/components/responses/ServerError' }
 
+  /tcp-services/metrics:
+    get:
+      summary: Counters of every TCP / UDP service
+      description: |
+        What each relay has carried since the process started:
+        connections accepted, how many are open right now, bytes each
+        way, and connections the relay could not complete — almost
+        always a backend that refused or timed out.
+
+        Layer-4 traffic does not cross the HTTP chain, so these
+        counters are the only view of it: they do not appear in the
+        per-route metrics, the dashboard or the logs.
+
+        Keys are service ids. A service with no cell has not been
+        mounted since the last apply.
+      tags: [TCP services]
+      x-arenet-role: viewer
+      responses:
+        '200':
+          description: Counters, keyed by service id.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { $ref: '#/components/schemas/TCPServiceCounters' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
   /tcp-services/{id}:
     parameters:
       - name: id
@@ -220,6 +248,17 @@ components:
             id: { type: string }
             createdAt: { type: string, format: date-time }
             updatedAt: { type: string, format: date-time }
+
+    TCPServiceCounters:
+      type: object
+      required: [connections, active, bytesIn, bytesOut, errors]
+      properties:
+        connections: { type: integer, description: Accepted since the process started. }
+        active: { type: integer, description: Open right now. }
+        bytesIn: { type: integer, description: Sent by clients. }
+        bytesOut: { type: integer, description: Received by clients. }
+        errors: { type: integer, description: Connections the relay could not complete. }
+        lastConnectionAt: { type: string, format: date-time }
 
     TCPServiceTestResult:
       type: object
