@@ -427,6 +427,20 @@
 			"summaryErrorPagesTemplate": "custom template",
 			"stateActiveHint": "The route serves traffic normally.",
 			"stateMaintenanceHint": "Visitors get the maintenance page; the certificate stays alive and the bypass IPs still reach the backend.",
+			"stateRedirectHint": "Answers a redirect; nothing is proxied.",
+			"badgeRedirect": "redirect",
+			"summaryStateRedirect": "redirects to {target}",
+			"redirect": {
+				"sectionTitle": "Redirect",
+				"targetLabel": "Target URL",
+				"targetHelper": "Must be a different host. A target on this route's own name would redirect to itself — to send one path elsewhere on the same host, use a path rule instead.",
+				"codeLabel": "Status code",
+				"code301Hint": "Permanent. Browsers and search engines remember it.",
+				"code302Hint": "Temporary. Nothing is cached; use it while you are unsure.",
+				"preservePathLabel": "Keep the visitor's path",
+				"preservePathHelper": "/a/b?c on this route lands on the same /a/b?c at the target. Off sends every visitor to the target as typed.",
+				"noProxyWarning": "A redirecting route does not proxy: the WAF, authentication, rate limit and country block do not apply. TLS still does — the route needs its certificate to answer at all."
+			},
 			"stateDisabledHint": "The route is parked: its configuration is kept but nothing is served.",
 			"stateCreateHint": "Maintenance becomes available once the route is saved.",
 			"summaryStateActive": "serving traffic",
@@ -649,6 +663,7 @@
 		"state": {
 			"active": "Active",
 			"maintenance": "Maintenance",
+			"redirect": "Redirect",
 			"disabled": "Disabled"
 		},
 		"ipFilter": {

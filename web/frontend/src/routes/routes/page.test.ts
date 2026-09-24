@@ -4654,3 +4654,99 @@ describe('Routes page — a rollback caused by the health check', () => {
 		expect(shown.textContent).not.toMatch(/fix the change \(upstream address/i);
 	});
 });
+
+// --- v2.44 — the redirect state ----------------------------------
+//
+// A fourth exclusive state, next to Active / Maintenance / Disabled.
+// It exists for moving a domain: old.example.com answers 301 to
+// new.example.com and proxies nothing. It deliberately cannot express
+// "/ goes to /admin/login" — that target is on the same host, so the
+// redirect would match its own target and loop. The server refuses
+// that at save; the form says so before the operator tries.
+
+describe('Routes page — the redirect state', () => {
+	it('offers the state and ships what the form holds', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		apiMock.createRoute.mockResolvedValue({ id: 'r1', host: 'old.test' });
+		render(Page);
+		await openCreateForm();
+
+		await userEvent.type(hostInput(), 'old.test');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+		// The state control carries it, and it is a birth state: a
+		// route created purely to forward a retired name never needs
+		// to have proxied anything first.
+		await userEvent.click(screen.getByText('Redirect'));
+		await tick();
+
+		await userEvent.type(screen.getByTestId('redirect-target'), 'https://new.test');
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		await waitFor(() => expect(apiMock.createRoute).toHaveBeenCalledTimes(1));
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.redirectConfig).toMatchObject({
+			target: 'https://new.test',
+			statusCode: 301,
+			preservePath: true
+		});
+		// The two states are exclusive: choosing one must not ship the
+		// other, which the server would refuse.
+		expect(payload.maintenanceConfig).toBeUndefined();
+	});
+
+	it('says what a redirecting route stops doing', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByText('Redirect'));
+		await tick();
+
+		const warning = screen.getByTestId('redirect-warning').textContent ?? '';
+		expect(warning).toMatch(/WAF/);
+		// TLS is the exception and the form must say so: a redirect
+		// served on a broken certificate is a browser warning, not a
+		// redirect.
+		expect(warning).toMatch(/TLS/);
+
+		// And the loop, named before the operator meets it.
+		expect(screen.getByTestId('redirect-fields').textContent).toMatch(/different host/i);
+	});
+
+	it('reads a stored redirect back into the form', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'red-1',
+				host: 'old.example.com',
+				redirectConfig: { target: 'https://new.example.com', statusCode: 302, preservePath: false }
+			})
+		]);
+		render(Page);
+		await userEvent.click((await screen.findByText('old.example.com')).closest('tr')!);
+		await tick();
+
+		expect((screen.getByTestId('redirect-target') as HTMLInputElement).value).toBe(
+			'https://new.example.com'
+		);
+		expect((screen.getByTestId('redirect-preserve-path') as HTMLInputElement).checked).toBe(false);
+	});
+
+	it('shows the state on the row without offering to switch it there', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'red-1',
+				host: 'old.example.com',
+				redirectConfig: { target: 'https://new.example.com' }
+			})
+		]);
+		render(Page);
+		const row = (await screen.findByText('old.example.com')).closest('tr')!;
+
+		// The dedicated maintenance/disable endpoints take no argument
+		// and a redirect needs a target, so the row states it and the
+		// form changes it.
+		expect(row.textContent).toMatch(/Redirect/);
+	});
+});

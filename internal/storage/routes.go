@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -284,6 +285,98 @@ type MaintenanceConfig struct {
 	// HTML-escaped + {env.*}/{file.*}-neutralized at emission, not
 	// here. omitempty keeps pre-v2.18.1 rows migration-free.
 	Message string `json:"message,omitempty"`
+}
+
+// RedirectConfig, when non-nil (and Disabled=false,
+// MaintenanceConfig=nil), makes the route answer a redirect instead of
+// proxying anything. Nil = not redirecting (zero value,
+// migration-free), and turning the state off sets it back to nil,
+// exactly like MaintenanceConfig.
+//
+// v2.44 — see docs/superpowers/specs/2026-09-24-route-redirects-design.md.
+// This is the whole-host scope: moving a domain. It cannot express "/
+// goes to /admin/login" — the target would be on the same host and the
+// redirect would match its own target. That need is the path-rule
+// scope, and the loop is why Validate refuses a same-host target.
+type RedirectConfig struct {
+	// Target is an absolute URL: scheme (http or https) plus host.
+	// With PreservePath it must carry no path of its own — see the
+	// field below for why.
+	Target string `json:"target"`
+	// StatusCode is 301 or 302. Zero means 301, the permanent move
+	// that a domain change almost always is.
+	StatusCode int `json:"statusCode,omitempty"`
+	// PreservePath appends the original path AND query to the target,
+	// so old.example.com/a/b?c reaches new.example.com/a/b?c. That is
+	// what a domain move wants, so the API and the UI default it on;
+	// the zero value is false only for hand-written JSON.
+	//
+	// It is also why Validate refuses a target that already has a
+	// path: appending to https://host/app would produce /app/a/b,
+	// which is silently not what anyone asked for.
+	PreservePath bool `json:"preservePath,omitempty"`
+}
+
+// RedirectStatusCodes are the two this feature offers. 307 and 308
+// preserve the request method, which is a different decision with
+// different consequences (a browser re-POSTing to another host); they
+// are a documented non-goal rather than an oversight.
+var RedirectStatusCodes = []int{301, 302}
+
+// Validate checks the target is a usable absolute URL and the status
+// code is one we offer. The same-host loop guard is NOT here: it needs
+// the route's host and aliases, so it lives in Route.Validate.
+func (rc *RedirectConfig) Validate() error {
+	if rc == nil {
+		return nil
+	}
+	target := strings.TrimSpace(rc.Target)
+	if target == "" {
+		return errors.New("redirect: a target URL is required")
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return fmt.Errorf("redirect: target %q is not a valid URL: %w", rc.Target, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("redirect: target %q must start with http:// or https://", rc.Target)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("redirect: target %q has no host", rc.Target)
+	}
+	if rc.PreservePath && u.Path != "" && u.Path != "/" {
+		return fmt.Errorf(
+			"redirect: target %q already has a path (%q) — with \"keep the path\" on, the "+
+				"visitor's own path is appended, which would produce %s%s/...; either drop the "+
+				"path from the target or turn \"keep the path\" off",
+			rc.Target, u.Path, u.Host, u.Path)
+	}
+	if rc.StatusCode != 0 && rc.StatusCode != 301 && rc.StatusCode != 302 {
+		return fmt.Errorf("redirect: statusCode must be 301 or 302, got %d", rc.StatusCode)
+	}
+	return nil
+}
+
+// Code returns the status code to emit, resolving the zero value.
+func (rc *RedirectConfig) Code() int {
+	if rc == nil || rc.StatusCode == 0 {
+		return 301
+	}
+	return rc.StatusCode
+}
+
+// TargetHost returns the target's host without its port, lowercased,
+// for the same-host comparison. Empty when the target is unparseable —
+// Validate reports that separately.
+func (rc *RedirectConfig) TargetHost() string {
+	if rc == nil {
+		return ""
+	}
+	u, err := url.Parse(strings.TrimSpace(rc.Target))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }
 
 // Validate rejects a negative Retry-After and any bypass entry that is
@@ -682,6 +775,11 @@ type Route struct {
 	// zero value — pre-feature routes and fresh creates decode with
 	// no maintenance active, no migration needed.
 	MaintenanceConfig *MaintenanceConfig `json:"maintenanceConfig,omitempty"`
+	// RedirectConfig (v2.44), when non-nil, makes the route answer a
+	// redirect instead of proxying (see the RedirectConfig type doc).
+	// Nil is the zero value and keeps pre-v2.44 rows migration-free.
+	// Mutually exclusive with MaintenanceConfig — Validate enforces it.
+	RedirectConfig *RedirectConfig `json:"redirectConfig,omitempty"`
 	// CertSource (v2.19.0) selects the cert provider: "" or "acme"
 	// (ACME, default), "internal" (self-signed), "manual" (external
 	// uploaded cert referenced by CertID). Zero value = acme
@@ -1030,6 +1128,35 @@ func (r *Route) validate() error {
 	// above.
 	if err := r.MaintenanceConfig.Validate(); err != nil {
 		return err
+	}
+	// RedirectConfig (v2.44): same last-line-of-defence posture as
+	// maintenance above, plus the two checks that need the route
+	// itself — exclusivity and the same-host loop.
+	if err := r.RedirectConfig.Validate(); err != nil {
+		return err
+	}
+	if r.RedirectConfig != nil {
+		if r.MaintenanceConfig != nil {
+			return errors.New("route: a route cannot be in maintenance and redirecting at the same time")
+		}
+		// The loop guard. A target on this route's own host — or on
+		// one of its aliases — matches the redirect that produced it,
+		// so the browser bounces until it gives up. Refuse it here,
+		// while the operator is still looking at the form.
+		//
+		// This is also why "/ goes to /admin/login" is NOT expressible
+		// at this scope: it is the same host by construction. That
+		// need belongs to a path rule.
+		target := r.RedirectConfig.TargetHost()
+		for _, h := range r.AllHosts() {
+			if target != "" && target == strings.ToLower(h) {
+				return fmt.Errorf(
+					"redirect: the target points back at %s, which this route answers for — "+
+						"every visitor would be redirected to the same place forever; "+
+						"redirect to a different host, or use a path rule to send one path elsewhere",
+					h)
+			}
+		}
 	}
 	return nil
 }

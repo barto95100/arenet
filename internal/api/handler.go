@@ -1331,6 +1331,12 @@ type routeRequest struct {
 	// maintenance (the default); non-nil = maintenance active with
 	// the given retry-after + bypass IPs.
 	MaintenanceConfig *storage.MaintenanceConfig `json:"maintenanceConfig,omitempty"`
+	// RedirectConfig (v2.44) mirrors MaintenanceConfig exactly: the
+	// route form sends it on create/update, so DisallowUnknownFields
+	// would 400 every payload carrying it otherwise. nil = not
+	// redirecting. Mutually exclusive with MaintenanceConfig, which
+	// storage.Route.Validate enforces rather than this struct.
+	RedirectConfig *storage.RedirectConfig `json:"redirectConfig,omitempty"`
 	// CertSource (v2.19.0) selects the cert provider for this route.
 	// "" / "acme" (default), "internal", or "manual". When "manual",
 	// CertID must reference an uploaded external certificate whose
@@ -1859,6 +1865,10 @@ type routeResponse struct {
 	// maintenance (the common case); omitempty keeps pre-existing
 	// snapshots byte-identical.
 	MaintenanceConfig *storage.MaintenanceConfig `json:"maintenanceConfig,omitempty"`
+	// RedirectConfig (v2.44) — echoed on every GET so the form
+	// reads back the redirect state it is in. Same omitempty
+	// reasoning as above.
+	RedirectConfig *storage.RedirectConfig `json:"redirectConfig,omitempty"`
 	// CertSource (v2.19.0) — echoed on every GET so the frontend's
 	// cert-source selector reads the persisted value and a GET→PUT
 	// round-trip carries it back. omitempty keeps pre-v2.19.0 rows
@@ -1969,6 +1979,7 @@ func toResponse(r storage.Route) routeResponse {
 		UpdatedAt:           r.UpdatedAt.UTC().Format(timestampFormat),
 		Disabled:            r.Disabled,
 		MaintenanceConfig:   r.MaintenanceConfig,
+		RedirectConfig:      r.RedirectConfig,
 		CertSource:          r.CertSource,
 		CertID:              r.CertID,
 		IPFilter:            toIPFilterResp(r.IPFilter),
