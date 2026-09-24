@@ -3,31 +3,29 @@
   Copyright (C) 2026  Ludovic Ramos
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
-  v2.42.1 — what a layer-4 relay does, drawn.
+  v2.42.2 — what a layer-4 relay does, drawn.
 
-  The empty state explains it in a sentence, but the thing worth
-  understanding is spatial: the bytes cross Arenet without being
-  read, the TLS session spans the whole path rather than stopping in
-  the middle, and the only thing Arenet adds is the client's address
-  in front of the stream.
+  One row, three nodes, two segments of equal length. The first
+  version also drew an HTTP route above for contrast; it earned its
+  place in an explanation but not on screen — the page is about
+  relays, and the second row only made the one that matters harder
+  to read.
 
-  Two rows on purpose: an HTTP route above, where Arenet terminates
-  TLS and inspects, and a relay below, where it does not. The
-  contrast is the explanation.
+  The geometry is a grid rather than flex so the two segments are
+  the same width whatever the labels say: with flex, the wider
+  "Arenet" node ate into the segment on its right and pushed the
+  stamp against the backend.
 
   The animation is decoration: the diagram reads correctly frozen,
-  every label is text, and prefers-reduced-motion stops the motion
-  entirely.
+  every label is text, and prefers-reduced-motion stops the motion.
 -->
 <script lang="ts">
 	interface Props {
 		/** Labels, resolved by the caller so this stays i18n-free. */
 		labels: {
 			client: string;
-			route: string;
 			service: string;
 			backend: string;
-			routeNote: string;
 			serviceNote: string;
 			proxyNote: string;
 		};
@@ -36,113 +34,66 @@
 	let { labels }: Props = $props();
 </script>
 
-<div class="diagram" role="img" aria-label="{labels.routeNote}. {labels.serviceNote}">
-	<div class="row">
-		<span class="tag">{labels.route}</span>
-		<div class="track">
-			<span class="node">{labels.client}</span>
-			<span class="wire">
-				<span class="dot d1"></span>
-				<span class="dot d2"></span>
-			</span>
-			<span class="node arenet">Arenet<span class="opens">{labels.routeNote}</span></span>
-			<span class="wire">
-				<span class="dot d3"></span>
-			</span>
-			<span class="node">{labels.backend}</span>
-		</div>
-	</div>
+<div class="diagram" role="img" aria-label="{labels.client} → Arenet ({labels.serviceNote}) → {labels.backend}. {labels.proxyNote}">
+	<span class="node">{labels.client}</span>
 
-	<div class="row">
-		<span class="tag tag-l4">{labels.service}</span>
-		<div class="track">
-			<span class="node">{labels.client}</span>
-			<span class="wire sealed">
-				<span class="dot sealed-dot s1"></span>
-				<span class="dot sealed-dot s2"></span>
-			</span>
-			<span class="node arenet pass">Arenet<span class="opens">{labels.serviceNote}</span></span>
-			<span class="wire sealed">
-				<span class="dot sealed-dot s3"></span>
-				<span class="stamp">{labels.proxyNote}</span>
-			</span>
-			<span class="node">{labels.backend}</span>
-		</div>
-	</div>
+	<span class="wire">
+		<span class="dot d1"></span>
+		<span class="dot d2"></span>
+	</span>
+
+	<span class="node arenet">
+		Arenet
+		<span class="note">{labels.serviceNote}</span>
+	</span>
+
+	<span class="wire">
+		<span class="stamp">{labels.proxyNote}</span>
+		<span class="dot d3"></span>
+		<span class="dot d4"></span>
+	</span>
+
+	<span class="node">{labels.backend}</span>
 </div>
 
 <style>
+	/* Equal segments by construction: the node columns size to their
+	   content, the two wire columns share what is left. */
 	.diagram {
-		display: flex;
-		flex-direction: column;
-		gap: 18px;
+		display: grid;
+		grid-template-columns: auto 1fr auto 1fr auto;
+		align-items: center;
+		gap: 14px;
 		width: 100%;
-		max-width: 720px;
-		margin: 6px auto 2px;
+		max-width: 640px;
+		margin: 26px auto 6px;
 	}
-	.row {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-	}
-	.tag {
-		flex: none;
-		width: 84px;
-		text-align: right;
-		font-size: 10.5px;
-		font-weight: 600;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		color: var(--text-muted);
-	}
-	.tag-l4 {
-		color: var(--accent-cyan);
-	}
-	.track {
-		flex: 1;
-		display: flex;
-		align-items: center;
-		min-width: 0;
-	}
+
 	.node {
-		flex: none;
-		position: relative;
-		padding: 5px 10px;
-		border-radius: 7px;
+		padding: 7px 12px;
+		border-radius: 8px;
 		border: 1px solid var(--border-subtle);
 		background: var(--bg-surface);
-		font-size: 11.5px;
+		font-size: 12px;
 		color: var(--text-secondary);
+		text-align: center;
 		white-space: nowrap;
 	}
 	.node.arenet {
-		border-color: var(--border-default);
+		border-color: color-mix(in oklch, var(--accent-cyan) 45%, transparent);
 		color: var(--text-primary);
 	}
-	.node.pass {
-		border-color: color-mix(in oklch, var(--accent-cyan) 45%, transparent);
-	}
-	.opens {
+	.note {
 		display: block;
-		font-size: 9.5px;
-		color: var(--text-muted);
-		text-transform: none;
-		letter-spacing: 0;
-	}
-	.node.pass .opens {
+		margin-top: 2px;
+		font-size: 10px;
 		color: var(--accent-cyan);
 	}
 
 	.wire {
 		position: relative;
-		flex: 1;
-		min-width: 24px;
 		height: 2px;
-		background: var(--border-default);
-	}
-	/* A sealed wire is one Arenet does not open: drawn solid and
-	   tinted, against the plain grey of the inspected one. */
-	.wire.sealed {
+		min-width: 70px;
 		background: color-mix(in oklch, var(--accent-cyan) 40%, var(--border-default));
 	}
 
@@ -152,29 +103,20 @@
 		width: 8px;
 		height: 8px;
 		border-radius: 50%;
-		background: var(--text-muted);
-		animation: travel 2.6s linear infinite;
-	}
-	.sealed-dot {
 		background: var(--accent-cyan);
+		animation: travel 2.4s linear infinite;
 	}
 	.d1 {
 		animation-delay: 0s;
 	}
 	.d2 {
-		animation-delay: 1.3s;
+		animation-delay: 1.2s;
 	}
 	.d3 {
-		animation-delay: 0.65s;
+		animation-delay: 0.4s;
 	}
-	.s1 {
-		animation-delay: 0.2s;
-	}
-	.s2 {
-		animation-delay: 1.5s;
-	}
-	.s3 {
-		animation-delay: 0.85s;
+	.d4 {
+		animation-delay: 1.6s;
 	}
 
 	@keyframes travel {
@@ -182,10 +124,10 @@
 			left: -4px;
 			opacity: 0;
 		}
-		12% {
+		15% {
 			opacity: 1;
 		}
-		88% {
+		85% {
 			opacity: 1;
 		}
 		to {
@@ -194,36 +136,37 @@
 		}
 	}
 
-	/* The only thing the relay adds: the client's address, stamped in
-	   front of the stream on the way out. */
+	/* The only thing the relay adds, sitting clear above its segment
+	   rather than wedged between two boxes. */
 	.stamp {
 		position: absolute;
-		top: -22px;
+		bottom: 12px;
 		left: 50%;
 		transform: translateX(-50%);
 		white-space: nowrap;
-		font-size: 9.5px;
+		font-size: 10px;
 		color: var(--accent-cyan);
 		border: 1px solid color-mix(in oklch, var(--accent-cyan) 45%, transparent);
 		background: color-mix(in oklch, var(--accent-cyan) 12%, transparent);
 		border-radius: 999px;
-		padding: 1px 7px;
+		padding: 1px 8px;
 	}
 
-	@media (max-width: 640px) {
-		.row {
+	@media (max-width: 560px) {
+		.diagram {
 			gap: 8px;
-		}
-		.tag {
-			width: 58px;
-			font-size: 9.5px;
+			margin-top: 22px;
 		}
 		.node {
-			padding: 4px 7px;
-			font-size: 10.5px;
+			padding: 5px 8px;
+			font-size: 11px;
+		}
+		.wire {
+			min-width: 28px;
 		}
 		.stamp {
-			display: none;
+			font-size: 9px;
+			padding: 1px 5px;
 		}
 	}
 

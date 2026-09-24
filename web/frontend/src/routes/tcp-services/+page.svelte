@@ -304,10 +304,8 @@
 				<TCPFlowDiagram
 					labels={{
 						client: tl('tcpServices.diagram.client'),
-						route: tl('tcpServices.diagram.route'),
 						service: tl('tcpServices.diagram.service'),
 						backend: tl('tcpServices.diagram.backend'),
-						routeNote: tl('tcpServices.diagram.routeNote'),
 						serviceNote: tl('tcpServices.diagram.serviceNote'),
 						proxyNote: tl('tcpServices.diagram.proxyNote')
 					}}
