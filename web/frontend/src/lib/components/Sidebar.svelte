@@ -76,6 +76,7 @@
 		| 'topology'
 		| 'map'
 		| 'routes'
+		| 'tcp'
 		| 'logs'
 		| 'waf'
 		| 'security'
@@ -119,6 +120,10 @@
 			labelKey: 'sidebar.sectionTraffic',
 			items: [
 				{ href: '/routes', labelKey: 'sidebar.navRoutes', icon: 'routes' },
+				// v2.42 — layer-4 relays. Next to Routes because it is
+				// the same question (what does this host serve?), one
+				// layer down.
+				{ href: '/tcp-services', labelKey: 'sidebar.navTCPServices', icon: 'tcp' },
 				{ href: '/logs', labelKey: 'sidebar.navLogs', icon: 'logs' }
 			]
 		},
@@ -216,6 +221,10 @@
 			<circle cx="3" cy="8" r="2" />
 			<circle cx="13" cy="8" r="2" />
 			<path d="M5 8h6" />
+		{:else if icon === 'tcp'}
+			<path d="M2 4h5v8H2z" />
+			<path d="M9 8h5" />
+			<path d="M12 6l2 2-2 2" />
 		{:else if icon === 'logs'}
 			<path d="M3 3h10v10H3z" />
 			<path d="M5 6h6M5 8.5h6M5 11h4" />
