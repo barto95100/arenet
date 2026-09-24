@@ -759,6 +759,15 @@
 		"deleted": "Service supprimé",
 		"emptyTitle": "Aucun relais pour le moment",
 		"emptyBody": "Un service de niveau 4 transfère un port vers un backend — serveur de messagerie, base de données, SSH, WireGuard. Contrairement à une route, rien n'est lu au passage : pas de WAF, pas de pages d'erreur, et le chiffrement reste de bout en bout.",
+		"diagram": {
+			"client": "Client",
+			"route": "Route HTTP",
+			"service": "TCP / UDP",
+			"backend": "Backend",
+			"routeNote": "lit et inspecte",
+			"serviceNote": "transfère sans lire",
+			"proxyNote": "+ IP du client"
+		},
 		"colName": "Nom",
 		"colListen": "Écoute",
 		"colBackend": "Backend",

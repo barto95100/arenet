@@ -244,3 +244,33 @@ describe('/tcp-services — traffic', () => {
 		expect(await screen.findByTestId('tcp-row-svc1')).toBeInTheDocument();
 	});
 });
+
+// --- v2.42.1 — the empty state takes the page --------------------
+//
+// It used to be squeezed into the left column of the split layout,
+// which only exists to leave room for a list that is not there yet.
+
+describe('/tcp-services — empty state layout', () => {
+	it('is full width and carries the diagram when nothing is configured', async () => {
+		render(Page);
+		const empty = await screen.findByTestId('tcp-empty');
+		// Not inside the two-column grid.
+		expect(empty.closest('[class*="xl:grid-cols"]')).toBeNull();
+		// The diagram explains what the sentence says.
+		const diagram = empty.querySelector('[role="img"]');
+		expect(diagram).not.toBeNull();
+		expect(diagram?.getAttribute('aria-label') ?? '').toMatch(/without reading/i);
+	});
+
+	it('steps aside once the form is open, so the form is not pushed off screen', async () => {
+		render(Page);
+		await waitFor(() => expect(screen.getByTestId('tcp-empty')).toBeInTheDocument());
+		await userEvent.click(screen.getAllByText('+ New service')[0]);
+		await tick();
+
+		expect(screen.queryByTestId('tcp-empty')).toBeNull();
+		expect(screen.getByTestId('tcp-form')).toBeInTheDocument();
+		// A compact reminder stays where the list will be.
+		expect(screen.getByTestId('tcp-empty-compact')).toBeInTheDocument();
+	});
+});
