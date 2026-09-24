@@ -1,0 +1,581 @@
+<!--
+  Arenet - Homelab-friendly reverse proxy with integrated security
+  Copyright (C) 2026  Ludovic Ramos
+  Licensed under the GNU AGPL v3 or later. See LICENSE.
+
+  v2.42 — TCP / UDP services (layer 4).
+
+  The form is deliberately flat: a relay is four things, and folding
+  four things behind collapsible sections would add clicks to hide
+  what already fits on screen — the opposite mistake to the one the
+  route form had. Consistency with the rest of Arenet comes from the
+  components (segmented control, switch rows, posture chips), not
+  from the presence of sections.
+
+  Two elements are load-bearing and sit next to each other on
+  purpose: the PROXY-protocol block, which prints the exact address
+  to trust on the backend, and the "test the backends" button. A
+  mismatched PROXY setting breaks connections *silently*, so the
+  operator needs to be told what to configure and given a way to
+  check before they trust the relay.
+-->
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Button from '$lib/components/Button.svelte';
+	import Badge from '$lib/components/Badge.svelte';
+	import Spinner from '$lib/components/Spinner.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import ModeSelector from '$lib/components/form/ModeSelector.svelte';
+	import SwitchRow from '$lib/components/form/SwitchRow.svelte';
+	import PostureSentence from '$lib/components/form/PostureSentence.svelte';
+	import { pushToast } from '$lib/stores/toast';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
+	import {
+		listTCPServices,
+		createTCPService,
+		updateTCPService,
+		deleteTCPService,
+		testTCPService,
+		type TCPService,
+		type TCPServiceRequest,
+		type TCPServiceTestResult,
+		type TCPServiceProtocol,
+		type ProxyProtocolVersion
+	} from '$lib/api/tcp-services';
+	import { PRESET_GROUPS, presetsOf, type ServicePreset } from '$lib/components/tcp/presets';
+
+	function tl(key: string, params?: Record<string, string | number>): string {
+		void language.current;
+		return t(key, params);
+	}
+
+	let services = $state<TCPService[]>([]);
+	let loading = $state(true);
+	let loadError = $state<string | null>(null);
+
+	let formOpen = $state(false);
+	let editingId = $state<string | null>(null);
+	let saving = $state(false);
+	let formError = $state<string | null>(null);
+	let testResult = $state<TCPServiceTestResult | null>(null);
+	let testing = $state(false);
+	let confirmDeleteOpen = $state(false);
+
+	// --- form state ---------------------------------------------
+	let fName = $state('');
+	let fProtocol = $state<TCPServiceProtocol>('tcp');
+	let fListenAddr = $state('');
+	let fListenPort = $state<number | null>(null);
+	let fBackendHost = $state('');
+	let fBackendPort = $state<number | null>(null);
+	let fProxyProtocol = $state<ProxyProtocolVersion>('v2');
+	let fCrowdSec = $state(true);
+	let fRestrict = $state(false);
+	let fCIDRs = $state('');
+	let fHealthCheck = $state(false);
+	let fDisabled = $state(false);
+
+	const protocolOptions = $derived([
+		{ value: 'tcp' as const, label: 'TCP', hint: tl('tcpServices.form.protocolTCPHint'), tone: 'neutral' as const },
+		{ value: 'udp' as const, label: 'UDP', hint: tl('tcpServices.form.protocolUDPHint'), tone: 'neutral' as const }
+	]);
+
+	const proxyOptions = $derived([
+		{ value: '' as const, label: tl('tcpServices.form.proxyNone'), hint: tl('tcpServices.form.proxyNoneHint'), tone: 'neutral' as const },
+		{ value: 'v1' as const, label: 'v1', hint: tl('tcpServices.form.proxyV1Hint'), tone: 'neutral' as const },
+		{ value: 'v2' as const, label: 'v2', hint: tl('tcpServices.form.proxyV2Hint'), tone: 'allow' as const }
+	]);
+
+	// The two pairings the API refuses, surfaced before the operator
+	// presses Save rather than as a 400 afterwards.
+	const udpWithV1 = $derived(fProtocol === 'udp' && fProxyProtocol === 'v1');
+	const udpWithHealthCheck = $derived(fProtocol === 'udp' && fHealthCheck);
+
+	const relaySentence = $derived(
+		fListenPort && fBackendHost && fBackendPort
+			? tl('tcpServices.form.relaySentence', {
+					protocol: fProtocol.toUpperCase(),
+					listen: `${fListenAddr || '0.0.0.0'}:${fListenPort}`,
+					backend: `${fBackendHost}:${fBackendPort}`
+				})
+			: ''
+	);
+
+	async function load() {
+		loading = true;
+		loadError = null;
+		try {
+			services = await listTCPServices();
+		} catch (err) {
+			loadError = err instanceof Error ? err.message : String(err);
+		} finally {
+			loading = false;
+		}
+	}
+
+	onMount(load);
+
+	function resetForm() {
+		fName = '';
+		fProtocol = 'tcp';
+		fListenAddr = '';
+		fListenPort = null;
+		fBackendHost = '';
+		fBackendPort = null;
+		fProxyProtocol = 'v2';
+		fCrowdSec = true;
+		fRestrict = false;
+		fCIDRs = '';
+		fHealthCheck = false;
+		fDisabled = false;
+		formError = null;
+		testResult = null;
+	}
+
+	function openCreate() {
+		resetForm();
+		editingId = null;
+		formOpen = true;
+	}
+
+	function openEdit(svc: TCPService) {
+		resetForm();
+		editingId = svc.id;
+		fName = svc.name;
+		fProtocol = svc.protocol ?? 'tcp';
+		fListenAddr = svc.listenAddr ?? '';
+		fListenPort = svc.listenPort;
+		fBackendHost = svc.upstreams[0]?.host ?? '';
+		fBackendPort = svc.upstreams[0]?.port ?? null;
+		fProxyProtocol = svc.proxyProtocol ?? '';
+		fCrowdSec = svc.crowdSecEnabled ?? false;
+		fRestrict = svc.ipFilter?.mode === 'allow';
+		fCIDRs = (svc.ipFilter?.cidrs ?? []).join(', ');
+		fHealthCheck = svc.healthCheck?.enabled ?? false;
+		fDisabled = svc.disabled ?? false;
+		formOpen = true;
+	}
+
+	// A preset fills what an operator would otherwise have to know by
+	// heart, including whether the thing should be exposed at all.
+	function applyPreset(p: ServicePreset) {
+		fName = p.name;
+		fProtocol = p.protocol;
+		fListenPort = p.port;
+		fBackendPort = p.port;
+		fProxyProtocol = p.proxyProtocol;
+		fRestrict = p.restrictByDefault;
+		fHealthCheck = p.healthCheck;
+	}
+
+	function buildPayload(): TCPServiceRequest {
+		const cidrs = fCIDRs
+			.split(/[,\n]/)
+			.map((c) => c.trim())
+			.filter((c) => c !== '');
+		return {
+			name: fName.trim(),
+			protocol: fProtocol,
+			listenAddr: fListenAddr.trim(),
+			listenPort: fListenPort ?? 0,
+			upstreams: [{ host: fBackendHost.trim(), port: fBackendPort ?? 0 }],
+			proxyProtocol: fProxyProtocol,
+			crowdSecEnabled: fCrowdSec,
+			ipFilter: fRestrict ? { mode: 'allow', cidrs } : undefined,
+			healthCheck: fHealthCheck ? { enabled: true } : undefined,
+			disabled: fDisabled
+		};
+	}
+
+	async function save() {
+		saving = true;
+		formError = null;
+		try {
+			if (editingId) {
+				await updateTCPService(editingId, buildPayload());
+			} else {
+				await createTCPService(buildPayload());
+			}
+			pushToast(tl('tcpServices.saved'), 'success');
+			formOpen = false;
+			await load();
+		} catch (err) {
+			formError = err instanceof Error ? err.message : String(err);
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function runTest() {
+		if (!editingId) return;
+		testing = true;
+		testResult = null;
+		try {
+			testResult = await testTCPService(editingId);
+		} catch (err) {
+			formError = err instanceof Error ? err.message : String(err);
+		} finally {
+			testing = false;
+		}
+	}
+
+	async function confirmDelete() {
+		if (!editingId) return;
+		try {
+			await deleteTCPService(editingId);
+			pushToast(tl('tcpServices.deleted'), 'success');
+			confirmDeleteOpen = false;
+			formOpen = false;
+			await load();
+		} catch (err) {
+			formError = err instanceof Error ? err.message : String(err);
+			confirmDeleteOpen = false;
+		}
+	}
+
+	function listenOf(svc: TCPService): string {
+		return `${svc.protocol === 'udp' ? 'udp' : 'tcp'}/${svc.listenAddr || '0.0.0.0'}:${svc.listenPort}`;
+	}
+</script>
+
+<svelte:head>
+	<title>{language.current && t('tcpServices.headTitle')}</title>
+</svelte:head>
+
+<PageHeader
+	eyebrow={tl('tcpServices.eyebrow')}
+	title={tl('tcpServices.title')}
+	subtitle={tl('tcpServices.subtitle')}
+>
+	{#snippet actions()}
+		<Button onclick={openCreate}>{tl('tcpServices.addButton')}</Button>
+	{/snippet}
+</PageHeader>
+
+{#if loading}
+	<div class="flex justify-center mt-12"><Spinner size="lg" /></div>
+{:else if loadError}
+	<div class="rounded-md border border-border-subtle bg-elevated p-4 text-sm text-down" data-testid="tcp-load-error">
+		{loadError}
+	</div>
+{:else}
+	<div class="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-4 mt-6 items-start">
+		<div class="rounded-lg border border-border-subtle bg-elevated overflow-hidden">
+			{#if services.length === 0}
+				<EmptyState
+					testid="tcp-empty"
+					title={tl('tcpServices.emptyTitle')}
+					body={tl('tcpServices.emptyBody')}
+					actionLabel={tl('tcpServices.addButton')}
+					onAction={openCreate}
+				/>
+			{:else}
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="text-left text-xs uppercase tracking-wide text-muted">
+							<th class="px-4 py-3 font-medium">{tl('tcpServices.colName')}</th>
+							<th class="px-4 py-3 font-medium">{tl('tcpServices.colListen')}</th>
+							<th class="px-4 py-3 font-medium">{tl('tcpServices.colBackend')}</th>
+							<th class="px-4 py-3 font-medium">{tl('tcpServices.colGuards')}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each services as svc (svc.id)}
+							<tr
+								class="border-t border-border-subtle cursor-pointer hover:bg-hover"
+								class:opacity-50={svc.disabled}
+								data-testid="tcp-row-{svc.id}"
+								onclick={() => openEdit(svc)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										openEdit(svc);
+									}
+								}}
+								tabindex="0"
+								role="button"
+							>
+								<td class="px-4 py-3 font-mono">{svc.name}</td>
+								<td class="px-4 py-3 font-mono text-secondary">{listenOf(svc)}</td>
+								<td class="px-4 py-3 font-mono text-secondary">
+									{svc.upstreams[0]?.host}:{svc.upstreams[0]?.port}{svc.upstreams.length > 1
+										? ` (+${svc.upstreams.length - 1})`
+										: ''}
+								</td>
+								<td class="px-4 py-3">
+									<div class="flex flex-wrap gap-1">
+										{#if svc.proxyProtocol}
+											<Badge variant="status-up">proxy {svc.proxyProtocol}</Badge>
+										{/if}
+										{#if svc.crowdSecEnabled}
+											<Badge variant="status-down">crowdsec</Badge>
+										{/if}
+										{#if svc.ipFilter?.mode === 'allow'}
+											<Badge variant="status-up"
+												>{tl('tcpServices.badgeIPAllow', { count: svc.ipFilter.cidrs?.length ?? 0 })}</Badge
+											>
+										{:else if svc.ipFilter?.mode === 'deny'}
+											<Badge variant="status-down"
+												>{tl('tcpServices.badgeIPDeny', { count: svc.ipFilter.cidrs?.length ?? 0 })}</Badge
+											>
+										{/if}
+										{#if svc.disabled}
+											<Badge variant="neutral">{tl('tcpServices.badgeDisabled')}</Badge>
+										{/if}
+									</div>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{/if}
+		</div>
+
+		{#if formOpen}
+			<div class="rounded-lg border border-border-subtle bg-elevated" data-testid="tcp-form">
+				<div class="px-5 py-4 border-b border-border-subtle">
+					<h3 class="text-base font-semibold text-primary">
+						{editingId ? tl('tcpServices.form.titleEdit') : tl('tcpServices.form.titleNew')}
+					</h3>
+				</div>
+
+				<form
+					class="flex flex-col gap-4 p-5"
+					onsubmit={(e) => {
+						e.preventDefault();
+						save();
+					}}
+				>
+					{#if !editingId}
+						<div>
+							<span class="text-sm font-medium text-secondary block mb-2"
+								>{tl('tcpServices.form.presetsLabel')}</span
+							>
+							{#each PRESET_GROUPS as group (group)}
+								<div class="mb-2">
+									<div class="text-xs text-muted mb-1">{tl(`tcpServices.presetGroup.${group}`)}</div>
+									<div class="flex flex-wrap gap-1.5">
+										{#each presetsOf(group) as p (p.id)}
+											<button
+												type="button"
+												class="px-2.5 py-1 rounded-md border border-border-default bg-surface text-xs text-secondary hover:text-primary hover:bg-hover"
+												data-testid="tcp-preset-{p.id}"
+												onclick={() => applyPreset(p)}
+											>
+												{p.name}
+												<span class="text-muted">{p.protocol}/{p.port}</span>
+											</button>
+										{/each}
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					<div class="grid gap-3 sm:grid-cols-2">
+						<div>
+							<label for="tcp-name" class="text-sm font-medium text-secondary block mb-1"
+								>{tl('tcpServices.form.name')}</label
+							>
+							<input
+								id="tcp-name"
+								bind:value={fName}
+								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+							/>
+						</div>
+						<div>
+							<label for="tcp-listen-port" class="text-sm font-medium text-secondary block mb-1"
+								>{tl('tcpServices.form.listenPort')}</label
+							>
+							<input
+								id="tcp-listen-port"
+								type="number"
+								min="1"
+								max="65535"
+								bind:value={fListenPort}
+								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+							/>
+						</div>
+						<div>
+							<label for="tcp-listen-addr" class="text-sm font-medium text-secondary block mb-1"
+								>{tl('tcpServices.form.listenAddr')}</label
+							>
+							<input
+								id="tcp-listen-addr"
+								bind:value={fListenAddr}
+								placeholder="0.0.0.0"
+								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+							/>
+						</div>
+						<div class="grid grid-cols-[1fr_90px] gap-2">
+							<div>
+								<label for="tcp-backend-host" class="text-sm font-medium text-secondary block mb-1"
+									>{tl('tcpServices.form.backend')}</label
+								>
+								<input
+									id="tcp-backend-host"
+									bind:value={fBackendHost}
+									placeholder="10.20.0.5"
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+								/>
+							</div>
+							<div>
+								<label for="tcp-backend-port" class="text-sm font-medium text-secondary block mb-1"
+									>{tl('tcpServices.form.port')}</label
+								>
+								<input
+									id="tcp-backend-port"
+									type="number"
+									min="1"
+									max="65535"
+									bind:value={fBackendPort}
+									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+								/>
+							</div>
+						</div>
+					</div>
+
+					<div class="flex flex-col gap-2">
+						<span class="text-sm font-medium text-secondary">{tl('tcpServices.form.protocol')}</span>
+						<ModeSelector id="tcp-protocol" bind:value={fProtocol} options={protocolOptions} ariaLabel={tl('tcpServices.form.protocol')} />
+					</div>
+
+					{#if relaySentence}
+						<PostureSentence posture="allow" testid="tcp-relay-sentence">{relaySentence}</PostureSentence>
+					{/if}
+
+					<div class="flex flex-col gap-2">
+						<span class="text-sm font-medium text-secondary"
+							>{tl('tcpServices.form.proxyProtocol')}</span
+						>
+						<ModeSelector id="tcp-proxy" bind:value={fProxyProtocol} options={proxyOptions} ariaLabel={tl('tcpServices.form.proxyProtocol')} />
+						{#if fProxyProtocol}
+							<div
+								class="rounded-md border border-border-subtle border-l-[3px] border-l-warn bg-surface p-3 text-xs text-secondary leading-relaxed"
+								data-testid="tcp-proxy-callout"
+							>
+								{tl('tcpServices.form.proxyCallout')}
+							</div>
+						{/if}
+						{#if udpWithV1}
+							<p class="text-xs text-down" data-testid="tcp-udp-v1-warning">
+								{tl('tcpServices.form.udpV1Refused')}
+							</p>
+						{/if}
+					</div>
+
+					<SwitchRow
+						checked={fCrowdSec}
+						onchange={(v) => (fCrowdSec = v)}
+						label={tl('tcpServices.form.crowdsec')}
+						helper={tl('tcpServices.form.crowdsecHelper')}
+						testid="tcp-crowdsec"
+					/>
+
+					<SwitchRow
+						checked={fRestrict}
+						onchange={(v) => (fRestrict = v)}
+						label={tl('tcpServices.form.restrict')}
+						helper={tl('tcpServices.form.restrictHelper')}
+						testid="tcp-restrict"
+					/>
+					{#if fRestrict}
+						<div>
+							<label for="tcp-cidrs" class="text-sm font-medium text-secondary block mb-1"
+								>{tl('tcpServices.form.cidrs')}</label
+							>
+							<textarea
+								id="tcp-cidrs"
+								rows="2"
+								bind:value={fCIDRs}
+								placeholder="192.168.1.0/24, 10.0.0.0/8"
+								class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+							></textarea>
+						</div>
+					{/if}
+
+					<SwitchRow
+						checked={fHealthCheck}
+						onchange={(v) => (fHealthCheck = v)}
+						label={tl('tcpServices.form.healthCheck')}
+						helper={tl('tcpServices.form.healthCheckHelper')}
+						disabled={fProtocol === 'udp'}
+						testid="tcp-healthcheck"
+					/>
+					{#if udpWithHealthCheck}
+						<p class="text-xs text-down" data-testid="tcp-udp-hc-warning">
+							{tl('tcpServices.form.udpHealthCheckRefused')}
+						</p>
+					{/if}
+
+					<SwitchRow
+						checked={fDisabled}
+						onchange={(v) => (fDisabled = v)}
+						label={tl('tcpServices.form.disabled')}
+						helper={tl('tcpServices.form.disabledHelper')}
+						testid="tcp-disabled"
+					/>
+
+					<p class="text-xs text-muted" data-testid="tcp-not-applicable">
+						{tl('tcpServices.form.notApplicable')}
+					</p>
+
+					{#if editingId}
+						<div class="flex items-center gap-2">
+							<Button variant="secondary" size="sm" onclick={runTest} loading={testing} type="button"
+								>{tl('tcpServices.form.testButton')}</Button
+							>
+						</div>
+						{#if testResult}
+							<div class="rounded-md border border-border-subtle bg-surface p-3 text-xs" data-testid="tcp-test-result">
+								{#each testResult.backends as b (b.backend)}
+									<div class="flex items-center gap-2 py-0.5">
+										<span class:text-up={b.ok} class:text-down={!b.ok}>{b.ok ? '✓' : '✕'}</span>
+										<span class="font-mono text-primary">{b.backend}</span>
+										<span class="text-muted">{b.ok ? `${b.elapsedMs} ms` : b.error}</span>
+									</div>
+								{/each}
+								{#if testResult.proxyProtocolNote}
+									<p class="text-muted mt-2">{testResult.proxyProtocolNote}</p>
+								{/if}
+							</div>
+						{/if}
+					{/if}
+
+					{#if formError}
+						<p class="text-sm text-down" data-testid="tcp-form-error">{formError}</p>
+					{/if}
+
+					<div class="flex items-center justify-between border-t border-border-subtle pt-4">
+						{#if editingId}
+							<Button variant="ghost" type="button" onclick={() => (confirmDeleteOpen = true)}
+								>{tl('tcpServices.form.delete')}</Button
+							>
+						{:else}
+							<span></span>
+						{/if}
+						<div class="flex gap-2">
+							<Button variant="ghost" type="button" onclick={() => (formOpen = false)}
+								>{tl('tcpServices.form.cancel')}</Button
+							>
+							<Button type="submit" loading={saving}>{tl('tcpServices.form.save')}</Button>
+						</div>
+					</div>
+				</form>
+			</div>
+		{/if}
+	</div>
+{/if}
+
+<ConfirmDialog
+	bind:open={confirmDeleteOpen}
+	title={tl('tcpServices.deleteDialog.title')}
+	message={tl('tcpServices.deleteDialog.message')}
+	confirmLabel={tl('tcpServices.deleteDialog.confirm')}
+	cancelLabel={tl('tcpServices.deleteDialog.cancel')}
+	confirmVariant="danger"
+	onConfirm={confirmDelete}
+/>
