@@ -73,6 +73,7 @@ type RestoreSnapshotInput struct {
 type RestoreExtras struct {
 	ManagedDomains     []ManagedDomain
 	ErrorTemplates     []ErrorPageTemplate
+	TCPServices        []TCPService
 	MaintenancePage    *MaintenancePageConfig
 	AlertChannels      []Channel
 	AlertRules         []AlertRule
@@ -143,7 +144,8 @@ func (e *RestoreExtras) rows() (map[string]map[string][]byte, error) {
 	}
 	for _, b := range []string{bucketManagedDomains, bucketErrorTemplates, bucketMaintenancePage,
 		bucketAlertingChannels, bucketAlertRules, bucketCrowdSecConfig, bucketAutomation,
-		bucketUpdateCheck, bucketGeoIPUpdate, bucketBackupSchedule, bucketRouteCheck} {
+		bucketUpdateCheck, bucketGeoIPUpdate, bucketBackupSchedule, bucketRouteCheck,
+		bucketTCPServices} {
 		out[b] = map[string][]byte{}
 	}
 	for _, md := range e.ManagedDomains {
@@ -153,6 +155,11 @@ func (e *RestoreExtras) rows() (map[string]map[string][]byte, error) {
 	}
 	for _, t := range e.ErrorTemplates {
 		if err := put(bucketErrorTemplates, t.ID, t); err != nil {
+			return nil, err
+		}
+	}
+	for _, svc := range e.TCPServices {
+		if err := put(bucketTCPServices, svc.ID, svc); err != nil {
 			return nil, err
 		}
 	}

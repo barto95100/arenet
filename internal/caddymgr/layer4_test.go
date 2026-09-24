@@ -125,7 +125,7 @@ func TestBuildLayer4App_BareService(t *testing.T) {
 	// dial is a LIST in caddy-l4, not a string.
 	ups, _ := handle[0]["upstreams"].([]map[string]any)
 	dial, _ := ups[0]["dial"].([]string)
-	if len(dial) != 1 || dial[0] != "10.20.0.5:993" {
+	if len(dial) != 1 || dial[0] != "tcp/10.20.0.5:993" {
 		t.Fatalf("dial: got %v", ups[0]["dial"])
 	}
 	if _, hasPP := handle[0]["proxy_protocol"]; hasPP {
@@ -370,5 +370,41 @@ func TestCanBindTCP(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already uses it") {
 		t.Fatalf("the refusal must say the address is taken, got %v", err)
+	}
+}
+
+// v2.42 — UDP. A layer-4 relay that could not do UDP would be no use
+// for WireGuard, DNS, syslog or a game server, which is most of what
+// people put behind one.
+func TestBuildLayer4App_UDPService(t *testing.T) {
+	svc := imapsService()
+	svc.Name, svc.ListenPort = "wireguard", 51820
+	svc.Protocol = storage.TCPServiceProtocolUDP
+	svc.Upstreams = []storage.TCPUpstream{{Host: "10.20.0.9", Port: 51820}}
+	svc.ProxyProtocol = storage.ProxyProtocolV2
+
+	app := buildLayer4App([]storage.TCPService{svc}, false)
+	srv := app["servers"].(map[string]any)["svc_svc1"].(map[string]any)
+
+	listen, _ := srv["listen"].([]string)
+	if len(listen) != 1 || listen[0] != "udp/0.0.0.0:51820" {
+		t.Fatalf("listen: got %v", listen)
+	}
+	proxy := srv["routes"].([]map[string]any)[0]["handle"].([]map[string]any)[0]
+	dial, _ := proxy["upstreams"].([]map[string]any)[0]["dial"].([]string)
+	if len(dial) != 1 || dial[0] != "udp/10.20.0.9:51820" {
+		t.Fatalf("dial: got %v", dial)
+	}
+}
+
+// Same port number on both networks is two sockets, not a conflict.
+func TestL4ListenConflicts_TCPAndUDPCoexist(t *testing.T) {
+	tcpSvc := imapsService()
+	udpSvc := imapsService()
+	udpSvc.ID, udpSvc.Name = "svc2", "same-port-udp"
+	udpSvc.Protocol = storage.TCPServiceProtocolUDP
+
+	if err := l4ListenConflicts([]storage.TCPService{tcpSvc, udpSvc}); err != nil {
+		t.Fatalf("tcp and udp on the same port must coexist: %v", err)
 	}
 }

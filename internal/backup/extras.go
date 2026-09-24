@@ -57,6 +57,9 @@ type SnapshotExtras struct {
 	BackupSchedule *storage.BackupScheduleConfig `json:"backup_schedule,omitempty"`
 	// RouteCheck (v2.35) is the post-apply route check toggle.
 	RouteCheck *storage.RouteCheckConfig `json:"route_check,omitempty"`
+	// TCPServices (v2.42) are the layer-4 relays. No secret is
+	// involved: a relay carries addresses and gates, nothing else.
+	TCPServices []storage.TCPService `json:"tcp_services"`
 	// APITokens are the service-account tokens; token_hash is a secret.
 	APITokens []auth.APIToken `json:"api_tokens"`
 }
@@ -95,6 +98,9 @@ func exportExtras(ctx context.Context, store Storer) (*SnapshotExtras, error) {
 	}
 	if ex.ErrorTemplates, err = store.ListErrorPageTemplates(ctx); err != nil {
 		return nil, fmt.Errorf("export: list error templates: %w", err)
+	}
+	if ex.TCPServices, err = store.ListTCPServices(ctx); err != nil {
+		return nil, fmt.Errorf("export: list tcp services: %w", err)
 	}
 	mp, err := store.GetMaintenancePageConfig(ctx)
 	if err != nil {
@@ -591,6 +597,7 @@ func extrasRestoreInput(ex *SnapshotExtras) (*storage.RestoreExtras, error) {
 	return &storage.RestoreExtras{
 		ManagedDomains:     ex.ManagedDomains,
 		ErrorTemplates:     ex.ErrorTemplates,
+		TCPServices:        ex.TCPServices,
 		MaintenancePage:    ex.MaintenancePage,
 		AlertChannels:      ex.AlertChannels,
 		AlertRules:         ex.AlertRules,

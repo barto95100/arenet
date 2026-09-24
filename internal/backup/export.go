@@ -41,6 +41,9 @@ type Storer interface {
 	// v2.29 extras.
 	ListManagedDomains(ctx context.Context) ([]storage.ManagedDomain, error)
 	ListErrorPageTemplates(ctx context.Context) ([]storage.ErrorPageTemplate, error)
+	// v2.42 — layer-4 relays. A restore that silently dropped them
+	// would take services off the network without a word.
+	ListTCPServices(ctx context.Context) ([]storage.TCPService, error)
 	GetMaintenancePageConfig(ctx context.Context) (storage.MaintenancePageConfig, error)
 	ListAlertChannels(ctx context.Context) ([]storage.Channel, error)
 	ListAlertRules(ctx context.Context) ([]storage.AlertRule, error)

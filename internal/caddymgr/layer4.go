@@ -77,7 +77,9 @@ func buildLayer4App(services []storage.TCPService, crowdSecAvailable bool) map[s
 			continue
 		}
 		servers[l4ServerName(svc)] = map[string]any{
-			"listen": []string{"tcp/" + svc.ListenHostPort()},
+			// The network is part of the address in caddy-l4, which
+			// is how a UDP relay is expressed.
+			"listen": []string{svc.ListenAddress()},
 			"routes": buildLayer4Routes(svc, crowdSecAvailable),
 		}
 	}
@@ -140,7 +142,7 @@ func buildLayer4Routes(svc storage.TCPService, crowdSecAvailable bool) []map[str
 func buildLayer4Proxy(svc storage.TCPService) map[string]any {
 	upstreams := make([]map[string]any, 0, len(svc.Upstreams))
 	for _, u := range svc.Upstreams {
-		up := map[string]any{"dial": []string{u.Dial()}}
+		up := map[string]any{"dial": []string{svc.DialAddress(u)}}
 		if u.MaxConnections > 0 {
 			up["max_connections"] = u.MaxConnections
 		}
@@ -218,6 +220,10 @@ func ValidateTCPListen(services []storage.TCPService, reserved map[int]string) e
 		if svc.Disabled {
 			continue
 		}
+		// The reserved set is checked on the port NUMBER, whatever
+		// the network: Caddy serves HTTP/3 over UDP on the HTTPS
+		// port, so a UDP relay on 443 would fight with it even
+		// though the TCP socket is a different one.
 		if what, taken := reserved[svc.ListenPort]; taken {
 			return fmt.Errorf("tcp service %q: port %d is used by %s", svc.Name, svc.ListenPort, what)
 		}
@@ -259,7 +265,9 @@ func l4ListenConflicts(services []storage.TCPService) error {
 		if svc.Disabled {
 			continue
 		}
-		addr := svc.ListenHostPort()
+		// Keyed by network too: a TCP and a UDP service can share a
+		// port number without fighting — that is one socket each.
+		addr := svc.ListenAddress()
 		if other, dup := seen[addr]; dup {
 			return fmt.Errorf("tcp services %q and %q both listen on %s", other, svc.Name, addr)
 		}

@@ -148,6 +148,7 @@ func Import(ctx context.Context, store ImportStorer, users UserStorer, snap *Sna
 		report.ExtrasImported = true
 		report.ManagedDomainsImported = len(ex.ManagedDomains)
 		report.ErrorTemplatesImported = len(ex.ErrorTemplates)
+		report.TCPServicesImported = len(ex.TCPServices)
 		report.AlertChannelsImported = len(ex.AlertChannels)
 		report.AlertRulesImported = len(ex.AlertRules)
 		report.APITokensImported = len(ex.APITokens)
