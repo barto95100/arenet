@@ -179,6 +179,26 @@ func TestWS_Topology_LockedSession_403(t *testing.T) {
 	}
 }
 
+// waitForSubscribers blocks until the WS handler has registered n
+// subscribers with the broadcaster, or fails the test.
+//
+// Needed because the handshake completes on the client before the
+// server-side subscription exists: a Publish in that window reaches
+// nobody and the frame is simply lost, which surfaces later as an
+// unexplained read timeout rather than as the race it is.
+func waitForSubscribers(t *testing.T, env *wsTestEnv, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if env.broadcaster.SubscriberCount() == n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("SubscriberCount=%d, want %d: the handler never subscribed",
+		env.broadcaster.SubscriberCount(), n)
+}
+
 func TestWS_Topology_Upgrades_AndStreams(t *testing.T) {
 	env := newWSTestEnv(t)
 
@@ -190,6 +210,18 @@ func TestWS_Topology_Upgrades_AndStreams(t *testing.T) {
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Errorf("handshake status=%d, want 101", resp.StatusCode)
 	}
+
+	// The 101 is written before the handler registers its subscriber,
+	// so publishing straight after the dial can land in that gap: the
+	// broadcaster fans out to nobody, the frame is gone, and the read
+	// below blocks until its deadline with a misleading "i/o timeout".
+	// Rare on a fast machine, reproducible on a loaded CI runner —
+	// which is exactly where it fired (2026-09-24).
+	//
+	// TestWS_Topology_SlowSubscriberDoesNotBlock below already used
+	// this barrier and calls it "the cleanest"; this test simply
+	// never got it.
+	waitForSubscribers(t, env, 1)
 
 	// Publish a snapshot — the WS handler should forward it as a
 	// JSON frame matching spec §5.2.
@@ -254,18 +286,7 @@ func TestWS_Topology_SlowClient_DropsTicks(t *testing.T) {
 	}
 	defer fastConn.Close()
 
-	// Give the server time to register both subscriptions.
-	// SubscriberCount is the cleanest barrier.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if env.broadcaster.SubscriberCount() == 2 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := env.broadcaster.SubscriberCount(); got != 2 {
-		t.Fatalf("SubscriberCount=%d, want 2 after both dials", got)
-	}
+	waitForSubscribers(t, env, 2)
 
 	// Fire off many publishes. Slow never drains; fast drains
 	// continuously.
