@@ -424,3 +424,65 @@ func TestL4ListenConflicts_TCPAndUDPCoexist(t *testing.T) {
 		t.Fatalf("tcp and udp on the same port must coexist: %v", err)
 	}
 }
+
+// --- v2.42.3 — every emitted module ID must exist ----------------
+//
+// The regression this pins: `layer4.matchers.crowdsec` lives in the
+// bouncer's `layer4` subpackage, which registers only its own module
+// in its own init(). Importing the bouncer's `crowdsec` and `http`
+// packages left the matcher unregistered, so a service with CrowdSec
+// armed emitted valid-looking JSON that Caddy refused at load time
+// with "unknown module: layer4.matchers.crowdsec" — in front of the
+// operator, at the first save.
+//
+// It escaped the suite because CrowdSec is the one family kept away
+// from caddy.Validate on purpose (provisioning dials LAPI, see
+// crowdsec_test.go:301). A registry lookup needs no LAPI, so this
+// covers the gap: walk what the emitter can actually produce and ask
+// Caddy whether each ID resolves.
+func TestLayer4ModuleIDs_AllRegistered(t *testing.T) {
+	// One service armed with everything the emitter knows how to
+	// emit: a source filter (remote_ip + close), CrowdSec, and the
+	// proxy itself.
+	svc := imapsService()
+	svc.CrowdSecEnabled = true
+	svc.IPFilter = &storage.IPFilter{Mode: storage.IPFilterModeDeny, CIDRs: []string{"203.0.113.0/24"}}
+
+	app := buildLayer4App([]storage.TCPService{svc}, true)
+	if app == nil {
+		t.Fatal("buildLayer4App returned nil")
+	}
+
+	ids := map[string]bool{}
+	for _, srv := range app["servers"].(map[string]any) {
+		for _, route := range srv.(map[string]any)["routes"].([]map[string]any) {
+			// A route without matchers is the catch-all; only the
+			// handlers of such a route carry an ID.
+			match, _ := route["match"].([]map[string]any)
+			for _, m := range match {
+				for name := range m {
+					ids["layer4.matchers."+name] = true
+				}
+			}
+			handle, _ := route["handle"].([]map[string]any)
+			for _, h := range handle {
+				name, _ := h["handler"].(string)
+				if name != "" {
+					ids["layer4.handlers."+name] = true
+				}
+			}
+		}
+	}
+
+	// Sanity: the walk must have seen the matcher that regressed,
+	// otherwise this test would pass by looking at nothing.
+	if !ids["layer4.matchers.crowdsec"] {
+		t.Fatalf("test fixture emitted no crowdsec matcher: %v", ids)
+	}
+
+	for id := range ids {
+		if _, err := caddy.GetModule(id); err != nil {
+			t.Errorf("module %q is emitted but not registered: %v", id, err)
+		}
+	}
+}
