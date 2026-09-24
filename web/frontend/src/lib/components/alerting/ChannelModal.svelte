@@ -80,6 +80,7 @@
 	let ccList = $state<string[]>([]);
 	let bccList = $state<string[]>([]);
 	let tlsMode = $state<'none' | 'tls' | 'starttls'>('starttls');
+	let emailHeloName = $state('');
 	let emailSubjectTemplate = $state('');
 	let emailBodyTemplate = $state('');
 
@@ -125,6 +126,7 @@
 				if (cfg.useTLS) tlsMode = 'tls';
 				else if (cfg.useStartTLS) tlsMode = 'starttls';
 				else tlsMode = 'none';
+				emailHeloName = cfg.heloName ?? '';
 				emailSubjectTemplate = cfg.subjectTemplate ?? '';
 				emailBodyTemplate = cfg.bodyTemplate ?? '';
 			}
@@ -149,6 +151,7 @@
 			ccList = [];
 			bccList = [];
 			tlsMode = 'starttls';
+			emailHeloName = '';
 			emailSubjectTemplate = '';
 			emailBodyTemplate = '';
 		}
@@ -252,6 +255,7 @@
 			bcc: bcc.length > 0 ? bcc : undefined,
 			useTLS: tlsMode === 'tls',
 			useStartTLS: tlsMode === 'starttls',
+			heloName: emailHeloName.trim() || undefined,
 			subjectTemplate: emailSubjectTemplate.trim() || undefined,
 			bodyTemplate: emailBodyTemplate.trim() || undefined
 		};
@@ -648,6 +652,21 @@
 					</label>
 				</div>
 			</fieldset>
+
+			<div>
+				<label for="email-helo-name" class="text-sm font-medium text-secondary mb-1.5 block">
+					{language.current && t('alerting.channelModal.labelHeloName')}
+				</label>
+				<input
+					id="email-helo-name"
+					bind:value={emailHeloName}
+					placeholder="arenet.example.com"
+					class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+				/>
+				<p class="text-xs text-muted mt-1">
+					{language.current && t('alerting.channelModal.helpHeloName')}
+				</p>
+			</div>
 
 			<div>
 				<label

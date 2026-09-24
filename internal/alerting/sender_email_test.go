@@ -353,3 +353,53 @@ func TestEmailSender_MultiRecipientRcptCount(t *testing.T) {
 // io / fmt / etc.
 var _ = io.EOF
 var _ = fmt.Sprintf
+
+// v2.42 — EHLO. Every alert Arenet ever sent announced itself as
+// `EHLO localhost`, because net/smtp's default localName applies
+// when Hello() is never called. A strict MTA refuses that name: it
+// is not fully qualified and it resolves to the receiver's own
+// loopback.
+func TestEmailSender_EHLOIsNotLocalhost(t *testing.T) {
+	stub := newSMTPStub(t)
+	defer stub.close()
+
+	cfg := sampleEmailCfg()
+	cfg.HeloName = "arenet.example.com"
+	sender := NewEmailSender(cfg, stubDialer(stub))
+	if err := sender.Send(context.Background(), sampleEvent()); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	transcript := strings.Join(stub.received, "\n")
+	if !strings.Contains(transcript, "EHLO arenet.example.com") {
+		t.Fatalf("the configured name must be announced, got:\n%s", transcript)
+	}
+	if strings.Contains(transcript, "EHLO localhost") {
+		t.Fatalf("localhost must never be announced again:\n%s", transcript)
+	}
+}
+
+func TestHeloName_FallbackOrder(t *testing.T) {
+	// 1. What the operator set wins, spaces trimmed.
+	if got := heloName(EmailConfig{HeloName: "  mx.example.com  ", From: "a@other.test"}); got != "mx.example.com" {
+		t.Fatalf("configured name must win: %q", got)
+	}
+
+	// 2/3. Nothing configured: the machine's hostname when it is
+	// qualified, otherwise the From domain — which at least exists
+	// and usually aligns with the SPF record authorising this mail.
+	got := heloName(EmailConfig{From: "alerts@example.com"})
+	if got == "localhost" {
+		t.Fatal("localhost is the last resort, not the fallback for a known From domain")
+	}
+	if !strings.Contains(got, ".") {
+		t.Fatalf("the announced name must be fully qualified, got %q", got)
+	}
+
+	// 4. Nothing knowable at all: the old behaviour, and only then.
+	if got := heloName(EmailConfig{From: "no-at-sign"}); got != "localhost" && !strings.Contains(got, ".") {
+		t.Fatalf("with nothing to work from, expected localhost or a qualified hostname, got %q", got)
+	}
+}

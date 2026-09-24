@@ -114,10 +114,17 @@ type EmailConfig struct {
 	To              []string `json:"to"`
 	CC              []string `json:"cc,omitempty"`
 	BCC             []string `json:"bcc,omitempty"`
-	UseTLS          bool     `json:"useTLS"`          // implicit TLS (port 465)
-	UseStartTLS     bool     `json:"useStartTLS"`     // STARTTLS upgrade (port 587)
+	UseTLS          bool     `json:"useTLS"`      // implicit TLS (port 465)
+	UseStartTLS     bool     `json:"useStartTLS"` // STARTTLS upgrade (port 587)
 	SubjectTemplate string   `json:"subjectTemplate,omitempty"`
 	BodyTemplate    string   `json:"bodyTemplate,omitempty"`
+	// HeloName (v2.42) is the name announced in EHLO. Empty means
+	// "work it out": the machine's hostname when it is fully
+	// qualified, otherwise the domain of the From address. Before
+	// this field existed, Go's net/smtp default applied and Arenet
+	// announced itself as `localhost` — which a strict MTA rejects
+	// (Postfix's reject_non_fqdn_helo_hostname, among others).
+	HeloName string `json:"heloName,omitempty"`
 }
 
 const (

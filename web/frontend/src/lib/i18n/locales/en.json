@@ -1103,6 +1103,8 @@
 			"encryptionNone": "None",
 			"encryptionStartTLS": "STARTTLS (port 587)",
 			"encryptionTLS": "Implicit TLS (port 465)",
+			"labelHeloName": "EHLO name (optional)",
+			"helpHeloName": "The name Arenet announces to the mail server. Leave empty to use this machine’s hostname, or the domain of the From address. A strict server refuses a name that is not fully qualified.",
 			"labelSubjectTemplate": "Subject template (optional)",
 			"labelEmailBodyTemplate": "Body template (optional)",
 			"btnSendTest": "Send test",

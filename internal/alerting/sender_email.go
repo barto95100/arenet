@@ -28,6 +28,7 @@ import (
 	"net"
 	"net/smtp"
 	"net/textproto"
+	"os"
 	"strings"
 	"time"
 )
@@ -119,6 +120,18 @@ func (s *EmailSender) deliver(ctx context.Context, msg []byte) error {
 		return fmt.Errorf("email: dial smtp: %w", err)
 	}
 	defer func() { _ = client.Close() }()
+
+	// v2.42 — announce ourselves properly. net/smtp defaults
+	// localName to "localhost" (net/smtp/smtp.go:71) and sends it on
+	// the first command that needs a greeting, so every alert Arenet
+	// ever sent went out as `EHLO localhost`. A strict MTA refuses
+	// that: it is not a fully-qualified name and it resolves to the
+	// receiver's own loopback. Hello() must be called BEFORE
+	// StartTLS / Auth / Mail, which are the commands that would
+	// otherwise trigger the implicit greeting.
+	if err := client.Hello(heloName(s.cfg)); err != nil {
+		return fmt.Errorf("email: EHLO: %w", err)
+	}
 
 	// STARTTLS upgrade if requested. Mutually exclusive
 	// with UseTLS (validated at config time).
@@ -325,4 +338,31 @@ func concat3(a, b, c []string) []string {
 	out = append(out, b...)
 	out = append(out, c...)
 	return out
+}
+
+// heloName decides what to announce in EHLO.
+//
+// Order, from the most correct to the least wrong:
+//  1. what the operator configured — they know their DNS;
+//  2. this machine's hostname when it is fully qualified, which is
+//     what a receiving MTA expects to be able to resolve;
+//  3. the domain of the From address, which at least exists and
+//     usually aligns with the SPF record that authorises this mail;
+//  4. "localhost", the old behaviour, only when nothing else is
+//     knowable — an unqualified hostname is no better.
+func heloName(cfg EmailConfig) string {
+	if name := strings.TrimSpace(cfg.HeloName); name != "" {
+		return name
+	}
+	if host, err := os.Hostname(); err == nil {
+		if h := strings.TrimSpace(host); strings.Contains(h, ".") {
+			return h
+		}
+	}
+	if at := strings.LastIndex(cfg.From, "@"); at >= 0 && at < len(cfg.From)-1 {
+		if domain := strings.TrimSpace(cfg.From[at+1:]); domain != "" {
+			return domain
+		}
+	}
+	return "localhost"
 }

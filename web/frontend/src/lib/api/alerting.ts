@@ -30,6 +30,13 @@ export interface WebhookConfig {
 
 export interface EmailConfig {
 	smtpHost: string;
+	/**
+	 * v2.42 — name announced in EHLO. Empty lets the server work it
+	 * out: the machine's hostname when fully qualified, otherwise the
+	 * From domain. Arenet used to announce `localhost`, which strict
+	 * MTAs refuse.
+	 */
+	heloName?: string;
 	smtpPort: number;
 	smtpUsername: string;
 	// On GET this is always empty (server-side redaction).

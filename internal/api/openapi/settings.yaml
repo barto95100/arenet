@@ -1541,6 +1541,13 @@ components:
       required: [smtpHost, smtpPort, from, to]
       properties:
         smtpHost: { type: string, description: "Host only (no port)." }
+        heloName:
+          type: string
+          description: |
+            Name announced in EHLO (v2.42). Empty lets the server
+            decide: this machine's hostname when fully qualified,
+            otherwise the domain of the From address. Before v2.42
+            Arenet announced `localhost`, which strict MTAs refuse.
         smtpPort: { type: integer, minimum: 1, maximum: 65535 }
         smtpUsername: { type: string }
         smtpPassword:
