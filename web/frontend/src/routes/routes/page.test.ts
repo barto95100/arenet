@@ -4548,3 +4548,109 @@ describe('Routes page — v2.41.2 section badges', () => {
 		expect(screen.getByTestId('section-rate-limit').getAttribute('data-posture')).toBe('off');
 	});
 });
+
+// --- v2.43.1 — the probe's verdict, where you configure it -------
+//
+// The list has shown the aggregate health since Pack A, but the form
+// — the one screen where the URI, the expected status and the
+// expected body are set — showed only on/off. After changing a probe
+// you had to leave the form to learn whether it now passes. The
+// 2026-09-24 session lost an afternoon to that gap: a probe expecting
+// "OK" against a backend answering JSON took the route out of service
+// while every field on screen looked right.
+
+function routeWithProbe(status: Route['aggregateStatus'], healthy: number): Route {
+	return makeRoute({
+		id: 'probe-fixture',
+		host: 'probe.example.com',
+		healthCheck: {
+			enabled: true,
+			uri: '/healthz/ready',
+			method: 'GET',
+			interval: '30s',
+			timeout: '5s',
+			expectStatus: 200,
+			expectBody: 'OK',
+			passes: 2,
+			fails: 3
+		},
+		aggregateStatus: status,
+		healthyUpstreamCount: healthy,
+		totalUpstreamCount: 1
+	});
+}
+
+async function openProbeRoute(route: Route) {
+	apiMock.listRoutes.mockResolvedValue([route]);
+	render(Page);
+	await userEvent.click((await screen.findByText(route.host)).closest('tr')!);
+	await tick();
+}
+
+describe('Routes page — the health check reports its own verdict', () => {
+	it('says the probe is failing, and points at the fields that decide it', async () => {
+		await openProbeRoute(routeWithProbe('down', 0));
+
+		const live = screen.getByTestId('health-check-live');
+		expect(live.textContent).toMatch(/DOWN/i);
+		// The hint must name the probe's own fields — the address is
+		// not what is wrong on this path.
+		expect(live.textContent).toMatch(/expected body/i);
+		// And the section badge must not claim "on" while every
+		// backend is down.
+		expect(screen.getByTestId('section-health-check').getAttribute('data-posture')).toBe('block');
+	});
+
+	it('shows the green verdict without the warning', async () => {
+		await openProbeRoute(routeWithProbe('healthy', 1));
+
+		const live = screen.getByTestId('health-check-live');
+		expect(live.textContent).toMatch(/HEALTHY/i);
+		expect(live.textContent).not.toMatch(/expected body/i);
+		expect(screen.getByTestId('section-health-check').getAttribute('data-posture')).toBe('allow');
+	});
+
+	it('does not paint warm-up as a failure', async () => {
+		await openProbeRoute(routeWithProbe('unknown', 0));
+
+		const live = screen.getByTestId('health-check-live');
+		expect(live.textContent).toMatch(/first probe/i);
+		expect(live.textContent).not.toMatch(/expected body/i);
+		expect(screen.getByTestId('section-health-check').getAttribute('data-posture')).toBe('allow');
+	});
+
+	it('says nothing while creating a route, where no probe has run', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByTestId('health-check-toggle'));
+		await tick();
+		expect(screen.queryByTestId('health-check-live')).toBeNull();
+	});
+});
+
+describe('Routes page — a rollback caused by the health check', () => {
+	it('names the probe instead of sending the operator to the upstream address', async () => {
+		apiMock.createRoute.mockRejectedValueOnce(
+			new ApiError('undone', 409, 'validation', undefined, 'route_check_rolled_back', {
+				host: 'app.test',
+				detail: 'the route answered 503 Service Unavailable',
+				cause: 'health_check'
+			})
+		);
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'app.test');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		const shown = await screen.findByRole('alert');
+		expect(shown.textContent).toMatch(/active health check/i);
+		expect(shown.textContent).toMatch(/expected body/i);
+		// The generic wording would have pointed here, and it is the
+		// one thing that is not wrong on this path.
+		expect(shown.textContent).not.toMatch(/fix the change \(upstream address/i);
+	});
+});

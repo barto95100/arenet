@@ -216,3 +216,118 @@ func TestRouteCheck_ClientGoneDuringReload(t *testing.T) {
 		t.Errorf("the broken change was not undone: stored %s", got.Upstreams[0].URL)
 	}
 }
+
+// --- v2.43.1 — say which field broke the route -------------------
+//
+// The rollback message used to be unconditional: "fix the change
+// (upstream address, port…)". When the 503 comes from the route's own
+// active health check having just marked its upstreams down, that
+// sentence points at the one thing that is not wrong. The 2026-09-24
+// session followed it and lost an afternoon; the real cause — an
+// expected-body regex that did not match the backend's JSON — was
+// three fields away in the same form.
+
+// hcStatusStub reports one fixed verdict for every upstream.
+type hcStatusStub struct{ verdict string }
+
+func (s hcStatusStub) Status(string) string { return s.verdict }
+
+// serviceUnavailableProber fails the new upstream with a 503, the
+// shape a reverse_proxy returns when no upstream is available.
+type serviceUnavailableProber struct{ broken string }
+
+func (p serviceUnavailableProber) Probe(_ context.Context, r storage.Route) routecheck.Result {
+	if r.Upstreams[0].URL == p.broken {
+		return routecheck.Result{
+			Status: routecheck.StatusFailed, Host: r.Host,
+			HTTPStatus: http.StatusServiceUnavailable,
+			Detail:     "the route answered 503 Service Unavailable",
+		}
+	}
+	return routecheck.Result{Status: routecheck.StatusOK, Host: r.Host, HTTPStatus: 200}
+}
+
+func routeJSONWithHealthCheck(upstream string) string {
+	return `{"host":"app.local","upstreams":[{"url":"` + upstream + `","weight":1}],` +
+		`"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],` +
+		`"authMode":"none","wafMode":"off",` +
+		`"healthCheck":{"enabled":true,"uri":"/healthz","method":"GET","interval":"30s",` +
+		`"timeout":"5s","expectStatus":200,"expectBody":"OK","passes":2,"fails":3}}`
+}
+
+func rollbackDetails(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body struct {
+		Code   string         `json:"code"`
+		Error  string         `json:"error"`
+		Params map[string]any `json:"params"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal error body: %v (%s)", err, rec.Body)
+	}
+	out := body.Params
+	if out == nil {
+		t.Fatalf("no params in %s", rec.Body)
+	}
+	out["__message"] = body.Error
+	return out
+}
+
+func TestRouteCheck_RollbackBlamesTheHealthCheckWhenItIsTheCause(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.handler.SetRouteProber(serviceUnavailableProber{broken: upB})
+	env.handler.SetHCStatusReader(hcStatusStub{verdict: "unhealthy"})
+	seeded := seedRoute(t, env, upA)
+
+	rec := send(t, env, http.MethodPut, "/api/v1/routes/"+seeded.ID, routeJSONWithHealthCheck(upB))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d %s", rec.Code, rec.Body)
+	}
+
+	got := rollbackDetails(t, rec)
+	if got["cause"] != causeHealthCheck {
+		t.Fatalf("the probe marked every upstream down: cause must name it, got %v", got["cause"])
+	}
+	msg, _ := got["__message"].(string)
+	// The operator must be sent to the fields that decide the probe,
+	// not to the address that is fine.
+	for _, want := range []string{"health check", "expected body"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message must mention %q: %s", want, msg)
+		}
+	}
+}
+
+// A 503 on a route with no health check is not the probe's doing, and
+// blaming it would be its own wrong turn.
+func TestRouteCheck_RollbackDoesNotBlameAnAbsentHealthCheck(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.handler.SetRouteProber(serviceUnavailableProber{broken: upB})
+	env.handler.SetHCStatusReader(hcStatusStub{verdict: "unhealthy"})
+	seeded := seedRoute(t, env, upA)
+
+	rec := send(t, env, http.MethodPut, "/api/v1/routes/"+seeded.ID, routeJSON(upB))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d %s", rec.Code, rec.Body)
+	}
+	if got := rollbackDetails(t, rec); got["cause"] != nil {
+		t.Fatalf("no health check configured: nothing to blame, got %v", got["cause"])
+	}
+}
+
+// The probe is enabled but has not reported yet (warm-up). Silence is
+// not a verdict: the 503 came from somewhere else.
+func TestRouteCheck_RollbackDoesNotBlameAProbeThatHasNotReported(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.handler.SetRouteProber(serviceUnavailableProber{broken: upB})
+	env.handler.SetHCStatusReader(hcStatusStub{verdict: ""})
+	seeded := seedRoute(t, env, upA)
+
+	rec := send(t, env, http.MethodPut, "/api/v1/routes/"+seeded.ID, routeJSONWithHealthCheck(upB))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d %s", rec.Code, rec.Body)
+	}
+	if got := rollbackDetails(t, rec); got["cause"] != nil {
+		t.Fatalf("warm-up is not a failing probe, got %v", got["cause"])
+	}
+}

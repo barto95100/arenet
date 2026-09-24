@@ -1967,10 +1967,41 @@
 			: { badge: 'http', posture: 'off' }
 	);
 
+	// v2.43.1 — the probe's live verdict, inside the form.
+	//
+	// The list has carried it since Pack A, but the form — the one
+	// screen where you set the URI, the expected status and the
+	// expected body — showed only on/off. So after changing a probe
+	// you had to leave the form to find out whether it now passes.
+	// The 2026-09-24 session lost an afternoon to exactly that gap.
+	//
+	// Null while creating: there is no running probe to report yet.
+	const healthCheckLive = $derived(
+		editingId ? (routes.find((r) => r.id === editingId) ?? null) : null
+	);
+
+	// Only 'degraded' and 'down' mean the probe is actually failing;
+	// 'unknown' is the warm-up window and must not be painted red.
+	const healthCheckFailing = $derived(
+		healthCheckLive?.aggregateStatus === 'down' ||
+			healthCheckLive?.aggregateStatus === 'degraded'
+	);
+
+	const healthCheckLiveLabel = $derived(
+		healthCheckLive ? tl(`routes.form.healthCheckLive.${healthCheckLive.aggregateStatus}`) : ''
+	);
+
+	// The badge follows the verdict rather than the switch: a section
+	// that says "on" while every backend is down is worse than no
+	// badge at all.
 	const healthCheckBadge = $derived<SectionBadge>(
-		formData.healthCheck.enabled
-			? { badge: tl('routes.form.badgeOn'), posture: 'allow' }
-			: { badge: tl('routes.form.badgeOff'), posture: 'off' }
+		!formData.healthCheck.enabled
+			? { badge: tl('routes.form.badgeOff'), posture: 'off' }
+			: healthCheckFailing
+				? { badge: healthCheckLiveLabel, posture: 'block' }
+				: healthCheckLive?.aggregateStatus === 'healthy'
+					? { badge: healthCheckLiveLabel, posture: 'allow' }
+					: { badge: tl('routes.form.badgeOn'), posture: 'allow' }
 	);
 
 	const summaryAuth = $derived(
@@ -2776,7 +2807,16 @@
 			} else if (err instanceof ApiError && err.code === 'route_check_rolled_back') {
 				// v2.35 — the change broke a working route and was undone:
 				// keep the panel open with the explanation.
-				formError = t('errors.route_check_rolled_back', {
+				//
+				// v2.43.1 — when the server could attribute the 503 to the
+				// route's own health check, say so. The generic wording
+				// sends the operator to check the upstream address, which
+				// on that path is the one thing that is not wrong.
+				const key =
+					err.params?.cause === 'health_check'
+						? 'errors.route_check_rolled_back_health_check'
+						: 'errors.route_check_rolled_back';
+				formError = t(key, {
 					host: String(err.params?.host ?? ''),
 					detail: String(err.params?.detail ?? err.message)
 				});
@@ -4693,6 +4733,45 @@
 						     switch marks the block as touched, which drives the
 						     J.2 preserve-or-replace decision on submit. -->
 						<div class="flex flex-col gap-3">
+								<!-- v2.43.1 — what the probe is actually saying, next
+								     to the fields that decide it. Only shown for a
+								     saved route: while creating, no probe has run. -->
+								{#if formData.healthCheck.enabled && healthCheckLive}
+									<div
+										class="rounded-md border p-3 text-xs"
+										class:border-border-subtle={!healthCheckFailing}
+										class:bg-surface={!healthCheckFailing}
+										class:border-down={healthCheckFailing}
+										data-testid="health-check-live"
+									>
+										<div class="flex flex-wrap items-center gap-2">
+											<span class="text-secondary"
+												>{language.current && t('routes.form.healthCheckLiveLabel')}</span
+											>
+											<span
+												class="font-medium"
+												class:text-down={healthCheckFailing}
+												class:text-up={healthCheckLive.aggregateStatus === 'healthy'}
+												>{healthCheckLiveLabel}</span
+											>
+											{#if healthCheckLive.totalUpstreamCount > 0}
+												<span class="text-muted"
+													>· {language.current &&
+														t('routes.list.healthyCounter', {
+															healthy: healthCheckLive.healthyUpstreamCount,
+															total: healthCheckLive.totalUpstreamCount
+														})}</span
+												>
+											{/if}
+										</div>
+										{#if healthCheckFailing}
+											<p class="text-muted mt-1">
+												{language.current && t('routes.form.healthCheckLiveFailingHint')}
+											</p>
+										{/if}
+									</div>
+								{/if}
+
 								<SwitchRow
 									checked={formData.healthCheck.enabled}
 									onchange={(v) => {
