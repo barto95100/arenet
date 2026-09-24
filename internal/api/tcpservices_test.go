@@ -522,3 +522,92 @@ func TestTCPService_TestSkipsUDPInsteadOfFailingIt(t *testing.T) {
 		t.Fatalf("the note must survive the UDP path: %q", report.ProxyProtocolNote)
 	}
 }
+
+// --- v2.44.1 — the listen check must not trip over itself --------
+//
+// Found by the operator on the v2.44 smoke, on the very first item:
+// create a service, open it to press "Test the backends", press Save,
+// and Arenet answers "cannot listen on 0.0.0.0:18080: something else
+// on this host already uses it". The something else was Arenet,
+// listening for that exact service. Every edit of a live relay was
+// refused — the conflict check already excluded the row being
+// replaced, but the bind probe knew nothing about it.
+
+func TestTCPService_UpdateOfALiveServiceIsNotRefusedByItsOwnPort(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	// Bind the port for real, the way a running Arenet holds it, and
+	// keep it held for the whole update.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port := atoiForTest(t, portStr)
+
+	// Create it while the port is free — a second listener on the same
+	// address would fail, so create against a free port and then move
+	// the fixture: simpler is to create with the store directly.
+	created := createTCPServiceForTest(t, env, map[string]any{
+		"listenAddr": host,
+		"listenPort": freePort(t),
+		"upstreams":  []map[string]any{{"host": "10.20.0.5", "port": 993}},
+	})
+
+	// Now pretend it listens on the held port: store it, then update
+	// something unrelated. The address is unchanged between the stored
+	// row and the update, so the probe must be skipped.
+	stored, err := env.store.GetTCPService(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	stored.ListenAddr, stored.ListenPort = host, port
+	if _, err := env.store.UpdateTCPService(t.Context(), stored); err != nil {
+		t.Fatalf("seed the held address: %v", err)
+	}
+
+	body := map[string]any{
+		"name":          stored.Name,
+		"listenAddr":    host,
+		"listenPort":    port,
+		"upstreams":     []map[string]any{{"host": "10.20.0.5", "port": 993}},
+		"proxyProtocol": "v2", // the unrelated change
+	}
+	rec := tcpDo(t, env, http.MethodPut, "/api/v1/tcp-services/"+created.ID, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("editing a live service must be allowed: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Moving a live service onto a port something else holds must still
+// be refused: the skip is narrow, not a hole.
+func TestTCPService_MovingOntoATakenPortIsStillRefused(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+
+	created := createTCPServiceForTest(t, env, map[string]any{
+		"listenAddr": host,
+		"listenPort": freePort(t),
+		"upstreams":  []map[string]any{{"host": "10.20.0.5", "port": 993}},
+	})
+
+	rec := tcpDo(t, env, http.MethodPut, "/api/v1/tcp-services/"+created.ID, map[string]any{
+		"name":       created.Name,
+		"listenAddr": host,
+		"listenPort": atoiForTest(t, portStr), // held by the listener above
+		"upstreams":  []map[string]any{{"host": "10.20.0.5", "port": 993}},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("moving onto a taken port must be refused: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "already uses it") {
+		t.Errorf("the message must say the port is taken: %s", rec.Body.String())
+	}
+}
