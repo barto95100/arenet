@@ -206,7 +206,7 @@ Not available per path yet: forward-auth, WAF on/off, rate limit, country block,
 
 ---
 
-## Route states (Active / Maintenance / Disabled)
+## Route states (Active / Maintenance / Redirect / Disabled)
 
 Every route has a **3-state lifecycle control**, shown as an icon-only segmented control on the `/routes` list — play (▶, green) = **Active**, wrench (🔧, amber) = **Maintenance**, power (⏻, red) = **Disabled**. Hover any segment for a tooltip with its name ; click a segment to switch state.
 
@@ -266,6 +266,44 @@ curl -b /tmp/jar -X POST http://localhost:8001/api/v1/routes/<route-id>/maintena
 All four endpoints are idempotent : disabling an already-disabled route, or entering maintenance on a route already in maintenance, returns `200` without error.
 
 ---
+
+## Redirect a whole domain (v2.44)
+
+A route in the **Redirect** state stops proxying and answers a 301 or a
+302. This is the "I moved a domain" state: `old.example.com` sends
+every visitor to `new.example.com`.
+
+**Keep the visitor's path** (on by default) appends the original path
+*and* query, so `/a/b?c=1` lands on the same `/a/b?c=1` at the target.
+With it on, the target must carry no path of its own — appending to
+`https://example.com/app` would silently produce `/app/a/b`, so Arenet
+refuses it at save instead of emitting it.
+
+**301 or 302.** 301 is permanent and is remembered by browsers and
+search engines — right for a move you will not undo. 302 is temporary
+and is not cached; use it while you are still unsure. 307 and 308,
+which preserve the request method, are deliberately not offered: a
+browser re-POSTing to another host is a different decision.
+
+**The target must be a different host.** A target on this route's own
+name — or on one of its aliases — matches the redirect that produced
+it, so the browser bounces until it gives up. Arenet refuses it while
+the form is still open rather than letting you find out from a browser.
+
+> **To send one path elsewhere on the same host** — `/` to
+> `/admin/login`, the shape a mail server's webadmin needs — a
+> whole-host redirect cannot work, for exactly that reason. That is a
+> path rule's job.
+
+**What still applies:** TLS. A redirecting route terminates TLS to
+answer at all, so it keeps its certificate and its renewals. **What
+does not:** the WAF, authentication, the rate limit and country
+blocking — the state replaces the proxy chain, exactly like
+maintenance.
+
+**On the list**, a redirecting route shows its state as a badge rather
+than the three-way control: switching to a redirect needs a target, so
+it happens in the form.
 
 ## Per-route security knobs (cheat sheet)
 

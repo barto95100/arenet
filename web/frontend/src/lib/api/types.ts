@@ -62,6 +62,24 @@ export interface RouteCheck {
 	detail?: string;
 }
 
+/**
+ * v2.44 — the route-level redirect state.
+ *
+ * Present only when the route redirects instead of proxying. The
+ * target must be on a DIFFERENT host: a target on this route's own
+ * host matches the redirect that produced it, and the server refuses
+ * it at save. Sending "/" somewhere else on the same host is the path
+ * rule's job, not this one.
+ */
+export interface RedirectConfig {
+	/** Absolute URL, scheme + host. No path when preservePath is on. */
+	target: string;
+	/** 301 or 302. Omitted means 301. */
+	statusCode?: number;
+	/** Appends the visitor's own path AND query to the target. */
+	preservePath?: boolean;
+}
+
 export interface Route {
 	id: string;
 	host: string;
@@ -355,6 +373,8 @@ export interface Route {
 	 * disabled takes precedence when both happen to be set.
 	 */
 	maintenanceConfig?: MaintenanceConfig;
+	/** v2.44 — present only when the route redirects. */
+	redirectConfig?: RedirectConfig;
 	/**
 	 * v2.19.0 external-certs SOCLE — cert provider selector.
 	 *   - "" / "acme"  → ACME-issued cert (managed-domain wildcard,
@@ -754,6 +774,13 @@ export interface RouteRequest {
 	 * exist for changing state without a full-body PUT).
 	 */
 	maintenanceConfig?: MaintenanceConfig;
+	/**
+	 * v2.44 — the redirect state, shipped full-replacement like the
+	 * maintenance block above. Omitted means "not redirecting", and
+	 * the server clears a stored redirect when a PUT explicitly
+	 * re-enables the route without carrying one.
+	 */
+	redirectConfig?: RedirectConfig;
 	/**
 	 * v2.19.0 external-certs SOCLE — cert provider on the wire.
 	 * The route form ships this full-replacement on every POST/PUT

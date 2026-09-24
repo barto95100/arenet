@@ -208,7 +208,7 @@ Pas encore disponible par chemin : forward-auth, WAF on/off, rate limit, blocage
 
 ---
 
-## Route states (Active / Maintenance / Disabled)
+## Route states (Active / Maintenance / Redirect / Disabled)
 
 Chaque route a un **contrôle de cycle de vie à 3 états**, affiché comme un segmented control icon-only sur la liste `/routes` — play (▶, vert) = **Active**, wrench (🔧, ambre) = **Maintenance**, power (⏻, rouge) = **Disabled**. Survole un segment pour son tooltip ; clique dessus pour changer d'état.
 
@@ -268,6 +268,49 @@ curl -b /tmp/jar -X POST http://localhost:8001/api/v1/routes/<route-id>/maintena
 Les quatre endpoints sont idempotents : désactiver une route déjà désactivée, ou entrer en maintenance sur une route déjà en maintenance, renvoie `200` sans erreur.
 
 ---
+
+## Rediriger tout un domaine (v2.44)
+
+Une route dans l'état **Redirection** cesse de relayer et répond un 301
+ou un 302. C'est l'état « j'ai déménagé un domaine » :
+`old.example.com` envoie tous ses visiteurs vers `new.example.com`.
+
+**Conserver le chemin du visiteur** (activé par défaut) ajoute le
+chemin *et* la requête d'origine, donc `/a/b?c=1` arrive sur le même
+`/a/b?c=1` à destination. Avec cette option, la destination ne doit
+porter aucun chemin : l'ajouter à `https://example.com/app`
+produirait silencieusement `/app/a/b`, donc Arenet le refuse à
+l'enregistrement plutôt que de l'émettre.
+
+**301 ou 302.** Le 301 est permanent et retenu par les navigateurs et
+les moteurs de recherche — c'est celui d'un déménagement sur lequel tu
+ne reviendras pas. Le 302 est temporaire et n'est pas mémorisé ; il
+convient tant que tu hésites. Les codes 307 et 308, qui préservent la
+méthode de la requête, ne sont volontairement pas proposés : un
+navigateur qui re-POSTe vers un autre hôte est une autre décision.
+
+**La destination doit être un autre hôte.** Une destination sur le nom
+de cette route — ou sur l'un de ses alias — correspond à la
+redirection qui l'a produite, et le navigateur rebondit jusqu'à
+abandonner. Arenet le refuse pendant que le formulaire est encore
+ouvert, plutôt que de te le laisser découvrir depuis un navigateur.
+
+> **Pour envoyer un seul chemin ailleurs sur le même hôte** — `/` vers
+> `/admin/login`, ce dont a besoin l'interface d'administration d'un
+> serveur de messagerie — une redirection d'hôte entier ne peut pas
+> fonctionner, précisément pour cette raison. C'est le travail d'une
+> règle par chemin.
+
+**Ce qui s'applique encore :** le TLS. Une route en redirection termine
+le TLS pour pouvoir répondre, donc elle garde son certificat et ses
+renouvellements. **Ce qui ne s'applique plus :** le WAF,
+l'authentification, la limitation de débit et le blocage par pays —
+l'état remplace la chaîne de relais, exactement comme la maintenance.
+
+**Dans la liste**, une route en redirection affiche son état sous forme
+de pastille plutôt que le sélecteur à trois positions : passer en
+redirection exige une destination, donc cela se fait dans le
+formulaire.
 
 ## Per-route security knobs (antisèche)
 

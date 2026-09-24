@@ -1222,6 +1222,25 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 				{PathPrefix: "/metrics", IPFilter: &storage.IPFilter{Mode: "allow", CIDRs: []string{"192.168.1.5"}}},
 			},
 		},
+		// v2.44 — a route in the redirect state. Folded onto the
+		// canonical fixture for the same reason as everything else
+		// here: the static_response + Location shape has to survive
+		// a real Provision, not just a JSON shape assertion. TLS on,
+		// because a redirecting route still terminates TLS to answer
+		// (spec D8) and that path must provision too.
+		{
+			ID:         "r-redirect",
+			Host:       "old.example.com",
+			Upstreams:  []storage.Upstream{{URL: "http://127.0.0.1:9011", Weight: 1}},
+			LBPolicy:   storage.LBPolicyRoundRobin,
+			WAFMode:    "off",
+			TLSEnabled: true,
+			RedirectConfig: &storage.RedirectConfig{
+				Target:       "https://new.example.com",
+				StatusCode:   301,
+				PreservePath: true,
+			},
+		},
 	}
 	// One additional route per non-default LB policy. Each carries a
 	// two-upstream pool so the selection_policy module has something

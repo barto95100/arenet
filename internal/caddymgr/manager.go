@@ -1478,28 +1478,43 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// r.Disabled check below is defensive belt-and-braces for
 		// direct buildConfigJSON callers (e.g. tests) that don't
 		// pre-filter.
-		if r.MaintenanceConfig != nil && !r.Disabled {
-			maintenanceHTML := resolveMaintenancePage(opts.MaintenancePageHTML)
-			// v2.18.1 — per-route message wins; fall back to the global
-			// message (MaintenancePageConfig.Message via opts) when the
-			// route sets none. Both empty → empty substitution.
-			effectiveMsg := r.MaintenanceConfig.Message
-			if effectiveMsg == "" {
-				effectiveMsg = opts.MaintenanceMessage
+		// v2.44 — the redirect state joins maintenance here rather
+		// than getting a branch of its own. Both replace the proxy
+		// chain entirely and both need the identical TLS-redirect and
+		// cert-registration tail below: a redirecting route still has
+		// to be reachable on both listeners and still needs its
+		// certificate, or the browser meets a warning instead of a
+		// redirect (spec D8). Duplicating that tail is how it drifts.
+		//
+		// Route.Validate guarantees the two configs are never both
+		// set, so the inner choice is a simple either/or.
+		if (r.MaintenanceConfig != nil || r.RedirectConfig != nil) && !r.Disabled {
+			var replacement map[string]any
+			if r.RedirectConfig != nil {
+				replacement = buildRedirectStateHandler(metricsHandler, r.RedirectConfig)
+			} else {
+				maintenanceHTML := resolveMaintenancePage(opts.MaintenancePageHTML)
+				// v2.18.1 — per-route message wins; fall back to the global
+				// message (MaintenancePageConfig.Message via opts) when the
+				// route sets none. Both empty → empty substitution.
+				effectiveMsg := r.MaintenanceConfig.Message
+				if effectiveMsg == "" {
+					effectiveMsg = opts.MaintenanceMessage
+				}
+				replacement = buildMaintenanceRoute(
+					metricsHandler,
+					proxyHandler,
+					r.MaintenanceConfig.BypassIPs,
+					r.MaintenanceConfig.RetryAfterSeconds,
+					maintenanceHTML,
+					effectiveMsg,
+				)
 			}
-			maintRoute := buildMaintenanceRoute(
-				metricsHandler,
-				proxyHandler,
-				r.MaintenanceConfig.BypassIPs,
-				r.MaintenanceConfig.RetryAfterSeconds,
-				maintenanceHTML,
-				effectiveMsg,
-			)
 
 			allHosts := r.AllHosts()
 			route := httpRoute{
 				Match:    []matcherSet{{Host: allHosts}},
-				Handle:   []map[string]any{maintRoute},
+				Handle:   []map[string]any{replacement},
 				Terminal: true,
 			}
 

@@ -248,6 +248,10 @@
 		// is the actual on/off switch. Full-replacement on submit,
 		// same shape as the wire's MaintenanceConfig.
 		maintenanceConfig: MaintenanceConfig;
+		// v2.44 — the redirect state's own fields. Kept in the form
+		// whatever the current state, so switching away and back does
+		// not lose what was typed.
+		redirectConfig: { target: string; statusCode: number; preservePath: boolean };
 		// v2.19.0 external-certs SOCLE — narrowed to definite
 		// strings for reactive binding. cert_source defaults to
 		// 'acme' (the wire "" / "acme" default); cert_id is '' unless
@@ -372,6 +376,16 @@
 				retryAfterSeconds: 300,
 				bypassIps: [] as string[],
 				message: ''
+			},
+			// v2.44 — redirect defaults. 301 because a domain move is
+			// permanent far more often than not, and preservePath on
+			// because old.example.com/a/b should land on
+			// new.example.com/a/b rather than dumping every visitor
+			// on the target's home page.
+			redirectConfig: {
+				target: '',
+				statusCode: 301,
+				preservePath: true
 			},
 			// v2.19.0 external-certs SOCLE — default to the ACME cert
 			// source (byte-equivalent to the pre-v2.19.0 "" wire
@@ -654,10 +668,23 @@
 	// states are mutually exclusive on the control, but a future
 	// API caller could set both — disabled wins because it's the
 	// stronger "serves no traffic at all" state).
-	function routeState(r: Route): 'active' | 'maintenance' | 'disabled' {
+	function routeState(r: Route): 'active' | 'maintenance' | 'redirect' | 'disabled' {
 		if (r.disabled) return 'disabled';
 		if (r.maintenanceConfig) return 'maintenance';
+		// v2.44 — a redirecting route serves no upstream either; it is
+		// the fourth exclusive state, after disabled in precedence for
+		// the same reason maintenance is: disabled serves nothing at
+		// all, which is stronger than serving a redirect.
+		if (r.redirectConfig) return 'redirect';
 		return 'active';
+	}
+
+	// The three states the row control can actually switch between.
+	// Only called on a route that is not redirecting — the template
+	// branches before this — so the fallback never fires in practice.
+	function rowState(r: Route): 'active' | 'maintenance' | 'disabled' {
+		const s = routeState(r);
+		return s === 'redirect' ? 'active' : s;
 	}
 
 	async function handleEnterMaintenance(r: Route) {
@@ -1416,6 +1443,16 @@
 						message: r.maintenanceConfig.message ?? ''
 					}
 				: { retryAfterSeconds: 300, bypassIps: [], message: '' },
+			// v2.44 — seed the redirect sub-form, falling back to the
+			// same defaults as a new route when this one has never
+			// redirected.
+			redirectConfig: r.redirectConfig
+				? {
+						target: r.redirectConfig.target,
+						statusCode: r.redirectConfig.statusCode ?? 301,
+						preservePath: r.redirectConfig.preservePath ?? false
+					}
+				: { target: '', statusCode: 301, preservePath: true },
 			// v2.19.0 external-certs SOCLE — seed the cert source from
 			// the persisted route. The backend emits "" for pre-v2.19.0
 			// rows (omitempty) which we normalise to 'acme' so the
@@ -1813,8 +1850,8 @@
 	// (internal/api/routes.go, v2.39 preserve-or-replace rules).
 	// The icons in the routes list keep applying immediately — there,
 	// the click IS the action.
-	let stateChoice = $state<'active' | 'maintenance' | 'disabled'>('active');
-	let stateSnapshot = $state<'active' | 'maintenance' | 'disabled'>('active');
+	let stateChoice = $state<'active' | 'maintenance' | 'redirect' | 'disabled'>('active');
+	let stateSnapshot = $state<'active' | 'maintenance' | 'redirect' | 'disabled'>('active');
 
 	// v2.41 — "unsaved changes" marker: the panel snapshots the form when
 	// it opens; anything different afterwards is unsaved work. Compared as
@@ -2154,7 +2191,11 @@
 			? tl('routes.form.summaryStateDisabled')
 			: stateChoice === 'maintenance'
 				? tl('routes.form.summaryStateMaintenance')
-				: tl('routes.form.summaryStateActive')
+				: stateChoice === 'redirect'
+					? tl('routes.form.summaryStateRedirect', {
+							target: formData.redirectConfig.target || '—'
+						})
+					: tl('routes.form.summaryStateActive')
 	);
 
 	const stateOptions = $derived(
@@ -2177,6 +2218,15 @@
 						}
 					]
 				: []),
+			// Unlike maintenance, a redirect IS a birth state: a route
+			// created purely to forward a retired name somewhere else
+			// never needs to have proxied anything first.
+			{
+				value: 'redirect' as const,
+				label: tl('routes.state.redirect'),
+				hint: tl('routes.form.stateRedirectHint'),
+				tone: 'watch' as const
+			},
 			{
 				value: 'disabled' as const,
 				label: tl('routes.state.disabled'),
@@ -2185,6 +2235,24 @@
 			}
 		]
 	);
+
+	// 301 vs 302: the only pair offered. 307/308 preserve the request
+	// method, which means a browser re-POSTing to another host — a
+	// different decision, deliberately out of scope (spec D2).
+	const redirectCodeOptions = $derived([
+		{
+			value: '301',
+			label: '301',
+			hint: tl('routes.form.redirect.code301Hint'),
+			tone: 'neutral' as const
+		},
+		{
+			value: '302',
+			label: '302',
+			hint: tl('routes.form.redirect.code302Hint'),
+			tone: 'neutral' as const
+		}
+	]);
 
 	function onFormStateChange(next: string): void {
 		// Kept in sync so anything still reading formData.disabled
@@ -2198,7 +2266,9 @@
 			? { badge: tl('routes.form.badgeDisabled'), posture: 'off' }
 			: stateChoice === 'maintenance'
 				? { badge: tl('routes.form.badgeMaintenance'), posture: 'watch' }
-				: { badge: tl('routes.form.badgeActive'), posture: 'allow' }
+				: stateChoice === 'redirect'
+					? { badge: tl('routes.form.badgeRedirect'), posture: 'watch' }
+					: { badge: tl('routes.form.badgeActive'), posture: 'allow' }
 	);
 
 	// Step J.3: derive whether the weight column is visible.
@@ -2734,6 +2804,17 @@
 			// leaving maintenance is simply not shipping the block. A
 			// route being created can only be born active or disabled
 			// — the control offers nothing else.
+			if (stateChoice === 'redirect') {
+				// Full replacement, like the maintenance block. Leaving
+				// the state is simply not shipping it: the server clears
+				// a stored redirect when a PUT re-enables the route
+				// without one.
+				payload.redirectConfig = {
+					target: formData.redirectConfig.target.trim(),
+					statusCode: formData.redirectConfig.statusCode,
+					preservePath: formData.redirectConfig.preservePath
+				};
+			}
 			if (stateChoice === 'maintenance') {
 				payload.maintenanceConfig = {
 					retryAfterSeconds: formData.maintenanceConfig.retryAfterSeconds,
@@ -3325,8 +3406,18 @@
 									     icon-only control. -->
 									<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 									<div class="flex justify-center" onclick={(e) => e.stopPropagation()}>
+										{#if r.redirectConfig}
+											<!-- v2.44 — a redirect cannot be switched on from
+											     a row: the dedicated maintenance/disable
+											     endpoints take no argument, and a redirect
+											     needs a target. The row states it, the form
+											     changes it. -->
+											<Badge variant="status-warn">
+												{language.current && t('routes.state.redirect')}
+											</Badge>
+										{:else}
 										<RouteStateControl
-											value={routeState(r)}
+											value={rowState(r)}
 											ariaLabel={language.current && t('routes.list.colActions')}
 											labels={language.current && {
 												active: t('routes.state.active'),
@@ -3335,6 +3426,7 @@
 											}}
 											onchange={(next) => onRouteStateChange(r, next)}
 										/>
+										{/if}
 									</div>
 								</td>
 							</tr>
@@ -3476,6 +3568,58 @@
 							<p class="text-xs text-muted" data-testid="state-create-hint">
 								{language.current && t('routes.form.stateCreateHint')}
 							</p>
+						{/if}
+						{#if stateChoice === 'redirect'}
+							<!-- v2.44 — the redirect state's fields. The route
+							     stops proxying and answers a 301/302; the
+							     target must be a DIFFERENT host, which the
+							     server refuses at save with an explanation
+							     rather than letting the operator discover the
+							     loop from their browser. -->
+							<div
+								class="flex flex-col gap-3 p-3 rounded-md border border-border-subtle"
+								data-testid="redirect-fields"
+							>
+								<span class="text-sm font-medium text-secondary">
+									{language.current && t('routes.form.redirect.sectionTitle')}
+								</span>
+								<label class="flex flex-col gap-1">
+									<span class="text-sm text-secondary"
+										>{language.current && t('routes.form.redirect.targetLabel')}</span
+									>
+									<input
+										id="redirect-target"
+										type="url"
+										class="input"
+										placeholder="https://new.example.com"
+										bind:value={formData.redirectConfig.target}
+										data-testid="redirect-target"
+									/>
+									<span class="text-xs text-muted"
+										>{language.current && t('routes.form.redirect.targetHelper')}</span
+									>
+								</label>
+
+								<ModeSelector
+									id="redirect-status"
+									value={String(formData.redirectConfig.statusCode)}
+									options={redirectCodeOptions}
+									onchange={(v) => (formData.redirectConfig.statusCode = Number(v))}
+									ariaLabel={language.current && t('routes.form.redirect.codeLabel')}
+								/>
+
+								<SwitchRow
+									checked={formData.redirectConfig.preservePath}
+									onchange={(v) => (formData.redirectConfig.preservePath = v)}
+									label={language.current && t('routes.form.redirect.preservePathLabel')}
+									helper={language.current && t('routes.form.redirect.preservePathHelper')}
+									testid="redirect-preserve-path"
+								/>
+
+								<p class="text-xs text-muted" data-testid="redirect-warning">
+									{language.current && t('routes.form.redirect.noProxyWarning')}
+								</p>
+							</div>
 						{/if}
 						{#if stateChoice === 'maintenance'}
 						<!-- Task 9 — Maintenance section. Shown always (not

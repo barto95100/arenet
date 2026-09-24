@@ -1562,6 +1562,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		RedirectToHTTPS:   req.RedirectToHTTPS,
 		Disabled:          req.Disabled != nil && *req.Disabled,
 		MaintenanceConfig: req.MaintenanceConfig,
+		RedirectConfig:    req.RedirectConfig,
 		CertSource:        req.CertSource,
 		CertID:            req.CertID,
 		Aliases:           req.Aliases,
@@ -2079,6 +2080,26 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	if req.Disabled != nil && !*req.Disabled && req.MaintenanceConfig == nil {
 		maintenance = nil
 	}
+	// v2.44 — RedirectConfig on PUT, same preserve-or-replace shape
+	// as maintenance above.
+	redirect := previous.RedirectConfig
+	if req.RedirectConfig != nil {
+		redirect = req.RedirectConfig
+	}
+	if req.Disabled != nil && !*req.Disabled && req.RedirectConfig == nil {
+		redirect = nil
+	}
+	// The two replacement states are exclusive: a PUT that sets one
+	// clears the other. Without this, a route moved from maintenance
+	// to redirect would carry both and storage.Route.Validate would
+	// refuse a change the operator made correctly in the form.
+	if req.MaintenanceConfig != nil {
+		redirect = nil
+	}
+	if req.RedirectConfig != nil {
+		maintenance = nil
+	}
+
 	// v2.38 — WAFSecLang on PUT: preserve on nil, replace (checked)
 	// otherwise.
 	secLang := previous.WAFSecLang
@@ -2148,6 +2169,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		RedirectToHTTPS:   req.RedirectToHTTPS,
 		Disabled:          disabled,
 		MaintenanceConfig: maintenance,
+		RedirectConfig:    redirect,
 		CertSource:        req.CertSource,
 		CertID:            req.CertID,
 		Aliases:           req.Aliases,

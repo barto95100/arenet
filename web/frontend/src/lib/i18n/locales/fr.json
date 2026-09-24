@@ -427,6 +427,20 @@
 			"summaryErrorPagesTemplate": "modèle personnalisé",
 			"stateActiveHint": "La route sert le trafic normalement.",
 			"stateMaintenanceHint": "Les visiteurs reçoivent la page de maintenance ; le certificat reste actif et les IP exclues atteignent toujours le backend.",
+			"stateRedirectHint": "Répond une redirection ; rien n'est relayé.",
+			"badgeRedirect": "redirection",
+			"summaryStateRedirect": "redirige vers {target}",
+			"redirect": {
+				"sectionTitle": "Redirection",
+				"targetLabel": "URL de destination",
+				"targetHelper": "Doit être un autre hôte. Une destination sur le nom de cette route se redirigerait sur elle-même — pour envoyer un chemin ailleurs sur le même hôte, utilise une règle par chemin.",
+				"codeLabel": "Code de statut",
+				"code301Hint": "Permanente. Navigateurs et moteurs la retiennent.",
+				"code302Hint": "Temporaire. Rien n'est mémorisé ; à utiliser tant que tu hésites.",
+				"preservePathLabel": "Conserver le chemin du visiteur",
+				"preservePathHelper": "/a/b?c sur cette route arrive sur le même /a/b?c à destination. Désactivé, tous les visiteurs atterrissent sur la destination telle quelle.",
+				"noProxyWarning": "Une route en redirection ne relaie rien : le WAF, l'authentification, la limitation de débit et le blocage par pays ne s'appliquent pas. Le TLS, si — la route a besoin de son certificat pour répondre."
+			},
 			"stateDisabledHint": "La route est en pause : sa configuration est conservée, mais rien n’est servi.",
 			"stateCreateHint": "La maintenance sera disponible une fois la route enregistrée.",
 			"summaryStateActive": "en service",
@@ -649,6 +663,7 @@
 		"state": {
 			"active": "Active",
 			"maintenance": "Maintenance",
+			"redirect": "Redirection",
 			"disabled": "Désactivée"
 		},
 		"ipFilter": {
