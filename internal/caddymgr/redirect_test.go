@@ -152,3 +152,65 @@ func TestBuildConfigJSON_NoRedirectIsByteIdentical(t *testing.T) {
 		t.Error("a route without a redirect must still proxy")
 	}
 }
+
+// --- v2.44 — the path-rule redirect ------------------------------
+//
+// The second scope. The operator's live case: a mail server whose
+// webadmin lives under /admin serves nothing at "/", so visiting the
+// bare hostname gives a 404 that looks like Arenet's fault. A
+// whole-host redirect cannot fix it — the target is the same host, so
+// it would match its own target — which is why exact path matching
+// exists at all.
+
+func pathRedirectRoute(pr storage.PathRule) storage.Route {
+	return storage.Route{
+		ID: "r1", Host: "app.example.com",
+		Upstreams: []storage.Upstream{{URL: "http://10.0.0.9:8080", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+		PathRules: []storage.PathRule{pr},
+	}
+}
+
+func TestBuildConfigJSON_ExactPathRedirect(t *testing.T) {
+	compact := compactConfig(t, []storage.Route{pathRedirectRoute(storage.PathRule{
+		PathPrefix: "/",
+		MatchExact: true,
+		Redirect:   &storage.PathRedirect{Target: "/admin/login"},
+	})})
+
+	// The matcher must be the bare path. The prefix form — ["/", "/*"]
+	// — would also match /admin/login and loop the browser, which is
+	// the whole reason MatchExact exists.
+	if !strings.Contains(compact, `"path":["/"]`) {
+		t.Errorf("exact match must emit the bare pattern: %s", compact)
+	}
+	if strings.Contains(compact, `"path":["/","/*"]`) {
+		t.Error("exact match must not emit the prefix form")
+	}
+	if !strings.Contains(compact, `"Location":["/admin/login"]`) {
+		t.Errorf("no Location for the path redirect: %s", compact)
+	}
+	// A path redirect replaces the proxy for THAT path only: the rest
+	// of the route must still be proxied.
+	if !strings.Contains(compact, `"reverse_proxy"`) {
+		t.Error("the route must keep proxying everything else")
+	}
+	// Zero means 302 here, not 301: a landing path is a convenience an
+	// application update can change, and a 301 cached by every
+	// visitor's browser is remarkably hard to take back.
+	if !strings.Contains(compact, `"status_code":302`) {
+		t.Errorf("a path redirect must default to 302: %s", compact)
+	}
+}
+
+// A prefix rule keeps emitting both patterns — the exact mode is
+// opt-in and must not change what every existing rule emits.
+func TestBuildConfigJSON_PrefixRuleStillEmitsBothPatterns(t *testing.T) {
+	compact := compactConfig(t, []storage.Route{pathRedirectRoute(storage.PathRule{
+		PathPrefix: "/docs",
+		IPFilter:   &storage.IPFilter{Mode: "allow", CIDRs: []string{"10.0.0.0/8"}},
+	})})
+	if !strings.Contains(compact, `"path":["/docs","/docs/*"]`) {
+		t.Errorf("a prefix rule must be unchanged: %s", compact)
+	}
+}

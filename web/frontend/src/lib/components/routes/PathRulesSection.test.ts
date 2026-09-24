@@ -256,3 +256,61 @@ describe('PathRulesSection', () => {
 		expect(getByTestId('path-rule-skip-verify-0')).toBeInTheDocument();
 	});
 });
+
+// --- v2.44 — exact match and the path redirect -------------------
+//
+// The case this exists for: an application that serves nothing at its
+// root. A whole-host redirect cannot express "/ goes to /admin/login"
+// — the target is on the same host, so it would match its own target
+// — and a "/" prefix rule has the same problem. The exact mode is
+// what makes the rule possible at all.
+
+describe('PathRulesSection — exact match and redirect (v2.44)', () => {
+	it('carries the exact-match choice into the rule', async () => {
+		const value: PathRule[] = [{ pathPrefix: '/' }];
+		const { getByTestId } = render(PathRulesSection, { value });
+
+		await fireEvent.click(getByTestId('path-rule-exact-toggle-0'));
+		expect(value[0].matchExact).toBe(true);
+	});
+
+	it('adds and removes the redirect, with a temporary default', async () => {
+		const value: PathRule[] = [{ pathPrefix: '/', matchExact: true }];
+		const { getByTestId, queryByTestId } = render(PathRulesSection, { value });
+
+		// Nothing is rendered until the rule carries a redirect. (The
+		// block's own rendering is covered below, on a rule that has
+		// one at mount: this harness passes a plain array, so nested
+		// mutation does not re-render — the same reason every other
+		// toggle test in this file asserts the data.)
+		expect(queryByTestId('path-rule-redirect-0')).toBeNull();
+
+		await fireEvent.click(getByTestId('path-rule-redirect-toggle-0'));
+		// 302 by default: a landing path is a convenience an application
+		// update can change, and a 301 cached by every visitor's browser
+		// is remarkably hard to take back.
+		expect(value[0].redirect).toEqual({ target: '', statusCode: 302 });
+
+		await fireEvent.click(getByTestId('path-rule-redirect-toggle-0'));
+		expect(value[0].redirect).toBeUndefined();
+	});
+
+	it('types the target into the rule', async () => {
+		const value: PathRule[] = [
+			{ pathPrefix: '/', matchExact: true, redirect: { target: '', statusCode: 302 } }
+		];
+		const { getByTestId } = render(PathRulesSection, { value });
+
+		const input = getByTestId('path-rule-redirect-target-0') as HTMLInputElement;
+		await fireEvent.input(input, { target: { value: '/admin/login' } });
+		expect(value[0].redirect?.target).toBe('/admin/login');
+	});
+
+	it('warns that the target must fall outside the rule', () => {
+		const value: PathRule[] = [
+			{ pathPrefix: '/', matchExact: true, redirect: { target: '', statusCode: 302 } }
+		];
+		const { getByTestId } = render(PathRulesSection, { value });
+		expect(getByTestId('path-rule-redirect-0').textContent).toMatch(/forever/i);
+	});
+});

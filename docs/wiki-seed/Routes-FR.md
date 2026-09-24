@@ -269,6 +269,44 @@ Les quatre endpoints sont idempotents : désactiver une route déjà désactivé
 
 ---
 
+## Rediriger un seul chemin (v2.44)
+
+Le cas pour lequel ça existe : une application qui **ne sert rien à sa
+racine**. L'interface d'administration d'un serveur de messagerie sous
+`/admin`, une API sous `/api`. Visiter le nom d'hôte nu donne un 404
+qui a tout l'air d'être la faute d'Arenet.
+
+Dans **Règles par chemin**, ajoute une règle sur `/`, active **Ne
+correspondre qu'à ce chemin exact**, active **Rediriger ce chemin**,
+et donne `/admin/login`. Tout le reste de la route continue d'être
+relayé normalement.
+
+**Pourquoi le mode exact n'est pas optionnel ici.** Les règles par
+chemin couvrent un sous-arbre par défaut : une règle sur `/` couvre
+donc aussi `/admin/login`, la redirection correspondrait à sa propre
+destination, et le navigateur rebondirait jusqu'à abandonner. La
+correspondance exacte fait que la règle ne couvre que `/`. Arenet
+refuse une destination que sa propre règle attraperait, quel que soit
+le mode choisi.
+
+**301 ou 302.** Le 302 est la valeur par défaut, et généralement la
+bonne : un chemin d'accueil est un confort qu'une mise à jour de
+l'application peut changer, et un 301 est retenu par le navigateur de
+chaque visiteur — très difficile à reprendre. Le 301 ne se justifie
+que pour quelque chose sur quoi tu ne reviendras pas.
+
+**La destination** peut être un chemin sur cet hôte (`/admin/login`)
+ou une URL complète ailleurs (`https://docs.example.com/`). Une règle
+qui ne fait que rediriger est une règle complète : elle n'a besoin ni
+d'authentification, ni de filtre, ni de backend.
+
+> **Les chemins sont en minuscules.** Caddy minuscule le chemin de la
+> requête avant de comparer, mais jamais le motif : une règle écrite
+> `/Admin` ne pourrait donc jamais correspondre à quoi que ce soit —
+> elle se chargerait sans erreur et ne ferait rien, en silence. Arenet
+> refuse un chemin comportant une majuscule à l'enregistrement et
+> t'indique la forme en minuscules.
+
 ## Rediriger tout un domaine (v2.44)
 
 Une route dans l'état **Redirection** cesse de relayer et répond un 301

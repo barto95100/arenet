@@ -1220,6 +1220,15 @@ func TestBuildConfigJSON_LoadsCleanly(t *testing.T) {
 					PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$U0FMVFNBTFRTQUxUU0FMVA$S0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0VZS0U",
 				}},
 				{PathPrefix: "/metrics", IPFilter: &storage.IPFilter{Mode: "allow", CIDRs: []string{"192.168.1.5"}}},
+				// v2.44 — an exact-match path redirect: "/" alone goes
+				// to the app's real entry point, everything else keeps
+				// being proxied. Folded here so the static_response +
+				// exact matcher shape is provisioned by real Caddy.
+				{
+					PathPrefix: "/",
+					MatchExact: true,
+					Redirect:   &storage.PathRedirect{Target: "/admin/login", StatusCode: 302},
+				},
 			},
 		},
 		// v2.44 — a route in the redirect state. Folded onto the

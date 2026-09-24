@@ -49,6 +49,19 @@
 		value = value.filter((_, idx) => idx !== i);
 	}
 
+	// v2.44 — mirrors toggleBasicAuth: assign through value[i], not
+	// through the each-block alias, so the change propagates.
+	function toggleRedirect(i: number, enabled: boolean): void {
+		if (enabled) {
+			// 302 by default: a landing path is a convenience an
+			// application update can change, and a 301 cached by every
+			// visitor's browser is remarkably hard to take back.
+			value[i].redirect = { target: '', statusCode: 302 };
+		} else {
+			value[i].redirect = undefined;
+		}
+	}
+
 	function toggleBasicAuth(i: number, enabled: boolean): void {
 		if (enabled) {
 			value[i].basicAuth = { username: '', password: '' };
@@ -199,6 +212,72 @@
 					>
 						×
 					</Button>
+				</div>
+
+				<!-- v2.44 — exact match + redirect. Both exist for the
+				     same case: an application that serves nothing at its
+				     root. "/" as a prefix matches everything, including
+				     the redirect's own target, so the exact mode is what
+				     makes the rule expressible at all. -->
+				<div class="flex flex-col gap-2">
+					<label class="inline-flex items-center gap-2 text-sm text-secondary cursor-pointer">
+						<input
+							type="checkbox"
+							class="accent-cyan"
+							checked={!!rule.matchExact}
+							onchange={(e) => (value[i].matchExact = (e.currentTarget as HTMLInputElement).checked)}
+							data-testid="path-rule-exact-toggle-{i}"
+						/>
+						{language.current && t('routes.pathRules.matchExactLabel')}
+					</label>
+					<p class="text-xs text-muted">
+						{language.current && t('routes.pathRules.matchExactHelp')}
+					</p>
+				</div>
+
+				<div class="flex flex-col gap-2">
+					<label class="inline-flex items-center gap-2 text-sm text-secondary cursor-pointer">
+						<input
+							type="checkbox"
+							class="accent-cyan"
+							checked={!!rule.redirect}
+							onchange={(e) => toggleRedirect(i, (e.currentTarget as HTMLInputElement).checked)}
+							data-testid="path-rule-redirect-toggle-{i}"
+						/>
+						{language.current && t('routes.pathRules.redirectLabel')}
+					</label>
+					{#if rule.redirect}
+						<div class="flex flex-col gap-2 pl-6" data-testid="path-rule-redirect-{i}">
+							<Input
+								label={language.current && t('routes.pathRules.redirectTargetLabel')}
+								bind:value={value[i].redirect!.target}
+								placeholder="/admin/login"
+								data-testid="path-rule-redirect-target-{i}"
+							/>
+							<p class="text-xs text-muted">
+								{language.current && t('routes.pathRules.redirectTargetHelp')}
+							</p>
+							<label class="inline-flex items-center gap-2 text-sm text-secondary">
+								{language.current && t('routes.pathRules.redirectCodeLabel')}
+								<select
+									class="input w-28"
+									value={String(rule.redirect.statusCode ?? 302)}
+									onchange={(e) =>
+										value[i].redirect &&
+										(value[i].redirect.statusCode = Number(
+											(e.currentTarget as HTMLSelectElement).value
+										))}
+									data-testid="path-rule-redirect-code-{i}"
+								>
+									<option value="302">302</option>
+									<option value="301">301</option>
+								</select>
+							</label>
+							<p class="text-xs text-muted">
+								{language.current && t('routes.pathRules.redirectCodeHelp')}
+							</p>
+						</div>
+					{/if}
 				</div>
 
 				<div class="flex flex-col gap-2">

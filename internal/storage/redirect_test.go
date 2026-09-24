@@ -148,3 +148,136 @@ func TestRedirectConfig_NilIsInert(t *testing.T) {
 		t.Fatalf("no redirect configured must stay valid: %v", err)
 	}
 }
+
+// --- v2.44 — the path-rule redirect ------------------------------
+
+func routeWithPathRule(pr PathRule) Route {
+	return Route{
+		ID: "r1", Host: "app.example.com",
+		Upstreams: []Upstream{{URL: "http://10.0.0.9:8080", Weight: 1}},
+		LBPolicy:  LBPolicyRoundRobin,
+		PathRules: []PathRule{pr},
+	}
+}
+
+func TestPathRedirect_AcceptsTheStalwartShape(t *testing.T) {
+	r := routeWithPathRule(PathRule{
+		PathPrefix: "/",
+		MatchExact: true,
+		Redirect:   &PathRedirect{Target: "/admin/login"},
+	})
+	if err := r.validate(); err != nil {
+		t.Fatalf("the case this feature exists for must be accepted: %v", err)
+	}
+}
+
+// The loop, in its two shapes. An exact rule on "/" pointing at "/",
+// and a prefix rule pointing anywhere under itself.
+func TestPathRedirect_RefusesTheLoop(t *testing.T) {
+	cases := []struct {
+		name string
+		rule PathRule
+	}{
+		{"exact rule pointing at itself", PathRule{
+			PathPrefix: "/", MatchExact: true,
+			Redirect: &PathRedirect{Target: "/"},
+		}},
+		{"prefix rule pointing under itself", PathRule{
+			PathPrefix: "/app",
+			Redirect:   &PathRedirect{Target: "/app/login"},
+		}},
+		{"prefix rule pointing at itself", PathRule{
+			PathPrefix: "/app",
+			Redirect:   &PathRedirect{Target: "/app"},
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := routeWithPathRule(c.rule)
+			err := r.validate()
+			if err == nil {
+				t.Fatal("must be refused")
+			}
+			if !strings.Contains(err.Error(), "forever") {
+				t.Errorf("the message must say what would happen: %v", err)
+			}
+		})
+	}
+}
+
+// Without MatchExact, a "/" rule matches everything, so the very
+// target the operator wants is inside the rule. This is the mistake
+// the exact mode exists to let them avoid — and it must be refused
+// rather than silently looping.
+func TestPathRedirect_RefusesARootPrefixRule(t *testing.T) {
+	r := routeWithPathRule(PathRule{
+		PathPrefix: "/",
+		Redirect:   &PathRedirect{Target: "/admin/login"},
+	})
+	if err := r.validate(); err == nil {
+		t.Fatal("a prefix rule on / matches its own target: must be refused")
+	}
+}
+
+// An absolute URL leaves this host, so no local loop is possible.
+func TestPathRedirect_AcceptsAnAbsoluteTarget(t *testing.T) {
+	r := routeWithPathRule(PathRule{
+		PathPrefix: "/docs", MatchExact: true,
+		Redirect: &PathRedirect{Target: "https://docs.example.com/"},
+	})
+	if err := r.validate(); err != nil {
+		t.Fatalf("an off-host target must be accepted: %v", err)
+	}
+}
+
+func TestPathRedirect_RefusesAMalformedTarget(t *testing.T) {
+	for _, target := range []string{"", "admin/login", "ftp://x.example.com"} {
+		r := routeWithPathRule(PathRule{
+			PathPrefix: "/", MatchExact: true,
+			Redirect: &PathRedirect{Target: target},
+		})
+		if err := r.validate(); err == nil {
+			t.Errorf("target %q must be refused", target)
+		}
+	}
+}
+
+// Caddy lowercases the request path but never the pattern, so an
+// uppercase rule loads fine and then never matches anything. Silence
+// is the worst failure mode, so it is refused at save.
+func TestPathRule_RefusesAnUppercasePath(t *testing.T) {
+	r := routeWithPathRule(PathRule{
+		PathPrefix: "/Admin",
+		IPFilter:   &IPFilter{Mode: "allow", CIDRs: []string{"10.0.0.0/8"}},
+	})
+	err := r.validate()
+	if err == nil {
+		t.Fatal("an uppercase path could never match: it must be refused")
+	}
+	// And the message must hand over the fix, not just the diagnosis.
+	if !strings.Contains(err.Error(), "/admin") {
+		t.Errorf("the message must offer the lowercase form: %v", err)
+	}
+}
+
+// A redirect alone is enough to justify a path rule — before v2.44 a
+// rule had to carry auth, a filter or a pool.
+func TestPathRule_ARedirectIsEnoughOnItsOwn(t *testing.T) {
+	r := routeWithPathRule(PathRule{
+		PathPrefix: "/", MatchExact: true,
+		Redirect: &PathRedirect{Target: "/admin/login"},
+	})
+	if err := r.validate(); err != nil {
+		t.Fatalf("a redirect-only rule must be valid: %v", err)
+	}
+}
+
+func TestPathRedirect_CodeDefaultsToTemporary(t *testing.T) {
+	if got := (&PathRedirect{}).Code(); got != 302 {
+		t.Errorf("a landing path must default to 302, got %d", got)
+	}
+	var nilCfg *PathRedirect
+	if got := nilCfg.Code(); got != 302 {
+		t.Errorf("nil must be usable, got %d", got)
+	}
+}
