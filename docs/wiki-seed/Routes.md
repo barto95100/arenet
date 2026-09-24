@@ -267,6 +267,39 @@ All four endpoints are idempotent : disabling an already-disabled route, or ente
 
 ---
 
+## Redirect one path (v2.44)
+
+The case this exists for: an application that serves **nothing at its
+root**. A mail server's webadmin under `/admin`, an API under `/api`.
+Visiting the bare hostname gives a 404 that looks like Arenet's fault.
+
+In **Path rules**, add a rule on `/`, turn on **Match this exact path
+only**, turn on **Redirect this path**, and give it `/admin/login`.
+Everything else on the route keeps being proxied.
+
+**Why the exact mode is not optional here.** Path rules match a
+sub-tree by default: a rule on `/` also covers `/admin/login`, so the
+redirect would match its own target and the browser would bounce until
+it gave up. Exact matching makes the rule cover `/` and nothing else.
+Arenet refuses a target that its own rule would match, whichever mode
+you picked.
+
+**301 or 302.** 302 is the default and usually the right one: a
+landing path is a convenience that an application update can change,
+and a 301 is remembered by every visitor's browser — remarkably hard
+to take back. Use 301 only for something you will not revisit.
+
+**The target** can be a path on this host (`/admin/login`) or a full
+URL elsewhere (`https://docs.example.com/`). A rule that only
+redirects is a complete rule: it needs no authentication, no filter
+and no upstream pool.
+
+> **Paths are lowercase.** Caddy lowercases the request path before
+> matching but never the pattern, so a rule written `/Admin` could
+> never match anything — it would load without error and silently do
+> nothing. Arenet refuses an uppercase path at save and tells you the
+> lowercase form to use.
+
 ## Redirect a whole domain (v2.44)
 
 A route in the **Redirect** state stops proxying and answers a 301 or a

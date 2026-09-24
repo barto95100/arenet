@@ -16,12 +16,25 @@
 
 package caddymgr
 
-import "github.com/barto95100/arenet/internal/storage"
+import (
+	"strings"
+
+	"github.com/barto95100/arenet/internal/storage"
+)
 
 // pathMatchers returns Caddy path matchers for a prefix: the prefix
 // itself + everything under it. "/docs" → ["/docs","/docs/*"].
-func pathMatchers(prefix string) []string {
-	return []string{prefix, prefix + "/*"}
+func pathMatchers(pr storage.PathRule) []string {
+	// v2.44 — MatchExact emits the bare pattern. Verified in Caddy
+	// v2.11.4 (caddyhttp/matchers.go): a pattern with no wildcard
+	// falls through to path.Match, which the source itself calls
+	// "exact matching if there are no glob/wildcard chars". So "/"
+	// alone matches "/" and nothing else — which is the whole point,
+	// since the prefix form would also match the redirect's target.
+	if pr.MatchExact {
+		return []string{pr.PathPrefix}
+	}
+	return []string{pr.PathPrefix, pr.PathPrefix + "/*"}
 }
 
 // poolUsesHTTPS reports whether a bare upstream pool (a route's or a
@@ -97,13 +110,27 @@ func buildPathRulesSubroute(
 		if pr.BasicAuth != nil {
 			handle = append(handle, basicAuthBuilder(*pr.BasicAuth))
 		}
-		proxy, err := pathProxyBuilder(pr)
-		if err != nil {
-			return nil, err
+		// v2.44 — a path redirect replaces the proxy for THIS path
+		// only; everything else on the route keeps being proxied. The
+		// IP filter and basic auth above still run first, so a
+		// protected path that also redirects stays protected.
+		if pr.Redirect != nil {
+			handle = append(handle, map[string]any{
+				"handler":     "static_response",
+				"status_code": pr.Redirect.Code(),
+				"headers": map[string]any{
+					"Location": []string{strings.TrimSpace(pr.Redirect.Target)},
+				},
+			})
+		} else {
+			proxy, err := pathProxyBuilder(pr)
+			if err != nil {
+				return nil, err
+			}
+			handle = append(handle, proxy)
 		}
-		handle = append(handle, proxy)
 		inner = append(inner, map[string]any{
-			"match":  []map[string]any{{"path": pathMatchers(pr.PathPrefix)}},
+			"match":  []map[string]any{{"path": pathMatchers(pr)}},
 			"handle": handle,
 		})
 	}

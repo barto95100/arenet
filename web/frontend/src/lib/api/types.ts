@@ -847,6 +847,17 @@ export interface PathRule {
 	/** Per-path TLS skip-verify (v2.23.1). Autonomous — does not inherit the
 	 *  route's posture. Only meaningful when the path pool is https. */
 	insecureSkipVerify?: boolean;
+	/**
+	 * v2.44 — match the WHOLE path instead of the sub-tree. Required
+	 * for a "/" rule, whose prefix form also matches the redirect's
+	 * own target and would loop the browser.
+	 */
+	matchExact?: boolean;
+	/**
+	 * v2.44 — answer a redirect for this path instead of proxying it.
+	 * The rest of the route keeps being proxied.
+	 */
+	redirect?: { target: string; statusCode?: number };
 }
 
 /**

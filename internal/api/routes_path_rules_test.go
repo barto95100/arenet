@@ -355,8 +355,8 @@ func TestUpdateRoute_PathRuleNoProtection_Returns400NotServerError(t *testing.T)
 	// upstream branch was added — a path-rule is now valid with basic-auth,
 	// an active IP filter, OR a non-empty upstream pool. The message wording
 	// changed accordingly (routes.go PathRule.Validate).
-	if !strings.Contains(putRec.Body.String(), "must declare at least one of basic auth, IP filter, or an upstream") {
+	if !strings.Contains(putRec.Body.String(), "must declare at least one of basic auth, IP filter") {
 		t.Errorf("put body = %s; want it to contain the validation message %q",
-			putRec.Body.String(), "must declare at least one of basic auth, IP filter, or an upstream")
+			putRec.Body.String(), "must declare at least one of basic auth, IP filter")
 	}
 }

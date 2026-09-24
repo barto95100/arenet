@@ -139,3 +139,25 @@ describe('sanitizePathRules', () => {
 		expect(out[0].ipFilter?.cidrs).toEqual([]);
 	});
 });
+
+// --- v2.44 — a redirect justifies a rule on its own ---------------
+//
+// Before v2.44 a path rule had to carry auth, an IP filter or a pool,
+// and anything else was dropped here as empty. The operator's live
+// case carries none of the three: "/" going to "/admin/login" is a
+// rule whose only content is the redirect, and silently discarding it
+// on save would be the worst possible answer.
+
+describe('sanitizePathRules — redirects', () => {
+	it('keeps a rule whose only content is a redirect', () => {
+		const rules = [
+			{ pathPrefix: '/', matchExact: true, redirect: { target: '/admin/login', statusCode: 302 } }
+		];
+		expect(sanitizePathRules(rules)).toHaveLength(1);
+	});
+
+	it('still drops a rule that carries nothing at all', () => {
+		expect(sanitizePathRules([{ pathPrefix: '/', redirect: { target: '   ' } }])).toEqual([]);
+		expect(sanitizePathRules([{ pathPrefix: '/nothing' }])).toEqual([]);
+	});
+});

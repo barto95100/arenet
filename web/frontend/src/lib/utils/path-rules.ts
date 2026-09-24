@@ -58,9 +58,24 @@ function hasActiveUpstream(rule: PathRule): boolean {
  * elements — so it's callable directly from the submit payload
  * assembler and from unit tests.
  */
+/** A rule that redirects: target filled in. */
+function hasActiveRedirect(rule: PathRule): boolean {
+	return (rule.redirect?.target ?? '').trim().length > 0;
+}
+
 export function sanitizePathRules(rules: PathRule[]): PathRule[] {
 	return rules
-		.filter((rule) => hasActiveBasicAuth(rule) || hasActiveIPFilter(rule) || hasActiveUpstream(rule))
+		// v2.44 — a redirect is on its own enough to justify a rule:
+		// "/" going to "/admin/login" carries no auth, no filter and
+		// no pool, and dropping it here would silently discard exactly
+		// the rule the operator just wrote.
+		.filter(
+			(rule) =>
+				hasActiveBasicAuth(rule) ||
+				hasActiveIPFilter(rule) ||
+				hasActiveUpstream(rule) ||
+				hasActiveRedirect(rule)
+		)
 		.map((rule) => {
 			if (rule.ipFilter && rule.ipFilter.mode === 'off') {
 				return { ...rule, ipFilter: { ...rule.ipFilter, cidrs: [] } };

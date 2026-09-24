@@ -1201,6 +1201,19 @@ type pathRuleReq struct {
 	LBPolicy           string          `json:"lbPolicy,omitempty"`
 	HealthCheck        *healthCheckReq `json:"healthCheck,omitempty"`
 	InsecureSkipVerify bool            `json:"insecureSkipVerify,omitempty"`
+	// MatchExact (v2.44) matches the whole path instead of the
+	// sub-tree. Required for a "/" rule, whose prefix form would also
+	// match the redirect's own target.
+	MatchExact bool `json:"matchExact,omitempty"`
+	// Redirect (v2.44) answers a redirect for this path instead of
+	// proxying it.
+	Redirect *pathRedirectReq `json:"redirect,omitempty"`
+}
+
+// pathRedirectReq is the wire mirror of storage.PathRedirect.
+type pathRedirectReq struct {
+	Target     string `json:"target"`
+	StatusCode int    `json:"statusCode,omitempty"`
 }
 
 // mapPathRuleReqs nil/empty-safely maps the wire slice to
@@ -1230,7 +1243,13 @@ func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) ([]storage
 	}
 	out := make([]storage.PathRule, len(reqs))
 	for i, r := range reqs {
-		pr := storage.PathRule{PathPrefix: r.PathPrefix}
+		pr := storage.PathRule{PathPrefix: r.PathPrefix, MatchExact: r.MatchExact}
+		if r.Redirect != nil {
+			pr.Redirect = &storage.PathRedirect{
+				Target:     r.Redirect.Target,
+				StatusCode: r.Redirect.StatusCode,
+			}
+		}
 		if r.BasicAuth != nil {
 			hash := ""
 			if r.BasicAuth.Password == "" {
@@ -2009,7 +2028,13 @@ func toPathRulesResp(rules []storage.PathRule) []pathRuleReq {
 	}
 	out := make([]pathRuleReq, len(rules))
 	for i, pr := range rules {
-		out[i] = pathRuleReq{PathPrefix: pr.PathPrefix}
+		out[i] = pathRuleReq{PathPrefix: pr.PathPrefix, MatchExact: pr.MatchExact}
+		if pr.Redirect != nil {
+			out[i].Redirect = &pathRedirectReq{
+				Target:     pr.Redirect.Target,
+				StatusCode: pr.Redirect.StatusCode,
+			}
+		}
 		if pr.BasicAuth != nil {
 			out[i].BasicAuth = &pathRuleBasicAuthReq{
 				Username: pr.BasicAuth.Username,

@@ -114,6 +114,44 @@ type PathRule struct {
 	// when the pool is https (transport.tls is emitted). omitempty →
 	// migration-free.
 	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
+	// MatchExact (v2.44) matches PathPrefix as the WHOLE path instead
+	// of a sub-tree. Without it, "/" is a prefix that matches every
+	// request — including the redirect's own target — so this is what
+	// makes "/ goes to /admin/login" expressible at all.
+	MatchExact bool `json:"match_exact,omitempty"`
+	// Redirect (v2.44), when non-nil, answers a redirect for this path
+	// instead of proxying it. The rest of the route keeps proxying
+	// normally: unlike the route-level redirect state, this replaces
+	// the proxy for ONE path.
+	Redirect *PathRedirect `json:"redirect,omitempty"`
+}
+
+// PathRedirect answers a redirect for one path of a route.
+//
+// v2.44 — the second scope of
+// docs/superpowers/specs/2026-09-24-route-redirects-design.md. Its
+// reason to exist is the application that serves nothing at its root:
+// a mail server's webadmin under /admin, an API under /api. Visiting
+// the bare hostname gives a 404 that looks like Arenet's fault.
+type PathRedirect struct {
+	// Target is either a path on this same host ("/admin/login") or an
+	// absolute URL ("https://elsewhere.example.com/docs").
+	Target string `json:"target"`
+	// StatusCode is 301 or 302; zero means 302.
+	//
+	// The default differs from the route-level redirect on purpose. A
+	// domain move is permanent; a landing path is a convenience that
+	// an application update can change, and a 301 cached by every
+	// visitor's browser is remarkably hard to take back.
+	StatusCode int `json:"status_code,omitempty"`
+}
+
+// Code returns the status code to emit, resolving the zero value.
+func (pr *PathRedirect) Code() int {
+	if pr == nil || pr.StatusCode == 0 {
+		return 302
+	}
+	return pr.StatusCode
 }
 
 // Validate checks that the PathRule is well-formed: PathPrefix is a
@@ -135,9 +173,24 @@ func (p PathRule) Validate() error {
 			return fmt.Errorf("path_rule: path_prefix %q must not contain whitespace", p.PathPrefix)
 		}
 	}
+	// v2.44 — Caddy lowercases the REQUEST path before matching but
+	// never the pattern (caddyhttp/matchers.go MatchPath.MatchWithError).
+	// A pattern carrying an uppercase letter can therefore never match
+	// anything: Caddy accepts the config, the rule loads, and it
+	// silently does nothing forever. Refusing it here is the only
+	// place an operator can be told.
+	if p.PathPrefix != strings.ToLower(p.PathPrefix) {
+		return fmt.Errorf(
+			"path_rule: path_prefix %q contains an uppercase letter — Caddy lowercases the "+
+				"request path but not the pattern, so this rule could never match anything; "+
+				"use %q", p.PathPrefix, strings.ToLower(p.PathPrefix))
+	}
 	hasUpstreams := len(p.Upstreams) > 0
-	if p.BasicAuth == nil && (p.IPFilter == nil || !p.IPFilter.IsActive()) && !hasUpstreams {
-		return fmt.Errorf("path_rule %q: must declare at least one of basic auth, IP filter, or an upstream", p.PathPrefix)
+	if p.BasicAuth == nil && (p.IPFilter == nil || !p.IPFilter.IsActive()) && !hasUpstreams && p.Redirect == nil {
+		return fmt.Errorf("path_rule %q: must declare at least one of basic auth, IP filter, an upstream, or a redirect", p.PathPrefix)
+	}
+	if err := p.validateRedirect(); err != nil {
+		return err
 	}
 	if p.BasicAuth != nil && p.BasicAuth.Username == "" {
 		return fmt.Errorf("path_rule %q: basic auth requires a username", p.PathPrefix)
@@ -183,6 +236,62 @@ func (p PathRule) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validateRedirect checks a path rule's redirect, including the loop
+// the operator cannot see coming.
+//
+// A redirect whose target is matched by the rule that produced it
+// bounces the browser until it gives up. For an exact rule that means
+// a target equal to the path; for a prefix rule it means anything
+// under it. Both are refused here, while the form is still open,
+// rather than discovered from a browser.
+func (p PathRule) validateRedirect() error {
+	if p.Redirect == nil {
+		return nil
+	}
+	target := strings.TrimSpace(p.Redirect.Target)
+	if target == "" {
+		return fmt.Errorf("path_rule %q: the redirect needs a target", p.PathPrefix)
+	}
+	if p.Redirect.StatusCode != 0 && p.Redirect.StatusCode != 301 && p.Redirect.StatusCode != 302 {
+		return fmt.Errorf("path_rule %q: redirect status must be 301 or 302, got %d",
+			p.PathPrefix, p.Redirect.StatusCode)
+	}
+
+	// An absolute URL leaves this host, so no local loop is possible;
+	// only its shape is checked.
+	if !strings.HasPrefix(target, "/") {
+		u, err := url.Parse(target)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf(
+				"path_rule %q: the redirect target must be a path starting with / or an "+
+					"absolute http(s) URL, got %q", p.PathPrefix, p.Redirect.Target)
+		}
+		return nil
+	}
+
+	// A local target: would this very rule match it back?
+	if p.matches(target) {
+		return fmt.Errorf(
+			"path_rule %q: the redirect target %q is matched by this same rule, so every "+
+				"visitor would be redirected to it forever; point it outside the rule's own "+
+				"path", p.PathPrefix, p.Redirect.Target)
+	}
+	return nil
+}
+
+// matches reports whether this rule would match the given path, using
+// the same semantics the emitted Caddy matcher uses: the whole path
+// when MatchExact, otherwise the prefix and everything under it.
+func (p PathRule) matches(path string) bool {
+	// Caddy compares against a lowercased request path.
+	path = strings.ToLower(path)
+	prefix := strings.ToLower(p.PathPrefix)
+	if p.MatchExact {
+		return path == prefix
+	}
+	return path == prefix || strings.HasPrefix(path, strings.TrimSuffix(prefix, "/")+"/")
 }
 
 // SortPathRulesByPrefixLenDesc returns the rules ordered longest-prefix

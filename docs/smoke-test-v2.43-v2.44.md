@@ -149,12 +149,41 @@ it happens in the form.
 
 ---
 
-## 7. Non-regression
+## 7. The path redirect — the Stalwart case (v2.44)
+
+**Do.** On the Stalwart webadmin route, add a **path rule** on `/`,
+turn on **Match this exact path only** and **Redirect this path**, and
+set the target to `/admin/login`. Save.
+
+**Expect.**
+
+```
+curl -I https://stalwart.worldgeekwide.fr/
+```
+
+answers `302` with `Location: /admin/login`. And the webadmin itself
+must keep working — `/admin/login` is proxied as before, not
+redirected. Open it in a browser: one hop, then the login page.
+
+**The loop guard.** Set the target to `/` instead. Refused at save,
+saying every visitor would be redirected to it forever. Now turn
+**Match this exact path only** *off* while keeping `/admin/login` as
+the target: also refused, because a `/` prefix rule covers
+`/admin/login` too. That second refusal is the one worth seeing — it
+is the mistake that looks correct.
+
+**The uppercase trap.** Set a rule's path to `/Admin`. Refused, with
+the lowercase form offered. Caddy would have accepted that config and
+the rule would simply never have fired.
+
+---
+
+## 8. Non-regression
 
 - A route with no redirect and no health-check change must behave
   exactly as before — same certificate, same proxying, same counters.
 - The Stalwart mail relays (25 / 465 / 993) must keep working
   throughout: PROXY v2 to Stalwart, real client IP in its logs.
-- `arenet backup export` then re-import: a redirecting route must come
-  back redirecting. (Routes are snapshotted as whole structs, so this
+- `arenet backup export` then re-import: a redirecting route and a
+  path redirect must both come back. (Routes are snapshotted as whole structs, so this
   is a check that nothing else broke, not that a mapping was added.)
