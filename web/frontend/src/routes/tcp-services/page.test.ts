@@ -5,9 +5,8 @@
 // v2.42 — TCP / UDP services page.
 //
 // What is pinned is what the operator relies on: the list says what
-// guards each relay, a preset fills what you would otherwise have to
-// know by heart (including whether the thing should be exposed at
-// all), the two pairings the API refuses are surfaced before Save,
+// guards each relay, the two pairings the API refuses are surfaced
+// before Save,
 // and the PROXY-protocol block says what to configure on the far
 // side — the silent failure mode of this feature.
 
@@ -95,35 +94,6 @@ describe('/tcp-services — list', () => {
 	});
 });
 
-describe('/tcp-services — presets', () => {
-	it('fills the port, the protocol and the exposure decision', async () => {
-		render(Page);
-		await waitFor(() => expect(screen.getByTestId('tcp-empty')).toBeInTheDocument());
-		await userEvent.click(screen.getAllByText('+ New service')[0]);
-		await tick();
-
-		// PostgreSQL: TCP 5432, and restricted by default — a database
-		// open to the internet is the mistake the presets exist to
-		// prevent.
-		await userEvent.click(screen.getByTestId('tcp-preset-postgresql'));
-		await tick();
-		expect((document.getElementById('tcp-listen-port') as HTMLInputElement).value).toBe('5432');
-		expect((screen.getByTestId('tcp-restrict') as HTMLInputElement).checked).toBe(true);
-		expect(screen.getByTestId('tcp-protocol-tcp').getAttribute('aria-checked')).toBe('true');
-
-		// Inbound mail: the opposite — the world must reach it.
-		await userEvent.click(screen.getByTestId('tcp-preset-smtp'));
-		await tick();
-		expect((document.getElementById('tcp-listen-port') as HTMLInputElement).value).toBe('25');
-		expect((screen.getByTestId('tcp-restrict') as HTMLInputElement).checked).toBe(false);
-
-		// WireGuard: UDP.
-		await userEvent.click(screen.getByTestId('tcp-preset-wireguard'));
-		await tick();
-		expect(screen.getByTestId('tcp-protocol-udp').getAttribute('aria-checked')).toBe('true');
-	});
-});
-
 describe('/tcp-services — the two refusals, before Save', () => {
 	it('warns about PROXY v1 over UDP and about an active check over UDP', async () => {
 		render(Page);
@@ -180,8 +150,13 @@ describe('/tcp-services — saving', () => {
 		await userEvent.click(screen.getAllByText('+ New service')[0]);
 		await tick();
 
-		await userEvent.click(screen.getByTestId('tcp-preset-imaps'));
+		// v2.44.1 — typed in full: the presets are gone, so this is
+		// now the only way an operator fills the form, and the test
+		// exercises exactly that path.
+		await userEvent.type(document.getElementById('tcp-name') as HTMLInputElement, 'imaps');
+		await userEvent.type(document.getElementById('tcp-listen-port') as HTMLInputElement, '993');
 		await userEvent.type(document.getElementById('tcp-backend-host') as HTMLInputElement, '10.20.0.5');
+		await userEvent.type(document.getElementById('tcp-backend-port') as HTMLInputElement, '993');
 		await tick();
 		await userEvent.click(screen.getByText('Save'));
 

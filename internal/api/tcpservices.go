@@ -453,7 +453,27 @@ func (h *Handler) checkTCPListen(r *http.Request, svc storage.TCPService, exclud
 		// Nothing will be bound, so there is nothing to prove.
 		return nil
 	}
-	return caddymgr.CanBindTCP(svc.ListenHostPort())
+
+	// v2.44.1 — do not probe an address this very service already
+	// holds.
+	//
+	// The probe opens the port to prove it is free. On an UPDATE that
+	// leaves the address alone, the port is not free: Arenet is
+	// listening on it, for this service. Every edit of a live service
+	// was therefore refused with "something else on this host already
+	// uses it", the something else being Arenet. The conflict check
+	// above already excludes the row being replaced; the probe did
+	// not know about it.
+	//
+	// Still probed when the address changed (the new one must be
+	// free) or when the service was disabled and is being enabled
+	// (nothing was bound, so nothing is proven yet).
+	for _, e := range existing {
+		if e.ID == excludeID && !e.Disabled && e.ListenAddress() == svc.ListenAddress() {
+			return nil
+		}
+	}
+	return caddymgr.CanBind(svc.Network(), svc.ListenHostPort())
 }
 
 // decodeJSONBody is the small wrapper the TCP handlers share: it

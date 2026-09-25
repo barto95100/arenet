@@ -245,9 +245,29 @@ func ValidateTCPListen(services []storage.TCPService, reserved map[int]string) e
 // cannot bind must be refused while the operator is looking at the
 // form, not discovered at the next reload.
 func CanBindTCP(addr string) error {
-	ln, err := net.Listen("tcp", addr)
+	return CanBind(storage.TCPServiceProtocolTCP, addr)
+}
+
+// CanBind probes the address on the service's OWN network.
+//
+// v2.44.1 — this used to open a TCP socket whatever the service said,
+// so a UDP relay had its port checked on the wrong protocol: a free
+// TCP/51820 proved nothing about UDP/51820, and something holding
+// TCP/51820 refused a WireGuard relay that would have bound fine.
+func CanBind(network, addr string) error {
+	var closer interface{ Close() error }
+	var err error
+	if network == storage.TCPServiceProtocolUDP {
+		var pc net.PacketConn
+		pc, err = net.ListenPacket("udp", addr)
+		closer = pc
+	} else {
+		var ln net.Listener
+		ln, err = net.Listen("tcp", addr)
+		closer = ln
+	}
 	if err == nil {
-		_ = ln.Close()
+		_ = closer.Close()
 		return nil
 	}
 	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {

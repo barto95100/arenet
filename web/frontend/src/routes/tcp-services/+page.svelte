@@ -47,7 +47,6 @@
 		type ProxyProtocolVersion,
 		type TCPServiceCounters
 	} from '$lib/api/tcp-services';
-	import { PRESET_GROUPS, presetsOf, type ServicePreset } from '$lib/components/tcp/presets';
 	import TCPFlowDiagram from '$lib/components/tcp/TCPFlowDiagram.svelte';
 
 	function tl(key: string, params?: Record<string, string | number>): string {
@@ -217,18 +216,6 @@
 		fHealthCheck = svc.healthCheck?.enabled ?? false;
 		fDisabled = svc.disabled ?? false;
 		formOpen = true;
-	}
-
-	// A preset fills what an operator would otherwise have to know by
-	// heart, including whether the thing should be exposed at all.
-	function applyPreset(p: ServicePreset) {
-		fName = p.name;
-		fProtocol = p.protocol;
-		fListenPort = p.port;
-		fBackendPort = p.port;
-		fProxyProtocol = p.proxyProtocol;
-		fRestrict = p.restrictByDefault;
-		fHealthCheck = p.healthCheck;
 	}
 
 	function buildPayload(): TCPServiceRequest {
@@ -465,31 +452,6 @@
 						save();
 					}}
 				>
-					{#if !editingId}
-						<div>
-							<span class="text-sm font-medium text-secondary block mb-2"
-								>{tl('tcpServices.form.presetsLabel')}</span
-							>
-							{#each PRESET_GROUPS as group (group)}
-								<div class="mb-2">
-									<div class="text-xs text-muted mb-1">{tl(`tcpServices.presetGroup.${group}`)}</div>
-									<div class="flex flex-wrap gap-1.5">
-										{#each presetsOf(group) as p (p.id)}
-											<button
-												type="button"
-												class="px-2.5 py-1 rounded-md border border-border-default bg-surface text-xs text-secondary hover:text-primary hover:bg-hover"
-												data-testid="tcp-preset-{p.id}"
-												onclick={() => applyPreset(p)}
-											>
-												{p.name}
-												<span class="text-muted">{p.protocol}/{p.port}</span>
-											</button>
-										{/each}
-									</div>
-								</div>
-							{/each}
-						</div>
-					{/if}
 
 					<div class="grid gap-3 sm:grid-cols-2">
 						<div>
