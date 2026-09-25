@@ -70,6 +70,23 @@ func freePort(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
+// freeUDPPort is freePort's counterpart for a UDP service.
+//
+// v2.45.3 — needed because the bind probe now follows the service's
+// own protocol. A port free for TCP says nothing about UDP, so the
+// UDP fixtures were picking numbers that something else on the
+// machine already held — a flake by construction, and one the old
+// always-TCP probe hid.
+func freeUDPPort(t *testing.T) int {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	defer pc.Close()
+	return pc.LocalAddr().(*net.UDPAddr).Port
+}
+
 func tcpServiceBody(t *testing.T, over map[string]any) map[string]any {
 	t.Helper()
 	body := map[string]any{
@@ -499,8 +516,9 @@ func TestTCPService_TestSkipsUDPInsteadOfFailingIt(t *testing.T) {
 	created := createTCPServiceForTest(t, env, map[string]any{
 		"name":          "wireguard",
 		"protocol":      "udp",
+		"listenPort":    freeUDPPort(t),
 		"proxyProtocol": "v2",
-		"upstreams":     []map[string]any{{"host": "127.0.0.1", "port": freePort(t)}},
+		"upstreams":     []map[string]any{{"host": "127.0.0.1", "port": freeUDPPort(t)}},
 	})
 
 	report := tcpTestReport(t, env, created.ID)

@@ -260,7 +260,7 @@
 							<label class="inline-flex items-center gap-2 text-sm text-secondary">
 								{language.current && t('routes.pathRules.redirectCodeLabel')}
 								<select
-									class="input w-28"
+									class="h-9 w-28 rounded-md border border-border-default bg-surface px-2 text-sm text-primary"
 									value={String(rule.redirect.statusCode ?? 302)}
 									onchange={(e) =>
 										value[i].redirect &&

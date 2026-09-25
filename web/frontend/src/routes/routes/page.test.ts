@@ -4816,3 +4816,75 @@ describe('Routes page — the four states are all offered at creation', () => {
 		}
 	});
 });
+
+// --- v2.45.3 — a path redirect must survive Save ------------------
+//
+// The operator configured "/" exact → /admin/login, got a success
+// toast, and the log said "config is unchanged": the submit payload
+// rebuilds every path rule field by field, and the two v2.44 fields
+// were not on the list. They were dropped between the form and the
+// wire, silently, while the UI reported success.
+//
+// The same hole existed on hydrate, so an unrelated edit to a route
+// would have wiped a stored redirect.
+
+const redirectRule = {
+	pathPrefix: '/',
+	matchExact: true,
+	redirect: { target: '/admin/login', statusCode: 302 }
+};
+
+describe('Routes page — path-rule redirects survive the round trip', () => {
+	it('ships matchExact and the redirect on save', async () => {
+		const seeded = makeRoute({ id: 'r-red', host: 'app.example.com' });
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+
+		await userEvent.click((await screen.findByText('app.example.com')).closest('tr')!);
+		await tick();
+
+		// Add the rule the way the editor does, then save.
+		await userEvent.click(screen.getByTestId('path-rules-add'));
+		await tick();
+		await userEvent.type(screen.getByTestId('path-rule-prefix-0'), '/');
+		await userEvent.click(screen.getByTestId('path-rule-exact-toggle-0'));
+		await userEvent.click(screen.getByTestId('path-rule-redirect-toggle-0'));
+		await tick();
+		await userEvent.type(screen.getByTestId('path-rule-redirect-target-0'), '/admin/login');
+		await tick();
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		await waitFor(() => expect(apiMock.updateRoute).toHaveBeenCalled());
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		const rule = payload.pathRules?.[0];
+		expect(rule?.matchExact).toBe(true);
+		expect(rule?.redirect).toMatchObject({ target: '/admin/login', statusCode: 302 });
+	});
+
+	// An unrelated edit must not wipe a redirect the route already has.
+	it('keeps a stored redirect through an unrelated edit', async () => {
+		const seeded = makeRoute({
+			id: 'r-red',
+			host: 'app.example.com',
+			pathRules: [redirectRule]
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+
+		await userEvent.click((await screen.findByText('app.example.com')).closest('tr')!);
+		await tick();
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		await waitFor(() => expect(apiMock.updateRoute).toHaveBeenCalled());
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		const rule = payload.pathRules?.[0];
+		expect(rule?.matchExact).toBe(true);
+		expect(rule?.redirect).toMatchObject({ target: '/admin/login' });
+	});
+});
