@@ -17,6 +17,43 @@ Arenet's own connections).
 
 ---
 
+## Verdict — run on 2026-09-25, arenet-test
+
+All seven points pass. The run found **five defects no test in the
+suite would have caught**, each fixed and released before the next
+point was attempted:
+
+| Found | Fixed in |
+|---|---|
+| No edit of a live TCP relay could be saved — the bind probe found the port taken by Arenet itself | v2.44.1 |
+| A UDP relay had its port checked over TCP | v2.44.1 |
+| The probe verdict in the route form was stale until a page reload | v2.45.1 |
+| The rollback stayed generic on a probe pointed at a path the backend does not serve | v2.45.1 |
+| **A path redirect was dropped on save, silently, with a success toast** | v2.45.3 |
+
+The last one is the one that matters: the rule reached neither storage
+nor Caddy, and the only evidence was `config is unchanged` in the log.
+It was found because the operator read the log instead of believing the
+toast. Worth remembering as a habit, and as the reason this document
+asks for log lines rather than screenshots.
+
+### A correction to this document's own method
+
+Several checks below use `curl -I`, which sends **HEAD**. That is fine
+for a response Arenet produces itself — a redirect, a refusal, an
+error page. It is misleading for a **proxied** path: an application may
+answer 404 to a HEAD it does not implement and 307 to the GET on the
+same URL, which is exactly what Stalwart does on
+`/.well-known/jmap`. That artefact cost a round of wrongly suspecting
+Arenet of breaking JMAP discovery.
+
+**Use `curl -i` (GET) whenever the answer comes from the backend**, and
+keep `-I` for what Arenet answers on its own.
+
+---
+
+---
+
 ## 1. The layer-4 test sends a real PROXY header (v2.43)
 
 **Do.** Open a TCP service configured with PROXY protocol v2 — `imaps`
