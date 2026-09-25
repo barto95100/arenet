@@ -24,8 +24,11 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/barto95100/arenet/internal/apierr"
 
 	"github.com/google/uuid"
 	bolt "go.etcd.io/bbolt"
@@ -180,14 +183,17 @@ func (p PathRule) Validate() error {
 	// silently does nothing forever. Refusing it here is the only
 	// place an operator can be told.
 	if p.PathPrefix != strings.ToLower(p.PathPrefix) {
-		return fmt.Errorf(
+		return apierr.New("path_rule_uppercase",
+			map[string]string{"path": p.PathPrefix, "lower": strings.ToLower(p.PathPrefix)},
 			"path_rule: path_prefix %q contains an uppercase letter — Caddy lowercases the "+
 				"request path but not the pattern, so this rule could never match anything; "+
 				"use %q", p.PathPrefix, strings.ToLower(p.PathPrefix))
 	}
 	hasUpstreams := len(p.Upstreams) > 0
 	if p.BasicAuth == nil && (p.IPFilter == nil || !p.IPFilter.IsActive()) && !hasUpstreams && p.Redirect == nil {
-		return fmt.Errorf("path_rule %q: must declare at least one of basic auth, IP filter, an upstream, or a redirect", p.PathPrefix)
+		return apierr.New("path_rule_empty", map[string]string{"path": p.PathPrefix},
+			"path_rule %q: must declare at least one of basic auth, IP filter, an upstream, or a redirect",
+			p.PathPrefix)
 	}
 	if err := p.validateRedirect(); err != nil {
 		return err
@@ -252,10 +258,14 @@ func (p PathRule) validateRedirect() error {
 	}
 	target := strings.TrimSpace(p.Redirect.Target)
 	if target == "" {
-		return fmt.Errorf("path_rule %q: the redirect needs a target", p.PathPrefix)
+		return apierr.New("path_rule_redirect_target_required",
+			map[string]string{"path": p.PathPrefix},
+			"path_rule %q: the redirect needs a target", p.PathPrefix)
 	}
 	if p.Redirect.StatusCode != 0 && p.Redirect.StatusCode != 301 && p.Redirect.StatusCode != 302 {
-		return fmt.Errorf("path_rule %q: redirect status must be 301 or 302, got %d",
+		return apierr.New("path_rule_redirect_status",
+			map[string]string{"path": p.PathPrefix, "status": strconv.Itoa(p.Redirect.StatusCode)},
+			"path_rule %q: redirect status must be 301 or 302, got %d",
 			p.PathPrefix, p.Redirect.StatusCode)
 	}
 
@@ -264,7 +274,8 @@ func (p PathRule) validateRedirect() error {
 	if !strings.HasPrefix(target, "/") {
 		u, err := url.Parse(target)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf(
+			return apierr.New("path_rule_redirect_target_invalid",
+				map[string]string{"path": p.PathPrefix, "target": p.Redirect.Target},
 				"path_rule %q: the redirect target must be a path starting with / or an "+
 					"absolute http(s) URL, got %q", p.PathPrefix, p.Redirect.Target)
 		}
@@ -273,7 +284,8 @@ func (p PathRule) validateRedirect() error {
 
 	// A local target: would this very rule match it back?
 	if p.matches(target) {
-		return fmt.Errorf(
+		return apierr.New("path_rule_redirect_loop",
+			map[string]string{"path": p.PathPrefix, "target": p.Redirect.Target},
 			"path_rule %q: the redirect target %q is matched by this same rule, so every "+
 				"visitor would be redirected to it forever; point it outside the rule's own "+
 				"path", p.PathPrefix, p.Redirect.Target)
@@ -441,27 +453,34 @@ func (rc *RedirectConfig) Validate() error {
 	}
 	target := strings.TrimSpace(rc.Target)
 	if target == "" {
-		return errors.New("redirect: a target URL is required")
+		return apierr.New("redirect_target_required", nil,
+			"redirect: a target URL is required")
 	}
 	u, err := url.Parse(target)
 	if err != nil {
-		return fmt.Errorf("redirect: target %q is not a valid URL: %w", rc.Target, err)
+		return apierr.New("redirect_target_invalid", map[string]string{"target": rc.Target},
+			"redirect: target %q is not a valid URL: %v", rc.Target, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("redirect: target %q must start with http:// or https://", rc.Target)
+		return apierr.New("redirect_target_scheme", map[string]string{"target": rc.Target},
+			"redirect: target %q must start with http:// or https://", rc.Target)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("redirect: target %q has no host", rc.Target)
+		return apierr.New("redirect_target_no_host", map[string]string{"target": rc.Target},
+			"redirect: target %q has no host", rc.Target)
 	}
 	if rc.PreservePath && u.Path != "" && u.Path != "/" {
-		return fmt.Errorf(
+		return apierr.New("redirect_target_has_path",
+			map[string]string{"target": rc.Target, "path": u.Path, "host": u.Host},
 			"redirect: target %q already has a path (%q) — with \"keep the path\" on, the "+
 				"visitor's own path is appended, which would produce %s%s/...; either drop the "+
 				"path from the target or turn \"keep the path\" off",
 			rc.Target, u.Path, u.Host, u.Path)
 	}
 	if rc.StatusCode != 0 && rc.StatusCode != 301 && rc.StatusCode != 302 {
-		return fmt.Errorf("redirect: statusCode must be 301 or 302, got %d", rc.StatusCode)
+		return apierr.New("redirect_status_unsupported",
+			map[string]string{"status": strconv.Itoa(rc.StatusCode)},
+			"redirect: statusCode must be 301 or 302, got %d", rc.StatusCode)
 	}
 	return nil
 }
@@ -1253,7 +1272,8 @@ func (r *Route) validate() error {
 	}
 	if r.RedirectConfig != nil {
 		if r.MaintenanceConfig != nil {
-			return errors.New("route: a route cannot be in maintenance and redirecting at the same time")
+			return apierr.New("route_maintenance_and_redirect", nil,
+				"route: a route cannot be in maintenance and redirecting at the same time")
 		}
 		// The loop guard. A target on this route's own host — or on
 		// one of its aliases — matches the redirect that produced it,
@@ -1266,7 +1286,7 @@ func (r *Route) validate() error {
 		target := r.RedirectConfig.TargetHost()
 		for _, h := range r.AllHosts() {
 			if target != "" && target == strings.ToLower(h) {
-				return fmt.Errorf(
+				return apierr.New("redirect_self_loop", map[string]string{"host": h},
 					"redirect: the target points back at %s, which this route answers for — "+
 						"every visitor would be redirected to the same place forever; "+
 						"redirect to a different host, or use a path rule to send one path elsewhere",

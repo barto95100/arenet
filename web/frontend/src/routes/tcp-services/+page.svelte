@@ -30,6 +30,7 @@
 	import ModeSelector from '$lib/components/form/ModeSelector.svelte';
 	import SwitchRow from '$lib/components/form/SwitchRow.svelte';
 	import PostureSentence from '$lib/components/form/PostureSentence.svelte';
+	import { serverErrorMessage } from '$lib/api/server-errors';
 	import { pushToast } from '$lib/stores/toast';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
@@ -250,7 +251,7 @@
 			formOpen = false;
 			await load();
 		} catch (err) {
-			formError = err instanceof Error ? err.message : String(err);
+			formError = serverErrorMessage(err);
 		} finally {
 			saving = false;
 		}
@@ -263,7 +264,7 @@
 		try {
 			testResult = await testTCPService(editingId);
 		} catch (err) {
-			formError = err instanceof Error ? err.message : String(err);
+			formError = serverErrorMessage(err);
 		} finally {
 			testing = false;
 		}
@@ -278,7 +279,7 @@
 			formOpen = false;
 			await load();
 		} catch (err) {
-			formError = err instanceof Error ? err.message : String(err);
+			formError = serverErrorMessage(err);
 			confirmDeleteOpen = false;
 		}
 	}
@@ -630,14 +631,26 @@
 											<Badge variant="status-down">{tl('tcpServices.form.testProxyRefused')}</Badge>
 										{/if}
 									</div>
-									{#if b.skipped && b.error}
-										<p class="text-muted pb-1 pl-5">{b.error}</p>
+									{#if b.skipped && (b.errorCode || b.error)}
+										<!-- v2.46 — translated when the code is known,
+										     the server's sentence otherwise. -->
+										<p class="text-muted pb-1 pl-5">
+											{b.errorCode
+												? tl(`tcpServices.form.${b.errorCode}`)
+												: b.error}
+										</p>
 									{/if}
 								{/each}
 								{#if testResult.backends.some((b) => b.proxyProtocol)}
 									<p class="text-muted mt-2">{tl('tcpServices.form.testProxyExplain')}</p>
 								{/if}
-								{#if testResult.proxyProtocolNote}
+								{#if testResult.proxyProtocolVersion}
+									<p class="text-muted mt-2">
+										{tl('tcpServices.form.proxyNote', {
+											version: testResult.proxyProtocolVersion
+										})}
+									</p>
+								{:else if testResult.proxyProtocolNote}
 									<p class="text-muted mt-2">{testResult.proxyProtocolNote}</p>
 								{/if}
 							</div>

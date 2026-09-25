@@ -52,6 +52,7 @@
 	import { countryName, matchCountries, type CountryMatch } from '$lib/data/countries';
 	import { secondsToParts, partsToSeconds, type DurationUnit } from '$lib/utils/duration';
 	import { ApiError } from '$lib/api/types';
+	import { serverErrorMessage } from '$lib/api/server-errors';
 	import { pushToast } from '$lib/stores/toast';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { t } from '$lib/i18n';
@@ -2943,11 +2944,21 @@
 					detail: String(err.params?.detail ?? err.message)
 				});
 			} else if (err instanceof ApiError && err.kind === 'validation') {
+				// v2.46 — a coded refusal is shown in the operator's
+				// language; anything else falls back to the server's own
+				// sentence, so an untranslated code stays readable.
+				//
+				// The field-mapping below still reads the English
+				// sentence: it exists to attach a message to the input
+				// that caused it, and the server's wording is the stable
+				// thing to pattern-match on. The text displayed is the
+				// translated one.
+				const shown = serverErrorMessage(err);
 				const field = fieldFromMessage(err.message);
 				if (field) {
-					errors = { ...errors, [field]: err.message };
+					errors = { ...errors, [field]: shown };
 				} else {
-					formError = err.message;
+					formError = shown;
 				}
 			} else if (auth.state === 'locked') {
 				// Day 13 — #R-FRONTEND-PUT-NO-TIMEOUT layer B.

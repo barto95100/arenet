@@ -42,6 +42,24 @@
 		}
 	},
 	"errors": {
+		"server": {
+			"redirect_target_required": "Une URL de destination est requise.",
+			"redirect_target_invalid": "{target} n'est pas une URL valide.",
+			"redirect_target_scheme": "{target} doit commencer par http:// ou https://.",
+			"redirect_target_no_host": "{target} ne comporte aucun hôte.",
+			"redirect_target_has_path": "{target} porte déjà un chemin ({path}). Avec « conserver le chemin du visiteur » activé, son chemin est ajouté au bout, ce qui produirait {host}{path}/… — retire le chemin de la destination, ou désactive cette option.",
+			"redirect_status_unsupported": "Le code doit être 301 ou 302 (reçu {status}).",
+			"route_maintenance_and_redirect": "Une route ne peut pas être en maintenance et en redirection en même temps.",
+			"redirect_self_loop": "La destination renvoie vers {host}, que cette route sert déjà : chaque visiteur y serait redirigé indéfiniment. Redirige vers un autre hôte, ou utilise une règle par chemin pour envoyer un seul chemin ailleurs.",
+			"path_rule_uppercase": "Le chemin {path} contient une majuscule. Caddy minuscule le chemin de la requête mais pas le motif : cette règle ne pourrait jamais correspondre à quoi que ce soit — utilise {lower}.",
+			"path_rule_empty": "La règle sur {path} doit déclarer au moins l'un des éléments suivants : authentification Basic, filtrage d'IP, un backend, ou une redirection.",
+			"path_rule_redirect_target_required": "La redirection sur {path} a besoin d'une destination.",
+			"path_rule_redirect_status": "Le code de la redirection sur {path} doit être 301 ou 302 (reçu {status}).",
+			"path_rule_redirect_target_invalid": "La destination de la redirection sur {path} doit être un chemin commençant par / ou une URL http(s) complète (reçu {target}).",
+			"path_rule_redirect_loop": "La destination {target} est attrapée par la règle sur {path} elle-même : chaque visiteur y serait redirigé indéfiniment. Vise un chemin en dehors de celui de la règle.",
+			"listen_needs_capability": "Impossible d'écouter sur {addr} : les ports sous 1024 exigent une capacité. Ajoute AmbientCapabilities=CAP_NET_BIND_SERVICE à l'unité systemd d'Arenet — ou publie le port dans docker-compose.yml si tu es en conteneur — puis redémarre Arenet.",
+			"listen_port_taken": "Impossible d'écouter sur {addr} : quelque chose d'autre sur cet hôte l'occupe déjà."
+		},
 		"unauthorized": "Non autorisé",
 		"forbidden": "Interdit",
 		"notFound": "Introuvable",
@@ -840,6 +858,8 @@
 			"disabledHelper": "Le service est conservé mais rien n'écoute.",
 			"notApplicable": "Un relais transfère des octets sans les lire : ni WAF, ni pages d'erreur, ni blocage par pays. Le TLS reste négocié de bout en bout entre le client et le backend.",
 			"testButton": "Tester les backends",
+			"udp_not_testable": "L'UDP est sans connexion : il n'y a aucune poignée de main à tenter, donc Arenet ne peut pas prouver que ce backend est joignable sans parler son protocole.",
+			"proxyNote": "Ce service ajoute l'en-tête PROXY protocol {version}. Le backend doit être configuré pour l'attendre depuis cet hôte, sinon les connexions échouent en silence — sur Stalwart, ce réglage s'appelle proxyTrustedNetworks.",
 			"testProxyNotRefused": "en-tête non refusé",
 			"testProxyRefused": "en-tête refusé — le backend ne l'attend pas",
 			"testProxyExplain": "Le test envoie un vrai en-tête PROXY protocol. Un backend qui n'est pas configuré pour le recevoir raccroche ; un backend qui l'attend reste ouvert et attend que le client parle.",

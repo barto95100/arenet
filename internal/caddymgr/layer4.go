@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/barto95100/arenet/internal/apierr"
 	"github.com/barto95100/arenet/internal/l4metrics"
 	"github.com/barto95100/arenet/internal/storage"
 )
@@ -271,14 +272,15 @@ func CanBind(network, addr string) error {
 		return nil
 	}
 	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
-		return fmt.Errorf(
+		return apierr.New("listen_needs_capability", map[string]string{"addr": addr},
 			"cannot listen on %s: ports below 1024 need the capability. "+
 				"Add `AmbientCapabilities=CAP_NET_BIND_SERVICE` to the arenet systemd unit "+
 				"(or publish the port in docker-compose.yml when running in a container), "+
-				"then restart Arenet: %w", addr, err)
+				"then restart Arenet: %v", addr, err)
 	}
 	if errors.Is(err, syscall.EADDRINUSE) {
-		return fmt.Errorf("cannot listen on %s: something else on this host already uses it: %w", addr, err)
+		return apierr.New("listen_port_taken", map[string]string{"addr": addr},
+			"cannot listen on %s: something else on this host already uses it: %v", addr, err)
 	}
 	return fmt.Errorf("cannot listen on %s: %w", addr, err)
 }
