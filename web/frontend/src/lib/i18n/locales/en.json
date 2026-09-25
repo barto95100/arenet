@@ -53,7 +53,8 @@
 		"backup_dir_unwritable": "Arenet cannot write in {dir}: check the mount and the permissions (UID 65532 in Docker). Details: {detail}",
 		"backup_failed": "The backup failed: {detail}",
 		"route_check_rolled_back": "Change undone: {host} answered before this change and stopped answering after it ({detail}). The previous version is back in place — fix the change (upstream address, port…) and save again.",
-		"route_check_rolled_back_health_check": "Change undone: {host} answered before this change and stopped answering after it ({detail}). The cause is this route's own active health check, which has just marked its backends down — the upstream address and port are fine. Check the health check's URI, expected status and expected body: a probe that does not match what the backend actually answers takes the route out of service."
+		"route_check_rolled_back_health_check": "Change undone: {host} answered before this change and stopped answering after it ({detail}). The cause is this route's own active health check, which has just marked its backends down — the upstream address and port are fine. Check the health check's URI, expected status and expected body: a probe that does not match what the backend actually answers takes the route out of service.",
+		"route_check_rolled_back_maybe_health_check": "Change undone: {host} answered before this change and stopped answering after it ({detail}). No upstream was available. Two places to look: the backend itself, and this route's active health check — a probe whose URI, expected status or expected body does not match what the backend answers takes the route out of service even though the backend is up."
 	},
 	"sidebar": {
 		"sectionOverview": "Overview",

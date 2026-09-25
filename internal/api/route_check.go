@@ -108,6 +108,22 @@ func (h *Handler) reapply(ctx context.Context, updated storage.Route) error {
 // own active health check having just marked its upstreams down.
 const causeHealthCheck = "health_check"
 
+// causeMaybeHealthCheck: the upstreams are unavailable and this route
+// has an active check, but the tracker has not recorded a verdict for
+// them — so the probe is a candidate, not a conclusion.
+//
+// v2.45.1 — added because the confident branch missed the case it was
+// built for. The operator pointed a probe at /toto, the route answered
+// 503, and the message stayed generic: Arenet's tracker learns of a
+// transition from a Caddy event, and the post-apply check can run
+// before that event lands. Worse, on a freshly changed upstream the
+// tracker has no history at all, by construction.
+//
+// Rather than widen the confident branch — which would have blamed
+// the probe for a mistyped port — this names both places to look and
+// says which is which.
+const causeMaybeHealthCheck = "maybe_health_check"
+
 // rollbackCause names what actually broke the route, so the operator
 // is sent to the field that is wrong.
 //
@@ -137,7 +153,12 @@ func (h *Handler) rollbackCause(r storage.Route, failed routecheck.Result) strin
 	if status == routeStatusDown || status == routeStatusDegraded {
 		return causeHealthCheck
 	}
-	return ""
+	// A 503 means reverse_proxy had no upstream to send to. With an
+	// active check configured, the probe is the most common way that
+	// happens — but the tracker may simply not have caught up, or the
+	// upstream may have just changed and have no history. Both are
+	// worth naming; neither is worth asserting.
+	return causeMaybeHealthCheck
 }
 
 // writeRolledBack answers the 409 of an undone update and audits it.
@@ -152,9 +173,17 @@ func (h *Handler) writeRolledBack(w http.ResponseWriter, r *http.Request, previo
 	})
 	details := map[string]any{"host": failed.Host, "httpStatus": failed.HTTPStatus, "detail": failed.Detail}
 	message := "the change was undone: the route answered before and stopped answering after it (" + failed.Detail + ")"
-	if cause := h.rollbackCause(updated, failed); cause != "" {
+	switch cause := h.rollbackCause(updated, failed); cause {
+	case causeHealthCheck:
 		details["cause"] = cause
-		message += "; the active health check has marked the upstreams down — check its URI, expected status and expected body rather than the upstream address"
+		message += "; the active health check has marked the upstreams down — check its URI, " +
+			"expected status and expected body rather than the upstream address"
+	case causeMaybeHealthCheck:
+		details["cause"] = cause
+		message += "; no upstream was available. Check the backend itself, and this route's " +
+			"active health check — a probe whose URI, expected status or expected body does " +
+			"not match what the backend answers takes the route out of service even though " +
+			"the backend is up"
 	}
 	writeErrorCode(w, http.StatusConflict, codeRouteCheckRolledBack, message, details)
 }

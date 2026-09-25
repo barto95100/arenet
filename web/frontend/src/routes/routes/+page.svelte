@@ -4,7 +4,7 @@
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import {
 		listRoutes,
 		createRoute,
@@ -2893,10 +2893,16 @@
 				// route's own health check, say so. The generic wording
 				// sends the operator to check the upstream address, which
 				// on that path is the one thing that is not wrong.
+				// v2.45.1 — three messages, not two. "maybe" is the
+				// honest one: no upstream was available, and Arenet
+				// cannot tell from here whether the backend or the
+				// probe is at fault, so it names both.
 				const key =
 					err.params?.cause === 'health_check'
 						? 'errors.route_check_rolled_back_health_check'
-						: 'errors.route_check_rolled_back';
+						: err.params?.cause === 'maybe_health_check'
+							? 'errors.route_check_rolled_back_maybe_health_check'
+							: 'errors.route_check_rolled_back';
 				formError = t(key, {
 					host: String(err.params?.host ?? ''),
 					detail: String(err.params?.detail ?? err.message)
@@ -2948,6 +2954,47 @@
 			deleting = false;
 		}
 	}
+
+	// v2.45.1 — the verdict in the form has to be live.
+	//
+	// It was derived from the routes list, which is fetched once on
+	// mount: an operator who broke a probe on purpose and watched the
+	// section saw nothing change until they reloaded the page. The
+	// panel claimed to report the probe and reported a memory of it.
+	//
+	// Polled only while the edit panel is open on a route with an
+	// active check — that is the one moment the number matters, and
+	// the routes list is too heavy to poll for the sake of a tab
+	// nobody is looking at. refreshRoutes never raises the spinner
+	// and keeps the last good list on failure.
+	const HEALTH_REFRESH_MS = 10000;
+	let healthPollId: ReturnType<typeof setInterval> | null = null;
+
+	async function refreshRoutes() {
+		try {
+			routes = await listRoutes();
+		} catch {
+			// A failed tick leaves the page as it was; the next one
+			// corrects it.
+		}
+	}
+
+	$effect(() => {
+		const watching = formOpen && editingId !== null && formData.healthCheck.enabled;
+		if (watching && healthPollId === null) {
+			healthPollId = setInterval(() => {
+				if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+				void refreshRoutes();
+			}, HEALTH_REFRESH_MS);
+		} else if (!watching && healthPollId !== null) {
+			clearInterval(healthPollId);
+			healthPollId = null;
+		}
+	});
+
+	onDestroy(() => {
+		if (healthPollId !== null) clearInterval(healthPollId);
+	});
 
 	async function loadRoutes() {
 		loading = true;

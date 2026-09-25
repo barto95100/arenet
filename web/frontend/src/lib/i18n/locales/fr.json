@@ -53,7 +53,8 @@
 		"backup_dir_unwritable": "Arenet ne peut pas écrire dans {dir} : vérifie le montage et les droits (UID 65532 en Docker). Détail : {detail}",
 		"backup_failed": "La sauvegarde a échoué : {detail}",
 		"route_check_rolled_back": "Modification annulée : {host} répondait avant cette modification et ne répondait plus après ({detail}). L'ancienne version est remise en place — corrige la modification (adresse de l'upstream, port…) et enregistre à nouveau.",
-		"route_check_rolled_back_health_check": "Modification annulée : {host} répondait avant cette modification et ne répondait plus après ({detail}). La cause est la vérification d'état de cette route, qui vient de déclarer ses backends morts — l'adresse et le port de l'upstream ne sont pas en cause. Vérifie l'URI de la sonde, le code HTTP attendu et le corps attendu : une sonde qui ne correspond pas à ce que le backend répond vraiment met la route hors service."
+		"route_check_rolled_back_health_check": "Modification annulée : {host} répondait avant cette modification et ne répondait plus après ({detail}). La cause est la vérification d'état de cette route, qui vient de déclarer ses backends morts — l'adresse et le port de l'upstream ne sont pas en cause. Vérifie l'URI de la sonde, le code HTTP attendu et le corps attendu : une sonde qui ne correspond pas à ce que le backend répond vraiment met la route hors service.",
+		"route_check_rolled_back_maybe_health_check": "Modification annulée : {host} répondait avant cette modification et ne répondait plus après ({detail}). Aucun backend n'était disponible. Deux endroits à regarder : le backend lui-même, et la vérification d'état de cette route — une sonde dont l'URI, le code HTTP attendu ou le corps attendu ne correspondent pas à ce que répond le backend met la route hors service alors même que le backend fonctionne."
 	},
 	"sidebar": {
 		"sectionOverview": "Aperçu",

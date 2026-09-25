@@ -315,9 +315,18 @@ func TestRouteCheck_RollbackDoesNotBlameAnAbsentHealthCheck(t *testing.T) {
 	}
 }
 
-// The probe is enabled but has not reported yet (warm-up). Silence is
-// not a verdict: the 503 came from somewhere else.
-func TestRouteCheck_RollbackDoesNotBlameAProbeThatHasNotReported(t *testing.T) {
+// The probe is enabled but the tracker has not reported a verdict.
+//
+// v2.45.1 — this used to assert silence, and the operator's smoke
+// showed why that was wrong: pointing a probe at /toto produced a 503
+// and the generic "check the upstream address" message, because the
+// tracker learns of a transition from a Caddy event that can land
+// after the post-apply check has already run — and a freshly changed
+// upstream has no history at all, by construction.
+//
+// So the answer is neither silence nor a confident accusation: name
+// both places to look, and say which is which.
+func TestRouteCheck_RollbackNamesBothWhenTheProbeHasNotReported(t *testing.T) {
 	env := newTestEnv(t, false)
 	env.handler.SetRouteProber(serviceUnavailableProber{broken: upB})
 	env.handler.SetHCStatusReader(hcStatusStub{verdict: ""})
@@ -327,7 +336,18 @@ func TestRouteCheck_RollbackDoesNotBlameAProbeThatHasNotReported(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status %d %s", rec.Code, rec.Body)
 	}
-	if got := rollbackDetails(t, rec); got["cause"] != nil {
-		t.Fatalf("warm-up is not a failing probe, got %v", got["cause"])
+	got := rollbackDetails(t, rec)
+	if got["cause"] != causeMaybeHealthCheck {
+		t.Fatalf("an unreported probe is a candidate, not a verdict: got %v", got["cause"])
+	}
+	msg, _ := got["__message"].(string)
+	// Both suspects named, neither asserted.
+	for _, want := range []string{"backend itself", "health check", "expected body"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message must mention %q: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "has marked the upstreams down") {
+		t.Errorf("no verdict was recorded, so none may be claimed: %s", msg)
 	}
 }
