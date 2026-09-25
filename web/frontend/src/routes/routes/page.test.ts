@@ -4888,3 +4888,21 @@ describe('Routes page — path-rule redirects survive the round trip', () => {
 		expect(rule?.redirect).toMatchObject({ target: '/admin/login' });
 	});
 });
+
+// --- v2.47 — the table owns the page until a route is selected ----
+
+describe('Routes page — the split only opens on demand', () => {
+	it('is one column until a route is selected', async () => {
+		apiMock.listRoutes.mockResolvedValue([makeRoute({ id: 'r1', host: 'app.example.com' })]);
+		render(Page);
+
+		const row = (await screen.findByText('app.example.com')).closest('tr')!;
+		const split = row.closest('.split');
+		expect(split).not.toBeNull();
+		expect(split?.classList.contains('split-open')).toBe(false);
+
+		await userEvent.click(row);
+		await tick();
+		expect(split?.classList.contains('split-open')).toBe(true);
+	});
+});

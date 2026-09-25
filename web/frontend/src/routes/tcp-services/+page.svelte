@@ -351,7 +351,7 @@
 			</EmptyState>
 		</div>
 	{:else}
-	<div class="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-4 mt-6 items-start">
+	<div class="split mt-6" class:split-open={formOpen} style="--split-open-cols: 1.2fr 1fr">
 		<div class="rounded-lg border border-border-subtle bg-elevated overflow-hidden">
 			{#if services.length === 0}
 				<EmptyState
@@ -692,3 +692,43 @@
 	confirmVariant="danger"
 	onConfirm={confirmDelete}
 />
+
+<style>
+	/* v2.47 — the table owns the page until something is selected.
+	   
+	   The split was fixed at two columns, so the list sat squeezed
+	   into 55% of the width even with nothing open beside it — every
+	   column truncated for a panel that was not there.
+	   
+	   Both tracks always exist; the second animates between 0fr and
+	   1fr. That is what makes the transition possible at all:
+	   grid-template-columns interpolates when the two sides have the
+	   same structure, which swapping between one and two tracks does
+	   not. The collapsed track needs overflow hidden and min-width 0
+	   or its content refuses to shrink below its intrinsic size and
+	   the animation fights itself. */
+	.split {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 1rem;
+		align-items: start;
+	}
+	@media (min-width: 1280px) {
+		.split {
+			grid-template-columns: 1fr 0fr;
+			transition: grid-template-columns 260ms ease;
+		}
+		.split.split-open {
+			grid-template-columns: var(--split-open-cols, 1.3fr 1fr);
+		}
+		.split > * {
+			min-width: 0;
+			overflow: hidden;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.split {
+			transition: none;
+		}
+	}
+</style>
