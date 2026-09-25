@@ -8,6 +8,37 @@ Pour les diagnostics spécifiques aux messages de boot, voir [`docs/operations/t
 
 ---
 
+## Est-ce l'hôte, ou est-ce Arenet ? (v2.45)
+
+**Réglages → Système** rapporte désormais la machine sur laquelle
+Arenet tourne, rafraîchie toutes les cinq secondes : utilisation et
+charge du processeur, mémoire, espace libre sur le **répertoire de
+données**, plus la mémoire d'Arenet, ses goroutines et son temps de
+fonctionnement. C'est le premier endroit à regarder quand les relais
+ralentissent ou qu'un rechargement échoue sans raison visible : ça
+sépare « l'hôte manque de quelque chose » de « Arenet se comporte
+mal » avant d'aller fouiller.
+
+Le chiffre du disque porte volontairement sur le **répertoire de
+données**, pas sur `/`. La base, les sauvegardes et les journaux y
+vivent tous, et sur une installation qui lui donne son propre volume,
+une racine en bonne santé ne dit rien de la place qui restera pour la
+prochaine sauvegarde.
+
+**En conteneur, lis l'étiquette de provenance.** `/proc` rapporte
+l'*hôte* : un conteneur limité à 512 Mio afficherait sinon les 64 Gio
+de la machine — littéralement exact, et inutile quand on cherche
+pourquoi Arenet se fait tuer par l'OOM killer. Quand une limite cgroup
+existe, Arenet affiche cette limite et le dit ; un quota de processeur
+est montré à côté du nombre réel de cœurs de la machine, pour qu'il se
+lise comme une restriction et non comme une machine plus petite.
+
+**L'utilisation du processeur affiche un tiret les premières secondes
+après un redémarrage.** C'est un taux, et un taux exige deux mesures ;
+le panneau préfère ne rien montrer plutôt qu'inventer un chiffre.
+
+---
+
 ## UI d'admin pas reachable
 
 ### Symptôme

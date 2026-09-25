@@ -2366,5 +2366,29 @@
 		"emptyNoMatch": "No events match the filters.",
 		"histogramHeader": "Activity timeline · 24h · 5m buckets",
 		"histogramAriaLabel": "Activity timeline histogram (24h, 5-minute buckets)"
+	},
+	"system": {
+		"title": "Host",
+		"container": "container",
+		"cpu": "CPU",
+		"memory": "Memory",
+		"disk": "Disk",
+		"cores": "{cores} cores",
+		"coresLimited": "{cores} of {hostCores} cores (limit)",
+		"load": "Load",
+		"usedOfTotal": "{used} of {total} used",
+		"freeOfTotal": "{free} free of {total}",
+		"sourceHost": "the machine's own memory",
+		"sourceContainer": "the container's limit, not the machine's memory",
+		"hostname": "Hostname",
+		"os": "System",
+		"kernel": "Kernel",
+		"hostUptime": "Machine up",
+		"arenetUptime": "Arenet up",
+		"arenetMemory": "Arenet memory",
+		"goroutines": "Goroutines",
+		"uptimeDays": "{days} d {hours} h",
+		"uptimeHours": "{hours} h {minutes} min",
+		"uptimeMinutes": "{minutes} min"
 	}
 }

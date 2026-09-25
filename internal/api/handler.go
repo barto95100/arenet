@@ -221,6 +221,10 @@ type Handler struct {
 	// external monitoring scrape never sees a 500. Set via
 	// SetSystemHealthChecker at boot.
 	systemHealthChecker SystemHealthChecker
+	// systemInfo (v2.45) reports the host under Arenet — CPU,
+	// memory, disk and the process itself. Injected at boot by
+	// SetSystemInfoReader; nil answers an honest empty snapshot.
+	systemInfo SystemInfoReader
 
 	// updateChecker (v2.12.3) powers GET/POST /api/v1/system/version.
 	// nil-tolerant: when nil (never wired, or the opt-in is off at

@@ -117,6 +117,7 @@ import (
 	"github.com/barto95100/arenet/internal/ratelimit"
 	"github.com/barto95100/arenet/internal/routecheck"
 	"github.com/barto95100/arenet/internal/storage"
+	"github.com/barto95100/arenet/internal/sysinfo"
 	"github.com/barto95100/arenet/internal/systemhealth"
 	"github.com/barto95100/arenet/internal/throttle"
 	"github.com/barto95100/arenet/internal/updatecheck"
@@ -1384,6 +1385,12 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		&systemhealth.CertmagicCheck{Lister: &certInfoListerAdapter{tracker: certTracker}},
 	)
 	apiHandler.SetSystemHealthChecker(healthChecker)
+
+	// v2.45 — the host under Arenet. The data directory is what the
+	// disk figure measures: the database, the backups and the logs
+	// live there, and on an install that gives it its own volume a
+	// healthy "/" says nothing about whether the next backup fits.
+	apiHandler.SetSystemInfoReader(sysinfo.New(cfg.DataDir))
 
 	// Step AL.1.b — wire the alerting Dispatcher. Stateless
 	// fan-out engine that owns the channel.Kind → Sender

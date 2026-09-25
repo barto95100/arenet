@@ -162,6 +162,10 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			r.Get("/routes/{id}", h.getRoute)
 			// v2.42 — TCP (layer 4) services, read side. Same
 			// posture as routes: any signed-in user may look.
+			// v2.45 — the host Arenet runs on. Viewer scope: it
+			// names the machine and its free disk, which is not for
+			// an unauthenticated probe, but looking is not changing.
+			r.Get("/system/info", h.getSystemInfo)
 			r.Get("/tcp-services", h.listTCPServices)
 			// Counters live under a fixed path, declared BEFORE the
 			// {id} route so chi does not read "metrics" as an id.

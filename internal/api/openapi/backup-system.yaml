@@ -583,6 +583,39 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SystemHealthz' }
+  /system/info:
+    get:
+      operationId: getSystemInfo
+      summary: The host Arenet runs on
+      tags: [System]
+      x-arenet-role: viewer
+      description: |
+        CPU, memory, disk and Arenet's own process, read live. Unlike
+        `/system/health` this sits behind authentication: it names the
+        machine, its kernel and its free disk.
+
+        **Read `source` before reading a figure.** `/proc` reports the
+        HOST, so a container limited to 512 MiB would otherwise show
+        the machine's memory. When a cgroup limit exists it is the one
+        reported and `source` is `container`; a CPU quota is reported
+        alongside `hostCores` so it reads as a restriction rather than
+        as a smaller machine.
+
+        `cpu.usagePercent` is absent until two samples exist: usage is
+        a rate, and the first call after a restart has no baseline.
+
+        `disk` measures the filesystem holding the **data directory**
+        (database, backups, logs), not the root filesystem.
+
+        On a platform without `/proc` the host fields are empty and
+        `unsupported` says why; the process fields stay accurate.
+      responses:
+        '200':
+          description: One reading.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemInfo' }
+
   /system/health:
     servers:
       - url: /
@@ -837,6 +870,78 @@ components:
         status: { type: string, enum: [healthy, degraded, unhealthy] }
         latency_ms: { type: integer, description: Omitted when the check has no latency. }
         message: { type: string }
+    SystemInfo:
+      type: object
+      description: One live reading of the host under Arenet.
+      properties:
+        host:
+          type: object
+          properties:
+            hostname: { type: string }
+            os: { type: string, description: 'PRETTY_NAME from /etc/os-release.' }
+            kernel: { type: string }
+            arch: { type: string }
+            uptimeSeconds:
+              type: integer
+              format: int64
+              description: The machine's uptime, not Arenet's.
+            containerised:
+              type: boolean
+              description: >
+                Arenet runs confined. Does not imply a limit is set — a
+                container may have none.
+        cpu:
+          type: object
+          properties:
+            model: { type: string }
+            cores:
+              type: integer
+              description: What this process may use — the cgroup quota when one is set.
+            hostCores:
+              type: integer
+              description: The machine's own count, so a quota reads as a restriction.
+            usagePercent:
+              type: number
+              description: Absent until two samples exist; a rate needs a baseline.
+            load1: { type: number }
+            load5: { type: number }
+            load15: { type: number }
+            source: { type: string, enum: [host, container] }
+        memory:
+          type: object
+          properties:
+            totalBytes: { type: integer, format: int64 }
+            usedBytes: { type: integer, format: int64 }
+            availableBytes: { type: integer, format: int64 }
+            source:
+              type: string
+              enum: [host, container]
+              description: >
+                Which ceiling these figures describe. In a container the
+                two answers differ and only one is actionable.
+        disk:
+          type: object
+          description: The filesystem holding the data directory, not the root one.
+          properties:
+            path: { type: string }
+            totalBytes: { type: integer, format: int64 }
+            usedBytes: { type: integer, format: int64 }
+            availableBytes: { type: integer, format: int64 }
+        process:
+          type: object
+          description: Arenet itself, kept apart from the host so a leak can be attributed.
+          properties:
+            heapBytes: { type: integer, format: int64 }
+            residentBytes: { type: integer, format: int64 }
+            goroutines: { type: integer }
+            goVersion: { type: string }
+            uptimeSeconds: { type: integer, format: int64 }
+        unsupported:
+          type: string
+          description: Why the host fields are empty, on a platform that cannot answer.
+        timestamp: { type: string, format: date-time }
+      required: [host, cpu, memory, disk, process, timestamp]
+
     SystemHealthReport:
       type: object
       properties:
