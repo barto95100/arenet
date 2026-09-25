@@ -1514,7 +1514,14 @@
 				// hydration alongside upstreams/lbPolicy/healthCheck above, or
 				// editing a route with an https path-pool and clicking Save
 				// would silently reset it.
-				insecureSkipVerify: rule.insecureSkipVerify
+				insecureSkipVerify: rule.insecureSkipVerify,
+				// v2.45.3 — same reasoning as the pool above, which this
+				// block already warns about: the submit payload re-sends
+				// pathRules from formData, so a field not hydrated here
+				// is wiped the next time the operator saves an unrelated
+				// change on the route.
+				matchExact: rule.matchExact,
+				redirect: rule.redirect ? { ...rule.redirect } : undefined
 			})),
 			// (subform expansion handled below — needs to fire
 			// AFTER formData assignment so the $effect sees the
@@ -2721,7 +2728,22 @@
 										insecureSkipVerify: !!rule.insecureSkipVerify
 									}
 								: {}),
-							...(rule.healthCheck ? { healthCheck: { ...rule.healthCheck } } : {})
+							...(rule.healthCheck ? { healthCheck: { ...rule.healthCheck } } : {}),
+							// v2.45.3 — the two v2.44 fields. This payload
+							// rebuilds each rule field by field, so anything
+							// not listed here is dropped on Save — silently,
+							// with a success toast, which is exactly how the
+							// operator lost a path redirect and saw "config is
+							// unchanged" in the log.
+							...(rule.matchExact ? { matchExact: true } : {}),
+							...(rule.redirect && rule.redirect.target.trim() !== ''
+								? {
+										redirect: {
+											target: rule.redirect.target.trim(),
+											statusCode: rule.redirect.statusCode ?? 302
+										}
+									}
+								: {})
 						}))
 				)
 			};
