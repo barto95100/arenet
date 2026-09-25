@@ -1052,7 +1052,14 @@ func (r *Route) validate() error {
 	// layer validates the URL shape (http/https scheme, non-empty
 	// host) earlier with friendlier messages; storage's job is to
 	// reject obviously inconsistent rows that bypass the API.
-	if len(r.Upstreams) == 0 {
+	// v2.45.2 — a redirecting route proxies nothing, so demanding a
+	// backend for it is asking the operator to invent an address that
+	// will never be dialled. The operator hit this creating a route
+	// whose only job was to forward a retired name.
+	//
+	// Every other route still needs a pool: without one there is
+	// nothing to serve.
+	if len(r.Upstreams) == 0 && r.RedirectConfig == nil {
 		return errors.New("route: upstreams must contain at least one entry")
 	}
 	for i, u := range r.Upstreams {
