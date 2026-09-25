@@ -1189,7 +1189,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateHost(req.Host); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	// Step J.1: materialise the per-Upstream default Weight=1 BEFORE
@@ -1203,7 +1203,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := validateUpstreamPool(req.Upstreams); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -1215,12 +1215,12 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		req.LBPolicy = storage.LBPolicyRoundRobin
 	}
 	if err := validateLBPolicy(req.LBPolicy); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
 	if err := validateAliasesStructural(req.Host, req.Aliases); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	// Step K.1: AuthMode default + validation. Empty on POST is
@@ -1230,7 +1230,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		req.AuthMode = storage.RouteAuthNone
 	}
 	if err := validateAuthMode(req.AuthMode); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	// Step K.1: per-mode validation + cross-field mutual-exclusion
@@ -1240,27 +1240,27 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	// just one of the two, so direct API clients can't smuggle a
 	// confused row past the radio-group UI.
 	if err := validateAuthFieldsMutex(req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	if req.AuthMode == storage.RouteAuthBasic {
 		if err := validateBasicAuth(req, ""); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorFrom(w, http.StatusBadRequest, err)
 			return
 		}
 	}
 	if req.AuthMode == storage.RouteAuthForwardAuth {
 		if err := h.validateForwardAuthProvider(r.Context(), req.ForwardAuth.ProviderName); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorFrom(w, http.StatusBadRequest, err)
 			return
 		}
 	}
 	if err := validateHeaders(req.RequestHeaders, "request"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := validateHeaders(req.ResponseHeaders, "response"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -1272,7 +1272,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		req.WAFMode = "detect"
 	}
 	if err := validateWAFMode(req.WAFMode); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -1298,12 +1298,12 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	reconciled, err := reconcileManagedDomainCoverage(req.ACMEChallenge, req.UseDedicatedCert, req.Host, req.Aliases, mds)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	req.ACMEChallenge = reconciled
 	if err := validateACMEChallenge(req.ACMEChallenge, req.Host, req.Aliases); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	if req.ACMEChallenge == storage.ACMEChallengeDNS01 {
@@ -1331,7 +1331,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	if req.HealthCheck != nil && req.HealthCheck.Enabled {
 		hc := materialiseHealthCheck(*req.HealthCheck)
 		if err := validateHealthCheck(hc); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorFrom(w, http.StatusBadRequest, err)
 			return
 		}
 		req.HealthCheck = &hc
@@ -1356,7 +1356,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	if req.CountryBlock != nil {
 		cb, err := materialiseCountryBlock(*req.CountryBlock)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorFrom(w, http.StatusBadRequest, err)
 			return
 		}
 		// Spec §D2 deny+empty: legal no-op. Surface a Warn so the
@@ -1544,7 +1544,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	// validatePathRuleUpstreams doc-comment), so the API is the only line
 	// of defence against a malformed path-rule upstream reaching Caddy.
 	if err := validatePathRuleUpstreams(req.PathRules); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	// v1 path-based-rules: nil-safe mapper, hashes each path-rule's
@@ -1628,6 +1628,17 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// v2.46 — validate before storing, as the update path already
+	// does (routes.go ValidateRoute above). Without this a refusal from
+	// the storage validator surfaced as a 500 "failed to create route",
+	// so an operator creating a route with, say, a self-referencing
+	// redirect was told nothing about what was wrong. The same refusal
+	// on an edit of that route explained itself.
+	if err := storage.ValidateRoute(newRoute); err != nil {
+		writeErrorFrom(w, http.StatusBadRequest, err)
+		return
+	}
+
 	created, err := h.store.CreateRoute(r.Context(), newRoute)
 	if err != nil {
 		h.logger.Error("create route", "err", err)
@@ -1688,7 +1699,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateHost(req.Host); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	// Step J.1: materialise the per-Upstream default Weight=1 before
@@ -1700,11 +1711,11 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := validateUpstreamPool(req.Upstreams); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := validateAliasesStructural(req.Host, req.Aliases); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -1733,11 +1744,11 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := validateAuthMode(req.AuthMode); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := validateAuthFieldsMutex(req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	// Step K.1: per-mode validation. For "basic", validateBasicAuth
@@ -1746,22 +1757,22 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	// (Step I.5 preserve UX preserved through K.1).
 	if req.AuthMode == storage.RouteAuthBasic {
 		if err := validateBasicAuth(req, previous.BasicAuth.PasswordHash); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorFrom(w, http.StatusBadRequest, err)
 			return
 		}
 	}
 	if req.AuthMode == storage.RouteAuthForwardAuth {
 		if err := h.validateForwardAuthProvider(r.Context(), req.ForwardAuth.ProviderName); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorFrom(w, http.StatusBadRequest, err)
 			return
 		}
 	}
 	if err := validateHeaders(req.RequestHeaders, "request"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := validateHeaders(req.ResponseHeaders, "response"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -1778,7 +1789,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := validateLBPolicy(req.LBPolicy); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -1802,7 +1813,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := validateWAFMode(req.WAFMode); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -1830,12 +1841,12 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	reconciled, err := reconcileManagedDomainCoverage(req.ACMEChallenge, req.UseDedicatedCert, req.Host, req.Aliases, mds)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	req.ACMEChallenge = reconciled
 	if err := validateACMEChallenge(req.ACMEChallenge, req.Host, req.Aliases); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	if req.ACMEChallenge == storage.ACMEChallengeDNS01 {
@@ -1878,7 +1889,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	if req.HealthCheck != nil && req.HealthCheck.Enabled {
 		hc := materialiseHealthCheck(*req.HealthCheck)
 		if err := validateHealthCheck(hc); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorFrom(w, http.StatusBadRequest, err)
 			return
 		}
 		req.HealthCheck = &hc
@@ -1908,7 +1919,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	} else {
 		cb, err := materialiseCountryBlock(*req.CountryBlock)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorFrom(w, http.StatusBadRequest, err)
 			return
 		}
 		if cb.Mode == countryblock.ModeDeny && len(cb.CountryList) == 0 && len(cb.Continents) == 0 && len(cb.ASNs) == 0 {
@@ -2150,7 +2161,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	// createRoute — see validatePathRuleUpstreams doc-comment for why
 	// storage.PathRule.Validate() alone is not sufficient.
 	if err := validatePathRuleUpstreams(req.PathRules); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 	// v1 path-based-rules: hashes each path-rule's plain
@@ -2258,7 +2269,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	// with a residual CIDR and no basic auth — returned an opaque
 	// "failed to update route" 500 instead of an actionable 400).
 	if err := storage.ValidateRoute(newRoute); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 

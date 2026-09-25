@@ -18,6 +18,7 @@ package api
 
 import (
 	"encoding/json"
+	"github.com/barto95100/arenet/internal/apierr"
 	"net/http"
 )
 
@@ -30,6 +31,29 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// writeErrorFrom reports err, carrying its code and params when it has
+// them so the UI can render the refusal in the operator's language.
+//
+// v2.46 — the drop-in replacement for `writeError(w, status,
+// err.Error())`. A plain error produces exactly the body it always
+// did, so switching a call site over is safe on its own and the
+// frontend keeps falling back to the English sentence until a
+// translation exists for that code.
+func writeErrorFrom(w http.ResponseWriter, status int, err error) {
+	code, params, ok := apierr.Coded(err)
+	if !ok {
+		writeError(w, status, err.Error())
+		return
+	}
+	body := map[string]any{"error": err.Error(), "code": code}
+	if len(params) > 0 {
+		body["params"] = params
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 // writeErrorCode emits a structured, i18n-able error:

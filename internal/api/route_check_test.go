@@ -351,3 +351,65 @@ func TestRouteCheck_RollbackNamesBothWhenTheProbeHasNotReported(t *testing.T) {
 		t.Errorf("no verdict was recorded, so none may be claimed: %s", msg)
 	}
 }
+
+// --- v2.46 — refusals carry a code the UI can translate ----------
+//
+// Arenet used to answer refusals as English sentences and the frontend
+// printed them verbatim, so an operator working in French met English
+// at exactly the moments that matter. The body now carries a stable
+// code and its parameters; the sentence stays as the fallback for a
+// code the frontend does not know yet.
+
+func TestRouteRefusal_CarriesACodeAndParams(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	// A redirect pointing back at the route's own host.
+	body := `{"host":"loop.local","upstreams":[{"url":"` + upA + `","weight":1}],` +
+		`"lbPolicy":"round_robin","tlsEnabled":false,"redirectToHttps":false,"aliases":[],` +
+		`"authMode":"none","wafMode":"off",` +
+		`"redirectConfig":{"target":"https://loop.local"}}`
+	rec := send(t, env, http.MethodPost, "/api/v1/routes", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got struct {
+		Error  string            `json:"error"`
+		Code   string            `json:"code"`
+		Params map[string]string `json:"params"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Code != "redirect_self_loop" {
+		t.Fatalf("code: %q (body %s)", got.Code, rec.Body.String())
+	}
+	if got.Params["host"] != "loop.local" {
+		t.Errorf("the host must travel as a parameter, not only inside the sentence: %v", got.Params)
+	}
+	// The English sentence stays, so a frontend without the
+	// translation still shows something readable.
+	if !strings.Contains(got.Error, "loop.local") {
+		t.Errorf("the fallback sentence must survive: %q", got.Error)
+	}
+}
+
+// An uncoded refusal must keep the body it always had: that is what
+// makes adopting this one message at a time safe.
+func TestRouteRefusal_UncodedKeepsTheOldShape(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	rec := send(t, env, http.MethodPost, "/api/v1/routes",
+		`{"host":"","upstreams":[],"authMode":"none","wafMode":"off"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if _, hasCode := got["code"]; hasCode {
+		t.Errorf("an uncoded refusal must not invent a code: %v", got)
+	}
+	if _, hasErr := got["error"]; !hasErr {
+		t.Errorf("the sentence must still be there: %v", got)
+	}
+}

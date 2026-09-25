@@ -104,6 +104,8 @@ export interface TCPBackendResult {
 	elapsedMs: number;
 	/** UDP: there is no connection to open, so nothing was measured. */
 	skipped?: boolean;
+	/** v2.46 — the reason in translatable form; `error` is the fallback. */
+	errorCode?: string;
 	/** Absent when the service sends no header. */
 	proxyProtocol?: ProxyProbeVerdict;
 }
@@ -112,6 +114,8 @@ export interface TCPServiceTestResult {
 	backends: TCPBackendResult[];
 	/** Present when the service sends a PROXY header. */
 	proxyProtocolNote?: string;
+	/** v2.46 — lets the UI compose that note in the operator's language. */
+	proxyProtocolVersion?: string;
 }
 
 export const listTCPServices = (): Promise<TCPService[]> =>

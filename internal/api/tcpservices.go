@@ -80,6 +80,9 @@ type tcpBackendResult struct {
 	// UDP, where there is no connection to open. Distinct from a
 	// failure: nothing is wrong, the question is unanswerable.
 	Skipped bool `json:"skipped,omitempty"`
+	// ErrorCode names the reason in a form the UI can translate
+	// (v2.46). Error keeps the English sentence as the fallback.
+	ErrorCode string `json:"errorCode,omitempty"`
 	// ProxyProtocol is proxyProbeNotRefused or proxyProbeRefused,
 	// empty when the service sends no header.
 	ProxyProtocol string `json:"proxyProtocol,omitempty"`
@@ -91,6 +94,9 @@ type tcpServiceTestResponse struct {
 	// what has to be true on the other side — the pairing whose
 	// mismatch is the silent failure mode of this feature.
 	ProxyProtocolNote string `json:"proxyProtocolNote,omitempty"`
+	// ProxyProtocolVersion lets the UI compose that note in the
+	// operator's language (v2.46); the note above is the fallback.
+	ProxyProtocolVersion string `json:"proxyProtocolVersion,omitempty"`
 }
 
 func (h *Handler) listTCPServices(w http.ResponseWriter, r *http.Request) {
@@ -142,13 +148,13 @@ func (h *Handler) createTCPService(w http.ResponseWriter, r *http.Request) {
 	svc.ID = "" // assigned by the store
 
 	if err := h.checkTCPListen(r, svc, ""); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
 	created, err := h.store.CreateTCPService(r.Context(), svc)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -192,7 +198,7 @@ func (h *Handler) updateTCPService(w http.ResponseWriter, r *http.Request) {
 	svc.ID = id
 
 	if err := h.checkTCPListen(r, svc, id); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -202,7 +208,7 @@ func (h *Handler) updateTCPService(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "TCP service not found")
 			return
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorFrom(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -279,6 +285,7 @@ func (h *Handler) testTCPService(w http.ResponseWriter, r *http.Request) {
 
 	resp := tcpServiceTestResponse{Backends: make([]tcpBackendResult, 0, len(svc.Upstreams))}
 	if svc.ProxyProtocol != storage.ProxyProtocolOff {
+		resp.ProxyProtocolVersion = svc.ProxyProtocol
 		resp.ProxyProtocolNote = fmt.Sprintf(
 			"This service prepends the PROXY protocol %s header. The backend must be configured to "+
 				"expect it from this host, otherwise connections fail silently. On Stalwart, that is "+
@@ -292,8 +299,9 @@ func (h *Handler) testTCPService(w http.ResponseWriter, r *http.Request) {
 	if svc.Network() == storage.TCPServiceProtocolUDP {
 		for _, u := range svc.Upstreams {
 			resp.Backends = append(resp.Backends, tcpBackendResult{
-				Backend: u.Dial(),
-				Skipped: true,
+				Backend:   u.Dial(),
+				Skipped:   true,
+				ErrorCode: "udp_not_testable",
 				Error: "UDP is connectionless: there is no handshake to attempt, so Arenet cannot " +
 					"prove this backend is reachable without speaking its protocol.",
 			})
