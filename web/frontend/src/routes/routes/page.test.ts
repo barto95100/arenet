@@ -4455,13 +4455,20 @@ describe('Routes page — v2.41.1 state section', () => {
 		expect(payload.maintenanceConfig).toMatchObject({ retryAfterSeconds: 300 });
 	});
 
-	it('offers only active and disabled on a route that does not exist yet', async () => {
+	// v2.45.2 — maintenance used to be withheld on a route that does
+	// not exist yet, on the grounds that it is a transition rather
+	// than a birth state. Defensible in the abstract, confusing in
+	// practice: the operator opened a new route, counted three options
+	// where four exist, and reported maintenance as missing. Nothing
+	// prevents a route from being born in maintenance, and the
+	// asymmetry became indefensible once redirect appeared there.
+	it('offers every state on a route that does not exist yet', async () => {
 		apiMock.listRoutes.mockResolvedValue([]);
 		render(Page);
 		await openCreateForm();
 		expect(screen.getByTestId('route-state-active')).toBeInTheDocument();
+		expect(screen.getByTestId('route-state-maintenance')).toBeInTheDocument();
 		expect(screen.getByTestId('route-state-disabled')).toBeInTheDocument();
-		expect(screen.queryByTestId('route-state-maintenance')).toBeNull();
 		expect(screen.getByTestId('state-create-hint')).toBeInTheDocument();
 	});
 });
@@ -4748,5 +4755,64 @@ describe('Routes page — the redirect state', () => {
 		// and a redirect needs a target, so the row states it and the
 		// form changes it.
 		expect(row.textContent).toMatch(/Redirect/);
+	});
+});
+
+// --- v2.45.2 — a redirecting route needs no backend --------------
+//
+// The operator hit this creating a route whose only job was to
+// forward a retired name: the form demanded an upstream, which meant
+// inventing an address that would never be dialled.
+
+describe('Routes page — a redirect needs no upstream', () => {
+	it('saves without a backend', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		apiMock.createRoute.mockResolvedValue({ id: 'r1', host: 'old.test' });
+		render(Page);
+		await openCreateForm();
+
+		await userEvent.type(hostInput(), 'old.test');
+		await userEvent.click(screen.getByText('Redirect'));
+		await tick();
+		await userEvent.type(screen.getByTestId('redirect-target'), 'https://new.test');
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		await waitFor(() => expect(apiMock.createRoute).toHaveBeenCalledTimes(1));
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		// No invented address travels on the wire.
+		expect(payload.upstreams).toEqual([]);
+		expect(payload.redirectConfig).toMatchObject({ target: 'https://new.test' });
+	});
+
+	// The requirement still stands for every other route: without a
+	// pool there is nothing to serve.
+	it('still demands one for a proxying route', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+
+		await userEvent.type(hostInput(), 'app.test');
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+
+		expect(apiMock.createRoute).not.toHaveBeenCalled();
+	});
+});
+
+// Maintenance is offered when creating a route, not only when editing
+// one. The asymmetry was defensible in the abstract and confusing in
+// practice: the operator counted three options where four exist.
+describe('Routes page — the four states are all offered at creation', () => {
+	it('lists active, maintenance, redirect and disabled', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		await openCreateForm();
+
+		const state = screen.getByTestId('section-state');
+		for (const label of ['Active', 'Maintenance', 'Redirect', 'Disabled']) {
+			expect(state.textContent).toContain(label);
+		}
 	});
 });

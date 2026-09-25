@@ -2206,21 +2206,20 @@
 				hint: tl('routes.form.stateActiveHint'),
 				tone: 'allow' as const
 			},
-			// Maintenance needs a saved route: it is a transition on an
-			// existing route, not a birth state.
-			...(formMode === 'edit'
-				? [
-						{
-							value: 'maintenance' as const,
-							label: tl('routes.state.maintenance'),
-							hint: tl('routes.form.stateMaintenanceHint'),
-							tone: 'watch' as const
-						}
-					]
-				: []),
-			// Unlike maintenance, a redirect IS a birth state: a route
-			// created purely to forward a retired name somewhere else
-			// never needs to have proxied anything first.
+			// v2.45.2 — offered at creation too. It used to be hidden
+			// there on the grounds that maintenance is a transition
+			// rather than a birth state, which is defensible in the
+			// abstract and confusing in practice: the operator opened
+			// a new route, counted three options where four exist, and
+			// reported maintenance as missing. Nothing prevents a
+			// route from being born in maintenance, and the asymmetry
+			// became indefensible the moment redirect appeared there.
+			{
+				value: 'maintenance' as const,
+				label: tl('routes.state.maintenance'),
+				hint: tl('routes.form.stateMaintenanceHint'),
+				tone: 'watch' as const
+			},
 			{
 				value: 'redirect' as const,
 				label: tl('routes.state.redirect'),
@@ -2414,12 +2413,18 @@
 		}
 
 		// Step J.1: per-upstream URL + weight validation.
-		if (formData.upstreams.length === 0) {
+		//
+		// v2.45.2 — skipped entirely for a redirecting route: it
+		// proxies nothing, so demanding a backend means asking the
+		// operator to invent an address that will never be dialled.
+		const needsUpstream = stateChoice !== 'redirect';
+		if (needsUpstream && formData.upstreams.length === 0) {
 			next['upstreams'] = 'At least one upstream is required';
 		}
 		formData.upstreams.forEach((u, i) => {
 			const url = u.url.trim();
 			if (url === '') {
+				if (!needsUpstream) return;
 				next[`upstreams[${i}].url`] = 'URL must not be empty';
 			} else {
 				try {
@@ -2602,7 +2607,15 @@
 					: { providerName: '' };
 			const payload: RouteRequest = {
 				host: formData.host,
-				upstreams: formData.upstreams.map((u) => ({ url: u.url.trim(), weight: u.weight })),
+				// v2.45.2 — a redirecting route ships no pool: an empty
+				// backend row would otherwise travel as {url: ""} and be
+				// refused by the storage validator.
+				upstreams:
+					stateChoice === 'redirect'
+						? formData.upstreams
+								.filter((u) => u.url.trim() !== '')
+								.map((u) => ({ url: u.url.trim(), weight: u.weight }))
+						: formData.upstreams.map((u) => ({ url: u.url.trim(), weight: u.weight })),
 				lbPolicy: lbSelectorVisible ? (formData.lbPolicy as LBPolicy) : '',
 				tlsEnabled: formData.tlsEnabled,
 				redirectToHttps: formData.redirectToHttps,
@@ -3630,14 +3643,15 @@
 								<span class="text-sm font-medium text-secondary">
 									{language.current && t('routes.form.redirect.sectionTitle')}
 								</span>
-								<label class="flex flex-col gap-1">
-									<span class="text-sm text-secondary"
-										>{language.current && t('routes.form.redirect.targetLabel')}</span
-									>
-									<input
+								<div class="flex flex-col gap-1">
+									<!-- v2.45.2 — the shared Input, like every other
+									     field on this form. A bare <input class="input">
+									     inherited nothing and rendered white on white:
+									     the operator could not read what they typed. -->
+									<Input
 										id="redirect-target"
 										type="url"
-										class="input"
+										label={language.current && t('routes.form.redirect.targetLabel')}
 										placeholder="https://new.example.com"
 										bind:value={formData.redirectConfig.target}
 										data-testid="redirect-target"
@@ -3645,7 +3659,7 @@
 									<span class="text-xs text-muted"
 										>{language.current && t('routes.form.redirect.targetHelper')}</span
 									>
-								</label>
+								</div>
 
 								<ModeSelector
 									id="redirect-status"
