@@ -71,3 +71,54 @@ describe('collapsedRoutes store', () => {
 		expect(collapsedRoutes.isCollapsed('r-2')).toBe(true);
 	});
 });
+
+// --- v2.47 — alias stacks arrive folded --------------------------
+//
+// Everything used to arrive expanded, trading verbosity for
+// discovery. On a real installation a handful of routes with three or
+// four aliases each turns the first column into a wall, and the shape
+// of the graph — which is the whole point of the page — is lost
+// behind it.
+
+describe('collapsedRoutes — the default', () => {
+	beforeEach(() => collapsedRoutes.reset());
+
+	it('folds the routes it is given', () => {
+		collapsedRoutes.seedCollapsed(['r-a', 'r-b']);
+		expect(collapsedRoutes.isCollapsed('r-a')).toBe(true);
+		expect(collapsedRoutes.isCollapsed('r-b')).toBe(true);
+		// A route never seeded stays expanded.
+		expect(collapsedRoutes.isCollapsed('r-c')).toBe(false);
+	});
+
+	// The property that matters: a poll tick must not undo a chevron
+	// click. Re-seeding on every rebuild would silently re-fold what
+	// the operator just opened, which is worse than the wall.
+	it('never re-folds what the operator opened', () => {
+		collapsedRoutes.seedCollapsed(['r-a']);
+		collapsedRoutes.toggle('r-a');
+		expect(collapsedRoutes.isCollapsed('r-a')).toBe(false);
+
+		// Later ticks call the seeder again with the same routes.
+		collapsedRoutes.seedCollapsed(['r-a']);
+		collapsedRoutes.seedCollapsed(['r-a']);
+		expect(collapsedRoutes.isCollapsed('r-a')).toBe(false);
+	});
+
+	// An installation with no aliases anywhere still consumes its one
+	// seeding, so a later route gaining an alias mid-visit does not
+	// fold itself under the operator.
+	it('spends its single seeding even on an empty list', () => {
+		collapsedRoutes.seedCollapsed([]);
+		collapsedRoutes.seedCollapsed(['r-a']);
+		expect(collapsedRoutes.isCollapsed('r-a')).toBe(false);
+	});
+
+	it('starts over after a reset', () => {
+		collapsedRoutes.seedCollapsed(['r-a']);
+		collapsedRoutes.reset();
+		expect(collapsedRoutes.isCollapsed('r-a')).toBe(false);
+		collapsedRoutes.seedCollapsed(['r-b']);
+		expect(collapsedRoutes.isCollapsed('r-b')).toBe(true);
+	});
+});

@@ -2324,6 +2324,7 @@
 		"emptyAction": "Create a route",
 
 		"headTitle": "Topology v2 — Arenet",
+		"relayout": "Rebuild the layout",
 		"eyebrow": "TRAFFIC · FLOW VIEW",
 		"title": "Topology",
 		"lede": "Reverse-proxy entry points on the left, upstream services on the right. The thickness and brightness of each line reflect the real-time throughput of that flow.",

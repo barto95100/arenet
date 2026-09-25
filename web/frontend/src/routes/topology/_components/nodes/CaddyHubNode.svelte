@@ -27,7 +27,11 @@
 <div class="caddy-node" title={hubTooltip}>
         <Handle type="target" position={Position.Left} />
 
-        <div class="caddy-title">Caddy</div>
+        <!-- v2.47 — the hub is Arenet. "Caddy" named the engine
+             inside it, which tells an operator nothing about their
+             own installation and everything about an implementation
+             detail they did not choose. -->
+        <div class="caddy-title">ARENET</div>
         <div class="caddy-rate">{formatRate(data.aggregateReqPerSec)}</div>
 
         <Handle type="source" position={Position.Right} />

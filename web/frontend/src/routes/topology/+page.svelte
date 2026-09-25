@@ -28,7 +28,7 @@
 -->
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import { SvelteFlow, Background, Controls, useSvelteFlow, type NodeTypes, type EdgeTypes, type Node, type Edge } from '@xyflow/svelte';
+	import { SvelteFlow, Background, Controls, ControlButton, useSvelteFlow, type NodeTypes, type EdgeTypes, type Node, type Edge } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 
 	import { buildTopologyGraph } from './_layout';
@@ -144,6 +144,14 @@
 	// distinguishes "first build" (full reassignment, no prior
 	// state) from "tick" (in-place data updates via the flow API).
 	function rebuildGraph(routesIn: TopologyRoute[]): void {
+		// v2.47 — fold the alias stacks on arrival, once. A route
+		// with no alias has nothing to fold, so seeding only the
+		// ones that do keeps the chevron meaningful everywhere it
+		// appears.
+		collapsedRoutes.seedCollapsed(
+			routesIn.filter((r) => (r.aliases?.length ?? 0) > 0).map((r) => r.id)
+		);
+
 		// Phase 3.e — thread the page-local collapsed set into
 		// the layout builder. The builder is pure; the set
 		// arrives as a read-only snapshot of the store's current
@@ -404,6 +412,26 @@
 		if (!targetNode) return;
 		lastDragPosByNode.delete(targetNode.id);
 	}
+
+	// v2.47 — put the graph back where the builder wanted it.
+	//
+	// Nodes are draggable, and there was no way back: an operator who
+	// pulled things apart to read a busy corner had to reload the page
+	// to recover the layout. This rebuilds positions from the builder,
+	// which is the same pure function that produced them in the first
+	// place, then re-frames the view.
+	//
+	// Deliberately NOT automatic on a poll tick: a tick that snapped
+	// dragged nodes back would make the graph unusable while reading
+	// it. This is a button because it has to be a decision.
+	function relayout(): void {
+		const graph = buildTopologyGraph(routes, collapsedRoutes.collapsed);
+		nodes = graph.nodes;
+		edges = graph.edges;
+		lastDragPosByNode.clear();
+		// Let the reassignment render before framing it.
+		queueMicrotask(() => flowApi?.fitView?.());
+	}
 </script>
 
 <svelte:head>
@@ -474,7 +502,26 @@
 						proOptions={{ hideAttribution: true }}
 					>
 						<Background />
-						<Controls />
+						<Controls>
+							<ControlButton
+								onclick={relayout}
+								title={language.current && t('topology.relayout')}
+								aria-label={language.current && t('topology.relayout')}
+								data-testid="topology-relayout"
+							>
+								<!-- Four corners drawing inwards: "put this back
+								     in order", distinct from the fit-view icon
+								     just above it, which only re-frames. -->
+								<svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+									stroke="currentColor" stroke-width="2" stroke-linecap="round">
+									<path d="M3 9V5a2 2 0 0 1 2-2h4" />
+									<path d="M21 9V5a2 2 0 0 0-2-2h-4" />
+									<path d="M3 15v4a2 2 0 0 0 2 2h4" />
+									<path d="M21 15v4a2 2 0 0 1-2 2h-4" />
+									<rect x="9" y="9" width="6" height="6" rx="1" />
+								</svg>
+							</ControlButton>
+						</Controls>
 						<FlowApiBridge onReady={(api) => (flowApi = api)} />
 					</SvelteFlow>
 				</div>
