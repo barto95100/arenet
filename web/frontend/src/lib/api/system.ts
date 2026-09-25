@@ -57,3 +57,80 @@ export const systemApi = {
 		request<GeoIPUpdateResult>('POST', '/system/geoip/update'),
 	getGeoIPStatus: (): Promise<GeoIPStatus> => request<GeoIPStatus>('GET', '/system/geoip/status')
 };
+
+// --- v2.45 — the host Arenet runs on -----------------------------
+//
+//   GET /api/v1/system/info  (viewer)
+//
+// Backend mirror: internal/api/system_info.go, internal/sysinfo.
+
+/**
+ * Where a figure came from. In a container the two answers differ and
+ * only one is useful: /proc reports the HOST, so a container limited
+ * to 512 MiB would otherwise show the host's 64 GiB — literally
+ * correct, and useless to whoever is working out why Arenet keeps
+ * being OOM-killed.
+ */
+export type MetricSource = 'host' | 'container';
+
+export interface SystemHost {
+	hostname?: string;
+	os?: string;
+	kernel?: string;
+	arch?: string;
+	/** The machine's uptime, not Arenet's. */
+	uptimeSeconds?: number;
+	containerised: boolean;
+}
+
+export interface SystemCPU {
+	model?: string;
+	/** What this process may use: the cgroup quota when one is set. */
+	cores?: number;
+	/** The machine's own count, so a quota reads as a restriction. */
+	hostCores?: number;
+	/** Absent until two samples exist — a rate needs a baseline. */
+	usagePercent?: number;
+	load1?: number;
+	load5?: number;
+	load15?: number;
+	source?: MetricSource;
+}
+
+export interface SystemMemory {
+	totalBytes?: number;
+	usedBytes?: number;
+	availableBytes?: number;
+	source?: MetricSource;
+}
+
+/** The filesystem holding the data directory, not the root one. */
+export interface SystemDisk {
+	path?: string;
+	totalBytes?: number;
+	usedBytes?: number;
+	availableBytes?: number;
+}
+
+export interface SystemProcess {
+	heapBytes?: number;
+	residentBytes?: number;
+	goroutines?: number;
+	goVersion?: string;
+	/** Since this process started, not since boot. */
+	uptimeSeconds?: number;
+}
+
+export interface SystemInfo {
+	host: SystemHost;
+	cpu: SystemCPU;
+	memory: SystemMemory;
+	disk: SystemDisk;
+	process: SystemProcess;
+	/** Set when the platform cannot answer; the fields are then empty. */
+	unsupported?: string;
+	timestamp: string;
+}
+
+export const getSystemInfo = (): Promise<SystemInfo> =>
+	request<SystemInfo>('GET', '/system/info');

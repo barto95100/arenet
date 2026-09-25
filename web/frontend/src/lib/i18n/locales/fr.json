@@ -2366,5 +2366,29 @@
 		"emptyNoMatch": "Aucun événement ne correspond aux filtres.",
 		"histogramHeader": "Chronologie d'activité · 24h · buckets 5 min",
 		"histogramAriaLabel": "Histogramme chronologique d'activité (24h, buckets 5 minutes)"
+	},
+	"system": {
+		"title": "Hôte",
+		"container": "conteneur",
+		"cpu": "Processeur",
+		"memory": "Mémoire",
+		"disk": "Disque",
+		"cores": "{cores} cœurs",
+		"coresLimited": "{cores} cœurs sur {hostCores} (limite)",
+		"load": "Charge",
+		"usedOfTotal": "{used} utilisés sur {total}",
+		"freeOfTotal": "{free} libres sur {total}",
+		"sourceHost": "la mémoire de la machine",
+		"sourceContainer": "la limite du conteneur, pas la mémoire de la machine",
+		"hostname": "Nom de machine",
+		"os": "Système",
+		"kernel": "Noyau",
+		"hostUptime": "Machine démarrée depuis",
+		"arenetUptime": "Arenet démarré depuis",
+		"arenetMemory": "Mémoire d'Arenet",
+		"goroutines": "Goroutines",
+		"uptimeDays": "{days} j {hours} h",
+		"uptimeHours": "{hours} h {minutes} min",
+		"uptimeMinutes": "{minutes} min"
 	}
 }

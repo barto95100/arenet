@@ -8,6 +8,34 @@ For boot-message-specific diagnostics, see [`docs/operations/troubleshooting.md`
 
 ---
 
+## Is it the host, or is it Arenet? (v2.45)
+
+**Settings → System** now reports the machine Arenet runs on, refreshed
+every five seconds: processor usage and load, memory, free space on
+the **data directory**, plus Arenet's own memory, goroutines and
+uptime. It is the first place to look when relays slow down or a
+reload fails for no visible reason — it separates "the host is out of
+something" from "Arenet is misbehaving" before you go digging.
+
+The disk figure is deliberately the **data directory**, not `/`. The
+database, the backups and the logs all live there, and on any install
+that gives it its own volume a healthy root filesystem says nothing
+about whether the next backup will fit.
+
+**In a container, read the source label.** `/proc` reports the *host*,
+so a container limited to 512 MiB would otherwise show the machine's
+64 GiB — literally correct, and useless when you are working out why
+Arenet keeps being OOM-killed. When a cgroup limit exists Arenet shows
+that limit instead and says so, and a CPU quota is displayed beside
+the machine's real core count so it reads as a restriction rather than
+as a smaller machine.
+
+**CPU usage shows a dash for the first few seconds after a restart.**
+Usage is a rate, and a rate needs two readings; the panel would rather
+show nothing than invent a number.
+
+---
+
 ## Admin UI not reachable
 
 ### Symptom

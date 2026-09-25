@@ -55,6 +55,7 @@
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import DNSProvidersSection from '$lib/components/settings/DNSProvidersSection.svelte';
+	import SystemInfoSection from '$lib/components/settings/SystemInfoSection.svelte';
 	import UpdatesSection from '$lib/components/settings/UpdatesSection.svelte';
 	import GeoIPSettingsSection from '$lib/components/settings/GeoIPSettingsSection.svelte';
 	import OIDCSettingsSection from '$lib/components/OIDCSettingsSection.svelte';
@@ -1331,6 +1332,10 @@
 		{/if}
 
 		{#if activeTab === 'system'}
+			<!-- v2.45 — the machine under Arenet, refreshed live. It
+			     sits first because it answers the question an operator
+			     opens this tab with: is the host healthy? -->
+			<SystemInfoSection />
 			<!-- v2.12.3 — opt-in update checker mini-card. -->
 			<UpdatesSection />
 			<!-- ROW 3 — About, full-width (footer-meta, intentionally aerated) -->
