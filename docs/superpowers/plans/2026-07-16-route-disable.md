@@ -108,7 +108,7 @@ func contains(s, sub string) bool {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestRoute_Disabled -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/storage/ -run TestRoute_Disabled -v`
 Expected: FAIL — `r.Disabled undefined (type Route has no field Disabled)`.
 
 - [ ] **Step 3: Add the field**
@@ -131,14 +131,14 @@ In `internal/storage/routes.go`, inside the `Route` struct (before the closing `
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestRoute_Disabled -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/storage/ -run TestRoute_Disabled -v`
 Expected: PASS (3 subtests).
 
 - [ ] **Step 5: gofmt + vet + commit**
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 gofmt -w internal/storage/routes.go internal/storage/routes_disabled_test.go
 go vet ./internal/storage/
 git add internal/storage/routes.go internal/storage/routes_disabled_test.go
@@ -262,7 +262,7 @@ func mustDump(t *testing.T, v any) string {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run 'DisabledRoute_NotEmitted|FilterDisabledRoutes' -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/caddymgr/ -run 'DisabledRoute_NotEmitted|FilterDisabledRoutes' -v`
 Expected: FAIL — `undefined: filterDisabledRoutes`.
 
 - [ ] **Step 3: Add the filter helper + call it in applyLocked**
@@ -337,7 +337,7 @@ func TestHasHTTPSServer_IgnoresDisabled(t *testing.T) {
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 ls web/frontend/build/index.html >/dev/null 2>&1 || (cd web/frontend && npm run build)
 go test ./internal/caddymgr/ -run 'DisabledRoute|FilterDisabled|HasHTTPSServer' -v
 go test ./internal/caddymgr/ -run 'TestBuildConfigJSON_LoadsCleanly'   # existing caddy.Validate guard still green
@@ -348,7 +348,7 @@ Expected: all PASS.
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 gofmt -w internal/caddymgr/manager.go internal/caddymgr/route_disabled_emission_test.go
 go vet ./internal/caddymgr/
 git add internal/caddymgr/manager.go internal/caddymgr/route_disabled_emission_test.go
@@ -372,7 +372,7 @@ In `internal/audit/actions_test.go`, change `wantCount` at line 28 from `56` to 
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/audit/ -run TestAllActions -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/audit/ -run TestAllActions -v`
 Expected: FAIL — compile error `undefined: ActionRouteDisabled` (and/or count mismatch).
 
 - [ ] **Step 3: Add the constants + register in allActions**
@@ -397,14 +397,14 @@ In the `allActions` slice, after `ActionRouteDeleted,` (line 248) add:
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/audit/ -run TestAllActions -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/audit/ -run TestAllActions -v`
 Expected: PASS (count now 58, ExactSet matches).
 
 - [ ] **Step 5: gofmt + vet + commit**
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 gofmt -w internal/audit/actions.go internal/audit/actions_test.go
 go vet ./internal/audit/
 git add internal/audit/actions.go internal/audit/actions_test.go
@@ -533,7 +533,7 @@ func TestRouteDisable_LastHttpsRouteHint(t *testing.T) {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run 'TestRouteDisable|TestRouteEnable' -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/api/ -run 'TestRouteDisable|TestRouteEnable' -v`
 Expected: FAIL — 404 (routes not registered) / missing handler.
 
 - [ ] **Step 3: Add the two handlers**
@@ -654,7 +654,7 @@ In `internal/api/routes.go`, in the admin-auth subgroup right after line 337 (`r
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 go test ./internal/api/ -run 'TestRouteDisable|TestRouteEnable' -v
 ```
 Expected: all PASS.
@@ -663,7 +663,7 @@ Expected: all PASS.
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 gofmt -w internal/api/routes.go internal/api/route_toggle_test.go
 go vet ./internal/api/
 git add internal/api/routes.go internal/api/route_toggle_test.go
@@ -729,7 +729,7 @@ func TestBuildRoute_PassesDisabledThrough(t *testing.T) {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/topology/ -run TestBuildRoute_PassesDisabledThrough -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/api/topology/ -run TestBuildRoute_PassesDisabledThrough -v`
 Expected: FAIL — `out.Disabled undefined (Route has no field Disabled)`.
 
 - [ ] **Step 3: Add the wire field + populate it**
@@ -754,14 +754,14 @@ In `internal/api/topology/builder.go`, inside `buildRoute`'s `out := Route{...}`
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/topology/ -run TestBuildRoute_PassesDisabledThrough -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/api/topology/ -run TestBuildRoute_PassesDisabledThrough -v`
 Expected: PASS.
 
 - [ ] **Step 5: gofmt + vet + commit**
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 gofmt -w internal/api/topology/types.go internal/api/topology/builder.go internal/api/topology/route_disabled_test.go
 go vet ./internal/api/topology/
 git add internal/api/topology/types.go internal/api/topology/builder.go internal/api/topology/route_disabled_test.go
@@ -855,7 +855,7 @@ Add under `topology` in BOTH bundles:
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend
+cd /home/operator/arenet/web/frontend
 npx vitest run src/lib/i18n/index.test.ts
 npm run check
 ```
@@ -865,7 +865,7 @@ Expected: parity test PASS (EN/FR key sets equal), `svelte-check` 0 errors.
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 git add web/frontend/src/lib/api/client.ts web/frontend/src/lib/api/types.ts web/frontend/src/lib/i18n/locales/en.json web/frontend/src/lib/i18n/locales/fr.json
 git commit -m "feat(web): route disable/enable API client, type, i18n keys"
 ```
@@ -916,7 +916,7 @@ describe('/routes — disable/enable', () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend && npx vitest run src/routes/routes/page.test.ts -t "disable/enable"`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet/web/frontend && npx vitest run src/routes/routes/page.test.ts -t "disable/enable"`
 Expected: FAIL — no Disabled badge / no `route-disable-*` control.
 
 - [ ] **Step 3: Implement the UI**
@@ -933,7 +933,7 @@ In `+page.svelte`:
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend
+cd /home/operator/arenet/web/frontend
 npx vitest run src/routes/routes/page.test.ts
 npm run check
 ```
@@ -943,7 +943,7 @@ Expected: new tests PASS, whole /routes suite PASS, svelte-check 0 errors.
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 git add web/frontend/src/routes/routes/+page.svelte web/frontend/src/routes/routes/page.test.ts
 git commit -m "feat(web): /routes disable/enable toggle, badge, confirm dialogs"
 ```
@@ -963,7 +963,7 @@ git commit -m "feat(web): /routes disable/enable toggle, badge, confirm dialogs"
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 grep -rln "tlsEnabled\|httpRedirect\|route.*node\|TopologyNode\|d3" web/frontend/src --include='*.svelte' | head
 ```
 Identify the component that renders a route node from the topology snapshot's `Route`.
@@ -980,7 +980,7 @@ In the node renderer, when the route's `disabled` is true: apply reduced opacity
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend
+cd /home/operator/arenet/web/frontend
 npx vitest run   # full suite, ensure no regression
 npm run check
 ```
@@ -990,7 +990,7 @@ Expected: PASS, svelte-check 0 errors.
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 git add web/frontend/src
 git commit -m "feat(web): dim disabled routes in the topology graph"
 ```
@@ -1007,8 +1007,8 @@ This task runs the §8 gates against a built binary + `caddy.Validate`, not assu
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend && npm run build
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet/web/frontend && npm run build
+cd /home/operator/arenet
 go vet ./...
 go test -race -count=1 ./...
 cd web/frontend && npx vitest run && npm run check
@@ -1021,7 +1021,7 @@ Confirm via the caddymgr tests (Task 2) that a disabled route is absent from emi
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 go test ./internal/caddymgr/ -run 'Disabled|LoadsCleanly' -v
 ```
 
@@ -1037,7 +1037,7 @@ Append one line to the spec's §5 (or a smoke note) confirming: disabling the so
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 git add -A
 git commit -m "test: route-disable empirical smoke gates verified" --allow-empty
 ```

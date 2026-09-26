@@ -8,7 +8,7 @@
 // routes list resolves the referenced ExternalCertificate (via
 // route.cert_id) and derives a human label:
 //
-//   - wildcard cert (a SAN like "*.worldgeekwide.fr") → "*.worldgeekwide.fr"
+//   - wildcard cert (a SAN like "*.example.com") → "*.example.com"
 //     so a manual wildcard reads like the ACME wildcard badge.
 //   - otherwise → the cert's display name.
 //   - cert not found (orphaned cert_id) → undefined, so the badge

@@ -27,7 +27,7 @@ here is invented.
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 
 # 1. Build the real binary (frontend embedded).
 go build -o /tmp/arenet ./cmd/arenet

@@ -52,7 +52,7 @@ import Page from './+page.svelte';
 const sampleTemplate = (overrides: Partial<ErrorTemplate> = {}): ErrorTemplate => ({
 	id: 'tpl-1',
 	name: 'WGW Branding',
-	description: 'Worldgeekwide branded errors',
+	description: 'Example branded errors',
 	pages: { '403': '<h1>403 — branded</h1>', '404': '<h1>404 — branded</h1>' },
 	createdAt: '2026-06-20T10:00:00Z',
 	updatedAt: '2026-06-20T10:00:00Z',

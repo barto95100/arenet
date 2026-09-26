@@ -23,7 +23,7 @@ Section 5 lists residual debt acknowledged at ship time.
 ```bash
 # From repo root
 pkill arenet 2>/dev/null; true
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 go build -o ./arenet ./cmd/arenet
 rm -rf /tmp/arenet-i-smoke-data && mkdir -p /tmp/arenet-i-smoke-data
 ./arenet --dev --data-dir /tmp/arenet-i-smoke-data --admin-port :8001
@@ -32,7 +32,7 @@ rm -rf /tmp/arenet-i-smoke-data && mkdir -p /tmp/arenet-i-smoke-data
 Frontend dev server (second terminal):
 
 ```bash
-cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend
+cd /home/operator/arenet/web/frontend
 npm run dev
 ```
 

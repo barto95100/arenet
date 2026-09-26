@@ -27,7 +27,7 @@ HTTP/1.1 200 OK
 [normal response body]
 
 # Same request via the public domain
-$ curl -i -X PUT https://arenet.worldgeekwide.fr/api/v1/settings/crowdsec ...
+$ curl -i -X PUT https://arenet.example.com/api/v1/settings/crowdsec ...
 HTTP/1.1 403 Forbidden
 Server: Caddy
 Content-Length: 0
@@ -39,7 +39,7 @@ on `routes.go:61` `slogLogger`). Live Caddy config dump confirmed:
 ```text
 $ curl -s http://localhost:2019/config/ | jq '.apps.http.servers...'
 chain handlers: routemetrics → crowdsec → arenet_waf → reverse_proxy
-arenet_waf: { host: "arenet.worldgeekwide.fr", mode: "block",
+arenet_waf: { host: "arenet.example.com", mode: "block",
               load_owasp_crs: true }
 ```
 
@@ -47,11 +47,11 @@ The boot log corroborated:
 
 ```text
 waf handler provisioned route_id=b2a1a41e-... 
-host=arenet.worldgeekwide.fr mode=block load_owasp_crs=true
+host=arenet.example.com mode=block load_owasp_crs=true
 ```
 
 Root cause: the operator had created a **self-route admin** in BoltDB
-(host=`arenet.worldgeekwide.fr` → upstream=`127.0.0.1:8001`) to get TLS
+(host=`arenet.example.com` → upstream=`127.0.0.1:8001`) to get TLS
 + CrowdSec bouncer + country-block on their admin UI. That route
 inherited `WAFMode=block` + OWASP CRS load by default. CRS rule 911100
 (PROTOCOL_ENFORCEMENT method check) rejects PUT/DELETE/PATCH because

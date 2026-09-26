@@ -135,7 +135,7 @@ func TestGenerateKeyAndCSR_Validation(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestGenerateKeyAndCSR -v`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ -run TestGenerateKeyAndCSR -v`
 Expected: FAIL — `undefined: GenerateKeyAndCSR` / `CSRSubject`.
 
 - [ ] **Step 3: Write the implementation**
@@ -266,7 +266,7 @@ func containsString(s []string, v string) bool {
 
 - [ ] **Step 4: Run tests + vet + staticcheck**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestGenerateKeyAndCSR -v && go vet ./internal/storage/ && gofmt -l internal/storage/csr.go`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ -run TestGenerateKeyAndCSR -v && go vet ./internal/storage/ && gofmt -l internal/storage/csr.go`
 Expected: PASS (all 3 tests), no vet output, `gofmt -l` prints nothing.
 
 - [ ] **Step 5: Commit**
@@ -376,7 +376,7 @@ func TestCompareCSRAndCert_OrgRewrittenAndSANsExtra(t *testing.T) {
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestCompareCSRAndCert -v`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ -run TestCompareCSRAndCert -v`
 Expected: FAIL — `undefined: CompareCSRAndCert` and the warning-code consts.
 
 - [ ] **Step 4: Write the implementation**
@@ -462,7 +462,7 @@ func joinComma(s []string) string {
 
 - [ ] **Step 5: Run tests + vet**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run 'TestCompareCSRAndCert|TestGenerateKeyAndCSR' -v && go vet ./internal/storage/`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ -run 'TestCompareCSRAndCert|TestGenerateKeyAndCSR' -v && go vet ./internal/storage/`
 Expected: PASS, no vet output.
 
 - [ ] **Step 6: Commit**
@@ -570,7 +570,7 @@ func TestCreateExternalCertCSR_CNRequired(t *testing.T) {
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run TestCreateExternalCertCSR -v`
+Run: `cd /home/operator/arenet && go test ./internal/api/ -run TestCreateExternalCertCSR -v`
 Expected: FAIL — 404 (route unregistered).
 
 - [ ] **Step 4: Add the handler**
@@ -636,7 +636,7 @@ In `internal/api/routes.go`, in the admin block (near line 369), add:
 
 - [ ] **Step 6: Run tests + vet**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run TestCreateExternalCertCSR -v && go vet ./internal/api/`
+Run: `cd /home/operator/arenet && go test ./internal/api/ -run TestCreateExternalCertCSR -v && go vet ./internal/api/`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -694,7 +694,7 @@ func TestDownloadExternalCertCSR(t *testing.T) {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run TestDownloadExternalCertCSR -v`
+Run: `cd /home/operator/arenet && go test ./internal/api/ -run TestDownloadExternalCertCSR -v`
 Expected: FAIL — 404.
 
 - [ ] **Step 3: Add the handler**
@@ -750,7 +750,7 @@ In `internal/api/routes.go`, after line 178 (the viewer GET-by-id):
 
 - [ ] **Step 5: Run tests + vet**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run 'TestDownloadExternalCertCSR|TestCreateExternalCertCSR' -v && go vet ./internal/api/`
+Run: `cd /home/operator/arenet && go test ./internal/api/ -run 'TestDownloadExternalCertCSR|TestCreateExternalCertCSR' -v && go vet ./internal/api/`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -825,7 +825,7 @@ func TestReimportSignedCert_FlipsStatusAndWarns(t *testing.T) {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run TestReimportSignedCert -v`
+Run: `cd /home/operator/arenet && go test ./internal/api/ -run TestReimportSignedCert -v`
 Expected: FAIL — status not cleared / warnings absent (current PUT ignores pending).
 
 - [ ] **Step 3: Modify `updateExternalCert`**
@@ -860,7 +860,7 @@ Add `"crypto/x509"` and `"encoding/pem"` to the file's imports if not present.
 
 - [ ] **Step 4: Run tests + vet**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run 'TestReimport|TestCreateExternalCertCSR|TestDownloadExternalCertCSR' -v && go vet ./internal/api/`
+Run: `cd /home/operator/arenet && go test ./internal/api/ -run 'TestReimport|TestCreateExternalCertCSR|TestDownloadExternalCertCSR' -v && go vet ./internal/api/`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -907,7 +907,7 @@ func TestDeletePendingCSR_NoConflict(t *testing.T) {
 
 - [ ] **Step 2: Run — expected PASS immediately** (proves the delete-guard already handles pending correctly; no code change).
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run TestDeletePendingCSR -v`
+Run: `cd /home/operator/arenet && go test ./internal/api/ -run TestDeletePendingCSR -v`
 Expected: PASS.
 
 - [ ] **Step 3: Commit**
@@ -950,7 +950,7 @@ func TestBuildLoadPemList_SkipsPendingEmptyLeaf(t *testing.T) {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run TestBuildLoadPemList_SkipsPendingEmptyLeaf -v`
+Run: `cd /home/operator/arenet && go test ./internal/caddymgr/ -run TestBuildLoadPemList_SkipsPendingEmptyLeaf -v`
 Expected: FAIL — the row IS emitted with `"certificate": ""`.
 
 - [ ] **Step 3: Add the skip**
@@ -969,7 +969,7 @@ In `internal/caddymgr/manager.go`, inside `buildLoadPemList`, immediately after 
 
 - [ ] **Step 4: Run tests + vet + the broader caddymgr suite**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run 'TestBuildLoadPemList|TestBuildConfigJSON' -v && go vet ./internal/caddymgr/`
+Run: `cd /home/operator/arenet && go test ./internal/caddymgr/ -run 'TestBuildLoadPemList|TestBuildConfigJSON' -v && go vet ./internal/caddymgr/`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1228,7 +1228,7 @@ git commit -m "i18n(external-certs): CSR generate/pending/warnings keys EN+FR"
 
 - [ ] **Step 1: Full backend build + all tests + static analysis**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go build ./... && go test ./... && go vet ./... && staticcheck ./...`
+Run: `cd /home/operator/arenet && go build ./... && go test ./... && go vet ./... && staticcheck ./...`
 Expected: build OK, all tests PASS, no vet/staticcheck output.
 
 - [ ] **Step 2: Frontend build + tests**

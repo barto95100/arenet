@@ -50,7 +50,7 @@ The defer observes the FINAL status code (success: 2xx from the upstream; failur
 
 ### 1.2 Caddy reverse_proxy internals (for context)
 
-`/Users/l.ramos/go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.3/modules/caddyhttp/reverseproxy/reverseproxy.go`:
+`$GOPATH/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.3/modules/caddyhttp/reverseproxy/reverseproxy.go`:
 
 - Line **1039** — structured access-log emission: `zap.Int("status", res.StatusCode)`. This is what Caddy's `http.log` shows for every upstream response, success or failure.
 - Line **1049** — circuit-breaker metric recording: `di.Upstream.cb.RecordMetric(res.StatusCode, duration)`.

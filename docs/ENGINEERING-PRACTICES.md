@@ -486,7 +486,7 @@ That was wrong. The smoke caught it immediately:
 ```text
 $ curl -X PUT -H 'Content-Type: application/json' \
        -d @route.json \
-       https://arenet.worldgeekwide.fr/api/v1/routes/<id>
+       https://arenet.example.com/api/v1/routes/<id>
 HTTP/1.1 400 Bad Request
 {"error":"invalid JSON body"}
 ```

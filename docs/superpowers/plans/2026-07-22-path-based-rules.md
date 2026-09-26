@@ -89,7 +89,7 @@ func TestIPFilter_IsActive(t *testing.T) {
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestIPFilter -v`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ -run TestIPFilter -v`
 Expected: FAIL — `undefined: IPFilter`.
 
 - [ ] **Step 3: Implement**
@@ -180,7 +180,7 @@ func (f IPFilter) NormalizedCIDRs() []string {
 
 - [ ] **Step 4: Run + vet + gofmt**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestIPFilter -v && go vet ./internal/storage/ && gofmt -l internal/storage/ipfilter.go`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ -run TestIPFilter -v && go vet ./internal/storage/ && gofmt -l internal/storage/ipfilter.go`
 Expected: PASS, no vet output, gofmt prints nothing.
 
 - [ ] **Step 5: Commit**
@@ -351,12 +351,12 @@ func TestRoute_Validate_RejectsDuplicatePathPrefix(t *testing.T) {
 
 - [ ] **Step 3: Run to verify fail, then it passes after Step 1's code**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run 'TestPathRule|TestSortPathRules|TestRoute_Validate_RejectsDuplicate' -v`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ -run 'TestPathRule|TestSortPathRules|TestRoute_Validate_RejectsDuplicate' -v`
 Expected: PASS (code from Step 1 already present). If Step 1 not yet applied → FAIL `undefined: PathRule`; apply Step 1 then re-run.
 
 - [ ] **Step 4: Migration-free check + full storage suite**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ && go vet ./internal/storage/`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ && go vet ./internal/storage/`
 Expected: PASS (existing route tests unaffected — new fields are `omitempty`). Confirm a pre-v1 route JSON (no `ip_filter`/`path_rules`) round-trips with nil values; mention in the report.
 
 - [ ] **Step 5: Commit**
@@ -413,7 +413,7 @@ func TestCreateRoute_WithPathRulesAndIPFilter(t *testing.T) {
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run TestCreateRoute_WithPathRulesAndIPFilter -v`
+Run: `cd /home/operator/arenet && go test ./internal/api/ -run TestCreateRoute_WithPathRulesAndIPFilter -v`
 Expected: FAIL — 400 `unknown field "ipFilter"` (the gap).
 
 - [ ] **Step 3: Add the 4 wire points (camelCase API mirror types)**
@@ -475,7 +475,7 @@ Add `IPFilter` + `PathRules` fields to the `routeResponse` struct. On UPDATE, ap
 
 - [ ] **Step 4: Run + full api suite**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run TestCreateRoute_WithPathRulesAndIPFilter -v && go test ./internal/api/ && go vet ./internal/api/`
+Run: `cd /home/operator/arenet && go test ./internal/api/ -run TestCreateRoute_WithPathRulesAndIPFilter -v && go test ./internal/api/ && go vet ./internal/api/`
 Expected: PASS, no regression.
 
 - [ ] **Step 5: Commit**
@@ -562,7 +562,7 @@ func TestBuildIPFilterRoute_DenyBlocksListed(t *testing.T) {
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run TestBuildIPFilterRoute -v`
+Run: `cd /home/operator/arenet && go test ./internal/caddymgr/ -run TestBuildIPFilterRoute -v`
 Expected: FAIL — `undefined: buildIPFilterRoute`.
 
 - [ ] **Step 3: Implement**
@@ -633,7 +633,7 @@ In `internal/caddymgr/manager.go`, right after the country-block emit (~1733), a
 
 - [ ] **Step 5: Run + vet**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run TestBuildIPFilterRoute -v && go vet ./internal/caddymgr/`
+Run: `cd /home/operator/arenet && go test ./internal/caddymgr/ -run TestBuildIPFilterRoute -v && go vet ./internal/caddymgr/`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -692,7 +692,7 @@ func TestBuildPathRulesSubroute_LongestFirstPlusCatchAll(t *testing.T) {
 
 - [ ] **Step 2: Run to verify fail**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run TestBuildPathRulesSubroute -v`
+Run: `cd /home/operator/arenet && go test ./internal/caddymgr/ -run TestBuildPathRulesSubroute -v`
 Expected: FAIL — undefined.
 
 - [ ] **Step 3: Implement**
@@ -766,7 +766,7 @@ In `manager.go`, where `handlers = append(handlers, proxyHandler)` is the final 
 
 - [ ] **Step 5: Run + vet + full caddymgr suite**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ && go vet ./internal/caddymgr/`
+Run: `cd /home/operator/arenet && go test ./internal/caddymgr/ && go vet ./internal/caddymgr/`
 Expected: PASS (existing tests unaffected — path-rules only emit when present).
 
 - [ ] **Step 6: Commit**
@@ -802,12 +802,12 @@ In `TestBuildConfigJSON_LoadsCleanly` (`manager_test.go` ~1126), add to the fixt
 
 - [ ] **Step 2: Run the canonical Validate test**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run 'TestBuildConfigJSON_LoadsCleanly$' -v`
+Run: `cd /home/operator/arenet && go test ./internal/caddymgr/ -run 'TestBuildConfigJSON_LoadsCleanly$' -v`
 Expected: PASS — the emitted config (route IP-filter block + path subroute + client_ip/not matchers + basic-auth) provisions cleanly through `caddy.Validate`. If it FAILS with an "unknown module" / provision error, the matcher shape is wrong — fix the emission (Task 4/5) until it validates. **This is the load-bearing empirical gate.**
 
 - [ ] **Step 3: Run the handler-resolvable test too**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run 'HandlersAllResolvable|LoadsCleanly'`
+Run: `cd /home/operator/arenet && go test ./internal/caddymgr/ -run 'HandlersAllResolvable|LoadsCleanly'`
 Expected: PASS.
 
 - [ ] **Step 4: Commit**
@@ -1015,7 +1015,7 @@ git commit -m "i18n(routes): IP filter + path rules keys EN+FR"
 
 - [ ] **Step 1: Full backend + frontend build + suites**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go build ./... && go vet ./... && go test ./internal/caddymgr/ ./internal/storage/ ./internal/api/` then `cd web/frontend && npm run build && npx vitest run && npx svelte-check --threshold error`
+Run: `cd /home/operator/arenet && go build ./... && go vet ./... && go test ./internal/caddymgr/ ./internal/storage/ ./internal/api/` then `cd web/frontend && npm run build && npx vitest run && npx svelte-check --threshold error`
 Expected: all green.
 
 - [ ] **Step 2: Live smoke against a real binary** (per CLAUDE.md; reuse the smoke recipe from `docs/smoke-test-csr-generation.md` — dev binary + setup token + a test upstream). Document each in `docs/smoke-test-path-rules.md`:

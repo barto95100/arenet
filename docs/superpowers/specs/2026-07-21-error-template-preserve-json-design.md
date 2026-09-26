@@ -22,7 +22,7 @@ proxied API's structured JSON error responses**.
 
 Two dogfooding bugs, both proven via DevTools, share this single root cause —
 the operator runs the Arenet admin behind a reverse-proxy route
-(`arenet.worldgeekwide.fr` → the admin API), so admin API responses traverse
+(`arenet.example.com` → the admin API), so admin API responses traverse
 the branding block:
 
 - Manual-cert upload conflict → backend returns

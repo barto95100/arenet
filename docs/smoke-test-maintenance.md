@@ -18,7 +18,7 @@ bypass — must be confirmed against a running binary. Modelled on
 
 ```bash
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 
 # 1. Build the real binary (frontend embed optional for API-only smoke).
 go build -o /tmp/arenet ./cmd/arenet

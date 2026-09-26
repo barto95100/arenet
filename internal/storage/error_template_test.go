@@ -29,7 +29,7 @@ import (
 func sampleErrorTemplate(name string) ErrorPageTemplate {
 	return ErrorPageTemplate{
 		Name:        name,
-		Description: "Brand-aligned error pages for worldgeekwide.fr",
+		Description: "Brand-aligned error pages for example.com",
 		Pages: map[int]string{
 			403: "<!doctype html><h1>403 Forbidden</h1>",
 			404: "<!doctype html><h1>404 Not Found</h1>",
@@ -40,7 +40,7 @@ func sampleErrorTemplate(name string) ErrorPageTemplate {
 
 func TestErrorTemplate_CreateGet(t *testing.T) {
 	store := newStoreForTest(t)
-	created, err := store.CreateErrorPageTemplate(context.Background(), sampleErrorTemplate("worldgeekwide"))
+	created, err := store.CreateErrorPageTemplate(context.Background(), sampleErrorTemplate("example"))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -55,8 +55,8 @@ func TestErrorTemplate_CreateGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Name != "worldgeekwide" {
-		t.Errorf("Name = %q ; want worldgeekwide", got.Name)
+	if got.Name != "example" {
+		t.Errorf("Name = %q ; want example", got.Name)
 	}
 	if got.Pages[403] != "<!doctype html><h1>403 Forbidden</h1>" {
 		t.Errorf("page 403 round-trip lost: %q", got.Pages[403])

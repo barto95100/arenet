@@ -34,7 +34,7 @@ import (
 //
 // Day 17 empirical motivation : the authentik OIDC route returned
 // "issuer": "http://192.168.99.12/..." instead of
-// "https://auth.worldgeekwide.fr/..." because authentik used the
+// "https://auth.example.com/..." because authentik used the
 // rewritten Host header. The {http.request.host} placeholder
 // preserves the original.
 //

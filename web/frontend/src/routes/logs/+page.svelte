@@ -306,7 +306,7 @@
 			srcIp: e.srcIp,
 			// W.7 follow-up — WAF rows carry routeId so the
 			// host badge resolves the operator-visible
-			// hostname (e.g. "ha.worldgeekwide.fr" instead
+			// hostname (e.g. "ha.example.com" instead
 			// of grep'ing a UUID).
 			routeId: e.routeId,
 			wafEvent: e

@@ -98,7 +98,7 @@ afterwards if you do not want it.
 Mac, hold an IMAP session open through Arenet:
 
 ```
-openssl s_client -connect 192.168.99.10:993 -servername mail.worldgeekwide.fr
+openssl s_client -connect 192.168.99.10:993 -servername mail.example.com
 ```
 
 **Expect.** Within ~5 seconds and without touching the page: the
@@ -195,7 +195,7 @@ set the target to `/admin/login`. Save.
 **Expect.**
 
 ```
-curl -I https://stalwart.worldgeekwide.fr/
+curl -I https://stalwart.example.com/
 ```
 
 answers `302` with `Location: /admin/login`. And the webadmin itself

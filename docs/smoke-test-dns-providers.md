@@ -70,14 +70,14 @@ echoes the secret key** in its error. Both are covered by
 
 Run locally: `--dev` mode = ports 8080/8443 + Let's Encrypt **staging**;
 DNS-01 needs no inbound port. v2.25.1 (`main`) started first on a fresh data
-dir, OVH provider + wildcard apex `worldgeekwide.fr` created through its UI,
+dir, OVH provider + wildcard apex `example.com` created through its UI,
 then the v2.26.0 binary restarted on the same data dir. The v2.25.1 staging
 certs were moved out of Caddy's storage before the switch so v2.26.0 had to
 issue again. UI served by `vite dev` of the matching tree.
 
 | # | Gate | Result | Evidence |
 |---|------|--------|----------|
-| B0 | v2.25.1 baseline issues the wildcard via OVH | PASS | `certificate obtained successfully` for `*.worldgeekwide.fr` + `worldgeekwide.fr` (staging) |
+| B0 | v2.25.1 baseline issues the wildcard via OVH | PASS | `certificate obtained successfully` for `*.example.com` + `example.com` (staging) |
 | B1 | Upgrade: boot migration converts the OVH provider; still `configured` | PASS | `migrated DNS provider credentials to multi-type format count=1`; UI shows `configured`, Details `ovh-eu` |
 | B2/B5 | v2.26.0 issues the wildcard via OVH (new emission path) | PASS | both certs re-obtained ~5 s after boot, no ACME error |
 | B3 | ⚡ Test connection on the OVH provider (zone prefilled) | PASS | green, record count shown (operator) |

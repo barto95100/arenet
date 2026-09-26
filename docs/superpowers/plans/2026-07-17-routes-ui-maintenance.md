@@ -89,7 +89,7 @@ func TestMaintenanceConfig_Validate_BadIP(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run 'TestRoute_MaintenanceConfig|TestMaintenanceConfig' -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/storage/ -run 'TestRoute_MaintenanceConfig|TestMaintenanceConfig' -v`
 Expected: FAIL — `MaintenanceConfig` undefined.
 
 - [ ] **Step 3: Add the struct + field + Validate**
@@ -139,7 +139,7 @@ Ensure `"net"` and `"fmt"` are imported in routes.go (fmt already is; add net if
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run 'TestRoute_MaintenanceConfig|TestMaintenanceConfig' -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/storage/ -run 'TestRoute_MaintenanceConfig|TestMaintenanceConfig' -v`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
@@ -200,7 +200,7 @@ func TestMaintenancePageConfig_Roundtrip(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestMaintenancePageConfig -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/storage/ -run TestMaintenancePageConfig -v`
 Expected: FAIL — `GetMaintenancePageConfig` undefined / bucket missing.
 
 - [ ] **Step 3: Implement (mirror GeoIPUpdateConfig verbatim)**
@@ -270,7 +270,7 @@ In `internal/storage/storage.go`: add `bucketMaintenancePage = "maintenance_page
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestMaintenancePageConfig -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/storage/ -run TestMaintenancePageConfig -v`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Commit**
@@ -297,7 +297,7 @@ In `internal/audit/actions_test.go`, change `const wantCount = 59` to `const wan
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/audit/ -run TestAllActions -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/audit/ -run TestAllActions -v`
 Expected: FAIL — count drift 59 vs 61 + ExactSet missing.
 
 - [ ] **Step 3: Add the constants + register**
@@ -316,7 +316,7 @@ If `TestAllActions_ExactSet` enumerates the set, add both there.
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/audit/ -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/audit/ -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -404,7 +404,7 @@ IMPLEMENTER: read `manager_test.go` `TestBuildConfigJSON_LoadsCleanly` (~1082-12
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run TestBuildConfigJSON_MaintenanceRoute -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/caddymgr/ -run TestBuildConfigJSON_MaintenanceRoute -v`
 Expected: FAIL — no static_response emitted (maintenance branch doesn't exist yet).
 
 - [ ] **Step 3: Implement the maintenance body helper**
@@ -471,12 +471,12 @@ Only emit the bypass route when `len(BypassIPs) > 0` (an empty ranges list is a 
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ -run TestBuildConfigJSON_MaintenanceRoute -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/caddymgr/ -run TestBuildConfigJSON_MaintenanceRoute -v`
 Expected: PASS.
 
 - [ ] **Step 6: Run the existing caddymgr suite (no regression)**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/caddymgr/ 2>&1 | tail -5`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/caddymgr/ 2>&1 | tail -5`
 Expected: all pass (the existing LoadsCleanly / ForwardAuth / etc. still green).
 
 - [ ] **Step 7: Commit**
@@ -631,7 +631,7 @@ func TestUpdateRoute_PreservesMaintenanceOnEdit(t *testing.T) {
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run 'TestCreateRoute_WithMaintenance|TestMaintenanceEndpoint|TestUpdateRoute_PreservesMaintenance' -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/api/ -run 'TestCreateRoute_WithMaintenance|TestMaintenanceEndpoint|TestUpdateRoute_PreservesMaintenance' -v`
 Expected: FAIL — 400 "unknown field maintenanceConfig" (wire gap) + endpoints 404.
 
 - [ ] **Step 3: Add the wire field**
@@ -681,7 +681,7 @@ IMPLEMENTER: fill the body by copying `toggleRouteDisabled` verbatim and swappin
 
 - [ ] **Step 6: Run to verify they pass**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run 'TestCreateRoute_WithMaintenance|TestMaintenanceEndpoint|TestUpdateRoute_PreservesMaintenance' -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/api/ -run 'TestCreateRoute_WithMaintenance|TestMaintenanceEndpoint|TestUpdateRoute_PreservesMaintenance' -v`
 Expected: PASS (4 tests).
 
 - [ ] **Step 7: Commit**
@@ -769,7 +769,7 @@ git commit -m "feat(api): maintenance state endpoints + MaintenanceConfig wire-f
 
 Run:
 ```
-export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET
+export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet
 go vet ./...
 go build ./...
 go test -race ./internal/storage/ ./internal/audit/ ./internal/caddymgr/ ./internal/api/
@@ -780,7 +780,7 @@ Expected: all clean/green (internal/api -race may be slow; note in ledger if lef
 
 Run:
 ```
-cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend
+cd /home/operator/arenet/web/frontend
 npx vitest run src/lib/components/RouteStateControl.test.ts src/routes/routes/page.test.ts src/lib/i18n/index.test.ts
 npm run build
 ```

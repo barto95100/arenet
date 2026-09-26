@@ -33,9 +33,9 @@ describe('CertSourceBadge', () => {
 
 	it('renders "Couvert par *.<apex>" for managed-domain', () => {
 		render(CertSourceBadge, {
-			props: { source: 'managed-domain:worldgeekwide.fr' }
+			props: { source: 'managed-domain:example.com' }
 		});
-		expect(screen.getByText('Couvert par *.worldgeekwide.fr')).toBeInTheDocument();
+		expect(screen.getByText('Couvert par *.example.com')).toBeInTheDocument();
 	});
 
 	it('carries the RFC 6125 explanation in the tooltip for managed-domain', () => {

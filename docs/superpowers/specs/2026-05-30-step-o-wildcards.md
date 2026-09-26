@@ -365,4 +365,4 @@ Same cadence as M / Q / N: present results before commit, accumulate without pus
 - certmagic source: `cache.go:333-347`, `match.go` (wildcard handshake expansion verified empirically).
 - RFC 6125 §6.4.3 (wildcard label depth).
 - Let's Encrypt rate limits: 50 certs / registered domain / week (production); Pebble unlimited for local smoke.
-- Step J smoke doc: `docs/smoke-test-step-j.md` §3.5 B.4 (the live wildcard issuance baseline against `*.worldgeekwide.fr`).
+- Step J smoke doc: `docs/smoke-test-step-j.md` §3.5 B.4 (the live wildcard issuance baseline against `*.example.com`).
