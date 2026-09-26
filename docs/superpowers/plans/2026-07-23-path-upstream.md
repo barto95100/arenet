@@ -50,7 +50,7 @@ Create `internal/storage/routes_pathrule_upstream_test.go`:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 package storage
@@ -219,7 +219,7 @@ Create `internal/api/routes_pathrule_upstream_test.go`:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 package api
@@ -446,7 +446,7 @@ Run first: `grep -n "func buildConfigJSON\|func TestBuildConfigJSON\|buildConfig
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 package caddymgr
@@ -564,7 +564,7 @@ Create `internal/caddymgr/path_rules_upstream_emit_test.go`:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 package caddymgr

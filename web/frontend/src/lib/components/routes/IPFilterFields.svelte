@@ -1,6 +1,6 @@
 <!--
   Arenet - Homelab-friendly reverse proxy with integrated security
-  Copyright (C) 2026  Ludovic Ramos
+  Copyright (C) 2026  The Arenet Authors
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
   IPFilterFields (path-based-rules Task 7). Reusable IP allow/deny

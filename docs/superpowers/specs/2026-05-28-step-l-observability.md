@@ -2,7 +2,7 @@
 
 **Status:** FROZEN — tag `v0.8.0-step-l-spec` on 2026-05-28.
 **Target implementation tag:** `v0.8.0-step-l` after the L.5 smoke verdict PASS.
-**Author:** Claude + Ludovic Ramos.
+**Author:** Claude + Operator.
 **Date frozen:** 2026-05-28.
 
 ---

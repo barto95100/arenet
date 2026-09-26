@@ -4,7 +4,7 @@
 **Target spec-freeze tag:** `v1.0.0-step-q-spec`.
 **Target implementation tag:** `v1.0.0-step-q` after the Q.5 smoke
 verdict PASS.
-**Author:** Claude + Ludovic Ramos.
+**Author:** Claude + Operator.
 **Draft date:** 2026-05-29.
 
 > Closes the THROTTLE + auth-failure feed signals in the Step M
