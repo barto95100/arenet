@@ -230,7 +230,7 @@ describe('/tcp-services — empty state layout', () => {
 		render(Page);
 		const empty = await screen.findByTestId('tcp-empty');
 		// Not inside the two-column grid.
-		// v2.47 — the marker moved from the old fixed xl:grid-cols
+		// v2.48 — the marker moved from the old fixed xl:grid-cols
 		// class to .split, so the previous assertion would now pass
 		// by looking for something that exists nowhere.
 		expect(empty.closest('.split')).toBeNull();
@@ -392,7 +392,7 @@ describe('/tcp-services — live counters', () => {
 	});
 });
 
-// --- v2.47 — the table owns the page until something is selected --
+// --- v2.48 — the table owns the page until something is selected --
 //
 // The split was fixed at two columns, so the list sat squeezed into
 // half the width even with nothing open beside it: every column

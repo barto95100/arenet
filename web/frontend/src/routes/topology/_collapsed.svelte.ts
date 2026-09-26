@@ -16,7 +16,7 @@
 // see `#R-TOPO-collapse-persistence` in the backlog when it
 // gets logged.
 //
-// Default (v2.47): a route that has aliases arrives COLLAPSED.
+// Default (v2.48): a route that has aliases arrives COLLAPSED.
 //
 // It used to be the opposite — everything expanded, trading
 // verbosity for discovery. On a real installation that bet does

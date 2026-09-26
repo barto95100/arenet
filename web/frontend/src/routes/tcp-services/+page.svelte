@@ -694,7 +694,7 @@
 />
 
 <style>
-	/* v2.47 — the table owns the page until something is selected.
+	/* v2.48 — the table owns the page until something is selected.
 	   
 	   The split was fixed at two columns, so the list sat squeezed
 	   into 55% of the width even with nothing open beside it — every

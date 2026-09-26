@@ -4889,7 +4889,7 @@ describe('Routes page — path-rule redirects survive the round trip', () => {
 	});
 });
 
-// --- v2.47 — the table owns the page until a route is selected ----
+// --- v2.48 — the table owns the page until a route is selected ----
 
 describe('Routes page — the split only opens on demand', () => {
 	it('is one column until a route is selected', async () => {
