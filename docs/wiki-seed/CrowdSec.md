@@ -132,22 +132,40 @@ The `/security/decisions` page renders these with filter by origin + scenario + 
 
 ## Verifying the integration is live
 
-```bash
-# Find a currently-banned IP in your agent's decision list
-sudo cscli decisions list
+Ban your own IP for a minute and watch a route refuse you.
 
-# Pick an IP from the output, then try to hit any of your routes from it
-# (or, easier, run from a VM with that IP)
-# Expected : the route returns 403 before reaching the WAF
-```
+**1. Find your address — from the machine you will browse with, not from
+the server.**
 
-You can also manually ban your own IP for a minute as a smoke test :
+`curl -s ifconfig.me` run *on the Arenet host* returns the **server's**
+public address, not the one your browser arrives on. Banning that bans
+the server. Run it where you are sitting :
 
 ```bash
-sudo cscli decisions add --ip "$(curl -s ifconfig.me)" --duration 60s
+curl -s https://ifconfig.me        # on your laptop, NOT on the server
+curl -4 -s https://ifconfig.me     # your IPv4, specifically
+curl -6 -s https://ifconfig.me     # your IPv6, specifically
 ```
 
-Try to hit any route from your home → 403. After 60s the ban expires, the route works again.
+If your browser reaches the site over IPv6, ban the IPv6 address — a ban
+on the wrong family does nothing at all, and this is the most common
+reason the test appears to fail.
+
+**2. Ban it, on the Arenet host :**
+
+```bash
+sudo cscli decisions add --ip <the address from step 1> --duration 60s
+sudo cscli decisions list          # check Scope:Value is what you expect
+```
+
+**3. Load one of your configured routes** from that machine → **403**.
+After 60 s the ban expires and the route answers normally again.
+
+> **A 404 instead of a 403 is not a failure.** The bouncer runs inside
+> each route's handler chain, so it only sees requests that match a
+> route you configured. Anything else — an unknown host, a path on no
+> route — is answered by Arenet's catch-all 404 before CrowdSec is ever
+> consulted. Test against a route that exists.
 
 ---
 

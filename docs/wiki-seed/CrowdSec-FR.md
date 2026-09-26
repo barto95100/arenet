@@ -133,25 +133,46 @@ La page `/security/decisions` rend ces événements avec filtre par origin + sce
 
 ---
 
-## Vérifier que l'intégration est live
+## Vérifier que l'intégration fonctionne
+
+Bannissez votre propre IP une minute et regardez une route vous refuser.
+
+**1. Trouvez votre adresse — depuis la machine avec laquelle vous allez
+naviguer, pas depuis le serveur.**
+
+`curl -s ifconfig.me` lancé *sur l'hôte Arenet* retourne l'adresse
+publique **du serveur**, pas celle avec laquelle votre navigateur arrive.
+La bannir revient à bannir le serveur. Lancez la commande là où vous
+êtes assis :
 
 ```bash
-# Trouver une IP actuellement bannie dans la liste des décisions de l'agent
-sudo cscli decisions list
-
-# Choisir une IP dans la sortie, puis tenter d'atteindre une de vos routes
-# depuis cette IP (ou, plus simple, depuis une VM qui la porte)
-# Attendu : la route répond 403 avant même d'atteindre le WAF
+curl -s https://ifconfig.me        # sur votre poste, PAS sur le serveur
+curl -4 -s https://ifconfig.me     # votre IPv4, précisément
+curl -6 -s https://ifconfig.me     # votre IPv6, précisément
 ```
 
-Vous pouvez aussi bannir votre propre IP une minute, comme test :
+Si votre navigateur atteint le site en IPv6, bannissez l'adresse IPv6 :
+un bannissement sur la mauvaise famille d'adresses ne fait absolument
+rien, et c'est la raison la plus fréquente pour laquelle ce test semble
+échouer.
+
+**2. Bannissez-la, sur l'hôte Arenet :**
 
 ```bash
-sudo cscli decisions add --ip "$(curl -s ifconfig.me)" --duration 60s
+sudo cscli decisions add --ip <l-adresse-de-l-etape-1> --duration 60s
+sudo cscli decisions list          # vérifiez que Scope:Value est bien celle attendue
 ```
 
-Tentez d'atteindre une route depuis chez vous → 403. Au bout de 60 s le
-bannissement expire et la route répond de nouveau.
+**3. Chargez une de vos routes configurées** depuis cette machine →
+**403**. Au bout de 60 s le bannissement expire et la route répond de
+nouveau normalement.
+
+> **Un 404 au lieu d'un 403 n'est pas un échec.** Le bouncer s'exécute
+> dans la chaîne de chaque route, il ne voit donc que les requêtes qui
+> correspondent à une route que vous avez configurée. Tout le reste — un
+> hôte inconnu, un chemin qui n'appartient à aucune route — est traité
+> par le 404 attrape-tout d'Arenet avant que CrowdSec ne soit consulté.
+> Testez sur une route qui existe.
 
 ---
 
