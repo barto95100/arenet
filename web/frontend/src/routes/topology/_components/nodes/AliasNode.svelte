@@ -1,6 +1,6 @@
 <!--
   Arenet - Homelab-friendly reverse proxy with integrated security
-  Copyright (C) 2026  Ludovic Ramos
+  Copyright (C) 2026  The Arenet Authors
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
   AliasNode — Sub-node of the col-0 stack representing one alias of

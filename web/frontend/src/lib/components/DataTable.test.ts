@@ -1,5 +1,5 @@
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 // DataTable component tests (Step F Chunk 7.2, spec §11.3 — 3 tests).

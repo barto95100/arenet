@@ -104,7 +104,7 @@ git commit -m "i18n(notifications): add notifications.* keys, drop topbar.update
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import { describe, it, expect } from 'vitest';
@@ -156,7 +156,7 @@ Expected: FAIL — "Cannot find module './notification-href'".
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import type { AlertEvent } from '$lib/api/alerting';
@@ -210,7 +210,7 @@ git commit -m "feat(notifications): add notificationHref contextual nav helper"
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -338,7 +338,7 @@ Expected: FAIL — "Cannot find module './notifications.svelte'".
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 // Notification panel state. Layers over alertEventsStore (rule-driven
@@ -490,7 +490,7 @@ git commit -m "feat(notifications): store with unread tracking + synthetic updat
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -586,7 +586,7 @@ Expected: FAIL — "Cannot find module './NotificationBell.svelte'".
 ```svelte
 <!--
   Arenet - Homelab-friendly reverse proxy with integrated security
-  Copyright (C) 2026  Ludovic Ramos
+  Copyright (C) 2026  The Arenet Authors
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
   Sidebar notification entry (bell + label + unread count) with a

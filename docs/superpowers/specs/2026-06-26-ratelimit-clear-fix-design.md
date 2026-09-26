@@ -1,7 +1,7 @@
 # Rate-limit clear via UI — Phase Q.2 sentinel field
 
 **Ship target**: v2.9.13
-**Author**: Ludovic Ramos
+**Author**: Operator
 **Date**: 2026-06-26
 **Status**: Approved — ready for implementation
 **Cross-ref**: Step Q (rate-limiting shipped v2.5.0) + the
