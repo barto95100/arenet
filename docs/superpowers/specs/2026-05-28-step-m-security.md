@@ -4,7 +4,7 @@
 **Target spec-freeze tag:** `v0.9.0-step-m-spec`.
 **Target implementation tag:** `v0.9.0-step-m` after the M.5 smoke
 verdict PASS.
-**Author:** Claude + Ludovic Ramos.
+**Author:** Claude + Operator.
 **Draft date:** 2026-05-28.
 
 > Scope α only — WAF events. CrowdSec integration is deferred to

@@ -1,6 +1,6 @@
 <!--
   Arenet - Homelab-friendly reverse proxy with integrated security
-  Copyright (C) 2026  Ludovic Ramos
+  Copyright (C) 2026  The Arenet Authors
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 
   Step R.4.3.a — /waf page. Replaces the R.2 stub.

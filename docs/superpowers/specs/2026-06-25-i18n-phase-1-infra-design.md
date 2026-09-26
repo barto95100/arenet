@@ -1,7 +1,7 @@
 # i18n Phase 1 — infra-only foundation
 
 **Ship target**: v2.9.11
-**Author**: Ludovic Ramos
+**Author**: Operator
 **Date**: 2026-06-25
 **Status**: Approved — ready for implementation
 **Follow-ups**: Phase 2 (v2.9.12 — 4 demo screens migrated + enriched bundles), Phase 3+ (bulk string extraction)

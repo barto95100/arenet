@@ -1,5 +1,5 @@
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 // v2.41 — the shared empty-state surface. Half the pages had a real

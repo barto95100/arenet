@@ -157,7 +157,7 @@ Expected: FAIL — `undefined: DeleteCertFiles`.
 ```go
 // internal/certinfo/delete.go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -488,7 +488,7 @@ Expected: FAIL — route not registered (404) / `h.deleteCertificate` undefined.
 ```go
 // internal/api/certificates_delete.go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as

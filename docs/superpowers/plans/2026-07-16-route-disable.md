@@ -39,7 +39,7 @@ Create `internal/storage/routes_disabled_test.go`:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 package storage
@@ -163,7 +163,7 @@ Create `internal/caddymgr/route_disabled_emission_test.go`:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 package caddymgr
@@ -429,7 +429,7 @@ Create `internal/api/route_toggle_test.go`. Mirror the existing route-handler te
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 package api
@@ -689,7 +689,7 @@ Create `internal/api/topology/route_disabled_test.go`:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 package topology
