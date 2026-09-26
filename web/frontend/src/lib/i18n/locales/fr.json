@@ -43,6 +43,13 @@
 	},
 	"errors": {
 		"server": {
+			"user_username_taken": "Cet identifiant est déjà pris.",
+			"user_username_invalid": "L'identifiant doit faire de 3 à 32 caractères, parmi a–z, 0–9, _ ou -.",
+			"user_display_name_too_long": "Le nom affiché est trop long.",
+			"user_role_invalid": "Choisis un rôle : lecteur ou administrateur.",
+			"user_password_too_short": "Le mot de passe est trop court — 15 caractères minimum.",
+			"user_password_too_long": "Le mot de passe est trop long.",
+			"user_email_on_oidc_allowlist": "{email} est déjà une identité SSO. Créer un compte local pour cette adresse donnerait deux comptes à la même personne — un par mot de passe, un fédéré — et celui où elle arriverait dépendrait du bouton pressé.",
 			"redirect_target_required": "Une URL de destination est requise.",
 			"redirect_target_invalid": "{target} n'est pas une URL valide.",
 			"redirect_target_scheme": "{target} doit commencer par http:// ou https://.",
@@ -988,6 +995,7 @@
 		"kpiLocalHintBreakGlass": "{count} en break-glass",
 		"kpiLocalHintManual": "gérés manuellement",
 		"subtitle": "{total} compte{plural_total} — {admins} admin{plural_admins}, {viewers} viewer{plural_viewers} · {oidc} OIDC, {local} local",
+		"createUser": "Créer un utilisateur",
 		"createServiceAccount": "+ Créer un service account",
 		"searchPlaceholder": "Rechercher (nom, email, rôle, source)…",
 		"filterUsersAria": "Filtrer les utilisateurs",
@@ -2412,5 +2420,34 @@
 		"uptimeDays": "{days} j {hours} h",
 		"uptimeHours": "{hours} h {minutes} min",
 		"uptimeMinutes": "{minutes} min"
+	},
+	"createUser": {
+		"titleCreate": "Créer un utilisateur",
+		"titleReveal": "Le mot de passe, une seule fois",
+		"username": "Identifiant",
+		"displayName": "Nom affiché",
+		"email": "Adresse e-mail",
+		"role": "Rôle",
+		"roleViewer": "Lecteur — lecture seule",
+		"roleAdmin": "Administrateur — accès complet",
+		"roleHelp": "Un lecteur voit tout et ne modifie rien. N'accorde le rôle administrateur que délibérément.",
+		"generate": "Laisser Arenet générer le premier mot de passe",
+		"password": "Premier mot de passe",
+		"mustChangeNotice": "Celui qui crée le compte connaît son premier mot de passe : le compte devra donc le changer dès sa première connexion.",
+		"revealIntro": "Copie-le maintenant. Il n'est affiché qu'une fois et rien ne permet de le retrouver ensuite — si tu le perds, supprime le compte et recrée-le.",
+		"revealWarning": "Le compte devra changer ce mot de passe à sa première connexion.",
+		"cancel": "Annuler",
+		"create": "Créer",
+		"copy": "Copier",
+		"copied": "Copié",
+		"close": "Fermer",
+		"toastCreated": "{username} créé",
+		"toastCopied": "Mot de passe copié",
+		"toastCopyFailed": "Copie impossible — sélectionne le texte et copie-le à la main"
+	},
+	"mustChange": {
+		"title": "Change ton mot de passe",
+		"body": "Ce compte a été créé par un administrateur, qui connaît son premier mot de passe. Choisis le tien avant d'aller plus loin.",
+		"action": "Changer mon mot de passe"
 	}
 }

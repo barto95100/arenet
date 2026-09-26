@@ -1623,6 +1623,32 @@ export interface CreateServiceAccountRequest {
  * lifecycle is a deliberate non-feature (an operator wanting
  * a fresh copy rotates).
  */
+/**
+ * v2.48 — creating a local account.
+ *
+ * `password` is optional: empty means "generate one", which is the
+ * default because an operator asked to invent a password for somebody
+ * else reaches for something memorable, and nobody needs to remember
+ * this one — it is shown once and the account must change it.
+ */
+export interface CreateAdminUserRequest {
+	username: string;
+	displayName: string;
+	email: string;
+	role: UserRole;
+	password?: string;
+}
+
+export interface CreateAdminUserResponse {
+	user: AdminUser;
+	/**
+	 * Present ONLY when Arenet generated it, and only here. When the
+	 * admin typed one they already have it, and echoing it back would
+	 * put it somewhere it does not need to be.
+	 */
+	generatedPassword?: string;
+}
+
 export interface CreateServiceAccountResponse {
 	user: AdminUser;
 	token: string;

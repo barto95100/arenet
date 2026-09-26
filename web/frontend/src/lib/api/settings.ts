@@ -16,6 +16,8 @@ import type {
 	AutomationRulesRequest,
 	AutomationRuleSet,
 	CreateServiceAccountRequest,
+	CreateAdminUserRequest,
+	CreateAdminUserResponse,
 	CreateServiceAccountResponse,
 	CrowdSecSettings,
 	CrowdSecSettingsRequest,
@@ -165,6 +167,15 @@ export const settingsApi = {
 	// Step K.2 — admin Users management. The list response omits
 	// PasswordHash and surfaces OIDCSub as a boolean (oidcLinked).
 	listAdminUsers: (): Promise<AdminUser[]> => request<AdminUser[]>('GET', '/admin/users'),
+	/**
+	 * v2.48 — create a local account.
+	 *
+	 * Leaving `password` empty asks Arenet to generate one, which is
+	 * the default and the safe path; the response then carries it
+	 * ONCE, in `generatedPassword`. Nothing returns it afterwards.
+	 */
+	createAdminUser: (r: CreateAdminUserRequest): Promise<CreateAdminUserResponse> =>
+		request<CreateAdminUserResponse>('POST', '/admin/users', r),
 	updateUserRole: (id: string, r: UpdateUserRoleRequest): Promise<AdminUser> =>
 		request<AdminUser>('POST', `/admin/users/${encodeURIComponent(id)}/role`, r),
 	// Users-page Phase 1 refactor — hard delete with last-admin

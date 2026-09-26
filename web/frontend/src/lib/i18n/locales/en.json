@@ -43,6 +43,13 @@
 	},
 	"errors": {
 		"server": {
+			"user_username_taken": "That username is already taken.",
+			"user_username_invalid": "The username must be 3 to 32 characters, using a–z, 0–9, _ or -.",
+			"user_display_name_too_long": "The display name is too long.",
+			"user_role_invalid": "Choose a role: viewer or admin.",
+			"user_password_too_short": "The password is too short — 15 characters minimum.",
+			"user_password_too_long": "The password is too long.",
+			"user_email_on_oidc_allowlist": "{email} is already an SSO identity. Creating a local account for it would give that person two accounts — one password-based, one federated — and which one they land in would depend on which button they pressed.",
 			"redirect_target_required": "A target URL is required.",
 			"redirect_target_invalid": "{target} is not a valid URL.",
 			"redirect_target_scheme": "{target} must start with http:// or https://.",
@@ -988,6 +995,7 @@
 		"kpiLocalHintBreakGlass": "{count} in break-glass",
 		"kpiLocalHintManual": "manually managed",
 		"subtitle": "{total} account{plural_total} — {admins} admin{plural_admins}, {viewers} viewer{plural_viewers} · {oidc} OIDC, {local} local",
+		"createUser": "Create a user",
 		"createServiceAccount": "+ Create service account",
 		"searchPlaceholder": "Search (name, email, role, source)…",
 		"filterUsersAria": "Filter users",
@@ -2412,5 +2420,34 @@
 		"uptimeDays": "{days} d {hours} h",
 		"uptimeHours": "{hours} h {minutes} min",
 		"uptimeMinutes": "{minutes} min"
+	},
+	"createUser": {
+		"titleCreate": "Create a user",
+		"titleReveal": "The password, once",
+		"username": "Username",
+		"displayName": "Display name",
+		"email": "Email",
+		"role": "Role",
+		"roleViewer": "Viewer — read-only",
+		"roleAdmin": "Admin — full access",
+		"roleHelp": "A viewer can look at everything and change nothing. Grant admin deliberately.",
+		"generate": "Let Arenet generate the first password",
+		"password": "First password",
+		"mustChangeNotice": "Whoever creates the account knows its first password, so the account is required to change it at first login.",
+		"revealIntro": "Copy this now. It is shown once and nothing can retrieve it afterwards — if you lose it, delete the account and create it again.",
+		"revealWarning": "The account must change this password the first time it signs in.",
+		"cancel": "Cancel",
+		"create": "Create",
+		"copy": "Copy",
+		"copied": "Copied",
+		"close": "Close",
+		"toastCreated": "{username} created",
+		"toastCopied": "Password copied",
+		"toastCopyFailed": "Could not copy — select the text and copy it by hand"
+	},
+	"mustChange": {
+		"title": "Change your password",
+		"body": "This account was created by an administrator, who knows its first password. Choose your own before going any further.",
+		"action": "Change my password"
 	}
 }

@@ -455,6 +455,10 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				r.Post("/settings/oidc/allowlist", h.addOIDCAllowlist)
 				r.Delete("/settings/oidc/allowlist/{email}", h.deleteOIDCAllowlist)
 				r.Get("/admin/users", h.listAdminUsers)
+				// v2.48 — create a local account. Admin only:
+				// creating an account is a privilege change, same
+				// posture as editing a role or deleting one.
+				r.Post("/admin/users", h.createAdminUser)
 				r.Post("/admin/users/{id}/role", h.updateUserRole)
 				// Users-page Phase 1 refactor — delete an
 				// admin user. Last-admin guard fires inside

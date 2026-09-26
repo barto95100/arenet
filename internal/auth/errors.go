@@ -28,6 +28,12 @@ var (
 	// that already exists in the bucket.
 	ErrUsernameTaken = errors.New("auth: username already taken")
 
+	// ErrRoleInvalid is returned when a role is neither "viewer" nor
+	// "admin". v2.48 — CreateManaged has no default role on purpose:
+	// defaulting would turn a forgotten dropdown into a silent
+	// privilege decision.
+	ErrRoleInvalid = errors.New("auth: role must be viewer or admin")
+
 	// ErrUsernameInvalid is returned when the supplied username does not
 	// match the format defined by D5: regex ^[a-z0-9_-]+$, length 3..32.
 	ErrUsernameInvalid = errors.New("auth: username does not match required format")

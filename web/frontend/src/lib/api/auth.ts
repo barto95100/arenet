@@ -29,6 +29,14 @@ export interface User {
 	 */
 	role: UserRole;
 	/**
+	 * v2.48 — the account was created by an administrator, who
+	 * necessarily knows its first password: they either typed it or
+	 * read it off the screen once. The UI keeps the user on the
+	 * change-password screen until this clears, which happens when
+	 * they change it. Absent on pre-v2.48 sessions, hence optional.
+	 */
+	mustChangePassword?: boolean;
+	/**
 	 * Step K.2 — provenance of the credentials backing this
 	 * session. "local" → username+password (and Settings → "Change
 	 * password" works); "oidc" → SSO via IdP (password rotation

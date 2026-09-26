@@ -179,14 +179,29 @@ func (s *UserStore) Create(ctx context.Context, username, displayName, email, pa
 		Role:       UserRoleAdmin,
 	}
 
-	err = s.db.Update(func(tx *bolt.Tx) error {
+	if err := s.insertUnique(user); err != nil {
+		return User{}, err
+	}
+	return user, nil
+}
+
+// insertUnique persists a brand-new user, refusing a username another
+// row already holds.
+//
+// v2.48 — extracted from Create so CreateManaged shares the exact same
+// uniqueness check rather than carrying a second copy of it. The
+// check has to live inside the transaction: two concurrent creations
+// would otherwise both read "free" and both insert.
+//
+// A corrupted row is logged and skipped rather than blocking every
+// future creation — one unreadable record should not lock the
+// operator out of adding users.
+func (s *UserStore) insertUnique(user User) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(usersBucketName))
 		if b == nil {
 			return fmt.Errorf("auth: bucket %q missing", usersBucketName)
 		}
-		// Check uniqueness in-transaction so concurrent Create calls
-		// cannot both succeed with the same username. Corrupted rows
-		// are logged and skipped rather than blocking new creations.
 		var taken bool
 		_ = b.ForEach(func(k, v []byte) error {
 			var existing User
@@ -197,7 +212,7 @@ func (s *UserStore) Create(ctx context.Context, username, displayName, email, pa
 				)
 				return nil
 			}
-			if existing.Username == username {
+			if existing.Username == user.Username {
 				taken = true
 			}
 			return nil
@@ -211,7 +226,76 @@ func (s *UserStore) Create(ctx context.Context, username, displayName, email, pa
 		}
 		return b.Put([]byte(user.ID), value)
 	})
+}
+
+// ManagedUserSpec is a user an administrator creates from the Users
+// page, as opposed to the single account the setup flow bootstraps.
+type ManagedUserSpec struct {
+	Username    string
+	DisplayName string
+	Email       string
+	// Password is the first password. Already generated or typed by
+	// the caller; this layer only validates and hashes it.
+	Password string
+	// Role is "viewer" or "admin". The caller decides; there is no
+	// default here, so forgetting it is a refusal rather than a
+	// silent privilege grant.
+	Role string
+}
+
+// CreateManaged persists a user an administrator created.
+//
+// v2.48 — distinct from Create, which hardcodes Role=admin because the
+// setup flow is trusted by definition and a homelab with zero admins
+// is locked out. Neither assumption holds here: an admin creating an
+// account picks the role, and the account starts out having to change
+// its password, because whoever created it knows the first one.
+func (s *UserStore) CreateManaged(ctx context.Context, spec ManagedUserSpec) (User, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	username := strings.TrimSpace(spec.Username)
+	if !usernameRegex.MatchString(username) || len(username) < UsernameMinLen || len(username) > UsernameMaxLen {
+		return User{}, ErrUsernameInvalid
+	}
+	if len(spec.DisplayName) > DisplayNameMaxLen {
+		return User{}, ErrDisplayNameTooLong
+	}
+	if spec.Role != UserRoleViewer && spec.Role != UserRoleAdmin {
+		return User{}, ErrRoleInvalid
+	}
+	if len(spec.Password) < PasswordMinLen {
+		return User{}, ErrPasswordTooShort
+	}
+	if len(spec.Password) > PasswordMaxLen {
+		return User{}, ErrPasswordTooLong
+	}
+
+	hash, err := argon2id.CreateHash(spec.Password, argon2idParams)
 	if err != nil {
+		return User{}, fmt.Errorf("auth: hash password: %w", err)
+	}
+
+	now := time.Now().UTC()
+	user := User{
+		ID:              uuid.NewString(),
+		Username:        username,
+		DisplayName:     spec.DisplayName,
+		Email:           strings.TrimSpace(spec.Email),
+		PasswordHash:    hash,
+		HIBPCheckStatus: HIBPStatusPending,
+		HIBPCheckedAt:   now,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		AuthSource:      UserAuthSourceLocal,
+		Role:            spec.Role,
+		// The whole point: the creator knows this password.
+		MustChangePassword: true,
+	}
+	if err := s.insertUnique(user); err != nil {
 		return User{}, err
 	}
 	return user, nil
@@ -443,6 +527,10 @@ func (s *UserStore) UpdatePassword(ctx context.Context, id, newPassword string) 
 		u.HIBPCheckStatus = HIBPStatusPending
 		u.HIBPCheckedAt = time.Time{} // re-verified at next login
 		u.PasswordCompromised = false
+		// v2.48 — changing the password is the only way out of the
+		// forced-change state, and it is unconditional: a user who
+		// arrives here already free of the flag simply stays free.
+		u.MustChangePassword = false
 		u.UpdatedAt = time.Now().UTC()
 		out, err := json.Marshal(u)
 		if err != nil {
@@ -634,6 +722,7 @@ func (s *UserStore) RecordLogin(ctx context.Context, id string) error {
 //   - Re-check uniqueness — the in-transaction check below
 //     defends against concurrent Create races but the caller's
 //     pre-check produces a friendlier error.
+//
 // `email` is the OIDC `email` claim — best-effort capture
 // so the users-page can display contact info. Empty when
 // the IdP didn't emit the claim; UpdateEmail can backfill on
