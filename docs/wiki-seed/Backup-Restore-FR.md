@@ -131,8 +131,9 @@ L'erreur de refus nomme la ligne et le champ, et donne les deux options : ré-ex
 # Avant upgrade
 [UI] Export (redacted) → save vers ~/backups/arenet-pre-upgrade.json
 
-# Fais l'upgrade
-docker compose pull && docker compose up -d
+# Faire la mise à jour
+docker compose pull && docker compose up -d          # Docker
+# curl -fsSL .../packaging/systemd/install.sh | sudo bash   # natif (voir Mises à jour)
 
 # Vérifie
 curl http://localhost:8001/healthz
@@ -149,8 +150,10 @@ curl http://localhost:8001/healthz
 # Copie vers le nouvel host
 scp ~/backups/arenet-full.json newhost:/root/
 
-# Host source — copie aussi les fichiers cert Caddy (optionnel, skip la ré-émission ACME)
-docker cp arenet:/var/lib/arenet/caddy ~/backups/caddy-state
+# Hôte source — copier aussi les certificats Caddy (optionnel : évite une
+# ré-émission ACME)
+docker cp arenet:/var/lib/arenet/.local/share/caddy ~/backups/caddy-state   # Docker
+# sudo cp -r /var/lib/arenet/.local/share/caddy ~/backups/caddy-state       # natif
 scp -r ~/backups/caddy-state newhost:/root/
 
 # Nouvel host
@@ -164,13 +167,19 @@ scp -r ~/backups/caddy-state newhost:/root/
 ### Scénario C : "factory reset" puis restore depuis backup clean
 
 ```bash
-# Stop Arenet, wipe state
+# Arrêter Arenet et effacer l'état — Docker
 docker compose down
 docker volume rm arenet_arenet-data
 docker compose up -d
 
-# Le premier boot génère un nouveau setup token
-docker logs arenet | grep "setup token"
+# Arrêter Arenet et effacer l'état — natif (systemd)
+# sudo systemctl stop arenet
+# sudo rm -rf /var/lib/arenet/*
+# sudo systemctl start arenet
+
+# Le premier démarrage génère un nouveau jeton d'installation
+docker logs arenet | grep "setup token"          # Docker
+# sudo journalctl -u arenet | grep "setup token" # natif
 
 # Wizard de setup → crée un admin jetable
 # [UI] Browse → backup précédent → Allow incomplete + Allow empty users : NO/YES selon cas → Restore

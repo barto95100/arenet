@@ -4,7 +4,7 @@
 
 [CrowdSec](https://www.crowdsec.net) is a community-powered IP reputation service : a collaborative IDS that lets your hosts share threat intelligence. Arenet ships a native [CrowdSec bouncer](https://github.com/hslatman/caddy-crowdsec-bouncer) that blocks requests from IPs the CrowdSec community has flagged.
 
-**The CrowdSec agent itself runs separately** (typically as a Docker container or systemd service on the same host). Arenet only embeds the *bouncer* — the component that queries the agent's Local API (LAPI) and enforces decisions.
+**The CrowdSec agent itself runs separately** — as a Linux service installed from the CrowdSec repository, or as a Docker container. Both are covered below. Arenet only embeds the *bouncer* — the component that queries the agent's Local API (LAPI) and enforces decisions.
 
 ---
 
@@ -34,7 +34,32 @@ You also get **community decisions** for free : the agent fetches the CrowdSec h
 
 ### 1. Install + run the CrowdSec agent
 
-Run the agent on the same host as Arenet (or a reachable LAN host). Docker is easiest :
+The agent runs on the same host as Arenet, or on any host Arenet can
+reach. Pick the path that matches how Arenet itself is installed.
+
+#### Linux package — systemd or bare-binary Arenet
+
+```bash
+curl -s https://install.crowdsec.net | sudo sh   # add the CrowdSec repository
+sudo apt install crowdsec                        # Debian / Ubuntu
+# sudo yum install crowdsec                      # RHEL / CentOS / Fedora
+sudo systemctl enable --now crowdsec
+```
+
+The package starts the agent and its Local API. Check it is listening :
+
+```bash
+ss -tlnp | grep 8080
+# tcp LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:* users:(("crowdsec",pid=…))
+```
+
+Configuration lives in `/etc/crowdsec/`, the database in
+`/var/lib/crowdsec/data/`. Agent logs : `sudo journalctl -u crowdsec -f`.
+
+See the [official Linux install guide](https://docs.crowdsec.net/u/getting_started/installation/linux/)
+for other distributions.
+
+#### Docker — containerised Arenet
 
 ```bash
 docker run -d --name crowdsec \
@@ -43,16 +68,21 @@ docker run -d --name crowdsec \
   -v /var/log:/var/log:ro \
   -v crowdsec-db:/var/lib/crowdsec/data \
   -v crowdsec-config:/etc/crowdsec \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   crowdsecurity/crowdsec
 ```
 
-The agent's LAPI is now on `http://<host>:8080`.
+Either way, the agent's LAPI is now on `http://127.0.0.1:8080`.
+
+> **Every `cscli` command below is written for the package install.**
+> With the Docker agent, prefix it with `docker exec crowdsec` —
+> `sudo cscli decisions list` becomes
+> `docker exec crowdsec cscli decisions list`.
 
 ### 2. Register the Arenet bouncer
 
 ```bash
-docker exec crowdsec cscli bouncers add arenet
+sudo cscli bouncers add arenet
 ```
 
 The command prints an API key — copy it.
@@ -104,7 +134,7 @@ The `/security/decisions` page renders these with filter by origin + scenario + 
 
 ```bash
 # Find a currently-banned IP in your agent's decision list
-docker exec crowdsec cscli decisions list
+sudo cscli decisions list
 
 # Pick an IP from the output, then try to hit any of your routes from it
 # (or, easier, run from a VM with that IP)
@@ -114,7 +144,7 @@ docker exec crowdsec cscli decisions list
 You can also manually ban your own IP for a minute as a smoke test :
 
 ```bash
-docker exec crowdsec cscli decisions add --ip "$(curl -s ifconfig.me)" --duration 60s
+sudo cscli decisions add --ip "$(curl -s ifconfig.me)" --duration 60s
 ```
 
 Try to hit any route from your home → 403. After 60s the ban expires, the route works again.
@@ -128,10 +158,12 @@ CrowdSec is communal — sometimes an IP gets banned globally for behaviour your
 ### Whitelist a specific IP
 
 ```bash
-docker exec crowdsec cscli decisions delete --ip <your-user-ip>
-docker exec crowdsec cscli postoverflows install crowdsecurity/whitelists
+sudo cscli decisions delete --ip <your-user-ip>
+sudo cscli postoverflows install crowdsecurity/whitelists
 # Then edit /etc/crowdsec/postoverflows/s01-whitelist/whitelists.yaml
-# to add your user's IP / CIDR
+# to add your user's IP / CIDR.
+# Docker : that file is inside the crowdsec-config volume, so edit it with
+#   docker exec -it crowdsec vi /etc/crowdsec/postoverflows/s01-whitelist/whitelists.yaml
 ```
 
 ### Disable the bouncer per-route
@@ -144,7 +176,7 @@ A per-route CrowdSec toggle is on the V3 backlog ; open an issue if you'd find i
 
 ## Fallback behaviour (LAPI down)
 
-When the agent is unreachable (network blip, agent crash, restart), the bouncer **fails open by default** — requests pass through as if CrowdSec was disabled. This is the AC #13 degraded-mode contract : Arenet's own LAPI client never blocks legitimate traffic because the agent is having a bad day.
+When the agent is unreachable — network blip, crash, restart — the bouncer **fails open by default** : requests pass through as if CrowdSec were disabled. That is deliberate (`enable_hard_fails: false`) : legitimate traffic should not go down because the agent is having a bad day.
 
 The dashboard's CrowdSec card shows the agent status (✅ reachable / ⚠️ unreachable + last-success timestamp). Wire an [Alerting](Alerting) rule on `system_health == degraded` to get a Discord/email ping when the agent drops.
 
