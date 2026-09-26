@@ -132,7 +132,8 @@ The reject error names the row and field and gives the two paths forward : re-ex
 [UI] Export (redacted) → save to ~/backups/arenet-pre-upgrade.json
 
 # Do the upgrade
-docker compose pull && docker compose up -d
+docker compose pull && docker compose up -d          # Docker
+# curl -fsSL .../packaging/systemd/install.sh | sudo bash   # native (see Updates)
 
 # Verify
 curl http://localhost:8001/healthz
@@ -150,7 +151,8 @@ curl http://localhost:8001/healthz
 scp ~/backups/arenet-full.json newhost:/root/
 
 # Source host — copy Caddy cert files too (optional, skips ACME re-issuance)
-docker cp arenet:/var/lib/arenet/.local/share/caddy ~/backups/caddy-state
+docker cp arenet:/var/lib/arenet/.local/share/caddy ~/backups/caddy-state   # Docker
+# sudo cp -r /var/lib/arenet/.local/share/caddy ~/backups/caddy-state       # native
 scp -r ~/backups/caddy-state newhost:/root/
 
 # New host
@@ -164,13 +166,19 @@ scp -r ~/backups/caddy-state newhost:/root/
 ### Scenario C : "factory reset" then restore from clean backup
 
 ```bash
-# Stop Arenet, wipe state
+# Stop Arenet, wipe state — Docker
 docker compose down
 docker volume rm arenet_arenet-data
 docker compose up -d
 
+# Stop Arenet, wipe state — native (systemd)
+# sudo systemctl stop arenet
+# sudo rm -rf /var/lib/arenet/*
+# sudo systemctl start arenet
+
 # First boot generates a new setup token
-docker logs arenet | grep "setup token"
+docker logs arenet | grep "setup token"          # Docker
+# sudo journalctl -u arenet | grep "setup token" # native
 
 # Setup wizard → create throwaway admin
 # [UI] Browse → previous backup → Allow incomplete + Allow empty users : NO/YES per case → Restore

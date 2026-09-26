@@ -4,7 +4,7 @@
 
 [CrowdSec](https://www.crowdsec.net) est un service de réputation IP community-powered : un IDS collaboratif qui laisse tes hosts partager du threat intelligence. Arenet ship un [bouncer CrowdSec](https://github.com/hslatman/caddy-crowdsec-bouncer) natif qui bloque les requêtes depuis les IPs que la communauté CrowdSec a flaguées.
 
-**L'agent CrowdSec lui-même tourne séparément** (typiquement comme un container Docker ou service systemd sur le même host). Arenet embarque uniquement le *bouncer* — le composant qui query la Local API (LAPI) de l'agent et enforce les décisions.
+**L'agent CrowdSec lui-même tourne séparément** — en service Linux installé depuis le dépôt CrowdSec, ou en conteneur Docker. Les deux sont couverts ci-dessous. Arenet n'embarque que le *bouncer* : le composant qui interroge l'API locale (LAPI) de l'agent et applique ses décisions.
 
 ---
 
@@ -14,7 +14,7 @@
 ┌─────────────────┐       ┌─────────────────┐       ┌──────────────────┐
 │  Arenet         │ ────▶ │  CrowdSec       │ ◀──── │  CrowdSec Hub    │
 │  (bouncer)      │ LAPI  │  agent          │       │  (blocklists     │
-│                 │ poll  │  (ton host)     │       │   communauté)    │
+│                 │ LAPI  │  (votre hôte)   │       │   communauté)    │
 └─────────────────┘       └─────────────────┘       └──────────────────┘
    │                          │
    │ si IP dans decision      │ scenarios triggerent
@@ -24,7 +24,7 @@
                               (IPs bannies)
 ```
 
-L'agent parse tes logs locaux (auth, serveur web, etc.), trigger sur des scenarios (brute-force, scanning, exploitation), et crée des **décisions** (ban X pour Y minutes). Le bouncer poll l'agent toutes les N secondes et enforce.
+L'agent analyse vos journaux locaux (authentification, serveur web…), se déclenche sur des scénarios (force brute, balayage, exploitation) et crée des **décisions** : bannir telle IP pendant tel temps. Le bouncer interroge l'agent toutes les N secondes et applique ces décisions.
 
 Tu reçois aussi des **décisions communauté** gratuitement : l'agent fetch la blocklist curated du hub CrowdSec, des IPs actuellement abusives dans la communauté globale. Effectivement une blocklist temps réel maintenue par des milliers d'opérateurs dans le monde.
 
@@ -32,9 +32,36 @@ Tu reçois aussi des **décisions communauté** gratuitement : l'agent fetch la 
 
 ## Quick start
 
-### 1. Install + run l'agent CrowdSec
+### 1. Installer et démarrer l'agent CrowdSec
 
-Run l'agent sur le même host qu'Arenet (ou un host LAN reachable). Docker est le plus facile :
+L'agent tourne sur la même machine qu'Arenet, ou sur n'importe quelle
+machine qu'Arenet peut joindre. Choisissez la voie qui correspond à la
+façon dont Arenet lui-même est installé.
+
+#### Paquet Linux — Arenet en service systemd ou en binaire
+
+```bash
+curl -s https://install.crowdsec.net | sudo sh   # ajoute le dépôt CrowdSec
+sudo apt install crowdsec                        # Debian / Ubuntu
+# sudo yum install crowdsec                      # RHEL / CentOS / Fedora
+sudo systemctl enable --now crowdsec
+```
+
+Le paquet démarre l'agent et son API locale. Vérifiez qu'elle écoute :
+
+```bash
+ss -tlnp | grep 8080
+# tcp LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:* users:(("crowdsec",pid=…))
+```
+
+La configuration se trouve dans `/etc/crowdsec/`, la base dans
+`/var/lib/crowdsec/data/`. Journaux de l'agent :
+`sudo journalctl -u crowdsec -f`.
+
+Voir le [guide d'installation Linux officiel](https://docs.crowdsec.net/u/getting_started/installation/linux/)
+pour les autres distributions.
+
+#### Docker — Arenet en conteneur
 
 ```bash
 docker run -d --name crowdsec \
@@ -43,31 +70,37 @@ docker run -d --name crowdsec \
   -v /var/log:/var/log:ro \
   -v crowdsec-db:/var/lib/crowdsec/data \
   -v crowdsec-config:/etc/crowdsec \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   crowdsecurity/crowdsec
 ```
 
-La LAPI de l'agent est maintenant sur `http://<host>:8080`.
+Dans les deux cas, l'API locale de l'agent est maintenant sur
+`http://127.0.0.1:8080`.
 
-### 2. Enregistre le bouncer Arenet
+> **Toutes les commandes `cscli` de cette page sont écrites pour
+> l'installation par paquet.** Avec l'agent en Docker, préfixez-les par
+> `docker exec crowdsec` : `sudo cscli decisions list` devient
+> `docker exec crowdsec cscli decisions list`.
+
+### 2. Déclarer le bouncer Arenet
 
 ```bash
-docker exec crowdsec cscli bouncers add arenet
+sudo cscli bouncers add arenet
 ```
 
-La commande print une API key — copie-la.
+La commande affiche une clé d'API — copiez-la.
 
 ### 3. Configure Arenet
 
 1. Sidebar → **Settings** → section **CrowdSec**
 2. **LAPI URL** : `http://127.0.0.1:8080` (ou l'adresse de ton agent)
-3. **API key** : colle la key de l'étape 2
+3. **Clé d'API** : collez la clé obtenue à l'étape 2
 4. **Bouncer name** : `arenet` (correspond à la registration cscli)
 5. **Timeout** : `5s` (défaut ; combien de temps le bouncer attend la réponse LAPI)
 6. **Test connection** → devrait retourner ✅
 7. **Save**
 
-En ~30 secondes le bouncer est actif. Toute requête inbound dont l'IP source est dans la decision list actuelle de CrowdSec retourne **403 Forbidden** avant d'atteindre le WAF / les handlers de route.
+Le bouncer est actif en une trentaine de secondes. Toute requête entrante dont l'IP source figure dans les décisions courantes de CrowdSec reçoit un **403 Forbidden** avant même d'atteindre le WAF ou les gestionnaires de route.
 
 Depuis la **v2.26.0**, un visiteur bloqué reçoit la **page d'erreur personnalisée** d'Arenet au lieu d'une réponse vide : une décision `ban` sert la page **403** de la route, une décision `throttle` sa page **429** (avec un en-tête `Retry-After` égal à la durée de la décision). C'est la page choisie pour la route dans ses réglages de pages d'erreur, ou celle d'Arenet par défaut — les mêmes pages que pour le filtre IP et les erreurs d'upstream (voir [Pages d'erreur personnalisées](Custom-Error-Pages-FR)).
 
@@ -75,7 +108,7 @@ Depuis la **v2.26.0**, un visiteur bloqué reçoit la **page d'erreur personnali
 
 ## Ce qui se fait bloquer
 
-Le bouncer enforce **les décisions que l'agent a**. Les scenarios par défaut (après `cscli scenarios install crowdsecurity/http-cve` etc.) incluent :
+Le bouncer applique **les décisions dont l'agent dispose**. Les scénarios installés par défaut (après `cscli scenarios install crowdsecurity/http-cve`, par exemple) couvrent :
 
 - Brute-force sur SSH / pages d'auth web
 - Scanning (nmap, masscan, scanners web vuln)
@@ -103,40 +136,48 @@ La page `/security/decisions` rend ces événements avec filtre par origin + sce
 ## Vérifier que l'intégration est live
 
 ```bash
-# Trouve une IP actuellement bannie dans la decision list de ton agent
-docker exec crowdsec cscli decisions list
+# Trouver une IP actuellement bannie dans la liste des décisions de l'agent
+sudo cscli decisions list
 
-# Choisis une IP de l'output, puis essaie de hit n'importe laquelle de tes routes depuis cette IP
-# (ou, plus facile, run depuis une VM avec cette IP)
-# Attendu : la route retourne 403 avant d'atteindre le WAF
+# Choisir une IP dans la sortie, puis tenter d'atteindre une de vos routes
+# depuis cette IP (ou, plus simple, depuis une VM qui la porte)
+# Attendu : la route répond 403 avant même d'atteindre le WAF
 ```
 
-Tu peux aussi bannir manuellement ta propre IP pour une minute comme smoke test :
+Vous pouvez aussi bannir votre propre IP une minute, comme test :
 
 ```bash
-docker exec crowdsec cscli decisions add --ip "$(curl -s ifconfig.me)" --duration 60s
+sudo cscli decisions add --ip "$(curl -s ifconfig.me)" --duration 60s
 ```
 
-Essaie de hit n'importe quelle route depuis chez toi → 403. Après 60s le ban expire, la route fonctionne à nouveau.
+Tentez d'atteindre une route depuis chez vous → 403. Au bout de 60 s le
+bannissement expire et la route répond de nouveau.
 
 ---
 
-## Tuning : que faire quand CrowdSec bloque des users légitimes
+## Réglage : que faire quand CrowdSec bloque des utilisateurs légitimes
 
-CrowdSec est communautaire — parfois une IP se fait bannir globalement pour un comportement que tes users locaux ne font pas. Tu as deux soupapes de sécurité :
+CrowdSec est communautaire — il arrive qu'une IP soit bannie globalement
+pour un comportement que vos propres utilisateurs n'ont pas. Vous avez
+deux soupapes.
 
-### Whitelist une IP spécifique
+### Mettre une IP en liste blanche
 
 ```bash
-docker exec crowdsec cscli decisions delete --ip <your-user-ip>
-docker exec crowdsec cscli postoverflows install crowdsecurity/whitelists
-# Puis édite /etc/crowdsec/postoverflows/s01-whitelist/whitelists.yaml
-# pour ajouter l'IP / CIDR de ton user
+sudo cscli decisions delete --ip <ip-de-l-utilisateur>
+sudo cscli postoverflows install crowdsecurity/whitelists
+# Puis éditer /etc/crowdsec/postoverflows/s01-whitelist/whitelists.yaml
+# pour y ajouter l'IP ou le CIDR de l'utilisateur.
+# En Docker, ce fichier est dans le volume crowdsec-config :
+#   docker exec -it crowdsec vi /etc/crowdsec/postoverflows/s01-whitelist/whitelists.yaml
 ```
 
-### Désactiver le bouncer par route
+### Désactiver le bouncer sur une route
 
-Actuellement CrowdSec est **global** dans Arenet (toutes les routes ou aucune). Si tu as besoin de bypass sur une route spécifique, le workaround est de mettre cette route sur une instance Arenet différente OU de whitelister les IPs source à la couche agent CrowdSec.
+CrowdSec est aujourd'hui **global** dans Arenet : toutes les routes ou
+aucune. Pour l'écarter sur une route précise, il faut soit placer cette
+route sur une autre instance d'Arenet, soit mettre les IP source en liste
+blanche au niveau de l'agent CrowdSec.
 
 Un toggle CrowdSec par route est dans le backlog V3 ; ouvre une issue si tu trouverais ça utile.
 
@@ -144,9 +185,9 @@ Un toggle CrowdSec par route est dans le backlog V3 ; ouvre une issue si tu trou
 
 ## Comportement fallback (LAPI down)
 
-Quand l'agent est unreachable (blip réseau, crash agent, restart), le bouncer **fail open par défaut** — les requêtes passent comme si CrowdSec était désactivé. C'est le contrat de degraded-mode AC #13 : le client LAPI propre d'Arenet ne bloque jamais du trafic légitime parce que l'agent a une mauvaise journée.
+Quand l'agent est injoignable — coupure réseau, plantage, redémarrage — le bouncer **laisse passer par défaut** : les requêtes circulent comme si CrowdSec était désactivé. C'est délibéré (`enable_hard_fails: false`) : le trafic légitime ne doit pas tomber parce que l'agent a une mauvaise journée.
 
-La card CrowdSec du dashboard montre le status de l'agent (✅ reachable / ⚠️ unreachable + timestamp du dernier success). Câble une règle d'[Alerting](Alerting) sur `system_health == degraded` pour recevoir un ping Discord/email quand l'agent drop.
+La carte CrowdSec du tableau de bord indique l'état de l'agent (✅ joignable / ⚠️ injoignable, avec l'horodatage du dernier succès). Ajoutez une règle d'[alerte](Alerting) sur `system_health == degraded` pour être prévenu par Discord ou courriel quand l'agent décroche.
 
 ---
 
