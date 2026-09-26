@@ -2324,6 +2324,7 @@
 		"emptyAction": "Créer une route",
 
 		"headTitle": "Topology v2 — Arenet",
+		"relayout": "Reconstruire la disposition",
 		"eyebrow": "TRAFIC · VUE FLUX",
 		"title": "Topologie",
 		"lede": "Points d'entrée du reverse proxy à gauche, services en amont à droite. L'épaisseur et la luminosité de chaque ligne reflètent le débit en temps réel sur ce flux.",

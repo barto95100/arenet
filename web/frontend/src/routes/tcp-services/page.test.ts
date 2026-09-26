@@ -230,7 +230,10 @@ describe('/tcp-services — empty state layout', () => {
 		render(Page);
 		const empty = await screen.findByTestId('tcp-empty');
 		// Not inside the two-column grid.
-		expect(empty.closest('[class*="xl:grid-cols"]')).toBeNull();
+		// v2.47 — the marker moved from the old fixed xl:grid-cols
+		// class to .split, so the previous assertion would now pass
+		// by looking for something that exists nowhere.
+		expect(empty.closest('.split')).toBeNull();
 		// The diagram explains what the sentence says.
 		const diagram = empty.querySelector('[role="img"]');
 		expect(diagram).not.toBeNull();
@@ -386,5 +389,27 @@ describe('/tcp-services — live counters', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+// --- v2.47 — the table owns the page until something is selected --
+//
+// The split was fixed at two columns, so the list sat squeezed into
+// half the width even with nothing open beside it: every column
+// truncated for a panel that was not there.
+
+describe('/tcp-services — the split only opens on demand', () => {
+	it('is one column until a service is selected', async () => {
+		api.listTCPServices.mockResolvedValue([service()]);
+		render(Page);
+
+		const row = await screen.findByTestId('tcp-row-svc1');
+		const split = row.closest('.split');
+		expect(split).not.toBeNull();
+		expect(split?.classList.contains('split-open')).toBe(false);
+
+		await userEvent.click(row);
+		await tick();
+		expect(split?.classList.contains('split-open')).toBe(true);
 	});
 });
