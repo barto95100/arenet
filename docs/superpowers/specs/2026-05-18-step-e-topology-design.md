@@ -1406,7 +1406,7 @@ same pattern is expected here.
 The 12 design decisions of this spec were resolved during a live
 brainstorm session between user and assistant on 2026-05-18. The
 transcript is preserved as part of the Claude Code session log at
-`/Users/l.ramos/.claude/projects/-Users-l-ramos-Documents-Projets-AreNET/`
+`~/.claude/projects/<arenet-project>/`
 (local-only; not committed for privacy).
 
 Key items debated:

@@ -49,17 +49,17 @@ describe('manualCertDisplayName', () => {
 	it('returns the "*.apex" SAN when the cert is a wildcard', () => {
 		expect(
 			manualCertDisplayName('c1', [
-				cert({ id: 'c1', name: 'Wildcard prod', dnsNames: ['*.worldgeekwide.fr'] }),
+				cert({ id: 'c1', name: 'Wildcard prod', dnsNames: ['*.example.com'] }),
 			])
-		).toBe('*.worldgeekwide.fr');
+		).toBe('*.example.com');
 	});
 
 	it('prefers the wildcard SAN even when other SANs are present', () => {
 		expect(
 			manualCertDisplayName('c1', [
-				cert({ id: 'c1', name: 'Multi', dnsNames: ['app.corp.local', '*.worldgeekwide.fr'] }),
+				cert({ id: 'c1', name: 'Multi', dnsNames: ['app.corp.local', '*.example.com'] }),
 			])
-		).toBe('*.worldgeekwide.fr');
+		).toBe('*.example.com');
 	});
 
 	it('ignores a bare "*." with no apex (defensive)', () => {

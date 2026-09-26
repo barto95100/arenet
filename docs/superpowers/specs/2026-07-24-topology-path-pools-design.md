@@ -135,7 +135,7 @@ Frontend (`_layout.ts` + `_types.ts`) :
 - `svelte-check` 0, vitest vert.
 
 **Vérification visuelle (feature visuelle) :** dogfooding sur
-`testpath.worldgeekwide.fr` (a déjà `/v1`, `/legacy` avec pools + `/docs`
+`testpath.example.com` (a déjà `/v1`, `/legacy` avec pools + `/docs`
 protection-only) → ouvrir la topology, vérifier 3 clusters (racine + `/v1` +
 `/legacy`), `/docs` n'ajoute pas de cluster, layout lisible.
 

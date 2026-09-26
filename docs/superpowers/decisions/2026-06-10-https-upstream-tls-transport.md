@@ -14,7 +14,7 @@ Related tickets: `#R-PROXMOX-HTTPS-LOOP` (RESOLVED), `#F-UPSTREAM-TEST-ENDPOINT`
 
 Operator Day-8 review (2026-06-10) reproduced an infinite-redirect loop on
 every route with an `https://` upstream pool. The symptomatic route was
-`proxmox.worldgeekwide.fr → https://192.168.1.60:8006`; the browser saw an
+`proxmox.example.com → https://192.168.1.60:8006`; the browser saw an
 endless 301 chain. The same shape would break Synology DSM (`:5001`), ESXi
 (`:443`), UniFi controllers (`:8443`), and any other homelab service that
 serves only HTTPS.
@@ -24,7 +24,7 @@ Empirical reproduction:
 ```text
 # Live Caddy config dump (live admin :2019)
 $ curl -s http://localhost:2019/config/apps/http/servers | jq \
-    '.[].routes[] | select(.match[0].host[0]=="proxmox.worldgeekwide.fr")
+    '.[].routes[] | select(.match[0].host[0]=="proxmox.example.com")
      | .handle[0].routes[0].handle[]
      | select(.handler=="reverse_proxy")'
 {

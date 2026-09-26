@@ -27,7 +27,7 @@ Section 8 is the tag procedure.
 
 ```bash
 # From repo root, on main at ffba2fa (or HEAD if doc commit lands first)
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 go build -o /tmp/arenet ./cmd/arenet
 
 # Scratch data-dir for the smoke session
@@ -39,7 +39,7 @@ rm -rf /tmp/arenet-stepj-data && mkdir -p /tmp/arenet-stepj-data
 Frontend dev server (second terminal):
 
 ```bash
-cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend
+cd /home/operator/arenet/web/frontend
 npm run dev   # → http://localhost:5173, proxy /api → :8001
 ```
 
@@ -391,12 +391,12 @@ frontend/src/routes/routes/page.test.ts`) is doubled in vivo.
 
 DNS provider configured via the Settings page with real OVH
 credentials (endpoint `ovh-eu`, application key + secret + consumer
-key for the `worldgeekwide.fr` zone). Badge transitioned to
+key for the `example.com` zone). Badge transitioned to
 "Configured" (green); placeholder `••• set (leave blank to keep)`
 applied to all three secret inputs post-save (preserve-on-edit per
 J.4 §5.4).
 
-Route created via UI: host=`*.worldgeekwide.fr`, TLS enabled, ACME
+Route created via UI: host=`*.example.com`, TLS enabled, ACME
 challenge `dns-01` (automatically locked by the wildcard detection),
 single upstream `http://127.0.0.1:9201`.
 
@@ -404,8 +404,8 @@ Submit at T0. Live tail of the Arenet log:
 
 | T+      | event                                                    |
 |---------|----------------------------------------------------------|
-| 0.0s    | `enabling automatic TLS certificate management domains=[*.worldgeekwide.fr]` |
-| 0.0s    | `lock acquired identifier=*.worldgeekwide.fr`           |
+| 0.0s    | `enabling automatic TLS certificate management domains=[*.example.com]` |
+| 0.0s    | `lock acquired identifier=*.example.com`           |
 | 0.0s    | `ca=https://acme-staging-v02.api.letsencrypt.org/directory` ← γ recon validated live |
 | 3.4s    | `new ACME account registered status=valid` (acct 295829963) |
 | 3.4s    | `trying to solve challenge challenge_type=dns-01`       |
@@ -417,19 +417,19 @@ Total emission time: **~17 seconds** from Submit to wildcard cert
 acquired. No error, no retry.
 
 Cert stored at `~/Library/Application Support/Caddy/certificates/
-acme-staging-v02.api.letsencrypt.org-directory/wildcard_.worldgeekwide.fr/`:
+acme-staging-v02.api.letsencrypt.org-directory/wildcard_.example.com/`:
 
 ```
-$ openssl x509 -in wildcard_.worldgeekwide.fr.crt -noout -subject -issuer -dates -ext subjectAltName
-subject=CN=*.worldgeekwide.fr
+$ openssl x509 -in wildcard_.example.com.crt -noout -subject -issuer -dates -ext subjectAltName
+subject=CN=*.example.com
 issuer=C=US, O=Let's Encrypt, CN=(STAGING) Baloney Bulgur YE2
 notBefore=May 25 21:05:15 2026 GMT
 notAfter=Aug 23 21:05:14 2026 GMT
 X509v3 Subject Alternative Name:
-    DNS:*.worldgeekwide.fr
+    DNS:*.example.com
 ```
 
-Browser end-to-end: `https://<any-subdomain>.worldgeekwide.fr:8443`
+Browser end-to-end: `https://<any-subdomain>.example.com:8443`
 opens with the staging cert (browser warning expected — staging
 roots not trusted), accept the warning → upstream `:9201` responds
 `upstream-9201`. Full chain DNS-01 → cert → TLS server → reverse
@@ -495,7 +495,7 @@ Initial nav check (§2.7 above): `/topology` opens with the standard
 status indicator visible. ✅
 
 Post-B.3, with 9 routes in the BoltDB (6 B.1 + B.2 `hc.local` + B.3
-`b3-via-ui.local` + B.4 `*.worldgeekwide.fr`): reopen `/topology` from
+`b3-via-ui.local` + B.4 `*.example.com`): reopen `/topology` from
 cold — the graph auto-fits the viewport on first non-empty data (no
 zoomed-out blank, no zoomed-in microscopic, fits the rendered area
 with padding). Pan / wheel-zoom / overlay buttons (Fit / Reset / +/−)
@@ -650,7 +650,7 @@ implication, slated for a post-tag spec amend in
 The DNS-01 acceptance criterion AC #9, which the spec explicitly
 allowed to record as PARTIAL given the dependency on a real DNS
 provider, was achieved in FULL: a wildcard certificate for
-`*.worldgeekwide.fr` was emitted in 17 seconds against Let's Encrypt
+`*.example.com` was emitted in 17 seconds against Let's Encrypt
 staging via the OVH provider integration, and verified end-to-end
 through the browser (cert presented by Arenet on `:8443`, upstream
 proxied through).
@@ -660,7 +660,7 @@ proxied through).
 ## 8. Tag procedure (after PASS)
 
 ```bash
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 git status                                # working tree clean expected
 git checkout main
 git pull --ff-only

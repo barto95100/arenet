@@ -621,7 +621,7 @@
         <div class="mfa-user">
           <div class="a" id="mfaInitial">LR</div>
           <div class="who-l">
-            <span id="mfaName" style="color:var(--fg);font-weight:500">l.ramos@sct-telecom.fr</span>
+            <span id="mfaName" style="color:var(--fg);font-weight:500">operator@example.com</span>
             <small>compte local · MFA TOTP</small>
           </div>
         </div>
@@ -694,7 +694,7 @@
   const errBanner  = document.getElementById('errBanner');
 
   function showMfa(){
-    const email = document.getElementById('email').value.trim() || 'l.ramos@sct-telecom.fr';
+    const email = document.getElementById('email').value.trim() || 'operator@example.com';
     document.getElementById('mfaName').textContent = email;
     const initial = (email.split('@')[0].split('.').map(s=>s[0]).join('') || 'U').slice(0,2).toUpperCase();
     document.getElementById('mfaInitial').textContent = initial;
@@ -882,7 +882,7 @@
 
   // ============ Demo: ?step=mfa direct link ============
   if(new URLSearchParams(location.search).get('step') === 'mfa'){
-    document.getElementById('email').value = 'l.ramos@sct-telecom.fr';
+    document.getElementById('email').value = 'operator@example.com';
     showMfa();
   }
   if(new URLSearchParams(location.search).get('error') === '1'){

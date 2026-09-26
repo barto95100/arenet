@@ -1438,7 +1438,7 @@
 		"metaNameLabel": "Template name",
 		"metaNamePlaceholder": "e.g. WGW Branding",
 		"metaDescriptionLabel": "Description (optional)",
-		"metaDescriptionPlaceholder": "Branded error pages for worldgeekwide.fr",
+		"metaDescriptionPlaceholder": "Branded error pages for example.com",
 		"catchallToggleLabel": "Use as default catch-all page",
 		"catchallHint": "This template's 404 page will be served for any request reaching a host not configured in Arenet. Only one template can be catch-all at a time.",
 		"tabsAriaLabel": "Status codes",

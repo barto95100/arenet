@@ -149,7 +149,7 @@ func TestDeleteCertFiles_EmptyArgs(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/certinfo/ -run TestDeleteCertFiles -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/certinfo/ -run TestDeleteCertFiles -v`
 Expected: FAIL — `undefined: DeleteCertFiles`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -233,7 +233,7 @@ func DeleteCertFiles(storageDir, domain string) (int, error) {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/certinfo/ -run TestDeleteCertFiles -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/certinfo/ -run TestDeleteCertFiles -v`
 Expected: PASS (all 5 tests).
 
 - [ ] **Step 5: Commit**
@@ -260,7 +260,7 @@ In `internal/audit/actions_test.go`, change `const wantCount = 58` to `const wan
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/audit/ -run TestAllActions -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/audit/ -run TestAllActions -v`
 Expected: FAIL — `AllActions count drift: got 58, want 59` (and the ExactSet test fails on the missing action).
 
 - [ ] **Step 3: Add the action constant + register it**
@@ -277,7 +277,7 @@ If `TestAllActions_ExactSet` enumerates the expected set, add `ActionCertDeleted
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/audit/ -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/audit/ -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -329,7 +329,7 @@ In `cmd/arenet/main.go`, right after `apiHandler.SetCertInfoReader(certTracker)`
 
 - [ ] **Step 3: Build to verify it compiles**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go build ./...`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go build ./...`
 Expected: builds clean.
 
 - [ ] **Step 4: Commit**
@@ -480,7 +480,7 @@ func TestDeleteCertificate_GhostRow_Idempotent_200(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run TestDeleteCertificate -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/api/ -run TestDeleteCertificate -v`
 Expected: FAIL — route not registered (404) / `h.deleteCertificate` undefined. NOTE: if `env.handler` is not the field name on the test env, adapt to the actual field (check `newTestEnv` in `handler_test.go`); the reviewer flagged in route-disable that the env exposes `env.handler`/`env.store`/`env.router` — confirm names before writing.
 
 - [ ] **Step 3: Write the handler**
@@ -613,7 +613,7 @@ In `internal/api/routes.go`, in the RequireAdmin subgroup after line 339 (`r.Pos
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/ -run TestDeleteCertificate -v`
+Run: `export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet && go test ./internal/api/ -run TestDeleteCertificate -v`
 Expected: PASS (4 tests).
 
 - [ ] **Step 6: Verify wildcard URL encoding empirically (open item #1)**
@@ -699,7 +699,7 @@ describe('certificatesApi.deleteCertificate', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend && npx vitest run src/lib/api/certificates.test.ts`
+Run: `cd /home/operator/arenet/web/frontend && npx vitest run src/lib/api/certificates.test.ts`
 Expected: FAIL — `deleteCertificate is not a function`.
 
 - [ ] **Step 3: Implement the client method**
@@ -725,7 +725,7 @@ Open `web/frontend/src/lib/api/certificates.ts`. Follow the file's existing requ
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend && npx vitest run src/lib/api/certificates.test.ts`
+Run: `cd /home/operator/arenet/web/frontend && npx vitest run src/lib/api/certificates.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -788,7 +788,7 @@ In `web/frontend/src/lib/i18n/fr.json`:
 
 - [ ] **Step 3: Run the parity guard**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend && npx vitest run src/lib/i18n/index.test.ts`
+Run: `cd /home/operator/arenet/web/frontend && npx vitest run src/lib/i18n/index.test.ts`
 Expected: PASS (EN and FR key sets equal). If it fails on a missing/extra key, reconcile the two files.
 
 - [ ] **Step 4: Commit**
@@ -855,7 +855,7 @@ describe('/certs delete action', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend && npx vitest run src/routes/certs/page.test.ts`
+Run: `cd /home/operator/arenet/web/frontend && npx vitest run src/routes/certs/page.test.ts`
 Expected: FAIL — no delete button / testids.
 
 - [ ] **Step 3: Implement the UI**
@@ -887,12 +887,12 @@ async function doDeleteCert(domain: string) {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend && npx vitest run src/routes/certs/page.test.ts`
+Run: `cd /home/operator/arenet/web/frontend && npx vitest run src/routes/certs/page.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Build the frontend**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend && npm run build`
+Run: `cd /home/operator/arenet/web/frontend && npm run build`
 Expected: builds clean (TS strict).
 
 - [ ] **Step 6: Commit**
@@ -912,7 +912,7 @@ git commit -m "feat(web): delete action + confirm/blocked dialogs on the /certs 
 
 Run:
 ```
-export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /Users/l.ramos/Documents/Projets/AreNET
+export PATH=/usr/bin:/bin:/usr/local/bin:$PATH && cd /home/operator/arenet
 go vet ./...
 go build ./...
 go test -race ./internal/certinfo/ ./internal/api/ ./internal/audit/
@@ -923,7 +923,7 @@ Expected: all clean/green. (If internal/api -race is slow, it may be left to CI'
 
 Run:
 ```
-cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend
+cd /home/operator/arenet/web/frontend
 npx vitest run src/lib/api/certificates.test.ts src/lib/i18n/index.test.ts src/routes/certs/page.test.ts
 npm run build
 ```

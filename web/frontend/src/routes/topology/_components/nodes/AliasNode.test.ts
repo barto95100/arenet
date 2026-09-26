@@ -81,9 +81,9 @@ describe('AliasNode', () => {
 		// badge was redundant and crowded the host label on the
 		// new narrower 170 px width.
 		const { container } = render(AliasNode, {
-			props: nodeProps(makeData({ host: 'sonarr.worldgeekwide.fr', reqPerSec: 0.94, isIdle: false }))
+			props: nodeProps(makeData({ host: 'sonarr.example.com', reqPerSec: 0.94, isIdle: false }))
 		});
-		expect(screen.getByText('sonarr.worldgeekwide.fr')).toBeInTheDocument();
+		expect(screen.getByText('sonarr.example.com')).toBeInTheDocument();
 		expect(container.querySelector('.kind-tag')).toBeNull();
 		// The literal string "alias" must not appear as a
 		// standalone label anywhere on the card. (We allow it

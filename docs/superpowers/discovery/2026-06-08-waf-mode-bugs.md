@@ -13,7 +13,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 ## §1 Operator evidence
 
-Four distinct empirical observations from `barto95100@worldgeekwide.fr`'s homelab deployment.
+Four distinct empirical observations from `barto95100@example.com`'s homelab deployment.
 
 ### §1.1 Bug #1 — `wafMode="detect"` produces HTTP 403
 
@@ -32,7 +32,7 @@ Four distinct empirical observations from `barto95100@worldgeekwide.fr`'s homela
 
 ### §1.3 Bug #3 — Mode change post-creation is sticky, even after restart
 
-- Route `ha.worldgeekwide.fr` originally created with `wafMode="detect"`.
+- Route `ha.example.com` originally created with `wafMode="detect"`.
 - Edited to `"off"` via the UI.
 - Arenet restarted (fresh boot).
 - New request → still 403.
@@ -63,7 +63,7 @@ The appended `SecRuleEngine` directive **does** receive the correct value for th
 **Directive ordering verified empirically**:
 - `Include @coraza.conf-recommended` declares `SecRuleEngine DetectionOnly` at line 8 of the recommended conf.
 - `Include @crs-setup.conf.example` declares nothing.
-- `Include @owasp_crs/*.conf` (CRS v4.25.0) — no file under `rules/@owasp_crs/` declares `SecRuleEngine` (grep-confirmed against `/Users/l.ramos/go/pkg/mod/github.com/corazawaf/coraza-coreruleset/v4@v4.25.0/rules/`).
+- `Include @owasp_crs/*.conf` (CRS v4.25.0) — no file under `rules/@owasp_crs/` declares `SecRuleEngine` (grep-confirmed against `$GOPATH/pkg/mod/github.com/corazawaf/coraza-coreruleset/v4@v4.25.0/rules/`).
 - Arenet appends `\nSecRuleEngine On` (or `DetectionOnly`) AFTER all includes → **last write wins** → Arenet's intent should hold.
 
 Therefore the directive composition is **structurally correct** for both modes.

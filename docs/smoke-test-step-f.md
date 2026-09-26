@@ -27,7 +27,7 @@ the residual debt acknowledged at ship time.
 ```bash
 # From repo root
 pkill arenet 2>/dev/null; true
-cd /Users/l.ramos/Documents/Projets/AreNET
+cd /home/operator/arenet
 go build -o ./arenet ./cmd/arenet
 ./arenet --dev --admin-port :8001
 ```
@@ -35,7 +35,7 @@ go build -o ./arenet ./cmd/arenet
 Frontend (second terminal):
 
 ```bash
-cd /Users/l.ramos/Documents/Projets/AreNET/web/frontend
+cd /home/operator/arenet/web/frontend
 npm run dev
 ```
 

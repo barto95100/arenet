@@ -100,8 +100,8 @@ describe('parseEffectiveCertSource', () => {
 describe('certSourceLabel', () => {
 	it('emits "Couvert par *.<apex>" for managed-domain', () => {
 		expect(
-			certSourceLabel({ kind: 'managed-domain', coveringApex: 'worldgeekwide.fr' })
-		).toBe('Couvert par *.worldgeekwide.fr');
+			certSourceLabel({ kind: 'managed-domain', coveringApex: 'example.com' })
+		).toBe('Couvert par *.example.com');
 	});
 
 	it('emits "Cert dédié (DNS-01)" / "Cert dédié (HTTP-01)" for per-route', () => {
@@ -122,10 +122,10 @@ describe('certSourceLabel', () => {
 	});
 
 	it('emits "Cert manuel : *.<apex>" when the manual cert is a wildcard', () => {
-		// The caller detects a wildcard SAN and passes "*.worldgeekwide.fr"
+		// The caller detects a wildcard SAN and passes "*.example.com"
 		// as certName so a manual wildcard reads like the ACME wildcard.
-		expect(certSourceLabel({ kind: 'manual', certName: '*.worldgeekwide.fr' })).toBe(
-			'Cert manuel : *.worldgeekwide.fr'
+		expect(certSourceLabel({ kind: 'manual', certName: '*.example.com' })).toBe(
+			'Cert manuel : *.example.com'
 		);
 	});
 

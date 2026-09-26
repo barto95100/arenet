@@ -123,7 +123,7 @@ func TestPathRule_Validate_InvalidUpstreamURLRejected(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestPathRule_Validate -v`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ -run TestPathRule_Validate -v`
 Expected: compile error (fields don't exist yet) or FAIL.
 
 - [ ] **Step 3: Extend the struct**
@@ -952,7 +952,7 @@ Create `docs/smoke-test-path-upstream.md` mirroring `docs/smoke-test-path-rules.
 
 - [ ] **Step 4: Backend + frontend full suites + race, final gate**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./... && go test -race ./internal/caddymgr/ && cd web/frontend && npx vitest run && npx svelte-check --threshold error`
+Run: `cd /home/operator/arenet && go test ./... && go test -race ./internal/caddymgr/ && cd web/frontend && npx vitest run && npx svelte-check --threshold error`
 Expected: all green.
 
 - [ ] **Step 5: Commit**

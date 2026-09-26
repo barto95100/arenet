@@ -117,14 +117,14 @@ Découvert en investiguant #R-AUTOMATION-CREDS-403.
 
 Empirical root cause (triangulated per ENGINEERING-PRACTICES Lesson 1) :
   - Operator curl evidence: PUT direct sur 127.0.0.1:8001 → 200, 
-    PUT via https://arenet.worldgeekwide.fr → 403 Server:Caddy
+    PUT via https://arenet.example.com → 403 Server:Caddy
   - Boot log: "waf handler provisioned route_id=b2a1a41e-... 
-    host=arenet.worldgeekwide.fr mode=block load_owasp_crs=true"
+    host=arenet.example.com mode=block load_owasp_crs=true"
   - Live Caddy config dump shows arenet_waf attached to the self-
     route admin chain (routemetrics → crowdsec → arenet_waf → 
     reverse_proxy)
 
-L'opérateur a créé un self-route admin (host=arenet.worldgeekwide.fr → 
+L'opérateur a créé un self-route admin (host=arenet.example.com → 
 127.0.0.1:8001) pour TLS + CrowdSec bouncer + country-block sur 
 l'admin UI. WAFMode=block + OWASP CRS chargé → CRS rule 911100 
 (PROTOCOL_ENFORCEMENT method check) rejette PUT/DELETE/PATCH 
@@ -739,9 +739,9 @@ Decision doc complet : docs/superpowers/decisions/
 2026-06-10-https-upstream-tls-transport.md.
 
 Smoke browser confirmé Day-8 sur Proxmox à 
-proxmox.worldgeekwide.fr : page login Proxmox visible, 
+proxmox.example.com : page login Proxmox visible, 
 plus de 502 ni de boucle 301. Régression check 
-ha.worldgeekwide.fr OK depuis Mac + via loopback SNI forcé.
+ha.example.com OK depuis Mac + via loopback SNI forcé.
 
 ## #R-API-PUT-ROUTE-GENERIC-400 — RESOLVED 2026-06-10
 

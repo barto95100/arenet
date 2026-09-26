@@ -2827,7 +2827,7 @@ func httpsPortFor(devMode bool) int {
 // HTTPS chain (where the gate also fires). Without this, the
 // HTTP chain leaks "host present" information to operator-blocked
 // sources — exactly the symptom check-host.net flagged on
-// http://ha.worldgeekwide.fr returning 301 from 58 worldwide
+// http://ha.example.com returning 301 from 58 worldwide
 // probes even with mode=allow countryList=["FR","PT"].
 //
 // The country-block handler runs FIRST in the redirect-route

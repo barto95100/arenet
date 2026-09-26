@@ -128,7 +128,7 @@ func TestBuildRoute_NoPathRules_PathPoolsNil(t *testing.T) {
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/api/topology/ -run TestBuildRoute_PathPools -v`
+Run: `cd /home/operator/arenet && go test ./internal/api/topology/ -run TestBuildRoute_PathPools -v`
 Expected: compile error (`PathPools`/`PathPool` don't exist).
 
 - [ ] **Step 3: Add the `PathPool` type + `Route.PathPools` field**
@@ -507,7 +507,7 @@ git commit -m "docs(topology): note per-path pools appear as clusters in the gra
 ## Post-plan (controller, not a task)
 - Task 3 (layout) gets a DEDICATED review (D3/xyflow stacking correctness + non-regression of routes without path-pools + root-cluster rendering unchanged).
 - Inline review on Tasks 1, 2, 4.
-- **Visual check (mandatory — visual feature):** dogfood on `testpath.worldgeekwide.fr` (has `/v1`, `/legacy` with pools + `/docs` protection-only) → open Topology, confirm 3 clusters (root + /v1 + /legacy), `/docs` adds none, layout readable / no overlap.
+- **Visual check (mandatory — visual feature):** dogfood on `testpath.example.com` (has `/v1`, `/legacy` with pools + `/docs` protection-only) → open Topology, confirm 3 clusters (root + /v1 + /legacy), `/docs` adds none, layout readable / no overlap.
 - ONE final whole-branch review before PR.
 - **Backlog (spec §5):** live per-branch traffic — needs a per-(route,path) metric counter in the hot-path. Its own cycle.
 - Version v2.24.0 — tag only after operator go-ahead.

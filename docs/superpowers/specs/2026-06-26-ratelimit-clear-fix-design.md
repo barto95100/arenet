@@ -17,7 +17,7 @@ requests (visible as continuing `rate limit exceeded` log lines
 post-save in journalctl).
 
 Reproduction trace (operator-collected 2026-06-26, route
-`8448574c-f122-47a9-a09e-fadd8d971a53` = proxmox.worldgeekwide.fr):
+`8448574c-f122-47a9-a09e-fadd8d971a53` = proxmox.example.com):
 
 - 11:50:32 PUT /api/v1/routes/8448574c → 200 `config is unchanged`
 - 11:50:55+ `rate limit exceeded` keeps firing on zone
@@ -70,7 +70,7 @@ existing value". The chain is internally consistent — but the
 combination provides NO path to clear a previously-stored
 rate-limit short of deleting + recreating the route entirely.
 
-`grep -rn "clearRateLimit" /Users/l.ramos/Documents/Projets/AreNET`
+`grep -rn "clearRateLimit" /home/operator/arenet`
 confirms the sentinel field is **only mentioned in comments**;
 Phase Q.2 was designed but never shipped.
 
@@ -211,7 +211,7 @@ Operator: Routes → edit → un-ticks rate-limit toggle → Save
 2. Un-tick the rate-limit toggle
 3. Save → toast OK
 4. Reload page → toggle stays OFF, form fields cleared
-5. `curl -k https://proxmox.worldgeekwide.fr/ -i` from a separate
+5. `curl -k https://proxmox.example.com/ -i` from a separate
    client a few times rapidly → no 429
 6. `curl http://127.0.0.1:8001/api/v1/routes | jq '.[] |
    select(.id == "8448574c…") | .rateLimit'` → null/absent

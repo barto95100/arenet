@@ -71,7 +71,7 @@ func TestErrorTemplate_POST_HappyPath_201(t *testing.T) {
 	env := newTestEnv(t, false)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/error-templates",
-		strings.NewReader(validErrorTemplateBody("worldgeekwide")))
+		strings.NewReader(validErrorTemplateBody("example")))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	env.router.ServeHTTP(rec, req)
@@ -83,8 +83,8 @@ func TestErrorTemplate_POST_HappyPath_201(t *testing.T) {
 	if got.ID == "" {
 		t.Error("expected ID assigned")
 	}
-	if got.Name != "worldgeekwide" {
-		t.Errorf("Name = %q ; want worldgeekwide", got.Name)
+	if got.Name != "example" {
+		t.Errorf("Name = %q ; want example", got.Name)
 	}
 	if got.Pages[403] != "<h1>403 — branded</h1>" {
 		t.Errorf("Pages[403] = %q ; want branded", got.Pages[403])

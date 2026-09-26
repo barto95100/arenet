@@ -60,7 +60,7 @@ func TestPathRule_InsecureSkipVerify_RoundTrips(t *testing.T) {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /Users/l.ramos/Documents/Projets/AreNET && go test ./internal/storage/ -run TestPathRule_InsecureSkipVerify -v`
+Run: `cd /home/operator/arenet && go test ./internal/storage/ -run TestPathRule_InsecureSkipVerify -v`
 Expected: compile error (field doesn't exist).
 
 - [ ] **Step 3: Add the field**

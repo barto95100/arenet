@@ -8,7 +8,7 @@ Scope: Step K is the **Authentication (per-route + admin) + Backup /
 Restore** feature step (sub-tasks K.1, K.2, K.3, K.4). The smoke
 validates the 19 acceptance criteria of spec §2 plus the regression-
 safety of Steps D-J. Live OIDC + forward-auth exercised against a real
-Authentik instance (`auth.worldgeekwide.fr`) under the operator's
+Authentik instance (`auth.example.com`) under the operator's
 control.
 
 **Date**: 2026-05-27.
@@ -57,12 +57,12 @@ cd web/frontend && npm run dev
 python3 -m http.server 9999 --bind 127.0.0.1 --directory "$SMOKE_DIR" &
 
 # /etc/hosts on operator's machine (one-time)
-echo "127.0.0.1 arenet-test.worldgeekwide.fr" | sudo tee -a /etc/hosts
+echo "127.0.0.1 arenet-test.example.com" | sudo tee -a /etc/hosts
 ```
 
 Authentik instance configured per the runbook (Provider OIDC
 `arenet-admin` + Proxy Provider `arenet-test-fwdauth`, External host
-`http://arenet-test.worldgeekwide.fr:8080`). Three test users :
+`http://arenet-test.example.com:8080`). Three test users :
 `arenet-smoke-admin`, `arenet-smoke-viewer`, `arenet-smoke-stranger`.
 
 ---
@@ -106,7 +106,7 @@ smoked here.
 
 ### 2.2 — forward_auth ref-count guard (AC #5)
 
-- Created route `arenet-test.worldgeekwide.fr` with
+- Created route `arenet-test.example.com` with
   `authMode=forward_auth providerName=authentik`.
 - Attempted DELETE of the `authentik` provider via API.
 - **Result**: 409 Conflict (Q5 ref-count protection). Provider retained.
@@ -136,7 +136,7 @@ no `reverse_proxy`, no passthrough route emitted.
 
 ### 3.1 — Discovery + status (AC #7)
 
-- `GET https://auth.worldgeekwide.fr/application/o/arenet/.well-known/openid-configuration` → 200, RS256, issuer matches.
+- `GET https://auth.example.com/application/o/arenet/.well-known/openid-configuration` → 200, RS256, issuer matches.
 - `GET /api/v1/auth/oidc/status` (anonymous) → `{enabled: true}` ✓
 - `GET /api/v1/auth/oidc/login` → 302 to Authentik with state +
   nonce HttpOnly+SameSite=Lax cookies + 5min TTL ✓
@@ -354,12 +354,12 @@ Authentik's 302 to its login flow (correct shape).
 
 Caddy live config (via `:2019/config/`) verified post-PUT :
 ```
-route[2] host=[arenet-test.worldgeekwide.fr]
+route[2] host=[arenet-test.example.com]
         path=[/outpost.goauthentik.io/*]
         handlers=[reverse_proxy]
-        upstreams=[{dial: auth.worldgeekwide.fr:443}]
+        upstreams=[{dial: auth.example.com:443}]
         transport={protocol: http, tls: {}}
-route[3] host=[arenet-test.worldgeekwide.fr]
+route[3] host=[arenet-test.example.com]
         handlers=[metrics, reverse_proxy (fwd_auth), reverse_proxy (upstream)]
 ```
 
@@ -378,7 +378,7 @@ Verified empirically, link by link:
    (passthrough, main, deny FAIL-CLOSED) emits the canonical
    `subroute` wrapper + `terminal: true`. Mirrors
    `forward_auth_authelia.caddyfiletest`. Sub-request handler
-   carries `headers.request.set.Host = ["auth.worldgeekwide.fr"]`
+   carries `headers.request.set.Host = ["auth.example.com"]`
    when `RewriteVerifyHost: true` (verified by reading the
    live config back).
 
@@ -393,18 +393,18 @@ Verified empirically, link by link:
    No double-match, terminal flag behaviour confirmed live.
 
 3. **302 to Authentik login on anonymous request** — restored
-   verifyUrl to real Authentik (`https://auth.worldgeekwide.fr/
+   verifyUrl to real Authentik (`https://auth.example.com/
    outpost.goauthentik.io/auth/caddy`), probed
    `GET http://127.0.0.1:8080/` with Host=
-   `arenet-test.worldgeekwide.fr:8080`:
+   `arenet-test.example.com:8080`:
    ```
    < HTTP/1.1 302 Found
-   < Location: https://auth.worldgeekwide.fr/application/o/authorize/?...
+   < Location: https://auth.example.com/application/o/authorize/?...
    < Set-Cookie: authentik_proxy_f672b16d=...; Secure; HttpOnly; SameSite=Lax
    < Via: 2.0 Caddy
    ```
    This is the F-K4-S1 fix shipping: with the Host header
-   rewritten to `auth.worldgeekwide.fr` (via
+   rewritten to `auth.example.com` (via
    RewriteVerifyHost), Authentik correctly identifies the
    application and responds with the standard authorize 302
    instead of the broken 404.
@@ -482,7 +482,7 @@ No finding blocks the tag. The K.4 chain-structure mismatch
 | F-K3-1 | CLI restore error log carries doubled `restore: restore:` prefix (cosmetic in structured slog only; stderr user-facing message is clean) | backlog cosmetic |
 | F-K3-2 | Restore reject classification falls through to `other:restore:...` for validator-métier rejections (could be a dedicated `business_validate` token) | backlog cosmetic |
 | F-K2-UX-8 | Sessions list shows multiple curl-derived sessions from smoke (operator can Revoke; killed by §9 wipe) | operational, not a code bug |
-| HSTS browser cache | Operator's browser cached HSTS for `arenet-test.worldgeekwide.fr` from a prior session → forced HTTPS upgrade, certificate prompt. Workaround : clear HSTS for the FQDN | operational, browser-side |
+| HSTS browser cache | Operator's browser cached HSTS for `arenet-test.example.com` from a prior session → forced HTTPS upgrade, certificate prompt. Workaround : clear HSTS for the FQDN | operational, browser-side |
 
 ---
 
@@ -568,8 +568,8 @@ rm -f /tmp/cookie-port-test.txt /tmp/login-response*.json /tmp/probe*.txt
 # Drop the smoke binary (carries no secret but reduces clutter)
 rm -f /tmp/arenet-smoke-binary
 
-# Operator-side: clear browser cookies for arenet-test.worldgeekwide.fr
-# AND localhost:5173, AND clear HSTS for arenet-test.worldgeekwide.fr
+# Operator-side: clear browser cookies for arenet-test.example.com
+# AND localhost:5173, AND clear HSTS for arenet-test.example.com
 # (Chromium: chrome://net-internals/#hsts — Delete domain security policies)
 
 # Verify nothing left
