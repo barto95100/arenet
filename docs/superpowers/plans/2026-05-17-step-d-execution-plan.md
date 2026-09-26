@@ -2,7 +2,7 @@
 
 **Status**: Active
 **Spec frozen**: `v0.2.0-step-d-spec` (commit 5e08665, 5643 lines)
-**Plan author**: Ludovic Ramos
+**Plan author**: Operator
 **Created**: 2026-05-17
 
 ## 1. Overview

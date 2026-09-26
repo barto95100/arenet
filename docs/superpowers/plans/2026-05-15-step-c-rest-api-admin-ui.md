@@ -152,7 +152,7 @@ Create `internal/api/validation_test.go`:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -260,7 +260,7 @@ Create `internal/api/validation.go`:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -400,7 +400,7 @@ EOF
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -447,7 +447,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -566,7 +566,7 @@ Create `internal/api/handler_test.go`:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -742,7 +742,7 @@ Expected: compile error — `NewRouter` undefined.
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -837,7 +837,7 @@ Create `internal/api/middleware.go` with stubs that we'll flesh out in Task 2.7:
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -1461,7 +1461,7 @@ Expected: FAIL on `TestCORS_DevMode_Preflight` (current stub returns 404 / no he
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -1723,7 +1723,7 @@ touch web/frontend/build/.gitkeep
 
 ```go
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -1876,7 +1876,7 @@ npm install --save-dev @sveltejs/adapter-static tailwindcss postcss autoprefixer
 
 ```js
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import adapter from '@sveltejs/adapter-static';
@@ -1899,7 +1899,7 @@ export default config;
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import { sveltekit } from '@sveltejs/kit/vite';
@@ -1918,7 +1918,7 @@ export default defineConfig({
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 export const prerender = true;
@@ -1966,7 +1966,7 @@ EOF
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import type { Config } from 'tailwindcss';
@@ -2024,7 +2024,7 @@ export default config;
 
 ```js
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 export default {
@@ -2040,7 +2040,7 @@ export default {
 ```css
 /*
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 */
 
@@ -2098,7 +2098,7 @@ html, body {
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -2114,7 +2114,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 THROWAWAY SMOKE PAGE — replaced in Chunk 7 with the / → /routes redirect.
@@ -2297,7 +2297,7 @@ EOF
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 export interface Route {
@@ -2338,7 +2338,7 @@ export class ApiError extends Error {
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import type { Route, RouteRequest } from './types';
@@ -2453,7 +2453,7 @@ Seven atomic components: `Button`, `Input`, `Checkbox`, `Badge`, `Spinner`, `Sta
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -2494,7 +2494,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -2573,7 +2573,7 @@ git commit -m "Add Spinner and StatusDot atomic components"
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -2670,7 +2670,7 @@ git commit -m "Add Button atomic component (4 variants, 3 sizes, loading)"
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -2719,7 +2719,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -2800,7 +2800,7 @@ git commit -m "Add Input and Checkbox atomic components"
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -2832,7 +2832,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -2889,7 +2889,7 @@ Five composed components, all built on top of Chunk 5 atomics: `StatCard`, `Data
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -2947,7 +2947,7 @@ git commit -m "Add StatCard component for the Routes header stats row"
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts" generics="T extends { id: string }">
@@ -3047,7 +3047,7 @@ git commit -m "Add DataTable composed component (generic, click-to-expand)"
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -3163,7 +3163,7 @@ git commit -m "Add Modal composed component (Escape, click-outside, focus restor
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import { writable } from 'svelte/store';
@@ -3196,7 +3196,7 @@ export function dismissToast(id: number): void {
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -3240,7 +3240,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -3265,7 +3265,7 @@ Edit `src/routes/+layout.svelte` to render `ToastContainer` after the children s
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -3325,7 +3325,7 @@ Builds `Sidebar.svelte` and the real `+layout.svelte` shell, creates the three p
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -3436,7 +3436,7 @@ git commit -m "Add Sidebar component (collapse, active highlight, disabled items
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -3474,7 +3474,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -3492,7 +3492,7 @@ Create `src/routes/routes/+page.svelte`:
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <h1 class="text-4xl font-semibold">Routes</h1>
@@ -3507,7 +3507,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <h1 class="text-4xl font-semibold">Topology</h1>
@@ -3520,7 +3520,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <h1 class="text-4xl font-semibold">Security</h1>
@@ -3533,7 +3533,7 @@ Licensed under the GNU AGPL v3 or later. See LICENSE.
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <h1 class="text-4xl font-semibold">Settings</h1>
@@ -3582,7 +3582,7 @@ This is the largest chunk. We split it into 8a (statics + form) and 8b (API wiri
 ```svelte
 <!--
 Arenet - Homelab-friendly reverse proxy with integrated security
-Copyright (C) 2026  Ludovic Ramos
+Copyright (C) 2026  The Arenet Authors
 Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
@@ -3993,7 +3993,7 @@ git commit -m "Add delete confirmation modal for Routes page"
 
 ```ts
 // Arenet - Homelab-friendly reverse proxy with integrated security
-// Copyright (C) 2026  Ludovic Ramos
+// Copyright (C) 2026  The Arenet Authors
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import { writable, derived } from 'svelte/store';
@@ -4087,7 +4087,7 @@ Final chunk. Update the Makefile, write the frontend README, do a clean build, a
 
 ```makefile
 # Arenet - Homelab-friendly reverse proxy with integrated security
-# Copyright (C) 2026  Ludovic Ramos
+# Copyright (C) 2026  The Arenet Authors
 # Licensed under the GNU AGPLv3. See LICENSE for details.
 
 BINARY      := arenet

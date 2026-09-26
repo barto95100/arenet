@@ -1,7 +1,7 @@
 # Bug 1 — catch-all branded HTML + per-template default flag
 
 **Ship target**: v2.9.10
-**Author**: Ludovic Ramos
+**Author**: Operator
 **Date**: 2026-06-25
 **Status**: Approved — ready for implementation
 

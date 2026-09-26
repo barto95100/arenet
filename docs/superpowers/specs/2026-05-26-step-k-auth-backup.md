@@ -2,7 +2,7 @@
 
 **Status:** FROZEN — tagged `v0.7.0-step-k-spec` on 2026-05-26.
 **Target implementation tag:** `v0.7.0-step-k` after the K.4 smoke verdict PASS.
-**Author:** Claude + Ludovic Ramos.
+**Author:** Claude + Operator.
 **Date frozen:** 2026-05-26.
 
 ---

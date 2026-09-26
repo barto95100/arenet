@@ -1,7 +1,7 @@
 # Bug B — HC tracker reset on Caddy reload
 
 **Ship target**: v2.9.8
-**Author**: Ludovic Ramos
+**Author**: Operator
 **Date**: 2026-06-25
 **Status**: Approved — ready for implementation
 
