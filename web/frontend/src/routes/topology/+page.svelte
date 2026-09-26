@@ -144,7 +144,7 @@
 	// distinguishes "first build" (full reassignment, no prior
 	// state) from "tick" (in-place data updates via the flow API).
 	function rebuildGraph(routesIn: TopologyRoute[]): void {
-		// v2.47 — fold the alias stacks on arrival, once. A route
+		// v2.48 — fold the alias stacks on arrival, once. A route
 		// with no alias has nothing to fold, so seeding only the
 		// ones that do keeps the chevron meaningful everywhere it
 		// appears.
@@ -413,7 +413,7 @@
 		lastDragPosByNode.delete(targetNode.id);
 	}
 
-	// v2.47 — put the graph back where the builder wanted it.
+	// v2.48 — put the graph back where the builder wanted it.
 	//
 	// Nodes are draggable, and there was no way back: an operator who
 	// pulled things apart to read a busy corner had to reload the page

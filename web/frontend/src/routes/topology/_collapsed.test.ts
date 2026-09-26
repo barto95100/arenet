@@ -72,7 +72,7 @@ describe('collapsedRoutes store', () => {
 	});
 });
 
-// --- v2.47 — alias stacks arrive folded --------------------------
+// --- v2.48 — alias stacks arrive folded --------------------------
 //
 // Everything used to arrive expanded, trading verbosity for
 // discovery. On a real installation a handful of routes with three or
