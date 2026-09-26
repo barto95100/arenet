@@ -41,6 +41,8 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Topbar from '$lib/components/Topbar.svelte';
 	import LockScreen from '$lib/components/LockScreen.svelte';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
 	import ChangePasswordModal from '$lib/components/ChangePasswordModal.svelte';
 	import ToastContainer from '$lib/components/ToastContainer.svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -135,6 +137,38 @@
 {:else}
 	<!-- authenticated or locked: full layout. Compromised-password
 	     banner above; LockScreen overlay on locked. -->
+	<!-- v2.48 — an account created by an administrator cannot be used
+	     for anything until it changes its first password, because that
+	     administrator knows it: they either typed it or read it off the
+	     screen once.
+	     
+	     A blocking overlay rather than a banner. A banner is a
+	     suggestion, and the whole property here is that the window
+	     between creation and the user's own password is one login long.
+	     
+	     It sits BELOW LockScreen (z-index 999 against 1000) on purpose:
+	     a locked session has to be unlocked first, and stacking this on
+	     top would leave the operator facing a password form they cannot
+	     submit.
+	     
+	     The modal is opened from here rather than forced: dismissing it
+	     returns to this overlay, so there is no state in which someone
+	     is blocked with nothing to press. A successful change refreshes
+	     the session, the flag clears, and this disappears on its own. -->
+	{#if auth.user?.mustChangePassword}
+		<div class="must-change" role="alertdialog" aria-modal="true" data-testid="must-change-gate">
+			<div class="must-change-card">
+				<h1 class="text-lg font-semibold text-primary mb-2">
+					{language.current && t('mustChange.title')}
+				</h1>
+				<p class="text-sm text-secondary mb-4">{language.current && t('mustChange.body')}</p>
+				<Button variant="primary" onclick={() => (changePasswordModalOpen = true)}>
+					{#snippet children()}{language.current && t('mustChange.action')}{/snippet}
+				</Button>
+			</div>
+		</div>
+	{/if}
+
 	{#if auth.user?.passwordCompromised}
 		<div
 			class="bg-down/10 border-b border-down text-down px-6 py-3 flex items-center justify-between"
@@ -189,6 +223,27 @@
 {/if}
 
 <style>
+	/* v2.48 — see the markup comment: blocking, and below LockScreen. */
+	.must-change {
+		position: fixed;
+		inset: 0;
+		z-index: 999;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 16px;
+		background: color-mix(in oklch, var(--bg-base) 88%, transparent);
+		backdrop-filter: blur(4px);
+	}
+	.must-change-card {
+		max-width: 28rem;
+		border: 1px solid var(--border-default);
+		background: var(--bg-surface);
+		border-radius: 12px;
+		padding: 24px;
+		text-align: center;
+	}
+
 	.app-shell {
 		display: flex;
 		min-height: 100vh;

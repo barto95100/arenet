@@ -115,6 +115,12 @@ const (
 	// admin before this audit ever fires.
 	ActionUserDeleted = "user_deleted"
 
+	// ActionUserCreated (v2.48) — an administrator created a local
+	// account. The event records who, for whom, and with which role.
+	// It deliberately carries NO password material: an audit trail
+	// that holds credentials is a credential store.
+	ActionUserCreated = "user_created"
+
 	// Phase 4 — service-account lifecycle (3 actions). The plain
 	// token is NEVER recorded in BeforeJSON / AfterJSON; only the
 	// service-account user identity + token metadata (id, name,
@@ -317,6 +323,7 @@ var allActions = []string{
 	ActionLoginBreakGlass,
 	ActionLocalAdminPasswordRotated,
 	ActionUserRoleChanged,
+	ActionUserCreated,
 	ActionUserDeleted,
 	ActionServiceAccountCreated,
 	ActionServiceAccountTokenRotated,

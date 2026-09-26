@@ -484,6 +484,11 @@ type meResponse struct {
 	// The frontend gates write action UI on this; the backend gates
 	// the underlying routes via RequireAdminMiddleware.
 	Role string `json:"role"`
+	// MustChangePassword (v2.48) — the account was created by an
+	// administrator who necessarily knows its first password. The
+	// frontend keeps the user on the change-password screen until
+	// this clears, which happens when they change it.
+	MustChangePassword bool `json:"mustChangePassword"`
 	// Step K.2 — provenance of the credentials backing this session
 	// ("local" or "oidc"). Drives the "Change password" affordance:
 	// only LOCAL admins rotate password in-app; OIDC users rotate
@@ -524,6 +529,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		ThemePreference:     user.ThemePreference,
 		LanguagePreference:  user.LanguagePreference,
 		Role:                user.Role,
+		MustChangePassword:  user.MustChangePassword,
 		AuthSource:          user.AuthSource,
 	})
 }

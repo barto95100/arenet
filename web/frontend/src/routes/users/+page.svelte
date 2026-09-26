@@ -45,6 +45,7 @@
 	import UserAvatar from '$lib/components/UserAvatar.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
 	import CreateServiceAccountModal from '$lib/components/CreateServiceAccountModal.svelte';
+	import CreateUserModal from '$lib/components/CreateUserModal.svelte';
 	import { oidcProviderLabel, oidcProviderColors } from '$lib/utils/oidc-labels';
 	import type { OIDCProviderKind } from '$lib/api/types';
 
@@ -62,6 +63,9 @@
 
 	// Phase 4 — service-account modals.
 	let createSvcOpen = $state(false);
+	// v2.48 — creating a human account, which had no path at all:
+	// the only ways one existed were the setup flow and OIDC.
+	let createUserOpen = $state(false);
 	let confirmRotateOpen = $state(false);
 	let pendingRotate = $state<AdminUser | null>(null);
 	let revealedRotateToken = $state<string | null>(null);
@@ -371,9 +375,19 @@
 
 	<!-- Phase 4 — Service account create CTA. Above the grid so
 	     it stays visible regardless of sidebar collapse state. -->
-	<div class="mb-4 flex justify-end">
+	<div class="mb-4 flex justify-end gap-2">
+		<!-- v2.48 — a human account. Listed first because it is the
+		     common case; a service account is the specialist one. -->
 		<Button
 			variant="primary"
+			size="sm"
+			onclick={() => (createUserOpen = true)}
+			data-testid="create-user-button"
+		>
+			{language.current && t('users.createUser')}
+		</Button>
+		<Button
+			variant="secondary"
 			size="sm"
 			onclick={() => (createSvcOpen = true)}
 			data-testid="create-svc-button"
@@ -648,6 +662,13 @@
 <CreateServiceAccountModal
 	open={createSvcOpen}
 	onClose={() => (createSvcOpen = false)}
+	onCreated={load}
+/>
+
+<!-- v2.48 — create a local human account. -->
+<CreateUserModal
+	open={createUserOpen}
+	onClose={() => (createUserOpen = false)}
 	onCreated={load}
 />
 

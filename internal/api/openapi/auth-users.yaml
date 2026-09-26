@@ -696,6 +696,80 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '500': { $ref: '#/components/responses/ServerError' }
 
+    post:
+      summary: Create a local user
+      description: |
+        Creates a **human** local account (password-based). Service
+        accounts have their own endpoint
+        (`POST /admin/users/service-accounts`); OIDC users are created by
+        signing in through the provider, not here.
+
+        **The first password.** Leave `password` empty — the default and
+        the safe path — and Arenet generates one and returns it as
+        `generatedPassword`. **That response is the only place it ever
+        appears**: no endpoint returns it afterwards and it is not written
+        to the audit log. Send a `password` instead to choose one
+        yourself; it is then *not* echoed back, since you already have it.
+        Either way the same policy applies — length bounds and the HIBP
+        check the login flow runs.
+
+        The account is created with `mustChangePassword` set, so the
+        person has to replace that password before they can use Arenet
+        for anything else (`POST /auth/me/password`; the flag is visible on
+        `GET /auth/me`). Without it, whoever created the account would
+        know the password indefinitely.
+
+        `role` is required and explicit: `viewer` (read only) or `admin`
+        (everything, including creating more users). There is no default —
+        granting admin should be a deliberate act, not a forgotten field.
+
+        Errors arrive with a machine-readable `code` so the UI can show
+        them in the operator's language: `user_username_taken` (409),
+        `user_username_invalid`, `user_display_name_too_long`,
+        `user_role_invalid`, `user_password_too_short`,
+        `user_password_too_long`, and `user_email_on_oidc_allowlist` —
+        that last one refuses an address the OIDC allowlist already
+        covers, which would otherwise give one person two identities and
+        make which one they land in depend on how they signed in.
+      tags: [Users]
+      x-arenet-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsersCreateRequest' }
+            example:
+              username: alice
+              displayName: Alice
+              email: alice@example.org
+              role: viewer
+      responses:
+        '201':
+          description: |
+            User created. `generatedPassword` is present only when Arenet
+            generated it, and only here.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsersCreated' }
+              example:
+                user:
+                  id: 01JAB2C3D4E5F6G7H8J9K0M1NP
+                  username: alice
+                  displayName: Alice
+                  email: alice@example.org
+                  authSource: local
+                  oidcLinked: false
+                  role: viewer
+                  createdAt: '2026-09-26T08:30:00Z'
+                  updatedAt: '2026-09-26T08:30:00Z'
+                  activeSessionCount: 0
+                generatedPassword: Abcd-Efgh-Jkmn-Pqrs-Tuvw
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
   /admin/users/{id}/role:
     post:
       summary: Change a user's role
@@ -1001,7 +1075,7 @@ components:
     AuthMe:
       type: object
       required: [id, username, displayName, locked, passwordCompromised, hibpCheckStatus,
-        themePreference, languagePreference, role, authSource]
+        themePreference, languagePreference, role, authSource, mustChangePassword]
       properties:
         id: { type: string }
         username: { type: string }
@@ -1030,6 +1104,13 @@ components:
         authSource:
           type: string
           enum: [local, oidc, service]
+        mustChangePassword:
+          type: boolean
+          description: |
+            The account was created by an administrator, who therefore
+            knows its password. The UI blocks everything else until
+            `POST /auth/me/password` clears this, which is the only way
+            out.
 
     AuthUnlockRequest:
       type: object
@@ -1150,6 +1231,41 @@ components:
         activeSessionCount:
           type: integer
           minimum: 0
+
+    UsersCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [username, displayName, role]
+      properties:
+        username:
+          type: string
+          description: 'Sign-in name, unique across every account type.'
+        displayName:
+          type: string
+        email:
+          type: string
+          description: |
+            Contact address. Refused when the OIDC allowlist already
+            covers it.
+        role:
+          type: string
+          enum: [viewer, admin]
+        password:
+          type: string
+          description: |
+            Omit or leave empty to have Arenet generate one and return it
+            once. A supplied password is never echoed back.
+
+    UsersCreated:
+      type: object
+      required: [user]
+      properties:
+        user: { $ref: '#/components/schemas/UsersUser' }
+        generatedPassword:
+          type: string
+          description: |
+            Present only when Arenet generated the password. Shown here
+            and nowhere else, ever.
 
     UsersRoleRequest:
       type: object

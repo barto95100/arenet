@@ -85,6 +85,20 @@ type User struct {
 	// "viewer" — elevation requires an explicit operator
 	// gesture via POST /api/v1/admin/users/{id}/role.
 	Role string `json:"role"`
+	// MustChangePassword (v2.48) forces a password change before the
+	// account can be used for anything else.
+	//
+	// Set on every account an admin creates, because that admin
+	// necessarily knows the first password — they either typed it or
+	// read it off the screen once. Without this flag they would know
+	// it indefinitely; with it the exposure lasts one login.
+	//
+	// Cleared by UpdatePassword, which is the only way out. The setup
+	// flow does NOT set it: the operator who bootstraps Arenet chose
+	// their own password and there is nobody else to hide it from.
+	//
+	// omitempty keeps pre-v2.48 rows byte-identical on disk.
+	MustChangePassword bool `json:"must_change_password,omitempty"`
 }
 
 // AuthSource constants (Step K.2 + Phase 4).
