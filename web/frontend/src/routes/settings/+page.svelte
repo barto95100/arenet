@@ -45,6 +45,7 @@
 	import { ApiError, type AccessLogSettings } from '$lib/api/types';
 	import { serverErrorMessage } from '$lib/api/server-errors';
 	import { relativeTime } from '$lib/utils/audit-format';
+	import { humanToNs, nsToHuman } from '$lib/utils/rule-duration';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
 	import Card from '$lib/components/Card.svelte';
@@ -65,6 +66,8 @@
 	import ScheduledBackupsSection from '$lib/components/ScheduledBackupsSection.svelte';
 	import RouteCheckSection from '$lib/components/RouteCheckSection.svelte';
 	import ServerPositionSection from '$lib/components/ServerPositionSection.svelte';
+	import UnsavedMarker from '$lib/components/settings/UnsavedMarker.svelte';
+	import { guardNavigation } from '$lib/utils/navigation-guard';
 
 	// v2.9.12 i18n Phase 2 — theme toggle options are derived from
 	// the active language so the on-screen labels switch live with
@@ -152,7 +155,8 @@
 			const res = await authApi.listSessions();
 			sessions = res.sessions;
 		} catch (err) {
-			sessionsError = err instanceof Error ? err.message : 'Failed to load sessions';
+			sessionsError =
+				err instanceof Error ? err.message : t('settings.sessions.loadFailedFallback');
 		} finally {
 			sessionsLoading = false;
 		}
@@ -182,11 +186,11 @@
 			// rarely diverges in the ~50 ms window between delete and
 			// next request.
 			sessions = sessions.filter((x) => x.id !== target.id);
-			pushToast('Session revoked', 'success');
+			pushToast(t('settings.sessions.toastRevoked'), 'success');
 			revokeConfirmOpen = false;
 			revokeTarget = null;
 		} catch (_) {
-			pushToast('Failed to revoke session', 'danger');
+			pushToast(t('settings.sessions.toastRevokeFailed'), 'danger');
 			// Re-fetch on error to recover the truth — the delete might
 			// have partially succeeded or the local list might be stale.
 			// Keep the dialog open so the user can retry if they want.
@@ -242,6 +246,12 @@
 	);
 	let rulesSubmitting = $state(false);
 	let rulesFormError = $state<string | null>(null);
+	// Duration fields whose text could not be read, keyed
+	// "source.field", holding what the operator typed so the
+	// input keeps showing it. Save is refused while any is
+	// listed: an unreadable "5 minutes" used to go out as 0.
+	let unreadableDurations = $state<Record<string, string>>({});
+	const unreadableCount = $derived(Object.keys(unreadableDurations).length);
 
 	// Credentials form. Empty password triggers the J.4
 	// preserve-on-edit path (server keeps stored value).
@@ -251,6 +261,11 @@
 	let credsForm = $state({ lapiUrl: '', machineId: '', password: '' });
 	let credsSubmitting = $state(false);
 	let credsFormError = $state<string | null>(null);
+	// The credentials as last loaded or saved, password blank ("keep").
+	function credsKey(): string {
+		return JSON.stringify(credsForm);
+	}
+	let credsSaved = $state(credsKey());
 
 	async function loadAutomation(): Promise<void> {
 		automationLoading = true;
@@ -263,27 +278,31 @@
 			// re-runs on every load so the operator sees
 			// the live state, not a stale draft.
 			rulesDraft = { ...res.rules.rules };
+			unreadableDurations = {};
 			credsForm = {
 				lapiUrl: res.credentials.lapiUrl,
 				machineId: res.credentials.machineId,
 				password: ''
 			};
+			credsSaved = credsKey();
 		} catch (err) {
 			automationLoadError =
-				err instanceof Error ? err.message : 'Failed to load automation config';
+				err instanceof Error ? err.message : t('settings.automation.loadFailedFallback');
 		} finally {
 			automationLoading = false;
 		}
 	}
 
 	async function submitAutomationRules(): Promise<void> {
+		// Save is disabled meanwhile; this also covers Enter.
+		if (unreadableCount > 0) return;
 		rulesSubmitting = true;
 		rulesFormError = null;
 		try {
 			await settingsApi.putAutomationRules({
 				rules: { rules: rulesDraft }
 			});
-			pushToast('Automation rules saved', 'success');
+			pushToast(t('settings.automation.toastRulesSaved'), 'success');
 			await loadAutomation();
 		} catch (err) {
 			rulesFormError = err instanceof ApiError ? err.message : String(err);
@@ -304,11 +323,12 @@
 			automationCreds = res;
 			pushToast(
 				res.configured
-					? 'Automation credentials saved'
-					: 'Automation credentials cleared',
+					? t('settings.automation.toastCredsSaved')
+					: t('settings.automation.toastCredsCleared'),
 				'success'
 			);
 			credsForm.password = '';
+			credsSaved = credsKey();
 		} catch (err) {
 			credsFormError = err instanceof ApiError ? err.message : String(err);
 		} finally {
@@ -336,6 +356,7 @@
 			credsForm.lapiUrl = next.lapiUrl;
 			credsForm.machineId = next.machineId;
 			credsForm.password = '';
+			credsSaved = credsKey();
 			credsFormError = null;
 			pushToast(t('settingsSubcards.automationResetToastSuccess'), 'success');
 			automationResetConfirmOpen = false;
@@ -346,27 +367,30 @@
 		}
 	}
 
-	// Helper: ns ↔ "60s" / "4h" / "7d" round-trip. Keep the
-	// UI numbers operator-friendly without abandoning the
-	// wire's nanosecond format.
-	function nsToHuman(ns: number): string {
-		if (ns <= 0) return '0s';
-		const s = Math.floor(ns / 1e9);
-		if (s % 86400 === 0) return `${s / 86400}d`;
-		if (s % 3600 === 0) return `${s / 3600}h`;
-		if (s % 60 === 0) return `${s / 60}m`;
-		return `${s}s`;
-	}
-	function humanToNs(s: string): number {
-		const m = s.trim().match(/^(\d+)\s*([smhd]?)$/);
-		if (!m) return 0;
-		const n = Number(m[1]);
-		switch (m[2]) {
-			case 'd': return n * 86400 * 1e9;
-			case 'h': return n * 3600 * 1e9;
-			case 'm': return n * 60 * 1e9;
-			default:  return n * 1e9; // 's' or empty = seconds
+	// The three duration columns, edited as text ("60s" / "4h" /
+	// "7d", see $lib/utils/rule-duration) and stored as the
+	// wire's nanoseconds.
+	type RuleDurationField = 'window_ns' | 'duration_ns' | 'cooldown_ns';
+	const RULE_DURATION_FIELDS: readonly {
+		key: RuleDurationField;
+		ariaKey: string;
+		placeholder: string;
+	}[] = [
+		{ key: 'window_ns', ariaKey: 'settings.automation.ariaWindow', placeholder: '60s' },
+		{ key: 'duration_ns', ariaKey: 'settings.automation.ariaDuration', placeholder: '4h' },
+		{ key: 'cooldown_ns', ariaKey: 'settings.automation.ariaCooldown', placeholder: '24h' }
+	];
+	function setRuleDuration(s: AutomationSource, field: RuleDurationField, text: string): void {
+		const key = `${s}.${field}`;
+		const ns = humanToNs(text);
+		if (ns === null) {
+			unreadableDurations = { ...unreadableDurations, [key]: text };
+			return;
 		}
+		const next = { ...unreadableDurations };
+		delete next[key];
+		unreadableDurations = next;
+		setRuleField(s, field, ns);
 	}
 
 	// Per-rule field accessors. Svelte 5 runes work better
@@ -414,6 +438,8 @@
 	let fwdAuthDeleteError = $state<string | null>(null);
 	// Edit-mode flag for the placeholder pattern on the secret input.
 	let fwdAuthEditingSecretSet = $state(false);
+	// The form as it opened; anything different is unsaved.
+	let fwdAuthOpenedKey = $state('');
 
 	async function loadForwardAuthProviders(): Promise<void> {
 		fwdAuthLoading = true;
@@ -422,7 +448,7 @@
 			fwdAuthList = await settingsApi.listForwardAuthProviders();
 		} catch (err) {
 			fwdAuthListError =
-				err instanceof Error ? err.message : 'Failed to load forward-auth providers';
+				err instanceof Error ? err.message : t('settings.forwardAuth.loadFailedFallback');
 		} finally {
 			fwdAuthLoading = false;
 		}
@@ -441,6 +467,7 @@
 			authPassthroughPrefix: '',
 			rewriteVerifyHost: false
 		};
+		fwdAuthOpenedKey = JSON.stringify(fwdAuthForm);
 		fwdAuthFormError = null;
 		fwdAuthFormOpen = true;
 	}
@@ -458,6 +485,7 @@
 			authPassthroughPrefix: p.authPassthroughPrefix ?? '',
 			rewriteVerifyHost: p.rewriteVerifyHost ?? false
 		};
+		fwdAuthOpenedKey = JSON.stringify(fwdAuthForm);
 		fwdAuthFormError = null;
 		fwdAuthFormOpen = true;
 	}
@@ -482,10 +510,10 @@
 			};
 			if (fwdAuthEditingName === null) {
 				await settingsApi.createForwardAuthProvider(req);
-				pushToast('Forward-auth provider created', 'success');
+				pushToast(t('settings.forwardAuth.toastCreated'), 'success');
 			} else {
 				await settingsApi.updateForwardAuthProvider(fwdAuthEditingName, req);
-				pushToast('Forward-auth provider updated', 'success');
+				pushToast(t('settings.forwardAuth.toastUpdated'), 'success');
 			}
 			fwdAuthFormOpen = false;
 			await loadForwardAuthProviders();
@@ -500,11 +528,25 @@
 		fwdAuthDeleteError = null;
 		try {
 			await settingsApi.deleteForwardAuthProvider(name);
-			pushToast('Forward-auth provider deleted', 'success');
+			pushToast(t('settings.forwardAuth.toastDeleted'), 'success');
 			await loadForwardAuthProviders();
 		} catch (err) {
 			fwdAuthDeleteError = err instanceof ApiError ? err.message : String(err);
 		}
+	}
+
+	// Deleting a provider loses its settings and client secret, so it
+	// is confirmed first. deleteFwdAuth reports a failure in the card
+	// (role=alert), so the dialog closes either way.
+	let fwdAuthDeleteTarget = $state<string | null>(null);
+	let fwdAuthDeleteOpen = $state(false);
+	function askDeleteFwdAuth(name: string): void {
+		fwdAuthDeleteTarget = name;
+		fwdAuthDeleteOpen = true;
+	}
+	async function confirmDeleteFwdAuth(): Promise<void> {
+		if (fwdAuthDeleteTarget !== null) await deleteFwdAuth(fwdAuthDeleteTarget);
+		fwdAuthDeleteOpen = false;
 	}
 
 	// License URL ref resolution (Step G G.2).
@@ -588,6 +630,27 @@
 		return t(key, params);
 	}
 
+	// A few help sentences carry markup (<code>, <em>) in the middle.
+	// The translation keeps the whole sentence with {name} placeholders
+	// (t() leaves unknown placeholders untouched), and the template
+	// renders each placeholder as its own element — so a translator
+	// can move the markup wherever the sentence needs it, without
+	// {@html}.
+	type RichPart = { text: string; ph: string | null };
+	function richParts(text: string): RichPart[] {
+		const parts: RichPart[] = [];
+		const re = /\{(\w+)\}/g;
+		let last = 0;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(text)) !== null) {
+			if (m.index > last) parts.push({ text: text.slice(last, m.index), ph: null });
+			parts.push({ text: m[0], ph: m[1] });
+			last = m.index + m[0].length;
+		}
+		if (last < text.length) parts.push({ text: text.slice(last), ph: null });
+		return parts;
+	}
+
 	// --- v2.50 access log ------------------------------------------
 	//
 	// Off by default and that is the point: the file records every
@@ -610,6 +673,11 @@
 	// A list of names is what it is; a row editor would be four clicks to
 	// add "code".
 	let alRedactInput = $state('');
+	// The draft as last loaded or saved.
+	function alKey(): string {
+		return JSON.stringify([alEnabled, alPath, alRollSizeMB, alRollKeep, alCompress, alRedactInput]);
+	}
+	let alSaved = $state(alKey());
 
 	// The number the operator actually wants: how big can this get.
 	const alCeilingMB = $derived(alRollSizeMB * (alRollKeep + 1));
@@ -626,6 +694,7 @@
 			alRollKeep = cfg.rollKeep ?? 5;
 			alCompress = cfg.compress ?? true;
 			alRedactInput = (cfg.redactQueryParams ?? []).join(', ');
+			alSaved = alKey();
 		} catch (err) {
 			accessLogError = serverErrorMessage(err);
 		} finally {
@@ -662,6 +731,7 @@
 			alRollSizeMB = accessLog.rollSizeMB ?? 10;
 			alRollKeep = accessLog.rollKeep ?? 5;
 			alRedactInput = (accessLog.redactQueryParams ?? []).join(', ');
+			alSaved = alKey();
 			pushToast(tl('settings.accessLog.saved'), 'success');
 		} catch (err) {
 			accessLogError = serverErrorMessage(err);
@@ -679,10 +749,28 @@
 
 	let activeTab = $state<SettingsTab>('account');
 
+	// A tab is mounted the first time it is opened and then kept,
+	// hidden, instead of being unmounted on every switch. The OIDC,
+	// CrowdSec, GeoIP, DNS and backup sections hold their form state
+	// inside the component and reload it on mount, so switching tab
+	// threw away whatever the operator had typed and not yet saved.
+	// Unvisited tabs are still not rendered.
+	let visited = $state<Record<SettingsTab, boolean>>({
+		account: false,
+		security: false,
+		network: false,
+		backups: false,
+		system: false
+	});
+	$effect(() => {
+		visited[activeTab] = true;
+	});
+
 	const settingsTabs = $derived(
 		TAB_IDS.map((id) => ({
 			id,
-			label: (language.current && t(`settings.tab.${id}`)) as string,
+			// A dot on a tab holding unsaved edits, so they can be found.
+			label: ((language.current && t(`settings.tab.${id}`)) as string) + (dirtyTabs.has(id) ? ' •' : ''),
 			testId: `settings-tab-${id}`
 		}))
 	);
@@ -697,6 +785,9 @@
 	}
 
 	afterNavigate(async () => {
+		// A navigation that kept this page (a link back to /settings)
+		// also kept its edits: guard them again.
+		discarding = false;
 		await tick();
 		const hash = window.location.hash.slice(1);
 		if (!hash) return;
@@ -713,10 +804,75 @@
 			target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 		}
 	});
+
+	// --- Unsaved edits ----------------------------------------------
+	//
+	// Each card keeps its own draft. Leaving the page (a sidebar link,
+	// the back button, closing the tab) dropped every one of them
+	// without a word; it now asks first, naming the cards concerned.
+	// The self-contained sections report through bind:dirty.
+	let oidcDirty = $state(false);
+	let crowdsecDirty = $state(false);
+	let dnsDirty = $state(false);
+	let geoipDirty = $state(false);
+	let positionDirty = $state(false);
+	let scheduledBackupsDirty = $state(false);
+
+	const accessLogDirty = $derived(alKey() !== alSaved);
+	const automationDirty = $derived(
+		credsKey() !== credsSaved ||
+			unreadableCount > 0 ||
+			JSON.stringify(rulesDraft) !== JSON.stringify(automationRules.rules)
+	);
+	const fwdAuthDirty = $derived(fwdAuthFormOpen && JSON.stringify(fwdAuthForm) !== fwdAuthOpenedKey);
+
+	// Set once the operator agreed to drop the edits, so the guard lets
+	// the navigation they asked for through.
+	let discarding = $state(false);
+
+	const dirtyCards = $derived(
+		[
+			{ tab: 'security', dirty: accessLogDirty, name: tl('settings.accessLog.title') },
+			{ tab: 'security', dirty: automationDirty, name: tl('settings.unsaved.cardAutomation') },
+			{ tab: 'security', dirty: fwdAuthDirty, name: tl('settings.unsaved.cardForwardAuth') },
+			{ tab: 'security', dirty: oidcDirty, name: tl('oidcSettings.title') },
+			{ tab: 'security', dirty: crowdsecDirty, name: tl('crowdsecSettings.title') },
+			{ tab: 'network', dirty: dnsDirty, name: tl('settings.dnsProviders.title') },
+			{ tab: 'network', dirty: geoipDirty, name: tl('geoipSettings.title') },
+			{ tab: 'network', dirty: positionDirty, name: tl('serverPosition.title') },
+			{ tab: 'backups', dirty: scheduledBackupsDirty, name: tl('scheduledBackups.title') }
+		].filter((c) => c.dirty)
+	);
+	const dirtyTabs = $derived(new Set<string>(dirtyCards.map((c) => c.tab)));
+
+	let leaveConfirmOpen = $state(false);
+	let pendingLeave: (() => void) | null = null;
+
+	guardNavigation(
+		() => !discarding && dirtyCards.length > 0,
+		(proceed) => {
+			pendingLeave = proceed;
+			leaveConfirmOpen = true;
+		}
+	);
+
+	function confirmLeave(): void {
+		leaveConfirmOpen = false;
+		discarding = true;
+		const proceed = pendingLeave;
+		pendingLeave = null;
+		proceed?.();
+	}
+
+	// ConfirmDialog reports only the affirmative answer; a dialog
+	// closed any other way leaves nothing armed.
+	$effect(() => {
+		if (!leaveConfirmOpen) pendingLeave = null;
+	});
 </script>
 
 <svelte:head>
-	<title>Settings — Arenet</title>
+	<title>{tl('settings.headTitle')}</title>
 </svelte:head>
 
 <div class="mx-auto max-w-5xl">
@@ -751,7 +907,8 @@
 	<Tabs bind:value={activeTab} tabs={settingsTabs} ariaLabel={language.current && t('settings.tabsAria')} onChange={onTabChange} />
 
 	<div class="mt-6">
-		{#if activeTab === 'account'}
+		{#if activeTab === 'account' || visited.account}
+		<div hidden={activeTab !== 'account'}>
 			<!-- ROW 1 — Account + Appearance (2-col on lg+, 1-col below) -->
 			<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 				<!-- ACCOUNT SECTION -->
@@ -763,13 +920,13 @@
 					</header>
 
 					<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-3 text-sm">
-						<dt class="text-secondary">Display name</dt>
+						<dt class="text-secondary">{tl('settings.account.displayName')}</dt>
 						<dd class="text-primary">{auth.user?.displayName ?? '—'}</dd>
 
-						<dt class="text-secondary">Username</dt>
+						<dt class="text-secondary">{tl('settings.account.username')}</dt>
 						<dd class="text-primary font-mono">{auth.user?.username ?? '—'}</dd>
 
-						<dt class="text-secondary">Password security</dt>
+						<dt class="text-secondary">{tl('settings.account.passwordSecurity')}</dt>
 						<dd>
 							<!-- Discreet inline indicator — the compromised banner
 							     in +layout.svelte handles the urgent attention
@@ -778,24 +935,33 @@
 							     Chunk 6.4: wording switched from HIBP jargon to
 							     user-friendly equivalents. -->
 							{#if auth.user?.passwordCompromised}
-								<span class="text-down">Found in known breaches — change required</span>
+								<span class="text-down">{tl('settings.account.breachFound')}</span>
 							{:else if auth.user?.hibpCheckStatus === 'clean'}
-								<span class="text-up">Not found in known breaches</span>
+								<span class="text-up">{tl('settings.account.breachClean')}</span>
 							{:else if auth.user?.hibpCheckStatus === 'pending'}
-								<span class="text-muted">Verification in progress</span>
+								<span class="text-muted">{tl('settings.account.breachPending')}</span>
 							{:else if auth.user?.hibpCheckStatus === 'skipped'}
-								<span class="text-muted">Verification skipped</span>
+								<span class="text-muted">{tl('settings.account.breachSkipped')}</span>
 							{:else}
-								<span class="text-muted">Status unknown</span>
+								<span class="text-muted">{tl('settings.account.breachUnknown')}</span>
 							{/if}
 						</dd>
 					</dl>
 
-					<div class="mt-6">
-						<Button variant="secondary" onclick={() => (changePasswordOpen = true)}>
-							{language.current && t('settings.changePassword')}
-						</Button>
-					</div>
+					<!-- OIDC users have no local password to change (they
+					     rotate it at the IdP, and the server refuses the
+					     call), so the button is not offered to them. -->
+					{#if auth.user?.authSource !== 'oidc'}
+						<div class="mt-6">
+							<Button
+								variant="secondary"
+								onclick={() => (changePasswordOpen = true)}
+								data-testid="settings-change-password"
+							>
+								{language.current && t('settings.changePassword')}
+							</Button>
+						</div>
+					{/if}
 				</Card>
 
 				<!-- APPEARANCE SECTION -->
@@ -863,13 +1029,13 @@
 
 					{#if sessionsLoading}
 						<div class="flex items-center gap-2 py-4 text-secondary text-sm">
-							<Spinner size="sm" /> Loading sessions…
+							<Spinner size="sm" /> {tl('settings.sessions.loading')}
 						</div>
 					{:else if sessionsError}
 						<div class="py-4 text-sm" role="alert">
-							<p class="text-down">Failed to load sessions: {sessionsError}</p>
+							<p class="text-down">{tl('settings.sessions.loadFailed', { err: sessionsError })}</p>
 							<div class="mt-3">
-								<Button variant="ghost" size="sm" onclick={loadSessions}>Retry</Button>
+								<Button variant="ghost" size="sm" onclick={loadSessions}>{tl('settings.sessions.retry')}</Button>
 							</div>
 						</div>
 					{:else}
@@ -879,7 +1045,14 @@
 						     + tabindex + hover-rail + focus-ring when interactive
 						     is false. -->
 						<DataTable
-							headers={['Issued', 'Last activity', 'IP', 'Browser', 'Status', '']}
+							headers={[
+								tl('settings.sessions.colIssued'),
+								tl('settings.sessions.colLastActivity'),
+								tl('settings.sessions.colIp'),
+								tl('settings.sessions.colBrowser'),
+								tl('settings.sessions.colStatus'),
+								''
+							]}
 							items={sessions}
 							interactive={false}
 						>
@@ -896,7 +1069,7 @@
 								</td>
 								<td class="px-4 py-3 text-sm">
 									{#if s.isCurrent}
-										<Badge variant="current">Current</Badge>
+										<Badge variant="current">{tl('settings.sessions.current')}</Badge>
 									{/if}
 								</td>
 								<td class="px-4 py-3 text-sm text-right">
@@ -906,7 +1079,7 @@
 										disabled={s.isCurrent}
 										onclick={() => onRevokeClick(s)}
 									>
-										Revoke
+										{tl('settings.sessions.revoke')}
 									</Button>
 								</td>
 							{/snippet}
@@ -914,9 +1087,11 @@
 					{/if}
 				</Card>
 			</div>
+		</div>
 		{/if}
 
-		{#if activeTab === 'security'}
+		{#if activeTab === 'security' || visited.security}
+		<div hidden={activeTab !== 'security'}>
 			<!-- ROW 2.7 — Security Automation (Step P.4 / spec D8.A).
 			     New top-level Settings section, sibling of SSL /
 			     Certificates. Two forms in one Card: per-category
@@ -941,6 +1116,7 @@
 					<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
 						<div>
 							<h2 class="text-xl font-semibold">{tl('settings.accessLog.title')}</h2>
+							<UnsavedMarker dirty={accessLogDirty} testid="access-log-unsaved" />
 							<p class="text-xs text-muted mt-1">{tl('settings.accessLog.subtitle')}</p>
 						</div>
 						{#if accessLogLoading}
@@ -1088,31 +1264,32 @@
 				<Card padding="p-6">
 					<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
 						<div>
-							<h2 class="text-xl font-semibold">Security Automation</h2>
+							<h2 class="text-xl font-semibold">{tl('settings.automation.title')}</h2>
+							<UnsavedMarker dirty={automationDirty} testid="automation-unsaved" />
 							<p class="text-xs text-muted mt-1">
-								Push CrowdSec bans to LAPI automatically when WAF / throttle / auth-failure events cross operator-configured thresholds. Decisions appear in the CrowdSec dashboard with scenario prefix <code>arenet/</code>.
+								{#each richParts(tl('settings.automation.subtitle')) as part, i (i)}{#if part.ph === 'prefix'}<code>arenet/</code>{:else}{part.text}{/if}{/each}
 							</p>
 						</div>
 						{#if automationLoading}
 							<Spinner size="sm" />
 						{:else if automationCreds.configured}
-							<Badge variant="status-up">Configured</Badge>
+							<Badge variant="status-up">{tl('settings.automation.badgeConfigured')}</Badge>
 						{:else}
-							<Badge variant="status-warn">Not configured</Badge>
+							<Badge variant="status-warn">{tl('settings.automation.badgeNotConfigured')}</Badge>
 						{/if}
 					</header>
 
 					{#if automationLoadError}
 						<p class="text-sm text-down mb-3" role="alert">
-							Failed to load automation config: {automationLoadError}
+							{tl('settings.automation.loadFailed', { err: automationLoadError })}
 						</p>
 					{/if}
 
 					<!-- Watcher credentials sub-form -->
 					<section class="mb-6">
-						<h3 class="text-base font-medium text-primary mb-2">Watcher credentials</h3>
+						<h3 class="text-base font-medium text-primary mb-2">{tl('settings.automation.credsTitle')}</h3>
 						<p class="text-xs text-muted mb-3">
-							Run <code>cscli machines add arenet-writer</code> on your CrowdSec host and paste the resulting credentials here. Distinct from the read-side bouncer key (Step N): writes to LAPI require a watcher per CrowdSec's auth model.
+							{#each richParts(tl('settings.automation.credsHint')) as part, i (i)}{#if part.ph === 'cmd'}<code>cscli machines add arenet-writer</code>{:else}{part.text}{/if}{/each}
 						</p>
 						<form
 							class="grid grid-cols-1 md:grid-cols-2 gap-4"
@@ -1123,7 +1300,7 @@
 						>
 							<div class="md:col-span-2">
 								<label for="auto-lapi-url" class="text-sm font-medium text-secondary block mb-1">
-									LAPI URL
+									{tl('settings.automation.lapiUrl')}
 								</label>
 								<input
 									id="auto-lapi-url"
@@ -1136,7 +1313,7 @@
 							</div>
 							<div>
 								<label for="auto-machine-id" class="text-sm font-medium text-secondary block mb-1">
-									Machine ID
+									{tl('settings.automation.machineId')}
 								</label>
 								<input
 									id="auto-machine-id"
@@ -1149,14 +1326,14 @@
 							</div>
 							<div>
 								<label for="auto-password" class="text-sm font-medium text-secondary block mb-1">
-									Password
+									{tl('settings.automation.password')}
 								</label>
 								<input
 									id="auto-password"
 									type="password"
 									autocomplete="off"
 									bind:value={credsForm.password}
-									placeholder={automationCreds.configured ? '••• set (leave blank to keep)' : ''}
+									placeholder={automationCreds.configured ? tl('settings.automation.passwordKeepPlaceholder') : ''}
 									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 								/>
 							</div>
@@ -1196,9 +1373,14 @@
 
 					<!-- Per-category rule toggles -->
 					<section>
-						<h3 class="text-base font-medium text-primary mb-2">Trigger rules</h3>
+						<h3 class="text-base font-medium text-primary mb-2">{tl('settings.automation.rulesTitle')}</h3>
+						<!-- The emphasised words are the column headings below,
+						     so the sentence and the table name things the same way. -->
 						<p class="text-xs text-muted mb-3">
-							Each category is disabled by default. When enabled, Arenet bans a source IP after <em>threshold</em> events in <em>window</em>, for <em>duration</em>, with a <em>cooldown</em> after an operator unban that suppresses re-ban for that long.
+							{#each richParts(tl('settings.automation.rulesHint')) as part, i (i)}{#if part.ph === 'threshold'}<em>{tl('settings.automation.colThreshold').toLowerCase()}</em>{:else if part.ph === 'window'}<em>{tl('settings.automation.colWindow').toLowerCase()}</em>{:else if part.ph === 'duration'}<em>{tl('settings.automation.colDuration').toLowerCase()}</em>{:else if part.ph === 'cooldown'}<em>{tl('settings.automation.colCooldown').toLowerCase()}</em>{:else}{part.text}{/if}{/each}
+						</p>
+						<p id="automation-duration-hint" class="text-xs text-muted mb-3">
+							{tl('settings.automationRules.durationHint')}
 						</p>
 						<form
 							onsubmit={(e) => {
@@ -1210,12 +1392,12 @@
 								<table class="w-full text-sm">
 									<thead>
 										<tr class="text-left text-xs text-secondary uppercase">
-											<th class="py-2 pr-3">Category</th>
-											<th class="py-2 px-2">Enabled</th>
-											<th class="py-2 px-2">Threshold</th>
-											<th class="py-2 px-2">Window</th>
-											<th class="py-2 px-2">Duration</th>
-											<th class="py-2 px-2">Cooldown</th>
+											<th class="py-2 pr-3">{tl('settings.automation.colCategory')}</th>
+											<th class="py-2 px-2">{tl('settings.automation.colEnabled')}</th>
+											<th class="py-2 px-2">{tl('settings.automation.colThreshold')}</th>
+											<th class="py-2 px-2">{tl('settings.automation.colWindow')}</th>
+											<th class="py-2 px-2">{tl('settings.automation.colDuration')}</th>
+											<th class="py-2 px-2">{tl('settings.automation.colCooldown')}</th>
 										</tr>
 									</thead>
 									<tbody>
@@ -1228,7 +1410,7 @@
 														checked={getRule(src).enabled}
 														onchange={(e) =>
 															setRuleField(src, 'enabled', (e.target as HTMLInputElement).checked)}
-														aria-label={`Enable ${AUTOMATION_SOURCE_LABELS[src]}`}
+														aria-label={tl('settings.automation.ariaEnable', { source: AUTOMATION_SOURCE_LABELS[src] })}
 													/>
 												</td>
 												<td class="py-2 px-2">
@@ -1239,42 +1421,37 @@
 														oninput={(e) =>
 															setRuleField(src, 'threshold', Number((e.target as HTMLInputElement).value))}
 														class="w-16 bg-surface border border-border-default rounded-md px-2 py-1 text-sm font-mono"
-														aria-label={`Threshold for ${AUTOMATION_SOURCE_LABELS[src]}`}
+														aria-label={tl('settings.automation.ariaThreshold', { source: AUTOMATION_SOURCE_LABELS[src] })}
 													/>
 												</td>
-												<td class="py-2 px-2">
-													<input
-														type="text"
-														value={nsToHuman(getRule(src).window_ns)}
-														onchange={(e) =>
-															setRuleField(src, 'window_ns', humanToNs((e.target as HTMLInputElement).value))}
-														placeholder="60s"
-														class="w-20 bg-surface border border-border-default rounded-md px-2 py-1 text-sm font-mono"
-														aria-label={`Window for ${AUTOMATION_SOURCE_LABELS[src]}`}
-													/>
-												</td>
-												<td class="py-2 px-2">
-													<input
-														type="text"
-														value={nsToHuman(getRule(src).duration_ns)}
-														onchange={(e) =>
-															setRuleField(src, 'duration_ns', humanToNs((e.target as HTMLInputElement).value))}
-														placeholder="4h"
-														class="w-20 bg-surface border border-border-default rounded-md px-2 py-1 text-sm font-mono"
-														aria-label={`Duration for ${AUTOMATION_SOURCE_LABELS[src]}`}
-													/>
-												</td>
-												<td class="py-2 px-2">
-													<input
-														type="text"
-														value={nsToHuman(getRule(src).cooldown_ns)}
-														onchange={(e) =>
-															setRuleField(src, 'cooldown_ns', humanToNs((e.target as HTMLInputElement).value))}
-														placeholder="24h"
-														class="w-20 bg-surface border border-border-default rounded-md px-2 py-1 text-sm font-mono"
-														aria-label={`Cooldown for ${AUTOMATION_SOURCE_LABELS[src]}`}
-													/>
-												</td>
+												{#each RULE_DURATION_FIELDS as f (f.key)}
+													{@const key = `${src}.${f.key}`}
+													{@const unreadable = key in unreadableDurations}
+													{@const errorId = `automation-${src}-${f.key}-error`}
+													<td class="py-2 px-2">
+														<input
+															type="text"
+															value={unreadableDurations[key] ?? nsToHuman(getRule(src)[f.key])}
+															onchange={(e) =>
+																setRuleDuration(src, f.key, (e.target as HTMLInputElement).value)}
+															placeholder={f.placeholder}
+															class="w-20 bg-surface border rounded-md px-2 py-1 text-sm font-mono"
+															class:border-down={unreadable}
+															class:border-border-default={!unreadable}
+															aria-label={tl(f.ariaKey, { source: AUTOMATION_SOURCE_LABELS[src] })}
+															aria-invalid={unreadable ? 'true' : undefined}
+															aria-describedby={unreadable
+																? `${errorId} automation-duration-hint`
+																: 'automation-duration-hint'}
+															data-testid={`automation-${src}-${f.key}`}
+														/>
+														{#if unreadable}
+															<p id={errorId} class="text-xs text-down mt-1">
+																{tl('settings.automationRules.durationUnreadable')}
+															</p>
+														{/if}
+													</td>
+												{/each}
 											</tr>
 										{/each}
 									</tbody>
@@ -1283,14 +1460,29 @@
 							{#if rulesFormError}
 								<p class="text-sm text-down mt-3" role="alert">{rulesFormError}</p>
 							{/if}
+							{#if unreadableCount > 0}
+								<p
+									id="automation-rules-unreadable"
+									class="text-sm text-down mt-3"
+									role="alert"
+									data-testid="automation-rules-unreadable"
+								>
+									{tl('settings.automationRules.unreadableSummary', { count: unreadableCount })}
+								</p>
+							{/if}
 							<div class="flex justify-end mt-4">
-								<Button type="submit" disabled={rulesSubmitting}>
-									{rulesSubmitting ? 'Saving…' : 'Save rules'}
+								<Button
+									type="submit"
+									disabled={rulesSubmitting || unreadableCount > 0}
+									aria-describedby={unreadableCount > 0 ? 'automation-rules-unreadable' : undefined}
+									data-testid="automation-rules-save"
+								>
+									{rulesSubmitting ? tl('settings.automation.saving') : tl('settings.automation.saveRules')}
 								</Button>
 							</div>
 						</form>
 						<p class="text-xs text-muted mt-2">
-							Cooldown defaults reflect category mistake-distribution: AUTH 7 days (operator unbans typically reflect real users), WAF SQLi/RCE/XSS/LFI 24 hours (suspected false positives), PROTOCOL/OTHER/Throttle 4 hours (maintenance-action unbans). Tune per-row.
+							{tl('settings.automation.cooldownHint')}
 						</p>
 					</section>
 				</Card>
@@ -1305,26 +1497,26 @@
 				<Card padding="p-6">
 					<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
 						<div>
-							<h2 class="text-xl font-semibold">Forward-auth providers</h2>
+							<h2 class="text-xl font-semibold">{tl('settings.forwardAuth.title')}</h2>
+							<UnsavedMarker dirty={fwdAuthDirty} testid="fwdauth-unsaved" />
 							<p class="text-xs text-muted mt-1">
-								Configure identity providers (Authelia / Authentik /
-								Keycloak / generic) that routes delegate auth to.
+								{tl('settings.forwardAuth.subtitle')}
 							</p>
 						</div>
-						<Button onclick={openFwdAuthCreate}>+ Add provider</Button>
+						<Button onclick={openFwdAuthCreate}>{tl('settings.forwardAuth.addButton')}</Button>
 					</header>
 
 					{#if fwdAuthLoading}
 						<div class="flex items-center gap-2 py-4 text-secondary text-sm">
-							<Spinner size="sm" /> Loading providers…
+							<Spinner size="sm" /> {tl('settings.forwardAuth.loading')}
 						</div>
 					{:else if fwdAuthListError}
 						<p class="text-sm text-down mb-3" role="alert">
-							Failed to load forward-auth providers: {fwdAuthListError}
+							{tl('settings.forwardAuth.loadFailed', { err: fwdAuthListError })}
 						</p>
 					{:else if fwdAuthList.length === 0 && !fwdAuthFormOpen}
 						<p class="text-sm text-secondary py-2">
-							No forward-auth provider configured yet.
+							{tl('settings.forwardAuth.empty')}
 						</p>
 					{:else}
 						<div class="flex flex-col gap-2 mb-3">
@@ -1335,18 +1527,18 @@
 										<span class="text-xs text-muted">
 											{p.kind} · {p.verifyUrl}
 											{#if p.clientSecretSet}
-												· <span class="text-up">secret set</span>
+												· <span class="text-up">{tl('settings.forwardAuth.secretSet')}</span>
 											{:else}
-												· <span class="text-secondary">no secret</span>
+												· <span class="text-secondary">{tl('settings.forwardAuth.noSecret')}</span>
 											{/if}
 										</span>
 									</div>
 									<div class="flex items-center gap-1">
 										<Button variant="ghost" size="sm" onclick={() => openFwdAuthEdit(p)}>
-											Edit
+											{tl('settings.forwardAuth.edit')}
 										</Button>
-										<Button variant="ghost" size="sm" onclick={() => deleteFwdAuth(p.name)}>
-											Delete
+										<Button variant="ghost" size="sm" onclick={() => askDeleteFwdAuth(p.name)}>
+											{tl('settings.forwardAuth.delete')}
 										</Button>
 									</div>
 								</div>
@@ -1368,7 +1560,7 @@
 						>
 							<div>
 								<label for="fwdauth-name" class="text-sm font-medium text-secondary block mb-1">
-									Name (slug)
+									{tl('settings.forwardAuth.nameLabel')}
 								</label>
 								<input
 									id="fwdauth-name"
@@ -1380,14 +1572,14 @@
 								/>
 								{#if fwdAuthEditingName !== null}
 									<p class="text-xs text-muted mt-1">
-										Name is immutable after creation.
+										{tl('settings.forwardAuth.nameImmutable')}
 									</p>
 								{/if}
 							</div>
 
 							<div>
 								<label for="fwdauth-kind" class="text-sm font-medium text-secondary block mb-1">
-									Kind
+									{tl('settings.forwardAuth.kindLabel')}
 								</label>
 								<select
 									id="fwdauth-kind"
@@ -1405,7 +1597,7 @@
 									for="fwdauth-verify-url"
 									class="text-sm font-medium text-secondary block mb-1"
 								>
-									Verify URL
+									{tl('settings.forwardAuth.verifyUrlLabel')}
 								</label>
 								<input
 									id="fwdauth-verify-url"
@@ -1421,7 +1613,7 @@
 									for="fwdauth-auth-request-uri"
 									class="text-sm font-medium text-secondary block mb-1"
 								>
-									Auth request URI
+									{tl('settings.forwardAuth.authRequestUriLabel')}
 								</label>
 								<input
 									id="fwdauth-auth-request-uri"
@@ -1437,7 +1629,7 @@
 									for="fwdauth-copy-headers"
 									class="text-sm font-medium text-secondary block mb-1"
 								>
-									Copy headers (comma-separated)
+									{tl('settings.forwardAuth.copyHeadersLabel')}
 								</label>
 								<input
 									id="fwdauth-copy-headers"
@@ -1453,7 +1645,7 @@
 									for="fwdauth-client-secret"
 									class="text-sm font-medium text-secondary block mb-1"
 								>
-									Client secret (optional)
+									{tl('settings.forwardAuth.clientSecretLabel')}
 								</label>
 								<input
 									id="fwdauth-client-secret"
@@ -1461,7 +1653,7 @@
 									autocomplete="off"
 									bind:value={fwdAuthForm.clientSecret}
 									placeholder={fwdAuthEditingSecretSet
-										? '••• set (leave blank to keep)'
+										? tl('settings.forwardAuth.secretKeepPlaceholder')
 										: ''}
 									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 								/>
@@ -1472,7 +1664,7 @@
 									for="fwdauth-passthrough"
 									class="text-sm font-medium text-secondary block mb-1"
 								>
-									Auth passthrough prefix (optional)
+									{tl('settings.forwardAuth.passthroughLabel')}
 								</label>
 								<input
 									id="fwdauth-passthrough"
@@ -1482,16 +1674,7 @@
 									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 								/>
 								<p class="text-xs text-muted mt-1">
-									Path prefix served by the IdP itself on the
-									application's host (e.g. <code class="font-mono">/outpost.goauthentik.io</code> for
-									Authentik embedded outpost, <code class="font-mono">/oauth2</code> for
-									oauth2-proxy). Requests under this prefix bypass
-									the forward_auth gate and are reverse-proxied
-									directly to the verify URL host, carrying the same
-									Host as the verify sub-request so a reverse proxy in
-									front of the IdP routes both the same way. Leave
-									empty for providers that don't need it (Authelia
-									standalone, generic).
+									{#each richParts(tl('settings.forwardAuth.passthroughHint')) as part, i (i)}{#if part.ph === 'outpostPath'}<code class="font-mono">/outpost.goauthentik.io</code>{:else if part.ph === 'oauth2Path'}<code class="font-mono">/oauth2</code>{:else}{part.text}{/if}{/each}
 								</p>
 							</div>
 
@@ -1503,16 +1686,9 @@
 										class="mt-0.5 rounded border-border-default bg-surface text-cyan focus:ring-cyan"
 									/>
 									<span>
-										Rewrite Host of verify sub-request to verify URL host
+										{tl('settings.forwardAuth.rewriteHostLabel')}
 										<span class="block text-xs font-normal text-muted mt-0.5">
-											Depends on your network, not on which IdP you run.
-											Check it when something between Arenet and the IdP
-											routes by Host — typically a reverse proxy in front
-											of the IdP, such as Authentik behind Traefik or
-											nginx. Leave it unchecked when Arenet reaches the IdP
-											directly. Either way the IdP still identifies the
-											application from X-Forwarded-Host, which Arenet sends
-											from the original request.
+											{tl('settings.forwardAuth.rewriteHostHint')}
 										</span>
 									</span>
 								</label>
@@ -1524,14 +1700,14 @@
 
 							<div class="md:col-span-2 flex justify-end gap-2">
 								<Button variant="ghost" onclick={() => (fwdAuthFormOpen = false)} type="button">
-									Cancel
+									{tl('settings.forwardAuth.cancel')}
 								</Button>
 								<Button type="submit" disabled={fwdAuthSubmitting}>
 									{fwdAuthSubmitting
-										? 'Saving…'
+										? tl('settings.forwardAuth.saving')
 										: fwdAuthEditingName === null
-											? 'Create'
-											: 'Save'}
+											? tl('settings.forwardAuth.create')
+											: tl('settings.forwardAuth.save')}
 								</Button>
 							</div>
 						</form>
@@ -1544,27 +1720,29 @@
 			     the "Modifier la config" button in the
 			     OIDCConfigSummary sidebar on /utilisateurs. -->
 			<div id="oidc-config">
-				<OIDCSettingsSection />
+				<OIDCSettingsSection bind:dirty={oidcDirty} />
 			</div>
 			<!-- ROW 2.87 — CrowdSec bouncer (Step CS.1). Sits next
 			     to OIDC since both are admin-facing secret-config
 			     sections that hot-reload Caddy on save. The chain
 			     position #2 implication (country_block fires first)
 			     is documented in docs/setup/crowdsec.md. -->
-			<CrowdSecSettingsSection />
+			<CrowdSecSettingsSection bind:dirty={crowdsecDirty} />
+		</div>
 		{/if}
 
-		{#if activeTab === 'network'}
+		{#if activeTab === 'network' || visited.network}
+		<div hidden={activeTab !== 'network'}>
 			<!-- ROW 2.5 — DNS providers (v2.12). Self-contained collection
 			     component: table + add/edit modal + delete. Replaces the
 			     pre-v2.12 singleton OVH credentials form. The section root
 			     carries id="dns-providers" so the wildcard wizard's
 			     empty-state CTA can deep-link here. -->
-			<DNSProvidersSection />
+			<DNSProvidersSection bind:dirty={dnsDirty} />
 			<!-- Brick 4, Task 3 — GeoIP settings (MaxMind credentials +
 			     auto-update). Mounted right after UpdatesSection: both are
 			     opt-in "keep this data fresh" mini-sections. -->
-			<GeoIPSettingsSection />
+			<GeoIPSettingsSection bind:dirty={geoipDirty} />
 			<!-- ROW 2.85 — Post-apply route check (v2.35). -->
 			<RouteCheckSection />
 			<!-- ROW 2.95 — Server geographic position (Step V.7 §5.1-§5.3).
@@ -1572,34 +1750,59 @@
 			     mode badge (Auto/Manuel/Dégradé), lat/lon/city/country
 			     form with [-90, 90] / [-180, 180] inline validation,
 			     Re-détecter button driving the POST :redetect path. -->
-			<ServerPositionSection />
+			<ServerPositionSection bind:dirty={positionDirty} />
+		</div>
 		{/if}
 
-		{#if activeTab === 'backups'}
+		{#if activeTab === 'backups' || visited.backups}
+		<div hidden={activeTab !== 'backups'}>
 			<!-- ROW 2.9 — Backup & restore (Step K.3 §5.3). -->
 			<BackupSection />
 			<!-- ROW 2.91 — Scheduled backups (v2.33): folder / NAS / email. -->
-			<ScheduledBackupsSection />
+			<ScheduledBackupsSection bind:dirty={scheduledBackupsDirty} />
+		</div>
 		{/if}
 
-		{#if activeTab === 'system'}
+		{#if activeTab === 'system' || visited.system}
+		<div hidden={activeTab !== 'system'}>
 			<!-- v2.45 — the machine under Arenet, refreshed live. It
 			     sits first because it answers the question an operator
 			     opens this tab with: is the host healthy? -->
 			<SystemInfoSection />
 			<!-- v2.12.3 — opt-in update checker mini-card. -->
 			<UpdatesSection />
+			<!-- Error pages left the sidebar: it is a settings sub-page,
+			     so its way in is here. -->
+			<Card padding="p-6">
+				<div class="flex items-center justify-between gap-4">
+					<div>
+						<h2 class="text-xl font-semibold">
+							{language.current && t('errorPages.settingsCardTitle')}
+						</h2>
+						<p class="text-xs text-muted mt-1">
+							{language.current && t('errorPages.settingsCardDescription')}
+						</p>
+					</div>
+					<a
+						href="/settings/error-pages"
+						class="text-sm text-cyan hover:underline shrink-0"
+						data-testid="settings-error-pages-link"
+					>
+						{language.current && t('errorPages.settingsCardLink')}
+					</a>
+				</div>
+			</Card>
 			<!-- ROW 3 — About, full-width (footer-meta, intentionally aerated) -->
 			<Card padding="p-6">
 				<header class="border-b border-border-subtle pb-3 mb-4">
-					<h2 class="text-xl font-semibold">About</h2>
+					<h2 class="text-xl font-semibold">{tl('settings.about.title')}</h2>
 				</header>
 
 				<dl class="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-3 text-sm">
-					<dt class="text-secondary">Version</dt>
+					<dt class="text-secondary">{tl('settings.about.version')}</dt>
 					<dd class="text-primary font-mono" data-testid="about-version">{displayVersion}</dd>
 
-					<dt class="text-secondary">License</dt>
+					<dt class="text-secondary">{tl('settings.about.license')}</dt>
 					<dd>
 						<a
 							href="https://github.com/barto95100/arenet/blob/{licenseRef}/LICENSE"
@@ -1611,7 +1814,7 @@
 						</a>
 					</dd>
 
-					<dt class="text-secondary">Source</dt>
+					<dt class="text-secondary">{tl('settings.about.source')}</dt>
 					<dd>
 						<a
 							href="https://github.com/barto95100/arenet"
@@ -1624,6 +1827,7 @@
 					</dd>
 				</dl>
 			</Card>
+		</div>
 		{/if}
 
 	</div>
@@ -1656,6 +1860,28 @@
 		cancelLabel={language.current && t('settingsSubcards.automationResetDialogCancel')}
 		confirmVariant="danger"
 		onConfirm={confirmAutomationReset}
+	/>
+
+	<!-- Leaving the page with unsaved edits (see guardNavigation). -->
+	<ConfirmDialog
+		bind:open={leaveConfirmOpen}
+		title={language.current && t('settings.unsaved.dialogTitle')}
+		message={language.current &&
+			t('settings.unsaved.dialogMessage', { cards: dirtyCards.map((c) => c.name).join(', ') })}
+		confirmLabel={language.current && t('settings.unsaved.dialogConfirm')}
+		cancelLabel={language.current && t('settings.unsaved.dialogCancel')}
+		confirmVariant="danger"
+		onConfirm={confirmLeave}
+	/>
+
+	<ConfirmDialog
+		bind:open={fwdAuthDeleteOpen}
+		title={language.current && t('settingsSubcards.fwdAuthDeleteTitle')}
+		message={language.current && t('settingsSubcards.fwdAuthDeleteMessage', { name: fwdAuthDeleteTarget ?? '' })}
+		confirmLabel={language.current && t('settingsSubcards.fwdAuthDeleteConfirm')}
+		cancelLabel={language.current && t('settingsSubcards.fwdAuthDeleteCancel')}
+		confirmVariant="danger"
+		onConfirm={confirmDeleteFwdAuth}
 	/>
 
 	<!-- Step O.4 delete-managed-domain dialog migrated to /certs

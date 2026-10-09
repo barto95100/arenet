@@ -6,8 +6,9 @@
 // status → badge variant mapping is the AC #10 LOCKED contract;
 // the labels are part of the spec vocabulary. Both pinned here.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import type { Certificate } from '$lib/api/types';
+import { language } from '$lib/stores/language.svelte';
 import {
 	certificateSourceLabel,
 	certificateStatusLabel,
@@ -16,6 +17,7 @@ import {
 	daysUntilExpiry,
 	dominantIssuer,
 	inferChallengeLabel,
+	isExpired,
 	isExpiringSoon,
 	isZeroTimestamp,
 	RENEWAL_WINDOW_DAYS,
@@ -55,8 +57,24 @@ describe('certificateStatusToBadgeVariant', () => {
 	});
 });
 
+// The labels follow the active language: the English UI used to
+// show the French badges because they were hardcoded here.
 describe('certificateStatusLabel', () => {
-	it('maps each status to the French operator label', () => {
+	afterEach(() => {
+		language.current = 'en';
+	});
+
+	it('maps each status to the English label by default', () => {
+		language.current = 'en';
+		expect(certificateStatusLabel('VALID')).toBe('VALID');
+		expect(certificateStatusLabel('RENEWAL_PENDING')).toBe('RENEWING');
+		expect(certificateStatusLabel('EXPIRED')).toBe('EXPIRED');
+		expect(certificateStatusLabel('OBTAIN_FAILED')).toBe('FAILED');
+		expect(certificateStatusLabel('UNKNOWN')).toBe('—');
+	});
+
+	it('keeps the spec French vocabulary when French is chosen', () => {
+		language.current = 'fr';
 		expect(certificateStatusLabel('VALID')).toBe('VALIDE');
 		expect(certificateStatusLabel('RENEWAL_PENDING')).toBe('RENOUV. AUTO');
 		expect(certificateStatusLabel('EXPIRED')).toBe('EXPIRÉ');
@@ -66,9 +84,19 @@ describe('certificateStatusLabel', () => {
 });
 
 describe('certificateSourceLabel', () => {
-	it('maps each source to the French label', () => {
+	afterEach(() => {
+		language.current = 'en';
+	});
+
+	it('maps each source to its label in English', () => {
+		language.current = 'en';
 		expect(certificateSourceLabel('wildcard')).toBe('wildcard');
 		expect(certificateSourceLabel('apex')).toBe('apex');
+		expect(certificateSourceLabel('specific')).toBe('specific');
+	});
+
+	it('translates "specific" in French', () => {
+		language.current = 'fr';
 		expect(certificateSourceLabel('specific')).toBe('spécifique');
 	});
 });
@@ -193,9 +221,30 @@ describe('isExpiringSoon', () => {
 		});
 		expect(isExpiringSoon(c, NOW)).toBe(false);
 	});
-	it('flags already-expired certs (operator wants to see them too)', () => {
+	it('does NOT flag already-expired certs (negative days)', () => {
 		const c = mkCert({
+			status: 'EXPIRED',
 			notAfter: new Date(NOW.getTime() - 3 * 86400000).toISOString(),
+		});
+		expect(daysUntilExpiry(c, NOW)).toBe(-3);
+		expect(isExpiringSoon(c, NOW)).toBe(false);
+	});
+	it('does NOT flag a cert that expired less than a day ago (days rounds to 0)', () => {
+		const c = mkCert({
+			notAfter: new Date(NOW.getTime() - 3600000).toISOString(),
+		});
+		expect(isExpiringSoon(c, NOW)).toBe(false);
+	});
+	it('flags a cert that expires later today (days === 0, not yet expired)', () => {
+		const c = mkCert({
+			notAfter: new Date(NOW.getTime() + 3600000).toISOString(),
+		});
+		expect(daysUntilExpiry(c, NOW)).toBe(0);
+		expect(isExpiringSoon(c, NOW)).toBe(true);
+	});
+	it('flags a cert exactly at the edge of the renewal window', () => {
+		const c = mkCert({
+			notAfter: new Date(NOW.getTime() + RENEWAL_WINDOW_DAYS * 86400000).toISOString(),
 		});
 		expect(isExpiringSoon(c, NOW)).toBe(true);
 	});
@@ -212,6 +261,39 @@ describe('isExpiringSoon', () => {
 			notAfter: '0001-01-01T00:00:00Z',
 		});
 		expect(isExpiringSoon(c, NOW)).toBe(false);
+	});
+});
+
+describe('isExpired', () => {
+	it('is true once notAfter has passed', () => {
+		const c = mkCert({
+			status: 'EXPIRED',
+			notAfter: new Date(NOW.getTime() - 3 * 86400000).toISOString(),
+		});
+		expect(isExpired(c, NOW)).toBe(true);
+	});
+	it('is true less than a day after notAfter (days rounds to 0)', () => {
+		const c = mkCert({
+			notAfter: new Date(NOW.getTime() - 3600000).toISOString(),
+		});
+		expect(isExpired(c, NOW)).toBe(true);
+	});
+	it('is true at notAfter itself (backend: !now.Before(NotAfter))', () => {
+		const c = mkCert({ notAfter: NOW.toISOString() });
+		expect(isExpired(c, NOW)).toBe(true);
+	});
+	it('is false for a cert still valid, even inside the renewal window', () => {
+		expect(isExpired(mkCert({}), NOW)).toBe(false);
+		const c = mkCert({
+			notAfter: new Date(NOW.getTime() + 3600000).toISOString(),
+		});
+		expect(isExpired(c, NOW)).toBe(false);
+	});
+	it('is false for zero-time or malformed notAfter (never obtained)', () => {
+		expect(
+			isExpired(mkCert({ status: 'OBTAIN_FAILED', notAfter: '0001-01-01T00:00:00Z' }), NOW)
+		).toBe(false);
+		expect(isExpired(mkCert({ notAfter: 'not-a-date' }), NOW)).toBe(false);
 	});
 });
 
