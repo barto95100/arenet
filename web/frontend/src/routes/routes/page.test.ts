@@ -1483,11 +1483,11 @@ describe('Routes page — W.5 country-block form section', () => {
 		expect(chips).toHaveLength(1);
 		// v2.22.0 — the raw ISO code was replaced by a flag
 		// (Flag.svelte). The code now lives in the flag's
-		// `fi-fr` class; the resolved French name still renders
-		// in .cb-chip__name.
+		// `fi-fr` class; the name resolved in the app language
+		// still renders in .cb-chip__name.
 		expect(chips[0].querySelector('.fi-fr')).not.toBeNull();
-		// "France" comes from Intl.DisplayNames(fr) which
-		// jsdom + Node ICU both ship.
+		// "France" comes from Intl.DisplayNames in the app
+		// language (en in tests), which jsdom + Node ICU ship.
 		expect(chips[0].textContent).toContain('France');
 	});
 
@@ -1597,7 +1597,7 @@ describe('Routes page — W.7 country-block polish', () => {
 		expect(hasRU).toBe(true);
 	});
 
-	it('typing a French name prefix matches the country (russie → RU)', async () => {
+	it('typing a country name prefix matches the country (russ → RU)', async () => {
 		render(Page);
 		await openCreateForm();
 		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
@@ -1610,7 +1610,7 @@ describe('Routes page — W.7 country-block polish', () => {
 		expect(hasRU).toBe(true);
 	});
 
-	it('clicking a suggestion adds it as a chip with the French name', async () => {
+	it('clicking a suggestion adds it as a chip with the country name', async () => {
 		render(Page);
 		await openCreateForm();
 		await userEvent.click(screen.getByTestId('country-block-mode-deny'));
@@ -1822,7 +1822,7 @@ describe('Routes page — W.7 follow-up: section visibility on mode=off', () => 
 		// activate." Future copy changes should reach this
 		// test before reaching production.
 		const hint = screen.getByTestId('country-block-off-hint');
-		expect(hint.textContent).toContain('Aucun gate par pays');
+		expect(hint.textContent).toContain('No country gate');
 		expect(hint.textContent).toContain('Allow-list');
 		expect(hint.textContent).toContain('Deny-list');
 	});
@@ -1921,7 +1921,7 @@ describe('Routes page — TLS advanced disclosure + UX hints (#R-PROXMOX-HTTPS-L
 		await tick();
 		const warning = screen.getByTestId('upstream-path-warning');
 		expect(warning.textContent).toContain('/api2/json');
-		expect(warning.textContent).toMatch(/ignoré/i);
+		expect(warning.textContent).toMatch(/ignored/i);
 		// And the value is preserved (no auto-strip — the operator
 		// has to decide).
 		expect(firstURL().value).toBe('https://1.2.3.4:8006/api2/json');
@@ -2849,7 +2849,7 @@ describe('Routes page — Step X Option (c) wafExcludeRules textarea', () => {
 		await userEvent.type(textarea, '99999');
 
 		const errorNode = screen.getByTestId('waf-exclude-rules-error');
-		expect(errorNode.textContent ?? '').toMatch(/6 chiffres|range/i);
+		expect(errorNode.textContent ?? '').toMatch(/6-digit/i);
 	});
 
 	it('loads the persisted exclusion list into the textarea on edit', async () => {
