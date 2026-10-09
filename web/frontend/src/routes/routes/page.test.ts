@@ -31,7 +31,7 @@
 //     so it's testable by `queryByLabelText` returning null /
 //     non-null rather than by computed style.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
@@ -93,7 +93,8 @@ const { toastMock, apiMock, settingsMock, authMock, externalCertsMock } = vi.hoi
 // $app/navigation: only reached if the page redirects (it doesn't
 // here). Stub to avoid the SvelteKit runtime dependency.
 vi.mock('$app/navigation', () => ({
-	goto: vi.fn()
+	goto: vi.fn(),
+	beforeNavigate: vi.fn()
 }));
 
 // $lib/stores/toast: pushToast is called on success / failure
@@ -361,19 +362,11 @@ describe('Routes page — upstream-pool repeater', () => {
 		await userEvent.type(inputs[1], 'http://b.test');
 		await userEvent.type(inputs[2], 'http://c.test');
 
-		// Remove the middle row. The × buttons in the upstream rows
-		// are the ones in the same flex container as the URL Input;
-		// by role name they all match /^×$/, so pick by index.
-		const removeButtons = screen
-			.getAllByRole('button', { name: '×' })
-			// Aliases also render × buttons in this test — filter to
-			// the upstream removers by their proximity to an upstream URL input.
-			.filter((b) => {
-				const row = b.closest('.flex.items-start');
-				return row?.querySelector('input[placeholder="http://127.0.0.1:8080"]') != null;
-			});
+		// Remove the middle row. Each × is named after its row
+		// ("Remove upstream 2"), so the middle one is asked for by name.
+		const removeButtons = screen.getAllByRole('button', { name: /^Remove upstream \d+$/ });
 		expect(removeButtons).toHaveLength(3);
-		await userEvent.click(removeButtons[1]);
+		await userEvent.click(screen.getByRole('button', { name: 'Remove upstream 2' }));
 		await tick();
 
 		const remaining = upstreamURLInputs();
@@ -386,14 +379,7 @@ describe('Routes page — upstream-pool repeater', () => {
 		render(Page);
 		await openCreateForm();
 		expect(upstreamURLInputs()).toHaveLength(1);
-		// Pick the upstream's × — same proximity heuristic.
-		const removeBtn = screen
-			.getAllByRole('button', { name: '×' })
-			.find((b) => {
-				const row = b.closest('.flex.items-start');
-				return row?.querySelector('input[placeholder="http://127.0.0.1:8080"]') != null;
-			});
-		expect(removeBtn).toBeDefined();
+		const removeBtn = screen.getByRole('button', { name: 'Remove upstream 1' });
 		// `disabled` attribute on the button (the page passes
 		// disabled={formData.upstreams.length <= 1} to <Button>).
 		expect(removeBtn).toBeDisabled();
@@ -441,16 +427,7 @@ describe('Routes page — LB selector visibility', () => {
 		expect(lbSelect()!.value).toBe('least_conn');
 
 		// Remove the second upstream → selector hides again.
-		const removeBtn = screen
-			.getAllByRole('button', { name: '×' })
-			.find((b) => {
-				const row = b.closest('.flex.items-start');
-				return (
-					row?.querySelector('input[placeholder="http://127.0.0.1:8080"]') != null &&
-					!(b as HTMLButtonElement).disabled
-				);
-			});
-		await userEvent.click(removeBtn!);
+		await userEvent.click(screen.getByRole('button', { name: 'Remove upstream 2' }));
 		await tick();
 		expect(lbSelect()).toBeNull();
 
@@ -531,25 +508,21 @@ describe('Routes page — weight column visibility', () => {
 // --- 4. Health-check sub-form gating + state preservation ---------
 
 describe('Routes page — health-check gating', () => {
-	it('sub-fields are disabled when enabled=false, enabled when true, state preserved across the toggle', async () => {
+	// The sub-fields used to render greyed out while the check was
+	// off: ten controls that did nothing. They are not rendered at all
+	// now; their values live in formData, so the toggle keeps them.
+	it('sub-fields are absent when enabled=false, present when true, state preserved across the toggle', async () => {
 		render(Page);
 		await openCreateForm();
 
-		// HC URI input by id (the field is `<input id="hc-uri">`).
-		const uri = document.getElementById('hc-uri') as HTMLInputElement;
-		const method = document.getElementById('hc-method') as HTMLSelectElement;
-		const passes = document.getElementById('hc-passes') as HTMLInputElement;
-		const fails = document.getElementById('hc-fails') as HTMLInputElement;
-		const expectStatus = document.getElementById('hc-expect-status') as HTMLInputElement;
-		expect(uri).not.toBeNull();
-		expect(method).not.toBeNull();
+		const field = (id: string) => document.getElementById(id);
 
-		// Initial: enabled=false → every sub-field disabled.
-		expect(uri.disabled).toBe(true);
-		expect(method.disabled).toBe(true);
-		expect(passes.disabled).toBe(true);
-		expect(fails.disabled).toBe(true);
-		expect(expectStatus.disabled).toBe(true);
+		// Initial: enabled=false → none of the sub-fields is rendered.
+		for (const id of ['hc-uri', 'hc-method', 'hc-passes', 'hc-fails', 'hc-expect-status', 'hc-host-header']) {
+			expect(field(id), `${id} must not render while the check is off`).toBeNull();
+		}
+		expect(screen.queryByTestId('health-check-advanced')).toBeNull();
+		expect(screen.queryByText(/Test the check/i)).toBeNull();
 
 		// Flip the HC checkbox on. The Checkbox component hides the
 		// native input visually; click the label text.
@@ -557,10 +530,13 @@ describe('Routes page — health-check gating', () => {
 		await userEvent.click(hcCheckbox);
 		await tick();
 
-		// Sub-fields now enabled.
+		// Sub-fields now rendered, and editable.
+		const uri = field('hc-uri') as HTMLInputElement;
+		const method = field('hc-method') as HTMLSelectElement;
+		expect(uri).not.toBeNull();
 		expect(uri.disabled).toBe(false);
 		expect(method.disabled).toBe(false);
-		expect(passes.disabled).toBe(false);
+		expect(field('hc-passes')).not.toBeNull();
 
 		// Type identifying values.
 		await userEvent.type(uri, '/probe');
@@ -569,21 +545,86 @@ describe('Routes page — health-check gating', () => {
 		expect(uri.value).toBe('/probe');
 		expect(method.value).toBe('HEAD');
 
-		// Toggle OFF.
+		// Toggle OFF → gone.
 		await userEvent.click(hcCheckbox);
 		await tick();
-		expect(uri.disabled).toBe(true);
-		expect(method.disabled).toBe(true);
-		// State preserved (the page never clears the sub-fields).
-		expect(uri.value).toBe('/probe');
-		expect(method.value).toBe('HEAD');
+		expect(field('hc-uri')).toBeNull();
+		expect(field('hc-method')).toBeNull();
 
-		// Toggle ON again — values still there, fields editable.
+		// Toggle ON again — the values come back with the fields.
 		await userEvent.click(hcCheckbox);
 		await tick();
-		expect(uri.disabled).toBe(false);
-		expect(uri.value).toBe('/probe');
-		expect(method.value).toBe('HEAD');
+		expect((field('hc-uri') as HTMLInputElement).value).toBe('/probe');
+		expect((field('hc-method') as HTMLSelectElement).value).toBe('HEAD');
+	});
+
+	it('keeps passes, fails, expected body and probe headers under a closed "Advanced" disclosure', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.click(screen.getByLabelText('Enable active health checks'));
+		await tick();
+
+		const advanced = screen.getByTestId('health-check-advanced') as HTMLDetailsElement;
+		expect(advanced.tagName).toBe('DETAILS');
+		expect(advanced.open, 'a new check needs a URI, not its thresholds').toBe(false);
+		expect(advanced.contains(document.getElementById('hc-passes'))).toBe(true);
+		expect(advanced.contains(document.getElementById('hc-fails'))).toBe(true);
+		expect(advanced.contains(screen.getByLabelText('Expected body (regex)'))).toBe(true);
+		// By text, not role: the disclosure is closed, and what it holds
+		// is in the DOM but not exposed.
+		expect(within(advanced).getByText('Add a header')).toBeInTheDocument();
+		// The everyday fields stay outside it.
+		expect(advanced.contains(document.getElementById('hc-uri'))).toBe(false);
+		expect(advanced.contains(document.getElementById('hc-expect-status'))).toBe(false);
+	});
+
+	it('opens "Advanced" when one of its fields is refused', async () => {
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'h.test');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		await userEvent.click(screen.getByLabelText('Enable active health checks'));
+		await tick();
+		await userEvent.type(document.getElementById('hc-uri') as HTMLInputElement, '/p');
+		const passes = document.getElementById('hc-passes') as HTMLInputElement;
+		await userEvent.clear(passes);
+		await userEvent.type(passes, '-2');
+
+		await fireEvent.submit(document.querySelector('form')!);
+
+		const advanced = screen.getByTestId('health-check-advanced') as HTMLDetailsElement;
+		await waitFor(() => expect(advanced.open).toBe(true));
+		expect(advanced.hasAttribute('data-invalid')).toBe(true);
+		expect(screen.getByText('Passes must be >= 1')).toBeInTheDocument();
+	});
+
+	it('opens "Advanced" on a route that already sends a probe header', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				id: 'r-adv',
+				host: 'adv.example.com',
+				healthCheck: {
+					enabled: true,
+					uri: '/health',
+					method: 'GET',
+					interval: '30s',
+					timeout: '5s',
+					expectStatus: 0,
+					expectBody: '',
+					passes: 1,
+					fails: 1,
+					headers: { Authorization: 'Bearer x' }
+				}
+			})
+		]);
+		render(Page);
+		await userEvent.click((await screen.findByText('adv.example.com')).closest('tr')!);
+		await tick();
+		const advanced = screen.getByTestId('health-check-advanced') as HTMLDetailsElement;
+		expect(advanced.open).toBe(true);
+		expect(screen.getByLabelText('Probe header 1 name')).toHaveValue('Authorization');
+		expect(screen.getByLabelText('Probe header 1 value')).toHaveValue('Bearer x');
+		expect(screen.getByLabelText('Remove probe header 1').tagName).toBe('BUTTON');
 	});
 });
 
@@ -643,6 +684,69 @@ describe('Routes page — validation rules (§5.2)', () => {
 		await submitForm();
 		expect(screen.getByText('URI is required')).toBeInTheDocument();
 		expect(apiMock.createRoute).not.toHaveBeenCalled();
+	});
+
+	// A refused field inside a closed section used to stay out of
+	// sight: Save produced a toast and nothing else on screen.
+	describe('a refused save brings the error into view', () => {
+		let scroll: ReturnType<typeof vi.fn>;
+		beforeEach(() => {
+			// jsdom has no scrollIntoView; the page calls it optionally.
+			scroll = vi.fn();
+			Element.prototype.scrollIntoView = scroll as unknown as Element['scrollIntoView'];
+		});
+		afterEach(() => {
+			delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+		});
+
+		it('opens and marks the section holding the error, and scrolls to it', async () => {
+			render(Page);
+			await openCreateForm();
+			await userEvent.type(hostInput(), 'h.test');
+			await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+			await userEvent.click(screen.getByLabelText('Enable active health checks'));
+			const section = screen.getByTestId('section-health-check') as HTMLDetailsElement;
+			section.open = false;
+			await tick();
+
+			await submitForm();
+
+			await vi.waitFor(() => expect(scroll).toHaveBeenCalled());
+			expect(section.open).toBe(true);
+			expect(section.hasAttribute('data-invalid')).toBe(true);
+			expect(screen.getByTestId('section-health-check-invalid')).toBeInTheDocument();
+			expect(scroll.mock.contexts[0]).toHaveTextContent('URI is required');
+			// Sections without an error carry no marker.
+			expect(screen.queryByTestId('section-essentials-invalid')).toBeNull();
+		});
+
+		it('focuses the refused field when the error is on the field itself', async () => {
+			render(Page);
+			await openCreateForm();
+			await submitForm();
+
+			await vi.waitFor(() => expect(scroll).toHaveBeenCalled());
+			expect(screen.getByTestId('section-essentials-invalid')).toBeInTheDocument();
+			expect(document.activeElement).toBe(hostInput());
+		});
+
+		it('repeats a form-level refusal next to Save', async () => {
+			apiMock.createRoute.mockRejectedValue(
+				new ApiError('something the form cannot place', 400, 'validation')
+			);
+			render(Page);
+			await openCreateForm();
+			await userEvent.type(hostInput(), 'h.test');
+			await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+			await submitForm();
+
+			await vi.waitFor(() =>
+				expect(screen.getByTestId('form-error-footer')).toHaveTextContent(
+					'something the form cannot place'
+				)
+			);
+		});
 	});
 
 	it('rejects HC URI that does not start with /', async () => {
@@ -1169,7 +1273,8 @@ describe('Routes page — aggregate health badges + filter tabs', () => {
 		// resolved.
 		await screen.findByText('HEALTHY');
 
-		await userEvent.click(screen.getByRole('button', { name: 'Healthy' }));
+		// The tab's name carries its count now ("Healthy 1").
+		await userEvent.click(screen.getByRole('button', { name: /^Healthy\b/ }));
 		await tick();
 
 		// Strict: unknown must NOT pass the Healthy filter. The
@@ -1213,7 +1318,7 @@ describe('Routes page — aggregate health badges + filter tabs', () => {
 
 		await screen.findByText('HEALTHY');
 
-		await userEvent.click(screen.getByRole('button', { name: 'Alerts' }));
+		await userEvent.click(screen.getByRole('button', { name: /^Alerts\b/ }));
 		await tick();
 
 		expect(screen.getByText('DEGRADED')).toBeInTheDocument();
@@ -3356,11 +3461,148 @@ describe('/routes — disable/enable', () => {
 		expect(screen.getByTestId('form-dirty')).toBeInTheDocument();
 
 		await fireEvent.submit(form);
-		await tick();
-		await tick();
+		// Disabling a serving route asks first, as the row control
+		// does: no PUT until the operator confirms.
+		expect(await screen.findByText('Disable route?')).toBeInTheDocument();
+		expect(apiMock.updateRoute).not.toHaveBeenCalled();
+		await fireEvent.click(screen.getByTestId('route-disable-confirm'));
+		await waitFor(() => expect(apiMock.updateRoute).toHaveBeenCalledTimes(1));
 		expect(apiMock.disableRoute).not.toHaveBeenCalled();
 		const [, payload] = apiMock.updateRoute.mock.calls[0];
 		expect(payload.disabled).toBe(true);
+	});
+
+	it('the form disabling the last HTTPS route warns, and cancelling sends nothing', async () => {
+		const seeded = makeRoute({ id: 'only-tls', host: 'only-tls.example.com', tlsEnabled: true });
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		render(Page);
+		await userEvent.click((await screen.findByText('only-tls.example.com')).closest('tr')!);
+		await tick();
+
+		const form = document.querySelector('form')!;
+		await userEvent.click(within(form).getByTestId('route-state-disabled'));
+		await fireEvent.submit(form);
+
+		const dialog = await screen.findByRole('dialog', { name: 'Disable the last HTTPS route?' });
+		await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+		await tick();
+		expect(apiMock.updateRoute).not.toHaveBeenCalled();
+		expect(apiMock.disableRoute).not.toHaveBeenCalled();
+		// The form is left as the operator had it.
+		expect(screen.getByTestId('route-state-disabled').getAttribute('aria-checked')).toBe('true');
+		expect(screen.getByTestId('form-dirty')).toBeInTheDocument();
+	});
+});
+
+// A row's state control, found from the row rather than by host text
+// alone: with the panel open the host is on screen twice.
+function rowStateControl(host: string): HTMLElement {
+	const cell = screen.getAllByText(host).find((el) => el.closest('tr'))!;
+	return cell.closest('tr')!.querySelector('[role="radiogroup"]') as HTMLElement;
+}
+
+describe('/routes — a row state change and the open panel', () => {
+	it('a row state change on the open route is not undone by the next Save', async () => {
+		const seeded = makeRoute({ id: 'live', host: 'live.example.com' });
+		const inMaintenance = makeRoute({
+			id: 'live',
+			host: 'live.example.com',
+			maintenanceConfig: { retryAfterSeconds: 600, bypassIps: ['10.0.0.1'] }
+		});
+		apiMock.listRoutes.mockResolvedValueOnce([seeded]).mockResolvedValue([inMaintenance]);
+		apiMock.enterMaintenance.mockResolvedValue(inMaintenance);
+		apiMock.updateRoute.mockResolvedValue(inMaintenance);
+		render(Page);
+		await userEvent.click((await screen.findByText('live.example.com')).closest('tr')!);
+		await tick();
+
+		// An unrelated edit, which the row action must not discard.
+		const url = upstreamURLInputs()[0];
+		await userEvent.clear(url);
+		await userEvent.type(url, 'http://127.0.0.1:9100');
+
+		pickSegment(rowStateControl('live.example.com'), 'maintenance');
+		await waitFor(() => expect(apiMock.enterMaintenance).toHaveBeenCalledWith('live'));
+		await waitFor(() =>
+			expect(screen.getByTestId('route-state-maintenance').getAttribute('aria-checked')).toBe('true')
+		);
+		expect(upstreamURLInputs()[0].value).toBe('http://127.0.0.1:9100');
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await waitFor(() => expect(apiMock.updateRoute).toHaveBeenCalledTimes(1));
+		const [, payload] = apiMock.updateRoute.mock.calls[0];
+		expect(payload.disabled).toBe(false);
+		expect(payload.maintenanceConfig).toMatchObject({ retryAfterSeconds: 600, bypassIps: ['10.0.0.1'] });
+		expect(payload.upstreams[0].url).toBe('http://127.0.0.1:9100');
+	});
+
+	it('a row disabled from the list makes the open form Disabled, with no second confirm on Save', async () => {
+		const seeded = makeRoute({ id: 'cut', host: 'cut.example.com' });
+		const off = makeRoute({ id: 'cut', host: 'cut.example.com', disabled: true });
+		apiMock.listRoutes.mockResolvedValueOnce([seeded]).mockResolvedValue([off]);
+		apiMock.disableRoute.mockResolvedValue({ id: 'cut', disabled: true, lastHttpsRouteAffected: false });
+		apiMock.updateRoute.mockResolvedValue(off);
+		render(Page);
+		await userEvent.click((await screen.findByText('cut.example.com')).closest('tr')!);
+		await tick();
+
+		pickSegment(rowStateControl('cut.example.com'), 'disabled');
+		await fireEvent.click(await screen.findByTestId('route-disable-confirm'));
+		await waitFor(() =>
+			expect(screen.getByTestId('route-state-disabled').getAttribute('aria-checked')).toBe('true')
+		);
+		// The stored state moved with the form's: nothing unsaved.
+		expect(screen.queryByTestId('form-dirty')).toBeNull();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await waitFor(() => expect(apiMock.updateRoute).toHaveBeenCalledTimes(1));
+		expect(apiMock.updateRoute.mock.calls[0][1].disabled).toBe(true);
+	});
+
+	it('keeps the edit panel mounted across a row action', async () => {
+		const a = makeRoute({ id: 'a', host: 'a.example.com' });
+		const b = makeRoute({ id: 'b', host: 'b.example.com' });
+		apiMock.listRoutes.mockResolvedValue([a, b]);
+		apiMock.enterMaintenance.mockResolvedValue(b);
+		render(Page);
+		await userEvent.click((await screen.findByText('a.example.com')).closest('tr')!);
+		await tick();
+
+		const auth = screen.getByTestId('section-auth') as HTMLDetailsElement;
+		auth.open = true;
+		await tick();
+
+		pickSegment(rowStateControl('b.example.com'), 'maintenance');
+		await waitFor(() => expect(apiMock.listRoutes).toHaveBeenCalledTimes(2));
+		await tick();
+		expect(screen.queryByText('Loading routes…')).toBeNull();
+		expect(auth.isConnected).toBe(true);
+		expect(auth.open).toBe(true);
+	});
+
+	it('disables a row control while its request is in flight', async () => {
+		const seeded = makeRoute({ id: 'slow', host: 'slow.example.com' });
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		let release: (r: Route) => void = () => {};
+		apiMock.enterMaintenance.mockReturnValue(
+			new Promise<Route>((resolve) => {
+				release = resolve;
+			})
+		);
+		render(Page);
+		await screen.findByText('slow.example.com');
+		const group = rowStateControl('slow.example.com');
+
+		pickSegment(group, 'maintenance');
+		await tick();
+		const segment = group.querySelector('[data-state="maintenance"]') as HTMLButtonElement;
+		expect(segment.disabled).toBe(true);
+		// A second click on the pending row sends nothing more.
+		pickSegment(group, 'maintenance');
+		expect(apiMock.enterMaintenance).toHaveBeenCalledTimes(1);
+
+		release(seeded);
+		await waitFor(() => expect(segment.disabled).toBe(false));
 	});
 });
 
@@ -4057,6 +4299,26 @@ describe('Routes page — post-apply route check', () => {
 				12000
 			)
 		);
+		// The check message already says the route is saved.
+		expect(toastMock.pushToast).not.toHaveBeenCalledWith('Route created', 'success');
+	});
+
+	it('stays on the route, in edit mode, when it is saved but does not answer', async () => {
+		const stored = makeRoute({ id: 'r1', host: 'app.test' });
+		apiMock.createRoute.mockResolvedValueOnce({
+			...stored,
+			check: { status: 'failed', host: 'app.test', httpStatus: 502, detail: 'the route answered 502 Bad Gateway' }
+		});
+		apiMock.listRoutes.mockResolvedValue([stored]);
+		await fillAndSubmit();
+
+		const notice = await screen.findByTestId('save-check-failure');
+		expect(notice).toHaveTextContent('app.test is saved but does not answer');
+		// One message, not "Route created" beside "does not answer".
+		expect(toastMock.pushToast).not.toHaveBeenCalledWith('Route created', 'success');
+		// Reopened on the stored route: the edit-only pivots are there.
+		expect(screen.getByTestId('panel-pivot-metrics')).toBeInTheDocument();
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
 	});
 
 	it('keeps the panel open with the explanation when the change was undone (409)', async () => {
@@ -4170,6 +4432,32 @@ describe('Routes page — v2.37 guided WAF rules', () => {
 			operator: 'is_not',
 			values: ['GET', 'HEAD', 'POST', 'OPTIONS']
 		});
+	});
+});
+
+describe('Routes page — a guided WAF rule left open', () => {
+	// The draft lives in the editor until OK. Save used to ship the
+	// route without it, with a success toast.
+	it('blocks the save and points at the open rule', async () => {
+		const seeded = makeRoute({ id: 'draft-edit', host: 'draft.local', wafMode: 'block' });
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+		await userEvent.click((await screen.findByText('draft.local')).closest('tr')!);
+		await tick();
+
+		await userEvent.click(screen.getByTestId('waf-rule-preset-methods'));
+		await tick();
+		// An open draft is unsaved work, even before any other change.
+		expect(screen.getByTestId('form-dirty')).toBeInTheDocument();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.updateRoute).not.toHaveBeenCalled();
+		expect(screen.getByTestId('waf-rule-draft-error')).toBeInTheDocument();
+		expect(screen.getByTestId('section-waf').hasAttribute('data-invalid')).toBe(true);
 	});
 });
 
@@ -4305,6 +4593,7 @@ describe('Routes page — v2.41 route form sections', () => {
 		await tick();
 
 		const row = (id: string) => screen.getByTestId(id).querySelector('summary')!.textContent ?? '';
+		expect(row('section-essentials')).toContain('HTTPS');
 		expect(row('section-essentials')).toContain('2 backend');
 		expect(row('section-essentials')).toContain('1 alias');
 		expect(row('section-tls')).toContain("Let's Encrypt");
@@ -5980,5 +6269,262 @@ describe('routes page: panel header metrics strip', () => {
 		await tick();
 		expect(screen.getByTestId('panel-metrics-reqs').textContent).toContain('42');
 		expect(screen.getByTestId('panel-metrics-reqs').textContent).not.toContain('999');
+	});
+});
+
+// --- Labelled controls, a lighter form, a list you can sort ----------
+
+describe('Routes page — repeater controls carry their own names', () => {
+	// The repeaters were placeholder-only inputs next to a "×" that a
+	// screen reader announced as "times". Each control is named after
+	// its row now.
+	it('names the alias and upstream inputs and their remove buttons by row', async () => {
+		render(Page);
+		await openCreateForm();
+		const addAlias = screen.getByRole('button', { name: /\+\s*Add alias/i });
+		await userEvent.click(addAlias);
+		await userEvent.click(addAlias);
+		await userEvent.click(screen.getByRole('button', { name: /\+\s*Add upstream/i }));
+		await tick();
+
+		expect(screen.getByRole('textbox', { name: 'Alias 1' })).toBeInTheDocument();
+		expect(screen.getByRole('textbox', { name: 'Alias 2' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Remove alias 2' })).toBeInTheDocument();
+		expect(screen.getByRole('textbox', { name: 'Upstream 1 URL' })).toBe(upstreamURLInputs()[0]);
+		expect(screen.getByRole('textbox', { name: 'Upstream 2 URL' })).toBe(upstreamURLInputs()[1]);
+		expect(screen.getByRole('button', { name: 'Remove upstream 2' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Test upstream 2' })).toBeInTheDocument();
+		// No control is left whose whole name is the glyph.
+		expect(screen.queryAllByRole('button', { name: '×' })).toHaveLength(0);
+	});
+
+	it('names the request and response header rows', async () => {
+		render(Page);
+		await openCreateForm();
+		const [addRequest, addResponse] = screen.getAllByText('+ Add header');
+		await userEvent.click(addRequest);
+		await userEvent.click(addResponse);
+		await tick();
+
+		// By label, not role: the section holding them may be closed.
+		expect(screen.getByLabelText('Request header 1 name').tagName).toBe('INPUT');
+		expect(screen.getByLabelText('Request header 1 value').tagName).toBe('INPUT');
+		expect(screen.getByLabelText('Remove request header 1').tagName).toBe('BUTTON');
+		expect(screen.getByLabelText('Response header 1 name').tagName).toBe('INPUT');
+		expect(screen.getByLabelText('Response header 1 value').tagName).toBe('INPUT');
+		expect(screen.getByLabelText('Remove response header 1').tagName).toBe('BUTTON');
+	});
+
+	it('names the maintenance bypass IP rows', async () => {
+		apiMock.listRoutes.mockResolvedValue([makeRoute({ id: 'bp', host: 'bp.example.com' })]);
+		render(Page);
+		await userEvent.click((await screen.findByText('bp.example.com')).closest('tr')!);
+		await tick();
+		(screen.getByTestId('section-state') as HTMLDetailsElement).open = true;
+		await tick();
+		await userEvent.click(screen.getByTestId('route-state-maintenance'));
+		await tick();
+		await userEvent.click(screen.getByText('+ Add bypass IP'));
+		await tick();
+
+		const grid = screen.getByTestId('maintenance-bypass-ip-grid');
+		expect(within(grid).getByLabelText(/^Bypass IP \d+$/).tagName).toBe('INPUT');
+		expect(within(grid).getByLabelText(/^Remove bypass IP \d+$/).tagName).toBe('BUTTON');
+	});
+});
+
+describe('Routes page — the host is the row button', () => {
+	const mk = (id: string, host: string): Route => makeRoute({ id, host });
+
+	it('keeps a plain row and makes the host a real button that says whether its panel is open', async () => {
+		apiMock.listRoutes.mockResolvedValue([mk('r-a', 'alpha.example')]);
+		render(Page);
+
+		const hostBtn = await screen.findByRole('button', { name: 'alpha.example' });
+		const row = hostBtn.closest('tr')!;
+		// A row holding links and a radiogroup is not itself a button.
+		expect(row.getAttribute('role')).toBeNull();
+		expect(row.hasAttribute('tabindex')).toBe(false);
+		expect(hostBtn.getAttribute('aria-expanded')).toBe('false');
+
+		await userEvent.click(hostBtn);
+		await tick();
+		expect(hostBtn.getAttribute('aria-expanded')).toBe('true');
+		expect(hostBtn.getAttribute('aria-controls')).toBe('route-edit-panel');
+		expect(document.getElementById('route-edit-panel')).not.toBeNull();
+		expect((screen.getByLabelText('Host') as HTMLInputElement).value).toBe('alpha.example');
+		expect(row.classList.contains('route-row-selected')).toBe(true);
+
+		// Once, not twice: the row's own click must not undo the button's.
+		await userEvent.click(hostBtn);
+		await tick();
+		expect(hostBtn.getAttribute('aria-expanded')).toBe('false');
+		expect(screen.queryByLabelText('Host')).not.toBeInTheDocument();
+	});
+
+	it('opens from the keyboard through the host button', async () => {
+		apiMock.listRoutes.mockResolvedValue([mk('r-k', 'kbd.example')]);
+		render(Page);
+		const hostBtn = await screen.findByRole('button', { name: 'kbd.example' });
+		hostBtn.focus();
+		await userEvent.keyboard('{Enter}');
+		await tick();
+		expect(hostBtn.getAttribute('aria-expanded')).toBe('true');
+		expect((screen.getByLabelText('Host') as HTMLInputElement).value).toBe('kbd.example');
+	});
+});
+
+describe('Routes page — filter tabs, sorting, and the empty states', () => {
+	const mk = (id: string, host: string, aggregateStatus: Route['aggregateStatus']): Route =>
+		makeRoute({ id, host, aggregateStatus });
+
+	const order = () => screen.getAllByTestId('route-host-button').map((b) => b.textContent);
+
+	it('counts each tab and says which one is pressed', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			mk('r1', 'up.example', 'healthy'),
+			mk('r2', 'slow.example', 'degraded'),
+			mk('r3', 'dead.example', 'down'),
+			mk('r4', 'new.example', 'unknown')
+		]);
+		render(Page);
+		await screen.findByText('up.example');
+
+		expect(screen.getByTestId('list-tab-count-all').textContent).toBe('4');
+		expect(screen.getByTestId('list-tab-count-healthy').textContent).toBe('1');
+		expect(screen.getByTestId('list-tab-count-alerts').textContent).toBe('2');
+		expect(screen.getByTestId('list-tab-all').getAttribute('aria-pressed')).toBe('true');
+		expect(screen.getByTestId('list-tab-alerts').getAttribute('aria-pressed')).toBe('false');
+
+		await userEvent.click(screen.getByRole('button', { name: /^Alerts\b/ }));
+		await tick();
+		expect(screen.getByTestId('list-tab-alerts').getAttribute('aria-pressed')).toBe('true');
+		expect(screen.getByTestId('list-tab-all').getAttribute('aria-pressed')).toBe('false');
+
+		// The counts follow the search: they say what a click would show.
+		await userEvent.type(screen.getByRole('searchbox', { name: 'Filter routes' }), 'dead');
+		await tick();
+		expect(screen.getByTestId('list-tab-count-all').textContent).toBe('1');
+		expect(screen.getByTestId('list-tab-count-healthy').textContent).toBe('0');
+		expect(screen.getByTestId('list-tab-count-alerts').textContent).toBe('1');
+	});
+
+	it('sorts by host, both ways, and says so with aria-sort', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			mk('r1', 'charlie.example', 'healthy'),
+			mk('r2', 'alpha.example', 'healthy'),
+			mk('r3', 'bravo.example', 'healthy')
+		]);
+		render(Page);
+		await screen.findByText('alpha.example');
+		const hostTh = screen.getByTestId('sort-host').closest('th')!;
+		// The server's order until a header is clicked.
+		expect(order()).toEqual(['charlie.example', 'alpha.example', 'bravo.example']);
+		expect(hostTh.getAttribute('aria-sort')).toBe('none');
+
+		await userEvent.click(screen.getByTestId('sort-host'));
+		await tick();
+		expect(order()).toEqual(['alpha.example', 'bravo.example', 'charlie.example']);
+		expect(hostTh.getAttribute('aria-sort')).toBe('ascending');
+
+		await userEvent.click(screen.getByTestId('sort-host'));
+		await tick();
+		expect(order()).toEqual(['charlie.example', 'bravo.example', 'alpha.example']);
+		expect(hostTh.getAttribute('aria-sort')).toBe('descending');
+	});
+
+	it('sorts by state, worst first, host breaking the ties', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			mk('r1', 'b-up.example', 'healthy'),
+			mk('r2', 'down.example', 'down'),
+			mk('r3', 'a-up.example', 'healthy'),
+			mk('r4', 'slow.example', 'degraded')
+		]);
+		render(Page);
+		await screen.findByText('down.example');
+
+		await userEvent.click(screen.getByTestId('sort-state'));
+		await tick();
+		expect(order()).toEqual(['down.example', 'slow.example', 'a-up.example', 'b-up.example']);
+		expect(screen.getByTestId('sort-state').closest('th')!.getAttribute('aria-sort')).toBe('ascending');
+		expect(screen.getByTestId('sort-host').closest('th')!.getAttribute('aria-sort')).toBe('none');
+	});
+
+	it('offers to clear a filter that matches nothing', async () => {
+		apiMock.listRoutes.mockResolvedValue([mk('r1', 'up.example', 'healthy')]);
+		render(Page);
+		await screen.findByText('up.example');
+
+		const search = screen.getByRole('searchbox', { name: 'Filter routes' }) as HTMLInputElement;
+		await userEvent.type(search, 'nothing-here');
+		await userEvent.click(screen.getByRole('button', { name: /^Alerts\b/ }));
+		await tick();
+		expect(screen.getByTestId('routes-no-match').textContent).toContain('No routes match');
+		expect(screen.queryByText('up.example')).toBeNull();
+
+		await userEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
+		await tick();
+		expect(screen.getByText('up.example')).toBeInTheDocument();
+		expect(search.value).toBe('');
+		expect(screen.getByTestId('list-tab-all').getAttribute('aria-pressed')).toBe('true');
+	});
+
+	it('the empty page offers both ways in: add a route, or import a Caddyfile', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		const empty = await screen.findByTestId('routes-empty');
+		expect(empty.textContent).toContain('No routes configured yet.');
+
+		expect(screen.queryByTestId('import-caddyfile')).toBeNull();
+		await userEvent.click(within(empty).getByRole('button', { name: 'Import a Caddyfile' }));
+		await tick();
+		expect(screen.getByTestId('import-caddyfile')).toBeInTheDocument();
+	});
+
+	it('the empty page\'s add action opens the create form', async () => {
+		apiMock.listRoutes.mockResolvedValue([]);
+		render(Page);
+		const empty = await screen.findByTestId('routes-empty');
+		await userEvent.click(within(empty).getByRole('button', { name: /Add your first route/ }));
+		await tick();
+		expect(screen.getByLabelText('Host')).toBeInTheDocument();
+	});
+});
+
+describe('Routes page — a state change toast names its host', () => {
+	it('names the host put in maintenance', async () => {
+		apiMock.listRoutes.mockResolvedValue([makeRoute({ id: 'r-m', host: 'm.example.com' })]);
+		apiMock.enterMaintenance.mockResolvedValue(makeRoute({ id: 'r-m', host: 'm.example.com' }));
+		render(Page);
+		await screen.findByText('m.example.com');
+		pickSegment(stateControlFor('m.example.com'), 'maintenance');
+		await waitFor(() =>
+			expect(toastMock.pushToast).toHaveBeenCalledWith('m.example.com is now in maintenance', 'success')
+		);
+	});
+
+	it('names the host disabled', async () => {
+		apiMock.listRoutes.mockResolvedValue([makeRoute({ id: 'r-d', host: 'd.example.com' })]);
+		apiMock.disableRoute.mockResolvedValue({ id: 'r-d', disabled: true, lastHttpsRouteAffected: false });
+		render(Page);
+		await screen.findByText('d.example.com');
+		pickSegment(stateControlFor('d.example.com'), 'disabled');
+		await fireEvent.click(await screen.findByTestId('route-disable-confirm'));
+		await waitFor(() =>
+			expect(toastMock.pushToast).toHaveBeenCalledWith('d.example.com is now disabled', 'success')
+		);
+	});
+
+	it('names the host made active again', async () => {
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-e', host: 'e.example.com', disabled: true })
+		]);
+		apiMock.enableRoute.mockResolvedValue({ id: 'r-e', disabled: false });
+		render(Page);
+		await screen.findByText('e.example.com');
+		pickSegment(stateControlFor('e.example.com'), 'active');
+		await waitFor(() =>
+			expect(toastMock.pushToast).toHaveBeenCalledWith('e.example.com is now active', 'success')
+		);
 	});
 });
