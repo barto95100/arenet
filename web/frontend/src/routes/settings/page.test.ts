@@ -25,7 +25,14 @@ vi.mock('$lib/api/settings', () => {
 			rules: { rules: {} },
 			credentials: { lapiUrl: '', machineId: '', configured: false }
 		}),
-		listForwardAuthProviders: vi.fn().mockResolvedValue([])
+		listForwardAuthProviders: vi.fn().mockResolvedValue([]),
+		getAccessLog: vi.fn().mockResolvedValue({
+			enabled: false,
+			rollSizeMB: 10,
+			rollKeep: 5,
+			compress: true,
+			redactQueryParams: []
+		})
 	};
 	return {
 		settingsApi: new Proxy(known, {
@@ -44,17 +51,25 @@ vi.mock('$lib/api/auth', () => ({
 }));
 vi.mock('$lib/stores/toast', () => ({ pushToast: vi.fn() }));
 
-const { afterNavigateMock } = vi.hoisted(() => ({
-	afterNavigateMock: { cb: null as null | (() => void | Promise<void>) }
+const { afterNavigateMock, beforeNavigateMock } = vi.hoisted(() => ({
+	afterNavigateMock: { cb: null as null | (() => void | Promise<void>) },
+	beforeNavigateMock: { cb: null as null | ((nav: unknown) => void) }
 }));
 vi.mock('$app/navigation', () => ({
 	afterNavigate: (cb: () => void | Promise<void>) => {
 		afterNavigateMock.cb = cb;
 	},
+	// Captured so a test can play a navigation through the page's guard.
+	beforeNavigate: (cb: (nav: unknown) => void) => {
+		beforeNavigateMock.cb = cb;
+	},
 	goto: vi.fn()
 }));
 
+import { goto } from '$app/navigation';
 import Page from './+page.svelte';
+import { auth } from '$lib/stores/auth.svelte';
+import type { User } from '$lib/api/auth';
 
 function tab(id: string): HTMLElement {
 	return screen.getByTestId(`settings-tab-${id}`);
@@ -66,6 +81,8 @@ beforeEach(() => {
 	window.scrollTo = vi.fn();
 	window.history.replaceState(null, '', '/settings');
 	afterNavigateMock.cb = null;
+	beforeNavigateMock.cb = null;
+	vi.mocked(goto).mockClear();
 });
 
 afterEach(() => {
@@ -94,11 +111,31 @@ describe('Settings page — v2.41 categories', () => {
 		await waitFor(() => expect(screen.getByText('Security Automation')).toBeInTheDocument());
 		expect(window.location.hash).toBe('#security');
 
-		// Back to the first category: the security cards are gone,
-		// not merely scrolled out of sight.
+		// Back to the first category: the security cards are hidden,
+		// not merely scrolled out of sight. They stay mounted so an
+		// unsaved edit in them survives the switch (next test).
 		await userEvent.click(tab('account'));
-		expect(screen.queryByText('Security Automation')).toBeNull();
+		expect(screen.getByText('Security Automation')).not.toBeVisible();
 		expect(window.location.hash).toBe('#account');
+	});
+
+	// The OIDC, CrowdSec, GeoIP, DNS and backup sections hold their form
+	// state inside the component and reload it on mount: unmounting a
+	// tab on every switch threw away whatever the operator had typed
+	// and not saved. The same node surviving the round trip is the
+	// proof the component was not remounted.
+	it('keeps a visited tab mounted across a switch', async () => {
+		render(Page);
+		await userEvent.click(tab('security'));
+		await waitFor(() => expect(document.getElementById('oidc-config')).not.toBeNull());
+		const oidc = document.getElementById('oidc-config')!;
+
+		await userEvent.click(tab('network'));
+		expect(oidc).not.toBeVisible();
+		await userEvent.click(tab('security'));
+
+		expect(document.getElementById('oidc-config')).toBe(oidc);
+		expect(oidc).toBeVisible();
 	});
 
 	it('opens the tab named by the URL hash', async () => {
@@ -114,6 +151,107 @@ describe('Settings page — v2.41 categories', () => {
 		await afterNavigateMock.cb?.();
 		await waitFor(() => expect(tab('security').getAttribute('aria-selected')).toBe('true'));
 		expect(document.getElementById('oidc-config')).not.toBeNull();
+	});
+});
+
+// Leaving /settings — a sidebar link, the back button — dropped every
+// card's unsaved draft without a word. It now asks first, naming the
+// cards concerned.
+describe('Settings page — leaving with unsaved edits', () => {
+	function leave(to = 'http://localhost/routes') {
+		const cancel = vi.fn();
+		beforeNavigateMock.cb!({ type: 'link', to: { url: new URL(to) }, cancel });
+		return cancel;
+	}
+
+	async function openAccessLog(): Promise<HTMLInputElement> {
+		render(Page);
+		await userEvent.click(tab('security'));
+		// Save is disabled until the card has loaded its settings.
+		await waitFor(() => expect(screen.getByTestId('access-log-save')).not.toBeDisabled());
+		return screen.getByTestId('access-log-enabled') as HTMLInputElement;
+	}
+
+	it('lets the operator leave when nothing is unsaved', async () => {
+		await openAccessLog();
+		expect(screen.queryByTestId('access-log-unsaved')).toBeNull();
+		expect(leave()).not.toHaveBeenCalled();
+		expect(screen.queryByText('Discard your unsaved changes?')).toBeNull();
+	});
+
+	it('marks the card and its tab, and asks before leaving', async () => {
+		const enabled = await openAccessLog();
+		await userEvent.click(enabled);
+
+		expect(screen.getByTestId('access-log-unsaved')).toBeInTheDocument();
+		expect(tab('security').textContent).toContain('•');
+		expect(tab('network').textContent).not.toContain('•');
+
+		const cancel = leave();
+		expect(cancel).toHaveBeenCalled();
+		expect(await screen.findByText('Discard your unsaved changes?')).toBeInTheDocument();
+		expect(screen.getByText(/Not saved yet: HTTP access log\./)).toBeInTheDocument();
+		expect(goto).not.toHaveBeenCalled();
+
+		// Keep editing: nothing is lost, nothing navigates.
+		await userEvent.click(screen.getByText('Keep editing'));
+		await waitFor(() => expect(screen.queryByText('Discard your unsaved changes?')).toBeNull());
+		expect(enabled.checked).toBe(true);
+		expect(goto).not.toHaveBeenCalled();
+	});
+
+	it('resumes the navigation once the operator agrees to discard', async () => {
+		const enabled = await openAccessLog();
+		await userEvent.click(enabled);
+
+		leave('http://localhost/certs');
+		await userEvent.click(await screen.findByText('Discard and leave'));
+
+		expect(goto).toHaveBeenCalledWith(new URL('http://localhost/certs'));
+		// The resumed navigation goes through the guard again: it must pass.
+		expect(leave('http://localhost/certs')).not.toHaveBeenCalled();
+	});
+
+	it('clears the mark when the edit is undone', async () => {
+		const enabled = await openAccessLog();
+		await userEvent.click(enabled);
+		expect(screen.getByTestId('access-log-unsaved')).toBeInTheDocument();
+
+		await userEvent.click(enabled);
+		expect(screen.queryByTestId('access-log-unsaved')).toBeNull();
+		expect(leave()).not.toHaveBeenCalled();
+// An OIDC account has no local password — the server answers
+// no_local_password — so the account card must not offer to change it.
+describe('settings — change password button', () => {
+	function signInAs(authSource: User['authSource']): void {
+		auth.user = {
+			id: 'u1',
+			username: 'alice',
+			displayName: 'Alice',
+			locked: false,
+			passwordCompromised: false,
+			hibpCheckStatus: 'clean',
+			themePreference: '',
+			languagePreference: '',
+			role: 'admin',
+			authSource
+		};
+	}
+
+	afterEach(() => {
+		auth.user = null;
+	});
+
+	it('is offered to a local account', () => {
+		signInAs('local');
+		render(Page);
+		expect(screen.getByTestId('settings-change-password')).toBeInTheDocument();
+	});
+
+	it('is hidden from an OIDC account', () => {
+		signInAs('oidc');
+		render(Page);
+		expect(screen.queryByTestId('settings-change-password')).toBeNull();
 	});
 });
 
