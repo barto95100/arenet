@@ -248,7 +248,7 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 				{tl('securityRoute.wafOffBefore')}
 				<strong>{route?.host}</strong>
 				{tl('securityRoute.wafOffMiddle')}
-				<a href="/routes">{tl('securityRoute.wafOffRoutesLink')}</a>
+				<a href={`/routes?edit=${encodeURIComponent(routeId)}`}>{tl('securityRoute.wafOffRoutesLink')}</a>
 				{tl('securityRoute.wafOffAfter')}
 			</p>
 		</div>
@@ -414,6 +414,12 @@ Viewer-accessible per AC #12 (same gate as M.2 endpoints).
 				</dl>
 				<div class="pivot">
 					<a href="/observability/{routeId}">{tl('securityRoute.perfPivot')}</a>
+				</div>
+				<!-- The recent list above stops at 20 WAF events; the
+				     log goes further and adds rate-limit and country
+				     blocks for this route. -->
+				<div class="pivot">
+					<a href="/logs?route={encodeURIComponent(routeId)}">{tl('logs.viewInLogs')}</a>
 				</div>
 			</div>
 		</Card>
