@@ -61,14 +61,14 @@
                 return url.replace(SCHEME_RX, '');
         }
         function upstreamsLabel(r: TopologyRoute): string {
-                if (r.upstreams.length === 0) return '(aucun upstream)';
+                if (r.upstreams.length === 0) return t('topology.sidebar.noUpstream');
                 const stripped = r.upstreams.map((u) => stripScheme(u.url));
                 if (stripped.length <= TOPFLUX_MAX_INLINE_UPSTREAMS) {
                         return stripped.join(', ');
                 }
                 const head = stripped.slice(0, TOPFLUX_MAX_INLINE_UPSTREAMS).join(', ');
                 const extra = stripped.length - TOPFLUX_MAX_INLINE_UPSTREAMS;
-                return `${head}, +${extra} autres`;
+                return t('topology.sidebar.moreUpstreams', { head, extra });
         }
 
         // Optional inline badge surfaced next to the upstream label
@@ -356,7 +356,7 @@
         }
 
         .tier-warn {
-                color: var(--status-warn);
+                color: var(--status-warn-fg);
                 filter: drop-shadow(0 0 1.5px currentColor);
         }
 
@@ -451,7 +451,7 @@
 
         .topflux-line-2 .badge {
                 flex: 0 0 auto;
-                color: var(--status-warn);
+                color: var(--status-warn-fg);
         }
 
         .topflux-row[data-tier='bad'] .topflux-line-2 .badge {

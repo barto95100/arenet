@@ -33,8 +33,17 @@
 	import Button from '$lib/components/Button.svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
+	import UnsavedMarker from '$lib/components/settings/UnsavedMarker.svelte';
+
+	interface Props {
+		/** Out: the card holds edits not yet saved (see isDirty). */
+		dirty?: boolean;
+	}
+
+	let { dirty = $bindable(false) }: Props = $props();
 
 	let config = $state<OIDCConfig | null>(null);
 	let allowlist = $state<OIDCAllowedIdentity[]>([]);
@@ -54,9 +63,54 @@
 	let formError = $state('');
 	let submitting = $state(false);
 
+	// The IdP redirect target, as mounted by the Go router
+	// (internal/api/routes.go: /api/v1 → /auth → /oidc/callback).
+	const OIDC_CALLBACK_PATH = '/api/v1/auth/oidc/callback';
+
+	// In production the SPA is served by Arenet at the API's origin,
+	// so the address this page is reached at is the right default.
+	// Behind another reverse proxy the public origin can differ,
+	// which is why the field stays editable.
+	function defaultRedirectUrl(): string {
+		return `${window.location.origin}${OIDC_CALLBACK_PATH}`;
+	}
+
+	let redirectInput = $state<HTMLInputElement | null>(null);
+
+	async function copyRedirectUrl(): Promise<void> {
+		const value = form.redirectUrl.trim();
+		if (!value) return;
+		try {
+			// navigator.clipboard is undefined outside a secure context
+			// (plain-HTTP homelab access): the TypeError lands in catch.
+			await navigator.clipboard.writeText(value);
+			pushToast(t('oidcSettings.redirectCopied'), 'success');
+		} catch {
+			// Select the text so the operator can copy it by hand.
+			redirectInput?.focus();
+			redirectInput?.select();
+			pushToast(t('oidcSettings.redirectCopyFailed'), 'danger');
+		}
+	}
+
 	let newEntry = $state({ email: '', displayName: '', sub: '' });
 	let allowlistError = $state('');
 	let allowlistSubmitting = $state(false);
+
+	// Unsaved: the provider form differs from what was last loaded or
+	// saved (the secret is blank then — "keep" — so only a typed one
+	// counts), or an allowlist entry is typed but not yet added.
+	function formKey(): string {
+		return JSON.stringify(form);
+	}
+	let savedKey = $state(formKey());
+	const isDirty = $derived(
+		formKey() !== savedKey ||
+			[newEntry.email, newEntry.displayName, newEntry.sub].some((v) => v.trim() !== '')
+	);
+	$effect(() => {
+		dirty = isDirty;
+	});
 
 	async function load(): Promise<void> {
 		loading = true;
@@ -71,7 +125,9 @@
 			form.enabled = cfg.enabled;
 			form.issuerUrl = cfg.issuerUrl;
 			form.clientId = cfg.clientId;
-			form.redirectUrl = cfg.redirectUrl;
+			// Never typed by hand on a fresh setup: it is always this
+			// origin + the callback path. A saved value is kept as is.
+			form.redirectUrl = cfg.redirectUrl || defaultRedirectUrl();
 			form.acceptUnverifiedEmail = cfg.acceptUnverifiedEmail ?? false;
 			form.scopes = (cfg.scopes ?? []).join(' ');
 			form.kind = (cfg.kind ?? '') as OIDCProviderKind | '';
@@ -79,6 +135,7 @@
 			// types it on explicit rotation. The placeholder tells them
 			// what the empty state means.
 			form.clientSecret = '';
+			savedKey = formKey();
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : t('oidcSettings.loadFailed', { err: '' });
 		} finally {
@@ -112,6 +169,7 @@
 			config = saved;
 			form.scopes = (saved.scopes ?? []).join(' ');
 			form.clientSecret = ''; // reset the secret field after save
+			savedKey = formKey();
 			pushToast(t('oidcSettings.toastSaved'), 'success');
 		} catch (err) {
 			if (err instanceof ApiError) {
@@ -165,6 +223,20 @@
 			);
 		}
 	}
+
+	// Removing an entry shuts that person out of SSO at once, so it is
+	// confirmed first. deleteAllowlistEntry toasts a failure, so the
+	// dialog closes either way.
+	let removeTarget = $state<string | null>(null);
+	let removeOpen = $state(false);
+	function askRemoveEntry(email: string): void {
+		removeTarget = email;
+		removeOpen = true;
+	}
+	async function confirmRemoveEntry(): Promise<void> {
+		if (removeTarget !== null) await deleteAllowlistEntry(removeTarget);
+		removeOpen = false;
+	}
 </script>
 
 <!-- Wrapper div with mb-6 matches the spacing contract used by
@@ -176,6 +248,7 @@
 	<header class="flex items-center justify-between border-b border-border-subtle pb-3 mb-4">
 		<div>
 			<h2 class="text-xl font-semibold">{language.current && t('oidcSettings.title')}</h2>
+			<UnsavedMarker dirty={isDirty} testid="oidc-unsaved" />
 			<p class="text-xs text-muted mt-1">
 				{language.current && t('oidcSettings.subtitle')}
 			</p>
@@ -283,13 +356,29 @@
 			<label for="oidc-redirect" class="text-sm font-medium text-secondary block mb-1">
 				{language.current && t('oidcSettings.labelRedirect')}
 			</label>
-			<input
-				id="oidc-redirect"
-				type="url"
-				bind:value={form.redirectUrl}
-				placeholder="https://arenet.example.com/api/v1/auth/oidc/callback"
-				class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-			/>
+			<div class="flex items-center gap-2">
+				<input
+					id="oidc-redirect"
+					type="url"
+					bind:this={redirectInput}
+					bind:value={form.redirectUrl}
+					placeholder="https://arenet.example.com{OIDC_CALLBACK_PATH}"
+					aria-describedby="oidc-redirect-hint"
+					class="min-w-0 flex-1 bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+				/>
+				<Button
+					variant="secondary"
+					size="sm"
+					disabled={!form.redirectUrl.trim()}
+					aria-label={language.current && t('oidcSettings.redirectCopyAria')}
+					onclick={() => void copyRedirectUrl()}
+				>
+					{language.current && t('oidcSettings.redirectCopy')}
+				</Button>
+			</div>
+			<p id="oidc-redirect-hint" class="text-xs text-muted mt-1">
+				{language.current && t('oidcSettings.redirectHelper')}
+			</p>
 		</div>
 
 		<div class="md:col-span-2">
@@ -345,32 +434,57 @@
 				void addAllowlistEntry();
 			}}
 		>
+			<!-- Placeholders vanish once typed in and are not reliably
+			     announced, so each field carries a real (visually
+			     hidden) label. -->
 			<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-				<input
-					type="email"
-					bind:value={newEntry.email}
-					placeholder={language.current && t('oidcSettings.allowlistEmailPlaceholder')}
-					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-				/>
-				<input
-					type="text"
-					bind:value={newEntry.displayName}
-					placeholder={language.current && t('oidcSettings.allowlistDisplayNamePlaceholder')}
-					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
-				/>
+				<div>
+					<label for="oidc-allow-email" class="sr-only">
+						{language.current && t('oidcSettings.allowlistEmailLabel')}
+					</label>
+					<input
+						id="oidc-allow-email"
+						type="email"
+						autocomplete="off"
+						bind:value={newEntry.email}
+						placeholder={language.current && t('oidcSettings.allowlistEmailPlaceholder')}
+						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+					/>
+				</div>
+				<div>
+					<label for="oidc-allow-display-name" class="sr-only">
+						{language.current && t('oidcSettings.allowlistDisplayNameLabel')}
+					</label>
+					<input
+						id="oidc-allow-display-name"
+						type="text"
+						autocomplete="off"
+						bind:value={newEntry.displayName}
+						placeholder={language.current && t('oidcSettings.allowlistDisplayNamePlaceholder')}
+						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+					/>
+				</div>
 			</div>
 			<div class="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3">
-				<input
-					type="text"
-					bind:value={newEntry.sub}
-					placeholder={language.current && t('oidcSettings.allowlistSubPlaceholder')}
-					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
-				/>
+				<div>
+					<label for="oidc-allow-sub" class="sr-only">
+						{language.current && t('oidcSettings.allowlistSubLabel')}
+					</label>
+					<input
+						id="oidc-allow-sub"
+						type="text"
+						autocomplete="off"
+						bind:value={newEntry.sub}
+						placeholder={language.current && t('oidcSettings.allowlistSubPlaceholder')}
+						aria-describedby="oidc-allow-sub-hint"
+						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
+					/>
+				</div>
 				<Button type="submit" disabled={allowlistSubmitting}>
 					{language.current && (allowlistSubmitting ? t('oidcSettings.allowlistAdding') : t('oidcSettings.allowlistAdd'))}
 				</Button>
 			</div>
-			<p class="text-xs text-muted">
+			<p id="oidc-allow-sub-hint" class="text-xs text-muted">
 				{language.current && t('oidcSettings.allowlistAddHelper')}
 			</p>
 		</form>
@@ -401,7 +515,7 @@
 						<Button
 							variant="ghost"
 							size="sm"
-							onclick={() => void deleteAllowlistEntry(entry.email)}
+							onclick={() => askRemoveEntry(entry.email)}
 						>
 							{language.current && t('oidcSettings.allowlistBtnRemove')}
 						</Button>
@@ -412,3 +526,13 @@
 	</div>
 </Card>
 </div>
+
+<ConfirmDialog
+	bind:open={removeOpen}
+	title={language.current && t('oidcSettings.allowlistRemoveTitle')}
+	message={language.current && t('oidcSettings.allowlistRemoveMessage', { email: removeTarget ?? '' })}
+	confirmLabel={language.current && t('oidcSettings.allowlistRemoveConfirm')}
+	cancelLabel={language.current && t('oidcSettings.allowlistRemoveCancel')}
+	confirmVariant="danger"
+	onConfirm={confirmRemoveEntry}
+/>

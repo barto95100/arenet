@@ -35,9 +35,20 @@
 		wafMode?: string;
 		/** v2.38 — "→ SecLang": convert rule `index` (parent handles it). */
 		onConvert?: (index: number) => void;
+		/**
+		 * Out: a rule is open in the editor and not yet confirmed with
+		 * OK. The draft is not in `value` until then, so the parent
+		 * treats it as unsaved work and refuses to save over it.
+		 */
+		editing?: boolean;
 	}
 
-	let { value = $bindable(), wafMode = 'detect', onConvert }: Props = $props();
+	let {
+		value = $bindable(),
+		wafMode = 'detect',
+		onConvert,
+		editing = $bindable(false)
+	}: Props = $props();
 
 	// Editor state: index of the rule being edited (-1 = new rule),
 	// the draft, and one textarea string per condition.
@@ -51,6 +62,10 @@
 	}
 	let draft = $state<Draft | null>(null);
 	let error = $state<string | null>(null);
+
+	$effect(() => {
+		editing = draft !== null;
+	});
 
 	function open(rule: WafCustomRule, index: number): void {
 		const conditions = rule.conditions.map((c) => ({ ...c, values: [...(c.values ?? [])] }));
@@ -133,7 +148,7 @@
 	</span>
 	<p class="text-xs text-muted mb-2 max-w-prose">{language.current && t('wafRules.hint')}</p>
 	{#if wafMode === 'off'}
-		<p class="text-xs text-status-warn mb-2" data-testid="waf-rules-off">{language.current && t('wafRules.wafOff')}</p>
+		<p class="text-xs text-warn mb-2" data-testid="waf-rules-off">{language.current && t('wafRules.wafOff')}</p>
 	{/if}
 
 	{#if value.length === 0}
@@ -268,7 +283,7 @@
 				{language.current && preview}
 			</p>
 			{#if error}
-				<p class="text-xs text-status-down" role="alert" data-testid="waf-rule-error">{error}</p>
+				<p class="text-xs text-down" role="alert" data-testid="waf-rule-error">{error}</p>
 			{/if}
 			<div class="editor-actions">
 				<button type="button" class="btn" onclick={() => (draft = null)} data-testid="waf-rule-cancel">

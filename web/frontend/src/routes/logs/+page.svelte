@@ -36,6 +36,7 @@
 -->
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
@@ -63,9 +64,10 @@
 	import { pushToast } from '$lib/stores/toast';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
-	import { sourceMeta } from '$lib/utils/sourceMeta';
+	import { sourceMeta, type ActivitySource } from '$lib/utils/sourceMeta';
 	import { levelMeta } from '$lib/utils/levelMeta';
-	import { formatSourceIP } from '$lib/utils/ipClass';
+	import { formatSourceIP, isFullIP } from '$lib/utils/ipClass';
+	import BanIPModal from '$lib/components/BanIPModal.svelte';
 	import ActivityHistogram from '$lib/components/ActivityHistogram.svelte';
 	import WafExcludeDialog from '$lib/components/WafExcludeDialog.svelte';
 	import { auth } from '$lib/stores/auth.svelte';
@@ -117,10 +119,37 @@
 	}
 
 	const REFRESH_MS = 10_000;
+	// The sources load() reads, in the order of its fetches.
+	const LOG_SOURCES: readonly ActivitySource[] = [
+		'waf',
+		'throttle',
+		'auth',
+		'cert',
+		'country_block',
+		'rate_limit'
+	];
+	// load() keeps only this many rows, newest first, across all sources.
+	const ROW_CAP = 200;
 
 	let loading = $state(true);
 	let loadError = $state<string | null>(null);
 	let rows = $state<UnifiedRow[]>([]);
+	// Sources that failed on the last poll. allSettled keeps one
+	// failure from taking the page down, but nothing said which ones
+	// failed: their rows were simply missing, and with every source
+	// down the page read "No event in this window" — on a security
+	// log, an outage looked like a quiet system.
+	let failedSources = $state<ActivitySource[]>([]);
+	// Every source failed on the last poll: the rows on screen are
+	// the last good ones, and the pill stops saying "live".
+	let stale = $state(false);
+	let lastOkAt = $state<string | null>(null);
+	// How many rows load() merged before cutting to ROW_CAP. Above the
+	// cap, older events exist that the list (and so the filters and the
+	// histogram) never sees: the page says so instead of letting a busy
+	// hour pass for the whole day.
+	let mergedCount = $state(0);
+	const truncated = $derived(mergedCount > ROW_CAP);
 	let search = $state('');
 	let levelFilter = $state<'all' | LevelTag>('all');
 	// Phase Z.5.2 — route + HTTP status code filters. Both
@@ -157,6 +186,71 @@
 		{ value: '204', label: '204 · No Content' },
 		{ value: '200', label: '200 · OK' }
 	];
+
+	// The filters live in the URL (?q=…&route=…&code=…&level=…) so a
+	// filtered view survives a refresh and other pages can link to "this
+	// route's log" or "this rule's log". Read at init rather than in
+	// onMount: the effect below would otherwise run first with the
+	// defaults and wipe the incoming params. A value the page doesn't
+	// know falls back to its default instead of silently hiding every row.
+	const LEVEL_FILTERS: ReadonlyArray<'all' | LevelTag> = ['all', 'block', 'detect', 'warn', 'info'];
+	// The query string the filters were last read from or written to.
+	// Plain variable, not $state: the write-back effect must not track it.
+	let syncedSearch = '';
+	function readFiltersFromURL(): void {
+		if (typeof window === 'undefined') return;
+		syncedSearch = window.location.search;
+		const params = new URLSearchParams(window.location.search);
+		search = params.get('q') ?? '';
+		// Not checked against routeMap: it isn't loaded yet, and a deleted
+		// route's id still matches its past events.
+		routeFilter = params.get('route') ?? '';
+		const code = params.get('code') ?? '';
+		codeFilter = httpCodeOptions.some((o) => o.value === code) ? code : '';
+		const level = params.get('level');
+		levelFilter = LEVEL_FILTERS.find((l) => l === level) ?? 'all';
+	}
+	readFiltersFromURL();
+
+	// /logs → /logs (sidebar link, a "view in logs" link, back/forward)
+	// reuses this component, so the init read above doesn't run again.
+	// SvelteKit has already put the new URL in place when this fires.
+	// 'enter' is the first mount, which init already covered; our own
+	// history.replaceState below is not a SvelteKit navigation and never
+	// lands here.
+	afterNavigate(({ type }) => {
+		if (type === 'enter') return;
+		readFiltersFromURL();
+	});
+
+	// replaceState, not pushState (same as /security's ?tab): refining a
+	// filter shouldn't fill the back button. Defaults are omitted so the
+	// plain /logs stays plain, and SvelteKit's own history.state is kept
+	// so its back/forward bookkeeping survives.
+	$effect(() => {
+		// Read the filters first so the effect keeps tracking them even
+		// when it returns early below.
+		const next: Record<string, string> = {
+			q: search.trim(),
+			route: routeFilter,
+			code: codeFilter,
+			level: levelFilter === 'all' ? '' : levelFilter
+		};
+		const url = new URL(window.location.href);
+		// A navigation changed the query since our last sync. Its filters
+		// win and afterNavigate is about to read them; writing now would
+		// put the old ones back.
+		if (url.search !== syncedSearch) return;
+		for (const [key, value] of Object.entries(next)) {
+			if (value) url.searchParams.set(key, value);
+			else url.searchParams.delete(key);
+		}
+		if (url.href !== window.location.href) {
+			window.history.replaceState(window.history.state, '', url);
+		}
+		syncedSearch = url.search;
+	});
+
 	let paused = $state(false);
 	let pollId: ReturnType<typeof setInterval> | null = null;
 
@@ -172,6 +266,40 @@
 	// the authoritative gate).
 	const isAdmin = $derived(auth.user?.role === 'admin');
 	let excludeEvent = $state<WafEvent | null>(null);
+	// "Ban…" on a row with a real source IP (admins only, like the
+	// CrowdSec panel's ban button): the IP handed to BanIPModal.
+	let banIP = $state<string | null>(null);
+
+	// The SOURCE IP column is masked; this copies the full address.
+	// navigator.clipboard needs a secure context, so a plain-HTTP
+	// admin UI falls back to a hidden-textarea selection.
+	function copyBySelection(text: string): boolean {
+		const ta = document.createElement('textarea');
+		ta.value = text;
+		ta.setAttribute('readonly', '');
+		ta.style.position = 'fixed';
+		ta.style.opacity = '0';
+		document.body.appendChild(ta);
+		ta.select();
+		let ok = false;
+		try {
+			ok = document.execCommand('copy');
+		} catch {
+			ok = false;
+		}
+		ta.remove();
+		return ok;
+	}
+	async function copyIP(ip: string): Promise<void> {
+		let ok: boolean;
+		try {
+			await navigator.clipboard.writeText(ip);
+			ok = true;
+		} catch {
+			ok = copyBySelection(ip);
+		}
+		pushToast(ok ? t('logs.ipCopied') : t('logs.ipCopyFailed'), ok ? 'success' : 'danger');
+	}
 
 	// Phase Z.5.3 — IP → country code cache, populated by
 	// the lookup-batch endpoint after each event load. A
@@ -262,7 +390,10 @@
 				// match across more fields ; the structured
 				// `status:` / `route:` / `ip:` syntax is
 				// V2 backlog.
-				const hay = `${r.source} ${r.method} ${r.code} ${r.path} ${r.srcIp} ${r.detail}`.toLowerCase();
+				// The WAF rule id is indexed on its own: a guided rule's
+				// detail shows its name, not its id, and /waf links here
+				// with ?q=<ruleId>.
+				const hay = `${r.source} ${r.method} ${r.code} ${r.path} ${r.srcIp} ${r.detail} ${r.wafEvent?.ruleId ?? ''}`.toLowerCase();
 				if (!hay.includes(q)) return false;
 			}
 			return true;
@@ -277,6 +408,37 @@
 	const histogramCells = $derived(
 		filteredRows.map((r) => ({ ts: r.ts, source: r.source }))
 	);
+
+	// The histogram's default view: 24h in 5-minute buckets.
+	const HISTOGRAM_WINDOW_MS = 24 * 60 * 60 * 1000;
+	const HISTOGRAM_BUCKET_MS = 5 * 60 * 1000;
+	// When the list is cut, the chart is fitted to oldest-listed-row →
+	// now, with the finest of these bucket widths that keeps it under
+	// HISTOGRAM_FITTED_MAX_BUCKETS bars (5 minutes past that). A fixed
+	// ladder rather than span / N keeps the bars from changing width on
+	// every poll.
+	const HISTOGRAM_FITTED_BUCKETS_MS = [10_000, 30_000, 60_000, 2 * 60_000];
+	const HISTOGRAM_FITTED_MAX_BUCKETS = 72;
+
+	// Past the row cap, a 24h axis would draw the hours before the oldest
+	// listed row as empty when they were only cut. `since` is that row's
+	// ts when the window was fitted, null for the default view.
+	const histogramWindow = $derived.by(() => {
+		const full = { windowMs: HISTOGRAM_WINDOW_MS, bucketMs: HISTOGRAM_BUCKET_MS, since: null as string | null };
+		if (!truncated || rows.length === 0) return full;
+		const since = rows[rows.length - 1].ts;
+		const oldest = Date.parse(since);
+		if (!Number.isFinite(oldest)) return full;
+		const span = Math.max(0, Date.now() - oldest);
+		const bucketMs =
+			HISTOGRAM_FITTED_BUCKETS_MS.find((b) => span / b <= HISTOGRAM_FITTED_MAX_BUCKETS) ??
+			HISTOGRAM_BUCKET_MS;
+		// One bucket of slack: the chart ends on the bucket boundary after
+		// now, so a window of exactly `span` could leave the oldest row out.
+		const windowMs = (Math.ceil(span / bucketMs) + 1) * bucketMs;
+		if (windowMs >= HISTOGRAM_WINDOW_MS) return full;
+		return { windowMs, bucketMs, since };
+	});
 
 	function mapWaf(e: WafEvent): UnifiedRow {
 		// W.bugfix Fix #1 — read action + statusCode from the
@@ -321,7 +483,11 @@
 			source: 'throttle',
 			method: 'POST',
 			path: '/auth/login',
-			detail: `Rate-limit tier ${e.tier} · bloqué ${e.blockDurationSeconds}s · user "${e.attemptedUsername || '?'}"`,
+			detail: t('logs.detailThrottle', {
+				tier: e.tier,
+				seconds: e.blockDurationSeconds,
+				user: e.attemptedUsername || '?'
+			}),
 			srcIp: e.srcIp
 		};
 	}
@@ -373,7 +539,7 @@
 				const tail: string[] = [];
 				if (e.issuer) tail.push(e.issuer);
 				if (e.challenge) tail.push(e.challenge);
-				if (e.renewal) tail.push('renouvellement');
+				if (e.renewal) tail.push(t('logs.detailRenewal'));
 				return tail.length > 0
 					? `cert.obtained · ${tail.join(' · ')}`
 					: 'cert.obtained';
@@ -383,7 +549,7 @@
 					? `cert.failed · ${truncateError(e.error)}`
 					: 'cert.failed';
 			case 'cert_ocsp_revoked':
-				return 'cert.revoked · révocation OCSP';
+				return `cert.revoked · ${t('logs.detailOcspRevoked')}`;
 			default:
 				return 'cert.event';
 		}
@@ -451,9 +617,9 @@
 	function humanizeCountryBlockReason(reason: string): string {
 		switch (reason) {
 			case 'allow-miss':
-				return 'pays non autorisé';
+				return t('logs.countryNotAllowed');
 			case 'deny-match':
-				return 'pays interdit';
+				return t('logs.countryDenied');
 			default:
 				return reason;
 		}
@@ -529,14 +695,21 @@
 			// (degraded endpoint, 5xx, missed wire-up) doesn't
 			// take down the page. Each fulfilled result is
 			// mapped into UnifiedRow shape and merged.
-			const [waf, throttle, auth, certs, countryBlock, rateLimit] = await Promise.allSettled([
+			const settled = await Promise.allSettled([
 				fetchEvents({ limit: 100 }),
 				fetchThrottleEvents({ limit: 100 }),
 				fetchAuthFailures('24h'),
 				fetchCertEvents({ limit: 100 }),
 				fetchCountryBlockEvents({ limit: 100 }),
 				fetchRateLimitEvents({ limit: 100 })
-			]);
+			] as const);
+			const [waf, throttle, auth, certs, countryBlock, rateLimit] = settled;
+			failedSources = LOG_SOURCES.filter((_, i) => settled[i].status === 'rejected');
+			stale = failedSources.length === LOG_SOURCES.length;
+			// Nothing answered: keep the last good rows rather than
+			// replacing them with an empty list that reads as silence.
+			if (stale) return;
+			lastOkAt = new Date().toISOString();
 
 			const merged: UnifiedRow[] = [];
 			if (waf.status === 'fulfilled') {
@@ -561,7 +734,8 @@
 			}
 
 			merged.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
-			rows = merged.slice(0, 200);
+			mergedCount = merged.length;
+			rows = merged.slice(0, ROW_CAP);
 
 			// Phase Z.5.3 — enrich SOURCE IP column with
 			// country codes. Collect every distinct IP NOT
@@ -634,6 +808,10 @@
 			return iso;
 		}
 	}
+	// HH:MM, the precision of the histogram's own axis labels.
+	function fmtClock(iso: string): string {
+		return fmtTime(iso).slice(0, 5);
+	}
 
 	onMount(() => {
 		// W.7 follow-up — fire the routeMap refresh in
@@ -651,7 +829,7 @@
 </script>
 
 <svelte:head>
-	<title>Logs · Arenet</title>
+	<title>{language.current && t('logs.headTitle')}</title>
 </svelte:head>
 
 <!--
@@ -732,9 +910,16 @@
 			<button class:on={levelFilter === 'warn'} onclick={() => (levelFilter = 'warn')}>{language.current && t('logs.filterLevelWarn')}</button>
 			<button class:on={levelFilter === 'info'} onclick={() => (levelFilter = 'info')}>{language.current && t('logs.filterLevelInfo')}</button>
 		</div>
-		<span class="status-pill" class:paused>
+		<span
+			class="status-pill"
+			class:paused
+			class:stale={stale && !paused}
+			data-testid="logs-status"
+			title={language.current && stale && lastOkAt ? t('logs.statusStaleTitle', { time: fmtTime(lastOkAt).slice(0, 8) }) : undefined}
+		>
 			<span class="dot"></span>
-			{language.current && (paused ? t('logs.statusPaused') : t('logs.statusLive'))}
+			{language.current &&
+				(paused ? t('logs.statusPaused') : stale ? t('logs.statusStale') : t('logs.statusLive'))}
 		</span>
 	</div>
 </div>
@@ -746,6 +931,20 @@
   page height so the histogram has a real visual presence
   instead of the prior 80px slim band.
 -->
+{#if failedSources.length > 0}
+	<p class="sources-banner" role="status" data-testid="logs-sources-failed">
+		{language.current &&
+			(stale
+				? lastOkAt
+					? t('logs.sourcesAllFailedSince', { time: fmtTime(lastOkAt).slice(0, 8) })
+					: t('logs.sourcesAllFailed')
+				: t('logs.sourcesSomeFailed', {
+						count: failedSources.length,
+						total: LOG_SOURCES.length,
+						names: failedSources.map((s) => sourceMeta(s).label).join(', ')
+					}))}
+	</p>
+{/if}
 <div class="activity-area">
 <div class="card log-card">
 	<div class="log-header">
@@ -758,12 +957,23 @@
 		<span>{language.current && t('logs.colSource')}</span>
 		<span>{language.current && t('logs.colCode')}</span>
 		<span>{language.current && t('logs.colRequest')}</span>
+		<!-- Row-actions slot (the WAF "Exclude…" button); no heading. -->
+		<span></span>
 		<span class="right">{language.current && t('logs.colSourceIP')}</span>
 	</div>
 	{#if loading && rows.length === 0}
 		<div class="loading-wrap"><Spinner /></div>
 	{:else if loadError && rows.length === 0}
 		<div class="empty-row">{loadError}</div>
+	{:else if stale && rows.length === 0}
+		<!-- Not "no event": nothing could be read. -->
+		<EmptyState
+			testid="logs-unavailable"
+			title={language.current && t('logs.unavailableTitle')}
+			body={language.current && t('logs.unavailableBody')}
+			actionLabel={language.current && t('logs.unavailableRetry')}
+			onAction={() => void load()}
+		/>
 	{:else if filteredRows.length === 0}
 		<!-- v2.41 — was one italic line for two different situations.
 		     A filter that matched nothing offers a way back; a window
@@ -834,6 +1044,10 @@
 						{/if}
 						<span class="k">·</span>
 						<span title={r.detailTitle ?? ''}>{r.detail}</span>
+					</span>
+					<!-- Its own column, outside .log-msg's ellipsis: at the end
+					     of the message a long path pushed it out of view. -->
+					<span class="log-actions">
 						{#if isAdmin && r.wafEvent && isExcludableRule(r.wafEvent.ruleId)}
 							{@const ev = r.wafEvent}
 							<button
@@ -844,6 +1058,17 @@
 								data-testid="waf-exclude-open"
 							>
 								{language.current && t('wafExclude.action')}
+							</button>
+						{/if}
+						{#if isAdmin && isFullIP(r.srcIp)}
+							<button
+								type="button"
+								class="exclude-btn"
+								onclick={() => (banIP = r.srcIp)}
+								aria-label={language.current && t('banIp.rowActionAria', { ip: r.srcIp })}
+								data-testid="logs-ban-open"
+							>
+								{language.current && t('banIp.rowAction')}
 							</button>
 						{/if}
 					</span>
@@ -858,10 +1083,29 @@
 					-->
 					<span class="right mono dim" title={r.srcIp}>
 						{formatSourceIP(r.srcIp, countryMap.get(r.srcIp))}
+						{#if isFullIP(r.srcIp)}
+							<button
+								type="button"
+								class="copy-ip-btn"
+								onclick={() => void copyIP(r.srcIp)}
+								aria-label={language.current && t('logs.copyIpAria')}
+								data-testid="logs-copy-ip"
+							>
+								<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+									<rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4" />
+									<path d="M11 3.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h.5" fill="none" stroke="currentColor" stroke-width="1.4" />
+								</svg>
+							</button>
+						{/if}
 					</span>
 				</div>
 			{/each}
 		</div>
+	{/if}
+	{#if truncated}
+		<p class="truncated-notice" data-testid="logs-truncated">
+			{language.current && t('logs.truncatedNotice', { shown: rows.length })}
+		</p>
 	{/if}
 </div>
 
@@ -872,6 +1116,10 @@
 	onClose={() => (excludeEvent = null)}
 />
 
+{#if isAdmin}
+	<BanIPModal open={banIP !== null} initialValue={banIP ?? ''} onClose={() => (banIP = null)} />
+{/if}
+
 <!--
   Phase Z.5.4 — activity histogram. Stacked bars per
   5-minute bucket, segmented by source. Reflects every
@@ -880,7 +1128,12 @@
 -->
 <div class="card histogram-card">
 	<div class="histogram-header">
-		<span>{language.current && t('logs.histogramHeader')}</span>
+		<span>
+			{language.current &&
+				(histogramWindow.since
+					? t('logs.histogramHeaderFitted', { since: fmtClock(histogramWindow.since) })
+					: t('logs.histogramHeader'))}
+		</span>
 		<div class="histogram-legend">
 			{#each histogramSeries as s (s.key)}
 				<span class="legend-item">
@@ -893,7 +1146,12 @@
 	<ActivityHistogram
 		cells={histogramCells}
 		series={histogramSeries}
-		label={language.current && t('logs.histogramAriaLabel')}
+		windowMs={histogramWindow.windowMs}
+		bucketMs={histogramWindow.bucketMs}
+		label={language.current &&
+			(histogramWindow.since
+				? t('logs.histogramAriaLabelFitted', { since: fmtClock(histogramWindow.since) })
+				: t('logs.histogramAriaLabel'))}
 		height="fill"
 	/>
 </div>
@@ -1021,6 +1279,20 @@
 		background: var(--surface-2);
 	}
 	.status-pill.paused .dot { box-shadow: none; }
+	.status-pill.stale {
+		color: var(--status-warn);
+		background: color-mix(in oklch, var(--status-warn) 14%, transparent);
+	}
+	.status-pill.stale .dot { box-shadow: none; }
+	.sources-banner {
+		margin: 0 0 12px;
+		padding: 8px 12px;
+		border-radius: 8px;
+		font-size: 13px;
+		color: var(--text-primary);
+		border: 1px solid color-mix(in oklch, var(--status-warn) 45%, transparent);
+		background: color-mix(in oklch, var(--status-warn) 10%, transparent);
+	}
 
 
 	.log-card { padding: 0; overflow: hidden; }
@@ -1169,7 +1441,9 @@
 
 	.log-header {
 		display: grid;
-		grid-template-columns: 120px 78px 100px 60px 1fr 140px;
+		/* The `auto` track is the row-actions slot: empty (0 wide) on
+		   rows without an action, so only those rows' message narrows. */
+		grid-template-columns: 120px 78px 100px 60px 1fr auto 140px;
 		gap: 10px;
 		padding: 10px 16px;
 		border-bottom: 1px solid var(--border);
@@ -1195,7 +1469,7 @@
 	}
 	.log-row {
 		display: grid;
-		grid-template-columns: 120px 78px 100px 60px 1fr 140px;
+		grid-template-columns: 120px 78px 100px 60px 1fr auto 140px;
 		gap: 10px;
 		padding: 6px 16px;
 		align-items: baseline;
@@ -1203,8 +1477,11 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.log-row:last-child { border-bottom: none; }
+	.log-actions {
+		justify-self: end;
+		white-space: nowrap;
+	}
 	.exclude-btn {
-		margin-left: 8px;
 		background: transparent;
 		color: var(--fg-muted, var(--text-muted));
 		border: 1px solid var(--border);
@@ -1218,6 +1495,22 @@
 		color: var(--accent-cyan);
 		border-color: var(--accent-cyan);
 		outline: none;
+	}
+	.copy-ip-btn {
+		margin-left: 4px;
+		padding: 0 2px;
+		background: transparent;
+		border: none;
+		color: inherit;
+		cursor: pointer;
+		vertical-align: middle;
+		line-height: 1;
+	}
+	.copy-ip-btn:hover,
+	.copy-ip-btn:focus-visible {
+		color: var(--accent-cyan);
+		outline: 1px solid var(--accent-cyan);
+		border-radius: 2px;
 	}
 	/* Phase Z.5.1 — row tints dialed down to ~5%
 	   (rgba 0.05 mock target). The Z.4 tints at 8% were
@@ -1250,8 +1543,8 @@
 	/* W.5 — country-block pill. Slate to match the map
 	   legend's gray for "policy enforcement, not threat". */
 	.log-lvl.country-block { background: color-mix(in oklch, var(--status-meta) 24%, transparent); color: var(--status-meta); }
-	.log-lvl.detect { background: color-mix(in oklch, var(--status-warn) 14%, transparent); color: var(--status-warn); }
-	.log-lvl.warn { background: color-mix(in oklch, var(--status-warn) 18%, transparent); color: var(--status-warn); }
+	.log-lvl.detect { background: color-mix(in oklch, var(--status-warn) 14%, transparent); color: var(--status-warn-fg); }
+	.log-lvl.warn { background: color-mix(in oklch, var(--status-warn) 18%, transparent); color: var(--status-warn-fg); }
 	.log-lvl.info { background: color-mix(in oklch, var(--status-info) 18%, transparent); color: var(--status-info); }
 
 	/* Phase Z.5.1 — SOURCE badge. NEUTRAL grey across every
@@ -1282,6 +1575,15 @@
 	.right { text-align: right; }
 	.mono { font-family: var(--font-mono); }
 	.dim { color: var(--fg-dim); }
+
+	.truncated-notice {
+		margin: 0;
+		padding: 8px 16px;
+		border-top: 1px solid var(--border);
+		background: var(--bg-elevated);
+		color: var(--fg-muted);
+		font-size: 12px;
+	}
 
 	.loading-wrap { display: flex; justify-content: center; padding: 48px; }
 	.empty-row { color: var(--fg-muted); font-size: 12.5px; padding: 32px; text-align: center; font-style: italic; }

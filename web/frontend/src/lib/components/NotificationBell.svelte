@@ -29,6 +29,18 @@
 
 	const count = $derived(notificationsStore.unreadCount);
 	const badge = $derived(count > 99 ? '99+' : String(count));
+	// The aria-label replaces the button's content as its name, so the
+	// badge is never read out: the count has to be in the label. The
+	// real number, not the 99+ cap. Two keys for singular / plural.
+	const triggerLabel = $derived(
+		language.current &&
+			(() => {
+				const action = t(open ? 'notifications.ariaClose' : 'notifications.ariaOpen');
+				if (count === 0) return action;
+				const key = count === 1 ? 'notifications.ariaUnreadOne' : 'notifications.ariaUnreadMany';
+				return t(key, { action, count });
+			})()
+	);
 
 	function subjectOf(ev: AlertEvent): string {
 		if (ev.eventId === SYNTHETIC_UPDATE_ID) {
@@ -95,7 +107,7 @@
 		data-testid="notif-trigger"
 		aria-haspopup="dialog"
 		aria-expanded={open}
-		aria-label={language.current && t(open ? 'notifications.ariaClose' : 'notifications.ariaOpen')}
+		aria-label={triggerLabel}
 		onclick={toggle}
 	>
 		<span class="bell" aria-hidden="true">
@@ -168,7 +180,7 @@
 	.bell { position: relative; display: inline-flex; }
 	.label { flex: 1; }
 	.count {
-		background: var(--danger, #d9534f); color: #fff; font-size: 10.5px;
+		background: var(--status-down); color: var(--text-inverse); font-size: 10.5px;
 		font-weight: 700; border-radius: 20px; padding: 1px 7px; min-width: 16px;
 		text-align: center;
 	}
@@ -196,5 +208,5 @@
 	.panel-empty a, .panel-foot a { color: var(--accent); font-size: 11.5px; text-decoration: none; }
 	.panel-foot { padding: 10px 14px; border-top: 1px solid var(--border); text-align: center; }
 	.panel-msg { padding: 14px; font-size: 12px; color: var(--fg-muted); text-align: center; }
-	.panel-msg.error { color: var(--danger, #d9534f); }
+	.panel-msg.error { color: var(--status-down); }
 </style>
