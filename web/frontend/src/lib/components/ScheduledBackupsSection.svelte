@@ -29,6 +29,15 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
+	import { formatBytes } from '$lib/utils/format';
+	import UnsavedMarker from '$lib/components/settings/UnsavedMarker.svelte';
+
+	interface Props {
+		/** Out: the schedule form differs from the stored schedule. */
+		dirty?: boolean;
+	}
+
+	let { dirty = $bindable(false) }: Props = $props();
 
 	const selectClass =
 		'px-2 py-1 rounded-md bg-surface border border-border-default text-primary outline-none focus:border-accent-cyan';
@@ -67,6 +76,31 @@
 	let deleteOpen = $state(false);
 
 	let emailChannels = $derived(channels.filter((c) => c.kind === 'email'));
+
+	// Compared with the stored schedule (`view`), which applyView
+	// refreshes on load and save. A blank passphrase keeps the stored
+	// one, so only a typed one counts. Alert channels compare as a set:
+	// ticking one off and on again changes their order, not the choice.
+	const isDirty = $derived.by(() => {
+		if (!view) return false;
+		const sorted = (ids: string[] | undefined) => [...(ids ?? [])].sort().join(',');
+		return (
+			enabled !== view.enabled ||
+			frequency !== view.frequency ||
+			time !== view.time ||
+			weekday !== view.weekday ||
+			keep !== view.keep ||
+			dir !== view.dir ||
+			emailMode !== view.emailMode ||
+			emailChannelId !== view.emailChannelId ||
+			sorted(alertChannelIds) !== sorted(view.alertChannelIds) ||
+			passphrase !== '' ||
+			passphraseConfirm !== ''
+		);
+	});
+	$effect(() => {
+		dirty = isDirty;
+	});
 
 	function errorText(err: unknown): string {
 		if (err instanceof ApiError) {
@@ -224,12 +258,6 @@
 		return new Date(iso).toLocaleString(language.current === 'fr' ? 'fr-FR' : 'en-GB');
 	}
 
-	function fmtSize(bytes: number): string {
-		if (bytes < 1024) return `${bytes} B`;
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-		return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-	}
-
 	const weekdays = [0, 1, 2, 3, 4, 5, 6];
 </script>
 
@@ -237,6 +265,7 @@
 	<Card padding="p-6" class="mb-6">
 		<header class="border-b border-border-subtle pb-3 mb-4">
 			<h2 class="text-xl font-semibold">{language.current && t('scheduledBackups.title')}</h2>
+			<UnsavedMarker dirty={isDirty} testid="sched-unsaved" />
 			<p class="text-xs text-muted mt-1">{language.current && t('scheduledBackups.subtitle')}</p>
 		</header>
 
@@ -418,7 +447,7 @@
 								{#each files as f (f.name)}
 									<tr class="border-t border-border-subtle" data-testid="sched-file-row">
 										<td class="py-1 font-mono">{f.name}</td>
-										<td class="py-1">{fmtSize(f.size)}</td>
+										<td class="py-1">{formatBytes(f.size)}</td>
 										<td class="py-1 text-right space-x-2">
 											<a
 												href={settingsApi.backupDownloadURL(f.name)}
