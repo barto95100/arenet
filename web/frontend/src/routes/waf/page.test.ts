@@ -23,10 +23,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen } from '@testing-library/svelte';
 
-const { metricsMock, securityMock, toastMock } = vi.hoisted(() => ({
+const { metricsMock, securityMock, toastMock, clientMock } = vi.hoisted(() => ({
 	metricsMock: { fetchSummary: vi.fn() },
 	securityMock: { fetchEventsByRule: vi.fn() },
-	toastMock: { pushToast: vi.fn() }
+	toastMock: { pushToast: vi.fn() },
+	clientMock: { listRoutes: vi.fn() }
 }));
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
@@ -36,6 +37,9 @@ vi.mock('$lib/api/metrics', () => ({
 }));
 vi.mock('$lib/api/security', () => ({
 	fetchEventsByRule: (...a: unknown[]) => securityMock.fetchEventsByRule(...a)
+}));
+vi.mock('$lib/api/client', () => ({
+	listRoutes: (...a: unknown[]) => clientMock.listRoutes(...a)
 }));
 
 import Page from './+page.svelte';
@@ -70,6 +74,8 @@ beforeEach(() => {
 	metricsMock.fetchSummary.mockReset();
 	securityMock.fetchEventsByRule.mockReset();
 	toastMock.pushToast.mockReset();
+	clientMock.listRoutes.mockReset();
+	clientMock.listRoutes.mockResolvedValue([]);
 });
 
 describe('WAF page — Blocked + Detected KPI split (#R-DASHBOARD-WAF-COUNTERS-ZERO)', () => {
@@ -234,6 +240,22 @@ describe('WAF page — Phase Y taxonomy + drill-down', () => {
 		expect(drill.textContent ?? '').toContain('942130');
 	});
 
+	it('each drilled-down rule links to the activity log searched on its id', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		securityMock.fetchEventsByRule.mockResolvedValue({
+			rows: [{ ruleId: '942100', category: 'SQLi', count: 12, lastSeen: '2026-06-18T10:00:00Z' }]
+		});
+		const user = userEvent.setup();
+		render(Page);
+		await tick();
+		await tick();
+		await user.click(screen.getByTestId('cat-toggle-SQLi'));
+
+		const link = await screen.findByTestId('rule-logs-942100');
+		expect(link).toHaveAttribute('href', '/logs?q=942100');
+		expect(link).toHaveTextContent(/View in logs/);
+	});
+
 	it('clicking the same category twice toggles closed without a second fetch', async () => {
 		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
 		securityMock.fetchEventsByRule.mockResolvedValue({ rows: [] });
@@ -283,5 +305,61 @@ describe('WAF page — Phase Y taxonomy + drill-down', () => {
 		await tick();
 		const drill = screen.getByTestId('cat-drill-WEBSHELL');
 		expect(drill.textContent ?? '').toContain('failed to load rules');
+	});
+});
+
+describe('WAF page — Mode + paranoia tiles read the real config', () => {
+	// Pre-fix the Mode tile read a hardcoded "Blocking" and the
+	// paranoia tile a literal 2, whatever the routes said.
+	it('counts routes by the WAF mode actually applied', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		clientMock.listRoutes.mockResolvedValue([
+			{ wafMode: 'block' },
+			{ wafMode: 'detect' },
+			{ wafMode: 'detect' },
+			{ wafMode: 'off' },
+			{ wafMode: 'block', redirectConfig: { target: 'https://new.example.com' } }
+		]);
+		render(Page);
+
+		await vi.waitFor(() => {
+			const mode = screen.getByTestId('kpi-mode').textContent ?? '';
+			expect(mode).toContain('1 block · 2 detect');
+			expect(mode).toContain('1 off');
+			expect(mode).toContain('1 without WAF');
+		});
+		expect(screen.getByTestId('kpi-mode').textContent).not.toContain('Blocking');
+	});
+
+	it('reads Off when no proxying route has the WAF on', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		clientMock.listRoutes.mockResolvedValue([{ wafMode: 'off' }]);
+		render(Page);
+
+		await vi.waitFor(() => {
+			const value = screen.getByTestId('kpi-mode').querySelector('.value');
+			expect(value?.textContent?.trim()).toBe('Off');
+		});
+	});
+
+	it('says the route list is unavailable instead of guessing, and keeps the event counts', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary({ totalWafBlocked: 42 }));
+		clientMock.listRoutes.mockRejectedValue(new Error('boom'));
+		render(Page);
+
+		await vi.waitFor(() => {
+			expect(screen.getByTestId('kpi-mode').textContent).toContain('route list unavailable');
+		});
+		expect(screen.getByTestId('kpi-blocked').textContent).toContain('42');
+	});
+
+	it('shows the CRS default paranoia level, 1', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		render(Page);
+
+		await vi.waitFor(() => {
+			const value = screen.getByTestId('kpi-paranoia').querySelector('.value');
+			expect(value?.textContent?.replace(/\s/g, '')).toBe('1/4');
+		});
 	});
 });

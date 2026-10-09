@@ -11,7 +11,7 @@ Reused by /security (limit=20, no filter) AND
 /security/[routeId] (limit=20, route-scoped, M.4).
 
 Columns:
-  - ts           (relative: "12s ago" / "3m ago" / absolute past 1h)
+  - ts           (relative: "12 sec. ago" / "3 min. ago" / absolute past 1h)
   - route        (link to /security/<routeId>; falls back to UUID
                   if the host isn't supplied in props)
   - category     (coloured badge, same palette as CategoryDistribution)
@@ -31,10 +31,13 @@ selected route.
 <script lang="ts">
 	import type { OwaspCategory, WafEvent } from '$lib/api/types';
 	import WafExcludeDialog from '$lib/components/WafExcludeDialog.svelte';
+	import BanIPModal from '$lib/components/BanIPModal.svelte';
 	import { auth } from '$lib/stores/auth.svelte';
+	import { isFullIP } from '$lib/utils/ipClass';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 	import { isExcludableRule } from '$lib/utils/waf-exclusion';
+	import { recentTime } from '$lib/utils/relative-time';
 
 	interface Props {
 		events: WafEvent[];
@@ -64,6 +67,9 @@ selected route.
 	// authoritative gate). Protected / Arenet rules get no button.
 	const isAdmin = $derived(auth.user?.role === 'admin');
 	let excludeEvent = $state<WafEvent | null>(null);
+	// "Ban…" on a row: the source IP handed to BanIPModal (admins
+	// only, like the CrowdSec panel's ban button).
+	let banIP = $state<string | null>(null);
 
 	// Category badge colours mirror CategoryDistribution.
 	// Phase Y — colour mapping moved to lib/utils/waf-category
@@ -71,21 +77,9 @@ selected route.
 	// WafEventList + MixedEventList + /waf + /security/[routeId]).
 	import { categoryMeta } from '$lib/utils/waf-category';
 
-	// Relative time formatting: "Ns ago" up to a minute, "Nm
-	// ago" up to an hour, then HH:MM. Pure function — no
-	// re-renders on tick (caller controls refresh cadence).
-	function relativeTs(iso: string): string {
-		const then = new Date(iso).getTime();
-		const now = Date.now();
-		const secs = Math.max(0, Math.floor((now - then) / 1000));
-		if (secs < 60) return `${secs}s ago`;
-		const mins = Math.floor(secs / 60);
-		if (mins < 60) return `${mins}m ago`;
-		const d = new Date(iso);
-		const hh = String(d.getHours()).padStart(2, '0');
-		const mm = String(d.getMinutes()).padStart(2, '0');
-		return `${hh}:${mm}`;
-	}
+	// Short relative time up to an hour, then HH:MM, in the app
+	// language. No re-renders on tick (caller controls refresh cadence).
+	const relativeTs = (iso: string): string => recentTime(iso);
 
 	// Short host display: prefer the friendly host from the
 	// caller, fall back to a UUID prefix. The cell always
@@ -158,6 +152,17 @@ selected route.
 									{language.current && t('wafExclude.action')}
 								</button>
 							{/if}
+							{#if isFullIP(e.srcIp)}
+								<button
+									type="button"
+									class="exclude-btn"
+									onclick={() => (banIP = e.srcIp)}
+									aria-label={language.current && t('banIp.rowActionAria', { ip: e.srcIp })}
+									data-testid="waf-ban-open"
+								>
+									{language.current && t('banIp.rowAction')}
+								</button>
+							{/if}
 						</td>
 					{/if}
 				</tr>
@@ -173,6 +178,10 @@ selected route.
 	onClose={() => (excludeEvent = null)}
 	onSuccess={() => onExcluded?.()}
 />
+
+{#if isAdmin}
+	<BanIPModal open={banIP !== null} initialValue={banIP ?? ''} onClose={() => (banIP = null)} />
+{/if}
 
 <style>
 	table {
@@ -242,6 +251,9 @@ selected route.
 		border-radius: 4px;
 		font-size: var(--text-xs, 11px);
 		cursor: pointer;
+	}
+	.exclude-btn + .exclude-btn {
+		margin-left: 0.3rem;
 	}
 	.exclude-btn:hover {
 		color: var(--accent-cyan);
