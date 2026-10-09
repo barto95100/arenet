@@ -103,8 +103,11 @@
 		"navApiDocs": "API docs"
 	},
 	"topbar": {
-		"statusAriaLabel": "Gateway status",
-		"statusHealthy": "Gateway healthy"
+		"statusHealthy": "Gateway healthy",
+		"statusDegraded": "Gateway degraded",
+		"statusUnhealthy": "Gateway unhealthy",
+		"statusUnknown": "Gateway status unknown",
+		"statusUnknownTitle": "The health report (/system/health) could not be read."
 	},
 	"settings": {
 		"languageLabel": "Language",
@@ -131,6 +134,20 @@
 		"reduceMotionDisabled": "Disabled",
 		"reduceMotionHint": "(system preference)",
 		"changePassword": "Change password",
+		"unsaved": {
+			"marker": "Unsaved changes",
+			"dialogTitle": "Discard your unsaved changes?",
+			"dialogMessage": "Not saved yet: {cards}. Leaving now drops these changes.",
+			"dialogConfirm": "Discard and leave",
+			"dialogCancel": "Keep editing",
+			"cardAutomation": "Security Automation",
+			"cardForwardAuth": "Forward-auth providers"
+		},
+		"automationRules": {
+			"durationHint": "Window, duration and cooldown: a whole number followed by s, m (or min), h or d — e.g. 30s, 5m, 2h, 1d. A number alone counts as seconds.",
+			"durationUnreadable": "Not a duration — e.g. 30s, 5m, 2h, 1d",
+			"unreadableSummary": "Saving is blocked: {count} duration(s) cannot be read. Fix the fields marked in red."
+		},
 		"dnsProviders": {
 			"title": "DNS Providers",
 			"subtitle": "DNS accounts used to issue wildcard certificates (ACME DNS-01).",
@@ -305,6 +322,8 @@
 		"emptyState": "No routes configured yet.",
 		"emptyStateAddFirst": "+ Add your first route",
 		"noMatchFilter": "No routes match the current filter.",
+		"emptyStateBody": "Add your first route, or import the sites of an existing Caddyfile.",
+		"emptyStateImport": "Import a Caddyfile",
 		"dns01Banner": {
 			"title": "DNS-01 routes need a DNS provider.",
 			"message": "At least one route is configured for DNS-01 ACME, but the OVH DNS provider is missing or incomplete in",
@@ -328,6 +347,8 @@
 			"tabAll": "All",
 			"tabHealthy": "Healthy",
 			"tabAlerts": "Alerts",
+			"tabsAriaLabel": "Filter by health",
+			"clearFilter": "Clear filter",
 			"colHost": "Host / path",
 			"colUpstream": "Upstream",
 			"colTLS": "TLS",
@@ -408,6 +429,9 @@
 			"created": "Route created",
 			"updated": "Route updated",
 			"deleted": "Route deleted",
+			"nowActive": "{host} is now active",
+			"nowMaintenance": "{host} is now in maintenance",
+			"nowDisabled": "{host} is now disabled",
 			"connectionLost": "The connection was cut while Caddy reloaded (this happens over HTTP/3). The server still applied the change and its check — the list below shows the real state. If your change is missing, the check undid it (see the audit log)."
 		},
 		"form": {
@@ -444,10 +468,28 @@
 			"healthCheckHostHeaderLabel": "Probe Host (optional)",
 			"healthCheckHostHeaderHint": "The Host the probe sends. Empty uses the route's own host, which is what real traffic carries. Set this when the backend expects a different name.",
 			"healthCheckHeadersLabel": "Probe headers (optional)",
-			"healthCheckHeaderNameLabel": "Header name",
-			"healthCheckHeaderValueLabel": "Header value",
 			"healthCheckHeaderAdd": "Add a header",
 			"healthCheckHeaderRemove": "Remove",
+			"healthCheckAdvanced": "Advanced: thresholds, expected body, headers",
+			"repeater": {
+				"bypassIp": "Bypass IP {n}",
+				"bypassIpRemove": "Remove bypass IP {n}",
+				"alias": "Alias {n}",
+				"aliasRemove": "Remove alias {n}",
+				"upstreamUrl": "Upstream {n} URL",
+				"upstreamWeight": "Upstream {n} weight",
+				"upstreamTest": "Test upstream {n}",
+				"upstreamRemove": "Remove upstream {n}",
+				"requestHeaderName": "Request header {n} name",
+				"requestHeaderValue": "Request header {n} value",
+				"requestHeaderRemove": "Remove request header {n}",
+				"responseHeaderName": "Response header {n} name",
+				"responseHeaderValue": "Response header {n} value",
+				"responseHeaderRemove": "Remove response header {n}",
+				"probeHeaderName": "Probe header {n} name",
+				"probeHeaderValue": "Probe header {n} value",
+				"probeHeaderRemove": "Remove probe header {n}"
+			},
 			"healthCheckProbeButton": "Test the check",
 			"validationFailed": "The form was not saved: {reason}",
 			"validationFailedGeneric": "The form was not saved: a field is invalid.",
@@ -479,6 +521,8 @@
 			"wafExcludeRulesSecurityPage": "Security",
 			"wafExcludeRulesCRSDisabledWarning": "⚠️ The CRS is disabled via the toggle above — exclusions are silent until re-enabled.",
 			"sectionEssentials": "Essentiel",
+			"wafRuleDraftOpen": "Finish the WAF rule you are editing (OK) or cancel it before saving the route.",
+			"sectionInvalid": "needs fixing",
 			"sectionTLS": "TLS",
 			"sectionAuth": "Authentication",
 			"sectionWAF": "WAF",
@@ -927,6 +971,12 @@
 		"badgeIPAllow": "ip: {count} range(s)",
 		"badgeIPDeny": "ip: {count} blocked",
 		"badgeDisabled": "disabled",
+		"discardDialog": {
+			"title": "Discard your changes?",
+			"message": "This TCP service has unsaved changes. Leaving now drops them.",
+			"confirmLabel": "Discard changes",
+			"cancelLabel": "Keep editing"
+		},
 		"form": {
 			"titleNew": "New service",
 			"titleEdit": "Edit service",
@@ -1023,7 +1073,7 @@
 		"wafRules": "WAF rules"
 	},
 	"dashboard": {
-		"subtitle": "Real-time traffic across your {count} routes, recent WAF events and upstream services. Window {window}.",
+		"subtitle": "Traffic across your {count} routes, recent WAF events and upstream services. Window {window}, refreshed every minute.",
 		"disabledTitle": "Metrics unavailable",
 		"disabledBody": "The observability subsystem failed to start. The proxy is still serving traffic; only the metric history is missing. Check the Arenet logs for the root cause.",
 		"noRoutesTitle": "No routes configured yet",
@@ -1051,16 +1101,22 @@
 		"kpiCertFailedFootZero": "no issuance error",
 		"kpiCertFailedFootInvestigate": "investigate",
 		"trafficCardTitle": "Traffic — {window} window",
-		"trafficBtnReq": "Req/s",
+		"trafficBtnReq": "Requests",
 		"trafficBtnLatency": "Latency",
-		"trafficBtnErrors": "Errors",
+		"trafficBtnErrors": "5xx",
+		"chartUnitRequests": "requests / {per}",
+		"chartUnit5xx": "5xx responses / {per}",
+		"chartUnitLatency": "p95, ms",
+		"chartLoadFailed": "The series could not be loaded.",
+		"updatedAt": "Updated at {time}",
+		"updatedAtFailed": "Refresh failed · data from {time}",
 		"recentWafCardTitle": "Recent WAF events",
 		"recentWafCardMeta": "last 5",
+		"recentWafOpenLogs": "Open Logs →",
 		"recentWafEmpty": "No recent WAF events in the window.",
 		"recentWafPillDetect": "detect",
 		"recentWafPillBlock": "block",
 		"recentWafFromIp": "{method} {path} — from {ip}",
-		"tailEmpty": "No recent events.",
 		"certLifecycleTitle": "Certificate lifecycle",
 		"certLifecycleMeta": "last 30 days · 1 bucket / day",
 		"certLifecycleAria": "Certificate lifecycle over 30 days",
@@ -1078,10 +1134,10 @@
 		"topRoutesEmpty": "No data in the window.",
 		"upstreamsTitle": "Upstream services",
 		"upstreamsMetaCount": "{count} distinct",
+		"upstreamsMetaTruncated": "{shown} of {total} distinct",
+		"upstreamsSeeAll": "All in Routes →",
 		"upstreamsRouteSuffix": "{count} route{plural}",
-		"upstreamsEmpty": "No upstreams configured.",
-		"tailTitle": "WAF events — recent feed",
-		"tailOpenLogs": "Open Logs →"
+		"upstreamsEmpty": "No upstreams configured."
 	},
 	"users": {
 		"loadFailed": "Failed to load users: {err}",
@@ -1515,6 +1571,10 @@
 		"errUnexpected": "Unexpected error."
 	},
 	"errorPages": {
+		"discardTitle": "Discard your changes?",
+		"discardMessage": "This template has unsaved changes. Leaving the editor drops them.",
+		"discardConfirm": "Discard changes",
+		"discardCancel": "Keep editing",
 		"headTitle": "Error pages · Arenet",
 		"eyebrow": "Settings · Error pages",
 		"titleList": "Custom error pages",
@@ -1567,7 +1627,6 @@
 		"varsHelp": "These placeholders are substituted by Caddy at request time (not in the preview, which uses fake values).",
 		"deleteModalTitle": "Delete template?",
 		"deleteModalBody": "Deleting \"{name}\" is irreversible. Routes that reference it will revert to the Arenet branded default.",
-		"btnDeleting": "Deleting…",
 		"toastDuplicated": "Template \"{name}\" created",
 		"toastCreated": "Template \"{name}\" created",
 		"toastUpdated": "Template \"{name}\" updated",
@@ -2042,7 +2101,11 @@
 		"line": "line {line}:",
 		"pathRules": "{count} path rule(s)",
 		"toastDone": "{count} route(s) imported.",
-		"toastSkipped": "Left out: {list}"
+		"toastSkipped": "Left out: {list}",
+		"selectAll": "Select all",
+		"selectNone": "Select none",
+		"selectedCount": "{count} of {total} selected",
+		"pickLabel": "Import {host}"
 	},
 	"wafRules": {
 		"title": "Custom rules",
@@ -2423,10 +2486,13 @@
 		"kpiDetected": "Detected",
 		"kpiDetectedFoot": "detect-mode (request passed through)",
 		"kpiMode": "Mode",
-		"kpiModeBlocking": "Blocking",
-		"kpiModeFoot": "detection + block enabled",
+		"kpiModeValue": "{block} block · {detect} detect",
+		"kpiModeAllOff": "Off",
+		"kpiModeFoot": "routes by WAF mode · {off} off",
+		"kpiModeFootSkipped": "routes by WAF mode · {off} off · {skipped} without WAF (disabled, maintenance or redirect)",
+		"kpiModeUnavailable": "route list unavailable",
 		"kpiParanoiaLevel": "Paranoia level",
-		"kpiParanoiaLevelFoot": "Coraza default — read-only in v1.4",
+		"kpiParanoiaLevelFoot": "CRS default — a route's custom SecLang can raise it",
 		"categoriesTitle": "OWASP Core Rule Set — categories",
 		"categoriesMeta": "CRS via Coraza · {count} categories",
 		"categoriesReadOnlyNotice": "Granular category control (enable/disable per category) is deferred to a future step. Counts shown below are read-only.",
@@ -2502,6 +2568,14 @@
 		"filterLevelInfo": "Info",
 		"statusPaused": "pause",
 		"statusLive": "live",
+		"statusStale": "stale",
+		"statusStaleTitle": "No source answered the last refresh. Last update at {time}.",
+		"sourcesSomeFailed": "{count} of {total} sources did not answer: {names}. Their events are missing from the list.",
+		"sourcesAllFailed": "No source answered. Nothing could be read.",
+		"sourcesAllFailedSince": "No source answered the last refresh. The list below is from {time}.",
+		"unavailableTitle": "Events could not be read",
+		"unavailableBody": "None of the event sources answered. This is not the same as no events: check that Arenet is running, then retry.",
+		"unavailableRetry": "Retry",
 		"colTimestamp": "Timestamp",
 		"colLevel": "Level",
 		"colSource": "Source",
@@ -2571,6 +2645,9 @@
 		"action": "Change my password"
 	},
 	"observability": {
+		"chartRequests": "Requests / {per}",
+		"chart4xx": "4xx / {per}",
+		"chart5xx": "5xx / {per}",
 		"latencyTitle": "Latency (ms)",
 		"latencySeriesTtfb": "server",
 		"latencySeriesTotal": "with transfer",
