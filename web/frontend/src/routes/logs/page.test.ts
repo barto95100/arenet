@@ -15,7 +15,7 @@
 // coverage for the pre-U.5 sources.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import type {
 	AuthFailureRecentEvent,
@@ -116,6 +116,9 @@ afterEach(() => {
 	// onDestroy. No explicit timer-clear needed because the
 	// page calls clearInterval in onDestroy.
 	vi.clearAllMocks();
+	// The filters live in the URL: without this, one test's filter
+	// would greet the next one's render.
+	window.history.replaceState(null, '', '/');
 });
 
 const certFixture = (overrides: Partial<CertEvent> = {}): CertEvent => ({
@@ -158,7 +161,7 @@ describe('/logs — cert events render in the unified table', () => {
 		expect(row.textContent ?? '').toMatch(/Let's Encrypt/);
 		expect(row.textContent ?? '').toMatch(/DNS-01/);
 		// Renewal marker.
-		expect(row.textContent ?? '').toMatch(/renouvellement/);
+		expect(row.textContent ?? '').toMatch(/renewal/);
 	});
 
 	it('cert_failed row appears with WARN level + truncated error', async () => {
@@ -190,7 +193,7 @@ describe('/logs — cert events render in the unified table', () => {
 		expect(row.textContent ?? '').toMatch(/\.\.\./);
 	});
 
-	it('cert_ocsp_revoked row appears with WARN level + "révocation OCSP"', async () => {
+	it('cert_ocsp_revoked row appears with WARN level + "OCSP revocation"', async () => {
 		securityMock.fetchCertEvents.mockResolvedValue({
 			events: [
 				certFixture({
@@ -206,7 +209,7 @@ describe('/logs — cert events render in the unified table', () => {
 		render(Page);
 		const row = await screen.findByText(/cert\.revoked/);
 		expect(row).toBeInTheDocument();
-		expect(row.textContent ?? '').toMatch(/révocation OCSP/);
+		expect(row.textContent ?? '').toMatch(/OCSP revocation/);
 	});
 
 	it('cert events render with method=ACME and srcIp=(interne) for system-emitted rows', async () => {
@@ -722,10 +725,10 @@ describe('/logs — duplicate-tuple regression (Svelte each_key_duplicate)', () 
 });
 
 describe('/logs — W.5 country-block source (W.7 follow-up: humanized + host-resolved)', () => {
-	it('renders a country-block row with COUNTRY pill + status + humanized French detail + host badge', async () => {
+	it('renders a country-block row with COUNTRY pill + status + humanized detail + host badge', async () => {
 		// W.5 introduced the country-block row; W.7 follow-
 		// up replaced the raw "deny-deny-match" detail with
-		// the humanized "pays interdit" + routes the host
+		// the humanized "country denied" + routes the host
 		// badge through <RouteHost> resolving routeId →
 		// hostname via listRoutes(). Both changes are
 		// asserted here; the W.7-follow-up describe block
@@ -766,8 +769,8 @@ describe('/logs — W.5 country-block source (W.7 follow-up: humanized + host-re
 		expect(rowBadge).toBeDefined();
 		// Status code from the persisted row, not hardcoded.
 		expect(screen.getByText('451')).toBeInTheDocument();
-		// Humanized French detail string (W.7 follow-up).
-		expect(screen.getByText(/RU · pays interdit/)).toBeInTheDocument();
+		// Humanized detail string (W.7 follow-up).
+		expect(screen.getByText(/RU · country denied/)).toBeInTheDocument();
 		// Raw "deny-deny-match" must NOT be visible body text.
 		expect(
 			screen.queryByText(/deny-deny-match/)
@@ -783,7 +786,7 @@ describe('/logs — W.5 country-block source (W.7 follow-up: humanized + host-re
 });
 
 describe('/logs — W.7 follow-up: humanize reason + host resolution', () => {
-	it('allow-miss → "pays non autorisé"', async () => {
+	it('allow-miss → "country not allowed"', async () => {
 		clientMock.listRoutes.mockResolvedValue([
 			{ id: 'route-uuid-allow', host: 'app.example.test' }
 		]);
@@ -805,7 +808,7 @@ describe('/logs — W.7 follow-up: humanize reason + host resolution', () => {
 		});
 		render(Page);
 		await screen.findByText('app.example.test');
-		expect(screen.getByText(/IN · pays non autorisé/)).toBeInTheDocument();
+		expect(screen.getByText(/IN · country not allowed/)).toBeInTheDocument();
 	});
 
 	it('raw reason stays in title tooltip on the detail span', async () => {
@@ -829,7 +832,7 @@ describe('/logs — W.7 follow-up: humanize reason + host resolution', () => {
 			hasMore: false
 		});
 		render(Page);
-		const detail = await screen.findByText(/RU · pays interdit/);
+		const detail = await screen.findByText(/RU · country denied/);
 		// title="" carries the raw mode-reason for
 		// forensic ops that grep journalctl by code.
 		expect(detail).toHaveAttribute('title', 'deny-match');
@@ -924,7 +927,7 @@ describe('/logs — W.7 follow-up: humanize reason + host resolution', () => {
 		});
 		render(Page);
 		// Row still mounts via the fallback path.
-		await screen.findByText(/RU · pays interdit/);
+		await screen.findByText(/RU · country denied/);
 		expect(screen.getByTestId('route-host')).toHaveClass(
 			'route-host--fallback'
 		);
@@ -1352,6 +1355,111 @@ describe('/logs — Phase Z.5.2 filters', () => {
 	});
 });
 
+// --- Filters in the URL ------------------------------------------------------
+
+describe('/logs — filters live in the URL', () => {
+	const wafEvent = (overrides: Partial<WafEvent>): WafEvent =>
+		({
+			id: 1,
+			ts: isoOffset(0),
+			routeId: 'route-keep',
+			action: 'BLOCK',
+			statusCode: 403,
+			ruleId: '942100',
+			category: 'SQLi',
+			message: 'm',
+			requestMethod: 'GET',
+			requestPath: '/keep',
+			srcIp: '1.1.1.1',
+			...overrides
+		}) as WafEvent;
+
+	it('applies ?route= on arrival, before the dropdown has its options', async () => {
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'route-keep', host: 'keep.test' },
+			{ id: 'route-drop', host: 'drop.test' }
+		]);
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				wafEvent({ id: 1, routeId: 'route-keep', requestPath: '/keep' }),
+				wafEvent({ id: 2, ts: isoOffset(-60), routeId: 'route-drop', requestPath: '/drop' })
+			]
+		});
+		window.history.replaceState(null, '', '/logs?route=route-keep');
+		render(Page);
+		await screen.findByText('/keep');
+		expect(screen.queryByText('/drop')).not.toBeInTheDocument();
+		// Once the routes arrive, the dropdown shows the same filter.
+		await waitFor(() =>
+			expect(screen.getByLabelText('Filter by route')).toHaveValue('route-keep')
+		);
+	});
+
+	it('applies ?q=, ?code= and ?level= on arrival', async () => {
+		window.history.replaceState(null, '', '/logs?q=942100&code=403&level=block');
+		render(Page);
+		expect(await screen.findByLabelText('Filter events')).toHaveValue('942100');
+		expect(screen.getByLabelText('Filter by HTTP code')).toHaveValue('403');
+		expect(screen.getByRole('button', { name: 'Block' })).toHaveClass('on');
+		expect(screen.getByRole('button', { name: 'All' })).not.toHaveClass('on');
+	});
+
+	it('falls back to the defaults for values it does not know', async () => {
+		window.history.replaceState(null, '', '/logs?code=999&level=bogus');
+		render(Page);
+		expect(await screen.findByLabelText('Filter by HTTP code')).toHaveValue('');
+		expect(screen.getByRole('button', { name: 'All' })).toHaveClass('on');
+	});
+
+	it('matches ?q=<ruleId> on a guided rule, whose row shows its name', async () => {
+		// /waf links here with the rule id; a guided rule's detail
+		// carries its name instead, so the id has to be searched too.
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				wafEvent({ id: 1, ruleId: '9100042', ruleName: 'admin-only', requestPath: '/guided' }),
+				wafEvent({ id: 2, ts: isoOffset(-60), requestPath: '/crs' })
+			]
+		});
+		window.history.replaceState(null, '', '/logs?q=9100042');
+		render(Page);
+		await screen.findByText('/guided');
+		expect(screen.queryByText('/crs')).not.toBeInTheDocument();
+	});
+
+	it('writes a changed filter to the URL, without adding history', async () => {
+		clientMock.listRoutes.mockResolvedValue([{ id: 'route-keep', host: 'keep.test' }]);
+		window.history.replaceState(null, '', '/logs');
+		const historyLength = window.history.length;
+		render(Page);
+		await screen.findByText('keep.test');
+		const user = userEvent.setup();
+
+		await user.selectOptions(screen.getByLabelText('Filter by route'), 'route-keep');
+		await user.selectOptions(screen.getByLabelText('Filter by HTTP code'), '429');
+		await user.click(screen.getByRole('button', { name: 'Warn' }));
+		await user.type(screen.getByLabelText('Filter events'), 'login');
+		await waitFor(() => {
+			const params = new URLSearchParams(window.location.search);
+			expect(params.get('route')).toBe('route-keep');
+			expect(params.get('code')).toBe('429');
+			expect(params.get('level')).toBe('warn');
+			expect(params.get('q')).toBe('login');
+		});
+		expect(window.location.pathname).toBe('/logs');
+		expect(window.history.length).toBe(historyLength);
+
+		// Back at a default, the param leaves the URL.
+		await user.selectOptions(screen.getByLabelText('Filter by route'), '');
+		await user.click(screen.getByRole('button', { name: 'All' }));
+		await waitFor(() => {
+			const params = new URLSearchParams(window.location.search);
+			expect(params.has('route')).toBe(false);
+			expect(params.has('level')).toBe(false);
+			expect(params.get('code')).toBe('429');
+		});
+	});
+});
+
 // --- Phase Z.5.3 : SOURCE IP enrichment with country code -----------------
 
 describe('/logs — Phase Z.5.3 SOURCE IP country enrichment', () => {
@@ -1481,3 +1589,57 @@ describe('/logs — Phase Z.5.3 SOURCE IP country enrichment', () => {
 		expect(toastMock.pushToast).not.toHaveBeenCalled();
 	});
 });
+
+// allSettled kept one failing source from taking the page down, but
+// nothing said a source had failed: its rows were simply missing,
+// and with every source down the page read "No event in this
+// window" — an outage that looked like a quiet system.
+describe('/logs — a source that does not answer is named', () => {
+	const rejectAll = () => {
+		for (const fn of [
+			securityMock.fetchEvents,
+			securityMock.fetchThrottleEvents,
+			securityMock.fetchAuthFailures,
+			securityMock.fetchCertEvents,
+			securityMock.fetchCountryBlockEvents,
+			securityMock.fetchRateLimitEvents
+		]) {
+			fn.mockRejectedValue(new Error('503'));
+		}
+	};
+
+	it('lists the failed sources and keeps the pill live', async () => {
+		securityMock.fetchCertEvents.mockRejectedValue(new Error('503'));
+		securityMock.fetchRateLimitEvents.mockRejectedValue(new Error('503'));
+		render(Page);
+
+		const banner = await screen.findByTestId('logs-sources-failed');
+		expect(banner).toHaveTextContent('2 of 6 sources did not answer: CERT, RATE-LIMIT');
+		expect(screen.getByTestId('logs-status')).toHaveTextContent('live');
+	});
+
+	it('does not call an outage "no event" when every source fails', async () => {
+		rejectAll();
+		render(Page);
+
+		expect(await screen.findByTestId('logs-unavailable')).toBeInTheDocument();
+		expect(screen.queryByTestId('logs-empty')).toBeNull();
+		expect(screen.getByTestId('logs-status')).toHaveTextContent('stale');
+		expect(screen.getByTestId('logs-sources-failed')).toHaveTextContent('No source answered');
+	});
+
+	it('retries from the unavailable state', async () => {
+		rejectAll();
+		render(Page);
+		await screen.findByTestId('logs-unavailable');
+
+		securityMock.fetchEvents.mockResolvedValue({ events: [] });
+		await userEvent.click(screen.getByText('Retry'));
+
+		expect(await screen.findByTestId('logs-empty')).toBeInTheDocument();
+		// One source answered: no longer stale, the five others named.
+		expect(screen.getByTestId('logs-status')).toHaveTextContent('live');
+		expect(screen.getByTestId('logs-sources-failed')).toHaveTextContent('5 of 6');
+	});
+});
+
