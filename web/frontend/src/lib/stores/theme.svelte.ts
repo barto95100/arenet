@@ -20,6 +20,9 @@
 
 import { authApi } from '$lib/api/auth';
 import { pushToast } from './toast';
+// Aliased: this store's methods take a theme parameter named `t`,
+// which would shadow the translator.
+import { t as translate } from '$lib/i18n';
 
 export type Theme = 'dark' | 'light';
 
@@ -57,7 +60,7 @@ class ThemeStore {
 			// linger on the wrong value.
 			this.applyLocally(previous);
 			this.persistLocally(previous);
-			pushToast('Failed to save theme preference', 'danger');
+			pushToast(translate('settings.themeSaveFailed'), 'danger');
 			throw err;
 		} finally {
 			this.isApplying = false;
