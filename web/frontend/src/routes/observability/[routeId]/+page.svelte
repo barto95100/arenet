@@ -40,6 +40,7 @@ Viewer-accessible — relies on the API gate (AC #17).
 	import Card from '$lib/components/Card.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { t } from '$lib/i18n';
+	import { bucketUnit } from '$lib/utils/bucket-unit';
 	import { language } from '$lib/stores/language.svelte';
 	import TimelineChart from '$lib/components/TimelineChart.svelte';
 	import MultiSeriesTimelineChart from '$lib/components/MultiSeriesTimelineChart.svelte';
@@ -67,6 +68,10 @@ Viewer-accessible — relies on the API gate (AC #17).
 	let reqSeries = $state<TimeseriesPoint[]>([]);
 	let fourxxSeries = $state<TimeseriesPoint[]>([]);
 	let fivexxSeries = $state<TimeseriesPoint[]>([]);
+	// The count series hold one bucket's count per point: a minute on
+	// 24h, an hour on 30d. The titles said "/ minute" on both.
+	let bucketSeconds = $state(60);
+	const per = $derived(bucketUnit(bucketSeconds));
 	// t() reads the active locale from the module, not from a store,
 	// so a derived label has to touch language.current to re-run on a
 	// language switch. tl() does that read once instead of repeating
@@ -122,6 +127,7 @@ Viewer-accessible — relies on the API gate (AC #17).
 				fetchTimeseries(routeId, 'ttfb_ms', window, quantile)
 			]);
 			disabled = req.disabled === true;
+			bucketSeconds = req.bucketSizeSeconds || bucketSeconds;
 			reqSeries = trimTrailing(req);
 			fourxxSeries = trimTrailing(fourxx);
 			fivexxSeries = trimTrailing(fivexx);
@@ -221,23 +227,22 @@ Viewer-accessible — relies on the API gate (AC #17).
 {:else if routeNotFound}
 	<Card>
 		<div class="empty-wrap">
-			<h3>Route introuvable</h3>
+			<h3>{tl('observability.notFoundTitle')}</h3>
 			<p>
-				La route <code>{routeId}</code> n'existe pas (ou plus). Retournez au
-				<a href="/dashboard">dashboard</a> ou à la liste des
-				<a href="/routes">routes</a>.
+				{tl('observability.notFoundBefore')}
+				<code>{routeId}</code>
+				{tl('observability.notFoundMiddle')}
+				<a href="/dashboard">{tl('observability.notFoundDashboardLink')}</a>
+				{tl('observability.notFoundOr')}
+				<a href="/routes">{tl('observability.notFoundRoutesLink')}</a>.
 			</p>
 		</div>
 	</Card>
 {:else if disabled}
 	<Card>
 		<div class="empty-wrap">
-			<h3>Métriques indisponibles</h3>
-			<p>
-				Le sous-système d'observabilité n'a pas pu démarrer. Le proxy
-				continue de fonctionner ; seule l'historique des métriques est
-				manquant.
-			</p>
+			<h3>{tl('observability.disabledTitle')}</h3>
+			<p>{tl('observability.disabledBody')}</p>
 		</div>
 	</Card>
 {:else}
@@ -251,7 +256,7 @@ Viewer-accessible — relies on the API gate (AC #17).
 		<button
 			type="button"
 			class:active={window === '30d'}
-			onclick={() => switchWindow('30d')}>30j</button
+			onclick={() => switchWindow('30d')}>{tl('observability.window30d')}</button
 		>
 	</div>
 
@@ -263,34 +268,34 @@ Viewer-accessible — relies on the API gate (AC #17).
 	<div class="chart-grid">
 		<Card>
 			<div class="chart-block">
-				<h3>Requêtes / minute</h3>
+				<h3 data-testid="obs-title-req">{tl('observability.chartRequests', { per })}</h3>
 				<TimelineChart
 					points={reqSeries}
 					color="var(--accent-cyan)"
 					formatValue={fmtCount}
-					label="Requests per minute"
+					label={tl('observability.chartRequests', { per })}
 				/>
 			</div>
 		</Card>
 		<Card>
 			<div class="chart-block">
-				<h3>4xx / minute</h3>
+				<h3>{tl('observability.chart4xx', { per })}</h3>
 				<TimelineChart
 					points={fourxxSeries}
 					color="var(--status-warn)"
 					formatValue={fmtCount}
-					label="4xx responses per minute"
+					label={tl('observability.chart4xx', { per })}
 				/>
 			</div>
 		</Card>
 		<Card>
 			<div class="chart-block">
-				<h3>5xx / minute</h3>
+				<h3>{tl('observability.chart5xx', { per })}</h3>
 				<TimelineChart
 					points={fivexxSeries}
 					color="var(--status-down)"
 					formatValue={fmtCount}
-					label="5xx responses per minute"
+					label={tl('observability.chart5xx', { per })}
 				/>
 			</div>
 		</Card>
