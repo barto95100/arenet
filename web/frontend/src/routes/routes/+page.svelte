@@ -4,7 +4,7 @@
   Licensed under the GNU AGPL v3 or later. See LICENSE.
 -->
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import {
 		listRoutes,
 		createRoute,
@@ -30,6 +30,8 @@
 	import { pathRuleContentChecks, sanitizePathRules } from '$lib/utils/path-rules';
 	import { manualCertDisplayName } from '$lib/utils/manual-cert-name';
 	import { gateApplies } from '$lib/utils/route-gates';
+	import { invalidSections } from '$lib/utils/route-form-errors';
+	import { guardNavigation } from '$lib/utils/navigation-guard';
 	import type {
 		SecLangError,
 		WafCustomRule,
@@ -932,10 +934,49 @@
 	// J.1/J.2 fields. formError remains as a top-of-form banner
 	// for non-field-attributable messages.
 	let errors = $state<Record<string, string>>({});
+	// The post-apply check of the last save said the route does not
+	// answer. Shown next to Save while the panel stays on the route.
+	let saveCheckFailure = $state<string | null>(null);
 
 	function resetFormErrors() {
 		formError = null;
 		errors = {};
+		secLangSaveErrors = [];
+		saveCheckFailure = null;
+	}
+
+	// Sections holding a field error open and carry a marker (see
+	// RouteSection's `invalid`); a refused SecLang counts for the WAF.
+	const errorSections = $derived(invalidSections(errors));
+	const wafSectionInvalid = $derived(errorSections.has('waf') || secLangSaveErrors.length > 0);
+
+	// After a refused save, bring the first error into view. Errors sat
+	// at the top of a long panel, or inside a closed section, while Save
+	// is at the bottom: the operator saw a toast and nothing else. The
+	// tick lets the invalid sections open before we look for the field.
+	async function revealFirstError(): Promise<void> {
+		await tick();
+		// RouteSection opens on the false → true edge of `invalid`. A
+		// section the operator closed while it still held an error stays
+		// invalid across the next refused save — no edge — so it is
+		// opened here.
+		panelEl
+			?.querySelectorAll<HTMLDetailsElement>('details[data-invalid]')
+			.forEach((d) => (d.open = true));
+		// Field errors first, in form order; then a section marked
+		// invalid with no field error of its own (a refused SecLang lists
+		// its problems inside the WAF section); the top banner last.
+		const target =
+			panelEl?.querySelector<HTMLElement>('[aria-invalid="true"], [data-field-error]') ??
+			panelEl?.querySelector<HTMLElement>('details[data-invalid]') ??
+			panelEl?.querySelector<HTMLElement>('[data-form-error]');
+		if (!target) return;
+		// Optional call: jsdom has no scrollIntoView.
+		target.scrollIntoView?.({ block: 'center' });
+		// Focus only when the target IS the field. A message's field is
+		// not reliably its neighbour, and focusing the wrong input is
+		// worse than leaving focus on Save.
+		if (target.matches('input, select, textarea')) target.focus({ preventScroll: true });
 	}
 
 	// Phase 1 split layout — close/cancel the right panel and
@@ -2094,9 +2135,15 @@
 	// it opens; anything different afterwards is unsaved work. Compared as
 	// JSON because formData is a plain object of plain values.
 	let formSnapshot = $state('');
+	// A guided WAF rule open in its editor lives in the editor, not in
+	// formData, until its OK: Save shipped the route without it and a
+	// discard dropped it unasked. It counts as unsaved work.
+	let wafRuleEditing = $state(false);
 	const formDirty = $derived(
 		formSnapshot !== '' &&
-			(JSON.stringify(formData) !== formSnapshot || stateChoice !== stateSnapshot)
+			(JSON.stringify(formData) !== formSnapshot ||
+				stateChoice !== stateSnapshot ||
+				wafRuleEditing)
 	);
 
 	// v2.41 — the unsaved marker now protects something: any path
@@ -2132,6 +2179,21 @@
 	$effect(() => {
 		if (!confirmDiscardOpen) pendingAfterDiscard = null;
 	});
+
+	// Every other way out — a sidebar link, the Metrics / Security
+	// pivots in the panel header, the back button — asks the same
+	// question. closePanel() clears the dirty state before the
+	// navigation resumes, so the guard lets it through. (A sidebar
+	// click also trips the click-outside guard on mousedown; this
+	// replaces the action that one armed.)
+	guardNavigation(
+		() => formOpen && formDirty,
+		(proceed) =>
+			guardUnsaved(() => {
+				closePanel();
+				proceed();
+			})
+	);
 
 	function snapshotForm(): void {
 		formSnapshot = JSON.stringify(formData);
@@ -2187,8 +2249,13 @@
 	// drift surfaced at all.
 	type SectionBadge = { badge: string; posture: Posture | undefined };
 
+	// The TLS state leads: the TLS section starts closed and new routes
+	// default to HTTP (deliberately — a LAN host often cannot get a
+	// certificate), so Essentials, the one section open on arrival, is
+	// where the operator sees which one they are saving.
 	const summaryEssentials = $derived(
 		[
+			formData.tlsEnabled ? 'HTTPS' : tl('routes.form.summaryTLSOff'),
 			tl('routes.form.summaryUpstreams', { count: formData.upstreams.filter((u) => u.url.trim() !== '').length }),
 			formData.aliases.filter((a) => a.trim() !== '').length > 0
 				? tl('routes.form.summaryAliases', { count: formData.aliases.filter((a) => a.trim() !== '').length })
@@ -2881,6 +2948,10 @@
 			next.wafExcludeTags = reparsedTags.error;
 		}
 
+		if (wafRuleEditing) {
+			next.wafCustomRules = t('routes.form.wafRuleDraftOpen');
+		}
+
 		errors = next;
 		return Object.keys(next).length === 0;
 	}
@@ -2956,6 +3027,7 @@
 					: tl('routes.form.validationFailedGeneric'),
 				'danger'
 			);
+			void revealFirstError();
 			return;
 		}
 		try {
@@ -3300,14 +3372,41 @@
 			if (formData.cert_source === 'manual') {
 				payload.cert_id = formData.cert_id;
 			}
-			if (formMode === 'create') {
-				const saved = await createRoute(payload);
-				pushToast(t('routes.toasts.created'), 'success');
-				reportRouteCheck(saved.check);
+			const created = formMode === 'create';
+			let saved: Route | undefined;
+			if (created) {
+				saved = await createRoute(payload);
 			} else if (editingId) {
-				const saved = await updateRoute(editingId, payload);
-				pushToast(t('routes.toasts.updated'), 'success');
-				reportRouteCheck(saved.check);
+				saved = await updateRoute(editingId, payload);
+			}
+			const check = saved?.check;
+			// One message per save. The check messages already say the
+			// route is saved, so "Route updated" next to them was the
+			// same news twice — and, beside a red "does not answer",
+			// a contradiction.
+			if (check?.status === 'failed' || check?.status === 'pending_certificate') {
+				reportRouteCheck(check);
+			} else {
+				pushToast(t(created ? 'routes.toasts.created' : 'routes.toasts.updated'), 'success');
+			}
+			if (saved && check?.status === 'failed') {
+				// Saved but not answering: the operator's next move is
+				// to fix this route, so the panel stays on it (a new
+				// route reopens in edit mode) with the result next to
+				// Save, where it outlives the toast.
+				const id = saved.id;
+				await loadRoutes();
+				const fresh = routes.find((r) => r.id === id);
+				if (fresh) {
+					openEdit(fresh);
+					saveCheckFailure = t('routes.check.failed', {
+						host: check.host ?? '',
+						detail: check.detail ?? ''
+					});
+				} else {
+					closePanel();
+				}
+				return;
 			}
 			// Bug 1 fix (C11 Pack A polish round 3, 2026-06-06):
 			// Save MUST clear editingId so the route-row-selected
@@ -3326,6 +3425,7 @@
 				// problems on their line under the editor.
 				secLangSaveErrors = (err.params?.errors as SecLangError[] | undefined) ?? [];
 				formError = t('wafSecLang.saveRefused');
+				void revealFirstError();
 			} else if (err instanceof ApiError && err.code === 'route_check_rolled_back') {
 				// v2.35 — the change broke a working route and was undone:
 				// keep the panel open with the explanation.
@@ -3365,6 +3465,7 @@
 				} else {
 					formError = shown;
 				}
+				void revealFirstError();
 			} else if (auth.state === 'locked') {
 				// Day 13 — #R-FRONTEND-PUT-NO-TIMEOUT layer B.
 				// If the session lock fired while the save was in
@@ -4272,6 +4373,7 @@
 						<p
 							class="px-3 py-2 rounded bg-down/10 border border-down/40 text-sm text-down"
 							role="alert"
+							data-form-error
 						>
 							{formError}
 						</p>
@@ -4464,7 +4566,7 @@
 						{/if}
 					</RouteSection>
 
-					<RouteSection name={language.current && t('routes.form.sectionEssentials')} summary={summaryEssentials} open testid="section-essentials">
+					<RouteSection name={language.current && t('routes.form.sectionEssentials')} summary={summaryEssentials} open invalid={errorSections.has('essentials')} testid="section-essentials">
 						<Input
 							label={language.current && t('routes.form.hostLabel')}
 							bind:value={formData.host}
@@ -4515,7 +4617,7 @@
 								</div>
 							</div>
 							{#if errors['upstreams']}
-								<p class="text-xs text-down">{errors['upstreams']}</p>
+								<p data-field-error class="text-xs text-down">{errors['upstreams']}</p>
 							{/if}
 							{#each formData.upstreams as _, i (i)}
 								<div class="flex items-start gap-2">
@@ -4637,7 +4739,7 @@
 												class:border-border-default={!errors[`upstreams[${i}].weight`]}
 											/>
 											{#if errors[`upstreams[${i}].weight`]}
-												<p class="text-xs text-down">{errors[`upstreams[${i}].weight`]}</p>
+												<p data-field-error class="text-xs text-down">{errors[`upstreams[${i}].weight`]}</p>
 											{/if}
 										</div>
 									{/if}
@@ -4719,7 +4821,10 @@
 								<select
 									id="route-lb-policy"
 									bind:value={formData.lbPolicy}
-									class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+									aria-invalid={errors['lbPolicy'] ? 'true' : undefined}
+									class="w-full bg-surface border rounded-md px-3 py-2 text-sm text-primary"
+									class:border-down={!!errors['lbPolicy']}
+									class:border-border-default={!errors['lbPolicy']}
 								>
 									<option value="round_robin">{language.current && t('routes.form.lbRoundRobin')}</option>
 									<option value="weighted_round_robin">{language.current && t('routes.form.lbWeightedRoundRobin')}</option>
@@ -4728,6 +4833,11 @@
 									<option value="random">{language.current && t('routes.form.lbRandom')}</option>
 									<option value="first">{language.current && t('routes.form.lbFirst')}</option>
 								</select>
+								<!-- fieldFromMessage maps a server refusal to 'lbPolicy',
+								     which nothing rendered: the message was lost. -->
+								{#if errors['lbPolicy']}
+									<p data-field-error class="text-xs text-down mt-1">{errors['lbPolicy']}</p>
+								{/if}
 							</div>
 						{/if}
 					</RouteSection>
@@ -5044,7 +5154,7 @@
 					</RouteSection>
 
 					<!-- WAF: mode, CRS, exclusions, guided rules and SecLang. -->
-					<RouteSection name={language.current && t('routes.form.sectionWAF')} summary={summaryWAF} badge={wafBadge.badge} posture={wafBadge.posture} testid="section-waf">
+					<RouteSection name={language.current && t('routes.form.sectionWAF')} summary={summaryWAF} badge={wafBadge.badge} posture={wafBadge.posture} invalid={wafSectionInvalid} testid="section-waf">
 						<!-- v2.41 — WAF interior. Reading order is deliberate and
 						     unchanged: what inspects (mode), how the body is read
 						     (streaming), turning the whole CRS off, then the three
@@ -5140,7 +5250,7 @@
 										class="w-full bg-elevated border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono disabled:opacity-50 disabled:cursor-not-allowed"
 									></textarea>
 									{#if errors.wafExcludeRules}
-										<p class="text-xs text-status-down mt-1" data-testid="waf-exclude-rules-error">
+										<p data-field-error class="text-xs text-status-down mt-1" data-testid="waf-exclude-rules-error">
 											{errors.wafExcludeRules}
 										</p>
 									{/if}
@@ -5188,7 +5298,7 @@
 										{/each}
 									</datalist>
 									{#if errors.wafExcludeTags}
-										<p class="text-xs text-status-down mt-1" data-testid="waf-exclude-tags-error">
+										<p data-field-error class="text-xs text-status-down mt-1" data-testid="waf-exclude-tags-error">
 											{errors.wafExcludeTags}
 										</p>
 									{/if}
@@ -5207,11 +5317,22 @@
 						/>
 						<!-- v2.37 — guided WAF rules (block when every condition
 						     matches, follows the route mode). -->
-						<WafCustomRulesEditor
-							bind:value={formData.wafCustomRules}
-							wafMode={formData.wafMode}
-							onConvert={convertGuidedRule}
-						/>
+						<!-- Keyed on the route: the panel stays mounted from one
+						     row to the next, and a draft left open on one route
+						     must not follow the operator onto another. -->
+						{#key editingId}
+							<WafCustomRulesEditor
+								bind:value={formData.wafCustomRules}
+								bind:editing={wafRuleEditing}
+								wafMode={formData.wafMode}
+								onConvert={convertGuidedRule}
+							/>
+						{/key}
+						{#if errors.wafCustomRules}
+							<p data-field-error class="text-xs text-down" data-testid="waf-rule-draft-error">
+								{errors.wafCustomRules}
+							</p>
+						{/if}
 						<!-- v2.38 — expert SecLang + templates + request tester. -->
 						<WafSecLangSection
 							bind:value={formData.wafSecLang}
@@ -5629,6 +5750,7 @@
 						summary={summaryHealthCheck}
 						badge={healthCheckBadge.badge}
 						posture={healthCheckBadge.posture}
+						invalid={errorSections.has('healthCheck')}
 						testid="section-health-check"
 					>
 						<!-- Step J.3: active health-check sub-form. Gated by the
@@ -5713,7 +5835,7 @@
 										class:border-border-default={!errors['healthCheck.uri']}
 									/>
 									{#if errors['healthCheck.uri']}
-										<p class="text-xs text-down mt-1">{errors['healthCheck.uri']}</p>
+										<p data-field-error class="text-xs text-down mt-1">{errors['healthCheck.uri']}</p>
 									{/if}
 								</div>
 								<div>
@@ -5734,7 +5856,7 @@
 										<option value="HEAD">HEAD</option>
 									</select>
 									{#if errors['healthCheck.method']}
-										<p class="text-xs text-down mt-1">{errors['healthCheck.method']}</p>
+										<p data-field-error class="text-xs text-down mt-1">{errors['healthCheck.method']}</p>
 									{/if}
 								</div>
 								<div class="grid grid-cols-2 gap-3">
@@ -5774,7 +5896,7 @@
 											class:border-border-default={!errors['healthCheck.passes']}
 										/>
 										{#if errors['healthCheck.passes']}
-											<p class="text-xs text-down">{errors['healthCheck.passes']}</p>
+											<p data-field-error class="text-xs text-down">{errors['healthCheck.passes']}</p>
 										{/if}
 									</div>
 									<div class="flex flex-col gap-1.5">
@@ -5795,7 +5917,7 @@
 											class:border-border-default={!errors['healthCheck.fails']}
 										/>
 										{#if errors['healthCheck.fails']}
-											<p class="text-xs text-down">{errors['healthCheck.fails']}</p>
+											<p data-field-error class="text-xs text-down">{errors['healthCheck.fails']}</p>
 										{/if}
 									</div>
 								</div>
@@ -5818,7 +5940,7 @@
 										class:border-border-default={!errors['healthCheck.expectStatus']}
 									/>
 									{#if errors['healthCheck.expectStatus']}
-										<p class="text-xs text-down">{errors['healthCheck.expectStatus']}</p>
+										<p data-field-error class="text-xs text-down">{errors['healthCheck.expectStatus']}</p>
 									{/if}
 									<p class="text-xs text-secondary">
 										{language.current && t('routes.form.healthCheckExpectStatusHint')}
@@ -5884,7 +6006,7 @@
 										</div>
 									{/each}
 									{#if errors['healthCheck.headers']}
-										<p class="text-xs text-down">{errors['healthCheck.headers']}</p>
+										<p data-field-error class="text-xs text-down">{errors['healthCheck.headers']}</p>
 									{/if}
 									<Button
 										variant="secondary"
@@ -5999,11 +6121,12 @@
 						summary={summaryPathsHeaders}
 						badge={pathsHeadersBadge?.badge}
 						posture={pathsHeadersBadge?.posture}
+						invalid={errorSections.has('pathsHeaders')}
 						testid="section-paths-headers"
 					>
 						{#each formData.pathRules as _rule, i (i)}
 							{#if errors[`pathRules.${i}`]}
-								<p class="text-xs text-down" role="alert" data-testid="path-rule-error-{i}">
+								<p data-field-error class="text-xs text-down" role="alert" data-testid="path-rule-error-{i}">
 									{errors[`pathRules.${i}`]}
 								</p>
 							{/if}
@@ -6160,7 +6283,23 @@
 				     formOpen via the existing path; on validation
 				     errors the panel stays open with field-level
 				     messages. -->
-				<div class="px-5 pb-5 pt-2 flex items-center justify-between gap-2 border-t border-border-subtle">
+				<!-- Sticky like the header: with the WAF or health-check
+				     sections open, Save was a long scroll away. -->
+				<div class="sticky bottom-0 z-10 bg-elevated border-t border-border-subtle" data-testid="panel-footer">
+				<!-- The refusal is repeated next to Save: the banner sits at the
+				     top of the form, out of sight from here. The banner is the
+				     one announced (role="alert"); this copy is for the eye. -->
+				{#if formError}
+					<p class="px-5 pt-3 text-xs text-down" aria-hidden="true" data-testid="form-error-footer">
+						{formError}
+					</p>
+				{/if}
+				{#if saveCheckFailure}
+					<p class="px-5 pt-3 text-xs text-down" data-testid="save-check-failure">
+						{saveCheckFailure}
+					</p>
+				{/if}
+				<div class="px-5 pb-5 pt-2 flex items-center justify-between gap-2">
 					{#if formMode === 'edit' && editingId}
 						<div class="delete-slot">
 							<Button
@@ -6188,6 +6327,7 @@
 						{language.current && (formMode === 'create' ? t('routes.form.create') : t('routes.form.save'))}
 					</Button>
 					</div>
+				</div>
 				</div>
 			{/if}
 

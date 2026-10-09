@@ -31,7 +31,7 @@
 //     so it's testable by `queryByLabelText` returning null /
 //     non-null rather than by computed style.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
@@ -93,7 +93,8 @@ const { toastMock, apiMock, settingsMock, authMock, externalCertsMock } = vi.hoi
 // $app/navigation: only reached if the page redirects (it doesn't
 // here). Stub to avoid the SvelteKit runtime dependency.
 vi.mock('$app/navigation', () => ({
-	goto: vi.fn()
+	goto: vi.fn(),
+	beforeNavigate: vi.fn()
 }));
 
 // $lib/stores/toast: pushToast is called on success / failure
@@ -643,6 +644,69 @@ describe('Routes page — validation rules (§5.2)', () => {
 		await submitForm();
 		expect(screen.getByText('URI is required')).toBeInTheDocument();
 		expect(apiMock.createRoute).not.toHaveBeenCalled();
+	});
+
+	// A refused field inside a closed section used to stay out of
+	// sight: Save produced a toast and nothing else on screen.
+	describe('a refused save brings the error into view', () => {
+		let scroll: ReturnType<typeof vi.fn>;
+		beforeEach(() => {
+			// jsdom has no scrollIntoView; the page calls it optionally.
+			scroll = vi.fn();
+			Element.prototype.scrollIntoView = scroll as unknown as Element['scrollIntoView'];
+		});
+		afterEach(() => {
+			delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+		});
+
+		it('opens and marks the section holding the error, and scrolls to it', async () => {
+			render(Page);
+			await openCreateForm();
+			await userEvent.type(hostInput(), 'h.test');
+			await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+			await userEvent.click(screen.getByLabelText('Enable active health checks'));
+			const section = screen.getByTestId('section-health-check') as HTMLDetailsElement;
+			section.open = false;
+			await tick();
+
+			await submitForm();
+
+			await vi.waitFor(() => expect(scroll).toHaveBeenCalled());
+			expect(section.open).toBe(true);
+			expect(section.hasAttribute('data-invalid')).toBe(true);
+			expect(screen.getByTestId('section-health-check-invalid')).toBeInTheDocument();
+			expect(scroll.mock.contexts[0]).toHaveTextContent('URI is required');
+			// Sections without an error carry no marker.
+			expect(screen.queryByTestId('section-essentials-invalid')).toBeNull();
+		});
+
+		it('focuses the refused field when the error is on the field itself', async () => {
+			render(Page);
+			await openCreateForm();
+			await submitForm();
+
+			await vi.waitFor(() => expect(scroll).toHaveBeenCalled());
+			expect(screen.getByTestId('section-essentials-invalid')).toBeInTheDocument();
+			expect(document.activeElement).toBe(hostInput());
+		});
+
+		it('repeats a form-level refusal next to Save', async () => {
+			apiMock.createRoute.mockRejectedValue(
+				new ApiError('something the form cannot place', 400, 'validation')
+			);
+			render(Page);
+			await openCreateForm();
+			await userEvent.type(hostInput(), 'h.test');
+			await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+
+			await submitForm();
+
+			await vi.waitFor(() =>
+				expect(screen.getByTestId('form-error-footer')).toHaveTextContent(
+					'something the form cannot place'
+				)
+			);
+		});
 	});
 
 	it('rejects HC URI that does not start with /', async () => {
@@ -4057,6 +4121,26 @@ describe('Routes page — post-apply route check', () => {
 				12000
 			)
 		);
+		// The check message already says the route is saved.
+		expect(toastMock.pushToast).not.toHaveBeenCalledWith('Route created', 'success');
+	});
+
+	it('stays on the route, in edit mode, when it is saved but does not answer', async () => {
+		const stored = makeRoute({ id: 'r1', host: 'app.test' });
+		apiMock.createRoute.mockResolvedValueOnce({
+			...stored,
+			check: { status: 'failed', host: 'app.test', httpStatus: 502, detail: 'the route answered 502 Bad Gateway' }
+		});
+		apiMock.listRoutes.mockResolvedValue([stored]);
+		await fillAndSubmit();
+
+		const notice = await screen.findByTestId('save-check-failure');
+		expect(notice).toHaveTextContent('app.test is saved but does not answer');
+		// One message, not "Route created" beside "does not answer".
+		expect(toastMock.pushToast).not.toHaveBeenCalledWith('Route created', 'success');
+		// Reopened on the stored route: the edit-only pivots are there.
+		expect(screen.getByTestId('panel-pivot-metrics')).toBeInTheDocument();
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
 	});
 
 	it('keeps the panel open with the explanation when the change was undone (409)', async () => {
@@ -4170,6 +4254,32 @@ describe('Routes page — v2.37 guided WAF rules', () => {
 			operator: 'is_not',
 			values: ['GET', 'HEAD', 'POST', 'OPTIONS']
 		});
+	});
+});
+
+describe('Routes page — a guided WAF rule left open', () => {
+	// The draft lives in the editor until OK. Save used to ship the
+	// route without it, with a success toast.
+	it('blocks the save and points at the open rule', async () => {
+		const seeded = makeRoute({ id: 'draft-edit', host: 'draft.local', wafMode: 'block' });
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+		await userEvent.click((await screen.findByText('draft.local')).closest('tr')!);
+		await tick();
+
+		await userEvent.click(screen.getByTestId('waf-rule-preset-methods'));
+		await tick();
+		// An open draft is unsaved work, even before any other change.
+		expect(screen.getByTestId('form-dirty')).toBeInTheDocument();
+
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+
+		expect(apiMock.updateRoute).not.toHaveBeenCalled();
+		expect(screen.getByTestId('waf-rule-draft-error')).toBeInTheDocument();
+		expect(screen.getByTestId('section-waf').hasAttribute('data-invalid')).toBe(true);
 	});
 });
 
@@ -4305,6 +4415,7 @@ describe('Routes page — v2.41 route form sections', () => {
 		await tick();
 
 		const row = (id: string) => screen.getByTestId(id).querySelector('summary')!.textContent ?? '';
+		expect(row('section-essentials')).toContain('HTTPS');
 		expect(row('section-essentials')).toContain('2 backend');
 		expect(row('section-essentials')).toContain('1 alias');
 		expect(row('section-tls')).toContain("Let's Encrypt");
