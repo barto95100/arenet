@@ -11,7 +11,7 @@
 
   Re-skinned in symmetry with /login and /setup (LSC port,
   2026-05): tokens OKLCH scoped to .lockscreen-page, glass card
-  with backdrop-filter, FR copy, eye toggle on the password
+  with backdrop-filter, translated copy, eye toggle on the password
   field, local cyan/violet halo behind the card. The
   constellation background is NOT reused on purpose — the
   LockScreen invariant is "underlying UI must remain visible
@@ -19,12 +19,15 @@
   decoration on top would defeat that.
 
   Mounted conditionally by +layout.svelte (Chunk 7 Étape 2) via
-  {#if auth.state === 'locked'}. No escape handler: the user
-  must authenticate or close the tab.
+  {#if auth.state === 'locked'}, which also makes the app shell
+  behind it `inert`. No escape handler: the way out is to unlock
+  or to sign out (same flow as the sidebar's sign-out, then
+  /login). Focus starts in the password field (the SSO button for
+  an OIDC account) and Tab cycles inside the card.
 
   Auth logic preserved verbatim: auth.unlock(password) → POST
-  /api/v1/auth/unlock, 401 → "Mot de passe incorrect", other →
-  generic message.
+  /api/v1/auth/unlock, 401 → "wrong password", other → the
+  server's message.
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
@@ -33,16 +36,75 @@
 	import { goto } from '$app/navigation';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { ApiError } from '$lib/api/types';
+	import { t } from '$lib/i18n';
+	import { language } from '$lib/stores/language.svelte';
+
+	// Reading language.current makes every label re-render on a
+	// language switch — same helper as the routes page.
+	function tl(key: string, params?: Record<string, string | number>): string {
+		void language.current;
+		return t(key, params);
+	}
 
 	let password = $state('');
 	let showPassword = $state(false);
 	let error = $state('');
 	let submitting = $state(false);
 	let passwordInput: HTMLInputElement | undefined = $state();
+	let card: HTMLDivElement | undefined = $state();
+	let signingOut = $state(false);
+
+	// Focusable descendants of the card, in tab order (same selector
+	// as Modal's trap).
+	function focusable(): HTMLElement[] {
+		if (!card) return [];
+		const selector =
+			'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+		return Array.from(card.querySelectorAll<HTMLElement>(selector));
+	}
 
 	onMount(() => {
-		passwordInput?.focus();
+		// An OIDC account has no password field: start on its button.
+		(passwordInput ?? focusable()[0])?.focus();
 	});
+
+	// Focus trap. The layout makes the app shell inert, but the
+	// banners and gates outside it are still in the tab order, and so
+	// is the browser chrome: keep Tab and Shift+Tab inside the card.
+	function onKeydown(event: KeyboardEvent): void {
+		if (event.key !== 'Tab') return;
+		const items = focusable();
+		if (items.length === 0) {
+			event.preventDefault();
+			return;
+		}
+		const first = items[0];
+		const last = items[items.length - 1];
+		const active = document.activeElement as HTMLElement | null;
+		if (!active || !card?.contains(active)) {
+			event.preventDefault();
+			(event.shiftKey ? last : first).focus();
+		} else if (event.shiftKey && active === first) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && active === last) {
+			event.preventDefault();
+			first.focus();
+		}
+	}
+
+	// The way out that is not unlocking: the sidebar's sign-out flow.
+	// Logging out turns the state anonymous, which unmounts this.
+	async function signOut(): Promise<void> {
+		if (signingOut) return;
+		signingOut = true;
+		try {
+			await auth.logout();
+		} finally {
+			signingOut = false;
+			void goto('/login');
+		}
+	}
 
 	function togglePassword(): void {
 		showPassword = !showPassword;
@@ -55,7 +117,7 @@
 		e.preventDefault();
 		if (submitting) return;
 		if (!password) {
-			error = 'Le mot de passe est requis.';
+			error = t('auth.errors.passwordRequired');
 			return;
 		}
 		submitting = true;
@@ -77,9 +139,9 @@
 					await goto('/login?reason=oidc_unlock_required');
 					return;
 				}				
-				error = err.status === 401 ? 'Mot de passe incorrect.' : err.message;
+				error = err.status === 401 ? t('auth.lock.wrongPassword') : err.message;
 			} else {
-				error = 'Erreur inattendue.';
+				error = t('auth.errors.unexpected');
 			}
 			password = '';
 			passwordInput?.focus();
@@ -88,6 +150,8 @@
 		}
 	}
 </script>
+
+<svelte:document onkeydown={onKeydown} />
 
 <div
 	class="lockscreen-page"
@@ -98,8 +162,8 @@
 >
 	<div class="lockscreen-halo" aria-hidden="true"></div>
 
-	<div class="lockscreen-card">
-		<h2 id="lockscreen-title" class="lockscreen-title">Session verrouillée.</h2>
+	<div class="lockscreen-card" bind:this={card}>
+		<h2 id="lockscreen-title" class="lockscreen-title">{tl('auth.lock.title')}</h2>
 
 		{#if auth.user?.authSource === 'oidc'}
 			<!-- Step #S-25: OIDC users have no local password.
@@ -110,18 +174,19 @@
 				400 + code:oidc_unlock_unsupported on POST /unlock)
 				remains in place as a safety net. -->
 			<p class="lockscreen-sub">
-				Connecté en tant que
-				<span class="lockscreen-user">{auth.user?.username ?? ''}</span> via SSO.
-				Re-authentifie-toi pour reprendre.
+				{tl('auth.lock.signedInAs')}
+				<span class="lockscreen-user">{auth.user?.username ?? ''}</span>
+				{tl('auth.lock.viaSso')}
+				{tl('auth.lock.ssoPrompt')}
 			</p>
 			<a class="lockscreen-submit" href="/api/v1/auth/oidc/login">
-				<span class="lockscreen-submit-label">Se reconnecter avec SSO</span>
+				<span class="lockscreen-submit-label">{tl('auth.lock.ssoButton')}</span>
 			</a>
-		{:else}		
+		{:else}
 		<p class="lockscreen-sub">
-			Connecté en tant que
+			{tl('auth.lock.signedInAs')}
 			<span class="lockscreen-user">{auth.user?.username ?? ''}</span>.
-			Entre ton mot de passe pour continuer.
+			{tl('auth.lock.passwordPrompt')}
 		</p>
 
 		{#if error}
@@ -145,7 +210,7 @@
 
 		<form onsubmit={handleSubmit} autocomplete="on" novalidate>
 			<div class="lockscreen-field">
-				<label for="lockscreen-password">Mot de passe</label>
+				<label for="lockscreen-password">{tl('auth.passwordLabel')}</label>
 				<div class="lockscreen-input-wrap">
 					<input
 						id="lockscreen-password"
@@ -161,8 +226,9 @@
 						type="button"
 						class="lockscreen-pw-toggle"
 						onclick={togglePassword}
-						tabindex={-1}
-						aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+						aria-pressed={showPassword ? 'true' : 'false'}
+						aria-controls="lockscreen-password"
+						aria-label={tl('auth.showPassword')}
 					>
 						{#if showPassword}
 							<svg
@@ -204,10 +270,20 @@
 				disabled={submitting}
 			>
 				<span class="lockscreen-spin" aria-hidden="true"></span>
-				<span class="lockscreen-submit-label">Déverrouiller</span>
+				<span class="lockscreen-submit-label">{tl('auth.lock.unlock')}</span>
 			</button>
 		</form>
 		{/if}
+
+		<button
+			type="button"
+			class="lockscreen-signout"
+			onclick={signOut}
+			disabled={signingOut}
+			data-testid="lockscreen-signout"
+		>
+			{tl('common.signOut')}
+		</button>
 	</div>
 </div>
 
@@ -404,6 +480,10 @@
 		color: var(--fg-muted);
 		background: var(--surface-2);
 	}
+	.lockscreen-pw-toggle:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
 	.lockscreen-pw-toggle :global(svg) {
 		width: 16px;
 		height: 16px;
@@ -450,6 +530,30 @@
 	}
 	.lockscreen-submit.loading .lockscreen-submit-label {
 		opacity: 0.85;
+	}
+	.lockscreen-signout {
+		display: block;
+		margin: 14px auto 0;
+		padding: 4px 8px;
+		background: none;
+		border: none;
+		border-radius: 6px;
+		color: var(--fg-muted);
+		font: inherit;
+		font-size: 12.5px;
+		cursor: pointer;
+	}
+	.lockscreen-signout:hover:not(:disabled) {
+		color: var(--fg);
+		text-decoration: underline;
+	}
+	.lockscreen-signout:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+	.lockscreen-signout:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
 	}
 	@keyframes lockscreenSpin {
 		to {
