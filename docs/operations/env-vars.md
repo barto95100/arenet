@@ -230,6 +230,68 @@ defaults; you'll typically touch 2–3 on a real install.
 - **Source**: `cmd/arenet/main.go:490`, parser at
   `internal/auth/ipextract.go:46`.
 
+### `ARENET_ADMIN_ALLOWED_CIDRS`
+
+- **Purpose**: which client IPs may reach the admin interface
+  (UI, REST API, WebSockets). Anything else gets a `403` and a
+  `request refused, source not in ARENET_ADMIN_ALLOWED_CIDRS`
+  warning in the logs.
+- **Default**: empty, which means **private networks only**:
+  loopback (`127.0.0.0/8`, `::1/128`), RFC 1918 (`10.0.0.0/8`,
+  `172.16.0.0/12`, `192.168.0.0/16`), Tailscale / CGNAT
+  (`100.64.0.0/10`), IPv4 link-local (`169.254.0.0/16`), IPv6
+  ULA (`fc00::/7`) and link-local (`fe80::/10`). It blocks an
+  admin reached from the Internet (forgotten port forward, VPS)
+  without changing anything for a homelab, but it does NOT tell
+  one LAN device from another, nor the Docker host from the other
+  containers of a Docker network — they are all private.
+- **Format**: comma-separated CIDRs and/or bare IPs (a bare IP is
+  that single address). An explicit list **replaces** the default
+  — loopback included, so keep the SSH-tunnel source if you use
+  one (`127.0.0.1` on systemd, the bridge gateway on Docker — see
+  below). `0.0.0.0/0,::/0` opens the admin to every source.
+- **Example**: one workstation + SSH tunnel —
+  `ARENET_ADMIN_ALLOWED_CIDRS=192.168.1.50,127.0.0.1` (systemd),
+  `ARENET_ADMIN_ALLOWED_CIDRS=192.168.1.50,172.20.0.1` (Docker,
+  with your own network's gateway).
+- **Notes**: a malformed entry causes Arenet to **fail-fast at
+  boot**. The effective list is logged at startup (`admin: source
+  allowlist`). `/healthz` is exempt so the container healthcheck
+  keeps working under a narrow list.
+  The check judges the client IP as resolved with
+  `ARENET_TRUSTED_PROXIES`: behind an Arenet route it is the real
+  client (Caddy overwrites `X-Forwarded-For` from untrusted
+  clients — `reverseproxy.go:943-953` in Caddy v2.11.4), but
+  **every CIDR in `ARENET_TRUSTED_PROXIES` can pick the IP the
+  allowlist sees**. Trusting a whole Docker network lets every
+  container on it through.
+  **Docker bridge mode** — source IPs seen inside the container,
+  measured on Docker 29.9 (rootful, `docker-proxy` enabled):
+
+  | Path | Source IP the allowlist sees |
+  |---|---|
+  | Host → port published on `127.0.0.1` (this is the SSH-tunnel path) | the network's **gateway** (e.g. `172.20.0.1`), not `127.0.0.1` |
+  | Another LAN machine → host's published port | that machine's **real LAN IP** (e.g. `192.168.1.227`) |
+  | Host → its own LAN IP | the host's LAN IP |
+  | Another container on the same network | that container's own IP (e.g. `172.20.0.3`) |
+
+  So a per-workstation list works on Docker bridge: LAN clients
+  are not masqueraded. But `127.0.0.1` in the list is useless
+  there; allow
+  the gateway as a `/32` instead. It lets the host (and the SSH
+  tunnel) in **without** letting the neighbouring containers in,
+  since they have their own addresses. Find it with
+  `docker network inspect <network> --format '{{(index .IPAM.Config 0).Gateway}}'`.
+  It is stable for an existing network but may differ after the
+  network is recreated.
+  **Rootless Docker** and Docker Desktop route published ports
+  through their own forwarder and were not measured; they may hide
+  the real client address. In any case, read the `client_ip` in
+  the refusal warning — it is exactly the address the allowlist
+  judged.
+- **Source**: `cmd/arenet/main.go`, parser and middleware at
+  `internal/auth/source_allowlist.go`.
+
 ### `ARENET_HIBP_DISABLED`
 
 - **Purpose**: disables the HaveIBeenPwned k-anonymity
