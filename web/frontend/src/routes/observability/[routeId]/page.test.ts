@@ -165,3 +165,31 @@ describe('observability route page: the quantile selector', () => {
 		}
 	});
 });
+
+// Each count point is one bucket's count: a minute on 24h, an hour
+// on 30d. The titles read "/ minute" on both windows.
+describe('observability route page: count units follow the bucket', () => {
+	it('reads per minute on 24h and per hour on 30d', async () => {
+		render(Page);
+		await waitFor(() =>
+			expect(screen.getByTestId('obs-title-req')).toHaveTextContent('Requests / min')
+		);
+
+		mocks.fetchTimeseries.mockImplementation((_r: string, metric: string) =>
+			Promise.resolve({ ...series(100), metric, window: '30d', bucketSizeSeconds: 3600 })
+		);
+		await fireEvent.click(screen.getByRole('button', { name: '30d' }));
+
+		await waitFor(() =>
+			expect(screen.getByTestId('obs-title-req')).toHaveTextContent('Requests / h')
+		);
+	});
+});
+
+describe('observability route page: the way to the log', () => {
+	it('links to the activity log filtered on this route', async () => {
+		render(Page);
+		const link = await screen.findByRole('link', { name: /View in logs/ });
+		expect(link).toHaveAttribute('href', `/logs?route=${ROUTE_ID}`);
+	});
+});
