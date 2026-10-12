@@ -1393,6 +1393,8 @@
 			"labelRoute": "Route",
 			"routeAll": "All routes",
 			"labelWindowSecs": "Window (seconds)",
+			"labelWafCategory": "OWASP category",
+			"wafCategoryAll": "Every category",
 			"labelAction": "Action",
 			"actionAll": "All",
 			"labelHostOptional": "Host (optional)",
