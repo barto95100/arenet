@@ -51,10 +51,14 @@ import (
 // lower-cased).
 type Config struct {
 	// AdminPort is the bind address:port for the admin REST API
-	// + WebSocket. Default ":8001" (matches the historical
-	// production default since Step D). Loopback is the v1.4+
-	// security default (D6); LAN exposure requires an explicit
-	// "0.0.0.0:8001" override.
+	// + WebSocket. Default "127.0.0.1:8001": loopback only, per
+	// spec D6, so LAN exposure is an explicit operator override
+	// ("0.0.0.0:8001") rather than an accident.
+	//
+	// This comment used to say both things at once — 'Default
+	// ":8001"' in one sentence and 'Loopback is the security
+	// default' in the next — which is how the gap between the
+	// decision and NewDefault survived the whole v2 line.
 	AdminPort string `toml:"admin-bind"`
 
 	// DataDir is the path where Arenet stores its persistent
@@ -151,9 +155,24 @@ type Config struct {
 
 // NewDefault returns a Config populated with the hardcoded
 // defaults. This is the "level 4" of the precedence stack.
+//
+// AdminPort binds LOOPBACK, which is what spec D6 decided and what this
+// package's own flag usage string has claimed since it was written:
+// "Loopback default per spec D6". It returned ":8001" — every
+// interface — for the whole v2 line, so a stock systemd install served
+// the admin API on the LAN while docs/operations/hardening.md:12 told
+// the operator it did not. Four documents and one usage string said
+// loopback; one line of code said otherwise, 36 lines from the usage
+// string that contradicted it.
+//
+// Docker is unaffected: its image CMD passes --admin-port=:8001, and a
+// flag beats this default. That is deliberate there — Docker forwards a
+// published port to the container's eth0, not its loopback, so a
+// loopback bind inside the container would make 127.0.0.1:8001:8001
+// unreachable while the in-container healthcheck stayed green.
 func NewDefault() *Config {
 	return &Config{
-		AdminPort:      ":8001",
+		AdminPort:      "127.0.0.1:8001",
 		DataDir:        "./data",
 		Dev:            false,
 		TopologyTickMs: 2000,

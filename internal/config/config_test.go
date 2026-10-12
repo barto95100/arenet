@@ -70,8 +70,11 @@ func TestDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.AdminPort != ":8001" {
-		t.Errorf("AdminPort: got %q, want :8001", cfg.AdminPort)
+	// v2.71 — was ":8001", which pinned a defect: the default never
+	// matched spec D6. See TestDefault_AdminBindsLoopbackPerD6 below for
+	// why, kept separate so the reasoning sits next to the assertion.
+	if cfg.AdminPort != "127.0.0.1:8001" {
+		t.Errorf("AdminPort: got %q, want 127.0.0.1:8001", cfg.AdminPort)
 	}
 	if cfg.DataDir != "./data" {
 		t.Errorf("DataDir: got %q, want ./data", cfg.DataDir)
@@ -191,8 +194,8 @@ func TestFileMissingIsNotError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: missing file should not be an error, got %v", err)
 	}
-	if cfg.AdminPort != ":8001" {
-		t.Errorf("AdminPort: got %q, want :8001 (default — file silently absent)", cfg.AdminPort)
+	if cfg.AdminPort != "127.0.0.1:8001" {
+		t.Errorf("AdminPort: got %q, want 127.0.0.1:8001 (default — file silently absent)", cfg.AdminPort)
 	}
 }
 
@@ -337,5 +340,46 @@ func TestTopologyTickMs_TOMLFile(t *testing.T) {
 	}
 	if cfg.TopologyTickMs != 4000 {
 		t.Errorf("TopologyTickMs TOML: got %d, want 4000", cfg.TopologyTickMs)
+	}
+}
+
+// The default bind is a locked decision, and for a long time the code
+// did not implement it.
+//
+// docs/superpowers/specs/2026-06-01-step-s-production-deployment.md:69:
+// "Loopback-only admin binding makes LAN exposure an explicit operator
+// override (D6), not an accident." Four places stated it as fact —
+// docs/operations/hardening.md:12, docs/wiki-seed/Installation.md:150,
+// docker-compose.yml:17, and the flag's own usage string in this
+// package ("Loopback default per spec D6") — while NewDefault returned
+// ":8001", every interface. The usage string and the default sat 36
+// lines apart in the same file.
+//
+// So a stock systemd install served the admin API on the LAN while its
+// own hardening guide said it did not. This asserts the decision rather
+// than the historical value, and it is deliberately separate from
+// TestDefault so the reason survives next to the assertion.
+func TestDefault_AdminBindsLoopbackPerD6(t *testing.T) {
+	withEnv(t, nil)
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AdminPort != "127.0.0.1:8001" {
+		t.Errorf("AdminPort default = %q, want %q — the admin API must not "+
+			"listen on every interface by default (spec D6)", cfg.AdminPort, "127.0.0.1:8001")
+	}
+}
+
+// The override has to keep working, or the fix above just moves the
+// problem: an operator who wants LAN access states it explicitly.
+func TestAdminBind_LANOverrideStillWorks(t *testing.T) {
+	withEnv(t, map[string]string{"ARENET_ADMIN_BIND": "0.0.0.0:8001"})
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AdminPort != "0.0.0.0:8001" {
+		t.Errorf("AdminPort = %q, want the env override to win", cfg.AdminPort)
 	}
 }

@@ -149,7 +149,7 @@ Same as Docker path step 4 — `http://<your-host>:8001`, paste the token, creat
 
 By default the admin UI binds to `127.0.0.1:8001` (loopback only) for safety. To access it from your LAN :
 
-**Docker** : the `docker-compose.yml` already publishes `8001:8001` so it's reachable on `http://<docker-host>:8001` from your LAN. Restrict via Docker network policies or your firewall.
+**Docker** : the `docker-compose.yml` publishes `127.0.0.1:8001:8001`, so the admin UI is reachable **from the Docker host only**, not from your LAN. To reach it from elsewhere, either tunnel (`ssh -L 8001:localhost:8001 <docker-host>`) or change the mapping to `8001:8001` and apply the [hardening checklist](https://github.com/barto95100/arenet/blob/main/docs/operations/hardening.md).
 
 **systemd** : edit `/etc/systemd/system/arenet.service` and set the env var :
 
