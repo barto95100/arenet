@@ -6107,3 +6107,84 @@ describe('Routes page — an open guided WAF rule is unsaved work', () => {
 		expect(screen.queryByTestId('waf-rule-cancel')).toBeNull();
 	});
 });
+
+// ---------------------------------------------------------------------
+// v2.71 — the form must not assert a state it did not change.
+//
+// The row control and the edit panel are two ways to set the same
+// state, and the panel's copy goes stale. With the panel open on an
+// active route, putting that route into maintenance from its own row
+// left stateChoice reading 'active' — handleEnterMaintenance does not
+// touch the form, loadRoutes does not re-seed it, and clicks inside the
+// table are exempt from clickOutsideToClose so the panel stays open.
+//
+// The next save then shipped `disabled: false` with no maintenance
+// block, and internal/api/routes.go:2161-2162 clears maintenance on
+// exactly that shape. A route the operator had just closed went back to
+// serving live traffic, with no dialog and no unsaved-changes marker.
+//
+// Same insight as the TCP payload fix: send what you own, not what you
+// happen to be holding.
+// ---------------------------------------------------------------------
+describe('Routes page — a state set from the row survives a form save', () => {
+	const twoRoutes = () => [
+		makeRoute({ id: 'r-a', host: 'a.example.com', tlsEnabled: true }),
+		makeRoute({ id: 'r-b', host: 'b.example.com', tlsEnabled: true })
+	];
+
+	it('omits the state from the payload when the form did not change it', async () => {
+		apiMock.listRoutes.mockResolvedValue(twoRoutes());
+		apiMock.updateRoute.mockResolvedValue(makeRoute({ id: 'r-a', host: 'a.example.com' }));
+		apiMock.enterMaintenance = apiMock.enterMaintenance ?? vi.fn();
+		apiMock.enterMaintenance.mockResolvedValue(undefined);
+		render(Page);
+
+		// Panel open on A, which is active.
+		const rowA = (await screen.findByText('a.example.com')).closest('tr')!;
+		await userEvent.click(rowA);
+		await tick();
+
+		// Maintenance from A's own row. The panel stays open and keeps
+		// reading 'active'.
+		const seg = rowA.querySelector('button[data-state="maintenance"]') as HTMLButtonElement;
+		expect(seg).not.toBeNull();
+		await fireEvent.click(seg);
+		await waitFor(() => expect(apiMock.enterMaintenance).toHaveBeenCalledWith('r-a'));
+
+		// Now save the form, having touched nothing about the state.
+		const form = document.querySelector('form');
+		await fireEvent.submit(form!);
+		await waitFor(() => expect(apiMock.updateRoute).toHaveBeenCalledTimes(1));
+
+		// `disabled` absent means "leave the state alone" on the server
+		// side, where the field is a pointer.
+		const sent = apiMock.updateRoute.mock.calls[0][1];
+		expect(sent).not.toHaveProperty('disabled');
+	});
+
+	it('still sends the state when the form is what changed it', async () => {
+		// The omission must be about an UNTOUCHED selector, not about the
+		// form losing the ability to set the state at all.
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-a', host: 'a.example.com', tlsEnabled: false, disabled: true })
+		]);
+		apiMock.updateRoute.mockResolvedValue(makeRoute({ id: 'r-a', host: 'a.example.com' }));
+		render(Page);
+
+		const rowA = (await screen.findByText('a.example.com')).closest('tr')!;
+		await userEvent.click(rowA);
+		await tick();
+
+		// Re-activate it from the form's own control.
+		// The form's control is a ModeSelector with id "route-state", so
+		// its segments carry route-state-<value> as their testid.
+		await fireEvent.click(screen.getByTestId('route-state-active'));
+		await tick();
+
+		const form = document.querySelector('form');
+		await fireEvent.submit(form!);
+		await waitFor(() => expect(apiMock.updateRoute).toHaveBeenCalledTimes(1));
+
+		expect(apiMock.updateRoute.mock.calls[0][1].disabled).toBe(false);
+	});
+});
