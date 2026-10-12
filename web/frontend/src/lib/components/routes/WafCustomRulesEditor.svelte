@@ -35,9 +35,28 @@
 		wafMode?: string;
 		/** v2.38 — "→ SecLang": convert rule `index` (parent handles it). */
 		onConvert?: (index: number) => void;
+		/** Bound out: a rule is open in the editor and not yet committed. */
+		draftOpen?: boolean;
 	}
 
-	let { value = $bindable(), wafMode = 'detect', onConvert }: Props = $props();
+	let {
+		value = $bindable(),
+		wafMode = 'detect',
+		onConvert,
+		// v2.71 — true while a rule is being written and has not been
+		// committed with OK. The page needs this: `draft` below is
+		// component state, so an open draft was invisible to the route
+		// form's unsaved-changes check, and switching route neither asked
+		// nor cleared it. See the {#key} at the usage site.
+		draftOpen = $bindable(false)
+	}: Props = $props();
+
+	// Mirrors `draft` for the parent. One $effect rather than an
+	// assignment in each of the five places draft changes, so a sixth
+	// cannot forget it.
+	$effect(() => {
+		draftOpen = draft !== null;
+	});
 
 	// Editor state: index of the rule being edited (-1 = new rule),
 	// the draft, and one textarea string per condition.
