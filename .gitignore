@@ -57,7 +57,10 @@ Thumbs.db
 /coverage/
 
 # Claude Code workspace dir (sessions, cache, local settings)
-.claude/
+# Local Claude Code state stays out; the project skills are versioned,
+# so an audit or a fix follows the same discipline in any clone.
+.claude/*
+!.claude/skills/
 
 # Compiled binaries (added after first commit mistake)
 /bin/
