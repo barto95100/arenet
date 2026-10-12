@@ -491,3 +491,83 @@ describe('RuleModal', () => {
 		});
 	});
 });
+
+// v2.72 — the OWASP category filter was destroyed on every save.
+//
+// `category` is a documented operator parameter of waf_event_rate
+// (docs/wiki-seed/Alerting.md) and it is live: source_waf_event_rate.go
+// puts it straight into the SQL filter and into the event labels. The
+// modal neither read it in the prefill effect nor wrote it in
+// buildSourceParams, and updateAlertRule passes sourceParams through
+// verbatim — storage marshals the blob whole, nothing merges inside it.
+//
+// So a rule built to alert on SQLi only, reopened and saved with
+// nothing changed, came back alerting on EVERY category. Worse than a
+// lost field: the rule still exists and now means something else, so it
+// fires on traffic it was written to ignore.
+describe('RuleModal — the WAF category filter', () => {
+	function sqliRule(): AlertRule {
+		return {
+			...thresholdRule(),
+			sourceParams: { windowSecs: 300, action: 'BLOCK', category: 'SQLi' }
+		};
+	}
+
+	it('keeps the category when the rule is saved unchanged', async () => {
+		const Modal = (await import('./RuleModal.svelte')).default;
+		listChannelsMock.mockResolvedValue([
+			{ id: 'ch-1', name: 'ops-webhook', kind: 'webhook', enabled: true, minSeverity: 1 }
+		]);
+		render(Modal, {
+			props: { open: true, rule: sqliRule(), onClose: () => {}, onSaved: () => {} }
+		});
+		await waitFor(() => expect(screen.getByText('ops-webhook')).toBeTruthy());
+
+		await fireEvent.click(screen.getByText('Save'));
+		await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+
+		expect(updateMock.mock.calls[0][1].sourceParams.category).toBe('SQLi');
+	});
+
+	it('shows the stored category so the operator can see what the rule watches', async () => {
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, rule: sqliRule(), onClose: () => {}, onSaved: () => {} }
+		});
+		await waitFor(() => expect(screen.getByLabelText(/OWASP category/i)).toBeTruthy());
+
+		expect((screen.getByLabelText(/OWASP category/i) as HTMLSelectElement).value).toBe('SQLi');
+	});
+
+	it('lets the operator clear the filter back to every category', async () => {
+		// Preserving alone would have left no way to remove a filter, so
+		// the control has to exist, not just the round-trip.
+		const Modal = (await import('./RuleModal.svelte')).default;
+		listChannelsMock.mockResolvedValue([
+			{ id: 'ch-1', name: 'ops-webhook', kind: 'webhook', enabled: true, minSeverity: 1 }
+		]);
+		render(Modal, {
+			props: { open: true, rule: sqliRule(), onClose: () => {}, onSaved: () => {} }
+		});
+		await waitFor(() => expect(screen.getByText('ops-webhook')).toBeTruthy());
+
+		await fireEvent.change(screen.getByLabelText(/OWASP category/i), { target: { value: '' } });
+		await fireEvent.click(screen.getByText('Save'));
+		await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+
+		expect(updateMock.mock.calls[0][1].sourceParams).not.toHaveProperty('category');
+	});
+
+	// Deliberately NOT tested here: the cross-rule leak.
+	//
+	// The modal is mounted once (RulesTab.svelte) and its $state survives
+	// every close, while the source fields are reset only in the create
+	// branch — so editing rule A, cancelling, editing rule B and changing
+	// B's source carries A's params onto B. That is the same family as
+	// the guided-WAF draft fixed in v2.71, it needs its own mechanism (a
+	// key on the rule id, or a reset on every source change), and the
+	// first version of a test here passed against the rule's OWN Category
+	// control rather than this one. Fixing it half way and asserting it
+	// fully is how a green suite stops meaning anything.
+
+});

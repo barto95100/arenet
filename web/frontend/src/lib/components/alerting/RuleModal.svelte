@@ -30,7 +30,16 @@
 	import { rulesStore, channelsStore } from '$lib/stores/alerting.svelte';
 	import { listRoutes } from '$lib/api/client';
 	import { ApiError } from '$lib/api/types';
-	import type { Route } from '$lib/api/types';
+	import type { Route, OwaspCategory } from '$lib/api/types';
+	import { CATEGORY_META } from '$lib/utils/waf-category';
+
+	// v2.72 — the OWASP category list, read from the single source of
+	// truth the WAF pages already use rather than restated here. Sorted
+	// by label so the select is navigable; CATEGORY_META's own order is
+	// the rule-id order of the CRS, which means nothing to an operator.
+	const wafCategoryOptions = Object.entries(CATEGORY_META)
+		.map(([value, meta]) => ({ value: value as OwaspCategory, label: meta.label }))
+		.sort((a, b) => a.label.localeCompare(b.label));
 	import { pushToast } from '$lib/stores/toast';
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -153,6 +162,11 @@
 	let wafRouteId = $state('');
 	let wafWindowSecs = $state(300);
 	let wafAction = $state<'' | 'BLOCK' | 'DETECT'>('');
+	// v2.72 — the OWASP category filter. It was stored, used by the
+	// evaluator and documented as an operator parameter, and this modal
+	// neither read nor wrote it: every save of a waf_event_rate rule
+	// dropped it, silently widening the rule from one category to all.
+	let wafCategory = $state<OwaspCategory | ''>('');
 
 	// cert_expiry
 	let certHost = $state('');
@@ -234,6 +248,7 @@
 				wafRouteId = typeof sp.routeId === 'string' ? sp.routeId : '';
 				wafWindowSecs = typeof sp.windowSecs === 'number' ? sp.windowSecs : 300;
 				wafAction = (sp.action as '' | 'BLOCK' | 'DETECT') ?? '';
+				wafCategory = typeof sp.category === 'string' ? (sp.category as OwaspCategory) : '';
 			} else if (source === 'cert_expiry') {
 				certHost = typeof sp.host === 'string' ? sp.host : '';
 			} else if (source === 'cert_renewal_failed') {
@@ -271,6 +286,7 @@
 			wafRouteId = '';
 			wafWindowSecs = 300;
 			wafAction = '';
+			wafCategory = '';
 			certHost = '';
 			certRenewalDomain = '';
 			certRenewalWindowSecs = 86400;
@@ -323,6 +339,7 @@
 				const p: Record<string, unknown> = { windowSecs: wafWindowSecs };
 				if (wafRouteId) p.routeId = wafRouteId;
 				if (wafAction) p.action = wafAction;
+				if (wafCategory) p.category = wafCategory;
 				return p;
 			}
 			case 'cert_expiry': {
@@ -581,6 +598,28 @@
 						<option value="">{language.current && t('alerting.ruleModal.actionAll')}</option>
 						<option value="BLOCK">BLOCK</option>
 						<option value="DETECT">DETECT</option>
+					</select>
+				</div>
+				<div>
+					<!-- Labelled "OWASP category", not "Category": the rule
+					     carries a Category of its own (its taxonomy), and two
+					     controls reading the same word is how a test of mine
+					     passed against the wrong one. -->
+					<label
+						for="waf-category"
+						class="text-sm font-medium text-secondary mb-1.5 block"
+					>
+						{language.current && t('alerting.ruleModal.labelWafCategory')}
+					</label>
+					<select
+						id="waf-category"
+						bind:value={wafCategory}
+						class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+					>
+						<option value="">{language.current && t('alerting.ruleModal.wafCategoryAll')}</option>
+						{#each wafCategoryOptions as opt (opt.value)}
+							<option value={opt.value}>{opt.label}</option>
+						{/each}
 					</select>
 				</div>
 			</div>
