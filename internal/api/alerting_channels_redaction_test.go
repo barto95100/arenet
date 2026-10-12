@@ -164,3 +164,98 @@ func TestAlertChannel_ReportsAnAlreadyLostURL(t *testing.T) {
 		t.Fatal("still flagged after retyping the URL")
 	}
 }
+
+// v2.72 — renaming a header key stored the placeholder as its value.
+//
+// GET redacts every header value to "[redacted]" and the modal binds
+// that literal into a visible text input. The merge inherits BY KEY: if
+// the key is not found in stored.Headers the branch falls through and
+// the placeholder is persisted verbatim. No validator rejected it, and
+// webhookURLLost only inspected the URL, so SecretsLost stayed false.
+//
+// Sequence: edit a webhook whose header key has a typo —
+// "Authorizaton" — fix the key to "Authorization", leave the value
+// field showing "[redacted]", save. The bearer token is now the
+// five-word placeholder and the channel 401s at the next real alert,
+// with a success toast behind it.
+//
+// The existing test above covers an unchanged key and an empty value. A
+// RENAMED key was the untested gap.
+
+func TestAlertChannel_RenamingAHeaderKeyIsRefused(t *testing.T) {
+	env := newTestEnv(t, false)
+	ch := seedRedactionChannel(t, env)
+
+	// What the operator sees, with the key corrected and the value left
+	// as the placeholder they cannot read.
+	rec := putChannel(t, env, ch.ID, alerting.WebhookConfig{
+		URL:            "https://discord.example/[redacted]",
+		TimeoutSeconds: 10,
+		Headers:        map[string]string{"X-Renamed": auditRedacted},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 — a placeholder under a key with no stored "+
+			"counterpart must be refused, not persisted; body=%s", rec.Code, rec.Body)
+	}
+
+	// And the original header is untouched: a refusal that half-applied
+	// would be worse than the defect.
+	stored := storedWebhook(t, env, ch.ID)
+	if stored.Headers["Authorization"] != "Bearer secret-value" {
+		t.Errorf("the refused save modified the stored headers: %+v", stored.Headers)
+	}
+}
+
+func TestAlertChannel_RenamingAHeaderWithANewValueIsAccepted(t *testing.T) {
+	// The refusal must be about an unreadable placeholder, not about
+	// renaming. An operator who retypes the value is doing the right
+	// thing and must not be blocked.
+	env := newTestEnv(t, false)
+	ch := seedRedactionChannel(t, env)
+
+	rec := putChannel(t, env, ch.ID, alerting.WebhookConfig{
+		URL:            "https://discord.example/[redacted]",
+		TimeoutSeconds: 10,
+		Headers:        map[string]string{"X-Renamed": "Bearer brand-new"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	stored := storedWebhook(t, env, ch.ID)
+	if stored.Headers["X-Renamed"] != "Bearer brand-new" {
+		t.Errorf("the new header value did not persist: %+v", stored.Headers)
+	}
+	if _, ok := stored.Headers["Authorization"]; ok {
+		t.Errorf("the old key should be gone after a rename: %+v", stored.Headers)
+	}
+}
+
+func TestAlertChannel_AlreadyDamagedHeaderIsReportedAsLost(t *testing.T) {
+	// The other half: a channel damaged before this fix must say so.
+	// webhookURLLost is the existing concept — "a stored secret carries
+	// the placeholder" — and headers are the same thing. Without this a
+	// channel stays silently dead with nothing on screen about it.
+	env := newTestEnv(t, false)
+	ch := seedRedactionChannel(t, env)
+
+	// Write the damaged state straight to the store, which is what the
+	// old merge produced.
+	damaged, _ := json.Marshal(alerting.WebhookConfig{
+		URL:            webhookURL,
+		TimeoutSeconds: 10,
+		Headers:        map[string]string{"Authorization": auditRedacted},
+	})
+	stored, err := env.store.GetAlertChannel(context.Background(), ch.ID)
+	if err != nil {
+		t.Fatalf("GetAlertChannel: %v", err)
+	}
+	stored.Config = damaged
+	if _, err := env.store.UpdateAlertChannel(context.Background(), stored); err != nil {
+		t.Fatalf("UpdateAlertChannel: %v", err)
+	}
+
+	got := getChannel(t, env, ch.ID)
+	if !got.SecretsLost {
+		t.Error("a stored header carrying the placeholder must set secretsLost")
+	}
+}

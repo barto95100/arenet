@@ -181,7 +181,19 @@ func webhookURLLost(c storage.Channel) bool {
 	if err := json.Unmarshal(c.Config, &cfg); err != nil {
 		return false
 	}
-	return strings.Contains(cfg.URL, auditRedacted)
+	if strings.Contains(cfg.URL, auditRedacted) {
+		return true
+	}
+	// v2.72 — header values are secrets too, and one carrying the
+	// placeholder is the same kind of casualty as a URL carrying it: the
+	// channel is dead and nothing said so. Channels damaged before the
+	// refusal above existed are only visible through this.
+	for _, v := range cfg.Headers {
+		if strings.Contains(v, auditRedacted) {
+			return true
+		}
+	}
+	return false
 }
 
 // alertChannelToResponse builds the GET wire shape with
@@ -281,9 +293,29 @@ func mergeAlertChannelSecrets(reqConfig json.RawMessage, kind string, previous s
 		}
 		for k, v := range incoming.Headers {
 			if v == "" || v == auditRedacted {
-				if storedV, ok := stored.Headers[k]; ok {
-					incoming.Headers[k] = storedV
+				storedV, ok := stored.Headers[k]
+				if !ok {
+					// v2.72 — the key has no stored counterpart, so there
+					// is nothing to inherit and the placeholder means
+					// nothing. This fell through and persisted the literal
+					// string "[redacted]" as the header value: an operator
+					// fixing a typo in a key — "Authorizaton" →
+					// "Authorization" — turned their bearer token into the
+					// placeholder, and the channel 401ed at the next real
+					// alert behind a success toast.
+					//
+					// Refusing is the only outcome that loses nothing. The
+					// value is unreadable by design, so a renamed key has
+					// to be retyped; dropping the header would discard it
+					// and keeping the placeholder is the defect.
+					if v == auditRedacted {
+						return nil, fmt.Errorf("header %q: its value still shows the "+
+							"redaction placeholder and the key has no stored value to "+
+							"inherit — retype the value, or restore the original key", k)
+					}
+					continue
 				}
+				incoming.Headers[k] = storedV
 			}
 		}
 		// The URL is a secret too (a Discord / Slack webhook URL IS
