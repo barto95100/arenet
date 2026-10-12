@@ -949,6 +949,7 @@
 			"crowdsecHelper": "Les IP bannies sur tes routes HTTP le sont aussi ici. Sans effet si aucun bouncer n’est configuré.",
 			"restrict": "Restreindre les IP sources",
 			"restrictHelper": "Seules les plages listées atteignent le backend ; tout le reste est fermé. À laisser désactivé pour un service que le monde entier doit joindre, comme le courrier entrant.",
+			"denyFilterKept": "Une liste deny est configurée sur ce relais ({cidrs}). Ce formulaire ne peut pas la modifier ; l'enregistrement la conserve.",
 			"cidrs": "Plages autorisées (CIDR)",
 			"healthCheck": "Contrôler le backend",
 			"healthCheckHelper": "Une connexion périodique ; un backend qui ne répond plus est retiré du pool.",

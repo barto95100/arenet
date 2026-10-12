@@ -501,3 +501,196 @@ describe('/tcp-services — the split only opens on demand', () => {
 		expect(split?.classList.contains('split-open')).toBe(true);
 	});
 });
+
+// ---------------------------------------------------------------------
+// v2.71 — the save must not destroy what the form cannot show.
+//
+// The PUT is a full replace: internal/api/tcpservices.go decodes into a
+// fresh storage.TCPService and only CreatedAt is carried over. The form
+// owns thirteen fields; storage.TCPService has sixteen. Everything else
+// was rebuilt by hand and therefore lost on every save, behind a success
+// toast — the file's own comment named the class after the v2.46 path
+// redirect went the same way.
+//
+// These assert on the PAYLOAD, because the payload is what destroys the
+// data. A test on the rendered form would have passed throughout.
+// ---------------------------------------------------------------------
+
+/** A service using every field the form has no control for. */
+function fullService(over: Record<string, unknown> = {}) {
+	return service({
+		upstreams: [
+			{ host: '10.20.0.5', port: 993, maxConnections: 64 },
+			{ host: '10.20.0.6', port: 993, maxConnections: 32 },
+		],
+		lbPolicy: 'least_conn',
+		healthCheck: { enabled: true, interval: '15s', timeout: '3s' },
+		ipFilter: { mode: 'allow', cidrs: ['10.0.0.0/8'], statusCode: 451 },
+		...over,
+	});
+}
+
+async function editAndSave(svc: Record<string, unknown>) {
+	api.listTCPServices.mockResolvedValue([svc]);
+	api.updateTCPService.mockResolvedValue(svc);
+	render(Page);
+	await waitFor(() =>
+		expect(screen.getByTestId('tcp-row-svc1')).toBeInTheDocument(),
+	);
+	await userEvent.click(screen.getByTestId('tcp-row-svc1'));
+	await tick();
+	await userEvent.click(screen.getByText('Save'));
+	await waitFor(() => expect(api.updateTCPService).toHaveBeenCalledTimes(1));
+	return api.updateTCPService.mock.calls[0][1];
+}
+
+describe('/tcp-services — a save keeps what the form cannot show', () => {
+	it('keeps every backend, not just the first', async () => {
+		const sent = await editAndSave(fullService());
+		expect(sent.upstreams).toHaveLength(2);
+		expect(sent.upstreams[1]).toEqual({
+			host: '10.20.0.6',
+			port: 993,
+			maxConnections: 32,
+		});
+	});
+
+	it('keeps maxConnections on the backend the form does edit', async () => {
+		const sent = await editAndSave(fullService());
+		expect(sent.upstreams[0].maxConnections).toBe(64);
+	});
+
+	it('keeps the load-balancing policy', async () => {
+		const sent = await editAndSave(fullService());
+		expect(sent.lbPolicy).toBe('least_conn');
+	});
+
+	it('keeps the health check interval and timeout', async () => {
+		const sent = await editAndSave(fullService());
+		expect(sent.healthCheck).toEqual({
+			enabled: true,
+			interval: '15s',
+			timeout: '3s',
+		});
+	});
+
+	it('keeps a tuned health check when the operator turns the check off', async () => {
+		// Turning it off must not throw the tuning away, or turning it
+		// back on silently resets to the defaults.
+		api.listTCPServices.mockResolvedValue([fullService()]);
+		api.updateTCPService.mockResolvedValue(fullService());
+		render(Page);
+		await waitFor(() =>
+			expect(screen.getByTestId('tcp-row-svc1')).toBeInTheDocument(),
+		);
+		await userEvent.click(screen.getByTestId('tcp-row-svc1'));
+		await tick();
+		await userEvent.click(screen.getByTestId('tcp-healthcheck'));
+		await userEvent.click(screen.getByText('Save'));
+		await waitFor(() => expect(api.updateTCPService).toHaveBeenCalledTimes(1));
+
+		const sent = api.updateTCPService.mock.calls[0][1];
+		expect(sent.healthCheck).toEqual({
+			enabled: false,
+			interval: '15s',
+			timeout: '3s',
+		});
+	});
+
+	it("keeps the IP filter's custom reject status", async () => {
+		const sent = await editAndSave(fullService());
+		expect(sent.ipFilter?.statusCode).toBe(451);
+	});
+
+	it('does not invent server-managed fields in the request', async () => {
+		const sent = await editAndSave(fullService());
+		expect(sent).not.toHaveProperty('id');
+		expect(sent).not.toHaveProperty('createdAt');
+		expect(sent).not.toHaveProperty('updatedAt');
+	});
+});
+
+describe('/tcp-services — a deny list is neither erased nor inverted', () => {
+	const denyService = () =>
+		fullService({
+			ipFilter: { mode: 'deny', cidrs: ['203.0.113.0/24'], statusCode: 403 },
+		});
+
+	it('leaves a stored deny list in place on save', async () => {
+		const sent = await editAndSave(denyService());
+		expect(sent.ipFilter).toEqual({
+			mode: 'deny',
+			cidrs: ['203.0.113.0/24'],
+			statusCode: 403,
+		});
+	});
+
+	it('says the deny list is there, since the form cannot edit it', async () => {
+		api.listTCPServices.mockResolvedValue([denyService()]);
+		render(Page);
+		await waitFor(() =>
+			expect(screen.getByTestId('tcp-row-svc1')).toBeInTheDocument(),
+		);
+		await userEvent.click(screen.getByTestId('tcp-row-svc1'));
+		await tick();
+		expect(screen.getByTestId('tcp-deny-filter-kept')).toBeInTheDocument();
+		expect(screen.getByTestId('tcp-deny-filter-kept').textContent).toContain(
+			'203.0.113.0/24',
+		);
+	});
+
+	it('never turns blocked ranges into allowed ones', async () => {
+		// The defect: openEdit pre-filled the CIDR field from ANY filter,
+		// so a deny list's ranges sat in the field and turning Restrict on
+		// shipped them back as the allow list. The rule inverted, and the
+		// toast said saved.
+		api.listTCPServices.mockResolvedValue([denyService()]);
+		api.updateTCPService.mockResolvedValue(denyService());
+		render(Page);
+		await waitFor(() =>
+			expect(screen.getByTestId('tcp-row-svc1')).toBeInTheDocument(),
+		);
+		await userEvent.click(screen.getByTestId('tcp-row-svc1'));
+		await tick();
+		await userEvent.click(screen.getByTestId('tcp-restrict'));
+		await tick();
+		await userEvent.click(screen.getByText('Save'));
+		await waitFor(() => expect(api.updateTCPService).toHaveBeenCalledTimes(1));
+
+		const sent = api.updateTCPService.mock.calls[0][1];
+		expect(sent.ipFilter?.cidrs ?? []).not.toContain('203.0.113.0/24');
+	});
+});
+
+describe('/tcp-services — creating is unaffected', () => {
+	it('sends only what the form holds, with no overlay', async () => {
+		// The overlay must be a no-op on create, or a newly created
+		// service would inherit the last edited one's fields.
+		api.listTCPServices.mockResolvedValue([fullService()]);
+		api.createTCPService.mockResolvedValue(service());
+		render(Page);
+		await waitFor(() =>
+			expect(screen.getByTestId('tcp-row-svc1')).toBeInTheDocument(),
+		);
+		await userEvent.click(screen.getByTestId('tcp-row-svc1'));
+		await tick();
+		await userEvent.click(screen.getAllByText('+ New service')[0]);
+		await tick();
+		// Same convention as the create tests above: these inputs carry an
+		// id, not a data-testid.
+		const byId = (id: string) => document.getElementById(id) as HTMLInputElement;
+		await userEvent.type(byId('tcp-name'), 'fresh');
+		await userEvent.type(byId('tcp-listen-port'), '2222');
+		await userEvent.type(byId('tcp-backend-host'), '10.0.0.9');
+		await userEvent.type(byId('tcp-backend-port'), '22');
+		await userEvent.click(screen.getByText('Save'));
+		await waitFor(() => expect(api.createTCPService).toHaveBeenCalledTimes(1));
+
+		// createTCPService takes the payload as its FIRST argument; only
+		// updateTCPService is (id, payload).
+		const sent = api.createTCPService.mock.calls[0][0];
+		expect(sent.upstreams).toHaveLength(1);
+		expect(sent.lbPolicy).toBeUndefined();
+		expect(sent.ipFilter).toBeUndefined();
+	});
+});
