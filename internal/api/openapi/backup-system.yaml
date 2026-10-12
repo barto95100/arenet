@@ -447,9 +447,15 @@ paths:
       x-arenet-role: admin
       description: |
         Enables/disables the periodic update check and sets its interval;
-        applied immediately. Unknown fields rejected. There is no GET for
-        this config: `enabled` is reported by `GET /system/version`, the
-        interval is not read back.
+        applied immediately. Unknown fields rejected.
+
+        Both fields are reported by `GET /system/version`. `enabled`
+        always was; `intervalOverride` was added in v2.72, because a
+        value no response carried could not be seen, could not be
+        re-entered, and was silently erased by a request that omitted it.
+
+        Omitting `intervalOverride` now means "leave it alone". An
+        explicit `""` clears it, back to the default cadence.
       requestBody:
         required: true
         content:
@@ -832,6 +838,9 @@ components:
         lastChecked: { type: string, format: date-time, description: 'Zero time (`0001-01-01T00:00:00Z`) before the first check.' }
         lastError: { type: string, description: 'Error of the last check, empty on success.' }
         enabled: { type: boolean, description: Periodic check enabled. }
+        intervalOverride:
+          type: string
+          description: 'Custom check cadence when set (Go duration, e.g. `24h`); omitted when the default applies. Added in v2.72 — before it, no response carried this value.'
     SystemVersionConfig:
       type: object
       additionalProperties: false
