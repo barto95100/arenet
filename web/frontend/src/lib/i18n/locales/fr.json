@@ -1986,7 +1986,7 @@
 		"send": "Envoyer",
 		"confirmSend": "Oui, envoyer",
 		"cancel": "Annuler",
-		"confirmMutating": "Cette requête modifie la configuration réelle de cet Arenet (même effet que depuis l'interface). L'envoyer ?"
+		"confirmMutating": "Ceci enverra {method} {url} sur la configuration en cours d'exécution. Confirmez pour continuer."
 	},
 	"wafSecLang": {
 		"title": "SecLang (avancé)",

@@ -73,12 +73,27 @@
 	});
 	const missingPath = $derived(pathParams.some((p) => (values[p.name] ?? '').trim() === ''));
 
+	// v2.71 — arming and firing are two calls, reached from two different
+	// buttons.
+	//
+	// They used to be one. `send()` set `confirming` on its first
+	// invocation and performed the request on its second, from a single
+	// button whose label swapped in place and whose only `disabled` term
+	// was `sending || missingPath`. The second click of a double-click
+	// therefore issued the real request — on a DELETE, against the
+	// running configuration.
+	function arm(): void {
+		if (missingPath) return;
+		confirming = true;
+	}
+
 	async function send(): Promise<void> {
 		if (missingPath) return;
-		if (isMutating(op.method) && !confirming) {
-			confirming = true;
-			return;
-		}
+		// A mutating request may only be sent from the armed state, and
+		// the armed state is only reachable from a separate control. This
+		// is the guard, not the disabled attribute on the button: that is
+		// the affordance.
+		if (isMutating(op.method) && !confirming) return;
 		confirming = false;
 		sending = true;
 		sendError = null;
@@ -188,19 +203,38 @@
 			{/if}
 			<p class="url"><code>{op.method.toUpperCase()} {url}</code></p>
 			{#if confirming}
-				<p class="warn" role="alert" data-testid="api-confirm">{language.current && t('apiDocs.confirmMutating')}</p>
+				<!-- Naming the method and the path is what makes this a
+				     confirmation rather than a speed bump: the operator is
+				     about to change the running configuration and should
+				     read back exactly what. -->
+				<p class="warn" role="alert" data-testid="api-confirm">
+					{language.current &&
+						t('apiDocs.confirmMutating', { method: op.method.toUpperCase(), url })}
+				</p>
 			{/if}
 			<div class="actions">
+				<!-- Arms only, and goes dead once armed, so the second click
+				     of a double-click lands on a disabled button. Firing is
+				     the separate control below. -->
 				<button
 					type="button"
 					class="btn primary"
-					onclick={() => void send()}
-					disabled={sending || missingPath}
+					onclick={() => (isMutating(op.method) ? arm() : void send())}
+					disabled={sending || missingPath || confirming}
 					data-testid="api-send"
 				>
-					{language.current && (confirming ? t('apiDocs.confirmSend') : t('apiDocs.send'))}
+					{language.current && t('apiDocs.send')}
 				</button>
 				{#if confirming}
+					<button
+						type="button"
+						class="btn primary"
+						onclick={() => void send()}
+						disabled={sending}
+						data-testid="api-confirm-send"
+					>
+						{language.current && t('apiDocs.confirmSend')}
+					</button>
 					<button type="button" class="btn" onclick={() => (confirming = false)}>{language.current && t('apiDocs.cancel')}</button>
 				{/if}
 			</div>
