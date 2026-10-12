@@ -3015,9 +3015,29 @@
 				lbPolicy: lbSelectorVisible ? (formData.lbPolicy as LBPolicy) : '',
 				tlsEnabled: formData.tlsEnabled,
 				redirectToHttps: formData.redirectToHttps,
-				// v2.14.3 — always ship the Disabled checkbox state,
-				// full-replacement semantic (mirrors uploadStreamingMode).
-				disabled: formData.disabled,
+				// v2.71 — the state travels only when THIS form changed it.
+				//
+				// It used to ship unconditionally, and the form's copy goes
+				// stale: the row control is a second way to set the same
+				// state, and neither handleEnterMaintenance nor loadRoutes
+				// re-seeds an open panel. So putting a route into
+				// maintenance from its row, with the panel open on that
+				// route, left stateChoice reading 'active' — and the next
+				// save shipped `disabled: false` with no maintenance block,
+				// which internal/api/routes.go:2161-2162 reads as "enable
+				// this route" and clears the maintenance. A route the
+				// operator had just closed went back to serving traffic.
+				//
+				// `disabled` is a POINTER server-side, so omitting it means
+				// "leave the state alone". Sending what this form owns
+				// rather than what it happens to be holding is the same
+				// correction the TCP payload needed.
+				//
+				// On create there is no prior state to preserve, so it
+				// always travels.
+				...(formMode !== 'edit' || stateChoice !== stateSnapshot
+					? { disabled: formData.disabled }
+					: {}),
 				aliases: formData.aliases.map((a) => a.trim()).filter((a) => a.length > 0),
 				authMode: formData.authMode,
 				basicAuth,
