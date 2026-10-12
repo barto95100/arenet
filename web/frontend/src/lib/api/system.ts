@@ -15,6 +15,14 @@ export interface SystemVersion {
 	lastChecked: string;
 	lastError: string;
 	enabled: boolean;
+	/**
+	 * v2.72 — the custom check cadence, when one is set. Reported so the
+	 * value can be seen: there was no response carrying it, which is how
+	 * its destruction by an unrelated toggle stayed invisible. Settable
+	 * through the admin API; omitting it from a config PUT now means
+	 * "leave it alone" rather than "erase it".
+	 */
+	intervalOverride?: string;
 }
 
 // Brick 3, Task 5 — GeoIP database auto-update client. Backs the

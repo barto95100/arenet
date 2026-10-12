@@ -90,3 +90,92 @@ func TestSystemVersionConfig_RejectsShortInterval(t *testing.T) {
 		t.Errorf("status=%d; want 400 for interval below the 1h minimum; body=%s", rec.Code, rec.Body)
 	}
 }
+
+// v2.72 — the interval survives a toggle of the checkbox.
+//
+// UpdatesSection.svelte sends `{enabled}` and nothing else, the handler
+// built a fresh storage.UpdateCheckConfig from the request, and
+// PutUpdateCheckConfig is a bare Put with no read-modify-write. So any
+// stored IntervalOverride was erased by the operator clicking "check
+// for updates" — the exact shape found in four of the five operator
+// forms on 2026-10-12.
+//
+// Worse than "the form cannot show it": nothing could. There was no GET
+// reporting the interval, which openapi/backup-system.yaml stated
+// outright, so the field could not be seen, could not be re-entered,
+// and was destroyed by an unrelated click. The value reaches the store
+// through the admin API or a backup restore.
+func TestSystemVersionConfig_IntervalSurvivesAToggle(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.handler.SetUpdateChecker(updatecheck.New("v2.12.3", nil))
+
+	// An operator (or a restore) sets a custom cadence.
+	rec := putJSONRaw(t, env, "/api/v1/system/version/config",
+		map[string]any{"enabled": true, "intervalOverride": "24h"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seeding the interval: status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	// Then the UI toggles the checkbox, sending only `enabled`.
+	rec = putJSONRaw(t, env, "/api/v1/system/version/config",
+		map[string]any{"enabled": false})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("toggle: status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	got, err := env.store.GetUpdateCheckConfig(context.Background())
+	if err != nil {
+		t.Fatalf("GetUpdateCheckConfig: %v", err)
+	}
+	if got.Enabled {
+		t.Error("the toggle did not persist enabled=false")
+	}
+	if got.IntervalOverride != "24h" {
+		t.Errorf("IntervalOverride = %q, want %q — a request that omits the field "+
+			"must leave it alone, not erase it", got.IntervalOverride, "24h")
+	}
+}
+
+// Clearing it has to stay possible, or the fix above just replaces one
+// dead end with another: an explicit empty string means "back to the
+// default cadence".
+func TestSystemVersionConfig_ExplicitEmptyClearsTheInterval(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.handler.SetUpdateChecker(updatecheck.New("v2.12.3", nil))
+
+	putJSONRaw(t, env, "/api/v1/system/version/config",
+		map[string]any{"enabled": true, "intervalOverride": "24h"})
+	rec := putJSONRaw(t, env, "/api/v1/system/version/config",
+		map[string]any{"enabled": true, "intervalOverride": ""})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	got, _ := env.store.GetUpdateCheckConfig(context.Background())
+	if got.IntervalOverride != "" {
+		t.Errorf("IntervalOverride = %q, want empty — an explicit \"\" is a clear, "+
+			"not a no-op", got.IntervalOverride)
+	}
+}
+
+// And it has to be readable, which is what let this hide for the whole
+// v2 line: a field no response carries cannot be managed by anyone.
+func TestSystemVersion_ReportsTheInterval(t *testing.T) {
+	env := newTestEnv(t, false)
+	env.handler.SetUpdateChecker(updatecheck.New("v2.12.3", nil))
+
+	putJSONRaw(t, env, "/api/v1/system/version/config",
+		map[string]any{"enabled": true, "intervalOverride": "24h"})
+
+	rec := getRec(t, env, "/api/v1/system/version")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body["intervalOverride"] != "24h" {
+		t.Errorf("GET /system/version intervalOverride = %v, want %q", body["intervalOverride"], "24h")
+	}
+}

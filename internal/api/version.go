@@ -27,17 +27,23 @@ type versionResponse struct {
 	LastChecked     time.Time `json:"lastChecked"`
 	LastError       string    `json:"lastError"`
 	Enabled         bool      `json:"enabled"`
+	// v2.72 — reported so the cadence can be seen. There was no GET
+	// carrying it, which openapi/backup-system.yaml stated outright, so
+	// the field could not be read back by anyone — which is how its
+	// destruction stayed invisible for the whole v2 line.
+	IntervalOverride string `json:"intervalOverride,omitempty"`
 }
 
-func (h *Handler) versionResponseFrom(st updatecheck.Status, enabled bool) versionResponse {
+func (h *Handler) versionResponseFrom(st updatecheck.Status, cfg storage.UpdateCheckConfig) versionResponse {
 	return versionResponse{
-		Current:         st.Current,
-		Latest:          st.Latest,
-		UpdateAvailable: st.UpdateAvailable,
-		URL:             st.URL,
-		LastChecked:     st.LastChecked,
-		LastError:       st.LastError,
-		Enabled:         enabled,
+		Current:          st.Current,
+		Latest:           st.Latest,
+		UpdateAvailable:  st.UpdateAvailable,
+		URL:              st.URL,
+		LastChecked:      st.LastChecked,
+		LastError:        st.LastError,
+		Enabled:          cfg.Enabled,
+		IntervalOverride: cfg.IntervalOverride,
 	}
 }
 
@@ -54,7 +60,7 @@ func (h *Handler) systemVersion(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, versionResponse{Enabled: false})
 		return
 	}
-	writeJSON(w, http.StatusOK, h.versionResponseFrom(h.updateChecker.Status(), cfg.Enabled))
+	writeJSON(w, http.StatusOK, h.versionResponseFrom(h.updateChecker.Status(), cfg))
 }
 
 // systemVersionCheck serves POST /api/v1/system/version/check — a manual
@@ -71,12 +77,18 @@ func (h *Handler) systemVersionCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := h.updateChecker.Check(r.Context())
-	writeJSON(w, http.StatusOK, h.versionResponseFrom(st, cfg.Enabled))
+	writeJSON(w, http.StatusOK, h.versionResponseFrom(st, cfg))
 }
 
 type versionConfigRequest struct {
-	Enabled          bool   `json:"enabled"`
-	IntervalOverride string `json:"intervalOverride"`
+	Enabled bool `json:"enabled"`
+	// v2.72 — a POINTER, because absent and "" must mean different
+	// things. It was a plain string, so a request carrying only
+	// {"enabled": …} — which is all UpdatesSection.svelte sends —
+	// decoded to "" and erased whatever cadence was stored. nil now
+	// means "leave it alone"; an explicit "" still means "back to the
+	// default".
+	IntervalOverride *string `json:"intervalOverride"`
 }
 
 // systemVersionConfig serves PUT /api/v1/system/version/config — toggles
@@ -91,8 +103,8 @@ func (h *Handler) systemVersionConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, translateDecodeError(err))
 		return
 	}
-	if req.IntervalOverride != "" {
-		d, err := time.ParseDuration(req.IntervalOverride)
+	if req.IntervalOverride != nil && *req.IntervalOverride != "" {
+		d, err := time.ParseDuration(*req.IntervalOverride)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "intervalOverride is not a valid duration (e.g. \"24h\")")
 			return
@@ -102,7 +114,20 @@ func (h *Handler) systemVersionConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	cfg := storage.UpdateCheckConfig{Enabled: req.Enabled, IntervalOverride: req.IntervalOverride}
+	// Read first. PutUpdateCheckConfig is a bare Put with no merge of its
+	// own, so building a fresh struct here destroyed every field the
+	// request did not carry — the shape found in four of the five
+	// operator forms on 2026-10-12.
+	cfg, err := h.store.GetUpdateCheckConfig(r.Context())
+	if err != nil {
+		h.logger.Error("read update check config", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to read update config")
+		return
+	}
+	cfg.Enabled = req.Enabled
+	if req.IntervalOverride != nil {
+		cfg.IntervalOverride = *req.IntervalOverride
+	}
 	if err := h.store.PutUpdateCheckConfig(r.Context(), cfg); err != nil {
 		h.logger.Error("persist update check config", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to persist update config")
@@ -116,5 +141,5 @@ func (h *Handler) systemVersionConfig(w http.ResponseWriter, r *http.Request) {
 	if h.updateChecker != nil {
 		st = h.updateChecker.Status()
 	}
-	writeJSON(w, http.StatusOK, h.versionResponseFrom(st, cfg.Enabled))
+	writeJSON(w, http.StatusOK, h.versionResponseFrom(st, cfg))
 }
