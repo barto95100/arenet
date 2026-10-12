@@ -142,3 +142,80 @@ describe('WafCustomRulesEditor', () => {
 		expect(state.value).toEqual([]);
 	});
 });
+
+// ---------------------------------------------------------------------
+// v2.71 — the open draft has to be visible to the route form.
+//
+// `draft` is component state and never was anything else, so a
+// half-written rule was invisible to the route form's unsaved-changes
+// check: switching route neither asked nor cleared it, the draft stayed
+// on screen, and pressing OK then committed it onto the OTHER route's
+// rules. Saving with one open dropped it and reported success.
+//
+// The component's half of the fix is reporting the state. The page's
+// half — the {#key} that stops the draft crossing, and the refusal to
+// save around it — is tested in routes/page.test.ts.
+// ---------------------------------------------------------------------
+
+function mountWithDraftFlag(initial: WafCustomRule[], wafMode = 'block') {
+	const state = { value: initial, draftOpen: false };
+	const utils = render(WafCustomRulesEditor, {
+		props: {
+			get value() {
+				return state.value;
+			},
+			set value(v) {
+				state.value = v;
+			},
+			get draftOpen() {
+				return state.draftOpen;
+			},
+			set draftOpen(v) {
+				state.draftOpen = v;
+			},
+			wafMode
+		}
+	});
+	return { state, ...utils };
+}
+
+describe('WafCustomRulesEditor — it reports an open draft', () => {
+	it('starts closed', () => {
+		const { state } = mountWithDraftFlag([]);
+		expect(state.draftOpen).toBe(false);
+	});
+
+	it('reports open while a rule is being written', async () => {
+		const { state } = mountWithDraftFlag([]);
+		await fireEvent.click(screen.getByTestId('waf-rule-add'));
+		expect(state.draftOpen).toBe(true);
+	});
+
+	it('reports closed again once the rule is committed', async () => {
+		const { state } = mountWithDraftFlag([]);
+		await fireEvent.click(screen.getByTestId('waf-rule-preset-sensitiveFiles'));
+		expect(state.draftOpen).toBe(true);
+		await fireEvent.click(screen.getByTestId('waf-rule-ok'));
+		expect(state.value).toHaveLength(1);
+		expect(state.draftOpen).toBe(false);
+	});
+
+	it('reports closed again when the rule is cancelled', async () => {
+		const { state } = mountWithDraftFlag([]);
+		await fireEvent.click(screen.getByTestId('waf-rule-add'));
+		await fireEvent.click(screen.getByTestId('waf-rule-cancel'));
+		expect(state.draftOpen).toBe(false);
+		expect(state.value).toHaveLength(0);
+	});
+
+	it('stays open while the rule is refused as invalid', async () => {
+		// OK on an incomplete rule shows an error and keeps the draft, so
+		// the flag must stay true — otherwise the form would let a save
+		// through and the half-written rule would be gone.
+		const { state } = mountWithDraftFlag([]);
+		await fireEvent.click(screen.getByTestId('waf-rule-add'));
+		await fireEvent.click(screen.getByTestId('waf-rule-ok'));
+		expect(screen.getByTestId('waf-rule-error')).toBeInTheDocument();
+		expect(state.draftOpen).toBe(true);
+	});
+});

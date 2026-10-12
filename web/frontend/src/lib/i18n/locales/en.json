@@ -2116,6 +2116,7 @@
 			}
 		},
 		"errors": {
+			"draftStillOpen": "A guided WAF rule is still open in the editor. Press OK on it, or cancel it, then save.",
 			"name": "Give the rule a name (up to 64 characters, no quotes or backslash).",
 			"noCondition": "Add at least one condition.",
 			"tooManyConditions": "At most 8 conditions per rule.",

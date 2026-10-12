@@ -2094,9 +2094,18 @@
 	// it opens; anything different afterwards is unsaved work. Compared as
 	// JSON because formData is a plain object of plain values.
 	let formSnapshot = $state('');
+	// v2.71 — a guided WAF rule is open in the editor and not committed.
+	// Bound out of WafCustomRulesEditor because the draft lives inside
+	// that component, which is why formDirty could not see it.
+	let wafDraftOpen = $state(false);
 	const formDirty = $derived(
 		formSnapshot !== '' &&
-			(JSON.stringify(formData) !== formSnapshot || stateChoice !== stateSnapshot)
+			(JSON.stringify(formData) !== formSnapshot ||
+				stateChoice !== stateSnapshot ||
+				// An open guided-WAF draft is unsaved work too. It is not in
+				// formData — it lives in the editor component — so without
+				// this term every guard built on formDirty ignored it.
+				wafDraftOpen)
 	);
 
 	// v2.41 — the unsaved marker now protects something: any path
@@ -2936,6 +2945,18 @@
 		}
 		submitting = true;
 		resetFormErrors();
+		// v2.71 — an open guided-WAF rule is unsaved work the payload does
+		// not carry: it reaches formData.wafCustomRules only when the
+		// operator presses OK in the editor. Saving used to drop it and
+		// report success, so the rule the operator had just written simply
+		// was not there afterwards. Refusing is the only option that loses
+		// nothing: committing it automatically would ship a rule the
+		// operator had not finished, and may not even be valid.
+		if (wafDraftOpen) {
+			submitting = false;
+			formError = t('wafRules.errors.draftStillOpen');
+			return;
+		}
 		if (!validateBeforeSubmit()) {
 			submitting = false;
 			// v2.56.3 — never refuse silently.
@@ -5207,11 +5228,22 @@
 						/>
 						<!-- v2.37 — guided WAF rules (block when every condition
 						     matches, follows the route mode). -->
-						<WafCustomRulesEditor
-							bind:value={formData.wafCustomRules}
-							wafMode={formData.wafMode}
-							onConvert={convertGuidedRule}
-						/>
+						<!-- v2.71 — keyed on the route, and the open draft is bound out.
+						     The editor holds the rule being written in its own state, so
+						     without the key that half-written rule survived a switch to
+						     another route and OK then committed it onto THAT route's
+						     rules. And because the draft was not part of formData,
+						     formDirty could not see it, so the switch did not even ask.
+						     The key makes the draft impossible to carry across; the
+						     binding makes losing it impossible to do silently. -->
+						{#key editingId}
+							<WafCustomRulesEditor
+								bind:value={formData.wafCustomRules}
+								wafMode={formData.wafMode}
+								onConvert={convertGuidedRule}
+								bind:draftOpen={wafDraftOpen}
+							/>
+						{/key}
 						<!-- v2.38 — expert SecLang + templates + request tester. -->
 						<WafSecLangSection
 							bind:value={formData.wafSecLang}

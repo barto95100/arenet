@@ -5982,3 +5982,128 @@ describe('routes page: panel header metrics strip', () => {
 		expect(screen.getByTestId('panel-metrics-reqs').textContent).not.toContain('999');
 	});
 });
+
+// ---------------------------------------------------------------------
+// v2.71 — a guided WAF rule being written belongs to the route it was
+// started on, and cannot vanish without a word.
+//
+// The editor holds the rule in its own `draft` state. That state was not
+// part of formData, so formDirty could not see it: switching route
+// neither asked nor cleared it, the half-written rule stayed on screen,
+// and pressing OK committed it onto the OTHER route's rules. Saving with
+// one open dropped it and toasted success.
+//
+// Two mechanisms fix it, and each gets its own test below: a {#key} on
+// editingId so the draft cannot cross, and a refusal to save while one
+// is open so nothing is lost silently.
+// ---------------------------------------------------------------------
+describe('Routes page — an open guided WAF rule is unsaved work', () => {
+	// The form's own onsubmit runs the validation, which is where the
+	// draft guard sits; clicking the button would also work but this
+	// keeps the preventDefault contract, as the §5.2 helper does.
+	async function submitRouteForm(): Promise<void> {
+		const form = document.querySelector('form');
+		expect(form).not.toBeNull();
+		await fireEvent.submit(form!);
+		await tick();
+	}
+
+	async function openWafSectionOnCreateForm(): Promise<void> {
+		await openCreateForm();
+		const summary = screen.getByTestId('section-waf').querySelector('summary');
+		expect(summary).not.toBeNull();
+		await fireEvent.click(summary!);
+		await tick();
+	}
+
+	it('refuses the save instead of dropping the rule', async () => {
+		render(Page);
+		await openWafSectionOnCreateForm();
+		await fireEvent.click(screen.getByTestId('waf-rule-add'));
+		await tick();
+
+		await submitRouteForm();
+		await tick();
+
+		// Nothing left for the server, and the form says why.
+		expect(apiMock.createRoute).not.toHaveBeenCalled();
+		expect(screen.getByRole('alert').textContent).toMatch(/still open in the editor/i);
+	});
+
+	it('saves normally once the rule is committed', async () => {
+		// The refusal must be about an OPEN draft, not about having
+		// touched the editor at all.
+		render(Page);
+		await openWafSectionOnCreateForm();
+		await fireEvent.click(screen.getByTestId('waf-rule-preset-sensitiveFiles'));
+		await fireEvent.click(screen.getByTestId('waf-rule-ok'));
+		await tick();
+
+		expect(screen.queryByTestId('waf-rule-cancel')).toBeNull();
+		await submitRouteForm();
+		await tick();
+
+		// It gets as far as validation rather than being stopped by the
+		// draft guard — the host is empty on a fresh create form, so the
+		// refusal that remains is the ordinary one, not ours.
+		const err = screen.queryByRole('alert');
+		if (err) {
+			expect(err.textContent).not.toMatch(/still open in the editor/i);
+		}
+	});
+
+	it('asks before leaving a route with a rule still open', async () => {
+		// The draft is not in formData, so formDirty could not see it and
+		// the switch happened in silence. Now it counts as unsaved work.
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-a', host: 'a.example.com' }),
+			makeRoute({ id: 'r-b', host: 'b.example.com' })
+		]);
+		render(Page);
+
+		const rowA = (await screen.findByText('a.example.com')).closest('tr')!;
+		await userEvent.click(rowA);
+		await tick();
+		const summary = screen.getByTestId('section-waf').querySelector('summary');
+		await fireEvent.click(summary!);
+		await tick();
+		await fireEvent.click(screen.getByTestId('waf-rule-add'));
+		await tick();
+
+		const rowB = screen.getByText('b.example.com').closest('tr')!;
+		await userEvent.click(rowB);
+		await tick();
+
+		expect(screen.getByText('Discard your changes?')).toBeInTheDocument();
+	});
+
+	it('does not carry the rule to the route switched to', async () => {
+		// The {#key editingId}: the editor is destroyed and rebuilt when
+		// the route changes, so the half-written rule cannot be committed
+		// onto the next route's rules.
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({ id: 'r-a', host: 'a.example.com' }),
+			makeRoute({ id: 'r-b', host: 'b.example.com' })
+		]);
+		render(Page);
+
+		const rowA = (await screen.findByText('a.example.com')).closest('tr')!;
+		await userEvent.click(rowA);
+		await tick();
+		await fireEvent.click(screen.getByTestId('section-waf').querySelector('summary')!);
+		await tick();
+		await fireEvent.click(screen.getByTestId('waf-rule-add'));
+		await tick();
+		expect(screen.getByTestId('waf-rule-cancel')).toBeInTheDocument();
+
+		await userEvent.click(screen.getByText('b.example.com').closest('tr')!);
+		await tick();
+		await userEvent.click(screen.getByText('Discard changes'));
+		await tick();
+		await fireEvent.click(screen.getByTestId('section-waf').querySelector('summary')!);
+		await tick();
+
+		// A fresh editor on route B: no draft to press OK on.
+		expect(screen.queryByTestId('waf-rule-cancel')).toBeNull();
+	});
+});

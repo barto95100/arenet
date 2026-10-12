@@ -2116,6 +2116,7 @@
 			}
 		},
 		"errors": {
+			"draftStillOpen": "Une règle WAF guidée est encore ouverte dans l'éditeur. Validez-la avec OK, ou annulez-la, puis enregistrez.",
 			"name": "Donne un nom à la règle (64 caractères max, sans guillemet ni antislash).",
 			"noCondition": "Ajoute au moins une condition.",
 			"tooManyConditions": "8 conditions maximum par règle.",
