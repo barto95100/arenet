@@ -89,6 +89,22 @@
 	let fHealthCheck = $state(false);
 	let fDisabled = $state(false);
 
+	// v2.71 — the service exactly as it was loaded, so a save can put
+	// back the fields this form has no control for.
+	//
+	// The PUT is a FULL REPLACE: internal/api/tcpservices.go decodes into
+	// a fresh storage.TCPService and storage/tcpservice.go carries over
+	// only CreatedAt. So anything buildPayload does not send is destroyed
+	// — and buildPayload was built by hand from the thirteen f* fields
+	// above, while storage.TCPService has sixteen. Five were lost on
+	// every save, behind a success toast: upstreams past the first,
+	// maxConnections, lbPolicy, a deny ipFilter, and the health check's
+	// interval and timeout. A sixth, ipFilter.statusCode, went with them.
+	//
+	// Null while creating, which is what makes the overlay below a no-op
+	// on the create path.
+	let editingStored = $state<TCPService | null>(null);
+
 	const protocolOptions = $derived([
 		{ value: 'tcp' as const, label: 'TCP', hint: tl('tcpServices.form.protocolTCPHint'), tone: 'neutral' as const },
 		{ value: 'udp' as const, label: 'UDP', hint: tl('tcpServices.form.protocolUDPHint'), tone: 'neutral' as const }
@@ -216,6 +232,7 @@
 		fCIDRs = '';
 		fHealthCheck = false;
 		fDisabled = false;
+		editingStored = null;
 		formError = null;
 		testResult = null;
 	}
@@ -239,34 +256,98 @@
 		fProxyProtocol = svc.proxyProtocol ?? '';
 		fCrowdSec = svc.crowdSecEnabled ?? false;
 		fRestrict = svc.ipFilter?.mode === 'allow';
-		fCIDRs = (svc.ipFilter?.cidrs ?? []).join(', ');
+		// Only an ALLOW list pre-fills the field. Pre-filling from a deny
+		// list was a security defect, not a cosmetic one: the ranges a
+		// deny filter BLOCKS landed in the field, and turning Restrict on
+		// then shipped them back as the ranges it ALLOWS — the rule
+		// inverted, silently.
+		fCIDRs = svc.ipFilter?.mode === 'allow' ? (svc.ipFilter.cidrs ?? []).join(', ') : '';
 		fHealthCheck = svc.healthCheck?.enabled ?? false;
 		fDisabled = svc.disabled ?? false;
+		editingStored = svc;
 		formOpen = true;
 	}
 
+	// buildPayload starts from the service as it was LOADED and overrides
+	// only the fields this form actually owns. Anything else round-trips
+	// untouched, so a storage field the form has no control for survives
+	// a save instead of being destroyed by it.
+	//
+	// That direction matters: the previous version listed the fields to
+	// KEEP, so forgetting one lost data. This version lists the fields to
+	// REPLACE, so forgetting one leaves the stored value alone. The
+	// failure mode flips from silent data loss to a control that does
+	// nothing, which is visible.
+	//
+	// The API contract is unchanged — this is still a full replace.
 	function buildPayload(): TCPServiceRequest {
 		const cidrs = fCIDRs
 			.split(/[,\n]/)
 			.map((c) => c.trim())
 			.filter((c) => c !== '');
+
+		// Server-managed fields never travel in a request.
+		const base: Partial<TCPServiceRequest> = editingStored
+			? (({ id: _id, createdAt: _c, updatedAt: _u, ...rest }) => rest)(editingStored)
+			: {};
+
 		return {
+			...base,
 			name: fName.trim(),
 			protocol: fProtocol,
-			// Every field of this payload is rebuilt by hand, so a new
-			// one that is not listed here is silently dropped on save
-			// with a success toast — that is how the v2.46 path
-			// redirect was lost. See the buildPayload test.
 			acceptProtocol: fAcceptProtocol || undefined,
 			listenAddr: fListenAddr.trim(),
 			listenPort: fListenPort ?? 0,
-			upstreams: [{ host: fBackendHost.trim(), port: fBackendPort ?? 0 }],
+			// The form edits the FIRST backend only. The rest of the pool
+			// and this one's maxConnections come from the stored service.
+			upstreams: [
+				{
+					...(editingStored?.upstreams?.[0] ?? {}),
+					host: fBackendHost.trim(),
+					port: fBackendPort ?? 0
+				},
+				...(editingStored?.upstreams ?? []).slice(1)
+			],
 			proxyProtocol: fProxyProtocol,
 			crowdSecEnabled: fCrowdSec,
-			ipFilter: fRestrict ? { mode: 'allow', cidrs } : undefined,
-			healthCheck: fHealthCheck ? { enabled: true } : undefined,
+			ipFilter: nextIPFilter(cidrs),
+			healthCheck: nextHealthCheck(),
 			disabled: fDisabled
 		};
+	}
+
+	// The Restrict toggle can only express "allow these ranges" or "no
+	// filter". It cannot express a DENY list, so a stored deny filter is
+	// left exactly as it is rather than being erased by a form that has
+	// no control for it. The banner in the markup says so, because an
+	// invisible gate that silently survives is its own trap.
+	function nextIPFilter(cidrs: string[]): TCPServiceRequest['ipFilter'] {
+		const stored = editingStored?.ipFilter;
+		if (fRestrict) {
+			return {
+				mode: 'allow',
+				cidrs,
+				// Keep a custom reject status when the stored filter was
+				// already an allow list; a deny filter's status does not
+				// carry over to a different mode.
+				statusCode: stored?.mode === 'allow' ? stored.statusCode : undefined
+			};
+		}
+		if (stored && stored.mode !== 'allow' && stored.mode !== 'off') {
+			return stored;
+		}
+		return undefined;
+	}
+
+	// The checkbox owns `enabled` and nothing else. Turning the check off
+	// keeps its tuned interval and timeout, so turning it back on does not
+	// silently reset them to the defaults.
+	function nextHealthCheck(): TCPServiceRequest['healthCheck'] {
+		const stored = editingStored?.healthCheck;
+		if (fHealthCheck) {
+			return { ...(stored ?? {}), enabled: true };
+		}
+		return stored ? { ...stored, enabled: false } : undefined;
 	}
 
 	async function save() {
@@ -644,6 +725,17 @@
 						helper={tl('tcpServices.form.restrictHelper')}
 						testid="tcp-restrict"
 					/>
+					<!-- A stored DENY list has no control in this form, and a save
+					     now leaves it in place instead of erasing it. Saying so is
+					     the point: a gate that survives invisibly is as much of a
+					     trap as one that silently disappears. -->
+					{#if editingStored?.ipFilter?.mode === 'deny'}
+						<p class="text-sm text-secondary" data-testid="tcp-deny-filter-kept">
+							{tl('tcpServices.form.denyFilterKept', {
+								cidrs: (editingStored.ipFilter.cidrs ?? []).join(', ')
+							})}
+						</p>
+					{/if}
 					{#if fRestrict}
 						<div>
 							<label for="tcp-cidrs" class="text-sm font-medium text-secondary block mb-1"

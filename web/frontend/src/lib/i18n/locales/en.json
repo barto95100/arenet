@@ -949,6 +949,7 @@
 			"crowdsecHelper": "IPs banned on your HTTP routes are banned here too. Ignored when no bouncer is configured.",
 			"restrict": "Restrict source IPs",
 			"restrictHelper": "Only the listed ranges reach the backend; everything else is closed. Leave off for a service the world must reach, such as inbound mail.",
+			"denyFilterKept": "A deny list is configured on this relay ({cidrs}). This form cannot edit it, and saving leaves it in place.",
 			"cidrs": "Allowed ranges (CIDR)",
 			"healthCheck": "Check the backend",
 			"healthCheckHelper": "A periodic connection; a backend that stops answering is taken out of the pool.",
