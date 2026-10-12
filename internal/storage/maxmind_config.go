@@ -114,6 +114,19 @@ func (s *Store) PutMaxMindConfig(ctx context.Context, c MaxMindConfig) error {
 		if c.LicenseKey == "" {
 			c.LicenseKey = existing.LicenseKey
 		}
+		// v2.72 — preserve, else default. This reset a blank edition to
+		// the default two lines after preserving a blank LicenseKey from
+		// the same stored row, and the asymmetry was the bug: the GeoIP
+		// settings section sends accountId + licenseKey and nothing else,
+		// so rotating the key reverted a GeoLite2-ASN or -Country install
+		// to -City. geoipupdate then downloads a different database than
+		// the operator chose, and its edition guard rejects the mismatch.
+		//
+		// The default still applies when there is nothing to inherit,
+		// which is a first write — exactly the LicenseKey semantics.
+		if c.EditionID == "" {
+			c.EditionID = existing.EditionID
+		}
 		if c.EditionID == "" {
 			c.EditionID = defaultMaxMindEdition
 		}

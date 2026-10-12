@@ -1718,6 +1718,7 @@
 	"geoipSettings": {
 		"title": "GeoIP database",
 		"subtitle": "Download and auto-update the MaxMind GeoIP database used by geoblocking and the world map.",
+		"editionInUse": "Database in use: {edition}",
 		"statusConfigured": "Configured",
 		"statusNotConfigured": "Not configured",
 		"credsTitle": "MaxMind credentials",

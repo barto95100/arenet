@@ -1718,6 +1718,7 @@
 	"geoipSettings": {
 		"title": "Base GeoIP",
 		"subtitle": "Téléchargez et mettez à jour automatiquement la base GeoIP MaxMind utilisée par le blocage par pays et la carte du monde.",
+		"editionInUse": "Base utilisée : {edition}",
 		"statusConfigured": "Configuré",
 		"statusNotConfigured": "Non configuré",
 		"credsTitle": "Identifiants MaxMind",

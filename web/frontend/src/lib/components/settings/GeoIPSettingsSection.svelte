@@ -230,6 +230,19 @@
 			{/if}
 		</header>
 
+		<!-- v2.72 — which database is in use. The response has always
+		     carried editionId and nothing rendered it, so an operator on
+		     GeoLite2-ASN had no way to know, and no way to notice when a
+		     licence-key rotation silently reverted them to -City. The
+		     value is read-only here: it is settable through the admin API
+		     only, and a control for it is a separate decision. -->
+		{#if maxmind?.configured && maxmind.editionId}
+			<p class="text-xs text-muted mb-3" data-testid="geoip-edition">
+				{language.current &&
+					t('geoipSettings.editionInUse', { edition: maxmind.editionId })}
+			</p>
+		{/if}
+
 		{#if loadError}
 			<p class="text-sm text-down mb-3" role="alert">
 				{language.current && t('geoipSettings.loadFailed')}
