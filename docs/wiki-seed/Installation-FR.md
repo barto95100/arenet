@@ -149,7 +149,7 @@ Pareil que l'étape 4 du chemin Docker — `http://<your-host>:8001`, colle le t
 
 Par défaut l'UI d'admin bind sur `127.0.0.1:8001` (loopback uniquement) par sécurité. Pour y accéder depuis ton LAN :
 
-**Docker** : le `docker-compose.yml` publie déjà `8001:8001` donc c'est reachable sur `http://<docker-host>:8001` depuis ton LAN. Restreins via des policies Docker network ou ton firewall.
+**Docker** : le `docker-compose.yml` publie `127.0.0.1:8001:8001`, donc l'UI d'admin est joignable **depuis l'hôte Docker uniquement**, pas depuis ton LAN. Pour y accéder d'ailleurs : soit un tunnel (`ssh -L 8001:localhost:8001 <docker-host>`), soit changer le mapping en `8001:8001` et appliquer la [checklist de durcissement](https://github.com/barto95100/arenet/blob/main/docs/operations/hardening.md).
 
 **systemd** : édite `/etc/systemd/system/arenet.service` et set la variable d'env :
 
