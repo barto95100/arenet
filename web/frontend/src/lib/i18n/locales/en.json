@@ -1985,7 +1985,7 @@
 		"send": "Send",
 		"confirmSend": "Yes, send it",
 		"cancel": "Cancel",
-		"confirmMutating": "This request changes the real configuration of this Arenet (same effect as from the UI). Send it?"
+		"confirmMutating": "This will send {method} {url} against the running configuration. Confirm to proceed."
 	},
 	"wafSecLang": {
 		"title": "SecLang (advanced)",

@@ -129,7 +129,10 @@ describe('/api-docs page', () => {
 		expect(screen.getByTestId('api-confirm')).toBeInTheDocument();
 		expect(clientMock.rawRequest).not.toHaveBeenCalled();
 
-		await fireEvent.click(screen.getByTestId('api-send'));
+		// v2.71 — the second click used to be on this same button, which
+		// is exactly how a double-click fired a write. Confirming is now
+		// a separate control.
+		await fireEvent.click(screen.getByTestId('api-confirm-send'));
 		await waitFor(() => expect(screen.getByTestId('api-result')).toBeInTheDocument());
 		expect(clientMock.rawRequest).toHaveBeenCalledWith('post', '/api/v1/routes', expect.stringContaining('app.example.com'));
 		expect(screen.getByTestId('api-result').textContent).toContain('201');
@@ -218,5 +221,72 @@ describe('/api-docs page', () => {
 		await waitFor(() => expect(screen.getByTestId('api-result')).toBeInTheDocument());
 		expect(clientMock.rawRequest).toHaveBeenCalledWith('get', '/api/v1/routes/r1', undefined);
 		expect(screen.getByTestId('api-result').textContent).toContain('route not found');
+	});
+});
+
+// ---------------------------------------------------------------------
+// v2.71 — one gesture must not both arm and fire a write.
+//
+// Send and Confirm send were the same button: the label swapped in
+// place while `onclick` stayed `send()`, and the only `disabled` term
+// was `sending || missingPath`. So the second click of a double-click
+// passed the `!confirming` guard and issued the real request — on a
+// DELETE, against the running configuration.
+//
+// Arming and firing now live on two different controls, and the primary
+// one is disabled while armed, so the second click of a double-click
+// lands on a dead button.
+// ---------------------------------------------------------------------
+describe('/api-docs — a double-click cannot send a write', () => {
+	// The POST, which is index 1 of this fixture — the same operation the
+	// confirmation test above uses. The fixture carries no DELETE, and
+	// adding one would change the operation count several other tests
+	// assert on; the hazard is identical for any mutating method, since
+	// the branch keys on isMutating(), not on the verb.
+	async function armTheWrite() {
+		clientMock.rawRequest.mockResolvedValue({ status: 201, body: '{"id":"r1"}', contentType: 'application/json' });
+		render(Page);
+		await waitFor(() => expect(screen.getAllByTestId('api-op-link')).toHaveLength(4));
+		await openGroup();
+		await fireEvent.click(screen.getAllByTestId('api-op-link')[1]);
+		await fireEvent.click(screen.getByTestId('api-try-open'));
+	}
+
+	it('does not send when the send button is clicked twice', async () => {
+		await armTheWrite();
+
+		await fireEvent.click(screen.getByTestId('api-send'));
+		expect(screen.getByTestId('api-confirm')).toBeInTheDocument();
+		expect(clientMock.rawRequest).not.toHaveBeenCalled();
+
+		// The same button again: this is the second click of a
+		// double-click, and it must do nothing.
+		await fireEvent.click(screen.getByTestId('api-send'));
+		expect(clientMock.rawRequest).not.toHaveBeenCalled();
+	});
+
+	it('disables the send button while it is armed', async () => {
+		// The mechanism behind the test above, asserted directly so a
+		// regression says which half broke.
+		await armTheWrite();
+		await fireEvent.click(screen.getByTestId('api-send'));
+		expect((screen.getByTestId('api-send') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('sends from the separate confirm control', async () => {
+		await armTheWrite();
+		await fireEvent.click(screen.getByTestId('api-send'));
+		await fireEvent.click(screen.getByTestId('api-confirm-send'));
+		await waitFor(() => expect(clientMock.rawRequest).toHaveBeenCalledTimes(1));
+	});
+
+	it('names the method and the path in the confirmation', async () => {
+		// A confirmation that does not say what it confirms is a speed
+		// bump, not a confirmation.
+		await armTheWrite();
+		await fireEvent.click(screen.getByTestId('api-send'));
+		const warn = screen.getByTestId('api-confirm').textContent ?? '';
+		expect(warn).toMatch(/POST/);
+		expect(warn).toContain('/api/v1/routes');
 	});
 });
