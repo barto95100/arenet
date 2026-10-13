@@ -248,6 +248,7 @@
 			"current": "Current version",
 			"latest": "Latest available",
 			"upToDate": "Up to date",
+			"toggleFailed": "Could not change the update-check setting: {err}",
 			"enableToggle": "Check for updates automatically",
 			"checkNow": "Check now",
 			"checking": "Checking…",
@@ -1728,6 +1729,7 @@
 	"geoipSettings": {
 		"title": "GeoIP database",
 		"subtitle": "Download and auto-update the MaxMind GeoIP database used by geoblocking and the world map.",
+		"scheduleFailed": "Could not change the automatic update schedule: {err}",
 		"editionInUse": "Database in use: {edition}",
 		"statusConfigured": "Configured",
 		"statusNotConfigured": "Not configured",

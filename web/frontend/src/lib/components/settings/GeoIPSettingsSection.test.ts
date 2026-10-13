@@ -433,3 +433,69 @@ describe('GeoIPSettingsSection — unsaved input', () => {
 		expect(hasUnsaved()).toBe(false);
 	});
 });
+
+// v2.72 — a failed toggle has to say so.
+//
+// Both handlers caught the error and discarded it with no toast of any
+// kind, success or failure. And the controls are bound one-way to a
+// value the failure leaves unchanged, so the DOM keeps what the
+// operator clicked: the box stays ticked, the interval stays on the
+// chosen option, and the schedule the server holds is the opposite.
+// GeoIP databases then quietly age out, and country-block and ASN
+// rules decay against stale data with nothing on screen about it.
+describe('GeoIPSettingsSection — a failed schedule change', () => {
+	it('reports the failure and puts the checkbox back', async () => {
+		mockDefaults(configured, disabledUpdateCfg);
+		putGeoIPUpdateConfigMock.mockRejectedValue(new ApiError('boltdb: write lock', 500));
+
+		render(GeoIPSettingsSection);
+		const box = (await waitFor(() =>
+			screen.getByTestId('geoip-enable')
+		)) as HTMLInputElement;
+		expect(box.checked).toBe(false);
+
+		await fireEvent.click(box);
+		await waitFor(() => expect(putGeoIPUpdateConfigMock).toHaveBeenCalled());
+
+		await waitFor(() =>
+			expect(pushToastMock).toHaveBeenCalledWith(expect.any(String), 'danger')
+		);
+		// The server still has it disabled, so the control must too.
+		expect(box.checked).toBe(false);
+	});
+
+	it('reports a failed interval change and keeps the stored interval', async () => {
+		mockDefaults(configured, enabledUpdateCfg);
+		putGeoIPUpdateConfigMock.mockRejectedValue(new ApiError('boltdb: write lock', 500));
+
+		render(GeoIPSettingsSection);
+		const select = (await waitFor(() =>
+			screen.getByTestId('geoip-interval')
+		)) as HTMLSelectElement;
+		expect(select.value).toBe(String(enabledUpdateCfg.intervalHours));
+
+		await fireEvent.change(select, { target: { value: '24' } });
+		await waitFor(() => expect(putGeoIPUpdateConfigMock).toHaveBeenCalled());
+
+		await waitFor(() =>
+			expect(pushToastMock).toHaveBeenCalledWith(expect.any(String), 'danger')
+		);
+		expect(select.value).toBe(String(enabledUpdateCfg.intervalHours));
+	});
+
+	it('says nothing extra when the change succeeds', async () => {
+		// The success path must not start shouting: the control simply
+		// reflects the new state.
+		mockDefaults(configured, disabledUpdateCfg);
+		putGeoIPUpdateConfigMock.mockResolvedValue({ ...enabledUpdateCfg });
+
+		render(GeoIPSettingsSection);
+		const box = (await waitFor(() =>
+			screen.getByTestId('geoip-enable')
+		)) as HTMLInputElement;
+		await fireEvent.click(box);
+		await waitFor(() => expect(box.checked).toBe(true));
+
+		expect(pushToastMock).not.toHaveBeenCalledWith(expect.any(String), 'danger');
+	});
+});

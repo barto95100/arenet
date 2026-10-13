@@ -9,6 +9,8 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { pushToast } from '$lib/stores/toast';
+	import { ApiError } from '$lib/api/types';
 	import { systemApi, type SystemVersion } from '$lib/api/system';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
@@ -28,11 +30,22 @@
 		}
 	}
 
-	async function toggleEnabled(next: boolean): Promise<void> {
+	// v2.72 — same defect as the GeoIP schedule toggle next door: the
+	// failure was caught and discarded with no toast, and the checkbox
+	// is bound one-way to a value the failure leaves unchanged, so
+	// nothing re-rendered it and the DOM kept the operator's click.
+	// Resetting it is imperative because only the DOM diverged.
+	async function toggleEnabled(next: boolean, control?: HTMLInputElement): Promise<void> {
 		try {
 			info = await systemApi.setVersionConfig({ enabled: next });
-		} catch {
-			/* keep prior state */
+		} catch (err) {
+			pushToast(
+				t('settings.updates.toggleFailed', {
+					err: err instanceof ApiError ? err.message : String(err)
+				}),
+				'danger'
+			);
+			if (control) control.checked = info?.enabled ?? false;
 		}
 	}
 
@@ -65,7 +78,11 @@
 					type="checkbox"
 					data-testid="updates-enable"
 					checked={info?.enabled ?? false}
-					onchange={(e) => toggleEnabled((e.currentTarget as HTMLInputElement).checked)}
+					onchange={(e) =>
+						toggleEnabled(
+							(e.currentTarget as HTMLInputElement).checked,
+							e.currentTarget as HTMLInputElement
+						)}
 				/>
 				<span>{language.current && t('settings.updates.enableToggle')}</span>
 			</label>
