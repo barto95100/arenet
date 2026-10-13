@@ -649,3 +649,158 @@ describe('RuleModal — the manual-cert expiry window', () => {
 		expect(days.value).toBe('30');
 	});
 });
+
+// v2.72 — one rule's sub-form must not carry into the next.
+//
+// The prefill decodes only the fields belonging to the stored rule's
+// own source, so every other sub-form kept whatever the previously
+// opened rule had left in it. The Source select is NOT disabled when
+// editing (only the Kind radios are), so switching a stored rule's
+// source showed, and would then save, another rule's parameters.
+//
+// This needs rerender, not a second render(): a fresh component has
+// fresh state and would pass whatever the prefill does.
+describe('RuleModal — no state carried between rules', () => {
+	it('does not show a previous rule’s WAF window after switching source', async () => {
+		const Modal = (await import('./RuleModal.svelte')).default;
+		const { rerender } = render(Modal, {
+			props: {
+				open: true,
+				rule: {
+					...thresholdRule(),
+					id: 'rule-a',
+					source: 'waf_event_rate',
+					sourceParams: { windowSecs: 600, action: 'BLOCK' }
+				},
+				onClose: () => {},
+				onSaved: () => {}
+			}
+		});
+		// The window really was loaded from rule A — without this the
+		// test could pass on a prefill that never ran at all.
+		const windowOf = () => screen.getByLabelText(/Window \(seconds\)/i) as HTMLInputElement;
+		await waitFor(() => expect(windowOf().value).toBe('600'));
+
+		// Close, then reopen on a rule whose source is a different one.
+		await rerender({ open: false });
+		await rerender({
+			open: true,
+			rule: {
+				...thresholdRule(),
+				id: 'rule-b',
+				source: 'cert_expiry',
+				sourceParams: { host: 'b.example.com' }
+			}
+		});
+		await waitFor(() =>
+			expect((screen.getByLabelText(/Host \(optional\)/i) as HTMLInputElement).value).toBe(
+				'b.example.com'
+			)
+		);
+
+		// Rule B is a cert_expiry rule; point it at the WAF source.
+		await fireEvent.change(screen.getByLabelText(/^Source$/i), {
+			target: { value: 'waf_event_rate' }
+		});
+
+		expect(windowOf().value).toBe('300');
+	});
+});
+
+// v2.72 — editing a rule must not be undone by touching Source.
+//
+// The prefill effect branched on the `source` and `kind` state
+// variables, which made them its own tracked dependencies. The Source
+// select is not disabled when editing (only the Kind radios are), so
+// the operator touching it re-ran the whole prefill: the source
+// snapped back to the stored one and every other field was
+// overwritten with the stored values. Everything typed since the
+// panel opened was discarded, with no save and no message.
+describe('RuleModal — editing a rule survives a Source change', () => {
+	it('keeps typed edits when the source is changed', async () => {
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: {
+				open: true,
+				rule: { ...thresholdRule(), source: 'waf_event_rate' },
+				onClose: () => {},
+				onSaved: () => {}
+			}
+		});
+		const nameInput = screen.getByLabelText(/^Name \(slug\)$/i) as HTMLInputElement;
+		const cooldown = screen.getByLabelText(/Cooldown/i) as HTMLInputElement;
+		await fireEvent.input(nameInput, { target: { value: 'my-new-name' } });
+		await fireEvent.input(cooldown, { target: { value: '900' } });
+
+		await fireEvent.change(screen.getByLabelText(/^Source$/i), {
+			target: { value: 'cert_expiry' }
+		});
+
+		expect(nameInput.value).toBe('my-new-name');
+		expect(cooldown.value).toBe('900');
+	});
+
+	it('actually swaps the sub-form, instead of snapping back', async () => {
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: {
+				open: true,
+				rule: { ...thresholdRule(), source: 'waf_event_rate' },
+				onClose: () => {},
+				onSaved: () => {}
+			}
+		});
+		const sel = screen.getByLabelText(/^Source$/i) as HTMLSelectElement;
+		await fireEvent.change(sel, { target: { value: 'cert_expiry' } });
+
+		expect(sel.value).toBe('cert_expiry');
+		expect(screen.getByLabelText(/Host/i)).toBeTruthy();
+		expect(screen.queryByLabelText(/Window \(seconds\)/i)).toBeNull();
+	});
+});
+
+// v2.72 — "available" is a default, not a lock.
+//
+// Picking the update_available source forces a state rule and
+// pre-fills the expected value. The pre-fill tested the value it was
+// about to write (`if (stateExpected !== 'available')`), which made
+// stateExpected a tracked dependency of the effect writing it: every
+// keystroke in the field re-ran the effect and restored "available",
+// so a rule on "up_to_date" could not be authored at all.
+describe('RuleModal — the expected value for update_available', () => {
+	it('defaults to available and stays editable', async () => {
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
+		});
+		await fireEvent.change(screen.getByLabelText(/^Source$/i), {
+			target: { value: 'update_available' }
+		});
+
+		const expected = screen.getByLabelText(/^Expected value$/i) as HTMLInputElement;
+		expect(expected.value).toBe('available');
+
+		await fireEvent.input(expected, { target: { value: 'up_to_date' } });
+		expect(expected.value).toBe('up_to_date');
+	});
+
+	it('re-applies the default when the source is picked again', async () => {
+		// Leaving and coming back is the moment a default belongs; the
+		// fix must not turn it into a one-shot.
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
+		});
+		const sourceSelect = screen.getByLabelText(/^Source$/i);
+		await fireEvent.change(sourceSelect, { target: { value: 'update_available' } });
+		await fireEvent.input(screen.getByLabelText(/^Expected value$/i), {
+			target: { value: 'up_to_date' }
+		});
+		await fireEvent.change(sourceSelect, { target: { value: 'system_health' } });
+		await fireEvent.change(sourceSelect, { target: { value: 'update_available' } });
+
+		expect((screen.getByLabelText(/^Expected value$/i) as HTMLInputElement).value).toBe(
+			'available'
+		);
+	});
+});
