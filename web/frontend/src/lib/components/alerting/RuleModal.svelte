@@ -145,10 +145,19 @@
 	// and defaults the expected value to "available" so the operator
 	// can't accidentally build a meaningless threshold rule. Only runs
 	// on create (kind is locked after create — see isEdit).
+	//
+	// v2.72 — the assignment is unconditional on purpose. It used to be
+	// `if (stateExpected !== 'available')`, and that read made
+	// stateExpected a tracked dependency of the effect that writes it:
+	// every keystroke in the Expected value field re-ran this and put
+	// "available" straight back, so the field could not be edited at
+	// all and a rule on "up_to_date" was unauthorable. Written and never
+	// read, it is the default the comment above claims it is — re-applied
+	// when the source is picked, not enforced forever.
 	$effect(() => {
 		if (!isEdit && source === 'update_available') {
 			kind = 'state';
-			if (stateExpected !== 'available') stateExpected = 'available';
+			stateExpected = 'available';
 		}
 	});
 	let channelIds = $state<string[]>([]);
@@ -224,6 +233,41 @@
 			});
 	});
 
+	// v2.72 — one owner for the per-source and per-kind defaults.
+	//
+	// The prefill below decodes only the fields belonging to the stored
+	// rule's own source and kind, so every other sub-form kept whatever
+	// the previously opened rule had left in it: open a waf_event_rate
+	// rule pinned to route r1, close it, open a cert_expiry rule, switch
+	// its Source to WAF — and r1, its window and its action were sitting
+	// there, from a different rule, ready to be saved onto this one.
+	//
+	// Listing the defaults in one function and calling it on BOTH paths
+	// inverts the direction: a field is reset unless the stored rule
+	// says otherwise, instead of being kept unless someone remembered
+	// to clear it. A new sub-form field added here is covered by that
+	// call without anyone having to notice.
+	function resetSourceAndEvalDraft() {
+		// waf_event_rate
+		wafRouteId = '';
+		wafWindowSecs = 300;
+		wafAction = '';
+		wafCategory = '';
+		// cert_expiry
+		certHost = '';
+		// cert_renewal_failed
+		certRenewalDomain = '';
+		certRenewalWindowSecs = 86400;
+		// cert_manual_expiring
+		certManualThresholdDays = 30;
+		// system_health
+		healthComponent = '';
+		// threshold / state eval params
+		thresholdOp = '>';
+		thresholdValue = 50;
+		stateExpected = 'degraded';
+	}
+
 	// Reset / pre-populate when the modal opens or the
 	// target rule changes.
 	$effect(() => {
@@ -231,12 +275,27 @@
 		validationError = '';
 		testResultLine = '';
 		if (rule) {
+			resetSourceAndEvalDraft();
 			name = rule.name;
 			enabled = rule.enabled;
 			category = rule.category;
 			severity = rule.severity;
-			kind = rule.kind;
-			source = (rule.source as SourceName) ?? 'waf_event_rate';
+			// v2.72 — branch on these locals, never on the `kind` / `source`
+			// state variables.
+			//
+			// The decode below used to test `source === ...` and
+			// `kind === ...`, which made both of them tracked dependencies
+			// of this effect. The Source select is not disabled when
+			// editing, so the operator touching it re-triggered this whole
+			// prefill: the source snapped back to the stored one AND every
+			// other field — name, cooldown, templates, channels — was
+			// overwritten with the stored values, discarding everything
+			// typed since the panel opened. Nothing was saved and nothing
+			// was reported.
+			const storedKind = rule.kind;
+			const storedSource = (rule.source as SourceName) ?? 'waf_event_rate';
+			kind = storedKind;
+			source = storedSource;
 			channelIds = [...rule.channels];
 			cooldownSecs = rule.cooldownSecs;
 			subjectTemplate = rule.subjectTemplate ?? '';
@@ -244,21 +303,21 @@
 
 			// Decode source-specific params.
 			const sp = (rule.sourceParams ?? {}) as Record<string, unknown>;
-			if (source === 'waf_event_rate') {
+			if (storedSource === 'waf_event_rate') {
 				wafRouteId = typeof sp.routeId === 'string' ? sp.routeId : '';
 				wafWindowSecs = typeof sp.windowSecs === 'number' ? sp.windowSecs : 300;
 				wafAction = (sp.action as '' | 'BLOCK' | 'DETECT') ?? '';
 				wafCategory = typeof sp.category === 'string' ? (sp.category as OwaspCategory) : '';
-			} else if (source === 'cert_expiry') {
+			} else if (storedSource === 'cert_expiry') {
 				certHost = typeof sp.host === 'string' ? sp.host : '';
-			} else if (source === 'cert_renewal_failed') {
+			} else if (storedSource === 'cert_renewal_failed') {
 				certRenewalDomain = typeof sp.domain === 'string' ? sp.domain : '';
 				certRenewalWindowSecs =
 					typeof sp.windowSecs === 'number' ? sp.windowSecs : 86400;
-			} else if (source === 'system_health') {
+			} else if (storedSource === 'system_health') {
 				healthComponent =
 					typeof sp.component === 'string' ? canonicalHealthComponent(sp.component) : '';
-			} else if (source === 'cert_manual_expiring') {
+			} else if (storedSource === 'cert_manual_expiring') {
 				// A rule stored before the bounds existed can carry 0 or a
 				// negative window, which Read replaces with 30 — show the
 				// window that actually fires, not the one that does not.
@@ -270,10 +329,10 @@
 
 			// Decode eval-specific params.
 			const ep = (rule.evalParams ?? {}) as Record<string, unknown>;
-			if (kind === 'threshold') {
+			if (storedKind === 'threshold') {
 				thresholdOp = (ep.operator as Operator) ?? '>';
 				thresholdValue = typeof ep.value === 'number' ? ep.value : 50;
-			} else if (kind === 'state') {
+			} else if (storedKind === 'state') {
 				stateExpected = typeof ep.expected === 'string' ? ep.expected : 'degraded';
 			}
 		} else {
@@ -288,18 +347,7 @@
 			cooldownSecs = 300;
 			subjectTemplate = '';
 			bodyTemplate = '';
-			wafRouteId = '';
-			wafWindowSecs = 300;
-			wafAction = '';
-			wafCategory = '';
-			certHost = '';
-			certRenewalDomain = '';
-			certRenewalWindowSecs = 86400;
-			certManualThresholdDays = 30;
-			healthComponent = '';
-			thresholdOp = '>';
-			thresholdValue = 50;
-			stateExpected = 'degraded';
+			resetSourceAndEvalDraft();
 		}
 	});
 
