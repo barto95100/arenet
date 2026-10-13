@@ -2320,6 +2320,10 @@
 				"nameLabel": "Name",
 				"descriptionLabel": "Description (optional)",
 				"commonNameLabel": "Common Name (CN)",
+				"errors": {
+					"invalidCountry": "The country must be a two-letter code, such as FR or BE.",
+					"invalidKeyAlgorithm": "That key algorithm is not supported."
+				},
 				"commonNameRequiredError": "Common Name is required.",
 				"sansLabel": "Subject Alternative Names (SANs)",
 				"sansHelp": "Comma-separated list of additional DNS names (e.g. www.example.com, api.example.com).",
@@ -2348,6 +2352,9 @@
 				"uploadSigned": "Upload signed cert",
 				"uploadSignedTitle": "Upload signed certificate",
 				"certLabel": "Certificate (PEM)",
+				"errors": {
+					"certDoesNotMatchKey": "This certificate does not match the private key held with this CSR. Check you uploaded the certificate your CA issued for this request."
+				},
 				"certRequiredError": "Certificate is required.",
 				"chainLabel": "Chain (PEM, optional)",
 				"uploadSignedSubmit": "Upload certificate",

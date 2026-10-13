@@ -62,3 +62,46 @@ describe('GenerateCSRForm', () => {
 		expect(spy.mock.calls[0][0].csrSubject.keyAlgorithm).toBe('rsa_4096');
 	});
 });
+
+// v2.72 — the backend's machine codes are not operator copy.
+//
+// The CSR endpoint answers with bare codes (storage/csr.go:
+// cn_required, invalid_country, invalid_key_algorithm) and this form
+// printed them verbatim. invalid_country is the reachable one: the
+// input accepts two characters and the backend requires exactly two,
+// so a single letter came back as the literal word "invalid_country".
+describe('GenerateCSRForm — backend validation codes', () => {
+	it('translates invalid_country instead of printing it', async () => {
+		const { ApiError } = await import('$lib/api/types');
+		vi.spyOn(externalCertsApi, 'generateCSR').mockRejectedValue(
+			new ApiError('invalid_country', 400)
+		);
+		const { getByTestId, findByTestId } = render(GenerateCSRForm);
+
+		await fireEvent.input(getByTestId('csr-common-name'), {
+			target: { value: 'app.corp.local' }
+		});
+		await fireEvent.input(getByTestId('csr-country'), { target: { value: 'F' } });
+		await fireEvent.click(getByTestId('csr-generate-btn'));
+
+		const err = await findByTestId('csr-submit-error');
+		expect(err.textContent ?? '').not.toContain('invalid_country');
+		expect(err.textContent ?? '').toContain('two-letter code');
+	});
+
+	it('shows an unmapped code as it arrived', async () => {
+		const { ApiError } = await import('$lib/api/types');
+		vi.spyOn(externalCertsApi, 'generateCSR').mockRejectedValue(
+			new ApiError('some_future_code: detail', 400)
+		);
+		const { getByTestId, findByTestId } = render(GenerateCSRForm);
+
+		await fireEvent.input(getByTestId('csr-common-name'), {
+			target: { value: 'app.corp.local' }
+		});
+		await fireEvent.click(getByTestId('csr-generate-btn'));
+
+		const err = await findByTestId('csr-submit-error');
+		expect(err.textContent ?? '').toContain('some_future_code: detail');
+	});
+});

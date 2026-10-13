@@ -31,6 +31,7 @@
 	import type { ExternalCertificate } from '$lib/api/external-certs';
 	import { ApiError } from '$lib/api/types';
 	import { t } from '$lib/i18n';
+	import { resolveApiError } from '$lib/utils/api-error-code';
 	import { language } from '$lib/stores/language.svelte';
 
 	interface Props {
@@ -97,6 +98,22 @@
 		a.click();
 	}
 
+	// v2.72 — the CSR endpoint answers with bare machine codes
+	// (storage/csr.go: cn_required, invalid_country,
+	// invalid_key_algorithm) and this form printed them at the
+	// operator. invalid_country is the reachable one: the input accepts
+	// two characters and the backend requires exactly two, so a single
+	// letter came back as the word "invalid_country". The other two are
+	// unreachable through this form — the Common Name is checked below
+	// and the algorithm comes from a two-option radio group — but the
+	// endpoint is callable directly, and an unmapped code still shows
+	// as it arrived.
+	const CSR_ERROR_CODE_KEYS: Record<string, string> = {
+		invalid_country: 'certs.externalCerts.generate.errors.invalidCountry',
+		invalid_key_algorithm: 'certs.externalCerts.generate.errors.invalidKeyAlgorithm',
+		cn_required: 'certs.externalCerts.generate.commonNameRequiredError'
+	};
+
 	async function handleSubmit(): Promise<void> {
 		if (submitting) return;
 		if (commonName.trim() === '') {
@@ -124,7 +141,8 @@
 			resetForm();
 			onCreated?.(created);
 		} catch (err) {
-			submitError = err instanceof ApiError ? err.message : String(err);
+			const rawMessage = err instanceof ApiError ? err.message : String(err);
+			submitError = resolveApiError(rawMessage, CSR_ERROR_CODE_KEYS, t).message;
 		} finally {
 			submitting = false;
 		}

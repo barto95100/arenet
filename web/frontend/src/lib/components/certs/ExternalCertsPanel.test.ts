@@ -436,3 +436,71 @@ describe('ExternalCertsPanel — Active / Pending CSR tabs', () => {
 		expect(apiMock.externalCertsApi.list).toHaveBeenCalled();
 	});
 });
+
+// v2.72 — the re-import dialog speaks the same language as the upload
+// form. Both answer the same validation codes from the same handler;
+// only the upload path resolved them, so the identical failure read as
+// a sentence when uploading and as "key_does_not_match_cert:
+// crypto/tls: private key does not match public key" when re-importing
+// a signed CSR — which is the classic mistake on that dialog, pasting
+// a certificate issued for a different request.
+describe('ExternalCertsPanel — re-import errors', () => {
+	it('renders a friendly message, not the raw code, on a key mismatch', async () => {
+		const pending = extCert({
+			name: 'MismatchCSR',
+			status: 'pending_csr',
+			createdAt: daysFromNow(-1),
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		apiMock.externalCertsApi.list.mockResolvedValue([pending]);
+		apiMock.externalCertsApi.update.mockRejectedValue(
+			new ApiError(
+				'key_does_not_match_cert: crypto/tls: private key does not match public key',
+				400
+			)
+		);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-empty');
+		await userEvent.click(screen.getByTestId('external-certs-tab-pending'));
+		await userEvent.click(await screen.findByTestId(`external-cert-reimport-${pending.id}`));
+		await userEvent.type(
+			await screen.findByTestId('external-cert-reimport-cert-pem'),
+			'WRONGCERTPEM'
+		);
+		await userEvent.click(screen.getByTestId('external-cert-reimport-submit'));
+
+		const err = await screen.findByTestId('external-cert-reimport-error');
+		expect(err.textContent ?? '').not.toContain('key_does_not_match_cert');
+		expect(err.textContent ?? '').not.toContain('crypto/tls');
+		expect(err.textContent ?? '').toContain('does not match the private key');
+	});
+
+	it('still shows an unmapped code as it arrived', async () => {
+		// Hiding an error we have no sentence for would be worse than
+		// printing it.
+		const pending = extCert({
+			name: 'UnknownCSR',
+			status: 'pending_csr',
+			createdAt: daysFromNow(-1),
+			csrSubject: { commonName: 'app.corp.local', keyAlgorithm: 'rsa_4096' }
+		});
+		apiMock.externalCertsApi.list.mockResolvedValue([pending]);
+		apiMock.externalCertsApi.update.mockRejectedValue(
+			new ApiError('some_future_code: with a detail', 400)
+		);
+
+		render(Panel);
+		await screen.findByTestId('external-certs-empty');
+		await userEvent.click(screen.getByTestId('external-certs-tab-pending'));
+		await userEvent.click(await screen.findByTestId(`external-cert-reimport-${pending.id}`));
+		await userEvent.type(
+			await screen.findByTestId('external-cert-reimport-cert-pem'),
+			'SOMECERTPEM'
+		);
+		await userEvent.click(screen.getByTestId('external-cert-reimport-submit'));
+
+		const err = await screen.findByTestId('external-cert-reimport-error');
+		expect(err.textContent ?? '').toContain('some_future_code: with a detail');
+	});
+});
