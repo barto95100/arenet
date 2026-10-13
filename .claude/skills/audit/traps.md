@@ -83,6 +83,25 @@ redirect served by `static_response` carries only `Server`. Testing for
 `Via` to decide whether Caddy answered gives a false negative on every
 redirect.
 
+**`bind:value` on `<input type="number">` changes the variable's
+type.** Measured on Svelte 5 in this app, same binding, four states:
+
+| when | `typeof` | value |
+| --- | --- | --- |
+| at mount | as declared | `""` for `$state('')` |
+| after a keystroke | `number` | `48.8566` |
+| after clearing the field | `object` | `null` |
+| typing `48.85660` | `number` | `48.8566` |
+
+So a field declared `$state('')` holds a number after the first
+keystroke and `null` once emptied — whatever the declaration or a
+comment says. Three consequences, all of which have bitten:
+`x !== baselineString` is permanently true once typed in; a `< min`
+range check passes for a cleared field, because `null < 1`; and the
+typed text is gone, so trailing zeros cannot be compared. Coerce both
+sides (`String(x)`, `Number(x)`) and use `Number.isFinite` to catch
+the cleared case.
+
 **Zero is not a sentinel.** A sub-microsecond measurement, an empty
 bypass list, a `Retry-After` of 0 — each is a real value that the code
 has at some point mistaken for "unset".
