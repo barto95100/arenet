@@ -54,6 +54,11 @@ vi.mock('$app/navigation', () => ({
 	goto: vi.fn()
 }));
 
+import {
+	registerUnsaved,
+	resetUnsavedRegistry
+} from '$lib/stores/unsaved.svelte';
+
 import Page from './+page.svelte';
 
 function tab(id: string): HTMLElement {
@@ -163,5 +168,82 @@ describe('settings — forward-auth provider help text', () => {
 		// v2.58.1 made the two halves agree; the text has to say so, because
 		// "one checkbox covers both" is the whole reason one is enough.
 		expect(body).toMatch(/same\s+Host\s+as\s+the\s+verify\s+sub-request/i);
+	});
+});
+
+// v2.72 — leaving a tab with unsaved input asks first (spec
+// 2026-10-13). The guard lives on the page, so this is where the
+// user-visible behaviour is pinned: the dialog appears, the tab does
+// NOT change underneath it, and confirming completes the switch.
+//
+// The dirty predicate is registered by whichever section is mounted,
+// so the test registers one of its own — that is the seam, and using
+// it keeps this test about the page rather than about any section's
+// idea of dirtiness.
+describe('Settings page — the unsaved-input guard', () => {
+	beforeEach(() => {
+		resetUnsavedRegistry();
+	});
+
+	it('switches freely when nothing is dirty', async () => {
+		render(Page);
+		await userEvent.click(tab('security'));
+
+		expect(tab('security').getAttribute('aria-selected')).toBe('true');
+		expect(screen.queryByText(/Unsaved changes/i)).toBeNull();
+	});
+
+	it('holds the switch and asks when a mounted section is dirty', async () => {
+		render(Page);
+		registerUnsaved('test-section', () => true);
+
+		await userEvent.click(tab('security'));
+
+		expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
+		// The tab strip must not have moved while the question is open.
+		expect(tab('account').getAttribute('aria-selected')).toBe('true');
+		expect(tab('security').getAttribute('aria-selected')).toBe('false');
+	});
+
+	it('completes the switch once the operator confirms the discard', async () => {
+		render(Page);
+		registerUnsaved('test-section', () => true);
+
+		await userEvent.click(tab('security'));
+		await screen.findByText(/Unsaved changes/i);
+		await userEvent.click(screen.getByRole('button', { name: /Discard and leave/i }));
+
+		await waitFor(() =>
+			expect(tab('security').getAttribute('aria-selected')).toBe('true')
+		);
+	});
+
+	it('stays put when the operator declines', async () => {
+		render(Page);
+		registerUnsaved('test-section', () => true);
+
+		await userEvent.click(tab('security'));
+		await screen.findByText(/Unsaved changes/i);
+		await userEvent.click(screen.getByRole('button', { name: /Stay on this tab/i }));
+
+		expect(tab('account').getAttribute('aria-selected')).toBe('true');
+		expect(tab('security').getAttribute('aria-selected')).toBe('false');
+	});
+
+	it('asks again on the next attempt, not once per page load', async () => {
+		// A guard that fires once is a guard that loses the second
+		// edit.
+		render(Page);
+		registerUnsaved('test-section', () => true);
+
+		await userEvent.click(tab('security'));
+		await screen.findByText(/Unsaved changes/i);
+		await userEvent.click(screen.getByRole('button', { name: /Stay on this tab/i }));
+		await waitFor(() => expect(screen.queryByText(/Unsaved changes/i)).toBeNull());
+
+		await userEvent.click(tab('network'));
+
+		expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
+		expect(tab('account').getAttribute('aria-selected')).toBe('true');
 	});
 });

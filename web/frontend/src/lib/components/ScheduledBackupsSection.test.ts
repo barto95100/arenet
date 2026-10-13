@@ -40,6 +40,12 @@ vi.mock('$lib/api/settings', () => ({ settingsApi: api, MIN_BACKUP_PASSPHRASE_LE
 vi.mock('$lib/api/alerting', () => ({ alertingApi: { listChannels: () => listChannels() } }));
 vi.mock('$lib/stores/toast', () => ({ pushToast: (m: string, v?: string) => pushToast(m, v) }));
 
+import {
+	hasUnsaved,
+	unsavedIds,
+	resetUnsavedRegistry
+} from '$lib/stores/unsaved.svelte';
+
 const { default: Section } = await import('./ScheduledBackupsSection.svelte');
 
 beforeEach(() => {
@@ -137,5 +143,68 @@ describe('ScheduledBackupsSection', () => {
 		const dialogRestore = screen.getAllByRole('button', { name: 'Restore' }).at(-1)!;
 		await userEvent.click(dialogRestore);
 		await waitFor(() => expect(api.restoreBackupFile).toHaveBeenCalledWith('arenet-backup-auto-20260921-030000.json'));
+	});
+});
+
+// v2.72 — the section tells the settings page when leaving would
+// discard input (spec 2026-10-13). Its onMount is async, so the
+// registration goes through an $effect; the destroy case below is what
+// proves that teardown actually runs.
+describe('ScheduledBackupsSection — unsaved input', () => {
+	beforeEach(() => {
+		resetUnsavedRegistry();
+	});
+
+	it('reports nothing on a freshly loaded form', async () => {
+		await renderLoaded();
+
+		expect(hasUnsaved()).toBe(false);
+	});
+
+	it('reports a toggled schedule and forgets it once toggled back', async () => {
+		await renderLoaded();
+
+		await userEvent.click(screen.getByTestId('sched-enabled'));
+		expect(unsavedIds()).toEqual(['scheduled-backups']);
+
+		await userEvent.click(screen.getByTestId('sched-enabled'));
+		expect(hasUnsaved()).toBe(false);
+	});
+
+	it('reports a typed passphrase, which has nothing to compare against', async () => {
+		await renderLoaded();
+
+		await userEvent.type(
+			screen.getByLabelText(/Passphrase \(at least/i),
+			'correct-horse-battery'
+		);
+
+		expect(hasUnsaved()).toBe(true);
+	});
+
+	it('is clean after a successful save', async () => {
+		await renderLoaded();
+		api.putBackupSchedule.mockResolvedValue({ ...baseView, keep: 30 });
+
+		const keep = screen.getByTestId('sched-keep');
+		await userEvent.clear(keep);
+		await userEvent.type(keep, '30');
+		expect(hasUnsaved()).toBe(true);
+
+		await userEvent.click(screen.getByRole('button', { name: /Save/i }));
+		await waitFor(() => expect(api.putBackupSchedule).toHaveBeenCalled());
+
+		await waitFor(() => expect(hasUnsaved()).toBe(false));
+	});
+
+	it('unregisters when the section is destroyed', async () => {
+		const { unmount } = render(Section);
+		await screen.findByTestId('sched-enabled');
+		await userEvent.click(screen.getByTestId('sched-enabled'));
+		expect(hasUnsaved()).toBe(true);
+
+		unmount();
+
+		expect(hasUnsaved()).toBe(false);
 	});
 });

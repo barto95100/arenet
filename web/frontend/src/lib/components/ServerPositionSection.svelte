@@ -32,6 +32,7 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { registerUnsaved } from '$lib/stores/unsaved.svelte';
 	import { pushToast } from '$lib/stores/toast';
 	import {
 		fetchServerPosition,
@@ -90,22 +91,51 @@
 		}
 	}
 
+	/** What the four fields hold when they mirror the backend. One
+	 *  owner, so resetForm and the unsaved check cannot drift: a check
+	 *  that derived the baseline its own way would report a difference
+	 *  the reset would not make. Trailing zeros from toFixed are
+	 *  trimmed here (operator-friendly: "48.8566", not "48.85660000"). */
+	function baselineFields(): { lat: string; lon: string; city: string; country: string } {
+		if (!position) return { lat: '', lon: '', city: '', country: '' };
+		return {
+			lat: position.degraded ? '' : trimNumber(position.lat),
+			lon: position.degraded ? '' : trimNumber(position.lon),
+			city: position.city,
+			country: position.country
+		};
+	}
+
 	function resetForm(): void {
-		if (!position) {
-			latStr = '';
-			lonStr = '';
-			city = '';
-			country = '';
-		} else {
-			// Trim trailing-zeros that toFixed leaves behind
-			// (operator-friendly: "48.8566" not "48.85660000").
-			latStr = position.degraded ? '' : trimNumber(position.lat);
-			lonStr = position.degraded ? '' : trimNumber(position.lon);
-			city = position.city;
-			country = position.country;
-		}
+		const base = baselineFields();
+		latStr = base.lat;
+		lonStr = base.lon;
+		city = base.city;
+		country = base.country;
 		latError = '';
 		lonError = '';
+	}
+
+	// v2.72 — tell the settings page when leaving would discard input
+	// (spec 2026-10-13). Reverting a field by hand clears the warning
+	// (D5), because the comparison is against the baseline rather than
+	// a "has been edited" flag.
+	function hasUnsavedInput(): boolean {
+		const base = baselineFields();
+		// latStr / lonStr are declared as strings and the comment above
+		// says the <Input> binding keeps them that way. It does not:
+		// bind:value on type="number" assigns a NUMBER on the first
+		// keystroke, so a raw !== against the baseline string reports
+		// 48.8566 !== "48.8566" and the form would never come clean
+		// again. Both sides go through String(), which also makes
+		// "48.85660" equal to "48.8566" — numerically the same point,
+		// so nothing to warn about.
+		return (
+			String(latStr) !== base.lat ||
+			String(lonStr) !== base.lon ||
+			city !== base.city ||
+			country !== base.country
+		);
 	}
 
 	function trimNumber(n: number): string {
@@ -204,6 +234,7 @@
 
 	onMount(() => {
 		void loadPosition();
+		return registerUnsaved('server-position', hasUnsavedInput);
 	});
 </script>
 

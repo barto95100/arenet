@@ -65,6 +65,7 @@
 	import ScheduledBackupsSection from '$lib/components/ScheduledBackupsSection.svelte';
 	import RouteCheckSection from '$lib/components/RouteCheckSection.svelte';
 	import ServerPositionSection from '$lib/components/ServerPositionSection.svelte';
+	import { hasUnsaved } from '$lib/stores/unsaved.svelte';
 
 	// v2.9.12 i18n Phase 2 — theme toggle options are derived from
 	// the active language so the on-screen labels switch live with
@@ -679,6 +680,36 @@
 
 	let activeTab = $state<SettingsTab>('account');
 
+	// v2.72 — ask before a tab switch discards typed input (spec
+	// 2026-10-13). Each tab's content sits behind {#if activeTab ===
+	// …}, so leaving unmounts the section and destroys its $state with
+	// no prompt and no toast — and the remount reloads the stored
+	// values, which makes the loss look like a successful save.
+	//
+	// The sections of the tab on screen are the only ones registered,
+	// precisely because the others are unmounted, so hasUnsaved() needs
+	// no tab argument.
+	let confirmLeaveOpen = $state(false);
+	let pendingTab = $state<SettingsTab | null>(null);
+
+	/** Tabs veto: false holds the switch until the operator answers. */
+	function canLeaveTab(next: string): boolean {
+		if (!hasUnsaved()) return true;
+		pendingTab = next as SettingsTab;
+		confirmLeaveOpen = true;
+		return false;
+	}
+
+	/** Discarding is the confirm action (D4): switching tabs unmounts
+	 *  the section, which drops what was typed. */
+	function confirmLeaveTab(): void {
+		const next = pendingTab;
+		pendingTab = null;
+		if (!next) return;
+		activeTab = next;
+		onTabChange(next);
+	}
+
 	const settingsTabs = $derived(
 		TAB_IDS.map((id) => ({
 			id,
@@ -748,7 +779,13 @@
 	     carried in the URL hash, and a deep link to a card's anchor
 	     (#security-automation, #oidc-config, #dns-providers) still
 	     opens the right tab and scrolls to it. -->
-	<Tabs bind:value={activeTab} tabs={settingsTabs} ariaLabel={language.current && t('settings.tabsAria')} onChange={onTabChange} />
+	<Tabs
+		bind:value={activeTab}
+		tabs={settingsTabs}
+		ariaLabel={language.current && t('settings.tabsAria')}
+		onChange={onTabChange}
+		canLeave={canLeaveTab}
+	/>
 
 	<div class="mt-6">
 		{#if activeTab === 'account'}
@@ -1643,6 +1680,16 @@
 		confirmLabel={language.current && t('settingsSubcards.revokeSessionConfirm')}
 		confirmVariant="danger"
 		onConfirm={confirmRevoke}
+	/>
+
+	<ConfirmDialog
+		bind:open={confirmLeaveOpen}
+		title={language.current && t('settings.unsavedLeaveTitle')}
+		message={language.current && t('settings.unsavedLeaveMessage')}
+		confirmLabel={language.current && t('settings.unsavedLeaveConfirm')}
+		cancelLabel={language.current && t('settings.unsavedLeaveCancel')}
+		confirmVariant="danger"
+		onConfirm={confirmLeaveTab}
 	/>
 
 	<!-- Step CS.3 follow-up — Reset Security Automation

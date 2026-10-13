@@ -18,6 +18,11 @@ import type {
 	CrowdSecTestResponse
 } from '$lib/api/types';
 import { ApiError } from '$lib/api/types';
+import {
+	hasUnsaved,
+	unsavedIds,
+	resetUnsavedRegistry
+} from '$lib/stores/unsaved.svelte';
 
 const getMock = vi.fn<() => Promise<CrowdSecSettings>>();
 const putMock = vi.fn<(r: CrowdSecSettingsRequest) => Promise<CrowdSecSettings>>();
@@ -475,5 +480,77 @@ describe('CrowdSecSettingsSection — Reset (CS.2 follow-up)', () => {
 		// Badge still "Configured" — the row wasn't actually
 		// wiped on the backend (rollback contract).
 		expect(screen.getByText(/^Configured$/i)).toBeInTheDocument();
+	});
+});
+
+// v2.72 — the section tells the settings page when leaving would
+// discard input (spec 2026-10-13). Gate 3 of that spec is the one that
+// matters here: a save must leave the form clean, or the dialog cries
+// wolf on the next tab click.
+describe('CrowdSecSettingsSection — unsaved input', () => {
+	beforeEach(() => {
+		resetUnsavedRegistry();
+	});
+
+	it('reports nothing on a freshly loaded form', async () => {
+		getMock.mockResolvedValue(configuredSettings);
+		render(CrowdSecSettingsSection);
+		await waitFor(() => expect(screen.getByLabelText(/LAPI URL/i)).toBeInTheDocument());
+
+		expect(hasUnsaved()).toBe(false);
+	});
+
+	it('reports a typed API key, which has nothing to compare against', async () => {
+		getMock.mockResolvedValue(configuredSettings);
+		render(CrowdSecSettingsSection);
+		const key = await waitFor(() => screen.getByLabelText(/Bouncer API key/i));
+
+		await fireEvent.input(key, { target: { value: 'NEWKEY' } });
+
+		expect(unsavedIds()).toEqual(['crowdsec']);
+	});
+
+	it('reports a changed LAPI URL and forgets it once typed back', async () => {
+		getMock.mockResolvedValue(configuredSettings);
+		render(CrowdSecSettingsSection);
+		const url = (await waitFor(() =>
+			screen.getByLabelText(/LAPI URL/i)
+		)) as HTMLInputElement;
+
+		await fireEvent.input(url, { target: { value: 'http://crowdsec:8080' } });
+		expect(hasUnsaved()).toBe(true);
+
+		await fireEvent.input(url, { target: { value: configuredSettings.lapiUrl } });
+		expect(hasUnsaved()).toBe(false);
+	});
+
+	it('is clean after a successful save', async () => {
+		getMock.mockResolvedValue(configuredSettings);
+		putMock.mockResolvedValue({ ...configuredSettings, lapiUrl: 'http://crowdsec:8080' });
+		render(CrowdSecSettingsSection);
+		const url = await waitFor(() => screen.getByLabelText(/LAPI URL/i));
+
+		await fireEvent.input(url, { target: { value: 'http://crowdsec:8080' } });
+		await fireEvent.input(screen.getByLabelText(/Bouncer API key/i), {
+			target: { value: 'KEY' }
+		});
+		expect(hasUnsaved()).toBe(true);
+
+		await fireEvent.click(screen.getByRole('button', { name: /Save & apply/i }));
+		await waitFor(() => expect(putMock).toHaveBeenCalled());
+
+		await waitFor(() => expect(hasUnsaved()).toBe(false));
+	});
+
+	it('unregisters when the section is destroyed', async () => {
+		getMock.mockResolvedValue(configuredSettings);
+		const { unmount } = render(CrowdSecSettingsSection);
+		const key = await waitFor(() => screen.getByLabelText(/Bouncer API key/i));
+		await fireEvent.input(key, { target: { value: 'NEWKEY' } });
+		expect(hasUnsaved()).toBe(true);
+
+		unmount();
+
+		expect(hasUnsaved()).toBe(false);
 	});
 });

@@ -12,6 +12,7 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { registerUnsaved } from '$lib/stores/unsaved.svelte';
 	import { pushToast } from '$lib/stores/toast';
 	import {
 		settingsApi,
@@ -82,6 +83,32 @@
 		return t('scheduledBackups.errUnexpected');
 	}
 
+	// v2.72 — tell the settings page when leaving would discard input
+	// (spec 2026-10-13). applyView below is the baseline setter and
+	// `view` is the record it was given, so the comparison is against
+	// the stored schedule rather than an "edited" flag: reverting a
+	// field by hand clears the warning (D5), and save() calls applyView
+	// with the response so a saved form is clean (gate 3).
+	//
+	// dir is compared trimmed because the submit trims it. The two
+	// passphrase boxes are blank by design — the stored one is never
+	// echoed — so anything in either is unsaved input (D6).
+	function hasUnsavedInput(): boolean {
+		if (!view) return false;
+		if (passphrase !== '' || passphraseConfirm !== '') return true;
+		return (
+			enabled !== view.enabled ||
+			frequency !== view.frequency ||
+			time !== view.time ||
+			Number(weekday) !== view.weekday ||
+			Number(keep) !== view.keep ||
+			dir.trim() !== view.dir ||
+			emailMode !== view.emailMode ||
+			emailChannelId !== view.emailChannelId ||
+			alertChannelIds.join(',') !== view.alertChannelIds.join(',')
+		);
+	}
+
 	function applyView(v: BackupSchedule): void {
 		view = v;
 		enabled = v.enabled;
@@ -104,6 +131,11 @@
 			files = [];
 		}
 	}
+
+	// This section's onMount is async, and an async onMount cannot
+	// return a teardown — the registration goes through an $effect,
+	// whose cleanup runs on destroy. It reads no state, so it runs once.
+	$effect(() => registerUnsaved('scheduled-backups', hasUnsavedInput));
 
 	onMount(async () => {
 		try {

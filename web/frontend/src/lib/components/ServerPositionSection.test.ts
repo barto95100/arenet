@@ -14,6 +14,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
 import type { ServerPosition } from '$lib/api/types';
 import { ApiError } from '$lib/api/types';
+import {
+	hasUnsaved,
+	unsavedIds,
+	resetUnsavedRegistry
+} from '$lib/stores/unsaved.svelte';
 
 const fetchServerPositionMock = vi.fn<() => Promise<ServerPosition>>();
 const putServerPositionMock = vi.fn<(body: {
@@ -376,5 +381,54 @@ describe('ServerPositionSection — Reset button', () => {
 		// fetchServerPosition was called once on mount; the reset
 		// must not refetch.
 		expect(fetchServerPositionMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+// v2.72 — the section tells the settings page when leaving would
+// discard input (spec 2026-10-13). The baseline is one function shared
+// with resetForm, which is what makes "typed back by hand" clean
+// again (D5) rather than sticky.
+describe('ServerPositionSection — unsaved input', () => {
+	beforeEach(() => {
+		resetUnsavedRegistry();
+	});
+
+	it('reports nothing on a freshly loaded form', async () => {
+		fetchServerPositionMock.mockResolvedValue(autoPosition);
+		render(ServerPositionSection);
+		await waitFor(() =>
+			expect(screen.getByTestId('server-position-lat-input')).toBeInTheDocument()
+		);
+
+		expect(hasUnsaved()).toBe(false);
+	});
+
+	it('reports an edited coordinate and forgets it once typed back', async () => {
+		fetchServerPositionMock.mockResolvedValue(autoPosition);
+		render(ServerPositionSection);
+		const lat = (await waitFor(() =>
+			screen.getByTestId('server-position-lat-input')
+		)) as HTMLInputElement;
+		const original = lat.value;
+
+		await fireEvent.input(lat, { target: { value: '51.5' } });
+		expect(unsavedIds()).toEqual(['server-position']);
+
+		// bind:value on a type="number" input assigns a number, so this
+		// only passes if the predicate compares as strings.
+		await fireEvent.input(lat, { target: { value: original } });
+		expect(hasUnsaved()).toBe(false);
+	});
+
+	it('unregisters when the section is destroyed', async () => {
+		fetchServerPositionMock.mockResolvedValue(autoPosition);
+		const { unmount } = render(ServerPositionSection);
+		const lat = await waitFor(() => screen.getByTestId('server-position-lat-input'));
+		await fireEvent.input(lat, { target: { value: '51.5' } });
+		expect(hasUnsaved()).toBe(true);
+
+		unmount();
+
+		expect(hasUnsaved()).toBe(false);
 	});
 });

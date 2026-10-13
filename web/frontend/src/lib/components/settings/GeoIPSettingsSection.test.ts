@@ -16,6 +16,11 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
 import type { MaxMindConfig, MaxMindRequest, MaxMindTestResult } from '$lib/api/types';
 import { ApiError } from '$lib/api/types';
 import type { GeoIPUpdateConfig, GeoIPUpdateResult, GeoIPStatus } from '$lib/api/system';
+import {
+	hasUnsaved,
+	unsavedIds,
+	resetUnsavedRegistry
+} from '$lib/stores/unsaved.svelte';
 
 const getMaxMindMock = vi.fn<() => Promise<MaxMindConfig>>();
 const putMaxMindMock = vi.fn<(r: MaxMindRequest) => Promise<MaxMindConfig>>();
@@ -339,5 +344,92 @@ describe('GeoIPSettingsSection — the edition in use', () => {
 		render(GeoIPSettingsSection);
 		await waitFor(() => expect(screen.getByLabelText(/Account ID/i)).toBeInTheDocument());
 		expect(screen.queryByTestId('geoip-edition')).toBeNull();
+	});
+});
+
+// v2.72 — the section tells the settings page when leaving would
+// discard input (spec 2026-10-13). Gates 3 and 4 of that spec live
+// here: a saved form must be clean, and so must a form reverted by
+// hand — a dialog that fires after a successful save would be worse
+// than no dialog.
+describe('GeoIPSettingsSection — unsaved input', () => {
+	beforeEach(() => {
+		resetUnsavedRegistry();
+	});
+
+	it('reports nothing on a freshly loaded form', async () => {
+		mockDefaults(configured, enabledUpdateCfg);
+		render(GeoIPSettingsSection);
+		await waitFor(() => expect(getMaxMindMock).toHaveBeenCalled());
+
+		expect(hasUnsaved()).toBe(false);
+	});
+
+	it('reports a typed licence key, which has nothing to compare against', async () => {
+		mockDefaults(configured, enabledUpdateCfg);
+		render(GeoIPSettingsSection);
+		const key = await waitFor(() => screen.getByLabelText(/License key/i));
+
+		await fireEvent.input(key, { target: { value: 'NEWKEY' } });
+
+		expect(unsavedIds()).toEqual(['geoip']);
+	});
+
+	it('reports a changed account ID', async () => {
+		mockDefaults(configured, enabledUpdateCfg);
+		render(GeoIPSettingsSection);
+		const accountId = await waitFor(() => screen.getByLabelText(/Account ID/i));
+
+		await fireEvent.input(accountId, { target: { value: '42' } });
+
+		expect(hasUnsaved()).toBe(true);
+	});
+
+	it('is clean again once the account ID is typed back', async () => {
+		mockDefaults(configured, enabledUpdateCfg);
+		render(GeoIPSettingsSection);
+		const accountId = (await waitFor(() =>
+			screen.getByLabelText(/Account ID/i)
+		)) as HTMLInputElement;
+
+		await fireEvent.input(accountId, { target: { value: '42' } });
+		expect(hasUnsaved()).toBe(true);
+		await fireEvent.input(accountId, { target: { value: String(configured.accountId) } });
+
+		expect(hasUnsaved()).toBe(false);
+	});
+
+	it('is clean after a successful save', async () => {
+		mockDefaults(notConfigured, disabledUpdateCfg);
+		putMaxMindMock.mockResolvedValue({ ...notConfigured, accountId: 42, configured: true });
+		getMaxMindMock.mockResolvedValue({ ...notConfigured, accountId: 42, configured: true });
+
+		render(GeoIPSettingsSection);
+		await waitFor(() => expect(getMaxMindMock).toHaveBeenCalled());
+		await fireEvent.input(screen.getByLabelText(/Account ID/i), { target: { value: '42' } });
+		await fireEvent.input(screen.getByLabelText(/License key/i), {
+			target: { value: 'KEY' }
+		});
+		expect(hasUnsaved()).toBe(true);
+
+		await fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+		await waitFor(() => expect(putMaxMindMock).toHaveBeenCalled());
+
+		await waitFor(() => expect(hasUnsaved()).toBe(false));
+	});
+
+	it('unregisters when the section is destroyed', async () => {
+		// The page's guard asks the mounted sections only; a destroyed
+		// one answering for state that no longer exists would block
+		// every later tab switch.
+		mockDefaults(configured, enabledUpdateCfg);
+		const { unmount } = render(GeoIPSettingsSection);
+		const key = await waitFor(() => screen.getByLabelText(/License key/i));
+		await fireEvent.input(key, { target: { value: 'NEWKEY' } });
+		expect(hasUnsaved()).toBe(true);
+
+		unmount();
+
+		expect(hasUnsaved()).toBe(false);
 	});
 });
