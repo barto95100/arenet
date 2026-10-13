@@ -19,6 +19,7 @@ package systemhealth
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,24 @@ import (
 // Satisfied by *caddymgr.CaddyManager.
 type ReloadStater interface {
 	ReloadHealth() (started bool, inFlight time.Duration, timedOut bool)
+	// LastReloadFailure reports the most recent reload Caddy rejected,
+	// and when. Empty message = the last completed reload was accepted.
+	LastReloadFailure() (msg string, at time.Time)
+}
+
+// maxReloadErrorChars caps the Caddy error quoted in the health
+// message. Provisioning errors can run to several lines, and this
+// string is rendered in a status card.
+const maxReloadErrorChars = 200
+
+// truncateReloadError keeps the head of msg, which is where Caddy puts
+// the failing module and reason.
+func truncateReloadError(msg string) string {
+	msg = strings.TrimSpace(strings.ReplaceAll(msg, "\n", " "))
+	if len(msg) <= maxReloadErrorChars {
+		return msg
+	}
+	return msg[:maxReloadErrorChars] + "…"
 }
 
 // stuckReloadThreshold is how long a config reload may run before the
@@ -66,7 +85,24 @@ func (c *CaddyCheck) Check(_ context.Context) ComponentStatus {
 		}
 	case timedOut:
 		return ComponentStatus{Status: StatusDegraded, Message: "last config reload timed out"}
-	default:
-		return ComponentStatus{Status: StatusHealthy, Message: "config reloads healthy"}
 	}
+	// v2.72 — a reload Caddy REJECTED used to land here and be reported
+	// as healthy. The goroutine that runs the apply clears timedOut
+	// whatever the apply returned, so a rejection was indistinguishable
+	// from a clean run, and several handlers answer 200 on a failed
+	// reload by design (the store write is committed; undoing it would
+	// be worse). The operator got a success toast, a UI reading back the
+	// new value, and an edge still running the old config — with this
+	// check affirming health on top.
+	//
+	// Degraded, not unhealthy: the previous config is still being
+	// served, so Arenet is up. What is wrong is that it is not serving
+	// what the store says.
+	if msg, _ := c.Reloads.LastReloadFailure(); msg != "" {
+		return ComponentStatus{
+			Status:  StatusDegraded,
+			Message: "last config reload failed: " + truncateReloadError(msg),
+		}
+	}
+	return ComponentStatus{Status: StatusHealthy, Message: "config reloads healthy"}
 }

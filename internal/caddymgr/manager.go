@@ -246,6 +246,20 @@ type CaddyManager struct {
 	// startedFlag mirrors started for lock-free reads (ReloadHealth).
 	startedFlag    atomic.Bool
 	reloadTimedOut atomic.Bool
+	// lastReloadFailure holds the most recent apply that returned an
+	// error, cleared by the next apply that succeeds. nil = the last
+	// completed apply was accepted.
+	//
+	// v2.72 — without it a REJECTED reload left no trace anywhere. The
+	// goroutine below cleared reloadTimedOut whatever applyFn returned,
+	// and the health check derives its verdict from (started, inFlight,
+	// timedOut) alone, so it answered "config reloads healthy" right
+	// after Caddy had refused the config. Several handlers log a reload
+	// error and answer 200 on purpose — the store write is already
+	// committed and undoing it would be worse — which left the operator
+	// with a success toast, a UI reading back the new value, and an edge
+	// still running the old config, with nothing anywhere to say so.
+	lastReloadFailure atomic.Pointer[reloadFailure]
 
 	// applyFn is the seam ReloadFromStore invokes inside its
 	// goroutine + timeout wrapper. Default points to
@@ -560,6 +574,15 @@ func (m *CaddyManager) ReloadFromStore(ctx context.Context) error {
 		err := m.applyFn(reloadCtx)
 		m.reloadStartedAt.Store(0)
 		m.reloadTimedOut.Store(false)
+		// This is the one place both outcomes pass through, including
+		// the apply that completes AFTER its caller gave up on the
+		// timeout: whatever Caddy last answered is what the health
+		// check should report.
+		if err != nil {
+			m.lastReloadFailure.Store(&reloadFailure{Msg: err.Error(), At: time.Now()})
+		} else {
+			m.lastReloadFailure.Store(nil)
+		}
 		done <- err
 	}()
 
@@ -586,6 +609,26 @@ func (m *CaddyManager) ReloadFromStore(ctx context.Context) error {
 		return fmt.Errorf("caddy reload timed out after %s: %w",
 			reloadFromStoreTimeoutForTest, reloadCtx.Err())
 	}
+}
+
+// reloadFailure is the record of one rejected apply.
+type reloadFailure struct {
+	Msg string
+	At  time.Time
+}
+
+// LastReloadFailure reports the most recent config reload that Caddy
+// rejected, and when. Empty message = the last completed reload was
+// accepted (or none has run).
+//
+// Separate from ReloadHealth because a rejection is a different state
+// from a timeout: a timeout means "we do not know yet", a rejection
+// means "we know, and the running config is not the stored one".
+func (m *CaddyManager) LastReloadFailure() (string, time.Time) {
+	if f := m.lastReloadFailure.Load(); f != nil {
+		return f.Msg, f.At
+	}
+	return "", time.Time{}
 }
 
 // ReloadHealth reports whether Caddy config reloads are healthy:

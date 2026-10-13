@@ -32,10 +32,18 @@ type fakeReloads struct {
 	started  bool
 	inFlight time.Duration
 	timedOut bool
+	lastErr  string
 }
 
 func (f fakeReloads) ReloadHealth() (bool, time.Duration, bool) {
 	return f.started, f.inFlight, f.timedOut
+}
+
+func (f fakeReloads) LastReloadFailure() (string, time.Time) {
+	if f.lastErr == "" {
+		return "", time.Time{}
+	}
+	return f.lastErr, time.Now()
 }
 
 func TestCaddyCheck_ReloadStates(t *testing.T) {
@@ -51,6 +59,37 @@ func TestCaddyCheck_ReloadStates(t *testing.T) {
 		{"last reload timed out", fakeReloads{started: true, timedOut: true}, StatusDegraded, "timed out"},
 		{"not started", fakeReloads{}, StatusUnhealthy, "not started"},
 		{"not wired", nil, StatusUnhealthy, "not wired"},
+		// v2.72 — a reload Caddy REJECTED used to fall through to
+		// "config reloads healthy": the apply goroutine clears timedOut
+		// whatever the apply returned, so a rejection looked exactly
+		// like a clean run. Handlers that answer 200 on a failed reload
+		// by design then left the operator with a success toast, a UI
+		// reading back the new value, an edge on the old config — and
+		// this check affirming health.
+		{
+			"last reload rejected",
+			fakeReloads{started: true, lastErr: "loading new config: http app module: provision: tls: ..."},
+			StatusDegraded,
+			"last config reload failed: loading new config",
+		},
+		// A rejection is reported even while a new reload is in flight
+		// and short: the stale config is what is being served until the
+		// new one lands.
+		{
+			"rejected, with a fresh reload running",
+			fakeReloads{started: true, inFlight: 2 * time.Second, lastErr: "boom"},
+			StatusDegraded,
+			"last config reload failed: boom",
+		},
+		// A timeout still wins: "we do not know yet" outranks "we knew
+		// last time", because the goroutine may still be the one that
+		// settles it.
+		{
+			"timed out outranks a stale rejection",
+			fakeReloads{started: true, timedOut: true, lastErr: "boom"},
+			StatusDegraded,
+			"timed out",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
