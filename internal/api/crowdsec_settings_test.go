@@ -37,9 +37,11 @@ var errBoom = errors.New("boom")
 // PUT handler tests can assert the hot-reload contract without
 // booting Caddy.
 type fakeCrowdSecApplier struct {
-	mu        sync.Mutex
-	calls     []fakeCrowdSecApplierCall
-	nextErr   error
+	// liveURL is what BouncerLiveURL reports.
+	liveURL string
+	mu      sync.Mutex
+	calls   []fakeCrowdSecApplierCall
+	nextErr error
 }
 
 type fakeCrowdSecApplierCall struct {
@@ -53,6 +55,11 @@ func (f *fakeCrowdSecApplier) ApplyCrowdSecConfig(_ context.Context, apiURL, api
 	f.calls = append(f.calls, fakeCrowdSecApplierCall{apiURL: apiURL, apiKey: apiKey})
 	return f.nextErr
 }
+
+// v2.72 — the address the running bouncer dials. Settable by a test
+// that wants restartRequired to fire; empty means "no bouncer
+// provisioned", which keeps the flag false.
+func (f *fakeCrowdSecApplier) BouncerLiveURL() string { return f.liveURL }
 
 func (f *fakeCrowdSecApplier) Calls() []fakeCrowdSecApplierCall {
 	f.mu.Lock()

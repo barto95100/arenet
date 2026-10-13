@@ -246,6 +246,23 @@ type CaddyManager struct {
 	// startedFlag mirrors started for lock-free reads (ReloadHealth).
 	startedFlag    atomic.Bool
 	reloadTimedOut atomic.Bool
+	// bouncerLiveURL is the LAPI address the running bouncer was
+	// provisioned with, captured at the FIRST apply that enabled it and
+	// never overwritten afterwards.
+	//
+	// v2.72 — that is the address the bouncer's streaming client keeps
+	// dialling, whatever a later apply writes into the config. The
+	// comment on caddy.Load below states why: a graceful reload does
+	// not restart subsystems that did not change, and "CrowdSec stays
+	// connected". So after an address move the config says one thing
+	// and the traffic goes somewhere else, which is the v2.51
+	// observation that produced the restart warning.
+	//
+	// An atomic rather than a mutex-guarded field: ReloadFromStore
+	// holds m.mu for the whole reload, and a health probe reading this
+	// must not queue behind it — same rationale as ReloadHealth.
+	bouncerLiveURL atomic.Value // string
+
 	// lastReloadFailure holds the most recent apply that returned an
 	// error, cleared by the next apply that succeeds. nil = the last
 	// completed apply was accepted.
@@ -615,6 +632,19 @@ func (m *CaddyManager) ReloadFromStore(ctx context.Context) error {
 type reloadFailure struct {
 	Msg string
 	At  time.Time
+}
+
+// BouncerLiveURL reports the LAPI address the running bouncer is
+// dialling, or "" when CrowdSec has never been provisioned in this
+// process.
+//
+// Compare it with the stored address to know whether a restart is
+// still pending: the two diverge from the moment an operator moves the
+// address until Arenet restarts, and converge again by construction
+// afterwards. Nothing has to be persisted or cleared.
+func (m *CaddyManager) BouncerLiveURL() string {
+	v, _ := m.bouncerLiveURL.Load().(string)
+	return v
 }
 
 // LastReloadFailure reports the most recent config reload that Caddy
@@ -1059,6 +1089,16 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		// from its redacted text — deliberately NOT wrapped, which
 		// would keep the raw secret reachable via errors.Unwrap.
 		return fmt.Errorf("caddy.Load: %s", storage.RedactDNSSecrets(err.Error(), provList...))
+	}
+
+	// v2.72 — remember what the bouncer was actually provisioned with,
+	// once. Set only while it is enabled, so enabling CrowdSec later
+	// captures the address of the apply that first provisioned it
+	// rather than an empty earlier one.
+	if m.crowdsec.apiKey != "" {
+		if _, ok := m.bouncerLiveURL.Load().(string); !ok {
+			m.bouncerLiveURL.Store(m.crowdsec.apiURL)
+		}
 	}
 
 	// v2.9.9 Bug B follow-up — re-prime healthy after every reload.

@@ -363,7 +363,14 @@ describe('CrowdSecSettingsSection — LAPI address moved (v2.51)', () => {
 
 	// Sticky on purpose: the condition persists until the operator acts,
 	// so a later successful save of something else must not clear it.
-	it('keeps the warning until the operator restarts', async () => {
+	it('keeps the warning across later saves', async () => {
+		// v2.72 — this test used to make the second save answer
+		// restartRequired:false and assert the warning survived it,
+		// because the flag was a sticky local latch. The backend now
+		// DERIVES it from the running bouncer, so that response is not
+		// one the server can give while a restart is pending: the
+		// bouncer is still on the old address, so every read says true.
+		// The premise is corrected rather than the assertion.
 		getMock.mockResolvedValue(configuredSettings);
 		putMock.mockResolvedValueOnce({
 			...configuredSettings,
@@ -379,12 +386,47 @@ describe('CrowdSecSettingsSection — LAPI address moved (v2.51)', () => {
 		await fireEvent.click(screen.getByRole('button', { name: /Save/i }));
 		await screen.findByTestId('crowdsec-restart-required');
 
-		// A second save that does not move the address.
-		putMock.mockResolvedValueOnce({ ...configuredSettings, restartRequired: false });
+		// A second save, with the restart still pending.
+		putMock.mockResolvedValueOnce({
+			...configuredSettings,
+			lapiUrl: 'http://10.66.0.1:8080',
+			restartRequired: true
+		});
 		await fireEvent.click(screen.getByRole('button', { name: /Save/i }));
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
 
 		expect(screen.queryByTestId('crowdsec-restart-required')).not.toBeNull();
+	});
+
+	// v2.72 — the regression this derivation exists for.
+	//
+	// The warning was a bare $state set once by the PUT that moved the
+	// address. A browser reload, a tab close or a second admin's
+	// session lost it entirely, while the bouncer went on dialling the
+	// old address and — failing open — blocking nothing. A plain load
+	// has to show it.
+	it('shows the warning on a plain load, with no save in this session', async () => {
+		getMock.mockResolvedValue({
+			...configuredSettings,
+			lapiUrl: 'http://10.66.0.1:8080',
+			restartRequired: true
+		});
+
+		render(CrowdSecSettingsSection);
+
+		expect(await screen.findByTestId('crowdsec-restart-required')).toBeInTheDocument();
+	});
+
+	it('drops the warning once the server stops reporting it', async () => {
+		// Which is what a restart looks like: the bouncer now dials the
+		// stored address, so the server derives false and the banner
+		// clears itself. No local flag to reset.
+		getMock.mockResolvedValue(configuredSettings);
+
+		render(CrowdSecSettingsSection);
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+
+		expect(screen.queryByTestId('crowdsec-restart-required')).toBeNull();
 	});
 });
 

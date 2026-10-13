@@ -47,12 +47,20 @@
 	import { language } from '$lib/stores/language.svelte';
 
 	let settings = $state<CrowdSecSettings | null>(null);
-	// Sticky: set when a save moved the LAPI address, and NOT cleared by
-	// a later reload of the settings. Until Arenet restarts, the bouncer
-	// still dials the old address and — failing open — blocks nothing.
-	// An operator who dismisses this by navigating away would be
-	// unprotected with no other sign of it.
-	let restartRequired = $state(false);
+	// v2.72 — read from the server on every load, not latched locally.
+	//
+	// This used to be a bare $state set once by the PUT that moved the
+	// address, and the comment here claimed it was "NOT cleared by a
+	// later reload of the settings". True of load() — and irrelevant,
+	// because the realistic way an operator leaves this screen is a
+	// browser reload, a tab close or another admin's session, and all
+	// three lost the warning entirely. The bouncer was still dialling
+	// the old address and, failing open, blocking nothing.
+	//
+	// The backend now derives it from the running bouncer, so it comes
+	// back on every GET until Arenet restarts and clears itself
+	// afterwards by construction.
+	const restartRequired = $derived(settings?.restartRequired ?? false);
 	let loading = $state(true);
 	let loadError = $state('');
 
@@ -101,7 +109,8 @@
 				timeoutSeconds: form.timeoutSeconds
 			});
 			settings = next;
-			if (next.restartRequired) restartRequired = true;
+			// The PUT response carries it too, and assigning `settings`
+			// is what makes it visible — same source as the GET.
 			form.apiKey = ''; // clear so a re-visit doesn't show ghost value
 			pushToast(
 				next.configured

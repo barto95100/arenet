@@ -1416,7 +1416,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		&systemhealth.CaddyCheck{Reloads: mgr},
 		&systemhealth.BoltDBCheck{Counter: &boltdbRoutesCounter{store: store}},
 		&systemhealth.MetricsCheck{Prober: metricsProber},
-		&systemhealth.CrowdSecCheck{Config: &crowdsecConfigAdapter{store: store}},
+		// v2.72 — Live lets the check say "the bouncer is still on the
+		// old address" instead of probing the new one and reporting
+		// healthy while nothing is being blocked.
+		&systemhealth.CrowdSecCheck{
+			Config: &crowdsecConfigAdapter{store: store},
+			Live:   mgr,
+		},
 		&systemhealth.CertmagicCheck{Lister: &certInfoListerAdapter{tracker: certTracker}},
 	)
 	apiHandler.SetSystemHealthChecker(healthChecker)

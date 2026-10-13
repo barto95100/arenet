@@ -19,6 +19,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -57,17 +58,25 @@ func putCrowdSecBody(t *testing.T, h *Handler, body string) crowdSecResponse {
 func TestPutCrowdSecSettings_MovedURL_SignalsRestart(t *testing.T) {
 	var logBuf bytes.Buffer
 	h := newTestHandler(t, &fakeAuditAppender{}, &logBuf)
-	h.SetCrowdSecApplier(&fakeCrowdSecApplier{})
+	// v2.72 — the precondition is now explicit: the applier reports
+	// the address the RUNNING bouncer dials. Empty means no bouncer has
+	// been provisioned in this process, which is the state of a fresh
+	// install and the reason the first PUT claims nothing.
+	applier := &fakeCrowdSecApplier{}
+	h.SetCrowdSecApplier(applier)
 
-	// First PUT configures; there is nothing to move from, so no
-	// restart is claimed.
+	// First PUT configures; nothing is running yet, so no restart is
+	// claimed.
 	first := putCrowdSecBody(t, h,
 		`{"lapiUrl":"http://127.0.0.1:8080","apiKey":"k1","bouncerName":"arenet","timeoutSeconds":5}`)
 	if first.RestartRequired {
-		t.Error("the first configuration must not demand a restart — there is no previous address")
+		t.Error("the first configuration must not demand a restart — nothing is running yet")
 	}
 
-	// Now move the address.
+	// The reload provisions the bouncer on that address.
+	applier.liveURL = "http://127.0.0.1:8080"
+
+	// Now move the address. The bouncer keeps the old one.
 	moved := putCrowdSecBody(t, h,
 		`{"lapiUrl":"http://10.66.0.1:8080","apiKey":"","bouncerName":"arenet","timeoutSeconds":5}`)
 	if !moved.RestartRequired {
@@ -77,6 +86,53 @@ func TestPutCrowdSecSettings_MovedURL_SignalsRestart(t *testing.T) {
 	// driving this from the API rather than the UI.
 	if !bytes.Contains(logBuf.Bytes(), []byte("LAPI address changed")) {
 		t.Errorf("no warning logged when the address moved:\n%s", logBuf.String())
+	}
+}
+
+// TestGetCrowdSecSettings_StillSignalsRestartAfterAReload is the
+// regression this derivation exists for.
+//
+// restartRequired used to be computed from the PUT's own before/after,
+// so it was true exactly once — in that one response. The settings
+// component held it in a bare $state that no GET refreshed, so one F5,
+// one tab close or a second admin's browser lost the only warning that
+// the bouncer was reaching nothing and therefore blocking nothing.
+func TestGetCrowdSecSettings_StillSignalsRestartAfterAReload(t *testing.T) {
+	h := newTestHandler(t, &fakeAuditAppender{}, io.Discard)
+	applier := &fakeCrowdSecApplier{}
+	h.SetCrowdSecApplier(applier)
+
+	putCrowdSecBody(t, h,
+		`{"lapiUrl":"http://127.0.0.1:8080","apiKey":"k1","bouncerName":"arenet","timeoutSeconds":5}`)
+	applier.liveURL = "http://127.0.0.1:8080"
+	putCrowdSecBody(t, h,
+		`{"lapiUrl":"http://10.66.0.1:8080","apiKey":"","bouncerName":"arenet","timeoutSeconds":5}`)
+
+	// A plain read — what a page reload does.
+	getReq := reqWithAuth(http.MethodGet, "/api/v1/settings/crowdsec", "user", "admin", "1.2.3.4", "test")
+	getRec := httptest.NewRecorder()
+	h.getCrowdSecSettings(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body=%s", getRec.Code, getRec.Body.String())
+	}
+	var got crowdSecResponse
+	if err := json.Unmarshal(getRec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !got.RestartRequired {
+		t.Error("a GET must keep reporting the pending restart — the bouncer is still on the old address")
+	}
+
+	// And it stops once the process has restarted onto the new one,
+	// which is what a fresh boot looks like: the live address is
+	// captured from the stored config.
+	applier.liveURL = "http://10.66.0.1:8080"
+	getRec2 := httptest.NewRecorder()
+	h.getCrowdSecSettings(getRec2, reqWithAuth(http.MethodGet, "/api/v1/settings/crowdsec", "user", "admin", "1.2.3.4", "test"))
+	var after crowdSecResponse
+	_ = json.Unmarshal(getRec2.Body.Bytes(), &after)
+	if after.RestartRequired {
+		t.Error("the warning must clear by itself once the bouncer dials the stored address")
 	}
 }
 

@@ -51,9 +51,28 @@ type CrowdSecConfigReader interface {
 //   - unhealthy: NOT used. CrowdSec is optional in arenet's
 //     posture; an unreachable LAPI is a degraded security
 //     posture, not an unhealthy system.
+//
+// BouncerAddressReader reports the LAPI address the RUNNING bouncer is
+// dialling. Satisfied by *caddymgr.CaddyManager via BouncerLiveURL.
+//
+// v2.72 — this check probed the STORED address, so after an operator
+// moved the LAPI it reported "healthy" by reaching the new endpoint
+// while the bouncer's streaming client was still dialling the old one
+// and, failing open, blocking nothing. The one surface an operator
+// consults when something feels wrong actively confirmed the opposite
+// of the truth.
+type BouncerAddressReader interface {
+	BouncerLiveURL() string
+}
+
 type CrowdSecCheck struct {
 	Config     CrowdSecConfigReader
 	HTTPClient *http.Client
+	// Live is optional. When wired and it disagrees with the stored
+	// address, the check reports that rather than probing: whichever
+	// endpoint answers, the bouncer is on the wrong one until Arenet
+	// restarts, and that is the actionable fact.
+	Live BouncerAddressReader
 }
 
 // errBadProbeURL marks a LAPI URL that cannot be turned into a request at
@@ -107,6 +126,20 @@ func (c *CrowdSecCheck) Check(ctx context.Context) ComponentStatus {
 		return ComponentStatus{
 			Status:  StatusDegraded,
 			Message: "crowdsec not configured (bouncer disabled)",
+		}
+	}
+
+	// v2.72 — a pending restart outranks any probe result. The bouncer
+	// dials the address it was provisioned with, so reaching the stored
+	// one proves nothing about whether decisions are flowing.
+	if c.Live != nil {
+		if live := strings.TrimSpace(c.Live.BouncerLiveURL()); live != "" &&
+			live != strings.TrimSpace(lapiURL) {
+			return ComponentStatus{
+				Status: StatusDegraded,
+				Message: "bouncer still on " + live + " after the LAPI address changed; " +
+					"it blocks nothing until Arenet restarts",
+			}
 		}
 	}
 
