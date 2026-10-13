@@ -110,3 +110,61 @@ func TestMaxMindConfig_EverConfigured(t *testing.T) {
 		t.Fatal("after put EverConfigured = false; want true")
 	}
 }
+
+// v2.72 — a non-default edition survives a licence-key rotation.
+//
+// PutMaxMindConfig already preserved a blank LicenseKey from the stored
+// row, and then reset a blank EditionID to the default instead of
+// preserving it. The asymmetry WAS the bug: the GeoIP settings section
+// sends accountId + licenseKey and nothing else, so rotating the key
+// reverted a GeoLite2-ASN or GeoLite2-Country install to
+// GeoLite2-City — after which geoipupdate downloads a different
+// database than the operator chose, and its edition guard rejects the
+// mismatch.
+//
+// TestMaxMindConfig_DefaultEdition above is the other half and still
+// holds: with no stored row there is nothing to preserve, so the
+// default applies. The two tests together say "preserve, else default",
+// which is exactly what LicenseKey has always done.
+func TestMaxMindConfig_PutBlankEdition_PreservesStored(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.PutMaxMindConfig(context.Background(), MaxMindConfig{
+		AccountID: 1, LicenseKey: "orig", EditionID: "GeoLite2-ASN",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// What the settings section sends: account + key, no edition.
+	if err := s.PutMaxMindConfig(context.Background(), MaxMindConfig{
+		AccountID: 1, LicenseKey: "rotated",
+	}); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	got, _ := s.GetMaxMindConfig(context.Background())
+	if got.EditionID != "GeoLite2-ASN" {
+		t.Errorf("EditionID = %q, want %q — a blank edition must inherit the stored "+
+			"one, not reset to the default", got.EditionID, "GeoLite2-ASN")
+	}
+	if got.LicenseKey != "rotated" {
+		t.Errorf("LicenseKey = %q, want the rotated value", got.LicenseKey)
+	}
+}
+
+// Changing the edition on purpose has to keep working, or the fix
+// replaces a reset with a value nobody can move.
+func TestMaxMindConfig_PutExplicitEdition_Replaces(t *testing.T) {
+	s := newTestStore(t)
+	_ = s.PutMaxMindConfig(context.Background(), MaxMindConfig{
+		AccountID: 1, LicenseKey: "k", EditionID: "GeoLite2-ASN",
+	})
+	if err := s.PutMaxMindConfig(context.Background(), MaxMindConfig{
+		AccountID: 1, LicenseKey: "k", EditionID: "GeoLite2-Country",
+	}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	got, _ := s.GetMaxMindConfig(context.Background())
+	if got.EditionID != "GeoLite2-Country" {
+		t.Errorf("EditionID = %q, want the explicit value", got.EditionID)
+	}
+}

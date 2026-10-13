@@ -315,3 +315,29 @@ describe('GeoIPSettingsSection — update now', () => {
 		});
 	});
 });
+
+// v2.72 — which database is in use.
+//
+// The response has always carried editionId and nothing rendered it, so
+// an operator on GeoLite2-ASN had no way to know — and no way to notice
+// when a licence-key rotation silently reverted them to GeoLite2-City,
+// after which geoipupdate downloads a different database than they
+// chose. The storage-side preserve is the fix; this is the half that
+// makes the value legible.
+describe('GeoIPSettingsSection — the edition in use', () => {
+	it('names the non-default database', async () => {
+		mockDefaults({ ...configured, editionId: 'GeoLite2-ASN' }, enabledUpdateCfg);
+		render(GeoIPSettingsSection);
+		await waitFor(() => expect(screen.getByTestId('geoip-edition')).toBeInTheDocument());
+		expect(screen.getByTestId('geoip-edition').textContent).toContain('GeoLite2-ASN');
+	});
+
+	it('says nothing before GeoIP is configured', async () => {
+		// An edition on an unconfigured install is noise: there is no
+		// database to download yet.
+		mockDefaults(notConfigured, disabledUpdateCfg);
+		render(GeoIPSettingsSection);
+		await waitFor(() => expect(screen.getByLabelText(/Account ID/i)).toBeInTheDocument());
+		expect(screen.queryByTestId('geoip-edition')).toBeNull();
+	});
+});
