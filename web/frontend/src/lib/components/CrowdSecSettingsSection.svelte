@@ -30,6 +30,7 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { registerUnsaved } from '$lib/stores/unsaved.svelte';
 	import { pushToast } from '$lib/stores/toast';
 	import { settingsApi } from '$lib/api/settings';
 	import {
@@ -78,9 +79,9 @@
 		try {
 			const cfg = await settingsApi.getCrowdSecSettings();
 			settings = cfg;
-			form.lapiUrl = cfg.lapiUrl || 'http://127.0.0.1:8080';
-			form.bouncerName = cfg.bouncerName || 'arenet';
-			form.timeoutSeconds = cfg.timeoutSeconds || 5;
+			form.lapiUrl = storedLapiUrl(cfg);
+			form.bouncerName = storedBouncerName(cfg);
+			form.timeoutSeconds = storedTimeout(cfg);
 			form.apiKey = ''; // never round-trip the secret
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : t('crowdsecSettings.loadFailed', { err: '' });
@@ -196,8 +197,37 @@
 		}
 	}
 
+	// v2.72 — tell the settings page when leaving would discard input
+	// (spec 2026-10-13). This form holds the bouncer API key.
+	//
+	// The three fallbacks below are the baseline: the form shows them
+	// when the stored value is empty, so the unsaved check has to apply
+	// the same ones or a never-configured install would report itself
+	// dirty the moment it loads. The API key is blank by design
+	// whenever one is stored, so any content in it is unsaved input (D6).
+	function storedLapiUrl(cfg: CrowdSecSettings): string {
+		return cfg.lapiUrl || 'http://127.0.0.1:8080';
+	}
+	function storedBouncerName(cfg: CrowdSecSettings): string {
+		return cfg.bouncerName || 'arenet';
+	}
+	function storedTimeout(cfg: CrowdSecSettings): number {
+		return cfg.timeoutSeconds || 5;
+	}
+
+	function hasUnsavedInput(): boolean {
+		if (!settings) return false;
+		return (
+			form.apiKey !== '' ||
+			(form.lapiUrl ?? '').trim() !== storedLapiUrl(settings) ||
+			(form.bouncerName ?? '').trim() !== storedBouncerName(settings) ||
+			Number(form.timeoutSeconds) !== storedTimeout(settings)
+		);
+	}
+
 	onMount(() => {
 		void load();
+		return registerUnsaved('crowdsec', hasUnsavedInput);
 	});
 </script>
 

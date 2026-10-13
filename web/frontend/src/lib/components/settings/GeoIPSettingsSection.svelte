@@ -23,6 +23,7 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { registerUnsaved } from '$lib/stores/unsaved.svelte';
 	import { pushToast } from '$lib/stores/toast';
 	import { settingsApi } from '$lib/api/settings';
 	import { systemApi, type GeoIPUpdateConfig, type GeoIPStatus } from '$lib/api/system';
@@ -207,8 +208,19 @@
 		}
 	}
 
+	// v2.72 — tell the settings page when leaving would discard input
+	// (spec 2026-10-13). The loaded record is the baseline, so there is
+	// nothing extra to snapshot: the account ID is dirty when it
+	// differs from what the API returned, and the licence key — blank
+	// by design whenever one is stored — is dirty as soon as it holds
+	// anything (D6). save() resets both, so a saved form is clean.
+	function hasUnsavedInput(): boolean {
+		return form.accountId !== (maxmind?.accountId ?? 0) || form.licenseKey !== '';
+	}
+
 	onMount(() => {
 		void load();
+		return registerUnsaved('geoip', hasUnsavedInput);
 	});
 </script>
 

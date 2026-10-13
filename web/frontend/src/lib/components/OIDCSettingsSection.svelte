@@ -20,6 +20,7 @@
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { registerUnsaved } from '$lib/stores/unsaved.svelte';
 	import { pushToast } from '$lib/stores/toast';
 	import { settingsApi } from '$lib/api/settings';
 	import {
@@ -86,8 +87,54 @@
 		}
 	}
 
+	/** The scope list as the API will store it. Shared by the submit
+	 *  and by the unsaved check, which has to normalise the same way or
+	 *  it reports a difference the server would not make. */
+	function parseScopes(raw: string): string[] {
+		return raw
+			.split(/[\s,]+/)
+			.map((s) => s.trim())
+			.filter((s) => s.length > 0);
+	}
+
+	// v2.72 — tell the settings page when leaving would discard input
+	// (spec 2026-10-13). This is the largest form in settings and it
+	// holds a client secret.
+	//
+	// Every field is compared after the same trim or split the submit
+	// applies, because the submit sends the normalised value and the
+	// response is what lands in `config`: comparing raw text would
+	// report a trailing space as unsaved work forever. The secret is
+	// blank by design whenever one is stored, so any content in it is
+	// unsaved input (D6). The allowlist row counts too — it is typed
+	// input in this tab, and the unmount takes it with everything else.
+	function hasUnsavedInput(): boolean {
+		if (!config) return false;
+		if (form.clientSecret !== '') return true;
+		if (newEntry.email !== '' || newEntry.displayName !== '' || newEntry.sub !== '') {
+			return true;
+		}
+		// load() copies cfg.issuerUrl and friends straight across, so a
+		// response missing one leaves undefined in a string field. Both
+		// sides are coerced here rather than trusting the shape: a
+		// predicate that throws is a predicate that cancels tab
+		// switches.
+		const same = (a: string | undefined, b: string | undefined) =>
+			(a ?? '').trim() === (b ?? '').trim();
+		return (
+			form.enabled !== config.enabled ||
+			!same(form.issuerUrl, config.issuerUrl) ||
+			!same(form.clientId, config.clientId) ||
+			!same(form.redirectUrl, config.redirectUrl) ||
+			form.acceptUnverifiedEmail !== (config.acceptUnverifiedEmail ?? false) ||
+			parseScopes(form.scopes ?? '').join(' ') !== (config.scopes ?? []).join(' ') ||
+			form.kind !== ((config.kind ?? '') as OIDCProviderKind | '')
+		);
+	}
+
 	onMount(() => {
 		void load();
+		return registerUnsaved('oidc', hasUnsavedInput);
 	});
 
 	async function submitConfig(): Promise<void> {
@@ -95,10 +142,7 @@
 		formError = '';
 		submitting = true;
 		try {
-			const scopes = form.scopes
-				.split(/[\s,]+/)
-				.map((s) => s.trim())
-				.filter((s) => s.length > 0);
+			const scopes = parseScopes(form.scopes);
 			const saved = await settingsApi.putOIDCConfig({
 				enabled: form.enabled,
 				issuerUrl: form.issuerUrl.trim(),
@@ -349,12 +393,14 @@
 				<input
 					type="email"
 					bind:value={newEntry.email}
+					aria-label={language.current && t('oidcSettings.allowlistEmailLabel')}
 					placeholder={language.current && t('oidcSettings.allowlistEmailPlaceholder')}
 					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 				/>
 				<input
 					type="text"
 					bind:value={newEntry.displayName}
+					aria-label={language.current && t('oidcSettings.allowlistDisplayNameLabel')}
 					placeholder={language.current && t('oidcSettings.allowlistDisplayNamePlaceholder')}
 					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
 				/>
@@ -363,6 +409,7 @@
 				<input
 					type="text"
 					bind:value={newEntry.sub}
+					aria-label={language.current && t('oidcSettings.allowlistSubLabel')}
 					placeholder={language.current && t('oidcSettings.allowlistSubPlaceholder')}
 					class="bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary font-mono"
 				/>

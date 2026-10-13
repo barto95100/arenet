@@ -53,12 +53,21 @@
 		tabs: readonly TabDescriptor<T>[];
 		ariaLabel: string;
 		onChange?: (next: T) => void;
+		/**
+		 * Vetoes a switch. Returning false leaves `value` alone and
+		 * skips onChange, so the caller owns what happens next — it has
+		 * the pending id and can apply the switch itself once the
+		 * operator has answered. Omitted, every switch proceeds, which
+		 * is what the other call sites rely on.
+		 */
+		canLeave?: (next: T) => boolean;
 	}
 
-	let { value = $bindable(), tabs, ariaLabel, onChange }: Props = $props();
+	let { value = $bindable(), tabs, ariaLabel, onChange, canLeave }: Props = $props();
 
 	function select(next: T): void {
 		if (next === value) return;
+		if (canLeave && !canLeave(next)) return;
 		value = next;
 		onChange?.(next);
 	}

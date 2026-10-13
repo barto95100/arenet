@@ -133,3 +133,66 @@ describe('Tabs', () => {
 		expect(screen.getByRole('tab', { name: 'B' })).toBeInTheDocument();
 	});
 });
+
+// v2.72 — the veto hook (spec 2026-10-13, D3).
+//
+// The settings page needs to ask before a tab switch discards the
+// unsaved input of the section it is about to unmount. canLeave is
+// optional so the five other call sites are untouched; the tests above
+// are the instrument for that.
+describe('Tabs — canLeave', () => {
+	const tabs = [
+		{ id: 'a', label: 'Alpha' },
+		{ id: 'b', label: 'Beta' }
+	] as const;
+
+	it('does not switch, and does not fire onChange, when the veto refuses', async () => {
+		const onChange = vi.fn();
+		render(Tabs, {
+			props: { value: 'a', tabs, ariaLabel: 'test tabs', onChange, canLeave: () => false }
+		});
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Beta' }));
+
+		expect(onChange).not.toHaveBeenCalled();
+		expect(screen.getByRole('tab', { name: 'Alpha' }).getAttribute('aria-selected')).toBe(
+			'true'
+		);
+		expect(screen.getByRole('tab', { name: 'Beta' }).getAttribute('aria-selected')).toBe(
+			'false'
+		);
+	});
+
+	it('passes the target id to the veto, so the caller can resume', async () => {
+		const seen: string[] = [];
+		render(Tabs, {
+			props: {
+				value: 'a',
+				tabs,
+				ariaLabel: 'test tabs',
+				canLeave: (next: string) => {
+					seen.push(next);
+					return false;
+				}
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Beta' }));
+
+		expect(seen).toEqual(['b']);
+	});
+
+	it('switches when the veto allows it', async () => {
+		const onChange = vi.fn();
+		render(Tabs, {
+			props: { value: 'a', tabs, ariaLabel: 'test tabs', onChange, canLeave: () => true }
+		});
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Beta' }));
+
+		expect(onChange).toHaveBeenCalledWith('b');
+		expect(screen.getByRole('tab', { name: 'Beta' }).getAttribute('aria-selected')).toBe(
+			'true'
+		);
+	});
+});
