@@ -25,6 +25,16 @@ import (
 	"github.com/barto95100/arenet/internal/storage"
 )
 
+// Bounds on the threshold window. They are the ones the rule form
+// already advertises on its input (min="1" max="365"); until v2.72
+// nothing enforced them, so the attribute was decorative and a rule
+// could be stored on a window the engine would not use.
+const (
+	certManualExpiringDefaultThresholdDays = 30  // 30d
+	certManualExpiringMinThresholdDays     = 1   // 1d
+	certManualExpiringMaxThresholdDays     = 365 // 1y
+)
+
 // CertStore is the seam this source reads through (*storage.Store satisfies it).
 type CertStore interface {
 	ListExternalCertificates(ctx context.Context) ([]storage.ExternalCertificate, error)
@@ -60,6 +70,19 @@ func (s *CertManualExpiringSource) ValidateParams(raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return fmt.Errorf("cert_manual_expiring: params not valid JSON: %w", err)
 	}
+	// Absent, null and 0 all mean "use the default", exactly as in
+	// waf_event_rate and cert_renewal_failed. Anything else has to be
+	// a window Read will actually honour: a negative or zero value was
+	// accepted here and then silently replaced by 30 at Read time, so
+	// the rule alerted on a window the form never showed.
+	d := p.ThresholdDays
+	if d == 0 {
+		d = certManualExpiringDefaultThresholdDays
+	}
+	if d < certManualExpiringMinThresholdDays || d > certManualExpiringMaxThresholdDays {
+		return fmt.Errorf("cert_manual_expiring: thresholdDays %d out of range [%d, %d]",
+			p.ThresholdDays, certManualExpiringMinThresholdDays, certManualExpiringMaxThresholdDays)
+	}
 	return nil
 }
 
@@ -69,14 +92,17 @@ func (s *CertManualExpiringSource) Read(ctx context.Context, raw json.RawMessage
 	if s.store == nil {
 		return SourceValue{}, fmt.Errorf("cert_manual_expiring: store not wired (boot-degraded)")
 	}
-	p := CertManualExpiringParams{ThresholdDays: 30}
+	p := CertManualExpiringParams{ThresholdDays: certManualExpiringDefaultThresholdDays}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return SourceValue{}, fmt.Errorf("cert_manual_expiring: params decode: %w", err)
 		}
 	}
+	// Rules stored before the ValidateParams bounds existed may still
+	// carry a non-positive window; keep honouring the default for them
+	// rather than reading a cutoff in the past.
 	if p.ThresholdDays <= 0 {
-		p.ThresholdDays = 30
+		p.ThresholdDays = certManualExpiringDefaultThresholdDays
 	}
 	certs, err := s.store.ListExternalCertificates(ctx)
 	if err != nil {

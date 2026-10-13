@@ -1837,7 +1837,7 @@ components:
       type: object
       title: cert_manual_expiring
       properties:
-        thresholdDays: { type: integer, description: "Window in days; ≤ 0 = 30." }
+        thresholdDays: { type: integer, minimum: 1, maximum: 365, description: "Window in days, 1-365. Absent, null or 0 = 30; any other out-of-range value is rejected." }
     AlertSystemHealthParams:
       type: object
       title: system_health
