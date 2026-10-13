@@ -1444,6 +1444,7 @@
 			"errExpectedEmpty": "The expected value cannot be empty.",
 			"errWafWindowRange": "The WAF window must be between 60 seconds and 24 hours.",
 			"errCertRenewalWindowRange": "The renewal failure window must be between 60 seconds and 7 days.",
+			"errManualCertDaysRange": "The expiry warning window must be between 1 and 365 days.",
 			"toastSaved": "Rule \"{name}\" saved.",
 			"toastCreated": "Rule \"{name}\" created.",
 			"summaryTestOk": "Send successful to {count} channel(s).",

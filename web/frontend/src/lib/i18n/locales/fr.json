@@ -1444,6 +1444,7 @@
 			"errExpectedEmpty": "La valeur attendue ne peut pas être vide.",
 			"errWafWindowRange": "La fenêtre WAF doit être comprise entre 60 secondes et 24 heures.",
 			"errCertRenewalWindowRange": "La fenêtre d'échec de renouvellement doit être comprise entre 60 secondes et 7 jours.",
+			"errManualCertDaysRange": "Le délai d'alerte avant expiration doit être compris entre 1 et 365 jours.",
 			"toastSaved": "Règle \"{name}\" enregistrée.",
 			"toastCreated": "Règle \"{name}\" créée.",
 			"summaryTestOk": "Envoi réussi sur {count} canal/aux.",

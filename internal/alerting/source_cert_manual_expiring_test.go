@@ -107,3 +107,66 @@ func TestCertManualExpiring_NoneWithinThreshold(t *testing.T) {
 		t.Errorf("Context[certs] len = %d; want 0", len(certsRaw))
 	}
 }
+
+// v2.72 — the threshold window has bounds, and Read honours it.
+//
+// ValidateParams accepted any valid JSON, so a rule could be stored
+// with thresholdDays 0, -5 or 400 behind a success toast; Read then
+// replaced anything <= 0 with 30, and the rule alerted on a window
+// the form had never shown. The two tests above both pass
+// thresholdDays:30 — the default — so a Read that ignored the param
+// entirely would satisfy them; TestCertManualExpiring_HonoursNonDefaultThreshold
+// is the one that pins it.
+func TestCertManualExpiring_ValidateParamsBounds(t *testing.T) {
+	src := NewCertManualExpiringSource(stubCertStore{})
+	cases := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{"absent", `{}`, false},
+		{"null means default", `{"thresholdDays":null}`, false},
+		{"zero means default", `{"thresholdDays":0}`, false},
+		{"min", `{"thresholdDays":1}`, false},
+		{"max", `{"thresholdDays":365}`, false},
+		{"negative", `{"thresholdDays":-5}`, true},
+		{"over max", `{"thresholdDays":400}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := src.ValidateParams(json.RawMessage(tc.raw))
+			if tc.wantErr && err == nil {
+				t.Fatalf("ValidateParams(%s) = nil; want an out-of-range error", tc.raw)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("ValidateParams(%s) = %v; want nil", tc.raw, err)
+			}
+			if tc.wantErr && !strings.Contains(err.Error(), "out of range") {
+				t.Errorf("error = %q; want it to name the range", err)
+			}
+		})
+	}
+}
+
+func TestCertManualExpiring_HonoursNonDefaultThreshold(t *testing.T) {
+	now := time.Now()
+	src := NewCertManualExpiringSource(stubCertStore{certs: []storage.ExternalCertificate{
+		{ID: "a", Name: "ten-days", NotAfter: now.Add(10 * 24 * time.Hour)},
+	}})
+	// A 7-day window excludes a cert that a 30-day window catches, so
+	// the count separates "the param was read" from "the default was used".
+	v, err := src.Read(context.Background(), json.RawMessage(`{"thresholdDays":7}`))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if v.Float == nil || *v.Float != 0 {
+		t.Errorf("count within 7 days = %v; want 0 (the cert expires in 10)", v.Float)
+	}
+	v, err = src.Read(context.Background(), json.RawMessage(`{"thresholdDays":30}`))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if v.Float == nil || *v.Float != 1 {
+		t.Errorf("count within 30 days = %v; want 1", v.Float)
+	}
+}

@@ -259,8 +259,13 @@
 				healthComponent =
 					typeof sp.component === 'string' ? canonicalHealthComponent(sp.component) : '';
 			} else if (source === 'cert_manual_expiring') {
+				// A rule stored before the bounds existed can carry 0 or a
+				// negative window, which Read replaces with 30 — show the
+				// window that actually fires, not the one that does not.
 				certManualThresholdDays =
-					typeof sp.thresholdDays === 'number' ? sp.thresholdDays : 30;
+					typeof sp.thresholdDays === 'number' && sp.thresholdDays > 0
+						? sp.thresholdDays
+						: 30;
 			}
 
 			// Decode eval-specific params.
@@ -430,6 +435,23 @@
 			// (source_cert_renewal_failed.go [60s, 7d]).
 			if (certRenewalWindowSecs < 60 || certRenewalWindowSecs > 604800) {
 				validationError = t('alerting.ruleModal.errCertRenewalWindowRange');
+				return null;
+			}
+		}
+		if (source === 'cert_manual_expiring') {
+			// Mirror backend cert_manual_expiring bounds
+			// (source_cert_manual_expiring.go [1d, 365d]). This source was
+			// the only numeric one guarded on neither side: the input's
+			// min/max attributes stop the spinner, not a typed value, so
+			// 0 or 400 saved clean and the engine then ran on its own
+			// default of 30. Number.isFinite also catches the cleared
+			// field, which binds to null.
+			if (
+				!Number.isFinite(certManualThresholdDays) ||
+				certManualThresholdDays < 1 ||
+				certManualThresholdDays > 365
+			) {
+				validationError = t('alerting.ruleModal.errManualCertDaysRange');
 				return null;
 			}
 		}

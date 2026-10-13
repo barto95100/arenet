@@ -571,3 +571,81 @@ describe('RuleModal — the WAF category filter', () => {
 	// fully is how a green suite stops meaning anything.
 
 });
+
+// v2.72 — the expiry window is bounded on both sides.
+//
+// The input carries min="1" max="365" and nothing enforced it: those
+// attributes stop the spinner, not a typed value, and the backend's
+// ValidateParams accepted any valid JSON. A rule saved with 0, -5 or
+// 400 got a success toast, and Read then replaced anything <= 0 with
+// its own default of 30 — so the rule watched a window the form had
+// never shown.
+describe('RuleModal — the manual-cert expiry window', () => {
+	// The file-level beforeEach already seeds two enabled channels.
+	async function openOnManualExpiring() {
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, rule: null, onClose: () => {}, onSaved: () => {} }
+		});
+		await waitFor(() => expect(screen.getByText('ops-webhook')).toBeTruthy());
+		await fireEvent.change(screen.getByLabelText(/^Source$/i), {
+			target: { value: 'cert_manual_expiring' }
+		});
+		await fireEvent.input(screen.getByLabelText(/^Name \(slug\)$/i), {
+			target: { value: 'manual-window' }
+		});
+		await fireEvent.click(screen.getByText('ops-webhook').previousElementSibling as HTMLElement);
+		return screen.getByTestId('cert-manual-days') as HTMLInputElement;
+	}
+
+	it('refuses a window above the stated maximum', async () => {
+		const days = await openOnManualExpiring();
+		await fireEvent.input(days, { target: { value: '400' } });
+		await fireEvent.click(screen.getByText('Create'));
+
+		await waitFor(() => expect(screen.getByText(/between 1 and 365 days/i)).toBeTruthy());
+		expect(createMock).not.toHaveBeenCalled();
+	});
+
+	it('refuses a cleared window instead of saving the engine default', async () => {
+		// A cleared number input binds to null, which would have reached
+		// the API as thresholdDays: null and run on 30.
+		const days = await openOnManualExpiring();
+		await fireEvent.input(days, { target: { value: '' } });
+		await fireEvent.click(screen.getByText('Create'));
+
+		await waitFor(() => expect(screen.getByText(/between 1 and 365 days/i)).toBeTruthy());
+		expect(createMock).not.toHaveBeenCalled();
+	});
+
+	it('accepts the bounds themselves', async () => {
+		createMock.mockResolvedValue(thresholdRule());
+		const days = await openOnManualExpiring();
+		await fireEvent.input(days, { target: { value: '1' } });
+		await fireEvent.click(screen.getByText('Create'));
+
+		await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+		expect(createMock.mock.calls[0][0].sourceParams.thresholdDays).toBe(1);
+	});
+
+	it('shows the window that fires for a rule stored with 0', async () => {
+		// Read replaces 0 with 30, so a form that echoed the stored 0
+		// told the operator the rule watched a window it did not.
+		const Modal = (await import('./RuleModal.svelte')).default;
+		render(Modal, {
+			props: {
+				open: true,
+				rule: {
+					...thresholdRule(),
+					source: 'cert_manual_expiring',
+					sourceParams: { thresholdDays: 0 }
+				},
+				onClose: () => {},
+				onSaved: () => {}
+			}
+		});
+
+		const days = (await screen.findByTestId('cert-manual-days')) as HTMLInputElement;
+		expect(days.value).toBe('30');
+	});
+});
