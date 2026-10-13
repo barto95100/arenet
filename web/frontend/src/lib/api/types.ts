@@ -3177,6 +3177,13 @@ export interface ManualBanRequest {
 	duration: string;
 	type: 'ban' | 'captcha' | 'throttle';
 	reason: string;
+	/**
+	 * v2.72 — proceed despite the backend guard that refuses a ban
+	 * covering the caller's own address or the whole internet. Omitted
+	 * or false means "refuse those"; the override is recorded in the
+	 * audit entry.
+	 */
+	confirm?: boolean;
 }
 
 /**

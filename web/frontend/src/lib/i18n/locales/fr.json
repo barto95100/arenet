@@ -44,6 +44,8 @@
 	"errors": {
 		"server": {
 			"path_rule_basic_auth_password_unmatched": "La règle de chemin {prefix} est protégée par authentification basique et aucun mot de passe enregistré ne correspond à ce préfixe. Soit la règle est nouvelle, soit son préfixe a changé depuis le dernier enregistrement — ressaisissez son mot de passe pour enregistrer la route.",
+			"crowdsec_ban_covers_caller": "Ce bannissement couvre l’adresse depuis laquelle vous êtes connecté. Toutes les routes servies par Arenet vous répondraient 403 jusqu’à son expiration — l’interface d’administration n’est pas derrière le bouncer, vous y garderiez donc l’accès. Cochez la case pour bannir quand même.",
+			"crowdsec_ban_covers_everything": "Ce bannissement couvre tout Internet. Toutes les routes servies par Arenet répondraient 403 à tout le monde jusqu’à son expiration. Cochez la case pour bannir quand même.",
 			"user_username_taken": "Cet identifiant est déjà pris.",
 			"user_username_invalid": "L'identifiant doit faire de 3 à 32 caractères, parmi a–z, 0–9, _ ou -.",
 			"user_display_name_too_long": "Le nom affiché est trop long.",
@@ -2217,6 +2219,7 @@
 		"errDurationRequired": "Durée requise (champ custom vide)",
 		"errReasonRequired": "Raison requise",
 		"errReasonTooLong": "Raison dépasse 256 caractères (got {count})",
+		"confirmOverride": "Bannir quand même",
 		"errSubmitFailed": "Échec de soumission",
 		"errLapiUnreachablePrefix": "LAPI inaccessible :",
 		"errUnknownError": "erreur inconnue",

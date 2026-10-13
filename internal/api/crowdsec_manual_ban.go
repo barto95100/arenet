@@ -118,6 +118,12 @@ type manualBanRequest struct {
 	// rejected (defensive: a reason like "X\x00Y\n" could
 	// confuse downstream consumers — sanitise upfront).
 	Reason string `json:"reason"`
+	// Confirm bypasses the guard that refuses a ban covering the
+	// caller's own address or the whole internet (v2.72, see
+	// crowdsec_ban_selfguard.go). Absent or false means "refuse those";
+	// true means the operator has read the reason and wants it anyway,
+	// and the bypass is recorded in the audit entry.
+	Confirm bool `json:"confirm"`
 }
 
 // manualBanResponse is the wire shape returned on 201 success.
@@ -125,6 +131,12 @@ type manualBanRequest struct {
 // optimistically prepend the new row to the Live LAPI table
 // without waiting for the 30s polling tick.
 type manualBanResponse struct {
+	// Confirmed is true when the ban overrode the self / whole-internet
+	// refusal. Only ever set in the audit payload — without it the
+	// trail cannot tell a routine ban from one that pushed past a
+	// warning, which is exactly the entry someone looks for after an
+	// outage.
+	Confirmed bool   `json:"confirmed,omitempty"`
 	Scenario  string `json:"scenario"`
 	Scope     string `json:"scope"`
 	Value     string `json:"value"`
@@ -185,6 +197,21 @@ func (h *Handler) addManualBan(w http.ResponseWriter, r *http.Request) {
 	reason, rErr := validateManualBanReason(req.Reason)
 	if rErr != nil {
 		writeError(w, http.StatusBadRequest, rErr.Error())
+		return
+	}
+
+	// v2.72 — refuse the two bans an operator almost never means: one
+	// that covers the address this request came from, and one that
+	// covers the whole internet. validateManualBanValue above checks
+	// syntax only, so 0.0.0.0/0 and the caller's own IP both sailed
+	// through and took every proxied service down for the duration.
+	//
+	// Explicitly confirmable, because both have legitimate uses, and
+	// the confirmation lands in the audit entry below.
+	guard := classifyBanTarget(scope, value, auth.ClientIPFromContext(r.Context()))
+	if guard.Refused() && !req.Confirm {
+		writeErrorCode(w, http.StatusConflict, banGuardCode(guard),
+			banGuardMessage(guard), map[string]any{"value": value})
 		return
 	}
 
@@ -259,6 +286,7 @@ func (h *Handler) addManualBan(w http.ResponseWriter, r *http.Request) {
 		Duration:  req.Duration,
 		Origin:    "manual",
 		ExpiresAt: expiresAt,
+		Confirmed: req.Confirm,
 	}
 	h.appendAudit(r, audit.Event{
 		Action:     audit.ActionCrowdSecDecisionCreate,
