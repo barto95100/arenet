@@ -43,6 +43,7 @@
 	},
 	"errors": {
 		"server": {
+			"path_rule_basic_auth_password_unmatched": "The path rule {prefix} is protected by basic auth and no stored password matches that prefix. Either the rule is new, or its prefix changed since the last save — retype its password to save the route.",
 			"user_username_taken": "That username is already taken.",
 			"user_username_invalid": "The username must be 3 to 32 characters, using a–z, 0–9, _ or -.",
 			"user_display_name_too_long": "The display name is too long.",
