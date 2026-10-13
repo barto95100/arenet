@@ -58,6 +58,22 @@ builds its payload by hand destroys every field it forgot. Build the
 payload by overlaying the loaded object instead: list what to replace,
 not what to keep, so forgetting one leaves the stored value alone.
 
+**A `$effect` that reads the `$state` it writes becomes its own
+dependency.** In Svelte 5 a read inside an effect subscribes to it, so a
+prefill that branches on `source === '…'` after assigning `source`
+re-fires when the operator changes the bound select — and reassigns
+every other field it touches. The symptoms are a control that snaps
+back, a field that cannot be typed in, and unsaved edits vanishing with
+no message. Branch on a local read off the prop, and write a default
+unconditionally. The sweep is mechanical: per effect, which state does it
+both read and write, and is that state bound to an enabled, mounted
+control. 33 effects in this app, 5 have the shape, 4 are unreachable
+because the control is `disabled` or outside the DOM exactly then.
+
+**Reproducing a cross-entity leak needs `rerender`, not a second
+`render()`.** A fresh component has fresh state and passes whatever the
+prefill does, so the test proves nothing.
+
 **Percentiles are not summable, averageable or maximisable.**
 `max(p95(a), p95(b)) ≠ p95(a ∪ b)`. Summing histogram bucket counts is
 exact; anything else is a new number with a familiar name.
