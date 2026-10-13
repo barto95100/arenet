@@ -2320,6 +2320,10 @@
 				"nameLabel": "Nom",
 				"descriptionLabel": "Description (optionnel)",
 				"commonNameLabel": "Nom commun (CN)",
+				"errors": {
+					"invalidCountry": "Le pays doit être un code à deux lettres, par exemple FR ou BE.",
+					"invalidKeyAlgorithm": "Cet algorithme de clé n'est pas pris en charge."
+				},
 				"commonNameRequiredError": "Le nom commun est obligatoire.",
 				"sansLabel": "Noms alternatifs (SAN)",
 				"sansHelp": "Liste de noms DNS additionnels séparés par des virgules (ex. www.example.com, api.example.com).",
@@ -2348,6 +2352,9 @@
 				"uploadSigned": "Importer le certificat signé",
 				"uploadSignedTitle": "Importer le certificat signé",
 				"certLabel": "Certificat (PEM)",
+				"errors": {
+					"certDoesNotMatchKey": "Ce certificat ne correspond pas à la clé privée conservée avec ce CSR. Vérifiez que vous importez bien le certificat émis par votre AC pour cette demande."
+				},
 				"certRequiredError": "Le certificat est obligatoire.",
 				"chainLabel": "Chaîne (PEM, optionnel)",
 				"uploadSignedSubmit": "Importer le certificat",

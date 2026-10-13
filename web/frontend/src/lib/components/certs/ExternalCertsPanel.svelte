@@ -54,6 +54,7 @@
 	import type { ExternalCertificate, CertWarning } from '$lib/api/external-certs';
 	import { ApiError } from '$lib/api/types';
 	import { t } from '$lib/i18n';
+	import { resolveApiError } from '$lib/utils/api-error-code';
 	import { language } from '$lib/stores/language.svelte';
 	import { pushToast } from '$lib/stores/toast';
 	import { csrAgeBadge } from '$lib/utils/csr-age';
@@ -128,21 +129,28 @@
 		key_required: 'certificates.external.upload.errors.keyRequired'
 	};
 
+	// v2.72 — the re-import dialog below answers the same validation
+	// codes as the upload form and used to print them raw, so the exact
+	// same failure read as a French sentence when uploading and as
+	// "key_does_not_match_cert: crypto/tls: private key does not match
+	// public key" when re-importing a signed CSR. One mismatch wording
+	// is specific to re-import: there the operator pastes the
+	// certificate, not the key, so the fault is the certificate.
+	const REIMPORT_ERROR_CODE_KEYS: Record<string, string> = {
+		key_does_not_match_cert: 'certs.externalCerts.pending.errors.certDoesNotMatchKey',
+		chain_specified_twice: 'certificates.external.upload.errors.chainSpecifiedTwice',
+		invalid_cert_pem: 'certificates.external.upload.errors.invalidCertPem',
+		invalid_chain_pem: 'certificates.external.upload.errors.invalidChainPem',
+		cert_required: 'certs.externalCerts.pending.certRequiredError'
+	};
+
 	/**
-	 * Extracts the leading "code" token from a backend error message
-	 * ("code: human detail") and resolves it to a friendly translated
-	 * string via UPLOAD_ERROR_CODE_KEYS. Returns the raw message
-	 * unchanged (and a null code) when the message doesn't match a
-	 * known code, so unrecognized errors are still shown, not hidden.
+	 * Resolves a backend error against UPLOAD_ERROR_CODE_KEYS. The code
+	 * splitting lives in lib/utils/api-error-code so the re-import and
+	 * the CSR form share it instead of each re-deriving it.
 	 */
 	function resolveUploadError(rawMessage: string): { message: string; code: string | null } {
-		const sep = rawMessage.indexOf(': ');
-		const code = sep === -1 ? rawMessage : rawMessage.slice(0, sep);
-		const key = UPLOAD_ERROR_CODE_KEYS[code];
-		if (key) {
-			return { message: t(key), code };
-		}
-		return { message: rawMessage, code: null };
+		return resolveApiError(rawMessage, UPLOAD_ERROR_CODE_KEYS, t);
 	}
 
 	// Delete-dialog state. deleteTarget holds the cert awaiting
@@ -357,7 +365,8 @@
 			closeReimport();
 			await loadCerts();
 		} catch (err) {
-			reimportError = err instanceof ApiError ? err.message : String(err);
+			const rawMessage = err instanceof ApiError ? err.message : String(err);
+			reimportError = resolveApiError(rawMessage, REIMPORT_ERROR_CODE_KEYS, t).message;
 		} finally {
 			reimporting = false;
 		}
