@@ -371,6 +371,11 @@ func (s *scriptedCrowdSecApplier) ApplyCrowdSecConfig(_ context.Context, apiURL,
 	return nil
 }
 
+// v2.72 — the applier seam also reports the running bouncer's address.
+// This stub has no bouncer, so it reports none: restartRequired is
+// then false, which is what every test here expects.
+func (s *scriptedCrowdSecApplier) BouncerLiveURL() string { return "" }
+
 // extrasRestoreBody builds a restore body carrying the v2.26 extras
 // with a CrowdSec row and enabled update / GeoIP schedules.
 func extrasRestoreBody(t *testing.T, env *testEnv, crowdSecKey string) []byte {

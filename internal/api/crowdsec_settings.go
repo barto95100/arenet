@@ -53,6 +53,20 @@ import (
 // manager surface area.
 type CrowdSecApplier interface {
 	ApplyCrowdSecConfig(ctx context.Context, apiURL, apiKey string) error
+	// BouncerLiveURL reports the LAPI address the RUNNING bouncer is
+	// dialling, which is not the same thing as the stored one: a
+	// graceful Caddy reload does not restart the bouncer's streaming
+	// client, so an address move only takes effect on a process
+	// restart.
+	//
+	// v2.72 — added so restartRequired can be DERIVED on every read
+	// instead of being set once on the PUT that moved the address. The
+	// flag used to live in a bare $state in the settings component,
+	// never re-derived on a GET, so one F5 removed the only warning
+	// that the bouncer was blocking nothing. The interface widens by a
+	// read-only method rather than gaining a second seam, because the
+	// handler already holds this one.
+	BouncerLiveURL() string
 }
 
 // crowdSecRequest is the wire shape accepted by PUT
@@ -149,7 +163,12 @@ func (h *Handler) getCrowdSecSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get crowdsec config")
 		return
 	}
-	writeJSON(w, http.StatusOK, crowdSecResponseFor(cfg, true))
+	resp := crowdSecResponseFor(cfg, true)
+	// v2.72 — the warning has to survive a page reload. It is derived
+	// from the running bouncer, so it reappears on every read until
+	// Arenet restarts.
+	resp.RestartRequired = h.crowdSecRestartRequired(cfg)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // putCrowdSecSettings serves PUT /api/v1/settings/crowdsec.
@@ -265,9 +284,13 @@ func (h *Handler) putCrowdSecSettings(w http.ResponseWriter, r *http.Request) {
 	// Only when the ADDRESS moved. Rotating the key alone re-provisions
 	// cleanly, so demanding a restart for it would train the operator to
 	// ignore the warning.
-	resp.RestartRequired = !errors.Is(prevErr, storage.ErrNotFound) &&
-		previous.LAPIURL != persisted.LAPIURL &&
-		persisted.APIKey != ""
+	// v2.72 — derived from the running bouncer rather than from this
+	// request's before/after, so a reload of the page keeps saying it.
+	// The previous form compared previous.LAPIURL with persisted and
+	// was therefore true exactly once, in this response.
+	_ = prevErr
+	_ = previous
+	resp.RestartRequired = h.crowdSecRestartRequired(persisted)
 	if resp.RestartRequired {
 		h.logger.Warn("crowdsec: the LAPI address changed; the bouncer keeps the previous one until Arenet restarts, and blocks nothing until then (fail-open)",
 			"from", previous.LAPIURL, "to", persisted.LAPIURL)
@@ -275,7 +298,31 @@ func (h *Handler) putCrowdSecSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// crowdSecTestRequest is the wire shape accepted by POST
+// crowdSecRestartRequired reports that the running bouncer is still on
+// a different LAPI address than the stored one.
+//
+// Derived, never stored: the two diverge the moment an operator moves
+// the address and converge again when Arenet restarts, so the warning
+// appears on every read until it is actually resolved — including in
+// another tab, for another admin, and after a page reload. The previous
+// implementation set it once in the PUT response, and the component
+// held it in a bare $state that no GET refreshed.
+//
+// False when the bouncer was never provisioned in this process (no key,
+// or CrowdSec enabled since boot without a reload yet): there is no
+// live address to disagree with.
+func (h *Handler) crowdSecRestartRequired(stored storage.CrowdSecConfig) bool {
+	if h.crowdsecApplier == nil || stored.APIKey == "" {
+		return false
+	}
+	live := strings.TrimSpace(h.crowdsecApplier.BouncerLiveURL())
+	if live == "" {
+		return false
+	}
+	return live != strings.TrimSpace(stored.LAPIURL)
+}
+
+// crowdSecTestRequest is the wire shape accepted by POST// crowdSecTestRequest is the wire shape accepted by POST
 // /api/v1/settings/crowdsec/test. Empty fields fall back to
 // the currently persisted row (the UI sends the form values
 // even before Save, so the operator can probe a candidate

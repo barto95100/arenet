@@ -427,3 +427,82 @@ func TestCrowdSecCheck_AuthFailureIsNotRetried(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// v2.72 — a pending restart outranks the probe.
+//
+// The check probed the STORED address, so after an operator moved the
+// LAPI it reached the new endpoint, reported "healthy", and said
+// nothing about the bouncer's streaming client still dialling the old
+// one — where, failing open, it was blocking nothing. The one surface
+// an operator consults when something feels wrong confirmed the
+// opposite of the truth.
+
+type fakeBouncerAddress struct{ live string }
+
+func (f fakeBouncerAddress) BouncerLiveURL() string { return f.live }
+
+func TestCrowdSecCheck_DegradedWhenTheBouncerIsOnTheOldAddress(t *testing.T) {
+	// The stored address answers perfectly. That is exactly the trap:
+	// the probe would come back healthy.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &CrowdSecCheck{
+		Config: &fakeCrowdSecConfig{url: srv.URL, key: "secret", configured: true},
+		Live:   fakeBouncerAddress{live: "http://127.0.0.1:8080"},
+	}
+	got := c.Check(context.Background())
+
+	if got.Status != StatusDegraded {
+		t.Fatalf("status = %q; want degraded while the bouncer is on another address", got.Status)
+	}
+	if !strings.Contains(got.Message, "127.0.0.1:8080") {
+		t.Errorf("message = %q; want it to name the address the bouncer is on", got.Message)
+	}
+	if !strings.Contains(got.Message, "blocks nothing") {
+		t.Errorf("message = %q; want it to name the consequence", got.Message)
+	}
+}
+
+func TestCrowdSecCheck_ProbesNormallyWhenTheAddressesAgree(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &CrowdSecCheck{
+		Config: &fakeCrowdSecConfig{url: srv.URL, key: "secret", configured: true},
+		Live:   fakeBouncerAddress{live: srv.URL},
+	}
+	if got := c.Check(context.Background()); got.Status != StatusHealthy {
+		t.Errorf("status = %q; want healthy when the bouncer is on the stored address", got.Status)
+	}
+}
+
+func TestCrowdSecCheck_NoLiveAddressProbesAsBefore(t *testing.T) {
+	// Before the first reload there is no live address, and an
+	// unwired Live must not change the verdict either — the fifteen
+	// tests above all run that way.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	for name, live := range map[string]BouncerAddressReader{
+		"not wired":     nil,
+		"empty address": fakeBouncerAddress{live: ""},
+		"whitespace":    fakeBouncerAddress{live: "   "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := &CrowdSecCheck{
+				Config: &fakeCrowdSecConfig{url: srv.URL, key: "secret", configured: true},
+				Live:   live,
+			}
+			if got := c.Check(context.Background()); got.Status != StatusHealthy {
+				t.Errorf("status = %q; want healthy", got.Status)
+			}
+		})
+	}
+}
