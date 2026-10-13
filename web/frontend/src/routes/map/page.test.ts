@@ -396,3 +396,51 @@ describe('/map page — V.7 LAN counter', () => {
 		});
 	});
 });
+
+// v2.72 — the live counters must not be announced on every frame.
+//
+// Both pills carried role="status", which implies aria-live="polite"
+// with aria-atomic="true", and both are incremented inside the
+// WebSocket message handler. A screen reader therefore re-read the
+// whole pill for every qualifying event; under real traffic the
+// announcement queue never drained and the page was unusable with
+// assistive tech on. The stream appends up to 1000 events.
+//
+// The three legitimate uses stay: the degraded banner, the connection
+// pill and the empty note each change once per state change.
+describe('Map — live counters are not a live region', () => {
+	const happyPosition: ServerPosition = {
+		lat: 48.8566,
+		lon: 2.3522,
+		city: 'Paris',
+		country: 'FR',
+		mode: 'auto'
+	};
+
+	it('does not mark the LAN and country-block counters as status', async () => {
+		fetchServerPositionMock.mockResolvedValue(happyPosition);
+		render(MapPage);
+		await waitFor(() => {
+			expect(streamCapture.onEvent).not.toBeNull();
+		});
+		streamCapture.onEvent?.(mkEvent({ isLan: true, sourceLat: 0, sourceLon: 0 }));
+		streamCapture.onEvent?.(mkEvent({ category: 'country_block' }));
+
+		const lan = await screen.findByTestId('map-lan-pill');
+		const cb = await screen.findByTestId('map-country-block-pill');
+		expect(lan.getAttribute('role')).toBeNull();
+		expect(lan.getAttribute('aria-live')).toBeNull();
+		expect(cb.getAttribute('role')).toBeNull();
+		expect(cb.getAttribute('aria-live')).toBeNull();
+	});
+
+	it('still announces the degraded banner, which changes once', async () => {
+		// The fix must not sweep up the three legitimate live regions.
+		fetchServerPositionMock.mockResolvedValue({ ...happyPosition, degraded: true });
+		render(MapPage);
+
+		await waitFor(() =>
+			expect(screen.getByTestId('map-degraded').getAttribute('role')).toBe('status')
+		);
+	});
+});

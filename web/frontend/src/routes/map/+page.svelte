@@ -203,10 +203,18 @@
 				class="lan-pill"
 				data-testid="map-lan-pill"
 				data-lan-count={lanCount}
-				role="status"
 				title={language.current && t('map.lanPillTitle')}
 			>
-				<span class="lan-pill__icon" aria-hidden="true">⌂</span>
+				<!-- v2.72 — no role="status" on these two pills. They count
+			     live WebSocket frames (lanCount++ / countryBlockCount++
+			     in the message handler), and role="status" implies
+			     aria-live="polite" with aria-atomic="true": a screen
+			     reader re-read the whole pill on every qualifying event,
+			     so under real traffic the announcement queue never
+			     drained and the page was unusable with AT on. The
+			     degraded banner, the connection pill and the empty note
+			     keep theirs — those change once per state change. -->
+			<span class="lan-pill__icon" aria-hidden="true">⌂</span>
 				<span data-testid="map-lan-pill-count">{lanCount}</span>
 				<span class="lan-pill__label"
 					>{language.current &&
@@ -227,7 +235,6 @@
 				class="lan-pill lan-pill--country"
 				data-testid="map-country-block-pill"
 				data-country-block-count={countryBlockCount}
-				role="status"
 				title={language.current && t('map.countryPillTitle')}
 			>
 				<span class="lan-pill__icon" aria-hidden="true">🛡</span>
