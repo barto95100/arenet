@@ -23,7 +23,10 @@ vi.mock('$lib/api/settings', () => {
 	const known: Record<string, unknown> = {
 		getAutomation: vi.fn().mockResolvedValue({
 			rules: { rules: {} },
-			credentials: { lapiUrl: '', machineId: '', configured: false }
+			credentials: { lapiUrl: '', machineId: '', configured: false },
+			// v2.72 — false is the boot-degraded state this page has to
+			// surface; the warning test below asserts it does.
+			engineRunning: false
 		}),
 		listForwardAuthProviders: vi.fn().mockResolvedValue([])
 	};
@@ -245,5 +248,30 @@ describe('Settings page — the unsaved-input guard', () => {
 
 		expect(await screen.findByText(/Unsaved changes/i)).toBeInTheDocument();
 		expect(tab('account').getAttribute('aria-selected')).toBe('true');
+	});
+});
+
+// v2.72 — a rule set nothing is evaluating has to say so.
+//
+// wireAutomation failing at boot logs one WARN line and Arenet keeps
+// serving. The rules page then showed a saved, audited rule set with
+// no sign that the trigger engine was absent — and the "Configured"
+// badge beside it reads the watcher credentials, which are a different
+// fact and are fine in that state.
+describe('Settings page — the automation engine', () => {
+	beforeEach(() => {
+		// The unsaved-input guard's registry is module state, and the
+		// tests above register a permanently dirty predicate. Without
+		// this the tab switch below is vetoed and the security tab
+		// never opens — which would have read as "the warning is
+		// missing".
+		resetUnsavedRegistry();
+	});
+
+	it('warns when the engine is not running', async () => {
+		render(Page);
+		await userEvent.click(tab('security'));
+
+		expect(await screen.findByTestId('automation-engine-down')).toBeInTheDocument();
 	});
 });

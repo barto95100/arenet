@@ -506,3 +506,82 @@ func TestCrowdSecCheck_NoLiveAddressProbesAsBefore(t *testing.T) {
 		})
 	}
 }
+
+// --- AutomationCheck (v2.72) ----------------------------------------------
+//
+// Rules are saved and audited whether the trigger engine runs or not,
+// which is the right call: they take effect at the next boot and
+// refusing the write would lose the operator's work. But
+// wireAutomation failing at boot logs one WARN line and Arenet keeps
+// serving, so an operator could enable rules, watch them save, see
+// them in the audit trail, and have nothing anywhere tell them no bans
+// were being pushed. The settings page's own "Configured" badge reads
+// the watcher credentials, which are a different fact and are fine in
+// that state.
+
+type fakeAutomationEngine struct {
+	running bool
+	enabled int
+}
+
+func (f fakeAutomationEngine) Running() bool     { return f.running }
+func (f fakeAutomationEngine) RulesEnabled() int { return f.enabled }
+
+func TestAutomationCheck(t *testing.T) {
+	cases := []struct {
+		name   string
+		engine AutomationEngineReader
+		want   Status
+		msg    string
+	}{
+		{
+			"running with rules",
+			fakeAutomationEngine{running: true, enabled: 3},
+			StatusHealthy, "running",
+		},
+		{
+			"running with no rules",
+			fakeAutomationEngine{running: true, enabled: 0},
+			StatusHealthy, "running",
+		},
+		{
+			// The case this check exists for.
+			"down with rules enabled",
+			fakeAutomationEngine{running: false, enabled: 2},
+			StatusDegraded, "2 rules enabled but nothing is evaluating them",
+		},
+		{
+			// Readable for one.
+			"down with one rule",
+			fakeAutomationEngine{running: false, enabled: 1},
+			StatusDegraded, "1 rule enabled",
+		},
+		{
+			// An install that never enabled a rule is not degraded by
+			// an engine it does not use.
+			"down with nothing enabled",
+			fakeAutomationEngine{running: false, enabled: 0},
+			StatusHealthy, "no rule enabled",
+		},
+		{"not wired", nil, StatusDegraded, "not wired"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := (&AutomationCheck{Engine: tc.engine}).Check(context.Background())
+			if got.Status != tc.want {
+				t.Errorf("status = %q; want %q", got.Status, tc.want)
+			}
+			if !strings.Contains(got.Message, tc.msg) {
+				t.Errorf("message = %q; want it to contain %q", got.Message, tc.msg)
+			}
+		})
+	}
+}
+
+func TestAutomationCheck_Name(t *testing.T) {
+	// The component name is what the operator sees in the health card,
+	// beside caddy, boltdb, metrics and crowdsec.
+	if got := (&AutomationCheck{}).Name(); got != "automation" {
+		t.Errorf("Name() = %q; want automation", got)
+	}
+}

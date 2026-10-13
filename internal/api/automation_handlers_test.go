@@ -476,3 +476,43 @@ func TestAutomation_DELETECredentials_NoManager_StillWipesRow(t *testing.T) {
 		t.Errorf("row should be deleted even without a manager: %v", err)
 	}
 }
+
+// v2.72 — the response says whether anything is evaluating these rules.
+//
+// wireAutomation failing at boot logs one WARN line and Arenet keeps
+// serving, so an operator could enable rules, watch them save, see them
+// in the audit trail, and have nothing tell them no bans were being
+// pushed. The "Configured" badge beside them reads the watcher
+// credentials, which are a different fact and are fine in that state.
+func TestAutomation_GET_ReportsWhetherTheEngineRuns(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	// No manager registered — what a failed wireAutomation leaves.
+	automation.SetManager(nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/automation", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+	}
+	var down automationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &down); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if down.EngineRunning {
+		t.Error("engineRunning must be false with no manager registered")
+	}
+
+	// And true once one is.
+	withFakeManager(t)
+	rec2 := httptest.NewRecorder()
+	env.router.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/api/v1/settings/automation", nil))
+	var up automationResponse
+	if err := json.Unmarshal(rec2.Body.Bytes(), &up); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !up.EngineRunning {
+		t.Error("engineRunning must be true once a manager is registered")
+	}
+}

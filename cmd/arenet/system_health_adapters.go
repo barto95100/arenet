@@ -18,8 +18,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
+	"github.com/barto95100/arenet/internal/automation"
 	"github.com/barto95100/arenet/internal/certinfo"
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/storage"
@@ -123,4 +125,47 @@ func (a *metricsProberAdapter) SchemaVersion(ctx context.Context) (int, error) {
 		return 0, errors.New("observability store not configured")
 	}
 	return a.store.SchemaVersion(ctx)
+}
+
+// automationEngineAdapter adapts the automation package's global
+// manager registry and the stored rule set into the
+// systemhealth.AutomationEngineReader signature (v2.72).
+//
+// Running() is the whole point: wireAutomation failing at boot logs one
+// WARN line and Arenet keeps serving, so an operator could enable
+// rules, watch them save, see them in the audit trail, and have
+// nothing anywhere tell them no bans were being pushed.
+//
+// RulesEnabled() decides whether that matters. An install that never
+// enabled a rule is not degraded by an engine it does not use, so the
+// check stays healthy there.
+type automationEngineAdapter struct {
+	store *storage.Store
+}
+
+func (a *automationEngineAdapter) Running() bool {
+	return automation.GetManager() != nil
+}
+
+func (a *automationEngineAdapter) RulesEnabled() int {
+	raw, err := a.store.GetAutomationRulesRaw(context.Background())
+	if err != nil || len(raw) == 0 {
+		// No stored set is the fresh-install path: every source
+		// defaults to disabled, so nothing is enabled.
+		return 0
+	}
+	var set automation.RuleSet
+	if err := json.Unmarshal(raw, &set); err != nil {
+		// Unreadable rules are a separate problem, reported by the
+		// settings page's own load error. Counting them as zero keeps
+		// this check from blaming the engine for it.
+		return 0
+	}
+	n := 0
+	for _, r := range set.Rules {
+		if r.Enabled {
+			n++
+		}
+	}
+	return n
 }

@@ -1527,6 +1527,15 @@ export interface AutomationRuleSet {
 export interface AutomationResponse {
 	rules: AutomationRuleSet;
 	credentials: AutomationCredentialsView;
+	/**
+	 * v2.72 — whether the trigger engine exists in the running process.
+	 *
+	 * Rules are saved and audited either way (they take effect at the
+	 * next boot), so false means the page is showing a rule set that
+	 * nothing is currently evaluating. Distinct from
+	 * `credentials.configured`, which is about the stored credentials.
+	 */
+	engineRunning?: boolean;
 }
 
 export interface AutomationCredentialsView {

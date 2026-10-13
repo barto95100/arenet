@@ -117,6 +117,9 @@
 		"themeDark": "Sombre",
 		"themeLight": "Clair",
 		"appearanceSection": "Apparence",
+		"automation": {
+			"engineDown": "Le moteur de déclenchement ne tourne pas dans ce processus : ces règles sont enregistrées mais rien ne les évalue. Elles prendront effet au prochain démarrage d’Arenet ; le journal de démarrage indique pourquoi il est désactivé."
+		},
 		"tabsAria": "Catégories de réglages",
 		"unsavedLeaveTitle": "Modifications non enregistrées",
 		"unsavedLeaveMessage": "Cet onglet contient des modifications qui n’ont pas été enregistrées. Le quitter les abandonne.",

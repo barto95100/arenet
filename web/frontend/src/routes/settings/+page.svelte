@@ -226,6 +226,9 @@
 	let automationRules = $state<AutomationRuleSet>({
 		rules: {} as Record<AutomationSource, AutomationRule>
 	});
+	// Defaults to true so a server that does not send the field — an
+	// older build behind a proxy — does not raise a false alarm.
+	let automationEngineRunning = $state(true);
 	let automationCreds = $state<AutomationCredentialsView>({
 		lapiUrl: '',
 		machineId: '',
@@ -260,6 +263,11 @@
 			const res = await settingsApi.getAutomation();
 			automationRules = res.rules;
 			automationCreds = res.credentials;
+			// v2.72 — false means wireAutomation failed at boot: the
+			// rules below are stored and audited but nothing evaluates
+			// them. Nothing said so before, and the "Configured" badge
+			// beside them reads from the credentials, which are fine.
+			automationEngineRunning = res.engineRunning ?? true;
 			// Seed the working copy from the loaded set;
 			// re-runs on every load so the operator sees
 			// the live state, not a stale draft.
@@ -1142,6 +1150,22 @@
 					{#if automationLoadError}
 						<p class="text-sm text-down mb-3" role="alert">
 							Failed to load automation config: {automationLoadError}
+						</p>
+					{/if}
+
+					<!-- v2.72 — the rules save and audit whether the engine
+					     runs or not, which is right: they take effect at the
+					     next boot. What was missing is any sign that nothing
+					     is evaluating them right now. The badge above reads
+					     the credentials, which are a different fact and are
+					     perfectly fine in this state. -->
+					{#if !automationLoading && !automationEngineRunning}
+						<p
+							class="text-sm text-status-warn mb-3"
+							role="alert"
+							data-testid="automation-engine-down"
+						>
+							{language.current && t('settings.automation.engineDown')}
 						</p>
 					{/if}
 

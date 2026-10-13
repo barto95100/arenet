@@ -51,6 +51,23 @@ type automationResponse struct {
 	// `configured` boolean. Password is ALWAYS redacted.
 	// Same J.4 secret discipline as the DNS provider GET.
 	Credentials credentialsResponse `json:"credentials"`
+	// EngineRunning says whether the trigger engine exists in this
+	// process (v2.72).
+	//
+	// Rules are saved and audited whether it does or not, which is the
+	// right call — they take effect at the next boot and refusing the
+	// write would lose the operator's work. What was missing is any way
+	// to know. wireAutomation failing at boot logs one WARN line and
+	// Arenet keeps serving (cmd/arenet/main.go), so the rules page
+	// showed a saved, audited rule set that nothing was evaluating.
+	//
+	// Note what this is NOT: `configured` above still means "watcher
+	// credentials are stored and usable", which is a different fact and
+	// one storage can answer on its own. Making it false here would
+	// tell the operator to re-enter credentials that are already
+	// correct. The missing fact gets its own field rather than
+	// overloading that one.
+	EngineRunning bool `json:"engineRunning"`
 }
 
 type credentialsResponse struct {
@@ -108,7 +125,8 @@ func (h *Handler) getAutomation(w http.ResponseWriter, r *http.Request) {
 	configured := storage.WatcherCredentialsConfigured(creds)
 	// Manager view trumps storage when available — reflects
 	// the live writer state after a rotation.
-	if mgr := automation.GetManager(); mgr != nil {
+	mgr := automation.GetManager()
+	if mgr != nil {
 		configured = mgr.CredentialsConfigured()
 	}
 
@@ -119,6 +137,9 @@ func (h *Handler) getAutomation(w http.ResponseWriter, r *http.Request) {
 			MachineID:  creds.MachineID,
 			Configured: configured,
 		},
+		// v2.72 — nil manager means wireAutomation failed at boot and
+		// nothing is evaluating these rules.
+		EngineRunning: mgr != nil,
 	})
 }
 
