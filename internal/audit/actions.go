@@ -261,6 +261,9 @@ const (
 	// duplicates the username so the audit log is searchable
 	// by operator independently of the encoded scenario.
 	ActionCrowdSecDecisionCreate = "crowdsec_decision_create"
+	// v2.72 — expiring a decision through the UI. A manual ban could
+	// only be undone with cscli on the host before this.
+	ActionCrowdSecDecisionDelete = "crowdsec_decision_delete"
 	// Step CS.3 follow-up — operator-pressed "Reset Security
 	// Automation" button on the Settings UI. DELETE wipes
 	// the persisted watcher credentials AND clears the
@@ -369,6 +372,7 @@ var allActions = []string{
 	ActionCrowdSecUpdated,
 	ActionCrowdSecReset,
 	ActionCrowdSecDecisionCreate,
+	ActionCrowdSecDecisionDelete,
 	ActionAutomationReset,
 	ActionMaxMindConfigUpdated,
 	ActionMaxMindConfigDeleted,

@@ -584,6 +584,16 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// crowdsec_manual_ban.go for the LAPI Alert
 				// payload shape + validation rules.
 				r.Post("/security/crowdsec/decisions", h.addManualBan)
+				// v2.72 — the inverse of the POST above. A manual
+				// ban had no undo in Arenet: the only way back was
+				// `cscli decisions delete` on the host. Same JWT
+				// group on LAPI (DELETE by id is machine-only;
+				// the bouncer key has GET/HEAD only), same 412
+				// contract when Security Automation is unset.
+				// See crowdsec_decision_delete.go, including why
+				// the id is re-serialised from its parsed form
+				// before it reaches a LAPI path.
+				r.Delete("/security/crowdsec/decisions/{id}", h.deleteCrowdSecDecision)
 				// Step AL.1.b — alerting channel CRUD + /test.
 				// Admin-only (channel config carries SMTP
 				// passwords + webhook auth headers — secret
