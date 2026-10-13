@@ -193,3 +193,78 @@ func TestReloadHealth_TracksStuckAndRecoveredReloads(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// v2.72 — a reload Caddy REJECTED has to leave a trace.
+//
+// The apply goroutine clears reloadTimedOut whatever applyFn returned,
+// and ReloadHealth reports only (started, inFlight, timedOut), so a
+// rejection was indistinguishable from a clean run. Several handlers
+// log a reload error and answer 200 on purpose — the store write is
+// committed and undoing it would be worse — so the operator got a
+// success toast, a UI reading back the new value, an edge still on the
+// old config, and systemhealth saying "config reloads healthy".
+func TestLastReloadFailure_RecordsAndClears(t *testing.T) {
+	mgr := newReloadTestManager(t)
+
+	if msg, at := mgr.LastReloadFailure(); msg != "" || !at.IsZero() {
+		t.Fatalf("fresh manager: msg=%q at=%v; want empty", msg, at)
+	}
+
+	mgr.applyFn = func(context.Context) error {
+		return errors.New("loading new config: http app module: provision: tls: no DNS provider")
+	}
+	if err := mgr.ReloadFromStore(context.Background()); err == nil {
+		t.Fatal("want the rejection to reach the caller too")
+	}
+	msg, at := mgr.LastReloadFailure()
+	if !strings.Contains(msg, "no DNS provider") {
+		t.Errorf("msg = %q; want Caddy's reason", msg)
+	}
+	if at.IsZero() {
+		t.Error("at is zero; the operator needs to know when it failed")
+	}
+
+	// The next accepted reload clears it — a stale failure reported
+	// forever would be its own lie.
+	mgr.applyFn = func(context.Context) error { return nil }
+	if err := mgr.ReloadFromStore(context.Background()); err != nil {
+		t.Fatalf("second reload: %v", err)
+	}
+	if msg, _ := mgr.LastReloadFailure(); msg != "" {
+		t.Errorf("msg = %q after a successful reload; want it cleared", msg)
+	}
+}
+
+// And the apply that completes AFTER its caller gave up still records
+// what Caddy answered: that goroutine outlives the timeout, so it is
+// the only thing that knows the outcome.
+func TestLastReloadFailure_RecordedByALateApply(t *testing.T) {
+	mgr := newReloadTestManager(t)
+	restore := withShortTimeout(t, 50*time.Millisecond)
+	defer restore()
+
+	release := make(chan struct{})
+	mgr.applyFn = func(context.Context) error {
+		<-release // ignore ctx: simulate caddy.Load stuck on its mutex
+		return errors.New("rejected after the caller gave up")
+	}
+	if err := mgr.ReloadFromStore(context.Background()); err == nil {
+		t.Fatal("want timeout")
+	}
+	// The timeout is what the caller saw; nothing is known yet.
+	if msg, _ := mgr.LastReloadFailure(); msg != "" {
+		t.Errorf("msg = %q before the apply returned; want empty", msg)
+	}
+
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if msg, _ := mgr.LastReloadFailure(); strings.Contains(msg, "gave up") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the late apply's rejection was never recorded")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
