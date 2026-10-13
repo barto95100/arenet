@@ -400,3 +400,91 @@ func TestExternalCert_Get_NotFound(t *testing.T) {
 		t.Errorf("GET missing status=%d; want 404", grec.Code)
 	}
 }
+
+// TestExternalCert_PutChainWireSemantics pins what each shape of
+// chainPEM does on PUT. Three comments in external_certs.go described
+// this and two of them were inverted on both edge cases: they said ""
+// keeps the stored chain and an explicit null clears it, which is the
+// opposite of what encoding/json and the handler do. An API client
+// following them would send "" to preserve a chain and destroy it.
+//
+// The UI never sends "" — it omits the field (`chainPEM.trim() ||
+// undefined`) — so nothing in the product was losing chains; a script
+// or a service account reading the doc comment would have.
+//
+// This is a characterisation test: it fails if someone later "fixes"
+// the code to match a comment instead of the wire.
+func TestExternalCert_PutChainWireSemantics(t *testing.T) {
+	leafA, keyA := genSelfSignedAPI(t, "chain.example.com", []string{"chain.example.com"})
+	intermediate, _ := genSelfSignedAPI(t, "Intermediate CA", nil)
+
+	cases := []struct {
+		name      string
+		chainJSON string // the chainPEM member of the PUT body, or "" to omit it
+		wantChain func(stored string) bool
+		wantDesc  string
+	}{
+		{
+			name:      "field absent keeps the stored chain",
+			chainJSON: "",
+			wantChain: func(s string) bool { return strings.Contains(s, "BEGIN CERTIFICATE") },
+			wantDesc:  "the stored intermediate",
+		},
+		{
+			// encoding/json decodes null into a nil *string, exactly
+			// like an absent field: the two are indistinguishable, so
+			// no handler can give them different meanings.
+			name:      "explicit null keeps it too",
+			chainJSON: `"chainPEM":null,`,
+			wantChain: func(s string) bool { return strings.Contains(s, "BEGIN CERTIFICATE") },
+			wantDesc:  "the stored intermediate",
+		},
+		{
+			name:      "empty string clears it",
+			chainJSON: `"chainPEM":"",`,
+			wantChain: func(s string) bool { return s == "" },
+			wantDesc:  "an empty chain",
+		},
+		{
+			name:      "a value replaces it",
+			chainJSON: `"chainPEM":` + jsonStr(intermediate) + `,`,
+			wantChain: func(s string) bool { return strings.Contains(s, "BEGIN CERTIFICATE") },
+			wantDesc:  "the supplied chain",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t, false)
+			rec := postExternalCert(t, env, "chained", leafA, keyA, intermediate)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("POST status=%d body=%s", rec.Code, rec.Body)
+			}
+			var created struct {
+				ID string `json:"id"`
+			}
+			_ = json.NewDecoder(rec.Body).Decode(&created)
+
+			// Edit the description only: no cert, no key, so the
+			// preserve-on-edit paths all engage.
+			body := `{"name":"chained","description":"edited",` + tc.chainJSON +
+				`"certPEM":"","keyPEM":""}`
+			pr := httptest.NewRequest(http.MethodPut,
+				"/api/v1/certificates/external/"+created.ID, strings.NewReader(body))
+			pr.Header.Set("Content-Type", "application/json")
+			prec := httptest.NewRecorder()
+			env.router.ServeHTTP(prec, pr)
+			if prec.Code != http.StatusOK {
+				t.Fatalf("PUT status=%d body=%s", prec.Code, prec.Body)
+			}
+
+			stored, err := env.store.GetExternalCertificate(t.Context(), created.ID)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if !tc.wantChain(stored.ChainPEM) {
+				t.Errorf("stored chain = %q; want %s", stored.ChainPEM, tc.wantDesc)
+			}
+		})
+	}
+}

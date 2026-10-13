@@ -40,9 +40,18 @@ import (
 
 // externalCertRequest is the wire shape accepted by POST and PUT.
 //
-// ChainPEM is a *string so PUT can distinguish three cases: absent /
-// "" (keep the stored chain) from an explicit JSON null (clear it) from
-// a new value (set it). On POST a nil pointer is treated as "no chain".
+// ChainPEM is a *string so PUT can tell "the client said nothing about
+// the chain" from "the client sent an empty chain". encoding/json
+// decodes BOTH an absent field and an explicit null into a nil
+// pointer, so those two cannot be given different meanings and do not
+// have them: nil keeps the stored chain, a non-nil "" clears it, any
+// other value replaces it. On POST a nil pointer is treated as "no
+// chain". TestExternalCert_PutChainWireSemantics pins all four shapes.
+//
+// This doc used to claim the opposite for two of them — that "" keeps
+// and null clears — which would have had a client send "" to preserve
+// a chain and destroy it instead. The UI never sends "": it omits the
+// field entirely (chainPEM.trim() || undefined).
 type externalCertRequest struct {
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
@@ -190,8 +199,9 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 	// Resolve the effective cert/key/chain applying preserve-on-edit:
 	//   - CertPEM: empty keeps the stored leaf.
 	//   - KeyPEM:  empty keeps the stored key (secret preserve-on-edit).
-	//   - ChainPEM (*string): nil / "" keeps the stored chain; an
-	//     explicit JSON null clears it; any other value sets it.
+	//   - ChainPEM (*string): nil keeps the stored chain — that covers
+	//     both an absent field and an explicit null, which decode
+	//     identically; a non-nil "" clears it; any other value sets it.
 	certPEM := req.CertPEM
 	if certPEM == "" {
 		certPEM = existing.CertPEM
@@ -202,9 +212,9 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 	}
 	chainPEM := existing.ChainPEM
 	if req.ChainPEM != nil {
-		// Present in the payload: "" or null both mean "clear"; a
-		// non-empty value replaces the stored chain. (A nil pointer —
-		// the field absent from JSON — falls through to "keep".)
+		// Non-nil: "" means "clear", any other value replaces the
+		// stored chain. A nil pointer — an absent field or an explicit
+		// null, which decode the same way — falls through to "keep".
 		chainPEM = *req.ChainPEM
 	}
 
