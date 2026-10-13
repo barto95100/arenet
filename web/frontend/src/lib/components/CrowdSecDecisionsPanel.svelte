@@ -20,7 +20,10 @@
 	import Spinner from '$lib/components/Spinner.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
 	import BanIPModal from '$lib/components/BanIPModal.svelte';
+	import Button from '$lib/components/Button.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import { fetchDecisions, fetchLAPIDecisions, fetchScenarios } from '$lib/api/security';
+	import { deleteCrowdSecDecision } from '$lib/api/security';
 	import type {
 		Decision,
 		LAPIDecision,
@@ -138,6 +141,59 @@
 	// not a guess.
 	const LIVE_POLL_MS = 30_000;
 	let livePollHandle: ReturnType<typeof setInterval> | null = null;
+
+	// v2.72 — undoing a ban from the table (backend in
+	// crowdsec_decision_delete.go).
+	//
+	// Offered only on decisions this install created. A CAPI row or a
+	// `lists:*` row comes from a community feed: expiring it locally
+	// does nothing lasting, because the next stream pull brings it
+	// back. For those the fix is a CrowdSec allowlist, so a button that
+	// looked like it worked would be the misleading kind of control.
+	const UNBANNABLE_ORIGINS = ['manual', 'arenet', 'crowdsec', 'cscli'];
+
+	function canUnban(origin: string): boolean {
+		return UNBANNABLE_ORIGINS.includes((origin ?? '').trim().toLowerCase());
+	}
+
+	// ConfirmDialog owns its own visibility through a bindable boolean
+	// and has no onCancel, so the target and the open flag are separate:
+	// a cancel just closes the dialog, and the next click overwrites the
+	// target.
+	let unbanTarget = $state<LAPIDecision | null>(null);
+	let unbanConfirmOpen = $state(false);
+	let unbanning = $state(false);
+
+	function askUnban(d: LAPIDecision): void {
+		unbanTarget = d;
+		unbanConfirmOpen = true;
+	}
+
+	async function confirmUnban(): Promise<void> {
+		const target = unbanTarget;
+		if (!target || unbanning) return;
+		unbanning = true;
+		try {
+			await deleteCrowdSecDecision(target.id);
+			pushToast(t('crowdsecDecisions.unbanToast', { value: target.value }), 'success');
+		} catch (err) {
+			// The backend cannot tell "already expired" from a LAPI
+			// failure — LAPI answers 500 for both — and its message
+			// says so. Surfacing it verbatim beats inventing a verdict.
+			pushToast(
+				err instanceof ApiError ? err.message : t('crowdsecDecisions.unbanFailed'),
+				'danger'
+			);
+		} finally {
+			unbanning = false;
+			unbanTarget = null;
+			unbanConfirmOpen = false;
+			// Reload either way: on success the row is gone, and on a
+			// failure the list is the only honest answer to "is it
+			// still active?".
+			await loadLive();
+		}
+	}
 
 	async function loadLive(): Promise<void> {
 		liveLoading = true;
@@ -754,6 +810,9 @@
 								<th>Origin</th>
 								<th>Scenario</th>
 								<th>Expires</th>
+								{#if isAdmin}
+									<th>{language.current && t('crowdsecDecisions.colActions')}</th>
+								{/if}
 							</tr>
 						</thead>
 						<tbody>
@@ -801,6 +860,20 @@
 									<td class="ts" title={d.expiresAt ?? ''}>
 										{d.expiresAt ? formatExpiry(d.expiresAt) : d.duration || '—'}
 									</td>
+									{#if isAdmin}
+										<td>
+											{#if canUnban(d.origin)}
+												<Button
+													variant="ghost"
+													onclick={() => askUnban(d)}
+													data-testid={`live-unban-${d.id}`}
+												>
+													{#snippet children()}{language.current &&
+															t('crowdsecDecisions.unbanAction')}{/snippet}
+												</Button>
+											{/if}
+										</td>
+									{/if}
 								</tr>
 							{/each}
 						</tbody>
@@ -1024,6 +1097,20 @@
 		onClose={closeBanModal}
 		onSuccess={onBanSuccess}
 	/>
+
+<!-- v2.72 — unbanning is destructive enough to confirm, and the
+     message names the value so the operator sees what they picked. -->
+<ConfirmDialog
+	bind:open={unbanConfirmOpen}
+	title={language.current && t('crowdsecDecisions.unbanConfirmTitle')}
+	message={unbanTarget && language.current
+		? t('crowdsecDecisions.unbanConfirmMessage', { value: unbanTarget.value })
+		: ''}
+	confirmLabel={language.current && t('crowdsecDecisions.unbanConfirmLabel')}
+	cancelLabel={language.current && t('crowdsecDecisions.unbanCancelLabel')}
+	confirmVariant="danger"
+	onConfirm={() => void confirmUnban()}
+/>
 {/if}
 
 <style>

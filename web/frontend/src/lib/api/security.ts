@@ -298,6 +298,22 @@ export function createManualBan(req: ManualBanRequest): Promise<ManualBanRespons
 }
 
 /**
+ * v2.72 — expire one LAPI decision, the inverse of createManualBan.
+ *
+ * LAPI expires the decision rather than deleting the row, so the
+ * bouncer stops applying it within one stream interval. `nbDeleted` is
+ * a number here; the backend decodes LAPI's string.
+ */
+export function deleteCrowdSecDecision(
+	id: number
+): Promise<{ id: number; nbDeleted: number }> {
+	return request<{ id: number; nbDeleted: number }>(
+		'DELETE',
+		`/security/crowdsec/decisions/${id}`
+	);
+}
+
+/**
  * Step U.4 — typed client wrapper around GET
  * /api/v1/observability/cert-events. The endpoint backs the
  * Activity log page's cert source (U.5 wires it into the

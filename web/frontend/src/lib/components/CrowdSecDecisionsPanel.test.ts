@@ -18,7 +18,7 @@
 // triggered via the refresh button.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import type {
 	Decision,
 	DecisionsResponse,
@@ -31,7 +31,8 @@ const { toastMock, securityMock } = vi.hoisted(() => ({
 	securityMock: {
 		fetchDecisions: vi.fn(),
 		fetchLAPIDecisions: vi.fn(),
-		fetchScenarios: vi.fn()
+		fetchScenarios: vi.fn(),
+		deleteCrowdSecDecision: vi.fn()
 	}
 }));
 
@@ -763,5 +764,112 @@ describe('CrowdSec decisions panel — Scenarios tab', () => {
 		// Refresh button is the explicit re-fetch path; tab
 		// re-open is NOT supposed to re-fire.
 		expect(securityMock.fetchScenarios).toHaveBeenCalledTimes(1);
+	});
+});
+
+// v2.72 — undoing a ban from the table.
+//
+// Until the DELETE endpoint existed, a decision created from this very
+// UI could be removed only with `cscli decisions delete` on the host.
+// The button is offered only on decisions this install created: a CAPI
+// or `lists:*` row comes from a community feed, and expiring it locally
+// does nothing lasting because the next stream pull brings it back.
+describe('CrowdSecDecisionsPanel — unban', () => {
+	const adminUser = {
+		username: 'admin',
+		displayName: 'Admin',
+		role: 'admin',
+		mfa: 'none',
+		passwordCompromised: false
+	} as never;
+
+	async function openLiveAsAdmin(): Promise<void> {
+		auth.user = adminUser;
+		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleLAPI());
+		render(Page);
+		await waitFor(() => expect(securityMock.fetchDecisions).toHaveBeenCalled());
+		await fireEvent.click(screen.getByTestId('tab-live'));
+		await waitFor(() => expect(securityMock.fetchLAPIDecisions).toHaveBeenCalled());
+	}
+
+	it('offers it on a local decision and not on a CAPI one', async () => {
+		await openLiveAsAdmin();
+
+		// id 3 is origin "cscli" — created on this host.
+		await waitFor(() => expect(screen.getByTestId('live-unban-3')).toBeInTheDocument());
+		// ids 1 and 2 are CAPI: the community blocklist comes back on
+		// the next pull, so a button there would promise what it cannot
+		// deliver.
+		expect(screen.queryByTestId('live-unban-1')).toBeNull();
+		expect(screen.queryByTestId('live-unban-2')).toBeNull();
+	});
+
+	it('shows nothing to a viewer', async () => {
+		auth.user = null;
+		securityMock.fetchDecisions.mockResolvedValue(sampleSnapshot);
+		securityMock.fetchLAPIDecisions.mockResolvedValue(sampleLAPI());
+		render(Page);
+		await waitFor(() => expect(securityMock.fetchDecisions).toHaveBeenCalled());
+		await fireEvent.click(screen.getByTestId('tab-live'));
+		await waitFor(() => expect(securityMock.fetchLAPIDecisions).toHaveBeenCalled());
+
+		expect(screen.queryByTestId('live-unban-3')).toBeNull();
+	});
+
+	it('confirms, calls the API with that id, and reloads', async () => {
+		await openLiveAsAdmin();
+		securityMock.deleteCrowdSecDecision.mockResolvedValue({ id: 3, nbDeleted: 1 });
+		const callsBefore = securityMock.fetchLAPIDecisions.mock.calls.length;
+
+		await fireEvent.click(await screen.findByTestId('live-unban-3'));
+		// The dialog names the value, so the operator sees what they picked.
+		const dialog = await screen.findByRole('dialog');
+		expect(dialog.textContent ?? '').toContain('192.0.2.42');
+
+		await fireEvent.click(
+			within(dialog).getByRole('button', { name: /^Débannir$|^Unban$/ })
+		);
+
+		await waitFor(() =>
+			expect(securityMock.deleteCrowdSecDecision).toHaveBeenCalledWith(3)
+		);
+		await waitFor(() =>
+			expect(toastMock.pushToast).toHaveBeenCalledWith(
+				expect.stringContaining('192.0.2.42'),
+				'success'
+			)
+		);
+		// The table has to be re-read: the row is gone.
+		await waitFor(() =>
+			expect(securityMock.fetchLAPIDecisions.mock.calls.length).toBeGreaterThan(callsBefore)
+		);
+	});
+
+	it('surfaces the backend message on a failure, and still reloads', async () => {
+		// The backend cannot tell "already expired" from a LAPI failure
+		// and says so; inventing a verdict here would be worse. And the
+		// list is the only honest answer to "is it still active?".
+		await openLiveAsAdmin();
+		securityMock.deleteCrowdSecDecision.mockRejectedValue(
+			new ApiError('LAPI refused to expire this decision — it may already have expired', 502)
+		);
+		const callsBefore = securityMock.fetchLAPIDecisions.mock.calls.length;
+
+		await fireEvent.click(await screen.findByTestId('live-unban-3'));
+		const dialog = await screen.findByRole('dialog');
+		await fireEvent.click(
+			within(dialog).getByRole('button', { name: /^Débannir$|^Unban$/ })
+		);
+
+		await waitFor(() =>
+			expect(toastMock.pushToast).toHaveBeenCalledWith(
+				expect.stringContaining('may already have expired'),
+				'danger'
+			)
+		);
+		await waitFor(() =>
+			expect(securityMock.fetchLAPIDecisions.mock.calls.length).toBeGreaterThan(callsBefore)
+		);
 	});
 });
