@@ -410,7 +410,10 @@ describe('ChannelModal', () => {
 // redaction placeholder is flagged by the backend: warn and force the
 // operator to retype it (an empty field, not the masked value).
 describe('ChannelModal — lost webhook URL', () => {
-	it('warns and clears the URL when secretsLost is set', async () => {
+	it('warns and clears the URL when secretsLost carries no detail', async () => {
+		// Back-compat: a bare secretsLost keeps its historical meaning,
+		// the URL. A response from before lostSecrets existed must still
+		// warn rather than go quiet.
 		const Modal = (await import('./ChannelModal.svelte')).default;
 		const broken = { ...webhookFixture(), secretsLost: true };
 		render(Modal, { props: { open: true, channel: broken, onClose: () => {}, onSaved: () => {} } });
@@ -425,5 +428,81 @@ describe('ChannelModal — lost webhook URL', () => {
 
 		expect(screen.queryByTestId('channel-secrets-lost')).toBeNull();
 		expect((screen.getByLabelText(/URL/i) as HTMLInputElement).value).not.toBe('');
+	});
+});
+
+// v2.72 — the warning names which credential was lost.
+//
+// secretsLost is raised by a damaged header value just as much as by a
+// damaged URL, and this modal could only react one way: blank the URL
+// and point the operator at it. On a channel whose URL was fine and
+// whose Authorization header was the casualty that was wrong twice —
+// it threw away a good URL and never named the field to retype, so the
+// repair could not be found and every save came back with a success
+// toast and a dead channel.
+describe('ChannelModal — which secret was lost', () => {
+	it('names the header and leaves the intact URL alone', async () => {
+		const Modal = (await import('./ChannelModal.svelte')).default;
+		const broken = {
+			...webhookFixture(),
+			secretsLost: true,
+			lostSecrets: ['header:Authorization']
+		};
+		render(Modal, { props: { open: true, channel: broken, onClose: () => {}, onSaved: () => {} } });
+
+		const warning = screen.getByTestId('channel-secrets-lost');
+		expect(warning.textContent ?? '').toContain('Authorization');
+		// The URL was never the casualty; blanking it discarded a good
+		// value and sent the operator after the wrong field.
+		expect((screen.getByLabelText(/URL/i) as HTMLInputElement).value).not.toBe('');
+	});
+
+	it('clears the URL and says so when the URL is the casualty', async () => {
+		const Modal = (await import('./ChannelModal.svelte')).default;
+		const broken = { ...webhookFixture(), secretsLost: true, lostSecrets: ['url'] };
+		render(Modal, { props: { open: true, channel: broken, onClose: () => {}, onSaved: () => {} } });
+
+		expect(screen.getByTestId('channel-secrets-lost').textContent ?? '').toContain('URL');
+		expect((screen.getByLabelText(/URL/i) as HTMLInputElement).value).toBe('');
+	});
+
+	it('names every damaged header, not just the first', async () => {
+		const Modal = (await import('./ChannelModal.svelte')).default;
+		const broken = {
+			...webhookFixture(),
+			secretsLost: true,
+			lostSecrets: ['header:Authorization', 'header:X-Api-Key']
+		};
+		render(Modal, { props: { open: true, channel: broken, onClose: () => {}, onSaved: () => {} } });
+
+		const text = screen.getByTestId('channel-secrets-lost').textContent ?? '';
+		expect(text).toContain('Authorization');
+		expect(text).toContain('X-Api-Key');
+	});
+
+	it('warns a discord channel too, which had no warning at all', async () => {
+		const Modal = (await import('./ChannelModal.svelte')).default;
+		const broken = {
+			...webhookFixture(),
+			kind: 'discord' as const,
+			config: { webhookUrl: 'https://discord.com/[redacted]', timeoutSeconds: 10 },
+			secretsLost: true,
+			lostSecrets: ['url']
+		};
+		render(Modal, { props: { open: true, channel: broken, onClose: () => {}, onSaved: () => {} } });
+
+		expect(screen.getByTestId('channel-secrets-lost')).toBeTruthy();
+		// And the placeholder is not left in the field, where the host
+		// check and the Go validator both accept it.
+		expect((screen.getByLabelText(/URL/i) as HTMLInputElement).value).toBe('');
+	});
+
+	it('says nothing for a healthy channel', async () => {
+		const Modal = (await import('./ChannelModal.svelte')).default;
+		render(Modal, {
+			props: { open: true, channel: webhookFixture(), onClose: () => {}, onSaved: () => {} }
+		});
+
+		expect(screen.queryByTestId('channel-secrets-lost')).toBeNull();
 	});
 });
