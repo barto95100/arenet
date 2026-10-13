@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -79,11 +80,22 @@ type alertChannelResponse struct {
 	LastErrorAt *time.Time      `json:"lastErrorAt,omitempty"`
 	CreatedAt   string          `json:"createdAt"`
 	UpdatedAt   string          `json:"updatedAt"`
-	// SecretsLost (v2.39) flags a webhook channel whose stored URL is
-	// the redacted placeholder: an edit made before the fix above
+	// SecretsLost (v2.39) flags a channel whose stored credential is
+	// the redaction placeholder: an edit made before the fix above
 	// overwrote it, so the channel cannot send until the operator
-	// retypes the URL.
+	// retypes it.
 	SecretsLost bool `json:"secretsLost,omitempty"`
+	// LostSecrets (v2.72) says WHICH one. "url", or "header:<key>" per
+	// damaged header value.
+	//
+	// The boolean alone was unactionable. It is raised by a damaged
+	// header just as much as by a damaged URL, and the UI could only
+	// react one way: blank the URL and tell the operator to retype it.
+	// On a channel whose URL was intact and whose Authorization header
+	// was the casualty, that instruction was wrong twice — it discarded
+	// a good URL and never named the field that actually had to be
+	// retyped, so the repair could not be found.
+	LostSecrets []string `json:"lostSecrets,omitempty"`
 }
 
 // alertChannelTestResponse reports the outcome of a
@@ -163,37 +175,53 @@ func alertChannelForAudit(c storage.Channel) storage.Channel {
 	return c
 }
 
-// webhookURLLost reports a webhook channel whose stored URL carries the
-// redaction placeholder — the channel is broken until the URL is
-// retyped (see mergeAlertChannelSecrets).
-func webhookURLLost(c storage.Channel) bool {
-	if c.Kind == storage.ChannelKindDiscord {
+// lostChannelSecrets names every stored credential of c that carries
+// the redaction placeholder instead of its value — each one is a field
+// the channel cannot send without and that only the operator can
+// restore (see mergeAlertChannelSecrets).
+//
+// Identifiers are "url" and "header:<key>". The order is stable: the
+// URL first, then the header keys sorted, so the UI renders the same
+// sentence on every load.
+func lostChannelSecrets(c storage.Channel) []string {
+	switch c.Kind {
+	case storage.ChannelKindDiscord:
 		var cfg alerting.DiscordConfig
 		if err := json.Unmarshal(c.Config, &cfg); err != nil {
-			return false
+			return nil
 		}
-		return strings.Contains(cfg.WebhookURL, auditRedacted)
-	}
-	if c.Kind != storage.ChannelKindWebhook {
-		return false
-	}
-	var cfg alerting.WebhookConfig
-	if err := json.Unmarshal(c.Config, &cfg); err != nil {
-		return false
-	}
-	if strings.Contains(cfg.URL, auditRedacted) {
-		return true
-	}
-	// v2.72 — header values are secrets too, and one carrying the
-	// placeholder is the same kind of casualty as a URL carrying it: the
-	// channel is dead and nothing said so. Channels damaged before the
-	// refusal above existed are only visible through this.
-	for _, v := range cfg.Headers {
-		if strings.Contains(v, auditRedacted) {
-			return true
+		if strings.Contains(cfg.WebhookURL, auditRedacted) {
+			return []string{"url"}
 		}
+		return nil
+	case storage.ChannelKindWebhook:
+		var cfg alerting.WebhookConfig
+		if err := json.Unmarshal(c.Config, &cfg); err != nil {
+			return nil
+		}
+		var lost []string
+		if strings.Contains(cfg.URL, auditRedacted) {
+			lost = append(lost, "url")
+		}
+		// v2.72 — header values are secrets too, and one carrying the
+		// placeholder is the same kind of casualty as a URL carrying it:
+		// the channel is dead and nothing said so. Channels damaged
+		// before the refusal in the merge existed are only visible
+		// through this.
+		keys := make([]string, 0, len(cfg.Headers))
+		for k, v := range cfg.Headers {
+			if strings.Contains(v, auditRedacted) {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			lost = append(lost, "header:"+k)
+		}
+		return lost
+	default:
+		return nil
 	}
-	return false
 }
 
 // alertChannelToResponse builds the GET wire shape with
@@ -204,8 +232,10 @@ func alertChannelToResponse(c storage.Channel) alertChannelResponse {
 	// Re-use the audit redaction — same secret-stripping
 	// rules, same per-kind dispatch.
 	redacted := alertChannelForAudit(c)
+	lost := lostChannelSecrets(c)
 	return alertChannelResponse{
-		SecretsLost: webhookURLLost(c),
+		SecretsLost: len(lost) > 0,
+		LostSecrets: lost,
 		ID:          c.ID,
 		Name:        c.Name,
 		Kind:        c.Kind,
@@ -294,6 +324,19 @@ func mergeAlertChannelSecrets(reqConfig json.RawMessage, kind string, previous s
 		for k, v := range incoming.Headers {
 			if v == "" || v == auditRedacted {
 				storedV, ok := stored.Headers[k]
+				if ok && storedV == auditRedacted {
+					// v2.72 — the stored value IS the placeholder, so
+					// there is no secret left to inherit: this row was
+					// damaged before the refusal below existed. Letting
+					// it through re-wrote the placeholder and the channel
+					// went on 401ing behind a success toast, which made
+					// the damage unrepairable in practice — the operator
+					// was told to retype the URL, did, and nothing
+					// changed.
+					return nil, fmt.Errorf("header %q: its stored value is the "+
+						"redaction placeholder, so the real value was lost by an "+
+						"earlier save — retype it", k)
+				}
 				if !ok {
 					// v2.72 — the key has no stored counterpart, so there
 					// is nothing to inherit and the placeholder means

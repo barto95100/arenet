@@ -104,6 +104,26 @@
 	// channel changes. The reactive guard means edit-mode
 	// pre-populates from the supplied channel; create-mode
 	// resets to clean defaults.
+	// v2.72 — which credential was lost, not merely that one was.
+	//
+	// secretsLost is raised by a damaged header value just as much as by
+	// a damaged URL, and this modal could only react one way: blank the
+	// URL and point the operator at it. On a channel whose URL was fine
+	// and whose Authorization header was the casualty that was wrong
+	// twice — it threw away a good URL and never named the field that
+	// had to be retyped, so the repair could not be found and every
+	// save came back with a success toast and a dead channel.
+	const lostSecrets = $derived(channel?.lostSecrets ?? []);
+	// A bare secretsLost with no detail keeps its historical meaning —
+	// the URL — so a response from before lostSecrets existed still
+	// warns instead of going quiet.
+	const urlLost = $derived(
+		lostSecrets.includes('url') || (!!channel?.secretsLost && lostSecrets.length === 0)
+	);
+	const lostHeaderKeys = $derived(
+		lostSecrets.filter((s) => s.startsWith('header:')).map((s) => s.slice('header:'.length))
+	);
+
 	$effect(() => {
 		if (!open) return;
 		validationError = '';
@@ -114,7 +134,11 @@
 			minSeverity = channel.minSeverity;
 			if (channel.kind === 'discord') {
 				const cfg = (channel.config ?? {}) as unknown as Record<string, unknown>;
-				discordUrl = typeof cfg.webhookUrl === 'string' ? cfg.webhookUrl : '';
+				// A discord webhook URL is the whole credential, so the
+				// same rule applies: show nothing rather than the
+				// placeholder, which the host check and the Go validator
+				// both accept.
+				discordUrl = !urlLost && typeof cfg.webhookUrl === 'string' ? cfg.webhookUrl : '';
 				discordUsername = typeof cfg.username === 'string' ? cfg.username : '';
 				discordMentionUsers = Array.isArray(cfg.mentionUserIds) ? cfg.mentionUserIds.join(', ') : '';
 				discordMentionRoles = Array.isArray(cfg.mentionRoleIds) ? cfg.mentionRoleIds.join(', ') : '';
@@ -124,8 +148,11 @@
 				const cfg = channel.config as WebhookConfig;
 				// v2.39 — a channel whose stored URL was overwritten by the
 				// redaction placeholder starts empty: the operator must
-				// retype it (the warning below says so).
-				webhookUrl = channel.secretsLost ? '' : (cfg.url ?? '');
+				// retype it (the warning below says so). v2.72 — only
+				// when the URL is the casualty; it used to blank an
+				// intact URL because a damaged header raised the same
+				// flag.
+				webhookUrl = urlLost ? '' : (cfg.url ?? '');
 				webhookMethod = 'POST';
 				webhookTimeout = cfg.timeoutSeconds ?? 10;
 				webhookHeaders = cfg.headers
@@ -533,12 +560,23 @@
 			</p>
 		{/if}
 
+		{#if urlLost || lostHeaderKeys.length > 0}
+			<!-- Outside the per-kind blocks: a discord channel can lose
+			     its URL too, and the warning used to be webhook-only. -->
+			<p class="text-xs text-status-warn" role="alert" data-testid="channel-secrets-lost">
+				{#if urlLost}
+					{language.current && t('alerting.channelModal.secretsLostUrl')}
+				{/if}
+				{#if lostHeaderKeys.length > 0}
+					{language.current &&
+						t('alerting.channelModal.secretsLostHeaders', {
+							keys: lostHeaderKeys.join(', ')
+						})}
+				{/if}
+			</p>
+		{/if}
+
 		{#if kind === 'webhook'}
-			{#if channel?.secretsLost}
-				<p class="text-xs text-status-warn" role="alert" data-testid="channel-secrets-lost">
-					{language.current && t('alerting.channelModal.secretsLost')}
-				</p>
-			{/if}
 			<Input
 				bind:value={webhookUrl}
 				label={language.current && t('alerting.channelModal.labelWebhookUrl')}

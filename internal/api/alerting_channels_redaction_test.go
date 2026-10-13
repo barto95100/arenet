@@ -258,4 +258,118 @@ func TestAlertChannel_AlreadyDamagedHeaderIsReportedAsLost(t *testing.T) {
 	if !got.SecretsLost {
 		t.Error("a stored header carrying the placeholder must set secretsLost")
 	}
+	// v2.72 — and it must say WHICH one. The boolean alone sent the UI
+	// down the URL path: it blanked an intact URL and told the operator
+	// to retype it, never naming the header that was the casualty.
+	if len(got.LostSecrets) != 1 || got.LostSecrets[0] != "header:Authorization" {
+		t.Errorf("lostSecrets = %v; want exactly [header:Authorization]", got.LostSecrets)
+	}
+}
+
+// TestAlertChannel_DamagedHeaderCannotBeSilentlyReSaved is the half
+// that made the damage unrepairable.
+//
+// The merge inherits a stored value whenever the incoming one is blank
+// or the placeholder. On a row whose STORED value is itself the
+// placeholder there is nothing to inherit, and inheriting wrote the
+// placeholder straight back: the operator retyped the URL the banner
+// pointed at, got a success toast, and the channel went on 401ing.
+// Every later edit did the same, so the loop never ended.
+func TestAlertChannel_DamagedHeaderCannotBeSilentlyReSaved(t *testing.T) {
+	env := newTestEnv(t, false)
+	ch := seedRedactionChannel(t, env)
+
+	damaged, _ := json.Marshal(alerting.WebhookConfig{
+		URL:            webhookURL,
+		TimeoutSeconds: 10,
+		Headers:        map[string]string{"Authorization": auditRedacted},
+	})
+	stored, err := env.store.GetAlertChannel(context.Background(), ch.ID)
+	if err != nil {
+		t.Fatalf("GetAlertChannel: %v", err)
+	}
+	stored.Config = damaged
+	if _, err := env.store.UpdateAlertChannel(context.Background(), stored); err != nil {
+		t.Fatalf("UpdateAlertChannel: %v", err)
+	}
+
+	// The operator saves the channel back exactly as the UI shows it:
+	// the key unchanged, the value still the placeholder.
+	rec := putChannel(t, env, ch.ID, alerting.WebhookConfig{
+		URL:            webhookURL,
+		TimeoutSeconds: 10,
+		Headers:        map[string]string{"Authorization": auditRedacted},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 — re-saving a row whose stored header value is "+
+			"the placeholder must say so, not write it back; body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "Authorization") {
+		t.Errorf("the refusal must name the header to retype; body=%s", rec.Body)
+	}
+}
+
+// TestAlertChannel_RetypingTheDamagedHeaderRepairsIt is the exit from
+// that loop: the one action that fixes the channel must work.
+func TestAlertChannel_RetypingTheDamagedHeaderRepairsIt(t *testing.T) {
+	env := newTestEnv(t, false)
+	ch := seedRedactionChannel(t, env)
+
+	damaged, _ := json.Marshal(alerting.WebhookConfig{
+		URL:            webhookURL,
+		TimeoutSeconds: 10,
+		Headers:        map[string]string{"Authorization": auditRedacted},
+	})
+	stored, err := env.store.GetAlertChannel(context.Background(), ch.ID)
+	if err != nil {
+		t.Fatalf("GetAlertChannel: %v", err)
+	}
+	stored.Config = damaged
+	if _, err := env.store.UpdateAlertChannel(context.Background(), stored); err != nil {
+		t.Fatalf("UpdateAlertChannel: %v", err)
+	}
+
+	rec := putChannel(t, env, ch.ID, alerting.WebhookConfig{
+		URL:            webhookURL,
+		TimeoutSeconds: 10,
+		Headers:        map[string]string{"Authorization": "Bearer retyped"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	if got := storedWebhook(t, env, ch.ID).Headers["Authorization"]; got != "Bearer retyped" {
+		t.Errorf("header = %q; want the retyped value", got)
+	}
+	// And the channel stops reporting itself broken.
+	if after := getChannel(t, env, ch.ID); after.SecretsLost || len(after.LostSecrets) != 0 {
+		t.Errorf("still reported lost after the repair: %v / %v",
+			after.SecretsLost, after.LostSecrets)
+	}
+}
+
+// TestAlertChannel_LostURLSaysURL keeps the two casualties
+// distinguishable: the UI picks its sentence from this list, so a
+// damaged URL must not look like a damaged header.
+func TestAlertChannel_LostURLSaysURL(t *testing.T) {
+	env := newTestEnv(t, false)
+	ch := seedRedactionChannel(t, env)
+
+	damaged, _ := json.Marshal(alerting.WebhookConfig{
+		URL:            "https://discord.example/" + auditRedacted,
+		TimeoutSeconds: 10,
+		Headers:        map[string]string{"Authorization": "Bearer still-here"},
+	})
+	stored, err := env.store.GetAlertChannel(context.Background(), ch.ID)
+	if err != nil {
+		t.Fatalf("GetAlertChannel: %v", err)
+	}
+	stored.Config = damaged
+	if _, err := env.store.UpdateAlertChannel(context.Background(), stored); err != nil {
+		t.Fatalf("UpdateAlertChannel: %v", err)
+	}
+
+	got := getChannel(t, env, ch.ID)
+	if len(got.LostSecrets) != 1 || got.LostSecrets[0] != "url" {
+		t.Errorf("lostSecrets = %v; want exactly [url]", got.LostSecrets)
+	}
 }

@@ -1297,7 +1297,8 @@
 			"colFailed": "Failed"
 		},
 		"channelModal": {
-			"secretsLost": "The webhook URL of this channel was lost by an earlier version of Arenet (an edit saved the masked value). Retype it to repair the channel.",
+			"secretsLostUrl": "The URL of this channel was lost by an earlier save, which stored the masked value instead. Retype it to repair the channel.",
+			"secretsLostHeaders": "The value of {keys} was lost by an earlier save, which stored the masked value instead. Retype it to repair the channel.",
 			"titleEdit": "Edit channel",
 			"titleCreate": "Add channel",
 			"labelName": "Name",

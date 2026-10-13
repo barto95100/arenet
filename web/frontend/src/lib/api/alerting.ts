@@ -114,6 +114,8 @@ export interface AlertChannel {
 	 * channel cannot send until the URL is retyped.
 	 */
 	secretsLost?: boolean;
+	/** Which credential carries the placeholder: "url", "header:<key>". */
+	lostSecrets?: string[];
 }
 
 export interface AlertChannelRequest {

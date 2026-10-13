@@ -1297,7 +1297,8 @@
 			"colFailed": "Échecs"
 		},
 		"channelModal": {
-			"secretsLost": "L'URL du webhook de ce canal a été perdue par une version précédente d'Arenet (une modification a enregistré la valeur masquée). Retape-la pour réparer le canal.",
+			"secretsLostUrl": "L’URL de ce canal a été perdue par un enregistrement précédent, qui a conservé la valeur masquée à sa place. Ressaisissez-la pour réparer le canal.",
+			"secretsLostHeaders": "La valeur de {keys} a été perdue par un enregistrement précédent, qui a conservé la valeur masquée à sa place. Ressaisissez-la pour réparer le canal.",
 			"titleEdit": "Modifier le canal",
 			"titleCreate": "Ajouter un canal",
 			"labelName": "Nom",
