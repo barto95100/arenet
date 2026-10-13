@@ -17,6 +17,11 @@ vi.mock('$lib/api/system', () => ({
 	}
 }));
 
+const pushToastMock = vi.fn();
+vi.mock('$lib/stores/toast', () => ({
+	pushToast: (m: string, v?: string) => pushToastMock(m, v)
+}));
+
 import UpdatesSection from './UpdatesSection.svelte';
 
 function version(over: Record<string, unknown> = {}) {
@@ -30,6 +35,7 @@ beforeEach(() => {
 	systemMock.getVersion.mockReset();
 	systemMock.checkVersion.mockReset();
 	systemMock.setVersionConfig.mockReset();
+	pushToastMock.mockReset();
 });
 
 describe('UpdatesSection', () => {
@@ -77,5 +83,46 @@ describe('UpdatesSection', () => {
 		const state = await screen.findByTestId('updates-laststate');
 		expect(state.textContent ?? '').toMatch(/never/i);
 		expect(state.textContent ?? '').not.toMatch(/years? ago|ans/i);
+	});
+});
+
+// v2.72 — same defect as the GeoIP schedule toggle: the failure was
+// caught and discarded with no toast, and because the checkbox is
+// bound one-way to a value the failure leaves unchanged, nothing
+// re-rendered it and the DOM kept the operator's click. They were left
+// believing update checks were on while the server had them off.
+describe('UpdatesSection — a failed toggle', () => {
+	it('reports the failure and puts the checkbox back', async () => {
+		const { ApiError } = await import('$lib/api/types');
+		systemMock.getVersion.mockResolvedValue(version({ enabled: false }));
+		systemMock.setVersionConfig.mockRejectedValue(new ApiError('boltdb: write lock', 500));
+
+		render(UpdatesSection);
+		const box = (await waitFor(() =>
+			screen.getByTestId('updates-enable')
+		)) as HTMLInputElement;
+		expect(box.checked).toBe(false);
+
+		await fireEvent.click(box);
+		await waitFor(() => expect(systemMock.setVersionConfig).toHaveBeenCalled());
+
+		await waitFor(() =>
+			expect(pushToastMock).toHaveBeenCalledWith(expect.any(String), 'danger')
+		);
+		expect(box.checked).toBe(false);
+	});
+
+	it('says nothing extra when the toggle succeeds', async () => {
+		systemMock.getVersion.mockResolvedValue(version({ enabled: false }));
+		systemMock.setVersionConfig.mockResolvedValue(version({ enabled: true }));
+
+		render(UpdatesSection);
+		const box = (await waitFor(() =>
+			screen.getByTestId('updates-enable')
+		)) as HTMLInputElement;
+		await fireEvent.click(box);
+		await waitFor(() => expect(box.checked).toBe(true));
+
+		expect(pushToastMock).not.toHaveBeenCalledWith(expect.any(String), 'danger');
 	});
 });

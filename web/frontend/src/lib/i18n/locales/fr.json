@@ -248,6 +248,7 @@
 			"current": "Version actuelle",
 			"latest": "Dernière disponible",
 			"upToDate": "À jour",
+			"toggleFailed": "Impossible de modifier le réglage de vérification des mises à jour : {err}",
 			"enableToggle": "Vérifier les mises à jour automatiquement",
 			"checkNow": "Vérifier maintenant",
 			"checking": "Vérification…",
@@ -1728,6 +1729,7 @@
 	"geoipSettings": {
 		"title": "Base GeoIP",
 		"subtitle": "Téléchargez et mettez à jour automatiquement la base GeoIP MaxMind utilisée par le blocage par pays et la carte du monde.",
+		"scheduleFailed": "Impossible de modifier la planification des mises à jour automatiques : {err}",
 		"editionInUse": "Base utilisée : {edition}",
 		"statusConfigured": "Configuré",
 		"statusNotConfigured": "Non configuré",

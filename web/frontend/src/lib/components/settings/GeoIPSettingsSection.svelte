@@ -151,25 +151,58 @@
 		}
 	}
 
-	async function toggleEnabled(next: boolean): Promise<void> {
+	// v2.72 — a failed schedule change says so, and the control goes
+	// back to what the server holds.
+	//
+	// Both handlers used to catch the error and discard it with no toast
+	// of any kind. Worse, the controls are bound one-way to a value the
+	// failure leaves unchanged, so nothing re-rendered them and the DOM
+	// kept the operator's click: the box stayed ticked while the server
+	// still had automatic updates off. Measured, not assumed — a
+	// component test clicking through a rejected PUT reads
+	// checked === true afterwards.
+	//
+	// Putting the control back is imperative on purpose. The model never
+	// moved, so the `checked` / `value` expressions still evaluate to
+	// the same thing they did before the click and Svelte has nothing to
+	// update; only the DOM diverged, so only the DOM has to be reset.
+	function scheduleChangeFailed(err: unknown, reset: () => void): void {
+		pushToast(
+			t('geoipSettings.scheduleFailed', {
+				err: err instanceof ApiError ? err.message : String(err)
+			}),
+			'danger'
+		);
+		reset();
+	}
+
+	async function toggleEnabled(next: boolean, control?: HTMLInputElement): Promise<void> {
 		try {
 			updateCfg = await systemApi.putGeoIPUpdateConfig({
 				enabled: next,
 				intervalHours: updateCfg?.intervalHours ?? 168
 			});
-		} catch {
-			/* keep prior state */
+		} catch (err) {
+			scheduleChangeFailed(err, () => {
+				if (control) {
+					control.checked = (maxmind?.configured ?? false) && (updateCfg?.enabled ?? false);
+				}
+			});
 		}
 	}
 
-	async function changeInterval(hours: number): Promise<void> {
+	async function changeInterval(hours: number, control?: HTMLSelectElement): Promise<void> {
 		try {
 			updateCfg = await systemApi.putGeoIPUpdateConfig({
 				enabled: updateCfg?.enabled ?? false,
 				intervalHours: hours
 			});
-		} catch {
-			/* keep prior state */
+		} catch (err) {
+			scheduleChangeFailed(err, () => {
+				if (control) {
+					control.value = String(updateCfg?.intervalHours ?? 168);
+				}
+			});
 		}
 	}
 
@@ -373,7 +406,11 @@
 					aria-label={language.current && t('geoipSettings.enableToggle')}
 					checked={(maxmind?.configured ?? false) && (updateCfg?.enabled ?? false)}
 					disabled={!maxmind?.configured}
-					onchange={(e) => toggleEnabled((e.currentTarget as HTMLInputElement).checked)}
+					onchange={(e) =>
+						toggleEnabled(
+							(e.currentTarget as HTMLInputElement).checked,
+							e.currentTarget as HTMLInputElement
+						)}
 				/>
 				<span>{language.current && t('geoipSettings.enableToggle')}</span>
 			</label>
@@ -397,7 +434,10 @@
 					disabled={!updateCfg?.enabled || !maxmind?.configured}
 					value={updateCfg?.intervalHours ?? 168}
 					onchange={(e) =>
-						changeInterval(Number((e.currentTarget as HTMLSelectElement).value))}
+						changeInterval(
+							Number((e.currentTarget as HTMLSelectElement).value),
+							e.currentTarget as HTMLSelectElement
+						)}
 				>
 					<option value={24}>{language.current && t('geoipSettings.intervalDaily')}</option>
 					<option value={168}>{language.current && t('geoipSettings.intervalWeekly')}</option>
