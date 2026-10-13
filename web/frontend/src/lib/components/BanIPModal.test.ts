@@ -356,3 +356,104 @@ describe('BanIPModal — form reset on re-open', () => {
 		expect(reasonInput.value).toBe('');
 	});
 });
+
+// v2.72 — the backend refuses a ban covering the caller's own address
+// or the whole internet, with a 409 and a code.
+//
+// Before the guard, net.ParseCIDR accepted 0.0.0.0/0 and net.ParseIP
+// accepted the operator's own address, so one mistyped field put every
+// proxied service behind a 403 for up to 30 days — and until the unban
+// endpoint existed, the only way back was cscli on the host. The modal
+// had a non-blocking notice for wide masks and nothing at all for the
+// caller's own IP.
+describe('BanIPModal — the 409 confirmation', () => {
+	// ApiError's positional signature: (message, status, kind,
+	// retryAfterSeconds, code, params).
+	function conflict(code: string) {
+		return new ApiError('refused', 409, 'validation', undefined, code, {
+			value: '203.0.113.9'
+		});
+	}
+
+	async function submitValue(value: string) {
+		await fireEvent.input(screen.getByTestId('ban-input-value'), { target: { value } });
+		await fireEvent.input(screen.getByTestId('ban-input-reason'), {
+			target: { value: 'because' }
+		});
+		await fireEvent.click(screen.getByTestId('ban-submit'));
+	}
+
+	it('explains the refusal and offers the override', async () => {
+		securityMock.createManualBan.mockRejectedValue(conflict('crowdsec_ban_covers_caller'));
+		render(BanIPModal, { props: { open: true, onClose: vi.fn() } });
+
+		await submitValue('203.0.113.9');
+
+		const notice = await screen.findByTestId('ban-needs-confirm');
+		// The translated sentence, not the server's English one.
+		expect(notice.textContent ?? '').toContain('address you are connecting from');
+		expect(screen.getByTestId('ban-confirm')).toBeInTheDocument();
+	});
+
+	it('names the whole-internet case differently', async () => {
+		securityMock.createManualBan.mockRejectedValue(
+			conflict('crowdsec_ban_covers_everything')
+		);
+		render(BanIPModal, { props: { open: true, onClose: vi.fn() } });
+
+		await submitValue('0.0.0.0/0');
+
+		expect((await screen.findByTestId('ban-needs-confirm')).textContent ?? '').toContain(
+			'whole internet'
+		);
+	});
+
+	it('sends confirm only once the box is ticked', async () => {
+		securityMock.createManualBan.mockRejectedValue(conflict('crowdsec_ban_covers_caller'));
+		render(BanIPModal, { props: { open: true, onClose: vi.fn() } });
+		await submitValue('203.0.113.9');
+		await screen.findByTestId('ban-confirm');
+
+		// The first attempt carried no confirmation.
+		expect(securityMock.createManualBan.mock.calls[0][0].confirm).toBeUndefined();
+
+		securityMock.createManualBan.mockResolvedValue(happyResponse('203.0.113.9'));
+		await fireEvent.click(screen.getByTestId('ban-confirm'));
+		await fireEvent.click(screen.getByTestId('ban-submit'));
+
+		const last = securityMock.createManualBan.mock.calls.at(-1)![0];
+		expect(last.confirm).toBe(true);
+	});
+
+	it('drops a confirmation when the target is edited', async () => {
+		// A confirmation is for the value it was granted for. Carrying
+		// it to a different target would ban that one with no warning
+		// at all.
+		securityMock.createManualBan.mockRejectedValue(conflict('crowdsec_ban_covers_caller'));
+		render(BanIPModal, { props: { open: true, onClose: vi.fn() } });
+		await submitValue('203.0.113.9');
+		await fireEvent.click(await screen.findByTestId('ban-confirm'));
+
+		await fireEvent.input(screen.getByTestId('ban-input-value'), {
+			target: { value: '0.0.0.0/0' }
+		});
+		expect(screen.queryByTestId('ban-needs-confirm')).toBeNull();
+
+		securityMock.createManualBan.mockResolvedValue(happyResponse('0.0.0.0/0'));
+		await fireEvent.click(screen.getByTestId('ban-submit'));
+
+		const last = securityMock.createManualBan.mock.calls.at(-1)![0];
+		expect(last.confirm).toBeUndefined();
+	});
+
+	it('leaves an ordinary ban untouched', async () => {
+		// The guard must add no friction to the normal case.
+		securityMock.createManualBan.mockResolvedValue(happyResponse('198.51.100.7'));
+		render(BanIPModal, { props: { open: true, onClose: vi.fn() } });
+
+		await submitValue('198.51.100.7');
+
+		expect(screen.queryByTestId('ban-needs-confirm')).toBeNull();
+		expect(securityMock.createManualBan.mock.calls[0][0].confirm).toBeUndefined();
+	});
+});

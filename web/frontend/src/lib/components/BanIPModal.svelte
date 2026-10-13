@@ -28,6 +28,7 @@
 	import { pushToast } from '$lib/stores/toast';
 	import { createManualBan } from '$lib/api/security';
 	import { ApiError, type ManualBanRequest } from '$lib/api/types';
+	import { serverErrorMessage } from '$lib/api/server-errors';
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import { t } from '$lib/i18n';
@@ -54,10 +55,28 @@
 	// Submit + error state. errorKind disambiguates the inline
 	// surface (validation vs 412 vs 502 vs generic) so each
 	// surfaces with the right wording / CTAs.
-	type SubmitErrorKind = 'validation' | 'not_configured' | 'unreachable' | 'other' | null;
+	type SubmitErrorKind =
+		| 'validation'
+		| 'not_configured'
+		| 'unreachable'
+		| 'needs_confirm'
+		| 'other'
+		| null;
 	let submitting = $state(false);
 	let errorKind = $state<SubmitErrorKind>(null);
 	let errorMsg = $state<string | null>(null);
+	// v2.72 — the backend refuses, with a 409 and a code, a ban that
+	// covers the address this request came from or the whole internet.
+	// The operator can proceed, but has to say so: the tick box below
+	// is what sets confirm on the request, and the override lands in
+	// the audit trail.
+	//
+	// Reset on every open and after every edit of the value, so a
+	// confirmation granted for one target can never carry to another.
+	let confirmOverride = $state(false);
+	// The refusal itself, kept so serverErrorMessage can translate by
+	// code rather than printing the server's English sentence.
+	let lastError = $state<ApiError | null>(null);
 
 	// Form-reset on modal open. The parent toggles `open`; an
 	// $effect catches the false → true transition and zeroes
@@ -80,6 +99,8 @@
 		reason = '';
 		errorKind = null;
 		errorMsg = null;
+		lastError = null;
+		confirmOverride = false;
 		submitting = false;
 	}
 
@@ -165,7 +186,8 @@
 				value: value.trim(),
 				duration: effectiveDuration,
 				type: banType,
-				reason: reason.trim()
+				reason: reason.trim(),
+				...(confirmOverride ? { confirm: true } : {})
 			};
 			const resp = await createManualBan(req);
 			pushToast(t('banIp.toastBanned', { value: resp.value, scope: resp.scope }), 'success');
@@ -181,10 +203,13 @@
 					errorKind = 'not_configured';
 				} else if (err.status === 502) {
 					errorKind = 'unreachable';
+				} else if (err.status === 409) {
+					errorKind = 'needs_confirm';
 				} else {
 					errorKind = 'other';
 				}
 				errorMsg = err.message;
+				lastError = err;
 			} else {
 				errorKind = 'other';
 				errorMsg = err instanceof Error ? err.message : t('banIp.errSubmitFailed');
@@ -225,6 +250,16 @@
 					autocomplete="off"
 					placeholder={language.current && t('banIp.valuePlaceholder')}
 					bind:value
+					oninput={() => {
+						// A confirmation is for the value it was granted
+						// for. Editing the target drops it, so the guard
+						// is asked again for the new one.
+						confirmOverride = false;
+						if (errorKind === 'needs_confirm') {
+							errorKind = null;
+							lastError = null;
+						}
+					}}
 					data-testid="ban-input-value"
 					required
 				/>
@@ -295,6 +330,18 @@
 					<strong>{language.current && t('banIp.errLapiUnreachablePrefix')}</strong> {errorMsg ?? (language.current && t('banIp.errUnknownError'))}
 					<button type="button" class="retry-btn" onclick={onRetry}>{language.current && t('banIp.btnRetry')}</button>
 				</div>
+			{:else if errorKind === 'needs_confirm'}
+				<p class="ban-error" role="alert" data-testid="ban-needs-confirm">
+					{language.current && lastError ? serverErrorMessage(lastError) : errorMsg}
+				</p>
+				<label class="ban-confirm" data-testid="ban-confirm-label">
+					<input
+						type="checkbox"
+						bind:checked={confirmOverride}
+						data-testid="ban-confirm"
+					/>
+					<span>{language.current && t('banIp.confirmOverride')}</span>
+				</label>
 			{:else if errorKind !== null && errorMsg !== null}
 				<div class="error-block error" role="alert" data-testid="ban-error">
 					{errorMsg}
