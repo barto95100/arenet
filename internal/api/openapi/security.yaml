@@ -486,6 +486,69 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+  /security/crowdsec/decisions/{id}:
+    delete:
+      summary: Expire one CrowdSec decision (undo a ban)
+      x-arenet-role: admin
+      description: |
+        The inverse of `POST /security/crowdsec/decisions`. Admin only.
+
+        Goes through the Security Automation **machine credentials**, not the
+        bouncer key: LAPI mounts `DELETE /v1/decisions/:decision_id` in the
+        machine-JWT group only (the bouncer key has GET and HEAD). Same 412
+        contract as the manual ban when those credentials are unset.
+
+        LAPI *expires* the decision (`until=now`) rather than deleting the
+        row; the bouncer's stream then reports it as removed, so the block
+        stops applying within one stream interval.
+
+        `nbDeleted` is a number here. LAPI sends it as a string and Arenet
+        decodes it.
+
+        Errors: 400 when the id is not a positive integer; 412 when Security
+        Automation is unset; 502 when LAPI is unreachable, rejects the
+        credentials, or refuses the expiry. LAPI answers 500 both for an
+        unknown id and for a real failure, so the 502 message names both
+        possibilities rather than claiming the decision was not found.
+      tags: [Security]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: LAPI decision id, a positive integer.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: LAPI expired the decision.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, nbDeleted]
+                properties:
+                  id: { type: integer, format: int64 }
+                  nbDeleted:
+                    type: integer
+                    description: >-
+                      How many decisions LAPI expired. 0 when LAPI's own count
+                      was unreadable — the expiry still happened.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '412':
+          description: Security Automation machine credentials not configured.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '502':
+          description: >-
+            LAPI unreachable, credentials rejected, or the expiry refused
+            (unknown id and a real LAPI failure are indistinguishable).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
   /security/crowdsec/scenarios:
     get:
       summary: CrowdSec alerts per scenario (last 24 h)

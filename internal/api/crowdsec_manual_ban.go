@@ -125,12 +125,12 @@ type manualBanRequest struct {
 // optimistically prepend the new row to the Live LAPI table
 // without waiting for the 30s polling tick.
 type manualBanResponse struct {
-	Scenario string `json:"scenario"`
-	Scope    string `json:"scope"`
-	Value    string `json:"value"`
-	Type     string `json:"type"`
-	Duration string `json:"duration"`
-	Origin   string `json:"origin"`
+	Scenario  string `json:"scenario"`
+	Scope     string `json:"scope"`
+	Value     string `json:"value"`
+	Type      string `json:"type"`
+	Duration  string `json:"duration"`
+	Origin    string `json:"origin"`
 	ExpiresAt string `json:"expiresAt"`
 }
 
@@ -146,18 +146,19 @@ const crowdSecManualBanReasonMaxLen = 256
 // /api/v1/security/crowdsec/decisions.
 //
 // Status codes:
-//   201 Created — happy path. Body echoes the canonical
-//                 scenario string + scope/type/duration.
-//   400 Bad Request — validation failed (bad IP, bad
-//                     duration, bad type, reason too long /
-//                     empty / non-printable).
-//   412 Precondition Failed — Security Automation creds
-//                              not configured (reuses CS.2.C
-//                              412 contract).
-//   502 Bad Gateway — LAPI unreachable OR machine creds
-//                     rejected after retry (mirror of
-//                     CS.2.C error path).
-//   500 Internal Server Error — storage read failed.
+//
+//	201 Created — happy path. Body echoes the canonical
+//	              scenario string + scope/type/duration.
+//	400 Bad Request — validation failed (bad IP, bad
+//	                  duration, bad type, reason too long /
+//	                  empty / non-printable).
+//	412 Precondition Failed — Security Automation creds
+//	                           not configured (reuses CS.2.C
+//	                           412 contract).
+//	502 Bad Gateway — LAPI unreachable OR machine creds
+//	                  rejected after retry (mirror of
+//	                  CS.2.C error path).
+//	500 Internal Server Error — storage read failed.
 func (h *Handler) addManualBan(w http.ResponseWriter, r *http.Request) {
 	var req manualBanRequest
 	dec := json.NewDecoder(r.Body)
@@ -213,12 +214,10 @@ func (h *Handler) addManualBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reuse the bouncer's TimeoutSeconds if present, else 5s.
-	timeoutSec := 5
-	if cs, err := h.store.GetCrowdSecConfig(r.Context()); err == nil && cs.TimeoutSeconds > 0 {
-		timeoutSec = cs.TimeoutSeconds
-	}
-	timeout := time.Duration(timeoutSec) * time.Second
+	// Reuse the bouncer's TimeoutSeconds if present, else 5s. The rule
+	// lives in crowdSecLAPITimeout so this handler and the decision
+	// delete cannot drift apart on it.
+	timeout := h.crowdSecLAPITimeout(r.Context())
 
 	scenario := buildManualBanScenario(username, reason)
 	alertPayload := buildManualBanAlertPayload(scenario, reason, scope, value, banType, req.Duration)
@@ -253,12 +252,12 @@ func (h *Handler) addManualBan(w http.ResponseWriter, r *http.Request) {
 	// twice: in scenario, and in the ActorUsernameSnapshot
 	// set by h.appendAudit automatically.
 	auditPayload := manualBanResponse{
-		Scenario: scenario,
-		Scope:    scope,
-		Value:    value,
-		Type:     banType,
-		Duration: req.Duration,
-		Origin:   "manual",
+		Scenario:  scenario,
+		Scope:     scope,
+		Value:     value,
+		Type:      banType,
+		Duration:  req.Duration,
+		Origin:    "manual",
 		ExpiresAt: expiresAt,
 	}
 	h.appendAudit(r, audit.Event{
