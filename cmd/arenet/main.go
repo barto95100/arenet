@@ -1419,6 +1419,9 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		// v2.72 — Live lets the check say "the bouncer is still on the
 		// old address" instead of probing the new one and reporting
 		// healthy while nothing is being blocked.
+		// v2.72 — a rule set nothing is evaluating has to be visible
+		// here, not only in a boot log line nobody re-reads.
+		&systemhealth.AutomationCheck{Engine: &automationEngineAdapter{store: store}},
 		&systemhealth.CrowdSecCheck{
 			Config: &crowdsecConfigAdapter{store: store},
 			Live:   mgr,

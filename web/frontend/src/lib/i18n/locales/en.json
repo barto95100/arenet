@@ -117,6 +117,9 @@
 		"themeDark": "Dark",
 		"themeLight": "Light",
 		"appearanceSection": "Appearance",
+		"automation": {
+			"engineDown": "The trigger engine is not running in this process, so these rules are stored but nothing is evaluating them. They will take effect the next time Arenet starts; the boot log explains why it is disabled."
+		},
 		"tabsAria": "Settings categories",
 		"unsavedLeaveTitle": "Unsaved changes",
 		"unsavedLeaveMessage": "This tab has changes that have not been saved. Leaving it discards them.",
