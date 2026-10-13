@@ -1595,6 +1595,12 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	if pathRulesErr != nil {
 		// Operator input gets a 400 carrying the reason; only a genuine
 		// server failure (a password that would not hash) is a 500.
+		var unmatched *pathRulePasswordUnmatchedError
+		if errors.As(pathRulesErr, &unmatched) {
+			writeErrorCode(w, http.StatusBadRequest, "path_rule_basic_auth_password_unmatched",
+				unmatched.Error(), map[string]any{"prefix": unmatched.Prefix})
+			return
+		}
 		if errors.Is(pathRulesErr, errPathRuleInvalid) {
 			writeError(w, http.StatusBadRequest, pathRulesErr.Error())
 			return
@@ -2239,6 +2245,12 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	if pathRulesErr != nil {
 		// Operator input gets a 400 carrying the reason; only a genuine
 		// server failure (a password that would not hash) is a 500.
+		var unmatched *pathRulePasswordUnmatchedError
+		if errors.As(pathRulesErr, &unmatched) {
+			writeErrorCode(w, http.StatusBadRequest, "path_rule_basic_auth_password_unmatched",
+				unmatched.Error(), map[string]any{"prefix": unmatched.Prefix})
+			return
+		}
 		if errors.Is(pathRulesErr, errPathRuleInvalid) {
 			writeError(w, http.StatusBadRequest, pathRulesErr.Error())
 			return

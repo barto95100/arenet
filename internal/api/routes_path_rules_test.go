@@ -836,3 +836,119 @@ func TestCreateRoute_ProxyingRouteStillNeedsAnUpstream(t *testing.T) {
 			"proxy to (body=%s)", rec.Code, rec.Body)
 	}
 }
+
+// TestUpdateRoute_PathRulePrefixRenamed_NamesTheRealCause covers the
+// v2.72 refusal. The stored hash is matched by PathPrefix, and the
+// prefix is an editable field, so renaming "/admin" to "/admin/" while
+// leaving the password blank found nothing to inherit. The hash went
+// out empty and the storage validator rejected the whole route PUT
+// with `path_rule "/admin/": basic auth requires a password hash` — a
+// message about a password the operator had not touched, for an edit
+// that was about a path, and their whole edit was lost with it.
+//
+// The refusal still happens; what changed is that it comes from the
+// layer that knows why, carries a code the UI can translate, and names
+// the prefix. The sibling test above is the instrument proving an
+// UNCHANGED prefix still preserves the hash.
+func TestUpdateRoute_PathRulePrefixRenamed_NamesTheRealCause(t *testing.T) {
+	env := newTestEnv(t, false)
+
+	createBody := `{
+	  "host":"renamed-path-rule.example.com",
+	  "upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],
+	  "pathRules":[
+	    {"pathPrefix":"/admin","basicAuth":{"username":"admin","password":"firstPlainPassword"}}
+	  ]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body)
+	}
+	var created routeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	// The only change is the trailing slash on the prefix. The password
+	// box is blank because the API never echoes the hash.
+	putBody := `{
+	  "host":"renamed-path-rule.example.com",
+	  "upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],
+	  "pathRules":[
+	    {"pathPrefix":"/admin/","basicAuth":{"username":"admin","password":""}}
+	  ]}`
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/routes/"+created.ID, strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	env.router.ServeHTTP(putRec, putReq)
+
+	if putRec.Code != http.StatusBadRequest {
+		t.Fatalf("put status=%d; want 400. body=%s", putRec.Code, putRec.Body)
+	}
+	var body struct {
+		Error  string         `json:"error"`
+		Code   string         `json:"code"`
+		Params map[string]any `json:"params"`
+	}
+	if err := json.Unmarshal(putRec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode refusal: %v (body=%s)", err, putRec.Body)
+	}
+	if body.Code != "path_rule_basic_auth_password_unmatched" {
+		t.Errorf("code = %q; want path_rule_basic_auth_password_unmatched", body.Code)
+	}
+	if got := body.Params["prefix"]; got != "/admin/" {
+		t.Errorf("params.prefix = %v; want /admin/", got)
+	}
+	// The English fallback has to say why, not just what: it is what a
+	// non-UI consumer and the logs get.
+	if !strings.Contains(body.Error, "prefix changed") {
+		t.Errorf("error = %q; want it to name the renamed prefix as the cause", body.Error)
+	}
+	// Nothing was written: the stored rule keeps its prefix and hash.
+	stored, err := env.store.ListRoutes(context.Background())
+	if err != nil {
+		t.Fatalf("ListRoutes: %v", err)
+	}
+	if len(stored) != 1 || len(stored[0].PathRules) != 1 {
+		t.Fatalf("unexpected stored state: %+v", stored)
+	}
+	if stored[0].PathRules[0].PathPrefix != "/admin" {
+		t.Errorf("stored prefix = %q; want the refusal to leave /admin alone",
+			stored[0].PathRules[0].PathPrefix)
+	}
+	if stored[0].PathRules[0].BasicAuth == nil ||
+		!strings.HasPrefix(stored[0].PathRules[0].BasicAuth.PasswordHash, "$argon2id$") {
+		t.Errorf("stored basic auth was damaged: %+v", stored[0].PathRules[0].BasicAuth)
+	}
+}
+
+// TestCreateRoute_PathRuleBasicAuthNoPassword_Returns400Coded pins the
+// create side of the same refusal: there is no previous route at all,
+// so nothing can be inherited and the message must not pretend a
+// rename happened.
+func TestCreateRoute_PathRuleBasicAuthNoPassword_Returns400Coded(t *testing.T) {
+	env := newTestEnv(t, false)
+	body := `{
+	  "host":"newrule.example.com",
+	  "upstreams":[{"url":"http://127.0.0.1:9000","weight":1}],
+	  "pathRules":[
+	    {"pathPrefix":"/admin","basicAuth":{"username":"admin","password":""}}
+	  ]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/routes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("create status=%d; want 400. body=%s", rec.Code, rec.Body)
+	}
+	var decoded struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &decoded)
+	if decoded.Code != "path_rule_basic_auth_password_unmatched" {
+		t.Errorf("code = %q; want path_rule_basic_auth_password_unmatched", decoded.Code)
+	}
+}

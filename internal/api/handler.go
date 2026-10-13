@@ -1278,6 +1278,34 @@ type pathRedirectReq struct {
 // site, or the UI cannot show what is wrong.
 var errPathRuleInvalid = errors.New("path rule is not valid")
 
+// pathRulePasswordUnmatchedError is the refusal for a path rule that
+// carries basic auth with a blank password and has no stored password
+// to inherit.
+//
+// v2.72 — the stored hash is matched by PathPrefix, and the prefix is
+// an editable field. Renaming "/admin" to "/admin/" therefore missed
+// the lookup, left the hash empty, and the whole route PUT was
+// rejected by the storage validator with `path_rule "/admin/": basic
+// auth requires a password hash` — a message about a password the
+// operator had not touched, for an edit that was about a path. The
+// route form shows the server's sentence, so that is what they read,
+// and the rest of their edit was lost with it.
+//
+// Matching by position instead was considered and rejected: a rename
+// combined with a reorder would attach one path's password to another.
+// The prefix stays the key; this error names the real cause, and the
+// code lets the UI say it in the operator's language.
+type pathRulePasswordUnmatchedError struct{ Prefix string }
+
+func (e *pathRulePasswordUnmatchedError) Error() string {
+	return fmt.Sprintf("path_rule %q: basic auth needs a password. No stored password matches this path prefix — "+
+		"either the rule is new, or its prefix changed since the last save, which is why the stored one could not be carried over.", e.Prefix)
+}
+
+// Unwrap keeps the existing operator-input/server-failure split at the
+// call sites working unchanged.
+func (e *pathRulePasswordUnmatchedError) Unwrap() error { return errPathRuleInvalid }
+
 // the previous route's PathRules (nil on create).
 func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) ([]storage.PathRule, error) {
 	if len(reqs) == 0 {
@@ -1299,9 +1327,11 @@ func mapPathRuleReqs(reqs []pathRuleReq, existing []storage.PathRule) ([]storage
 		if r.BasicAuth != nil {
 			hash := ""
 			if r.BasicAuth.Password == "" {
-				if prev, ok := prevByPrefix[r.PathPrefix]; ok && prev.BasicAuth != nil {
-					hash = prev.BasicAuth.PasswordHash
+				prev, ok := prevByPrefix[r.PathPrefix]
+				if !ok || prev.BasicAuth == nil || prev.BasicAuth.PasswordHash == "" {
+					return nil, &pathRulePasswordUnmatchedError{Prefix: r.PathPrefix}
 				}
+				hash = prev.BasicAuth.PasswordHash
 			} else {
 				h, hashErr := auth.HashRoutePassword(r.BasicAuth.Password)
 				if hashErr != nil {
