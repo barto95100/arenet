@@ -43,8 +43,10 @@
 	import { language } from '$lib/stores/language.svelte';
 	import { fetchSummary } from '$lib/api/metrics';
 	import { fetchEventsByRule } from '$lib/api/security';
+	import { listRoutes } from '$lib/api/client';
 	import { ApiError } from '$lib/api/types';
 	import type {
+		Route,
 		SummaryResponse,
 		OwaspCategory,
 		WafEventRuleAggregate
@@ -61,6 +63,11 @@
 	let loading = $state(true);
 	let loadError = $state<string | null>(null);
 	let summary = $state<SummaryResponse | null>(null);
+	// v2.73 — the Mode and Paranoia tiles were static text. Both
+	// now derive from the route list; see the derivations below for
+	// what each one used to claim.
+	let routes = $state<Route[]>([]);
+	let routesUnavailable = $state(false);
 
 	const disabled = $derived(summary?.disabled === true);
 
@@ -178,14 +185,109 @@
 		});
 	});
 
+	// The Mode tile (v2.73).
+	//
+	// It used to render t('waf.kpiModeBlocking') + t('waf.kpiModeFoot')
+	// — the words "Blocking" and "detection + block enabled" — with no
+	// data input of any kind. The page did not even load the route
+	// list, so it structurally could not know. But wafMode is
+	// PER-ROUTE (api/types.ts:176), and the documented recommended
+	// default is detect. An operator with every route in detect — i.e.
+	// nothing being blocked at all — read "Mode: Blocking · detection
+	// + block enabled" on the WAF page. That is a false assurance
+	// about enforcement, which is the worst kind on this page.
+	const wafModeCounts = $derived.by(() => {
+		const counts = { block: 0, detect: 0, off: 0 };
+		for (const r of routes) {
+			if (r.wafMode === 'block') counts.block += 1;
+			else if (r.wafMode === 'detect') counts.detect += 1;
+			else counts.off += 1;
+		}
+		return counts;
+	});
+
+	// "Blocking" / "Detect" / "Off" when every route agrees, "Mixed"
+	// when they do not, and an explicit em dash when the answer is
+	// not known.
+	const wafModeValue = $derived.by(() => {
+		if (routesUnavailable || routes.length === 0) return '—';
+		const { block, detect, off } = wafModeCounts;
+		const distinct = [block, detect, off].filter((n) => n > 0).length;
+		if (distinct > 1) return t('waf.kpiModeMixed');
+		if (block > 0) return t('waf.kpiModeBlocking');
+		if (detect > 0) return t('waf.kpiModeDetect');
+		return t('waf.kpiModeOff');
+	});
+
+	const wafModeHint = $derived.by(() => {
+		if (routesUnavailable) return t('waf.kpiModeUnknown');
+		if (routes.length === 0) return t('waf.kpiModeNoRoutes');
+		const { block, detect, off } = wafModeCounts;
+		return t('waf.kpiModeBreakdown', { block, detect, off });
+	});
+
+	// The Paranoia tile (v2.73).
+	//
+	// It rendered a literal value={2}. The applied level is 1, read
+	// in the pinned ruleset rather than inferred:
+	//
+	//   - go.mod pins coraza-coreruleset/v4 v4.25.0, and
+	//     manager.go:3379-3381 includes @coraza.conf-recommended,
+	//     @crs-setup.conf.example and @owasp_crs/*.conf;
+	//   - in that module, rule 900000 — the one that would set
+	//     tx.blocking_paranoia_level — is COMMENTED OUT in
+	//     rules/@crs-setup.conf.example:186;
+	//   - so rule 901120 in
+	//     rules/@owasp_crs/REQUEST-901-INITIALIZATION.conf:54-61
+	//     fires on "&TX:blocking_paranoia_level @eq 0" and sets it
+	//     to 1;
+	//   - and Arenet sets no paranoia level anywhere of its own
+	//     (no occurrence in internal/).
+	//
+	// A route's custom SecLang CAN set it, though, which is why this
+	// is not simply another hardcoded number: an override is counted
+	// and reported instead of silently contradicting the tile.
+	const PARANOIA_CRS_DEFAULT = 1;
+	const PARANOIA_MAX = 4;
+
+	const paranoiaOverrideCount = $derived(
+		routes.filter((r) => /blocking_paranoia_level/i.test(r.wafSecLang ?? '')).length
+	);
+
+	const paranoiaHint = $derived.by(() => {
+		if (paranoiaOverrideCount > 0) {
+			return t('waf.kpiParanoiaOverrides', {
+				count: paranoiaOverrideCount,
+				plural: paranoiaOverrideCount === 1 ? '' : 's'
+			});
+		}
+		return t('waf.kpiParanoiaLevelFoot');
+	});
+
 	async function load(): Promise<void> {
 		loading = true;
 		loadError = null;
 		try {
-			summary = await fetchSummary();
-		} catch (err) {
-			loadError = err instanceof ApiError ? err.message : 'failed to load summary';
-			pushToast(loadError, 'danger');
+			// The route list feeds the Mode and Paranoia tiles. It is
+			// settled separately from the summary so one failing does
+			// not blank the other — and so a failure makes the tiles
+			// say they do not know, rather than fall back on a
+			// flattering constant.
+			const [sum, rts] = await Promise.allSettled([fetchSummary(), listRoutes()]);
+			if (sum.status === 'fulfilled') {
+				summary = sum.value;
+			} else {
+				const err = sum.reason;
+				loadError = err instanceof ApiError ? err.message : 'failed to load summary';
+				pushToast(loadError, 'danger');
+			}
+			if (rts.status === 'fulfilled') {
+				routes = rts.value;
+				routesUnavailable = false;
+			} else {
+				routes = [];
+				routesUnavailable = true;
+			}
 		} finally {
 			loading = false;
 		}
@@ -254,16 +356,18 @@
 			hint={language.current && t('waf.kpiDetectedFoot')}
 		/>
 		<StatCard
+			testid="kpi-waf-mode"
 			label={language.current && t('waf.kpiMode')}
-			value={language.current && t('waf.kpiModeBlocking')}
+			value={language.current && wafModeValue}
 			variant="text"
-			hint={language.current && t('waf.kpiModeFoot')}
+			hint={language.current && wafModeHint}
 		/>
 		<StatCard
+			testid="kpi-waf-paranoia"
 			label={language.current && t('waf.kpiParanoiaLevel')}
-			value={2}
-			unit="/ 4"
-			hint={language.current && t('waf.kpiParanoiaLevelFoot')}
+			value={PARANOIA_CRS_DEFAULT}
+			unit={`/ ${PARANOIA_MAX}`}
+			hint={language.current && paranoiaHint}
 		/>
 	</div>
 

@@ -23,10 +23,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen } from '@testing-library/svelte';
 
-const { metricsMock, securityMock, toastMock } = vi.hoisted(() => ({
+const { metricsMock, securityMock, toastMock, clientMock } = vi.hoisted(() => ({
 	metricsMock: { fetchSummary: vi.fn() },
 	securityMock: { fetchEventsByRule: vi.fn() },
-	toastMock: { pushToast: vi.fn() }
+	toastMock: { pushToast: vi.fn() },
+	clientMock: { listRoutes: vi.fn() }
 }));
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
@@ -37,9 +38,14 @@ vi.mock('$lib/api/metrics', () => ({
 vi.mock('$lib/api/security', () => ({
 	fetchEventsByRule: (...a: unknown[]) => securityMock.fetchEventsByRule(...a)
 }));
+// v2.73 — the Mode and Paranoia tiles read the route list now.
+vi.mock('$lib/api/client', () => ({
+	listRoutes: (...a: unknown[]) => clientMock.listRoutes(...a)
+}));
 
 import Page from './+page.svelte';
-import type { SummaryResponse } from '$lib/api/types';
+import type { Route, SummaryResponse } from '$lib/api/types';
+import { makeRoute } from '$lib/test-support/route-fixture';
 
 function makeSummary(overrides: Partial<SummaryResponse> = {}): SummaryResponse {
 	return {
@@ -70,6 +76,8 @@ beforeEach(() => {
 	metricsMock.fetchSummary.mockReset();
 	securityMock.fetchEventsByRule.mockReset();
 	toastMock.pushToast.mockReset();
+	clientMock.listRoutes.mockReset();
+	clientMock.listRoutes.mockResolvedValue([]);
 });
 
 describe('WAF page — Blocked + Detected KPI split (#R-DASHBOARD-WAF-COUNTERS-ZERO)', () => {
@@ -283,5 +291,105 @@ describe('WAF page — Phase Y taxonomy + drill-down', () => {
 		await tick();
 		const drill = screen.getByTestId('cat-drill-WEBSHELL');
 		expect(drill.textContent ?? '').toContain('failed to load rules');
+	});
+});
+
+// The two tiles that described a posture they could not know (v2.73).
+//
+// The Mode tile rendered t('waf.kpiModeBlocking') + t('waf.kpiModeFoot')
+// — "Blocking" and "detection + block enabled" — with no data input at
+// all; the page did not even load the route list. But wafMode is
+// PER-ROUTE, and the documented recommended default is detect. So an
+// operator whose every route sat in detect, blocking nothing, read
+// "Mode: Blocking · detection + block enabled" on the WAF page.
+//
+// The Paranoia tile rendered a literal value={2}. The applied level is
+// 1: in the pinned coraza-coreruleset v4.25.0, rule 900000 is
+// commented out in rules/@crs-setup.conf.example:186, so rule 901120
+// in REQUEST-901-INITIALIZATION.conf:54-61 fires on
+// "&TX:blocking_paranoia_level @eq 0" and sets 1. Arenet sets no
+// paranoia level of its own anywhere.
+describe('WAF page — the Mode and Paranoia tiles read the routes', () => {
+	function withRoutes(routes: Route[]): void {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		clientMock.listRoutes.mockResolvedValue(routes);
+	}
+
+	it('says Detect when every route is in detect, not Blocking', async () => {
+		withRoutes([
+			makeRoute({ id: 'a', wafMode: 'detect' }),
+			makeRoute({ id: 'b', wafMode: 'detect' })
+		]);
+		render(Page);
+
+		const tile = await screen.findByTestId('kpi-waf-mode');
+		await vi.waitFor(() => expect(tile.textContent ?? '').toMatch(/Detect/));
+		expect(tile.textContent ?? '').not.toMatch(/Blocking/);
+	});
+
+	it('says Mixed when the routes disagree, and breaks the count down', async () => {
+		withRoutes([
+			makeRoute({ id: 'a', wafMode: 'block' }),
+			makeRoute({ id: 'b', wafMode: 'detect' }),
+			makeRoute({ id: 'c', wafMode: 'detect' }),
+			makeRoute({ id: 'd', wafMode: 'off' })
+		]);
+		render(Page);
+
+		const tile = await screen.findByTestId('kpi-waf-mode');
+		await vi.waitFor(() => expect(tile.textContent ?? '').toMatch(/Mixed/));
+		expect(tile.textContent ?? '').toMatch(/1 blocking · 2 detect · 1 off/);
+	});
+
+	it('says Blocking only when every route really blocks', async () => {
+		withRoutes([
+			makeRoute({ id: 'a', wafMode: 'block' }),
+			makeRoute({ id: 'b', wafMode: 'block' })
+		]);
+		render(Page);
+
+		const tile = await screen.findByTestId('kpi-waf-mode');
+		await vi.waitFor(() => expect(tile.textContent ?? '').toMatch(/Blocking/));
+	});
+
+	it('admits it does not know when the route list fails', async () => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		clientMock.listRoutes.mockRejectedValue(new Error('boom'));
+		render(Page);
+
+		const tile = await screen.findByTestId('kpi-waf-mode');
+		await vi.waitFor(() =>
+			expect(tile.textContent ?? '').toMatch(/route list unavailable/)
+		);
+		expect(tile.textContent ?? '').not.toMatch(/Blocking/);
+	});
+
+	it('reports the paranoia level CRS actually applies, which is 1', async () => {
+		withRoutes([makeRoute({ id: 'a', wafMode: 'block' })]);
+		render(Page);
+
+		const tile = await screen.findByTestId('kpi-waf-paranoia');
+		// Anchored on the "N/ 4" reading rather than a bare digit:
+		// the hint names CRS rule 901120, which contains a 2.
+		await vi.waitFor(() => expect(tile.textContent ?? '').toMatch(/1\/\s*4/));
+		expect(tile.textContent ?? '').not.toMatch(/2\/\s*4/);
+	});
+
+	// A route CAN move it in custom SecLang, so the tile counts the
+	// overrides rather than quietly contradicting them.
+	it('reports how many routes override it in SecLang', async () => {
+		withRoutes([
+			makeRoute({ id: 'a' }),
+			makeRoute({
+				id: 'b',
+				wafSecLang: 'SecAction "id:1,phase:1,pass,nolog,setvar:tx.blocking_paranoia_level=3"'
+			})
+		]);
+		render(Page);
+
+		const tile = await screen.findByTestId('kpi-waf-paranoia');
+		await vi.waitFor(() =>
+			expect(tile.textContent ?? '').toMatch(/1 SecLang override/)
+		);
 	});
 });
