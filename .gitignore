@@ -61,6 +61,16 @@ Thumbs.db
 # so an audit or a fix follows the same discipline in any clone.
 .claude/*
 !.claude/skills/
+# ...but a skill installed from elsewhere does not get versioned with
+# them. `npx skills add` drops its payload in .agents/ and leaves a
+# symlink here pointing into it, so committing the symlink would break
+# in every other clone, and committing .agents/ would vendor
+# third-party code into an AGPL tree without a licence review. The
+# versioned-skills rule above is for THIS project's skills (audit,
+# guard), which are a few KB of prose.
+.claude/skills/security-audit
+/.agents/
+/skills-lock.json
 
 # Compiled binaries (added after first commit mistake)
 /bin/
