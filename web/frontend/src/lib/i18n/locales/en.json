@@ -108,7 +108,10 @@
 	},
 	"topbar": {
 		"statusAriaLabel": "Gateway status",
-		"statusHealthy": "Gateway healthy"
+		"statusHealthy": "Gateway healthy",
+		"statusDegraded": "Gateway degraded",
+		"statusUnhealthy": "Gateway unhealthy",
+		"statusUnknown": "Gateway status unknown"
 	},
 	"settings": {
 		"languageLabel": "Language",

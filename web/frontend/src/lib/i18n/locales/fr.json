@@ -108,7 +108,10 @@
 	},
 	"topbar": {
 		"statusAriaLabel": "État de la passerelle",
-		"statusHealthy": "Passerelle saine"
+		"statusHealthy": "Passerelle saine",
+		"statusDegraded": "Passerelle dégradée",
+		"statusUnhealthy": "Passerelle en panne",
+		"statusUnknown": "État de la passerelle inconnu"
 	},
 	"settings": {
 		"languageLabel": "Langue",
