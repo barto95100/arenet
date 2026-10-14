@@ -463,3 +463,60 @@ describe('request: no background traffic while the session is locked', () => {
 		});
 	});
 });
+
+// v2.72 — a write whose Caddy reload was refused says so.
+//
+// Six backend write paths log a failed reload and still answer 2xx on
+// purpose: the store write is committed and undoing it would be worse
+// — for a certificate delete it is impossible, the files are gone. The
+// UI then read the store back and rendered the new value, confirming a
+// state the edge was not serving, under a plain success toast.
+//
+// Surfaced here rather than at each call site for two reasons: two of
+// those paths answer 204 with no body, so a field could not reach
+// them, and a seventh swallow site added later gets the caveat without
+// anyone remembering to wire it.
+describe('request — a refused reload after a committed write', () => {
+	it('warns when the header is set on a 200', async () => {
+		mockFetch(200, { ok: true }, { 'X-Arenet-Reload-Failed': '1' });
+
+		await request('PUT', '/settings/maintenance-page', { html: '<p>x</p>' });
+
+		expect(toastMock.pushToast).toHaveBeenCalledWith(
+			expect.stringContaining('refused the new configuration'),
+			'danger'
+		);
+	});
+
+	it('warns on a 204, which has no body to carry a field', async () => {
+		// An error-template delete and an external-certificate delete
+		// both answer 204. This is the case that decided header over
+		// body field.
+		mockFetch(204, undefined, { 'X-Arenet-Reload-Failed': '1' });
+
+		await request('DELETE', '/error-templates/abc');
+
+		expect(toastMock.pushToast).toHaveBeenCalledWith(
+			expect.stringContaining('refused the new configuration'),
+			'danger'
+		);
+	});
+
+	it('says nothing on an ordinary success', async () => {
+		// The overwhelming majority of writes. A caveat on every save
+		// would be noise and would train the operator to ignore it.
+		mockFetch(200, { ok: true });
+
+		await request('PUT', '/settings/maintenance-page', { html: '<p>x</p>' });
+
+		expect(toastMock.pushToast).not.toHaveBeenCalled();
+	});
+
+	it('ignores a header value that is not the flag', async () => {
+		mockFetch(200, { ok: true }, { 'X-Arenet-Reload-Failed': '0' });
+
+		await request('PUT', '/settings/maintenance-page', { html: '<p>x</p>' });
+
+		expect(toastMock.pushToast).not.toHaveBeenCalled();
+	});
+});

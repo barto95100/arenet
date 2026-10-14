@@ -123,6 +123,9 @@ func (h *Handler) putMaintenancePage(w http.ResponseWriter, r *http.Request) {
 	// update handler's reload-after-write contract.
 	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
 		h.logger.Warn("maintenance_page: caddy reload after update failed", "err", err)
+		// v2.72 — say so. This handler emits no audit row either, so
+		// before this the only trace was a Warn line in journalctl.
+		markReloadFailed(w)
 	}
 
 	// Echo the same {html, isDefault} shape GET would return right
