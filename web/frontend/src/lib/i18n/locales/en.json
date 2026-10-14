@@ -1500,6 +1500,8 @@
 		"a11yLoading": "Loading audit events…",
 		"a11yError": "Failed to load: {err}",
 		"a11yCount": "Loaded {count} event{plural}",
+		"colDetails": "Details",
+		"rowDetailsLabel": "Details for {action}, {when}",
 		"colTime": "Time",
 		"colAction": "Action",
 		"colActor": "Actor",

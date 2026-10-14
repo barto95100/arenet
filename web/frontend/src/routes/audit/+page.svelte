@@ -26,6 +26,7 @@
 	import AuditExpandedDetails from '$lib/components/AuditExpandedDetails.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { relativeTime } from '$lib/utils/audit-format';
 
 	// 15 action values per D7 (canonical list lives in
 	// docs/superpowers/decisions/2026-05-17-step-d-design-decisions-final.md).
@@ -334,6 +335,14 @@
 			] : []}
 			row={auditRowSnippet}
 			expanded={auditExpandedSnippet}
+			rowLabelHeader={language.current && t('audit.colDetails')}
+			rowLabel={(ev) =>
+				language.current
+					? t('audit.rowDetailsLabel', {
+							action: ev.action,
+							when: relativeTime(ev.timestamp)
+						})
+					: ev.action}
 		/>
 
 		{#if nextCursor}
