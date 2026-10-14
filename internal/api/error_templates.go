@@ -282,6 +282,10 @@ func (h *Handler) updateErrorTemplate(w http.ResponseWriter, r *http.Request) {
 	// pick up the new bodies on the next request.
 	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
 		h.logger.Warn("error_template: caddy reload after update failed", "id", id, "err", err)
+		// v2.72 — say so. The editor and the preview both render from
+		// the store, so they were confirming a body the edge was not
+		// serving.
+		markReloadFailed(w)
 	}
 
 	h.appendAudit(r, audit.Event{
@@ -328,6 +332,9 @@ func (h *Handler) deleteErrorTemplate(w http.ResponseWriter, r *http.Request) {
 	// a dangling ref so the operator can clean those up.
 	if err := h.caddy.ReloadFromStore(r.Context()); err != nil {
 		h.logger.Warn("error_template: caddy reload after delete failed", "id", id, "err", err)
+		// v2.72 — say so. This path answers 204, which is why the
+		// signal is a header and not a body field.
+		markReloadFailed(w)
 	}
 
 	h.appendAudit(r, audit.Event{

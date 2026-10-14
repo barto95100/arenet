@@ -42,6 +42,7 @@
 		}
 	},
 	"errors": {
+		"reloadFailedAfterSave": "Enregistré, mais Caddy a refusé la nouvelle configuration : l’arête sert encore la précédente. La santé du système en donne la raison.",
 		"server": {
 			"path_rule_basic_auth_password_unmatched": "La règle de chemin {prefix} est protégée par authentification basique et aucun mot de passe enregistré ne correspond à ce préfixe. Soit la règle est nouvelle, soit son préfixe a changé depuis le dernier enregistrement — ressaisissez son mot de passe pour enregistrer la route.",
 			"crowdsec_ban_covers_caller": "Ce bannissement couvre l’adresse depuis laquelle vous êtes connecté. Toutes les routes servies par Arenet vous répondraient 403 jusqu’à son expiration — l’interface d’administration n’est pas derrière le bouncer, vous y garderiez donc l’accès. Cochez la case pour bannir quand même.",

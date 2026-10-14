@@ -42,6 +42,7 @@
 		}
 	},
 	"errors": {
+		"reloadFailedAfterSave": "Saved, but Caddy refused the new configuration: the edge is still serving the previous one. Check System health for the reason.",
 		"server": {
 			"path_rule_basic_auth_password_unmatched": "The path rule {prefix} is protected by basic auth and no stored password matches that prefix. Either the rule is new, or its prefix changed since the last save — retype its password to save the route.",
 			"crowdsec_ban_covers_caller": "This ban covers the address you are connecting from. Every route proxied by Arenet would answer 403 for you until it expires — the admin interface is not behind the bouncer, so you would keep access to it. Tick the box to ban it anyway.",

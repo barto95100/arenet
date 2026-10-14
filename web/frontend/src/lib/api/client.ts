@@ -38,6 +38,7 @@ import { beginRequest, endRequest } from '$lib/stores/loading';
 import { auth } from '$lib/stores/auth.svelte';
 import { idle } from '$lib/stores/idle.svelte';
 import { pushToast } from '$lib/stores/toast';
+import { t } from '$lib/i18n';
 import { goto } from '$app/navigation';
 
 // In production (the binary serves both API and frontend), always use
@@ -238,6 +239,25 @@ export async function request<T>(
 					: undefined;
 			const kind = res.status >= 500 ? 'system' : 'validation';
 			throw new ApiError(msg, res.status, kind, undefined, code, params);
+		}
+
+		// v2.72 — a write whose Caddy reload was refused says so here.
+		//
+		// Six backend write paths log a failed reload and still answer
+		// 2xx on purpose: the store write is committed and undoing it
+		// would be worse — for a certificate delete it is impossible,
+		// the files are gone. The UI then read the store back and
+		// rendered the new value, confirming a state the edge was not
+		// serving, under a plain success toast.
+		//
+		// Surfaced in ONE place rather than at each call site, for two
+		// reasons: two of those paths answer 204 with no body, so a
+		// field could not reach them; and a seventh swallow site added
+		// later gets the caveat without anyone remembering to wire it.
+		// The handler's own success toast still fires — this is the
+		// sentence beside it, not a replacement for it.
+		if (res.headers.get('X-Arenet-Reload-Failed') === '1') {
+			pushToast(t('errors.reloadFailedAfterSave'), 'danger');
 		}
 
 		if (res.status === 204) return undefined as T;

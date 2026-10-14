@@ -162,6 +162,10 @@ func (h *Handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {
 	// gone). Uses the same reload seam as toggleRouteDisabled.
 	if rerr := h.caddy.ReloadFromStore(ctx); rerr != nil {
 		h.logger.Error("cert delete: reload after delete failed", "domain", domain, "err", rerr)
+		// v2.72 — say so. The files are already gone, so the 200 is
+		// right; what was wrong is answering "deleted" with no hint
+		// that certmagic's cache may still present the old leaf.
+		markReloadFailed(w)
 	}
 
 	h.appendAudit(r, audit.Event{

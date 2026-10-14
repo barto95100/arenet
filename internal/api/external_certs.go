@@ -303,6 +303,11 @@ func (h *Handler) updateExternalCert(w http.ResponseWriter, r *http.Request) {
 	// page / error-templates update contract).
 	if rerr := h.caddy.ReloadFromStore(r.Context()); rerr != nil {
 		h.logger.Warn("external cert update: caddy reload failed", "err", rerr)
+		// v2.72 — say so. This is the worst of the six: the list
+		// re-renders with the new expiry and serial from the store
+		// while the edge keeps presenting the old leaf, so a renewal
+		// looks done and is not.
+		markReloadFailed(w)
 	}
 
 	h.appendAudit(r, audit.Event{Action: audit.ActionExternalCertUpdated, TargetType: "external_certificate", TargetID: id})
@@ -354,6 +359,8 @@ func (h *Handler) deleteExternalCert(w http.ResponseWriter, r *http.Request) {
 	// Reload Caddy so the deleted cert stops being offered (best-effort).
 	if rerr := h.caddy.ReloadFromStore(r.Context()); rerr != nil {
 		h.logger.Warn("external cert delete: caddy reload failed", "err", rerr)
+		// v2.72 — say so.
+		markReloadFailed(w)
 	}
 
 	h.appendAudit(r, audit.Event{Action: audit.ActionExternalCertDeleted, TargetType: "external_certificate", TargetID: id})
