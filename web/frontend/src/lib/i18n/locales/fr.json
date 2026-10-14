@@ -1500,6 +1500,8 @@
 		"a11yLoading": "Chargement des événements d'audit…",
 		"a11yError": "Échec du chargement : {err}",
 		"a11yCount": "{count} événement{plural} chargé{plural}",
+		"colDetails": "Détails",
+		"rowDetailsLabel": "Détails de {action}, {when}",
 		"colTime": "Heure",
 		"colAction": "Action",
 		"colActor": "Acteur",
