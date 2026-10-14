@@ -69,10 +69,15 @@ defence layer is just inactive.
 
 Checklist in priority order:
 
-1. **The admin port is loopback-bound by default.** From a LAN
-   machine, `curl http://<host>:8001/healthz` will fail.
-   Either SSH-tunnel or set `ARENET_ADMIN_BIND=0.0.0.0:8001`
-   (see `docs/install/docker-quickstart.md`).
+1. **The admin port is restricted to loopback by default.** From
+   a LAN machine, `curl http://<host>:8001/healthz` will fail.
+   Either SSH-tunnel, or open it — and the lever differs by
+   install type. **systemd**: set
+   `ARENET_ADMIN_BIND=0.0.0.0:8001`. **Docker**: publish
+   `8001:8001` instead of `127.0.0.1:8001:8001`; the env var has
+   no effect in the image, which passes `--admin-port` on its
+   `CMD`. See `docs/install/docker-quickstart.md` step 5 and
+   `docs/operations/env-vars.md`.
 2. **Healthcheck reports unhealthy in `docker compose ps`?**
    Check the logs:
    ```bash

@@ -80,7 +80,7 @@ This wiki tracks **Arenet v2.40.x** (the current stable release line). Older ver
 | Users | `/users` | `/api/v1/users` | BoltDB `users` bucket |
 | Backup snapshot | `/settings` (Backup section) | `/api/v1/admin/backup` + `/admin/restore` | All buckets serialized to JSON |
 
-Default admin port : `:8001` (loopback by default ; set `ARENET_ADMIN_BIND=0.0.0.0:8001` for LAN access).
+Default admin port : `:8001`, loopback only by default. For LAN access : set `ARENET_ADMIN_BIND=0.0.0.0:8001` on systemd, or publish `8001:8001` on Docker (the env var has no effect there — the image passes `--admin-port`, and a flag wins).
 
 ---
 
@@ -93,7 +93,7 @@ All optional — every variable has a safe default. Set them the same way in **b
 
 | Variable | Default | What |
 | -------- | ------- | ---- |
-| `ARENET_ADMIN_BIND` | `127.0.0.1:8001` | Admin UI/API bind address (`0.0.0.0:8001` for LAN). |
+| `ARENET_ADMIN_BIND` | `127.0.0.1:8001` | Admin UI/API bind address (`0.0.0.0:8001` for LAN ; no effect under Docker). |
 | `ARENET_DATA_DIR` | `/var/lib/arenet` | State directory (BoltDB + SQLite). |
 | `ARENET_HTTP_PORT` / `ARENET_HTTPS_PORT` | `:80` / `:443` | Public data-plane listen ports. |
 | `ARENET_ACME_EMAIL` | _(none)_ | Contact email for the ACME issuer (Let's Encrypt notices). |

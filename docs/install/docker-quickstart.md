@@ -119,10 +119,22 @@ Copy that token — you'll paste it into the browser in a moment.
 
 ## 5. Open the admin UI
 
-**By default Arenet's admin port :8001 binds to 127.0.0.1 only**
-(your data plane on :80 / :443 is fully LAN-accessible — only
-the admin UI is loopback-restricted, to avoid serving a plaintext
-admin endpoint on your LAN by accident).
+**By default the compose file publishes admin port :8001 to
+127.0.0.1 only** (your data plane on :80 / :443 is fully
+LAN-accessible — only the admin UI is loopback-restricted, to
+avoid serving a plaintext admin endpoint on your LAN by
+accident).
+
+Two details worth knowing, because the lever is not where you
+might look for it. Inside the container the admin API binds
+every interface: the image's `CMD` passes `--admin-port=:8001`
+and a flag beats `ARENET_ADMIN_BIND`, so setting that variable
+in compose changes nothing. Docker forwards a published port to
+the container's `eth0` rather than its loopback, so this is what
+makes `127.0.0.1:8001:8001` work at all. It also means any
+container on the same Docker network can reach `arenet:8001`
+whatever you publish — give Arenet its own network if that
+matters to you.
 
 To reach the admin from a workstation on your LAN, pick one of:
 
@@ -152,10 +164,12 @@ on the homelab box:
 ports:
   - "80:80"
   - "443:443"
-  - "8001:8001"                    # was: "127.0.0.1:8001:8001"
-environment:
-  ARENET_ADMIN_BIND: 0.0.0.0:8001  # was: 127.0.0.1:8001
+  - "8001:8001"    # was: "127.0.0.1:8001:8001"
 ```
+
+That one line is the whole change. No environment variable is
+involved: the in-container bind is already every interface, so
+`ARENET_ADMIN_BIND` would have no effect here (see step 5).
 
 Then `docker compose up -d` to apply. Now anyone on your LAN can
 reach the admin port over plain HTTP — put a TLS terminator

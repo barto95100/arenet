@@ -147,7 +147,7 @@ Pareil que l'étape 4 du chemin Docker — `http://<your-host>:8001`, colle le t
 
 ## Post-install : exposer l'UI d'admin
 
-Par défaut l'UI d'admin bind sur `127.0.0.1:8001` (loopback uniquement) par sécurité. Pour y accéder depuis ton LAN :
+Par défaut l'UI d'admin est restreinte au loopback par sécurité — bind sur `127.0.0.1:8001` sur systemd, publiée sur `127.0.0.1:8001` sur Docker (dans le conteneur elle bind toutes les interfaces ; c'est le port publié qui fait frontière). Pour y accéder depuis ton LAN :
 
 **Docker** : le `docker-compose.yml` publie `127.0.0.1:8001:8001`, donc l'UI d'admin est joignable **depuis l'hôte Docker uniquement**, pas depuis ton LAN. Pour y accéder d'ailleurs : soit un tunnel (`ssh -L 8001:localhost:8001 <docker-host>`), soit changer le mapping en `8001:8001` et appliquer la [checklist de durcissement](https://github.com/barto95100/arenet/blob/main/docs/operations/hardening.md).
 
@@ -170,7 +170,7 @@ Toutes optionnelles — définis-les via `environment:` dans `docker-compose.yml
 
 | Variable | Défaut | Rôle |
 | -------- | ------ | ---- |
-| `ARENET_ADMIN_BIND` | `127.0.0.1:8001` | Adresse de bind de l'UI/API d'admin. Mets `0.0.0.0:8001` pour un accès LAN (voir ci-dessus). |
+| `ARENET_ADMIN_BIND` | `127.0.0.1:8001` | Adresse de bind de l'UI/API d'admin. Mets `0.0.0.0:8001` pour un accès LAN sur systemd. Sans effet sous Docker (l'image passe `--admin-port`). |
 | `ARENET_DATA_DIR` | `/var/lib/arenet` | Où le binaire stocke son état BoltDB/SQLite. |
 | `ARENET_UPDATE_CHECK_INTERVAL` | `24h` | Cadence du vérificateur de mises à jour opt-in (durée Go, min `1h`). Le check doit tout de même être **activé dans Réglages → Mises à jour** — pas de toggle env pour ça. Voir [DNS Providers → Rester à jour](DNS-Providers-FR#rester-à-jour). |
 | `ARENET_ACME_EMAIL` | _(aucun)_ | Email de contact passé à l'émetteur ACME pour les notices Let's Encrypt. |
