@@ -413,6 +413,14 @@ describe('dashboard — the traffic chart describes its own data', () => {
 		return screen.getByRole('heading', { name: /Traffic/ });
 	}
 
+	// Waits for the first series to be drawn, without reading the unit
+	// label: the race tests must not fail when the unit changes.
+	async function chartDrawn(): Promise<void> {
+		await vi.waitFor(() =>
+			expect(document.querySelector('.chart-wrap title')?.textContent).toMatch(/Requests/)
+		);
+	}
+
 	function timeseries(metric: string, bucketSizeSeconds: number, values: number[]) {
 		return {
 			routeId: 'all',
@@ -454,30 +462,36 @@ describe('dashboard — the traffic chart describes its own data', () => {
 	it('keeps the old label when the new metric fails to load', async () => {
 		metricsMock.fetchTimeseries.mockResolvedValue(timeseries('req_per_sec', 60, [1200]));
 		render(Page);
-		await vi.waitFor(() => expect(trafficHeading().textContent).toMatch(/per minute/));
+		await chartDrawn();
 
 		// Now the API starts failing, and the operator asks for latency.
 		metricsMock.fetchTimeseries.mockRejectedValue(new Error('boom'));
 		await userEvent.click(screen.getByText('Latency'));
 		await tick();
 
-		// Still the request series, so still its unit — not
-		// "milliseconds" over request counts.
-		expect(trafficHeading().textContent).toMatch(/per minute/);
-		expect(trafficHeading().textContent).not.toMatch(/milliseconds/);
+		// Still the request series. Asserted on what the chart says
+		// it is drawing, not on the unit text, so a change to the
+		// label cannot make this test fail for the wrong reason.
+		expect(document.querySelector('.chart-wrap')?.getAttribute('data-metric')).toBe(
+			'req_per_sec'
+		);
 	});
 
 	it('relabels once the new metric does load', async () => {
 		metricsMock.fetchTimeseries.mockResolvedValue(timeseries('req_per_sec', 60, [1200]));
 		render(Page);
-		await vi.waitFor(() => expect(trafficHeading().textContent).toMatch(/per minute/));
+		await chartDrawn();
 
 		metricsMock.fetchTimeseries.mockResolvedValue(
 			timeseries('p95_latency_ms', 60, [48])
 		);
 		await userEvent.click(screen.getByText('Latency'));
 
-		await vi.waitFor(() => expect(trafficHeading().textContent).toMatch(/milliseconds/));
+		await vi.waitFor(() =>
+			expect(document.querySelector('.chart-wrap')?.getAttribute('data-metric')).toBe(
+				'p95_latency_ms'
+			)
+		);
 	});
 
 	// The accessible label used to be `Series for ${chartMetric}` — an

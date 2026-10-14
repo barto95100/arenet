@@ -461,7 +461,12 @@
 					>
 				</div>
 			</div>
-			<div class="chart-wrap">
+			<!-- data-metric is what the drawn points ARE, so a test can
+			     observe the metric the chart describes without going
+			     through the unit label — otherwise a change to the
+			     label makes the race tests fail too, and neither says
+			     which mechanism broke. -->
+			<div class="chart-wrap" data-metric={chartMetricShown}>
 				{#if chartLoading}
 					<div class="chart-loading"><Spinner size="sm" /></div>
 				{:else}
