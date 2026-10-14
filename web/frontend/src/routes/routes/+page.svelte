@@ -3811,21 +3811,41 @@
 						{#each filteredRoutes as r (r.id)}
 							{@const selected = editingId === r.id}
 							{@const statusBadge = aggregateToBadge(r.aggregateStatus)}
+							<!-- v2.72 — the row is a row again.
+							     It carried role="button" + tabindex="0", and
+							     role="button" overrides the implicit `row`
+							     role: that takes every <td> out of the table's
+							     accessibility tree, so a screen reader
+							     announced ONE control named by all six columns
+							     concatenated, with no headers to anchor them.
+							     Worse than the DataTable case fixed in #267,
+							     because this row also contains a
+							     RouteStateControl — a radiogroup with three
+							     radios that change a route's LIVE state. That
+							     was a radiogroup inside a button: its radios
+							     stayed Tab-focusable but were flattened out of
+							     the tree, so focus could land on a control
+							     that announced nothing and switched a route to
+							     maintenance.
+							     The host cell below is the control now. The
+							     mouse click stays, minus clicks that started
+							     on a control inside the row. -->
 							<tr
 								class="route-row border-b border-border-subtle last:border-b-0 cursor-pointer transition-colors hover:bg-hover"
 								class:route-row-selected={selected}
 								class:opacity-50={r.disabled}
 								data-testid={selected ? 'route-row-selected' : 'route-row'}
-								onclick={() => selectOrToggleRoute(r)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter' || e.key === ' ') {
-										e.preventDefault();
-										selectOrToggleRoute(r);
+								onclick={(e) => {
+									const target = e.target;
+									if (
+										target instanceof Element &&
+										target.closest('button, a, input, select, textarea')
+									) {
+										return;
 									}
+									selectOrToggleRoute(r);
 								}}
-								tabindex="0"
 								aria-current={selected ? 'true' : undefined}
-								role="button"
 							>
 								<td class="px-4 py-3 font-mono">
 									<!-- v2.17.1 Item C — the Maintenance /
@@ -3838,7 +3858,18 @@
 									     set via class:opacity-50={r.disabled}
 									     on the <tr>) remains as the secondary
 									     disabled cue. -->
-									{r.host}
+									<!-- The row's keyboard and AT entry point: a
+									     real button on the identifier, named for
+									     what it does. aria-expanded reflects that
+									     it opens the edit panel for this route and
+									     closes it again on a second press. -->
+									<button
+										type="button"
+										class="route-host-btn"
+										aria-expanded={selected}
+										data-testid={`route-open-${r.id}`}
+										onclick={() => selectOrToggleRoute(r)}
+									>{r.host}</button>
 									{#if r.aliases && r.aliases.length > 0}
 										<span
 											class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-sans text-secondary bg-elevated border border-border-subtle cursor-help"
@@ -6503,6 +6534,25 @@
 	   future theme change propagates everywhere. Inset
 	   box-shadow gives the left edge a 3px solid accent stripe
 	   without requiring a layout-shifting border. */
+	/* v2.72 — the host is a real button now, so it has to look like the
+	   text it replaced rather than like a button: same font, same
+	   colour, no padding, inheriting the cell's monospace. The focus
+	   ring is the addition, and the point of the change. */
+	.route-host-btn {
+		font: inherit;
+		color: inherit;
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		text-align: left;
+	}
+	.route-host-btn:focus-visible {
+		outline: 2px solid var(--accent-cyan);
+		outline-offset: 2px;
+		border-radius: var(--radius-sm);
+	}
+
 	:global(tr.route-row-selected) {
 		background: color-mix(in oklch, var(--accent) 10%, transparent);
 		box-shadow: inset 3px 0 0 0 var(--accent);
