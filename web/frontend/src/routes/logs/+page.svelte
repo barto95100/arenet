@@ -65,7 +65,32 @@
 	import { language } from '$lib/stores/language.svelte';
 	import { sourceMeta } from '$lib/utils/sourceMeta';
 	import { levelMeta } from '$lib/utils/levelMeta';
-	import { formatSourceIP } from '$lib/utils/ipClass';
+	import { formatSourceIP, maskIP } from '$lib/utils/ipClass';
+	import { SvelteSet } from 'svelte/reactivity';
+
+	// v2.72 — revealing the real source address.
+	//
+	// Masked by default: the column stays compact and a shoulder does
+	// not read a visitor's address off the screen. Revealed per row on
+	// click, which is what makes it selectable — the title attribute
+	// never was, despite the comment in the markup claiming otherwise.
+	let revealedIPs = $state(new SvelteSet<string>());
+
+	function toggleReveal(ip: string): void {
+		if (revealedIPs.has(ip)) {
+			revealedIPs.delete(ip);
+		} else {
+			revealedIPs.add(ip);
+		}
+	}
+
+	// Only an address that masking actually changes is worth a reveal
+	// control. A placeholder row — "?", an internal marker, an empty
+	// source — has nothing hidden behind it, and offering a button
+	// there would promise something it cannot do.
+	function isMaskableIP(ip: string): boolean {
+		return !!ip && maskIP(ip) !== ip;
+	}
 	import ActivityHistogram from '$lib/components/ActivityHistogram.svelte';
 	import WafExcludeDialog from '$lib/components/WafExcludeDialog.svelte';
 	import { auth } from '$lib/stores/auth.svelte';
@@ -850,15 +875,44 @@
 					<!--
 					  Phase Z.5.3 — SOURCE IP enriched with the
 					  country code resolved by the batch lookup.
-					  The title carries the FULL unmasked IP so
-					  forensic ops can still copy-paste the
-					  exact source ; the visible label is
-					  octet-masked for compactness + shoulder-
-					  surfing hygiene.
+					  The visible label is octet-masked for
+					  compactness + shoulder-surfing hygiene.
+
+					  v2.72 — and the full address can now actually be
+					  taken out of the page. The comment here used to
+					  say the title attribute let "forensic ops
+					  copy-paste the exact source". It did not: a
+					  tooltip cannot be selected, so the real address
+					  was reachable only through DevTools. Clicking
+					  reveals it as plain selectable text.
+
+					  A copy-to-clipboard button was the obvious
+					  alternative and was rejected: navigator.clipboard
+					  is absent on a plain-HTTP origin, which is how
+					  many of these dashboards are served on a LAN, so
+					  it would fail exactly where it is needed and say
+					  nothing. A reveal has no API to be missing.
 					-->
-					<span class="right mono dim" title={r.srcIp}>
-						{formatSourceIP(r.srcIp, countryMap.get(r.srcIp))}
-					</span>
+					{#if isMaskableIP(r.srcIp)}
+						<button
+							type="button"
+							class="right mono dim ip-reveal"
+							title={r.srcIp}
+							aria-pressed={revealedIPs.has(r.srcIp)}
+							aria-label={language.current && t('logs.revealSourceIP')}
+							data-testid="log-src-ip"
+							onclick={() => toggleReveal(r.srcIp)}
+						>
+							{revealedIPs.has(r.srcIp)
+								? r.srcIp
+								: formatSourceIP(r.srcIp, countryMap.get(r.srcIp))}
+						</button>
+					{:else}
+						<!-- A placeholder row: nothing to unmask. -->
+						<span class="right mono dim" data-testid="log-src-ip">
+							{formatSourceIP(r.srcIp, countryMap.get(r.srcIp))}
+						</span>
+					{/if}
 				</div>
 			{/each}
 		</div>
@@ -902,6 +956,23 @@
 </div><!-- /.logs-page -->
 
 <style>
+	/* v2.72 — the reveal control has to read as the text it replaced:
+	   same font, same dimmed colour, no padding. Only the focus ring
+	   and the pointer are added. */
+	.ip-reveal {
+		font: inherit;
+		color: inherit;
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+	}
+	.ip-reveal:focus-visible {
+		outline: 2px solid var(--accent-cyan);
+		outline-offset: 2px;
+		border-radius: var(--radius-sm);
+	}
+
 	.card {
 		background: var(--surface);
 		border: 1px solid var(--border);

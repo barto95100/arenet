@@ -2521,6 +2521,7 @@
 		}
 	},
 	"logs": {
+		"revealSourceIP": "Afficher l’adresse source complète",
 		"pageEyebrow": "Trafic · Journaux",
 		"pageTitle": "Journal d'activité",
 		"pageSubtitle": "Flux en temps réel des événements WAF, throttling, échecs d'authentification et cycle de vie des certificats. La capture complète du trafic 2xx/3xx est différée — voir backlog.",

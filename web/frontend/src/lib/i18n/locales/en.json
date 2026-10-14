@@ -2521,6 +2521,7 @@
 		}
 	},
 	"logs": {
+		"revealSourceIP": "Show the full source address",
 		"pageEyebrow": "Traffic · Logs",
 		"pageTitle": "Activity log",
 		"pageSubtitle": "Real-time stream of WAF events, throttling, authentication failures and certificate lifecycle. Full 2xx/3xx traffic capture is deferred — see backlog.",
