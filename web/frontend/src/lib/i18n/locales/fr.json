@@ -2544,6 +2544,8 @@
 		"filterLevelInfo": "Info",
 		"statusPaused": "pause",
 		"statusLive": "live",
+		"statusStale": "périmé — {count} source(s) sur {total} muettes",
+		"allSourcesFailed": "Aucune source d'événements n'a répondu. Les lignes ci-dessous, s'il y en a, datent d'un rafraîchissement antérieur.",
 		"colTimestamp": "Horodatage",
 		"colLevel": "Niveau",
 		"colSource": "Source",
