@@ -14,7 +14,9 @@
   ARIA contract:
     - role="tablist" wrapper with operator-supplied aria-label
     - role="tab" buttons with aria-selected reflecting state
-    - keyboard activation: Enter and Space both trigger select
+    - keyboard activation: Enter and Space both trigger select;
+      arrows and Home/End move focus WITHOUT selecting (v2.72 —
+      manual activation, because callers do real work in onChange)
       (matches the native <button> behavior used by the
       pre-extraction inline implementation in
       /security/decisions and /certs)
@@ -71,9 +73,70 @@
 		value = next;
 		onChange?.(next);
 	}
+
+	// v2.72 — the declared role answers the keys it promises.
+	//
+	// This renders role="tablist" with role="tab" children and handled
+	// clicks only. Everything stayed REACHABLE — native <button>s with
+	// no negative tabindex, so Tab visited each one and Enter or Space
+	// activated it — so nothing was unusable. What was wrong is that
+	// the role was a lie: a tablist is a SINGLE tab stop whose tabs are
+	// traversed with the arrow keys, and assistive tech that trusts the
+	// declared role tells the user to press them. Nothing happened.
+	//
+	// MANUAL activation, deliberately: arrows move focus only, Enter or
+	// Space selects. Callers do real work in onChange — the CrowdSec
+	// panel restarts polling, the settings page rewrites the URL hash,
+	// and since the unsaved-input guard it can veto the switch and open
+	// a dialog. Selecting a tab merely because focus passed over it
+	// would fire all of that on the way to somewhere else.
+	let tablist = $state<HTMLDivElement | null>(null);
+
+	function focusTab(index: number): void {
+		const buttons = tablist?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+		if (!buttons || buttons.length === 0) return;
+		const wrapped = (index + buttons.length) % buttons.length;
+		// A non-selected tab carries tabindex="-1", which keeps it out
+		// of the Tab order while still allowing programmatic focus —
+		// that is what makes the roving pattern work.
+		buttons[wrapped].focus();
+	}
+
+	function onKeydown(e: KeyboardEvent): void {
+		const buttons = tablist?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+		if (!buttons || buttons.length === 0) return;
+		// Relative to where focus IS, not to what is selected, so
+		// repeated arrows walk along the strip.
+		const current = Array.from(buttons).indexOf(
+			document.activeElement as HTMLButtonElement
+		);
+		const from = current === -1 ? tabs.findIndex((t) => t.id === value) : current;
+		switch (e.key) {
+			case 'ArrowLeft':
+			case 'ArrowUp':
+				focusTab(from - 1);
+				break;
+			case 'ArrowRight':
+			case 'ArrowDown':
+				focusTab(from + 1);
+				break;
+			case 'Home':
+				focusTab(0);
+				break;
+			case 'End':
+				focusTab(buttons.length - 1);
+				break;
+			default:
+				return;
+		}
+		e.preventDefault();
+	}
 </script>
 
-<div class="tabs" role="tablist" aria-label={ariaLabel}>
+<!-- svelte-ignore a11y_interactive_supports_focus —
+     the tablist is not itself focusable; focus lives on a tab (roving
+     tabindex below), which is the WAI-ARIA pattern. -->
+<div class="tabs" role="tablist" aria-label={ariaLabel} bind:this={tablist} onkeydown={onKeydown}>
 	{#each tabs as tab (tab.id)}
 		<button
 			type="button"
@@ -81,6 +144,7 @@
 			class="tab"
 			class:active={value === tab.id}
 			aria-selected={value === tab.id}
+			tabindex={value === tab.id ? 0 : -1}
 			data-testid={tab.testId}
 			onclick={() => select(tab.id)}
 		>

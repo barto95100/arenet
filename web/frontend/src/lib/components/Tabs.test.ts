@@ -196,3 +196,106 @@ describe('Tabs — canLeave', () => {
 		);
 	});
 });
+
+// v2.72 — the tablist answers the arrow keys, with MANUAL activation.
+//
+// Tabs rendered role="tablist" with role="tab" children and handled
+// clicks only. Everything stayed reachable by Tab, so nothing was
+// unusable — what was wrong is that the role was a lie: a tablist is a
+// single tab stop whose tabs are traversed with the arrows, and AT
+// that trusts the role tells the user to press them.
+//
+// Manual activation is deliberate. Callers do real work in onChange:
+// the CrowdSec panel restarts polling, the settings page rewrites the
+// URL hash, and since the unsaved-input guard it can veto the switch
+// and open a dialog. Selecting a tab merely because focus passed over
+// it would fire all of that on the way to somewhere else.
+describe('Tabs — the tablist pattern', () => {
+	const tabs = [
+		{ id: 'a', label: 'Alpha' },
+		{ id: 'b', label: 'Beta' },
+		{ id: 'c', label: 'Gamma' }
+	] as const;
+
+	it('is a single tab stop: only the selected tab is reachable by Tab', () => {
+		render(Tabs, { value: 'b', tabs, ariaLabel: 'test tabs' });
+
+		expect(screen.getByRole('tab', { name: 'Alpha' }).getAttribute('tabindex')).toBe('-1');
+		expect(screen.getByRole('tab', { name: 'Beta' }).getAttribute('tabindex')).toBe('0');
+		expect(screen.getByRole('tab', { name: 'Gamma' }).getAttribute('tabindex')).toBe('-1');
+	});
+
+	it('moves focus with the arrows without selecting', async () => {
+		const onChange = vi.fn();
+		render(Tabs, { value: 'a', tabs, ariaLabel: 'test tabs', onChange });
+		const alpha = screen.getByRole('tab', { name: 'Alpha' });
+		alpha.focus();
+
+		await fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+
+		expect(screen.getByRole('tab', { name: 'Beta' })).toHaveFocus();
+		// The whole point: nothing was activated on the way past.
+		expect(onChange).not.toHaveBeenCalled();
+		expect(alpha.getAttribute('aria-selected')).toBe('true');
+	});
+
+	it('wraps around and answers Home and End', async () => {
+		render(Tabs, { value: 'a', tabs, ariaLabel: 'test tabs' });
+		const tablist = screen.getByRole('tablist');
+		screen.getByRole('tab', { name: 'Alpha' }).focus();
+
+		await fireEvent.keyDown(tablist, { key: 'ArrowLeft' });
+		expect(screen.getByRole('tab', { name: 'Gamma' })).toHaveFocus();
+
+		await fireEvent.keyDown(tablist, { key: 'Home' });
+		expect(screen.getByRole('tab', { name: 'Alpha' })).toHaveFocus();
+
+		await fireEvent.keyDown(tablist, { key: 'End' });
+		expect(screen.getByRole('tab', { name: 'Gamma' })).toHaveFocus();
+	});
+
+	it('activates the focused tab on Enter, which is the caller contract', async () => {
+		const onChange = vi.fn();
+		render(Tabs, { value: 'a', tabs, ariaLabel: 'test tabs', onChange });
+		const tablist = screen.getByRole('tablist');
+		screen.getByRole('tab', { name: 'Alpha' }).focus();
+
+		await fireEvent.keyDown(tablist, { key: 'ArrowRight' });
+		// A native <button> turns Enter into a click, which is what the
+		// existing click path already covers; firing it here keeps the
+		// two halves of the pattern in one test.
+		await fireEvent.click(screen.getByRole('tab', { name: 'Beta' }));
+
+		expect(onChange).toHaveBeenCalledWith('b');
+	});
+
+	it('leaves other keys alone', async () => {
+		const onChange = vi.fn();
+		render(Tabs, { value: 'a', tabs, ariaLabel: 'test tabs', onChange });
+
+		await fireEvent.keyDown(screen.getByRole('tablist'), { key: 'Escape' });
+
+		expect(onChange).not.toHaveBeenCalled();
+	});
+
+	it('still refuses to move when canLeave vetoes', async () => {
+		// Arrows move focus only, so they never reach the veto — but a
+		// real activation still must.
+		const onChange = vi.fn();
+		render(Tabs, {
+			value: 'a',
+			tabs,
+			ariaLabel: 'test tabs',
+			onChange,
+			canLeave: () => false
+		});
+
+		await fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+		await fireEvent.click(screen.getByRole('tab', { name: 'Beta' }));
+
+		expect(onChange).not.toHaveBeenCalled();
+		expect(screen.getByRole('tab', { name: 'Alpha' }).getAttribute('aria-selected')).toBe(
+			'true'
+		);
+	});
+});

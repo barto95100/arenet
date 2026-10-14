@@ -58,13 +58,60 @@
 		if (disabled || v === value) return;
 		onchange?.(v);
 	}
+
+	// v2.72 — the declared role answers the keys it promises.
+	//
+	// This renders role="radiogroup" with role="radio" children and
+	// handled clicks only. Everything stayed REACHABLE — they are
+	// native <button>s with no negative tabindex, so Tab visits each
+	// one and Enter or Space activates it — so nothing was unusable.
+	// What was wrong is that the role was a lie: a radiogroup is a
+	// SINGLE tab stop whose options are traversed with the arrow keys,
+	// and assistive tech that trusts the declared role tells the user
+	// to press them. Nothing happened.
+	//
+	// The correct implementation was already in this repo, in a sibling
+	// with the same role: RouteStateControl, whose own header comment
+	// says it "mirrors Toggle's click-to-select semantics". Toggle is
+	// the one that drifted, so this is its pattern, trimmed to two
+	// options.
+	function onKeydown(e: KeyboardEvent): void {
+		if (disabled) return;
+		const idx = options[0].value === value ? 0 : 1;
+		let next: number | null = null;
+		switch (e.key) {
+			case 'ArrowLeft':
+			case 'ArrowUp':
+				next = (idx - 1 + options.length) % options.length;
+				break;
+			case 'ArrowRight':
+			case 'ArrowDown':
+				next = (idx + 1) % options.length;
+				break;
+			case 'Home':
+				next = 0;
+				break;
+			case 'End':
+				next = options.length - 1;
+				break;
+			default:
+				return;
+		}
+		e.preventDefault();
+		pick(options[next].value);
+	}
 </script>
 
+<!-- svelte-ignore a11y_interactive_supports_focus —
+     the radiogroup is not itself focusable; focus lives on the checked
+     radio (roving tabindex below), which is the WAI-ARIA pattern and
+     what RouteStateControl does. -->
 <div
 	class="toggle"
 	role="radiogroup"
 	aria-label={ariaLabel}
 	aria-disabled={disabled || undefined}
+	onkeydown={onKeydown}
 >
 	<span class="knob" style:transform="translateX({activeIndex * 100}%)" aria-hidden="true"></span>
 	{#each options as opt (opt.value)}
@@ -74,6 +121,7 @@
 			class="opt"
 			class:active={opt.value === value}
 			aria-checked={opt.value === value}
+			tabindex={opt.value === value ? 0 : -1}
 			{disabled}
 			onclick={() => pick(opt.value)}
 		>
