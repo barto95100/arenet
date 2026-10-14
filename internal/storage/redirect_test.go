@@ -281,3 +281,46 @@ func TestPathRedirect_CodeDefaultsToTemporary(t *testing.T) {
 		t.Errorf("nil must be usable, got %d", got)
 	}
 }
+
+// A glob metacharacter in a path prefix is refused (v2.73).
+//
+// caddymgr emits [prefix, prefix+"/*"] from this value, and Caddy reads
+// *, ?, [ and ] as glob syntax. A stored "/*" therefore emitted "/*" —
+// a prefix match over the whole site — and on a rule carrying
+// DisableRouteAuth that turned the route's authentication off
+// everywhere. The field's only previous constraint was a leading slash.
+func TestPathRule_RefusesAGlobMetacharacter(t *testing.T) {
+	cases := []struct {
+		prefix string
+		why    string
+	}{
+		{"/*", "the whole-site wildcard: with DisableRouteAuth this disabled auth everywhere"},
+		{"/admin/*", "redundant at best — a prefix already covers everything beneath it"},
+		{"/item?", "a single-character wildcard, not a literal question mark"},
+		{"/items[1]", "a character class: this matches /items1, not /items[1]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.prefix, func(t *testing.T) {
+			r := routeWithPathRule(PathRule{
+				PathPrefix: tc.prefix,
+				IPFilter:   &IPFilter{Mode: "allow", CIDRs: []string{"10.0.0.0/8"}},
+			})
+			if err := r.validate(); err == nil {
+				t.Fatalf("prefix %q must be refused — %s", tc.prefix, tc.why)
+			}
+		})
+	}
+}
+
+// The trailing slash stays legal on purpose. It used to emit a broken
+// matcher; that is fixed where the matcher is built, so refusing it
+// here would break existing configurations to fix nothing.
+func TestPathRule_AcceptsATrailingSlash(t *testing.T) {
+	r := routeWithPathRule(PathRule{
+		PathPrefix: "/webhook/",
+		IPFilter:   &IPFilter{Mode: "allow", CIDRs: []string{"10.0.0.0/8"}},
+	})
+	if err := r.validate(); err != nil {
+		t.Fatalf("a trailing slash must stay accepted: %v", err)
+	}
+}

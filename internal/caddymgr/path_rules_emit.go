@@ -24,6 +24,24 @@ import (
 
 // pathMatchers returns Caddy path matchers for a prefix: the prefix
 // itself + everything under it. "/docs" → ["/docs","/docs/*"].
+//
+// The trailing slash is stripped first, and that is load-bearing
+// (v2.73). Concatenating "/*" onto a prefix that already ended in "/"
+// produced "/admin//*", and Caddy disables slash merging for any
+// pattern containing "//" (v2.11.4 caddyhttp/matchers.go:475), then
+// prefix-matches against the literal "/admin//" — which no ordinary
+// request produces. So a rule on "/admin/" matched "/admin/" and
+// NOTHING ELSE: every path under it fell through to
+// buildPathRulesSubroute's match-less catch-all and was proxied with
+// the rule's basic auth, forward auth, IP filter and rate limit never
+// executed. The exact path still prompted, so the gate tested as
+// working. A prefix of "/" was worse still: ["/", "//*"] gated the
+// root and not one path beneath it.
+//
+// Two places in this codebase already had it right and disagreed with
+// this one: storage's own matches() helper trims the slash
+// (internal/storage/routes.go:410), and buildAuthPassthroughRoute
+// normalises the same way (manager.go:3985).
 func pathMatchers(pr storage.PathRule) []string {
 	// v2.44 — MatchExact emits the bare pattern. Verified in Caddy
 	// v2.11.4 (caddyhttp/matchers.go): a pattern with no wildcard
@@ -34,7 +52,16 @@ func pathMatchers(pr storage.PathRule) []string {
 	if pr.MatchExact {
 		return []string{pr.PathPrefix}
 	}
-	return []string{pr.PathPrefix, pr.PathPrefix + "/*"}
+	base := strings.TrimSuffix(pr.PathPrefix, "/")
+	if base == "" {
+		// The root. Emitting base+"/*" here would rebuild "//*", the
+		// very pattern this function exists to avoid.
+		return []string{"/", "/*"}
+	}
+	// base matches the prefix with and without its trailing slash:
+	// Caddy lowercases and cleans the request path, and "/admin/"
+	// cleans to "/admin" when slashes merge.
+	return []string{base, base + "/*"}
 }
 
 // poolUsesHTTPS reports whether a bare upstream pool (a route's or a

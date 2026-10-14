@@ -178,6 +178,22 @@ func gatedRoutes() []storage.Route {
 					PathPrefix:  "/admin",
 					ForwardAuth: &storage.ForwardAuthRouteConfig{ProviderName: "authelia-prod"},
 				},
+				// The trailing slash here is deliberate, and this
+				// fixture is why the golden moved in v2.73.
+				//
+				// It used to pin ["/webhook/", "/webhook//*"] — the
+				// broken pair, because "//" turns off Caddy's slash
+				// merging. So the golden was protecting the defect:
+				// any change that FIXED the emitter failed this test.
+				//
+				// Note the direction of the change for an exemption,
+				// which is the opposite of a gate's. Broken, the
+				// exemption covered almost nothing, so the route's
+				// auth stayed on under /webhook/ — accidentally fail
+				// closed. Fixed, the exemption covers the subtree the
+				// operator asked for, so auth is now off there. Both
+				// readings are "the matcher means what was written";
+				// only one of them is what the operator sees.
 				{PathPrefix: "/webhook/", DisableRouteAuth: true},
 			},
 		},

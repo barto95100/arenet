@@ -1415,8 +1415,8 @@
                               "match": [
                                 {
                                   "path": [
-                                    "/webhook/",
-                                    "/webhook//*"
+                                    "/webhook",
+                                    "/webhook/*"
                                   ]
                                 }
                               ]
@@ -1558,8 +1558,8 @@
                                   "not": [
                                     {
                                       "path": [
-                                        "/webhook/",
-                                        "/webhook//*"
+                                        "/webhook",
+                                        "/webhook/*"
                                       ]
                                     }
                                   ]
@@ -1731,8 +1731,8 @@
                               "match": [
                                 {
                                   "path": [
-                                    "/webhook/",
-                                    "/webhook//*"
+                                    "/webhook",
+                                    "/webhook/*"
                                   ]
                                 }
                               ]
@@ -3189,8 +3189,8 @@
                               "match": [
                                 {
                                   "path": [
-                                    "/webhook/",
-                                    "/webhook//*"
+                                    "/webhook",
+                                    "/webhook/*"
                                   ]
                                 }
                               ]
@@ -3332,8 +3332,8 @@
                                   "not": [
                                     {
                                       "path": [
-                                        "/webhook/",
-                                        "/webhook//*"
+                                        "/webhook",
+                                        "/webhook/*"
                                       ]
                                     }
                                   ]
@@ -3505,8 +3505,8 @@
                               "match": [
                                 {
                                   "path": [
-                                    "/webhook/",
-                                    "/webhook//*"
+                                    "/webhook",
+                                    "/webhook/*"
                                   ]
                                 }
                               ]
