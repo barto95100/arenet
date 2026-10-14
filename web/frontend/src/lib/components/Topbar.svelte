@@ -34,6 +34,11 @@
 	import { auth } from '$lib/stores/auth.svelte';
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
+	import {
+		fetchSystemHealth,
+		unhealthyComponentNames,
+		type SystemHealthResult
+	} from '$lib/api/system-health';
 
 	// v2.9.12 i18n Phase 2 — crumb labels resolved from the active
 	// bundle. Each entry maps a pathname to a bundle key under
@@ -93,6 +98,67 @@
 			document.body.classList.remove('viewer');
 		}
 	});
+
+	// The gateway badge (v2.73).
+	//
+	// It used to be three lines of static markup: a dot hard-wired
+	// to var(--status-up) and the literal topbar.statusHealthy.
+	// There was no fetch, no store read and no prop anywhere in this
+	// component, so it read "Gateway healthy" in green on every
+	// page, in every state, including with Caddy down. The endpoint
+	// it should have been reading has existed since Step AL.3a.
+	//
+	// null is a reading in its own right — "unknown", grey — and not
+	// a reason to fall back on the reassuring answer. That fallback
+	// is the whole defect.
+	let health = $state<SystemHealthResult>(null);
+	// Distinguishes "not asked yet" from "asked, no answer". Both
+	// render grey, but only the second is worth a tooltip.
+	let healthProbed = $state(false);
+
+	const HEALTH_POLL_MS = 30_000;
+
+	const healthStatus = $derived(health?.status ?? 'unknown');
+	const healthLabelKey = $derived(
+		{
+			healthy: 'topbar.statusHealthy',
+			degraded: 'topbar.statusDegraded',
+			unhealthy: 'topbar.statusUnhealthy',
+			unknown: 'topbar.statusUnknown'
+		}[healthStatus]
+	);
+	// Which probes are complaining, for the tooltip. Empty unless
+	// something is actually wrong, so a healthy badge carries no
+	// title attribute at all.
+	const healthDetail = $derived(
+		health && health.status !== 'healthy' ? unhealthyComponentNames(health).join(', ') : ''
+	);
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+
+		let cancelled = false;
+
+		async function poll(): Promise<void> {
+			// Locked: the LockScreen overlay covers this badge, so the
+			// answer is unobservable. Hidden tab: same. Neither is a
+			// 403 risk on this path (it needs no session), but a
+			// request nobody can see is waste.
+			if (auth.state === 'locked') return;
+			if (document.visibilityState !== 'visible') return;
+			const result = await fetchSystemHealth();
+			if (cancelled) return;
+			health = result;
+			healthProbed = true;
+		}
+
+		void poll();
+		const id = setInterval(() => void poll(), HEALTH_POLL_MS);
+		return () => {
+			cancelled = true;
+			clearInterval(id);
+		};
+	});
 </script>
 
 <div class="topbar" role="banner">
@@ -100,9 +166,20 @@
 		<b>{crumbLabel}</b>
 	</div>
 
-	<div class="tb-status" aria-label={language.current && t('topbar.statusAriaLabel')}>
-		<span class="dot ok" aria-hidden="true"></span>
-		<span>{language.current && t('topbar.statusHealthy')}</span>
+	<!-- role="status" for two reasons. An aria-label on a role-less
+	     div is ignored by assistive tech, so the label that was here
+	     never reached anyone; and now that the reading changes, a
+	     change in the gateway's state is worth announcing. -->
+	<div
+		class="tb-status"
+		role="status"
+		data-testid="topbar-health"
+		data-status={healthStatus}
+		aria-label={language.current && t('topbar.statusAriaLabel')}
+		title={healthDetail || undefined}
+	>
+		<span class="dot" data-status={healthStatus} aria-hidden="true"></span>
+		<span>{language.current && t(healthLabelKey)}</span>
 	</div>
 </div>
 
@@ -147,8 +224,34 @@
 		border-radius: 50%;
 		flex: none;
 	}
-	.dot.ok {
+	/* Keyed on data-status rather than a class, so a state with no
+	   rule here is visibly grey instead of invisibly transparent.
+	   The .dot.ok rule this replaces became dead the moment the
+	   markup stopped emitting the class, and neither svelte-check
+	   nor the build says a word about an unused selector. */
+	.dot[data-status='healthy'] {
 		background: var(--status-up);
 		box-shadow: 0 0 8px var(--status-up);
+	}
+	.dot[data-status='degraded'] {
+		background: var(--status-warn);
+		box-shadow: 0 0 8px var(--status-warn);
+	}
+	.dot[data-status='unhealthy'] {
+		background: var(--status-down);
+		box-shadow: 0 0 8px var(--status-down);
+	}
+	.dot[data-status='unknown'] {
+		background: var(--fg-muted);
+	}
+	/* The word already says which state this is, so colour is a
+	   second channel rather than the only one. Tinting the text as
+	   well is what makes it readable at a glance across a 1440px
+	   topbar. */
+	.tb-status[data-status='degraded'] {
+		color: var(--status-warn);
+	}
+	.tb-status[data-status='unhealthy'] {
+		color: var(--status-down);
 	}
 </style>
