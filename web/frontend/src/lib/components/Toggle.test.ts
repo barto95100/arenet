@@ -12,7 +12,7 @@
 // any internal mutation of `value`.
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, fireEvent } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import Toggle from './Toggle.svelte';
 
@@ -74,6 +74,109 @@ describe('Toggle', () => {
 		// guards with `if (disabled || v === value) return;` before
 		// invoking onchange.
 		await user.click(screen.getByRole('radio', { name: 'Light' }));
+		expect(onchange).not.toHaveBeenCalled();
+	});
+});
+
+// v2.72 — the declared role answers the keys it promises.
+//
+// Toggle rendered role="radiogroup" with role="radio" children and
+// handled clicks only. Everything stayed REACHABLE — native <button>s
+// with no negative tabindex, so Tab visited each and Enter or Space
+// activated it — so the outside report's claim that a keyboard user
+// "cannot move between options" was wrong. What was wrong in the
+// component is that the role was a lie: a radiogroup is a SINGLE tab
+// stop whose options are traversed with the arrow keys, and assistive
+// tech that trusts the role tells the user to press them.
+//
+// The correct implementation was already in this repo, in a sibling
+// with the same role — RouteStateControl, whose header comment says it
+// "mirrors Toggle's click-to-select semantics". Toggle is the one that
+// drifted.
+describe('Toggle — the radiogroup pattern', () => {
+	// The prop is a mutable fixed-length pair, so the literal is typed
+	// as that tuple rather than widened to an array or frozen by
+	// `as const`.
+	const options: [{ value: string; label: string }, { value: string; label: string }] = [
+		{ value: 'light', label: 'Light' },
+		{ value: 'dark', label: 'Dark' }
+	];
+
+	it('is a single tab stop: only the checked option is reachable by Tab', () => {
+		render(Toggle, { options, value: 'light', ariaLabel: 'Theme' });
+
+		const radios = screen.getAllByRole('radio');
+		expect(radios[0].getAttribute('tabindex')).toBe('0');
+		expect(radios[1].getAttribute('tabindex')).toBe('-1');
+	});
+
+	it('moves the selection with the arrow keys', async () => {
+		const onchange = vi.fn();
+		const { container } = render(Toggle, {
+			options,
+			value: 'light',
+			ariaLabel: 'Theme',
+			onchange
+		});
+
+		await fireEvent.keyDown(container.querySelector('[role="radiogroup"]')!, {
+			key: 'ArrowRight'
+		});
+
+		expect(onchange).toHaveBeenCalledWith('dark');
+	});
+
+	it('wraps around, and answers Home and End', async () => {
+		const onchange = vi.fn();
+		const { container } = render(Toggle, {
+			options,
+			value: 'light',
+			ariaLabel: 'Theme',
+			onchange
+		});
+		const group = container.querySelector('[role="radiogroup"]')!;
+
+		// Left from the first wraps to the last.
+		await fireEvent.keyDown(group, { key: 'ArrowLeft' });
+		expect(onchange).toHaveBeenLastCalledWith('dark');
+
+		await fireEvent.keyDown(group, { key: 'End' });
+		expect(onchange).toHaveBeenLastCalledWith('dark');
+	});
+
+	it('ignores the arrows while disabled', async () => {
+		const onchange = vi.fn();
+		const { container } = render(Toggle, {
+			options,
+			value: 'light',
+			ariaLabel: 'Theme',
+			disabled: true,
+			onchange
+		});
+
+		await fireEvent.keyDown(container.querySelector('[role="radiogroup"]')!, {
+			key: 'ArrowRight'
+		});
+
+		expect(onchange).not.toHaveBeenCalled();
+	});
+
+	it('leaves other keys alone', async () => {
+		// The handler is on the group, so it must not swallow a key
+		// something else is listening for.
+		const onchange = vi.fn();
+		const { container } = render(Toggle, {
+			options,
+			value: 'light',
+			ariaLabel: 'Theme',
+			onchange
+		});
+
+		await fireEvent.keyDown(container.querySelector('[role="radiogroup"]')!, { key: 'a' });
+		await fireEvent.keyDown(container.querySelector('[role="radiogroup"]')!, {
+			key: 'Escape'
+		});
+
 		expect(onchange).not.toHaveBeenCalled();
 	});
 });
