@@ -67,6 +67,7 @@
 		daysUntilExpiry,
 		dominantIssuer,
 		inferChallengeLabel,
+		isExpired,
 		isExpiringSoon,
 		isZeroTimestamp,
 		resolveSource,
@@ -82,7 +83,7 @@
 	// the operator's "what's the state of all my certs?" entry
 	// intent. URL-anchored tabs can be revisited if the dashboard
 	// gains deep-link conventions elsewhere.
-	type DomaineTab = 'all' | 'wildcard' | 'expiring';
+	type DomaineTab = 'all' | 'wildcard' | 'expiring' | 'expired';
 	let activeTab = $state<DomaineTab>('all');
 	// Distinct from the page-level `loading` (which gates the
 	// editor markup): certsLoadError is the soft-fail state for
@@ -200,11 +201,16 @@
 	const certsBreakdown = $derived(countByEffectiveSource(certs));
 	const certsWildcard = $derived(certsBreakdown.wildcard);
 	const certsSpecific = $derived(certsBreakdown.specific);
-	// isExpiringSoon now excludes OBTAIN_FAILED + zero-time
-	// entries, so the count matches operator expectations
-	// ("renewal scheduled" should not include certs that haven't
-	// been obtained yet).
+	// isExpiringSoon excludes OBTAIN_FAILED, zero-time entries
+	// and — since this fix — already-expired certs, so the count
+	// matches what the tile's hint claims about it.
 	const certsExpiringSoon = $derived(certs.filter((c) => isExpiringSoon(c)).length);
+	// Expired certs are counted separately because the operator
+	// action differs: a cert expiring in 20 days needs nothing,
+	// one that expired yesterday means renewal is failing. They
+	// used to share the tile above, under the hint "auto-renewal
+	// scheduled".
+	const certsExpired = $derived(certs.filter((c) => isExpired(c)).length);
 	const principalIssuer = $derived(dominantIssuer(certs));
 	// ACME method KPI: DNS-01 wins as soon as at least one
 	// managed-domain is declared (we're using DNS-01 for at least
@@ -224,6 +230,8 @@
 				return certs.filter((c) => c.source === 'wildcard');
 			case 'expiring':
 				return certs.filter((c) => isExpiringSoon(c));
+			case 'expired':
+				return certs.filter((c) => isExpired(c));
 			case 'all':
 			default:
 				return certs;
@@ -531,7 +539,15 @@
 			testid="kpi-expirent-bientot"
 			label={language.current && t('certs.kpiExpiringLabel', { days: RENEWAL_WINDOW_DAYS })}
 			value={certsExpiringSoon}
-			hint={language.current && (certsExpiringSoon > 0 ? t('certs.kpiExpiringFootAuto') : '—')}
+			hint={language.current &&
+				(certsExpired > 0
+					? t('certs.kpiExpiringFootExpired', {
+							count: certsExpired,
+							plural: certsExpired === 1 ? '' : 's'
+						})
+					: certsExpiringSoon > 0
+						? t('certs.kpiExpiringFootAuto')
+						: '—')}
 		/>
 		<StatCard
 			testid="kpi-emetteur"
@@ -654,6 +670,17 @@
 				>
 					{language.current && t('certs.tabExpiring')}
 				</button>
+				<button
+					type="button"
+					role="tab"
+					class="tab"
+					class:active={activeTab === 'expired'}
+					aria-selected={activeTab === 'expired'}
+					data-testid="tab-expired"
+					onclick={() => (activeTab = 'expired')}
+				>
+					{language.current && t('certs.tabExpired')}
+				</button>
 			</div>
 		</div>
 
@@ -689,6 +716,7 @@
 					{#each filteredCerts as cert (cert.domain)}
 						{@const effectiveSource = resolveSource(cert)}
 						{@const days = daysUntilExpiry(cert)}
+						{@const expired = isExpired(cert)}
 						{@const notBeforeMissing = isZeroTimestamp(cert.notBefore)}
 						{@const staleFailedAt = staleFailureSince(cert.domain)}
 						{@const failCount = failureCountSince(cert.domain)}
@@ -733,15 +761,21 @@
 							<td>
 								<span
 									class="expiry"
-									class:expiry-warn={days !== null &&
-										days <= RENEWAL_WINDOW_DAYS &&
-										days > 0}
-									class:expiry-down={days !== null && days <= 0}
+									class:expiry-warn={!expired &&
+										days !== null &&
+										days <= RENEWAL_WINDOW_DAYS}
+									class:expiry-down={expired}
 								>
 									{#if days === null}
 										—
-									{:else if days <= 0}
+									{:else if expired}
 										{language.current && t('certs.expiryExpired')}
+									{:else if days === 0}
+										<!-- Still valid, under 24 h left.
+										     daysUntilExpiry floors, so the
+										     branch below would render
+										     "0 days". -->
+										{language.current && t('certs.expiryToday')}
 									{:else}
 										{language.current && t('certs.expiryDays', { days, plural: days === 1 ? '' : 's' })}
 									{/if}

@@ -16,6 +16,7 @@ import {
 	daysUntilExpiry,
 	dominantIssuer,
 	inferChallengeLabel,
+	isExpired,
 	isExpiringSoon,
 	isZeroTimestamp,
 	RENEWAL_WINDOW_DAYS,
@@ -193,11 +194,28 @@ describe('isExpiringSoon', () => {
 		});
 		expect(isExpiringSoon(c, NOW)).toBe(false);
 	});
-	it('flags already-expired certs (operator wants to see them too)', () => {
+	// Inverted deliberately. The previous assertion read "flags
+	// already-expired certs (operator wants to see them too)",
+	// and the premise was sound — but the only consumer of this
+	// predicate that an operator reads during an incident is the
+	// "Expiring < 30 days" KPI, whose hint says "auto-renewal
+	// scheduled" whenever the count is non-zero. Counting a dead
+	// cert there described a failed renewal as scheduled. The
+	// certs they still want to see now have their own bucket
+	// (isExpired) and their own tab.
+	it('does NOT flag already-expired certs — they are isExpired, not expiring', () => {
 		const c = mkCert({
 			notAfter: new Date(NOW.getTime() - 3 * 86400000).toISOString(),
 		});
+		expect(isExpiringSoon(c, NOW)).toBe(false);
+		expect(isExpired(c, NOW)).toBe(true);
+	});
+	it('still flags a cert with hours left — expiring, not expired', () => {
+		const c = mkCert({
+			notAfter: new Date(NOW.getTime() + 3 * 3600000).toISOString(),
+		});
 		expect(isExpiringSoon(c, NOW)).toBe(true);
+		expect(isExpired(c, NOW)).toBe(false);
 	});
 	it('does NOT flag OBTAIN_FAILED entries (no obtained cert to renew)', () => {
 		const c = mkCert({
@@ -212,6 +230,40 @@ describe('isExpiringSoon', () => {
 			notAfter: '0001-01-01T00:00:00Z',
 		});
 		expect(isExpiringSoon(c, NOW)).toBe(false);
+	});
+});
+
+describe('isExpired', () => {
+	it('is true for a notAfter in the past', () => {
+		const c = mkCert({ notAfter: new Date(NOW.getTime() - 86400000).toISOString() });
+		expect(isExpired(c, NOW)).toBe(true);
+	});
+	it('is false for a notAfter in the future', () => {
+		const c = mkCert({ notAfter: new Date(NOW.getTime() + 86400000).toISOString() });
+		expect(isExpired(c, NOW)).toBe(false);
+	});
+	// The whole reason this compares timestamps instead of
+	// reusing daysUntilExpiry, which floors to 0 here.
+	it('is false with three hours left, where the day count rounds to 0', () => {
+		const c = mkCert({ notAfter: new Date(NOW.getTime() + 3 * 3600000).toISOString() });
+		expect(daysUntilExpiry(c, NOW)).toBe(0);
+		expect(isExpired(c, NOW)).toBe(false);
+	});
+	it('is true one second after notAfter', () => {
+		const c = mkCert({ notAfter: new Date(NOW.getTime() - 1000).toISOString() });
+		expect(isExpired(c, NOW)).toBe(true);
+	});
+	it('is false for OBTAIN_FAILED — nothing was obtained to expire', () => {
+		const c = mkCert({ status: 'OBTAIN_FAILED', notAfter: '0001-01-01T00:00:00Z' });
+		expect(isExpired(c, NOW)).toBe(false);
+	});
+	it('is false for a zero-valued notAfter on any status', () => {
+		const c = mkCert({ status: 'UNKNOWN', notAfter: '0001-01-01T00:00:00Z' });
+		expect(isExpired(c, NOW)).toBe(false);
+	});
+	it('is false for an unparseable notAfter', () => {
+		const c = mkCert({ notAfter: 'not-a-date' });
+		expect(isExpired(c, NOW)).toBe(false);
 	});
 });
 
