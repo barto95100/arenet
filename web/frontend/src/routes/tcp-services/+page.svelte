@@ -487,21 +487,45 @@
 					</thead>
 					<tbody>
 						{#each services as svc (svc.id)}
+							<!-- v2.72 — the row is a row again, like the routes
+							     table in #268. It carried role="button" +
+							     tabindex="0", and role="button" overrides the
+							     implicit `row` role: that takes every <td> out
+							     of the table's accessibility tree, so a screen
+							     reader announced ONE control named by all six
+							     columns concatenated — name, listen, backend,
+							     guard badges, traffic and refusal counters —
+							     with no headers to anchor any of it.
+							     Milder than the routes case: there is no
+							     nested control here and Enter / Space did
+							     work, so nothing was unoperable. What was lost
+							     is the column context, which on a table of
+							     counters is most of the meaning.
+							     The name cell is the control now.
+							     No inner-control guard on the row click, unlike
+							     the routes table: openEdit is idempotent, so the
+							     name button's click bubbling up to the row just
+							     opens the same form again. The routes row needed
+							     one because its action TOGGLES — the bubbled
+							     click closed the panel the button had opened,
+							     and its test catches exactly that. A guard here
+							     would be a protection no test could fail on, and
+							     the day this row gains a real control the
+							     routes-page precedent is one line away. -->
 							<tr
 								class="border-t border-border-subtle cursor-pointer hover:bg-hover"
 								class:opacity-50={svc.disabled}
 								data-testid="tcp-row-{svc.id}"
 								onclick={() => openEdit(svc)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter' || e.key === ' ') {
-										e.preventDefault();
-										openEdit(svc);
-									}
-								}}
-								tabindex="0"
-								role="button"
 							>
-								<td class="px-4 py-3 font-mono">{svc.name}</td>
+								<td class="px-4 py-3 font-mono">
+									<button
+										type="button"
+										class="tcp-name-btn"
+										data-testid="tcp-open-{svc.id}"
+										onclick={() => openEdit(svc)}
+									>{svc.name}</button>
+								</td>
 								<td class="px-4 py-3 font-mono text-secondary">{listenOf(svc)}</td>
 								<td class="px-4 py-3 font-mono text-secondary">
 									{svc.upstreams[0]?.host}:{svc.upstreams[0]?.port}{svc.upstreams.length > 1
@@ -869,6 +893,25 @@
 />
 
 <style>
+
+	/* v2.72 — the name is a real button now, so it has to look like the
+	   text it replaced: same font, same colour, no padding, inheriting
+	   the cell's monospace. The focus ring is the addition, and the
+	   point of the change. Mirrors .route-host-btn. */
+	.tcp-name-btn {
+		font: inherit;
+		color: inherit;
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		text-align: left;
+	}
+	.tcp-name-btn:focus-visible {
+		outline: 2px solid var(--accent-cyan);
+		outline-offset: 2px;
+		border-radius: var(--radius-sm);
+	}
 	/* v2.48 — the table owns the page until something is selected.
 	   
 	   The split was fixed at two columns, so the list sat squeezed

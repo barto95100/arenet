@@ -694,3 +694,54 @@ describe('/tcp-services — creating is unaffected', () => {
 		expect(sent.ipFilter).toBeUndefined();
 	});
 });
+
+// v2.72 — the row is a row again, like the routes table in #268.
+//
+// It carried role="button" + tabindex="0", and role="button" overrides
+// the implicit `row` role: that takes every <td> out of the table's
+// accessibility tree, so a screen reader announced ONE control named
+// by all six columns concatenated — name, listen, backend, guard
+// badges, traffic and refusal counters — with no headers to anchor any
+// of it.
+//
+// Milder than the routes case: no nested control here and Enter /
+// Space did work, so nothing was unoperable. What was lost is the
+// column context, which on a table of counters is most of the meaning.
+describe('/tcp-services — the row keeps its cells', () => {
+	it('does not make the row a button', async () => {
+		api.listTCPServices.mockResolvedValue([service()]);
+		render(Page);
+
+		const row = await screen.findByTestId('tcp-row-svc1');
+		expect(row.getAttribute('role')).toBeNull();
+		expect(row.getAttribute('tabindex')).toBeNull();
+	});
+
+	it('puts a real control on the name, named by the name', async () => {
+		api.listTCPServices.mockResolvedValue([service()]);
+		render(Page);
+
+		const btn = await screen.findByTestId('tcp-open-svc1');
+		expect(btn.tagName).toBe('BUTTON');
+		expect(btn.textContent).toContain(service().name);
+	});
+
+	it('opens the edit form from that control', async () => {
+		api.listTCPServices.mockResolvedValue([service()]);
+		render(Page);
+
+		await userEvent.click(await screen.findByTestId('tcp-open-svc1'));
+
+		await waitFor(() => expect(screen.getByTestId('tcp-form')).toBeInTheDocument());
+	});
+
+	it('still opens the form when the row itself is clicked', async () => {
+		// The mouse affordance predates this change and operators use it.
+		api.listTCPServices.mockResolvedValue([service()]);
+		render(Page);
+
+		await userEvent.click(await screen.findByTestId('tcp-row-svc1'));
+
+		await waitFor(() => expect(screen.getByTestId('tcp-form')).toBeInTheDocument());
+	});
+});
