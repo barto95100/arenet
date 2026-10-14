@@ -2017,6 +2017,9 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	var basicAuthHash string
 	switch {
 	case req.AuthMode != storage.RouteAuthBasic:
+		// Irrelevant for an inactive mode: the block after the
+		// manual-cert cross-check decides what a non-basic route
+		// keeps. One owner, so the two cannot drift.
 		basicAuthHash = ""
 	case req.BasicAuth.Password != "":
 		hash, hashErr := auth.HashRoutePassword(req.BasicAuth.Password)
@@ -2333,8 +2336,29 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, verr.Error())
 		return
 	}
+	// v2.72 — a route that is not on basic auth KEEPS what was stored
+	// for it, rather than having it wiped.
+	//
+	// Switching a route to forward_auth to try an IdP and switching
+	// back is a normal afternoon, and it used to cost the password:
+	// this line zeroed the whole struct, so the way back was refused
+	// with "basicAuth.password required when enabling basic auth on a
+	// route without an existing password" and the operator had to
+	// retype a credential nothing had asked them to change.
+	//
+	// Safe because the emitter gates on AuthMode, not on what the
+	// struct holds: caddymgr/manager.go:1850 switches on r.AuthMode and
+	// emits the basicauth handler only in the RouteAuthBasic branch, so
+	// a preserved username and hash under "none" or "forward_auth"
+	// protect nothing. storage/routes.go says the same in its own
+	// words — a stray hash "would just be ignored at generation time".
+	//
+	// What is kept is an argon2id verifier, not a recoverable secret,
+	// and the response's passwordSet flag keeps the UI honest about it
+	// either way. createRoute still clears: on a first write there is
+	// nothing to carry over.
 	if newRoute.AuthMode != storage.RouteAuthBasic {
-		newRoute.BasicAuth = storage.BasicAuthRouteConfig{}
+		newRoute.BasicAuth = previous.BasicAuth
 	}
 	if newRoute.AuthMode != storage.RouteAuthForwardAuth {
 		newRoute.ForwardAuth = storage.ForwardAuthRouteConfig{}
