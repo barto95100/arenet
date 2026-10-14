@@ -6188,3 +6188,76 @@ describe('Routes page — a state set from the row survives a form save', () => 
 		expect(apiMock.updateRoute.mock.calls[0][1].disabled).toBe(false);
 	});
 });
+
+// v2.72 — the route row is a row again.
+//
+// It carried role="button" + tabindex="0", and role="button" overrides
+// the implicit `row` role: that takes every <td> out of the table's
+// accessibility tree, so a screen reader announced ONE control named
+// by all six columns concatenated, with no headers to anchor them.
+//
+// Worse than the DataTable case fixed in #267, because this row also
+// contains a RouteStateControl — a radiogroup with three radios that
+// change a route's LIVE state. That was a radiogroup inside a button:
+// its radios stayed Tab-focusable but were flattened out of the tree,
+// so focus could land on a control that announced nothing and switched
+// a route to maintenance.
+describe('/routes — the row keeps its cells', () => {
+	it('does not make the row a button', async () => {
+		apiMock.listRoutes.mockResolvedValue([makeRoute({ id: 'r1', host: 'alpha.example.com' })]);
+		render(Page);
+		const row = await screen.findByTestId('route-row');
+
+		expect(row.getAttribute('role')).toBeNull();
+		expect(row.getAttribute('tabindex')).toBeNull();
+	});
+
+	it('puts a real control on the host, named by the host', async () => {
+		apiMock.listRoutes.mockResolvedValue([makeRoute({ id: 'r1', host: 'alpha.example.com' })]);
+		render(Page);
+
+		const btn = await screen.findByTestId('route-open-r1');
+		expect(btn.tagName).toBe('BUTTON');
+		expect(btn.textContent).toContain('alpha.example.com');
+		// It opens the edit panel for this route, and closes it again on
+		// a second press.
+		expect(btn.getAttribute('aria-expanded')).toBe('false');
+	});
+
+	it('opens the edit panel from that control, and reflects it', async () => {
+		apiMock.listRoutes.mockResolvedValue([makeRoute({ id: 'r1', host: 'alpha.example.com' })]);
+		render(Page);
+
+		await fireEvent.click(await screen.findByTestId('route-open-r1'));
+
+		await waitFor(() =>
+			expect(screen.getByTestId('route-open-r1').getAttribute('aria-expanded')).toBe('true')
+		);
+		expect(screen.getByTestId('route-row-selected')).toBeInTheDocument();
+	});
+
+	it('still opens the panel when the row itself is clicked', async () => {
+		// The mouse affordance is years old and operators use it.
+		apiMock.listRoutes.mockResolvedValue([makeRoute({ id: 'r1', host: 'alpha.example.com' })]);
+		render(Page);
+
+		await fireEvent.click(await screen.findByTestId('route-row'));
+
+		await waitFor(() => expect(screen.getByTestId('route-row-selected')).toBeInTheDocument());
+	});
+
+	// A test for "clicking the state radios must not open the panel"
+	// stood here and was removed: it could not fail.
+	//
+	// Removing the row's inner-control guard left it green, twice —
+	// first because it asserted before Svelte had flushed, and then,
+	// with the flush fixed, because clicking the already-active segment
+	// produces no observable difference either way. What the guard
+	// actually protects, and what IS proven, is the host button: drop
+	// the guard and `opens the edit panel from that control` goes red,
+	// because the button's click then bubbles to the row and toggles
+	// the panel straight back shut.
+	//
+	// A test that cannot fail is worse than no test — it reads as
+	// coverage of a case nobody has checked.
+});
