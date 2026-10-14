@@ -29,19 +29,28 @@ services:
     # 80/443 → data plane, LAN-accessible (that's the whole point
     # of a reverse proxy).
     #
-    # 8001 → admin UI + REST API. Bound to 127.0.0.1 ONLY by
-    # default. To access from a workstation on your LAN, choose
-    # one of:
+    # 8001 → admin UI + REST API. PUBLISHED to 127.0.0.1 only by
+    # default, which is the boundary that matters here: inside the
+    # container the admin API binds every interface, because the
+    # image's CMD passes --admin-port=:8001 and a flag beats the
+    # env var (see the `environment:` block below). So two things
+    # follow: the host mapping below is what keeps admin off your
+    # LAN, and any container on the same Docker network can reach
+    # arenet:8001 whatever you publish. Give Arenet its own
+    # network if that matters to you.
+    #
+    # To access from a workstation on your LAN, choose one of:
     #
     #   Option 1 — SSH tunnel (recommended, no config change):
     #     From the workstation, run:
     #       ssh -L 8001:localhost:8001 <homelab-host>
     #     Then open http://localhost:8001 in your browser.
     #
-    #   Option 2 — Bind admin to LAN (less secure, plaintext):
+    #   Option 2 — Publish admin to the LAN (less secure, plaintext):
     #     Replace the line below with:
     #       - "8001:8001"
-    #     AND set ARENET_ADMIN_BIND=0.0.0.0:8001 in `environment:`.
+    #     That is the whole change — no env var is involved, since
+    #     the in-container bind is already every interface.
     #     Anyone on your LAN can now reach the admin port over
     #     plain HTTP — put a TLS terminator in front (Caddy,
     #     Nginx, Cloudflare Tunnel) before relying on this for
@@ -92,9 +101,15 @@ services:
     # Step D5 — env vars override the binary's default flags.
     # Precedence: --flag > env > config-file > default.
     environment:
-      # Default loopback bind. Override to 0.0.0.0:8001 for
-      # LAN-exposed admin (see ports comment above).
-      ARENET_ADMIN_BIND: 127.0.0.1:8001
+      # ARENET_ADMIN_BIND is deliberately NOT set here. It would
+      # have no effect: the image's CMD passes --admin-port=:8001
+      # (Dockerfile), and per the precedence line above a flag
+      # beats the env var. Setting it would read as the security
+      # boundary while doing nothing at all — which is exactly
+      # what this file used to do. Control the exposure with the
+      # published port above, or override the container's
+      # `command:` if you really want a loopback bind inside the
+      # container.
 
       # Where the binary writes its state. Matches the volume
       # mount; do not change unless you're also changing the

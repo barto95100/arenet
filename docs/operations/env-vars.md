@@ -129,19 +129,45 @@ defaults; you'll typically touch 2–3 on a real install.
 
 - **Purpose**: address:port the admin REST API + WebSocket
   binds to.
-- **Default**: `:8001` (binds all interfaces). Docker compose
-  + systemd both override to `127.0.0.1:8001` (loopback only)
-  per spec D6.
+- **Default**: `127.0.0.1:8001` — loopback only
+  (`internal/config/config.go:175`). This changed in v2.71.0;
+  every earlier v2 release defaulted to `:8001`, i.e. every
+  interface, which is what this page used to claim.
 - **Format**: `host:port` or just `:port` (binds all
   interfaces). `127.0.0.1:8001` for loopback, `0.0.0.0:8001`
   for explicit all-interfaces, `[::]:8001` for IPv6.
 - **Example**: `ARENET_ADMIN_BIND=127.0.0.1:8001`
-- **Notes**: this is the **security boundary** for the admin
-  surface. Loopback default is intentional — exposing admin to
-  the LAN requires an explicit override AND a TLS terminator
-  in front (see hardening doc item 2). Plain HTTP admin on a
-  LAN-reachable bind is a real footgun.
-- **Source**: `internal/config/config.go:263`.
+- **Precedence**: the `--admin-port` flag **overrides this
+  variable**. The env layer is applied first
+  (`internal/config/config.go:257`) and the flag layer after it
+  (`:264`), so a flag on the command line wins. This is what
+  makes the Docker note below load-bearing.
+- **Docker**: the official image's `CMD` passes
+  `--admin-port=:8001` (`Dockerfile:144`), so **this variable
+  has no effect in the official image** and the admin API binds
+  every interface *inside the container*. That bind is
+  deliberate (`internal/config/config.go:168-172`): Docker
+  forwards a published port to the container's `eth0`, not to
+  its loopback, so a loopback bind inside the container would
+  make `-p 127.0.0.1:8001:8001` unreachable while the
+  in-container healthcheck stayed green. Two consequences:
+  - the boundary that keeps admin off your LAN in Docker is the
+    **published port** (`127.0.0.1:8001:8001`), not this
+    variable;
+  - any container on the same Docker network reaches
+    `arenet:8001` regardless of what is published. Put Arenet on
+    its own network if that matters.
+
+  To bind loopback inside the container anyway, override the
+  **command**, not the environment.
+- **Notes**: on a systemd / bare-metal install this variable is
+  the **security boundary** for the admin surface. The loopback
+  default is intentional — exposing admin to the LAN requires an
+  explicit override AND a TLS terminator in front (see hardening
+  doc item 2). Plain HTTP admin on a LAN-reachable bind is a
+  real footgun.
+- **Source**: `internal/config/config.go:334` (env read), `:264`
+  (flag override), `:175` (default).
 
 ### `ARENET_HTTP_PORT`
 

@@ -11,7 +11,14 @@ as evidence.
 
 ## 1. Admin port is loopback by default — keep it that way
 
-The compose example binds admin to `127.0.0.1:8001` only.
+On a systemd / bare-metal install the admin API *binds*
+`127.0.0.1:8001` by default. In Docker it binds every interface
+inside the container and the compose example *publishes* it to
+`127.0.0.1:8001` on the host — that published mapping is the
+boundary there, and a container on the same Docker network
+reaches `arenet:8001` whatever you publish. Either way the
+verify command below is what settles it, not the config.
+
 Reach it from a workstation via SSH tunnel:
 
 ```bash
@@ -25,8 +32,11 @@ curl -m 3 http://<homelab-LAN-IP>:8001/healthz
 # expected: connection refused / timeout, NOT a 401
 ```
 
-If you've intentionally opened admin to LAN (`ARENET_ADMIN_BIND=
-0.0.0.0:8001`), apply items 2 + 3 below.
+If you've intentionally opened admin to the LAN, apply items
+2 + 3 below. The lever differs by install type: systemd takes
+`ARENET_ADMIN_BIND=0.0.0.0:8001`, Docker takes a `- "8001:8001"`
+published port (the env var has no effect in the official image
+— see `env-vars.md`, `ARENET_ADMIN_BIND`).
 
 ## 2. Put TLS in front of LAN-exposed admin
 
