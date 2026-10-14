@@ -1556,3 +1556,109 @@ describe('/logs — the source IP can be revealed', () => {
 		expect(cell.tagName).not.toBe('BUTTON');
 	});
 });
+
+// An outage must not look like a quiet system (v2.73).
+//
+// load() fans out to six sources through Promise.allSettled and
+// merged only the fulfilled ones. There was no else branch
+// anywhere, and `rows = merged.slice(0, 200)` ran unconditionally,
+// so a poll in which everything rejected replaced the table with
+// an empty list. allSettled never rejects, so the catch never ran
+// and loadError stayed null: the page rendered "No event in this
+// window" under a green "live" pill while six endpoints were down.
+// On a security event log that is the worst possible lie.
+describe('/logs — a failing source is reported, not swallowed', () => {
+	function failAll(): void {
+		securityMock.fetchEvents.mockRejectedValue(new Error('boom'));
+		securityMock.fetchThrottleEvents.mockRejectedValue(new Error('boom'));
+		securityMock.fetchAuthFailures.mockRejectedValue(new Error('boom'));
+		securityMock.fetchCertEvents.mockRejectedValue(new Error('boom'));
+		securityMock.fetchCountryBlockEvents.mockRejectedValue(new Error('boom'));
+		securityMock.fetchRateLimitEvents.mockRejectedValue(new Error('boom'));
+	}
+
+	it('does not claim the window was quiet when every source failed', async () => {
+		failAll();
+		render(Page);
+
+		// The error, in place of the empty state — which is the
+		// assertion that matters: the empty state's title is the
+		// sentence an operator would otherwise have believed.
+		await screen.findByText(/No event source answered/i);
+		expect(screen.queryByTestId('logs-empty')).toBeNull();
+	});
+
+	it('marks the pill stale rather than live when a source is down', async () => {
+		securityMock.fetchEvents.mockRejectedValue(new Error('boom'));
+		render(Page);
+
+		const pill = await screen.findByTestId('logs-status-pill');
+		expect(pill.textContent ?? '').toMatch(/stale/i);
+		expect(pill.textContent ?? '').not.toMatch(/live/i);
+	});
+
+	it('names which sources are down', async () => {
+		securityMock.fetchEvents.mockRejectedValue(new Error('boom'));
+		securityMock.fetchCertEvents.mockRejectedValue(new Error('boom'));
+		render(Page);
+
+		const pill = await screen.findByTestId('logs-status-pill');
+		expect(pill.textContent ?? '').toMatch(/2 of 6/);
+		expect(pill.getAttribute('title')).toBe('waf, certs');
+	});
+
+	it('reads live again once every source answers', async () => {
+		render(Page);
+		const pill = await screen.findByTestId('logs-status-pill');
+		expect(pill.textContent ?? '').toMatch(/live/i);
+		expect(pill.className).not.toMatch(/stale/);
+	});
+});
+
+// Separate describe because this one drives the 10 s poll, which
+// needs fake timers installed before render — the rest of the file
+// runs on real ones.
+describe('/logs — a total failure does not erase what is on screen', () => {
+	it('keeps earlier rows when a later poll fails entirely', async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			securityMock.fetchEvents.mockResolvedValue({
+				events: [
+					{
+						id: 1,
+						ts: isoOffset(-60),
+						routeId: 'r-1',
+						ruleId: '942100',
+						category: 'SQLi',
+						severity: 4,
+						srcIp: '203.0.113.9',
+						requestMethod: 'GET',
+						requestPath: '/keep-me',
+						payloadSample: 'id=1',
+						action: 'BLOCK',
+						statusCode: 403
+					} satisfies WafEvent
+				]
+			});
+			render(Page);
+			await screen.findByText(/keep-me/);
+
+			securityMock.fetchEvents.mockRejectedValue(new Error('boom'));
+			securityMock.fetchThrottleEvents.mockRejectedValue(new Error('boom'));
+			securityMock.fetchAuthFailures.mockRejectedValue(new Error('boom'));
+			securityMock.fetchCertEvents.mockRejectedValue(new Error('boom'));
+			securityMock.fetchCountryBlockEvents.mockRejectedValue(new Error('boom'));
+			securityMock.fetchRateLimitEvents.mockRejectedValue(new Error('boom'));
+
+			await vi.advanceTimersByTimeAsync(10_000);
+
+			// One job: the rows survived. The pill's own three
+			// readings are covered above; asserting them here too
+			// would make this test fail for a pill change and
+			// blur which mechanism broke.
+			expect(screen.queryByText(/keep-me/)).not.toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});

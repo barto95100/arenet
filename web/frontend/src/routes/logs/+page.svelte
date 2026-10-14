@@ -145,6 +145,11 @@
 
 	let loading = $state(true);
 	let loadError = $state<string | null>(null);
+	// Which of the six event sources rejected on the most recent
+	// poll. Empty means the last refresh was complete; anything in
+	// it means what the table shows is a partial or stale view, and
+	// the status pill says so instead of reading "live".
+	let failedSources = $state<string[]>([]);
 	let rows = $state<UnifiedRow[]>([]);
 	let search = $state('');
 	let levelFilter = $state<'all' | LevelTag>('all');
@@ -549,12 +554,23 @@
 	async function load(): Promise<void> {
 		loadError = null;
 		try {
-			// Step U.5 / W.5 — 5 parallel sources via
+			// Step U.5 / W.5 — 6 parallel sources via
 			// Promise.allSettled so any one source's failure
 			// (degraded endpoint, 5xx, missed wire-up) doesn't
 			// take down the page. Each fulfilled result is
 			// mapped into UnifiedRow shape and merged.
-			const [waf, throttle, auth, certs, countryBlock, rateLimit] = await Promise.allSettled([
+			//
+			// Until v2.73 the six `if (status === 'fulfilled')`
+			// blocks below had no else branch of any kind, and the
+			// assignment to `rows` ran unconditionally. A poll in
+			// which every source rejected therefore REPLACED the
+			// rows with an empty list, and because allSettled never
+			// rejects, the catch below never ran and loadError
+			// stayed null. The page rendered "No event in this
+			// window" under a green "live" pill while six
+			// endpoints were down — on the security event log, an
+			// outage was indistinguishable from a quiet system.
+			const settled = await Promise.allSettled([
 				fetchEvents({ limit: 100 }),
 				fetchThrottleEvents({ limit: 100 }),
 				fetchAuthFailures('24h'),
@@ -562,6 +578,22 @@
 				fetchCountryBlockEvents({ limit: 100 }),
 				fetchRateLimitEvents({ limit: 100 })
 			]);
+			const [waf, throttle, auth, certs, countryBlock, rateLimit] = settled;
+
+			// Names in the same order as the array above, so the
+			// pill can say which signal is missing rather than
+			// just how many.
+			const sourceNames = [
+				'waf',
+				'throttle',
+				'auth',
+				'certs',
+				'countryBlock',
+				'rateLimit'
+			] as const;
+			failedSources = settled
+				.map((r, i) => (r.status === 'rejected' ? sourceNames[i] : null))
+				.filter((n): n is (typeof sourceNames)[number] => n !== null);
 
 			const merged: UnifiedRow[] = [];
 			if (waf.status === 'fulfilled') {
@@ -586,6 +618,17 @@
 			}
 
 			merged.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+
+			if (failedSources.length === settled.length) {
+				// Nothing answered. Keep whatever the table already
+				// holds — stale data the pill marks as stale beats
+				// an empty table that claims the window was quiet —
+				// and report it. On a first load there is nothing to
+				// keep, and the error renders in place of the empty
+				// state.
+				loadError = t('logs.allSourcesFailed');
+				return;
+			}
 			rows = merged.slice(0, 200);
 
 			// Phase Z.5.3 — enrich SOURCE IP column with
@@ -757,9 +800,30 @@
 			<button class:on={levelFilter === 'warn'} onclick={() => (levelFilter = 'warn')}>{language.current && t('logs.filterLevelWarn')}</button>
 			<button class:on={levelFilter === 'info'} onclick={() => (levelFilter = 'info')}>{language.current && t('logs.filterLevelInfo')}</button>
 		</div>
-		<span class="status-pill" class:paused>
+		<!-- role="status" because the three readings differ in
+		     what the table means, not merely in colour: a stale
+		     pill says the rows below are older than they look. -->
+		<span
+			class="status-pill"
+			class:paused
+			class:stale={!paused && failedSources.length > 0}
+			role="status"
+			data-testid="logs-status-pill"
+			title={failedSources.length > 0 ? failedSources.join(', ') : undefined}
+		>
 			<span class="dot"></span>
-			{language.current && (paused ? t('logs.statusPaused') : t('logs.statusLive'))}
+			{#if paused}
+				{language.current && t('logs.statusPaused')}
+			{:else if failedSources.length > 0}
+				{language.current &&
+					t('logs.statusStale', {
+						count: failedSources.length,
+						total: 6,
+						sources: failedSources.join(', ')
+					})}
+			{:else}
+				{language.current && t('logs.statusLive')}
+			{/if}
 		</span>
 	</div>
 </div>
@@ -1086,6 +1150,14 @@
 		border-radius: 50%;
 		background: currentColor;
 		box-shadow: 0 0 6px currentColor;
+	}
+	.status-pill.stale {
+		color: var(--status-warn);
+		border-color: var(--status-warn);
+	}
+	.status-pill.stale .dot {
+		background: var(--status-warn);
+		box-shadow: none;
 	}
 	.status-pill.paused {
 		color: var(--fg-muted);

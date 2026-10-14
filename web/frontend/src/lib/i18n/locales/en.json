@@ -2547,6 +2547,8 @@
 		"filterLevelInfo": "Info",
 		"statusPaused": "pause",
 		"statusLive": "live",
+		"allSourcesFailed": "No event source answered. The rows below, if any, are from an earlier refresh.",
+		"statusStale": "stale — {count} of {total} sources down",
 		"colTimestamp": "Timestamp",
 		"colLevel": "Level",
 		"colSource": "Source",
