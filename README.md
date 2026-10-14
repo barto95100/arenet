@@ -192,6 +192,19 @@ Caddy is embedded as a **library**, not run as a sidecar — one process, one ne
 - **[SvelteKit 5](https://kit.svelte.dev)** + **[Tailwind CSS](https://tailwindcss.com)** + **[D3.js](https://d3js.org)** — frontend
 - **Go 1.26+** — single-binary toolchain
 
+## 🔒 Security
+
+Found a vulnerability? **Please do not open a public issue.** Use GitHub's
+[private vulnerability reporting](https://github.com/barto95100/arenet/security/advisories/new)
+— private between you and the maintainer, and published as an advisory
+crediting you once a fix ships.
+
+Scope, timelines and what to include: [SECURITY.md](SECURITY.md).
+
+Arenet sits in front of other people's services, so a flaw here can
+expose everything behind it. Reports about the proxied data plane
+(`:80` / `:443`) are prioritised over all other work.
+
 ## 🤝 Contributing
 
 Arenet is currently a single-developer project but contributions are welcome.
