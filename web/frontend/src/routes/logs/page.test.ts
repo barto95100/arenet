@@ -1652,8 +1652,10 @@ describe('/logs — a total failure does not erase what is on screen', () => {
 
 			await vi.advanceTimersByTimeAsync(10_000);
 
-			const pill = screen.getByTestId('logs-status-pill');
-			expect(pill.textContent ?? '').toMatch(/stale/i);
+			// One job: the rows survived. The pill's own three
+			// readings are covered above; asserting them here too
+			// would make this test fail for a pill change and
+			// blur which mechanism broke.
 			expect(screen.queryByText(/keep-me/)).not.toBeNull();
 		} finally {
 			vi.useRealTimers();
