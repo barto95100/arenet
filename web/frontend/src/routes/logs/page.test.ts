@@ -15,7 +15,7 @@
 // coverage for the pre-U.5 sources.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, fireEvent } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import type {
 	AuthFailureRecentEvent,
@@ -1479,5 +1479,80 @@ describe('/logs — Phase Z.5.3 SOURCE IP country enrichment', () => {
 		expect(screen.queryByText(/198\.51\.100\.x · \?/)).not.toBeInTheDocument();
 		// And no toast (silent degraded).
 		expect(toastMock.pushToast).not.toHaveBeenCalled();
+	});
+});
+
+// v2.72 — the real source address can be taken out of the page.
+//
+// The column is octet-masked (203.0.113.x), and the full address lived
+// only in a title attribute. The comment in the markup claimed that
+// let "forensic ops copy-paste the exact source" — it did not: a
+// tooltip cannot be selected, so the real address was reachable only
+// through DevTools.
+//
+// A copy-to-clipboard button was the obvious alternative and was
+// rejected: navigator.clipboard is absent on a plain-HTTP origin,
+// which is how many of these dashboards are served on a LAN, so it
+// would fail exactly where it is needed and say nothing. A reveal has
+// no API to be missing.
+describe('/logs — the source IP can be revealed', () => {
+	async function renderWithWafRow(srcIp: string) {
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 1,
+					ts: isoOffset(-60),
+					routeId: 'r-1',
+					ruleId: '942100',
+					category: 'SQLi',
+					severity: 4,
+					srcIp,
+					requestMethod: 'GET',
+					requestPath: '/?id=1',
+					payloadSample: 'id=1',
+					action: 'BLOCK',
+					statusCode: 403
+				} satisfies WafEvent
+			]
+		});
+		render(Page);
+		return await screen.findByTestId('log-src-ip');
+	}
+
+	it('masks the address until it is asked for', async () => {
+		const cell = await renderWithWafRow('203.0.113.9');
+
+		expect(cell.textContent).toContain('203.0.113.x');
+		expect(cell.textContent).not.toContain('203.0.113.9');
+	});
+
+	it('reveals the full address as selectable text', async () => {
+		const cell = await renderWithWafRow('203.0.113.9');
+		expect(cell.getAttribute('aria-pressed')).toBe('false');
+
+		await fireEvent.click(cell);
+
+		// In the document, not in a tooltip: this is what makes it
+		// selectable with a mouse and readable to a screen reader.
+		expect(cell.textContent).toContain('203.0.113.9');
+		expect(cell.getAttribute('aria-pressed')).toBe('true');
+	});
+
+	it('masks it again on a second press', async () => {
+		const cell = await renderWithWafRow('203.0.113.9');
+
+		await fireEvent.click(cell);
+		await fireEvent.click(cell);
+
+		expect(cell.textContent).toContain('203.0.113.x');
+		expect(cell.getAttribute('aria-pressed')).toBe('false');
+	});
+
+	it('offers no control on a row with nothing to unmask', async () => {
+		// A placeholder source — the cert rows render "(interne)". A
+		// button there would promise something it cannot do.
+		const cell = await renderWithWafRow('(interne)');
+
+		expect(cell.tagName).not.toBe('BUTTON');
 	});
 });
