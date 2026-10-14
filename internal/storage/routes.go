@@ -232,6 +232,36 @@ func (p PathRule) Validate() error {
 			return fmt.Errorf("path_rule: path_prefix %q must not contain whitespace", p.PathPrefix)
 		}
 	}
+	// v2.73 — a glob metacharacter in a path prefix is never what the
+	// operator meant, and one of them is a security hole.
+	//
+	// caddymgr emits [prefix, prefix+"/*"] from this value, and Caddy's
+	// path matcher treats *, ?, [ and ] as glob syntax (path.Match, via
+	// caddy v2.11.4 modules/caddyhttp/matchers.go). A stored prefix of
+	// "/*" therefore emits "/*" — a prefix match over the WHOLE site.
+	// On a rule carrying DisableRouteAuth that turns the route's
+	// authentication off everywhere, from a field whose only previous
+	// constraint was a leading slash.
+	//
+	// Brackets go too: "/items[1]" does not match the literal path
+	// "/items[1]" under Caddy, it matches "/items1". A prefix that does
+	// not mean what it reads is the class of defect this check exists
+	// for, so it is refused rather than silently reinterpreted.
+	//
+	// A TRAILING SLASH is deliberately still accepted. It used to
+	// produce a broken matcher ("/admin//*", which turns off Caddy's
+	// slash merging), but that is fixed at the emitter now, where
+	// pathMatchers trims it — the same normalisation storage's own
+	// matches() helper at routes.go:410 and buildAuthPassthroughRoute
+	// (manager.go:3985) already did. All three agree, so refusing the
+	// slash would break existing configurations to fix nothing.
+	if i := strings.IndexAny(p.PathPrefix, "*?[]"); i >= 0 {
+		return apierr.New("path_rule_glob",
+			map[string]string{"path": p.PathPrefix, "char": string(p.PathPrefix[i])},
+			"path_rule: path_prefix %q contains %q, which Caddy reads as a glob pattern "+
+				"rather than a literal path — a prefix already matches everything beneath "+
+				"it, so no wildcard is needed", p.PathPrefix, string(p.PathPrefix[i]))
+	}
 	// v2.44, corrected in v2.57.2 — path prefixes are stored lowercase.
 	//
 	// The rule used to say an uppercase pattern "could never match
