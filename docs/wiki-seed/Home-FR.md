@@ -80,7 +80,7 @@ Ce wiki suit **Arenet v2.40.x** (la ligne de release stable courante). Les versi
 | Users | `/users` | `/api/v1/users` | BoltDB bucket `users` |
 | Snapshot backup | `/settings` (section Backup) | `/api/v1/admin/backup` + `/admin/restore` | Tous les buckets sérialisés en JSON |
 
-Port admin par défaut : `:8001` (loopback par défaut ; set `ARENET_ADMIN_BIND=0.0.0.0:8001` pour accès LAN).
+Port admin par défaut : `:8001`, loopback uniquement. Pour un accès LAN : `ARENET_ADMIN_BIND=0.0.0.0:8001` sur systemd, ou publier `8001:8001` sur Docker (la variable n'y a aucun effet — l'image passe `--admin-port`, et un flag gagne).
 
 ---
 
@@ -93,7 +93,7 @@ Toutes optionnelles — chaque variable a un défaut safe. Définis-les de la m�
 
 | Variable | Défaut | Rôle |
 | -------- | ------ | ---- |
-| `ARENET_ADMIN_BIND` | `127.0.0.1:8001` | Adresse de bind de l'UI/API d'admin (`0.0.0.0:8001` pour le LAN). |
+| `ARENET_ADMIN_BIND` | `127.0.0.1:8001` | Adresse de bind de l'UI/API d'admin (`0.0.0.0:8001` pour le LAN ; sans effet sous Docker). |
 | `ARENET_DATA_DIR` | `/var/lib/arenet` | Dossier d'état (BoltDB + SQLite). |
 | `ARENET_HTTP_PORT` / `ARENET_HTTPS_PORT` | `:80` / `:443` | Ports d'écoute du data-plane public. |
 | `ARENET_ACME_EMAIL` | _(aucun)_ | Email de contact pour l'émetteur ACME (notices Let's Encrypt). |

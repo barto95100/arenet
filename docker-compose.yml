@@ -14,9 +14,11 @@
 #
 # Data plane (the HTTP/HTTPS traffic Arenet proxies) is exposed on
 # the host's :80 and :443 — operators reach it from LAN. The admin
-# UI on :8001 binds to 127.0.0.1 ONLY by default for security:
-# someone on the LAN cannot reach /api/v1 without authenticating
-# AND tunnelling.
+# UI on :8001 is published to 127.0.0.1 ONLY by default for
+# security: someone on the LAN cannot reach /api/v1 without
+# authenticating AND tunnelling. (Inside the container it binds
+# every interface — see the `ports` and `environment` comments
+# below for why that is deliberate and what it implies.)
 
 services:
   arenet:
