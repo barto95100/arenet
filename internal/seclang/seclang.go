@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see https://www.gnu.org/licenses/.
 
-package waf
+package seclang
 
 import (
 	"bufio"
@@ -35,10 +35,10 @@ import (
 
 // SecLang ID range and size limits.
 const (
-	SecLangMinID    = 130000
-	SecLangMaxID    = 139999
-	SecLangMaxBytes = 64 * 1024
-	SecLangMaxRules = 200
+	MinID    = 130000
+	MaxID    = 139999
+	MaxBytes = 64 * 1024
+	MaxRules = 200
 )
 
 var (
@@ -64,14 +64,14 @@ var (
 	secLangDisruptive = []string{"deny", "block", "drop", "pass", "allow", "redirect"}
 )
 
-// SecLangError is one problem, with its 1-based line.
-type SecLangError struct {
+// Error is one problem, with its 1-based line.
+type Error struct {
 	Line    int    `json:"line"`
 	Message string `json:"message"`
 }
 
-// SecLangRule is a rule (chain start or SecAction) found in the text.
-type SecLangRule struct {
+// Rule is a rule (chain start or SecAction) found in the text.
+type Rule struct {
 	ID   int
 	Msg  string
 	Line int
@@ -87,11 +87,11 @@ type secLangLine struct {
 // (internal/seclang/parser.go parseString): trimmed lines, "#"
 // comments skipped, trailing "\" joins the next line. Backticks
 // (multi-line blocks) are refused.
-func splitSecLang(text string) ([]secLangLine, []SecLangError) {
+func splitSecLang(text string) ([]secLangLine, []Error) {
 	var out []secLangLine
-	var errs []SecLangError
+	var errs []Error
 	scanner := bufio.NewScanner(strings.NewReader(text))
-	scanner.Buffer(make([]byte, 0, 64*1024), SecLangMaxBytes+1)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxBytes+1)
 	var buf strings.Builder
 	start, n := 0, 0
 	for scanner.Scan() {
@@ -101,7 +101,7 @@ func splitSecLang(text string) ([]secLangLine, []SecLangError) {
 			continue
 		}
 		if strings.Contains(line, "`") {
-			errs = append(errs, SecLangError{n, "backticks are not supported"})
+			errs = append(errs, Error{n, "backticks are not supported"})
 			continue
 		}
 		if buf.Len() == 0 {
@@ -121,19 +121,19 @@ func splitSecLang(text string) ([]secLangLine, []SecLangError) {
 	return out, errs
 }
 
-// CheckSecLang validates per-route SecLang: allowlist, rule IDs in
-// [SecLangMinID, SecLangMaxID], unique, then a Coraza compile of the
+// Check validates per-route SecLang: allowlist, rule IDs in
+// [MinID, MaxID], unique, then a Coraza compile of the
 // text alone (no filesystem). It returns the rules found and the
 // problems, sorted by line; no problem means the text is accepted.
-func CheckSecLang(text string) ([]SecLangRule, []SecLangError) {
+func Check(text string) ([]Rule, []Error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, nil
 	}
-	if len(text) > SecLangMaxBytes {
-		return nil, []SecLangError{{1, fmt.Sprintf("the SecLang is larger than %d KiB", SecLangMaxBytes/1024)}}
+	if len(text) > MaxBytes {
+		return nil, []Error{{1, fmt.Sprintf("the SecLang is larger than %d KiB", MaxBytes/1024)}}
 	}
 	lines, errs := splitSecLang(text)
-	var rules []SecLangRule
+	var rules []Rule
 	var groups []secLangLine // one rule (with its chain) per entry, for error lines
 	seen := map[int]int{}
 	inChain := false
@@ -146,17 +146,17 @@ func CheckSecLang(text string) ([]SecLangRule, []SecLangError) {
 		dir, opts, _ := strings.Cut(l.text, " ")
 		dir = strings.ToLower(dir)
 		if !slices.Contains(secLangDirectives, dir) {
-			errs = append(errs, SecLangError{l.line, fmt.Sprintf("directive %q is not allowed (only SecRule, SecAction, SecMarker)", dir)})
+			errs = append(errs, Error{l.line, fmt.Sprintf("directive %q is not allowed (only SecRule, SecAction, SecMarker)", dir)})
 			inChain = false
 			continue
 		}
 		if dir == "secmarker" {
 			if inChain {
-				errs = append(errs, SecLangError{l.line, "a chain must end with a SecRule"})
+				errs = append(errs, Error{l.line, "a chain must end with a SecRule"})
 			}
 			inChain = false
 			if strings.TrimSpace(opts) == "" {
-				errs = append(errs, SecLangError{l.line, "SecMarker needs a name"})
+				errs = append(errs, Error{l.line, "SecMarker needs a name"})
 			}
 			continue
 		}
@@ -164,63 +164,63 @@ func CheckSecLang(text string) ([]SecLangRule, []SecLangError) {
 		if dir == "secrule" {
 			vars, op, acts, err := splitSecRule(opts)
 			if err != nil {
-				errs = append(errs, SecLangError{l.line, err.Error()})
+				errs = append(errs, Error{l.line, err.Error()})
 				inChain = false
 				continue
 			}
 			if msg := checkVariables(vars); msg != "" {
-				errs = append(errs, SecLangError{l.line, msg})
+				errs = append(errs, Error{l.line, msg})
 			}
 			if msg := checkOperator(op); msg != "" {
-				errs = append(errs, SecLangError{l.line, msg})
+				errs = append(errs, Error{l.line, msg})
 			}
 			actions = acts
 		} else {
 			if inChain {
-				errs = append(errs, SecLangError{l.line, "a chain must end with a SecRule"})
+				errs = append(errs, Error{l.line, "a chain must end with a SecRule"})
 			}
 			actions = strings.Trim(strings.TrimSpace(opts), `"`)
 		}
 		parsed, msg := checkActions(actions)
 		if msg != "" {
-			errs = append(errs, SecLangError{l.line, msg})
+			errs = append(errs, Error{l.line, msg})
 		}
 		if inChain {
 			if parsed.id != "" {
-				errs = append(errs, SecLangError{l.line, "a chained rule must not have an id"})
+				errs = append(errs, Error{l.line, "a chained rule must not have an id"})
 			}
 			if parsed.disruptive {
-				errs = append(errs, SecLangError{l.line, "a chained rule must not have a disruptive action (deny, block, pass…)"})
+				errs = append(errs, Error{l.line, "a chained rule must not have a disruptive action (deny, block, pass…)"})
 			}
 		} else {
 			id, err := strconv.Atoi(parsed.id)
 			switch {
 			case parsed.id == "":
-				errs = append(errs, SecLangError{l.line, fmt.Sprintf("the rule needs an id between %d and %d", SecLangMinID, SecLangMaxID)})
-			case err != nil || id < SecLangMinID || id > SecLangMaxID:
-				errs = append(errs, SecLangError{l.line, fmt.Sprintf("id %s is outside %d..%d", parsed.id, SecLangMinID, SecLangMaxID)})
+				errs = append(errs, Error{l.line, fmt.Sprintf("the rule needs an id between %d and %d", MinID, MaxID)})
+			case err != nil || id < MinID || id > MaxID:
+				errs = append(errs, Error{l.line, fmt.Sprintf("id %s is outside %d..%d", parsed.id, MinID, MaxID)})
 			case seen[id] != 0:
-				errs = append(errs, SecLangError{l.line, fmt.Sprintf("id %d is already used on line %d", id, seen[id])})
+				errs = append(errs, Error{l.line, fmt.Sprintf("id %d is already used on line %d", id, seen[id])})
 			default:
 				seen[id] = l.line
-				rules = append(rules, SecLangRule{ID: id, Msg: parsed.msg, Line: l.line})
+				rules = append(rules, Rule{ID: id, Msg: parsed.msg, Line: l.line})
 			}
 		}
 		inChain = dir == "secrule" && parsed.chain
 	}
 	if inChain && len(lines) > 0 {
-		errs = append(errs, SecLangError{lines[len(lines)-1].line, "the last rule opens a chain that is never closed"})
+		errs = append(errs, Error{lines[len(lines)-1].line, "the last rule opens a chain that is never closed"})
 	}
-	if len(rules) > SecLangMaxRules {
-		errs = append(errs, SecLangError{1, fmt.Sprintf("too many rules (%d); max %d", len(rules), SecLangMaxRules)})
+	if len(rules) > MaxRules {
+		errs = append(errs, Error{1, fmt.Sprintf("too many rules (%d); max %d", len(rules), MaxRules)})
 	}
 	if len(errs) == 0 {
 		// Coraza compile of the text alone, without filesystem access.
 		if _, err := coraza.NewWAF(coraza.NewWAFConfig().WithDirectives(text)); err != nil {
-			errs = append(errs, SecLangError{failingGroupLine(groups), err.Error()})
+			errs = append(errs, Error{failingGroupLine(groups), err.Error()})
 		}
 	}
-	slices.SortStableFunc(errs, func(a, b SecLangError) int { return a.Line - b.Line })
+	slices.SortStableFunc(errs, func(a, b Error) int { return a.Line - b.Line })
 	return rules, errs
 }
 

@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see https://www.gnu.org/licenses/.
 
-package waf
+package seclang
 
 import (
 	"strings"
@@ -36,7 +36,7 @@ SecRule ARGS "@detectSQLi" "id:130003,phase:2,block,log,setvar:tx.custom_score=+
 `
 
 func TestCheckSecLang_Valid(t *testing.T) {
-	rules, errs := CheckSecLang(validSecLang)
+	rules, errs := Check(validSecLang)
 	if len(errs) != 0 {
 		t.Fatalf("valid SecLang refused: %+v", errs)
 	}
@@ -49,7 +49,7 @@ func TestCheckSecLang_Valid(t *testing.T) {
 	if rules[1].Line != 7 {
 		t.Errorf("second rule line = %d, want 7", rules[1].Line)
 	}
-	if r, e := CheckSecLang("  \n# only a comment\n"); len(r) != 0 || len(e) != 0 {
+	if r, e := Check("  \n# only a comment\n"); len(r) != 0 || len(e) != 0 {
 		t.Errorf("empty text: rules %+v errs %+v", r, e)
 	}
 }
@@ -89,10 +89,10 @@ func TestCheckSecLang_Refuses(t *testing.T) {
 		"unquoted operator":    `SecRule ARGS @rx "id:130000,phase:1,deny"`,
 		"syntax (Coraza)":      `SecRule ARGS "@rx (" "id:130000,phase:1,deny"`,
 		"unknown action":       `SecRule ARGS "@rx x" "id:130000,phase:1,deny,frobnicate"`,
-		"too big":              "SecAction \"id:130000,phase:1,pass,msg:'" + strings.Repeat("a", SecLangMaxBytes) + "'\"",
+		"too big":              "SecAction \"id:130000,phase:1,pass,msg:'" + strings.Repeat("a", MaxBytes) + "'\"",
 	}
 	for name, text := range cases {
-		if _, errs := CheckSecLang(text); len(errs) == 0 {
+		if _, errs := Check(text); len(errs) == 0 {
 			t.Errorf("%s: accepted, want a refusal", name)
 		}
 	}
@@ -100,7 +100,7 @@ func TestCheckSecLang_Refuses(t *testing.T) {
 
 func TestCheckSecLang_ErrorLines(t *testing.T) {
 	text := "# header\nSecAction \"id:130000,phase:1,pass,nolog\"\n\nSecRuleEngine Off\nSecRule ARGS \"@rx x\" \\\n  \"id:120000,phase:1,deny\"\n"
-	_, errs := CheckSecLang(text)
+	_, errs := Check(text)
 	if len(errs) != 2 || errs[0].Line != 4 || errs[1].Line != 5 {
 		t.Fatalf("errs = %+v, want lines 4 (directive) and 5 (id range, continuation start)", errs)
 	}
@@ -108,7 +108,7 @@ func TestCheckSecLang_ErrorLines(t *testing.T) {
 
 func TestCheckSecLang_CorazaErrorLine(t *testing.T) {
 	text := "SecAction \"id:130000,phase:1,pass,nolog\"\n\nSecRule ARGS \"@rx (\" \"id:130001,phase:1,deny\"\n"
-	_, errs := CheckSecLang(text)
+	_, errs := Check(text)
 	if len(errs) != 1 || errs[0].Line != 3 {
 		t.Fatalf("errs = %+v, want one error on line 3", errs)
 	}
