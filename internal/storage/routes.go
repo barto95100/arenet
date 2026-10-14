@@ -1031,9 +1031,14 @@ type Route struct {
 	// WAFCustomRules (v2.37) are the route's guided WAF rules (block
 	// when every condition matches). Empty = no extra directives.
 	WAFCustomRules []WAFCustomRule `json:"waf_custom_rules,omitempty"`
-	// WAFSecLang (v2.38) is the route's expert SecLang, checked by
-	// waf.CheckSecLang (allowlist, rule IDs 130000-139999) and emitted
-	// before the CRS. Empty = no extra directives.
+	// WAFSecLang (v2.38) is the route's expert SecLang, checked
+	// against the seclang allowlist (rule IDs 130000-139999) and
+	// emitted before the CRS. Empty = no extra directives.
+	//
+	// Until v2.73 this comment said "checked by waf.CheckSecLang" and
+	// validate() never called it: the check lived in internal/api
+	// only, so a restored snapshot reached the Coraza compiler
+	// unchecked. It is enforced here now — see validateWAFFields.
 	WAFSecLang string `json:"waf_seclang,omitempty"`
 	// RateLimit (Step Q, 2026-06-18) is the per-route rate
 	// limiting configuration that gates inbound requests
@@ -1585,6 +1590,12 @@ func (r *Route) validate() error {
 					h)
 			}
 		}
+	}
+	// v2.73 — the WAF fields, which used to be checked in
+	// internal/api and nowhere else. See waf_validate.go for what a
+	// restored snapshot could do with that.
+	if err := r.validateWAFFields(); err != nil {
+		return err
 	}
 	return nil
 }
