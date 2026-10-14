@@ -66,6 +66,25 @@
 	let chartMetric = $state<MetricName>('req_per_sec');
 	let chartPoints = $state<TimeseriesPoint[]>([]);
 	let chartLoading = $state(false);
+	// Which metric the points on screen ACTUALLY are (v2.73).
+	//
+	// switchMetric used to assign chartMetric and only then await the
+	// fetch, so the title and the colour changed at the click while
+	// the old series was still drawn. Click "Latency" during an API
+	// outage and the request-count series stayed on screen under the
+	// latency title, in the latency colour — you read requests as
+	// milliseconds. Two names: chartMetric is what the operator
+	// asked for and drives the active button, chartMetricShown is
+	// what the drawn points are and drives everything that describes
+	// them.
+	let chartMetricShown = $state<MetricName>('req_per_sec');
+	// The bucket width the API reported for the drawn series, so the
+	// chart can name its own unit instead of the page claiming "/s".
+	let chartBucketSeconds = $state(0);
+	// Monotonic token. Two quick metric switches can land in either
+	// order; without this the loser overwrites the winner and the
+	// chart ends up showing a series nobody selected.
+	let chartRequestSeq = 0;
 	const window: MetricWindow = '24h';
 
 	// Phase 5 — cert lifecycle data. certificates feeds the
@@ -210,18 +229,32 @@
 	}
 
 	async function loadChart(): Promise<void> {
+		const seq = ++chartRequestSeq;
+		const requested = chartMetric;
 		chartLoading = true;
 		try {
-			const resp = await fetchTimeseries('all', chartMetric, window);
+			const resp = await fetchTimeseries('all', requested, window);
+			// A newer request has been issued since; this answer is
+			// stale and applying it would show a series nobody asked
+			// for.
+			if (seq !== chartRequestSeq) return;
 			// Drop the in-progress last point (#L.2-2 trailing bucket).
 			chartPoints = resp.points.length > 0 ? resp.points.slice(0, -1) : [];
+			// Only now do the title, the colour and the unit follow —
+			// they describe these points, not the pending selection.
+			chartMetricShown = requested;
+			chartBucketSeconds = resp.bucketSizeSeconds;
 		} catch (err) {
+			if (seq !== chartRequestSeq) return;
+			// chartMetricShown deliberately unchanged: the points still
+			// on screen are the previous metric's, and relabelling them
+			// is the defect this guards.
 			pushToast(
 				err instanceof ApiError ? err.message : 'failed to load timeseries',
 				'danger'
 			);
 		} finally {
-			chartLoading = false;
+			if (seq === chartRequestSeq) chartLoading = false;
 		}
 	}
 
@@ -230,6 +263,46 @@
 		chartMetric = m;
 		void loadChart();
 	}
+
+	// What the series on screen is counted in (v2.73).
+	//
+	// The req_per_sec / four_xx_rate / five_xx_rate series carry
+	// per-bucket COUNTS, not rates — metrics_handlers.go:968-976
+	// returns float64(row.ReqCount) and friends straight out of the
+	// bucket. The button said "Req/s", so on the 24h window (1-minute
+	// buckets) every value read 60x too high, and on 30d (1-hour
+	// buckets) 3600x. An operator reading "1 200 req/s" was looking
+	// at 1 200 requests in a minute, i.e. 20 req/s.
+	//
+	// bucketSizeSeconds has always been on the wire
+	// (metrics_handlers.go:115), so the honest unit was one field
+	// away. Naming the bucket is also the better chart: a per-second
+	// line over hour-wide buckets would be a smoothed row of tiny
+	// numbers.
+	const chartUnit = $derived.by(() => {
+		if (chartMetricShown === 'p95_latency_ms') return t('dashboard.chartUnitMs');
+		if (chartBucketSeconds === 60) return t('dashboard.chartUnitPerMinute');
+		if (chartBucketSeconds === 3600) return t('dashboard.chartUnitPerHour');
+		if (chartBucketSeconds > 0) {
+			return t('dashboard.chartUnitPerSeconds', { seconds: chartBucketSeconds });
+		}
+		return '';
+	});
+
+	// The series name, translated. The chart's accessible label used
+	// to be `Series for ${chartMetric}` — an English literal built
+	// from the raw wire name, so a screen reader heard "Series for
+	// five_xx_rate".
+	const chartMetricLabel = $derived.by(() => {
+		switch (chartMetricShown) {
+			case 'p95_latency_ms':
+				return t('dashboard.trafficBtnLatency');
+			case 'five_xx_rate':
+				return t('dashboard.trafficBtnErrors');
+			default:
+				return t('dashboard.trafficBtnReq');
+		}
+	});
 
 	function fmtP95(v: number | null): string {
 		return v === null ? '—' : `${Math.round(v)}`;
@@ -369,7 +442,10 @@
 	<div class="two-col main-row">
 		<div class="card">
 			<div class="card-h">
-				<h3>{language.current && t('dashboard.trafficCardTitle', { window })}</h3>
+				<h3>
+					{language.current && t('dashboard.trafficCardTitle', { window })}
+					{#if chartUnit}<span class="unit">· {language.current && chartUnit}</span>{/if}
+				</h3>
 				<div class="seg">
 					<button
 						class:on={chartMetric === 'req_per_sec'}
@@ -391,8 +467,12 @@
 				{:else}
 					<TimelineChart
 						points={chartPoints}
-						color={chartColor(chartMetric)}
-						label={`Series for ${chartMetric}`}
+						color={chartColor(chartMetricShown)}
+						label={language.current &&
+							t('dashboard.chartAriaLabel', {
+								metric: chartMetricLabel,
+								unit: chartUnit
+							})}
 					/>
 				{/if}
 			</div>
@@ -578,6 +658,10 @@
 		margin-bottom: 12px;
 	}
 	.card-h h3 { color: var(--fg); font-size: 13.5px; font-weight: 500; margin: 0; }
+	/* The unit the series is counted in, beside the title rather than
+	   under the axis: it is the part that was wrong, so it belongs
+	   where the eye already is. */
+	.card-h h3 .unit { color: var(--fg-dim); font-weight: 400; }
 	.card-h .meta { margin-left: auto; color: var(--fg-dim); font-size: 11.5px; font-family: var(--font-mono); }
 	.meta-link { color: var(--accent); text-decoration: none; }
 	.meta-link:hover { text-decoration: underline; }

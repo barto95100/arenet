@@ -25,6 +25,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tick } from 'svelte';
 import { render, screen } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 
 const { metricsMock, securityMock, clientMock, certificatesMock, toastMock } = vi.hoisted(() => ({
 	metricsMock: {
@@ -378,5 +379,118 @@ describe('Dashboard — Phase 5 cert KPI tiles', () => {
 		// stays renderable instead of toasting an error.
 		expect(screen.getByTestId('kpi-cert-total').textContent).toContain('0');
 		expect(screen.getByTestId('kpi-cert-expiring').textContent).toContain('0');
+	});
+});
+
+// The chart said things the data did not support (v2.73).
+//
+// Two separate defects in the same card.
+//
+// The unit: req_per_sec / four_xx_rate / five_xx_rate carry per-bucket
+// COUNTS, not rates — metrics_handlers.go:968-976 returns
+// float64(row.ReqCount) and friends straight out of the bucket — while
+// the button read "Req/s". On the 24h window (1-minute buckets) every
+// value was 60x off; on 30d (1-hour buckets), 3600x. "1 200 req/s" was
+// 1 200 requests in a minute.
+//
+// The race: switchMetric assigned chartMetric and only then awaited, so
+// the title and the colour changed at the click. Click "Latency" while
+// the API is failing and the request-count series stayed drawn under
+// the latency title, in the latency colour — requests read as
+// milliseconds.
+describe('dashboard — the traffic chart describes its own data', () => {
+	// The file-wide beforeEach resets fetchSummary without giving it a
+	// default, so every test supplies its own; the chart card only
+	// renders once the page's load() resolves.
+	beforeEach(() => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+	});
+
+	// Scoped to the traffic card's heading. A document-wide getByText
+	// matched twice — the heading's unit span AND the chart's own
+	// accessible name, which carries the same unit by design.
+	function trafficHeading(): HTMLElement {
+		return screen.getByRole('heading', { name: /Traffic/ });
+	}
+
+	function timeseries(metric: string, bucketSizeSeconds: number, values: number[]) {
+		return {
+			routeId: 'all',
+			metric,
+			window: '24h',
+			bucketSizeSeconds,
+			// The loader drops the trailing in-progress bucket, so pad.
+			points: [
+				...values.map((v, i) => ({ ts: `2026-10-14T12:${String(i).padStart(2, '0')}:00Z`, value: v })),
+				{ ts: '2026-10-14T13:00:00Z', value: 0 }
+			]
+		};
+	}
+
+	it('names the bucket width instead of claiming per-second', async () => {
+		metricsMock.fetchTimeseries.mockResolvedValue(timeseries('req_per_sec', 60, [1200, 1300]));
+		render(Page);
+
+		await vi.waitFor(() => expect(trafficHeading().textContent).toMatch(/per minute/));
+	});
+
+	it('says per hour on an hour-wide bucket', async () => {
+		metricsMock.fetchTimeseries.mockResolvedValue(timeseries('req_per_sec', 3600, [42]));
+		render(Page);
+
+		await vi.waitFor(() => expect(trafficHeading().textContent).toMatch(/per hour/));
+	});
+
+	it('no longer offers a Req/s button, because that is not the unit', async () => {
+		metricsMock.fetchTimeseries.mockResolvedValue(timeseries('req_per_sec', 60, [1]));
+		render(Page);
+
+		await vi.waitFor(() => expect(screen.getByText('Requests')).toBeTruthy());
+		expect(screen.queryByText('Req/s')).toBeNull();
+	});
+
+	// The race, in one assertion: the failed switch must leave the
+	// chart describing the data it still shows.
+	it('keeps the old label when the new metric fails to load', async () => {
+		metricsMock.fetchTimeseries.mockResolvedValue(timeseries('req_per_sec', 60, [1200]));
+		render(Page);
+		await vi.waitFor(() => expect(trafficHeading().textContent).toMatch(/per minute/));
+
+		// Now the API starts failing, and the operator asks for latency.
+		metricsMock.fetchTimeseries.mockRejectedValue(new Error('boom'));
+		await userEvent.click(screen.getByText('Latency'));
+		await tick();
+
+		// Still the request series, so still its unit — not
+		// "milliseconds" over request counts.
+		expect(trafficHeading().textContent).toMatch(/per minute/);
+		expect(trafficHeading().textContent).not.toMatch(/milliseconds/);
+	});
+
+	it('relabels once the new metric does load', async () => {
+		metricsMock.fetchTimeseries.mockResolvedValue(timeseries('req_per_sec', 60, [1200]));
+		render(Page);
+		await vi.waitFor(() => expect(trafficHeading().textContent).toMatch(/per minute/));
+
+		metricsMock.fetchTimeseries.mockResolvedValue(
+			timeseries('p95_latency_ms', 60, [48])
+		);
+		await userEvent.click(screen.getByText('Latency'));
+
+		await vi.waitFor(() => expect(trafficHeading().textContent).toMatch(/milliseconds/));
+	});
+
+	// The accessible label used to be `Series for ${chartMetric}` — an
+	// English literal built from the raw wire name, so a screen reader
+	// heard "Series for five_xx_rate".
+	it('gives the chart a translated accessible name, not the wire name', async () => {
+		metricsMock.fetchTimeseries.mockResolvedValue(timeseries('req_per_sec', 60, [1200]));
+		render(Page);
+
+		await vi.waitFor(() => {
+			const labelled = document.querySelector('[aria-label*="Requests"]');
+			expect(labelled).not.toBeNull();
+		});
+		expect(document.querySelector('[aria-label*="req_per_sec"]')).toBeNull();
 	});
 });
