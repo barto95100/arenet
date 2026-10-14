@@ -188,6 +188,34 @@ func TestEvaluateGeo_ASN(t *testing.T) {
 		{"deny ASN only, ASN unknown → pass", Config{Mode: ModeDeny, ASNs: []uint32{do}},
 			GeoInfo{Country: "US", Continent: "NA"}, true, ReasonDenyMiss},
 		{"only ASN resolved still evaluates", denyDO, GeoInfo{ASN: do}, false, ReasonDenyMatch},
+
+		// v2.73 — the combination the table above never covered: a
+		// country (or continent) allow-list AND an ASN rule, with the
+		// ASN unresolved. The fail-open branch was evaluated against
+		// the WHOLE decision, so it discarded the country verdict it
+		// had just computed and admitted every source on earth. With
+		// no GeoLite2-ASN.mmdb installed — a separate optional
+		// download — that was permanent, and no event row was written,
+		// so the operator saw no blocks and concluded the fence held.
+		{"allow country blocks when an ASN rule is present and the ASN is unknown",
+			Config{Mode: ModeAllow, CountryList: []string{"DE"}, ASNs: []uint32{ovh}},
+			GeoInfo{Country: "FR", Continent: "EU"}, false, ReasonAllowMiss},
+		{"allow continent blocks when an ASN rule is present and the ASN is unknown",
+			Config{Mode: ModeAllow, Continents: []string{"NA"}, ASNs: []uint32{ovh}},
+			GeoInfo{Country: "FR", Continent: "EU"}, false, ReasonAllowMiss},
+		// The other direction: narrowing the fail-open must not start
+		// blocking traffic the allow-list admits.
+		{"allow country still matches when the ASN is unknown",
+			Config{Mode: ModeAllow, CountryList: []string{"FR"}, ASNs: []uint32{ovh}},
+			GeoInfo{Country: "FR", Continent: "EU"}, true, ReasonAllowMatch},
+		// And the two cases where failing open is still right, because
+		// there is nothing left to judge by.
+		{"nothing resolved at all still fails open",
+			Config{Mode: ModeAllow, CountryList: []string{"DE"}, ASNs: []uint32{ovh}},
+			GeoInfo{}, true, ReasonLookupFailed},
+		{"a country rule whose country did not resolve fails open",
+			Config{Mode: ModeAllow, CountryList: []string{"DE"}, ASNs: []uint32{ovh}},
+			GeoInfo{Continent: "EU"}, true, ReasonLookupFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
