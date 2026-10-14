@@ -109,9 +109,25 @@ func TestBuildConfigJSON_RedirectMetricsRunBeforeStaticResponse(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	chain := findHandlerChainWith(cfg, "static_response")
+	// v2.72 — select the chain by WHAT IT CONTAINS, not by walk order.
+	//
+	// This used to call findHandlerChainWith(cfg, "static_response"),
+	// which returns the FIRST chain the walk happens to reach — and
+	// the walk recursed with `for _, v := range n` over a
+	// map[string]any, whose iteration order Go randomises. The emitted
+	// config holds several static_response chains: this route's
+	// redirect, the HTTP→HTTPS redirect at manager.go:3090, the error
+	// pages, the maintenance page. So the test picked one at random and
+	// failed roughly one run in N with "no arenet_routemetrics in the
+	// redirect chain: [static_response]" — the bare HTTP→HTTPS chain.
+	//
+	// It did that on main on 2026-10-14 and the blame landed on a PR
+	// that had touched no Go file at all. A test that can fail for a
+	// reason unrelated to what it asserts is worse than no test: it
+	// spends someone's afternoon on an innocent change.
+	chain := findRedirectChainTo(cfg, "https://new.example.com")
 	if chain == nil {
-		t.Fatal("no handler chain containing static_response found in the emitted config")
+		t.Fatal("no redirect chain to https://new.example.com in the emitted config")
 	}
 
 	metricsAt, staticAt := -1, -1
@@ -138,35 +154,82 @@ func TestBuildConfigJSON_RedirectMetricsRunBeforeStaticResponse(t *testing.T) {
 	}
 }
 
-// findHandlerChainWith returns the first "handle" array in the config
-// tree that contains a handler of the given name. Walks maps and
-// slices generically so it does not depend on how deeply the redirect
-// subroute happens to be nested.
-func findHandlerChainWith(node any, handler string) []any {
-	switch n := node.(type) {
-	case map[string]any:
-		if raw, ok := n["handle"]; ok {
-			if chain, ok := raw.([]any); ok {
-				for _, h := range chain {
-					if handlerName(h) == handler {
-						return chain
-					}
-				}
+// findHandlerChainWith was removed in v2.72.
+//
+// It returned the FIRST "handle" array the walk reached, and the walk
+// recursed with `for _, v := range n` over a map[string]any — whose
+// iteration order Go randomises. With several static_response chains
+// in the emitted config, callers got a different one per run. It
+// failed on main on 2026-10-14 and the blame landed on a PR that had
+// touched no Go file.
+//
+// Leaving it here with a warning comment would have been an invitation
+// to reuse it; findRedirectChainTo below selects by content instead.
+// If a future test needs "any chain containing handler X", build it on
+// allHandlerChains, which returns all of them, and give it a predicate
+// that can only match one.
+
+// findRedirectChainTo returns the handler chain whose static_response
+// sends the visitor to location.
+//
+// The determinism comes from the PREDICATE, not from the walk order:
+// the Location header is what distinguishes this route's redirect from
+// every other static_response in the config, so exactly one chain
+// matches and the order it is reached in cannot change the answer.
+//
+// That is why there is no sorted traversal here. I wrote one, and the
+// injection showed it was carrying nothing — reverting to plain map
+// iteration left both guards green, because the predicate had already
+// made the result unique. A future selector whose predicate CAN match
+// two chains has to impose its own order; this one does not need to.
+func findRedirectChainTo(node any, location string) []any {
+	for _, chain := range allHandlerChains(node) {
+		for _, h := range chain {
+			if handlerName(h) != "static_response" {
+				continue
 			}
-		}
-		for _, v := range n {
-			if found := findHandlerChainWith(v, handler); found != nil {
-				return found
+			m, ok := h.(map[string]any)
+			if !ok {
+				continue
 			}
-		}
-	case []any:
-		for _, v := range n {
-			if found := findHandlerChainWith(v, handler); found != nil {
-				return found
+			headers, ok := m["headers"].(map[string]any)
+			if !ok {
+				continue
+			}
+			locs, ok := headers["Location"].([]any)
+			if !ok || len(locs) == 0 {
+				continue
+			}
+			if got, ok := locs[0].(string); ok && strings.HasPrefix(got, location) {
+				return chain
 			}
 		}
 	}
 	return nil
+}
+
+// allHandlerChains collects EVERY "handle" array in the tree.
+//
+// Returning all of them is the fix: the helper it replaced returned
+// the first one the walk reached, so the caller got whichever chain
+// Go's randomised map iteration happened to visit first. Collecting
+// them all hands the choice to a predicate instead of to chance.
+func allHandlerChains(node any) [][]any {
+	var out [][]any
+	switch n := node.(type) {
+	case map[string]any:
+		if chain, ok := n["handle"].([]any); ok {
+			out = append(out, chain)
+		}
+		for _, v := range n {
+			out = append(out, allHandlerChains(v)...)
+		}
+	case []any:
+		for _, v := range n {
+			out = append(out, allHandlerChains(v)...)
+		}
+	}
+	return out
 }
 
 func handlerName(h any) string {
@@ -319,5 +382,81 @@ func TestBuildConfigJSON_PrefixRuleStillEmitsBothPatterns(t *testing.T) {
 	})})
 	if !strings.Contains(compact, `"path":["/docs","/docs/*"]`) {
 		t.Errorf("a prefix rule must be unchanged: %s", compact)
+	}
+}
+
+// TestFindRedirectChainTo_PicksTheRightChainAmongSeveral is the guard
+// on the selector itself.
+//
+// The config this test builds is the shape that broke CI: a bare
+// [static_response] for the HTTP→HTTPS redirect (manager.go:3090)
+// alongside the route's own redirect chain. The old finder returned
+// whichever the randomised map walk reached first, so this is the
+// discrimination that has to hold — run many times, because one pass
+// proves nothing against map ordering.
+func TestFindRedirectChainTo_PicksTheRightChainAmongSeveral(t *testing.T) {
+	// Built by hand rather than emitted, so the ambiguity is present
+	// on every run instead of depending on what the emitter happens to
+	// produce.
+	cfg := map[string]any{
+		// Several sibling keys: the walk's starting point is a map, so
+		// the order it visits these is exactly what used to decide the
+		// answer.
+		"aaa_http_to_https": map[string]any{
+			"handle": []any{
+				map[string]any{
+					"handler":     "static_response",
+					"status_code": float64(301),
+					"headers": map[string]any{
+						"Location": []any{"https://{http.request.host}{http.request.uri}"},
+					},
+				},
+			},
+		},
+		"mmm_route_redirect": map[string]any{
+			"handle": []any{
+				map[string]any{"handler": "arenet_routemetrics"},
+				map[string]any{
+					"handler":     "static_response",
+					"status_code": float64(301),
+					"headers": map[string]any{
+						"Location": []any{"https://new.example.com"},
+					},
+				},
+			},
+		},
+		"zzz_maintenance": map[string]any{
+			"handle": []any{
+				map[string]any{"handler": "static_response", "status_code": float64(503)},
+			},
+		},
+	}
+
+	for i := 0; i < 200; i++ {
+		chain := findRedirectChainTo(cfg, "https://new.example.com")
+		if chain == nil {
+			t.Fatalf("iteration %d: no chain found", i)
+		}
+		names := handlerNames(chain)
+		if len(names) != 2 || names[0] != "arenet_routemetrics" {
+			t.Fatalf("iteration %d: picked the wrong chain: %v", i, names)
+		}
+	}
+}
+
+// And it answers nothing rather than something wrong when the target
+// is not there — a nil is a failed test, a wrong chain is a false
+// green.
+func TestFindRedirectChainTo_NoMatch(t *testing.T) {
+	cfg := map[string]any{
+		"handle": []any{
+			map[string]any{
+				"handler": "static_response",
+				"headers": map[string]any{"Location": []any{"https://elsewhere.example"}},
+			},
+		},
+	}
+	if chain := findRedirectChainTo(cfg, "https://new.example.com"); chain != nil {
+		t.Errorf("found a chain for a target that is not in the config: %v", handlerNames(chain))
 	}
 }
