@@ -677,31 +677,72 @@ func requestSnippetFromMatch(mr types.MatchedRule) (method, path, payload, match
 	return
 }
 
-// isWebSocketUpgrade reports whether r is an HTTP 1.1
-// WebSocket upgrade handshake (RFC 6455 §4.1). Two header
-// invariants — both required, case-insensitive (HTTP headers
-// are case-insensitive per RFC 7230 §3.2):
+// isWebSocketUpgrade reports whether r is an HTTP/1.1
+// WebSocket upgrade handshake (RFC 6455 §4.1).
 //
-//   - Upgrade: websocket
-//   - Connection: upgrade (may carry additional tokens,
-//     e.g. "keep-alive, Upgrade" — the comma-separated list
-//     is RFC 7230 §6.1 compliant and present in some clients;
-//     substring-match the lowercased value rather than
-//     EqualFold the whole header).
+// Every invariant the RFC makes mandatory for the client's
+// opening handshake is required here, because this predicate
+// decides how much of the WAF a request gets to skip:
 //
-// We intentionally do NOT check Sec-WebSocket-Key /
-// Sec-WebSocket-Version: a client missing those is malformed
-// but still trying to upgrade, and bypassing the WAF is the
-// safest behaviour (Coraza can't handle it either way; the
-// upstream gets the malformed handshake and replies 400).
+//   - the method is GET (§4.1 item 2);
+//   - the version is HTTP/1.1 or later (§4.1 item 3);
+//   - Upgrade: websocket (§4.1 item 5);
+//   - Connection: upgrade (§4.1 item 6) — may carry further
+//     tokens, e.g. "keep-alive, Upgrade", which is RFC 7230
+//     §6.1 compliant and present in some clients, so the
+//     lowercased value is substring-matched rather than
+//     compared whole;
+//   - Sec-WebSocket-Key is present (§4.1 item 7);
+//   - Sec-WebSocket-Version is present (§4.1 item 9).
+//
+// The last two used to be deliberately NOT checked. The
+// comment that stood here said a client missing them "is
+// malformed but still trying to upgrade, and bypassing the
+// WAF is the safest behaviour" — and that reasoning was the
+// defect (v2.73). Bypassing the WAF is never the safe side of
+// a coin-flip: it meant two client-chosen headers on any
+// request of any method, with any body, skipped Coraza
+// entirely and emitted no event, so an injection payload the
+// CRS would have blocked reached the upstream with no trace.
+//
+// Tightening the predicate is only half the fix. A GET with a
+// complete, forged handshake still reaches this branch, which
+// is why ServeHTTP no longer short-circuits on it: the
+// request phases (URI, headers, body) run for a handshake
+// like any other request, and only the RESPONSE-phase
+// interception is skipped, because Coraza's response wrapper
+// does not implement http.Hijacker and HTTP 101 needs it.
+//
+// Being too STRICT here is the dangerous direction, not too
+// loose: a genuine handshake this function fails to recognise
+// gets its response wrapped, and the 101 then breaks. So the
+// checks are exactly the RFC's mandatory set and nothing
+// more — no Content-Length check in particular, since the
+// request-phase inspection now covers a body if one rides
+// along.
 //
 // Pure function; called once per request on the hot path.
-// Two map lookups + a strings.Contains; nanoseconds.
 func isWebSocketUpgrade(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	// HTTP/1.1 or later. Go's HTTP/2 server rejects
+	// connection-specific headers, so in practice this is
+	// 1.1, but the comparison states the requirement rather
+	// than relying on that.
+	if r.ProtoMajor < 1 || (r.ProtoMajor == 1 && r.ProtoMinor < 1) {
+		return false
+	}
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		return false
 	}
-	return strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+	if !strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") {
+		return false
+	}
+	if r.Header.Get("Sec-WebSocket-Key") == "" {
+		return false
+	}
+	return r.Header.Get("Sec-WebSocket-Version") != ""
 }
 
 // ServeHTTP wraps the next handler with Coraza's request +
@@ -716,11 +757,10 @@ func isWebSocketUpgrade(r *http.Request) bool {
 //     so Caddy emits the configured status (typically 403);
 //     in DETECT mode we let the request through (the
 //     callback already emitted the event).
-//   - WebSocket upgrade requests bypass the WAF entirely
-//     (see isWebSocketUpgrade doc-comment below). The
-//     bypass runs BEFORE tx.NewTransaction so we don't
-//     allocate Coraza state for a request we're going to
-//     pass through anyway.
+//   - A WebSocket upgrade handshake is inspected like any
+//     other request and skips only the RESPONSE phase (see
+//     isWebSocketUpgrade below for why, and for what the
+//     bypass used to be before v2.73).
 func (h *ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	// WAF bypass for WebSocket upgrades. Coraza wraps the
 	// response writer for phase 4-5 (response body) rule
@@ -734,25 +774,36 @@ func (h *ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 	// scope upstream:
 	// https://github.com/corazawaf/coraza/discussions/1399
 	//
-	// The bypass is unconditional: detect + block modes
-	// both pass WebSocket upgrade requests through to the
-	// upstream untouched. Operators wanting per-route WAF
-	// coverage on the HTTP side of a WebSocket app keep
-	// that protection — only the upgrade handshake itself
-	// (one request per session) is exempt.
+	// v2.73 — the bypass is now RESPONSE-PHASE ONLY.
+	//
+	// It used to return here, before tx.NewTransaction, so a
+	// WebSocket upgrade skipped Coraza completely: URI,
+	// headers and body uninspected, in detect and block mode
+	// alike, with no event emitted. Since the only thing
+	// identifying an upgrade is client-supplied headers, that
+	// was a full unauthenticated WAF bypass for anyone willing
+	// to add two of them — and the absence of an event meant
+	// it left no trace in the activity log either.
+	//
+	// What actually needs skipping is narrow: wrap() below
+	// replaces the ResponseWriter for phase 4-5 evaluation and
+	// the replacement does not implement http.Hijacker, which
+	// HTTP 101 Switching Protocols requires. So the request
+	// phases run for a handshake like any other request, and
+	// only the response interception is skipped.
 	//
 	// DEBUG (not INFO) log because chatty heartbeat-heavy
 	// apps would otherwise spam journalctl: an active
 	// dashboard with 5 routes could emit hundreds of
 	// upgrade attempts per minute under reconnect storms.
-	// Operators flipping arenet to DEBUG see the bypass
-	// signal without paying the steady-state cost.
-	if isWebSocketUpgrade(r) {
-		slog.Default().Debug("waf: bypassing websocket upgrade",
+	// Operators flipping arenet to DEBUG see the signal
+	// without paying the steady-state cost.
+	isHandshake := isWebSocketUpgrade(r)
+	if isHandshake {
+		slog.Default().Debug("waf: websocket handshake — request inspected, response phase skipped",
 			"route_id", h.RouteID,
 			"path", r.URL.Path,
 		)
-		return next.ServeHTTP(w, r)
 	}
 
 	tx := h.waf.NewTransaction()
@@ -842,6 +893,17 @@ func (h *ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 			}
 		}
 		// detect mode + interruption: log and continue.
+		return next.ServeHTTP(w, r)
+	}
+
+	if isHandshake {
+		// The one thing a handshake must not get: a wrapped
+		// ResponseWriter. wrap()'s writer has no
+		// http.Hijacker, and the upstream's 101 needs to
+		// hijack the connection. The request phases above
+		// already ran, so a forged handshake carrying a
+		// payload has been inspected and, in block mode,
+		// already refused.
 		return next.ServeHTTP(w, r)
 	}
 
