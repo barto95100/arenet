@@ -481,15 +481,38 @@ describe('/certs — runtime KPI cards (T.4)', () => {
 		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
 		render(Page);
 		const card = await screen.findByTestId('kpi-expirent-bientot');
-		// fixtureCerts post-polish: soon (15d, RENEWAL_PENDING) +
-		// expired (-3d, EXPIRED) = 2. The *.test.local OBTAIN_FAILED
-		// row has notAfter = Go zero-time which would have trivially
-		// satisfied "<= now+30d" pre-polish; the new isExpiringSoon
-		// filter correctly excludes it.
-		expect(card.textContent ?? '').toMatch(/2/);
+		// fixtureCerts: soon (15d, RENEWAL_PENDING) is the only
+		// entry in the window now. expired (-3d, EXPIRED) used to be
+		// counted here as well, which is what this assertion read as
+		// 2. The *.test.local OBTAIN_FAILED row has notAfter = Go
+		// zero-time and has always been excluded.
+		expect(card.textContent ?? '').toMatch(/1/);
+	});
+
+	// The reason the count above changed. With an expired cert in
+	// the pool the tile used to read "2 · auto-renewal scheduled",
+	// describing a certificate that had been dead for three days as
+	// scheduled for renewal — reassurance at the one moment it is
+	// not warranted. The hint now reports the expired count, which
+	// is the thing an operator can act on.
+	it('the expiring tile reports expired certs instead of claiming auto-renewal', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		const card = await screen.findByTestId('kpi-expirent-bientot');
+		expect(card.textContent ?? '').toMatch(/1 already expired/);
+		expect(card.textContent ?? '').not.toMatch(/auto-renewal scheduled/);
+	});
+
+	it('the tile says auto-renewal only when nothing has expired', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(
+			fixtureCerts.filter((c) => c.domain !== 'expired.example.com'),
+		);
+		render(Page);
+		const card = await screen.findByTestId('kpi-expirent-bientot');
 		// v2.9.21 i18n — "renouvellement auto programmé" → EN bundle
 		// "auto-renewal scheduled".
 		expect(card.textContent ?? '').toMatch(/auto-renewal scheduled/);
+		expect(card.textContent ?? '').not.toMatch(/already expired/);
 	});
 
 	it('Émetteur principal surfaces the dominant issuer', async () => {
@@ -749,7 +772,7 @@ describe('/certs — Domaines tabs (T.4)', () => {
 		expect(rows[0].dataset.domain).toBe('*.wild.example.com');
 	});
 
-	it('Expirent bientôt tab filters to certs within the renewal window OR already expired', async () => {
+	it('Expirent bientôt tab lists certs in the window, not expired ones', async () => {
 		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
 		render(Page);
 		await screen.findByTestId('certs-table');
@@ -759,11 +782,48 @@ describe('/certs — Domaines tabs (T.4)', () => {
 		await tick();
 
 		const rows = screen.getAllByTestId('cert-row');
-		// soon (15d) + expired (-3d) qualify; valid/wild/broken
-		// have notAfter beyond the 30d window.
-		expect(rows.map((r) => r.dataset.domain).sort()).toEqual(
-			['expired.example.com', 'soon.example.com'].sort(),
-		);
+		// soon (15d) only. expired (-3d) used to appear here too;
+		// it has its own tab below. valid/wild/broken have notAfter
+		// beyond the 30d window.
+		expect(rows.map((r) => r.dataset.domain)).toEqual(['soon.example.com']);
+	});
+
+	// The expiry cell used to test `days <= 0`, and daysUntilExpiry
+	// floors: a certificate with three hours left yields 0 and read
+	// as "expired" for its entire final day. The operator sees the
+	// word on a certificate that is serving traffic perfectly well.
+	it('a cert with hours left reads "today", not "expired"', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue([
+			{
+				domain: 'lastday.example.com',
+				sanList: ['lastday.example.com'],
+				issuer: "Let's Encrypt",
+				notBefore: daysFromNow(-89),
+				notAfter: new Date(Date.now() + 3 * 3600_000).toISOString(),
+				status: 'RENEWAL_PENDING',
+				source: 'specific',
+			},
+		]);
+		render(Page);
+		await screen.findByTestId('certs-table');
+
+		const row = screen.getByTestId('cert-row');
+		expect(row.textContent ?? '').toMatch(/today/);
+		expect(row.textContent ?? '').not.toMatch(/expired/);
+	});
+
+	// Nothing is hidden by the split — this is where the certs that
+	// left the tab above went.
+	it('the Expired tab lists exactly the certs whose notAfter has passed', async () => {
+		certsMock.certificatesApi.list.mockResolvedValue(fixtureCerts);
+		render(Page);
+		await screen.findByTestId('certs-table');
+
+		await userEvent.click(screen.getByTestId('tab-expired'));
+		await tick();
+
+		const rows = screen.getAllByTestId('cert-row');
+		expect(rows.map((r) => r.dataset.domain)).toEqual(['expired.example.com']);
 	});
 
 	it('per-tab empty state surfaces when the active filter yields zero rows', async () => {

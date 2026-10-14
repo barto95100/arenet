@@ -203,15 +203,48 @@ export function daysUntilExpiry(cert: Certificate, now: Date = new Date()): numb
  *     renew). The dedicated ÉCHEC badge already calls them out.
  *   - Zero-time entries from any other path (defensive — the
  *     daysUntilExpiry null return signals "no known expiry").
- *
- * Includes already-expired certs with valid timestamps (the
- * operator surely wants to see those in the bucket too).
+ *   - Already-expired certs. This used to include them, on the
+ *     reasoning that the operator wants to see them too — which
+ *     is right, but the "Expiring < 30 days" KPI renders
+ *     certs.kpiExpiringFootAuto as its hint whenever the count
+ *     is above zero, i.e. the words "auto-renewal scheduled".
+ *     So a cert that expired three days ago because its
+ *     renewal has been failing was counted, and described as
+ *     scheduled for renewal. That is the opposite of true, and
+ *     it reads as reassurance at the exact moment it should not.
+ *     Expired certs are now their own bucket — see isExpired —
+ *     and the page gives them their own tab, so nothing is
+ *     hidden; it is just no longer conflated.
  */
 export function isExpiringSoon(cert: Certificate, now: Date = new Date()): boolean {
 	if (cert.status === 'OBTAIN_FAILED') return false;
+	if (isExpired(cert, now)) return false;
 	const days = daysUntilExpiry(cert, now);
 	if (days === null) return false;
 	return days <= RENEWAL_WINDOW_DAYS;
+}
+
+/**
+ * Predicate: the cert's notAfter is in the past.
+ *
+ * Compares timestamps rather than the whole-day count from
+ * daysUntilExpiry, which floors: a cert with three hours left
+ * yields days = 0, and a `days <= 0` test then calls a perfectly
+ * valid certificate expired for its final day. Here, "expired"
+ * means expired.
+ *
+ * Shares the two exclusions of isExpiringSoon for the same
+ * reasons: an OBTAIN_FAILED entry has nothing to expire, and a
+ * zero-valued notAfter (Go's 0001-01-01, which every unobtained
+ * entry carries on the wire) would otherwise read as expired
+ * two thousand years ago.
+ */
+export function isExpired(cert: Certificate, now: Date = new Date()): boolean {
+	if (cert.status === 'OBTAIN_FAILED') return false;
+	if (isZeroTimestamp(cert.notAfter)) return false;
+	const notAfter = new Date(cert.notAfter);
+	if (Number.isNaN(notAfter.getTime())) return false;
+	return notAfter.getTime() <= now.getTime();
 }
 
 /**
