@@ -213,6 +213,7 @@ func withAuthIdentity(ctx context.Context, user User, sessionID, tokenID string,
 	ctx = context.WithValue(ctx, IsLockedKey, isLocked)
 	ctx = context.WithValue(ctx, RoleKey, user.Role)
 	ctx = context.WithValue(ctx, AuthSourceKey, user.AuthSource)
+	ctx = context.WithValue(ctx, MustChangePasswordKey, user.MustChangePassword)
 	return ctx
 }
 
@@ -258,6 +259,20 @@ func HardAuthMiddleware(sessions sessionStore, users userStore, tokens APITokenL
 				// a failed authentication (v2.39).
 				MarkSessionLocked(r.Context())
 				writeForbidden(w, "session locked")
+				return
+			}
+
+			// Forced password change, enforced server-side (F23). An
+			// admin-created account still on its one-time initial
+			// password may reach ONLY the endpoint that rotates it;
+			// every other hard endpoint is refused, so a holder of the
+			// relayed initial password cannot drive the API with that
+			// identity. GET /auth/me, /unlock and /logout are soft-auth
+			// and never reach here, so the user can still see the
+			// overlay, unlock and log out. The SPA overlay is UX on top.
+			if mustChange, _ := r.Context().Value(MustChangePasswordKey).(bool); mustChange &&
+				!isPasswordChangeRequest(r) {
+				writePasswordChangeRequired(w)
 				return
 			}
 
@@ -332,6 +347,27 @@ func writeForbidden(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// writePasswordChangeRequired is the 403 a MustChangePassword account
+// gets on every hard endpoint but the password-change one. The machine
+// code lets the SPA route to the change-password flow instead of showing
+// a generic forbidden.
+func writePasswordChangeRequired(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error": "password change required",
+		"code":  "password_change_required",
+	})
+}
+
+// isPasswordChangeRequest reports whether r is the self-service password
+// rotation (POST .../auth/me/password) — the one hard endpoint a
+// MustChangePassword account may reach. Matched by suffix so it holds
+// under the /api/v1 mount without the router knowing about this gate.
+func isPasswordChangeRequest(r *http.Request) bool {
+	return r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/auth/me/password")
 }
 
 // writeServiceUnavailable sends a 503 JSON response. Used when a

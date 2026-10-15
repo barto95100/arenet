@@ -315,6 +315,20 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if user.PasswordHash == "" {
+		// An OIDC user or a service account has no local password.
+		// Answer the SAME generic 401 as an unknown user or a wrong
+		// password — never a distinct status, and never the 500 the
+		// compare below used to raise on an empty hash, either of which
+		// is an unauthenticated enumeration oracle for federated and
+		// machine identities (F46). emitLoginFailure records it so the
+		// per-IP limiter counts the probe like any other failure, rather
+		// than letting a 5xx run uncounted.
+		h.emitLoginFailure(r, attempted, "no_local_password")
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
 	match, err := argon2id.ComparePasswordAndHash(req.Password, user.PasswordHash)
 	if err != nil {
 		// Malformed PHC string in storage; treat as internal failure.
