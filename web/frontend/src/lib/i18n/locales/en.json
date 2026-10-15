@@ -1101,6 +1101,9 @@
 		"upstreamsMetaCount": "{count} distinct",
 		"upstreamsRouteSuffix": "{count} route{plural}",
 		"upstreamsEmpty": "No upstreams configured.",
+		"updatedSeconds": "updated {seconds}s ago",
+		"updatedMinutes": "updated {minutes} min ago",
+		"upstreamsTruncated": "+{hidden} more — showing {shown} of {total}",
 		"tailTitle": "WAF events — recent feed",
 		"tailOpenLogs": "Open Logs →"
 	},
