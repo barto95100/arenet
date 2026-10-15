@@ -82,7 +82,7 @@ func SoftAuthMiddleware(sessions sessionStore, users userStore, tokens APITokenL
 			if cookie, err := r.Cookie(sessionCookieName); err == nil {
 				if user, session, ok := resolveSessionCookie(w, r, sessions, users, cookie.Value); ok {
 					isLocked := time.Since(session.LastActivity) > SessionIdleTimeout
-					ctx := withAuthIdentity(r.Context(), user, session.ID, isLocked)
+					ctx := withAuthIdentity(r.Context(), user, session.ID, "", isLocked)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -100,7 +100,7 @@ func SoftAuthMiddleware(sessions sessionStore, users userStore, tokens APITokenL
 					go func(id string) {
 						_ = tokens.TouchLastUsed(context.Background(), id)
 					}(tok.ID)
-					ctx := withAuthIdentity(r.Context(), user, "", false)
+					ctx := withAuthIdentity(r.Context(), user, "", tok.ID, false)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -205,10 +205,11 @@ func resolveBearerToken(
 // handlers read. sessionID is "" for Bearer-authenticated
 // requests; isLocked is always false on the Bearer path (no idle
 // timer applies to service accounts).
-func withAuthIdentity(ctx context.Context, user User, sessionID string, isLocked bool) context.Context {
+func withAuthIdentity(ctx context.Context, user User, sessionID, tokenID string, isLocked bool) context.Context {
 	ctx = context.WithValue(ctx, UserIDKey, user.ID)
 	ctx = context.WithValue(ctx, UsernameKey, user.Username)
 	ctx = context.WithValue(ctx, SessionIDKey, sessionID)
+	ctx = context.WithValue(ctx, TokenIDKey, tokenID)
 	ctx = context.WithValue(ctx, IsLockedKey, isLocked)
 	ctx = context.WithValue(ctx, RoleKey, user.Role)
 	ctx = context.WithValue(ctx, AuthSourceKey, user.AuthSource)

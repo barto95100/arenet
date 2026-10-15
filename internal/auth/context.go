@@ -42,6 +42,14 @@ const (
 	// Populated by SoftAuthMiddleware on success.
 	UsernameKey ctxKey = "auth.username"
 
+	// TokenIDKey is the service-account API token's ID for a
+	// Bearer-authenticated request, and empty for a cookie session
+	// (v2.73). Added so a long-lived stream can re-check the TOKEN
+	// that opened it, not merely the user behind it: revoking a token
+	// leaves the service account in place, so a user-only re-check
+	// would let a revoked token keep streaming.
+	TokenIDKey ctxKey = "auth.token_id"
+
 	// SessionIDKey is the current session ID (43-char base64url string).
 	// Populated by SoftAuthMiddleware on success.
 	SessionIDKey ctxKey = "auth.session_id"
@@ -97,6 +105,14 @@ func UsernameFromContext(ctx context.Context) string {
 // string if the request is not authenticated.
 func SessionIDFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(SessionIDKey).(string)
+	return v
+}
+
+// TokenIDFromContext returns the API token's ID for a
+// Bearer-authenticated request, or empty string for a cookie session
+// or an unauthenticated request.
+func TokenIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(TokenIDKey).(string)
 	return v
 }
 

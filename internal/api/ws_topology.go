@@ -25,6 +25,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/metrics"
 )
 
@@ -48,6 +49,14 @@ type WSTopologyHandler struct {
 	broadcaster *metrics.Broadcaster
 	upgrader    websocket.Upgrader
 	logger      *slog.Logger
+	// reauth re-checks the stream's authorization while it runs.
+	// Wired by NewRouter; see stream_reauth.go.
+	reauth streamReauthorizer
+}
+
+// SetStreamReauthorizer wires the periodic authorization re-check.
+func (h *WSTopologyHandler) SetStreamReauthorizer(ra streamReauthorizer) {
+	h.reauth = ra
 }
 
 // NewWSTopologyHandler constructs the handler. The dev flag mirrors
@@ -126,8 +135,31 @@ func (h *WSTopologyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	ctx := r.Context()
+	// v2.73 — re-authorize while the stream runs. Authorized once at
+	// the upgrade and never again, this socket outlived session
+	// revocation, account deletion, a role demotion and the
+	// 15-minute idle lock. See stream_reauth.go.
+	sessionID, tokenID := streamCredentials(ctx)
+	reauthTick := time.NewTicker(streamReauthInterval)
+	defer reauthTick.Stop()
+
 	for {
 		select {
+		case <-reauthTick.C:
+			if streamStillAuthorized(ctx, h.reauth, sessionID, tokenID) {
+				continue
+			}
+			// 1008 Policy Violation, with no reason text: a peer that
+			// no longer owns this stream learns nothing about why.
+			h.logger.Info("ws topology: closing stream, authorization lapsed",
+				slog.String("session", auth.SessionHandle(sessionID)))
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.ClosePolicyViolation, ""),
+				time.Now().Add(closeWriteDeadline),
+			)
+			return
+
 		case <-ctx.Done():
 			// Server shutdown or request cancellation. Close cleanly
 			// with code 1001 (Going Away) so the client distinguishes

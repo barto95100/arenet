@@ -68,6 +68,23 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 	}
 	r.Use(auth.IPExtractMiddleware(ipExtractor))
 
+	// v2.73 — every stream handler re-checks its own authorization
+	// while it runs. Wired here rather than in cmd/arenet so that
+	// every caller of NewRouter gets it, tests included: the three
+	// sockets were authorized once at the upgrade and never again,
+	// which made session revocation, account deletion, a role
+	// demotion and the 15-minute idle lock all ineffective on them.
+	// TestNewRouter_WiresStreamReauthorization pins this.
+	if ws != nil {
+		ws.SetStreamReauthorizer(h)
+	}
+	if streamHandler != nil {
+		streamHandler.SetStreamReauthorizer(h)
+	}
+	if wsGeoEvents != nil {
+		wsGeoEvents.SetStreamReauthorizer(h)
+	}
+
 	// /healthz: mounted at the root (NOT /api/v1/...) so the probe
 	// path stays stable across API versions. No auth wrapper because
 	// orchestrator probes carry no credentials. No audit either —

@@ -27,6 +27,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/barto95100/arenet/internal/api/topology"
+	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/metrics"
 )
 
@@ -53,6 +54,10 @@ import (
 // snapshot immediately on connection" contract. Subsequent emits
 // follow the N-tick aggregation cadence.
 type StreamHandler struct {
+	// reauth re-checks the stream's authorization while it runs.
+	// Wired by NewRouter; see stream_reauth.go.
+	reauth streamReauthorizer
+
 	broadcaster *metrics.Broadcaster
 	store       SnapshotRouteLister
 	window      *topology.SlidingWindow
@@ -62,6 +67,11 @@ type StreamHandler struct {
 	logger      *slog.Logger
 
 	now func() time.Time
+}
+
+// SetStreamReauthorizer wires the periodic authorization re-check.
+func (h *StreamHandler) SetStreamReauthorizer(ra streamReauthorizer) {
+	h.reauth = ra
 }
 
 // NewStreamHandler constructs the stream handler. tickMs is the
@@ -200,8 +210,31 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// push is cheap and the code stays local to this handler.
 	tickCount := 0
 	ctx := r.Context()
+	// v2.73 — re-authorize while the stream runs. Authorized once at
+	// the upgrade and never again, this socket outlived session
+	// revocation, account deletion, a role demotion and the
+	// 15-minute idle lock. See stream_reauth.go.
+	sessionID, tokenID := streamCredentials(ctx)
+	reauthTick := time.NewTicker(streamReauthInterval)
+	defer reauthTick.Stop()
+
 	for {
 		select {
+		case <-reauthTick.C:
+			if streamStillAuthorized(ctx, h.reauth, sessionID, tokenID) {
+				continue
+			}
+			// 1008 Policy Violation, with no reason text: a peer that
+			// no longer owns this stream learns nothing about why.
+			h.logger.Info("topology stream: closing stream, authorization lapsed",
+				slog.String("session", auth.SessionHandle(sessionID)))
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.ClosePolicyViolation, ""),
+				time.Now().Add(closeWriteDeadline),
+			)
+			return
+
 		case <-ctx.Done():
 			_ = conn.WriteControl(
 				websocket.CloseMessage,
