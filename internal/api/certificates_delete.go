@@ -57,6 +57,16 @@ func (h *Handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "domain is required")
 		return
 	}
+	// Reject anything that is not a real certificate subject BEFORE it
+	// reaches the filesystem. certmagic's key sanitiser collapses ".."
+	// such that ".,." / ".!." / "./." become a traversal component, so
+	// an authenticated caller could otherwise delete the whole
+	// certificates tree with a single crafted path (F30). An allow-list
+	// of the real shape — bare hostname or *.apex — closes it.
+	if !storage.ValidCertSubject(domain) {
+		writeError(w, http.StatusBadRequest, "domain must be a hostname or a *.domain wildcard")
+		return
+	}
 
 	ctx := r.Context()
 

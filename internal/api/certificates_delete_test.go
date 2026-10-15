@@ -506,3 +506,31 @@ func TestDeleteCertificate_EmitsAuditEvent(t *testing.T) {
 		t.Errorf("TargetType=%q; want %q", got.TargetType, "certificate")
 	}
 }
+
+// TestDeleteCertificate_RejectsTraversal pins F30 at the handler: a
+// {domain} that is not a real certificate subject is refused with 400
+// before it reaches the filesystem, so a crafted path like ".,." cannot
+// wipe the whole certificates tree. The sibling cert on disk must
+// survive untouched.
+func TestDeleteCertificate_RejectsTraversal(t *testing.T) {
+	for _, payload := range []string{".,.", ".!.", "..", "."} {
+		env := newTestEnv(t, false)
+		storageDir := t.TempDir()
+		env.handler.SetCertStorageDir(storageDir)
+		leaf := seedCertOnDisk(t, storageDir, "local", "keep.example.com")
+
+		// chi binds {domain} from the path; url-escape so the router
+		// routes the odd characters to the handler rather than 404ing.
+		req := httptest.NewRequest(http.MethodDelete,
+			"/api/v1/certificates/"+url.PathEscape(payload), nil)
+		rec := httptest.NewRecorder()
+		env.router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("payload %q: status=%d body=%s; want 400", payload, rec.Code, rec.Body)
+		}
+		if _, err := os.Stat(leaf); err != nil {
+			t.Errorf("payload %q destroyed the certificates tree: %v", payload, err)
+		}
+	}
+}

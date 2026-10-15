@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/caddyserver/certmagic"
 )
@@ -45,6 +46,17 @@ func DeleteCertFiles(storageDir, domain string) (int, error) {
 		return 0, errors.New("certinfo.DeleteCertFiles: domain is empty")
 	}
 	safeDomain := certmagic.StorageKeys.Safe(domain)
+	// certmagic's Safe() collapses ".." before it strips non-word
+	// characters, so an input like ".,." / ".!." / "./." sanitises to the
+	// literal component ".." and "." passes straight through — each then
+	// escapes (or climbs to) the issuer/certificates root under
+	// filepath.Join, and os.RemoveAll wipes far more than one domain
+	// (F30/F36). A real domain key is always a single, non-dot path
+	// element, so refuse anything else, fail-closed.
+	if safeDomain == "" || safeDomain == "." || safeDomain == ".." ||
+		safeDomain != filepath.Base(safeDomain) || strings.ContainsAny(safeDomain, `/\`) {
+		return 0, fmt.Errorf("certinfo.DeleteCertFiles: refusing unsafe domain key %q (from %q)", safeDomain, domain)
+	}
 
 	certsDir := filepath.Join(storageDir, "certificates")
 	issuers, err := os.ReadDir(certsDir)
