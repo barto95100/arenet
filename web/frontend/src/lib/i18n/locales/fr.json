@@ -2517,7 +2517,10 @@
 		"errorTitle": "Échec du chargement",
 		"errorRetry": "Réessayer",
 		"liveLive": "live",
-		"liveReconnecting": "reconnexion…",
+		"liveConnecting": "connexion…",
+		"liveStale": "périmé — flux perdu",
+		"liveStaleSeconds": "périmé — {seconds} s",
+		"liveStaleMinutes": "périmé — {minutes} min",
 		"sidebar": {
 			"ariaLabel": "Panneau latéral topology",
 			"panelLegendTitle": "Légende des flux",

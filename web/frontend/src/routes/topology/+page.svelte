@@ -127,8 +127,52 @@
 	// Live indicator — 'live' when the WS is connected, 'reconnecting'
 	// when an automatic reconnect is in flight. The indicator is a
 	// small dot in the canvas toolbar.
-	type LiveStatus = 'live' | 'reconnecting';
-	let liveStatus = $state<LiveStatus>('reconnecting');
+	// Three states, not two (v2.73).
+	//
+	// This was 'live' | 'reconnecting' initialised to 'reconnecting',
+	// so every page load showed an amber "reconnecting…" until the
+	// first tick — a warning about a problem that did not exist, which
+	// is how a real warning stops being read. And a dropped stream
+	// said "reconnecting" while the canvas went on rendering its last
+	// frame with particles still flowing, so a frozen graph was
+	// pixel-identical to a live one.
+	//
+	//   connecting — opened, no frame yet. Neutral: nothing is wrong.
+	//   live       — a frame arrived.
+	//   stale      — the stream dropped. What you see is OLD, and both
+	//                the pill and the canvas say so.
+	type LiveStatus = 'connecting' | 'live' | 'stale';
+	let liveStatus = $state<LiveStatus>('connecting');
+	// When the last frame landed, so a stale pill can say how old the
+	// picture is instead of only that it is old.
+	let lastFrameAt = $state<Date | null>(null);
+	// Re-read on a timer so a stale pill's age keeps climbing instead
+	// of freezing at the second the stream dropped — a stale picture
+	// whose age is itself stale would be the same defect one level up.
+	let staleClock = $state(0);
+
+	$effect(() => {
+		if (liveStatus !== 'stale') return;
+		const id = setInterval(() => (staleClock += 1), 30_000);
+		return () => clearInterval(id);
+	});
+
+	const liveLabel = $derived.by(() => {
+		switch (liveStatus) {
+			case 'live':
+				return t('topology.liveLive');
+			case 'connecting':
+				return t('topology.liveConnecting');
+			default: {
+				// staleClock is read so this recomputes on the tick.
+				void staleClock;
+				if (lastFrameAt === null) return t('topology.liveStale');
+				const secs = Math.max(0, Math.round((Date.now() - lastFrameAt.getTime()) / 1000));
+				if (secs < 60) return t('topology.liveStaleSeconds', { seconds: secs });
+				return t('topology.liveStaleMinutes', { minutes: Math.round(secs / 60) });
+			}
+		}
+	});
 
 	let closeStream: (() => void) | null = null;
 
@@ -328,13 +372,16 @@
 				// it did, and it was the handler that forgot to filter.
 				rebuildGraph(filterForView(nextRoutes, topoView), topoView);
 				liveStatus = 'live';
+				lastFrameAt = new Date();
 			},
 			() => {
 				// onDisconnect — the stream client is mid-reconnect.
-				// We don't reset routes; the canvas keeps showing
-				// the last-known state until the next successful
-				// tick. The dot turns amber.
-				liveStatus = 'reconnecting';
+				// The routes are deliberately NOT reset: dropping the
+				// graph would be worse than showing an old one. That
+				// is precisely why the state is called stale and why
+				// the canvas is marked — the old graph has to look
+				// old.
+				liveStatus = 'stale';
 			}
 		);
 	}
@@ -564,12 +611,26 @@
 		<div class="topo-content">
 			<div class="topo-canvas-wrap">
 				<div class="canvas-toolbar">
-					<div class="live-indicator" class:reconnecting={liveStatus === 'reconnecting'}>
+					<!-- role="status" because the three readings differ in
+					     what the canvas MEANS, not merely in colour. -->
+					<div
+						class="live-indicator"
+						class:stale={liveStatus === 'stale'}
+						class:connecting={liveStatus === 'connecting'}
+						data-status={liveStatus}
+						data-testid="topology-live-indicator"
+						role="status"
+					>
 						<span class="dot"></span>
-						<span class="label">{language.current && (liveStatus === 'live' ? t('topology.liveLive') : t('topology.liveReconnecting'))}</span>
+						<span class="label">{language.current && liveLabel}</span>
 					</div>
 				</div>
-				<div class="canvas-frame">
+				<div
+					class="canvas-frame"
+					class:stale={liveStatus === 'stale'}
+					data-stale={liveStatus === 'stale'}
+					data-testid="topology-canvas-frame"
+				>
 					<SvelteFlow
 						bind:nodes
 						bind:edges
@@ -733,6 +794,27 @@
 		position: relative;
 	}
 
+	/* A frozen graph must not look like a live one. The particles on
+	   the edges keep animating from the last frame, so without this
+	   the only difference between live and stale was a pill in the
+	   corner. Desaturating is enough to be unmistakable at a glance
+	   and still leaves the topology readable, which matters: the
+	   operator is probably looking at it BECAUSE something broke. */
+	.canvas-frame.stale {
+		filter: saturate(0.35) opacity(0.75);
+		/* Declared on the stale rule, not on .canvas-frame, so the
+		   reduced-motion override below wins on specificity instead of
+		   relying on source order — a later equal-specificity rule
+		   would silently defeat the media query. */
+		transition: filter 200ms ease-out;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.canvas-frame.stale {
+			transition: none;
+		}
+	}
+
 	/* Loading / error states use the same outer wrap so the
 	   page layout doesn't jump between states. */
 	.topo-state-wrap {
@@ -794,9 +876,16 @@
 		background: color-mix(in oklch, var(--status-up) 14%, transparent);
 	}
 
-	.live-indicator.reconnecting {
+	.live-indicator.stale {
 		color: var(--status-warn);
 		background: color-mix(in oklch, var(--status-warn) 14%, transparent);
+	}
+
+	/* Connecting is not a warning: nothing is wrong yet. Neutral, so
+	   the amber keeps meaning something. */
+	.live-indicator.connecting {
+		color: var(--fg-muted);
+		background: color-mix(in oklch, var(--fg-muted) 12%, transparent);
 	}
 
 	.live-indicator .dot {
@@ -807,7 +896,8 @@
 		box-shadow: 0 0 6px currentColor;
 	}
 
-	.live-indicator.reconnecting .dot {
+	.live-indicator.stale .dot,
+	.live-indicator.connecting .dot {
 		box-shadow: none;
 	}
 

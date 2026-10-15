@@ -2517,7 +2517,10 @@
 		"errorTitle": "Loading failed",
 		"errorRetry": "Retry",
 		"liveLive": "live",
-		"liveReconnecting": "reconnecting…",
+		"liveConnecting": "connecting…",
+		"liveStale": "stale — stream lost",
+		"liveStaleSeconds": "stale — {seconds}s old",
+		"liveStaleMinutes": "stale — {minutes} min old",
 		"sidebar": {
 			"ariaLabel": "Topology side panel",
 			"panelLegendTitle": "Flow legend",
