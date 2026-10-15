@@ -64,7 +64,7 @@ func TestCustomRuleDirectives_Shapes(t *testing.T) {
 func TestBuildWAFHandler_CustomRules_AfterExclusionsBeforeCRS(t *testing.T) {
 	got := buildWAFHandler("r-1", "h", "block", false, false, []int{920170}, nil,
 		[]storage.WAFTargetedExclusion{{RuleID: 942100, Target: "ARGS:a"}},
-		[]storage.WAFCustomRule{{ID: 120000, Conditions: []storage.WAFRuleCondition{cond(storage.WAFFieldPath, storage.WAFOpIs, "/x")}}}, "")
+		[]storage.WAFCustomRule{{ID: 120000, Conditions: []storage.WAFRuleCondition{cond(storage.WAFFieldPath, storage.WAFOpIs, "/x")}}}, "", false)
 	dirs := got["directives"].(string)
 	i1, i2, i3, i4 := strings.Index(dirs, "id:999001"), strings.Index(dirs, "id:110000"), strings.Index(dirs, "id:120000"), strings.Index(dirs, "Include @coraza")
 	if !(i1 >= 0 && i1 < i2 && i2 < i3 && i3 < i4) {
@@ -72,7 +72,7 @@ func TestBuildWAFHandler_CustomRules_AfterExclusionsBeforeCRS(t *testing.T) {
 	}
 	// CRS disabled: the rule is still emitted (no Include).
 	off := buildWAFHandler("r-1", "h", "block", false, true, nil, nil, nil,
-		[]storage.WAFCustomRule{{ID: 120000, Conditions: []storage.WAFRuleCondition{cond(storage.WAFFieldPath, storage.WAFOpIs, "/x")}}}, "")
+		[]storage.WAFCustomRule{{ID: 120000, Conditions: []storage.WAFRuleCondition{cond(storage.WAFFieldPath, storage.WAFOpIs, "/x")}}}, "", false)
 	if d := off["directives"].(string); !strings.Contains(d, "id:120000") || strings.Contains(d, "Include") {
 		t.Fatalf("CRS disabled: want the custom rule and no Include, got %q", d)
 	}
@@ -91,7 +91,7 @@ type customReq struct {
 // and returns the response status and whether ruleID fired.
 func runCustom(t *testing.T, mode string, rules []storage.WAFCustomRule, r customReq, ruleID string) (int, bool) {
 	t.Helper()
-	cfg := buildWAFHandler("r-custom", "example.com", mode, false, false, nil, nil, nil, rules, "")
+	cfg := buildWAFHandler("r-custom", "example.com", mode, false, false, nil, nil, nil, rules, "", false)
 	h := &waf.ArenetWafHandler{RouteID: "r-custom", Mode: mode, Directives: cfg["directives"].(string), LoadOWASPCRS: true}
 	if err := h.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -244,14 +244,14 @@ func TestWAFDirectivesForRoute_DraftOverridesStored(t *testing.T) {
 func TestBuildWAFHandler_SecLang_LastBeforeCRS(t *testing.T) {
 	got := buildWAFHandler("r", "h", "block", false, false, nil, nil, nil,
 		[]storage.WAFCustomRule{{ID: 120000, Conditions: []storage.WAFRuleCondition{cond("path", "is", "/x")}}},
-		"  SecAction \"id:130000,phase:1,pass,nolog\"\n")
+		"  SecAction \"id:130000,phase:1,pass,nolog\"\n", false)
 	dirs := got["directives"].(string)
 	i1, i2, i3 := strings.Index(dirs, "id:120000"), strings.Index(dirs, "id:130000"), strings.Index(dirs, "Include @coraza")
 	if !(i1 >= 0 && i1 < i2 && i2 < i3) {
 		t.Fatalf("order must be guided < SecLang < Include; got %q", dirs)
 	}
-	blank := buildWAFHandler("r", "h", "block", false, false, nil, nil, nil, nil, " \n ")
-	plain := buildWAFHandler("r", "h", "block", false, false, nil, nil, nil, nil, "")
+	blank := buildWAFHandler("r", "h", "block", false, false, nil, nil, nil, nil, " \n ", false)
+	plain := buildWAFHandler("r", "h", "block", false, false, nil, nil, nil, nil, "", false)
 	if blank["directives"] != plain["directives"] {
 		t.Fatal("blank SecLang must not change the directives")
 	}

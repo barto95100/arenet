@@ -131,8 +131,12 @@ func WAFDirectivesForRoute(r storage.Route, secLang *string) (directives string,
 	if secLang != nil {
 		sl = *secLang
 	}
+	// adminPlane false: the tester answers "what do THIS ROUTE's rules
+	// do to this request", and the management-plane exemption is not
+	// one of the route's rules. A route pointing at the admin listener
+	// is also not a route an operator tests sample requests against.
 	h := buildWAFHandler(r.ID, r.Host, "block", r.UploadStreamingMode, r.WAFDisableCRS,
-		r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions, r.WAFCustomRules, sl)
+		r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions, r.WAFCustomRules, sl, false)
 	directives, _ = h["directives"].(string)
 	loadCRS, _ = h["load_owasp_crs"].(bool)
 	return directives, loadCRS

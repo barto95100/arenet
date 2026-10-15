@@ -58,14 +58,21 @@ type DryRunResult struct {
 	Matches   []DryRunMatch `json:"matches"`
 }
 
-// DryRun evaluates req against a WAF built like the route's handler
-// (the Arenet admin guard + directives + SecRuleEngine On), without
-// traffic, event sink or Caddy. The engine is always On so the result
-// says whether the request WOULD be blocked; the caller reports the
-// route mode separately.
+// DryRun evaluates req against a WAF built from the route's own
+// directives plus SecRuleEngine On, without traffic, event sink or
+// Caddy. The engine is always On so the result says whether the
+// request WOULD be blocked; the caller reports the route mode
+// separately.
+//
+// v2.73 — this used to prepend AdminAPIExclusionDirective
+// unconditionally, mirroring buildWAF's own unconditional prepend. It
+// no longer does, for the same reason: the exemption belongs to one
+// route, and caddymgr now decides which. Whatever the caller composed
+// into `directives` is what runs, so the tester shows the operator the
+// engine their route actually gets.
 func DryRun(directives string, loadCRS bool, req DryRunRequest) (DryRunResult, error) {
 	cfg := coraza.NewWAFConfig().
-		WithDirectives(adminAPIExclusionDirective + directives + "\nSecRuleEngine On")
+		WithDirectives(directives + "\nSecRuleEngine On")
 	if loadCRS {
 		cfg = cfg.WithRootFS(mergefs.Merge(coreruleset.FS, mergefsio.OSFS))
 	}
