@@ -133,3 +133,64 @@ func TestScrubAuditSecrets_RewritesOldEvents(t *testing.T) {
 		}
 	}
 }
+
+// TestScrubAuditSecrets_ScrubsLastErrorAndDiscordURL pins the two
+// webhook-URL leaks the pre-v2.73 boot scrub missed in stored audit
+// rows, both viewer-readable through GET /audit (findings F21, and the
+// Discord half of F22's family in the audit surface):
+//
+//   - a channel row's top-level last_error, into which Go's net/http
+//     writes the full request URL on a transport failure;
+//   - a Discord channel's config.webhookUrl, whose key is webhookUrl,
+//     not the url that scrubChannelAuditPayload handled.
+//
+// New rows are already written redacted by alertChannelForAudit; this
+// covers the rows an upgraded install already holds.
+func TestScrubAuditSecrets_ScrubsLastErrorAndDiscordURL(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewStore(filepath.Join(t.TempDir(), "arenet.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	as := audit.NewStore(store.DB())
+
+	// A webhook channel whose last transport error embedded the URL.
+	wh := leakyWebhook()
+	wh.LastError = `Post "` + leakWebhookURL + `": dial tcp: i/o timeout`
+	whJSON, _ := json.Marshal(wh)
+
+	// A Discord channel — its credential field is webhookUrl.
+	discordCfg, _ := json.Marshal(map[string]any{"webhookUrl": leakWebhookURL})
+	discordJSON, _ := json.Marshal(storage.Channel{
+		ID: "c3", Kind: storage.ChannelKindDiscord, Config: discordCfg,
+	})
+
+	for _, e := range []audit.Event{
+		{Action: "alerting_channel_updated", TargetType: auditTargetAlertChannel, TargetID: "c1", BeforeJSON: whJSON},
+		{Action: "alerting_channel_updated", TargetType: auditTargetAlertChannel, TargetID: "c3", BeforeJSON: discordJSON},
+	} {
+		if err := as.Append(ctx, e); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	if _, err := ScrubAuditSecrets(ctx, as); err != nil {
+		t.Fatalf("ScrubAuditSecrets: %v", err)
+	}
+
+	after, _, _ := as.List(ctx, audit.Filter{Limit: 10})
+	for _, e := range after {
+		assertNoLeak(t, e.Action, append(append([]byte{}, e.BeforeJSON...), e.AfterJSON...))
+		// The host must survive so the operator can still audit where
+		// alerts went.
+		if !strings.Contains(string(e.BeforeJSON), "discord.example") {
+			t.Errorf("%s: redaction dropped the auditable host: %s", e.Action, e.BeforeJSON)
+		}
+	}
+
+	// Idempotent: a second pass rewrites nothing.
+	if n, _ := ScrubAuditSecrets(ctx, as); n != 0 {
+		t.Errorf("second scrub rewrote %d events", n)
+	}
+}

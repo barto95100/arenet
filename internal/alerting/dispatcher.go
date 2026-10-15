@@ -247,7 +247,17 @@ func (d *Dispatcher) persistAlertEventRecord(ctx context.Context, evt AlertEvent
 			"event_id", evt.ID, "err", err)
 		return
 	}
-	failedJSON, err := marshalMapStringOrEmpty(result.Failed)
+	// Redact webhook URLs out of the per-channel error strings before
+	// they are persisted into the alert-event row (F16). Go's net/http
+	// embeds the full request URL — the credential, for Discord/Slack —
+	// in a transport error. The viewer-facing read path already redacts
+	// on the way out, so this closes the at-rest half; RedactURLsInText
+	// is idempotent and leaves URL-free strings untouched.
+	persistFailed := make(map[string]string, len(result.Failed))
+	for id, msg := range result.Failed {
+		persistFailed[id] = storage.RedactURLsInText(msg)
+	}
+	failedJSON, err := marshalMapStringOrEmpty(persistFailed)
 	if err != nil {
 		d.logger.Warn("alerting dispatch: marshal failed for history sink failed",
 			"event_id", evt.ID, "err", err)

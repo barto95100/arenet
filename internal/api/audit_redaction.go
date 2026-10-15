@@ -152,8 +152,21 @@ func scrubRouteAuditPayload(m map[string]json.RawMessage) bool {
 }
 
 func scrubChannelAuditPayload(m map[string]json.RawMessage) bool {
+	// v2.73 — last_error is a top-level field, not inside config. Go's
+	// net/http writes the full request URL into a transport error, so a
+	// webhook channel's last_error carries the credential; redact the
+	// URL in place (RedactURLsInText keeps the host, drops the secret
+	// path, and is idempotent so a second scrub rewrites nothing). New
+	// rows are already stored redacted by alertChannelForAudit; this is
+	// for the rows an upgraded install already holds.
+	// changed is OR-combined with the config edit at the return so a
+	// row that carried only a leaky last_error still counts as rewritten.
+	changed := setString(m, "last_error", storage.RedactURLsInText)
 	return editObject(m, "config", func(cfg map[string]json.RawMessage) bool {
 		c := setString(cfg, "url", redactWebhookURL)
+		// webhookUrl is the Discord channel's credential field — the
+		// same secret under a different key than the webhook kind's url.
+		c = setString(cfg, "webhookUrl", redactWebhookURL) || c
 		c = setString(cfg, "smtpPassword", func(string) string { return "" }) || c
 		c = editObject(cfg, "headers", func(h map[string]json.RawMessage) bool {
 			hc := false
@@ -168,7 +181,7 @@ func scrubChannelAuditPayload(m map[string]json.RawMessage) bool {
 			return hc
 		}) || c
 		return c
-	})
+	}) || changed
 }
 
 func blankPasswordHash(ba map[string]json.RawMessage) bool {
