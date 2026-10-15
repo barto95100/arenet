@@ -127,7 +127,7 @@ type Sink struct {
 	// LRU (spec D6.A). nil = no fanout, AC #21 (Step N
 	// read-side unchanged) preserved.
 	tombstoneListenerMu sync.RWMutex
-	tombstoneListener   func(uuid string)
+	tombstoneListener   func(uuid string, revoked bool)
 }
 
 // sinkOp is the discriminated union pushed onto the ingress
@@ -276,6 +276,11 @@ func (s *Sink) absorbEmit(d Decision) {
 		atomic.AddUint64(&s.suppressedByLRU, 1)
 		return
 	}
+	// Record the ban-end on the fresh entry so a later tombstone
+	// can tell a revocation from a natural expiry (F24). On a
+	// suppressed re-poll the entry already carries it from first
+	// sight, so this only runs on the first-sight path.
+	s.lru.setExpiresAt(d.UUID, d.ExpiresAt)
 	if s.counter != nil {
 		// First-sight only — see invariant above.
 		s.counter.BumpCrowdSecDecisions(d.Value)
@@ -302,7 +307,12 @@ func (s *Sink) absorbEmit(d Decision) {
 // (D8.A). Errors from the inserter are logged + counted,
 // never propagated (AC #13).
 func (s *Sink) absorbTombstone(uuid string) {
-	s.lru.forget(uuid)
+	// forgetReportingRevocation both frees the LRU slot (so a
+	// re-grant with a fresh UUID reads as brand-new) AND tells us
+	// whether this decision was cut short or simply ran its term —
+	// the bit the fan-out needs so a natural expiry records no
+	// operator cooldown (F24).
+	revoked := s.lru.forgetReportingRevocation(uuid)
 	atomic.AddUint64(&s.tombstoneCount, 1)
 	if s.inserter != nil {
 		if err := s.inserter.MarkDecisionExpired(context.Background(), uuid); err != nil {
@@ -324,7 +334,7 @@ func (s *Sink) absorbTombstone(uuid string) {
 	fn := s.tombstoneListener
 	s.tombstoneListenerMu.RUnlock()
 	if fn != nil {
-		fn(uuid)
+		fn(uuid, revoked)
 	}
 }
 
@@ -339,7 +349,7 @@ func (s *Sink) absorbTombstone(uuid string) {
 // forget + MarkDecisionExpired) executes regardless of whether
 // a listener is registered. The fanout is purely additive.
 // Pinned by TestSink_AbsorbTombstone_NoListener_Unchanged.
-func (s *Sink) SetTombstoneListener(fn func(uuid string)) {
+func (s *Sink) SetTombstoneListener(fn func(uuid string, revoked bool)) {
 	s.tombstoneListenerMu.Lock()
 	s.tombstoneListener = fn
 	s.tombstoneListenerMu.Unlock()

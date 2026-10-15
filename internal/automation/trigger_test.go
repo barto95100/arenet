@@ -477,7 +477,7 @@ func TestTriggerEngine_OnTombstone_RecordsCooldownAndInvalidatesDedupe(t *testin
 	e.dedupe.Record("Ip", "1.2.3.4", "arenet/waf-sqli", true)
 	e.dedupe.Record("Ip", "1.2.3.4", "arenet/auth-burst", true)
 
-	e.OnTombstone("1.2.3.4", "arenet/waf-sqli")
+	e.OnTombstone("1.2.3.4", "arenet/waf-sqli", true)
 
 	if !e.cooldown.HasCooldown("1.2.3.4", "arenet/waf-sqli") {
 		t.Error("OnTombstone should record a cooldown for (srcIP, scenario)")
@@ -512,7 +512,7 @@ func TestTriggerEngine_OnTombstone_OrphanScenario_InvalidatesDedupeOnly(t *testi
 	// because the dedupe key includes the scenario but the
 	// tombstone semantic is "this IP is now unbanned in LAPI"
 	// — affects every scenario for that IP.
-	e.OnTombstone("1.2.3.4", "crowdsecurity/http-probing")
+	e.OnTombstone("1.2.3.4", "crowdsecurity/http-probing", true)
 
 	if _, hit := e.dedupe.Lookup("Ip", "1.2.3.4", "arenet/waf-sqli"); hit {
 		t.Error("orphan tombstone should still invalidate dedupe for the IP")
@@ -563,4 +563,31 @@ func TestRuleSetHolder_Set_AtomicSwap(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+// TestTriggerEngine_OnTombstone_NaturalExpiry_NoCooldown is the F24
+// guard. A ban that simply reached its end (revoked=false) is NOT an
+// operator unban: it must record NO cooldown, so the engine can re-ban
+// the source the moment it reoffends — otherwise a persistent attacker
+// waits out each ban and rides the cooldown, un-bannable, indefinitely.
+// The dedupe is still invalidated so the next evaluation re-checks LAPI.
+func TestTriggerEngine_OnTombstone_NaturalExpiry_NoCooldown(t *testing.T) {
+	rs := enableRule(SourceWafSQLi, 2, 60*time.Second, 4*time.Hour, 24*time.Hour)
+	holder := NewRuleSetHolder(rs)
+	e, _ := NewEngine(EngineConfig{
+		Waf: &fakeWafReader{}, Throttle: &fakeThrottleReader{}, Audit: &fakeAuditReader{},
+		Rules: holder, Logger: silentLogger(),
+	})
+
+	e.dedupe.Record("Ip", "1.2.3.4", "arenet/waf-sqli", true)
+
+	// revoked=false — the ban expired on its own.
+	e.OnTombstone("1.2.3.4", "arenet/waf-sqli", false)
+
+	if e.cooldown.HasCooldown("1.2.3.4", "arenet/waf-sqli") {
+		t.Error("a naturally expired ban must NOT record a cooldown (F24) — it would shield the attacker from re-banning")
+	}
+	if _, hit := e.dedupe.Lookup("Ip", "1.2.3.4", "arenet/waf-sqli"); hit {
+		t.Error("expiry must still invalidate the dedupe so the source is re-evaluated against LAPI")
+	}
 }

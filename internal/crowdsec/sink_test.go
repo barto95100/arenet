@@ -476,7 +476,7 @@ func TestSink_TombstoneListener_FiredOnAbsorb(t *testing.T) {
 		mu        sync.Mutex
 		seenUUIDs []string
 	)
-	s.SetTombstoneListener(func(uuid string) {
+	s.SetTombstoneListener(func(uuid string, _ bool) {
 		mu.Lock()
 		seenUUIDs = append(seenUUIDs, uuid)
 		mu.Unlock()
@@ -548,7 +548,7 @@ func TestSink_TombstoneListener_NilRegistration_DisablesFanout(t *testing.T) {
 	})
 
 	var calls atomic.Int32
-	s.SetTombstoneListener(func(_ string) { calls.Add(1) })
+	s.SetTombstoneListener(func(_ string, _ bool) { calls.Add(1) })
 	// Now unregister.
 	s.SetTombstoneListener(nil)
 
@@ -563,5 +563,53 @@ func TestSink_TombstoneListener_NilRegistration_DisablesFanout(t *testing.T) {
 
 	if calls.Load() != 0 {
 		t.Errorf("listener calls = %d, want 0 after unregister", calls.Load())
+	}
+}
+
+// TestSink_TombstoneListener_RevokedReflectsBanEnd is the F24 guard at
+// the sink: the revoked flag the fan-out carries must come from the
+// decision's own ban-end. A tombstone for a decision whose ExpiresAt is
+// still in the future is a revocation (true); one whose ExpiresAt has
+// passed is a natural expiry (false). The downstream engine records an
+// operator cooldown only on the former.
+func TestSink_TombstoneListener_RevokedReflectsBanEnd(t *testing.T) {
+	rec := &recordingInserter{}
+	s := NewSink(rec, nil, silentLogger(), SinkConfig{
+		FlushInterval:  20 * time.Millisecond,
+		FlushBatchSize: 1000,
+	})
+
+	var (
+		mu   sync.Mutex
+		seen = map[string]bool{}
+	)
+	s.SetTombstoneListener(func(uuid string, revoked bool) {
+		mu.Lock()
+		seen[uuid] = revoked
+		mu.Unlock()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.Run(ctx)
+
+	now := time.Now()
+	// A ban still in force when LAPI drops it → the operator cut it short.
+	s.Emit(Decision{UUID: "u-revoked", Value: "1.2.3.4", Type: "ban", ExpiresAt: now.Add(time.Hour)})
+	// A ban whose term has passed → it simply expired.
+	s.Emit(Decision{UUID: "u-expired", Value: "5.6.7.8", Type: "ban", ExpiresAt: now.Add(-time.Hour)})
+	time.Sleep(50 * time.Millisecond)
+	s.Tombstone("u-revoked")
+	s.Tombstone("u-expired")
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-s.Done()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if r, ok := seen["u-revoked"]; !ok || !r {
+		t.Errorf("a tombstone before the ban-end must report revoked=true; got ok=%v revoked=%v", ok, r)
+	}
+	if r, ok := seen["u-expired"]; !ok || r {
+		t.Errorf("a tombstone at/after the ban-end must report revoked=false; got ok=%v revoked=%v", ok, r)
 	}
 }

@@ -364,12 +364,14 @@ func wireAutomation(
 	// drives Engine.OnTombstone (records cooldown +
 	// invalidates dedupe).
 	if crowdsecSink != nil {
-		crowdsecSink.SetTombstoneListener(func(uuid string) {
+		crowdsecSink.SetTombstoneListener(func(uuid string, revoked bool) {
 			srcIP, scenario := resolveTombstoneToCooldownArgs(context.Background(), obsStore, uuid)
 			if srcIP == "" {
 				return
 			}
-			engine.OnTombstone(srcIP, scenario)
+			// revoked distinguishes an operator unban (cooldown) from a
+			// ban that merely expired (no cooldown) — F24.
+			engine.OnTombstone(srcIP, scenario, revoked)
 		})
 	}
 
