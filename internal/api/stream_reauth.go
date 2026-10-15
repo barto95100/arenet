@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/barto95100/arenet/internal/auth"
@@ -59,8 +60,33 @@ const streamReauthInterval = 30 * time.Second
 // errStreamUnauthorized is returned when the stream must close. The
 // specific reason is deliberately NOT carried to the peer: a client
 // that can distinguish "revoked" from "locked" from "deleted" learns
-// about the instance's state from a socket it no longer owns.
+// about the instance's state from a socket it no longer owns. The
+// close frame carries no reason text at all.
+//
+// The reasons below each wrap it, so a caller keeps one check —
+// errors.Is(err, errStreamUnauthorized) — while the operator's log and
+// the tests can name which control fired.
+//
+// That distinction is load-bearing for the tests, and an injection
+// proved it: with the session-lookup check disabled, a revoked
+// session's zero-valued LastActivity made time.Since() exceed the
+// idle timeout, so the idle branch refused it anyway and the
+// revocation test stayed green against the defect it exists to catch.
+// A test that passes for the wrong reason is worse than none.
 var errStreamUnauthorized = errors.New("stream authorization lapsed")
+
+var (
+	// errStreamSessionGone — revoked, deleted or expired.
+	errStreamSessionGone = fmt.Errorf("session gone: %w", errStreamUnauthorized)
+	// errStreamSessionLocked — idle past auth.SessionIdleTimeout.
+	errStreamSessionLocked = fmt.Errorf("session idle-locked: %w", errStreamUnauthorized)
+	// errStreamTokenGone — revoked or expired API token.
+	errStreamTokenGone = fmt.Errorf("token gone: %w", errStreamUnauthorized)
+	// errStreamUserGone — account deleted, or role no longer parses.
+	errStreamUserGone = fmt.Errorf("user gone: %w", errStreamUnauthorized)
+	// errStreamNoCredential — neither credential in the context.
+	errStreamNoCredential = fmt.Errorf("no credential: %w", errStreamUnauthorized)
+)
 
 // streamReauthorizer re-checks a live stream's authorization. The
 // stream handlers hold this interface rather than the stores, so a
@@ -99,13 +125,13 @@ func (h *Handler) reauthorizeStream(ctx context.Context, sessionID, tokenID stri
 		if err != nil {
 			// Not found or expired — the store distinguishes them for
 			// observability, and for this decision they are the same.
-			return errStreamUnauthorized
+			return errStreamSessionGone
 		}
 		// The idle lock, applied to a socket. HardAuthMiddleware
 		// refuses a request past this point; a stream that outlived
 		// it was the only authenticated surface that did not.
 		if time.Since(session.LastActivity) > auth.SessionIdleTimeout {
-			return errStreamUnauthorized
+			return errStreamSessionLocked
 		}
 		return h.streamUserStillValid(ctx, session.UserID)
 
@@ -117,13 +143,13 @@ func (h *Handler) reauthorizeStream(ctx context.Context, sessionID, tokenID stri
 		}
 		tok, err := h.apiTokens.GetByID(ctx, tokenID)
 		if err != nil {
-			return errStreamUnauthorized
+			return errStreamTokenGone
 		}
 		if tok.RevokedAt != nil {
-			return errStreamUnauthorized
+			return errStreamTokenGone
 		}
 		if tok.ExpiresAt != nil && !tok.ExpiresAt.After(time.Now().UTC()) {
-			return errStreamUnauthorized
+			return errStreamTokenGone
 		}
 		return h.streamUserStillValid(ctx, tok.UserID)
 	}
@@ -132,7 +158,7 @@ func (h *Handler) reauthorizeStream(ctx context.Context, sessionID, tokenID stri
 	// to get here, so this is a wiring error rather than an attack —
 	// but a stream nobody can be held responsible for is exactly what
 	// this function exists to close.
-	return errStreamUnauthorized
+	return errStreamNoCredential
 }
 
 // streamUserStillValid reports whether the identity behind a stream
@@ -140,13 +166,13 @@ func (h *Handler) reauthorizeStream(ctx context.Context, sessionID, tokenID stri
 func (h *Handler) streamUserStillValid(ctx context.Context, userID string) error {
 	user, err := h.users.GetByID(ctx, userID)
 	if err != nil {
-		return errStreamUnauthorized
+		return errStreamUserGone
 	}
 	// Any recognised role may hold these streams — they are
 	// viewer-accessible by design. An unrecognised role is a user
 	// whose grant no longer parses, which is not a grant.
 	if user.Role != auth.UserRoleAdmin && user.Role != auth.UserRoleViewer {
-		return errStreamUnauthorized
+		return errStreamUserGone
 	}
 	return nil
 }

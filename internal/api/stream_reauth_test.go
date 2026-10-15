@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -74,9 +75,12 @@ func TestReauthorizeStream_RevokedSessionLosesIt(t *testing.T) {
 		t.Fatalf("revoke: %v", err)
 	}
 
-	if err := env.handler.reauthorizeStream(ctx, s.ID, ""); err == nil {
-		t.Error("a revoked session must lose its stream — this is the control the " +
-			"operator used, and the socket outlived it")
+	err = env.handler.reauthorizeStream(ctx, s.ID, "")
+	if !errors.Is(err, errStreamSessionGone) {
+		t.Errorf("a revoked session must be refused BY THE SESSION LOOKUP, got %v.\n"+
+			"Asserting only that it is refused is not enough: a zero-valued session makes "+
+			"time.Since(LastActivity) exceed the idle timeout, so the idle branch would "+
+			"refuse it anyway and this test would pass against the defect.", err)
 	}
 }
 
@@ -96,8 +100,12 @@ func TestReauthorizeStream_DeletedAccountLosesIt(t *testing.T) {
 		t.Fatalf("delete user: %v", err)
 	}
 
-	if err := env.handler.reauthorizeStream(ctx, s.ID, ""); err == nil {
-		t.Error("a deleted account must lose its stream")
+	// Deleting the account cascades its sessions, so the session
+	// lookup is what fires. Named explicitly so the test says which
+	// control it is exercising.
+	err = env.handler.reauthorizeStream(ctx, s.ID, "")
+	if !errors.Is(err, errStreamUnauthorized) {
+		t.Errorf("a deleted account must lose its stream, got %v", err)
 	}
 }
 
@@ -124,9 +132,10 @@ func TestReauthorizeStream_IdleLockClosesIt(t *testing.T) {
 		t.Fatalf("age the session: %v", err)
 	}
 
-	if err := env.handler.reauthorizeStream(ctx, s.ID, ""); err == nil {
-		t.Error("an idle-locked session must lose its stream: the lock gates every other " +
-			"authenticated surface")
+	err = env.handler.reauthorizeStream(ctx, s.ID, "")
+	if !errors.Is(err, errStreamSessionLocked) {
+		t.Errorf("an idle-locked session must be refused BY THE IDLE CHECK, got %v — "+
+			"the lock gates every other authenticated surface", err)
 	}
 }
 
@@ -134,8 +143,8 @@ func TestReauthorizeStream_IdleLockClosesIt(t *testing.T) {
 // nobody can be held responsible for is what this closes.
 func TestReauthorizeStream_NoCredentialIsRefused(t *testing.T) {
 	env := newTestEnv(t, false)
-	if err := env.handler.reauthorizeStream(context.Background(), "", ""); err == nil {
-		t.Error("a stream with no identity in its context must be refused")
+	if err := env.handler.reauthorizeStream(context.Background(), "", ""); !errors.Is(err, errStreamNoCredential) {
+		t.Errorf("a stream with no identity in its context must be refused, got %v", err)
 	}
 }
 
@@ -143,8 +152,8 @@ func TestReauthorizeStream_NoCredentialIsRefused(t *testing.T) {
 // replaying an id it made up.
 func TestReauthorizeStream_UnknownSessionIsRefused(t *testing.T) {
 	env := newTestEnv(t, false)
-	if err := env.handler.reauthorizeStream(context.Background(), "not-a-session", ""); err == nil {
-		t.Error("an unknown session id must be refused")
+	if err := env.handler.reauthorizeStream(context.Background(), "not-a-session", ""); !errors.Is(err, errStreamSessionGone) {
+		t.Errorf("an unknown session id must be refused by the session lookup, got %v", err)
 	}
 }
 
