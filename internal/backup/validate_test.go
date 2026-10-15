@@ -356,3 +356,38 @@ func TestValidate_DerogationIsActive_OnLegitimateClearedField(t *testing.T) {
 		t.Errorf("expected >= 1 unresolved sentinel; got %d", report.SentinelsUnresolvedTotal)
 	}
 }
+
+// TestValidate_PlaceholderInHeader_Rejected pins that the v2.73 Caddy
+// placeholder refusal (storage.validatePlaceholderSafety) survives the
+// restore path — which is the path that matters, because the API form
+// has always been the one checked. A snapshot that smuggles a response
+// header value of "{env.SECRET}" would, once restored and served, expand
+// to a process environment variable in every response; Import must
+// reject it before it reaches the store.
+func TestValidate_PlaceholderInHeader_Rejected(t *testing.T) {
+	store, us := newTestStoreWithUserStore(t)
+	_ = seedLiveUser(t, us, "admin", "admin-password-15c-xx")
+
+	snap := minimalSnapshot()
+	seeded, _ := us.List(context.Background())
+	snap.Users = []auth.User{seeded[0]}
+	snap.Routes = []storage.Route{
+		{
+			ID:              "route-leaky-header",
+			Host:            "leak.example.com",
+			Upstreams:       []storage.Upstream{{URL: "http://x", Weight: 1}},
+			LBPolicy:        "round_robin",
+			AuthMode:        "none",
+			WAFMode:         "off",
+			ResponseHeaders: map[string]string{"X-Debug": "{env.ARENET_SECRET}"},
+		},
+	}
+
+	_, err := Import(context.Background(), store, us, snap, ImportOptions{})
+	if err == nil {
+		t.Fatal("BUSINESS VALIDATOR BYPASS: a response header with {env.*} was accepted by Import")
+	}
+	if !strings.Contains(err.Error(), "env") {
+		t.Errorf("error should name what it refused; got: %s", err)
+	}
+}

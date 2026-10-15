@@ -1597,6 +1597,12 @@ func (r *Route) validate() error {
 	if err := r.validateWAFFields(); err != nil {
 		return err
 	}
+	// v2.73 — operator header values and redirect targets reach Caddy
+	// handlers that run them through the replacer. See
+	// placeholder_validate.go for what {env.*}/{file.*} leak there.
+	if err := r.validatePlaceholderSafety(); err != nil {
+		return err
+	}
 	return nil
 }
 
