@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/barto95100/arenet/internal/observability"
+	"github.com/barto95100/arenet/internal/storage"
 )
 
 // AL.4.a — GET /api/v1/observability/alert-events.
@@ -187,6 +188,17 @@ func alertEventRowToWire(e observability.AlertEvent) alertEventResponseItem {
 	var failed map[string]string
 	if e.ChannelsFailedJSON != "" {
 		_ = json.Unmarshal([]byte(e.ChannelsFailedJSON), &failed)
+		// v2.73 — these are the dispatcher's transport errors, and
+		// Go's net/http embeds the full request URL in them: for a
+		// Discord or Slack channel that URL IS the credential. This
+		// endpoint sits in the viewer-accessible hard-auth group, so a
+		// read-only account could lift a working webhook token out of
+		// a DNS failure. Redacted at persistence now
+		// (storage.MarkAlertChannelSendResult); this covers rows
+		// written before that.
+		for id, msg := range failed {
+			failed[id] = storage.RedactURLsInText(msg)
+		}
 	}
 	return alertEventResponseItem{
 		EventID:        e.EventID,

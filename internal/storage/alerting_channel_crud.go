@@ -282,7 +282,13 @@ func (s *Store) MarkAlertChannelSendResult(ctx context.Context, id string, sendE
 			c.LastError = ""
 			c.LastErrorAt = nil
 		} else {
-			c.LastError = sendErr.Error()
+			// v2.73 — a webhook URL carries its secret in the path,
+			// and Go's net/http puts the full request URL into
+			// transport errors. Redacted here, at the point of
+			// persistence, so the database, the audit trail and
+			// every read surface are clean from one change. See
+			// url_redact.go.
+			c.LastError = RedactURLsInText(sendErr.Error())
 			c.LastErrorAt = &now
 		}
 		c.UpdatedAt = now
