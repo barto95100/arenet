@@ -107,6 +107,9 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 	r.Get("/system/health", h.systemHealth)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// F37 — CSRF defence for every cookie-authenticated write on the
+		// admin API. See csrf.go; it no-ops for bearer and safe requests.
+		r.Use(csrfGuard())
 		r.Route("/auth", func(r chi.Router) {
 			// S.5 smoke finding #5 — rate-limit scoped back to
 			// /auth/* only (Step Q's original scope), reverting

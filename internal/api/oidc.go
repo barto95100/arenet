@@ -367,6 +367,14 @@ func (h *Handler) putOIDCConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F38 — disabling OIDC closes the sign-in gate but leaves every
+	// existing OIDC session resolving. Purge them on the enabled
+	// true→false transition, the same revocation the allowlist delete
+	// does for one identity.
+	if previous.Enabled && !merged.Enabled {
+		h.revokeAllOIDCSessions(r)
+	}
+
 	// Audit: oidc_configured on the first write, oidc_updated on
 	// subsequent writes. Both with secrets scrubbed.
 	action := audit.ActionOIDCUpdated
@@ -531,10 +539,12 @@ func (h *Handler) deleteOIDCAllowlist(w http.ResponseWriter, r *http.Request) {
 	}
 
 	found := false
+	var removed storage.OIDCAllowedIdentity
 	out := make([]storage.OIDCAllowedIdentity, 0, len(cfg.AllowedIdentities))
 	for _, ai := range cfg.AllowedIdentities {
 		if strings.EqualFold(strings.TrimSpace(ai.Email), email) {
 			found = true
+			removed = ai
 			continue
 		}
 		out = append(out, ai)
@@ -548,7 +558,78 @@ func (h *Handler) deleteOIDCAllowlist(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// F38 — the allowlist is the SSO authorization gate, but rewriting it
+	// only stops NEW sign-ins. The removed identity's existing session
+	// cookie keeps resolving through soft and hard auth, and Touch rolls
+	// its expiry forward on every request, so without this the revoked
+	// user holds their role indefinitely. Purge their live sessions, the
+	// way deleteAdminUser cascades (users_admin.go).
+	h.revokeOIDCSessionsForSub(r, removed.Sub, removed.Email)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// revokeOIDCSessionsForSub purges the live sessions of the OIDC user
+// identified by sub, best-effort. email is used only for the log line.
+//
+// An empty sub means the identity never completed a sign-in — no user
+// row, no session — so there is nothing to revoke.
+func (h *Handler) revokeOIDCSessionsForSub(r *http.Request, sub, email string) {
+	if sub == "" {
+		return
+	}
+	user, err := h.users.GetByOIDCSub(r.Context(), sub)
+	if err != nil {
+		h.logger.Warn("oidc revoke: user lookup by sub failed; no sessions purged",
+			"err", err, "email", email)
+		return
+	}
+	n, err := h.sessions.DeleteAllForUser(r.Context(), user.ID)
+	if err != nil {
+		h.logger.Warn("oidc revoke: purge sessions failed",
+			"err", err, "user_id", user.ID)
+		return
+	}
+	if n > 0 {
+		h.appendAudit(r, audit.Event{
+			Action:                audit.ActionSessionRevoked,
+			TargetType:            "user",
+			TargetID:              user.ID,
+			ActorUsernameSnapshot: user.Username,
+			Message:               "oidc_allowlist_revoked",
+		})
+	}
+}
+
+// revokeAllOIDCSessions purges the live sessions of every OIDC-sourced
+// user. Called when OIDC is disabled (enabled true→false): the sign-in
+// gate closes but existing OIDC sessions would otherwise keep resolving
+// (F38). Best-effort per user.
+func (h *Handler) revokeAllOIDCSessions(r *http.Request) {
+	users, err := h.users.List(r.Context())
+	if err != nil {
+		h.logger.Warn("oidc disable: user list failed; sessions not purged", "err", err)
+		return
+	}
+	purged := 0
+	for _, u := range users {
+		if u.AuthSource != auth.UserAuthSourceOIDC {
+			continue
+		}
+		n, err := h.sessions.DeleteAllForUser(r.Context(), u.ID)
+		if err != nil {
+			h.logger.Warn("oidc disable: purge sessions failed", "err", err, "user_id", u.ID)
+			continue
+		}
+		purged += n
+	}
+	if purged > 0 {
+		h.appendAudit(r, audit.Event{
+			Action:     audit.ActionSessionRevoked,
+			TargetType: "oidc_config",
+			TargetID:   "default",
+			Message:    "oidc_disabled_sessions_revoked",
+		})
+	}
 }
 
 // --- OIDC login flow: initiate + callback --------------------------------

@@ -234,6 +234,15 @@ func newAutoAuthRouter(t *testing.T, raw http.Handler, store *storage.Store, ss 
 		}
 		mu.Unlock()
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionCookie})
+		// An authenticated SPA write always carries application/json, and
+		// the v2.73 CSRF guard (csrf.go) requires it for a cookie-auth
+		// write. These auto-authenticated requests simulate exactly such
+		// a request, so set the content type when a body is present and
+		// the test left it unset — keeping legacy tests that predate the
+		// guard faithful to a real authenticated call.
+		if r.ContentLength != 0 && r.Header.Get("Content-Type") == "" {
+			r.Header.Set("Content-Type", "application/json")
+		}
 		raw.ServeHTTP(w, r)
 	})
 }
