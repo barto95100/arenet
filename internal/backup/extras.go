@@ -87,6 +87,13 @@ const (
 	cfgKeySMTPPassword = "smtpPassword"
 	cfgKeyURL          = "url"
 	cfgKeyHeaders      = "headers"
+	// cfgKeyWebhookURL is the Discord kind's credential (v2.53), and
+	// it is NOT cfgKeyURL — alerting.DiscordConfig names the field
+	// webhookUrl. That difference is why the kind slipped past the
+	// secret registry entirely until v2.73: the generic webhook
+	// branch looked like it covered "a webhook URL" and covered a
+	// different key.
+	cfgKeyWebhookURL = "webhookUrl"
 )
 
 // exportExtras reads every extras area from the live store.
@@ -387,11 +394,16 @@ func resolveChannelConfig(c *storage.Channel, liveCfg map[string]any, resolve re
 		m[key] = v
 		return nil
 	}
-	if err := field(cfgKeySMTPPassword); err != nil {
-		return nil, err
-	}
-	if err := field(cfgKeyURL); err != nil {
-		return nil, err
+	// v2.73 — every credential key any kind can carry, from the
+	// registry, instead of the two that were spelled out here. A key
+	// the kind does not have resolves to a no-op, so the union is both
+	// correct and the shape least likely to miss one. Before this,
+	// webhookUrl was not in the list and a restored Discord channel's
+	// sentinel was never resolved back to the live value.
+	for _, key := range allChannelSecretStringFields() {
+		if err := field(key); err != nil {
+			return nil, err
+		}
 	}
 	if h, ok := m[cfgKeyHeaders].(map[string]any); ok {
 		liveH, _ := liveCfg[cfgKeyHeaders].(map[string]any)
@@ -539,9 +551,16 @@ func validateChannelWithDerogation(c storage.Channel, cleared clearedSet) error 
 	if cleared.has(entityAlertChannels, c.ID, "config") {
 		return nil
 	}
-	if cleared.has(entityAlertChannels, c.ID, "config."+cfgKeyURL) {
+	// Both spellings of "the webhook URL": the generic kind's `url`
+	// and the Discord kind's `webhookUrl`. Only the first was handled,
+	// so a Discord channel whose secret the operator cleared restored
+	// with no placeholder at all.
+	for _, key := range []string{cfgKeyURL, cfgKeyWebhookURL} {
+		if !cleared.has(entityAlertChannels, c.ID, "config."+key) {
+			continue
+		}
 		if m := decodeConfig(cfg); m != nil {
-			m[cfgKeyURL] = placeholderWebhookURL
+			m[key] = placeholderWebhookURL
 			if b, err := json.Marshal(m); err == nil {
 				cfg = b
 			}

@@ -36,9 +36,16 @@ const (
 	extSMTPPassword  = "smtp-secret-pw"
 	extWebhookURL    = "https://discord.example/api/webhooks/123/very-secret"
 	extWebhookHeader = "Bearer webhook-header-secret"
-	extCrowdSecKey   = "crowdsec-bouncer-key-secret"
-	extWatcherPass   = "watcher-password-secret"
-	extSchedulePass  = "schedule-passphrase-secret"
+	// v2.73 — a channel of the DISCORD kind, which the fixture did
+	// not have. The webhook channel above is named "discord" and
+	// carries a Discord-looking URL, but its Kind is webhook, so a
+	// test called "RedactsEverySecret" could not see the Discord
+	// kind's own field at all: "every secret" meant "every secret
+	// this fixture happens to carry".
+	extDiscordWebhookURL = "https://discord.com/api/webhooks/987654/discord-kind-secret"
+	extCrowdSecKey       = "crowdsec-bouncer-key-secret"
+	extWatcherPass       = "watcher-password-secret"
+	extSchedulePass      = "schedule-passphrase-secret"
 )
 
 type seededExtras struct {
@@ -108,6 +115,20 @@ func seedExtras(t *testing.T, store *storage.Store, us *auth.UserStore) seededEx
 		t.Fatalf("webhook channel: %v", err)
 	}
 	s.webhookID = wh.ID
+
+	// A real Discord-kind channel. Its credential lives in
+	// `webhookUrl`, not `url`, which is what let it slip past the
+	// secret registry from v2.53 to v2.73.
+	discordCfg, _ := json.Marshal(map[string]any{
+		"webhookUrl": extDiscordWebhookURL, "username": "arenet",
+	})
+	if _, derr := store.CreateAlertChannel(ctx, storage.Channel{
+		ID: uuid.NewString(), Name: "discord-kind", Kind: storage.ChannelKindDiscord,
+		Enabled: true, Config: discordCfg,
+	}); derr != nil {
+		t.Fatalf("discord channel: %v", derr)
+	}
+
 	emailCfg, _ := json.Marshal(map[string]any{
 		"smtpHost": "smtp.example.com", "smtpPort": 587, "smtpUsername": "ops",
 		"smtpPassword": extSMTPPassword, "from": "arenet@example.com", "to": []string{"ops@example.com"},
@@ -196,7 +217,9 @@ func TestExtras_RoundTrip_IncludeSecrets_FreshTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if !report.ExtrasImported || report.APITokensImported != 1 || report.AlertChannelsImported != 2 ||
+	// 3 channels: webhook, discord and email (the Discord-kind one
+	// was added in v2.73 — see extDiscordWebhookURL).
+	if !report.ExtrasImported || report.APITokensImported != 1 || report.AlertChannelsImported != 3 ||
 		report.AlertRulesImported != 1 || report.ManagedDomainsImported != 1 || report.ErrorTemplatesImported != 1 {
 		t.Errorf("report counts: %+v", report)
 	}
@@ -254,7 +277,7 @@ func TestExtras_DefaultExportRedactsEverySecret(t *testing.T) {
 		t.Fatalf("export: %v", err)
 	}
 	body, _ := json.Marshal(snap)
-	for _, secret := range []string{extSMTPPassword, extWebhookURL, extWebhookHeader, extCrowdSecKey, extWatcherPass, extSchedulePass, seeded.token.TokenHash} {
+	for _, secret := range []string{extSMTPPassword, extWebhookURL, extWebhookHeader, extDiscordWebhookURL, extCrowdSecKey, extWatcherPass, extSchedulePass, seeded.token.TokenHash} {
 		if strings.Contains(string(body), secret) {
 			t.Errorf("REDACTION LEAK: %q in default export", secret)
 		}
@@ -346,7 +369,7 @@ func TestExtras_UnresolvedSecrets_OtherInstance(t *testing.T) {
 		t.Errorf("api_tokens bucket: %d rows", len(rows))
 	}
 	channels, _ := dst.ListAlertChannels(ctx)
-	if len(channels) != 2 {
+	if len(channels) != 3 {
 		t.Fatalf("channels restored: %d", len(channels))
 	}
 	for _, c := range channels {
