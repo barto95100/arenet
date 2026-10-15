@@ -123,6 +123,17 @@ type alertChannelTestResponse struct {
 // the caller emits a verbose audit row; the failure is
 // logged separately so the operator sees the cause.
 func alertChannelForAudit(c storage.Channel) storage.Channel {
+	// v2.73 — LastError too, not just Config.
+	//
+	// This function rewrote the config and nothing else, and
+	// Channel.LastError holds the sender's transport error verbatim —
+	// which Go's net/http fills with the full request URL, webhook
+	// secret and all. It was then marshalled into the audit
+	// before/after blob, and GET /api/v1/audit is viewer-readable.
+	// The source is redacted at persistence now
+	// (storage.MarkAlertChannelSendResult), so this covers the rows
+	// written before that.
+	c.LastError = storage.RedactURLsInText(c.LastError)
 	switch c.Kind {
 	case storage.ChannelKindWebhook:
 		var cfg alerting.WebhookConfig

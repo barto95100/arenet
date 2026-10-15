@@ -648,7 +648,9 @@ func (h *Handler) listRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]routeResponse, 0, len(routes))
 	for _, rt := range routes {
-		resp := toResponse(rt)
+		// v2.73 — a viewer gets the route without its upstream
+		// credentials. See route_secret_redaction.go.
+		resp := redactRouteForRole(toResponse(rt), r.Context())
 		resp.EffectiveCertSource = computeEffectiveCertSource(rt, mds)
 		// Critique 11 Pack A: attach the per-route aggregate
 		// health rollup derived from the Stage B HC tracker.
@@ -679,7 +681,7 @@ func (h *Handler) getRoute(w http.ResponseWriter, r *http.Request) {
 	if mdErr != nil {
 		h.logger.Warn("list managed domains for effectiveCertSource — continuing without", "err", mdErr)
 	}
-	resp := toResponse(rt)
+	resp := redactRouteForRole(toResponse(rt), r.Context())
 	resp.EffectiveCertSource = computeEffectiveCertSource(rt, mds)
 	// Critique 11 Pack A — see the comment in listRoutes for the
 	// rationale. Same nil-tolerance contract: missing tracker
@@ -817,6 +819,16 @@ func validateBasicAuth(req routeRequest, existingHash string) error {
 //
 // v2.30: also blanks path-rule Basic Auth hashes and redacts the
 // values of credential-bearing request / response headers.
+//
+// v2.73: and the HEALTH-CHECK probe headers, route-level and
+// per-path-rule. Those were the one credential-bearing map this
+// function did not touch, so an operator who put an "Authorization:
+// Bearer <token>" on a probe — the documented purpose of the v2.55
+// field, "an Authorization a health endpoint requires" — wrote it in
+// cleartext into the audit bucket. GET /api/v1/audit is mounted
+// outside RequireAdminMiddleware, so any viewer could read it back
+// for every route change ever made. The secret codec does not seal
+// the audit bucket either, so it was on disk in the clear.
 func routeForAudit(r storage.Route) storage.Route {
 	r.BasicAuth.PasswordHash = ""
 	if len(r.PathRules) > 0 {
@@ -827,11 +839,17 @@ func routeForAudit(r storage.Route) storage.Route {
 				cp.PasswordHash = ""
 				rules[i].BasicAuth = &cp
 			}
+			if hc := rules[i].HealthCheck; hc != nil && len(hc.Headers) > 0 {
+				cp := *hc
+				cp.Headers = redactSensitiveHeaders(cp.Headers)
+				rules[i].HealthCheck = &cp
+			}
 		}
 		r.PathRules = rules
 	}
 	r.RequestHeaders = redactSensitiveHeaders(r.RequestHeaders)
 	r.ResponseHeaders = redactSensitiveHeaders(r.ResponseHeaders)
+	r.HealthCheck.Headers = redactSensitiveHeaders(r.HealthCheck.Headers)
 	return r
 }
 
