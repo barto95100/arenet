@@ -45,6 +45,7 @@
 	import { t } from '$lib/i18n';
 	import { language } from '$lib/stores/language.svelte';
 	import { relativeTime } from '$lib/utils/audit-format';
+	import { auth } from '$lib/stores/auth.svelte';
 	import MultiSeriesTimelineChart from '$lib/components/MultiSeriesTimelineChart.svelte';
 	import type {
 		Certificate,
@@ -183,9 +184,16 @@
 					}
 				}
 			}
-			return result.slice(0, 8);
+			return result;
 		})()
 	);
+
+	// The card shows at most this many. It used to slice silently, so
+	// an operator with 11 distinct upstreams saw 8 and nothing said
+	// the other 3 existed.
+	const UPSTREAMS_SHOWN = 8;
+	const upstreamsShown = $derived(upstreams.slice(0, UPSTREAMS_SHOWN));
+	const upstreamsHidden = $derived(Math.max(0, upstreams.length - UPSTREAMS_SHOWN));
 
 	async function load(): Promise<void> {
 		loading = true;
@@ -220,6 +228,10 @@
 			if (!sum.disabled) {
 				void loadChart();
 			}
+			// Only on the success path: a failed refresh must not
+			// advance the freshness clock, or the page would claim to
+			// be newer than its data.
+			lastLoadedAt = new Date();
 		} catch (err) {
 			loadError = err instanceof ApiError ? err.message : 'failed to load dashboard';
 			pushToast(loadError, 'danger');
@@ -315,6 +327,22 @@
 		return relativeTime(iso);
 	}
 
+	// HH:MM:SS in the viewer's own timezone.
+	//
+	// The tail column used toISOString().substring(11, 19), which is
+	// UTC, with nothing on the page saying so — a constant offset
+	// against /logs, which has always shown local time, and no way to
+	// tell which of the two was lying. Built from the parts rather
+	// than toLocaleTimeString so the shape stays fixed across locales
+	// (a 12-hour clock in a monospace column would also shift the
+	// alignment).
+	function localClock(iso: string): string {
+		const d = new Date(iso);
+		if (Number.isNaN(d.getTime())) return '—';
+		const p = (n: number) => String(n).padStart(2, '0');
+		return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+	}
+
 	function chartColor(m: MetricName): string {
 		switch (m) {
 			case 'req_per_sec':
@@ -328,8 +356,51 @@
 		}
 	}
 
+	// "Real-time" is now true (v2.73).
+	//
+	// The subtitle has always read "Real-time traffic across your N
+	// routes", and load() ran exactly once, from onMount. A dashboard
+	// left open overnight showed yesterday's numbers under that
+	// sentence. The honest options were to delete the claim or to make
+	// it hold; a dashboard an operator keeps open is worth refreshing,
+	// so it refreshes.
+	//
+	// 60 s rather than the topbar's 30 s because load() makes six
+	// calls, two of them over the metrics store, and this project
+	// targets 4 GB homelab hosts.
+	const REFRESH_MS = 60_000;
+	let lastLoadedAt = $state<Date | null>(null);
+
+	// Read on a timer so the "updated Xs ago" line keeps climbing
+	// between refreshes instead of freezing at the last fetch.
+	let freshnessClock = $state(0);
+
+	const lastUpdatedLabel = $derived.by(() => {
+		void freshnessClock;
+		if (lastLoadedAt === null) return '';
+		const secs = Math.max(0, Math.round((Date.now() - lastLoadedAt.getTime()) / 1000));
+		if (secs < 60) return t('dashboard.updatedSeconds', { seconds: secs });
+		return t('dashboard.updatedMinutes', { minutes: Math.round(secs / 60) });
+	});
+
 	onMount(() => {
 		void load();
+
+		const freshness = setInterval(() => (freshnessClock += 1), 15_000);
+		const poll = setInterval(() => {
+			// Locked: the LockScreen overlay covers the page, so the
+			// answer is unobservable. Hidden tab: same. client.ts
+			// already refuses background traffic while locked, so this
+			// only avoids the pointless request and its 403.
+			if (auth.state === 'locked') return;
+			if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+			void load();
+		}, REFRESH_MS);
+
+		return () => {
+			clearInterval(freshness);
+			clearInterval(poll);
+		};
 	});
 </script>
 
@@ -367,7 +438,10 @@
 	<PageHeader
 		eyebrow={language.current && t('dashboard.eyebrow')}
 		title={language.current && t('pageTitles.dashboard')}
-		subtitle={language.current && t('dashboard.subtitle', { count: routes.length, window })}
+		subtitle={language.current &&
+			`${t('dashboard.subtitle', { count: routes.length, window })}${
+				lastUpdatedLabel ? ` · ${lastUpdatedLabel}` : ''
+			}`}
 	/>
 
 	<!-- KPIs -->
@@ -582,7 +656,7 @@
 				<div class="meta">{language.current && t('dashboard.upstreamsMetaCount', { count: upstreams.length })}</div>
 			</div>
 			<div class="stack">
-				{#each upstreams as u (u.url)}
+				{#each upstreamsShown as u (u.url)}
 					<div class="upstream-row">
 						<span class="mono">{u.url}</span>
 						<span class="mono dim">{language.current && t('dashboard.upstreamsRouteSuffix', { count: u.routes.length, plural: u.routes.length > 1 ? 's' : '' })}</span>
@@ -590,6 +664,16 @@
 				{:else}
 					<div class="empty-row">{language.current && t('dashboard.upstreamsEmpty')}</div>
 				{/each}
+				{#if upstreamsHidden > 0}
+					<div class="upstream-row dim" data-testid="upstreams-truncated">
+						{language.current &&
+							t('dashboard.upstreamsTruncated', {
+								hidden: upstreamsHidden,
+								shown: UPSTREAMS_SHOWN,
+								total: upstreams.length
+							})}
+					</div>
+				{/if}
 			</div>
 		</div>
 	</div>
@@ -616,7 +700,13 @@
 					answer obvious.
 				-->
 				<div class="log-row" data-testid="tail-event-{ev.id}">
-					<span class="log-time">{new Date(ev.ts).toISOString().substring(11, 19)}</span>
+					<!-- Local time, not UTC. This was
+					     toISOString().substring(11,19), so the column
+					     read UTC with nothing saying so — a constant
+					     offset against /logs, which has always shown
+					     local time, and no way for the operator to
+					     know which of the two was lying. -->
+					<span class="log-time">{localClock(ev.ts)}</span>
 					<span class="log-lvl {ev.action === 'DETECT' ? 'detect' : 'block'}">
 						{ev.action}
 					</span>

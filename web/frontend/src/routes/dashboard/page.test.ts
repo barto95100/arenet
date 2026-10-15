@@ -508,3 +508,120 @@ describe('dashboard — the traffic chart describes its own data', () => {
 		expect(document.querySelector('[aria-label*="req_per_sec"]')).toBeNull();
 	});
 });
+
+// The three claims the page made that its data did not support
+// (v2.73). All low-harm next to the chart's unit, all the same class.
+describe('dashboard — it is as live as it claims', () => {
+	beforeEach(() => {
+		metricsMock.fetchSummary.mockResolvedValue(makeSummary());
+		metricsMock.fetchTimeseries.mockResolvedValue({
+			routeId: 'all',
+			metric: 'req_per_sec',
+			window: '24h',
+			bucketSizeSeconds: 60,
+			points: [
+				{ ts: '2026-10-15T12:00:00Z', value: 10 },
+				{ ts: '2026-10-15T12:01:00Z', value: 0 }
+			]
+		});
+	});
+
+	// The subtitle has always said "Real-time traffic across your N
+	// routes". load() ran once, from onMount, so a dashboard left open
+	// overnight showed yesterday's numbers under that sentence.
+	it('says when it last refreshed, so "real-time" is checkable', async () => {
+		render(Page);
+		await vi.waitFor(() =>
+			expect(document.body.textContent ?? '').toMatch(/updated \d+s ago/)
+		);
+	});
+
+	// The tail column was toISOString().substring(11, 19) — UTC, with
+	// nothing saying so, against a /logs page that has always shown
+	// local time.
+	// The timezone is forced, so this test has teeth on a UTC CI
+	// runner too. Read against the host's own zone it would pass with
+	// the bug whenever that zone is UTC — the assertion that matters
+	// is the negative one: the cell must NOT read the UTC rendering.
+	// process.env.TZ is honoured at runtime by Node; probed before
+	// relying on it.
+	it('shows the tail time in local time, not UTC', async () => {
+		const realTZ = process.env.TZ;
+		process.env.TZ = 'Asia/Tokyo';
+		try {
+			await tailTimeAssertions();
+		} finally {
+			process.env.TZ = realTZ;
+		}
+	});
+
+	async function tailTimeAssertions(): Promise<void> {
+		const iso = '2026-10-15T12:00:00Z';
+		const d = new Date(iso);
+		const p = (n: number) => String(n).padStart(2, '0');
+		const expected = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+		const utcRendering = iso.substring(11, 19);
+		// Guard the guard: if the forced zone ever stops taking
+		// effect, the test would silently lose its point.
+		expect(expected).not.toBe(utcRendering);
+
+		securityMock.fetchEvents.mockResolvedValue({
+			events: [
+				{
+					id: 1,
+					ts: iso,
+					routeId: 'r1',
+					ruleId: '942100',
+					category: 'SQLi',
+					severity: 4,
+					srcIp: '203.0.113.9',
+					requestMethod: 'GET',
+					requestPath: '/',
+					payloadSample: 'x',
+					action: 'BLOCK',
+					statusCode: 403
+				}
+			]
+		});
+		render(Page);
+
+		await vi.waitFor(() => {
+			const cells = Array.from(document.querySelectorAll('.log-time')).map(
+				(e) => e.textContent?.trim() ?? ''
+			);
+			expect(cells).toContain(expected);
+			expect(cells).not.toContain(utcRendering);
+		});
+	}
+
+	// The card sliced to 8 with no sign the rest existed. The meta
+	// count was always honest, which is what made the list's silence
+	// easy to miss.
+	it('says how many upstreams it is not showing', async () => {
+		clientMock.listRoutes.mockResolvedValue(
+			Array.from({ length: 11 }, (_, i) => ({
+				id: `r${i}`,
+				host: `h${i}.example.com`,
+				upstreams: [{ url: `http://10.0.0.${i}`, weight: 1 }]
+			}))
+		);
+		render(Page);
+
+		// findByTestId, not vi.waitFor(querySelector): querySelector
+		// returning null does not throw, so waitFor resolves on the
+		// first attempt with null and the assertion runs against ''.
+		const note = await screen.findByTestId('upstreams-truncated');
+		expect(note.textContent ?? '').toMatch(/\+3 more/);
+		expect(note.textContent ?? '').toMatch(/8 of 11/);
+	});
+
+	it('says nothing about truncation when nothing is truncated', async () => {
+		clientMock.listRoutes.mockResolvedValue([
+			{ id: 'r1', host: 'h.example.com', upstreams: [{ url: 'http://10.0.0.1', weight: 1 }] }
+		]);
+		render(Page);
+		await vi.waitFor(() => expect(metricsMock.fetchSummary).toHaveBeenCalled());
+
+		expect(document.querySelector('[data-testid="upstreams-truncated"]')).toBeNull();
+	});
+});
