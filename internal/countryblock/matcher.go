@@ -183,10 +183,31 @@ func EvaluateGeo(
 		(geo.Continent != "" && containsCountry(config.Continents, geo.Continent)) ||
 		(geo.ASN != 0 && slices.Contains(config.ASNs, geo.ASN))
 
-	// Layer 4c — an allow gate with ASN rules must not block traffic
-	// just because the ASN is unknown (ASN database missing, or IP
-	// not in it): the ASN rules fail open, like a missing GeoIP DB.
-	if config.Mode == ModeAllow && !match && len(config.ASNs) > 0 && geo.ASN == 0 {
+	// Layer 4c — an allow gate whose only usable rule dimension is the
+	// ASN must not block traffic just because the ASN is unknown (the
+	// ASN database missing, or the IP not in it): there the ASN rules
+	// fail open, like a missing GeoIP database at layer 4.
+	//
+	// The scope is the fix (v2.73). This branch used to test only
+	// "mode is allow, nothing matched, there are ASN rules, the ASN is
+	// 0", and returned Accepted for the WHOLE decision — discarding
+	// the country and continent verdict computed three lines above.
+	// So a route fenced to allow CountryList=["FR"] with any ASN rule
+	// beside it admitted every source on earth, and because
+	// GeoLite2-ASN.mmdb is a separate optional download the condition
+	// was permanent, not transient. No event row is written on an
+	// accept, so the operator saw no blocks and concluded the fence
+	// was working. The comment described the intent correctly; the
+	// code was broader than the comment.
+	//
+	// Now it fails open only when there is no non-ASN rule that COULD
+	// have decided: either the operator configured none, or the
+	// dimension they configured did not resolve for this request. When
+	// a country allow-list is set and the country did resolve, that
+	// verdict stands — an absent ASN database is no reason to admit
+	// the internet.
+	if config.Mode == ModeAllow && !match && len(config.ASNs) > 0 && geo.ASN == 0 &&
+		!hasUsableNonASNRule(config, country, geo.Continent) {
 		return Decision{Accepted: true, Country: country, Reason: ReasonLookupFailed}
 	}
 	switch config.Mode {
@@ -281,4 +302,19 @@ func isLAN(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// hasUsableNonASNRule reports whether the config carries a rule
+// dimension other than the ASN that could have decided this request —
+// that is, a configured list whose corresponding lookup resolved.
+//
+// It exists to scope layer 4c's fail-open. "Configured" is not enough
+// on its own: a country allow-list the operator set cannot judge a
+// request whose country did not resolve, and failing open there is the
+// same call layer 4 already makes when nothing resolves at all.
+func hasUsableNonASNRule(config Config, country, continent string) bool {
+	if len(config.CountryList) > 0 && country != "" {
+		return true
+	}
+	return len(config.Continents) > 0 && continent != ""
 }
