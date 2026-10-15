@@ -539,14 +539,31 @@ describe('dashboard — it is as live as it claims', () => {
 	// The tail column was toISOString().substring(11, 19) — UTC, with
 	// nothing saying so, against a /logs page that has always shown
 	// local time.
+	// The timezone is forced, so this test has teeth on a UTC CI
+	// runner too. Read against the host's own zone it would pass with
+	// the bug whenever that zone is UTC — the assertion that matters
+	// is the negative one: the cell must NOT read the UTC rendering.
+	// process.env.TZ is honoured at runtime by Node; probed before
+	// relying on it.
 	it('shows the tail time in local time, not UTC', async () => {
-		// 12:00:00 UTC. Rendered in UTC the cell reads 12:00:00; in
-		// local time it reads whatever this machine makes of it, so
-		// the assertion is on the conversion, not on a fixed string.
+		const realTZ = process.env.TZ;
+		process.env.TZ = 'Asia/Tokyo';
+		try {
+			await tailTimeAssertions();
+		} finally {
+			process.env.TZ = realTZ;
+		}
+	});
+
+	async function tailTimeAssertions(): Promise<void> {
 		const iso = '2026-10-15T12:00:00Z';
 		const d = new Date(iso);
 		const p = (n: number) => String(n).padStart(2, '0');
 		const expected = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+		const utcRendering = iso.substring(11, 19);
+		// Guard the guard: if the forced zone ever stops taking
+		// effect, the test would silently lose its point.
+		expect(expected).not.toBe(utcRendering);
 
 		securityMock.fetchEvents.mockResolvedValue({
 			events: [
@@ -573,8 +590,9 @@ describe('dashboard — it is as live as it claims', () => {
 				(e) => e.textContent?.trim() ?? ''
 			);
 			expect(cells).toContain(expected);
+			expect(cells).not.toContain(utcRendering);
 		});
-	});
+	}
 
 	// The card sliced to 8 with no sign the rest existed. The meta
 	// count was always honest, which is what made the list's silence
