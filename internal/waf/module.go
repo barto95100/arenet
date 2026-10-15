@@ -292,7 +292,31 @@ func (h *ArenetWafHandler) buildWAF() (coraza.WAF, error) {
 	//
 	// SecRuleEngine still appends (terminal directive
 	// wins) so block/detect mode behaviour is unchanged.
-	directives := adminAPIExclusionDirective + h.Directives + "\nSecRuleEngine " + mode
+	// v2.73 — the management-plane exclusion is NO LONGER prepended
+	// here. It used to be added to every route's engine, and it
+	// decides what to strip from REQUEST_FILENAME — the path the
+	// CLIENT chooses — so any unauthenticated request under /api/v1/
+	// had CRS families 911*, 930*, 931* and, critically, the 949*
+	// anomaly-score evaluator removed from its transaction. On a route
+	// in block mode that meant SQLi and XSS still matched and logged
+	// while nothing read the score to interrupt, and the LFI/RFI
+	// families produced no event at all.
+	//
+	// The comment on AdminAPIExclusionDirective claimed "user proxy
+	// routes are UNAFFECTED — the pattern is path-based, not
+	// host-based, and user routes proxy to upstreams whose path space
+	// is entirely operator-controlled". Both halves were wrong: the
+	// directive was prepended to every route, and a request path is
+	// chosen by the requester.
+	//
+	// caddymgr now decides, per route, whether the exclusion belongs
+	// in Directives — it knows which route points at the admin
+	// listener, which is the only place the false positives it guards
+	// against can arise. Keeping the choice in the directive text also
+	// keeps computePoolKey correct for free: two routes that differ
+	// only by the exclusion differ in Directives, so they do not share
+	// a pooled WAF.
+	directives := h.Directives + "\nSecRuleEngine " + mode
 
 	cfg := coraza.NewWAFConfig().
 		WithErrorCallback(h.onMatch).
@@ -303,7 +327,7 @@ func (h *ArenetWafHandler) buildWAF() (coraza.WAF, error) {
 	return coraza.NewWAF(cfg)
 }
 
-// adminAPIExclusionDirective is a CRS false-positive guard
+// AdminAPIExclusionDirective is a CRS false-positive guard
 // for the Arenet management plane.
 //
 // History:
@@ -397,12 +421,12 @@ func (h *ArenetWafHandler) buildWAF() (coraza.WAF, error) {
 // a Home Assistant instance) WOULD have these CRS families
 // stripped on that path; this collision is narrow, accepted,
 // and documented in the decision doc as a known limitation.
-const adminAPIExclusionDirective = `
+const AdminAPIExclusionDirective = `
 
 # Arenet — CRS false-positive guard for the management plane.
 # Skip CRS rule families 911*, 930*, 931*, 949* when the
 # request URI is under /api/v1/. Documented in
-# internal/waf/module.go's adminAPIExclusionDirective.
+# internal/waf/module.go's AdminAPIExclusionDirective.
 SecRule REQUEST_FILENAME "@rx ^/api/v1(/.*)?$" \
     "id:100001,phase:1,nolog,pass,\
     ctl:ruleRemoveById=911100-911199,\

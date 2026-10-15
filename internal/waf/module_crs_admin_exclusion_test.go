@@ -62,14 +62,27 @@ import (
 //       face the full rule set including LFI / PROTOCOL.
 
 // adminAPIDirectives composes the production directive
-// chain the caddymgr emits at runtime (mirror of
-// internal/caddymgr/manager.go's buildWAFHandler emit),
-// so the exclusion is tested in its real placement
-// relative to the CRS includes and the SecRuleEngine
-// directive. The handler's buildWAF then appends
-// adminAPIUUIDExclusionDirective + the SecRuleEngine
-// trailer.
-const adminAPIDirectives = "Include @coraza.conf-recommended\n" +
+// chain caddymgr emits at runtime FOR THE ADMIN ROUTE
+// (mirror of internal/caddymgr/manager.go's
+// buildWAFHandler emit), so the exclusion is tested in its
+// real placement relative to the CRS includes. The
+// handler's buildWAF appends the SecRuleEngine trailer.
+//
+// v2.73 — the exclusion is part of this string now.
+// buildWAF used to prepend it to EVERY route's engine,
+// which is why these tests did not carry it; caddymgr
+// decides per route, and only a route pointing at the
+// admin listener gets it. userRouteDirectives below is the
+// other half, and the test that uses it is the security
+// property this change exists for.
+const adminAPIDirectives = AdminAPIExclusionDirective +
+	"Include @coraza.conf-recommended\n" +
+	"Include @crs-setup.conf.example\n" +
+	"Include @owasp_crs/*.conf"
+
+// userRouteDirectives is what every OTHER route gets: the
+// CRS, with no management-plane exemption.
+const userRouteDirectives = "Include @coraza.conf-recommended\n" +
 	"Include @crs-setup.conf.example\n" +
 	"Include @owasp_crs/*.conf"
 
@@ -418,5 +431,97 @@ func TestUserRoute_911_BlocksMutatingMethods(t *testing.T) {
 	// At least one event recorded.
 	if cap.eventCount() == 0 {
 		t.Error("expected at least one CRS event on user-route PUT; got 0")
+	}
+}
+
+// The security property this whole change exists for (v2.73).
+//
+// buildWAF prepended AdminAPIExclusionDirective to EVERY route's
+// engine, and the directive keys on REQUEST_FILENAME — the path the
+// CLIENT chooses. So an unauthenticated request to any route in block
+// mode could strip CRS families 911*, 930*, 931* and the 949*
+// anomaly-score evaluator from its own transaction just by arriving
+// under /api/v1/. SQLi and XSS still matched and logged; with 949*
+// gone, nothing read the score to interrupt. Upstreams that serve
+// their own API under /api/v1 — Gitea, n8n, many REST apps — had that
+// whole surface unprotected.
+//
+// The directive's own comment asserted the opposite: "User proxy
+// routes are UNAFFECTED — the pattern is path-based, not host-based,
+// and user routes proxy to upstreams whose path space is entirely
+// operator-controlled." Path-based was the reason they WERE affected,
+// and the path space belongs to the requester.
+
+// newUserRouteCRSHandler builds what every route that is NOT the admin
+// plane now gets: the CRS with no exemption.
+func newUserRouteCRSHandler(t *testing.T, mode string) *ArenetWafHandler {
+	t.Helper()
+	h := &ArenetWafHandler{
+		RouteID:      "r-user",
+		Mode:         mode,
+		Directives:   userRouteDirectives,
+		LoadOWASPCRS: true,
+	}
+	if err := h.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if err := h.Provision(caddy.Context{}); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Cleanup() })
+	return h
+}
+
+func TestUserRoute_ApiV1Path_DoesNotDisarmCRSBlocking(t *testing.T) {
+	cap := newCaptureSink()
+	setGlobalSinkFor(t, cap)
+
+	h := newUserRouteCRSHandler(t, "block")
+
+	// The same SQLi the admin-plane test asserts is NOT blocked, on a
+	// path that used to buy the attacker the exemption.
+	req := httptest.NewRequest(http.MethodGet,
+		"http://app.example.com/api/v1/repos/search?q=1%27%20OR%20%271%27%3D%271", nil)
+
+	next := &passthroughHandler{}
+	rec := httptest.NewRecorder()
+	err := h.ServeHTTP(rec, req, caddyhttp.HandlerFunc(next.ServeHTTP))
+
+	if err == nil {
+		t.Fatal("a user route in block mode must refuse this request: the /api/v1 prefix " +
+			"must not strip the 949* anomaly-score evaluator from the transaction")
+	}
+	if next.called {
+		t.Error("the upstream must not be reached")
+	}
+}
+
+// And the exemption still works where it belongs, so the false
+// positives it guards against on the operator's own admin UI stay
+// guarded. The admin-plane tests above cover that in detail; this one
+// states the contrast in one place.
+func TestAdminPlaneAndUserRoute_DifferOnTheSameRequest(t *testing.T) {
+	cap := newCaptureSink()
+	setGlobalSinkFor(t, cap)
+
+	target := "http://x.example.com/api/v1/routes/8f14e45f-ceea-467a-9c8d-1b2c3d4e5f60"
+
+	admin := newCRSProvisionedHandler(t, "block")
+	adminErr := admin.ServeHTTP(httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPut, target, nil),
+		caddyhttp.HandlerFunc((&passthroughHandler{}).ServeHTTP))
+	if adminErr != nil {
+		t.Fatalf("the admin plane must keep its exemption: %v", adminErr)
+	}
+
+	user := newUserRouteCRSHandler(t, "block")
+	userNext := &passthroughHandler{}
+	userErr := user.ServeHTTP(httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPut, target, nil),
+		caddyhttp.HandlerFunc(userNext.ServeHTTP))
+	if userErr == nil {
+		t.Error("a user route must evaluate the full CRS on the same request — " +
+			"911100 refuses PUT, which is the false positive the exemption exists for " +
+			"and which a user route has no reason to be exempt from")
 	}
 }

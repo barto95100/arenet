@@ -56,7 +56,7 @@ import (
 	// resolvable at caddy.Load time. Replaces the legacy
 	// coraza-caddy/v2 import that previously registered the
 	// `waf` handler.
-	_ "github.com/barto95100/arenet/internal/waf"
+	"github.com/barto95100/arenet/internal/waf"
 
 	// Step W.3 — side-effect import: registers the
 	// arenet_country_block Caddy module (internal/countryblock
@@ -862,6 +862,7 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		TCPServices:               tcpServices,
 		AccessLog:                 accessLog,
 		AccessLogPath:             accessLogPath,
+		AdminListen:               m.adminListen,
 	})
 	if err != nil {
 		return fmt.Errorf("build config: %w", err)
@@ -1506,6 +1507,13 @@ type buildOpts struct {
 	// created one — emits no `layer4` key at all, so the config stays
 	// byte-identical to the pre-v2.42 one.
 	TCPServices []storage.TCPService
+	// AdminListen (v2.73) is the admin interface's bind address, so
+	// the builder can tell which route — if any — points at Arenet's
+	// own admin listener. That route, and only that route, gets the
+	// management-plane CRS exemption; see admin_plane.go for why
+	// prepending it to every route was a WAF bypass. Empty means no
+	// route is identified as the management plane, which fails closed.
+	AdminListen string
 }
 
 // acmePartition splits a TLS-enabled route's public subjects into
@@ -1960,7 +1968,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//     mutations would otherwise confuse the rules);
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
-		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions, r.WAFCustomRules, r.WAFSecLang); wafHandler != nil {
+		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions, r.WAFCustomRules, r.WAFSecLang, routeTargetsAdminListener(r, opts.AdminListen)); wafHandler != nil {
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -3218,7 +3226,7 @@ func normalizeKnownHost(h string) string {
 	return strings.ToLower(h)
 }
 
-func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excludeRules []int, excludeTags []string, targeted []storage.WAFTargetedExclusion, custom []storage.WAFCustomRule, secLang string) map[string]any {
+func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excludeRules []int, excludeTags []string, targeted []storage.WAFTargetedExclusion, custom []storage.WAFCustomRule, secLang string, adminPlane bool) map[string]any {
 	if mode == "" || mode == "off" {
 		return nil
 	}
@@ -3379,6 +3387,26 @@ func buildWAFHandler(routeID, host, mode string, skipBody, disableCRS bool, excl
 		directives += "Include @coraza.conf-recommended\n" +
 			"Include @crs-setup.conf.example\n" +
 			"Include @owasp_crs/*.conf"
+	}
+
+	// v2.73 — the management-plane CRS exemption, for the one route
+	// that needs it.
+	//
+	// internal/waf's buildWAF used to prepend this to EVERY route's
+	// engine. It keys on REQUEST_FILENAME, the path the client picks,
+	// so any unauthenticated request under /api/v1/ had CRS families
+	// 911*, 930*, 931* and the 949* anomaly-score evaluator stripped
+	// from its transaction — on a route in block mode, SQLi and XSS
+	// still matched and logged while nothing read the score to
+	// interrupt. An upstream that serves its own API under /api/v1,
+	// which Gitea and n8n both do, had that whole surface unprotected.
+	//
+	// It must go BEFORE the CRS includes: the ctl actions remove rules
+	// from the transaction's scope, and a rule already evaluated
+	// cannot be removed. That ordering was the reason for the original
+	// prepend and it is preserved here.
+	if adminPlane && loadCRS {
+		directives = waf.AdminAPIExclusionDirective + directives
 	}
 
 	out := map[string]any{
