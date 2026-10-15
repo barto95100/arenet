@@ -748,16 +748,30 @@ func buildAlert(intent Intent, now time.Time) Alert {
 //
 // Invalidates the dedupe LRU for the (Ip, srcIP) key across
 // all scenarios so the next push attempt re-checks LAPI
-// fresh.
+// fresh. This happens on EVERY tombstone, revoked or expired —
+// a naturally expired ban must let the engine re-evaluate the
+// source against LAPI, not stay cached as "already active".
 //
-// Records the cooldown using the rule's Cooldown duration
-// for the matching Source. If no rule matches the scenario
-// (orphan tombstone — possible if the operator unbans an IP
-// that arenet never auto-classified) we still invalidate the
-// dedupe but do NOT record a cooldown (no rule to read
-// duration from).
-func (e *Engine) OnTombstone(srcIP, scenario string) {
+// The cooldown is the operator-honour window and is recorded
+// ONLY when the decision was revoked — cut short before its
+// `until` — because its whole purpose is to respect an operator
+// who deliberately unbanned an IP (spec D5.A). A ban that simply
+// reached the end of its term was not an unban and must record
+// NO cooldown (scan F24): recording one let a persistent
+// attacker wait out each ban and then enjoy a cooldown-long
+// immunity from the auto-ban control, cycling indefinitely.
+//
+// If no rule matches the scenario (orphan tombstone — the
+// operator unbanned an IP arenet never auto-classified) there is
+// no rule duration to read, so no cooldown regardless.
+func (e *Engine) OnTombstone(srcIP, scenario string, revoked bool) {
 	e.dedupe.Invalidate("Ip", srcIP)
+
+	if !revoked {
+		// Natural expiry: dedupe already invalidated so the
+		// source is re-evaluated against LAPI; no cooldown.
+		return
+	}
 
 	// Translate scenario back to Source to get the rule's
 	// cooldown duration. Scenario = "arenet/<source>".

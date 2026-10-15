@@ -73,6 +73,12 @@ type decisionLRU struct {
 type decisionLRUEntry struct {
 	uuid string
 	ts   time.Time
+	// expiresAt is the decision's own ban-end time (LAPI `until`),
+	// captured at first sight via setExpiresAt. It is the signal
+	// forgetReportingRevocation uses to tell a revocation (removed
+	// before this time) from a natural expiry (removed at or after
+	// it). Zero when never set — treated as "not revoked".
+	expiresAt time.Time
 }
 
 // newDecisionLRU constructs an LRU. cap <= 0 means unlimited;
@@ -145,6 +151,51 @@ func (l *decisionLRU) shouldEmit(uuid string) bool {
 	elt := l.ll.PushFront(&decisionLRUEntry{uuid: uuid, ts: now})
 	l.idx[uuid] = elt
 	return true
+}
+
+// setExpiresAt records the decision's own ban-end time on the
+// entry for uuid, if the entry is present. Called by the sink
+// right after a first-sight shouldEmit so a later tombstone can
+// tell a revocation from a natural expiry. No-op when the entry
+// is absent (empty uuid, or evicted) — the tombstone then
+// defaults to "not revoked", the fail-safe that records no
+// cooldown.
+func (l *decisionLRU) setExpiresAt(uuid string, expiresAt time.Time) {
+	if uuid == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if elt, ok := l.idx[uuid]; ok {
+		elt.Value.(*decisionLRUEntry).expiresAt = expiresAt
+	}
+}
+
+// forgetReportingRevocation removes the entry for uuid (like
+// forget) and reports whether the decision was REVOKED — removed
+// before its own ban-end — as opposed to having simply expired.
+//
+// revoked is true only when the entry is present AND carries an
+// expiresAt strictly in the future at removal time. An unknown
+// UUID (never seen, or evicted under cap pressure) and an entry
+// with no recorded expiresAt both report false: without proof the
+// ban was cut short, the caller must not record an operator
+// cooldown (fail-safe toward re-banning, per scan F24).
+func (l *decisionLRU) forgetReportingRevocation(uuid string) (revoked bool) {
+	if uuid == "" {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	elt, ok := l.idx[uuid]
+	if !ok {
+		return false
+	}
+	entry := elt.Value.(*decisionLRUEntry)
+	revoked = !entry.expiresAt.IsZero() && entry.expiresAt.After(l.now())
+	delete(l.idx, uuid)
+	l.ll.Remove(elt)
+	return revoked
 }
 
 // forget removes the entry for uuid if present, freeing the
