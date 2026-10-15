@@ -64,37 +64,82 @@ func SplitLeafAndChain(certPEM, chainPEM string) (leaf string, chain string, err
 	certPEM = normalizePEM(certPEM)
 	chainPEM = normalizePEM(chainPEM)
 
-	var blocks []*pem.Block
-	rest := []byte(certPEM)
-	for {
-		var b *pem.Block
-		b, rest = pem.Decode(rest)
-		if b == nil {
-			break
-		}
-		if b.Type == "CERTIFICATE" {
-			blocks = append(blocks, b)
-		}
+	// A private key must never reach certPEM or chainPEM. Those fields
+	// are returned to viewer-role callers, left unsealed by the at-rest
+	// codec (secret_codec.go seals keyPEM only), and shipped in a
+	// default-redacted backup. An operator who pasted a combined
+	// cert+key bundle into the Certificate field — the HAProxy / `cat
+	// cert.pem key.pem` layout — is refused outright rather than having
+	// the key silently trimmed, because a silent trim would validate
+	// against the real key in the Key field and hide the mistake. (F41)
+	if pemHasPrivateKey(certPEM) {
+		return "", "", errors.New("private_key_in_cert_field: the Certificate field contains a PRIVATE KEY block — the private key belongs only in the Key field")
 	}
+	if pemHasPrivateKey(chainPEM) {
+		return "", "", errors.New("private_key_in_chain_field: the Chain field contains a PRIVATE KEY block — the private key belongs only in the Key field")
+	}
+
+	blocks := decodeCertificateBlocks(certPEM)
 	if len(blocks) == 0 {
-		// Let ParseExternalCert produce the actionable invalid_cert_pem
-		// error; return the input unchanged.
+		// No certificate to split; hand the input to ParseExternalCert
+		// for the actionable invalid_cert_pem error.
 		return certPEM, chainPEM, nil
 	}
-	if len(blocks) == 1 {
-		return certPEM, chainPEM, nil
-	}
-	// >1 block in the cert field = a pasted fullchain.
-	if strings.TrimSpace(chainPEM) != "" {
+	// >1 block in the cert field = a pasted fullchain; a non-empty Chain
+	// field then specifies the chain in two places.
+	if len(blocks) > 1 && strings.TrimSpace(chainPEM) != "" {
 		return "", "", errors.New("chain_specified_twice: the Certificate field already contains a chain (" +
 			strconv.Itoa(len(blocks)) + " certificates) and the Chain field is also filled — put the chain in only one place")
 	}
+
+	// Re-encode from the decoded CERTIFICATE blocks, never pass the raw
+	// input through: that is what keeps a stray key, a comment block or
+	// trailing junk out of the stored, viewer-readable certPEM/chainPEM.
 	leaf = string(pem.EncodeToMemory(blocks[0]))
 	var sb strings.Builder
 	for _, b := range blocks[1:] {
 		sb.Write(pem.EncodeToMemory(b))
 	}
+	// When the chain arrived in its own field (single leaf in the cert
+	// field), re-encode its certificate blocks too.
+	for _, b := range decodeCertificateBlocks(chainPEM) {
+		sb.Write(pem.EncodeToMemory(b))
+	}
 	return leaf, sb.String(), nil
+}
+
+// decodeCertificateBlocks returns every CERTIFICATE PEM block in s, in
+// order, dropping blocks of any other type.
+func decodeCertificateBlocks(s string) []*pem.Block {
+	var blocks []*pem.Block
+	rest := []byte(s)
+	for {
+		var b *pem.Block
+		b, rest = pem.Decode(rest)
+		if b == nil {
+			return blocks
+		}
+		if b.Type == "CERTIFICATE" {
+			blocks = append(blocks, b)
+		}
+	}
+}
+
+// pemHasPrivateKey reports whether s carries any PRIVATE KEY block —
+// "PRIVATE KEY", "RSA/EC PRIVATE KEY", "ENCRYPTED PRIVATE KEY",
+// "OPENSSH PRIVATE KEY" all match the substring.
+func pemHasPrivateKey(s string) bool {
+	rest := []byte(s)
+	for {
+		var b *pem.Block
+		b, rest = pem.Decode(rest)
+		if b == nil {
+			return false
+		}
+		if strings.Contains(b.Type, "PRIVATE KEY") {
+			return true
+		}
+	}
 }
 
 // ParseExternalCert validates the leaf/key (blocking) and returns

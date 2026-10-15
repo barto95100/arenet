@@ -92,3 +92,54 @@ func TestSplitLeafAndChain_LeafOnly(t *testing.T) {
 		t.Errorf("leaf-only should yield empty chain; got %q", gotChain)
 	}
 }
+
+// A combined cert+key bundle pasted into the Certificate field — the
+// HAProxy-style `cat cert.pem key.pem` layout — must be refused, not
+// silently accepted with the key living on in certPEM. certPEM is served
+// to viewer-role callers, left unsealed at rest, and shipped in a
+// default-redacted backup, so a private key must never reach it (F41).
+func TestSplitLeafAndChain_RejectsPrivateKeyInCertField(t *testing.T) {
+	now := time.Now()
+	leaf, key := genSelfSigned(t, "app.example.com", now.Add(-time.Hour), now.Add(time.Hour), []string{"app.example.com"})
+	bundle := leaf + key // cert first, then the private key
+
+	gotLeaf, gotChain, err := SplitLeafAndChain(bundle, "")
+	if err == nil {
+		t.Fatalf("a private key in the Certificate field must be refused; got leaf=%q chain=%q", gotLeaf, gotChain)
+	}
+	if strings.Contains(gotLeaf, "PRIVATE KEY") || strings.Contains(gotChain, "PRIVATE KEY") {
+		t.Errorf("the private key must not survive into the returned cert/chain: leaf=%q chain=%q", gotLeaf, gotChain)
+	}
+}
+
+// Same for the Chain field.
+func TestSplitLeafAndChain_RejectsPrivateKeyInChainField(t *testing.T) {
+	now := time.Now()
+	leaf, key := genSelfSigned(t, "app.example.com", now.Add(-time.Hour), now.Add(time.Hour), []string{"app.example.com"})
+	inter, _ := genSelfSigned(t, "Intermediate CA", now.Add(-time.Hour), now.Add(time.Hour), nil)
+
+	if _, _, err := SplitLeafAndChain(leaf, inter+key); err == nil {
+		t.Error("a private key in the Chain field must be refused")
+	}
+}
+
+// Belt and suspenders: the stored leaf/chain are re-encoded from the
+// decoded CERTIFICATE blocks, so a non-certificate, non-key block (a
+// comment, a trust-anchor marker) pasted alongside the cert does not
+// survive into the viewer-readable certPEM either.
+func TestSplitLeafAndChain_StoredLeafIsReencoded(t *testing.T) {
+	now := time.Now()
+	leaf, _ := genSelfSigned(t, "app.example.com", now.Add(-time.Hour), now.Add(time.Hour), []string{"app.example.com"})
+	noise := "-----BEGIN TRUSTED COMMENT-----\naGVsbG8=\n-----END TRUSTED COMMENT-----\n"
+
+	gotLeaf, _, err := SplitLeafAndChain(leaf+noise, "")
+	if err != nil {
+		t.Fatalf("a stray non-cert block should be dropped, not error: %v", err)
+	}
+	if strings.Contains(gotLeaf, "TRUSTED COMMENT") {
+		t.Errorf("stored leaf kept a non-certificate block: %q", gotLeaf)
+	}
+	if strings.Count(gotLeaf, "BEGIN CERTIFICATE") != 1 {
+		t.Errorf("stored leaf should be exactly the one cert block; got %q", gotLeaf)
+	}
+}
