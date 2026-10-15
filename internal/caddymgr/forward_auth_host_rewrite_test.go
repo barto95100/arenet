@@ -72,7 +72,7 @@ func hostOverride(t *testing.T, h map[string]any) string {
 // passthroughProxy digs the reverse_proxy out of the emitted passthrough route.
 func passthroughProxy(t *testing.T, p storage.ForwardAuthProvider) map[string]any {
 	t.Helper()
-	route := buildAuthPassthroughRoute(p, []string{"app.example.com"})
+	route := buildAuthPassthroughRoute(p, []string{"app.example.com"}, nil)
 	if len(route.Handle) != 1 {
 		t.Fatalf("passthrough route has %d handlers; want 1 subroute", len(route.Handle))
 	}

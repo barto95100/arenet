@@ -2070,7 +2070,13 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		// generic: oauth2-proxy uses `/oauth2/*` the same way.
 		var passthroughRoute *httpRoute
 		if fwdAuthProviderForPassthrough != nil && fwdAuthProviderForPassthrough.AuthPassthroughPrefix != "" {
-			pr := buildAuthPassthroughRoute(*fwdAuthProviderForPassthrough, allHosts)
+			// F17 — the passthrough route carries the host's perimeter
+			// gates (IP filter, country block, rate limit, CrowdSec), the
+			// same ones the main chain applies above. Without them the IdP
+			// endpoint on this host was reachable from everywhere the
+			// operator thought they had fenced off.
+			pr := buildAuthPassthroughRoute(
+				*fwdAuthProviderForPassthrough, allHosts, perimeterGateHandlers(r, opts))
 			passthroughRoute = &pr
 		}
 
@@ -3987,6 +3993,49 @@ func buildForwardAuthDenyHandler(providerName string) map[string]any {
 	}
 }
 
+// perimeterGateHandlers returns the operator's host-perimeter gates in
+// the order the main handler chain emits them — rate limit, country
+// block, IP filter, CrowdSec — each omitted when the route does not
+// configure it. These are the gates that stand BEFORE the auth stage:
+// static, host-scoped policy (who may reach this host at all) as opposed
+// to the per-request auth decision.
+//
+// It exists so buildAuthPassthroughRoute can carry the same perimeter
+// (scan F17): the passthrough route proxies the IdP's own endpoint with
+// no forward_auth gate — correctly, it is the authenticator — but it is
+// still part of the host, so the host's perimeter must apply or an IP /
+// country / reputation the operator fenced out still reaches that
+// endpoint. The order mirrors the main chain (manager.go, the gate
+// appends after metricsHandler) so TestForwardAuthPassthrough_Mirrors…
+// can assert the two stay in lockstep: a gate added to the main chain but
+// not here fails that parity test.
+//
+// WAF, response headers and the auth gate itself are deliberately NOT
+// here: WAF inspecting the IdP's own protocol traffic is the WebSocket
+// false-positive class again, headers are the app's not the perimeter's,
+// and the auth gate on its own callback is circular.
+func perimeterGateHandlers(r storage.Route, opts buildOpts) []map[string]any {
+	gates := make([]map[string]any, 0, 4)
+	if rlHandler := buildRateLimitHandler(r.ID, r.RateLimit); rlHandler != nil {
+		gates = append(gates, rlHandler)
+	}
+	if cbHandler := buildCountryBlockHandler(r.ID, r.Host, r.CountryBlock); cbHandler != nil {
+		gates = append(gates, cbHandler)
+	}
+	if r.IPFilter != nil {
+		if ipRoute := buildIPFilterRoute(*r.IPFilter); ipRoute != nil {
+			gates = append(gates, map[string]any{
+				"handler": "subroute",
+				"routes":  []map[string]any{ipRoute},
+			})
+		}
+	}
+	if opts.CrowdSec.apiKey != "" {
+		gates = append(gates, map[string]any{"handler": "crowdsec"})
+	}
+	return gates
+}
+
 // buildAuthPassthroughRoute returns the httpRoute that
 // reverse-proxies a single path prefix on the route's Host(s)
 // straight to the forward-auth provider's verify-URL host,
@@ -4005,7 +4054,7 @@ func buildForwardAuthDenyHandler(providerName string) map[string]any {
 // (they're internal-to-auth, not application). Same posture as
 // the forward_auth sub-request itself (which doesn't go through
 // metrics either).
-func buildAuthPassthroughRoute(provider storage.ForwardAuthProvider, hosts []string) httpRoute {
+func buildAuthPassthroughRoute(provider storage.ForwardAuthProvider, hosts []string, gates []map[string]any) httpRoute {
 	// Path matcher: "<prefix>/*" matches the prefix subtree.
 	// Caddy's path matcher uses a glob with "*" matching anything
 	// including "/", so a single trailing /* is the right shape
@@ -4056,12 +4105,17 @@ func buildAuthPassthroughRoute(provider storage.ForwardAuthProvider, hosts []str
 		}
 	}
 
+	// The perimeter gates run first, then the proxy to the IdP endpoint:
+	// a blocked source is turned away by the same wall that fences the
+	// rest of the host, before the passthrough reaches the IdP.
+	chain := append(append([]map[string]any{}, gates...), rp)
+
 	return httpRoute{
 		Match: []matcherSet{{
 			Host: hosts,
 			Path: []string{pathPattern},
 		}},
-		Handle:   []map[string]any{wrapInSubroute([]map[string]any{rp})},
+		Handle:   []map[string]any{wrapInSubroute(chain)},
 		Terminal: true,
 	}
 }
