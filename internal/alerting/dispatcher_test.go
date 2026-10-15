@@ -349,3 +349,37 @@ func TestDispatcher_Sink_InserterErrorDoesNotBreakDispatch(t *testing.T) {
 // public-only seam used by future tests.
 var _ = errors.New
 var _ = strings.Contains
+
+// TestDispatcher_Sink_RedactsWebhookURLInFailure pins that a webhook
+// URL does not reach the persisted alert-event row through the failure
+// message (F16). Go's net/http embeds the full request URL — the
+// credential, for a Discord/Slack webhook — in a transport error, and
+// the row's channels_failed is otherwise that error verbatim.
+func TestDispatcher_Sink_RedactsWebhookURLInFailure(t *testing.T) {
+	// Port 1 refuses instantly, so Do returns a *url.Error carrying the
+	// full URL, path and all — no network wait.
+	const secretURL = "http://127.0.0.1:1/api/webhooks/SECRET-TOKEN"
+
+	loader := &fakeChannelLoader{
+		channels: map[string]storage.Channel{
+			"ch-bad": webhookChannel(t, "ch-bad", "bad", true, 0, secretURL),
+		},
+	}
+	sink := &fakeAlertEventInserter{}
+	d := NewDispatcher(loader, nil)
+	d.SetAlertEventSink(sink)
+
+	d.Dispatch(context.Background(), sampleEvent(), []string{"ch-bad"})
+
+	if len(sink.records) != 1 {
+		t.Fatalf("sink records=%d want 1", len(sink.records))
+	}
+	failed := sink.records[0].ChannelsFailedJSON
+	if strings.Contains(failed, "SECRET-TOKEN") {
+		t.Errorf("persisted failure leaks the webhook secret path: %s", failed)
+	}
+	// The host stays so the operator can still see which endpoint failed.
+	if !strings.Contains(failed, "127.0.0.1") {
+		t.Errorf("redaction dropped the auditable host: %s", failed)
+	}
+}
