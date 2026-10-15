@@ -223,27 +223,31 @@ func visitChannelConfig(base, kind string, raw json.RawMessage, fn secretFn) (js
 		m[key] = nv
 		return nil
 	}
-	switch kind {
-	case storage.ChannelKindEmail:
-		if err := str(cfgKeySMTPPassword); err != nil {
+	// v2.73 — driven by the registry in channel_secret_registry.go
+	// rather than a switch. The switch handled email and webhook and
+	// did nothing at all for any other kind, which is how the Discord
+	// kind's webhookUrl shipped in cleartext in every backup for four
+	// minor versions.
+	for _, key := range channelSecretStringFields[kind] {
+		if err := str(key); err != nil {
 			return nil, err
 		}
-	case storage.ChannelKindWebhook:
-		if err := str(cfgKeyURL); err != nil {
-			return nil, err
+	}
+	for _, mapKey := range channelSecretMapFields[kind] {
+		h, ok := m[mapKey].(map[string]any)
+		if !ok {
+			continue
 		}
-		if h, ok := m[cfgKeyHeaders].(map[string]any); ok {
-			for k, v := range h {
-				s, ok := v.(string)
-				if !ok || s == "" {
-					continue
-				}
-				nv, err := fn(base+"config."+cfgKeyHeaders+"["+k+"]", s)
-				if err != nil {
-					return nil, err
-				}
-				h[k] = nv
+		for k, v := range h {
+			s, ok := v.(string)
+			if !ok || s == "" {
+				continue
 			}
+			nv, err := fn(base+"config."+mapKey+"["+k+"]", s)
+			if err != nil {
+				return nil, err
+			}
+			h[k] = nv
 		}
 	}
 	b, err := json.Marshal(m)
