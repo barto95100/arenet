@@ -79,6 +79,14 @@ const (
 	// emission decision (AC #10).
 	AuthSourceKey ctxKey = "auth.source"
 
+	// MustChangePasswordKey is true when the authenticated account
+	// must rotate its password before it may do anything else — an
+	// admin-created local account still on its one-time initial
+	// password. Populated by SoftAuthMiddleware; enforced server-side
+	// by HardAuthMiddleware, which 403s every endpoint but the
+	// password-change one (v2.73, F23). The SPA overlay is UX on top.
+	MustChangePasswordKey ctxKey = "auth.must_change_password"
+
 	// attemptedUsernameKey is the username submitted by an
 	// unauthenticated /login or /unlock attempt. Stored by the
 	// handler via SetAttemptedUsername so the rate-limit middleware
@@ -149,6 +157,13 @@ func RoleFromContext(ctx context.Context) string {
 // rotation audit hook + the break-glass audit emission.
 func AuthSourceFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(AuthSourceKey).(string)
+	return v
+}
+
+// MustChangePasswordFromContext reports whether the authenticated
+// account must rotate its password before it may do anything else.
+func MustChangePasswordFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(MustChangePasswordKey).(bool)
 	return v
 }
 

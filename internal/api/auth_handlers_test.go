@@ -1825,3 +1825,34 @@ func TestSetup_SetsLanguageCookieAsEnglish(t *testing.T) {
 		t.Errorf("setup cookie = %q, want \"en\"", c.Value)
 	}
 }
+
+// TestLogin_NoLocalPassword_401SameAsBadPassword pins F46: an account
+// with no local password — an OIDC user or a service account, both
+// created with an empty hash — must answer the SAME generic 401 as a
+// wrong password or an unknown user, never the 500 the argon2id compare
+// used to raise on an empty hash. A distinct status is an
+// unauthenticated enumeration oracle for federated and machine
+// identities, and a 5xx would not even be counted by the per-IP limiter.
+func TestLogin_NoLocalPassword_401SameAsBadPassword(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, _ = adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	// A service account is created with an empty password hash.
+	us := auth.NewUserStore(env.store.DB())
+	svc, err := us.CreateServiceAccount(context.Background(), "ci-bot", auth.UserRoleViewer)
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+
+	rec := postJSON(t, env.router, "/api/v1/auth/login", map[string]any{
+		"username": svc.Username,
+		"password": "any-password-15chars",
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (a 500 or anything else enumerates the account); body = %s",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid credentials") {
+		t.Errorf("body = %s; want the same message as a bad password", rec.Body.String())
+	}
+}
