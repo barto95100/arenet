@@ -25,6 +25,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/geo"
 )
 
@@ -69,6 +70,16 @@ type WSGeoEventsHandler struct {
 	bus      GeoEventSubscriber
 	upgrader websocket.Upgrader
 	logger   *slog.Logger
+	// reauth re-checks the stream's authorization while it runs.
+	// Wired by NewRouter; see stream_reauth.go for why a stream
+	// that is authorized only once is a hole.
+	reauth streamReauthorizer
+}
+
+// SetStreamReauthorizer wires the periodic authorization re-check.
+// Called by NewRouter for every stream handler.
+func (h *WSGeoEventsHandler) SetStreamReauthorizer(ra streamReauthorizer) {
+	h.reauth = ra
 }
 
 // NewWSGeoEventsHandler constructs the handler. The dev flag
@@ -154,8 +165,32 @@ func (h *WSGeoEventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	ctx := r.Context()
+
+	// v2.73 — re-authorize while the stream runs. Authorized once at
+	// the upgrade and never again, this socket outlived session
+	// revocation, account deletion, a role demotion and the
+	// 15-minute idle lock.
+	sessionID, tokenID := streamCredentials(ctx)
+	reauthTick := time.NewTicker(streamReauthInterval)
+	defer reauthTick.Stop()
+
 	for {
 		select {
+		case <-reauthTick.C:
+			if streamStillAuthorized(ctx, h.reauth, sessionID, tokenID) {
+				continue
+			}
+			// 1008 Policy Violation, with no reason text: a peer that
+			// no longer owns this stream learns nothing about why.
+			h.logger.Info("ws geo-events: closing stream, authorization lapsed",
+				slog.String("session", auth.SessionHandle(sessionID)))
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.ClosePolicyViolation, ""),
+				time.Now().Add(wsGeoEventsWriteDeadline),
+			)
+			return
+
 		case <-ctx.Done():
 			// Server shutdown / request cancellation. Close
 			// cleanly with code 1001 (Going Away) so the
