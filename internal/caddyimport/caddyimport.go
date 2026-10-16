@@ -102,6 +102,17 @@ func Parse(text string) (Result, error) {
 	if len(text) > MaxBytes {
 		return res, fmt.Errorf("the Caddyfile is larger than %d KiB", MaxBytes/1024)
 	}
+	// Refuse the two constructs Caddy's parser resolves against THIS
+	// host before returning any block: `import <file>` reads files off
+	// the Arenet filesystem and `{$VAR}` substitutes the Arenet process
+	// environment, and both come back to the caller through candidate
+	// hosts and parse warnings — an admin-reachable arbitrary-file-read
+	// and env-dump primitive (F9/F26). In an imported Caddyfile these
+	// name the SOURCE host, not this one, so resolving them here is
+	// meaningless as well as unsafe; the caller inlines instead.
+	if err := rejectFilesystemAndEnv(text); err != nil {
+		return res, err
+	}
 	blocks, err := caddyfile.Parse("Caddyfile", []byte(text))
 	if err != nil {
 		return res, fmt.Errorf("this is not a valid Caddyfile: %w", err)
@@ -573,4 +584,53 @@ func orDefaultInt(v, def int) int {
 		return def
 	}
 	return v
+}
+
+// rejectFilesystemAndEnv refuses a submitted Caddyfile that would make
+// caddyfile.Parse touch this host: an `import` directive at the start of
+// a line (Caddy resolves it by reading files, parse.go: `value ==
+// "import" && p.isNewLine()`) or a `{$...}` environment placeholder
+// (substituted from the process environment before parsing). See the
+// call site in Parse for the threat (F9/F26).
+func rejectFilesystemAndEnv(text string) error {
+	// {$...} is Caddy's ONLY meaning for that span — an env placeholder —
+	// so any occurrence is refused. A plain {...} runtime placeholder is
+	// untouched.
+	if strings.Contains(text, "{$") {
+		return fmt.Errorf("environment placeholders ({$VAR}) are not allowed in an imported Caddyfile: " +
+			"they would read this server's environment, not the source host's — inline the values instead")
+	}
+	tokens, err := caddyfile.Tokenize([]byte(text), "import")
+	if err != nil {
+		// Malformed input: let caddyfile.Parse produce the actionable
+		// syntax error rather than a vaguer one here.
+		return nil
+	}
+
+	// `import <snippet>` is safe — it pulls in a (snippet) block defined
+	// in the SAME submitted text, no filesystem. `import <file-or-glob>`
+	// is the primitive to refuse. So first collect the snippet names the
+	// text declares, then allow only imports that name one of them.
+	snippets := map[string]bool{}
+	for _, tok := range tokens {
+		if len(tok.Text) >= 2 && tok.Text[0] == '(' && tok.Text[len(tok.Text)-1] == ')' {
+			snippets[tok.Text[1:len(tok.Text)-1]] = true
+		}
+	}
+
+	prevLine := -1
+	for i, tok := range tokens {
+		atLineStart := i == 0 || tok.Line != prevLine
+		prevLine = tok.Line
+		if !atLineStart || tok.Text != "import" {
+			continue
+		}
+		// The first argument (same line) is the import target.
+		if i+1 < len(tokens) && tokens[i+1].Line == tok.Line && snippets[tokens[i+1].Text] {
+			continue // importing a defined snippet — safe
+		}
+		return fmt.Errorf("the import directive may only reference a snippet defined in the same file: " +
+			"importing a path would read files from this server — inline the imported configuration instead")
+	}
+	return nil
 }
