@@ -475,3 +475,16 @@ func (s *Store) DeleteManagedDomainWithRouteMigrationRevertTo(
 	}
 	return mutated, nil
 }
+
+// ValidCertSubject reports whether s is a legal TLS certificate subject
+// for the external-cert and cert-deletion APIs: a bare RFC 1123 hostname
+// (example.com) or the wildcard form (*.example.com). It exists so the
+// certificate-delete handler can reject a {domain} path parameter before
+// it reaches the filesystem — certmagic's key sanitiser collapses ".."
+// in a way that turns inputs like ".,." into a traversal, so the gate
+// must be an allow-list of the real shape, not a deny-list (F30/F36).
+func ValidCertSubject(s string) bool {
+	s = NormalizeApex(s) // lowercase, strip the trailing dot
+	s = strings.TrimPrefix(s, "*.")
+	return s != "" && managedDomainApexRE.MatchString(s)
+}
