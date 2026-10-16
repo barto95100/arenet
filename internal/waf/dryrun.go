@@ -139,7 +139,7 @@ func dryRunResult(matched []types.MatchedRule, it *types.Interruption) DryRunRes
 			RuleID:   r.ID(),
 			Message:  mr.Message(),
 			Severity: r.Severity().String(),
-			Data:     Truncate(Redact(mr.Data()), MaxPayloadSampleBytes),
+			Data:     RedactSnippet(mr.Data(), MaxPayloadSampleBytes),
 		})
 	}
 	sort.SliceStable(res.Matches, func(i, j int) bool { return res.Matches[i].RuleID < res.Matches[j].RuleID })

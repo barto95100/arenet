@@ -566,8 +566,8 @@ func (h *ArenetWafHandler) onMatch(mr types.MatchedRule) {
 		Severity:      int(rule.Severity()),
 		SrcIP:         mr.ClientIPAddress(),
 		RequestMethod: method,
-		RequestPath:   Truncate(Redact(path), MaxRequestPathBytes),
-		PayloadSample: Truncate(Redact(payload), MaxPayloadSampleBytes),
+		RequestPath:   RedactSnippet(path, MaxRequestPathBytes),
+		PayloadSample: payloadSampleFor(payload, matchedVar, MaxPayloadSampleBytes),
 		MatchedVar:    Truncate(matchedVar, MaxMatchedVarBytes),
 		// Action + StatusCode left as zero values — set by
 		// flushTxBuffer based on the final tx verdict.
@@ -603,8 +603,8 @@ func fallbackEmit(routeID, mode string, mr types.MatchedRule, rule types.RuleMet
 		Severity:      int(rule.Severity()),
 		SrcIP:         mr.ClientIPAddress(),
 		RequestMethod: method,
-		RequestPath:   Truncate(Redact(path), MaxRequestPathBytes),
-		PayloadSample: Truncate(Redact(payload), MaxPayloadSampleBytes),
+		RequestPath:   RedactSnippet(path, MaxRequestPathBytes),
+		PayloadSample: payloadSampleFor(payload, matchedVar, MaxPayloadSampleBytes),
 		MatchedVar:    Truncate(matchedVar, MaxMatchedVarBytes),
 		Action:        action,
 		StatusCode:    statusCode,
