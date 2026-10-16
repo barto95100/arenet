@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -114,7 +115,19 @@ var (
 // bucket. Safe for concurrent use (bbolt single-writer model).
 type APITokenStore struct {
 	db *bolt.DB
+
+	// touchCh feeds a single background worker that applies LastUsedAt
+	// updates, so a token polled faster than bbolt's single-writer fsync
+	// can commit does not spawn an unbounded backlog of goroutines
+	// blocked on the writer lock (F52). Lazily created on first async
+	// touch; a full channel drops, since LastUsedAt is best-effort
+	// telemetry.
+	touchCh   chan string
+	touchOnce sync.Once
 }
+
+// touchQueueSize bounds the async LastUsedAt backlog.
+const touchQueueSize = 256
 
 // NewAPITokenStore returns a store backed by the given bbolt
 // handle. Ownership of the handle is retained by the caller.
@@ -123,6 +136,45 @@ func NewAPITokenStore(db *bolt.DB) *APITokenStore {
 		panic("auth.NewAPITokenStore: db is nil")
 	}
 	return &APITokenStore{db: db}
+}
+
+// TouchLastUsedAsync schedules a best-effort LastUsedAt update for the
+// token id through the single background worker, instead of the caller
+// spawning a goroutine per request. Non-blocking: when the queue is full
+// the update is dropped. This bounds both the goroutine count (one
+// worker) and the backlog (the buffered channel) regardless of request
+// rate (F52).
+func (s *APITokenStore) TouchLastUsedAsync(id string) {
+	s.touchOnce.Do(func() {
+		s.touchCh = make(chan string, touchQueueSize)
+		go s.touchWorker()
+	})
+	select {
+	case s.touchCh <- id:
+	default: // queue full — drop (best-effort telemetry)
+	}
+}
+
+// touchWorker serialises LastUsedAt writes and coalesces a burst: on each
+// wake it drains everything currently queued into a set and writes each
+// token id once, so repeated touches of the same token collapse to one
+// bbolt transaction.
+func (s *APITokenStore) touchWorker() {
+	for id := range s.touchCh {
+		batch := map[string]struct{}{id: {}}
+	drain:
+		for {
+			select {
+			case more := <-s.touchCh:
+				batch[more] = struct{}{}
+			default:
+				break drain
+			}
+		}
+		for tid := range batch {
+			_ = s.TouchLastUsed(context.Background(), tid)
+		}
+	}
 }
 
 // generatePlainToken builds a fresh "arn_<base64url>" token.
@@ -362,12 +414,12 @@ func (s *APITokenStore) ValidateAuthToken(
 // middleware calls it from a goroutine and ignores failures so
 // a transient bbolt write contention never blocks an
 // authenticated request.
-func (s *APITokenStore) TouchLastUsed(ctx context.Context, id string) error {
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-	}
+func (s *APITokenStore) TouchLastUsed(_ context.Context, id string) error {
+	// No ctx deadline is set here: bolt.DB.Update takes no context and
+	// blocks on the single-writer lock regardless, so a timeout would be
+	// decorative — the real bound on this path is the single worker that
+	// serialises these writes (TouchLastUsedAsync), not a per-call
+	// deadline (F52).
 	now := time.Now().UTC()
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(apiTokensBucketName))

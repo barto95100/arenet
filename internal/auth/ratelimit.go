@@ -66,6 +66,14 @@ const (
 	// failures, no active block) before being garbage-collected.
 	// Not in spec — implementation hygiene.
 	InactiveAfter = 2 * time.Hour
+
+	// maxLimiterEntries caps the per-IP state map so its memory is a
+	// constant, not a function of how many distinct source addresses an
+	// attacker can present (F50). At the cap, the least-recently-seen
+	// entry is evicted on insert. 50k entries is far above any real
+	// homelab's active-IP count while bounding the worst case to a few
+	// MiB.
+	maxLimiterEntries = 50000
 )
 
 // BlockedIP describes a currently rate-limited IP. Exposed for the
@@ -124,6 +132,10 @@ type RateLimiter struct {
 	// stays bounded. Guarded by ipGateMu, which is independent of mu.
 	ipGate   map[string]*ipGateEntry
 	ipGateMu sync.Mutex
+
+	// maxEntries caps the state map's cardinality (F50); defaults to
+	// maxLimiterEntries, lowered by tests.
+	maxEntries int
 }
 
 // ipGateEntry is a reference-counted per-IP mutex.
@@ -152,10 +164,11 @@ func NewRateLimiter(logger *slog.Logger) *RateLimiter {
 		panic("auth.NewRateLimiter: logger is nil")
 	}
 	return &RateLimiter{
-		state:   make(map[string]*counter),
-		logger:  logger,
-		nowFunc: time.Now,
-		ipGate:  make(map[string]*ipGateEntry),
+		state:      make(map[string]*counter),
+		logger:     logger,
+		nowFunc:    time.Now,
+		ipGate:     make(map[string]*ipGateEntry),
+		maxEntries: maxLimiterEntries,
 	}
 }
 
@@ -258,6 +271,16 @@ func (rl *RateLimiter) Hit(ip, attemptedUsername string) {
 	now := rl.now()
 	c := rl.state[ip]
 	if c == nil {
+		// Cap the map's cardinality (F50). Without this, each distinct
+		// source — an IPv6 /64, a botnet, or any loopback caller forging
+		// X-Forwarded-For — inserts a key that the 2-hour idle sweep does
+		// not reclaim for hours, so the footprint tracked attack
+		// cardinality rather than any limit. At the cap, evict the
+		// least-recently-seen entry; an IP under active attack has a
+		// fresh lastSeen and is never the victim.
+		if rl.maxEntries > 0 && len(rl.state) >= rl.maxEntries {
+			rl.evictOldestLocked()
+		}
 		c = &counter{}
 		rl.state[ip] = c
 	}
@@ -373,6 +396,25 @@ func (rl *RateLimiter) Reset(ip string) {
 // block to reconcile here.
 //
 // Empty IP is a no-op.
+// evictOldestLocked removes the entry with the oldest lastSeen. The
+// caller MUST hold rl.mu. Linear scan, acceptable because it runs only
+// when the map is at maxLimiterEntries (F50). The oldest entry is by
+// definition the least likely to be mid-attack — an attacker's own IP
+// has a fresh lastSeen from its latest Hit.
+func (rl *RateLimiter) evictOldestLocked() {
+	var oldestIP string
+	var oldest time.Time
+	first := true
+	for ip, c := range rl.state {
+		if first || c.lastSeen.Before(oldest) {
+			oldestIP, oldest, first = ip, c.lastSeen, false
+		}
+	}
+	if oldestIP != "" {
+		delete(rl.state, oldestIP)
+	}
+}
+
 func (rl *RateLimiter) ResetForUser(ip, username string) {
 	if ip == "" {
 		return
