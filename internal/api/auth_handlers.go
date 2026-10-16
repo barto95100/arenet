@@ -305,6 +305,10 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	user, err := h.users.GetByUsername(ctx, req.Username)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
+			// Pay the same KDF cost as a real wrong-password check so
+			// the response time does not betray that the account is
+			// absent (F28/F47/F58).
+			auth.EqualiseLoginTiming(req.Password)
 			h.emitLoginFailure(r, attempted, "user_not_found")
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return
@@ -324,6 +328,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		// machine identities (F46). emitLoginFailure records it so the
 		// per-IP limiter counts the probe like any other failure, rather
 		// than letting a 5xx run uncounted.
+		//
+		// Pay the KDF cost here too, so this branch is not a timing
+		// oracle for "account exists but has no local password"
+		// (F28/F47/F58).
+		auth.EqualiseLoginTiming(req.Password)
 		h.emitLoginFailure(r, attempted, "no_local_password")
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return

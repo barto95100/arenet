@@ -1856,3 +1856,51 @@ func TestLogin_NoLocalPassword_401SameAsBadPassword(t *testing.T) {
 		t.Errorf("body = %s; want the same message as a bad password", rec.Body.String())
 	}
 }
+
+// TestLogin_UnknownUser_PaysKDFCost pins F28/F47/F58: a login for a
+// nonexistent user must run the argon2id KDF (via the dummy-hash
+// equaliser) so its latency does not betray that the account is absent.
+// The gap this guards is enormous — a real KDF at 64 MiB is tens of ms,
+// a bare bucket scan is microseconds — so a 15ms floor sits safely
+// between them and is not flaky.
+func TestLogin_UnknownUser_PaysKDFCost(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, _ = adminBootstrap(t, env, token, "admin", testAdminPassword)
+
+	start := time.Now()
+	rec := postJSON(t, env.router, "/api/v1/auth/login", map[string]any{
+		"username": "no-such-account",
+		"password": "whatever-15-chars",
+	})
+	elapsed := time.Since(start)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", rec.Code)
+	}
+	if elapsed < 15*time.Millisecond {
+		t.Errorf("unknown-user login returned in %s — the KDF was skipped, leaking account absence by timing", elapsed)
+	}
+}
+
+// Same equalisation for an account with no local password (OIDC/service).
+func TestLogin_NoLocalPassword_PaysKDFCost(t *testing.T) {
+	env, token := setupTestEnv(t)
+	_, _ = adminBootstrap(t, env, token, "admin", testAdminPassword)
+	us := auth.NewUserStore(env.store.DB())
+	svc, err := us.CreateServiceAccount(context.Background(), "ci-timing", auth.UserRoleViewer)
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+
+	start := time.Now()
+	rec := postJSON(t, env.router, "/api/v1/auth/login", map[string]any{
+		"username": svc.Username,
+		"password": "whatever-15-chars",
+	})
+	elapsed := time.Since(start)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", rec.Code)
+	}
+	if elapsed < 15*time.Millisecond {
+		t.Errorf("no-local-password login returned in %s — the KDF was skipped, leaking account existence by timing", elapsed)
+	}
+}
