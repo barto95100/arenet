@@ -117,21 +117,12 @@ func scrubPayload(raw json.RawMessage, scrub func(map[string]json.RawMessage) bo
 func scrubRouteAuditPayload(m map[string]json.RawMessage) bool {
 	changed := false
 	for _, key := range []string{"request_headers", "response_headers"} {
-		changed = editObject(m, key, func(h map[string]json.RawMessage) bool {
-			c := false
-			for name := range h {
-				if storage.IsSensitiveHeader(name) {
-					c = setString(h, name, func(v string) string {
-						if v == "" {
-							return v
-						}
-						return auditRedacted
-					}) || c
-				}
-			}
-			return c
-		}) || changed
+		changed = editObject(m, key, scrubSensitiveHeaderValues) || changed
 	}
+	// health_check.headers carry the credential a probe uses to reach the
+	// backend; a stored row written before routeForAudit redacted them
+	// still has them in cleartext for a viewer to read (F48).
+	changed = scrubHealthCheckHeaders(m) || changed
 	changed = editObject(m, "basic_auth", blankPasswordHash) || changed
 	if raw, ok := m["path_rules"]; ok {
 		var rules []map[string]json.RawMessage
@@ -139,6 +130,7 @@ func scrubRouteAuditPayload(m map[string]json.RawMessage) bool {
 			rc := false
 			for _, r := range rules {
 				rc = editObject(r, "basic_auth", blankPasswordHash) || rc
+				rc = scrubHealthCheckHeaders(r) || rc
 			}
 			if rc {
 				if b, err := json.Marshal(rules); err == nil {
@@ -149,6 +141,32 @@ func scrubRouteAuditPayload(m map[string]json.RawMessage) bool {
 		}
 	}
 	return changed
+}
+
+// scrubSensitiveHeaderValues redacts the value of every credential-named
+// header in a header map (keeping the key so the operator still sees what
+// was configured).
+func scrubSensitiveHeaderValues(h map[string]json.RawMessage) bool {
+	c := false
+	for name := range h {
+		if storage.IsSensitiveHeader(name) {
+			c = setString(h, name, func(v string) string {
+				if v == "" {
+					return v
+				}
+				return auditRedacted
+			}) || c
+		}
+	}
+	return c
+}
+
+// scrubHealthCheckHeaders redacts the sensitive values inside
+// obj.health_check.headers, if present.
+func scrubHealthCheckHeaders(obj map[string]json.RawMessage) bool {
+	return editObject(obj, "health_check", func(hc map[string]json.RawMessage) bool {
+		return editObject(hc, "headers", scrubSensitiveHeaderValues)
+	})
 }
 
 func scrubChannelAuditPayload(m map[string]json.RawMessage) bool {

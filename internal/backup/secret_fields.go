@@ -69,6 +69,16 @@ func visitSecrets(s *Snapshot, fn secretFn) error {
 					}
 					rules[j].BasicAuth = &cp
 				}
+				// A path rule's own health-check headers carry the same
+				// probe credential and must not ship in cleartext (F48).
+				if hc := rules[j].HealthCheck; hc != nil && len(hc.Headers) > 0 {
+					cp := *hc
+					var herr error
+					if cp.Headers, herr = visitHeaders(base+"path_rules/"+rules[j].PathPrefix+"/health_check_headers", cp.Headers, fn); herr != nil {
+						return herr
+					}
+					rules[j].HealthCheck = &cp
+				}
 			}
 			r.PathRules = rules
 		}
@@ -77,6 +87,12 @@ func visitSecrets(s *Snapshot, fn secretFn) error {
 			return err
 		}
 		if r.ResponseHeaders, err = visitHeaders(base+"response_headers", r.ResponseHeaders, fn); err != nil {
+			return err
+		}
+		// The route's health-check headers carry the credential the probe
+		// uses to reach the backend; redact/seal them like the others so
+		// they do not ship in cleartext in a secrets-excluded export (F48).
+		if r.HealthCheck.Headers, err = visitHeaders(base+"health_check_headers", r.HealthCheck.Headers, fn); err != nil {
 			return err
 		}
 	}
