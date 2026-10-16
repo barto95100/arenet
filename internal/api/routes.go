@@ -107,10 +107,18 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 	r.Get("/system/health", h.systemHealth)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// F4/F31 — blanket anti-OOM ceiling on every request body in the
+		// subtree; the sensitive subtrees add a tighter cap below. See
+		// body_limit.go.
+		r.Use(bodyLimit(maxAPIBodyBytes))
 		// F37 — CSRF defence for every cookie-authenticated write on the
 		// admin API. See csrf.go; it no-ops for bearer and safe requests.
 		r.Use(csrfGuard())
 		r.Route("/auth", func(r chi.Router) {
+			// F4 — tight body cap on the unauthenticated / self-service
+			// auth surface, where a payload is only ever a few short
+			// fields. This is the pre-auth path to process OOM.
+			r.Use(bodyLimit(maxAuthBodyBytes))
 			// S.5 smoke finding #5 — rate-limit scoped back to
 			// /auth/* only (Step Q's original scope), reverting
 			// the Step S.4 lift to /api/v1/*. The broader scope
@@ -316,7 +324,9 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 			// enrichment without a per-IP round-trip. Cap
 			// 256 IPs / request. AC #13 degraded path :
 			// empty country codes when MMDB absent.
-			r.Post("/geo/lookup-batch", h.geoLookupBatch)
+			// F31 — the handler caps the IP count only after decoding,
+			// so the body needs its own tight bound ahead of it.
+			r.With(bodyLimit(maxGeoBatchBodyBytes)).Post("/geo/lookup-batch", h.geoLookupBatch)
 			// Step V.4 — server geographic position (read).
 			// Returns the current Mercator-center coordinates
 			// + mode (auto|manual) per spec §5.1. Viewer-
