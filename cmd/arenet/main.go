@@ -613,67 +613,16 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	for _, perr := range cbTrustedErrs {
 		logger.Warn("country block: dropping invalid trusted-IP entry", "err", perr)
 	}
-	// Early-stage globals — nil-inner adapter (degraded fail-
-	// open path); real lookup + client-IP resolver land later
-	// in boot via the same atomic.Pointer setters.
-	countryblock.SetGlobalLookup(countryBlockGeoLookup{inner: nil})
-	countryblock.SetGlobalTrustedIPs(cbTrustedIPs)
-	countryblock.SetGlobalDefaultStatusCode(cbStatusCode)
-
-	if err := mgr.Start(ctx); err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := mgr.Stop(); cerr != nil {
-			logger.Error("caddy stop error", "err", cerr)
-			if retErr == nil {
-				retErr = cerr
-			}
-		}
-	}()
-
-	// Build the metrics ticker FIRST so we can wire the
-	// observability consumer (Step L L.7) on it BEFORE the tick
-	// goroutine starts. The ticker reads .consumer without
-	// synchronisation from its hot loop, so SetConsumer must
-	// happen pre-Run.
-	metricsTicker := metrics.NewTicker(metricsRegistry, metricsBroadcaster, &storeLister{store: store})
-
-	// Step L L.1 — observability subsystem (per-route metrics
-	// history on SQLite). AC #13 degraded-mode policy: if any
-	// step here fails, log the error and continue WITHOUT the
-	// metrics history. The Caddy data plane and the Step E live
-	// pipeline must keep running.
-	//
-	// The aggregator and retention runner are started even when
-	// the store is nil — they become silent no-ops (the
-	// aggregator still drains its ingress channel so the
-	// producer never blocks; the retention runner ticks but
-	// finds nothing to do). This uniform shape keeps the wire-up
-	// simple: the ticker always has a valid TickConsumer to feed.
-	obsPath := filepath.Join(cfg.DataDir, "metrics.db")
-	obsStore, obsErr := observability.Open(ctx, obsPath)
-	if obsErr != nil {
-		logger.Error("observability: metrics DB unavailable — continuing without metrics history (AC #13)",
-			"path", obsPath, "err", obsErr,
-		)
-		obsStore = nil
-	} else {
-		logger.Info("observability storage opened", "path", obsPath)
-	}
-
-	// Step V.1 — GeoIP lookup + server position auto-detect.
-	//
-	// Both components are degraded-mode tolerant per spec §3.7:
-	// missing MMDB or network failure yields nil/no-position, V.2
-	// sinks read nil as "skip enrichment", V.4 will surface manual
-	// override as the operator escape hatch. No fatal exit, no
-	// panic — matches the AC #13 pattern from Step T.
-	//
-	// MMDB path resolution per spec §3.2: ARENET_GEOIP_MMDB env
-	// override beats the canonical /var/lib/arenet path. Boot-log
-	// signals follow the HF4 pattern (commit 30418ea) so future
-	// wire-up regressions surface in journalctl, not silently.
+	// F53/F54 — open the GeoIP databases and install the REAL
+	// country-block lookup BEFORE mgr.Start binds the public
+	// listeners. Previously a nil-inner placeholder was installed
+	// here and the real lookup only landed much later in boot, so
+	// every country-gated route failed open for the whole window
+	// between Start and that late install — an unlogged bypass once
+	// per restart. Opening here depends on nothing initialised after
+	// Start, and the geoLookup.Close defer registered here (before
+	// mgr.Stop's below) also makes LIFO tear the readers down after
+	// the data plane stops.
 	geoMMDBPath := os.Getenv("ARENET_GEOIP_MMDB")
 	if geoMMDBPath == "" {
 		geoMMDBPath = "/var/lib/arenet/GeoLite2-City.mmdb"
@@ -741,6 +690,56 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	defer func() { _ = asnLookup.Close() }()
 
 	countryblock.SetGlobalLookup(countryBlockGeoLookup{inner: geoLookup, asn: asnLookup})
+	countryblock.SetGlobalTrustedIPs(cbTrustedIPs)
+	countryblock.SetGlobalDefaultStatusCode(cbStatusCode)
+
+	if err := mgr.Start(ctx); err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := mgr.Stop(); cerr != nil {
+			logger.Error("caddy stop error", "err", cerr)
+			if retErr == nil {
+				retErr = cerr
+			}
+		}
+	}()
+
+	// Build the metrics ticker FIRST so we can wire the
+	// observability consumer (Step L L.7) on it BEFORE the tick
+	// goroutine starts. The ticker reads .consumer without
+	// synchronisation from its hot loop, so SetConsumer must
+	// happen pre-Run.
+	metricsTicker := metrics.NewTicker(metricsRegistry, metricsBroadcaster, &storeLister{store: store})
+
+	// Step L L.1 — observability subsystem (per-route metrics
+	// history on SQLite). AC #13 degraded-mode policy: if any
+	// step here fails, log the error and continue WITHOUT the
+	// metrics history. The Caddy data plane and the Step E live
+	// pipeline must keep running.
+	//
+	// The aggregator and retention runner are started even when
+	// the store is nil — they become silent no-ops (the
+	// aggregator still drains its ingress channel so the
+	// producer never blocks; the retention runner ticks but
+	// finds nothing to do). This uniform shape keeps the wire-up
+	// simple: the ticker always has a valid TickConsumer to feed.
+	obsPath := filepath.Join(cfg.DataDir, "metrics.db")
+	obsStore, obsErr := observability.Open(ctx, obsPath)
+	if obsErr != nil {
+		logger.Error("observability: metrics DB unavailable — continuing without metrics history (AC #13)",
+			"path", obsPath, "err", obsErr,
+		)
+		obsStore = nil
+	} else {
+		logger.Info("observability storage opened", "path", obsPath)
+	}
+
+	// Step V.1 — the GeoIP City/ASN lookups are now opened and the
+	// country-block adapter installed BEFORE mgr.Start (see the F53/F54
+	// block above), so geoLookup/asnLookup already exist here. Both are
+	// degraded-mode tolerant per spec §3.7: a missing MMDB yields
+	// Found:false and the updater installs a DB live via Reload.
 
 	// Step V.4 — server position resolution. Order of
 	// precedence (spec §5.1):
