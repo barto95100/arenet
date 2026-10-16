@@ -166,10 +166,18 @@ func TestForwardAuthPassthrough_MirrorsTheMainChainGates(t *testing.T) {
 	if len(main) == 0 {
 		t.Fatal("did not find the main route's gate block")
 	}
-	if !reflect.DeepEqual(passthrough, main) {
+	// The main chain opens (after metrics) with exactly the passthrough's
+	// perimeter gates, then adds the auth stage the passthrough omits (the
+	// forward-auth gate is a subroute that lands in `main` after the
+	// perimeter). So the passthrough must be the PREFIX of the main gate
+	// block: every perimeter gate the host carries, the IdP endpoint
+	// carries too, in the same order (the F17 drift guard); anything the
+	// main chain adds beyond that prefix is auth, which is correctly
+	// absent from the passthrough.
+	if len(main) < len(passthrough) || !reflect.DeepEqual(passthrough, main[:len(passthrough)]) {
 		t.Errorf("passthrough and main-chain perimeter gates have drifted apart:\n"+
 			"  passthrough = %v\n  main chain  = %v\n"+
-			"a gate on the host that the IdP endpoint does not also carry is the F17 hole",
+			"a perimeter gate on the host that the IdP endpoint does not also carry is the F17 hole",
 			passthrough, main)
 	}
 }

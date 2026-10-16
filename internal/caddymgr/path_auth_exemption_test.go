@@ -193,10 +193,24 @@ func TestPathAuthExemption_GateSkipsTheExemptedPaths(t *testing.T) {
 			"pattern only; the prefix rules contribute both forms)", got, want)
 	}
 
-	// The gate itself is still the forward-auth handler, not something else.
+	// The gate itself is still the forward-auth gate, not something else.
+	// Since F34/F35/F44/F45 the gate is a subroute wrapping the
+	// identity-header strip and the forward_auth reverse_proxy, so the
+	// non-exempted paths are both stripped and authenticated.
 	gateHandle := routes[0].(map[string]any)["handle"].([]any)
-	if name, _ := gateHandle[0].(map[string]any)["handler"].(string); name != "reverse_proxy" {
-		t.Errorf("gated handler = %q; want the forward-auth reverse_proxy", name)
+	gateSub, _ := gateHandle[0].(map[string]any)
+	if gateSub["handler"] != "subroute" {
+		t.Fatalf("gated handler = %q; want the forward-auth gate subroute", gateSub["handler"])
+	}
+	var foundFA bool
+	for _, ir := range gateSub["routes"].([]any) {
+		h, _ := ir.(map[string]any)["handle"].([]any)[0].(map[string]any)
+		if h["handler"] == "reverse_proxy" {
+			foundFA = true
+		}
+	}
+	if !foundFA {
+		t.Errorf("no forward-auth reverse_proxy inside the gate subroute: %v", gateSub)
 	}
 }
 

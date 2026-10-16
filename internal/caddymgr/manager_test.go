@@ -2655,6 +2655,31 @@ func firstReverseProxyHandler(t *testing.T, raw []byte) map[string]any {
 	return nil
 }
 
+// forwardAuthProxy returns the forward_auth reverse_proxy handler for a
+// route. Since F34/F35/F44/F45 the gate at index 1 (after metrics) is a
+// subroute wrapping an identity-header strip followed by the
+// forward_auth reverse_proxy; this descends into it and returns that
+// reverse_proxy so position-based forward-auth tests keep working.
+func forwardAuthProxy(t *testing.T, target map[string]any) map[string]any {
+	t.Helper()
+	handlers := unwrapHandlers(target)
+	if len(handlers) < 2 {
+		t.Fatalf("handler chain too short for a forward-auth gate: %v", handlers)
+	}
+	gate, _ := handlers[1].(map[string]any)
+	if gate["handler"] != "subroute" {
+		t.Fatalf("forward_auth gate is %v; want subroute (strip + forward_auth)", gate["handler"])
+	}
+	for _, irAny := range gate["routes"].([]any) {
+		h, _ := irAny.(map[string]any)["handle"].([]any)[0].(map[string]any)
+		if h["handler"] == "reverse_proxy" {
+			return h
+		}
+	}
+	t.Fatalf("no forward_auth reverse_proxy inside the gate subroute: %v", gate)
+	return nil
+}
+
 // TestBuildConfigJSON_LBPolicy_<X> — one test per LB policy. Every
 // policy must reach the emitted JSON as the value of
 // load_balancing.selection_policy.policy, verbatim. The constants
@@ -3142,14 +3167,33 @@ func TestBuildConfigJSON_LoadsCleanly_ForwardAuth(t *testing.T) {
 	httpRoutes := httpSrv["routes"].([]any)
 	target := findRouteByHost(t, httpRoutes, "protected.example.com")
 	handlers := unwrapHandlers(target)
-	// Chain: [metrics, forward_auth_proxy, ..., real_proxy]. The
-	// forward_auth handler is at index 1 (right after metrics).
+	// Chain: [metrics, forward_auth_gate, ..., real_proxy]. The
+	// forward-auth gate at index 1 is now a subroute wrapping the
+	// identity-header strip and the forward_auth reverse_proxy (F34/F35);
+	// reach into it for the forward_auth handler itself.
 	if len(handlers) < 3 {
 		t.Fatalf("handler chain too short: %v", handlers)
 	}
-	faHandler := handlers[1].(map[string]any)
-	if faHandler["handler"] != "reverse_proxy" {
-		t.Errorf("forward_auth handler is %v; want reverse_proxy", faHandler["handler"])
+	faGate := handlers[1].(map[string]any)
+	if faGate["handler"] != "subroute" {
+		t.Fatalf("forward_auth gate is %v; want subroute (strip + forward_auth)", faGate["handler"])
+	}
+	// The strip must come first and delete the conventional identity set.
+	gateRoutes := faGate["routes"].([]any)
+	stripHandle := gateRoutes[0].(map[string]any)["handle"].([]any)[0].(map[string]any)
+	if stripHandle["handler"] != "headers" {
+		t.Errorf("forward-auth gate does not lead with a headers strip: %v", stripHandle["handler"])
+	}
+	var faHandler map[string]any
+	for _, ir := range gateRoutes {
+		h := ir.(map[string]any)["handle"].([]any)[0].(map[string]any)
+		if h["handler"] == "reverse_proxy" {
+			faHandler = h
+			break
+		}
+	}
+	if faHandler == nil {
+		t.Fatalf("no forward_auth reverse_proxy inside the gate subroute: %v", faGate)
 	}
 	upstreams := faHandler["upstreams"].([]any)
 	if dial := upstreams[0].(map[string]any)["dial"]; dial != "127.0.0.1:9091" {
@@ -3548,9 +3592,7 @@ func TestBuildConfigJSON_ForwardAuth_HTTPSVerifyURL_UsesTLSTransport(t *testing.
 	httpSrv := servers["arenet_http"].(map[string]any)
 	httpRoutes := httpSrv["routes"].([]any)
 	target := findRouteByHost(t, httpRoutes, "tls-protected.example.com")
-	handlers := unwrapHandlers(target)
-	// forward_auth handler is at index 1 (after metrics).
-	fa := handlers[1].(map[string]any)
+	fa := forwardAuthProxy(t, target)
 	transport, ok := fa["transport"].(map[string]any)
 	if !ok {
 		t.Fatalf("TLS TRANSPORT REGRESSION: forward_auth handler missing transport block for HTTPS VerifyURL; Caddy will default to plain HTTP and the IdP will reject every sub-request with 400. Handler: %v", fa)
@@ -3603,7 +3645,7 @@ func TestBuildConfigJSON_ForwardAuth_HTTPVerifyURL_NoTLSTransport(t *testing.T) 
 	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
 	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
 	target := findRouteByHost(t, httpRoutes, "plain-http.example.com")
-	fa := unwrapHandlers(target)[1].(map[string]any)
+	fa := forwardAuthProxy(t, target)
 	if _, hasTransport := fa["transport"]; hasTransport {
 		t.Errorf("LEGACY SHAPE REGRESSION: HTTP-only verify URL gained a transport block: %v", fa["transport"])
 	}
@@ -3755,9 +3797,7 @@ func TestBuildConfigJSON_ForwardAuth_RewriteVerifyHost_HostSetToUpstream(t *test
 	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
 	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
 	target := findRouteByHost(t, httpRoutes, "protected.example.com")
-	// forward_auth handler is at index 1 (after metrics) inside
-	// the unwrapped subroute chain.
-	fa := unwrapHandlers(target)[1].(map[string]any)
+	fa := forwardAuthProxy(t, target)
 	headers := fa["headers"].(map[string]any)["request"].(map[string]any)["set"].(map[string]any)
 	hostVal, ok := headers["Host"]
 	if !ok {
@@ -3809,7 +3849,7 @@ func TestBuildConfigJSON_ForwardAuth_RewriteVerifyHost_DefaultFalse_NoHostSet(t 
 	servers := full["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)
 	httpRoutes := servers["arenet_http"].(map[string]any)["routes"].([]any)
 	target := findRouteByHost(t, httpRoutes, "canon.example.com")
-	fa := unwrapHandlers(target)[1].(map[string]any)
+	fa := forwardAuthProxy(t, target)
 	headers := fa["headers"].(map[string]any)["request"].(map[string]any)["set"].(map[string]any)
 	if _, hasHost := headers["Host"]; hasHost {
 		t.Errorf("CANONICAL SHAPE REGRESSION: Host header was set on the sub-request without RewriteVerifyHost opt-in. headers: %v", headers)

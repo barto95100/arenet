@@ -1905,7 +1905,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				// provider is passed so the headers it copies are stripped
 				// on the exempted paths, on top of the conventional set.
 				handlers = append(handlers, buildPathAuthExemption(
-					buildForwardAuthHandler(provider), r.PathRules, &provider)...)
+					buildForwardAuthGate(provider), r.PathRules, &provider)...)
 				// Capture for the passthrough-route block below.
 				// Local-variable copy — the loop iteration reuses
 				// the same map key on the next route, so we take a
@@ -2024,7 +2024,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 				if !found {
 					return buildForwardAuthDenyHandler(providerName), false
 				}
-				return buildForwardAuthHandler(provider), true
+				return buildForwardAuthGate(provider), true
 			}, pathProxy)
 			if err != nil {
 				return nil, fmt.Errorf("route %s (%s) path rules: %w", r.ID, r.Host, err)
@@ -3847,6 +3847,31 @@ func buildBasicAuthHandlerFromConfig(c storage.BasicAuthRouteConfig, realm strin
 //     CopyHeaders list still produces a valid forward_auth gate
 //     (auth check happens, but no claims are forwarded to the
 //     upstream).
+//
+// buildForwardAuthGate wraps buildForwardAuthHandler with a request-
+// header strip, so on a gated path a client cannot spoof an identity
+// header the upstream trusts (F34/F35/F44/F45). forward_auth only ever
+// deleted the provider's CopyHeaders from the request; a conventional
+// identity header the provider does not copy — Remote-Groups,
+// X-Authentik-*, X-Forwarded-User — was proxied verbatim, and an upstream
+// that reads it for role mapping believed the client's value.
+//
+// identityHeadersToStrip is the union of the conventional set and the
+// provider's copy headers; deleting them from the incoming request BEFORE
+// the verify sub-request means only the IdP's values — re-set in the
+// handler's handle_response — reach the upstream. This mirrors the strip
+// buildPathAuthExemption already applies on exempted paths, now applied on
+// the gated path too.
+func buildForwardAuthGate(p storage.ForwardAuthProvider) map[string]any {
+	strip := map[string]any{
+		"handler": "headers",
+		"request": map[string]any{
+			"delete": identityHeadersToStrip(&p),
+		},
+	}
+	return wrapInSubroute([]map[string]any{strip, buildForwardAuthHandler(p)})
+}
+
 func buildForwardAuthHandler(p storage.ForwardAuthProvider) map[string]any {
 	// Build the per-header copy routes. For each header, two
 	// routes mirror the Caddyfile expansion: (1) delete the
