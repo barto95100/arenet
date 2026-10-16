@@ -194,3 +194,52 @@ func TestScrubAuditSecrets_ScrubsLastErrorAndDiscordURL(t *testing.T) {
 		t.Errorf("second scrub rewrote %d events", n)
 	}
 }
+
+// TestScrubAuditSecrets_ScrubsHealthCheckHeaders pins F48 for stored
+// rows: a health-check probe credential (route-level and path-rule) that
+// a pre-redaction version wrote into an audit row must be cleaned by the
+// boot scrub, since GET /audit is viewer-readable and does not redact on
+// read.
+func TestScrubAuditSecrets_ScrubsHealthCheckHeaders(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewStore(filepath.Join(t.TempDir(), "arenet.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	as := audit.NewStore(store.DB())
+
+	r := storage.Route{
+		ID:   "r1",
+		Host: "app.example.com",
+		HealthCheck: storage.HealthCheck{
+			Enabled: true, URI: "/healthz",
+			Headers: map[string]string{"Authorization": leakHeader},
+		},
+		PathRules: []storage.PathRule{{
+			PathPrefix: "/api",
+			HealthCheck: &storage.HealthCheck{
+				Enabled: true, URI: "/api/healthz",
+				Headers: map[string]string{"X-Api-Key": leakHeader},
+			},
+		}},
+	}
+	rJSON, _ := json.Marshal(r)
+	if err := as.Append(ctx, audit.Event{
+		Action: "route_updated", TargetType: auditTargetRoute, TargetID: "r1", BeforeJSON: rJSON,
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	if _, err := ScrubAuditSecrets(ctx, as); err != nil {
+		t.Fatalf("ScrubAuditSecrets: %v", err)
+	}
+	after, _, _ := as.List(ctx, audit.Filter{Limit: 10})
+	for _, e := range after {
+		assertNoLeak(t, e.Action, append(append([]byte{}, e.BeforeJSON...), e.AfterJSON...))
+	}
+	// Idempotent.
+	if n, _ := ScrubAuditSecrets(ctx, as); n != 0 {
+		t.Errorf("second scrub rewrote %d events", n)
+	}
+}
