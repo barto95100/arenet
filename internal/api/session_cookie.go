@@ -187,6 +187,7 @@ func normalizeLanguageForCookie(language string) string {
 	}
 	return auth.LanguageEnglish
 }
+
 // isSecureRequest returns true when the request was served over TLS,
 // in which case cookies may be set with the Secure attribute.
 //
@@ -199,15 +200,30 @@ func normalizeLanguageForCookie(language string) string {
 // dropped — every subsequent request comes in with no cookie and
 // hits the 401 unauthenticated path. See finding #S-11.
 //
-// Future-proofing: when Arenet sits behind a TLS-terminating
-// upstream proxy (Caddy, Traefik, Nginx), X-Forwarded-Proto
-// would carry the original scheme. Trusting this header requires
-// gating on the trusted-proxies list (Arenet already has the
-// infrastructure via ARENET_TRUSTED_PROXIES). Adding the
-// X-Forwarded-Proto path is intentionally deferred — the common
-// deployments (SSH-tunneled loopback admin, direct HTTPS via
-// Arenet's own TLS, or LAN HTTP admin) all work with the r.TLS
-// check alone.
+// When Arenet sits behind a TLS-terminating proxy — including its own
+// embedded Caddy, which is the documented way to reach the admin UI:
+// an Arenet HTTPS route terminates TLS and proxies to 127.0.0.1:8001
+// over plaintext HTTP with X-Forwarded-Proto: https — r.TLS is nil even
+// though the browser's connection is HTTPS. Keying Secure off r.TLS
+// alone dropped Secure in exactly that deployment (F11). The resolved
+// flag from IPExtractMiddleware (auth.RequestIsSecureFromContext)
+// closes the gap: it is true for direct TLS AND for a trusted proxy
+// (loopback ∪ ARENET_TRUSTED_PROXIES) that forwarded
+// X-Forwarded-Proto: https, while an untrusted caller's forwarded
+// scheme is ignored so it cannot be forged.
+//
+// The direct r.TLS check is kept as a fallback for requests that never
+// passed through the middleware (unit tests, internal callers). The
+// plaintext loopback admin path (SSH tunnel, direct HTTP on 127.0.0.1)
+// still resolves to false — no X-Forwarded-Proto is present — so the
+// cookie keeps working there (localhost is a browser secure context
+// regardless). See finding #S-11 / F11.
 func isSecureRequest(r *http.Request) bool {
-	return r != nil && r.TLS != nil
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	return auth.RequestIsSecureFromContext(r.Context())
 }

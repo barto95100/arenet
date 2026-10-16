@@ -158,6 +158,60 @@ func (e *IPExtractor) ClientIP(r *http.Request) string {
 	return leftmost
 }
 
+// callerTrusted reports whether the immediate caller (r.RemoteAddr,
+// NOT any forwarded value) is in the trusted set — loopback, always,
+// plus ARENET_TRUSTED_PROXIES. It is the same gate ClientIP applies
+// before honoring X-Forwarded-For, kept separate so RequestIsSecure can
+// reuse it for X-Forwarded-Proto without disturbing the IP path.
+func (e *IPExtractor) callerTrusted(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range e.trustedCIDRs {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// forwardedProtoIsHTTPS reports whether the leftmost X-Forwarded-Proto
+// entry is "https". The leftmost value is the scheme the original
+// client used to reach the outermost proxy; intermediate hops append
+// to the right. Caller trust is NOT checked here — RequestIsSecure
+// gates on callerTrusted first.
+func forwardedProtoIsHTTPS(r *http.Request) bool {
+	xfp := r.Header.Get("X-Forwarded-Proto")
+	if xfp == "" {
+		return false
+	}
+	first := strings.TrimSpace(strings.SplitN(xfp, ",", 2)[0])
+	return strings.EqualFold(first, "https")
+}
+
+// RequestIsSecure reports whether the request reached Arenet over a
+// secure transport: directly over TLS, or through a TLS-terminating
+// proxy whose immediate hop is trusted and that set
+// X-Forwarded-Proto: https. An untrusted caller's X-Forwarded-Proto is
+// ignored, so a client on a plaintext path cannot forge a secure
+// context and trick Arenet into emitting Secure cookies it would then
+// have to honor. Consumed via RequestIsSecureFromContext by the
+// Set-Cookie helpers (F11).
+func (e *IPExtractor) RequestIsSecure(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	return e.callerTrusted(r) && forwardedProtoIsHTTPS(r)
+}
+
 // IPExtractMiddleware returns a chi-compatible middleware that
 // resolves the client IP via the extractor and stores it in the
 // request context under ClientIPKey (spec §8.6).
@@ -172,6 +226,7 @@ func IPExtractMiddleware(extractor *IPExtractor) func(http.Handler) http.Handler
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := extractor.ClientIP(r)
 			ctx := context.WithValue(r.Context(), ClientIPKey, ip)
+			ctx = context.WithValue(ctx, RequestSecureKey, extractor.RequestIsSecure(r))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

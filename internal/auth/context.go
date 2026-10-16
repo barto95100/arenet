@@ -66,6 +66,17 @@ const (
 	// Populated by IPExtractMiddleware near the top of the stack.
 	ClientIPKey ctxKey = "auth.client_ip"
 
+	// RequestSecureKey is true when the request reached Arenet over a
+	// secure transport — either directly (r.TLS != nil) or through a
+	// TLS-terminating proxy whose immediate hop is in the trusted set
+	// (loopback ∪ ARENET_TRUSTED_PROXIES) that forwarded
+	// X-Forwarded-Proto: https. Populated by IPExtractMiddleware;
+	// consumed by the Set-Cookie helpers in internal/api to decide the
+	// Secure attribute (F11). The trust gate matches ClientIPKey's:
+	// X-Forwarded-Proto from an untrusted caller is ignored, so a
+	// client cannot forge a secure context.
+	RequestSecureKey ctxKey = "auth.request_secure"
+
 	// RoleKey is the authenticated user's role ("viewer" or
 	// "admin") populated by SoftAuthMiddleware on success.
 	// Consumed by RequireAdminMiddleware to gate write
@@ -137,6 +148,17 @@ func IsLockedFromContext(ctx context.Context) bool {
 // when r.RemoteAddr was unparseable.
 func ClientIPFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(ClientIPKey).(string)
+	return v
+}
+
+// RequestIsSecureFromContext reports whether the request reached
+// Arenet over a secure transport (direct TLS, or a trusted proxy that
+// forwarded X-Forwarded-Proto: https). Returns false when
+// IPExtractMiddleware has not run, which is the safe default: a cookie
+// without Secure is still stored, whereas a Secure cookie set over a
+// genuinely plaintext context would be silently dropped by the browser.
+func RequestIsSecureFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(RequestSecureKey).(bool)
 	return v
 }
 
