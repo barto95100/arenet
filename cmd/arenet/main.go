@@ -1998,7 +1998,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		Addr:              cfg.AdminPort,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// MaxHeaderBytes is set explicitly (the net/http default is 1
+		// MiB) to bound header memory per connection. ReadTimeout is
+		// deliberately NOT set: it would apply to the whole connection
+		// read, which would cut off the long-lived live-metrics and
+		// topology WebSockets served by this same listener. Request-body
+		// memory is bounded instead by the bodyLimit middleware
+		// (internal/api/body_limit.go, F4/F31).
+		MaxHeaderBytes: 1 << 20,
+		IdleTimeout:    60 * time.Second,
 		// BaseContext propagates the process-level ctx (cancelled by
 		// SIGINT / SIGTERM) into each request's context. Hijacked
 		// connections — like the Step E WebSocket at
