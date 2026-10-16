@@ -1433,122 +1433,148 @@
                             {
                               "handle": [
                                 {
-                                  "handle_response": [
+                                  "handler": "subroute",
+                                  "routes": [
                                     {
-                                      "match": {
-                                        "status_code": [
-                                          2
-                                        ]
-                                      },
-                                      "routes": [
+                                      "handle": [
                                         {
-                                          "handle": [
-                                            {
-                                              "handler": "vars"
-                                            }
-                                          ]
-                                        },
+                                          "handler": "headers",
+                                          "request": {
+                                            "delete": [
+                                              "Remote-Email",
+                                              "Remote-Groups",
+                                              "Remote-Name",
+                                              "Remote-User",
+                                              "X-Authentik-*",
+                                              "X-Forwarded-User"
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "handle": [
                                         {
-                                          "handle": [
+                                          "handle_response": [
                                             {
-                                              "handler": "headers",
-                                              "request": {
-                                                "delete": [
-                                                  "Remote-User"
+                                              "match": {
+                                                "status_code": [
+                                                  2
                                                 ]
-                                              }
-                                            }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
-                                            {
-                                              "handler": "headers",
-                                              "request": {
-                                                "set": {
-                                                  "Remote-User": [
-                                                    "{http.reverse_proxy.header.Remote-User}"
-                                                  ]
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "match": [
-                                            {
-                                              "not": [
+                                              },
+                                              "routes": [
                                                 {
-                                                  "vars": {
-                                                    "{http.reverse_proxy.header.Remote-User}": [
-                                                      ""
-                                                    ]
-                                                  }
+                                                  "handle": [
+                                                    {
+                                                      "handler": "vars"
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "delete": [
+                                                          "Remote-User"
+                                                        ]
+                                                      }
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "set": {
+                                                          "Remote-User": [
+                                                            "{http.reverse_proxy.header.Remote-User}"
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "match": [
+                                                    {
+                                                      "not": [
+                                                        {
+                                                          "vars": {
+                                                            "{http.reverse_proxy.header.Remote-User}": [
+                                                              ""
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "delete": [
+                                                          "Remote-Email"
+                                                        ]
+                                                      }
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "set": {
+                                                          "Remote-Email": [
+                                                            "{http.reverse_proxy.header.Remote-Email}"
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "match": [
+                                                    {
+                                                      "not": [
+                                                        {
+                                                          "vars": {
+                                                            "{http.reverse_proxy.header.Remote-Email}": [
+                                                              ""
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
                                                 }
                                               ]
                                             }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
-                                            {
-                                              "handler": "headers",
-                                              "request": {
-                                                "delete": [
-                                                  "Remote-Email"
+                                          ],
+                                          "handler": "reverse_proxy",
+                                          "headers": {
+                                            "request": {
+                                              "set": {
+                                                "X-Forwarded-Method": [
+                                                  "{http.request.method}"
+                                                ],
+                                                "X-Forwarded-Uri": [
+                                                  "{http.request.uri}"
                                                 ]
                                               }
                                             }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
+                                          },
+                                          "rewrite": {
+                                            "method": "GET",
+                                            "uri": "/api/authz/forward-auth"
+                                          },
+                                          "upstreams": [
                                             {
-                                              "handler": "headers",
-                                              "request": {
-                                                "set": {
-                                                  "Remote-Email": [
-                                                    "{http.reverse_proxy.header.Remote-Email}"
-                                                  ]
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "match": [
-                                            {
-                                              "not": [
-                                                {
-                                                  "vars": {
-                                                    "{http.reverse_proxy.header.Remote-Email}": [
-                                                      ""
-                                                    ]
-                                                  }
-                                                }
-                                              ]
+                                              "dial": "127.0.0.1:9091"
                                             }
                                           ]
                                         }
                                       ]
-                                    }
-                                  ],
-                                  "handler": "reverse_proxy",
-                                  "headers": {
-                                    "request": {
-                                      "set": {
-                                        "X-Forwarded-Method": [
-                                          "{http.request.method}"
-                                        ],
-                                        "X-Forwarded-Uri": [
-                                          "{http.request.uri}"
-                                        ]
-                                      }
-                                    }
-                                  },
-                                  "rewrite": {
-                                    "method": "GET",
-                                    "uri": "/api/authz/forward-auth"
-                                  },
-                                  "upstreams": [
-                                    {
-                                      "dial": "127.0.0.1:9091"
                                     }
                                   ]
                                 }
@@ -1740,122 +1766,148 @@
                             {
                               "handle": [
                                 {
-                                  "handle_response": [
+                                  "handler": "subroute",
+                                  "routes": [
                                     {
-                                      "match": {
-                                        "status_code": [
-                                          2
-                                        ]
-                                      },
-                                      "routes": [
+                                      "handle": [
                                         {
-                                          "handle": [
-                                            {
-                                              "handler": "vars"
-                                            }
-                                          ]
-                                        },
+                                          "handler": "headers",
+                                          "request": {
+                                            "delete": [
+                                              "Remote-Email",
+                                              "Remote-Groups",
+                                              "Remote-Name",
+                                              "Remote-User",
+                                              "X-Authentik-*",
+                                              "X-Forwarded-User"
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "handle": [
                                         {
-                                          "handle": [
+                                          "handle_response": [
                                             {
-                                              "handler": "headers",
-                                              "request": {
-                                                "delete": [
-                                                  "Remote-User"
+                                              "match": {
+                                                "status_code": [
+                                                  2
                                                 ]
-                                              }
-                                            }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
-                                            {
-                                              "handler": "headers",
-                                              "request": {
-                                                "set": {
-                                                  "Remote-User": [
-                                                    "{http.reverse_proxy.header.Remote-User}"
-                                                  ]
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "match": [
-                                            {
-                                              "not": [
+                                              },
+                                              "routes": [
                                                 {
-                                                  "vars": {
-                                                    "{http.reverse_proxy.header.Remote-User}": [
-                                                      ""
-                                                    ]
-                                                  }
+                                                  "handle": [
+                                                    {
+                                                      "handler": "vars"
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "delete": [
+                                                          "Remote-User"
+                                                        ]
+                                                      }
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "set": {
+                                                          "Remote-User": [
+                                                            "{http.reverse_proxy.header.Remote-User}"
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "match": [
+                                                    {
+                                                      "not": [
+                                                        {
+                                                          "vars": {
+                                                            "{http.reverse_proxy.header.Remote-User}": [
+                                                              ""
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "delete": [
+                                                          "Remote-Email"
+                                                        ]
+                                                      }
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "set": {
+                                                          "Remote-Email": [
+                                                            "{http.reverse_proxy.header.Remote-Email}"
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "match": [
+                                                    {
+                                                      "not": [
+                                                        {
+                                                          "vars": {
+                                                            "{http.reverse_proxy.header.Remote-Email}": [
+                                                              ""
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
                                                 }
                                               ]
                                             }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
-                                            {
-                                              "handler": "headers",
-                                              "request": {
-                                                "delete": [
-                                                  "Remote-Email"
+                                          ],
+                                          "handler": "reverse_proxy",
+                                          "headers": {
+                                            "request": {
+                                              "set": {
+                                                "X-Forwarded-Method": [
+                                                  "{http.request.method}"
+                                                ],
+                                                "X-Forwarded-Uri": [
+                                                  "{http.request.uri}"
                                                 ]
                                               }
                                             }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
+                                          },
+                                          "rewrite": {
+                                            "method": "GET",
+                                            "uri": "/api/authz/forward-auth"
+                                          },
+                                          "upstreams": [
                                             {
-                                              "handler": "headers",
-                                              "request": {
-                                                "set": {
-                                                  "Remote-Email": [
-                                                    "{http.reverse_proxy.header.Remote-Email}"
-                                                  ]
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "match": [
-                                            {
-                                              "not": [
-                                                {
-                                                  "vars": {
-                                                    "{http.reverse_proxy.header.Remote-Email}": [
-                                                      ""
-                                                    ]
-                                                  }
-                                                }
-                                              ]
+                                              "dial": "127.0.0.1:9091"
                                             }
                                           ]
                                         }
                                       ]
-                                    }
-                                  ],
-                                  "handler": "reverse_proxy",
-                                  "headers": {
-                                    "request": {
-                                      "set": {
-                                        "X-Forwarded-Method": [
-                                          "{http.request.method}"
-                                        ],
-                                        "X-Forwarded-Uri": [
-                                          "{http.request.uri}"
-                                        ]
-                                      }
-                                    }
-                                  },
-                                  "rewrite": {
-                                    "method": "GET",
-                                    "uri": "/api/authz/forward-auth"
-                                  },
-                                  "upstreams": [
-                                    {
-                                      "dial": "127.0.0.1:9091"
                                     }
                                   ]
                                 },
@@ -3207,122 +3259,148 @@
                             {
                               "handle": [
                                 {
-                                  "handle_response": [
+                                  "handler": "subroute",
+                                  "routes": [
                                     {
-                                      "match": {
-                                        "status_code": [
-                                          2
-                                        ]
-                                      },
-                                      "routes": [
+                                      "handle": [
                                         {
-                                          "handle": [
-                                            {
-                                              "handler": "vars"
-                                            }
-                                          ]
-                                        },
+                                          "handler": "headers",
+                                          "request": {
+                                            "delete": [
+                                              "Remote-Email",
+                                              "Remote-Groups",
+                                              "Remote-Name",
+                                              "Remote-User",
+                                              "X-Authentik-*",
+                                              "X-Forwarded-User"
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "handle": [
                                         {
-                                          "handle": [
+                                          "handle_response": [
                                             {
-                                              "handler": "headers",
-                                              "request": {
-                                                "delete": [
-                                                  "Remote-User"
+                                              "match": {
+                                                "status_code": [
+                                                  2
                                                 ]
-                                              }
-                                            }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
-                                            {
-                                              "handler": "headers",
-                                              "request": {
-                                                "set": {
-                                                  "Remote-User": [
-                                                    "{http.reverse_proxy.header.Remote-User}"
-                                                  ]
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "match": [
-                                            {
-                                              "not": [
+                                              },
+                                              "routes": [
                                                 {
-                                                  "vars": {
-                                                    "{http.reverse_proxy.header.Remote-User}": [
-                                                      ""
-                                                    ]
-                                                  }
+                                                  "handle": [
+                                                    {
+                                                      "handler": "vars"
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "delete": [
+                                                          "Remote-User"
+                                                        ]
+                                                      }
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "set": {
+                                                          "Remote-User": [
+                                                            "{http.reverse_proxy.header.Remote-User}"
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "match": [
+                                                    {
+                                                      "not": [
+                                                        {
+                                                          "vars": {
+                                                            "{http.reverse_proxy.header.Remote-User}": [
+                                                              ""
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "delete": [
+                                                          "Remote-Email"
+                                                        ]
+                                                      }
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "set": {
+                                                          "Remote-Email": [
+                                                            "{http.reverse_proxy.header.Remote-Email}"
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "match": [
+                                                    {
+                                                      "not": [
+                                                        {
+                                                          "vars": {
+                                                            "{http.reverse_proxy.header.Remote-Email}": [
+                                                              ""
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
                                                 }
                                               ]
                                             }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
-                                            {
-                                              "handler": "headers",
-                                              "request": {
-                                                "delete": [
-                                                  "Remote-Email"
+                                          ],
+                                          "handler": "reverse_proxy",
+                                          "headers": {
+                                            "request": {
+                                              "set": {
+                                                "X-Forwarded-Method": [
+                                                  "{http.request.method}"
+                                                ],
+                                                "X-Forwarded-Uri": [
+                                                  "{http.request.uri}"
                                                 ]
                                               }
                                             }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
+                                          },
+                                          "rewrite": {
+                                            "method": "GET",
+                                            "uri": "/api/authz/forward-auth"
+                                          },
+                                          "upstreams": [
                                             {
-                                              "handler": "headers",
-                                              "request": {
-                                                "set": {
-                                                  "Remote-Email": [
-                                                    "{http.reverse_proxy.header.Remote-Email}"
-                                                  ]
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "match": [
-                                            {
-                                              "not": [
-                                                {
-                                                  "vars": {
-                                                    "{http.reverse_proxy.header.Remote-Email}": [
-                                                      ""
-                                                    ]
-                                                  }
-                                                }
-                                              ]
+                                              "dial": "127.0.0.1:9091"
                                             }
                                           ]
                                         }
                                       ]
-                                    }
-                                  ],
-                                  "handler": "reverse_proxy",
-                                  "headers": {
-                                    "request": {
-                                      "set": {
-                                        "X-Forwarded-Method": [
-                                          "{http.request.method}"
-                                        ],
-                                        "X-Forwarded-Uri": [
-                                          "{http.request.uri}"
-                                        ]
-                                      }
-                                    }
-                                  },
-                                  "rewrite": {
-                                    "method": "GET",
-                                    "uri": "/api/authz/forward-auth"
-                                  },
-                                  "upstreams": [
-                                    {
-                                      "dial": "127.0.0.1:9091"
                                     }
                                   ]
                                 }
@@ -3514,122 +3592,148 @@
                             {
                               "handle": [
                                 {
-                                  "handle_response": [
+                                  "handler": "subroute",
+                                  "routes": [
                                     {
-                                      "match": {
-                                        "status_code": [
-                                          2
-                                        ]
-                                      },
-                                      "routes": [
+                                      "handle": [
                                         {
-                                          "handle": [
-                                            {
-                                              "handler": "vars"
-                                            }
-                                          ]
-                                        },
+                                          "handler": "headers",
+                                          "request": {
+                                            "delete": [
+                                              "Remote-Email",
+                                              "Remote-Groups",
+                                              "Remote-Name",
+                                              "Remote-User",
+                                              "X-Authentik-*",
+                                              "X-Forwarded-User"
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "handle": [
                                         {
-                                          "handle": [
+                                          "handle_response": [
                                             {
-                                              "handler": "headers",
-                                              "request": {
-                                                "delete": [
-                                                  "Remote-User"
+                                              "match": {
+                                                "status_code": [
+                                                  2
                                                 ]
-                                              }
-                                            }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
-                                            {
-                                              "handler": "headers",
-                                              "request": {
-                                                "set": {
-                                                  "Remote-User": [
-                                                    "{http.reverse_proxy.header.Remote-User}"
-                                                  ]
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "match": [
-                                            {
-                                              "not": [
+                                              },
+                                              "routes": [
                                                 {
-                                                  "vars": {
-                                                    "{http.reverse_proxy.header.Remote-User}": [
-                                                      ""
-                                                    ]
-                                                  }
+                                                  "handle": [
+                                                    {
+                                                      "handler": "vars"
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "delete": [
+                                                          "Remote-User"
+                                                        ]
+                                                      }
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "set": {
+                                                          "Remote-User": [
+                                                            "{http.reverse_proxy.header.Remote-User}"
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "match": [
+                                                    {
+                                                      "not": [
+                                                        {
+                                                          "vars": {
+                                                            "{http.reverse_proxy.header.Remote-User}": [
+                                                              ""
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "delete": [
+                                                          "Remote-Email"
+                                                        ]
+                                                      }
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "handle": [
+                                                    {
+                                                      "handler": "headers",
+                                                      "request": {
+                                                        "set": {
+                                                          "Remote-Email": [
+                                                            "{http.reverse_proxy.header.Remote-Email}"
+                                                          ]
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "match": [
+                                                    {
+                                                      "not": [
+                                                        {
+                                                          "vars": {
+                                                            "{http.reverse_proxy.header.Remote-Email}": [
+                                                              ""
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
                                                 }
                                               ]
                                             }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
-                                            {
-                                              "handler": "headers",
-                                              "request": {
-                                                "delete": [
-                                                  "Remote-Email"
+                                          ],
+                                          "handler": "reverse_proxy",
+                                          "headers": {
+                                            "request": {
+                                              "set": {
+                                                "X-Forwarded-Method": [
+                                                  "{http.request.method}"
+                                                ],
+                                                "X-Forwarded-Uri": [
+                                                  "{http.request.uri}"
                                                 ]
                                               }
                                             }
-                                          ]
-                                        },
-                                        {
-                                          "handle": [
+                                          },
+                                          "rewrite": {
+                                            "method": "GET",
+                                            "uri": "/api/authz/forward-auth"
+                                          },
+                                          "upstreams": [
                                             {
-                                              "handler": "headers",
-                                              "request": {
-                                                "set": {
-                                                  "Remote-Email": [
-                                                    "{http.reverse_proxy.header.Remote-Email}"
-                                                  ]
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "match": [
-                                            {
-                                              "not": [
-                                                {
-                                                  "vars": {
-                                                    "{http.reverse_proxy.header.Remote-Email}": [
-                                                      ""
-                                                    ]
-                                                  }
-                                                }
-                                              ]
+                                              "dial": "127.0.0.1:9091"
                                             }
                                           ]
                                         }
                                       ]
-                                    }
-                                  ],
-                                  "handler": "reverse_proxy",
-                                  "headers": {
-                                    "request": {
-                                      "set": {
-                                        "X-Forwarded-Method": [
-                                          "{http.request.method}"
-                                        ],
-                                        "X-Forwarded-Uri": [
-                                          "{http.request.uri}"
-                                        ]
-                                      }
-                                    }
-                                  },
-                                  "rewrite": {
-                                    "method": "GET",
-                                    "uri": "/api/authz/forward-auth"
-                                  },
-                                  "upstreams": [
-                                    {
-                                      "dial": "127.0.0.1:9091"
                                     }
                                   ]
                                 },

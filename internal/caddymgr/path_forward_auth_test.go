@@ -106,9 +106,11 @@ func TestPathForwardAuth_EmitsTheGateBeforeTheProxy(t *testing.T) {
 	if len(order) < 2 {
 		t.Fatalf("chain = %v; want a gate then the proxy", order)
 	}
-	// The gate is a reverse_proxy to the IdP, as the route level emits.
-	if order[0] != "reverse_proxy" {
-		t.Errorf("chain = %v; the IdP gate must come first", order)
+	// The gate comes first. Since F34/F35/F44/F45 it is a subroute
+	// wrapping the identity-header strip and the forward_auth
+	// reverse_proxy to the IdP, as the route level emits.
+	if order[0] != "subroute" {
+		t.Errorf("chain = %v; the IdP gate (subroute) must come first", order)
 	}
 	if order[len(order)-1] != "reverse_proxy" {
 		t.Errorf("chain = %v; the backend proxy must still be last", order)
