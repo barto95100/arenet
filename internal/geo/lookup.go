@@ -63,6 +63,18 @@ type Location struct {
 type Lookup struct {
 	reader atomic.Pointer[geoip2.Reader]
 
+	// closeMu is held for READ for the duration of a lookup that
+	// touches the reader, and for WRITE by Close. maxminddb traverses
+	// the mmap through a slice captured at entry and only checks for a
+	// closed database at the top, so a Close that munmaps while a
+	// traversal is in flight faults on unmapped memory — an
+	// unrecoverable runtime error that kills the whole process, not a
+	// per-request panic (F55). Taking the read lock around the lookup
+	// makes Close wait for every in-flight traversal before it unmaps.
+	// An uncontended RLock is a couple of atomics, negligible next to a
+	// City() traversal.
+	closeMu sync.RWMutex
+
 	// pathMu guards path, updated by Reload off the hot path.
 	pathMu sync.Mutex
 	path   string
@@ -142,6 +154,10 @@ func (l *Lookup) LookupIP(ip net.IP) Location {
 	if isLAN(ip) {
 		return Location{Country: "LAN", Found: false}
 	}
+	// Hold the read lock across the load AND the traversal, so Close
+	// cannot munmap the reader mid-lookup (F55).
+	l.closeMu.RLock()
+	defer l.closeMu.RUnlock()
 	r := l.reader.Load()
 	if r == nil {
 		return Location{Found: false}
@@ -200,6 +216,11 @@ func (l *Lookup) Close() error {
 	if l == nil {
 		return nil
 	}
+	// Take the write lock so every in-flight LookupIP traversal has
+	// finished before the reader is unmapped; new lookups then load the
+	// nil reader and return Found:false instead of faulting (F55).
+	l.closeMu.Lock()
+	defer l.closeMu.Unlock()
 	if r := l.reader.Swap(nil); r != nil {
 		return r.Close()
 	}

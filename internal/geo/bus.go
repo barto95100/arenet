@@ -111,22 +111,23 @@ func (b *Bus) Publish(ev GeoEvent) {
 		b.writeIdx = 0
 		b.filled = true
 	}
-	// Walk subscribers under the same lock — fan-out is
-	// effectively constant time per subscriber. Holding the
-	// lock through the non-blocking sends is fine because
-	// each select-default takes ~ns and the only writers
-	// contending are subscribe/unsubscribe paths.
-	subs := b.subscribers
-	b.mu.Unlock()
-
-	atomic.AddUint64(&b.published, 1)
-	for _, sub := range subs {
+	// Fan out under the SAME lock that unsubscribe closes a
+	// subscriber channel under, so a send can never interleave
+	// with a close — the send-on-closed-channel panic in F49.
+	// Holding the lock across the sends is bounded: each is a
+	// non-blocking select-default (~ns), exactly as this
+	// comment always claimed; the bug was the Unlock that used
+	// to run BEFORE the loop.
+	for _, sub := range b.subscribers {
 		select {
 		case sub.ch <- ev:
 		default:
 			atomic.AddUint64(&b.droppedToSlowSub, 1)
 		}
 	}
+	b.mu.Unlock()
+
+	atomic.AddUint64(&b.published, 1)
 }
 
 // Subscribe registers a new subscriber and returns the
@@ -173,8 +174,11 @@ func (b *Bus) Subscribe(bufferSize int) (<-chan GeoEvent, func()) {
 					break
 				}
 			}
-			b.mu.Unlock()
+			// Close UNDER the lock, so a concurrent Publish
+			// (which now fans out holding the same lock) can
+			// never send on this channel after it is closed (F49).
 			close(sub.ch)
+			b.mu.Unlock()
 		})
 	}
 	return sub.ch, unsubscribe
