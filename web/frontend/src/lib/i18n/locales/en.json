@@ -1637,8 +1637,7 @@
 				"message": "The route's message, or this global message as fallback",
 				"refreshMeta": "Auto-refresh meta tag built from Retry-After (built-in default only; empty when Retry-After is 0)",
 				"method": "Request method (GET, POST, …)",
-				"host": "Requested host",
-				"uri": "Full request URI",
+				"uriEscaped": "Requested URI, URL-escaped (safe)",
 				"uuid": "Per-request ID (handy for support)"
 			}
 		},

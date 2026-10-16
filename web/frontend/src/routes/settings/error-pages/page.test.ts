@@ -249,8 +249,13 @@ describe('/settings/error-pages — editor', () => {
 		).toBeInTheDocument();
 		// Some token examples are rendered as <code>.
 		expect(screen.getByText('{http.error.status_code}')).toBeInTheDocument();
-		expect(screen.getByText('{http.request.host}')).toBeInTheDocument();
+		expect(screen.getByText('{http.request.uri_escaped}')).toBeInTheDocument();
 		expect(screen.getByText('{time.now.year}')).toBeInTheDocument();
+		// F42: the raw request reflectors are defanged server-side, so the
+		// palette must not advertise them (the operator would get a literal,
+		// non-expanding token in prod).
+		expect(screen.queryByText('{http.request.host}')).toBeNull();
+		expect(screen.queryByText('{http.request.uri}')).toBeNull();
 	});
 
 	it('pre-populates the editor when editing an existing template', async () => {
@@ -579,6 +584,11 @@ describe('/settings/error-pages — Maintenance tab', () => {
 		// nothing substitutes it any more, so a page built from it would
 		// print the token to the public.
 		expect(screen.queryByText('{arenet.maintenance.retry_after}')).toBeNull();
+		// F42 — the palette offers the URL-escaped URI, never the raw
+		// reflectors, which are defanged server-side.
+		expect(screen.getByText('{http.request.uri_escaped}')).toBeInTheDocument();
+		expect(screen.queryByText('{http.request.uri}')).toBeNull();
+		expect(screen.queryByText('{http.request.host}')).toBeNull();
 	});
 
 	// v2.69.0 — the preview substituted nothing: the iframe took the

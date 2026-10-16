@@ -203,7 +203,7 @@ func TestErrorTemplate_Preview_RendersWithSubstitution(t *testing.T) {
 	body := `{
 		"name":"preview-fixture",
 		"pages":{
-			"403":"<h1>{http.error.status_code} {http.error.status_text}</h1><p>{http.request.uri}</p>"
+			"403":"<h1>{http.error.status_code} {http.error.status_text}</h1><p>{http.request.uri_escaped}</p>"
 		}
 	}`
 	post := httptest.NewRequest(http.MethodPost, "/api/v1/error-templates",
