@@ -16,7 +16,10 @@
 
 package waf
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // redactPlaceholder is the marker substituted in place of a
 // redacted secret. Visible in the stored Event so an operator
@@ -101,4 +104,74 @@ func Redact(s string) string {
 	s = reSetCookie.ReplaceAllString(s, "${1}"+redactPlaceholder)
 	s = reSensitiveQueryParam.ReplaceAllString(s, "${1}"+redactPlaceholder)
 	return s
+}
+
+// RedactSnippet bounds the cost of scrubbing an untrusted value before
+// it is stored as an event sample. Redact runs four unanchored regex
+// passes, each of which allocates about two copies of its whole input,
+// so running it on a raw multi-megabyte matched value (an ARGS value up
+// to SecRequestBodyLimit, or a ~1 MiB header) allocated ~8x and scanned
+// 4x the length on the request goroutine — a handful of such requests
+// saturated CPU and GC for every route on the host (F5).
+//
+// The value is first truncated to a small window (twice the final cap,
+// leaving room for a prefix like "Authorization:" to still be matched),
+// then redacted, then truncated to the final cap. Redact therefore never
+// sees more than 2*maxBytes, whatever the attacker sends.
+func RedactSnippet(s string, maxBytes int) string {
+	return Truncate(Redact(Truncate(s, maxBytes*2)), maxBytes)
+}
+
+// credentialMask replaces an event payload sample whose matched variable
+// is itself a credential — Redact's text patterns need a "header:" or
+// "key=" prefix and so miss a BARE matched value like a raw cookie or
+// password (F5). The whole sample is dropped rather than shown.
+const credentialMask = "[credential redacted]"
+
+// credentialArgKeys are argument names whose value is a credential; a
+// CRS match on one of these must never persist the raw value into the
+// viewer-readable waf_event store.
+var credentialArgKeys = map[string]bool{
+	"password": true, "passwd": true, "pwd": true, "pass": true,
+	"token": true, "access_token": true, "refresh_token": true,
+	"secret": true, "client_secret": true, "apikey": true,
+	"api_key": true, "auth": true, "authorization": true, "session": true,
+}
+
+// credentialHeaderKeys are request headers that carry a credential.
+var credentialHeaderKeys = map[string]bool{
+	"authorization": true, "proxy-authorization": true, "cookie": true,
+	"x-api-key": true, "x-auth-token": true, "x-amz-security-token": true,
+}
+
+// isCredentialVar reports whether matchedVar ("NAME:key", as
+// requestSnippetFromMatch builds it) names a value that is itself a
+// credential, so its sample must be masked rather than merely redacted.
+func isCredentialVar(matchedVar string) bool {
+	name, key, ok := strings.Cut(matchedVar, ":")
+	if !ok {
+		return false
+	}
+	name = strings.ToUpper(strings.TrimSpace(name))
+	key = strings.ToLower(strings.TrimSpace(key))
+	switch {
+	case strings.HasPrefix(name, "REQUEST_COOKIES"):
+		// Every cookie value is a bearer-equivalent credential.
+		return true
+	case name == "REQUEST_HEADERS":
+		return credentialHeaderKeys[key]
+	case strings.HasPrefix(name, "ARGS"):
+		return credentialArgKeys[key]
+	}
+	return false
+}
+
+// payloadSampleFor returns the stored sample for a matched value: a fixed
+// mask when the variable is a credential carrier, otherwise the
+// cost-bounded redaction (F5). cap is the final byte cap.
+func payloadSampleFor(payload, matchedVar string, cap int) string {
+	if isCredentialVar(matchedVar) {
+		return credentialMask
+	}
+	return RedactSnippet(payload, cap)
 }
