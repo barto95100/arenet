@@ -161,20 +161,16 @@ export const ERROR_PAGE_PLACEHOLDERS: PlaceholderDef[] = [
 		label: 'Request method (GET, POST, …)',
 		example: 'GET'
 	},
+	// F42: {http.request.uri}, {http.request.host} and
+	// {http.request.uri.path} reflect raw, attacker-controlled bytes into
+	// the text/html page and are defanged server-side
+	// (SanitizeErrorPageBody), so they are no longer offered. The
+	// URL-escaped whole-URI form is safe (a '<' from the client survives
+	// as %3C) and covers the "show the requested URL" use case.
 	{
-		token: '{http.request.host}',
-		label: 'Host header (route primary host)',
-		example: 'api.example.com'
-	},
-	{
-		token: '{http.request.uri}',
-		label: 'Full request URI with query',
-		example: '/items?id=42'
-	},
-	{
-		token: '{http.request.uri.path}',
-		label: 'Request path only (no query)',
-		example: '/items'
+		token: '{http.request.uri_escaped}',
+		label: 'Full request URI, URL-escaped (safe)',
+		example: '/items%3Fid%3D42'
 	},
 	{
 		token: '{http.request.uuid}',

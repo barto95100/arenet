@@ -181,7 +181,13 @@ func TestBuildErrorRoutesForRoute_HostMatcherIncludesAliases(t *testing.T) {
 func TestSanitizeErrorPageBody_NeutralizesEnvAndFilePlaceholders(t *testing.T) {
 	// The {arenet.*} sample is a sentinel that actually exists, so this
 	// asserts the sanitizer against a string the product really emits.
-	in := `<p>{env.SECRET_TOKEN}</p><p>{file./etc/passwd}</p><p>host {http.request.host}</p><p>` + maintenanceRetryAfterHumanSentinel + `</p>`
+	// {http.request.host} and {http.request.uri} are raw request
+	// reflectors (F42) and must be neutralized; the escaped / non-text
+	// forms stay live, and so does our own {arenet.*} sentinel.
+	in := `<p>{env.SECRET_TOKEN}</p><p>{file./etc/passwd}</p>` +
+		`<p>host {http.request.host}</p><p>uri {http.request.uri}</p>` +
+		`<p>safe {http.request.uri_escaped} {http.request.uuid} {http.request.method}</p>` +
+		`<p>` + maintenanceRetryAfterHumanSentinel + `</p>`
 	got := SanitizeErrorPageBody(in)
 
 	// Dangerous namespaces neutralized (the literal live prefix must
@@ -192,12 +198,68 @@ func TestSanitizeErrorPageBody_NeutralizesEnvAndFilePlaceholders(t *testing.T) {
 	if strings.Contains(got, "{file./etc/passwd}") {
 		t.Errorf("{file.*} placeholder survived — file disclosure vector: %q", got)
 	}
-	// Documented-safe placeholders preserved (still expandable by Caddy).
-	if !strings.Contains(got, "{http.request.host}") {
-		t.Errorf("documented {http.request.host} was wrongly neutralized: %q", got)
+	// Raw request reflectors neutralized (F42 — reflected XSS vector).
+	if strings.Contains(got, "{http.request.host}") {
+		t.Errorf("{http.request.host} survived — reflected XSS vector (F42): %q", got)
+	}
+	if strings.Contains(got, "{http.request.uri}") {
+		t.Errorf("{http.request.uri} survived — reflected XSS vector (F42): %q", got)
+	}
+	// Safe request placeholders preserved (still expandable by Caddy).
+	for _, safe := range []string{"{http.request.uri_escaped}", "{http.request.uuid}", "{http.request.method}"} {
+		if !strings.Contains(got, safe) {
+			t.Errorf("safe placeholder %s was wrongly neutralized: %q", safe, got)
+		}
 	}
 	if !strings.Contains(got, maintenanceRetryAfterHumanSentinel) {
 		t.Errorf("documented {arenet.*} placeholder was wrongly neutralized: %q", got)
+	}
+}
+
+// TestSanitizeErrorPageBody_NeutralizesRawRequestReflectors_F42 pins
+// F42: every {http.request.*} token that reflects raw, attacker-
+// controlled bytes into the text/html page body must be defanged, so
+// Caddy cannot expand it at serve time. {http.request.header.*} is the
+// broadest vector (any request header, including ones an attacker sets
+// freely) and is not covered by the env/file test; the escaped and
+// non-text forms stay live so the default templates keep working.
+func TestSanitizeErrorPageBody_NeutralizesRawRequestReflectors_F42(t *testing.T) {
+	defanged := []string{
+		"{http.request.uri}",
+		"{http.request.uri.path}",
+		"{http.request.host}",
+		"{http.request.header.User-Agent}",
+		"{http.request.header.Referer}",
+		"{http.request.orig_uri}",
+	}
+	live := []string{
+		"{http.request.uri_escaped}",
+		"{http.request.uuid}",
+		"{http.request.method}",
+		"{http.request.remote.host}",
+	}
+
+	var b strings.Builder
+	for _, tok := range append(append([]string{}, defanged...), live...) {
+		b.WriteString("<p>" + tok + "</p>")
+	}
+	got := SanitizeErrorPageBody(b.String())
+
+	for _, tok := range defanged {
+		if strings.Contains(got, tok) {
+			t.Errorf("raw request reflector %s survived — Caddy would expand it into the HTML (F42): %q", tok, got)
+		}
+	}
+	for _, tok := range live {
+		if !strings.Contains(got, tok) {
+			t.Errorf("safe placeholder %s was wrongly neutralized: %q", tok, got)
+		}
+	}
+
+	// Idempotent: re-sanitizing the stored (already-defanged) body at
+	// emission must not double-defang or otherwise change it.
+	if again := SanitizeErrorPageBody(got); again != got {
+		t.Errorf("sanitize is not idempotent:\n first = %q\nsecond = %q", got, again)
 	}
 }
 

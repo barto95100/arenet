@@ -210,27 +210,67 @@ func SanitizeErrorPageBody(body string) string {
 //   - {file.*} → readFileIntoBuffer (replacer.go:350-361) — arbitrary
 //     on-disk file contents
 //
-// The documented-safe {http.request.*} (offered in the error-page
-// editor's variable palette) and our own {arenet.*} sentinels are
-// deliberately NOT in this list — they stay expandable.
+// Our own {arenet.*} sentinels are substituted in Go before Caddy ever
+// sees the body, so they are not in this list. The {http.request.*}
+// namespace is handled separately (requestPlaceholderRe) because only
+// SOME of it is safe.
 var dangerousPlaceholderPrefixes = []string{"{env.", "{file."}
 
-// neutralizeDangerousPlaceholders defangs {env.*} / {file.*} in
-// operator-supplied page bodies by replacing the opening brace with its
-// HTML entity (&#123;). The text still RENDERS as "{env.FOO}" in the
-// browser, but Caddy's placeholder replacer scans for a literal '{' and
-// no longer matches, so the value is never expanded at serve time.
-// Applied AFTER bluemonday (bluemonday passes {…} through as ordinary
-// text, so it must run here, on the final operator content). Our own
+// safeRequestPlaceholders is the allowlist of {http.request.*} tokens
+// that may expand in an operator page body served as text/html. Each
+// either carries no attacker-controlled bytes — {http.request.uuid} is
+// Caddy-generated, {http.request.method} is an RFC 7230 token the
+// net/http server rejects '<' in, {http.request.remote.host} is a
+// parsed IP — or is percent-escaped so a '<' from the client cannot
+// survive into the HTML (the *_escaped forms). Every OTHER
+// {http.request.*} token reflects the raw request into the page: F42 —
+// {http.request.uri} appends the client's raw query verbatim, so a
+// visitor sent to /?<svg/onload=…> gets script execution in the site's
+// origin; {http.request.host} and {http.request.header.*} are the same
+// class. Those are defanged.
+var safeRequestPlaceholders = map[string]bool{
+	"{http.request.uri_escaped}":      true,
+	"{http.request.orig_uri_escaped}": true,
+	"{http.request.uuid}":             true,
+	"{http.request.method}":           true,
+	"{http.request.remote.host}":      true,
+}
+
+// requestPlaceholderRe matches one {http.request.<anything>} placeholder.
+// [^}]* so header tokens with '-' ({http.request.header.User-Agent}) and
+// defaults with ':' are matched whole, not left half-defanged.
+var requestPlaceholderRe = regexp.MustCompile(`\{http\.request\.[^}]*\}`)
+
+// neutralizeDangerousPlaceholders defangs the Caddy placeholders that
+// must not expand in an operator-supplied page body by replacing the
+// opening brace with its HTML entity (&#123;). The text still RENDERS
+// as "{env.FOO}" in the browser, but Caddy's placeholder replacer scans
+// for a literal '{' and no longer matches, so the value is never
+// expanded at serve time.
+//
+// Two families are defanged:
+//   - {env.*} / {file.*}, always — process secrets and host files;
+//   - every {http.request.*} NOT in safeRequestPlaceholders — the raw
+//     request reflectors behind F42.
+//
+// Applied AFTER bluemonday (which passes {…} through as ordinary text),
+// on the final operator content. It is idempotent: an already-defanged
+// body has no literal '{' left for either pass to match, so re-running
+// it at emission on a stored, already-sanitized body is a no-op. Our
 // {arenet.maintenance.*} sentinels are substituted in Go before Caddy
-// ever sees the body, and {http.request.*} is a documented-safe,
-// request-scoped namespace — neither is touched.
+// sees the body and are left untouched here.
 func neutralizeDangerousPlaceholders(s string) string {
 	for _, prefix := range dangerousPlaceholderPrefixes {
 		if strings.Contains(s, prefix) {
 			s = strings.ReplaceAll(s, prefix, "&#123;"+prefix[1:])
 		}
 	}
+	s = requestPlaceholderRe.ReplaceAllStringFunc(s, func(tok string) string {
+		if safeRequestPlaceholders[tok] {
+			return tok
+		}
+		return "&#123;" + tok[1:]
+	})
 	return s
 }
 

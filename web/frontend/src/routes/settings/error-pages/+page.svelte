@@ -397,9 +397,11 @@
 			'{http.error.message}': statusText[code] ?? '',
 			'{http.reverse_proxy.status_code}': String(code),
 			'{http.request.method}': 'GET',
-			'{http.request.host}': 'preview.example.com',
-			'{http.request.uri}': '/preview/path',
-			'{http.request.uri.path}': '/preview/path',
+			// F42: the raw request reflectors are not substituted here;
+			// they are defanged server-side, so the preview shows the
+			// same literal, non-expanding token prod serves. The escaped
+			// whole-URI form stays live.
+			'{http.request.uri_escaped}': '/preview/path',
 			'{http.request.uuid}': '00000000-0000-4000-8000-000000000000',
 			'{http.request.remote.host}': '203.0.113.42',
 			'{time.now.year}': String(new Date().getFullYear()),
@@ -441,8 +443,8 @@
 			// reload itself while the operator is editing.
 			'{arenet.maintenance.refresh_meta}': '',
 			'{http.request.method}': 'GET',
-			'{http.request.host}': 'preview.example.com',
-			'{http.request.uri}': '/preview/path',
+			// F42: raw reflectors defanged server-side — not substituted
+			// here so the preview matches prod. Escaped form stays live.
 			'{http.request.uri_escaped}': '/preview/path',
 			'{http.request.uuid}': '00000000-0000-4000-8000-000000000000'
 		};
@@ -508,8 +510,7 @@
 		{ token: '{arenet.maintenance.message}', desc: t('errorPages.maintenance.ph.message') },
 		{ token: '{arenet.maintenance.refresh_meta}', desc: t('errorPages.maintenance.ph.refreshMeta') },
 		{ token: '{http.request.method}', desc: t('errorPages.maintenance.ph.method') },
-		{ token: '{http.request.host}', desc: t('errorPages.maintenance.ph.host') },
-		{ token: '{http.request.uri}', desc: t('errorPages.maintenance.ph.uri') },
+		{ token: '{http.request.uri_escaped}', desc: t('errorPages.maintenance.ph.uriEscaped') },
 		{ token: '{http.request.uuid}', desc: t('errorPages.maintenance.ph.uuid') }
 	]);
 

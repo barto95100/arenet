@@ -1637,8 +1637,7 @@
 				"message": "Le message de la route, ou ce message global en repli",
 				"refreshMeta": "Balise meta d'auto-refresh construite depuis le Retry-After (page par défaut uniquement ; vide si Retry-After = 0)",
 				"method": "Méthode de la requête (GET, POST, …)",
-				"host": "Host demandé",
-				"uri": "URI complète de la requête",
+				"uriEscaped": "URI demandée, échappée (sûre)",
 				"uuid": "ID par requête (pratique pour le support)"
 			}
 		},
