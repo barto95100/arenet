@@ -95,11 +95,12 @@ func SoftAuthMiddleware(sessions sessionStore, users userStore, tokens APITokenL
 			// AND an Authorization header is present.
 			if tokens != nil {
 				if user, tok, ok := resolveBearerToken(r, tokens, users); ok {
-					// Best-effort LastUsedAt update; never block
-					// the request on a write contention.
-					go func(id string) {
-						_ = tokens.TouchLastUsed(context.Background(), id)
-					}(tok.ID)
+					// Best-effort LastUsedAt update; never block the
+					// request on write contention. The production store
+					// routes this through a single bounded worker
+					// (F52); a store that does not implement the async
+					// path (test fakes) falls back to a goroutine.
+					touchLastUsedBestEffort(tokens, tok.ID)
 					ctx := withAuthIdentity(r.Context(), user, "", tok.ID, false)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
@@ -399,4 +400,25 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 		Secure:   r != nil && r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 	})
+}
+
+// asyncTokenToucher is the optional capability a token store may offer to
+// bound LastUsedAt updates behind a single worker instead of a goroutine
+// per request (F52). The production *APITokenStore implements it; this is
+// an optional upgrade so the required APITokenLookup interface — and its
+// test fakes — need not change.
+type asyncTokenToucher interface {
+	TouchLastUsedAsync(id string)
+}
+
+// touchLastUsedBestEffort records a token's use without blocking the
+// request or spawning an unbounded goroutine: it prefers the store's
+// bounded async worker and falls back to a detached goroutine only for a
+// store that does not provide one.
+func touchLastUsedBestEffort(tokens APITokenLookup, id string) {
+	if at, ok := tokens.(asyncTokenToucher); ok {
+		at.TouchLastUsedAsync(id)
+		return
+	}
+	go func() { _ = tokens.TouchLastUsed(context.Background(), id) }()
 }

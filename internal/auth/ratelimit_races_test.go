@@ -18,6 +18,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -97,5 +98,26 @@ func TestRateLimiter_Middleware_SerialisesConcurrentBurst(t *testing.T) {
 	if got := reached.Load(); got > int32(Tier1Threshold+1) {
 		t.Errorf("%d of %d concurrent attempts reached the handler; the burst outran the counter (want <= %d) — F33/F56",
 			got, n, Tier1Threshold+1)
+	}
+}
+
+// The per-IP state map must not grow without bound: at the cap, inserting
+// a new key evicts the least-recently-seen entry, so an attacker cycling
+// through distinct source addresses cannot drive unbounded memory (F50).
+func TestRateLimiter_CapsCardinality(t *testing.T) {
+	rl := quietLimiter()
+	rl.maxEntries = 3
+
+	// Record failures from more distinct IPs than the cap. Each Hit sets
+	// a fresh lastSeen, so the earliest IPs are the eviction victims.
+	for i := 0; i < 10; i++ {
+		rl.Hit(fmt.Sprintf("10.0.0.%d", i), "admin")
+	}
+
+	rl.mu.Lock()
+	n := len(rl.state)
+	rl.mu.Unlock()
+	if n > rl.maxEntries {
+		t.Errorf("state holds %d entries, cap is %d — the map grew past the cap (F50)", n, rl.maxEntries)
 	}
 }
