@@ -80,11 +80,13 @@ type BlockedIP struct {
 // counter holds the per-IP rate-limit state. Access must be
 // serialized through RateLimiter.mu.
 type counter struct {
-	// failures is a sliding window of failure timestamps within the
+	// failures is a sliding window of failure records within the
 	// last Tier2Window (longest window). Older entries are pruned on
-	// each access. Always sorted ascending (Hit appends, append is
-	// monotonic in time).
-	failures []time.Time
+	// each access. Always sorted ascending by ts (Hit appends, append
+	// is monotonic in time). Each record carries the attempted username
+	// so ResetForUser can clear one account's failures without touching
+	// another's (F51/F57).
+	failures []failureRecord
 	// blockedUntil is the wall-clock time at which the current block
 	// expires. Zero value = not blocked. Set by Hit when a tier
 	// threshold is reached.
@@ -114,6 +116,32 @@ type RateLimiter struct {
 	state   map[string]*counter
 	logger  *slog.Logger
 	nowFunc func() time.Time // overridable for tests
+
+	// ipGate serialises the auth attempts of a single IP so the
+	// check-then-count window between Allow and Hit cannot be raced by
+	// a concurrent burst (F33/F56). Entries are reference-counted and
+	// removed when no attempt from that IP is in flight, so the map
+	// stays bounded. Guarded by ipGateMu, which is independent of mu.
+	ipGate   map[string]*ipGateEntry
+	ipGateMu sync.Mutex
+}
+
+// ipGateEntry is a reference-counted per-IP mutex.
+type ipGateEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// failureRecord is one recorded authentication failure: when it
+// happened, and the username it was attempted against. The username
+// lets a successful login clear only its OWN failures instead of the
+// whole per-IP bucket, so a success for one account cannot erase the
+// failures accumulated while brute-forcing another (F51/F57). The
+// block thresholds still count every record in the window, so the
+// IP-wide ceiling is unchanged.
+type failureRecord struct {
+	ts   time.Time
+	user string
 }
 
 // NewRateLimiter constructs a rate limiter with an injected logger.
@@ -127,6 +155,37 @@ func NewRateLimiter(logger *slog.Logger) *RateLimiter {
 		state:   make(map[string]*counter),
 		logger:  logger,
 		nowFunc: time.Now,
+		ipGate:  make(map[string]*ipGateEntry),
+	}
+}
+
+// lockIP acquires the per-IP serialisation gate and returns a release
+// function. Attempts from the same IP run one at a time between acquire
+// and release, so each sees the previous attempt's recorded failure
+// before its own Allow check — closing the check-then-count race
+// (F33/F56). An empty IP is not serialised (not associable to a bucket).
+func (rl *RateLimiter) lockIP(ip string) func() {
+	if ip == "" {
+		return func() {}
+	}
+	rl.ipGateMu.Lock()
+	e := rl.ipGate[ip]
+	if e == nil {
+		e = &ipGateEntry{}
+		rl.ipGate[ip] = e
+	}
+	e.refs++
+	rl.ipGateMu.Unlock()
+
+	e.mu.Lock()
+	return func() {
+		e.mu.Unlock()
+		rl.ipGateMu.Lock()
+		e.refs--
+		if e.refs == 0 {
+			delete(rl.ipGate, ip)
+		}
+		rl.ipGateMu.Unlock()
 	}
 }
 
@@ -203,23 +262,23 @@ func (rl *RateLimiter) Hit(ip, attemptedUsername string) {
 		rl.state[ip] = c
 	}
 
-	// Prune timestamps older than the longest window (Tier 2).
+	// Prune records older than the longest window (Tier 2).
 	cutoff := now.Add(-Tier2Window)
 	keep := c.failures[:0]
-	for _, ts := range c.failures {
-		if ts.After(cutoff) {
-			keep = append(keep, ts)
+	for _, fr := range c.failures {
+		if fr.ts.After(cutoff) {
+			keep = append(keep, fr)
 		}
 	}
 	c.failures = keep
-	c.failures = append(c.failures, now)
+	c.failures = append(c.failures, failureRecord{ts: now, user: attemptedUsername})
 	c.lastSeen = now
 
 	// Count failures in each tier window.
 	tier1Cutoff := now.Add(-Tier1Window)
 	tier1Count := 0
-	for _, ts := range c.failures {
-		if ts.After(tier1Cutoff) {
+	for _, fr := range c.failures {
+		if fr.ts.After(tier1Cutoff) {
 			tier1Count++
 		}
 	}
@@ -286,9 +345,9 @@ func (rl *RateLimiter) Hit(ip, attemptedUsername string) {
 }
 
 // Reset clears the failure counters and any active block for the
-// given IP. Called by the /login and /unlock handlers after a
-// successful auth, so a legitimate user who typoed a few times is
-// not penalized after they finally succeed.
+// given IP entirely. Kept for callers that genuinely want a full
+// per-IP clear (tests, an operator-driven reset). The login/unlock
+// success paths use ResetForUser instead — see F51/F57.
 //
 // Empty IP is a no-op.
 func (rl *RateLimiter) Reset(ip string) {
@@ -298,6 +357,44 @@ func (rl *RateLimiter) Reset(ip string) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	delete(rl.state, ip)
+}
+
+// ResetForUser clears only the failures recorded against username on
+// the given IP, after that account authenticates successfully. A
+// legitimate user who mistyped their own password a few times is still
+// forgiven, but a success for one account no longer erases the failures
+// accumulated while guessing another — so a low-privilege holder cannot
+// loop "four admin guesses, one own-login" to defeat the per-IP ceiling
+// indefinitely (F51/F57). Failures against other accounts stay in the
+// window and keep counting toward the block.
+//
+// This runs only on the success path, which is reachable only when Allow
+// let the request through, i.e. no block is active — so there is no live
+// block to reconcile here.
+//
+// Empty IP is a no-op.
+func (rl *RateLimiter) ResetForUser(ip, username string) {
+	if ip == "" {
+		return
+	}
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	c := rl.state[ip]
+	if c == nil {
+		return
+	}
+	keep := c.failures[:0]
+	for _, fr := range c.failures {
+		if fr.user != username {
+			keep = append(keep, fr)
+		}
+	}
+	c.failures = keep
+	if len(c.failures) == 0 && c.blockedUntil.IsZero() {
+		delete(rl.state, ip)
+		return
+	}
+	c.lastSeen = rl.now()
 }
 
 // GetBlockedIPs returns a snapshot of every currently-blocked IP,
@@ -397,6 +494,12 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := ClientIPFromContext(r.Context())
+			// Serialise this IP's attempts for the whole request so the
+			// Allow check below sees every prior attempt's Hit — a
+			// concurrent burst can no longer all clear the gate before
+			// any failure is recorded (F33/F56).
+			release := rl.lockIP(ip)
+			defer release()
 			if allowed, retryAfter, blockDuration := rl.Allow(ip); !allowed {
 				writeRateLimited(w, retryAfter, blockDuration)
 				return

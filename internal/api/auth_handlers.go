@@ -382,7 +382,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}(user.ID)
 
 	// Reset the per-IP failure counter on successful login (spec §5.3).
-	h.rateLimiter.Reset(ip)
+	h.rateLimiter.ResetForUser(ip, user.Username)
 
 	// Audit success — populate ActorUserID directly because the soft-auth
 	// context keys are not set on no-auth endpoints.
@@ -650,7 +650,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reset rate-limit counter for this IP (spec §5.3).
-	h.rateLimiter.Reset(auth.ClientIPFromContext(ctx))
+	h.rateLimiter.ResetForUser(auth.ClientIPFromContext(ctx), user.Username)
 
 	h.appendAudit(r, audit.Event{
 		Action:     audit.ActionUnlockSuccess,
