@@ -142,6 +142,17 @@ If state was touched and won't load, restore the backup you took: [Backup & Rest
 
   Also in this release: private vulnerability reporting is enabled on the repository and `SECURITY.md` describes the channel, the scope and the timelines.
 
+- **Upgrading to v2.74.0+ (the rest of the security review: hardening, with a few behaviour changes).** This release closes the remaining findings from the same review — the MEDIUM and LOW ones — mostly invisible internal hardening (WAF event-sample memory and credential masking, request-body caps against OOM, rate-limiter and token-touch memory bounds, a geo-reader use-after-free and a bus send-on-closed race). These few you may feel:
+
+  1. **Cookie-authenticated writes must be `Content-Type: application/json`.** A new CSRF guard on `/api/v1` refuses a state-changing request that carries the session cookie but a form/`text/plain` body (415), or whose browser labels it cross-site (403). The web UI and **bearer / API-token clients are unaffected** (a token is not attached cross-site). **Consequence:** a hand-written script that drives the admin API with the *session cookie* and a non-JSON body breaks — give it an API token, or send JSON.
+  2. **A forced password change is now enforced by the server, not just the UI.** An admin-created account still on its one-time initial password is refused on every endpoint except changing that password (403 `password_change_required`). **Consequence:** if you point automation at such an account, it cannot act until the password is rotated. Rotate it, or use a service-account API token.
+  3. **Removing an OIDC allowlist entry — or disabling OIDC — now ends that identity's live sessions.** Before, it only blocked future sign-ins while the open session kept working. **Consequence:** an offboarded SSO user is logged out immediately, as intended.
+  4. **Login answers the same 401 for an OIDC/service account as for a bad password** (it used to answer 500 for an account with no local password) and now runs the key derivation on every failure. **Consequence:** a monitor that keyed on the old 500 sees 401; there is no behaviour to rely on there.
+  5. **The Caddyfile import refuses `import <path>` and `{$ENV}`.** Caddy's parser would otherwise read files off *this* host and substitute *this* process's environment, and hand both back in the preview — an admin-only file-read. A snippet import (`import name` with `(name)` defined in the same text) still works; a file/glob import or an env placeholder is rejected. **Consequence:** inline those before importing a Caddyfile that used them.
+  6. **Country blocking enforces from the first request after a restart.** There was a brief window at boot where a country-gated route accepted everything; it is closed. Certificate deletion also now accepts only a hostname or `*.domain`.
+
+  **One action, if it applies to you:** rotate the password of any admin-created account still on its initial password that a script logs in with (item 2) — otherwise that account is now blocked from doing anything but changing it.
+
 ---
 
 ## 6. Automation (CLI-only)
