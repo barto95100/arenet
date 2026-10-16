@@ -103,7 +103,11 @@ func (h *Handler) appendAudit(r *http.Request, evt audit.Event) {
 		evt.IP = auth.ClientIPFromContext(ctx)
 	}
 	if evt.UserAgent == "" {
-		evt.UserAgent = r.UserAgent()
+		// Cap the client-chosen User-Agent: it is attacker-controlled on
+		// the unauthenticated endpoints, and the audit bucket is never
+		// pruned, so an uncapped value is an unbounded-growth vector
+		// (F29). A real UA is well under this.
+		evt.UserAgent = truncate(r.UserAgent(), maxAuditUserAgentBytes)
 	}
 
 	if err := h.audit.Append(ctx, evt); err != nil {

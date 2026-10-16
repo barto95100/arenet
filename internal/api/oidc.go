@@ -753,7 +753,7 @@ func (h *Handler) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if errParam := q.Get("error"); errParam != "" {
 		h.appendAudit(r, audit.Event{
 			Action:  audit.ActionOIDCCallbackInvalid,
-			Message: fmt.Sprintf("idp_error=%s", errParam),
+			Message: fmt.Sprintf("idp_error=%s", sanitizeOIDCErrorParam(errParam)),
 		})
 		http.Redirect(w, r, h.uiURL("/login?error=idp_error"), http.StatusFound)
 		return
@@ -1147,4 +1147,32 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max]
+}
+
+// Bounds for attacker-controlled text that reaches the audit log from the
+// unauthenticated OIDC callback and from appendAudit (F29). The callback
+// is reachable without any auth, the audit bucket is never pruned, and
+// bbolt never returns freed pages, so an uncapped value is both a
+// log-injection and an unbounded-growth vector.
+const (
+	oidcErrorParamMaxLen   = 64
+	maxAuditUserAgentBytes = 256
+)
+
+// sanitizeOIDCErrorParam bounds and neutralises the `error` query
+// parameter of the OIDC callback before it is interpolated into an audit
+// Message. RFC 6749 §4.1.2.1 error codes are short tokens; the value is
+// capped and every character outside printable ASCII is dropped, so a
+// crafted value cannot inject newlines or control sequences into the
+// security audit trail or grow a record without bound.
+func sanitizeOIDCErrorParam(s string) string {
+	s = truncate(s, oidcErrorParamMaxLen) // O(1) byte slice; bounds the scan
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r >= 0x20 && r < 0x7f { // printable ASCII only: no CR/LF, no controls
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
