@@ -258,3 +258,60 @@ func TestParse_DNSProviderArgumentsConsumed(t *testing.T) {
 		t.Errorf("a real unsupported option must still be reported: %+v", c.Warnings)
 	}
 }
+
+// Caddy's parser resolves `import <file>` by reading the host filesystem
+// and returns the content through the result, turning the admin-only
+// import endpoint into an arbitrary-file-read primitive (F9/F26). The
+// directive is refused before parsing, so no file is ever opened.
+func TestParse_RefusesImportDirective(t *testing.T) {
+	for _, in := range []string{
+		"app.example.com {\n\timport /etc/hosts\n}\n",
+		"import /var/lib/arenet/arenet.key\n",
+		"IMPORTnot := app.example.com {\n\timport\t/proc/self/environ\n}\n",
+	} {
+		_, err := Parse(in)
+		if err == nil {
+			t.Errorf("import must be refused: %q", in)
+			continue
+		}
+		if !strings.Contains(err.Error(), "import directive may only reference a snippet") {
+			t.Errorf("error should name the refused directive: %v", err)
+		}
+	}
+}
+
+// {$VAR} is substituted from THIS process's environment before parsing,
+// so it leaks the Arenet env (F9/F26). It is refused.
+func TestParse_RefusesEnvPlaceholder(t *testing.T) {
+	_, err := Parse("{$ARENET_BACKUP_PASSPHRASE} {\n}\n")
+	if err == nil || !strings.Contains(err.Error(), "environment placeholders") {
+		t.Errorf("an env placeholder must be refused; got %v", err)
+	}
+}
+
+// The refusal must not catch the token "import" used elsewhere than at
+// the start of a line (e.g. as a directive argument), nor a normal
+// Caddyfile — otherwise a legitimate migration breaks.
+func TestParse_AllowsImportWordNotAtLineStart(t *testing.T) {
+	res, err := Parse("app.example.com {\n\treverse_proxy 10.0.0.1:80 {\n\t\theader_up X-Note import-me\n\t}\n}\n")
+	if err != nil {
+		t.Fatalf("\"import\" as an argument must be allowed: %v", err)
+	}
+	if len(res.Candidates) != 1 {
+		t.Fatalf("expected the site block to parse; got %d candidates", len(res.Candidates))
+	}
+}
+
+// `import <snippet>` referencing a snippet defined in the same text is
+// safe (no filesystem) and must keep working — it is a normal Caddyfile
+// idiom and the migration feature's whole point.
+func TestParse_AllowsSnippetImport(t *testing.T) {
+	in := "(common) {\n\tencode gzip\n}\n\napp.example.com {\n\timport common\n\treverse_proxy 10.0.0.1:80\n}\n"
+	res, err := Parse(in)
+	if err != nil {
+		t.Fatalf("importing a defined snippet must be allowed: %v", err)
+	}
+	if len(res.Candidates) != 1 {
+		t.Fatalf("the site block importing a snippet should parse; got %d candidates", len(res.Candidates))
+	}
+}
