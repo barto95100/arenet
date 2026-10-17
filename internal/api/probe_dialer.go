@@ -18,15 +18,14 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/barto95100/arenet/internal/audit"
+	"github.com/barto95100/arenet/internal/netguard"
 )
 
 // v2.56 — where a diagnostic probe may not go.
@@ -53,65 +52,32 @@ import (
 // with the resolved host:port, which is exactly the right seam — it also
 // covers any redirect a probe follows, since each hop dials again.
 
-// errBlockedProbeTarget is returned when a probe resolves to an address it
-// may not reach. Wrapped rather than formatted so a caller can recognise
-// it with errors.Is and say something better than "dial failed".
-var errBlockedProbeTarget = errors.New("probe target is not allowed")
+// The SSRF guard itself — which addresses a server-side fetch may not
+// reach, and the dialer that refuses them — lives in internal/netguard,
+// so the alerting channel senders share one implementation with these
+// probes. The names below are thin aliases kept for the probe call sites
+// and the audit classification.
+
+// errBlockedProbeTarget is returned when a probe resolves to an address
+// it may not reach. It IS netguard.ErrBlocked, so errors.Is against
+// either recognises the refusal.
+var errBlockedProbeTarget = netguard.ErrBlocked
 
 // blockedProbeAuditMarker is the substring a humanised probe error keeps
-// from errBlockedProbeTarget, used to tell a refusal apart from an
-// ordinary dial failure when choosing the audit action.
+// from the guard, used to tell a refusal apart from an ordinary dial
+// failure when choosing the audit action. netguard.ErrBlocked's message
+// ("target is not allowed") carries it.
 const blockedProbeAuditMarker = "not allowed"
 
-// metadataIPv6 is AWS's IMDS address over IPv6. The IPv4 one
-// (169.254.169.254) needs no entry of its own: it already sits inside the
-// link-local range below.
-var metadataIPv6 = net.ParseIP("fd00:ec2::254")
-
 // probeTargetBlocked reports whether an IP is one a diagnostic probe must
-// not connect to, and why.
-//
-// Private ranges and loopback are deliberately allowed: refusing them
-// would break the feature for every homelab, where the upstream IS a
-// private address.
-func probeTargetBlocked(ip net.IP) (bool, string) {
-	if ip == nil {
-		return true, "address could not be parsed"
-	}
-	// Covers 169.254.0.0/16 and fe80::/10, so the IPv4 metadata address
-	// is already refused here.
-	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true, "link-local address (cloud instance metadata lives there)"
-	}
-	if ip.Equal(metadataIPv6) {
-		return true, "cloud instance metadata address"
-	}
-	return false, ""
-}
+// not connect to, and why. Delegates to the shared guard: private ranges
+// and loopback are deliberately allowed (a homelab upstream IS private);
+// link-local / cloud-metadata is refused.
+func probeTargetBlocked(ip net.IP) (bool, string) { return netguard.Blocked(ip) }
 
-// newProbeDialer returns a dialer that refuses the addresses above.
-//
-// Control is called after resolution with the address about to be dialled,
-// once per candidate, so a name resolving to several addresses has each of
-// them checked and a rebound name cannot slip a second lookup past us.
-func newProbeDialer(timeout time.Duration) *net.Dialer {
-	return &net.Dialer{
-		Timeout: timeout,
-		Control: func(_, address string, _ syscall.RawConn) error {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				// Control always receives host:port; a parse failure here
-				// means something changed underneath us, so refuse rather
-				// than connect to an address we did not inspect.
-				return fmt.Errorf("%w: %q could not be read", errBlockedProbeTarget, address)
-			}
-			if blocked, why := probeTargetBlocked(net.ParseIP(host)); blocked {
-				return fmt.Errorf("%w: %s is a %s", errBlockedProbeTarget, host, why)
-			}
-			return nil
-		},
-	}
-}
+// newProbeDialer returns a dialer that refuses the addresses above,
+// checked after resolution per candidate address.
+func newProbeDialer(timeout time.Duration) *net.Dialer { return netguard.NewDialer(timeout) }
 
 // probeAuditAction picks the audit action for a finished probe: the
 // refusal gets its own, so an attempt at a blocked address is searchable
