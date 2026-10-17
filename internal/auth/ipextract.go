@@ -105,19 +105,46 @@ func (e *IPExtractor) TrustedCIDRs() []string {
 	return out
 }
 
-// ClientIP resolves the client IP for the given request per the
-// algorithm in spec §8.3:
+// maxXFFChain caps how many X-Forwarded-For entries ClientIP parses.
+// A real proxy topology is a handful of hops; a chain longer than this
+// is padding (an attacker lengthening it to hide the real client or to
+// cost CPU), so the header is ignored and the socket peer is used.
+const maxXFFChain = 50
+
+// isTrustedIP reports whether ip is inside any trusted CIDR — loopback,
+// always, plus ARENET_TRUSTED_PROXIES.
+func (e *IPExtractor) isTrustedIP(ip net.IP) bool {
+	for _, cidr := range e.trustedCIDRs {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// ClientIP resolves the client IP for the given request:
 //
-//  1. Parse RemoteAddr → strip port → get caller IP.
-//  2. If caller IP is NOT in any trusted CIDR → return caller IP
-//     (X-Forwarded-For is ignored).
-//  3. Otherwise, read X-Forwarded-For, take the leftmost entry,
-//     validate it. If valid → return it. If invalid → log Debug
-//     and fall back to caller IP.
+//  1. Parse RemoteAddr → strip port → get the immediate-peer IP.
+//  2. If the peer is NOT in any trusted CIDR → return it; a direct,
+//     untrusted caller may speak only for itself, so X-Forwarded-For is
+//     ignored.
+//  3. The peer is trusted: walk X-Forwarded-For from the RIGHT, skipping
+//     entries that are themselves in the trusted set (our own proxy /
+//     CDN hops), and return the first untrusted entry — the real client.
 //
-// Returns an empty string only if RemoteAddr itself is unparseable
-// (which is exceptional). An empty client IP surfaces clearly in
-// audit events and rate-limit buckets, making the anomaly visible.
+// Right-to-left is the point (F13/F32). A forwarding proxy APPENDS the
+// address it saw to the right of the chain; a client can only prepend
+// to the left. The leftmost entry is therefore the LEAST trustworthy —
+// taking it let a client behind a trusted CDN forge any source IP
+// (e.g. a private 10.0.0.1 to hit the country-gate's RFC1918 bypass,
+// or to rotate the login rate-limiter bucket and poison audit rows).
+// The first untrusted hop from the right is the one our own
+// infrastructure vouched for and the client cannot move.
+//
+// Returns the socket peer when X-Forwarded-For is absent, over the
+// length cap, malformed, or made entirely of trusted hops; returns ""
+// only if RemoteAddr itself is unparseable, which surfaces the anomaly
+// in audit events and rate-limit buckets.
 func (e *IPExtractor) ClientIP(r *http.Request) string {
 	callerIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -128,34 +155,43 @@ func (e *IPExtractor) ClientIP(r *http.Request) string {
 	if callerParsed == nil {
 		return "" // unparseable RemoteAddr
 	}
-
-	// Check if caller is a trusted proxy.
-	trusted := false
-	for _, cidr := range e.trustedCIDRs {
-		if cidr.Contains(callerParsed) {
-			trusted = true
-			break
-		}
-	}
-	if !trusted {
+	if !e.isTrustedIP(callerParsed) {
 		return callerIP
 	}
 
-	// Caller is trusted: honor leftmost XFF entry.
 	xff := r.Header.Get("X-Forwarded-For")
 	if xff == "" {
 		return callerIP
 	}
-	leftmost := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
-	leftmost = strings.Trim(leftmost, "[]") // strip brackets if IPv6
-	if leftmost == "" || net.ParseIP(leftmost) == nil {
-		slog.Default().Debug("auth: malformed X-Forwarded-For, falling back to RemoteAddr",
-			slog.String("xff", xff),
+	entries := strings.Split(xff, ",")
+	if len(entries) > maxXFFChain {
+		slog.Default().Debug("auth: X-Forwarded-For chain over cap, using RemoteAddr",
+			slog.Int("entries", len(entries)),
 			slog.String("remote_addr", r.RemoteAddr),
 		)
 		return callerIP
 	}
-	return leftmost
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := strings.Trim(strings.TrimSpace(entries[i]), "[]") // strip IPv6 brackets
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			// A malformed hop means we cannot trust anything to its
+			// left either, so fail safe to the socket peer rather than
+			// return a value an attacker may have placed past the gap.
+			slog.Default().Debug("auth: malformed X-Forwarded-For hop, falling back to RemoteAddr",
+				slog.String("xff", xff),
+				slog.String("remote_addr", r.RemoteAddr),
+			)
+			return callerIP
+		}
+		if e.isTrustedIP(ip) {
+			continue // our own proxy / CDN hop — keep walking left
+		}
+		return entry // first untrusted hop from the right = the client
+	}
+	// Every hop is trusted (all our own infrastructure): the peer is
+	// the closest thing to the client we have.
+	return callerIP
 }
 
 // callerTrusted reports whether the immediate caller (r.RemoteAddr,
@@ -169,15 +205,7 @@ func (e *IPExtractor) callerTrusted(r *http.Request) bool {
 		host = r.RemoteAddr
 	}
 	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	for _, cidr := range e.trustedCIDRs {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return ip != nil && e.isTrustedIP(ip)
 }
 
 // forwardedProtoIsHTTPS reports whether the leftmost X-Forwarded-Proto
