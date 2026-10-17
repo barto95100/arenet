@@ -157,6 +157,13 @@ Si l'état a été touché et ne charge plus, restaure le backup que tu as pris 
   9. **Les pages d'erreur / maintenance personnalisées rendent les placeholders de requête bruts littéralement.** `{http.request.uri}`, `{http.request.host}` et `{http.request.uri.path}` reflètent la requête brute du client dans une page servie en HTML — un vecteur de XSS réfléchie — donc ils ne sont plus expansés ; ils s'affichent en texte littéral. La forme URL-échappée de l'URI complète `{http.request.uri_escaped}` est sûre et s'expanse toujours. **Conséquence :** si une page personnalisée utilisait un des jetons bruts, remplacez-le par `{http.request.uri_escaped}`. Les pages par défaut intégrées ne sont pas affectées (elles utilisent déjà la forme échappée).
 
   **Une action, si elle s'applique à vous :** changez le mot de passe de tout compte créé par un admin encore sur son mot de passe initial utilisé par un script (point 2) — sinon ce compte est maintenant bloqué pour tout sauf le changer.
+
+- **Mise à jour vers v2.74.1+ (deux durcissements de sécurité, aucun comportement que vous utilisez ne change).** Les deux ferment un trou plutôt que de modifier une fonctionnalité :
+
+  1. **L'IP client derrière un proxy de confiance est lue depuis la *droite* de `X-Forwarded-For`.** Si vous mettez AreNET derrière un CDN et listez ses plages dans `ARENET_TRUSTED_PROXIES`, l'IP source utilisée pour le filtre pays/ASN, le limiteur de login et les lignes d'audit est désormais le hop attesté par votre propre infrastructure — pas l'entrée la plus à gauche, fournie par le client, qu'un visiteur pouvait forger. **Conséquence :** concerne uniquement un déploiement derrière CDN ; ces décisions géo / rate-limit / audit reflètent maintenant le vrai client. AreNET en bordure avec le défaut (confiance loopback seule) est inchangé.
+  2. **Les canaux d'alerte ne peuvent plus joindre les métadonnées d'instance cloud.** Les senders webhook et Discord — et le bouton Tester — refusent désormais les adresses lien-local / métadonnées (`169.254.169.254`, `fd00:ec2::254`), le même garde-fou que les sondes upstream et health-check. Les webhooks privés et loopback restent joignables. **Conséquence :** aucune, sauf si un canal pointait vers une adresse de métadonnées (ce qui ne devrait pas exister).
+
+  **Aucune action requise.**
 ---
 
 ## 6. Automatisation (CLI-only)
