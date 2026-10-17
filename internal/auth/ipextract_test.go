@@ -19,6 +19,7 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -231,27 +232,32 @@ func TestIPExtractor_ClientIP_EdgeCases(t *testing.T) {
 		}
 	})
 
-	t.Run("empty leftmost token falls back to RemoteAddr", func(t *testing.T) {
+	t.Run("empty leftmost token is skipped, real client to its right is used", func(t *testing.T) {
 		e, err := NewIPExtractor("10.0.0.0/8")
 		if err != nil {
 			t.Fatalf("NewIPExtractor: %v", err)
 		}
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.RemoteAddr = "10.0.0.1:12345"
+		// An empty leftmost no longer matters: the right-to-left walk
+		// returns the first untrusted hop (the client) before it reaches
+		// the empty slot.
 		r.Header.Set("X-Forwarded-For", ", 198.51.100.42")
-		if got := e.ClientIP(r); got != "10.0.0.1" {
-			t.Errorf("empty leftmost: got %q, want 10.0.0.1", got)
+		if got := e.ClientIP(r); got != "198.51.100.42" {
+			t.Errorf("empty leftmost: got %q, want 198.51.100.42", got)
 		}
 	})
 
-	t.Run("trailing whitespace in XFF tokens", func(t *testing.T) {
+	t.Run("whitespace around the returned XFF token is trimmed", func(t *testing.T) {
 		e, err := NewIPExtractor("10.0.0.0/8")
 		if err != nil {
 			t.Fatalf("NewIPExtractor: %v", err)
 		}
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.RemoteAddr = "10.0.0.1:12345"
-		r.Header.Set("X-Forwarded-For", "  198.51.100.42  , 198.51.100.43")
+		// Rightmost untrusted hop carries surrounding whitespace; it must
+		// be trimmed before being returned.
+		r.Header.Set("X-Forwarded-For", "198.51.100.43 ,  198.51.100.42  ")
 		if got := e.ClientIP(r); got != "198.51.100.42" {
 			t.Errorf("trailing ws: got %q, want 198.51.100.42", got)
 		}
@@ -311,6 +317,98 @@ func TestIPExtractor_Security_XFFIgnoredWhenUntrusted(t *testing.T) {
 				t.Errorf("forged XFF %q honored: got %q, want 203.0.113.5", forged, got)
 			}
 		})
+	}
+}
+
+// TestIPExtractor_ClientIP_WalksRightToLeft_F13F32 pins the fix for
+// F13/F32: with a TRUSTED immediate peer (a CDN / fronting proxy in
+// ARENET_TRUSTED_PROXIES), the resolved client must be the first
+// untrusted hop walking from the RIGHT, never the client-supplied
+// leftmost entry. A fronting proxy appends the address it saw to the
+// right; a client can only prepend to the left, so the leftmost is
+// forgeable and the old "take leftmost" let a client choose its own
+// source IP — bypassing the country/ASN gate (via the RFC1918 branch),
+// rotating the login rate-limiter bucket, and poisoning audit rows.
+func TestIPExtractor_ClientIP_WalksRightToLeft_F13F32(t *testing.T) {
+	// Trust a CDN range plus RFC1918, exactly the kind of list an
+	// operator sets when fronting Arenet with a CDN.
+	e, err := NewIPExtractor("192.0.2.0/24, 10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("NewIPExtractor: %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		remoteAddr string
+		xff        string
+		want       string
+	}{
+		{
+			// The attack: client prepends a forged private IP; the CDN
+			// appends the real client. Right-to-left returns the real one.
+			name:       "forged private leftmost, real client appended on the right",
+			remoteAddr: "192.0.2.5:443",
+			xff:        "10.0.0.1, 203.0.113.9",
+			want:       "203.0.113.9",
+		},
+		{
+			// Two of our own hops on the right are skipped.
+			name:       "skips trailing trusted hops to the real client",
+			remoteAddr: "192.0.2.5:443",
+			xff:        "203.0.113.9, 192.0.2.7, 10.0.0.9",
+			want:       "203.0.113.9",
+		},
+		{
+			// A forged public IP on the left is also ignored.
+			name:       "forged public leftmost is ignored",
+			remoteAddr: "192.0.2.5:443",
+			xff:        "198.51.100.200, 203.0.113.9",
+			want:       "203.0.113.9",
+		},
+		{
+			// Whole chain is our own infrastructure → fall back to peer.
+			name:       "all-trusted chain falls back to the peer",
+			remoteAddr: "192.0.2.5:443",
+			xff:        "10.0.0.8, 192.0.2.7",
+			want:       "192.0.2.5",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.RemoteAddr = tc.remoteAddr
+			r.Header.Set("X-Forwarded-For", tc.xff)
+			got := e.ClientIP(r)
+			if got != tc.want {
+				t.Errorf("ClientIP = %q; want %q (xff=%q)", got, tc.want, tc.xff)
+			}
+			// Belt-and-braces: the forged private IP must never win, as
+			// it would have under the old leftmost rule (the RFC1918
+			// country-gate bypass).
+			if got == "10.0.0.1" {
+				t.Errorf("forged private IP 10.0.0.1 was honored — F13/F32 regression")
+			}
+		})
+	}
+}
+
+// TestIPExtractor_ClientIP_OverlongChainIgnored pins the chain cap: a
+// padded X-Forwarded-For (more than maxXFFChain hops) is not parsed and
+// the socket peer is used instead.
+func TestIPExtractor_ClientIP_OverlongChainIgnored(t *testing.T) {
+	e, err := NewIPExtractor("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("NewIPExtractor: %v", err)
+	}
+	hops := make([]string, maxXFFChain+5)
+	for i := range hops {
+		hops[i] = "203.0.113.9"
+	}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "10.0.0.1:12345"
+	r.Header.Set("X-Forwarded-For", strings.Join(hops, ", "))
+	if got := e.ClientIP(r); got != "10.0.0.1" {
+		t.Errorf("overlong chain: got %q, want the peer 10.0.0.1", got)
 	}
 }
 
