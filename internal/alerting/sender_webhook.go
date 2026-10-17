@@ -55,10 +55,8 @@ type WebhookSender struct {
 func NewWebhookSender(cfg WebhookConfig) *WebhookSender {
 	cfg = cfg.WithDefaults()
 	return &WebhookSender{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
-		},
+		cfg:    cfg,
+		client: guardedHTTPClient(time.Duration(cfg.TimeoutSeconds) * time.Second),
 	}
 }
 

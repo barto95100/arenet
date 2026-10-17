@@ -294,10 +294,8 @@ type DiscordSender struct {
 func NewDiscordSender(cfg DiscordConfig) *DiscordSender {
 	cfg = cfg.WithDefaults()
 	return &DiscordSender{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
-		},
+		cfg:    cfg,
+		client: guardedHTTPClient(time.Duration(cfg.TimeoutSeconds) * time.Second),
 	}
 }
 
