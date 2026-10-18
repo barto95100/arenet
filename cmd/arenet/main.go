@@ -142,6 +142,7 @@ import (
 	"github.com/barto95100/arenet/internal/observability"
 	"github.com/barto95100/arenet/internal/ratelimit"
 	"github.com/barto95100/arenet/internal/routecheck"
+	"github.com/barto95100/arenet/internal/routehealth"
 	"github.com/barto95100/arenet/internal/storage"
 	"github.com/barto95100/arenet/internal/sysinfo"
 	"github.com/barto95100/arenet/internal/systemhealth"
@@ -1466,6 +1467,17 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 		alertingDispatcher.SetAlertEventSink(&alertEventInserterAdapter{store: obsStore})
 	}
 	apiHandler.SetAlertingDispatcher(alertingDispatcher)
+
+	// v2.75 — route-health notifier. caddyhc health transitions become
+	// per-route notifications on the route's chosen channel, delivered
+	// through the same dispatcher. Registered on the tracker's
+	// transition hook, and refreshed with the applied route set at each
+	// reload via the manager's reload hook (the seam the tracker is
+	// reset at).
+	routeHealthNotifier := routehealth.NewNotifier(hcTracker, alertingDispatcher, logger)
+	hcTracker.SetOnTransition(routeHealthNotifier.OnTransition)
+	mgr.SetReloadHook(routeHealthNotifier.Refresh)
+
 	if obsStore != nil {
 		// AL.4.a — wire the History tab read seam. Same
 		// nil-tolerance contract as the cert-events reader

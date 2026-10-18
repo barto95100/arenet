@@ -17,6 +17,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 
+	"github.com/barto95100/arenet/internal/apierr"
 	"github.com/barto95100/arenet/internal/audit"
 	"github.com/barto95100/arenet/internal/auth"
 	"github.com/barto95100/arenet/internal/countryblock"
@@ -1247,6 +1249,39 @@ func validateHeaders(headers map[string]string, direction string) error {
 	return nil
 }
 
+// materialiseHealthNotify maps the wire health-notify to storage,
+// preserving the previous value when the field is omitted (nil) — the
+// same preserve-on-omit semantics as healthCheck / countryBlock.
+func materialiseHealthNotify(req *healthNotifyReq, prev storage.HealthNotifyConfig) storage.HealthNotifyConfig {
+	if req == nil {
+		return prev
+	}
+	return storage.HealthNotifyConfig{
+		Enabled:         req.Enabled,
+		ChannelID:       strings.TrimSpace(req.ChannelID),
+		ReminderMinutes: req.ReminderMinutes,
+	}
+}
+
+// validateHealthNotifyChannel checks the named channel exists when the
+// notify is enabled. storage.validate() checks the shape (a channel is
+// named, reminder in range); this is the existence check storage cannot
+// do, since it does not know the channels store.
+func (h *Handler) validateHealthNotifyChannel(ctx context.Context, hn storage.HealthNotifyConfig) error {
+	if !hn.Enabled {
+		return nil
+	}
+	if _, err := h.store.GetAlertChannel(ctx, hn.ChannelID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return apierr.New("health_notify_channel_not_found",
+				map[string]string{"channel_id": hn.ChannelID},
+				"health notification names channel %q, which does not exist", hn.ChannelID)
+		}
+		return fmt.Errorf("load health-notify channel: %w", err)
+	}
+	return nil
+}
+
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	var req routeRequest
 	dec := json.NewDecoder(r.Body)
@@ -1667,6 +1702,13 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to hash path-rule password")
 		return
 	}
+	// v2.75 — health-notify. On create there is no previous value, so a
+	// nil wire field means off.
+	storeHN := materialiseHealthNotify(req.HealthNotify, storage.HealthNotifyConfig{})
+	if err := h.validateHealthNotifyChannel(r.Context(), storeHN); err != nil {
+		writeErrorFrom(w, http.StatusBadRequest, err)
+		return
+	}
 	newRoute := storage.Route{
 		Host:              req.Host,
 		Upstreams:         storeUpstreams,
@@ -1693,6 +1735,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		ACMEChallenge:         req.ACMEChallenge,
 		UseDedicatedCert:      req.UseDedicatedCert,
 		HealthCheck:           storeHC,
+		HealthNotify:          storeHN,
 		CountryBlock:          newCountryBlock,
 		InsecureSkipVerify:    skipVerify,
 		UpstreamTLSServerName: tlsServerName,
@@ -2320,6 +2363,13 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to hash path-rule password")
 		return
 	}
+	// v2.75 — health-notify. nil wire field preserves the stored value
+	// (preserve-on-omit, like healthCheck / countryBlock).
+	storeHN := materialiseHealthNotify(req.HealthNotify, previous.HealthNotify)
+	if err := h.validateHealthNotifyChannel(r.Context(), storeHN); err != nil {
+		writeErrorFrom(w, http.StatusBadRequest, err)
+		return
+	}
 	newRoute := storage.Route{
 		ID:                id,
 		Host:              req.Host,
@@ -2347,6 +2397,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		ACMEChallenge:         req.ACMEChallenge,
 		UseDedicatedCert:      req.UseDedicatedCert,
 		HealthCheck:           storeHC,
+		HealthNotify:          storeHN,
 		CountryBlock:          newCountryBlock,
 		InsecureSkipVerify:    skipVerify,
 		UpstreamTLSServerName: tlsServerName,

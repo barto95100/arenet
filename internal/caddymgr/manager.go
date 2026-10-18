@@ -233,6 +233,13 @@ type CaddyManager struct {
 	// tracker; the applyLocked call site nil-guards before Reset.
 	hcTracker *caddyhc.HCStatusTracker
 
+	// reloadHook (v2.75), when set, is called with the applied route
+	// set after every successful reload. The route-health notifier
+	// registers it to refresh its upstream→route index at the same
+	// seam the tracker is reset. A plain func so caddymgr does not
+	// import routehealth. May be nil.
+	reloadHook func([]storage.Route)
+
 	mu      sync.Mutex
 	started bool
 
@@ -388,6 +395,17 @@ func (m *CaddyManager) SetNormalTrafficExcludePaths(paths []string) {
 func (m *CaddyManager) SetHCTracker(t *caddyhc.HCStatusTracker) {
 	m.mu.Lock()
 	m.hcTracker = t
+	m.mu.Unlock()
+}
+
+// SetReloadHook (v2.75) installs a callback invoked with the applied
+// route set after every successful reload, at the same seam the tracker
+// is reset. The route-health notifier uses it to refresh its
+// upstream→route index. A plain func so caddymgr stays independent of
+// routehealth. Passing nil clears it.
+func (m *CaddyManager) SetReloadHook(fn func([]storage.Route)) {
+	m.mu.Lock()
+	m.reloadHook = fn
 	m.mu.Unlock()
 }
 
@@ -1129,6 +1147,14 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 				m.hcTracker.RecordHealthy(u.URL)
 			}
 		}
+	}
+
+	// v2.75 — refresh the route-health notifier's upstream→route index
+	// to match the config just applied, at the same seam the tracker was
+	// reset above. nil unless a notifier is wired (unit tests, boot
+	// orderings without one).
+	if m.reloadHook != nil {
+		m.reloadHook(routes)
 	}
 
 	// Reload succeeded — sync the metrics registry with the live
