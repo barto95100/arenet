@@ -188,10 +188,45 @@ func TestNormalizeAddr(t *testing.T) {
 		"10.0.0.1:80/healthz":  "10.0.0.1:80",
 		"10.0.0.1:80?x=1":      "10.0.0.1:80",
 		"10.0.0.1:80#fragment": "10.0.0.1:80",
+		// v2.75.1 — a port-less upstream URL must canonicalize to the
+		// scheme's default port, because Caddy's health-check events
+		// always carry the dial address WITH a port. Without this a
+		// port-less upstream stayed stuck green.
+		"http://10.0.0.5":         "10.0.0.5:80",
+		"http://10.0.0.5/healthz": "10.0.0.5:80",
+		"https://10.0.0.5":        "10.0.0.5:443",
+		"https://api.example.com": "api.example.com:443",
+		"h2c://10.0.0.5":          "10.0.0.5:80",
+		"10.0.0.5":                "10.0.0.5:80",
+		"http://[fe80::1]":        "[fe80::1]:80",
+		"https://[fe80::1]":       "[fe80::1]:443",
+		"[fe80::1]:80":            "[fe80::1]:80",
 	}
 	for in, want := range cases {
 		if got := NormalizeAddr(in); got != want {
 			t.Errorf("NormalizeAddr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestNormalizeAddr_StoredURLMatchesEventHost is the bug guard: the
+// operator's stored upstream URL (often port-less) and Caddy's
+// health-check event host (always host:port) MUST normalize to the same
+// key, or a RecordUnhealthy keyed by the event is invisible to the
+// topology lookup keyed by the stored URL — a down upstream stuck green.
+func TestNormalizeAddr_StoredURLMatchesEventHost(t *testing.T) {
+	pairs := []struct{ storedURL, eventHost string }{
+		{"http://192.168.1.120", "192.168.1.120:80"},    // the reported case
+		{"http://192.168.1.120:80", "192.168.1.120:80"}, // explicit port
+		{"https://10.0.0.5", "10.0.0.5:443"},
+		{"https://10.0.0.5:443", "10.0.0.5:443"},
+		{"http://[fe80::1]", "[fe80::1]:80"},
+	}
+	for _, p := range pairs {
+		got, want := NormalizeAddr(p.storedURL), NormalizeAddr(p.eventHost)
+		if got != want {
+			t.Errorf("stored %q → %q but event %q → %q; the keys must match or the badge/notify stay green",
+				p.storedURL, got, p.eventHost, want)
 		}
 	}
 }
