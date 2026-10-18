@@ -693,6 +693,31 @@ func (m *MaintenanceConfig) Validate() error {
 	return nil
 }
 
+// HealthNotify reminder bounds (minutes). Zero means notify once on each
+// edge with no reminder while the outage persists.
+const (
+	HealthNotifyReminderMin = 0
+	HealthNotifyReminderMax = 1440 // one day
+)
+
+// HealthNotifyConfig (v2.75) is the per-route opt-in for route-health
+// notifications — a message to a chosen alert channel when the route's
+// upstreams go down and when they recover. Zero value (Enabled: false)
+// means no notification; a pre-v2.75 row decodes to it, so no boot
+// migration is needed (the JSON decoder zero-fills the missing key, as
+// with HealthCheck and CountryBlock).
+//
+// It references an alert channel by ID, never by URL: the channel's
+// webhook URL stays sealed in the channels store, so a route row carries
+// no secret to leak or to seal (backup secret registry untouched). The
+// API layer checks the ID resolves to an existing channel; storage
+// validates only the shape.
+type HealthNotifyConfig struct {
+	Enabled         bool   `json:"enabled"`
+	ChannelID       string `json:"channel_id"`
+	ReminderMinutes int    `json:"reminder_minutes"`
+}
+
 // Route is a proxied virtual host served by Arenet.
 type Route struct {
 	ID   string `json:"id"`
@@ -795,6 +820,12 @@ type Route struct {
 	// storage.validate() is the last line of defence, strict (e.g.
 	// Passes < 1 rejected) without blank-or-positive branching.
 	HealthCheck HealthCheck `json:"health_check"`
+	// HealthNotify (v2.75) is the per-route opt-in for route-health
+	// notifications. Zero-value (Enabled: false) means no notification
+	// and nothing is emitted into Caddy — this is a control-plane
+	// concern, not a data-plane one, so buildConfigJSON is unaffected.
+	// See the HealthNotifyConfig type above this struct.
+	HealthNotify HealthNotifyConfig `json:"health_notify"`
 	// CountryBlock (Step W) — per-route geo allow/deny gate. Active
 	// when Mode is one of {ModeAllow, ModeDeny}. Empty / ModeOff
 	// means the country-block handler is not even emitted in the
@@ -1602,6 +1633,33 @@ func (r *Route) validate() error {
 	// placeholder_validate.go for what {env.*}/{file.*} leak there.
 	if err := r.validatePlaceholderSafety(); err != nil {
 		return err
+	}
+	if err := r.validateHealthNotify(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateHealthNotify checks the shape of the per-route health-notify
+// opt-in (v2.75). Storage validates shape only — that an enabled config
+// names a channel and a reminder in range; whether the channel ID
+// actually resolves is the API layer's check, since storage does not
+// know the channels store.
+func (r *Route) validateHealthNotify() error {
+	if !r.HealthNotify.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(r.HealthNotify.ChannelID) == "" {
+		return apierr.New("health_notify_channel_required",
+			map[string]string{"route": r.Host},
+			"route %q: health notification is enabled but names no alert channel", r.Host)
+	}
+	if r.HealthNotify.ReminderMinutes < HealthNotifyReminderMin ||
+		r.HealthNotify.ReminderMinutes > HealthNotifyReminderMax {
+		return apierr.New("health_notify_reminder_range",
+			map[string]string{"route": r.Host, "minutes": strconv.Itoa(r.HealthNotify.ReminderMinutes)},
+			"route %q: health-notify reminder must be between %d and %d minutes, got %d",
+			r.Host, HealthNotifyReminderMin, HealthNotifyReminderMax, r.HealthNotify.ReminderMinutes)
 	}
 	return nil
 }

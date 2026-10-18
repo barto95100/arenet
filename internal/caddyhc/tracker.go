@@ -41,6 +41,7 @@ package caddyhc
 import (
 	"strings"
 	"sync"
+	"time"
 )
 
 // Status mirrors the three states the topology layer cares about.
@@ -68,7 +69,17 @@ const (
 // in-process and never block reads beyond the brief map mutation.
 type HCStatusTracker struct {
 	mu       sync.RWMutex
-	statuses map[string]string // normalized addr -> Status*
+	statuses map[string]string    // normalized addr -> Status*
+	since    map[string]time.Time // normalized addr -> instant of its last transition
+
+	// onTransition, when set, is called once per genuine status change
+	// for an upstream (old != new), after the lock is released. Route
+	// health notification (v2.75) registers it; nil (the default) keeps
+	// the tracker's behaviour identical for every other caller.
+	onTransition func(addr, old, newStatus string, at time.Time)
+
+	// now is the clock, injectable so tests can pin transition instants.
+	now func() time.Time
 }
 
 // NewTracker returns an empty tracker. The tracker carries no
@@ -79,7 +90,24 @@ type HCStatusTracker struct {
 func NewTracker() *HCStatusTracker {
 	return &HCStatusTracker{
 		statuses: make(map[string]string),
+		since:    make(map[string]time.Time),
+		now:      time.Now,
 	}
+}
+
+// SetOnTransition registers a callback invoked once per genuine status
+// transition for an upstream (old != new), with the normalized address,
+// the old and new statuses, and the instant of the change. It runs after
+// the tracker's lock is released, so it may do slow work (dispatch an
+// alert) without blocking the topology readers on the hot path.
+//
+// Set once at startup, before Caddy begins emitting events. A nil
+// callback disables the hook. Reset() does NOT invoke it — a reload is
+// not a real upstream transition.
+func (t *HCStatusTracker) SetOnTransition(fn func(addr, old, newStatus string, at time.Time)) {
+	t.mu.Lock()
+	t.onTransition = fn
+	t.mu.Unlock()
 }
 
 // RecordHealthy marks an upstream healthy. Called by the Caddy
@@ -102,8 +130,32 @@ func (t *HCStatusTracker) set(addr, status string) {
 		return // refuse to record garbage — protects the map from "" keys
 	}
 	t.mu.Lock()
+	old := t.statuses[key]
+	if old == status {
+		t.mu.Unlock()
+		return // no transition — nothing changes, no callback, since untouched
+	}
+	at := t.now()
 	t.statuses[key] = status
+	t.since[key] = at
+	cb := t.onTransition
 	t.mu.Unlock()
+	if cb != nil {
+		cb(key, old, status, at)
+	}
+}
+
+// Since returns the instant the upstream last transitioned into its
+// current status, or the zero time if no event has been observed for it.
+// The route-health notifier reads it to state an outage's duration.
+func (t *HCStatusTracker) Since(addr string) time.Time {
+	key := NormalizeAddr(addr)
+	if key == "" {
+		return time.Time{}
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.since[key]
 }
 
 // Reset clears every recorded per-upstream status, restoring the
@@ -132,6 +184,7 @@ func (t *HCStatusTracker) set(addr, status string) {
 func (t *HCStatusTracker) Reset() {
 	t.mu.Lock()
 	t.statuses = make(map[string]string)
+	t.since = make(map[string]time.Time)
 	t.mu.Unlock()
 }
 

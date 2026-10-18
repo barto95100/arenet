@@ -1522,6 +1522,13 @@ type routeRequest struct {
 	// rule matches Step I.5 BasicAuth + Step I.4 WAFMode
 	// preserve-on-omission patterns.
 	HealthCheck *healthCheckReq `json:"healthCheck,omitempty"`
+	// HealthNotify (v2.75) — per-route opt-in for route-health
+	// notifications. Pointer with the same preserve-on-omission
+	// semantics as healthCheck/countryBlock: nil on PUT keeps the
+	// stored value, a value fully replaces it. The channel is named
+	// by ID; the handler checks it resolves to an existing channel
+	// when Enabled.
+	HealthNotify *healthNotifyReq `json:"healthNotify,omitempty"`
 	// Step W — per-route country-block gate. Mode is one of
 	// "" / "off" / "allow" / "deny" (the latter two require a
 	// non-empty CountryList). Pointer so nil distinguishes "block
@@ -1789,6 +1796,22 @@ type upstreamResp struct {
 //
 // The "omission ≠ clear" semantic mirrors Step I.5 (empty password
 // preserves hash) and Step I.4 (empty wafMode preserves mode).
+// healthNotifyReq is the wire shape of the per-route health-notify
+// opt-in (v2.75). camelCase to match the rest of the route payload. The
+// channel is an ID, never a URL — no secret rides the route.
+type healthNotifyReq struct {
+	Enabled         bool   `json:"enabled"`
+	ChannelID       string `json:"channelId"`
+	ReminderMinutes int    `json:"reminderMinutes"`
+}
+
+// healthNotifyResp mirrors healthNotifyReq on reads.
+type healthNotifyResp struct {
+	Enabled         bool   `json:"enabled"`
+	ChannelID       string `json:"channelId"`
+	ReminderMinutes int    `json:"reminderMinutes"`
+}
+
 type healthCheckReq struct {
 	Enabled      bool   `json:"enabled"`
 	URI          string `json:"uri"`
@@ -1915,7 +1938,8 @@ type routeResponse struct {
 	// route (storage.HealthCheck has no omitempty); when Enabled
 	// is false the rest of the sub-fields carry zero values and
 	// the generator omits the Caddy `health_checks` block.
-	HealthCheck healthCheckResp `json:"healthCheck"`
+	HealthCheck  healthCheckResp  `json:"healthCheck"`
+	HealthNotify healthNotifyResp `json:"healthNotify"`
 	// Step W — per-route country-block gate state. Always present
 	// on a stored route (zero-value reads back as Mode="off" via
 	// toResponse normalisation). The frontend renders this as the
@@ -2110,6 +2134,11 @@ func toResponse(r storage.Route) routeResponse {
 			Fails:        r.HealthCheck.Fails,
 			HostHeader:   r.HealthCheck.HostHeader,
 			Headers:      r.HealthCheck.Headers,
+		},
+		HealthNotify: healthNotifyResp{
+			Enabled:         r.HealthNotify.Enabled,
+			ChannelID:       r.HealthNotify.ChannelID,
+			ReminderMinutes: r.HealthNotify.ReminderMinutes,
 		},
 		CountryBlock:          toCountryBlockResp(r.CountryBlock),
 		InsecureSkipVerify:    r.InsecureSkipVerify,

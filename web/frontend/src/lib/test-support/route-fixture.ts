@@ -58,6 +58,7 @@ export function makeRoute(overrides: Partial<Route> = {}): Route {
 		// that need the gate active override via the partial
 		// Route overrides.
 		countryBlock: { mode: 'off', countryList: [], continents: [], asns: [], exceptions: { countries: [], asns: [] }, statusCode: 0 },
+		healthNotify: { enabled: false, channelId: '', reminderMinutes: 0 },
 		// Step #R-PROXMOX-HTTPS-LOOP — strict default. Tests
 		// exercising the disclosure / toggle override via the
 		// partial Route overrides.
