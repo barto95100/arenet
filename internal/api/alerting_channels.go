@@ -649,6 +649,18 @@ func (h *Handler) testAlertChannel(w http.ResponseWriter, r *http.Request) {
 			resp.OK = false
 			resp.Error = "dispatcher returned no result for this channel"
 		}
+		// Always leave a server-side breadcrumb for a manual test. A send
+		// that hangs never reaches the dispatcher's own WARN/DEBUG lines,
+		// so without this the operator saw "rien dans les logs" and had no
+		// way to tell a silent success from a stuck sender (reported
+		// 2026-10-18 for a stalled SMTP greeting).
+		if resp.OK {
+			h.logger.Info("alerting channel test sent",
+				"channel_id", id, "channel", ch.Name, "kind", ch.Kind)
+		} else {
+			h.logger.Warn("alerting channel test failed",
+				"channel_id", id, "channel", ch.Name, "kind", ch.Kind, "err", resp.Error)
+		}
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -667,6 +679,11 @@ func (h *Handler) testAlertChannel(w http.ResponseWriter, r *http.Request) {
 	resp := alertChannelTestResponse{OK: sendErr == nil}
 	if sendErr != nil {
 		resp.Error = sendErr.Error()
+		h.logger.Warn("alerting channel test failed",
+			"channel_id", ch.ID, "channel", ch.Name, "kind", ch.Kind, "err", sendErr)
+	} else {
+		h.logger.Info("alerting channel test sent",
+			"channel_id", ch.ID, "channel", ch.Name, "kind", ch.Kind)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
