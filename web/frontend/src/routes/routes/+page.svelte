@@ -2440,18 +2440,6 @@
 			: tl('routes.form.summaryHealthCheckOff')
 	);
 
-	// v2.75 — one-line state of the health-notify block on the closed row.
-	const summaryHealthNotify = $derived(
-		formData.healthNotify.enabled
-			? (() => {
-					const ch = healthChannels.find((c) => c.id === formData.healthNotify.channelId);
-					return tl('routes.form.summaryHealthNotifyOn', {
-						channel: ch?.name || formData.healthNotify.channelId || '—'
-					});
-				})()
-			: tl('routes.form.summaryHealthNotifyOff')
-	);
-
 	const namedHeaderCount = $derived(
 		requestHeaderRows.filter(([k]) => k.trim() !== '').length +
 			responseHeaderRows.filter(([k]) => k.trim() !== '').length
@@ -6136,18 +6124,10 @@
 								<p class="text-xs text-muted">
 									{language.current && t('routes.form.healthCheckHelper')}
 								</p>
-						</div>
-					</RouteSection>
-
-					<!-- v2.75 — notify a chosen alert channel when this route's
-					     upstreams go down and when they recover. Control-plane
-					     only: it changes nothing in the emitted Caddy config. -->
-					<RouteSection
-						name={language.current && t('routes.form.sectionHealthNotify')}
-						summary={summaryHealthNotify}
-						testid="section-health-notify"
-					>
-						<div class="flex flex-col gap-3">
+							<!-- v2.75 — notify a channel when THIS route flips. Inside
+							     Health Check on purpose: notifications fire only on the
+							     active check’s transitions, so the check must be enabled. -->
+							<div class="border-t border-border-subtle pt-3 mt-1"></div>
 							<SwitchRow
 								checked={formData.healthNotify.enabled}
 								onchange={(v) => (formData.healthNotify.enabled = v)}
@@ -6156,6 +6136,11 @@
 								labelTestid="health-notify-toggle-label"
 							/>
 							{#if formData.healthNotify.enabled}
+								{#if !formData.healthCheck.enabled}
+									<p class="text-muted text-xs" data-testid="health-notify-needs-hc">
+										{language.current && t('routes.form.healthNotifyNeedsHealthCheck')}
+									</p>
+								{/if}
 								{#if healthChannels.length === 0}
 									<p class="text-muted text-sm" data-testid="health-notify-no-channel">
 										{language.current && t('routes.form.healthNotifyNoChannel')}
@@ -6216,7 +6201,6 @@
 							{/if}
 						</div>
 					</RouteSection>
-
 					<!-- Path rules and custom headers. -->
 					<RouteSection
 						name={language.current && t('routes.form.sectionPathsHeaders')}

@@ -6216,13 +6216,30 @@ describe('Routes page — health notifications', () => {
 		await tick();
 	}
 
-	it('renders the health-notify section with its toggle', async () => {
+	it('renders the health-notify toggle inside the health-check section', async () => {
 		render(Page);
 		await openCreateForm();
-		expect(screen.getByTestId('section-health-notify')).toBeInTheDocument();
+		// v2.75.1 — the control lives inside the Health Check section, not
+		// a standalone one (notifications only fire on the active check's
+		// transitions). The toggle is the anchor.
 		expect(
 			screen.getByLabelText('Notify a channel when this route goes down')
 		).toBeInTheDocument();
+		// and it sits within the health-check section's subtree
+		expect(
+			within(screen.getByTestId('section-health-check')).getByLabelText(
+				'Notify a channel when this route goes down'
+			)
+		).toBeInTheDocument();
+	});
+
+	it('warns that the health check must be enabled for notifications to fire', async () => {
+		render(Page);
+		await openCreateForm();
+		// HC disabled by default; enabling notify surfaces the dependency hint.
+		await userEvent.click(screen.getByLabelText('Notify a channel when this route goes down'));
+		await tick();
+		expect(screen.getByTestId('health-notify-needs-hc')).toBeInTheDocument();
 	});
 
 	it('shows the no-channel hint and refuses to save when enabled with no channels configured', async () => {

@@ -533,6 +533,7 @@
 			"healthNotifyChannelRequired": "Choose a channel to notify.",
 			"healthNotifyReminderLabel": "Reminder while down (minutes)",
 			"healthNotifyReminderHint": "0 = notify once on each change. Otherwise, repeat while the route stays down.",
+			"healthNotifyNeedsHealthCheck": "The health check must be enabled for notifications to fire.",
 			"healthNotifyNoChannel": "No alert channel is configured yet.",
 			"healthNotifyNoChannelLink": "Add one in Alerting settings.",
 			"summaryHealthNotifyOn": "On → {channel}",
