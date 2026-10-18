@@ -164,6 +164,8 @@ Si l'état a été touché et ne charge plus, restaure le backup que tu as pris 
   2. **Les canaux d'alerte ne peuvent plus joindre les métadonnées d'instance cloud.** Les senders webhook et Discord — et le bouton Tester — refusent désormais les adresses lien-local / métadonnées (`169.254.169.254`, `fd00:ec2::254`), le même garde-fou que les sondes upstream et health-check. Les webhooks privés et loopback restent joignables. **Conséquence :** aucune, sauf si un canal pointait vers une adresse de métadonnées (ce qui ne devrait pas exister).
 
   **Aucune action requise.**
+
+- **Mise à jour vers v2.75.0+ (une nouvelle fonctionnalité opt-in : notifications de santé des routes).** Rien ne change pour une route existante — la fonctionnalité est désactivée tant que vous ne l'activez pas. Chaque route a désormais une section **Notifications de santé** : activez-la, choisissez un canal d'alerte, et Arenet prévient ce canal quand les upstreams de la route tombent et quand ils reviennent (avec la durée de la panne), en regroupant les routes qui partagent un même backend en panne, avec un rappel optionnel tant qu'elle reste hors service. **Conséquence :** aucune tant que vous ne l'activez pas ; une route non modifiée se comporte exactement comme avant. Pour l'utiliser il faut au moins un canal d'alerte configuré (Réglages → Alertes), puis le toggle + le canal sur la route.
 ---
 
 ## 6. Automatisation (CLI-only)
