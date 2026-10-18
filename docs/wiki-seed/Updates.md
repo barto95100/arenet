@@ -156,6 +156,13 @@ If state was touched and won't load, restore the backup you took: [Backup & Rest
 
   **One action, if it applies to you:** rotate the password of any admin-created account still on its initial password that a script logs in with (item 2) — otherwise that account is now blocked from doing anything but changing it.
 
+- **Upgrading to v2.74.1+ (two security hardenings, no behaviour you set out to use changes).** Both close a gap rather than alter a feature you drive:
+
+  1. **The client IP behind a trusted proxy is read from the *right* of `X-Forwarded-For`.** If you front AreNET with a CDN and list its ranges in `ARENET_TRUSTED_PROXIES`, the source IP used for the country/ASN gate, the login rate-limiter and the audit rows is now the hop your own infrastructure vouched for — not the leftmost, client-supplied entry a visitor could forge. **Consequence:** relevant only to a CDN-fronted deployment; those geo / rate-limit / audit decisions now reflect the real client. AreNET at the edge with the default (loopback-only trust) is unchanged.
+  2. **Alert channels can no longer reach cloud instance metadata.** The webhook and Discord senders — and the channel Test button — now refuse link-local / metadata addresses (`169.254.169.254`, `fd00:ec2::254`), the same guard the upstream and health-check probes already apply. Private and loopback webhooks stay reachable. **Consequence:** none, unless a channel was pointed at a metadata address (which should not exist).
+
+  **No action required.**
+
 ---
 
 ## 6. Automation (CLI-only)
