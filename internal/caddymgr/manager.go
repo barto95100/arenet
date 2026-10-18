@@ -1093,14 +1093,10 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	// this reset the badge stays stuck DOWN forever even when the
 	// upstream is answering 2xx on the new config.
 	//
-	// Nil-guard for unit tests / boot orderings that don't install
-	// a tracker. Reset acquires its own lock; the caller's
-	// manager-mu is unrelated (covers store/registry/started, not
-	// the tracker's internal map).
-	if m.hcTracker != nil {
-		m.hcTracker.Reset()
-	}
-
+	// v2.75.1 — the tracker is reconciled AFTER a successful Load (below),
+	// not reset-then-primed here. A pre-Load wipe is unnecessary: Caddy
+	// keeps per-host health across the reload, so the tracker's current
+	// values stay accurate during the brief Load window.
 	if err := caddy.Load(cfgJSON, false); err != nil {
 		// v2.26: DNS provider modules may echo a credential in their
 		// Provision error (caddy-dns/cloudflare does). The error is
@@ -1120,33 +1116,34 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 		}
 	}
 
-	// v2.9.9 Bug B follow-up — re-prime healthy after every reload.
-	// Symmetric to the cmd/arenet boot-time prime: Caddy's active
-	// health checker only emits state-TRANSITION events; new
-	// Upstream objects default to healthy (Caddy v2.11.3 hosts.go:251
-	// — u.unhealthy.Load() == 0). After the v2.9.8 Reset() above
-	// the tracker is empty, so an upstream whose probes succeed
-	// silently leaves the badge gray forever (no event ever fires
-	// to flip it green).
+	// v2.75.1 — reconcile the HC tracker with the applied upstream set,
+	// preserving the health of upstreams that survive the reload.
 	//
-	// Priming-as-healthy matches Caddy's optimistic default. The
-	// window of risk: ≤1 probe interval (~30s default). If the
-	// upstream is actually DOWN, Caddy's first probe (fired
-	// IMMEDIATELY at goroutine start per healthchecks.go:283) will
-	// fail, accumulate to Fails threshold, transition the Upstream
-	// state to false, and emit "unhealthy" — at which point our
-	// tracker flips to DOWN and the badge turns red. Worst case
-	// the operator sees a green-then-red sequence within 30s after
-	// a Save on a route whose upstream is genuinely broken.
+	// The former logic reset the tracker and re-primed EVERY
+	// health-checked upstream as healthy on every reload, betting that
+	// Caddy would re-emit "unhealthy" on the first failed probe. That
+	// bet is wrong for an upstream that was ALREADY down before the
+	// reload: Caddy keeps per-host health in a global pool that persists
+	// across the reload (v2.11.4 reverseproxy/hosts.go:130,:306), so the
+	// failing probe's setHealthy(false) is a no-op CAS and emits nothing
+	// (healthchecks.go:476-479) — the tracker stayed stuck on the
+	// optimistic green, so the badge lied and route-health notifications
+	// never fired. Reconcile keeps already-tracked addresses as-is (their
+	// event-driven value is still accurate, Caddy's state being
+	// continuous) and primes only genuinely-new addresses healthy, which
+	// a down new upstream corrects via its first healthy→unhealthy
+	// transition.
 	if m.hcTracker != nil {
+		hcAddrs := make([]string, 0, len(routes))
 		for _, r := range routes {
 			if !r.HealthCheck.Enabled {
 				continue
 			}
 			for _, u := range r.Upstreams {
-				m.hcTracker.RecordHealthy(u.URL)
+				hcAddrs = append(hcAddrs, u.URL)
 			}
 		}
+		m.hcTracker.Reconcile(hcAddrs)
 	}
 
 	// v2.75 — refresh the route-health notifier's upstream→route index
