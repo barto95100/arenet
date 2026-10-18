@@ -165,6 +165,8 @@ If state was touched and won't load, restore the backup you took: [Backup & Rest
 
 - **Upgrading to v2.75.0+ (a new opt-in feature: route health notifications).** Nothing changes for an existing route — the feature is off until you turn it on. Each route now has a **Health notifications** section: enable it, pick an alert channel, and Arenet messages that channel when the route's upstreams go down and when they recover (with the outage duration), grouping routes that share a dead backend, with an optional reminder while it stays down. **Consequence:** none unless you enable it; an untouched route behaves exactly as before. To use it you need at least one alert channel configured (Settings → Alerting), then the toggle + channel on the route.
 
+- **Upgrading to v2.75.1+ (a health-detection fix).** Before this release, a route's upstream that had been down since before the last reload could still show **healthy** in the UI — and route-health notifications would not fire — because Arenet re-primed every health-checked upstream optimistically on each reload, and the embedded Caddy (which keeps upstream health across a reload) had no state change left to announce. Health is now **reconciled** across a reload instead of reset-and-reprimed. **Consequence:** nothing to act on — the upgrade restarts Arenet, which re-establishes the true state on the first probe, and in-process reloads no longer flip a down upstream back to green. If you enabled route-health notifications on v2.75.0 and they seemed silent for a down backend, this is the fix.
+
 ---
 
 ## 6. Automation (CLI-only)
