@@ -188,6 +188,51 @@ func (t *HCStatusTracker) Reset() {
 	t.mu.Unlock()
 }
 
+// Reconcile aligns the tracker with the upstream set of a freshly applied
+// config, WITHOUT discarding the health of upstreams that survive the
+// reload. For each normalized address in addrs:
+//
+//   - already tracked  → LEFT AS-IS. Caddy keeps per-host health in a
+//     global pool that persists across a reload (v2.11.4
+//     reverseproxy/hosts.go:130 LoadOrStore, :306 "state preserved"), so
+//     the tracker's last event-driven value is still the truth. Caddy
+//     will NOT re-announce it: its events fire only on a transition
+//     (healthchecks.go:476-479), and a steady host does not transition.
+//   - not yet tracked  → primed StatusHealthy, matching Caddy's
+//     optimistic default for a newly-created host (a genuinely-down new
+//     upstream transitions healthy→unhealthy on its first probe and the
+//     "unhealthy" event corrects the tracker).
+//
+// Addresses no longer present are dropped. This REPLACES the former
+// Reset()+prime-every-upstream-healthy, which re-primed a
+// persistently-unhealthy upstream back to healthy on every reload and,
+// because Caddy then had no transition to emit, left the badge stuck
+// green forever (the inverse of the stale-DOWN case Reset() was built
+// for). Does not fire OnTransition — a reload is not an upstream event.
+func (t *HCStatusTracker) Reconcile(addrs []string) {
+	want := make(map[string]struct{}, len(addrs))
+	for _, a := range addrs {
+		if k := NormalizeAddr(a); k != "" {
+			want[k] = struct{}{}
+		}
+	}
+	now := t.now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for k := range t.statuses {
+		if _, keep := want[k]; !keep {
+			delete(t.statuses, k)
+			delete(t.since, k)
+		}
+	}
+	for k := range want {
+		if _, tracked := t.statuses[k]; !tracked {
+			t.statuses[k] = StatusHealthy
+			t.since[k] = now
+		}
+	}
+}
+
 // Status returns the last-known state for an upstream, or
 // StatusUnknown ("") if no event has been observed for it yet.
 // Called by the topology snapshot builder per upstream per emit.

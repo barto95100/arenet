@@ -133,3 +133,41 @@ func TestTracker_Reset_ClearsSince_NoCallback(t *testing.T) {
 		t.Errorf("callback fired %d times; want 1 (the RecordUnhealthy only) — Reset must not invoke it", got)
 	}
 }
+
+// TestTracker_Reconcile_PreservesDownAcrossReload pins the v2.75.1 fix:
+// an upstream recorded unhealthy (by a real Caddy transition) must STAY
+// unhealthy across a reload's Reconcile — the old Reset()+prime flipped
+// it back to healthy, and Caddy (whose host stays unhealthy) never
+// re-emitted, so the badge lied.
+func TestTracker_Reconcile_PreservesDownAcrossReload(t *testing.T) {
+	tr := NewTracker()
+	const down = "10.0.0.1:80"
+	const up = "10.0.0.2:80"
+	tr.RecordUnhealthy(down)
+	tr.RecordHealthy(up)
+
+	// A reload applies the same two upstreams.
+	tr.Reconcile([]string{"http://" + down, "http://" + up})
+
+	if got := tr.Status(down); got != StatusUnhealthy {
+		t.Errorf("Status(%s) = %q after reconcile; a persistently-down upstream must stay unhealthy, not be re-primed healthy", down, got)
+	}
+	if got := tr.Status(up); got != StatusHealthy {
+		t.Errorf("Status(%s) = %q; a healthy upstream stays healthy", up, got)
+	}
+}
+
+func TestTracker_Reconcile_PrimesNewAndDropsRemoved(t *testing.T) {
+	tr := NewTracker()
+	tr.RecordUnhealthy("10.0.0.9:80") // present before, absent from the new config
+
+	// New config: a brand-new upstream not seen before.
+	tr.Reconcile([]string{"http://10.0.0.5:8080"})
+
+	if got := tr.Status("10.0.0.5:8080"); got != StatusHealthy {
+		t.Errorf("a new upstream must be primed healthy (Caddy's optimistic default); got %q", got)
+	}
+	if got := tr.Status("10.0.0.9:80"); got != StatusUnknown {
+		t.Errorf("an upstream dropped from the config must be forgotten; got %q", got)
+	}
+}
