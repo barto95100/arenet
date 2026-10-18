@@ -167,6 +167,8 @@ If state was touched and won't load, restore the backup you took: [Backup & Rest
 
 - **Upgrading to v2.75.1+ (a health-detection fix).** Before this release, a route's upstream that had been down since before the last reload could still show **healthy** in the UI — and route-health notifications would not fire — because Arenet re-primed every health-checked upstream optimistically on each reload, and the embedded Caddy (which keeps upstream health across a reload) had no state change left to announce. Health is now **reconciled** across a reload instead of reset-and-reprimed. **Consequence:** nothing to act on — the upgrade restarts Arenet, which re-establishes the true state on the first probe, and in-process reloads no longer flip a down upstream back to green. If you enabled route-health notifications on v2.75.0 and they seemed silent for a down backend, this is the fix.
 
+- **Upgrading to v2.75.2+ (the other half of the health-detection fix).** v2.75.1 fixed the reload case; this fixes the rest: an upstream whose URL **omits the port** (e.g. `http://10.0.0.5` for a port-80 backend) was tracked without a port, while Caddy's health-check events always report the dial address **with** one (`10.0.0.5:80`). The down state recorded by the event never met the port-less lookup the badge and the notifier used, so the upstream stayed green. Addresses are now canonicalized to `host:port`. **Consequence:** none to act on — a down upstream whose URL omits the port is now correctly shown DOWN and fires route-health notifications. If notifications still looked silent on v2.75.1, this is why.
+
 ---
 
 ## 6. Automation (CLI-only)
