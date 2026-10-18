@@ -39,6 +39,7 @@
 package caddyhc
 
 import (
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -258,11 +259,16 @@ func (t *HCStatusTracker) Status(addr string) string {
 // receives storage-shaped strings like "http://10.0.4.12:8080")
 // need to produce the same key.
 func NormalizeAddr(raw string) string {
-	s := raw
-	// Strip scheme.
-	for _, prefix := range []string{"http://", "https://", "h2c://", "h2://"} {
-		if strings.HasPrefix(s, prefix) {
-			s = s[len(prefix):]
+	s := strings.TrimSpace(raw)
+	// Strip scheme, remembering it so a missing port can be defaulted the
+	// way Caddy defaults it when dialing.
+	defaultPort := "80"
+	for _, p := range []struct{ prefix, port string }{
+		{"https://", "443"}, {"h2://", "443"}, {"http://", "80"}, {"h2c://", "80"},
+	} {
+		if strings.HasPrefix(s, p.prefix) {
+			s = s[len(p.prefix):]
+			defaultPort = p.port
 			break
 		}
 	}
@@ -271,6 +277,29 @@ func NormalizeAddr(raw string) string {
 		if i := strings.IndexByte(s, sep); i >= 0 {
 			s = s[:i]
 		}
+	}
+	if s == "" {
+		return ""
+	}
+	// Canonicalize to host:port. Caddy's active-health-check events ALWAYS
+	// carry the dial address with an explicit port (it adds the scheme's
+	// default when dialing), so an operator upstream like
+	// "http://10.0.0.5" must key to "10.0.0.5:80" — otherwise the
+	// event-recorded "10.0.0.5:80" and the topology's port-less lookup
+	// never meet and a down upstream stays green (v2.75.1 follow-up).
+	// net.SplitHostPort errors when there is no port; JoinHostPort then
+	// adds it and brackets IPv6 correctly.
+	if _, _, err := net.SplitHostPort(s); err != nil {
+		s = net.JoinHostPort(stripBrackets(s), defaultPort)
+	}
+	return s
+}
+
+// stripBrackets removes a single pair of surrounding [] from a bare IPv6
+// literal so net.JoinHostPort can re-add them without doubling.
+func stripBrackets(s string) string {
+	if len(s) >= 2 && s[0] == '[' && s[len(s)-1] == ']' {
+		return s[1 : len(s)-1]
 	}
 	return s
 }
