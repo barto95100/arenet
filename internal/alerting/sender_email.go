@@ -326,6 +326,19 @@ func productionDialer(ctx context.Context, host string, port int, useTLS bool) (
 	if err != nil {
 		return nil, err
 	}
+	// Bound the ENTIRE SMTP conversation, not just the dial. net/smtp
+	// takes no context, so without a connection deadline a server that
+	// accepts the TCP connection but then stalls on any command (a slow
+	// reverse-DNS/SPF check on our EHLO name, a greylist pause, an
+	// implicit-TLS mismatch) blocks the read forever — the dispatcher's
+	// ctx timeout cannot interrupt it, and the request hangs with no
+	// response and no completion log. The dial Deadline above covers only
+	// connect/handshake; this covers EHLO/STARTTLS/AUTH/MAIL/RCPT/DATA.
+	if hasDeadline {
+		_ = conn.SetDeadline(deadline)
+	} else {
+		_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	}
 	return smtp.NewClient(conn, host)
 }
 

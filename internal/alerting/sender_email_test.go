@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // AL.1.b — EmailSender pinning tests.
@@ -401,5 +402,72 @@ func TestHeloName_FallbackOrder(t *testing.T) {
 	// 4. Nothing knowable at all: the old behaviour, and only then.
 	if got := heloName(EmailConfig{From: "no-at-sign"}); got != "localhost" && !strings.Contains(got, ".") {
 		t.Fatalf("with nothing to work from, expected localhost or a qualified hostname, got %q", got)
+	}
+}
+
+// TestEmailSender_ProductionDialer_StalledServerDoesNotHang guards the
+// v2.75.3 regression fix: a server that completes the TCP handshake and
+// sends the 220 greeting but then goes silent (a strict MTA stalling on a
+// slow reverse-DNS / SPF check of our HELO name, a greylist pause) must
+// not hang the sender forever. net/smtp takes no context, so the
+// production dialer MUST stamp the ctx deadline onto the connection; the
+// dispatcher's ctx timeout alone cannot interrupt a blocking net/smtp
+// read. Without the conn deadline the channel-test POST hung with no
+// response and no completion log — the operator's reported symptom.
+//
+// This drives the REAL productionDialer (dialer == nil), because the seam
+// under test is precisely productionDialer's conn.SetDeadline. Remove
+// that SetDeadline block and this test hangs past the ceiling and fails.
+func TestEmailSender_ProductionDialer_StalledServerDoesNotHang(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	go func() {
+		conn, aerr := ln.Accept()
+		if aerr != nil {
+			return
+		}
+		// Accept the TCP connection, then stall forever WITHOUT sending the
+		// 220 greeting banner. This mirrors the operator's tcpdump against
+		// Stalwart on :25 exactly: the SYN/SYN-ACK/ACK completes and then no
+		// inbound data ever follows, so smtp.NewClient's ReadResponse(220)
+		// blocks. The client's deadline must cut that read; when it closes,
+		// io.Copy returns and we clean up.
+		_, _ = io.Copy(io.Discard, conn)
+		_ = conn.Close()
+	}()
+
+	tcpAddr := ln.Addr().(*net.TCPAddr)
+	cfg := sampleEmailCfg()
+	cfg.SMTPHost = tcpAddr.IP.String()
+	cfg.SMTPPort = tcpAddr.Port
+	cfg.SMTPUsername = ""              // no AUTH — the stall must bite at EHLO, before auth
+	sender := NewEmailSender(cfg, nil) // nil => the real productionDialer under test
+
+	// Short deadline the dialer must honour on the conn; a generous ceiling
+	// on the test so a genuine hang (missing SetDeadline) is unmistakable.
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- sender.Send(ctx, sampleEvent()) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("Send returned nil; want a timeout error from the stalled EHLO read")
+		}
+		if !strings.Contains(err.Error(), "email:") {
+			t.Errorf("err = %q; want an 'email:' SMTP-stage error, not a pre-dial failure", err.Error())
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Errorf("Send took %s with a 750ms deadline — the conversation was not bounded", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Send hung past 5s on a stalled SMTP server — the conn deadline is missing")
 	}
 }
