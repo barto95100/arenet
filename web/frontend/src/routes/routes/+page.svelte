@@ -20,6 +20,7 @@
 		exitMaintenance
 	} from '$lib/api/client';
 	import { settingsApi } from '$lib/api/settings';
+	import { alertingApi, type AlertChannel } from '$lib/api/alerting';
 	import {
 		errorTemplatesApi,
 		SUPPORTED_ERROR_STATUS_CODES,
@@ -39,6 +40,7 @@
 		ExternalCertificate,
 		ForwardAuthProvider,
 		HealthCheck,
+		HealthNotify,
 		IPFilter,
 		LBPolicy,
 		MaintenanceConfig,
@@ -242,8 +244,13 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'countryBlock' | 'insecureSkipVerify' | 'upstreamTlsServerName' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'wafTargetedExclusions' | 'wafCustomRules' | 'wafSecLang' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'healthNotify' | 'countryBlock' | 'insecureSkipVerify' | 'upstreamTlsServerName' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'wafTargetedExclusions' | 'wafCustomRules' | 'wafSecLang' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
 		healthCheck: HealthCheck;
+		// v2.75 — route-health notify. Always present on the form (zero
+		// value = off), shipped full-replacement on POST and PUT, same
+		// discipline as countryBlock: the operator's choices are the
+		// truth, no preserve-on-omit needed from the form.
+		healthNotify: HealthNotify;
 		// v2.14.3 — narrowed to a non-optional boolean, same
 		// pattern as insecureSkipVerify/uploadStreamingMode: the
 		// form always carries a definite value (default false on
@@ -365,6 +372,10 @@
 	// it empty (the picker then shows the no-eligible-cert warning,
 	// which links to the upload surface — a graceful degrade).
 	let externalCerts = $state<ExternalCertificate[]>([]);
+	// v2.75 — alert channels for the health-notify picker. Loaded on
+	// mount / form open; a failed load degrades to an empty list, and the
+	// picker then shows the "no channel configured" hint + a link.
+	let healthChannels = $state<AlertChannel[]>([]);
 	// Eligible = uploaded certs whose SANs cover the current host
 	// (RFC 6125 single-label wildcard, case-insensitive — same rule
 	// the backend re-checks). Preserves the server's notAfter-ascending
@@ -575,6 +586,13 @@
 				asns: [] as number[],
 				exceptions: { countries: [] as string[], asns: [] as number[] },
 				statusCode: 0
+			},
+			// v2.75 — route-health notify defaults to off; the operator
+			// opts in via the toggle in the health-notify block below.
+			healthNotify: {
+				enabled: false,
+				channelId: '',
+				reminderMinutes: 0
 			},
 			healthCheck: {
 				enabled: false,
@@ -1569,6 +1587,13 @@
 				},
 				statusCode: r.countryBlock.statusCode
 			},
+			// v2.75 — route-health notify. `?? ` tolerates a pre-v2.75
+			// API that does not send the block.
+			healthNotify: {
+				enabled: r.healthNotify?.enabled ?? false,
+				channelId: r.healthNotify?.channelId ?? '',
+				reminderMinutes: r.healthNotify?.reminderMinutes ?? 0
+			},
 			// Step O: "inherited" is a server-derived value the
 			// frontend never sends back. Reload it as "" (empty)
 			// rather than "http-01" so the dropdown doesn't show
@@ -2415,6 +2440,18 @@
 			: tl('routes.form.summaryHealthCheckOff')
 	);
 
+	// v2.75 — one-line state of the health-notify block on the closed row.
+	const summaryHealthNotify = $derived(
+		formData.healthNotify.enabled
+			? (() => {
+					const ch = healthChannels.find((c) => c.id === formData.healthNotify.channelId);
+					return tl('routes.form.summaryHealthNotifyOn', {
+						channel: ch?.name || formData.healthNotify.channelId || '—'
+					});
+				})()
+			: tl('routes.form.summaryHealthNotifyOff')
+	);
+
 	const namedHeaderCount = $derived(
 		requestHeaderRows.filter(([k]) => k.trim() !== '').length +
 			responseHeaderRows.filter(([k]) => k.trim() !== '').length
@@ -2787,6 +2824,13 @@
 				'All upstreams must share the same scheme (http:// or https://) — mixed pools are not supported.';
 		}
 
+		// v2.75 — health-notify: an enabled notify must name a channel.
+		// The backend repeats this check (and verifies the channel exists);
+		// this is the inline form feedback.
+		if (formData.healthNotify.enabled && formData.healthNotify.channelId.trim() === '') {
+			next['healthNotify.channelId'] = t('routes.form.healthNotifyChannelRequired');
+		}
+
 		// Step J.2: health-check sub-form validation, gated on enabled.
 		if (formData.healthCheck.enabled) {
 			const hc = formData.healthCheck;
@@ -3074,6 +3118,14 @@
 								: []
 					},
 					statusCode: formData.countryBlock.statusCode
+				},
+				// v2.75 — route-health notify, full-replacement on both
+				// POST and PUT. reminderMinutes is coerced to a number so
+				// a blank input does not ship NaN.
+				healthNotify: {
+					enabled: formData.healthNotify.enabled,
+					channelId: formData.healthNotify.channelId,
+					reminderMinutes: Number(formData.healthNotify.reminderMinutes) || 0
 				},
 				// path-based-rules Task 9 — route-level IP filter always
 				// shipped (POST and PUT), same always-shipped/full-
@@ -3508,9 +3560,20 @@
 			loadDNSProvider(),
 			loadForwardAuthProviders(),
 			loadManagedDomainsForRoutes(),
-			loadErrorTemplates()
+			loadErrorTemplates(),
+			loadHealthChannels()
 		]);
 	});
+
+	// v2.75 — alert channels for the health-notify picker. Non-fatal on
+	// failure (empty list → the picker shows the no-channel hint).
+	async function loadHealthChannels(): Promise<void> {
+		try {
+			healthChannels = await alertingApi.listChannels();
+		} catch {
+			healthChannels = [];
+		}
+	}
 
 	// Step R Phase 2.b — load templates for the dropdown.
 	// Failure is non-fatal : the dropdown falls back to
@@ -6073,6 +6136,84 @@
 								<p class="text-xs text-muted">
 									{language.current && t('routes.form.healthCheckHelper')}
 								</p>
+						</div>
+					</RouteSection>
+
+					<!-- v2.75 — notify a chosen alert channel when this route's
+					     upstreams go down and when they recover. Control-plane
+					     only: it changes nothing in the emitted Caddy config. -->
+					<RouteSection
+						name={language.current && t('routes.form.sectionHealthNotify')}
+						summary={summaryHealthNotify}
+						testid="section-health-notify"
+					>
+						<div class="flex flex-col gap-3">
+							<SwitchRow
+								checked={formData.healthNotify.enabled}
+								onchange={(v) => (formData.healthNotify.enabled = v)}
+								label={language.current && t('routes.form.healthNotifyEnableLabel')}
+								testid="health-notify-toggle"
+								labelTestid="health-notify-toggle-label"
+							/>
+							{#if formData.healthNotify.enabled}
+								{#if healthChannels.length === 0}
+									<p class="text-muted text-sm" data-testid="health-notify-no-channel">
+										{language.current && t('routes.form.healthNotifyNoChannel')}
+										<a href="/settings/alerting" class="text-accent underline"
+											>{language.current && t('routes.form.healthNotifyNoChannelLink')}</a
+										>
+									</p>
+								{:else}
+									<div>
+										<label
+											for="hn-channel"
+											class="text-sm font-medium text-secondary block mb-1"
+										>
+											{language.current && t('routes.form.healthNotifyChannelLabel')}
+											<span class="text-down" aria-hidden="true">*</span>
+										</label>
+										<select
+											id="hn-channel"
+											bind:value={formData.healthNotify.channelId}
+											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+											data-testid="health-notify-channel"
+											aria-label={language.current && t('routes.form.healthNotifyChannelLabel')}
+										>
+											<option value=""
+												>{language.current &&
+													t('routes.form.healthNotifyChannelPlaceholder')}</option
+											>
+											{#each healthChannels as ch (ch.id)}
+												<option value={ch.id}>{ch.name}</option>
+											{/each}
+										</select>
+										{#if errors['healthNotify.channelId']}
+											<p class="text-xs text-down mt-1">{errors['healthNotify.channelId']}</p>
+										{/if}
+									</div>
+									<div>
+										<label
+											for="hn-reminder"
+											class="text-sm font-medium text-secondary block mb-1"
+										>
+											{language.current && t('routes.form.healthNotifyReminderLabel')}
+										</label>
+										<input
+											id="hn-reminder"
+											type="number"
+											min="0"
+											max="1440"
+											bind:value={formData.healthNotify.reminderMinutes}
+											class="w-full bg-surface border border-border-default rounded-md px-3 py-2 text-sm text-primary"
+											data-testid="health-notify-reminder"
+											aria-label={language.current && t('routes.form.healthNotifyReminderLabel')}
+										/>
+										<p class="text-muted text-xs mt-1">
+											{language.current && t('routes.form.healthNotifyReminderHint')}
+										</p>
+									</div>
+								{/if}
+							{/if}
 						</div>
 					</RouteSection>
 

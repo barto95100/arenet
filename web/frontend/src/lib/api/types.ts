@@ -42,6 +42,16 @@ export type LBPolicy =
  * its server-side default. See docs/backlog-step-j.md "J.3 frontend
  * — health-check is preserve-or-replace, never partial".
  */
+/**
+ * v2.75 — per-route health-notify opt-in. Always present on a stored
+ * route (zero value = off); the channel is referenced by ID, never a URL.
+ */
+export interface HealthNotify {
+	enabled: boolean;
+	channelId: string;
+	reminderMinutes: number;
+}
+
 export interface HealthCheck {
 	enabled: boolean;
 	uri: string;
@@ -181,6 +191,11 @@ export interface Route {
 	 * false, every sub-field at zero).
 	 */
 	healthCheck: HealthCheck;
+	/**
+	 * v2.75 — route-health notification opt-in. Always present on a
+	 * stored route (zero value = off).
+	 */
+	healthNotify: HealthNotify;
 	/**
 	 * Step J.4 — ACME challenge type. The backend normalises the
 	 * pre-J.4 storage zero value "" to "http-01" before serialising,
@@ -665,6 +680,12 @@ export interface RouteRequest {
 	 * docs/backlog-step-j.md.
 	 */
 	healthCheck?: HealthCheck;
+	/**
+	 * v2.75 — route-health notification opt-in. Sent on create/update;
+	 * omitted (undefined) preserves the stored value on PUT, same
+	 * preserve-on-omit contract as healthCheck. The form always sends it.
+	 */
+	healthNotify?: HealthNotify;
 	/**
 	 * Step J.4 — ACME challenge type. Empty string on POST/PUT is
 	 * normalised by the backend to "http-01" (no preserve-on-omit

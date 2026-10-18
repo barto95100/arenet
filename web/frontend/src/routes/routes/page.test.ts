@@ -43,8 +43,11 @@ import userEvent from '@testing-library/user-event';
 // vi.hoisted form so we can keep the static `import Page from`
 // at the top of this file).
 
-const { toastMock, apiMock, settingsMock, authMock, externalCertsMock } = vi.hoisted(() => ({
+const { toastMock, apiMock, settingsMock, authMock, externalCertsMock, alertingMock } = vi.hoisted(() => ({
 	toastMock: { pushToast: vi.fn() },
+	// v2.75 — the route form loads alert channels for the health-notify
+	// picker. Default empty; the health-notify tests rebind it.
+	alertingMock: { listChannels: vi.fn() },
 	// v2.19.0 external-certs SOCLE (Task 8) — the route form loads
 	// the uploaded external-cert list when the operator picks the
 	// "manual" cert source. Default to an empty list; the manual-cert
@@ -162,6 +165,11 @@ vi.mock('$lib/api/external-certs', () => ({
 		list: (...args: unknown[]) => externalCertsMock.list(...args)
 	}
 }));
+vi.mock('$lib/api/alerting', () => ({
+	alertingApi: {
+		listChannels: (...args: unknown[]) => alertingMock.listChannels(...args)
+	}
+}));
 
 // Day 13 — #R-FRONTEND-PUT-NO-TIMEOUT layer B. The page now
 // reads auth.state to decide whether to suppress the danger
@@ -191,6 +199,7 @@ beforeEach(() => {
 	apiMock.exitMaintenance.mockReset();
 	settingsMock.listDNSProviders.mockReset();
 	externalCertsMock.list.mockReset();
+	alertingMock.listChannels.mockReset();
 	metricsMock.fetchRouteSummary.mockReset();
 	// Day 13 — auth store defaults: every test starts in
 	// authenticated state. Tests exercising the lock-screen-
@@ -206,6 +215,7 @@ beforeEach(() => {
 	apiMock.listRoutes.mockResolvedValue([]);
 	settingsMock.listDNSProviders.mockResolvedValue([]);
 	externalCertsMock.list.mockResolvedValue([]);
+	alertingMock.listChannels.mockResolvedValue([]);
 	metricsMock.fetchRouteSummary.mockRejectedValue(new Error('no metrics in this test'));
 });
 
@@ -6187,4 +6197,110 @@ describe('/routes — the row keeps its cells', () => {
 	//
 	// A test that cannot fail is worse than no test — it reads as
 	// coverage of a case nobody has checked.
+});
+
+// --- v2.75 — route-health notifications -----------------------------------
+
+describe('Routes page — health notifications', () => {
+	async function openCreateForm(): Promise<void> {
+		const btn = await screen.findByRole('button', { name: /^\+\s*Add route$/i });
+		await userEvent.click(btn);
+		await tick();
+	}
+	function hostInput(): HTMLInputElement {
+		return screen.getByLabelText('Host') as HTMLInputElement;
+	}
+	async function submitForm() {
+		const form = document.querySelector('form');
+		await fireEvent.submit(form!);
+		await tick();
+	}
+
+	it('renders the health-notify section with its toggle', async () => {
+		render(Page);
+		await openCreateForm();
+		expect(screen.getByTestId('section-health-notify')).toBeInTheDocument();
+		expect(
+			screen.getByLabelText('Notify a channel when this route goes down')
+		).toBeInTheDocument();
+	});
+
+	it('shows the no-channel hint and refuses to save when enabled with no channels configured', async () => {
+		// no channels configured (beforeEach default: [])
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'n.test');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		await userEvent.click(screen.getByLabelText('Notify a channel when this route goes down'));
+		await tick();
+		expect(screen.getByTestId('health-notify-no-channel')).toBeInTheDocument();
+		await submitForm();
+		expect(apiMock.createRoute).not.toHaveBeenCalled();
+	});
+
+	it('refuses to save when enabled with channels available but none selected', async () => {
+		alertingMock.listChannels.mockResolvedValue([
+			{ id: 'ch-ops', name: 'ops', kind: 'webhook', enabled: true, minSeverity: 'info' }
+		]);
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'n.test');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		await userEvent.click(screen.getByLabelText('Notify a channel when this route goes down'));
+		await tick();
+		// leave the select at its placeholder ('')
+		await submitForm();
+		expect(screen.getByText('Choose a channel to notify.')).toBeInTheDocument();
+		expect(apiMock.createRoute).not.toHaveBeenCalled();
+	});
+
+	it('ships healthNotify in the create payload when a channel is chosen', async () => {
+		alertingMock.listChannels.mockResolvedValue([
+			{ id: 'ch-ops', name: 'ops', kind: 'webhook', enabled: true, minSeverity: 'info' }
+		]);
+		apiMock.createRoute.mockResolvedValue(makeRoute({ host: 'n.test' }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'n.test');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		await userEvent.click(screen.getByLabelText('Notify a channel when this route goes down'));
+		await tick();
+		await userEvent.selectOptions(screen.getByTestId('health-notify-channel'), 'ch-ops');
+		await fireEvent.input(screen.getByTestId('health-notify-reminder'), { target: { value: '15' } });
+		await submitForm();
+
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
+		const payload = apiMock.createRoute.mock.calls[0][0];
+		expect(payload.healthNotify).toEqual({
+			enabled: true,
+			channelId: 'ch-ops',
+			reminderMinutes: 15
+		});
+	});
+
+	it('hydrates the toggle and channel from a stored route on edit', async () => {
+		alertingMock.listChannels.mockResolvedValue([
+			{ id: 'ch-ops', name: 'ops', kind: 'webhook', enabled: true, minSeverity: 'info' }
+		]);
+		apiMock.listRoutes.mockResolvedValue([
+			makeRoute({
+				host: 'edit.test',
+				healthNotify: { enabled: true, channelId: 'ch-ops', reminderMinutes: 30 }
+			})
+		]);
+		render(Page);
+		// open the row's edit form
+		const editBtn = await screen.findByRole('button', { name: /edit/i });
+		await userEvent.click(editBtn);
+		await tick();
+
+		const toggle = screen.getByLabelText(
+			'Notify a channel when this route goes down'
+		) as HTMLInputElement;
+		expect(toggle.checked).toBe(true);
+		const select = screen.getByTestId('health-notify-channel') as HTMLSelectElement;
+		expect(select.value).toBe('ch-ops');
+		const reminder = screen.getByTestId('health-notify-reminder') as HTMLInputElement;
+		expect(reminder.value).toBe('30');
+	});
 });

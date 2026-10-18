@@ -752,7 +752,18 @@
 				"messageHelp": "Affiché sur la page de maintenance de cette route. Laissez vide pour utiliser le message global (Settings → Error Pages → Maintenance).",
 				"bypassIps": "IPs / CIDRs de contournement",
 				"bypassIpsAdd": "+ Ajouter une IP de contournement"
-			}
+			},
+			"sectionHealthNotify": "Notifications de santé",
+			"healthNotifyEnableLabel": "Notifier un canal quand cette route tombe",
+			"healthNotifyChannelLabel": "Canal d'alerte",
+			"healthNotifyChannelPlaceholder": "Choisir un canal…",
+			"healthNotifyChannelRequired": "Choisissez un canal à notifier.",
+			"healthNotifyReminderLabel": "Rappel pendant la panne (minutes)",
+			"healthNotifyReminderHint": "0 = notifier une fois à chaque changement. Sinon, répéter tant que la route est hors service.",
+			"healthNotifyNoChannel": "Aucun canal d'alerte n'est configuré.",
+			"healthNotifyNoChannelLink": "Ajoutez-en un dans les réglages Alertes.",
+			"summaryHealthNotifyOn": "Activé → {channel}",
+			"summaryHealthNotifyOff": "Désactivé"
 		},
 		"disabled": {
 			"badge": "Désactivée"
