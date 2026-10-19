@@ -1614,6 +1614,11 @@ type routeRequest struct {
 	// effects are coupled in one toggle on purpose — operators
 	// flipping one without the other always wanted both.
 	UploadStreamingMode *bool `json:"uploadStreamingMode,omitempty"`
+	// ResponseStreamingMode (v2.77, issue #317) is the response-side
+	// mirror: the WAF streams the response body instead of buffering it,
+	// and Caddy emits flush_interval:-1. Same nil-pointer preserve-on-omit
+	// shape as UploadStreamingMode.
+	ResponseStreamingMode *bool `json:"responseStreamingMode,omitempty"`
 	// WAFDisableCRS (Step X.1, 2026-06-17) opts the route out
 	// of the OWASP CRS load. nil pointer = preserve-on-omit
 	// (PUT) / default false (POST) — mirror of the
@@ -1992,6 +1997,10 @@ type routeResponse struct {
 	// when false (preserve-on-omit at PUT relies on nil to
 	// detect omission, false to detect explicit-off).
 	UploadStreamingMode bool `json:"uploadStreamingMode"`
+	// ResponseStreamingMode (v2.77, issue #317) — echoed on every GET,
+	// same no-omitempty shape as UploadStreamingMode (PUT preserve-on-omit
+	// needs nil=omitted vs false=explicit-off).
+	ResponseStreamingMode bool `json:"responseStreamingMode"`
 	// WAFDisableCRS (Step X.1) — same echo-on-every-GET shape
 	// as UploadStreamingMode. The frontend toggle starts from
 	// the persisted value; the GET→PUT round-trip echoes the
@@ -2172,6 +2181,7 @@ func toResponse(r storage.Route) routeResponse {
 		InsecureSkipVerify:    r.InsecureSkipVerify,
 		UpstreamTLSServerName: r.UpstreamTLSServerName,
 		UploadStreamingMode:   r.UploadStreamingMode,
+		ResponseStreamingMode: r.ResponseStreamingMode,
 		WAFDisableCRS:         r.WAFDisableCRS,
 		WAFExcludeRules:       emptyIntSliceIfNil(r.WAFExcludeRules),
 		WAFExcludeTags:        emptyStringSliceIfNil(r.WAFExcludeTags),
