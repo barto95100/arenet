@@ -240,6 +240,16 @@ type CaddyManager struct {
 	// import routehealth. May be nil.
 	reloadHook func([]storage.Route)
 
+	// lastAppliedRoutes is the (disabled-filtered) route set of the most
+	// recent successful applyLocked, retained so a reloadHook wired AFTER
+	// boot can be seeded immediately. The startup ordering is the reason
+	// it exists: mgr.Start runs the first applyLocked before the hooks are
+	// installed, so without a replay the hook's consumer (the route-health
+	// notifier's upstream→route index) stays empty until the next config
+	// change — a restart followed by an outage would then notify no one.
+	// Guarded by mu.
+	lastAppliedRoutes []storage.Route
+
 	mu      sync.Mutex
 	started bool
 
@@ -406,7 +416,17 @@ func (m *CaddyManager) SetHCTracker(t *caddyhc.HCStatusTracker) {
 func (m *CaddyManager) SetReloadHook(fn func([]storage.Route)) {
 	m.mu.Lock()
 	m.reloadHook = fn
+	seed := m.lastAppliedRoutes
 	m.mu.Unlock()
+	// Boot ordering: mgr.Start runs the first applyLocked before this hook
+	// is wired, so replay the last applied routes now. Without it the
+	// hook's consumer (the route-health notifier's index) stays empty
+	// until the next config change, and a restart followed by an outage
+	// notifies no one. Replay happens outside the lock so the callback may
+	// take its own. nil fn (clearing) and no-apply-yet (seed nil) skip it.
+	if fn != nil && seed != nil {
+		fn(seed)
+	}
 }
 
 // SetCrowdSecConfig (Step N.1) installs the LAPI connection
@@ -1150,6 +1170,7 @@ func (m *CaddyManager) applyLocked(ctx context.Context) error {
 	// to match the config just applied, at the same seam the tracker was
 	// reset above. nil unless a notifier is wired (unit tests, boot
 	// orderings without one).
+	m.lastAppliedRoutes = routes
 	if m.reloadHook != nil {
 		m.reloadHook(routes)
 	}
