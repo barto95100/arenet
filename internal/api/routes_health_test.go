@@ -52,7 +52,7 @@ func TestComputeRouteAggregateHealth_AllHealthy(t *testing.T) {
 		"http://10.0.0.1:80": "healthy",
 		"http://10.0.0.2:80": "healthy",
 	}
-	got, healthy, total := computeRouteAggregateHealth(r, s)
+	got, healthy, total := computeRouteAggregateHealth(r, s, nil)
 	if got != routeStatusHealthy {
 		t.Errorf("status = %q, want %q", got, routeStatusHealthy)
 	}
@@ -67,7 +67,7 @@ func TestComputeRouteAggregateHealth_AllUnhealthyDown(t *testing.T) {
 		"http://10.0.0.1:80": "unhealthy",
 		"http://10.0.0.2:80": "unhealthy",
 	}
-	got, healthy, total := computeRouteAggregateHealth(r, s)
+	got, healthy, total := computeRouteAggregateHealth(r, s, nil)
 	if got != routeStatusDown {
 		t.Errorf("status = %q, want %q", got, routeStatusDown)
 	}
@@ -82,7 +82,7 @@ func TestComputeRouteAggregateHealth_MixedDegraded(t *testing.T) {
 		"http://10.0.0.1:80": "healthy",
 		"http://10.0.0.2:80": "unhealthy",
 	}
-	got, healthy, total := computeRouteAggregateHealth(r, s)
+	got, healthy, total := computeRouteAggregateHealth(r, s, nil)
 	if got != routeStatusDegraded {
 		t.Errorf("status = %q, want %q", got, routeStatusDegraded)
 	}
@@ -101,7 +101,7 @@ func TestComputeRouteAggregateHealth_UnhealthyWithWarmupStillDegraded(t *testing
 		"http://10.0.0.1:80": "unhealthy",
 		// 10.0.0.2 absent → tracker returns "" (warm-up)
 	}
-	got, healthy, total := computeRouteAggregateHealth(r, s)
+	got, healthy, total := computeRouteAggregateHealth(r, s, nil)
 	if got != routeStatusDegraded {
 		t.Errorf("status = %q, want %q (unhealthy + warm-up)", got, routeStatusDegraded)
 	}
@@ -116,7 +116,7 @@ func TestComputeRouteAggregateHealth_AllUnknownWarmup(t *testing.T) {
 	// and not down (no red lie).
 	r := hcRoute("http://10.0.0.1:80", "http://10.0.0.2:80")
 	s := stubHCStatus{} // no entries
-	got, healthy, total := computeRouteAggregateHealth(r, s)
+	got, healthy, total := computeRouteAggregateHealth(r, s, nil)
 	if got != routeStatusUnknown {
 		t.Errorf("status = %q, want %q", got, routeStatusUnknown)
 	}
@@ -133,7 +133,7 @@ func TestComputeRouteAggregateHealth_PartialHealthyPartialWarmup(t *testing.T) {
 	s := stubHCStatus{
 		"http://10.0.0.1:80": "healthy",
 	}
-	got, healthy, total := computeRouteAggregateHealth(r, s)
+	got, healthy, total := computeRouteAggregateHealth(r, s, nil)
 	if got != routeStatusUnknown {
 		t.Errorf("status = %q, want %q (partial coverage)", got, routeStatusUnknown)
 	}
@@ -158,7 +158,7 @@ func TestComputeRouteAggregateHealth_NoHCConfiguredGate(t *testing.T) {
 	s := stubHCStatus{
 		"http://10.0.0.1:80": "healthy",
 	}
-	got, healthy, total := computeRouteAggregateHealth(r, s)
+	got, healthy, total := computeRouteAggregateHealth(r, s, nil)
 	if got != routeStatusNotMonitored {
 		t.Errorf("status = %q, want %q (C13 gate must mask tracker state with the distinct not_monitored label)",
 			got, routeStatusNotMonitored)
@@ -178,7 +178,7 @@ func TestComputeRouteAggregateHealth_NilStatusReader(t *testing.T) {
 	// Handler. The aggregate must collapse to unknown, matching
 	// the behaviour the gate produces for unmonitored routes.
 	r := hcRoute("http://10.0.0.1:80")
-	got, healthy, total := computeRouteAggregateHealth(r, nil)
+	got, healthy, total := computeRouteAggregateHealth(r, nil, nil)
 	if got != routeStatusUnknown {
 		t.Errorf("status = %q, want %q (nil reader)", got, routeStatusUnknown)
 	}
@@ -190,7 +190,7 @@ func TestComputeRouteAggregateHealth_NilStatusReader(t *testing.T) {
 func TestComputeRouteAggregateHealth_SingleUpstreamHealthy(t *testing.T) {
 	r := hcRoute("http://10.0.0.1:80")
 	s := stubHCStatus{"http://10.0.0.1:80": "healthy"}
-	got, healthy, total := computeRouteAggregateHealth(r, s)
+	got, healthy, total := computeRouteAggregateHealth(r, s, nil)
 	if got != routeStatusHealthy {
 		t.Errorf("status = %q, want %q", got, routeStatusHealthy)
 	}
@@ -202,7 +202,7 @@ func TestComputeRouteAggregateHealth_SingleUpstreamHealthy(t *testing.T) {
 func TestComputeRouteAggregateHealth_SingleUpstreamUnhealthy(t *testing.T) {
 	r := hcRoute("http://10.0.0.1:80")
 	s := stubHCStatus{"http://10.0.0.1:80": "unhealthy"}
-	got, healthy, total := computeRouteAggregateHealth(r, s)
+	got, healthy, total := computeRouteAggregateHealth(r, s, nil)
 	if got != routeStatusDown {
 		t.Errorf("status = %q, want %q (single upstream unhealthy → down, not degraded)", got, routeStatusDown)
 	}
@@ -232,7 +232,7 @@ func TestComputeRouteAggregateHealth_RedirectRouteNotApplicable(t *testing.T) {
 		},
 		HealthCheck: storage.HealthCheck{Enabled: true},
 	}
-	got, healthy, total := computeRouteAggregateHealth(r, stubHCStatus{})
+	got, healthy, total := computeRouteAggregateHealth(r, stubHCStatus{}, nil)
 	if got != routeStatusNotApplicable {
 		t.Errorf("status = %q, want %q (redirecting route)", got, routeStatusNotApplicable)
 	}
@@ -253,17 +253,77 @@ func TestComputeRouteAggregateHealth_EmptyUpstreams(t *testing.T) {
 	// have sent the next reader looking for a guarantee that no
 	// longer exists.
 	r := storage.Route{
-		ID:        "r",
-		Host:      "h.example",
-		LBPolicy:  "round_robin",
-		Upstreams: nil,
+		ID:          "r",
+		Host:        "h.example",
+		LBPolicy:    "round_robin",
+		Upstreams:   nil,
 		HealthCheck: storage.HealthCheck{Enabled: true},
 	}
-	got, healthy, total := computeRouteAggregateHealth(r, stubHCStatus{})
+	got, healthy, total := computeRouteAggregateHealth(r, stubHCStatus{}, nil)
 	if got != routeStatusUnknown {
 		t.Errorf("status = %q, want %q (empty pool)", got, routeStatusUnknown)
 	}
 	if healthy != 0 || total != 0 {
 		t.Errorf("counts = (%d, %d), want (0, 0)", healthy, total)
+	}
+}
+
+// stubPerRoute implements PerRouteStatusReader with a canned
+// "routeID\x00url" -> status map. A missing key reports ok=false, so the
+// caller falls back to the address-keyed tracker.
+type stubPerRoute map[string]string
+
+func (s stubPerRoute) RouteUpstreamStatus(routeID, url string) (string, bool) {
+	v, ok := s[routeID+"\x00"+url]
+	return v, ok
+}
+
+// TestComputeRouteAggregateHealth_PerRouteWinsForSharedUpstream is the
+// v2.76 repro: a route sharing an upstream must be painted on its OWN
+// per-route verdict, NOT the address-keyed tracker's collapsed state.
+// www is really up though the shared address reads unhealthy.
+func TestComputeRouteAggregateHealth_PerRouteWinsForSharedUpstream(t *testing.T) {
+	r := hcRoute("http://10.66.0.2:80")
+	r.ID = "www"
+	// The shared address is unhealthy in the tracker (meet's dead backend
+	// collapsed the shared Caddy host) ...
+	tracker := stubHCStatus{"http://10.66.0.2:80": "unhealthy"}
+	// ... but www's own per-route probe says healthy.
+	perRoute := stubPerRoute{"www\x00http://10.66.0.2:80": "healthy"}
+
+	got, healthy, total := computeRouteAggregateHealth(r, tracker, perRoute)
+	if got != routeStatusHealthy || healthy != 1 || total != 1 {
+		t.Fatalf("www = (%q, %d/%d); want (healthy, 1/1) — per-route verdict must win over the shared tracker",
+			got, healthy, total)
+	}
+
+	// meet, same shared address, really down while the tracker reads healthy.
+	meet := hcRoute("http://10.66.0.2:80")
+	meet.ID = "meet"
+	trackerUp := stubHCStatus{"http://10.66.0.2:80": "healthy"}
+	perRouteDown := stubPerRoute{"meet\x00http://10.66.0.2:80": "unhealthy"}
+	if got, _, _ := computeRouteAggregateHealth(meet, trackerUp, perRouteDown); got != routeStatusDown {
+		t.Fatalf("meet = %q; want down — per-route verdict must win over the shared tracker", got)
+	}
+}
+
+// TestComputeRouteAggregateHealth_PerRouteAbsentFallsBackToTracker is the
+// non-regression gate: when the per-route reader has no verdict (unique
+// upstream, or not probed), the result is identical to the tracker-only
+// path — unique-upstream routes are byte-identical to pre-v2.76.
+func TestComputeRouteAggregateHealth_PerRouteAbsentFallsBackToTracker(t *testing.T) {
+	r := hcRoute("http://10.0.0.1:80", "http://10.0.0.2:80")
+	tracker := stubHCStatus{
+		"http://10.0.0.1:80": "healthy",
+		"http://10.0.0.2:80": "unhealthy",
+	}
+	withNil, hn, tn := computeRouteAggregateHealth(r, tracker, nil)
+	withEmpty, he, te := computeRouteAggregateHealth(r, tracker, stubPerRoute{})
+	if withNil != withEmpty || hn != he || tn != te {
+		t.Fatalf("empty per-route reader diverged from nil: (%q,%d,%d) vs (%q,%d,%d)",
+			withEmpty, he, te, withNil, hn, tn)
+	}
+	if withNil != routeStatusDegraded {
+		t.Errorf("status = %q; want degraded (one up, one down, no per-route override)", withNil)
 	}
 }

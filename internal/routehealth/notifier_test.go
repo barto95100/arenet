@@ -351,3 +351,47 @@ func countReminders(calls []dispatchCall) int {
 	}
 	return n
 }
+
+// TestNotifier_SharedUpstream_PagesOnlyTheDownRoute is the v2.76 gate #1:
+// two routes share one upstream; with the per-route reader wired, a flip
+// on the shared address pages ONLY the route whose own backend is down.
+// Without the reader (pre-v2.76) both would read the collapsed tracker
+// state and both would be named — which is the reported bug.
+func TestNotifier_SharedUpstream_PagesOnlyTheDownRoute(t *testing.T) {
+	ts := &fakeStatus{m: map[string]string{"10.66.0.2:80": caddyhc.StatusUnhealthy}} // collapsed shared state
+	d := &fakeDisp{}
+	n, clk := newTestNotifier(ts, d, time.Now())
+
+	// Per-route truth: meet's backend is down, www's is up.
+	n.SetPerRouteStatus(func(routeID, _ string) (string, bool) {
+		switch routeID {
+		case "meet":
+			return caddyhc.StatusUnhealthy, true
+		case "www":
+			return caddyhc.StatusHealthy, true
+		}
+		return "", false
+	})
+	n.Refresh([]storage.Route{
+		enabled("meet", "meet.hacf.fr", "ch1", 0, "http://10.66.0.2:80"),
+		enabled("www", "www.hacf.fr", "ch1", 0, "http://10.66.0.2:80"),
+	})
+
+	n.OnTransition("10.66.0.2:80", "", "", clk.Now())
+	clk.advance(5 * time.Second) // past the debounce window → flush
+
+	calls := d.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("dispatch calls = %d; want 1 (only meet)", len(calls))
+	}
+	body := calls[0].evt.Body
+	if !strings.Contains(body, "meet.hacf.fr") {
+		t.Errorf("notification omits meet.hacf.fr (the down route): %q", body)
+	}
+	if strings.Contains(body, "www.hacf.fr") {
+		t.Errorf("notification names www.hacf.fr, which is UP: %q", body)
+	}
+	if !strings.Contains(strings.ToLower(calls[0].evt.Subject), "down") {
+		t.Errorf("subject = %q; want a 'down' notification", calls[0].evt.Subject)
+	}
+}

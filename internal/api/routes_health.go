@@ -62,23 +62,23 @@ const (
 // some upstreams are still in the warm-up window. We never claim
 // "healthy" while any unhealthy upstream is recorded.
 //
-//   1. Route has no HealthCheck configured           → "unknown"
-//      (the C13 gate: don't paint green or red on an upstream
-//      the operator chose not to monitor, regardless of any
-//      stale state the tracker might be carrying.)
-//   2. Route proxies nothing (redirect)             → "not_applicable"
-//      (no upstream by design, nothing to probe, ever. A route
-//      with no upstream and no redirect either — a shape no
-//      endpoint can produce — keeps the old "unknown" fallback.)
-//   3. unhealthyCount == total AND no warm-up        → "down"
-//      (every upstream observed AND every one unhealthy.)
-//   4. unhealthyCount > 0                            → "degraded"
-//      (any unhealthy signal degrades the route, whether or not
-//      other upstreams are healthy or still warming up.)
-//   5. healthyCount == total                         → "healthy"
-//      (full confidence — every upstream observed AND healthy.)
-//   6. Otherwise — partial coverage with no unhealthy signal
-//      yet (warm-up window)                          → "unknown"
+//  1. Route has no HealthCheck configured           → "unknown"
+//     (the C13 gate: don't paint green or red on an upstream
+//     the operator chose not to monitor, regardless of any
+//     stale state the tracker might be carrying.)
+//  2. Route proxies nothing (redirect)             → "not_applicable"
+//     (no upstream by design, nothing to probe, ever. A route
+//     with no upstream and no redirect either — a shape no
+//     endpoint can produce — keeps the old "unknown" fallback.)
+//  3. unhealthyCount == total AND no warm-up        → "down"
+//     (every upstream observed AND every one unhealthy.)
+//  4. unhealthyCount > 0                            → "degraded"
+//     (any unhealthy signal degrades the route, whether or not
+//     other upstreams are healthy or still warming up.)
+//  5. healthyCount == total                         → "healthy"
+//     (full confidence — every upstream observed AND healthy.)
+//  6. Otherwise — partial coverage with no unhealthy signal
+//     yet (warm-up window)                          → "unknown"
 //
 // Returns (status, healthyCount, totalCount). Counts always
 // reflect the actual upstream pool sizes regardless of HC config,
@@ -88,7 +88,7 @@ const (
 // `status` may be nil — callers must tolerate that to keep the
 // pre-Pack-A no-tracker-installed code path identical to "no HC
 // configured" (collapses to unknown).
-func computeRouteAggregateHealth(r storage.Route, status HCStatusReader) (string, int, int) {
+func computeRouteAggregateHealth(r storage.Route, status HCStatusReader, perRoute PerRouteStatusReader) (string, int, int) {
 	total := len(r.Upstreams)
 	// v2.59 — a redirecting route is checked FIRST, and on the
 	// redirect itself rather than on the empty pool: the state is
@@ -116,7 +116,19 @@ func computeRouteAggregateHealth(r storage.Route, status HCStatusReader) (string
 	healthy := 0
 	unhealthy := 0
 	for _, u := range r.Upstreams {
-		switch status.Status(u.URL) {
+		// Per-route verdict wins when available (shared upstream); else
+		// the address-keyed tracker — identical to pre-v2.76 for a route
+		// whose upstream is not shared.
+		st := ""
+		if perRoute != nil {
+			if s, ok := perRoute.RouteUpstreamStatus(r.ID, u.URL); ok {
+				st = s
+			}
+		}
+		if st == "" {
+			st = status.Status(u.URL)
+		}
+		switch st {
 		case routeStatusHealthy:
 			healthy++
 		case "unhealthy":
