@@ -118,6 +118,15 @@ type ArenetWafHandler struct {
 	// WAF instance, so routes with matching directives+mode
 	// can still share a pooled Coraza WAF.
 	SkipBodyInspection bool `json:"skip_body_inspection,omitempty"`
+	// SkipResponseBodyInspection (v2.77, issue #317) is the response-side
+	// mirror of SkipBodyInspection: wrap()'s interceptor streams the
+	// response body straight through instead of buffering it for phase-4
+	// rule scanning. Request phases and response headers stay live; only
+	// the response body bytes are not fed to Coraza. Set from the route's
+	// ResponseStreamingMode, paired with Caddy's flush_interval=-1. Fixes
+	// the hang on never-ending chunked responses (HA log/follow, SSE). Not
+	// in computePoolKey, same as SkipBodyInspection — a per-call decision.
+	SkipResponseBodyInspection bool `json:"skip_response_body_inspection,omitempty"`
 
 	waf     coraza.WAF
 	poolKey string
@@ -931,7 +940,7 @@ func (h *ArenetWafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 		return next.ServeHTTP(w, r)
 	}
 
-	ww, processResponse := wrap(w, r, tx)
+	ww, processResponse := wrap(w, r, tx, h.SkipResponseBodyInspection)
 	if err := next.ServeHTTP(ww, r); err != nil {
 		return err
 	}

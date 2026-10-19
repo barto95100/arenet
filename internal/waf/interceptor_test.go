@@ -81,7 +81,7 @@ func TestInterceptor_FlushReachesWriterThroughCaddyWrapper(t *testing.T) {
 	// No response body access: the pass-through (streaming) path.
 	tx := newInterceptorTx(t, "SecRuleEngine On\nSecResponseBodyAccess Off")
 	rec := httptest.NewRecorder()
-	ww, _ := wrap(caddyWrapped(rec), httptest.NewRequest(http.MethodGet, "/events", nil), tx)
+	ww, _ := wrap(caddyWrapped(rec), httptest.NewRequest(http.MethodGet, "/events", nil), tx, false)
 
 	ww.Header().Set("Content-Type", "text/event-stream")
 	ww.WriteHeader(http.StatusOK)
@@ -104,7 +104,7 @@ func TestInterceptor_FlushHeldWhileBufferingInspectedBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	ww, _ := wrap(caddyWrapped(rec), httptest.NewRequest(http.MethodGet, "/", nil), tx)
+	ww, _ := wrap(caddyWrapped(rec), httptest.NewRequest(http.MethodGet, "/", nil), tx, false)
 
 	ww.Header().Set("Content-Type", "text/html")
 	ww.WriteHeader(http.StatusOK)
@@ -119,7 +119,7 @@ func TestInterceptor_FlushHeldWhileBufferingInspectedBody(t *testing.T) {
 func TestInterceptor_HijackerFoundThroughUnwrapAndTracked(t *testing.T) {
 	tx := newInterceptorTx(t, "SecRuleEngine On")
 	hr := &hijackRecorder{ResponseRecorder: httptest.NewRecorder()}
-	ww, process := wrap(caddyWrapped(hr), httptest.NewRequest(http.MethodGet, "/ws", nil), tx)
+	ww, process := wrap(caddyWrapped(hr), httptest.NewRequest(http.MethodGet, "/ws", nil), tx, false)
 
 	hj, ok := ww.(http.Hijacker)
 	if !ok {
@@ -145,7 +145,7 @@ func TestInterceptor_HijackerFoundThroughUnwrapAndTracked(t *testing.T) {
 func TestInterceptor_FailedHijackKeepsResponseProcessing(t *testing.T) {
 	tx := newInterceptorTx(t, "SecRuleEngine On")
 	hr := &hijackRecorder{ResponseRecorder: httptest.NewRecorder(), fail: true}
-	ww, _ := wrap(caddyWrapped(hr), httptest.NewRequest(http.MethodGet, "/", nil), tx)
+	ww, _ := wrap(caddyWrapped(hr), httptest.NewRequest(http.MethodGet, "/", nil), tx, false)
 	hj, ok := ww.(http.Hijacker)
 	if !ok {
 		t.Fatal("Hijacker not exposed")
@@ -171,7 +171,7 @@ SecRule RESPONSE_STATUS "@streq 200" "id:9001,phase:3,deny,status:403"`)
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	ww, _ := wrap(rec, httptest.NewRequest(http.MethodGet, "/", nil), tx)
+	ww, _ := wrap(rec, httptest.NewRequest(http.MethodGet, "/", nil), tx, false)
 	ww.Header().Set("Content-Length", "1234")
 	ww.Header().Set("X-Upstream", "leak")
 	ww.WriteHeader(http.StatusOK)
@@ -190,7 +190,7 @@ SecRule RESPONSE_STATUS "@streq 200" "id:9001,phase:3,deny,status:403"`)
 func TestInterceptor_PassThroughBodyStillWritten(t *testing.T) {
 	tx := newInterceptorTx(t, "SecRuleEngine On\nSecResponseBodyAccess Off")
 	rec := httptest.NewRecorder()
-	ww, process := wrap(caddyWrapped(rec), httptest.NewRequest(http.MethodGet, "/", nil), tx)
+	ww, process := wrap(caddyWrapped(rec), httptest.NewRequest(http.MethodGet, "/", nil), tx, false)
 	_, _ = ww.Write([]byte(strings.Repeat("x", 10)))
 	if err := process(tx, httptest.NewRequest(http.MethodGet, "/", nil)); err != nil {
 		t.Fatal(err)
@@ -209,5 +209,38 @@ func TestInterruptionErrorIsSecurityBlock(t *testing.T) {
 	var sb interface{ SecurityBlock() bool }
 	if !errors.As(err, &sb) || !sb.SecurityBlock() {
 		t.Fatal("WAF interruption error is not seen as a security block through HandlerError")
+	}
+}
+
+// TestInterceptor_ResponseStreamingBypassesBuffering is the issue-#317
+// guard (v2.77): with the exact WAF posture that WOULD buffer the response
+// body (SecResponseBodyAccess On + a matching MIME type), a route that
+// opted into response streaming (skipResponseBody=true) must flush the
+// first chunk straight to the client instead of holding it for phase-4
+// inspection. This is the mirror of
+// TestInterceptor_FlushHeldWhileBufferingInspectedBody. Set
+// skipResponseBody back to false (or drop it from bufferResponseBody) and
+// this fails — the chunk stays in the buffer, which is the reported hang.
+func TestInterceptor_ResponseStreamingBypassesBuffering(t *testing.T) {
+	tx := newInterceptorTx(t, "SecRuleEngine On\nSecResponseBodyAccess On\nSecResponseBodyMimeType text/html")
+	tx.ProcessConnection("127.0.0.1", 1234, "127.0.0.1", 80)
+	tx.ProcessURI("/", http.MethodGet, "HTTP/1.1")
+	tx.ProcessRequestHeaders()
+	if _, err := tx.ProcessRequestBody(); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	ww, _ := wrap(caddyWrapped(rec), httptest.NewRequest(http.MethodGet, "/", nil), tx, true) // response streaming ON
+
+	ww.Header().Set("Content-Type", "text/html")
+	ww.WriteHeader(http.StatusOK)
+	_, _ = ww.Write([]byte("first-chunk"))
+	http.NewResponseController(ww).Flush() //nolint:bodyclose
+
+	if !rec.Flushed {
+		t.Fatal("response streaming: Flush did not reach downstream — the chunk is still held by the WAF buffer (the reported hang)")
+	}
+	if !strings.Contains(rec.Body.String(), "first-chunk") {
+		t.Fatalf("response streaming: first chunk did not reach the client (body=%q)", rec.Body.String())
 	}
 }

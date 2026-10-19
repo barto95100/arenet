@@ -93,6 +93,19 @@ type rwInterceptor struct {
 	wroteBufferedBodyToDownstream bool
 	isHijacked                    bool
 	allowFlushing                 bool
+	// skipResponseBody (v2.77, issue #317) makes the interceptor stream
+	// the response body straight through instead of buffering it for
+	// phase-4 inspection — the response-side mirror of the module's
+	// SkipBodyInspection. Set from the route's ResponseStreamingMode.
+	skipResponseBody bool
+}
+
+// bufferResponseBody reports whether the interceptor should stage the
+// response body for phase-4 rule scanning. False when the route opted into
+// response streaming (skipResponseBody) OR Coraza says the body is not
+// accessible/processable — both mean "stream through, don't buffer".
+func (i *rwInterceptor) bufferResponseBody() bool {
+	return !i.skipResponseBody && i.tx.IsResponseBodyAccessible() && i.tx.IsResponseBodyProcessable()
 }
 
 // WriteHeader records the status code to be sent right before
@@ -121,7 +134,7 @@ func (i *rwInterceptor) WriteHeader(statusCode int) {
 		i.flushWriteHeader()
 	}
 	i.wroteHeader = true
-	if !i.tx.IsResponseBodyAccessible() || !i.tx.IsResponseBodyProcessable() {
+	if !i.bufferResponseBody() {
 		// Nothing will be buffered for inspection: flushing is safe
 		// from the first Flush() on.
 		i.allowFlushing = true
@@ -152,7 +165,7 @@ func (i *rwInterceptor) Write(b []byte) (int, error) {
 	if !i.wroteHeader {
 		i.WriteHeader(http.StatusOK)
 	}
-	if i.tx.IsResponseBodyAccessible() && i.tx.IsResponseBodyProcessable() && !i.wroteBufferedBodyToDownstream {
+	if i.bufferResponseBody() && !i.wroteBufferedBodyToDownstream {
 		it, n, err := i.tx.WriteResponseBody(b)
 		if it != nil {
 			i.cleanHeaders()
@@ -233,11 +246,11 @@ var _ responseWriter = (*rwInterceptor)(nil)
 // wrap returns the response writer + the response processor
 // the module calls after next.ServeHTTP returns (or before,
 // on interruption).
-func wrap(w http.ResponseWriter, r *http.Request, tx types.Transaction) (
+func wrap(w http.ResponseWriter, r *http.Request, tx types.Transaction, skipResponseBody bool) (
 	http.ResponseWriter,
 	func(types.Transaction, *http.Request) error,
 ) {
-	i := &rwInterceptor{w: w, tx: tx, proto: r.Proto, statusCode: 200}
+	i := &rwInterceptor{w: w, tx: tx, proto: r.Proto, statusCode: 200, skipResponseBody: skipResponseBody}
 
 	responseProcessor := func(tx types.Transaction, r *http.Request) error {
 		// A hijacked connection (WebSocket) must not be written to.
@@ -247,7 +260,7 @@ func wrap(w http.ResponseWriter, r *http.Request, tx types.Transaction) (
 		if tx.IsInterrupted() {
 			return nil
 		}
-		if tx.IsResponseBodyAccessible() && tx.IsResponseBodyProcessable() && !i.wroteBufferedBodyToDownstream {
+		if i.bufferResponseBody() && !i.wroteBufferedBodyToDownstream {
 			if it, err := tx.ProcessResponseBody(); err != nil {
 				i.overrideWriteHeader(http.StatusInternalServerError)
 				i.flushWriteHeader()
