@@ -68,6 +68,9 @@ export function makeRoute(overrides: Partial<Route> = {}): Route {
 		// streaming toggle override via the partial Route
 		// overrides parameter.
 		uploadStreamingMode: false,
+		// v2.77 (#317) — strict default; the response-streaming toggle
+		// test overrides via the partial Route overrides parameter.
+		responseStreamingMode: false,
 		// Step X.2 — strict default ; tests exercising the
 		// disable-CRS toggle override via the partial Route
 		// overrides parameter (zero-value false = CRS loaded).
