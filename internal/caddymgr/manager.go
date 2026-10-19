@@ -1678,7 +1678,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 			InsecureSkipVerify: r.InsecureSkipVerify,
 			// v2.60 — the route's TLS identity for its own pool.
 			UpstreamTLSServerName: r.UpstreamTLSServerName,
-		}, sharedHandleResponse, r.UploadStreamingMode)
+		}, sharedHandleResponse, r.UploadStreamingMode || r.ResponseStreamingMode)
 		if err != nil {
 			return nil, fmt.Errorf("route %s (%s): %w", r.ID, r.Host, err)
 		}
@@ -2013,6 +2013,13 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 		//   - BEFORE proxy, so a block-mode rejection (403) never
 		//     reaches the upstream.
 		if wafHandler := buildWAFHandler(r.ID, r.Host, r.WAFMode, r.UploadStreamingMode, r.WAFDisableCRS, r.WAFExcludeRules, r.WAFExcludeTags, r.WAFTargetedExclusions, r.WAFCustomRules, r.WAFSecLang, routeTargetsAdminListener(r, opts.AdminListen)); wafHandler != nil {
+			// v2.77 (issue #317) — response-body streaming is a per-call
+			// decision set on the emitted handler, not a buildWAFHandler
+			// param (keeps that signature + its many callers stable).
+			// Omitted when false so non-streaming routes stay byte-equal.
+			if r.ResponseStreamingMode {
+				wafHandler["skip_response_body_inspection"] = true
+			}
 			handlers = append(handlers, wafHandler)
 		}
 		if headersHandler := buildHeadersHandler(r.RequestHeaders, r.ResponseHeaders); headersHandler != nil {
@@ -2056,7 +2063,7 @@ func buildConfigJSON(routes []storage.Route, opts buildOpts) ([]byte, error) {
 					// different certificate, so inheriting would verify the
 					// wrong backend. Same autonomy as InsecureSkipVerify.
 					UpstreamTLSServerName: pr.UpstreamTLSServerName,
-				}, sharedHandleResponse, r.UploadStreamingMode)
+				}, sharedHandleResponse, r.UploadStreamingMode || r.ResponseStreamingMode)
 			}
 			sub, err := buildPathRulesSubroute(r.ID, r.PathRules, proxyHandler, func(c storage.BasicAuthRouteConfig) map[string]any {
 				return buildBasicAuthHandlerFromConfig(c, pathRealm)

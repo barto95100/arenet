@@ -6321,3 +6321,62 @@ describe('Routes page — health notifications', () => {
 		expect(reminder.value).toBe('30');
 	});
 });
+
+// --- v2.77 (#317) — responseStreamingMode toggle -----------------------
+// Mirror of the uploadStreamingMode toggle: renders unchecked, ships
+// false by default, ships true when ticked, and loads the persisted
+// value on edit.
+describe('Routes page — responseStreamingMode toggle', () => {
+	it('renders the response-streaming toggle unchecked by default on create', async () => {
+		render(Page);
+		await openCreateForm();
+		const toggle = screen.getByTestId('response-streaming-toggle') as HTMLInputElement;
+		expect(toggle).toBeInTheDocument();
+		expect(toggle.checked).toBe(false);
+	});
+
+	it('ships responseStreamingMode=false by default in the create payload', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute());
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'plain.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:9000');
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
+		expect(apiMock.createRoute.mock.calls[0][0].responseStreamingMode).toBe(false);
+	});
+
+	it('ships responseStreamingMode=true when the operator ticks the toggle', async () => {
+		apiMock.createRoute.mockResolvedValue(makeRoute({ responseStreamingMode: true }));
+		render(Page);
+		await openCreateForm();
+		await userEvent.type(hostInput(), 'ha.example.com');
+		await userEvent.type(upstreamURLInputs()[0], 'http://127.0.0.1:8123');
+		const toggle = screen.getByTestId('response-streaming-toggle') as HTMLInputElement;
+		await userEvent.click(toggle);
+		expect(toggle.checked).toBe(true);
+		await fireEvent.submit(document.querySelector('form')!);
+		await tick();
+		await tick();
+		expect(apiMock.createRoute).toHaveBeenCalledTimes(1);
+		expect(apiMock.createRoute.mock.calls[0][0].responseStreamingMode).toBe(true);
+	});
+
+	it('loads the persisted responseStreamingMode=true value into the toggle on edit', async () => {
+		const seeded = makeRoute({
+			id: 'edit-resp-streaming',
+			host: 'ha.edit.example.com',
+			responseStreamingMode: true
+		});
+		apiMock.listRoutes.mockResolvedValue([seeded]);
+		apiMock.updateRoute.mockResolvedValue(seeded);
+		render(Page);
+		const hostCell = await screen.findByText('ha.edit.example.com');
+		await userEvent.click(hostCell.closest('tr')!);
+		await tick();
+		const toggle = screen.getByTestId('response-streaming-toggle') as HTMLInputElement;
+		expect(toggle.checked).toBe(true);
+	});
+});

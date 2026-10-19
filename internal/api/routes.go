@@ -1584,6 +1584,11 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	if req.UploadStreamingMode != nil {
 		streamingMode = *req.UploadStreamingMode
 	}
+	// v2.77 (issue #317) — ResponseStreamingMode on POST: same shape.
+	responseStreamingMode := false
+	if req.ResponseStreamingMode != nil {
+		responseStreamingMode = *req.ResponseStreamingMode
+	}
 	// Step X.1 — WAFDisableCRS on POST: same default-false +
 	// non-nil-overrides shape as UploadStreamingMode above.
 	disableCRS := false
@@ -1740,6 +1745,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		InsecureSkipVerify:    skipVerify,
 		UpstreamTLSServerName: tlsServerName,
 		UploadStreamingMode:   streamingMode,
+		ResponseStreamingMode: responseStreamingMode,
 		WAFDisableCRS:         disableCRS,
 		WAFExcludeRules:       excludeRules,
 		WAFExcludeTags:        excludeTags,
@@ -2197,6 +2203,12 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 	if req.UploadStreamingMode != nil {
 		streamingMode = *req.UploadStreamingMode
 	}
+	// v2.77 (issue #317) — ResponseStreamingMode on PUT: preserve-on-nil,
+	// replace-on-non-nil, same as UploadStreamingMode.
+	responseStreamingMode := previous.ResponseStreamingMode
+	if req.ResponseStreamingMode != nil {
+		responseStreamingMode = *req.ResponseStreamingMode
+	}
 	// Step X.1 — WAFDisableCRS on PUT: same preserve-on-nil +
 	// replace-on-non-nil shape as UploadStreamingMode above.
 	disableCRS := previous.WAFDisableCRS
@@ -2402,6 +2414,7 @@ func (h *Handler) updateRoute(w http.ResponseWriter, r *http.Request) {
 		InsecureSkipVerify:    skipVerify,
 		UpstreamTLSServerName: tlsServerName,
 		UploadStreamingMode:   streamingMode,
+		ResponseStreamingMode: responseStreamingMode,
 		WAFDisableCRS:         disableCRS,
 		WAFExcludeRules:       excludeRules,
 		WAFExcludeTags:        excludeTags,

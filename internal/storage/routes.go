@@ -946,6 +946,23 @@ type Route struct {
 	// byte-equal with pre-fix snapshots on disk and in
 	// backup/restore exports.
 	UploadStreamingMode bool `json:"upload_streaming_mode,omitempty"`
+	// ResponseStreamingMode (v2.77, issue #317) is the response-side
+	// mirror of UploadStreamingMode. The CRS include turns
+	// SecResponseBodyAccess On with a 512 KiB ProcessPartial buffer, so a
+	// chunked text/plain response that never ends (Home Assistant's
+	// /api/hassio/.../logs/follow, SSE, a long-poll log tail) is buffered
+	// by the WAF interceptor and nothing reaches the client until the
+	// response ends or 512 KiB — the tab hangs, even in detect mode. When
+	// true, the interceptor streams the response body straight through
+	// instead of buffering it for phase-4 inspection; request (URL,
+	// headers, body unless UploadStreamingMode) and response headers stay
+	// fully inspected. Done in Go, like UploadStreamingMode — no SecLang,
+	// no ctl: directive (SecLang editor decision S1 untouched).
+	//
+	// Default false. Independent of WAFMode and UploadStreamingMode: any
+	// combination is valid. JSON omitempty so non-streaming routes stay
+	// byte-equal with pre-v2.77 snapshots on disk and in backup/restore.
+	ResponseStreamingMode bool `json:"response_streaming_mode,omitempty"`
 	// WAFDisableCRS (Step X.1, 2026-06-17) is the per-route opt-
 	// out from the OWASP Core Rule Set load. When true, the
 	// route's arenet_waf handler runs with @coraza.conf-recommended

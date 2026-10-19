@@ -244,7 +244,7 @@
 	// server takes the preserve-previous path (J.2 decision: PUT
 	// without healthCheck preserves the stored value). When true,
 	// we ship the complete 9-field block (full replacement).
-	type FormData = Omit<RouteRequest, 'healthCheck' | 'healthNotify' | 'countryBlock' | 'insecureSkipVerify' | 'upstreamTlsServerName' | 'uploadStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'wafTargetedExclusions' | 'wafCustomRules' | 'wafSecLang' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
+	type FormData = Omit<RouteRequest, 'healthCheck' | 'healthNotify' | 'countryBlock' | 'insecureSkipVerify' | 'upstreamTlsServerName' | 'uploadStreamingMode' | 'responseStreamingMode' | 'wafDisableCRS' | 'wafExcludeRules' | 'wafExcludeTags' | 'wafTargetedExclusions' | 'wafCustomRules' | 'wafSecLang' | 'rateLimit' | 'errorPageTemplateId' | 'errorPageOverrides' | 'disabled' | 'cert_source' | 'cert_id' | 'ipFilter' | 'pathRules'> & {
 		healthCheck: HealthCheck;
 		// v2.75 — route-health notify. Always present on the form (zero
 		// value = off), shipped full-replacement on POST and PUT, same
@@ -280,6 +280,8 @@
 		// payload re-introduces undefined for preserve-on-
 		// omit semantics on PUT.
 		uploadStreamingMode: boolean;
+		// v2.77 (#317) — response-side mirror, same definite-bool shape.
+		responseStreamingMode: boolean;
 		// Step X.2 — same narrowing as uploadStreamingMode :
 		// form holds a definite bool ; payload reintroduces
 		// undefined for preserve-on-omit on PUT.
@@ -507,6 +509,7 @@
 			// body inspection + Caddy buffering. Independent
 			// from wafMode (any combination is valid).
 			uploadStreamingMode: false,
+			responseStreamingMode: false,
 			// Step X.2 — CRS is loaded by default. Opt-in only
 			// (security-reducing) — the toggle in the WAF
 			// settings block triggers the ADR-D4 confirm
@@ -1629,6 +1632,7 @@
 			// purely defensive for very old pre-4.5 snapshots
 			// that might have been restored without the field.
 			uploadStreamingMode: r.uploadStreamingMode ?? false,
+			responseStreamingMode: r.responseStreamingMode ?? false,
 			// Step X.2 — load the persisted CRS-disable state
 			// so the toggle reflects what's actually saved.
 			// Pre-X.1 snapshots decode as undefined → defaults
@@ -3250,6 +3254,7 @@
 			// strict-false default cleanly; on PUT it's a full
 			// replacement aligned with the visible toggle state.
 			payload.uploadStreamingMode = formData.uploadStreamingMode;
+			payload.responseStreamingMode = formData.responseStreamingMode;
 			// Step X.2 — always ship wafDisableCRS. Same shape
 			// as uploadStreamingMode : POST captures the
 			// strict-false default ; PUT is full replacement
@@ -5202,6 +5207,21 @@
 							helper={language.current && t('routes.form.uploadStreamingHelper')}
 							testid="upload-streaming-toggle"
 							labelTestid="upload-streaming-toggle-label"
+						/>
+
+						<!-- v2.77 (#317) — response-side mirror of upload streaming.
+						     Grouped right after it (same "Streaming" intent): the WAF
+						     streams the response body instead of buffering it, so a
+						     never-ending chunked response (Home Assistant log/follow,
+						     SSE) reaches the client immediately. Independent of
+						     wafMode; request + response headers stay scanned. -->
+						<SwitchRow
+							checked={formData.responseStreamingMode}
+							onchange={(v) => (formData.responseStreamingMode = v)}
+							label={language.current && t('routes.form.responseStreamingToggleLabel')}
+							helper={language.current && t('routes.form.responseStreamingHelper')}
+							testid="response-streaming-toggle"
+							labelTestid="response-streaming-toggle-label"
 						/>
 
 						<!-- Step X.2 — wafDisableCRS toggle. The change is mediated

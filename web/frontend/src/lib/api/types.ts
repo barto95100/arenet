@@ -313,6 +313,12 @@ export interface Route {
 	 */
 	uploadStreamingMode: boolean;
 	/**
+	 * v2.77 (issue #317) — response-side mirror of uploadStreamingMode:
+	 * the WAF streams the response body instead of buffering it for
+	 * phase-4 inspection (log tails, SSE). Echoed on every GET.
+	 */
+	responseStreamingMode: boolean;
+	/**
 	 * Step X.1 — per-route opt-out from the OWASP CRS load. When
 	 * true, the route's arenet_waf handler runs with NO @-Includes
 	 * (no @coraza.conf-recommended, no @crs-setup, no
@@ -749,6 +755,11 @@ export interface RouteRequest {
 	 *   - present (true | false) → full replacement
 	 */
 	uploadStreamingMode?: boolean;
+	/**
+	 * v2.77 (issue #317) — responseStreamingMode toggle on the wire.
+	 * Same preserve-on-omit semantic as uploadStreamingMode.
+	 */
+	responseStreamingMode?: boolean;
 	/**
 	 * Step X.1 — wafDisableCRS toggle on the wire. Mirror of
 	 * uploadStreamingMode's preserve-on-omit shape (the backend
