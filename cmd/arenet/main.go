@@ -1475,8 +1475,47 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// reload via the manager's reload hook (the seam the tracker is
 	// reset at).
 	routeHealthNotifier := routehealth.NewNotifier(hcTracker, alertingDispatcher, logger)
-	hcTracker.SetOnTransition(routeHealthNotifier.OnTransition)
-	mgr.SetReloadHook(routeHealthNotifier.Refresh)
+
+	// v2.76 — per-route health for routes that SHARE an upstream. Caddy
+	// keeps one collapsed health state per dial address, so routes sharing
+	// a multiplexing upstream (a Traefik fanning out by Host) cannot be
+	// told apart from the address alone. The evaluator probes such routes
+	// individually with each route's own Host; the notifier AND the
+	// route-list badge read its per-route verdict instead of the shared
+	// address's tracker state. Unique-upstream routes are untouched.
+	routeHealthEval := routehealth.NewEvaluator(0, logger)
+	routeHealthNotifier.SetPerRouteStatus(routeHealthEval.RouteUpstreamStatus)
+	routeHealthEval.SetNotify(func(addr string, at time.Time) {
+		routeHealthNotifier.OnTransition(addr, "", "", at)
+	})
+
+	// A tracker transition on a SHARED address first re-probes the affected
+	// routes (off the event goroutine, so the probe never blocks Caddy's
+	// event dispatch) and then drives the notifier with fresh per-route
+	// verdicts. A unique address keeps the exact synchronous path as before.
+	hcTracker.SetOnTransition(func(addr, oldStatus, newStatus string, at time.Time) {
+		if routeHealthEval.IsSharedAddr(addr) {
+			go func() {
+				routeHealthEval.OnSharedEvent(ctx, addr)
+				routeHealthNotifier.OnTransition(addr, oldStatus, newStatus, at)
+			}()
+			return
+		}
+		routeHealthNotifier.OnTransition(addr, oldStatus, newStatus, at)
+	})
+
+	// Both consumers refresh with the applied route set at each reload. The
+	// v2.75.4 self-seed replays the last applied routes when the hook is
+	// wired, so both are seeded at boot.
+	mgr.SetReloadHook(func(routes []storage.Route) {
+		routeHealthNotifier.Refresh(routes)
+		routeHealthEval.Refresh(routes)
+	})
+
+	// Periodic re-probe so a recovery the flapping shared host never
+	// announces with a distinct event still converges (badge + notification
+	// self-heal). Floored internally; stops with ctx.
+	routeHealthEval.Start(ctx, 10*time.Second)
 
 	if obsStore != nil {
 		// AL.4.a — wire the History tab read seam. Same
@@ -1559,6 +1598,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg *appconfig.Config) (retEr
 	// constructed + primed before mgr.Start, so it's already
 	// receiving events by the time this setter fires.
 	apiHandler.SetHCStatusReader(hcTracker)
+	// v2.76 — per-route health for shared-upstream routes feeds the badge.
+	apiHandler.SetRouteHealthReader(routeHealthEval)
 
 	// Step T T.1 (2026-06-05) — share the cert-info tracker with
 	// the API so GET /api/certificates serves real data. Tracker
