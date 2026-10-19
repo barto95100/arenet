@@ -25,21 +25,26 @@ unique-upstream (non-regression) path.
 - Pure function, no deps — lands first so the evaluator and both
   consumers import one definition of "shared".
 
-## T2 — RouteHealthEvaluator core (no wiring yet)
+## T2 — RouteHealthEvaluator core + compact HC-replay probe (no wiring yet)
 
-- New `internal/routehealth/evaluator.go`: `Evaluator` holding a
-  `prober` (interface `Probe(ctx, storage.Route) routecheck.Result`,
-  the same seam `route_check.go` already defines), a `clock`, a
-  `logger`, and `perRoute map[routeID]status` + `since`.
-- `Refresh(routes)`: recompute the shared set + the shared route list;
-  DROP cache entries for routes no longer shared.
-- `evaluateRoute(ctx, r) status`: run the prober, map
-  `routecheck.StatusOK → healthy`, anything else → unhealthy; retry
-  policy is the Prober's own.
+- New `internal/routehealth/probe.go`: a compact `routeProbe(ctx, r,
+  dialer) status` that, for each upstream, dials it directly with the
+  route's `Host` (= `hc.ProbeHost(r.Host)`), the HC `uri/method/headers`,
+  and judges by `expect_status` + `expect_body`. Healthy only if an
+  upstream answers to the HC criteria. SSRF-guarded via `internal/netguard`.
+  Owned here (duplicated, per spec D3a), NOT extracted from the API.
+- New `internal/routehealth/evaluator.go`: `Evaluator` holding a `prober`
+  (interface `probe(ctx, storage.Route) string` so tests fake it), a
+  `clock`, a `logger`, `perRoute map[routeID]status` + `since`, and the
+  shared set from T1.
+- `Refresh(routes)`: recompute shared set + shared route list; DROP cache
+  entries for routes no longer shared.
 - `RouteStatus(routeID) (status string, ok bool)`: ok=false when the
   route is not shared (caller falls back to the tracker).
-- **Tests:** a fake prober; shared route gets probed + cached;
-  unique route → `RouteStatus` ok=false; Refresh evicts stale entries.
+- **Tests:** a fake prober — shared route probed + cached; unique route →
+  `RouteStatus` ok=false; Refresh evicts stale. Probe unit test against an
+  httptest server: Host-routed 200 → healthy, 502/404-with-expect-200 →
+  unhealthy, body-regex mismatch → unhealthy.
 - No goroutines yet — deterministic.
 
 ## T3 — event-driven + periodic probing (lifecycle)
