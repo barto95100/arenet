@@ -47,6 +47,12 @@ type Evaluator struct {
 	clk     clock
 	logger  *slog.Logger
 
+	// notify, when set, is called with a normalized upstream address whose
+	// per-route verdicts just changed, so the notifier can recompute and
+	// page. Wired to notifier.OnTransition. nil = no notifications (badge
+	// only). Never called while holding mu.
+	notify func(addr string, at time.Time)
+
 	mu           sync.RWMutex
 	shared       map[string]int              // normalized addr -> count of enabled routes using it
 	sharedRoutes map[string]storage.Route    // routeID -> route, only routes on a shared upstream
@@ -141,21 +147,120 @@ func (e *Evaluator) RouteUpstreamStatus(routeID, upstreamURL string) (string, bo
 	return s, ok
 }
 
+// SetNotify installs the callback invoked (outside the lock) with an
+// address whose per-route verdicts changed. Set once at startup.
+func (e *Evaluator) SetNotify(fn func(addr string, at time.Time)) {
+	e.mu.Lock()
+	e.notify = fn
+	e.mu.Unlock()
+}
+
 // evaluateRoute probes one shared route now and stores its per-upstream
-// verdicts, returning the stored map. An empty probe result (HC disabled,
-// nothing readable) clears the route's cache so RouteUpstreamStatus falls
-// back to the tracker rather than serve a stale verdict.
-func (e *Evaluator) evaluateRoute(ctx context.Context, r storage.Route) upstreamVerdicts {
+// verdicts, returning the normalized addresses whose status changed since
+// the last probe. An empty probe result (HC disabled, nothing readable)
+// clears the route's cache so RouteUpstreamStatus falls back to the
+// tracker rather than serve a stale verdict.
+func (e *Evaluator) evaluateRoute(ctx context.Context, r storage.Route) (changed []string) {
 	res := e.probe(ctx, r)
 	e.mu.Lock()
+	old := e.perRoute[r.ID]
 	if len(res) == 0 {
-		delete(e.perRoute, r.ID)
+		if len(old) > 0 {
+			for a := range old {
+				changed = append(changed, a)
+			}
+			delete(e.perRoute, r.ID)
+		}
 	} else {
 		e.perRoute[r.ID] = res
+		for a, s := range res {
+			if old == nil || old[a] != s {
+				changed = append(changed, a)
+			}
+		}
 	}
 	e.mu.Unlock()
-	return res
+	return changed
 }
+
+// routesOnAddr returns the shared routes that dial the given normalized
+// address.
+func (e *Evaluator) routesOnAddr(addr string) []storage.Route {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	var out []storage.Route
+	for _, r := range e.sharedRoutes {
+		for _, u := range r.Upstreams {
+			if caddyhc.NormalizeAddr(u.URL) == addr {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// OnSharedEvent re-probes the shared routes that use addr and updates the
+// cache. It does NOT notify: it is called from the tracker's transition
+// hook, which calls the notifier immediately afterwards (the composed
+// callback), so the notifier reads fresh verdicts. A no-op for a
+// non-shared address.
+func (e *Evaluator) OnSharedEvent(ctx context.Context, addr string) {
+	key := caddyhc.NormalizeAddr(addr)
+	if key == "" || !e.IsSharedAddr(key) {
+		return
+	}
+	for _, r := range e.routesOnAddr(key) {
+		e.evaluateRoute(ctx, r)
+	}
+}
+
+// Tick runs one periodic round: re-probe every shared route and notify
+// for each address whose per-route verdict changed. Separated from Start
+// so tests drive it deterministically without a goroutine. The periodic
+// round is what converges a recovery that the shared (flapping) Caddy host
+// never announced with a distinct event.
+func (e *Evaluator) Tick(ctx context.Context) {
+	changedAddrs := make(map[string]struct{})
+	for _, r := range e.sharedRoutesSnapshot() {
+		for _, a := range e.evaluateRoute(ctx, r) {
+			changedAddrs[a] = struct{}{}
+		}
+	}
+	e.mu.RLock()
+	notify := e.notify
+	e.mu.RUnlock()
+	if notify == nil {
+		return
+	}
+	at := e.clk.Now()
+	for a := range changedAddrs {
+		notify(a, at)
+	}
+}
+
+// Start runs the periodic re-probe loop until ctx is cancelled. interval
+// is floored at a small minimum so a tiny HC interval cannot busy-probe.
+func (e *Evaluator) Start(ctx context.Context, interval time.Duration) {
+	if interval < minTickInterval {
+		interval = minTickInterval
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				e.Tick(ctx)
+			}
+		}
+	}()
+}
+
+// minTickInterval floors the periodic re-probe cadence (spec D4).
+const minTickInterval = 10 * time.Second
 
 // sharedRoutesSnapshot copies the current shared-route set so a probe loop
 // does not hold the lock across network I/O.

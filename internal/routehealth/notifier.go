@@ -126,6 +126,14 @@ type Notifier struct {
 	window  time.Duration
 	logger  *slog.Logger
 
+	// perRoute, when set, gives the per-route verdict for one of a route's
+	// upstreams (the Evaluator's RouteUpstreamStatus). It is consulted
+	// FIRST when computing a route's aggregate; ok=false falls back to the
+	// address-keyed tracker. This is what lets a route sharing an upstream
+	// with others be judged on its OWN backend instead of the shared
+	// address's collapsed health. nil keeps the pre-v2.76 behaviour.
+	perRoute func(routeID, upstreamAddr string) (string, bool)
+
 	mu        sync.Mutex
 	last      map[string]aggState  // routeID -> last-notified aggregate
 	downSince map[string]time.Time // routeID -> when it entered a non-healthy state
@@ -160,6 +168,15 @@ func (n *Notifier) Refresh(routes []storage.Route) {
 	n.index.Refresh(routes)
 }
 
+// SetPerRouteStatus installs the per-route verdict reader (the Evaluator).
+// Set once at startup, before events flow. nil disables it, keeping the
+// address-keyed behaviour.
+func (n *Notifier) SetPerRouteStatus(fn func(routeID, upstreamAddr string) (string, bool)) {
+	n.mu.Lock()
+	n.perRoute = fn
+	n.mu.Unlock()
+}
+
 // OnTransition is registered on the caddyhc tracker. It recomputes the
 // aggregate state of every route using the flipped upstream, buffers the
 // ones whose aggregate changed, and arms the coalescing timer.
@@ -173,6 +190,15 @@ func (n *Notifier) OnTransition(addr, _, _ string, at time.Time) {
 	for _, ref := range refs {
 		statuses := make([]string, 0, len(ref.upstream))
 		for _, u := range ref.upstream {
+			// Prefer the per-route verdict (shared upstream); fall back to
+			// the address-keyed tracker (unique upstream, or not yet
+			// probed) so unique-upstream routes behave exactly as before.
+			if n.perRoute != nil {
+				if s, ok := n.perRoute(ref.routeID, u); ok {
+					statuses = append(statuses, s)
+					continue
+				}
+			}
 			statuses = append(statuses, n.tracker.Status(u))
 		}
 		newState := aggregate(statuses)
