@@ -399,6 +399,14 @@ type Handler struct {
 	// contract as the other readers: a nil hcStatus collapses
 	// the aggregate to "unknown" without erroring.
 	hcStatus HCStatusReader
+	// routeHealth (v2.76) is the optional per-route health reader for
+	// routes whose upstream is SHARED with other routes. When it returns
+	// ok=true for an upstream, its verdict wins over hcStatus — that is
+	// how a route sharing a (multiplexing) upstream with others is painted
+	// on its OWN backend instead of the shared address's collapsed state.
+	// Nil (or ok=false) falls back to hcStatus, so unique-upstream routes
+	// are byte-identical to pre-v2.76. Implemented by *routehealth.Evaluator.
+	routeHealth PerRouteStatusReader
 	// certInfo (Step T T.1, 2026-06-05) is the per-domain
 	// runtime cert metadata feed populated by internal/certinfo.
 	// Backs GET /api/certificates. Same nil-tolerance contract
@@ -538,6 +546,18 @@ type AuthEventSubmitter interface {
 // any unrecognised value to the unknown state.
 type HCStatusReader interface {
 	Status(addr string) string
+}
+
+// PerRouteStatusReader gives a route-scoped health verdict for one of its
+// upstreams, used to disambiguate routes that SHARE an upstream address
+// (where Caddy keeps a single collapsed health state). ok is false when
+// the route is not evaluated per-route (unique upstream) or no verdict is
+// available yet — the caller then falls back to HCStatusReader, so
+// unique-upstream routes keep their exact pre-v2.76 behaviour. Declared
+// locally (not importing routehealth) like HCStatusReader. Implemented by
+// *routehealth.Evaluator.
+type PerRouteStatusReader interface {
+	RouteUpstreamStatus(routeID, upstreamURL string) (string, bool)
 }
 
 // CertInfoReader is the seam the Certificates page uses to surface
@@ -855,6 +875,14 @@ func (h *Handler) SetThrottleEventReader(r ThrottleEventReader) {
 // routes without HC configured.
 func (h *Handler) SetHCStatusReader(r HCStatusReader) {
 	h.hcStatus = r
+}
+
+// SetRouteHealthReader (v2.76) attaches the per-route health evaluator
+// used to paint shared-upstream routes on their own backend. Nil-tolerant:
+// unset leaves every route on the address-keyed hcStatus, the pre-v2.76
+// behaviour.
+func (h *Handler) SetRouteHealthReader(r PerRouteStatusReader) {
+	h.routeHealth = r
 }
 
 // SetCertInfoReader (Step T T.1, 2026-06-05) attaches the

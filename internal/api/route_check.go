@@ -149,7 +149,7 @@ func (h *Handler) rollbackCause(r storage.Route, failed routecheck.Result) strin
 	}
 	// h.hcStatus may be nil; computeRouteAggregateHealth treats that
 	// as "unknown", which correctly declines to blame the probe.
-	status, _, _ := computeRouteAggregateHealth(r, h.hcStatus)
+	status, _, _ := computeRouteAggregateHealth(r, h.hcStatus, h.routeHealth)
 	if status == routeStatusDown || status == routeStatusDegraded {
 		return causeHealthCheck
 	}
