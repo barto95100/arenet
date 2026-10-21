@@ -66,6 +66,25 @@
 	let loadError: string | null = $state(null);
 	let loading = $state(true);
 	let events: GeoEvent[] = $state([]);
+	// v2.78 — map rendering style, a per-viewer preference. localStorage is
+	// a convenience only (wrapped in try/catch; the map renders correctly
+	// without it), never shared/read-back state.
+	const MAP_STYLE_KEY = 'arenet.map.style';
+	let mapStyle: 'continents' | 'octagons' = $state('continents');
+	try {
+		const saved = localStorage.getItem(MAP_STYLE_KEY);
+		if (saved === 'octagons' || saved === 'continents') mapStyle = saved;
+	} catch {
+		// private window / blocked storage — default stands.
+	}
+	function toggleMapStyle(): void {
+		mapStyle = mapStyle === 'octagons' ? 'continents' : 'octagons';
+		try {
+			localStorage.setItem(MAP_STYLE_KEY, mapStyle);
+		} catch {
+			// best-effort; a failed persist must not break the toggle.
+		}
+	}
 	let wsState: GeoEventStreamState = $state('connecting');
 	let wsHandle: GeoEventStreamHandle | null = null;
 	// Step V.7 — LAN counter. WorldMap.svelte skips LAN
@@ -245,6 +264,22 @@
 				</span>
 			</div>
 		{/if}
+		<!-- v2.78 — map style toggle (continents ↔ octagon dot-matrix). -->
+		<button
+			type="button"
+			class="map-style-toggle"
+			data-testid="map-style-toggle"
+			data-map-style={mapStyle}
+			onclick={toggleMapStyle}
+			title={language.current && t('map.styleToggleTitle')}
+			aria-label={language.current && t('map.styleToggleTitle')}
+		>
+			<span aria-hidden="true">{mapStyle === 'octagons' ? '⬡' : '🗺'}</span>
+			<span class="map-style-toggle__label">
+				{language.current &&
+					t(mapStyle === 'octagons' ? 'map.styleOctagons' : 'map.styleContinents')}
+			</span>
+		</button>
 		<div
 			class="ws-pill ws-pill--{wsState}"
 			data-testid="map-ws-pill"
@@ -280,6 +315,7 @@
 			country={position.country}
 			mode={position.mode}
 			{events}
+			{mapStyle}
 		/>
 		<MapLegend />
 	</div>
@@ -288,6 +324,28 @@
 <LicenseFooter />
 
 <style>
+	/* v2.78 — map style toggle, styled like the sibling pills. */
+	.map-style-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 10px;
+		border-radius: 999px;
+		border: 1px solid var(--border-subtle);
+		background: var(--bg-surface);
+		color: var(--text-secondary);
+		font-size: 0.78rem;
+		cursor: pointer;
+	}
+	.map-style-toggle:hover {
+		color: var(--text-primary);
+		border-color: var(--border-strong, var(--border-subtle));
+	}
+	.map-style-toggle[data-map-style='octagons'] {
+		color: var(--text-primary);
+		border-color: var(--accent, var(--border-subtle));
+	}
+
 	.map-empty-note {
 		position: absolute;
 		left: 50%;

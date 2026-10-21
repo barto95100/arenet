@@ -459,3 +459,73 @@ describe('WorldMap — V.8.HF1 tick-driven re-render', () => {
 		expect(laterD).not.toBe(initialD);
 	});
 });
+
+// v2.78 — octagon dot-matrix style. Uses a fixture WITH a `land` object
+// (a large polygon so the screen grid lands many cells inside). jsdom runs
+// d3.geoContains + projection.invert (pure math), so the octagon paths are
+// appended by the $effect and countable.
+const FIXTURE_WITH_LAND = {
+	type: 'Topology',
+	// No transform → arcs are absolute [lon, lat]. One big land polygon.
+	arcs: [
+		[
+			[-40, -20],
+			[40, -20],
+			[40, 40],
+			[-40, 40],
+			[-40, -20]
+		]
+	],
+	objects: {
+		countries: {
+			type: 'GeometryCollection',
+			geometries: [{ type: 'Polygon', arcs: [[0]], properties: { name: 'Bigland' } }]
+		},
+		land: {
+			type: 'GeometryCollection',
+			geometries: [{ type: 'Polygon', arcs: [[0]] }]
+		}
+	}
+};
+
+function mockLandFetch() {
+	return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+		return new Response(JSON.stringify(FIXTURE_WITH_LAND), {
+			status: 200,
+			headers: { 'Content-Type': 'application/json' }
+		});
+	});
+}
+
+describe('WorldMap — octagon style (v2.78)', () => {
+	it('renders octagons on land when mapStyle="octagons"', async () => {
+		mockLandFetch();
+		const { container } = render(WorldMap, {
+			props: {
+				arenetLat: null,
+				arenetLon: null,
+				width: 600,
+				height: 400,
+				mapStyle: 'octagons',
+				octagonStepPx: 10
+			}
+		});
+		await waitFor(() => {
+			const octagons = container.querySelectorAll('g.octagons path');
+			expect(octagons.length).toBeGreaterThan(0);
+		});
+		// The continent fill must NOT also be painted (the two never stack).
+		expect(container.querySelectorAll('g.countries path').length).toBe(0);
+	});
+
+	it('paints continents (not octagons) in the default style', async () => {
+		mockLandFetch();
+		const { container } = render(WorldMap, {
+			props: { arenetLat: null, arenetLon: null, width: 600, height: 400 }
+		});
+		await waitFor(() => {
+			expect(container.querySelectorAll('g.countries path').length).toBeGreaterThan(0);
+		});
+		expect(container.querySelectorAll('g.octagons path').length).toBe(0);
+	});
+});

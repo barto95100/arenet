@@ -62,6 +62,7 @@
 		arcProgressAt,
 		bezierAt
 	} from './arcMath';
+	import { octagonCells, octagonPath, type OctaCell } from './octagonGrid';
 	// ARC_TRAVEL_MS is imported for symmetry with the
 	// timing-constant docblock below; suppress the
 	// unused-import lint without removing the explicit
@@ -116,6 +117,16 @@
 		 * second × ARC_TOTAL_MS.
 		 */
 		events?: readonly GeoEvent[];
+		/**
+		 * v2.78 — map rendering style. 'continents' (default) fills the
+		 * country polygons as before; 'octagons' renders a dot-matrix of
+		 * octagons sampled on land (the SafeLine-style dotted map), using
+		 * the same projection + topojson land feature. Opt-in, so the
+		 * default render is byte-identical to pre-v2.78.
+		 */
+		mapStyle?: 'continents' | 'octagons';
+		/** Octagon grid spacing in viewBox px (octagons style only). */
+		octagonStepPx?: number;
 	}
 
 	let {
@@ -127,11 +138,16 @@
 		country = '',
 		mode = 'auto',
 		topojsonUrl = '/world-50m.topo.json',
-		events = []
+		events = [],
+		mapStyle = 'continents',
+		octagonStepPx = 14
 	}: Props = $props();
 
 	let svg: SVGSVGElement | undefined = $state();
 	let countries: FeatureCollection<Geometry> | null = $state(null);
+	// v2.78 — the merged land feature (topo.objects.land), used by the
+	// octagon style's point-in-land test. Loaded alongside countries.
+	let land: Feature<Geometry> | null = $state(null);
 	let loadError: string | null = $state(null);
 
 	// Projection recomputes whenever its inputs change. A
@@ -171,6 +187,11 @@
 			// future steps can switch to `land` for a cleaner
 			// silhouette).
 			countries = feature(topo, topo.objects.countries) as FeatureCollection<Geometry>;
+			// v2.78 — single merged land outline for the octagon style's
+			// geoContains test (cheaper than testing every country).
+			// Guarded: a fixture/topojson without a `land` object leaves
+			// the octagon style empty rather than failing the whole load.
+			land = topo.objects.land ? (feature(topo, topo.objects.land) as Feature<Geometry>) : null;
 		} catch (err) {
 			loadError = String(err);
 			// eslint-disable-next-line no-console
@@ -182,16 +203,44 @@
 	// D3 handles the join + path d-attribute; Svelte just
 	// hosts the <g class="countries"> root.
 	$effect(() => {
-		if (!svg || !countries) return;
-		d3.select(svg)
-			.select<SVGGElement>('g.countries')
-			.selectAll<SVGPathElement, Feature<Geometry>>('path')
+		if (!svg) return;
+		const g = d3.select(svg).select<SVGGElement>('g.countries');
+		// v2.78 — the octagon style owns the land rendering; clear the
+		// country paths so the two never stack.
+		if (mapStyle !== 'continents' || !countries) {
+			g.selectAll('path').remove();
+			return;
+		}
+		g.selectAll<SVGPathElement, Feature<Geometry>>('path')
 			.data(countries.features)
 			.join('path')
 			.attr('d', (d) => path(d))
 			.attr('fill', 'var(--map-land, var(--bg-surface))')
 			.attr('stroke', 'var(--map-border, var(--border-subtle))')
 			.attr('stroke-width', 0.5);
+	});
+
+	// v2.78 — octagon dot-matrix paint. Samples a screen grid, keeps the
+	// cells on land (projection.invert + geoContains against the merged
+	// land feature), and draws one octagon per kept cell. Reuses the same
+	// projection the continents + arcs use. Cleared when the style is off.
+	$effect(() => {
+		if (!svg) return;
+		const g = d3.select(svg).select<SVGGElement>('g.octagons');
+		if (mapStyle !== 'octagons' || !land) {
+			g.selectAll('path').remove();
+			return;
+		}
+		const inv = (p: [number, number]) => projection.invert?.(p) ?? null;
+		const onLand = (ll: [number, number]) => d3.geoContains(land as Feature<Geometry>, ll);
+		const cells = octagonCells(width, height, octagonStepPx, inv, onLand);
+		const r = octagonStepPx * 0.42;
+		g.selectAll<SVGPathElement, OctaCell>('path')
+			.data(cells)
+			.join('path')
+			.attr('d', (c) => octagonPath(c.x, c.y, r))
+			.attr('fill', 'var(--map-land, var(--bg-surface))')
+			.attr('stroke', 'none');
 	});
 
 	// -------------------------------------------------------
@@ -451,6 +500,9 @@
 			fill="var(--map-ocean, var(--bg-base))"
 		/>
 		<g class="countries" data-testid="worldmap-countries"></g>
+		<!-- v2.78 — octagon dot-matrix land (opt-in style), painted by the
+		     octagon $effect. Empty in the default 'continents' style. -->
+		<g class="octagons" data-testid="worldmap-octagons"></g>
 		<g class="arcs" data-testid="worldmap-arcs">
 			{#each arcs as arc (arc.id)}
 				{@const _tick = tick}

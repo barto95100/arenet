@@ -1032,6 +1032,9 @@
 		"countryPillLabelOne": "bloqué (pays)",
 		"countryPillLabelMany": "bloqués (pays)",
 		"wsLive": "Live",
+		"styleToggleTitle": "Changer le style de carte (continents / octogones)",
+		"styleContinents": "Continents",
+		"styleOctagons": "Octogones",
 		"wsConnecting": "Connexion…",
 		"wsReconnecting": "Reconnexion…",
 		"wsOffline": "Hors ligne"
