@@ -177,6 +177,8 @@ If state was touched and won't load, restore the backup you took: [Backup & Rest
 
 - **Upgrading to v2.77.0+ (WAF: response-body streaming for a route).** A route whose WAF runs the CRS buffers the response body (up to 512 KiB) to scan it — which makes a never-ending or chunk-by-chunk response hang: the WAF holds it and sends the client nothing, even in detect mode. This bit Home Assistant add-on log tabs (`/api/hassio/.../logs/follow`), Server-Sent Events, and long log tails. A route now has a **Response body** streaming toggle (in the WAF block's Streaming controls, next to the existing Upload streaming), the response-side mirror of upload streaming: when on, the WAF streams the response body straight to the client instead of buffering it. Request URL/headers/body and response headers stay inspected; only the response body bytes are exempt, and only on that route. Done in Go (no SecLang, no engine-policy `ctl:`). **Consequence:** none to act on — routes are unchanged until you enable it; turn it on for a route that serves streaming responses (log tails, SSE) and hung behind the WAF.
 
+- **Upgrading to v2.78.0+ (threat map: octagon style).** The threat map gets a style toggle (top-right of the map): the usual filled **Continents**, or a new **Octagons** dot-matrix where the continents are drawn as a grid of octagons on land. Purely visual, per-viewer (remembered in your browser), same data and projection; attack arcs are unchanged. **Consequence:** none — the default is the existing continents style; switch to octagons if you prefer the look.
+
 ---
 
 ## 6. Automation (CLI-only)
