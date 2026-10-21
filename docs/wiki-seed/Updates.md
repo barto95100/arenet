@@ -179,6 +179,8 @@ If state was touched and won't load, restore the backup you took: [Backup & Rest
 
 - **Upgrading to v2.78.0+ (threat map: octagon style).** The threat map gets a style toggle (top-right of the map): the usual filled **Continents**, or a new **Octagons** dot-matrix where the continents are drawn as a grid of octagons on land. Purely visual, per-viewer (remembered in your browser), same data and projection; attack arcs are unchanged. **Consequence:** none — the default is the existing continents style; switch to octagons if you prefer the look.
 
+- **Upgrading to v2.78.1+ (threat map octagon style: freeze fix + coarser look).** The v2.78.0 octagon style tested on-land membership per grid cell against the full-resolution land outline — thousands of point-in-polygon tests on the main thread froze the browser when the map opened with that style selected. It now rasterises the land once to an offscreen canvas and reads one pixel per cell, and the grid is coarser (a deliberately rough mosaic rather than tracing the coastline). **Consequence:** if your map froze on v2.78.0, update; no action otherwise. If a browser is stuck, clear the saved style with `localStorage.removeItem('arenet.map.style')` from the devtools console (on any page but the map) and reload.
+
 ---
 
 ## 6. Automation (CLI-only)

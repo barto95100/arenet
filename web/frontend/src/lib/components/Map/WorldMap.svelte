@@ -62,7 +62,7 @@
 		arcProgressAt,
 		bezierAt
 	} from './arcMath';
-	import { octagonCells, octagonPath, type OctaCell } from './octagonGrid';
+	import { octagonCells, octagonPath, maskOnLand, type OctaCell } from './octagonGrid';
 	// ARC_TRAVEL_MS is imported for symmetry with the
 	// timing-constant docblock below; suppress the
 	// unused-import lint without removing the explicit
@@ -140,7 +140,11 @@
 		topojsonUrl = '/world-50m.topo.json',
 		events = [],
 		mapStyle = 'continents',
-		octagonStepPx = 14
+		// v2.78.1 — a deliberately COARSE grid: the octagon style is meant
+		// to rough out the continents as a mosaic, not trace the detailed
+		// coastline. A larger step downsamples the land silhouette into
+		// chunky blocks (and is cheaper). Tunable per taste.
+		octagonStepPx = 24
 	}: Props = $props();
 
 	let svg: SVGSVGElement | undefined = $state();
@@ -220,20 +224,47 @@
 			.attr('stroke-width', 0.5);
 	});
 
-	// v2.78 — octagon dot-matrix paint. Samples a screen grid, keeps the
-	// cells on land (projection.invert + geoContains against the merged
-	// land feature), and draws one octagon per kept cell. Reuses the same
-	// projection the continents + arcs use. Cleared when the style is off.
+	// v2.78.1 — octagon dot-matrix paint, via a RASTER land-mask.
+	//
+	// v2.78.0 called d3.geoContains(land, …) per grid cell. On the real
+	// full-resolution land feature (tens of thousands of points) × a few
+	// thousand cells that is millions of point-in-polygon tests on the main
+	// thread → the tab froze. Instead we draw `land` ONCE to an offscreen
+	// canvas with geoPath, then each cell is a single O(1) pixel read.
 	$effect(() => {
 		if (!svg) return;
 		const g = d3.select(svg).select<SVGGElement>('g.octagons');
-		if (mapStyle !== 'octagons' || !land) {
+		if (mapStyle !== 'octagons' || !land || width <= 0 || height <= 0) {
 			g.selectAll('path').remove();
 			return;
 		}
-		const inv = (p: [number, number]) => projection.invert?.(p) ?? null;
-		const onLand = (ll: [number, number]) => d3.geoContains(land as Feature<Geometry>, ll);
-		const cells = octagonCells(width, height, octagonStepPx, inv, onLand);
+		const w = Math.ceil(width);
+		const h = Math.ceil(height);
+		const canvas = document.createElement('canvas');
+		canvas.width = w;
+		canvas.height = h;
+		const ctx = canvas.getContext('2d');
+
+		let invert: (p: [number, number]) => [number, number] | null;
+		let onLand: (p: [number, number]) => boolean;
+		if (ctx && typeof ctx.getImageData === 'function') {
+			// FAST path (every real browser): rasterise the land silhouette
+			// once in the same projection, then each cell is one pixel read.
+			ctx.fillStyle = '#fff';
+			ctx.beginPath();
+			d3.geoPath(projection, ctx)(land as Feature<Geometry>);
+			ctx.fill();
+			const mask = ctx.getImageData(0, 0, w, h).data;
+			invert = (p) => p; // identity: grid point goes straight to the pixel test
+			onLand = maskOnLand(mask, w, h);
+		} else {
+			// Fallback where <canvas> is unavailable (jsdom tests): the
+			// precise but slow geoContains path. Never taken in a browser,
+			// so the per-cell cost that froze v2.78.0 cannot recur there.
+			invert = (p) => projection.invert?.(p) ?? null;
+			onLand = (ll) => d3.geoContains(land as Feature<Geometry>, ll);
+		}
+		const cells = octagonCells(width, height, octagonStepPx, invert, onLand);
 		const r = octagonStepPx * 0.42;
 		g.selectAll<SVGPathElement, OctaCell>('path')
 			.data(cells)

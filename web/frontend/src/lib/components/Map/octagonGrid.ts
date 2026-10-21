@@ -53,6 +53,27 @@ export function octagonCells(
 }
 
 /**
+ * maskOnLand returns a point-in-land predicate backed by a rasterised land
+ * mask: RGBA pixel data (width×height) where a painted alpha (> 0) marks
+ * land. Used by the octagon style's FAST path — the land is drawn once to
+ * an offscreen canvas, then each grid cell is this O(1) pixel read instead
+ * of a per-cell geoContains (the v2.78.0 freeze). Pure so the index math
+ * (the off-by-one-prone part) is unit-tested without a canvas.
+ */
+export function maskOnLand(
+	mask: Uint8ClampedArray | number[],
+	width: number,
+	height: number
+): (p: [number, number]) => boolean {
+	return (p: [number, number]): boolean => {
+		const x = Math.round(p[0]);
+		const y = Math.round(p[1]);
+		if (x < 0 || y < 0 || x >= width || y >= height) return false;
+		return mask[(y * width + x) * 4 + 3] > 0; // alpha channel
+	};
+}
+
+/**
  * octagonPath returns an SVG path `d` for a regular octagon centered at
  * (cx, cy) with circumradius r. Vertices sit at 22.5° + k·45° so a flat
  * edge faces up — the orientation that tiles cleanly on a square grid.
