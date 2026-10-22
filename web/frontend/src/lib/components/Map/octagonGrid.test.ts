@@ -3,7 +3,7 @@
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import { describe, it, expect } from 'vitest';
-import { octagonCells, octagonPath } from './octagonGrid';
+import { octagonCells, octagonPath, maskOnLand } from './octagonGrid';
 
 describe('octagonCells', () => {
 	// A fake projection: screen == lon/lat (identity invert), and a square
@@ -56,5 +56,36 @@ describe('octagonPath', () => {
 			// compact, so allow a matching tolerance.
 			expect(dist).toBeCloseTo(5, 2);
 		}
+	});
+});
+
+describe('maskOnLand', () => {
+	// A 4×2 RGBA mask; land (alpha=255) at (1,0) and (2,1), ocean elsewhere.
+	const w = 4;
+	const h = 2;
+	const mask = new Uint8ClampedArray(w * h * 4);
+	const paint = (x: number, y: number) => {
+		mask[(y * w + x) * 4 + 3] = 255;
+	};
+	paint(1, 0);
+	paint(2, 1);
+	const onLand = maskOnLand(mask, w, h);
+
+	it('is true only where the alpha channel is painted', () => {
+		expect(onLand([1, 0])).toBe(true);
+		expect(onLand([2, 1])).toBe(true);
+		expect(onLand([0, 0])).toBe(false);
+		expect(onLand([3, 1])).toBe(false);
+	});
+
+	it('rounds fractional points to the nearest pixel', () => {
+		expect(onLand([1.4, 0.2])).toBe(true); // rounds to (1,0)
+		expect(onLand([0.6, 0.1])).toBe(true); // rounds to (1,0)
+	});
+
+	it('is false (not out-of-bounds crash) outside the mask', () => {
+		expect(onLand([-1, 0])).toBe(false);
+		expect(onLand([4, 0])).toBe(false);
+		expect(onLand([0, 2])).toBe(false);
 	});
 });
