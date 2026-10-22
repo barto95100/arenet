@@ -62,13 +62,15 @@
 		arcProgressAt,
 		bezierAt
 	} from './arcMath';
-	import { octagonCells, octagonPath, maskOnLand, type OctaCell } from './octagonGrid';
-	// ARC_TRAVEL_MS is imported for symmetry with the
-	// timing-constant docblock below; suppress the
-	// unused-import lint without removing the explicit
-	// reference (a future caller may grep for the constant
-	// and expect to see it imported alongside).
-	void ARC_TRAVEL_MS;
+	import {
+		octagonCells,
+		octagonPath,
+		maskOnLand,
+		nearestCellIndex,
+		type OctaCell
+	} from './octagonGrid';
+	// ARC_TRAVEL_MS (arc source→Arenet travel time) now also delays the
+	// octagon destination-pulse so it fires when the arc lands.
 
 	interface Props {
 		/** Width of the SVG viewBox in pixels (default 1200). */
@@ -225,6 +227,47 @@
 			.attr('stroke-width', 0.5);
 	});
 
+	// v2.78.4 — octagon attack animation. A persistent density heatmap tints
+	// octagons toward a hot colour by how many attacks originated near them,
+	// plus a live FLASH on the source octagon of each new attack (and a
+	// discreet flash on the Arenet-destination octagon when the arc lands).
+	// State is imperative (plain Map + vars, NOT $state) so updating heat per
+	// event never re-triggers the reactive octagon paint (which would be an
+	// expensive full re-raster).
+	const OCTA_HOT = '#ff6a3d'; // density heat target
+	const OCTA_FLASH_SRC = '#ffd24a'; // source pulse
+	const OCTA_FLASH_DST = '#8ad0ff'; // destination pulse (discreet)
+	const OCTA_PULSE_MS = 1200;
+	const OCTA_HEAT_MAX = 8; // attacks for a fully-hot tint
+	let octaCells: OctaCell[] = [];
+	let octaLandColor = '#334155'; // resolved --map-land, for heat interpolation
+	let octaDestIdx = -1; // octagon nearest the Arenet position
+	const octaHeat = new Map<number, number>();
+
+	function octaFillForHeat(i: number): string {
+		const n = octaHeat.get(i) ?? 0;
+		if (n <= 0) return 'var(--map-land, var(--bg-surface))';
+		return d3.interpolateRgb(octaLandColor, OCTA_HOT)(Math.min(1, n / OCTA_HEAT_MAX));
+	}
+
+	// Flash one octagon, then ease back to its heat-tinted base. reduceMotion
+	// skips the animation and just applies the base. Safe if the cell is gone.
+	function octaPulse(i: number, flash: string): void {
+		if (!svg || i < 0) return;
+		const p = d3.select(svg).select<SVGPathElement>(`g.octagons path[data-i="${i}"]`);
+		if (p.empty()) return;
+		if (reduceMotion) {
+			p.attr('fill', octaFillForHeat(i));
+			return;
+		}
+		p.interrupt()
+			.attr('fill', flash)
+			.transition()
+			.duration(OCTA_PULSE_MS)
+			.ease(d3.easeCubicOut)
+			.attr('fill', octaFillForHeat(i));
+	}
+
 	// v2.78.1 — octagon dot-matrix paint, via a RASTER land-mask.
 	//
 	// v2.78.0 called d3.geoContains(land, …) per grid cell. On the real
@@ -266,12 +309,32 @@
 			onLand = (ll) => d3.geoContains(land as Feature<Geometry>, ll);
 		}
 		const cells = octagonCells(width, height, octagonStepPx, invert, onLand);
+		octaCells = cells;
+		// Resolve --map-land to a concrete rgb once, so heat can interpolate
+		// land→hot. A probe span inherits the custom property from :root.
+		try {
+			const probe = document.createElement('span');
+			probe.style.color = 'var(--map-land, #334155)';
+			document.body.appendChild(probe);
+			const c = getComputedStyle(probe).color;
+			document.body.removeChild(probe);
+			if (c) octaLandColor = c;
+		} catch {
+			octaLandColor = '#334155';
+		}
+		// Which octagon is the Arenet destination (for the arrival pulse).
+		octaDestIdx = -1;
+		if (arenetLat !== null && arenetLon !== null) {
+			const a = projection([arenetLon, arenetLat]);
+			if (a) octaDestIdx = nearestCellIndex(cells, a[0], a[1]);
+		}
 		const r = octagonStepPx * 0.42;
 		g.selectAll<SVGPathElement, OctaCell>('path')
 			.data(cells)
 			.join('path')
+			.attr('data-i', (_c, i) => i)
 			.attr('d', (c) => octagonPath(c.x, c.y, r))
-			.attr('fill', 'var(--map-land, var(--bg-surface))')
+			.attr('fill', (_c, i) => octaFillForHeat(i))
 			.attr('stroke', 'none');
 	});
 
@@ -480,9 +543,23 @@
 				source: src,
 				target: arenetXY
 			});
+			// v2.78.4 — octagon style: bump the source octagon's heat and
+			// flash it, so the mosaic shows WHERE attacks come from (not just
+			// the home marker). No-op in the continents style (octaCells empty).
+			if (mapStyle === 'octagons' && octaCells.length > 0) {
+				const si = nearestCellIndex(octaCells, src[0], src[1]);
+				if (si >= 0) {
+					octaHeat.set(si, (octaHeat.get(si) ?? 0) + 1);
+					octaPulse(si, OCTA_FLASH_SRC);
+				}
+			}
 		}
 		if (spawned.length > 0) {
 			arcs = [...arcs, ...spawned];
+			// Discreet flash on the destination octagon when the arc lands.
+			if (mapStyle === 'octagons' && octaDestIdx >= 0 && !reduceMotion) {
+				setTimeout(() => octaPulse(octaDestIdx, OCTA_FLASH_DST), ARC_TRAVEL_MS);
+			}
 		}
 		nextEventIdx = events.length;
 	});

@@ -53,6 +53,27 @@ export function octagonCells(
 }
 
 /**
+ * nearestCellIndex returns the index of the cell whose center is closest to
+ * (x, y), or -1 for an empty list. Used to light up the octagon nearest an
+ * attack's projected source (v2.78.4). Linear scan — cheap at the per-event
+ * rate, and squared distance avoids a sqrt per cell.
+ */
+export function nearestCellIndex(cells: readonly OctaCell[], x: number, y: number): number {
+	let best = -1;
+	let bestD2 = Infinity;
+	for (let i = 0; i < cells.length; i++) {
+		const dx = cells[i].x - x;
+		const dy = cells[i].y - y;
+		const d2 = dx * dx + dy * dy;
+		if (d2 < bestD2) {
+			bestD2 = d2;
+			best = i;
+		}
+	}
+	return best;
+}
+
+/**
  * maskOnLand returns a point-in-land predicate backed by a rasterised land
  * mask: RGBA pixel data (width×height) where a painted alpha (> 0) marks
  * land. Used by the octagon style's FAST path — the land is drawn once to

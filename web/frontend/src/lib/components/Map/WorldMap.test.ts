@@ -529,3 +529,46 @@ describe('WorldMap — octagon style (v2.78)', () => {
 		expect(container.querySelectorAll('g.octagons path').length).toBe(0);
 	});
 });
+
+describe('WorldMap — octagon attack animation (v2.78.4)', () => {
+	it('re-fills the source octagon when an on-land attack arrives', async () => {
+		mockLandFetch();
+		const ev = {
+			timestamp: new Date().toISOString(),
+			category: 'waf',
+			sourceIp: '203.0.113.9',
+			sourceLat: 10, // on the fixture land (lon -40..40, lat -20..40)
+			sourceLon: 10,
+			sourceCountry: 'US',
+			sourceCity: 'Nowhere',
+			isLan: false,
+			details: ''
+		} as unknown as import('$lib/api/types').GeoEvent;
+
+		const { container } = render(WorldMap, {
+			props: {
+				arenetLat: -5,
+				arenetLon: -5, // also on land → arcs + dest allowed
+				width: 600,
+				height: 400,
+				mapStyle: 'octagons',
+				octagonStepPx: 10,
+				events: [ev]
+			}
+		});
+
+		// After the TopoJSON loads and the event is processed, the octagon
+		// nearest the source must no longer carry the plain land fill — it is
+		// flashed / heat-tinted. (In jsdom the flash fill stays, since the d3
+		// transition back has no rAF — either way it's not the base colour.)
+		await waitFor(() => {
+			const octas = Array.from(container.querySelectorAll('g.octagons path'));
+			expect(octas.length).toBeGreaterThan(0);
+			const animated = octas.some((p) => {
+				const f = p.getAttribute('fill') ?? '';
+				return f !== '' && !f.includes('--map-land');
+			});
+			expect(animated).toBe(true);
+		});
+	});
+});

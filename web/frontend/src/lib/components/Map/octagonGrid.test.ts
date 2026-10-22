@@ -3,7 +3,7 @@
 // Licensed under the GNU AGPL v3 or later. See LICENSE.
 
 import { describe, it, expect } from 'vitest';
-import { octagonCells, octagonPath, maskOnLand } from './octagonGrid';
+import { octagonCells, octagonPath, maskOnLand, nearestCellIndex } from './octagonGrid';
 
 describe('octagonCells', () => {
 	// A fake projection: screen == lon/lat (identity invert), and a square
@@ -87,5 +87,23 @@ describe('maskOnLand', () => {
 		expect(onLand([-1, 0])).toBe(false);
 		expect(onLand([4, 0])).toBe(false);
 		expect(onLand([0, 2])).toBe(false);
+	});
+});
+
+describe('nearestCellIndex', () => {
+	const cells = [
+		{ x: 0, y: 0 },
+		{ x: 10, y: 0 },
+		{ x: 0, y: 10 },
+		{ x: 10, y: 10 }
+	];
+	it('returns the index of the closest cell', () => {
+		expect(nearestCellIndex(cells, 1, 1)).toBe(0);
+		expect(nearestCellIndex(cells, 9, 1)).toBe(1);
+		expect(nearestCellIndex(cells, 1, 9)).toBe(2);
+		expect(nearestCellIndex(cells, 9, 9)).toBe(3);
+	});
+	it('returns -1 for an empty list', () => {
+		expect(nearestCellIndex([], 5, 5)).toBe(-1);
 	});
 });
