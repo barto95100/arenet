@@ -66,25 +66,8 @@
 	let loadError: string | null = $state(null);
 	let loading = $state(true);
 	let events: GeoEvent[] = $state([]);
-	// v2.78 — map rendering style, a per-viewer preference. localStorage is
-	// a convenience only (wrapped in try/catch; the map renders correctly
-	// without it), never shared/read-back state.
-	const MAP_STYLE_KEY = 'arenet.map.style';
-	let mapStyle: 'continents' | 'octagons' = $state('continents');
-	try {
-		const saved = localStorage.getItem(MAP_STYLE_KEY);
-		if (saved === 'octagons' || saved === 'continents') mapStyle = saved;
-	} catch {
-		// private window / blocked storage — default stands.
-	}
-	function toggleMapStyle(): void {
-		mapStyle = mapStyle === 'octagons' ? 'continents' : 'octagons';
-		try {
-			localStorage.setItem(MAP_STYLE_KEY, mapStyle);
-		} catch {
-			// best-effort; a failed persist must not break the toggle.
-		}
-	}
+	// v2.79.1 — the threat map is octagon-only now (the former continents
+	// style + its toggle are gone). The WorldMap gets a constant style.
 	let wsState: GeoEventStreamState = $state('connecting');
 	let wsHandle: GeoEventStreamHandle | null = null;
 	// Step V.7 — LAN counter. WorldMap.svelte skips LAN
@@ -110,11 +93,55 @@
 	// final value, which then becomes the component default.
 	let octaStepOverride: number | undefined = $state(undefined);
 
+	// v2.79.1 — hidden visual-check injector: `?octademo=1` pushes a
+	// synthetic attack from a random world city every ~700ms so the octagon
+	// source pulses + heatmap are visible on demand, without waiting for
+	// real traffic. Dev/verification only — no UI, invisible unless the
+	// param is present. Cleared on destroy.
+	let demoTimer: ReturnType<typeof setInterval> | null = null;
+	const DEMO_SOURCES: Array<[number, number, string]> = [
+		[40.71, -74.0, 'New York'],
+		[51.51, -0.13, 'London'],
+		[35.68, 139.69, 'Tokyo'],
+		[-23.55, -46.63, 'Sao Paulo'],
+		[-33.87, 151.21, 'Sydney'],
+		[55.75, 37.62, 'Moscow'],
+		[6.52, 3.38, 'Lagos'],
+		[19.08, 72.88, 'Mumbai'],
+		[1.35, 103.82, 'Singapore'],
+		[48.85, 2.35, 'Paris'],
+		[-26.2, 28.04, 'Johannesburg'],
+		[19.43, -99.13, 'Mexico City']
+	];
+	const DEMO_CATEGORIES: GeoEvent['category'][] = ['waf', 'crowdsec', 'auth', 'throttle', 'country_block'];
+
+	function pushDemoEvent(): void {
+		const [lat, lon, city] = DEMO_SOURCES[Math.floor(Math.random() * DEMO_SOURCES.length)];
+		const ev: GeoEvent = {
+			timestamp: new Date().toISOString(),
+			category: DEMO_CATEGORIES[Math.floor(Math.random() * DEMO_CATEGORIES.length)],
+			sourceIp: '203.0.113.' + (1 + Math.floor(Math.random() * 254)),
+			sourceLat: lat,
+			sourceLon: lon,
+			sourceCountry: 'XX',
+			sourceCity: city,
+			isLan: false,
+			details: 'synthetic (octademo)'
+		};
+		const next = events.length >= MAX_EVENTS ? events.slice(1) : events.slice();
+		next.push(ev);
+		events = next;
+	}
+
 	onMount(async () => {
 		try {
-			const q = new URLSearchParams(window.location.search).get('octastep');
+			const params = new URLSearchParams(window.location.search);
+			const q = params.get('octastep');
 			const n = q ? parseInt(q, 10) : NaN;
 			if (Number.isFinite(n) && n >= 4 && n <= 40) octaStepOverride = n;
+			if (params.get('octademo') === '1') {
+				demoTimer = setInterval(pushDemoEvent, 700);
+			}
 		} catch {
 			// no URL / blocked — the baked default stands.
 		}
@@ -192,6 +219,10 @@
 	onDestroy(() => {
 		wsHandle?.close();
 		wsHandle = null;
+		if (demoTimer !== null) {
+			clearInterval(demoTimer);
+			demoTimer = null;
+		}
 	});
 </script>
 
@@ -277,22 +308,6 @@
 				</span>
 			</div>
 		{/if}
-		<!-- v2.78 — map style toggle (continents ↔ octagon dot-matrix). -->
-		<button
-			type="button"
-			class="map-style-toggle"
-			data-testid="map-style-toggle"
-			data-map-style={mapStyle}
-			onclick={toggleMapStyle}
-			title={language.current && t('map.styleToggleTitle')}
-			aria-label={language.current && t('map.styleToggleTitle')}
-		>
-			<span aria-hidden="true">{mapStyle === 'octagons' ? '⬡' : '🗺'}</span>
-			<span class="map-style-toggle__label">
-				{language.current &&
-					t(mapStyle === 'octagons' ? 'map.styleOctagons' : 'map.styleContinents')}
-			</span>
-		</button>
 		<div
 			class="ws-pill ws-pill--{wsState}"
 			data-testid="map-ws-pill"
@@ -328,7 +343,7 @@
 			country={position.country}
 			mode={position.mode}
 			{events}
-			{mapStyle}
+			mapStyle="octagons"
 			octagonStepPx={octaStepOverride}
 		/>
 		<MapLegend />
@@ -338,28 +353,6 @@
 <LicenseFooter />
 
 <style>
-	/* v2.78 — map style toggle, styled like the sibling pills. */
-	.map-style-toggle {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 4px 10px;
-		border-radius: 999px;
-		border: 1px solid var(--border-subtle);
-		background: var(--bg-surface);
-		color: var(--text-secondary);
-		font-size: 0.78rem;
-		cursor: pointer;
-	}
-	.map-style-toggle:hover {
-		color: var(--text-primary);
-		border-color: var(--border-strong, var(--border-subtle));
-	}
-	.map-style-toggle[data-map-style='octagons'] {
-		color: var(--text-primary);
-		border-color: var(--accent, var(--border-subtle));
-	}
-
 	.map-empty-note {
 		position: absolute;
 		left: 50%;
