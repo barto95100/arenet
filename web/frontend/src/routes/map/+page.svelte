@@ -104,7 +104,20 @@
 	// page reload (operator's escape hatch).
 	let countryBlockCount = $state(0);
 
+	// v2.78.2 — hidden dev knob to tune the octagon grid density WITHOUT
+	// shipping a user control: `?octastep=N` (clamped 4–40) overrides the
+	// baked default. Invisible unless the URL carries it; used to pick the
+	// final value, which then becomes the component default.
+	let octaStepOverride: number | undefined = $state(undefined);
+
 	onMount(async () => {
+		try {
+			const q = new URLSearchParams(window.location.search).get('octastep');
+			const n = q ? parseInt(q, 10) : NaN;
+			if (Number.isFinite(n) && n >= 4 && n <= 40) octaStepOverride = n;
+		} catch {
+			// no URL / blocked — the baked default stands.
+		}
 		// Step 1 — load position. A failure here is fatal:
 		// without the Arenet pixel position, the WorldMap
 		// can't draw arcs. The error banner kicks in and
@@ -316,6 +329,7 @@
 			mode={position.mode}
 			{events}
 			{mapStyle}
+			octagonStepPx={octaStepOverride}
 		/>
 		<MapLegend />
 	</div>
