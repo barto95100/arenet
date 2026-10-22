@@ -140,12 +140,12 @@
 		topojsonUrl = '/world-50m.topo.json',
 		events = [],
 		mapStyle = 'continents',
-		// v2.78.2 — octagon grid spacing over the 1200×600 viewBox. 8px
-		// gives ~9× more (and smaller) octagons than the first v2.78.1 cut
-		// (24px read as too coarse): a finer mosaic that still only roughs
-		// out the continents, not the coastline. Cheap — the raster mask is
-		// O(pixels), the cost is just more static <path> nodes. Tunable.
-		octagonStepPx = 8
+		// v2.78.3 — octagon grid spacing over the 1200×600 viewBox, baked at
+		// 4px after live tuning via ?octastep= (24→8→4): the fine mosaic the
+		// operator settled on. ~13k static <path> on land — fine because the
+		// land test is an O(1) raster-mask pixel read (no per-cell
+		// geoContains, the v2.78.0 freeze). Still overridable with ?octastep=.
+		octagonStepPx = 4
 	}: Props = $props();
 
 	let svg: SVGSVGElement | undefined = $state();
