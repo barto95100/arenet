@@ -1032,9 +1032,6 @@
 		"countryPillLabelOne": "blocked (country)",
 		"countryPillLabelMany": "blocked (country)",
 		"wsLive": "Live",
-		"styleToggleTitle": "Switch map style (continents / octagons)",
-		"styleContinents": "Continents",
-		"styleOctagons": "Octagons",
 		"wsConnecting": "Connecting…",
 		"wsReconnecting": "Reconnecting…",
 		"wsOffline": "Offline"
