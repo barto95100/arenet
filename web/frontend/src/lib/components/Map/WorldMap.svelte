@@ -234,38 +234,57 @@
 	// State is imperative (plain Map + vars, NOT $state) so updating heat per
 	// event never re-triggers the reactive octagon paint (which would be an
 	// expensive full re-raster).
-	const OCTA_HOT = '#ff6a3d'; // density heat target
-	const OCTA_FLASH_SRC = '#ffd24a'; // source pulse
+	const OCTA_HOT = '#ff3b1f'; // density heat target (vivid red-orange)
+	const OCTA_FLASH_SRC = '#ffe24a'; // source pulse (bright)
 	const OCTA_FLASH_DST = '#8ad0ff'; // destination pulse (discreet)
-	const OCTA_PULSE_MS = 1200;
-	const OCTA_HEAT_MAX = 8; // attacks for a fully-hot tint
+	const OCTA_PULSE_MS = 1400;
+	const OCTA_HEAT_MAX = 4; // attacks for a fully-hot tint
+	const OCTA_POP_MIN_R = 10; // a pulse pops to at least this radius, so it's visible even on a fine grid
 	let octaCells: OctaCell[] = [];
 	let octaLandColor = '#334155'; // resolved --map-land, for heat interpolation
 	let octaDestIdx = -1; // octagon nearest the Arenet position
+	let octaR = 4; // current base octagon radius (set at paint)
 	const octaHeat = new Map<number, number>();
 
 	function octaFillForHeat(i: number): string {
 		const n = octaHeat.get(i) ?? 0;
 		if (n <= 0) return 'var(--map-land, var(--bg-surface))';
-		return d3.interpolateRgb(octaLandColor, OCTA_HOT)(Math.min(1, n / OCTA_HEAT_MAX));
+		// Even a single hit reads clearly warm (floor 0.45), fully hot by HEAT_MAX.
+		const t = Math.min(1, 0.45 + (0.55 * (n - 1)) / Math.max(1, OCTA_HEAT_MAX - 1));
+		return d3.interpolateRgb(octaLandColor, OCTA_HOT)(t);
 	}
 
-	// Flash one octagon, then ease back to its heat-tinted base. reduceMotion
-	// skips the animation and just applies the base. Safe if the cell is gone.
+	// Flash one octagon with a size POP + glow, then ease back to its
+	// heat-tinted base. reduceMotion skips the animation (base only). Safe if
+	// the cell is gone. The pop is visible even at a fine grid because it
+	// grows to at least OCTA_POP_MIN_R.
 	function octaPulse(i: number, flash: string): void {
-		if (!svg || i < 0) return;
+		if (!svg || i < 0 || i >= octaCells.length) return;
 		const p = d3.select(svg).select<SVGPathElement>(`g.octagons path[data-i="${i}"]`);
 		if (p.empty()) return;
+		const c = octaCells[i];
+		const base = octaFillForHeat(i);
 		if (reduceMotion) {
-			p.attr('fill', octaFillForHeat(i));
+			p.attr('fill', base);
 			return;
 		}
+		const popR = Math.max(octaR * 2.8, OCTA_POP_MIN_R);
 		p.interrupt()
 			.attr('fill', flash)
+			.attr('stroke', flash)
+			.attr('stroke-width', 1.5)
+			.attr('stroke-opacity', 0.9)
+			.attr('d', octagonPath(c.x, c.y, popR))
+			.raise() // bring the popping octagon above its neighbours
 			.transition()
 			.duration(OCTA_PULSE_MS)
 			.ease(d3.easeCubicOut)
-			.attr('fill', octaFillForHeat(i));
+			.attrTween('d', () => (tt: number) => octagonPath(c.x, c.y, popR - (popR - octaR) * tt))
+			.attr('fill', base)
+			.attr('stroke-opacity', 0)
+			.on('end', function () {
+				d3.select(this).attr('stroke', 'none');
+			});
 	}
 
 	// v2.78.1 — octagon dot-matrix paint, via a RASTER land-mask.
@@ -329,6 +348,7 @@
 			if (a) octaDestIdx = nearestCellIndex(cells, a[0], a[1]);
 		}
 		const r = octagonStepPx * 0.42;
+		octaR = r;
 		g.selectAll<SVGPathElement, OctaCell>('path')
 			.data(cells)
 			.join('path')
