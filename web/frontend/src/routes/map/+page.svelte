@@ -117,12 +117,13 @@
 
 	function pushDemoEvent(): void {
 		const [lat, lon, city] = DEMO_SOURCES[Math.floor(Math.random() * DEMO_SOURCES.length)];
+		const jit = () => (Math.random() - 0.5) * 8; // ±4° so pulses scatter around each city
 		const ev: GeoEvent = {
 			timestamp: new Date().toISOString(),
 			category: DEMO_CATEGORIES[Math.floor(Math.random() * DEMO_CATEGORIES.length)],
 			sourceIp: '203.0.113.' + (1 + Math.floor(Math.random() * 254)),
-			sourceLat: lat,
-			sourceLon: lon,
+			sourceLat: lat + jit(),
+			sourceLon: lon + jit(),
 			sourceCountry: 'XX',
 			sourceCity: city,
 			isLan: false,
@@ -133,6 +134,11 @@
 		events = next;
 	}
 
+	// A storm: several attacks at once so the map is unmistakably alive.
+	function pushDemoBurst(n: number): void {
+		for (let k = 0; k < n; k++) pushDemoEvent();
+	}
+
 	onMount(async () => {
 		try {
 			const params = new URLSearchParams(window.location.search);
@@ -140,7 +146,10 @@
 			const n = q ? parseInt(q, 10) : NaN;
 			if (Number.isFinite(n) && n >= 4 && n <= 40) octaStepOverride = n;
 			if (params.get('octademo') === '1') {
-				demoTimer = setInterval(pushDemoEvent, 700);
+				// Opening salvo so the storm is obvious from the first frame,
+				// then a steady 2–4 attacks every ~350 ms from scattered cities.
+				pushDemoBurst(18);
+				demoTimer = setInterval(() => pushDemoBurst(2 + Math.floor(Math.random() * 3)), 350);
 			}
 		} catch {
 			// no URL / blocked — the baked default stands.
