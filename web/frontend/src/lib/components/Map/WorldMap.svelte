@@ -140,11 +140,12 @@
 		topojsonUrl = '/world-50m.topo.json',
 		events = [],
 		mapStyle = 'continents',
-		// v2.78.1 — a deliberately COARSE grid: the octagon style is meant
-		// to rough out the continents as a mosaic, not trace the detailed
-		// coastline. A larger step downsamples the land silhouette into
-		// chunky blocks (and is cheaper). Tunable per taste.
-		octagonStepPx = 24
+		// v2.78.2 — octagon grid spacing over the 1200×600 viewBox. 8px
+		// gives ~9× more (and smaller) octagons than the first v2.78.1 cut
+		// (24px read as too coarse): a finer mosaic that still only roughs
+		// out the continents, not the coastline. Cheap — the raster mask is
+		// O(pixels), the cost is just more static <path> nodes. Tunable.
+		octagonStepPx = 8
 	}: Props = $props();
 
 	let svg: SVGSVGElement | undefined = $state();
