@@ -154,6 +154,40 @@ SecLang runs **after** the targeted exclusions and guided rules and **before** t
 
 ---
 
+## Virtual-patching upstream CVEs (worked example)
+
+Arenet is a single Go binary — it does **not** run PHP or Node, so interpreter CVEs like these never touch Arenet itself. But as the reverse proxy in front of your apps it can **virtually patch** some of them for the backends behind it, buying time until you update the backend. This is defence-in-depth, **not** a replacement for patching the vulnerable app.
+
+Two real cases from the October 2026 "Black October" wave. Paste the rule into a route's **SecLang (advanced)** editor, start the route in **detect**, confirm with **Test a request**, then switch to **block**. The rules are per-route, so scope them to the routes that actually front the affected app.
+
+### Node.js "Node2Shell" — CVE-2026-111497 (effective)
+
+An out-of-bounds write in Node's bundled Brotli decoder: a single Brotli-encoded request body reaching the decoder (Express 5 / `body-parser` 2.x decode `Content-Encoding: br` by default, so `express.json()` alone is enough) yields RCE. Clients almost never Brotli-**encode** request bodies, so rejecting them at the edge removes the inbound attack surface with negligible collateral:
+
+```seclang
+SecRule REQUEST_HEADERS:Content-Encoding "@rx (?i)(^|[,\s])br([,;\s]|$)" "id:130201,phase:1,deny,status:415,log,msg:'Block Brotli-encoded request body (Node2Shell CVE-2026-111497)',tag:'cve-2026-111497'"
+```
+
+Rejects `Content-Encoding: br` (and `gzip, br`) at phase 1, before the body is read, with `415`. **Caveat**: covers **inbound** request bodies only — it cannot protect content your app itself fetches and Brotli-decodes from an external server (`fetch()` / undici). Patch Node to **22.23.4 / 24.22.1 / 26.12.1**.
+
+### PHP "PHP2Shell" — CVE-2026-109618 / 109619 (partial — speed-bump only)
+
+Memory-corruption bugs in the PHP interpreter core (a use-after-free reached through PHP's `session.upload_progress`, plus an out-of-memory path), both unauthenticated RCE. The bug lives below userland, so a WAF signature cannot be a reliable fix — it only raises the bar against the **known public** exploitation path, which rides a multipart field named `PHP_SESSION_UPLOAD_PROGRESS`:
+
+```seclang
+SecRule ARGS_NAMES "@rx (?i)PHP_SESSION_UPLOAD_PROGRESS" "id:130202,phase:2,deny,status:403,log,msg:'Block PHP session.upload_progress abuse (PHP2Shell CVE-2026-109619)',tag:'cve-2026-109619'"
+```
+
+**Read before deploying:**
+
+- It blocks **one** exploitation technique, not the vulnerability. CVE-2026-109618 (OOM path) has no reliable request signature; the only blunt lever there is a request-body size limit on the upload endpoint.
+- `PHP_SESSION_UPLOAD_PROGRESS` is a **legitimate** PHP feature. If an app behind the route genuinely uses upload progress, this rule breaks those uploads — hence per-route scoping and **detect** first.
+- Nothing here replaces updating PHP to the fixed release.
+
+> Both rules were validated against Arenet's own SecLang allowlist and Coraza engine: they pass the editor's check, block the attack shape, and leave a normal request untouched. Run **Test a request** on your route to see the same before switching to block.
+
+---
+
 ## CRS paranoia levels
 
 OWASP CRS supports four paranoia levels (PL1–PL4) controlling the strictness :
