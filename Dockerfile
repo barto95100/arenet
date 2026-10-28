@@ -5,7 +5,7 @@
 # Step S.1 — Multi-arch Docker image (linux/amd64 + linux/arm64).
 #
 # Three stages:
-#   1. frontend — Node 20 Alpine builds the SvelteKit SPA into
+#   1. frontend — Node 24 Alpine builds the SvelteKit SPA into
 #      web/frontend/build/. The build is consumed by stage 2 via
 #      COPY --from=frontend.
 #   2. backend — Go 1.26 Alpine compiles the static binary with
