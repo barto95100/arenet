@@ -525,6 +525,13 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 				// v2.50 — the HTTP access log CrowdSec parses.
 				r.Get("/settings/access-log", h.getAccessLogConfig)
 				r.Put("/settings/access-log", h.putAccessLogConfig)
+				// v2.80 — read-only access-log viewer. Admin-only (raw
+				// request logs, same posture as /admin/backup). Lazy: the
+				// Logs page fetches nothing until the operator clicks. The
+				// client sends only query params, never a path — the file is
+				// resolved server-side, so there is no traversal surface.
+				r.Get("/admin/access-log/tail", h.getAccessLogTail)
+				r.Get("/admin/access-log/search", h.getAccessLogSearch)
 				r.Get("/settings/backup-schedule", h.getBackupSchedule)
 				r.Put("/settings/backup-schedule", h.putBackupSchedule)
 				r.Post("/admin/backups/run", h.runBackupNow)
