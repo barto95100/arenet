@@ -96,4 +96,24 @@ describe('AccessLogPanel', () => {
 		expect(searchMock).toHaveBeenCalledWith('ip', '10.0.0.2', 200);
 		expect(tailMock).not.toHaveBeenCalled();
 	});
+
+	// v2.80 bugfix — the Logs page is a strict viewport-fit (no page
+	// scroll); the panel sits below a flex:1 area, so when it expands
+	// its results render under the fold with no way to reach them. The
+	// fix reverts the shell to natural scroll via a `:has()` selector
+	// that keys off an `is-open` class on the panel root. This guards
+	// that load-bearing hook: lose the class and the CSS unlock dies
+	// silently (jsdom cannot prove the layout, only the hook).
+	it('marks the root with "is-open" only while expanded', async () => {
+		render(AccessLogPanel);
+		const region = screen.getByRole('region', { name: /Access log/i });
+		expect(region).toHaveClass('access-log-panel');
+		expect(region).not.toHaveClass('is-open');
+
+		await openPanel();
+		expect(region).toHaveClass('is-open');
+
+		await openPanel();
+		expect(region).not.toHaveClass('is-open');
+	});
 });
