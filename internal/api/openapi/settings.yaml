@@ -80,6 +80,78 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '500': { $ref: '#/components/responses/ServerError' }
 
+  # ------------------------------------------------ access-log viewer (v2.80)
+  /admin/access-log/tail:
+    get:
+      summary: Tail the current access-log file
+      description: |
+        The last N lines of the **current** access-log file only (never a
+        rotated sibling), read from the end so a multi-gigabyte log is not
+        loaded. Admin-only — raw request logs are an admin surface, same
+        posture as the backup endpoints.
+
+        Returns an explicit empty result with a `reason` when the access
+        log is disabled or the file is absent, rather than an error.
+      tags: [Settings]
+      x-arenet-role: admin
+      parameters:
+        - name: lines
+          in: query
+          required: false
+          description: How many lines to return (default 200, clamped to 1-1000).
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        '200':
+          description: The tail of the current file (or an empty, disabled result).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccessLogTail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /admin/access-log/search:
+    get:
+      summary: Search the access log
+      description: |
+        Look up a request id, client IP, or path across the current log and
+        its rotated siblings. The search is tiered: the current file plus
+        uncompressed rotated files first, and gzipped rotated files only
+        when that found nothing (incidents are usually reported quickly, so
+        the hit is almost always recent). A `uuid` search stops at the first
+        match; `ip`/`path` collect up to `max`, bounded by a byte budget and
+        a wall-clock deadline, with the metadata reporting truncation
+        honestly. Admin-only. The client never sends a path — the file is
+        resolved server-side, so there is no traversal surface.
+      tags: [Settings]
+      x-arenet-role: admin
+      parameters:
+        - name: field
+          in: query
+          required: true
+          description: Which field to match.
+          schema: { type: string, enum: [uuid, ip, path] }
+        - name: q
+          in: query
+          required: true
+          description: The value to search for.
+          schema: { type: string }
+        - name: max
+          in: query
+          required: false
+          description: Max matches for ip/path (default 200, clamped to 1-1000); ignored for uuid (stops at first).
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        '200':
+          description: Matches plus honest search metadata (or an empty, disabled result).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccessLogSearch' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
   # ---------------------------------------------------------------- DNS providers
   /settings/dns-providers:
     get:
@@ -1153,6 +1225,52 @@ components:
               type: integer
               description: 'Worst case on disk before compression: rollSizeMB x (rollKeep + 1).'
               example: 60
+
+    # ------------------------------------------------- access-log viewer (v2.80)
+    AccessLogEntry:
+      type: object
+      description: One parsed access-log line, display-ready; `raw` is the on-disk JSON.
+      required: [ts, method, uri, clientIp, status, raw]
+      properties:
+        ts: { type: number, description: 'Unix timestamp (seconds, fractional).' }
+        method: { type: string }
+        uri: { type: string }
+        clientIp: { type: string }
+        status: { type: integer }
+        uuid:
+          type: string
+          description: The request id (Caddy's {http.request.uuid}); present on Arenet error-page responses.
+        denied:
+          type: string
+          description: 'The Arenet gate that refused the request (arenet_denied): waf, country, …'
+        raw: { type: string, description: The verbatim log line (already REDACTED on disk). }
+    AccessLogTail:
+      type: object
+      required: [enabled, path, lines]
+      properties:
+        enabled: { type: boolean, description: Whether the access log is enabled. }
+        reason: { type: string, description: Why the result is empty (e.g. the log is disabled). }
+        path: { type: string, description: The resolved access-log file path. }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/AccessLogEntry' }
+    AccessLogSearch:
+      type: object
+      required: [enabled, path, field, query, lines, filesScanned, bytesScanned, truncated, searchedCompressed, elapsedMs]
+      properties:
+        enabled: { type: boolean }
+        reason: { type: string }
+        path: { type: string }
+        field: { type: string, enum: [uuid, ip, path] }
+        query: { type: string }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/AccessLogEntry' }
+        filesScanned: { type: integer, description: How many files were opened and read. }
+        bytesScanned: { type: integer, description: 'Bytes read (decompressed, for .gz).' }
+        truncated: { type: boolean, description: True when a cap (max/bytes/deadline) stopped the search early. }
+        searchedCompressed: { type: boolean, description: True when the cold (.gz) tier was searched — the hot tier missed. }
+        elapsedMs: { type: integer }
 
     # ---------------------------------------------------------- DNS providers
     SettingsDNSProvider:

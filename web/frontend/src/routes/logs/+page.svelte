@@ -41,6 +41,7 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import RouteHost from '$lib/components/RouteHost.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import AccessLogPanel from '$lib/components/AccessLogPanel.svelte';
 	import { listRoutes } from '$lib/api/client';
 	import {
 		fetchEvents,
@@ -1016,6 +1017,12 @@
 	/>
 </div>
 </div><!-- /.activity-area -->
+
+{#if isAdmin}
+	<!-- v2.80 — raw access-log viewer, admin-only. Lazy: fetches
+	     nothing until the operator clicks (see AccessLogPanel). -->
+	<AccessLogPanel />
+{/if}
 
 </div><!-- /.logs-page -->
 
