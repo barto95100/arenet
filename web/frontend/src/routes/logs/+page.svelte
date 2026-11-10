@@ -1259,6 +1259,43 @@
 		.histogram-card { min-height: 220px; }
 	}
 
+	/* v2.80 — unlock page scroll when the admin access-log panel is
+	   expanded. The Z.5.7 strict viewport-fit (no page scroll; the
+	   activity table scrolls internally) pins .app-shell / .app-col /
+	   .app-main to the viewport with overflow:hidden. The access-log
+	   panel is mounted below .activity-area (flex:1), so once expanded
+	   its results fall under the fold with no reachable scroll — the
+	   page looks frozen (only the sidebar, outside .app-main, still
+	   responds). When the panel is open we revert the shell to the
+	   natural-scroll layout (same shape as the <900px fallback above)
+	   so the operator can scroll down to the raw log. Collapsed, the
+	   viewport-fit still holds. The hook is the `is-open` class on the
+	   panel root (guarded in AccessLogPanel.test.ts). */
+	:global(.app-shell:has(.logs-page .access-log-panel.is-open)) {
+		height: auto;
+		overflow: visible;
+	}
+	:global(.app-col:has(.logs-page .access-log-panel.is-open)) {
+		overflow: visible;
+	}
+	:global(.app-main:has(.logs-page .access-log-panel.is-open)) {
+		height: auto;
+		max-height: none;
+		overflow: visible;
+	}
+	.logs-page:has(.access-log-panel.is-open) {
+		height: auto;
+	}
+	.logs-page:has(.access-log-panel.is-open) .activity-area {
+		flex: none;
+	}
+	.logs-page:has(.access-log-panel.is-open) .log-card {
+		min-height: 480px;
+	}
+	.logs-page:has(.access-log-panel.is-open) .histogram-card {
+		min-height: 220px;
+	}
+
 	/* Z.5.6 — table claims 70 % of the activity area,
 	   histogram 30 %. min-height:0 is load-bearing on flex
 	   children so the inner scroll container (.logs) can

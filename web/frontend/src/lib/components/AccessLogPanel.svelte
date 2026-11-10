@@ -92,7 +92,8 @@
 </script>
 
 <section
-	class="rounded-xl border border-border-default bg-surface"
+	class="access-log-panel rounded-xl border border-border-default bg-surface"
+	class:is-open={open}
 	aria-label={language.current && t('logs.accessLog.title')}
 >
 	<button
@@ -178,7 +179,7 @@
 						{/if}
 					</p>
 				{/if}
-				<div class="overflow-x-auto">
+				<div class="max-h-[32rem] overflow-auto">
 					<table class="w-full min-w-[640px] border-collapse text-left font-mono text-xs">
 						<thead>
 							<tr class="text-secondary">
