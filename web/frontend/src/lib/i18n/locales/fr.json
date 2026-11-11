@@ -2581,8 +2581,12 @@
 			"colUri": "Chemin",
 			"colClientIp": "IP client",
 			"colGate": "Bloqué par",
-			"gatePillTitle": "La barrière Arenet qui a refusé cette requête"
+			"gatePillTitle": "La barrière Arenet qui a refusé cette requête",
+			"idleHint": "Cliquez sur « Afficher les dernières » ou lancez une recherche pour consulter le journal d'accès brut."
 		},
+		"viewActivity": "Activité",
+		"viewAccessLog": "Journal d'accès",
+		"viewTabsAria": "Vue des journaux",
 		"revealSourceIP": "Afficher l’adresse source complète",
 		"pageEyebrow": "Trafic · Journaux",
 		"pageTitle": "Journal d'activité",

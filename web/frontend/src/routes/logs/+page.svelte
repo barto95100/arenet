@@ -204,6 +204,12 @@
 	const isAdmin = $derived(auth.user?.role === 'admin');
 	let excludeEvent = $state<WafEvent | null>(null);
 
+	// v2.80.2 — top-level view selector (admin-only). The activity log
+	// and the raw access-log viewer are mutually-exclusive views so each
+	// keeps the page's strict viewport fit instead of stacking and
+	// forcing a page scroll. Non-admins never leave 'activity'.
+	let logView = $state<'activity' | 'access'>('activity');
+
 	// Phase Z.5.3 — IP → country code cache, populated by
 	// the lookup-batch endpoint after each event load. A
 	// missing key means "not yet resolved" ; an empty
@@ -739,15 +745,50 @@
 >
 	{#snippet actions()}
 		<!-- v2.41 — was a page-local .tb-btn copy of Button. -->
-		<Button variant="secondary" size="sm" onclick={togglePause}>
-			{language.current && (paused ? t('logs.btnResume') : t('logs.btnPause'))}
-		</Button>
-		<Button variant="secondary" size="sm" disabled title={language.current && t('logs.btnExportTooltip')}
-			>{language.current && t('logs.btnExport')}</Button
-		>
+		<!-- v2.80.2 — Pause/Export govern the activity poll only; hidden
+		     on the access-log view where they would act on a stream the
+		     operator can't see. -->
+		{#if logView === 'activity'}
+			<Button variant="secondary" size="sm" onclick={togglePause}>
+				{language.current && (paused ? t('logs.btnResume') : t('logs.btnPause'))}
+			</Button>
+			<Button variant="secondary" size="sm" disabled title={language.current && t('logs.btnExportTooltip')}
+				>{language.current && t('logs.btnExport')}</Button
+			>
+		{/if}
 	{/snippet}
 </PageHeader>
 
+{#if isAdmin}
+	<!-- v2.80.2 — top-level view selector, mirroring the Error Pages
+	     Templates/Maintenance tabs. Switches the page between the
+	     activity log and the raw access-log viewer; each view is
+	     viewport-fit on its own, so neither forces a page scroll. -->
+	<div class="card view-tabs-card">
+		<div class="view-tabs" role="tablist" aria-label={language.current && t('logs.viewTabsAria')}>
+			<button
+				role="tab"
+				aria-selected={logView === 'activity'}
+				class="view-tab"
+				class:active={logView === 'activity'}
+				onclick={() => (logView = 'activity')}
+			>
+				{language.current && t('logs.viewActivity')}
+			</button>
+			<button
+				role="tab"
+				aria-selected={logView === 'access'}
+				class="view-tab"
+				class:active={logView === 'access'}
+				onclick={() => (logView = 'access')}
+			>
+				{language.current && t('logs.viewAccessLog')}
+			</button>
+		</div>
+	</div>
+{/if}
+
+{#if logView === 'activity'}
 <div class="card filters">
 	<div class="filters-row">
 		<div class="search-inline">
@@ -1017,10 +1058,11 @@
 	/>
 </div>
 </div><!-- /.activity-area -->
-
-{#if isAdmin}
-	<!-- v2.80 — raw access-log viewer, admin-only. Lazy: fetches
-	     nothing until the operator clicks (see AccessLogPanel). -->
+{:else}
+	<!-- v2.80.2 — raw access-log viewer, admin-only (gated by the
+	     selector above, which only renders for admins; the server also
+	     enforces admin). Lazy: fetches nothing until the operator
+	     clicks inside the panel. -->
 	<AccessLogPanel />
 {/if}
 
@@ -1052,6 +1094,38 @@
 	.card.filters {
 		padding: 14px 16px;
 		margin-bottom: 14px;
+	}
+
+	/* v2.80.2 — top-level view selector (Activity / Access log),
+	   matching the Error Pages Templates/Maintenance tab style. */
+	.view-tabs-card {
+		padding: 8px;
+	}
+	.view-tabs {
+		display: inline-flex;
+		gap: 2px;
+		padding: 2px;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+	}
+	.view-tab {
+		padding: 6px 16px;
+		border-radius: 999px;
+		background: transparent;
+		border: none;
+		color: var(--fg-dim);
+		cursor: pointer;
+		font-size: 13px;
+		font-weight: 500;
+	}
+	.view-tab:hover {
+		color: var(--fg);
+	}
+	.view-tab.active {
+		background: var(--surface-hi);
+		color: var(--fg);
+		box-shadow: inset 0 0 0 1px var(--border-hi);
 	}
 	.filters-row {
 		display: flex;
@@ -1257,43 +1331,6 @@
 		}
 		.log-card { min-height: 480px; }
 		.histogram-card { min-height: 220px; }
-	}
-
-	/* v2.80 — unlock page scroll when the admin access-log panel is
-	   expanded. The Z.5.7 strict viewport-fit (no page scroll; the
-	   activity table scrolls internally) pins .app-shell / .app-col /
-	   .app-main to the viewport with overflow:hidden. The access-log
-	   panel is mounted below .activity-area (flex:1), so once expanded
-	   its results fall under the fold with no reachable scroll — the
-	   page looks frozen (only the sidebar, outside .app-main, still
-	   responds). When the panel is open we revert the shell to the
-	   natural-scroll layout (same shape as the <900px fallback above)
-	   so the operator can scroll down to the raw log. Collapsed, the
-	   viewport-fit still holds. The hook is the `is-open` class on the
-	   panel root (guarded in AccessLogPanel.test.ts). */
-	:global(.app-shell:has(.logs-page .access-log-panel.is-open)) {
-		height: auto;
-		overflow: visible;
-	}
-	:global(.app-col:has(.logs-page .access-log-panel.is-open)) {
-		overflow: visible;
-	}
-	:global(.app-main:has(.logs-page .access-log-panel.is-open)) {
-		height: auto;
-		max-height: none;
-		overflow: visible;
-	}
-	.logs-page:has(.access-log-panel.is-open) {
-		height: auto;
-	}
-	.logs-page:has(.access-log-panel.is-open) .activity-area {
-		flex: none;
-	}
-	.logs-page:has(.access-log-panel.is-open) .log-card {
-		min-height: 480px;
-	}
-	.logs-page:has(.access-log-panel.is-open) .histogram-card {
-		min-height: 220px;
 	}
 
 	/* Z.5.6 — table claims 70 % of the activity area,

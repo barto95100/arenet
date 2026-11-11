@@ -7,9 +7,19 @@
 
   The Logs page unifies internal event streams; it is NOT the raw
   access log. This panel adds a bounded view of the real access-log
-  file on disk — but it fetches NOTHING on mount: content loads only
-  when the operator clicks "Show latest" or runs a search. That keeps
-  opening the Logs page from ever streaming a multi-gigabyte file.
+  file on disk.
+
+  v2.80.2 — the viewer is now one of two top-level views on the Logs
+  page (an "Activity" / "Access log" selector, admin-only), instead of
+  a collapsible section stacked under the activity table. The parent
+  decides when it is shown; this component only renders its controls +
+  results and fills the flex slot it is given, its result list
+  scrolling internally so the page keeps its strict viewport fit.
+
+  It still fetches NOTHING on its own: selecting the view shows only
+  the controls, and content loads only when the operator clicks "Show
+  latest" or runs a search. That keeps opening the Logs page (or this
+  view) from ever streaming a multi-gigabyte file.
 
   The mount is gated to admins by the parent page; the server also
   enforces admin on every request regardless.
@@ -29,7 +39,6 @@
 		type AccessLogTailResponse
 	} from '$lib/api/accessLog';
 
-	let open = $state(false);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let field = $state<AccessLogField>('uuid');
@@ -91,129 +100,276 @@
 	}
 </script>
 
-<section
-	class="access-log-panel rounded-xl border border-border-default bg-surface"
-	class:is-open={open}
-	aria-label={language.current && t('logs.accessLog.title')}
->
-	<button
-		type="button"
-		class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-		aria-expanded={open}
-		onclick={() => (open = !open)}
-	>
-		<span class="flex flex-col">
-			<span class="text-sm font-semibold text-primary"
-				>{language.current && t('logs.accessLog.title')}</span
-			>
-			<span class="text-xs text-secondary"
-				>{language.current && t('logs.accessLog.subtitle')}</span
-			>
-		</span>
-		<span class="text-secondary" aria-hidden="true">{open ? '▾' : '▸'}</span>
-	</button>
-
-	{#if open}
-		<div class="flex flex-col gap-3 border-t border-border-default px-4 py-3">
-			<div class="flex flex-wrap items-end gap-2">
-				<form class="flex flex-wrap items-end gap-2" onsubmit={onSearchSubmit}>
-					<label class="flex flex-col gap-1 text-xs text-secondary">
-						{language.current && t('logs.accessLog.fieldLabel')}
-						<select
-							bind:value={field}
-							class="rounded-md border border-border-default bg-elevated px-2 py-1.5 text-sm text-primary"
-							aria-label={language.current && t('logs.accessLog.fieldLabel')}
-						>
-							<option value="uuid">{language.current && t('logs.accessLog.fieldUuid')}</option>
-							<option value="ip">{language.current && t('logs.accessLog.fieldIp')}</option>
-							<option value="path">{language.current && t('logs.accessLog.fieldPath')}</option>
-						</select>
-					</label>
-					<label class="flex min-w-0 flex-1 flex-col gap-1 text-xs text-secondary">
-						{language.current && t('logs.accessLog.queryLabel')}
-						<input
-							bind:value={query}
-							type="text"
-							class="w-full rounded-md border border-border-default bg-elevated px-2 py-1.5 font-mono text-sm text-primary"
-							placeholder={language.current && t('logs.accessLog.queryPlaceholder')}
-							aria-label={language.current && t('logs.accessLog.queryLabel')}
-						/>
-					</label>
-					<Button type="submit" variant="primary" size="sm" disabled={loading || !query.trim()}>
-						{language.current && t('logs.accessLog.btnSearch')}
-					</Button>
-				</form>
-				<Button variant="secondary" size="sm" disabled={loading} onclick={showLatest}>
-					{language.current && t('logs.accessLog.btnShowLatest')}
+<section class="access-log-view" aria-label={language.current && t('logs.accessLog.title')}>
+	<div class="alv-controls">
+		<p class="alv-subtitle">{language.current && t('logs.accessLog.subtitle')}</p>
+		<div class="alv-controls-row">
+			<form class="alv-form" onsubmit={onSearchSubmit}>
+				<label class="alv-field">
+					{language.current && t('logs.accessLog.fieldLabel')}
+					<select
+						bind:value={field}
+						aria-label={language.current && t('logs.accessLog.fieldLabel')}
+					>
+						<option value="uuid">{language.current && t('logs.accessLog.fieldUuid')}</option>
+						<option value="ip">{language.current && t('logs.accessLog.fieldIp')}</option>
+						<option value="path">{language.current && t('logs.accessLog.fieldPath')}</option>
+					</select>
+				</label>
+				<label class="alv-field alv-query">
+					{language.current && t('logs.accessLog.queryLabel')}
+					<input
+						bind:value={query}
+						type="text"
+						placeholder={language.current && t('logs.accessLog.queryPlaceholder')}
+						aria-label={language.current && t('logs.accessLog.queryLabel')}
+					/>
+				</label>
+				<Button type="submit" variant="primary" size="sm" disabled={loading || !query.trim()}>
+					{language.current && t('logs.accessLog.btnSearch')}
 				</Button>
-			</div>
-
-			{#if loading}
-				<div class="flex items-center gap-2 py-6 text-sm text-secondary">
-					<Spinner />
-					<span>{language.current && t('logs.accessLog.loading')}</span>
-				</div>
-			{:else if error}
-				<p class="py-4 text-sm text-down" role="alert">{error}</p>
-			{:else if disabledOnServer}
-				<p class="py-4 text-sm text-secondary">
-					{language.current && t('logs.accessLog.disabled')}
-				</p>
-			{:else if result && entries.length === 0}
-				<p class="py-4 text-sm text-secondary">
-					{language.current && t('logs.accessLog.noMatch')}
-				</p>
-			{:else if entries.length > 0}
-				{#if searchMeta}
-					<p class="text-xs text-secondary" role="status">
-						{language.current &&
-							t('logs.accessLog.meta', {
-								files: searchMeta.filesScanned,
-								ms: searchMeta.elapsedMs
-							})}
-						{#if searchMeta.searchedCompressed}
-							· {language.current && t('logs.accessLog.alsoCompressed')}
-						{/if}
-						{#if searchMeta.truncated}
-							· {language.current && t('logs.accessLog.truncated')}
-						{/if}
-					</p>
-				{/if}
-				<div class="max-h-[32rem] overflow-auto">
-					<table class="w-full min-w-[640px] border-collapse text-left font-mono text-xs">
-						<thead>
-							<tr class="text-secondary">
-								<th class="px-2 py-1 font-medium">{language.current && t('logs.accessLog.colTime')}</th>
-								<th class="px-2 py-1 font-medium">{language.current && t('logs.accessLog.colMethod')}</th>
-								<th class="px-2 py-1 font-medium">{language.current && t('logs.accessLog.colStatus')}</th>
-								<th class="px-2 py-1 font-medium">{language.current && t('logs.accessLog.colUri')}</th>
-								<th class="px-2 py-1 font-medium">{language.current && t('logs.accessLog.colClientIp')}</th>
-								<th class="px-2 py-1 font-medium">{language.current && t('logs.accessLog.colGate')}</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each entries as e, i (i)}
-								<tr class="border-t border-border-default align-top">
-									<td class="whitespace-nowrap px-2 py-1 text-secondary">{formatTime(e.ts)}</td>
-									<td class="px-2 py-1">{e.method}</td>
-									<td class="px-2 py-1">{e.status}</td>
-									<td class="max-w-[28rem] break-all px-2 py-1">{e.uri}</td>
-									<td class="whitespace-nowrap px-2 py-1">{e.clientIp}</td>
-									<td class="px-2 py-1">
-										{#if e.denied}
-											<span
-												class="rounded bg-elevated px-1.5 py-0.5 text-[0.7rem] text-down"
-												title={language.current && t('logs.accessLog.gatePillTitle')}
-												>{e.denied}</span
-											>
-										{/if}
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
+			</form>
+			<Button variant="secondary" size="sm" disabled={loading} onclick={showLatest}>
+				{language.current && t('logs.accessLog.btnShowLatest')}
+			</Button>
 		</div>
-	{/if}
+	</div>
+
+	<div class="alv-results card">
+		{#if loading}
+			<div class="alv-center">
+				<Spinner />
+				<span>{language.current && t('logs.accessLog.loading')}</span>
+			</div>
+		{:else if error}
+			<p class="alv-center alv-error" role="alert">{error}</p>
+		{:else if disabledOnServer}
+			<p class="alv-center alv-muted">
+				{language.current && t('logs.accessLog.disabled')}
+			</p>
+		{:else if result && entries.length === 0}
+			<p class="alv-center alv-muted">
+				{language.current && t('logs.accessLog.noMatch')}
+			</p>
+		{:else if entries.length > 0}
+			{#if searchMeta}
+				<p class="alv-meta" role="status">
+					{language.current &&
+						t('logs.accessLog.meta', {
+							files: searchMeta.filesScanned,
+							ms: searchMeta.elapsedMs
+						})}
+					{#if searchMeta.searchedCompressed}
+						· {language.current && t('logs.accessLog.alsoCompressed')}
+					{/if}
+					{#if searchMeta.truncated}
+						· {language.current && t('logs.accessLog.truncated')}
+					{/if}
+				</p>
+			{/if}
+			<div class="alv-table-wrap">
+				<table class="alv-table">
+					<thead>
+						<tr>
+							<th>{language.current && t('logs.accessLog.colTime')}</th>
+							<th>{language.current && t('logs.accessLog.colMethod')}</th>
+							<th>{language.current && t('logs.accessLog.colStatus')}</th>
+							<th>{language.current && t('logs.accessLog.colUri')}</th>
+							<th>{language.current && t('logs.accessLog.colClientIp')}</th>
+							<th>{language.current && t('logs.accessLog.colGate')}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each entries as e, i (i)}
+							<tr>
+								<td class="alv-nowrap alv-muted">{formatTime(e.ts)}</td>
+								<td>{e.method}</td>
+								<td>{e.status}</td>
+								<td class="alv-uri">{e.uri}</td>
+								<td class="alv-nowrap">{e.clientIp}</td>
+								<td>
+									{#if e.denied}
+										<span
+											class="alv-gate"
+											title={language.current && t('logs.accessLog.gatePillTitle')}
+											>{e.denied}</span
+										>
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{:else}
+			<p class="alv-center alv-muted">
+				{language.current && t('logs.accessLog.idleHint')}
+			</p>
+		{/if}
+	</div>
 </section>
+
+<style>
+	.access-log-view {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		flex: 1;
+		min-height: 0;
+		height: 100%;
+	}
+
+	.alv-controls {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.alv-subtitle {
+		margin: 0;
+		font-size: 12.5px;
+		color: var(--fg-muted);
+	}
+	.alv-controls-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: end;
+		gap: 10px;
+	}
+	.alv-form {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: end;
+		gap: 10px;
+		flex: 1;
+		min-width: 0;
+	}
+	.alv-field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		font-size: 11px;
+		color: var(--fg-muted);
+	}
+	.alv-query {
+		flex: 1;
+		min-width: 200px;
+	}
+	.alv-field select,
+	.alv-field input {
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm, 8px);
+		color: var(--fg);
+		font-size: 13px;
+		padding: 6px 10px;
+	}
+	.alv-field input {
+		font-family: var(--font-mono);
+	}
+	.alv-field select:focus-visible,
+	.alv-field input:focus-visible {
+		outline: none;
+		border-color: var(--accent-cyan);
+	}
+
+	/* The results card fills the remaining viewport height and scrolls
+	   internally, so the page keeps its strict viewport fit (no page
+	   scroll) just like the activity view. */
+	.alv-results {
+		flex: 1;
+		min-height: 0;
+		overflow: auto;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: 0;
+	}
+
+	.alv-center {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		min-height: 160px;
+		padding: 32px 16px;
+		font-size: 13px;
+		color: var(--fg);
+		text-align: center;
+	}
+	.alv-muted {
+		color: var(--fg-muted);
+	}
+	.alv-error {
+		color: var(--status-down);
+	}
+
+	.alv-meta {
+		margin: 0;
+		padding: 10px 16px;
+		font-size: 11px;
+		color: var(--fg-muted);
+		border-bottom: 1px solid var(--border);
+	}
+
+	.alv-table-wrap {
+		overflow-x: auto;
+	}
+	.alv-table {
+		width: 100%;
+		min-width: 640px;
+		border-collapse: collapse;
+		font-family: var(--font-mono);
+		font-size: 11.5px;
+		text-align: left;
+	}
+	.alv-table thead th {
+		position: sticky;
+		top: 0;
+		background: var(--bg-elevated);
+		color: var(--fg-dim);
+		font-weight: 500;
+		font-size: 10.5px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		padding: 8px 10px;
+		border-bottom: 1px solid var(--border);
+		z-index: 1;
+	}
+	.alv-table tbody td {
+		padding: 6px 10px;
+		border-bottom: 1px solid var(--border);
+		vertical-align: top;
+		color: var(--fg);
+	}
+	.alv-table tbody tr:last-child td {
+		border-bottom: none;
+	}
+	.alv-nowrap {
+		white-space: nowrap;
+	}
+	.alv-uri {
+		max-width: 28rem;
+		word-break: break-all;
+	}
+	.alv-gate {
+		display: inline-block;
+		background: color-mix(in oklch, var(--status-down) 18%, transparent);
+		color: var(--status-down);
+		border-radius: 4px;
+		padding: 1px 6px;
+		font-size: 10.5px;
+	}
+
+	/* Narrow screens: the Logs page drops its strict viewport fit and
+	   scrolls naturally (see the <900px rule on the page), so the
+	   results stop claiming the viewport and grow with the page. */
+	@media (max-width: 900px) {
+		.access-log-view {
+			flex: none;
+		}
+		.alv-results {
+			overflow: visible;
+			min-height: 420px;
+		}
+	}
+</style>
