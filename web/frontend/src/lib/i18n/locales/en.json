@@ -2581,8 +2581,12 @@
 			"colUri": "Path",
 			"colClientIp": "Client IP",
 			"colGate": "Blocked by",
-			"gatePillTitle": "The Arenet gate that refused this request"
+			"gatePillTitle": "The Arenet gate that refused this request",
+			"idleHint": "Click “Show latest” or run a search to view the raw access log."
 		},
+		"viewActivity": "Activity",
+		"viewAccessLog": "Access log",
+		"viewTabsAria": "Logs view",
 		"revealSourceIP": "Show the full source address",
 		"pageEyebrow": "Traffic · Logs",
 		"pageTitle": "Activity log",

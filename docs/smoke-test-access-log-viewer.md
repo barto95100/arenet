@@ -38,14 +38,20 @@ including after rotation.
 
 ## 3. Look it up in the UI (hot tier)
 
-1. Logs page → expand **Access log** (admin only). Confirm **nothing was
-   fetched** when the page first opened (the section is collapsed and
-   inert until expanded, and no request fires until a button is clicked).
-2. Field = **Request ID**, paste the id, **Search**.
-3. Expect exactly one row: the method / status / path of the refused
+1. Logs page → the view selector at the top (admin only) switches
+   between **Activity** and **Access log**. Click **Access log**.
+   Confirm **nothing was fetched** when the page opened or when the
+   view was selected — the controls appear but stay idle ("Click Show
+   latest or run a search…") until a button is clicked.
+2. Confirm the page itself does **not** scroll: the Access log view
+   fits the viewport and its result table scrolls internally (v2.80.2
+   regression check — the earlier stacked panel trapped the page with
+   no reachable scroll).
+3. Field = **Request ID**, paste the id, **Search**.
+4. Expect exactly one row: the method / status / path of the refused
    request, and — when a gate refused it — the **Blocked by** pill
    (`waf` / `country` / …) from the `arenet_denied` field.
-4. The metadata line should read "Searched 1 file(s) in N ms" and **not**
+5. The metadata line should read "Searched 1 file(s) in N ms" and **not**
    mention compressed files (the hit was in the current file).
 
 ## 4. Tail
@@ -70,9 +76,10 @@ including after rotation.
 - Search a random id that is nowhere → "No matching line found." (clean
   empty state, not an error), metadata says compressed files were also
   searched.
-- Disable the access log, reopen the panel, search → the panel states the
-  log is disabled rather than erroring.
-- A **viewer**-role account: no "Access log" section; `GET
+- Disable the access log, reselect the Access log view, search → it
+  states the log is disabled rather than erroring.
+- A **viewer**-role account: no view selector and no Access log view (the
+  activity log is the only thing shown); `GET
   /api/v1/admin/access-log/tail` and `/search` return **403**.
 
 ## Verdict
