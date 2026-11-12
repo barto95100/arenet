@@ -76,7 +76,7 @@ C'est tout. Arenet construit lui-même la charge utile Discord — il n'y a aucu
    - `state` : match exact sur une string value (utilisé avec `system_health`)
 7. **Channels** : multi-select depuis tes channels câblés
 8. **Cooldown** : secondes entre alertes successives pour cette rule (défaut 300s = 5min)
-9. **Subject template** (optionnel) + **Body template** (optionnel) : strings de template Go avec accès à `{{.Rule.Name}}`, `{{.Value}}`, `{{.Labels}}`, `{{.At}}`
+9. **Subject template** (optionnel) + **Body template** (optionnel) : strings de template Go avec accès à `{{.RuleName}}`, `{{.Value}}`, `{{.Labels}}`, `{{.Context}}` (voir *Templates* plus bas)
 10. Bouton **Test rule** : évalue la rule une fois avec la valeur courante de la source, dispatch optionnellement si elle triperait
 11. **Save**
 
@@ -182,28 +182,50 @@ Choisis les cooldowns adaptés au scénario :
 
 ## Templates
 
-Subject + body templates utilisent le `text/template` de Go avec le contexte suivant :
+Subject + body templates utilisent le `text/template` de Go avec ce contexte (les champs que le watcher passe au moment du déclenchement) :
 
 ```
-.Rule.Name        — slug de la rule
-.Rule.Severity    — 1-5
-.Value.Float      — return float de la source (quand Threshold)
-.Value.String     — return string de la source (quand State)
-.Value.Labels     — map d'attributs que la source a attachés (ex. {host, issuer, route_id})
-.At               — time.Time de l'évaluation
-.Operator         — opérateur de comparaison (ex. ">", "==")
-.Threshold        — le threshold configuré de la rule (Float ou String selon kind)
+.RuleName    — le nom de la règle (figé au déclenchement, un renommage ultérieur ne réécrit pas les anciennes alertes)
+.RuleID      — l'ID de la règle
+.Severity    — niveau en toutes lettres (info / warning / error / critical)
+.Category    — la catégorie de la règle (waf / crowdsec / cert / system …)
+.Source      — le nom de la source (ex. waf_event_rate, cert_expiry)
+.Timestamp   — time.Time de l'évaluation ({{.Timestamp.Format "2006-01-02 15:04 MST"}})
+.Value       — la valeur renvoyée par la source : le nombre pour les règles de seuil, la chaîne pour les règles d'état
+.Labels      — map chaîne→chaîne attachée par la source (ex. {{.Labels.route_id}}, {{.Labels.window_secs}})
+.Context     — payload structuré que certaines sources attachent (libre ; voir le détail WAF ci-dessous)
 ```
 
-Default subject : `[Arenet][SEV{{.Rule.Severity}}] {{.Rule.Name}} triggered`
-Default body : dépend du kind de channel ; Discord utilise un embed, generic webhook envoie du JSON, email plain text.
+Default subject : `[{{.Severity}}] {{.RuleName}} fired`
+Default body : `Rule {{.RuleName}} fired. Source {{.Source}} value: {{.Value}}`
 
-Exemple body Discord custom pour `cert_renewal_failed` :
+Un champ manquant rend une chaîne vide (templates compilés avec `missingkey=zero`) : une faute de frappe dégrade sans faire échouer l'envoi.
+
+### Détail des pics WAF (waf_event_rate)
+
+Une alerte `waf_event_rate` attache un détail à `.Context` pour que le mail **nomme les responsables**, pas seulement leur nombre. Chaque liste est un top-5 exact sur la même fenêtre/le même filtre que le comptage, et n'est présente que s'il y a eu au moins un événement :
 
 ```
-🚨 Cert renewal failed for {{index .Value.Labels "domain"}} ({{.Value.Float}} failures in last 24h)
+.Context.topIPs    — IP sources les plus actives
+.Context.topRules  — règles CRS les plus déclenchées
+.Context.topPaths  — chemins les plus visés
+```
 
-Open https://arenet.example.com/certs to investigate
+Chaque entrée a `.Key` (l'IP / l'ID de règle / le chemin) et `.Count` (nombre d'événements). Exemple de body :
+
+```
+Événements WAF sur les 5 dernières minutes : {{.Value}}
+
+Top IP sources :
+{{range .Context.topIPs}}  - {{.Key}} ({{.Count}}x)
+{{end}}
+Top règles CRS :
+{{range .Context.topRules}}  - {{.Key}} ({{.Count}}x)
+{{end}}
+Top chemins :
+{{range .Context.topPaths}}  - {{.Key}} ({{.Count}}x)
+{{end}}
+Règle : {{.RuleName}} | Source : {{.Source}}
 ```
 
 ---

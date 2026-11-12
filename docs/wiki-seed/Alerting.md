@@ -76,7 +76,7 @@ That is all. Arenet builds the Discord payload itself — there is no body templ
    - `state` : exact match on a string value (used with `system_health`)
 7. **Channels** : multi-select from your wired channels
 8. **Cooldown** : seconds between successive alerts for this rule (default 300s = 5min)
-9. **Subject template** (optional) + **Body template** (optional) : Go template strings with access to `{{.Rule.Name}}`, `{{.Value}}`, `{{.Labels}}`, `{{.At}}`
+9. **Subject template** (optional) + **Body template** (optional) : Go template strings with access to `{{.RuleName}}`, `{{.Value}}`, `{{.Labels}}`, `{{.Context}}` (see *Templates* below)
 10. **Test rule** button : evaluates the rule once with the current source value, optionally dispatches if it would trip
 11. **Save**
 
@@ -182,28 +182,50 @@ Pick cooldowns matched to the scenario :
 
 ## Templates
 
-Subject + body templates use Go's `text/template` with the following context :
+Subject + body templates use Go's `text/template` with this context (the fields the watcher passes at fire time) :
 
 ```
-.Rule.Name        — rule slug
-.Rule.Severity    — 1-5
-.Value.Float      — source's float return (when Threshold)
-.Value.String     — source's string return (when State)
-.Value.Labels     — map of attributes the source attached (e.g. {host, issuer, route_id})
-.At               — time.Time of the evaluation
-.Operator         — comparison operator (e.g. ">", "==")
-.Threshold        — the rule's configured threshold (Float or String depending on kind)
+.RuleName    — the rule's name (snapshot at fire time, so a later rename doesn't relabel old alerts)
+.RuleID      — the rule's ID
+.Severity    — severity word (info / warning / error / critical)
+.Category    — the rule's category (waf / crowdsec / cert / system …)
+.Source      — the source name (e.g. waf_event_rate, cert_expiry)
+.Timestamp   — time.Time of the evaluation ({{.Timestamp.Format "2006-01-02 15:04 MST"}})
+.Value       — the source's return value: the number for threshold rules, the string for state rules
+.Labels      — string→string map the source attached (e.g. {{.Labels.route_id}}, {{.Labels.window_secs}})
+.Context     — structured payload some sources attach (free-form; see the WAF breakdown below)
 ```
 
-Default subject : `[Arenet][SEV{{.Rule.Severity}}] {{.Rule.Name}} triggered`
-Default body : depends on channel kind ; Discord uses an embed, generic webhook sends JSON, email plain text.
+Default subject : `[{{.Severity}}] {{.RuleName}} fired`
+Default body : `Rule {{.RuleName}} fired. Source {{.Source}} value: {{.Value}}`
 
-Example custom Discord body for `cert_renewal_failed` :
+A missing field renders empty (templates compile with `missingkey=zero`), so a typo degrades gracefully instead of failing the send.
+
+### WAF event-rate breakdown
+
+A `waf_event_rate` alert attaches a breakdown to `.Context` so the mail can **name the offenders**, not only count them. Each list is an exact top-5 over the same window/filter as the count, and is present only when there was at least one event :
 
 ```
-🚨 Cert renewal failed for {{index .Value.Labels "domain"}} ({{.Value.Float}} failures in last 24h)
+.Context.topIPs    — busiest source IPs
+.Context.topRules  — most-fired CRS rule IDs
+.Context.topPaths  — most-targeted request paths
+```
 
-Open https://arenet.example.com/certs to investigate
+Each entry has `.Key` (the IP / rule ID / path) and `.Count` (number of events). Example body :
+
+```
+WAF events in the last 5 minutes: {{.Value}}
+
+Top source IPs:
+{{range .Context.topIPs}}  - {{.Key}} ({{.Count}}x)
+{{end}}
+Top CRS rules:
+{{range .Context.topRules}}  - {{.Key}} ({{.Count}}x)
+{{end}}
+Top paths:
+{{range .Context.topPaths}}  - {{.Key}} ({{.Count}}x)
+{{end}}
+Rule: {{.RuleName}} | Source: {{.Source}}
 ```
 
 ---

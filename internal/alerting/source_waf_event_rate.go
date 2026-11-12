@@ -76,7 +76,15 @@ var wafActions = []string{"", "BLOCK", "DETECT"}
 // surface.
 type WafEventReader interface {
 	CountWafEvents(ctx context.Context, filter observability.WafEventFilter) (int, error)
+	// TopWafEventGroups returns the top-N (value, count) breakdown of the
+	// matching rows grouped by one column (src_ip / rule_id /
+	// request_path …), used to name the offenders in the alert body.
+	TopWafEventGroups(ctx context.Context, filter observability.WafEventFilter, column string, limit int) ([]observability.WafEventGroup, error)
 }
+
+// wafBreakdownTopN caps how many entries each breakdown list (top IPs,
+// top rules, top paths) carries into the alert context.
+const wafBreakdownTopN = 5
 
 // WafEventRateSource counts waf_event rows.
 type WafEventRateSource struct {
@@ -171,5 +179,33 @@ func (s *WafEventRateSource) Read(ctx context.Context, raw json.RawMessage) (Sou
 	}
 	v := FloatValue(float64(count))
 	v.Labels = labels
+
+	// Attach a breakdown so the alert can name the offenders, not only
+	// count them: the busiest source IPs, the most-fired CRS rule IDs and
+	// the most-targeted paths over the same window/filter. Each is an
+	// exact SQL top-N, so an operator template can render e.g.
+	//   {{range .Context.topIPs}}{{.Key}} ({{.Count}}×)
+	//   {{end}}
+	// Best-effort: skipped when the window is empty (nothing to break
+	// down) or a sub-query fails — the breakdown decorates the count, it
+	// never fails the alert read, which must still fire on the number.
+	if count > 0 {
+		breakdown := map[string]string{
+			"topIPs":   "src_ip",
+			"topRules": "rule_id",
+			"topPaths": "request_path",
+		}
+		ctxData := map[string]any{}
+		for key, column := range breakdown {
+			groups, gerr := s.reader.TopWafEventGroups(ctx, filter, column, wafBreakdownTopN)
+			if gerr != nil || len(groups) == 0 {
+				continue
+			}
+			ctxData[key] = groups
+		}
+		if len(ctxData) > 0 {
+			v.Context = ctxData
+		}
+	}
 	return v, nil
 }

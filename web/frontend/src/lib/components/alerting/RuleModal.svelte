@@ -934,6 +934,13 @@
 					<code>{`{{.Severity}}`}</code>, <code>{`{{.Source}}`}</code>,
 					<code>{`{{.Value}}`}</code>, <code>{`{{.Subject}}`}</code>.
 				</p>
+				{#if source === 'waf_event_rate'}
+					<p class="text-xs text-secondary">
+						{language.current && t('alerting.ruleModal.templatesWafBreakdownHint')}
+						<code>{`{{range .Context.topIPs}}{{.Key}} ({{.Count}}x){{end}}`}</code>
+						— <code>topIPs</code>, <code>topRules</code>, <code>topPaths</code>.
+					</p>
+				{/if}
 			</div>
 		</details>
 

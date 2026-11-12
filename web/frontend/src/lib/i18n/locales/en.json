@@ -1468,6 +1468,7 @@
 			"labelSubjectTemplate": "Subject template",
 			"labelBodyTemplate": "Body template",
 			"templatesPlaceholdersAvailable": "Available placeholders:",
+			"templatesWafBreakdownHint": "For this source, the alert also carries the spike breakdown (top IPs, CRS rules, paths), e.g.:",
 			"testResultLine": "Test result: {line}",
 			"btnTest": "Test rule",
 			"btnCancel": "Cancel",
