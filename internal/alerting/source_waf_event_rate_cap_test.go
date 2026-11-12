@@ -46,6 +46,13 @@ func (c *countingWafReader) CountWafEvents(_ context.Context, f observability.Wa
 	return c.total, nil
 }
 
+// TopWafEventGroups is a no-op for the count/filter regression tests —
+// they assert on the numeric value, not the breakdown. Returning nil
+// leaves SourceValue.Context empty, which those tests expect.
+func (c *countingWafReader) TopWafEventGroups(_ context.Context, _ observability.WafEventFilter, _ string, _ int) ([]observability.WafEventGroup, error) {
+	return nil, nil
+}
+
 func TestWafEventRateSource_CountIsNotCappedAt100(t *testing.T) {
 	reader := &countingWafReader{total: 4271}
 	src := NewWafEventRateSource(reader)

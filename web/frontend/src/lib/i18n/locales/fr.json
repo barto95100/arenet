@@ -1468,6 +1468,7 @@
 			"labelSubjectTemplate": "Template du sujet",
 			"labelBodyTemplate": "Template du corps",
 			"templatesPlaceholdersAvailable": "Placeholders disponibles :",
+			"templatesWafBreakdownHint": "Pour cette source, l'alerte fournit aussi le détail du pic (top IP, règles CRS, chemins), p. ex. :",
 			"testResultLine": "Résultat du test : {line}",
 			"btnTest": "Tester la règle",
 			"btnCancel": "Annuler",

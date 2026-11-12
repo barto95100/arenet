@@ -88,7 +88,12 @@ jobs:
   backend-test:
     name: backend (go vet + go test -race)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The -race suite legitimately runs ~10 min on this runner (the api
+    # package alone is ~240s under -race, plus go vet compiling ./... and
+    # the frontend build for //go:embed). A 10-minute cap left no margin
+    # and a slightly slow runner tipped a fully-passing suite over the
+    # limit (PR #347). 15 gives headroom as the suite grows.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6

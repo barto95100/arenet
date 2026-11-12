@@ -559,6 +559,72 @@ func (s *Store) CountWafEvents(ctx context.Context, filter WafEventFilter) (int,
 	return n, nil
 }
 
+// WafEventGroup is one (value, count) row of a top-N breakdown of
+// waf_event rows grouped by a single column — e.g. the busiest source
+// IPs or the most-fired CRS rule IDs in a window. Count is the exact
+// number of matching rows for that value, not a sample.
+type WafEventGroup struct {
+	Key   string `json:"key"`
+	Count int    `json:"count"`
+}
+
+// wafGroupColumns whitelists the columns TopWafEventGroups may group by.
+// The column name is interpolated into SQL, so it must never come from
+// untrusted input: only a value in this set is accepted.
+var wafGroupColumns = map[string]bool{
+	"src_ip":       true,
+	"rule_id":      true,
+	"request_path": true,
+	"route_id":     true,
+	"category":     true,
+}
+
+// TopWafEventGroups returns the `limit` most frequent values of `column`
+// among the waf_event rows matching filter, most frequent first. The
+// count is computed in SQL (GROUP BY … COUNT(*)), so it reflects every
+// matching row — not the wafEventLimitCap-truncated result set that
+// QueryWafEvents returns. filter.Limit is ignored (a GROUP BY has no
+// result set to bound); limit bounds the number of groups and is clamped
+// to [1, 50]. An empty/whitespace key value is skipped so the breakdown
+// doesn't surface a blank row. column must be in wafGroupColumns.
+func (s *Store) TopWafEventGroups(ctx context.Context, filter WafEventFilter, column string, limit int) ([]WafEventGroup, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("observability: store closed")
+	}
+	if !wafGroupColumns[column] {
+		return nil, fmt.Errorf("observability: top waf_event groups: column %q not allowed", column)
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	where, args := wafEventPredicates(filter)
+	// column is whitelisted above, so this interpolation is safe.
+	q := `SELECT ` + column + ` AS k, COUNT(*) AS c FROM waf_event` + where +
+		` AND ` + column + ` <> '' GROUP BY k ORDER BY c DESC, k ASC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("observability: top waf_event groups: %w", err)
+	}
+	defer rows.Close()
+	var out []WafEventGroup
+	for rows.Next() {
+		var g WafEventGroup
+		if err := rows.Scan(&g.Key, &g.Count); err != nil {
+			return nil, fmt.Errorf("observability: scan waf_event group: %w", err)
+		}
+		out = append(out, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("observability: iterate waf_event groups: %w", err)
+	}
+	return out, nil
+}
+
 // QueryWafEvents returns the waf_event rows matching filter,
 // ts-descending (most recent first — the /security/events
 // endpoint's natural ordering). Empty filter returns the most

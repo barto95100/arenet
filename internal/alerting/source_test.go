@@ -20,6 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +113,55 @@ func (s *stubWafReader) CountWafEvents(_ context.Context, f observability.WafEve
 		n++
 	}
 	return n, nil
+}
+
+// TopWafEventGroups aggregates the stub's events by one column, honouring
+// the same Action filter as CountWafEvents, so a breakdown test can drive
+// it with the same fixture.
+func (s *stubWafReader) TopWafEventGroups(_ context.Context, f observability.WafEventFilter, column string, limit int) ([]observability.WafEventGroup, error) {
+	s.called = f
+	if s.err != nil {
+		return nil, s.err
+	}
+	counts := map[string]int{}
+	for _, e := range s.events {
+		if f.Action != "" && e.Action != f.Action {
+			continue
+		}
+		var key string
+		switch column {
+		case "src_ip":
+			key = e.SrcIP
+		case "rule_id":
+			key = e.RuleID
+		case "request_path":
+			key = e.RequestPath
+		case "route_id":
+			key = e.RouteID
+		case "category":
+			key = e.Category
+		default:
+			return nil, fmt.Errorf("stub: unknown column %q", column)
+		}
+		if key == "" {
+			continue
+		}
+		counts[key]++
+	}
+	groups := make([]observability.WafEventGroup, 0, len(counts))
+	for k, c := range counts {
+		groups = append(groups, observability.WafEventGroup{Key: k, Count: c})
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].Count != groups[j].Count {
+			return groups[i].Count > groups[j].Count
+		}
+		return groups[i].Key < groups[j].Key
+	})
+	if limit > 0 && len(groups) > limit {
+		groups = groups[:limit]
+	}
+	return groups, nil
 }
 
 func TestWafEventRateSource_HappyCountsAll(t *testing.T) {
