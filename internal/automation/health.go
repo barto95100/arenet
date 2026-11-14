@@ -1,0 +1,83 @@
+// Arenet - Homelab-friendly reverse proxy with integrated security
+// Copyright (C) 2026  The Arenet Authors
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see https://www.gnu.org/licenses/.
+
+package automation
+
+// health.go exposes the auto-classify writer's state for external
+// monitoring (the Prometheus /metrics endpoint in internal/api).
+//
+// Why this exists: the writer fails SILENTLY. A synchronous surface
+// (Scenarios tab, manual ban) shows the operator an error; the
+// asynchronous auto-classify writer only logs + bumps internal counters
+// when the machine credential breaks, so an operator could stop banning
+// attackers for weeks without a signal. These counters already live on
+// the Engine (TotalPush*), and the sticky login-failed bit lives on the
+// WatcherClient — this is the read-only view that stitches them into one
+// snapshot a metrics collector can scrape.
+
+// HealthSnapshot is a point-in-time read of the auto-classify writer.
+// All fields are cheap reads; a collector takes one per scrape.
+type HealthSnapshot struct {
+	// WriterConfigured is false in the boot-degraded path (no watcher
+	// credentials) — the writer is a no-op drain and the login-failed
+	// gauge must read 0, not 1.
+	WriterConfigured bool
+	// WriterLoginFailed is the sticky flag: the last login to LAPI was
+	// rejected (bad machine credential). This is THE silent-failure
+	// signal — true means auto-banning has stopped until the operator
+	// fixes the credential. Always false when WriterConfigured is false.
+	WriterLoginFailed bool
+	// PushSuccess / PushPermanent / PushDropped mirror the Engine's
+	// cumulative push counters. Permanent is the one that rises on a
+	// broken credential or a rejected payload (the drop that needs a
+	// human); Dropped is retry-exhaustion against an unreachable LAPI.
+	PushSuccess   uint64
+	PushPermanent uint64
+	PushDropped   uint64
+}
+
+// HealthReporter is the read-only surface a metrics collector asserts
+// GetManager() to. *DefaultManager implements it; a fake in tests can
+// too. Kept separate from the Manager interface (which is the
+// operator-mutation surface) so a read-only consumer cannot reach the
+// SetRules/SetCredentials mutators.
+type HealthReporter interface {
+	HealthSnapshot() HealthSnapshot
+}
+
+// HealthSnapshot reads the current writer + push counters. Safe for
+// concurrent callers: the writer pointer is read under the same RWMutex
+// SetCredentials/ClearCredentials write under, and the Engine counters
+// are atomics.
+func (m *DefaultManager) HealthSnapshot() HealthSnapshot {
+	m.mu.RLock()
+	w := m.writer
+	m.mu.RUnlock()
+
+	snap := HealthSnapshot{WriterConfigured: w != nil}
+	if w != nil {
+		snap.WriterLoginFailed = w.LoginFailed()
+	}
+	if m.engine != nil {
+		snap.PushSuccess = m.engine.TotalPushSuccess()
+		snap.PushPermanent = m.engine.TotalPushPermanent()
+		snap.PushDropped = m.engine.TotalPushDropped()
+	}
+	return snap
+}
+
+// Interface guard: the production manager is a HealthReporter.
+var _ HealthReporter = (*DefaultManager)(nil)

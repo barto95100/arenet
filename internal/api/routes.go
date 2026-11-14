@@ -108,6 +108,26 @@ func NewRouter(h *Handler, dev bool, ipExtractor *auth.IPExtractor, ws *WSTopolo
 	// decisions.md (D3) for the design context.
 	r.Get("/system/health", h.systemHealth)
 
+	// v2.82.0 — Prometheus metrics for external monitoring (Zabbix /
+	// Nagios / Datadog / Prometheus). v1 exposes the auto-classify
+	// writer's health, which otherwise fails silently.
+	//
+	// UNLIKE /healthz and /system/health, this endpoint is
+	// AUTHENTICATED: metrics carry operational data (push volume, writer
+	// state), and Arenet ships to every install, so an unauthenticated
+	// network endpoint would be a footgun if the admin plane is ever
+	// published. A read-only service-account token scrapes it with an
+	// `Authorization: Bearer <token>` header — every monitoring stack
+	// supports a static bearer header. Mounted at the root (NOT /api/v1)
+	// to follow the Prometheus convention and avoid colliding with the
+	// JSON /api/v1/metrics/* API; the auth middleware is applied
+	// explicitly to this one route. HardAuth (any signed-in principal) —
+	// viewer-accessible, read-only, no admin gate.
+	r.Group(func(r chi.Router) {
+		r.Use(auth.HardAuthMiddleware(h.sessions, h.users, h.tokenLookup(), h.devMode))
+		r.Get("/metrics", h.prometheusMetrics)
+	})
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// F4/F31 — blanket anti-OOM ceiling on every request body in the
 		// subtree; the sensitive subtrees add a tighter cap below. See

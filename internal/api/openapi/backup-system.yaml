@@ -652,6 +652,36 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SystemHealthReport' }
+
+  /metrics:
+    servers:
+      - url: /
+    get:
+      operationId: prometheusMetrics
+      summary: Prometheus metrics
+      tags: [System]
+      x-arenet-role: viewer
+      description: |
+        Served at the root (`/metrics`, not under `/api/v1`), in Prometheus
+        text exposition format, for external monitoring (Zabbix, Nagios,
+        Datadog, Prometheus). **v2.82.0+.**
+
+        Unlike `/healthz` and `/system/health`, this endpoint is
+        **authenticated**: metrics carry operational data, and Arenet may be
+        deployed with the admin plane published. Scrape it with a read-only
+        service-account token (`Authorization: Bearer <token>`); a viewer
+        role is enough.
+
+        v1 exposes the auto-classify writer's health (otherwise a silent
+        failure): `arenet_automation_writer_login_failed` (gauge) and
+        `arenet_automation_pushes_total{result}` (counter). See
+        `docs/operations/monitoring.md`.
+      responses:
+        '200':
+          description: Prometheus text exposition.
+          content:
+            text/plain:
+              schema: { type: string }
 components:
   parameters:
     BackupFileName:
