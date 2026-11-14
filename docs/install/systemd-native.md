@@ -120,6 +120,9 @@ The access log is **off by default** — it records every
 visitor's IP and the URLs they request. Enable it in
 Settings → Security when you want CrowdSec to detect attacks
 against this host; see [CrowdSec](../wiki-seed/CrowdSec.md).
+From **v2.81.1** it is written to this file only — earlier
+versions also duplicated every line, unredacted, to the systemd
+journal; point CrowdSec (and your own reading) at the file.
 Override the location with `ARENET_ACCESS_LOG_PATH` in the env
 file, but keep in mind that a different directory under
 `/var/log` will not be writable unless you add it to the unit.

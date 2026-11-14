@@ -142,6 +142,8 @@ If the window was short and the log never left the host, deciding this is not wo
 
 **The access log** is what lets CrowdSec's own scenarios see your traffic: scanning, brute force against the apps behind Arenet, known exploit attempts. Arenet emitted no access log at all before **v2.50**, which is why an agent could sit next to it for months and never fire a scenario.
 
+> **From v2.81.1 the access log is written to the file only.** Earlier versions also let every access line reach `stderr → journald` through Caddy's default logger, where it was written **unredacted** (only Caddy's four native headers masked) — so a secret the file protected, e.g. Proxmox's `CSRFPreventionToken` or an `X-Api-Key`, appeared in clear in `journalctl -u arenet`. Point CrowdSec at the **file**, not the journal: the file is the redacted, size-bounded copy. If you set up a `journalctl` acquisition on an older version, switch it to the `file` acquisition below.
+
 **Security Automation** is the other detector, and it works from what Arenet already understands rather than from raw requests: WAF events, rate-limit events, and failed logins to Arenet's own admin. When one source IP crosses a threshold inside a window, Arenet pushes a ban to LAPI with `origin=arenet` and a scenario named `arenet/…`. It deduplicates, and if you lift a ban by hand it backs off instead of immediately re-pushing it.
 
 > **Every automation rule is disabled by default.** If you filled in the watcher credentials and never saw an `arenet/…` decision, that is almost certainly why — the credentials alone do nothing.
@@ -157,7 +159,7 @@ It means two unrelated things in Arenet. A CrowdSec **watcher** is a machine all
 ## Turning detection on
 
 1. **Settings → Security → HTTP access log** → tick *Write an access log*.
-2. Read the **path the card prints**. Do not guess it: the default is `/var/log/arenet/access.log` on a systemd install and `/var/lib/arenet/logs/access.log` inside the container on Docker, and only the running process knows which applied.
+2. Read the **path the card prints**. Do not guess it: the default is `/var/log/arenet/access.log` on a systemd install and `/var/lib/arenet/logs/access.log` inside the container on Docker, and only the running process knows which applied. If the card shows the `/var/lib/arenet/logs/` form on a systemd host, the `ARENET_ACCESS_LOG_PATH` env var is not set on your unit — set it to `/var/log/arenet/access.log` (the `LogsDirectory=` the packaged unit manages) so the log lands in the conventional, agent-readable spot. The data-dir fallback works too, but `/var/lib/arenet` is mode `0700`, so CrowdSec must read it as root.
 3. Check **Masked query parameters**. The value of every parameter listed there is replaced with `REDACTED` in the logged URI. The list ships filled in, because some applications carry a credential in the URL: Vaultwarden sends the user's session token as `/notifications/hub?access_token=eyJ...`, and without masking the log records a live credential in a file CrowdSec also reads. The request forwarded to the backend is not modified — the substitution happens in the log encoder.
 4. Save. Arenet reloads Caddy — the log is part of the emitted configuration, so nothing appears until it does.
 5. On the CrowdSec host:

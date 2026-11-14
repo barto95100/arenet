@@ -139,6 +139,17 @@ func TestBuildConfigJSON_AccessLogOn_SinkAndServers(t *testing.T) {
 		t.Fatalf("include: got %v, want [%s]", include, accessLogInclude)
 	}
 
+	// v2.81.1 — alongside the file sink, an explicit `default` logger must
+	// exclude the access logger so the entries do not also hit stderr.
+	def, _ := logs["default"].(map[string]any)
+	if def == nil {
+		t.Fatalf("no \"default\" logger: access entries would double-log to stderr unfiltered")
+	}
+	exclude, _ := def["exclude"].([]any)
+	if len(exclude) != 1 || exclude[0] != accessLogInclude {
+		t.Fatalf("default.exclude: got %v, want [%s]", exclude, accessLogInclude)
+	}
+
 	// A sink no server writes to would load cleanly and receive nothing.
 	apps, _ := got["apps"].(map[string]any)
 	httpApp, _ := apps["http"].(map[string]any)
@@ -156,6 +167,57 @@ func TestBuildConfigJSON_AccessLogOn_SinkAndServers(t *testing.T) {
 		if srvLogs["default_logger_name"] != accessLogName {
 			t.Errorf("%s: default_logger_name = %v", name, srvLogs["default_logger_name"])
 		}
+	}
+}
+
+// v2.81.1 — the access entries must NOT also fan out to the auto-created
+// stderr/journald default logger, where they would be written UNFILTERED
+// (only Caddy's four native headers masked) — leaking the secrets the file
+// sink redacts (CSRFPreventionToken, API keys, access_token= params) and
+// double-writing every request outside Arenet's roll ceiling.
+//
+// The fix emits an explicit `default` logger that EXCLUDES the access
+// logger name, so access entries reach the filtered file sink only while
+// all other (runtime) logs still reach the journal.
+//
+// Reinjection: drop the `default` entry from buildAccessLogging and this
+// test fails while its siblings stay green.
+func TestBuildConfigJSON_AccessLogOn_ExcludesAccessFromDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "access.log")
+	cfg, _ := enabledAccessLog(path)
+
+	raw, err := buildConfigJSON([]storage.Route{{
+		ID: "r1", Host: "app.local",
+		Upstreams: []storage.Upstream{{URL: "http://127.0.0.1:9000", Weight: 1}},
+		LBPolicy:  storage.LBPolicyRoundRobin,
+	}}, buildOpts{DevMode: true, AccessLog: cfg, AccessLogPath: path})
+	if err != nil {
+		t.Fatalf("buildConfigJSON: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	logging, _ := got["logging"].(map[string]any)
+	logs, _ := logging["logs"].(map[string]any)
+
+	def, _ := logs["default"].(map[string]any)
+	if def == nil {
+		t.Fatalf("no explicit \"default\" logger: access entries would fan out to stderr unfiltered\nlogs: %v", logs)
+	}
+	exclude, _ := def["exclude"].([]any)
+	if len(exclude) != 1 || exclude[0] != accessLogInclude {
+		t.Fatalf("default.exclude = %v, want [%s]", exclude, accessLogInclude)
+	}
+	// The default logger must carry ONLY an exclude — no writer/encoder —
+	// so Caddy keeps stderr + the production encoder for every other log.
+	if _, hasWriter := def["writer"]; hasWriter {
+		t.Fatalf("default logger must not pin a writer (keep stderr): %v", def)
+	}
+	// And the file sink must still be there, untouched.
+	if _, ok := logs[accessLogName].(map[string]any); !ok {
+		t.Fatalf("the %q file sink vanished: %v", accessLogName, logs)
 	}
 }
 

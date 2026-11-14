@@ -208,7 +208,28 @@ func buildAccessLogging(cfg storage.AccessLogConfig, path string) map[string]any
 		"wrap":   map[string]any{"format": "json"},
 		"fields": fields,
 	}
-	return map[string]any{"logs": map[string]any{accessLogName: sink}}
+	// v2.81.1 — define the `default` logger explicitly so the access
+	// entries do NOT also fan out to stderr/journald.
+	//
+	// With no `default` logger of our own, Caddy auto-creates one
+	// (logging.go:143-153 → newDefaultProductionLog): stderr, plain JSON
+	// under systemd, and NO include/exclude — which makes it accept every
+	// entry (loggerAllowed:533-536), the access logger included. The
+	// result is each request logged TWICE: once to the file below through
+	// the `filter` encoder (redacted), and once to the journal through the
+	// default's plain encoder (UNFILTERED). Confirmed on the test VM
+	// (2026-11-14): CSRFPreventionToken in clear in the journal, REDACTED
+	// in the file. That journal copy leaks every secret the file masks and
+	// ignores the roll ceiling.
+	//
+	// An exclude-only `default` keeps stderr + the production encoder
+	// (provisionCommon:350-351,381-383 default a nil writer/encoder), so
+	// every other (runtime) log still reaches the journal; only the access
+	// logger is routed to the filtered file sink alone.
+	return map[string]any{"logs": map[string]any{
+		"default":     map[string]any{"exclude": []string{accessLogInclude}},
+		accessLogName: sink,
+	}}
 }
 
 // accessLogServerConfig is what a server needs for its requests to reach
