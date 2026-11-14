@@ -230,8 +230,10 @@ func (c *WatcherClient) loginLocked(ctx context.Context) error {
 // place but the loginFailed sticky flag is set so the caller
 // can pause emissions. Eventually consistent: the next refresh
 // attempt (driven by EnsureJWT calls at the next push) will
-// retry. Operator-visible via the "automation_login_failures_
-// per_hour" metric the writer goroutine reports.
+// retry. Operator-visible via LoginFailed(), surfaced on the
+// Prometheus /metrics endpoint as the gauge
+// arenet_automation_writer_login_failed (v2.82.0) — see
+// internal/automation/health.go.
 func (c *WatcherClient) EnsureJWT(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
